@@ -235,7 +235,7 @@ fn editingJson(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     var items = try json.Array.beginBuffer(allocator, &buffer);
     var seen = std.AutoHashMap(core.NodeId, void).init(allocator);
     defer seen.deinit();
-    const program = ir.projectProgram();
+    const program = ir.projectSyntax();
     for (program.pages.items) |*page_decl| {
         var names = try binding_names.Generator.init(allocator, ir, page_decl);
         defer names.deinit();

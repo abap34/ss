@@ -38,23 +38,15 @@ const ensureType = semantic_types.ensureType;
 const inferExprInfo = infer.exprInfo;
 pub const expectedPrimitiveArgType = infer.expectedPrimitiveArgType;
 
-pub const ProgramIndex = struct {
-    allocator: std.mem.Allocator,
-    modules: std.ArrayList(core.SourceModule),
-    module_order: std.ArrayList(core.SourceModuleId),
-    project_implicit_import_ids: std.ArrayList(core.SourceModuleId),
-    project_import_ids: std.ArrayList(core.SourceModuleId),
+pub const ModuleIndex = struct {
+    module_graph: module_loader.ModuleGraph,
     constants: core.ConstMap,
     functions: core.FunctionMap,
 
-    pub fn deinit(self: *ProgramIndex) void {
+    pub fn deinit(self: *ModuleIndex) void {
         self.constants.deinit();
         self.functions.deinit();
-        for (self.modules.items) |*module| module.deinit(self.allocator);
-        self.modules.deinit(self.allocator);
-        self.module_order.deinit(self.allocator);
-        self.project_implicit_import_ids.deinit(self.allocator);
-        self.project_import_ids.deinit(self.allocator);
+        self.module_graph.deinit();
     }
 };
 
@@ -83,7 +75,7 @@ pub const ProgramAnalysis = struct {
 
 pub fn collectFunctionsFromPrograms(
     allocator: std.mem.Allocator,
-    programs: []const *const ast.Program,
+    programs: []const *const ast.Module,
 ) !core.FunctionMap {
     var functions = core.FunctionMap.init(allocator);
     for (programs, 0..) |program, module_index| {
@@ -96,7 +88,7 @@ pub fn collectFunctionsFromPrograms(
 
 pub fn collectConstantsFromPrograms(
     allocator: std.mem.Allocator,
-    programs: []const *const ast.Program,
+    programs: []const *const ast.Module,
 ) !core.ConstMap {
     var constants = core.ConstMap.init(allocator);
     for (programs, 0..) |program, module_index| {
@@ -220,7 +212,7 @@ fn analyzeProgramWithoutSchedule(
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
         const module_sema = sema.forModule(module_id);
-        try checker.checkPageStatements(allocator, ir, &module_sema, checker.originPathForModule(module), module.program);
+        try checker.checkPageStatements(allocator, ir, &module_sema, checker.originPathForModule(module), module.syntax);
     }
     try addDependencyQueryDiagnostics(allocator, ir, &sema);
 }
@@ -294,10 +286,10 @@ fn dependencyQueryTarget(module: *const core.SourceModule, query_start: usize) ?
     var best: ?DependencyQueryTarget = null;
     var best_end: usize = 0;
     const document_display = dependencies.ScopeDisplayName{ .document = dependencyQueryDocumentName(module) };
-    for (module.program.document_statements.items, 0..) |stmt, index| {
-        updateDependencyQueryTarget(&best, &best_end, stmt, module.program.document_statements.items[0..index], .{ .document = module.id }, document_display, query_start);
+    for (module.syntax.document_statements.items, 0..) |stmt, index| {
+        updateDependencyQueryTarget(&best, &best_end, stmt, module.syntax.document_statements.items[0..index], .{ .document = module.id }, document_display, query_start);
     }
-    for (module.program.pages.items, 0..) |page, page_index| {
+    for (module.syntax.pages.items, 0..) |page, page_index| {
         const page_scope = dependencies.ResourceScope{ .page = dependencyQuerySyntheticPageId(page_index) };
         const page_display = dependencies.ScopeDisplayName{ .page = page.name };
         for (page.statements.items, 0..) |stmt, index| {
@@ -305,7 +297,7 @@ fn dependencyQueryTarget(module: *const core.SourceModule, query_start: usize) ?
         }
     }
     const caller_display: dependencies.ScopeDisplayName = .caller;
-    for (module.program.functions.items) |func| {
+    for (module.syntax.functions.items) |func| {
         for (func.statements.items, 0..) |stmt, index| {
             updateDependencyQueryTarget(&best, &best_end, stmt, func.statements.items[0..index], .any, caller_display, query_start);
         }
@@ -382,7 +374,7 @@ fn checkTypeDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
         var names = std.StringHashMap([]const u8).init(allocator);
         defer names.deinit();
 
-        for (module.program.objects.items) |object_decl| {
+        for (module.syntax.objects.items) |object_decl| {
             if (isBuiltinTypeName(object_decl.name)) {
                 const origin = try originForModuleSpan(allocator, origin_path, object_decl.span);
                 defer allocator.free(origin);
@@ -402,7 +394,7 @@ fn checkTypeDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
             try names.put(object_decl.name, "object");
         }
 
-        for (module.program.records.items) |record_decl| {
+        for (module.syntax.records.items) |record_decl| {
             if (isBuiltinTypeName(record_decl.name)) {
                 const origin = try originForModuleSpan(allocator, origin_path, record_decl.span);
                 defer allocator.free(origin);
@@ -422,7 +414,7 @@ fn checkTypeDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
             try names.put(record_decl.name, "record");
         }
 
-        for (module.program.types.items) |decl| {
+        for (module.syntax.types.items) |decl| {
             if (isBuiltinTypeName(decl.name)) {
                 const origin = try originForModuleSpan(allocator, origin_path, decl.span);
                 defer allocator.free(origin);
@@ -466,7 +458,7 @@ fn checkTypeAnnotations(
         const module = ir.moduleById(module_id) orelse continue;
         const origin_path = checker.originPathForModule(module);
 
-        for (module.program.records.items) |record_decl| {
+        for (module.syntax.records.items) |record_decl| {
             for (record_decl.fields.items) |field| {
                 const diagnostic_count = ir.diagnostics.items.len;
                 checkFieldTypeAnnotation(allocator, ir, sema, module_id, origin_path, field) catch |err| {
@@ -475,7 +467,7 @@ fn checkTypeAnnotations(
                 };
             }
         }
-        for (module.program.objects.items) |object_decl| {
+        for (module.syntax.objects.items) |object_decl| {
             for (object_decl.fields.items) |field| {
                 const diagnostic_count = ir.diagnostics.items.len;
                 checkFieldTypeAnnotation(allocator, ir, sema, module_id, origin_path, field) catch |err| {
@@ -484,7 +476,7 @@ fn checkTypeAnnotations(
                 };
             }
         }
-        for (module.program.object_extensions.items) |extension| {
+        for (module.syntax.object_extensions.items) |extension| {
             for (extension.fields.items) |field| {
                 const diagnostic_count = ir.diagnostics.items.len;
                 checkFieldTypeAnnotation(allocator, ir, sema, module_id, origin_path, field) catch |err| {
@@ -494,7 +486,7 @@ fn checkTypeAnnotations(
             }
         }
 
-        for (module.program.functions.items) |func| {
+        for (module.syntax.functions.items) |func| {
             const origin = try originForModuleSpan(allocator, origin_path, func.span);
             defer allocator.free(origin);
             for (func.params.items) |param| {
@@ -518,7 +510,7 @@ fn checkTypeAnnotations(
             };
         }
 
-        for (module.program.constants.items) |constant_decl| {
+        for (module.syntax.constants.items) |constant_decl| {
             const origin = try originForModuleSpan(allocator, origin_path, constant_decl.span);
             defer allocator.free(origin);
             const type_diagnostic_count = ir.diagnostics.items.len;
@@ -533,14 +525,14 @@ fn checkTypeAnnotations(
             };
         }
 
-        for (module.program.document_statements.items) |stmt| {
+        for (module.syntax.document_statements.items) |stmt| {
             const diagnostic_count = ir.diagnostics.items.len;
             checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, stmt) catch |err| {
                 try continueAfterDiagnostic(ir, diagnostic_count, err);
                 had_diagnostics = true;
             };
         }
-        for (module.program.pages.items) |page| {
+        for (module.syntax.pages.items) |page| {
             for (page.statements.items) |stmt| {
                 const diagnostic_count = ir.diagnostics.items.len;
                 checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, stmt) catch |err| {
@@ -585,13 +577,13 @@ fn resolveTypeReferences(
     sema: *const SemanticEnv,
 ) !void {
     for (ir.modules.items) |*module| {
-        try resolveProgramTypeReferences(allocator, &module.program, module.id, sema);
+        try resolveProgramTypeReferences(allocator, &module.syntax, module.id, sema);
     }
 }
 
 fn resolveProgramTypeReferences(
     allocator: std.mem.Allocator,
-    program: *ast.Program,
+    program: *ast.Module,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
@@ -718,7 +710,7 @@ fn resolveEnumCaseExpressionsAndDefaults(
     sema: *const SemanticEnv,
 ) !void {
     for (ir.modules.items) |*module| {
-        try resolveProgramEnumCasesAndDefaults(allocator, module.id, sema, &module.program);
+        try resolveProgramEnumCasesAndDefaults(allocator, module.id, sema, &module.syntax);
     }
 }
 
@@ -726,7 +718,7 @@ fn resolveProgramEnumCasesAndDefaults(
     allocator: std.mem.Allocator,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
-    program: *ast.Program,
+    program: *ast.Module,
 ) !void {
     for (program.objects.items) |*object_decl| {
         try resolveObjectFieldEnumCasesAndDefaults(allocator, module_id, sema, object_decl.fields.items);
@@ -1090,7 +1082,7 @@ fn rebuildConstDeclarations(
     ir.constants.clearRetainingCapacity();
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
-        try appendConstDeclarations(&ir.constants, module.program, module.id);
+        try appendConstDeclarations(&ir.constants, module.syntax, module.id);
     }
 }
 
@@ -1102,7 +1094,7 @@ fn rebuildFunctionDeclarations(
     ir.functions.clearRetainingCapacity();
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
-        try appendFunctionDeclarations(&ir.functions, module.program, module.id);
+        try appendFunctionDeclarations(&ir.functions, module.syntax, module.id);
     }
 }
 
@@ -1308,7 +1300,7 @@ fn checkDuplicateValueDeclarations(
         var names = std.StringHashMap(void).init(allocator);
         defer names.deinit();
         const origin_path = checker.originPathForModule(module);
-        for (module.program.functions.items) |func| {
+        for (module.syntax.functions.items) |func| {
             if (names.contains(func.name)) {
                 const origin = try originForModuleSpan(allocator, origin_path, func.span);
                 defer allocator.free(origin);
@@ -1319,7 +1311,7 @@ fn checkDuplicateValueDeclarations(
             }
             try names.put(func.name, {});
         }
-        for (module.program.constants.items) |constant_decl| {
+        for (module.syntax.constants.items) |constant_decl| {
             if (names.contains(constant_decl.name)) {
                 const origin = try originForModuleSpan(allocator, origin_path, constant_decl.span);
                 defer allocator.free(origin);
@@ -1349,7 +1341,7 @@ fn functionOrigin(
     const module = ir.moduleById(module_id);
     const path = if (module) |m| m.path orelse m.spec else "";
     if (module) |m| {
-        for (m.program.functions.items) |func| {
+        for (m.syntax.functions.items) |func| {
             if (!std.mem.eql(u8, func.name, function_name)) continue;
             if (path.len == 0) return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ func.span.start, func.span.end });
             return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ path, func.span.start, func.span.end });
@@ -1362,7 +1354,7 @@ fn functionOrigin(
 pub fn collectVariableInfoFromProgram(
     allocator: std.mem.Allocator,
     functions: *const core.FunctionMap,
-    program: ast.Program,
+    program: ast.Module,
     diagnostic_ir: ?*core.Ir,
 ) !std.StringHashMap(VariableInfo) {
     const sema = SemanticEnv.init(diagnostic_ir, null, functions);
@@ -1413,7 +1405,7 @@ pub fn collectVariableInfoFromProgram(
 pub fn collectScopedVariableInfoFromProgram(
     allocator: std.mem.Allocator,
     functions: *const core.FunctionMap,
-    program: ast.Program,
+    program: ast.Module,
     module_id: core.SourceModuleId,
     source_len: usize,
     diagnostic_ir: ?*core.Ir,
@@ -1470,7 +1462,7 @@ pub fn collectScopedVariableInfoFromProgram(
 
 fn appendFunctionDeclarations(
     functions: *core.FunctionMap,
-    program: ast.Program,
+    program: ast.Module,
     module_id: core.SourceModuleId,
 ) !void {
     for (program.functions.items) |func| {
@@ -1480,7 +1472,7 @@ fn appendFunctionDeclarations(
 
 fn appendConstDeclarations(
     constants: *core.ConstMap,
-    program: ast.Program,
+    program: ast.Module,
     module_id: core.SourceModuleId,
 ) !void {
     for (program.constants.items) |constant_decl| {
@@ -1493,8 +1485,8 @@ pub fn buildIr(
     input_path: []const u8,
     asset_base_path: []const u8,
     project_source: *[]u8,
-    project_program: *ast.Program,
-    index: *ProgramIndex,
+    project_program: *ast.Module,
+    index: *ModuleIndex,
 ) !core.Ir {
     return buildIrWithOptions(allocator, input_path, asset_base_path, project_source, project_program, index, .{});
 }
@@ -1504,8 +1496,8 @@ pub fn buildIrWithOptions(
     input_path: []const u8,
     asset_base_path: []const u8,
     project_source: *[]u8,
-    project_program: *ast.Program,
-    index: *ProgramIndex,
+    project_program: *ast.Module,
+    index: *ModuleIndex,
     options: BuildIrOptions,
 ) !core.Ir {
     const asset_base_dir = try allocator.dupe(u8, asset_base_path);
@@ -1518,7 +1510,7 @@ pub fn buildIrWithOptions(
     owns_asset_base_dir = false;
     owns_project_path = false;
     project_source.* = &.{};
-    project_program.* = ast.Program.init();
+    project_program.* = ast.Module.init();
     errdefer ir.deinit();
     if (options.parse_holes) |holes| {
         try addParseHoleDiagnostics(&ir, holes);
@@ -1528,14 +1520,14 @@ pub fn buildIrWithOptions(
     index.constants = core.ConstMap.init(allocator);
     ir.functions = index.functions;
     index.functions = core.FunctionMap.init(allocator);
-    ir.module_order = index.module_order;
-    index.module_order = .empty;
-    ir.projectModuleMutable().implicit_import_ids = index.project_implicit_import_ids;
-    index.project_implicit_import_ids = .empty;
-    ir.projectModuleMutable().resolved_import_ids = index.project_import_ids;
-    index.project_import_ids = .empty;
-    for (index.modules.items) |module| try ir.modules.append(allocator, module);
-    index.modules = .empty;
+    ir.module_order = index.module_graph.module_order;
+    index.module_graph.module_order = .empty;
+    ir.projectModuleMutable().implicit_import_ids = index.module_graph.project_implicit_import_ids;
+    index.module_graph.project_implicit_import_ids = .empty;
+    ir.projectModuleMutable().resolved_import_ids = index.module_graph.project_import_ids;
+    index.module_graph.project_import_ids = .empty;
+    for (index.module_graph.modules.items) |module| try ir.modules.append(allocator, module);
+    index.module_graph.modules = .empty;
     if (ir.module_order.items.len == 0 or ir.module_order.items[ir.module_order.items.len - 1] != ir.project_module_id) {
         try ir.module_order.append(allocator, ir.project_module_id);
     }
@@ -1549,7 +1541,7 @@ pub fn buildIrWithOptions(
         try rebuildFunctionDeclarations(allocator, &ir);
     }
     const variable_diagnostic_ir: ?*core.Ir = if (options.allow_diagnostics) null else &ir;
-    var variable_infos: ?std.StringHashMap(VariableInfo) = collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram(), variable_diagnostic_ir) catch |err| blk: {
+    var variable_infos: ?std.StringHashMap(VariableInfo) = collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectSyntax(), variable_diagnostic_ir) catch |err| blk: {
         if (!options.allow_diagnostics) {
             printIrDiagnosticsOrFallback(&ir, err);
             return error.DiagnosticsFailed;
@@ -1589,81 +1581,70 @@ fn printIrDiagnosticsOrFallback(ir: *core.Ir, err: anyerror) void {
     }
 }
 
-pub fn loadProgramIndex(
+pub fn loadModuleIndex(
     allocator: std.mem.Allocator,
     io: std.Io,
     base_dir: []const u8,
-    project_program: ast.Program,
-) !ProgramIndex {
-    return loadProgramIndexWithOverlay(allocator, io, base_dir, project_program, null);
+    project_program: ast.Module,
+) !ModuleIndex {
+    return loadModuleIndexWithOverlay(allocator, io, base_dir, project_program, null);
 }
 
-pub fn loadProgramIndexWithOverlay(
+pub fn loadModuleIndexWithOverlay(
     allocator: std.mem.Allocator,
     io: std.Io,
     base_dir: []const u8,
-    project_program: ast.Program,
+    project_program: ast.Module,
     overlay: ?*const module_loader.SourceOverlay,
-) !ProgramIndex {
-    return loadProgramIndexWithOptions(allocator, io, base_dir, project_program, .{ .overlay = overlay });
+) !ModuleIndex {
+    return loadModuleIndexWithOptions(allocator, io, base_dir, project_program, .{ .overlay = overlay });
 }
 
-pub const LoadProgramIndexOptions = struct {
+pub const LoadModuleIndexOptions = struct {
     overlay: ?*const module_loader.SourceOverlay = null,
     diagnostics: ?*module_loader.LoadDiagnostics = null,
     print_diagnostics: bool = true,
     recovering: bool = false,
 };
 
-pub fn loadProgramIndexWithOptions(
+pub fn loadModuleIndexWithOptions(
     allocator: std.mem.Allocator,
     io: std.Io,
     base_dir: []const u8,
-    project_program: ast.Program,
-    options: LoadProgramIndexOptions,
-) !ProgramIndex {
-    var graph = try module_loader.loadGraphWithOptions(allocator, io, base_dir, project_program, .{
+    project_program: ast.Module,
+    options: LoadModuleIndexOptions,
+) !ModuleIndex {
+    const module_graph = try module_loader.loadGraphWithOptions(allocator, io, base_dir, project_program, .{
         .overlay = options.overlay,
         .diagnostics = options.diagnostics,
         .print_diagnostics = options.print_diagnostics,
         .recovering = options.recovering,
     });
-    errdefer graph.deinit();
-
-    var index = ProgramIndex{
-        .allocator = allocator,
-        .modules = graph.modules,
-        .module_order = graph.module_order,
-        .project_implicit_import_ids = graph.project_implicit_import_ids,
-        .project_import_ids = graph.project_import_ids,
+    var index = ModuleIndex{
+        .module_graph = module_graph,
         .constants = core.ConstMap.init(allocator),
         .functions = core.FunctionMap.init(allocator),
     };
-    graph.modules = .empty;
-    graph.module_order = .empty;
-    graph.project_implicit_import_ids = .empty;
-    graph.project_import_ids = .empty;
-
     errdefer index.deinit();
 
-    for (index.module_order.items) |module_id| {
-        const module = findModuleById(index.modules.items, module_id) orelse continue;
-        try appendConstDeclarations(&index.constants, module.program, module.id);
-        try appendFunctionDeclarations(&index.functions, module.program, module.id);
+    for (index.module_graph.module_order.items) |module_id| {
+        const module = findModuleById(index.module_graph.modules.items, module_id) orelse continue;
+        try appendConstDeclarations(&index.constants, module.syntax, module.id);
+        try appendFunctionDeclarations(&index.functions, module.syntax, module.id);
     }
     try appendConstDeclarations(&index.constants, project_program, 0);
     try appendFunctionDeclarations(&index.functions, project_program, 0);
     return index;
 }
 
-pub fn loadProgramIndexForPath(
+pub fn loadModuleIndexForPath(
     allocator: std.mem.Allocator,
     io: std.Io,
     input_path: []const u8,
-    project_program: ast.Program,
-) !ProgramIndex {
+    project_program: ast.Module,
+) !ModuleIndex {
     const base_dir = std.fs.path.dirname(input_path) orelse ".";
-    return loadProgramIndex(allocator, io, base_dir, project_program);
+    return loadModuleIndex(allocator, io, base_dir, project_program);
 }
 
 fn collectVariableTypesFromStatement(

@@ -31,7 +31,7 @@ test "analysis query spec: expired structural parse budget keeps callable target
     });
     defer context.deinit(testing.allocator);
 
-    try testing.expect(context.program() == null);
+    try testing.expect(context.module() == null);
     try testing.expectEqualStrings("ultra_big!", context.target);
 }
 
@@ -55,6 +55,6 @@ test "analysis query spec: expired structural parse budget keeps local target" {
     });
     defer context.deinit(testing.allocator);
 
-    try testing.expect(context.program() == null);
+    try testing.expect(context.module() == null);
     try testing.expectEqualStrings("t1", context.target);
 }

@@ -20,7 +20,7 @@ pub const Symbol = struct {
     selection_span: source.ByteSpan,
 };
 
-pub fn collect(allocator: std.mem.Allocator, _: []const u8, program: ast.Program) ![]Symbol {
+pub fn collect(allocator: std.mem.Allocator, _: []const u8, program: ast.Module) ![]Symbol {
     var out = std.ArrayList(Symbol).empty;
     errdefer {
         for (out.items) |symbol| allocator.free(symbol.name);

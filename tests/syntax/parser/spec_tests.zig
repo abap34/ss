@@ -5,38 +5,38 @@ const Type = @import("language_type").Type;
 
 const testing = std.testing;
 
-const ParsedProgram = struct {
+const ParsedModule = struct {
     arena: std.heap.ArenaAllocator,
-    program: syntax.Program,
+    module: syntax.Module,
 
-    fn deinit(self: *ParsedProgram) void {
-        self.program.deinit(self.arena.allocator());
+    fn deinit(self: *ParsedModule) void {
+        self.module.deinit(self.arena.allocator());
         self.arena.deinit();
     }
 };
 
-const ParsedRecoveringProgram = struct {
+const ParsedRecoveringModule = struct {
     arena: std.heap.ArenaAllocator,
     result: syntax.ParseResult,
 
-    fn deinit(self: *ParsedRecoveringProgram) void {
+    fn deinit(self: *ParsedRecoveringModule) void {
         self.result.deinit(self.arena.allocator());
         self.arena.deinit();
     }
 };
 
-fn parse(source: []const u8) !ParsedProgram {
+fn parse(source: []const u8) !ParsedModule {
     return try parseWithSourceName(source, "unit-test.ss");
 }
 
-fn parseWithSourceName(source: []const u8, source_name: []const u8) !ParsedProgram {
+fn parseWithSourceName(source: []const u8, source_name: []const u8) !ParsedModule {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     errdefer arena.deinit();
     const program = try syntax.parseWithSourceName(arena.allocator(), source, source_name);
-    return .{ .arena = arena, .program = program };
+    return .{ .arena = arena, .module = program };
 }
 
-fn parseRecovering(source: []const u8) !ParsedRecoveringProgram {
+fn parseRecovering(source: []const u8) !ParsedRecoveringModule {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     errdefer arena.deinit();
     const result = try syntax.parseRecoveringWithSourceName(arena.allocator(), source, "unit-test.ss");
@@ -203,7 +203,7 @@ test "syntax spec: imports and pages preserve source order" {
     ;
     var parsed = try parse(source_text);
     defer parsed.deinit();
-    const program = &parsed.program;
+    const program = &parsed.module;
 
     try testing.expectEqual(@as(usize, 2), program.imports.items.len);
     try testing.expectEqualStrings("core", program.imports.items[0].spec);
@@ -241,19 +241,19 @@ test "syntax spec: import modes are explicit in the AST" {
     var parsed = try parse(source_text);
     defer parsed.deinit();
 
-    try testing.expectEqual(@as(usize, 5), parsed.program.imports.items.len);
-    try expectImportMode(parsed.program.imports.items[0], "default", true);
-    try expectImportMode(parsed.program.imports.items[1], "base", false);
-    try expectImportMode(parsed.program.imports.items[2], null, true);
-    try expectImportMode(parsed.program.imports.items[3], null, true);
-    try expectImportMode(parsed.program.imports.items[4], "seminar_theme", false);
-    try expectSpanText(source_text, parsed.program.imports.items[0].spec_span, "std:themes/default");
-    try expectSpanText(source_text, parsed.program.imports.items[1].spec_span, "std:themes/default");
-    try expectSpanText(source_text, parsed.program.imports.items[1].alias_span.?, "base");
-    try testing.expect(parsed.program.imports.items[0].alias_span == null);
-    try testing.expect(parsed.program.imports.items[2].alias_span == null);
-    try testing.expect(parsed.program.imports.items[3].alias_span == null);
-    try expectSpanText(source_text, parsed.program.imports.items[4].alias_span.?, "seminar_theme");
+    try testing.expectEqual(@as(usize, 5), parsed.module.imports.items.len);
+    try expectImportMode(parsed.module.imports.items[0], "default", true);
+    try expectImportMode(parsed.module.imports.items[1], "base", false);
+    try expectImportMode(parsed.module.imports.items[2], null, true);
+    try expectImportMode(parsed.module.imports.items[3], null, true);
+    try expectImportMode(parsed.module.imports.items[4], "seminar_theme", false);
+    try expectSpanText(source_text, parsed.module.imports.items[0].spec_span, "std:themes/default");
+    try expectSpanText(source_text, parsed.module.imports.items[1].spec_span, "std:themes/default");
+    try expectSpanText(source_text, parsed.module.imports.items[1].alias_span.?, "base");
+    try testing.expect(parsed.module.imports.items[0].alias_span == null);
+    try testing.expect(parsed.module.imports.items[2].alias_span == null);
+    try testing.expect(parsed.module.imports.items[3].alias_span == null);
+    try expectSpanText(source_text, parsed.module.imports.items[4].alias_span.?, "seminar_theme");
 }
 
 test "syntax spec: qualified callable names preserve source spans" {
@@ -266,7 +266,7 @@ test "syntax spec: qualified callable names preserve source spans" {
     var parsed = try parse(source_text);
     defer parsed.deinit();
 
-    const stmt = parsed.program.pages.items[0].statements.items[0];
+    const stmt = parsed.module.pages.items[0].statements.items[0];
     const expr = switch (stmt.kind) {
         .let_binding => |binding| binding.expr,
         else => return error.ExpectedLetBinding,
@@ -298,14 +298,14 @@ test "syntax spec: declaration names preserve source spans" {
     var parsed = try parse(source_text);
     defer parsed.deinit();
 
-    try expectSpanText(source_text, parsed.program.types.items[0].name_span.?, "Mode");
-    try expectSpanText(source_text, parsed.program.objects.items[0].name_span.?, "Widget");
-    try expectSpanText(source_text, parsed.program.objects.items[0].fields.items[0].name_span.?, "title");
-    try expectSpanText(source_text, parsed.program.records.items[0].name_span.?, "Theme");
-    try expectSpanText(source_text, parsed.program.records.items[0].fields.items[0].name_span.?, "accent");
-    try expectSpanText(source_text, parsed.program.constants.items[0].name_span.?, "accent");
-    try expectSpanText(source_text, parsed.program.functions.items[0].name_span.?, "helper");
-    try expectSpanText(source_text, parsed.program.pages.items[0].name_span.?, "First");
+    try expectSpanText(source_text, parsed.module.types.items[0].name_span.?, "Mode");
+    try expectSpanText(source_text, parsed.module.objects.items[0].name_span.?, "Widget");
+    try expectSpanText(source_text, parsed.module.objects.items[0].fields.items[0].name_span.?, "title");
+    try expectSpanText(source_text, parsed.module.records.items[0].name_span.?, "Theme");
+    try expectSpanText(source_text, parsed.module.records.items[0].fields.items[0].name_span.?, "accent");
+    try expectSpanText(source_text, parsed.module.constants.items[0].name_span.?, "accent");
+    try expectSpanText(source_text, parsed.module.functions.items[0].name_span.?, "helper");
+    try expectSpanText(source_text, parsed.module.pages.items[0].name_span.?, "First");
 }
 
 test "syntax spec: let bindings keep optional type annotations" {
@@ -318,7 +318,7 @@ test "syntax spec: let bindings keep optional type annotations" {
     var parsed = try parse(source_text);
     defer parsed.deinit();
 
-    const binding = parsed.program.pages.items[0].statements.items[0].kind.let_binding;
+    const binding = parsed.module.pages.items[0].statements.items[0].kind.let_binding;
     try testing.expectEqualStrings("count", binding.name);
     try expectSpanText(source_text, binding.name_span.?, "count");
     const annotation = binding.type_annotation orelse return error.ExpectedTypeAnnotation;
@@ -395,9 +395,9 @@ test "syntax spec: page name underscore generates an internal reserved name" {
     , "second.ss");
     defer second.deinit();
 
-    try testing.expect(std.mem.startsWith(u8, first.program.pages.items[0].name, "#gen_"));
-    try testing.expect(std.mem.startsWith(u8, second.program.pages.items[0].name, "#gen_"));
-    try testing.expect(!std.mem.eql(u8, first.program.pages.items[0].name, second.program.pages.items[0].name));
+    try testing.expect(std.mem.startsWith(u8, first.module.pages.items[0].name, "#gen_"));
+    try testing.expect(std.mem.startsWith(u8, second.module.pages.items[0].name, "#gen_"));
+    try testing.expect(!std.mem.eql(u8, first.module.pages.items[0].name, second.module.pages.items[0].name));
 }
 
 test "syntax spec: explicit reserved page names are rejected" {
@@ -421,7 +421,7 @@ test "syntax spec: function signatures preserve types and trailing defaults" {
         \\
     );
     defer parsed.deinit();
-    const program = &parsed.program;
+    const program = &parsed.module;
 
     try testing.expectEqual(@as(usize, 1), program.functions.items.len);
     const choose = program.functions.items[0];
@@ -448,24 +448,24 @@ test "syntax spec: functions can use expression bodies" {
     );
     defer parsed.deinit();
 
-    try testing.expectEqual(@as(usize, 4), parsed.program.functions.items.len);
+    try testing.expectEqual(@as(usize, 4), parsed.module.functions.items.len);
 
-    const square = parsed.program.functions.items[0];
+    const square = parsed.module.functions.items[0];
     try testing.expectEqualStrings("square", square.name);
     try testing.expectEqual(@as(usize, 1), square.statements.items.len);
     _ = try expectCall(square.statements.items[0].kind.return_expr, "mul", 2);
 
-    const remember = parsed.program.functions.items[1];
+    const remember = parsed.module.functions.items[1];
     try testing.expectEqualStrings("remember", remember.name);
     try testing.expectEqual(@as(usize, 1), remember.statements.items.len);
     _ = try expectCall(remember.statements.items[0].kind.expr_stmt, "set_prop", 3);
 
-    const badge = parsed.program.functions.items[2];
+    const badge = parsed.module.functions.items[2];
     try testing.expectEqualStrings("badge", badge.name);
     try testing.expectEqual(@as(usize, 1), badge.statements.items.len);
     _ = try expectCall(badge.statements.items[0].kind.return_expr, "text", 1);
 
-    const placing = parsed.program.functions.items[3];
+    const placing = parsed.module.functions.items[3];
     try testing.expectEqualStrings("badge!", placing.name);
     const place_on = try expectCall(placing.statements.items[0].kind.return_expr, "place_on!", 2);
     _ = try expectCall(place_on.args.items[0], "pagectx", 0);
@@ -486,9 +486,9 @@ test "syntax spec: constants are top-level value declarations" {
     );
     defer parsed.deinit();
 
-    try testing.expectEqual(@as(usize, 0), parsed.program.functions.items.len);
-    try testing.expectEqual(@as(usize, 1), parsed.program.constants.items.len);
-    const accent = parsed.program.constants.items[0];
+    try testing.expectEqual(@as(usize, 0), parsed.module.functions.items.len);
+    try testing.expectEqual(@as(usize, 1), parsed.module.constants.items.len);
+    const accent = parsed.module.constants.items[0];
     try testing.expectEqualStrings("accent", accent.name);
     try testing.expectEqual(Type.Kind.color, accent.value_type.kind);
     try expectColor(accent.value, "1,0,0");
@@ -525,11 +525,11 @@ test "syntax spec: void functions may omit explicit return values" {
     );
     defer parsed.deinit();
 
-    const noop = parsed.program.functions.items[0];
+    const noop = parsed.module.functions.items[0];
     try testing.expectEqual(Type.Kind.void, noop.result_type.kind);
     try testing.expectEqual(@as(usize, 1), noop.statements.items.len);
 
-    const stop = parsed.program.functions.items[1];
+    const stop = parsed.module.functions.items[1];
     try testing.expectEqual(Type.Kind.void, stop.result_type.kind);
     try testing.expectEqual(@as(usize, 1), stop.statements.items.len);
     switch (stop.statements.items[0].kind) {
@@ -551,7 +551,7 @@ test "syntax spec: function types and lambdas are source syntax" {
     );
     defer parsed.deinit();
 
-    const make_label = parsed.program.functions.items[0];
+    const make_label = parsed.module.functions.items[0];
     try testing.expectEqual(Type.Kind.function, make_label.result_type.kind);
     try testing.expectEqual(@as(usize, 1), make_label.result_type.fn_params.len);
     try testing.expectEqual(Type.Kind.page, make_label.result_type.fn_params[0].kind);
@@ -565,7 +565,7 @@ test "syntax spec: function types and lambdas are source syntax" {
         else => return error.ExpectedLambdaExpr,
     }
 
-    const use = parsed.program.functions.items[1];
+    const use = parsed.module.functions.items[1];
     try testing.expectEqual(Type.Kind.function, use.params.items[0].ty.kind);
     try testing.expectEqual(Type.Kind.function, use.params.items[0].ty.fn_params[0].kind);
     try testing.expectEqual(Type.Kind.function, use.params.items[1].ty.kind);
@@ -591,11 +591,11 @@ test "syntax spec: bang suffix is limited to callable names" {
     );
     defer parsed.deinit();
 
-    try testing.expectEqualStrings("mark!", parsed.program.functions.items[0].name);
-    const call = try expectCall(parsed.program.pages.items[0].statements.items[0].kind.expr_stmt, "mark!", 0);
+    try testing.expectEqualStrings("mark!", parsed.module.functions.items[0].name);
+    const call = try expectCall(parsed.module.pages.items[0].statements.items[0].kind.expr_stmt, "mark!", 0);
     try testing.expectEqualStrings("mark!", call.callee.name);
-    _ = try expectCall(parsed.program.pages.items[0].statements.items[1].kind.expr_stmt, "text!", 1);
-    _ = try expectCall(parsed.program.pages.items[0].statements.items[2].kind.expr_stmt, "code!", 1);
+    _ = try expectCall(parsed.module.pages.items[0].statements.items[1].kind.expr_stmt, "text!", 1);
+    _ = try expectCall(parsed.module.pages.items[0].statements.items[2].kind.expr_stmt, "code!", 1);
 
     try expectParseError(error.ExpectedChar,
         \\type Bad! = object {
@@ -644,11 +644,11 @@ test "syntax spec: qualified callables parse in normal and text block calls" {
     );
     defer parsed.deinit();
 
-    const normal_call = try expectCall(parsed.program.pages.items[0].statements.items[0].kind.expr_stmt, "h2", 1);
+    const normal_call = try expectCall(parsed.module.pages.items[0].statements.items[0].kind.expr_stmt, "h2", 1);
     try testing.expect(normal_call.callee.isQualified());
     try testing.expectEqualStrings("default", normal_call.callee.qualifier.?);
 
-    const block_call = try expectCall(parsed.program.pages.items[0].statements.items[1].kind.expr_stmt, "h2!", 1);
+    const block_call = try expectCall(parsed.module.pages.items[0].statements.items[1].kind.expr_stmt, "h2!", 1);
     try testing.expect(block_call.callee.isQualified());
     try testing.expectEqualStrings("default", block_call.callee.qualifier.?);
 }
@@ -671,14 +671,14 @@ test "syntax spec: paired placement functions expand to plain and placing defini
     );
     defer parsed.deinit();
 
-    try testing.expectEqual(@as(usize, 2), parsed.program.functions.items.len);
-    const note = parsed.program.functions.items[0];
+    try testing.expectEqual(@as(usize, 2), parsed.module.functions.items.len);
+    const note = parsed.module.functions.items[0];
     try testing.expectEqualStrings("note", note.name);
     try testing.expectEqual(@as(usize, 2), note.params.items.len);
     try testing.expectEqualStrings("tone", note.params.items[1].name);
     try expectString(note.params.items[1].default_value.?.*, "soft");
 
-    const placing = parsed.program.functions.items[1];
+    const placing = parsed.module.functions.items[1];
     try testing.expectEqualStrings("note!", placing.name);
     try testing.expectEqual(@as(usize, 2), placing.params.items.len);
     try testing.expectEqualStrings("tone", placing.params.items[1].name);
@@ -718,7 +718,7 @@ test "syntax spec: bare user type names parse as object class annotations" {
     );
     defer parsed.deinit();
 
-    const keep = parsed.program.functions.items[0];
+    const keep = parsed.module.functions.items[0];
     try testing.expectEqual(Type.Kind.object, keep.params.items[0].ty.kind);
     try testing.expectEqualStrings("Text", keep.params.items[0].ty.class_name.?);
     try testing.expectEqual(Type.Kind.object, keep.result_type.kind);
@@ -736,12 +736,12 @@ test "syntax spec: enum declarations and optional types parse" {
     );
     defer parsed.deinit();
 
-    try testing.expectEqual(@as(usize, 1), parsed.program.types.items.len);
-    try testing.expectEqualStrings("Align", parsed.program.types.items[0].name);
-    try testing.expectEqual(@as(usize, 3), parsed.program.types.items[0].cases.items.len);
-    try testing.expectEqualStrings("left", parsed.program.types.items[0].cases.items[0].name);
-    try testing.expectEqualStrings("center", parsed.program.types.items[0].cases.items[1].name);
-    try testing.expectEqualStrings("right", parsed.program.types.items[0].cases.items[2].name);
+    try testing.expectEqual(@as(usize, 1), parsed.module.types.items.len);
+    try testing.expectEqualStrings("Align", parsed.module.types.items[0].name);
+    try testing.expectEqual(@as(usize, 3), parsed.module.types.items[0].cases.items.len);
+    try testing.expectEqualStrings("left", parsed.module.types.items[0].cases.items[0].name);
+    try testing.expectEqualStrings("center", parsed.module.types.items[0].cases.items[1].name);
+    try testing.expectEqualStrings("right", parsed.module.types.items[0].cases.items[2].name);
     try expectSpanText(
         \\type Align = left | center | right
         \\
@@ -749,9 +749,9 @@ test "syntax spec: enum declarations and optional types parse" {
         \\  return value
         \\end
         \\
-    , parsed.program.types.items[0].cases.items[1].name_span.?, "center");
+    , parsed.module.types.items[0].cases.items[1].name_span.?, "center");
 
-    const keep = parsed.program.functions.items[0];
+    const keep = parsed.module.functions.items[0];
     try testing.expectEqual(Type.Kind.optional, keep.params.items[0].ty.kind);
     try testing.expectEqual(Type.Kind.color, keep.params.items[0].ty.optional_child.?.kind);
     try testing.expectEqual(Type.Kind.none, keep.params.items[1].ty.kind);
@@ -777,7 +777,7 @@ test "syntax spec: optional types compose with functions and selections" {
     );
     defer parsed.deinit();
 
-    const keep = parsed.program.functions.items[0];
+    const keep = parsed.module.functions.items[0];
     const callback = keep.params.items[0].ty;
     try testing.expectEqual(Type.Kind.optional, callback.kind);
     try testing.expectEqual(Type.Kind.function, callback.optional_child.?.kind);
@@ -808,7 +808,7 @@ test "syntax spec: qualified type names parse in annotations and type parameters
     var parsed = try parse(source);
     defer parsed.deinit();
 
-    const keep = parsed.program.functions.items[0];
+    const keep = parsed.module.functions.items[0];
     try testing.expectEqual(Type.Kind.object, keep.params.items[0].ty.kind);
     try testing.expectEqualStrings("classes::TextStyle", keep.params.items[0].ty.class_name.?);
     try testing.expectEqualStrings("classes::TextStyle", source[keep.params.items[0].ty.class_name_span.?.start..keep.params.items[0].ty.class_name_span.?.end]);
@@ -832,7 +832,7 @@ test "syntax spec: qualified record literals and enum targets parse" {
     );
     defer parsed.deinit();
 
-    const statements = parsed.program.pages.items[0].statements.items;
+    const statements = parsed.module.pages.items[0].statements.items;
     switch (statements[0].kind.let_binding.expr) {
         .record => |record| {
             try testing.expectEqualStrings("classes::TextStyle", record.type_name);
@@ -859,7 +859,7 @@ test "syntax spec: enum values color literals and none stay explicit in the AST"
     );
     defer parsed.deinit();
 
-    const statements = parsed.program.pages.items[0].statements.items;
+    const statements = parsed.module.pages.items[0].statements.items;
     const member = try expectMember(statements[0].kind.let_binding.expr, "left");
     switch (member.target.*) {
         .ident => |ident| try testing.expectEqualStrings("Align", ident.name),
@@ -892,7 +892,7 @@ test "syntax spec: object field defaults are parsed as expressions" {
     );
     defer parsed.deinit();
 
-    const card = parsed.program.objects.items[0];
+    const card = parsed.module.objects.items[0];
     try testing.expectEqual(@as(usize, 7), card.fields.items.len);
     try expectNumber(card.fields.items[0].default_value.?.*, 1.02);
     try testing.expect(card.fields.items[0].default_property_value == null);
@@ -929,7 +929,7 @@ test "syntax spec: member optional and coalesce keep nested targets" {
     );
     defer parsed.deinit();
 
-    const statements = parsed.program.pages.items[0].statements.items;
+    const statements = parsed.module.pages.items[0].statements.items;
     switch (statements[0].kind.let_binding.expr) {
         .coalesce => |coalesce| {
             const footer = try expectMember(coalesce.target.*, "footer_text");
@@ -970,7 +970,7 @@ test "syntax spec: record update keeps target and nested field paths" {
     );
     defer parsed.deinit();
 
-    const expr = parsed.program.pages.items[0].statements.items[0].kind.let_binding.expr;
+    const expr = parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr;
     const update = try expectRecordUpdate(expr, 2);
     _ = try expectCall(update.target.*, "default_theme", 0);
     try expectPath(update.fields.items[0].path.items, &.{ "body", "text", "size" });
@@ -988,7 +988,7 @@ test "syntax spec: lambda expressions can be used as callees" {
     );
     defer parsed.deinit();
 
-    const expr = parsed.program.pages.items[0].statements.items[0].kind.let_binding.expr;
+    const expr = parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr;
     switch (expr) {
         .apply => |apply| {
             try testing.expectEqual(@as(usize, 1), apply.args.items.len);
@@ -1025,7 +1025,7 @@ test "syntax spec: lambda body may start on a later line" {
     );
     defer parsed.deinit();
 
-    const expr = parsed.program.pages.items[0].statements.items[0].kind.let_binding.expr;
+    const expr = parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr;
     switch (expr.call.args.items[1]) {
         .lambda => |lambda| {
             try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
@@ -1058,7 +1058,7 @@ test "syntax spec: expression parsing lowers operators to named primitive calls"
         \\
     );
     defer parsed.deinit();
-    const program = &parsed.program;
+    const program = &parsed.module;
 
     const numeric = program.pages.items[0].statements.items[0].kind.let_binding.expr;
     const add = try expectCall(numeric, "add", 2);
@@ -1092,7 +1092,7 @@ test "syntax spec: quoted strings keep backslashes literally" {
         \\
     );
     defer parsed.deinit();
-    const statements = parsed.program.pages.items[0].statements.items;
+    const statements = parsed.module.pages.items[0].statements.items;
 
     try expectString(statements[0].kind.let_binding.expr, "$F : L \\to L$");
     try expectString(statements[1].kind.let_binding.expr, "\\[1\\]");
@@ -1115,7 +1115,7 @@ test "syntax spec: call sugar is explicit about text-bearing and zero-argument c
         \\
     );
     defer parsed.deinit();
-    const program = &parsed.program;
+    const program = &parsed.module;
 
     const statements = program.pages.items[0].statements.items;
     const title = try expectCall(statements[0].kind.expr_stmt, "title", 1);
@@ -1145,7 +1145,7 @@ test "syntax spec: explicit call arguments preserve source spans" {
     var parsed = try parse(source);
     defer parsed.deinit();
 
-    const call = try expectCall(parsed.program.pages.items[0].statements.items[0].kind.let_binding.expr, "themed", 2);
+    const call = try expectCall(parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr, "themed", 2);
     try testing.expectEqual(@as(usize, 2), call.arg_spans.items.len);
     try testing.expectEqualStrings("foo", source[call.arg_spans.items[0].start..call.arg_spans.items[0].end]);
     try testing.expectEqualStrings("\"bar\"", source[call.arg_spans.items[1].start..call.arg_spans.items[1].end]);
@@ -1163,7 +1163,7 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
         \\
     );
     defer parsed.deinit();
-    const program = &parsed.program;
+    const program = &parsed.module;
 
     const statements = program.pages.items[0].statements.items;
     try testing.expectEqualStrings("local", statements[0].kind.let_binding.name);
@@ -1209,7 +1209,7 @@ test "syntax spec: constraints accept record member anchor paths" {
     );
     defer parsed.deinit();
 
-    const constraint = parsed.program.pages.items[0].statements.items[0].kind.constrain;
+    const constraint = parsed.module.pages.items[0].statements.items[0].kind.constrain;
     try testing.expectEqual(.node, constraint.target.kind);
     try testing.expectEqualStrings("caption", constraint.target.node_name.?);
     try testing.expectEqualStrings("caption", constraint.target.node_path.?);
@@ -1232,7 +1232,7 @@ test "syntax spec: constraint updates accept optional replacement relations" {
     );
     defer parsed.deinit();
 
-    const statements = parsed.program.pages.items[0].statements.items;
+    const statements = parsed.module.pages.items[0].statements.items;
     const discard = statements[0].kind.constrain;
     try testing.expectEqual(.update, discard.action);
     try testing.expectEqual(.anchor, discard.target_kind);
@@ -1275,7 +1275,7 @@ test "syntax spec: member expressions stay in the AST" {
     );
     defer parsed.deinit();
 
-    const statements = parsed.program.pages.items[0].statements.items;
+    const statements = parsed.module.pages.items[0].statements.items;
     const content_set = statements[1].kind.property_set;
     try expectIdent(content_set.target, "target");
     try expectPath(content_set.path.items, &.{"content"});
@@ -1313,7 +1313,7 @@ test "syntax spec: chained member assignment targets the enclosing expression" {
     );
     defer parsed.deinit();
 
-    const statements = parsed.program.pages.items[0].statements.items;
+    const statements = parsed.module.pages.items[0].statements.items;
     const color_set = statements[1].kind.property_set;
     try expectIdent(color_set.target, "pipe");
     try expectPath(color_set.path.items, &.{ "middle", "text_color" });
@@ -1338,7 +1338,7 @@ test "syntax spec: member assignments keep nested property paths" {
     );
     defer parsed.deinit();
 
-    const statements = parsed.program.pages.items[0].statements.items;
+    const statements = parsed.module.pages.items[0].statements.items;
     const layout = statements[0].kind.property_set;
     try expectIdent(layout.target, "box");
     try expectPath(layout.path.items, &.{ "layout", "x" });
@@ -1360,7 +1360,7 @@ test "syntax spec: place is an ordinary identifier and bind is removed" {
     );
     defer parsed.deinit();
 
-    const statements = parsed.program.pages.items[0].statements.items;
+    const statements = parsed.module.pages.items[0].statements.items;
     try testing.expectEqualStrings("place", statements[0].kind.let_binding.name);
     const add = try expectCall(statements[1].kind.let_binding.expr, "add", 2);
     switch (add.args.items[0]) {
@@ -1421,7 +1421,7 @@ test "syntax spec: recovering parse keeps expression holes in the returned progr
         try testing.expectEqual(diagnostic.hole_id, diagnostic.caused_by.?);
     }
 
-    const statements = parsed.result.program.pages.items[0].statements.items;
+    const statements = parsed.result.module.pages.items[0].statements.items;
     switch (statements[0].kind.let_binding.expr) {
         .hole => |id| {
             try testing.expectEqual(@as(ast.HoleId, 0), id);
@@ -1459,7 +1459,7 @@ test "syntax spec: recovering parse keeps statement holes and continues" {
     try testing.expectEqual(syntax.HoleKind.member_name, parsed.result.holes.holes[0].kind);
     try testing.expectEqual(error.ExpectedMemberName, parsed.result.holes.diagnostics[0].err);
 
-    const statements = parsed.result.program.pages.items[0].statements.items;
+    const statements = parsed.result.module.pages.items[0].statements.items;
     switch (statements[0].kind) {
         .expr_stmt => |expr| switch (expr) {
             .member => |member| try testing.expectEqual(@as(ast.HoleId, 0), member.name_hole orelse return error.ExpectedMemberNameHole),
@@ -1483,8 +1483,8 @@ test "syntax spec: recovering parse reports import holes and parses following it
     try testing.expectEqual(@as(usize, 1), parsed.result.holes.holes.len);
     try testing.expectEqual(syntax.HoleKind.import_spec, parsed.result.holes.holes[0].kind);
     try testing.expectEqual(error.InvalidImportSpec, parsed.result.holes.diagnostics[0].err);
-    try testing.expectEqual(@as(usize, 1), parsed.result.program.pages.items.len);
-    try testing.expectEqualStrings("Recover", parsed.result.program.pages.items[0].name);
+    try testing.expectEqual(@as(usize, 1), parsed.result.module.pages.items.len);
+    try testing.expectEqualStrings("Recover", parsed.result.module.pages.items[0].name);
 }
 
 test "syntax spec: recovering parse keeps qualified callable name holes" {
@@ -1498,7 +1498,7 @@ test "syntax spec: recovering parse keeps qualified callable name holes" {
 
     try testing.expectEqual(@as(usize, 1), parsed.result.holes.holes.len);
     try testing.expectEqual(syntax.HoleKind.name, parsed.result.holes.holes[0].kind);
-    const call = parsed.result.program.pages.items[0].statements.items[0].kind.expr_stmt.call;
+    const call = parsed.result.module.pages.items[0].statements.items[0].kind.expr_stmt.call;
     try testing.expectEqualStrings("theme", call.callee.qualifier.?);
     try testing.expectEqual(@as(ast.HoleId, 0), call.callee.name_hole.?);
 }
@@ -1528,21 +1528,21 @@ test "syntax spec: recovering parse keeps type expression holes" {
         try testing.expectEqual(type_hole.id, parsed.result.holes.diagnostics[index].caused_by.?);
     }
 
-    const func = parsed.result.program.functions.items[0];
+    const func = parsed.result.module.functions.items[0];
     try testing.expectEqual(Type.Kind.hole, func.params.items[0].ty.kind);
     try testing.expectEqual(@as(ast.HoleId, 0), func.params.items[0].ty.hole_id.?);
     try testing.expectEqual(Type.Kind.hole, func.result_type.kind);
     try testing.expectEqual(@as(ast.HoleId, 1), func.result_type.hole_id.?);
 
-    const binding = parsed.result.program.pages.items[0].statements.items[0].kind.let_binding;
+    const binding = parsed.result.module.pages.items[0].statements.items[0].kind.let_binding;
     try testing.expectEqual(Type.Kind.hole, binding.type_annotation.?.kind);
     try testing.expectEqual(@as(ast.HoleId, 2), binding.type_annotation.?.hole_id.?);
 
-    const record_field = parsed.result.program.records.items[0].fields.items[0];
+    const record_field = parsed.result.module.records.items[0].fields.items[0];
     try testing.expectEqual(Type.Kind.hole, record_field.value_type.kind);
     try testing.expectEqual(@as(ast.HoleId, 3), record_field.value_type.hole_id.?);
 
-    const object_field = parsed.result.program.objects.items[0].fields.items[0];
+    const object_field = parsed.result.module.objects.items[0].fields.items[0];
     try testing.expectEqual(Type.Kind.hole, object_field.value_type.kind);
     try testing.expectEqual(@as(ast.HoleId, 4), object_field.value_type.hole_id.?);
 }

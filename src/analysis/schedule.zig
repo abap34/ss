@@ -128,13 +128,13 @@ const BuildContext = struct {
             try self.collected_modules.put(module.id, {});
         }
 
-        if (module.program.top_level_items.items.len == 0) {
-            try self.appendDocumentStatementUnits(module, 0, module.program.document_statements.items.len);
-            for (module.program.pages.items) |page| try self.appendPageStatementUnits(module, page);
+        if (module.syntax.top_level_items.items.len == 0) {
+            try self.appendDocumentStatementUnits(module, 0, module.syntax.document_statements.items.len);
+            for (module.syntax.pages.items) |page| try self.appendPageStatementUnits(module, page);
             return;
         }
 
-        for (module.program.top_level_items.items) |item| {
+        for (module.syntax.top_level_items.items) |item| {
             switch (item) {
                 .import => |import_index| {
                     if (import_index >= module.resolved_import_ids.items.len) continue;
@@ -143,13 +143,13 @@ const BuildContext = struct {
                     try self.collectScheduledUnits(imported);
                 },
                 .document => |document_index| {
-                    if (document_index >= module.program.document_blocks.items.len) continue;
-                    const block = module.program.document_blocks.items[document_index];
+                    if (document_index >= module.syntax.document_blocks.items.len) continue;
+                    const block = module.syntax.document_blocks.items[document_index];
                     try self.appendDocumentStatementUnits(module, block.statement_start, block.statement_count);
                 },
                 .page => |page_index| {
-                    if (page_index >= module.program.pages.items.len) continue;
-                    try self.appendPageStatementUnits(module, module.program.pages.items[page_index]);
+                    if (page_index >= module.syntax.pages.items.len) continue;
+                    try self.appendPageStatementUnits(module, module.syntax.pages.items[page_index]);
                 },
             }
         }
@@ -164,8 +164,8 @@ const BuildContext = struct {
         const sema = SemanticEnv.init(self.core_ir, null, self.functions).forModule(module.id);
         var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .document = sema.module_id }, self.run_cache);
         defer analyzer.deinit();
-        const statement_end = @min(statement_start + statement_count, module.program.document_statements.items.len);
-        for (module.program.document_statements.items[statement_start..statement_end], statement_start..) |stmt, stmt_index| {
+        const statement_end = @min(statement_start + statement_count, module.syntax.document_statements.items.len);
+        for (module.syntax.document_statements.items[statement_start..statement_end], statement_start..) |stmt, stmt_index| {
             const summary = try analyzer.statement(stmt);
             errdefer {
                 var owned = summary;

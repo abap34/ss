@@ -746,7 +746,7 @@ fn findRecordDecl(ir: *const core.Ir, type_name: []const u8) ?ResolvedRecordDecl
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.records.items) |*decl| {
+        for (module.syntax.records.items) |*decl| {
             if (std.mem.eql(u8, decl.name, type_name)) return .{
                 .decl = decl,
                 .module_id = module.id,
@@ -761,7 +761,7 @@ fn findEnumDecl(ir: *const core.Ir, type_name: []const u8) ?*const ast.TypeDecl 
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.types.items) |*decl| {
+        for (module.syntax.types.items) |*decl| {
             if (std.mem.eql(u8, decl.name, type_name)) return decl;
         }
     }

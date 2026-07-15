@@ -46,7 +46,7 @@ fn initIrWithTaggedRecordDefault() !core.Ir {
     const project_source = try allocator.dupe(u8, "");
     errdefer allocator.free(project_source);
 
-    var program = ast.Program.init();
+    var program = ast.Module.init();
     errdefer program.deinit(allocator);
 
     try program.objects.append(allocator, .{
@@ -63,7 +63,7 @@ fn initIrWithTaggedRecordDefault() !core.Ir {
     });
 
     var ir = try core.Ir.init(allocator, asset_base_dir, project_path, project_source, program);
-    program = ast.Program.init();
+    program = ast.Module.init();
     errdefer ir.deinit();
     try ir.module_order.append(allocator, ir.project_module_id);
     return ir;

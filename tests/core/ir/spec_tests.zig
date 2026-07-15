@@ -12,7 +12,7 @@ fn initEmptyIr() !core.Ir {
     errdefer allocator.free(project_path);
     const project_source = try allocator.dupe(u8, "");
     errdefer allocator.free(project_source);
-    return try core.Ir.init(allocator, asset_base_dir, project_path, project_source, ast.Program.init());
+    return try core.Ir.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
 }
 
 test "core IR spec: pages are ordered document children with one-based page indexes" {
@@ -397,7 +397,7 @@ fn initIrWithLayoutClassDefaults() !core.Ir {
     const project_source = try allocator.dupe(u8, "");
     errdefer allocator.free(project_source);
 
-    var program = ast.Program.init();
+    var program = ast.Module.init();
     errdefer program.deinit(allocator);
 
     try program.objects.append(allocator, .{
@@ -428,7 +428,7 @@ fn initIrWithLayoutClassDefaults() !core.Ir {
     });
 
     var ir = try core.Ir.init(allocator, asset_base_dir, project_path, project_source, program);
-    program = ast.Program.init();
+    program = ast.Module.init();
     errdefer ir.deinit();
     try ir.module_order.append(allocator, ir.project_module_id);
     return ir;

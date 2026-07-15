@@ -97,12 +97,12 @@ pub fn roleClass(ir: anytype, role_name: []const u8) ?[]const u8 {
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.object_extensions.items) |extension| {
+        for (module.syntax.object_extensions.items) |extension| {
             for (extension.roles.items) |role| {
                 if (std.mem.eql(u8, role, role_name)) return extension.target;
             }
         }
-        for (module.program.objects.items) |decl| {
+        for (module.syntax.objects.items) |decl| {
             for (decl.roles.items) |role| {
                 if (std.mem.eql(u8, role, role_name)) return decl.name;
             }
@@ -155,7 +155,7 @@ fn fieldDescriptorInClass(ir: anytype, class_name: []const u8, field_name: []con
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.object_extensions.items) |extension| {
+        for (module.syntax.object_extensions.items) |extension| {
             if (!std.mem.eql(u8, extension.target, class_name)) continue;
             for (extension.fields.items) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) return .{
@@ -164,7 +164,7 @@ fn fieldDescriptorInClass(ir: anytype, class_name: []const u8, field_name: []con
                 };
             }
         }
-        for (module.program.objects.items) |decl| {
+        for (module.syntax.objects.items) |decl| {
             if (!std.mem.eql(u8, decl.name, class_name)) continue;
             for (decl.fields.items) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) return .{
@@ -182,7 +182,7 @@ fn classBase(ir: anytype, class_name: []const u8) ?[]const u8 {
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.objects.items) |decl| {
+        for (module.syntax.objects.items) |decl| {
             if (std.mem.eql(u8, decl.name, class_name)) return decl.base;
         }
     }

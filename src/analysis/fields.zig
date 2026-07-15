@@ -16,16 +16,16 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir, sema:
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
         const origin_path = originPathForModule(module);
-        try checkObjectNamesUnique(allocator, ir, origin_path, module.program.objects.items);
-        try checkRecordNamesUnique(allocator, ir, origin_path, module.program.records.items);
-        for (module.program.records.items) |record_decl| {
+        try checkObjectNamesUnique(allocator, ir, origin_path, module.syntax.objects.items);
+        try checkRecordNamesUnique(allocator, ir, origin_path, module.syntax.records.items);
+        for (module.syntax.records.items) |record_decl| {
             try checkRecordDeclaration(allocator, ir, sema, origin_path, record_decl);
         }
-        for (module.program.objects.items) |object_decl| {
+        for (module.syntax.objects.items) |object_decl| {
             try checkObjectDeclaration(allocator, ir, sema, origin_path, object_decl);
             try checkRolesUnique(allocator, ir, origin_path, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
         }
-        for (module.program.object_extensions.items) |extension| {
+        for (module.syntax.object_extensions.items) |extension| {
             try checkObjectExtension(allocator, ir, sema, origin_path, extension);
             try checkRolesUnique(allocator, ir, origin_path, &roles, extension.target, extension.roles.items, extension.span);
         }

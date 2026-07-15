@@ -15,11 +15,11 @@ pub const types = @import("analysis/types.zig");
 
 pub const VariableInfo = program.VariableInfo;
 pub const ScopedVariableInfo = program.ScopedVariableInfo;
-pub const ProgramIndex = program.ProgramIndex;
+pub const ModuleIndex = program.ModuleIndex;
 pub const BuildIrOptions = program.BuildIrOptions;
 pub const AnalysisMode = program.AnalysisMode;
 pub const ProgramAnalysis = program.ProgramAnalysis;
-pub const LoadProgramIndexOptions = program.LoadProgramIndexOptions;
+pub const LoadModuleIndexOptions = program.LoadModuleIndexOptions;
 pub const expectedPrimitiveArgType = program.expectedPrimitiveArgType;
 
 pub const collectFunctionsFromPrograms = program.collectFunctionsFromPrograms;
@@ -31,7 +31,7 @@ pub const collectVariableInfoFromProgram = program.collectVariableInfoFromProgra
 pub const collectScopedVariableInfoFromProgram = program.collectScopedVariableInfoFromProgram;
 pub const buildIr = program.buildIr;
 pub const buildIrWithOptions = program.buildIrWithOptions;
-pub const loadProgramIndex = program.loadProgramIndex;
-pub const loadProgramIndexWithOverlay = program.loadProgramIndexWithOverlay;
-pub const loadProgramIndexWithOptions = program.loadProgramIndexWithOptions;
-pub const loadProgramIndexForPath = program.loadProgramIndexForPath;
+pub const loadModuleIndex = program.loadModuleIndex;
+pub const loadModuleIndexWithOverlay = program.loadModuleIndexWithOverlay;
+pub const loadModuleIndexWithOptions = program.loadModuleIndexWithOptions;
+pub const loadModuleIndexForPath = program.loadModuleIndexForPath;

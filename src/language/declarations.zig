@@ -185,12 +185,12 @@ pub fn findRoleClass(ir: *const core.Ir, role_name: []const u8) ?[]const u8 {
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.objects.items) |decl| {
+        for (module.syntax.objects.items) |decl| {
             for (decl.roles.items) |role| {
                 if (std.mem.eql(u8, role, role_name)) return decl.name;
             }
         }
-        for (module.program.object_extensions.items) |extension| {
+        for (module.syntax.object_extensions.items) |extension| {
             for (extension.roles.items) |role| {
                 if (std.mem.eql(u8, role, role_name)) return extension.target;
             }
@@ -213,14 +213,14 @@ pub fn findFieldByName(ir: *const core.Ir, field_name: []const u8) ?FieldDescrip
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.object_extensions.items) |extension| {
+        for (module.syntax.object_extensions.items) |extension| {
             for (extension.fields.items) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) {
                     return .{ .name = field.name, .name_span = field.name_span, .class_name = extension.target, .value_type = field.value_type, .default_value = field.default_value, .default_property_value = field.default_property_value, .module_id = module.id };
                 }
             }
         }
-        for (module.program.objects.items) |decl| {
+        for (module.syntax.objects.items) |decl| {
             for (decl.fields.items) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) {
                     return .{ .name = field.name, .name_span = field.name_span, .class_name = decl.name, .value_type = field.value_type, .default_value = field.default_value, .default_property_value = field.default_property_value, .module_id = module.id };
@@ -236,7 +236,7 @@ pub fn classExists(ir: *const core.Ir, class_name: []const u8) bool {
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.objects.items) |decl| {
+        for (module.syntax.objects.items) |decl| {
             if (std.mem.eql(u8, decl.name, class_name)) return true;
         }
     }
@@ -248,7 +248,7 @@ pub fn recordExists(ir: *const core.Ir, record_name: []const u8) bool {
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.records.items) |decl| {
+        for (module.syntax.records.items) |decl| {
             if (std.mem.eql(u8, decl.name, record_name)) return true;
         }
     }
@@ -260,7 +260,7 @@ pub fn findRecord(ir: *const core.Ir, record_name: []const u8) ?RecordDescriptor
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.records.items) |decl| {
+        for (module.syntax.records.items) |decl| {
             if (std.mem.eql(u8, decl.name, record_name)) return .{ .name = decl.name, .module_id = module.id };
         }
     }
@@ -272,7 +272,7 @@ pub fn findRecordField(ir: *const core.Ir, record_name: []const u8, field_name: 
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.records.items) |decl| {
+        for (module.syntax.records.items) |decl| {
             if (!std.mem.eql(u8, decl.name, record_name)) continue;
             for (decl.fields.items) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) {
@@ -297,7 +297,7 @@ pub fn findClassBase(ir: *const core.Ir, class_name: []const u8) ?[]const u8 {
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.objects.items) |decl| {
+        for (module.syntax.objects.items) |decl| {
             if (std.mem.eql(u8, decl.name, class_name)) return decl.base;
         }
     }
@@ -309,7 +309,7 @@ fn findFieldInClass(ir: *const core.Ir, class_name: []const u8, field_name: []co
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        for (module.program.object_extensions.items) |extension| {
+        for (module.syntax.object_extensions.items) |extension| {
             if (!std.mem.eql(u8, extension.target, class_name)) continue;
             for (extension.fields.items) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) {
@@ -317,7 +317,7 @@ fn findFieldInClass(ir: *const core.Ir, class_name: []const u8, field_name: []co
                 }
             }
         }
-        for (module.program.objects.items) |decl| {
+        for (module.syntax.objects.items) |decl| {
             if (!std.mem.eql(u8, decl.name, class_name)) continue;
             for (decl.fields.items) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) {
@@ -330,7 +330,7 @@ fn findFieldInClass(ir: *const core.Ir, class_name: []const u8, field_name: []co
 }
 
 fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void {
-    for (module.program.types.items) |decl| {
+    for (module.syntax.types.items) |decl| {
         try index.types.append(index.allocator, .{
             .name = decl.name,
             .cases = decl.cases.items,
@@ -338,7 +338,7 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
         });
     }
 
-    for (module.program.records.items) |decl| {
+    for (module.syntax.records.items) |decl| {
         const record_index = index.records.items.len;
         try index.records.append(index.allocator, .{
             .name = decl.name,
@@ -348,7 +348,7 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
         try appendRecordFields(index, module.id, decl.name, decl.fields.items);
     }
 
-    for (module.program.objects.items) |decl| {
+    for (module.syntax.objects.items) |decl| {
         const class_index = index.classes.items.len;
         try index.classes.append(index.allocator, .{
             .name = decl.name,
@@ -360,7 +360,7 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
         try appendFields(index, module.id, decl.name, decl.fields.items);
     }
 
-    for (module.program.object_extensions.items) |extension| {
+    for (module.syntax.object_extensions.items) |extension| {
         try appendRoles(index, module.id, extension.target, extension.roles.items);
         try appendFields(index, module.id, extension.target, extension.fields.items);
     }

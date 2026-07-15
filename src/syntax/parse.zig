@@ -10,7 +10,7 @@ const source = utils.source;
 const color_utils = utils.color;
 
 const Allocator = std.mem.Allocator;
-const Program = ast.Program;
+const Module = ast.Module;
 const TypeDecl = ast.TypeDecl;
 const RecordDecl = ast.RecordDecl;
 const ObjectDecl = ast.ObjectDecl;
@@ -28,23 +28,23 @@ pub const ParseDiagnostic = diagnostics.ParseDiagnostic;
 var last_diagnostic: ?ParseDiagnostic = null;
 
 pub const ParseResult = struct {
-    program: Program,
+    module: Module,
     holes: hole.Result,
 
     pub fn deinit(self: *ParseResult, allocator: Allocator) void {
-        self.program.deinit(allocator);
+        self.module.deinit(allocator);
         self.holes.deinit(allocator);
     }
 };
 
-pub fn parse(allocator: Allocator, text: []const u8) !Program {
+pub fn parse(allocator: Allocator, text: []const u8) !Module {
     return parseWithSourceName(allocator, text, "");
 }
 
-pub fn parseWithSourceName(allocator: Allocator, text: []const u8, source_name: []const u8) !Program {
+pub fn parseWithSourceName(allocator: Allocator, text: []const u8, source_name: []const u8) !Module {
     var parser = initParser(allocator, text, source_name);
     last_diagnostic = null;
-    return parser.parseProgram() catch |err| {
+    return parser.parseModule() catch |err| {
         const pos = @min(parser.error_pos, text.len);
         const span = if (parser.error_span) |span|
             ast.Span{
@@ -77,10 +77,10 @@ pub fn parseRecoveringWithSourceName(allocator: Allocator, text: []const u8, sou
     parser.holes = &builder;
     last_diagnostic = null;
 
-    var program = try parser.parseProgram();
-    errdefer program.deinit(allocator);
+    var module = try parser.parseModule();
+    errdefer module.deinit(allocator);
     const holes = try builder.finish();
-    return .{ .program = program, .holes = holes };
+    return .{ .module = module, .holes = holes };
 }
 
 pub fn lastDiagnostic() ?ParseDiagnostic {
@@ -114,25 +114,25 @@ const Parser = struct {
     reject_empty_args: bool,
     holes: ?*hole.Builder,
 
-    fn parseProgram(self: *Parser) !Program {
-        var program = Program.init();
-        errdefer program.deinit(self.allocator);
+    fn parseModule(self: *Parser) !Module {
+        var module = Module.init();
+        errdefer module.deinit(self.allocator);
         var imports_allowed = true;
 
         source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof()) {
             const item_start = self.pos;
-            self.parseTopLevelItem(&program, &imports_allowed) catch |err| {
+            self.parseTopLevelItem(&module, &imports_allowed) catch |err| {
                 if (!self.recovering) return err;
                 try self.addTopLevelHole(err, item_start);
                 self.synchronizeTopLevelItem(item_start);
             };
             source.skipTriviaFrom(self.source, &self.pos);
         }
-        return program;
+        return module;
     }
 
-    fn parseTopLevelItem(self: *Parser, program: *Program, imports_allowed: *bool) !void {
+    fn parseTopLevelItem(self: *Parser, module: *Module, imports_allowed: *bool) !void {
         const item_start = self.pos;
         if (self.source[self.pos] == '@') return self.fail(error.ExpectedKeyword);
 
@@ -144,15 +144,15 @@ const Parser = struct {
             const mode = try self.parseImportMode(spec.text);
             errdefer if (mode.mode.alias) |alias| self.allocator.free(alias);
             try self.consumeStatementTerminator();
-            const import_index = program.imports.items.len;
-            try program.imports.append(self.allocator, .{
+            const import_index = module.imports.items.len;
+            try module.imports.append(self.allocator, .{
                 .spec = spec.text,
                 .spec_span = spec.span,
                 .mode = mode.mode,
                 .alias_span = mode.alias_span,
                 .span = .{ .start = item_start, .end = self.pos },
             });
-            try program.top_level_items.append(self.allocator, .{ .import = import_index });
+            try module.top_level_items.append(self.allocator, .{ .import = import_index });
         } else if (try self.consumeKeyword("fn")) {
             imports_allowed.* = false;
             const paired = self.consumePairedFunctionMarker();
@@ -165,35 +165,35 @@ const Parser = struct {
                     if (!func_moved) func.deinit(self.allocator);
                     if (!placed_func_moved) placed_func.deinit(self.allocator);
                 }
-                try program.functions.append(self.allocator, func);
+                try module.functions.append(self.allocator, func);
                 func_moved = true;
-                try program.functions.append(self.allocator, placed_func);
+                try module.functions.append(self.allocator, placed_func);
                 placed_func_moved = true;
             } else {
-                try program.functions.append(self.allocator, func);
+                try module.functions.append(self.allocator, func);
             }
         } else if (try self.consumeKeyword("const")) {
             imports_allowed.* = false;
             const constant = try self.parseConstAfterKeyword(item_start);
-            try program.constants.append(self.allocator, constant);
+            try module.constants.append(self.allocator, constant);
         } else if (try self.consumeKeyword("type")) {
             imports_allowed.* = false;
             const type_item = try self.parseTypeItemAfterKeyword(item_start);
             switch (type_item) {
                 .enum_decl => |type_decl| {
                     try self.consumeStatementTerminator();
-                    try program.types.append(self.allocator, type_decl);
+                    try module.types.append(self.allocator, type_decl);
                 },
-                .object => |object_decl| try program.objects.append(self.allocator, object_decl),
+                .object => |object_decl| try module.objects.append(self.allocator, object_decl),
             }
         } else if (try self.consumeKeyword("record")) {
             imports_allowed.* = false;
             const record_decl = try self.parseRecordDeclAfterKeyword(item_start);
-            try program.records.append(self.allocator, record_decl);
+            try module.records.append(self.allocator, record_decl);
         } else if (try self.consumeKeyword("extend")) {
             imports_allowed.* = false;
             const extension = try self.parseObjectExtensionAfterKeyword(item_start);
-            try program.object_extensions.append(self.allocator, extension);
+            try module.object_extensions.append(self.allocator, extension);
         } else if (try self.consumeKeyword("document")) {
             imports_allowed.* = false;
             var statements = try self.parseBodyStatements();
@@ -204,22 +204,22 @@ const Parser = struct {
                     for (statements.items) |*stmt| stmt.deinit(self.allocator);
                 }
             }
-            const statement_start = program.document_statements.items.len;
-            try program.document_statements.appendSlice(self.allocator, statements.items);
+            const statement_start = module.document_statements.items.len;
+            try module.document_statements.appendSlice(self.allocator, statements.items);
             moved_statements = true;
-            const document_index = program.document_blocks.items.len;
-            try program.document_blocks.append(self.allocator, .{
+            const document_index = module.document_blocks.items.len;
+            try module.document_blocks.append(self.allocator, .{
                 .statement_start = statement_start,
                 .statement_count = statements.items.len,
                 .span = .{ .start = item_start, .end = self.pos },
             });
-            try program.top_level_items.append(self.allocator, .{ .document = document_index });
+            try module.top_level_items.append(self.allocator, .{ .document = document_index });
         } else {
             imports_allowed.* = false;
             const page = try self.parsePage();
-            const page_index = program.pages.items.len;
-            try program.pages.append(self.allocator, page);
-            try program.top_level_items.append(self.allocator, .{ .page = page_index });
+            const page_index = module.pages.items.len;
+            try module.pages.append(self.allocator, page);
+            try module.top_level_items.append(self.allocator, .{ .page = page_index });
         }
     }
 

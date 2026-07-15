@@ -8,7 +8,7 @@ pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir:
     var variables = try root.arrayField("variables");
     for (ir.modules.items) |module| {
         if (module.path == null) continue;
-        var variable_infos = try analysis.collectScopedVariableInfoFromProgram(allocator, &ir.functions, module.program, module.id, module.source.len, ir);
+        var variable_infos = try analysis.collectScopedVariableInfoFromProgram(allocator, &ir.functions, module.syntax, module.id, module.source.len, ir);
         defer variable_infos.deinit(allocator);
         for (variable_infos.items) |entry| {
             var item = try variables.objectItem();

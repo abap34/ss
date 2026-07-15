@@ -73,7 +73,7 @@ pub fn analyzeFile(
     if (progress) |p| p.begin("Analyze");
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
-    var index = analysis.loadProgramIndexWithOptions(allocator, io, request.asset_base_dir, parsed.program, .{
+    var index = analysis.loadModuleIndexWithOptions(allocator, io, request.asset_base_dir, parsed.module, .{
         .overlay = request.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
@@ -81,21 +81,21 @@ pub fn analyzeFile(
         if (progress) |p| p.endStatusLine();
         if (load_diagnostics.items.items.len != 0) {
             app_diagnostics.printLoadDiagnostics(&load_diagnostics);
-            app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, request.asset_base_dir, &parsed.program, request.overlay, &load_diagnostics);
+            app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, request.asset_base_dir, &parsed.module, request.overlay, &load_diagnostics);
             return error.DiagnosticsFailed;
         } else if (err == error.UnknownImport) {
-            try printUnknownImportDiagnostic(allocator, io, request, source, parsed.program);
+            try printUnknownImportDiagnostic(allocator, io, request, source, parsed.module);
             return error.DiagnosticsFailed;
         }
         return err;
     };
     defer index.deinit();
-    var ir = analysis.buildIrWithOptions(allocator, request.input_path, request.asset_base_dir, &source, &parsed.program, &index, .{
+    var ir = analysis.buildIrWithOptions(allocator, request.input_path, request.asset_base_dir, &source, &parsed.module, &index, .{
         .parse_holes = parsed.holes,
     }) catch |err| {
         if (progress) |p| p.endStatusLine();
         if (err == error.UnknownImport) {
-            try printUnknownImportDiagnostic(allocator, io, request, source, parsed.program);
+            try printUnknownImportDiagnostic(allocator, io, request, source, parsed.module);
         } else if (err != error.DiagnosticsFailed) {
             const message = try std.fmt.allocPrint(allocator, "BuildFailed: {s}", .{@errorName(err)});
             defer allocator.free(message);
@@ -109,7 +109,7 @@ pub fn analyzeFile(
         }
         return err;
     };
-    parsed.clearHoles(allocator);
+    app_diagnostics.clearParseHoles(&parsed, allocator);
     errdefer ir.deinit();
 
     var program_analysis = analysis.analyzeProgramWithMode(allocator, &ir, mode) catch |err| {
@@ -231,7 +231,7 @@ fn printUnknownImportDiagnostic(
     io: std.Io,
     request: types.SourceRequest,
     source: []const u8,
-    program: ast.Program,
+    program: ast.Module,
 ) !void {
     var report = try module_loader.findUnknownImportReport(allocator, io, request.asset_base_dir, program, request.overlay) orelse return error.UnknownImport;
     defer report.deinit(allocator);

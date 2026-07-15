@@ -169,8 +169,8 @@ const Analyzer = struct {
                 defer self.sema = previous;
                 var document_env = FunctionEnv.init(self.allocator);
                 var document_returns = LabelSet.init(self.allocator);
-                try self.analyzeStatements(module.program.document_statements.items, &document_env, &document_returns, null);
-                for (module.program.pages.items) |page| {
+                try self.analyzeStatements(module.syntax.document_statements.items, &document_env, &document_returns, null);
+                for (module.syntax.pages.items) |page| {
                     var page_env = FunctionEnv.init(self.allocator);
                     var page_returns = LabelSet.init(self.allocator);
                     try self.analyzeStatements(page.statements.items, &page_env, &page_returns, null);
