@@ -45,12 +45,17 @@ async function renderPdfPage(container, pdfjs) {
   }
   if (copyAnnotations === "true") {
     const annotations = (await page.getAnnotations({ intent: "display" })).filter(safeAnnotation);
-    const annotationLayer = container.querySelector(".annotationLayer");
-    await pdfjs.AnnotationLayer.render({
-      annotations,
-      div: annotationLayer,
+    const annotationLayer = new pdfjs.AnnotationLayer({
+      div: container.querySelector(".annotationLayer"),
+      accessibilityManager: null,
+      annotationCanvasMap: null,
+      annotationEditorUIManager: null,
       page,
       viewport,
+      structTreeLayer: null,
+    });
+    await annotationLayer.render({
+      annotations,
       linkService: {
         getDestinationHash: () => "",
         getAnchorUrl: (value) => value,
