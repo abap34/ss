@@ -239,11 +239,18 @@ fn appendItem(
             try appendFormat(allocator, out, "background:{s}\"></div>", .{color(value.color)});
         },
         .rounded_rect => |value| {
-            try appendItemStart(allocator, out, "div", "ss-box", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
-            try appendRectStyle(allocator, out, value.rect);
+            const half_stroke = if (value.stroke != null) @max(value.line_width / 2, 0) else 0;
+            const css_rect = render.Rect{
+                .x = value.rect.x - half_stroke,
+                .y = value.rect.y - half_stroke,
+                .width = value.rect.width + half_stroke * 2,
+                .height = value.rect.height + half_stroke * 2,
+            };
+            try appendItemStart(allocator, out, "div", "ss-box", header, .{ .x = css_rect.x, .y = css_rect.y }, null);
+            try appendRectStyle(allocator, out, css_rect);
             if (value.fill) |fill| try appendFormat(allocator, out, "background:{s};", .{color(fill)});
             if (value.stroke) |stroke| try appendFormat(allocator, out, "border:{d:.6}pt solid {s};", .{ normalized(value.line_width), color(stroke) });
-            try appendFormat(allocator, out, "border-radius:{d:.6}pt\"></div>", .{normalized(value.radius)});
+            try appendFormat(allocator, out, "border-radius:{d:.6}pt\"></div>", .{normalized(value.radius + half_stroke)});
         },
         .stroke_line => |value| {
             const dx = value.end.x - value.start.x;
@@ -377,10 +384,10 @@ fn appendPdfViewer(
     try appendFormat(allocator, out, "\" data-page=\"{d}\" data-box=\"{s}\" data-view-box=\"{d:.9},{d:.9},{d:.9},{d:.9}\" data-rotation=\"{d}\" data-copy-annotations=\"{s}\"><canvas></canvas><div class=\"textLayer\"></div><div class=\"annotationLayer\"></div></div>", .{
         page_index + 1,
         @tagName(box_kind),
-        normalized(box.left * page.user_unit),
-        normalized(box.bottom * page.user_unit),
-        normalized(box.right * page.user_unit),
-        normalized(box.top * page.user_unit),
+        normalized(box.left),
+        normalized(box.bottom),
+        normalized(box.right),
+        normalized(box.top),
         page.rotation,
         if (copy_annotations) "true" else "false",
     });

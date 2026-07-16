@@ -199,6 +199,15 @@ test "HTML renderer applies page labels transforms clips opacity and blending" {
     header.clip = .{ .rect = .{ .x = 30, .y = 35, .width = 50, .height = 20 } };
     header.opacity = 0.5;
     header.blend_mode = .screen;
+    try pages[0].appendRoundedRect(
+        testing.allocator,
+        43,
+        .{ .x = 120, .y = 60, .width = 80, .height = 40 },
+        10,
+        null,
+        .{ .r = 0, .g = 0, .b = 1 },
+        6,
+    );
 
     try html.write(testing.allocator, testing.io, &ir, output, .{});
     const generated = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/index.html", testing.allocator, .unlimited);
@@ -207,6 +216,8 @@ test "HTML renderer applies page labels transforms clips opacity and blending" {
     try testing.expect(std.mem.indexOf(u8, generated, "opacity:0.500000;mix-blend-mode:screen;") != null);
     try testing.expect(std.mem.indexOf(u8, generated, "transform:translate(25.000000000pt,22.000000000pt) matrix(2.000000000000,0.000000000000,0.000000000000,1.500000000000,0,0);") != null);
     try testing.expect(std.mem.indexOf(u8, generated, "clip-path:polygon(10.000000pt 5.000000pt,60.000000pt 5.000000pt,60.000000pt 25.000000pt,10.000000pt 25.000000pt);") != null);
+    try testing.expect(std.mem.indexOf(u8, generated, "left:117.000000pt;top:57.000000pt;width:86.000000pt;height:46.000000pt;border:6.000000pt solid") != null);
+    try testing.expect(std.mem.indexOf(u8, generated, "border-radius:13.000000pt") != null);
 }
 
 test "HTML renderer emits structured MathML without SVG or PDF fallback" {
@@ -323,6 +334,7 @@ test "HTML renderer packages PDF.js with explicit page geometry" {
     var ir = render.Ir{ .resources = resources, .pages = pages };
     resources = .{};
     defer ir.deinit(testing.allocator);
+    ir.resources.entries[0].metadata.pdf.pages[0].user_unit = 2;
     try addDocumentSemantics(&ir);
     try pages[0].appendPdfPage(
         testing.allocator,
