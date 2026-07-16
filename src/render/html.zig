@@ -122,6 +122,21 @@ fn manifestJson(allocator: std.mem.Allocator, assets: *const resources.Set) ![]u
         try out.appendSlice(allocator, size);
         try out.append(allocator, '}');
     }
+    try out.appendSlice(allocator, "],\"local_fonts\":[");
+    for (assets.local_fonts, 0..) |font, index| {
+        if (index != 0) try out.append(allocator, ',');
+        try out.appendSlice(allocator, "{\"resource_id\":\"");
+        const resource_hex = std.fmt.bytesToHex(font.resource, .lower);
+        try out.appendSlice(allocator, &resource_hex);
+        try out.appendSlice(allocator, "\",\"font_index\":");
+        const font_index = try std.fmt.allocPrint(allocator, "{d}", .{font.face_index});
+        defer allocator.free(font_index);
+        try out.appendSlice(allocator, font_index);
+        try out.appendSlice(allocator, ",\"family\":\"");
+        try appendJsonStringContent(allocator, &out, font.family);
+        try out.append(allocator, '"');
+        try out.append(allocator, '}');
+    }
     try out.appendSlice(allocator, "],\"pdfjs\":");
     try out.appendSlice(allocator, if (assets.has_pdf) "\"4.8.69\"" else "null");
     try out.appendSlice(allocator, "}\n");

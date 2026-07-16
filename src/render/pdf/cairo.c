@@ -838,7 +838,7 @@ static void ss_font_win_metrics(
     if (FT_Init_FreeType(&library) != 0) return;
     if (FT_New_Face(library, path, index, &face) == 0 && face->units_per_EM > 0) {
         TT_OS2 *os2 = (TT_OS2 *)FT_Get_Sfnt_Table(face, ft_sfnt_os2);
-        if (os2 != NULL) {
+        if (os2 != NULL && os2->usWinAscent > 0) {
             *ascent = ((double)os2->usWinAscent / face->units_per_EM) * font_size;
             *descent = ((double)os2->usWinDescent / face->units_per_EM) * font_size;
         }

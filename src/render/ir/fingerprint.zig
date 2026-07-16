@@ -71,6 +71,7 @@ pub fn document(ir: anytype) Digest {
         hash.optionalBytes(node.alt_text);
         hash.optionalBytes(node.language);
         hash.optionalBytes(node.code_language);
+        hash.optionalInteger(node.math_tree);
         hash.optionalTag(node.link_kind);
         hash.optionalBytes(node.link_target);
         hash.integer(node.children.len);
@@ -189,36 +190,38 @@ fn pageDigest(page_value: anytype, comptime include_metadata: bool) Digest {
             .math => |value| {
                 hashRect(&hash, value.rect);
                 if (include_metadata) hash.integer(value.tree);
-                hashColor(&hash, value.color);
-                if (value.layout) |layout| {
-                    hash.boolean(true);
-                    hash.float(layout.width);
-                    hash.float(layout.height);
-                    hash.float(layout.baseline);
-                    hash.integer(layout.elements.len);
-                    for (layout.elements) |element| {
-                        hash.tag(element);
-                        switch (element) {
-                            .text => |text| {
-                                if (include_metadata) hash.integer(text.node);
-                                hash.float(text.x);
-                                hash.float(text.y);
-                                hash.float(text.font_size);
-                                hashTextLayout(&hash, text.layout);
-                            },
-                            .rule => |rule| {
-                                if (include_metadata) hash.integer(rule.node);
-                                hashRect(&hash, rule.rect);
-                            },
+                hash.tag(value.content);
+                switch (value.content) {
+                    .structured => |structured| {
+                        hashColor(&hash, structured.color);
+                        const layout = structured.layout;
+                        hash.float(layout.width);
+                        hash.float(layout.height);
+                        hash.float(layout.baseline);
+                        hash.integer(layout.elements.len);
+                        for (layout.elements) |element| {
+                            hash.tag(element);
+                            switch (element) {
+                                .text => |text| {
+                                    if (include_metadata) hash.integer(text.node);
+                                    hash.float(text.x);
+                                    hash.float(text.y);
+                                    hash.float(text.font_size);
+                                    hashTextLayout(&hash, text.layout);
+                                },
+                                .rule => |rule| {
+                                    if (include_metadata) hash.integer(rule.node);
+                                    hashRect(&hash, rule.rect);
+                                },
+                            }
                         }
-                    }
-                } else hash.boolean(false);
-                if (value.pdf_resource) |resource| {
-                    hash.boolean(true);
-                    hash.bytes(&resource);
-                } else hash.boolean(false);
-                hash.integer(value.page_index);
-                hash.tag(value.box);
+                    },
+                    .raw_pdf => |raw| {
+                        hash.bytes(&raw.resource);
+                        hash.integer(raw.page_index);
+                        hash.tag(raw.box);
+                    },
+                }
             },
             .pdf_page => |value| {
                 hashRect(&hash, value.rect);

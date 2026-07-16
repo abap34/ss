@@ -1,4 +1,5 @@
 const std = @import("std");
+const math = @import("math.zig");
 
 pub const Id = u64;
 
@@ -40,6 +41,7 @@ pub const Node = struct {
     alt_text: ?[]u8 = null,
     language: ?[]u8 = null,
     code_language: ?[]u8 = null,
+    math_tree: ?math.TreeId = null,
     link_kind: ?LinkKind = null,
     link_target: ?[]u8 = null,
 

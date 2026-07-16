@@ -237,7 +237,7 @@ test "render IR stores resolved fonts and bidirectional glyph clusters" {
         20,
         80,
         500,
-        "office العربية",
+        "office 😀 العربية",
         .{ .family = "Sans", .weight = 400, .style = .normal, .stretch = .normal },
         24,
         .{ .r = 0, .g = 0, .b = 0 },

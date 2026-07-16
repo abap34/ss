@@ -66,7 +66,11 @@ pub fn write(
         if (missing[index]) missing_count += 1;
     }
     if (progress) |value| value.pageCompleted(value.context, ir.pages.len - missing_count, ir.pages.len);
-    if (missing_count != 0) try renderMissingPages(allocator, io, ir, page_paths, missing, options.jobs, progress);
+    if (missing_count != 0) {
+        var resources = try page_backend.ResourceFiles.init(allocator, io, &ir.resources, cache_root);
+        defer resources.deinit();
+        try renderMissingPages(allocator, io, ir, page_paths, missing, options.jobs, progress, &resources);
+    }
 
     const temporary_document = try temporaryPath(allocator, document_path, "pdf");
     defer allocator.free(temporary_document);
@@ -87,13 +91,14 @@ fn renderMissingPages(
     missing: []const bool,
     requested_jobs: ?usize,
     progress: ?Progress,
+    resources: *const page_backend.ResourceFiles,
 ) !void {
     const worker_count = configuredWorkerCount(requested_jobs, countMissing(missing));
     if (worker_count <= 1) {
         var completed = ir.pages.len - countMissing(missing);
         for (missing, 0..) |is_missing, index| {
             if (!is_missing) continue;
-            try renderPageToCache(allocator, io, ir, index, page_paths[index]);
+            try renderPageToCache(allocator, io, ir, index, page_paths[index], resources);
             completed += 1;
             if (progress) |value| value.pageCompleted(value.context, completed, ir.pages.len);
         }
@@ -105,6 +110,7 @@ fn renderMissingPages(
         .ir = ir,
         .page_paths = page_paths,
         .missing = missing,
+        .resources = resources,
         .completed = .init(ir.pages.len - countMissing(missing)),
     };
     const threads = try allocator.alloc(std.Thread, worker_count);
@@ -130,7 +136,11 @@ fn renderMissingPages(
     joined = true;
     const completed = work.completed.load(.acquire);
     if (completed != last_completed) if (progress) |value| value.pageCompleted(value.context, completed, ir.pages.len);
-    if (work.failed.load(.acquire)) return error.PdfPageRenderFailed;
+    if (work.failed.load(.acquire)) {
+        const error_code = work.error_code.load(.acquire);
+        if (error_code != 0) return @errorFromInt(error_code);
+        return error.PdfPageRenderFailed;
+    }
 }
 
 const PageWork = struct {
@@ -138,9 +148,11 @@ const PageWork = struct {
     ir: *const render.Ir,
     page_paths: []const []const u8,
     missing: []const bool,
+    resources: *const page_backend.ResourceFiles,
     next: std.atomic.Value(usize) = .init(0),
     completed: std.atomic.Value(usize),
     failed: std.atomic.Value(bool) = .init(false),
+    error_code: std.atomic.Value(u16) = .init(0),
 };
 
 fn pageWorker(work: *PageWork) void {
@@ -150,7 +162,8 @@ fn pageWorker(work: *PageWork) void {
         const index = work.next.fetchAdd(1, .monotonic);
         if (index >= work.ir.pages.len) return;
         if (!work.missing[index]) continue;
-        renderPageToCache(arena.allocator(), work.io, work.ir, index, work.page_paths[index]) catch {
+        renderPageToCache(arena.allocator(), work.io, work.ir, index, work.page_paths[index], work.resources) catch |err| {
+            _ = work.error_code.cmpxchgStrong(0, @intFromError(err), .seq_cst, .monotonic);
             work.failed.store(true, .seq_cst);
             return;
         };
@@ -159,12 +172,19 @@ fn pageWorker(work: *PageWork) void {
     }
 }
 
-fn renderPageToCache(allocator: Allocator, io: std.Io, ir: *const render.Ir, page_index: usize, destination: []const u8) !void {
+fn renderPageToCache(
+    allocator: Allocator,
+    io: std.Io,
+    ir: *const render.Ir,
+    page_index: usize,
+    destination: []const u8,
+    resources: *const page_backend.ResourceFiles,
+) !void {
     if (try cachedPdfAvailable(allocator, io, destination)) return;
     const temporary = try temporaryPath(allocator, destination, "pdf");
     defer allocator.free(temporary);
     errdefer deleteFile(io, temporary);
-    try page_backend.render(allocator, io, ir, page_index, temporary);
+    try page_backend.render(allocator, io, ir, page_index, temporary, resources);
     try validatePdf(allocator, io, temporary);
     try publishCache(io, temporary, destination);
 }

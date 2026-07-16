@@ -216,10 +216,10 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     addTestStep(ctx, modules, build_options, exe, tree_sitter_abi_check, tree_sitter);
-    addVisualTestSteps(ctx, modules, build_options, tree_sitter);
+    addVisualTestSteps(ctx, modules, build_options, exe, tree_sitter);
 }
 
-fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options: *Step.Options, tree_sitter: TreeSitterBundle) void {
+fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options: *Step.Options, exe: *Step.Compile, tree_sitter: TreeSitterBundle) void {
     const b = ctx.b;
     const app_mod = createCommonModule(ctx, "src/app.zig", modules, true);
     app_mod.addOptions("build_options", build_options);
@@ -243,6 +243,13 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
     full.stdio = .inherit;
     const full_step = b.step("test-render-parity-full", "Compare the extended PDF and HTML fixture set locally");
     full_step.dependOn(&full.step);
+
+    const behavior = b.addSystemCommand(&.{ "node", "tests/visual/render/behavior/spec.mjs" });
+    behavior.addFileArg(exe.getEmittedBin());
+    behavior.setCwd(b.path("."));
+    behavior.stdio = .inherit;
+    const behavior_step = b.step("test-render-behavior", "Inspect rendered PDF behavior locally with Chromium");
+    behavior_step.dependOn(&behavior.step);
 }
 
 fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: std.Build.LazyPath, build_options: *Step.Options, tree_sitter: TreeSitterBundle) ProjectModules {

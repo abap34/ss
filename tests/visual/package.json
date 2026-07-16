@@ -6,7 +6,8 @@
     "prepare-browser": "playwright install chromium",
     "test:compare": "node render/compare_spec.mjs",
     "test:parity": "node render/spec.mjs",
-    "test:parity:full": "node render/spec.mjs --full"
+    "test:parity:full": "node render/spec.mjs --full",
+    "test:behavior": "node render/behavior/spec.mjs"
   },
   "devDependencies": {
     "playwright": "1.61.1",

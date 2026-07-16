@@ -30,6 +30,11 @@ normal set and `zig build test-render-parity-full` to include structured
 mathematics．These steps are intentionally outside normal CI and do not use
 Poppler，ImageMagick，or TeX．
 
+PDF-only pixel behavior is checked by `zig build test-render-behavior` with the
+same Chromium and PDF.js capture path．This local-only step covers off-page
+clipping，embedded PDF sizing，and math scaling．Raw TeX cases run only when
+`pdflatex` is available．No visual test uses Poppler or ImageMagick．
+
 CLI and editor smoke tests live under `tests/smoke/`. They should stay thin:
 each script verifies a user-visible workflow end to end, not every bug fix that
 has ever touched that subsystem.

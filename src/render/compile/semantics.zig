@@ -29,19 +29,34 @@ pub fn build(
         var object_ids = std.ArrayList(render.SemanticId).empty;
         defer object_ids.deinit(allocator);
         for (prepared_page.objects) |*prepared_object| {
-            const item_count = countItemsForNode(page, prepared_object.node_id);
-            if (item_count == 0) continue;
+            if (!hasItemsForNode(page, prepared_object.node_id)) continue;
             const semantic_id = try builder.object(state, prepared_object);
             const semantic_index = builder.index(semantic_id);
-            const item_ids = try allocator.alloc(render.ItemId, item_count);
-            var next_item: usize = 0;
+            var parent_items = std.ArrayList(render.ItemId).empty;
+            defer parent_items.deinit(allocator);
+            var math_semantics = std.ArrayList(render.SemanticId).empty;
+            defer math_semantics.deinit(allocator);
+            try builder.collectMathNodes(semantic_id, &math_semantics, 0);
+            var next_math: usize = 0;
             for (page.items.items) |*item| {
                 if (item.nodeId() != prepared_object.node_id) continue;
-                item.setSemanticId(semantic_id);
-                item_ids[next_item] = item.header().item_id;
-                next_item += 1;
+                var item_semantic_id = semantic_id;
+                if (item.* == .math) {
+                    if (next_math >= math_semantics.items.len) return error.MissingMathSemantics;
+                    item_semantic_id = math_semantics.items[next_math];
+                    next_math += 1;
+                    const math_node = &builder.nodes.items[builder.index(item_semantic_id)];
+                    math_node.math_tree = item.math.tree;
+                    if (item_semantic_id != semantic_id) {
+                        if (math_node.items.len != 0) return error.DuplicateMathSemantics;
+                        math_node.items = try allocator.dupe(render.ItemId, &.{item.header().item_id});
+                    }
+                }
+                item.setSemanticId(item_semantic_id);
+                if (item_semantic_id == semantic_id) try parent_items.append(allocator, item.header().item_id);
             }
-            builder.nodes.items[semantic_index].items = item_ids;
+            if (next_math != math_semantics.items.len) return error.MissingMathItem;
+            builder.nodes.items[semantic_index].items = try parent_items.toOwnedSlice(allocator);
             try object_ids.append(allocator, semantic_id);
         }
         builder.nodes.items[page_node_index].children = try object_ids.toOwnedSlice(allocator);
@@ -76,13 +91,31 @@ const Builder = struct {
         return @intCast(id - 1);
     }
 
+    fn collectMathNodes(self: *Builder, id: render.SemanticId, result: *std.ArrayList(render.SemanticId), depth: usize) !void {
+        if (id == 0 or id > self.nodes.items.len or depth > self.nodes.items.len) return error.InvalidSemantics;
+        const node = self.nodes.items[self.index(id)];
+        if (node.role == .math) {
+            try result.append(self.allocator, id);
+            return;
+        }
+        for (node.children) |child| try self.collectMathNodes(child, result, depth + 1);
+    }
+
     fn object(self: *Builder, state: *core.DocumentState, prepared_object: *const core.prepared.PreparedObject) !render.SemanticId {
         const node = state.getNode(prepared_object.node_id);
         const role = if (node) |value| value.role orelse "" else "";
         if (std.mem.eql(u8, role, "title") or std.mem.eql(u8, role, "subtitle")) {
+            const level: u8 = if (std.mem.eql(u8, role, "title")) 1 else 2;
+            if (prepared_object.textLayout()) |layout| return try self.lines(.heading, level, layout.lines.items);
+            if (prepared_object.markdownDocument()) |document| {
+                if (document.blocks.items.len == 1) {
+                    const block_value = document.blocks.items[0];
+                    if (block_value.paragraph) |paragraph| return try self.lines(.heading, level, paragraph.lines.items);
+                }
+            }
             const id = try self.append(.heading);
             const index_value = self.index(id);
-            self.nodes.items[index_value].heading_level = if (std.mem.eql(u8, role, "title")) 1 else 2;
+            self.nodes.items[index_value].heading_level = level;
             self.nodes.items[index_value].text = try self.objectText(prepared_object);
             return id;
         }
@@ -101,6 +134,9 @@ const Builder = struct {
             const id = try self.append(.math);
             self.nodes.items[self.index(id)].text = try duplicateOptional(self.allocator, prepared_object.content);
             return id;
+        }
+        if (prepared_object.textLayout()) |layout| {
+            return try self.lines(if (std.mem.eql(u8, role, "caption")) .caption else .paragraph, null, layout.lines.items);
         }
         if (prepared_object.markdownDocument()) |document| {
             if (document.blocks.items.len == 1) return try self.block(document.blocks.items[0]);
@@ -144,13 +180,27 @@ const Builder = struct {
         defer children.deinit(self.allocator);
         for (line_values, 0..) |line, line_index| {
             if (line_index != 0) try children.append(self.allocator, try self.text("\n"));
-            for (line.runs.items) |run| {
+            var run_index: usize = 0;
+            while (run_index < line.runs.items.len) {
+                const run = line.runs.items[run_index];
+                if (run.kind == .display_math) {
+                    var source = std.ArrayList(u8).empty;
+                    defer source.deinit(self.allocator);
+                    while (run_index < line.runs.items.len and line.runs.items[run_index].kind == .display_math) : (run_index += 1) {
+                        try source.appendSlice(self.allocator, line.runs.items[run_index].text);
+                    }
+                    const trimmed = std.mem.trim(u8, source.items, " \t\r\n");
+                    if (trimmed.len != 0) try children.append(self.allocator, try self.leaf(.math, trimmed));
+                    continue;
+                }
                 const child = switch (run.kind) {
                     .link => try self.link(run),
-                    .math, .display_math => try self.leaf(.math, run.text),
+                    .math => try self.leaf(.math, run.text),
                     .text, .bold, .italic, .code, .icon => try self.text(run.text),
+                    .display_math => unreachable,
                 };
                 try children.append(self.allocator, child);
+                run_index += 1;
             }
         }
         self.nodes.items[node_index].children = try children.toOwnedSlice(self.allocator);
@@ -218,12 +268,11 @@ const Builder = struct {
     }
 };
 
-fn countItemsForNode(page: *const render.Page, node_id: core.NodeId) usize {
-    var count: usize = 0;
+fn hasItemsForNode(page: *const render.Page, node_id: core.NodeId) bool {
     for (page.items.items) |item| if (item.nodeId() == node_id) {
-        count += 1;
+        return true;
     };
-    return count;
+    return false;
 }
 
 fn plainBlocks(allocator: Allocator, blocks: []const *MarkdownBlock) !?[]u8 {

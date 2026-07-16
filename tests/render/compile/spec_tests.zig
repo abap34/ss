@@ -142,6 +142,8 @@ test "resource compiler records deterministic raster SVG and PDF metadata" {
     const svg_id = try builder.addPath(testing.allocator, testing.io, .svg, svg_path);
     const pdf_id = try builder.addPath(testing.allocator, testing.io, .pdf, pdf_path);
     try testing.expectEqual(raster_id, try builder.addPath(testing.allocator, testing.io, .raster, png_path));
+    try std.Io.Dir.cwd().deleteFile(testing.io, png_path);
+    try testing.expectEqual(raster_id, try builder.addPath(testing.allocator, testing.io, .raster, png_path));
     try testing.expectEqual(@as(usize, 3), builder.entries.items.len);
 
     const raster = builder.find(raster_id) orelse return error.MissingRenderResource;

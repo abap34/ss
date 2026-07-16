@@ -1,9 +1,16 @@
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { cp, mkdir, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { chromium } from "playwright";
 import { PNG } from "pngjs";
+
+export async function preparePdfViewer(root, repository) {
+  await mkdir(path.join(root, "pdfjs"), { recursive: true });
+  await cp(path.join(repository, "third_party/pdfjs/pdf.mjs"), path.join(root, "pdfjs/pdf.mjs"));
+  await cp(path.join(repository, "third_party/pdfjs/pdf.worker.mjs"), path.join(root, "pdfjs/pdf.worker.mjs"));
+  await writeFile(path.join(root, "pdf-viewer.html"), pdfViewerHtml(), "utf8");
+}
 
 export async function withBrowser(root, body) {
   const server = await startServer(root);
@@ -154,4 +161,32 @@ function contentType(file) {
     case ".ttc": return "font/collection";
     default: return "application/octet-stream";
   }
+}
+
+function pdfViewerHtml() {
+  return `<!doctype html>
+<meta charset="utf-8">
+<style>html,body{margin:0}canvas{display:block}</style>
+<main></main>
+<script type="module">
+import * as pdfjs from "./pdfjs/pdf.mjs";
+try {
+  pdfjs.GlobalWorkerOptions.workerSrc = "./pdfjs/pdf.worker.mjs";
+  const source = new URL(location.href).searchParams.get("source");
+  const pdf = await pdfjs.getDocument({url:source,isEvalSupported:false}).promise;
+  for (let index=1;index<=pdf.numPages;index++) {
+    const page = await pdf.getPage(index);
+    const viewport = page.getViewport({scale:2});
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    document.querySelector("main").append(canvas);
+    await page.render({canvasContext:canvas.getContext("2d"),viewport}).promise;
+  }
+} catch (error) {
+  globalThis.ssPdfError = error instanceof Error ? error.stack : String(error);
+} finally {
+  globalThis.ssPdfReady = true;
+}
+</script>`;
 }
