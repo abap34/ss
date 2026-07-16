@@ -76,6 +76,8 @@ async function itemRegions(page, pageBox, targetWidth, targetHeight) {
           ? "line"
           : item.classList.contains("ss-math")
           ? "math"
+          : item.classList.contains("ss-pdf")
+          ? "pdf"
           : item.classList.contains("ss-text")
           ? "text"
           : "other",
@@ -156,6 +158,7 @@ function contentType(file) {
     case ".css": return "text/css; charset=utf-8";
     case ".pdf": return "application/pdf";
     case ".png": return "image/png";
+    case ".svg": return "image/svg+xml";
     case ".ttf": return "font/ttf";
     case ".otf": return "font/otf";
     case ".ttc": return "font/collection";

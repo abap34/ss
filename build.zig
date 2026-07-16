@@ -250,6 +250,13 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
     behavior.stdio = .inherit;
     const behavior_step = b.step("test-render-behavior", "Inspect rendered PDF behavior locally with Chromium");
     behavior_step.dependOn(&behavior.step);
+
+    const benchmark = b.addSystemCommand(&.{ "node", "tests/benchmark/render/spec.mjs", @tagName(ctx.optimize) });
+    benchmark.addFileArg(exe.getEmittedBin());
+    benchmark.setCwd(b.path("."));
+    benchmark.stdio = .inherit;
+    const benchmark_step = b.step("benchmark-render", "Measure fixed-document PDF and HTML rendering with ReleaseSafe");
+    benchmark_step.dependOn(&benchmark.step);
 }
 
 fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: std.Build.LazyPath, build_options: *Step.Options, tree_sitter: TreeSitterBundle) ProjectModules {
