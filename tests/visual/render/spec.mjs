@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { PNG } from "pngjs";
+import { pdfAsset, rasterAsset } from "./assets.mjs";
 import { captureHtmlPages, capturePdfPages, preparePdfViewer, withBrowser } from "./capture.mjs";
 import { compareImages, decodePng, defaultThresholds, encodePng } from "./compare.mjs";
 
@@ -15,18 +16,23 @@ const repository = path.resolve(testRoot, "../..");
 const output = path.join(repository, ".ss-cache/render-parity");
 const driver = path.resolve(repository, process.argv.slice(2).find((argument) => !argument.startsWith("--")) ?? "zig-out/bin/ss-render-parity-driver");
 const full = process.argv.includes("--full");
-const fixtures = [
-  { name: "basic", source: path.join(repository, "tests/fixtures/project-basic/slide.ss") },
-  { name: "fonts", source: path.join(repository, "tests/fixtures/render/parity/text/fonts.ss") },
-];
-if (full) {
-  fixtures.push({ name: "math", source: path.join(repository, "tests/fixtures/render/math.ss") });
-  fixtures.push({ name: "markdown-math", source: path.join(repository, "tests/fixtures/render/parity/math/markdown.ss") });
-}
-
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await preparePdfViewer(output, repository);
+
+const fixtures = [
+  { name: "basic", source: path.join(repository, "tests/fixtures/project-basic/slide.ss") },
+  { name: "fonts", source: path.join(repository, "tests/fixtures/render/parity/text/fonts.ss") },
+  { name: "geometry", source: path.join(repository, "tests/fixtures/render/parity/geometry/slide.ss") },
+  { name: "images", source: await prepareGeneratedFixture("images", "asset.png", rasterAsset()) },
+];
+if (full) {
+  fixtures.push({ name: "vector", source: path.join(repository, "tests/fixtures/render/parity/vector/slide.ss") });
+  fixtures.push({ name: "pdf", source: await prepareGeneratedFixture("pdf", "asset.pdf", pdfAsset()) });
+  fixtures.push({ name: "semantics", source: path.join(repository, "tests/fixtures/render/parity/semantics/slide.ss") });
+  fixtures.push({ name: "math", source: path.join(repository, "tests/fixtures/render/math.ss") });
+  fixtures.push({ name: "markdown-math", source: path.join(repository, "tests/fixtures/render/parity/math/markdown.ss") });
+}
 
 for (const fixture of fixtures) {
   await run(driver, [fixture.source, path.join(output, `${fixture.name}.pdf`), path.join(output, `${fixture.name}-html`)]);
@@ -58,6 +64,12 @@ await withBrowser(output, async (browser, baseUrl) => {
         failed ||= !itemResult.pass;
       }
     }
+  }
+
+  if (full) {
+    await inspectNormalHtml(browser, baseUrl);
+    await inspectEmbeddedPdf(browser, baseUrl);
+    await inspectStructuredMath(browser, baseUrl);
   }
 
   const baselinePath = process.env.SS_RENDER_BASELINE_PDF;
@@ -104,12 +116,121 @@ function itemThresholds(kind) {
       spatialTolerance: 1,
     };
   }
+  if (kind === "pdf") {
+    return {
+      ...defaultThresholds,
+      meanAbsoluteError: 0.005,
+      largeDifferenceRatio: 0.05,
+      spatialTolerance: 1,
+    };
+  }
   return {
     ...defaultThresholds,
     meanAbsoluteError: 0.004,
     largeDifferenceRatio: 0.025,
     spatialTolerance: 1,
   };
+}
+
+async function inspectNormalHtml(browser, baseUrl) {
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
+  try {
+    await page.goto(`${baseUrl}/semantics-html/index.html`, { waitUntil: "networkidle" });
+    await page.evaluate(() => document.fonts.ready);
+    const visibleText = await page.locator(".ss-text").allTextContents();
+    assert(
+      visibleText.some((value) => value.includes("SelectableTextToken")),
+      `normal HTML text was not present in selectable elements: ${JSON.stringify(visibleText)}`,
+    );
+    const selected = await page.locator(".ss-text", { hasText: "SelectableTextToken" }).first().evaluate((element) => {
+      const selection = getSelection();
+      selection.removeAllRanges();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      selection.addRange(range);
+      return selection.toString();
+    });
+    assert(selected.includes("SelectableTextToken"), `normal HTML selection lost text: ${JSON.stringify(selected)}`);
+    assert.equal(
+      await page.locator('.ss-semantic-layer a[href="https://example.com/semantic"]').count(),
+      1,
+      "semantic HTML link was not preserved",
+    );
+    assert.equal(await page.locator(".ss-semantic-layer ol li").count(), 2, "ordered-list semantics were not preserved");
+    assert.equal(await page.locator(".ss-semantic-layer table").count(), 1, "table semantics were not preserved");
+    const coordinateError = await page.locator(".ss-page").evaluate((pageElement) => {
+      const pageRect = pageElement.getBoundingClientRect();
+      const width = Number.parseFloat(pageElement.style.width);
+      const scale = pageRect.width / width;
+      let maximum = Math.max(
+        Math.abs(pageRect.width / scale - width),
+        Math.abs(pageRect.height / scale - Number.parseFloat(pageElement.style.height)),
+      );
+      for (const item of pageElement.querySelectorAll(":scope > .ss-item")) {
+        if (getComputedStyle(item).transform !== "none") continue;
+        const rect = item.getBoundingClientRect();
+        const expectedLeft = Number.parseFloat(item.style.left);
+        const expectedTop = Number.parseFloat(item.style.top);
+        if (Number.isFinite(expectedLeft)) maximum = Math.max(maximum, Math.abs((rect.left - pageRect.left) / scale - expectedLeft));
+        if (Number.isFinite(expectedTop)) maximum = Math.max(maximum, Math.abs((rect.top - pageRect.top) / scale - expectedTop));
+      }
+      return maximum;
+    });
+    assert(coordinateError <= 0.01, `DOM coordinates differ from render IR styles by ${coordinateError} pt`);
+  } finally {
+    await page.close();
+  }
+}
+
+async function inspectEmbeddedPdf(browser, baseUrl) {
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
+  try {
+    await page.goto(`${baseUrl}/pdf-html/index.html`, { waitUntil: "networkidle" });
+    await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: 120_000 });
+    const container = page.locator(".ss-pdf");
+    assert.equal(await container.getAttribute("data-page"), "2", "HTML selected the wrong PDF source page");
+    const textLayer = container.locator(".textLayer");
+    const text = await textLayer.textContent();
+    assert(text?.includes("SelectablePdfToken"), `PDF.js text layer omitted source text: ${JSON.stringify(text)}`);
+    const selected = await textLayer.evaluate((element) => {
+      const selection = getSelection();
+      selection.removeAllRanges();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      selection.addRange(range);
+      return selection.toString();
+    });
+    assert(selected.includes("SelectablePdfToken"), `PDF.js text selection lost source text: ${JSON.stringify(selected)}`);
+    const link = container.locator('.annotationLayer a[href="https://example.com/pdf"]');
+    assert.equal(await link.count(), 1, "PDF.js annotation layer omitted the URI link");
+  } finally {
+    await page.close();
+  }
+}
+
+async function inspectStructuredMath(browser, baseUrl) {
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
+  try {
+    await page.goto(`${baseUrl}/markdown-math-html/index.html`, { waitUntil: "networkidle" });
+    await page.evaluate(() => document.fonts.ready);
+    assert(await page.locator(".ss-math-text").count() > 0, "structured mathematics omitted its selectable HTML text layer");
+    assert(await page.locator(".ss-semantic-layer math.ss-mathml").count() >= 2, "structured mathematics omitted MathML semantics");
+    assert.equal(await page.locator(".ss-math svg").count(), 0, "structured mathematics used an SVG display fallback");
+    assert.equal(await page.locator(".ss-math.ss-pdf").count(), 0, "structured mathematics used a PDF display fallback");
+  } finally {
+    await page.close();
+  }
+}
+
+async function prepareGeneratedFixture(name, assetName, assetBytes) {
+  const directory = path.join(output, "fixture-projects", name);
+  await mkdir(directory, { recursive: true });
+  await cp(
+    path.join(repository, `tests/fixtures/render/parity/${name}/slide.ss`),
+    path.join(directory, "slide.ss"),
+  );
+  await writeFile(path.join(directory, assetName), assetBytes);
+  return path.join(directory, "slide.ss");
 }
 
 if (failed) throw new Error(`rendering parity exceeded thresholds; inspect ${output}`);

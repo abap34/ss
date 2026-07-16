@@ -35,6 +35,14 @@ same Chromium and PDF.js capture path．This local-only step covers off-page
 clipping，embedded PDF sizing，and math scaling．Raw TeX cases run only when
 `pdflatex` is available．No visual test uses Poppler or ImageMagick．
 
+Fixed-document rendering performance is measured with five runs per mode by
+`zig build -Doptimize=ReleaseSafe benchmark-render`．The first measured run is
+discarded before computing the median，while maximum RSS uses the largest
+remaining sample．Set `SS_RENDER_BENCHMARK_WRITE_BASELINE` to create a local
+JSON baseline，then set `SS_RENDER_BENCHMARK_BASELINE` to enforce the `1.05`
+time and `1.10` memory limits．Benchmark files remain under
+`.ss-cache/render-benchmark/`．
+
 CLI and editor smoke tests live under `tests/smoke/`. They should stay thin:
 each script verifies a user-visible workflow end to end, not every bug fix that
 has ever touched that subsystem.
