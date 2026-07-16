@@ -118,6 +118,10 @@ fn semanticTree(ir: anytype) Error!void {
         if (node.id == 0) return error.InvalidSemantics;
         for (ir.semantics.nodes[0..index]) |previous| if (previous.id == node.id) return error.InvalidSemantics;
         try semanticNode(node);
+        if (node.role == .math) {
+            const tree_id = node.math_tree orelse return error.InvalidSemantics;
+            if (ir.math.find(tree_id) == null) return error.InvalidSemantics;
+        } else if (node.math_tree != null) return error.InvalidSemantics;
         for (node.children, 0..) |child, child_index| {
             const child_node = ir.semantics.find(child) orelse return error.InvalidSemantics;
             if (!validSemanticChild(node.role, child_node.role)) return error.InvalidSemantics;
@@ -169,7 +173,7 @@ fn semanticNode(node: anytype) Error!void {
         .list => {
             const ordered = node.list_ordered orelse return error.InvalidSemantics;
             if (ordered) {
-                if (node.list_start == null or node.list_start.? == 0) return error.InvalidSemantics;
+                if (node.list_start == null) return error.InvalidSemantics;
             } else if (node.list_start != null) return error.InvalidSemantics;
         },
         else => if (node.list_ordered != null or node.list_start != null) return error.InvalidSemantics,
@@ -308,34 +312,35 @@ fn itemGeometry(ir: anytype, item: anytype) Error!void {
         .math => |value| {
             if (!value.rect.isValid()) return error.InvalidItemGeometry;
             const tree = ir.math.find(value.tree) orelse return error.InvalidItemGeometry;
-            if (!colorValid(value.color)) return error.InvalidItemGeometry;
-            if (value.layout == null) {
-                const resource_id = value.pdf_resource orelse return error.MissingResource;
-                try requireResource(ir, resource_id, .math_pdf);
-                const resource = ir.resources.find(resource_id) orelse return error.MissingResource;
-                const metadata = switch (resource.metadata) {
-                    .math_pdf => |metadata| metadata,
-                    else => return error.InvalidResource,
-                };
-                if (value.page_index >= metadata.pages.len) return error.InvalidResource;
-            } else {
-                if (value.pdf_resource != null) return error.InvalidResource;
-                if (tree.input_kind == .raw) return error.InvalidItemGeometry;
-                const layout = value.layout.?;
-                if (!nonNegativeFinite(layout.width) or !nonNegativeFinite(layout.height) or
-                    !nonNegativeFinite(layout.baseline) or layout.baseline > layout.height) return error.InvalidItemGeometry;
-                for (layout.elements) |element| switch (element) {
-                    .text => |text| {
-                        if (tree.find(text.node) == null or !std.math.isFinite(text.x) or !std.math.isFinite(text.y) or
-                            !positiveFinite(text.font_size) or !text.layout.logical_bounds.isValid() or
-                            !text.layout.ink_bounds.isValid() or !std.unicode.utf8ValidateSlice(text.layout.source_text))
-                        {
-                            return error.InvalidItemGeometry;
-                        }
-                        for (text.layout.runs) |run| if (ir.fonts.find(run.font_instance) == null) return error.MissingFont;
-                    },
-                    .rule => |rule| if (tree.find(rule.node) == null or !rule.rect.isValid()) return error.InvalidItemGeometry,
-                };
+            switch (value.content) {
+                .structured => |structured| {
+                    if (tree.input_kind == .raw or !colorValid(structured.color)) return error.InvalidItemGeometry;
+                    const layout = structured.layout;
+                    if (!nonNegativeFinite(layout.width) or !nonNegativeFinite(layout.height) or
+                        !nonNegativeFinite(layout.baseline) or layout.baseline > layout.height) return error.InvalidItemGeometry;
+                    for (layout.elements) |element| switch (element) {
+                        .text => |text| {
+                            if (tree.find(text.node) == null or !std.math.isFinite(text.x) or !std.math.isFinite(text.y) or
+                                !positiveFinite(text.font_size) or !text.layout.logical_bounds.isValid() or
+                                !text.layout.ink_bounds.isValid() or !std.unicode.utf8ValidateSlice(text.layout.source_text))
+                            {
+                                return error.InvalidItemGeometry;
+                            }
+                            for (text.layout.runs) |run| if (ir.fonts.find(run.font_instance) == null) return error.MissingFont;
+                        },
+                        .rule => |rule| if (tree.find(rule.node) == null or !rule.rect.isValid()) return error.InvalidItemGeometry,
+                    };
+                },
+                .raw_pdf => |raw| {
+                    if (tree.input_kind != .raw) return error.InvalidItemGeometry;
+                    try requireResource(ir, raw.resource, .math_pdf);
+                    const resource = ir.resources.find(raw.resource) orelse return error.MissingResource;
+                    const metadata = switch (resource.metadata) {
+                        .math_pdf => |metadata| metadata,
+                        else => return error.InvalidResource,
+                    };
+                    if (raw.page_index >= metadata.pages.len) return error.InvalidResource;
+                },
             }
         },
         .pdf_page => |value| {

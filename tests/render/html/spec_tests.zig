@@ -125,6 +125,53 @@ test "HTML renderer writes deterministic normal elements with escaped text" {
     try testing.expectEqualStrings(first_manifest, second_manifest);
 }
 
+test "HTML renderer keeps emoji selectable when the resolved font forbids embedding" {
+    const output = ".ss-cache/test-render-html/emoji";
+    std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
+
+    var pages = try testing.allocator.alloc(render.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    var ir = render.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+    var resources = render_resources.Builder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    try render_support.appendText(
+        testing.allocator,
+        testing.io,
+        &pages[0],
+        &resources,
+        &fonts,
+        7,
+        20,
+        60,
+        240,
+        "selectable 👍 emoji",
+        .{ .family = "sans", .weight = 400, .style = .normal, .stretch = .normal },
+        24,
+        .{ .r = 0, .g = 0, .b = 0 },
+    );
+    const catalogs = try render_support.takeCatalogs(testing.allocator, &resources, &fonts);
+    ir.resources = catalogs.resources;
+    ir.fonts = catalogs.fonts;
+
+    try html.write(testing.allocator, testing.io, &ir, output, .{});
+    const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/index.html", testing.allocator, .unlimited);
+    defer testing.allocator.free(document);
+    const css = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/ss.css", testing.allocator, .unlimited);
+    defer testing.allocator.free(css);
+    const manifest = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/manifest.json", testing.allocator, .unlimited);
+    defer testing.allocator.free(manifest);
+    try testing.expect(std.mem.indexOf(u8, document, "👍") != null);
+    try testing.expect(std.mem.indexOf(u8, manifest, "\"local_fonts\":[") != null);
+    if (std.mem.indexOf(u8, css, "Apple Color Emoji") != null) {
+        try testing.expect(std.mem.indexOf(u8, css, "local('Apple Color Emoji')") != null);
+    }
+}
+
 test "HTML renderer applies page labels transforms clips opacity and blending" {
     const output = ".ss-cache/test-render-html/effects";
     std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
@@ -203,23 +250,42 @@ test "HTML renderer emits structured MathML without SVG or PDF fallback" {
     fonts = .{};
     math = .{};
     defer ir.deinit(testing.allocator);
-    try addDocumentSemantics(&ir);
-    try pages[0].appendMath(
+    try pages[0].appendStructuredMath(
         testing.allocator,
         43,
         rect,
         tree,
         math_layout,
         .{ .r = 0, .g = 0, .b = 0 },
-        null,
-        0,
-        .crop,
     );
+    pages[0].items.items[0].setSemanticId(3);
+    pages[0].reading_order = try testing.allocator.dupe(render.SemanticId, &.{3});
+    const semantic_nodes = try testing.allocator.alloc(render.SemanticNode, 3);
+    semantic_nodes[0] = .{
+        .id = 1,
+        .role = .document,
+        .children = try testing.allocator.dupe(render.SemanticId, &.{2}),
+    };
+    semantic_nodes[1] = .{
+        .id = 2,
+        .role = .page,
+        .children = try testing.allocator.dupe(render.SemanticId, &.{3}),
+    };
+    semantic_nodes[2] = .{
+        .id = 3,
+        .role = .math,
+        .items = try testing.allocator.dupe(render.ItemId, &.{pages[0].items.items[0].header().item_id}),
+        .text = try testing.allocator.dupe(u8, "x_1^2 + \\frac{\\alpha}{\\sqrt{y}}"),
+        .math_tree = tree,
+    };
+    ir.semantics = .{ .root = 1, .nodes = semantic_nodes };
 
     try html.write(testing.allocator, testing.io, &ir, output, .{});
     const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/index.html", testing.allocator, .unlimited);
     defer testing.allocator.free(document);
-    try testing.expect(std.mem.indexOf(u8, document, "<math class=\"ss-mathml\" xmlns=\"http://www.w3.org/1998/Math/MathML\"") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "class=\"ss-mathml\" xmlns=\"http://www.w3.org/1998/Math/MathML\"") != null);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, document, "class=\"ss-mathml\""));
+    try testing.expect(std.mem.indexOf(u8, document, "<div class=\"ss-semantic-layer\"><math") != null);
     try testing.expect(std.mem.indexOf(u8, document, "ss-math-text") != null);
     try testing.expect(std.mem.indexOf(u8, document, "ss-math-rule") != null);
     try testing.expect(std.mem.indexOf(u8, document, "<msubsup>") != null);
@@ -274,13 +340,14 @@ test "HTML renderer packages PDF.js with explicit page geometry" {
     try testing.expect(std.mem.indexOf(u8, document, "class=\"ss-item ss-pdf\"") != null);
     try testing.expect(std.mem.indexOf(u8, document, "data-view-box=\"0.000000000,0.000000000,120.000000000,60.000000000\"") != null);
     try testing.expect(std.mem.indexOf(u8, document, "data-rotation=\"0\"") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "data-copy-annotations=\"true\"") != null);
     try testing.expect(std.mem.indexOf(u8, document, "<script type=\"module\" src=\"ss.js\"></script>") != null);
     try std.Io.Dir.cwd().access(testing.io, output ++ "/pdfjs/pdf.mjs", .{});
     try std.Io.Dir.cwd().access(testing.io, output ++ "/pdfjs/pdf.worker.mjs", .{});
     try std.Io.Dir.cwd().access(testing.io, output ++ "/pdfjs/LICENSE", .{});
 }
 
-test "HTML renderer preserves semantic headings ordered lists and links" {
+test "HTML renderer preserves semantic headings zero-based ordered lists and links" {
     const output = ".ss-cache/test-render-html/semantics";
     std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
@@ -296,7 +363,7 @@ test "HTML renderer preserves semantic headings ordered lists and links" {
     nodes[1] = .{ .id = 2, .role = .page, .children = try testing.allocator.dupe(render.SemanticId, &.{ 3, 5 }) };
     nodes[2] = .{ .id = 3, .role = .heading, .heading_level = 2, .children = try testing.allocator.dupe(render.SemanticId, &.{4}) };
     nodes[3] = .{ .id = 4, .role = .text, .text = try testing.allocator.dupe(u8, "Overview") };
-    nodes[4] = .{ .id = 5, .role = .list, .list_ordered = true, .list_start = 3, .children = try testing.allocator.dupe(render.SemanticId, &.{6}) };
+    nodes[4] = .{ .id = 5, .role = .list, .list_ordered = true, .list_start = 0, .children = try testing.allocator.dupe(render.SemanticId, &.{6}) };
     nodes[5] = .{ .id = 6, .role = .list_item, .children = try testing.allocator.dupe(render.SemanticId, &.{7}) };
     nodes[6] = .{ .id = 7, .role = .paragraph, .children = try testing.allocator.dupe(render.SemanticId, &.{ 8, 9 }) };
     nodes[7] = .{ .id = 8, .role = .text, .text = try testing.allocator.dupe(u8, "Read ") };
@@ -313,6 +380,6 @@ test "HTML renderer preserves semantic headings ordered lists and links" {
     const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/index.html", testing.allocator, .unlimited);
     defer testing.allocator.free(document);
     try testing.expect(std.mem.indexOf(u8, document, "<h2 data-ss-semantic-id=\"3\"><span data-ss-semantic-id=\"4\">Overview</span></h2>") != null);
-    try testing.expect(std.mem.indexOf(u8, document, "<ol data-ss-semantic-id=\"5\" start=\"3\">") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "<ol data-ss-semantic-id=\"5\" start=\"0\">") != null);
     try testing.expect(std.mem.indexOf(u8, document, "<a data-ss-semantic-id=\"9\" href=\"https://example.com/reference\">the reference</a>") != null);
 }

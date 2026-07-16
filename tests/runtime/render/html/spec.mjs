@@ -59,22 +59,38 @@ async function testDeterministicBundleReplacement() {
 async function testStructuredMathDoesNotRequireTex() {
   const project = await mkdtemp(path.join(os.tmpdir(), "ss-html-math-"));
   try {
-    await writeSlide(project, 'math!("x_1^2 + \\frac{\\alpha}{\\sqrt{y}}")');
+    await writeSlide(project, `math!("x_1^2 + \\frac{\\alpha}{\\sqrt{y}}")
+text! <<
+Inline $x_1^2 + \\alpha$
+
+$$
+\\frac{a+b}{\\sqrt{c}}
+$$
+>>`);
     const emptyPath = path.join(project, "empty-path");
     await mkdir(emptyPath);
     await expectSuccess(
       await runSs(["render", "--format", "html", "slide.ss", "deck"], project, { env: { PATH: emptyPath } }),
       "structured math HTML render without TeX",
     );
+    await expectSuccess(
+      await runSs(["render", "slide.ss", "deck.pdf"], project, { env: { PATH: emptyPath } }),
+      "structured math PDF render without TeX",
+    );
+    assert((await stat(path.join(project, "deck.pdf"))).isFile(), "structured math PDF was not created");
     const bundle = await readBundle(path.join(project, "deck"));
     const index = bundle.contents.get("index.html").toString("utf8");
-    assert(index.includes("ss-math-text"), "structured math did not use native HTML elements");
-    assert(index.includes("<math class=\"ss-mathml\""), "structured math omitted MathML semantics");
+    assert(count(index, "ss-math-text") >= 3, "block，inline，or display math did not use native HTML elements");
+    assert(count(index, "class=\"ss-mathml\"") >= 3, "block，inline，or display math omitted MathML semantics");
     assert(!index.includes("data-pdf-src"), "structured math used a PDF fallback");
     assert(!bundle.files.includes("ss.js"), "structured math unnecessarily packaged PDF.js");
   } finally {
     await rm(project, { recursive: true, force: true });
   }
+}
+
+function count(value, pattern) {
+  return value.split(pattern).length - 1;
 }
 
 async function testWatchPublishesHtmlGenerations() {

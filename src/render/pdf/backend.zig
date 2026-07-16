@@ -12,17 +12,15 @@ pub fn render(
     ir: *const render_ir.Ir,
     page_index: usize,
     output: []const u8,
+    resources: *const ResourceFiles,
 ) !void {
-    try ir.validate();
     if (page_index >= ir.pages.len) return error.InvalidPageIndex;
     const page = &ir.pages[page_index];
     errdefer deleteFileIfExists(io, output);
-    var materialized = try MaterializedResources.init(allocator, io, &ir.resources, output);
-    defer materialized.deinit();
     if (page.hasPdfPages()) {
-        try renderComposed(allocator, io, ir, page, output, &materialized);
+        try renderComposed(allocator, io, ir, page, output, resources);
     } else {
-        try renderCairo(allocator, ir, page, output, &materialized);
+        try renderCairo(allocator, ir, page, output, resources);
     }
 }
 
@@ -31,7 +29,7 @@ fn renderCairo(
     ir: *const render_ir.Ir,
     page: *const render_ir.Page,
     output: []const u8,
-    resources: *const MaterializedResources,
+    resources: *const ResourceFiles,
 ) !void {
     const output_z = try allocator.dupeZ(u8, output);
     defer allocator.free(output_z);
@@ -51,7 +49,7 @@ fn renderComposed(
     ir: *const render_ir.Ir,
     page: *const render_ir.Page,
     output: []const u8,
-    resources: *const MaterializedResources,
+    resources: *const ResourceFiles,
 ) !void {
     var composition = Composition.init(allocator, io, ir, page, output, resources);
     defer composition.deinit();
@@ -80,7 +78,7 @@ fn renderComposed(
 fn isExternalPdfItem(item: render_ir.Item) bool {
     return switch (item) {
         .pdf_page => true,
-        .math => |value| value.pdf_resource != null,
+        .math => |value| value.content == .raw_pdf,
         else => false,
     };
 }
@@ -91,7 +89,7 @@ const Composition = struct {
     ir: *const render_ir.Ir,
     page: *const render_ir.Page,
     output: []const u8,
-    resources: *const MaterializedResources,
+    resources: *const ResourceFiles,
     layers: std.ArrayList(c.SsQpdfLayer) = .empty,
     owned_paths: std.ArrayList([:0]u8) = .empty,
     native_paths: std.ArrayList([]u8) = .empty,
@@ -103,7 +101,7 @@ const Composition = struct {
         ir: *const render_ir.Ir,
         page: *const render_ir.Page,
         output: []const u8,
-        resources: *const MaterializedResources,
+        resources: *const ResourceFiles,
     ) Composition {
         return .{
             .allocator = allocator,
@@ -168,12 +166,15 @@ const Composition = struct {
     }
 
     fn appendMathLayer(self: *Composition, item: render_ir.Math) !void {
-        const resource = item.pdf_resource orelse return error.MissingRenderResource;
-        const path = try self.resources.resolve(resource, .math_pdf);
+        const raw = switch (item.content) {
+            .raw_pdf => |value| value,
+            .structured => return error.MissingRenderResource,
+        };
+        const path = try self.resources.resolve(raw.resource, .math_pdf);
         try self.layers.append(self.allocator, .{
             .path = path.ptr,
-            .page_index = item.page_index,
-            .box = @intFromEnum(item.box),
+            .page_index = raw.page_index,
+            .box = @intFromEnum(raw.box),
             .x = item.rect.x,
             .y = self.page.height - item.rect.y - item.rect.height,
             .width = item.rect.width,
@@ -241,7 +242,7 @@ fn renderNativeLayer(
     start: usize,
     end: usize,
     first_layer: bool,
-    resources: *const MaterializedResources,
+    resources: *const ResourceFiles,
 ) !void {
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
@@ -260,7 +261,7 @@ fn replayItems(
     pdf: *c.SsPdf,
     ir: *const render_ir.Ir,
     items: []const render_ir.Item,
-    resources: *const MaterializedResources,
+    resources: *const ResourceFiles,
 ) !void {
     for (items) |item| {
         const header = item.header();
@@ -278,7 +279,7 @@ fn replayItem(
     pdf: *c.SsPdf,
     ir: *const render_ir.Ir,
     item: render_ir.Item,
-    resources: *const MaterializedResources,
+    resources: *const ResourceFiles,
 ) !void {
     switch (item) {
         .fill_rect => |value| c.ss_pdf_fill_rect(
@@ -373,7 +374,7 @@ fn replayText(
     pdf: *c.SsPdf,
     ir: *const render_ir.Ir,
     text: render_ir.Text,
-    resources: *const MaterializedResources,
+    resources: *const ResourceFiles,
 ) !void {
     try replayTextLayout(allocator, pdf, ir, &text.layout, text.x, text.y, text.font_size, text.color, resources);
 }
@@ -383,9 +384,13 @@ fn replayMath(
     pdf: *c.SsPdf,
     ir: *const render_ir.Ir,
     math: render_ir.Math,
-    resources: *const MaterializedResources,
+    resources: *const ResourceFiles,
 ) !void {
-    const layout = math.layout orelse return error.UnsupportedAssetType;
+    const structured = switch (math.content) {
+        .structured => |value| value,
+        .raw_pdf => return error.UnsupportedAssetType,
+    };
+    const layout = structured.layout;
     for (layout.elements) |element| switch (element) {
         .text => |text| try replayTextLayout(
             allocator,
@@ -395,7 +400,7 @@ fn replayMath(
             math.rect.x + text.x,
             math.rect.y + text.y,
             text.font_size,
-            math.color,
+            structured.color,
             resources,
         ),
         .rule => |rule| c.ss_pdf_fill_rect(
@@ -404,9 +409,9 @@ fn replayMath(
             math.rect.y + rule.rect.y,
             rule.rect.width,
             rule.rect.height,
-            math.color.r,
-            math.color.g,
-            math.color.b,
+            structured.color.r,
+            structured.color.g,
+            structured.color.b,
         ),
     };
 }
@@ -420,7 +425,7 @@ fn replayTextLayout(
     y: f64,
     font_size: f64,
     color: core.render_policy.Color,
-    resources: *const MaterializedResources,
+    resources: *const ResourceFiles,
 ) !void {
     for (layout.runs) |run| {
         const font = ir.fonts.find(run.font_instance) orelse return error.MissingRenderFont;
@@ -504,7 +509,7 @@ fn deleteFileIfExists(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
 }
 
-const MaterializedResources = struct {
+pub const ResourceFiles = struct {
     allocator: Allocator,
     io: std.Io,
     directory: []u8,
@@ -516,12 +521,12 @@ const MaterializedResources = struct {
         path: [:0]u8,
     };
 
-    fn init(
+    pub fn init(
         allocator: Allocator,
         io: std.Io,
         graph: *const render_ir.ResourceGraph,
         output: []const u8,
-    ) !MaterializedResources {
+    ) !ResourceFiles {
         const serial = @atomicRmw(usize, &materialization_counter, .Add, 1, .monotonic);
         const directory = try std.fmt.allocPrint(allocator, "{s}.resources-{d}-{d}", .{ output, std.c.getpid(), serial });
         errdefer allocator.free(directory);
@@ -546,14 +551,14 @@ const MaterializedResources = struct {
         return .{ .allocator = allocator, .io = io, .directory = directory, .entries = entries };
     }
 
-    fn deinit(self: *MaterializedResources) void {
+    pub fn deinit(self: *ResourceFiles) void {
         std.Io.Dir.cwd().deleteTree(self.io, self.directory) catch {};
         for (self.entries) |entry| self.allocator.free(entry.path);
         self.allocator.free(self.entries);
         self.allocator.free(self.directory);
     }
 
-    fn resolve(self: *const MaterializedResources, id: render_ir.ResourceId, kind: render_ir.ResourceKind) ![:0]const u8 {
+    fn resolve(self: *const ResourceFiles, id: render_ir.ResourceId, kind: render_ir.ResourceKind) ![:0]const u8 {
         for (self.entries) |entry| {
             if (entry.kind == kind and std.mem.eql(u8, &entry.id, &id)) return entry.path;
         }

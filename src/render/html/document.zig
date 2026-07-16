@@ -43,12 +43,23 @@ pub fn styleSheet(allocator: std.mem.Allocator, ir: *const render.Ir, assets: *c
     try out.appendSlice(allocator, fragment_css);
     if (standalone) try out.appendSlice(allocator, print_css);
     for (ir.fonts.instances) |font| {
-        const path = assets.fontPath(font.resource, font.face_index) orelse return error.MissingHtmlResource;
+        const source = assets.fontSource(font.resource, font.face_index) orelse return error.MissingHtmlResource;
         try out.appendSlice(allocator, "@font-face { font-family: '");
         try appendFontFamily(allocator, &out, font.id);
-        try out.appendSlice(allocator, "'; src: url('");
-        try appendCssUrl(allocator, &out, path);
-        try appendFormat(allocator, &out, "'); font-weight:{d}; font-style:{s}; font-stretch:{s}; ascent-override:{d:.9}%; descent-override:{d:.9}%; line-gap-override:{d:.9}%; font-display:block; }}\n", .{
+        try out.appendSlice(allocator, "'; src: ");
+        switch (source) {
+            .embedded => |path| {
+                try out.appendSlice(allocator, "url('");
+                try appendCssUrl(allocator, &out, path);
+                try out.appendSlice(allocator, "')");
+            },
+            .local => {
+                try out.appendSlice(allocator, "local(");
+                try appendCssString(allocator, &out, font.family);
+                try out.append(allocator, ')');
+            },
+        }
+        try appendFormat(allocator, &out, "; font-weight:{d}; font-style:{s}; font-stretch:{s}; ascent-override:{d:.9}%; descent-override:{d:.9}%; line-gap-override:{d:.9}%; font-display:block; }}\n", .{
             font.weight,
             fontStyle(font.style),
             fontStretch(font.stretch),
@@ -112,7 +123,7 @@ fn appendPage(
     for (page.items.items) |item| try appendItem(allocator, out, ir, item, assets);
     try out.appendSlice(allocator, "<div class=\"ss-semantic-layer\">");
     for (page.reading_order) |semantic_id| {
-        try appendSemanticNode(allocator, out, &ir.semantics, semantic_id, 0);
+        try appendSemanticNode(allocator, out, ir, semantic_id, 0);
     }
     try out.appendSlice(allocator, "</div>");
     for (page.links.items) |link| {
@@ -128,13 +139,19 @@ fn appendPage(
 fn appendSemanticNode(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
-    tree: *const render.SemanticTree,
+    ir: *const render.Ir,
     semantic_id: render.SemanticId,
     depth: usize,
 ) !void {
+    const tree = &ir.semantics;
     if (depth > tree.nodes.len) return error.InvalidSemantics;
     const semantic = tree.find(semantic_id) orelse return error.InvalidSemantics;
-    const tag = semanticTag(semantic.*);
+    const math_tree = if (semantic.role == .math)
+        ir.math.find(semantic.math_tree orelse return error.InvalidSemantics) orelse return error.InvalidSemantics
+    else
+        null;
+    const raw_math = if (math_tree) |value| value.input_kind == .raw else false;
+    const tag = if (raw_math) "span" else semanticTag(semantic.*);
     try appendFormat(allocator, out, "<{s} data-ss-semantic-id=\"{d}\"", .{ tag, semantic.id });
     if (semantic.role == .list and semantic.list_ordered.? and semantic.list_start.? != 1) {
         try appendFormat(allocator, out, " start=\"{d}\"", .{semantic.list_start.?});
@@ -151,17 +168,31 @@ fn appendSemanticNode(
         try out.append(allocator, '"');
     }
     if (semantic.alt_text) |alt| {
-        try out.appendSlice(allocator, " aria-label=\"");
-        try appendAttribute(allocator, out, alt);
-        try out.append(allocator, '"');
+        if (!raw_math) {
+            try out.appendSlice(allocator, " aria-label=\"");
+            try appendAttribute(allocator, out, alt);
+            try out.append(allocator, '"');
+        }
     }
-    if (semantic.role == .math) try out.appendSlice(allocator, " role=\"math\"");
+    if (semantic.role == .math) {
+        try out.appendSlice(allocator, " class=\"ss-mathml\"");
+        if (raw_math) {
+            try out.appendSlice(allocator, " role=\"math\" aria-label=\"");
+            try appendAttribute(allocator, out, semantic.alt_text orelse math_tree.?.source);
+            try out.append(allocator, '"');
+        } else {
+            try out.appendSlice(allocator, " xmlns=\"http://www.w3.org/1998/Math/MathML\"");
+            try appendFormat(allocator, out, " display=\"{s}\"", .{if (math_tree.?.input_kind == .@"inline") "inline" else "block"});
+        }
+    }
     try out.append(allocator, '>');
     if (semantic.role == .code) try out.appendSlice(allocator, "<code>");
-    if (semantic.text) |value| try appendText(allocator, out, value);
-    for (semantic.children) |child| try appendSemanticNode(allocator, out, tree, child, depth + 1);
+    if (semantic.role == .math and !raw_math) {
+        try appendMathNode(allocator, out, math_tree.?, math_tree.?.root, 0);
+    } else if (semantic.text) |value| try appendText(allocator, out, value);
+    for (semantic.children) |child| try appendSemanticNode(allocator, out, ir, child, depth + 1);
     if (semantic.role == .code) try out.appendSlice(allocator, "</code>");
-    try appendFormat(allocator, out, "</{s}>", .{semanticTag(semantic.*)});
+    try appendFormat(allocator, out, "</{s}>", .{tag});
 }
 
 fn semanticTag(semantic: render.SemanticNode) []const u8 {
@@ -187,7 +218,8 @@ fn semanticTag(semantic: render.SemanticNode) []const u8 {
         .caption => "figcaption",
         .code => "pre",
         .link => "a",
-        .math, .text => "span",
+        .math => "math",
+        .text => "span",
         .group, .decoration => "div",
     };
 }
@@ -271,33 +303,45 @@ fn appendItem(
         },
         .math => |value| {
             const tree = ir.math.find(value.tree) orelse return error.InvalidMathTree;
-            if (tree.input_kind == .raw) return error.UnsupportedMathSyntax;
-            const layout = value.layout orelse return error.InvalidMathTree;
-            try appendItemStart(allocator, out, "span", "ss-math", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
-            try appendRectStyle(allocator, out, value.rect);
-            try out.appendSlice(allocator, "\">");
-            for (layout.elements) |element| switch (element) {
-                .text => |text| {
-                    try appendFormat(allocator, out, "<span class=\"ss-math-text\" style=\"left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt\">", .{
-                        normalized(text.x),
-                        normalized(text.y),
-                        normalized(text.layout.logical_bounds.width),
-                        normalized(text.layout.logical_bounds.height),
-                    });
-                    try appendTextRuns(allocator, out, ir, &text.layout, text.font_size, value.color);
+            switch (value.content) {
+                .structured => |structured| {
+                    if (tree.input_kind == .raw) return error.InvalidMathTree;
+                    const layout = structured.layout;
+                    try appendItemStart(allocator, out, "span", "ss-math", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
+                    try appendRectStyle(allocator, out, value.rect);
+                    try out.appendSlice(allocator, "\">");
+                    for (layout.elements) |element| switch (element) {
+                        .text => |text| {
+                            try appendFormat(allocator, out, "<span class=\"ss-math-text\" style=\"left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt\">", .{
+                                normalized(text.x),
+                                normalized(text.y),
+                                normalized(text.layout.logical_bounds.width),
+                                normalized(text.layout.logical_bounds.height),
+                            });
+                            try appendTextRuns(allocator, out, ir, &text.layout, text.font_size, structured.color);
+                            try out.appendSlice(allocator, "</span>");
+                        },
+                        .rule => |rule| try appendFormat(allocator, out, "<span class=\"ss-math-rule\" style=\"left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt;background:{s}\"></span>", .{
+                            normalized(rule.rect.x),
+                            normalized(rule.rect.y),
+                            normalized(rule.rect.width),
+                            normalized(rule.rect.height),
+                            color(structured.color),
+                        }),
+                    };
                     try out.appendSlice(allocator, "</span>");
                 },
-                .rule => |rule| try appendFormat(allocator, out, "<span class=\"ss-math-rule\" style=\"left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt;background:{s}\"></span>", .{
-                    normalized(rule.rect.x),
-                    normalized(rule.rect.y),
-                    normalized(rule.rect.width),
-                    normalized(rule.rect.height),
-                    color(value.color),
-                }),
-            };
-            try out.appendSlice(allocator, "<math class=\"ss-mathml\" xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">");
-            try appendMathNode(allocator, out, tree, tree.root, 0);
-            try out.appendSlice(allocator, "</math></span>");
+                .raw_pdf => |raw| {
+                    if (tree.input_kind != .raw) return error.InvalidMathTree;
+                    const path = assets.path(.math_pdf, raw.resource) orelse return error.MissingHtmlResource;
+                    const resource = ir.resources.find(raw.resource) orelse return error.MissingHtmlResource;
+                    const metadata = switch (resource.metadata) {
+                        .math_pdf => |metadata| metadata,
+                        else => return error.MissingHtmlResource,
+                    };
+                    try appendPdfViewer(allocator, out, header, value.rect, "ss-math ss-pdf", path, raw.page_index, raw.box, &metadata, false);
+                },
+            }
         },
         .pdf_page => |value| {
             const path = assets.path(.pdf, value.resource) orelse return error.MissingHtmlResource;
@@ -306,24 +350,40 @@ fn appendItem(
                 .pdf => |metadata| metadata,
                 else => return error.MissingHtmlResource,
             };
-            if (value.page_index >= metadata.pages.len) return error.MissingHtmlResource;
-            const page = &metadata.pages[value.page_index];
-            const box = page.box(value.box);
-            try appendItemStart(allocator, out, "div", "ss-pdf", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
-            try appendRectStyle(allocator, out, value.rect);
-            try out.appendSlice(allocator, "\" data-pdf-src=\"");
-            try appendAttribute(allocator, out, path);
-            try appendFormat(allocator, out, "\" data-page=\"{d}\" data-box=\"{s}\" data-view-box=\"{d:.9},{d:.9},{d:.9},{d:.9}\" data-rotation=\"{d}\"><canvas></canvas><div class=\"textLayer\"></div><div class=\"annotationLayer\"></div></div>", .{
-                value.page_index + 1,
-                @tagName(value.box),
-                normalized(box.left * page.user_unit),
-                normalized(box.bottom * page.user_unit),
-                normalized(box.right * page.user_unit),
-                normalized(box.top * page.user_unit),
-                page.rotation,
-            });
+            try appendPdfViewer(allocator, out, header, value.rect, "ss-pdf", path, value.page_index, value.box, &metadata, value.copy_annotations);
         },
     }
+}
+
+fn appendPdfViewer(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    header: render.ItemHeader,
+    rect: render.Rect,
+    class: []const u8,
+    path: []const u8,
+    page_index: usize,
+    box_kind: core.render_policy.PdfPageBox,
+    metadata: *const render.PdfResourceMetadata,
+    copy_annotations: bool,
+) !void {
+    if (page_index >= metadata.pages.len) return error.MissingHtmlResource;
+    const page = &metadata.pages[page_index];
+    const box = page.box(box_kind);
+    try appendItemStart(allocator, out, "div", class, header, .{ .x = rect.x, .y = rect.y }, null);
+    try appendRectStyle(allocator, out, rect);
+    try out.appendSlice(allocator, "\" data-pdf-src=\"");
+    try appendAttribute(allocator, out, path);
+    try appendFormat(allocator, out, "\" data-page=\"{d}\" data-box=\"{s}\" data-view-box=\"{d:.9},{d:.9},{d:.9},{d:.9}\" data-rotation=\"{d}\" data-copy-annotations=\"{s}\"><canvas></canvas><div class=\"textLayer\"></div><div class=\"annotationLayer\"></div></div>", .{
+        page_index + 1,
+        @tagName(box_kind),
+        normalized(box.left * page.user_unit),
+        normalized(box.bottom * page.user_unit),
+        normalized(box.right * page.user_unit),
+        normalized(box.top * page.user_unit),
+        page.rotation,
+        if (copy_annotations) "true" else "false",
+    });
 }
 
 fn appendTextRuns(
@@ -353,7 +413,12 @@ fn appendTextRuns(
         });
         try out.append(allocator, '\'');
         try appendFontFamily(allocator, out, font.id);
-        try out.append(allocator, '\'');
+        try out.appendSlice(allocator, "',");
+        try appendCssString(allocator, out, font.family);
+        if (std.mem.indexOf(u8, font.family, "Emoji") != null) {
+            try out.appendSlice(allocator, ",'Noto Color Emoji','Segoe UI Emoji'");
+        }
+        try out.appendSlice(allocator, ",sans-serif");
         try appendFormat(allocator, out, ";width:{d:.6}pt;height:{d:.6}pt;font-size:{d:.6}pt;font-weight:{d};font-style:{s};font-stretch:{s};line-height:{d:.6}pt;color:{s};", .{
             normalized(run.advance),
             normalized(ascent + descent),

@@ -155,6 +155,12 @@ fn documentSemantics(allocator: std.mem.Allocator, page_count: usize) !render.Se
     return .{ .root = 1, .nodes = nodes };
 }
 
+fn renderPage(ir: *const render.Ir, page_index: usize, output: []const u8) !void {
+    var resources = try pdf_backend.ResourceFiles.init(testing.allocator, testing.io, &ir.resources, output);
+    defer resources.deinit();
+    try pdf_backend.render(testing.allocator, testing.io, ir, page_index, output, &resources);
+}
+
 test "render PDF spec: Cairo shim exposes rendering dependency versions" {
     try expectCString(c.ss_pdf_cairo_version_string());
     try expectCString(c.ss_pdf_pango_version_string());
@@ -248,7 +254,7 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
         .semantics = source_semantics,
         .pages = &source_pages,
     };
-    try pdf_backend.render(allocator, testing.io, &source_ir, 0, source_path);
+    try renderPage(&source_ir, 0, source_path);
 
     var composed_pages = [_]render.Page{.{
         .page_id = 2,
@@ -289,7 +295,7 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
     var composed_semantics = try documentSemantics(allocator, composed_pages.len);
     defer composed_semantics.deinit(allocator);
     const composed_ir = render.Ir{ .resources = resources, .semantics = composed_semantics, .pages = &composed_pages };
-    try pdf_backend.render(allocator, testing.io, &composed_ir, 0, output_path);
+    try renderPage(&composed_ir, 0, output_path);
 
     const json = try qpdfJson(allocator, testing.io, output_path);
     defer allocator.free(json);
@@ -599,5 +605,5 @@ fn writeQpdfTestLayer(allocator: std.mem.Allocator, path: []const u8, text: []co
     const catalogs = try render_support.takeCatalogs(allocator, &resources, &fonts);
     ir.resources = catalogs.resources;
     ir.fonts = catalogs.fonts;
-    try pdf_backend.render(allocator, testing.io, &ir, 0, path);
+    try renderPage(&ir, 0, path);
 }

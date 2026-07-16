@@ -4,10 +4,12 @@ const render = @import("render");
 
 pub const Builder = struct {
     entries: std.ArrayList(render.Resource) = .empty,
+    sources: std.ArrayList(Source) = .empty,
 
     pub fn deinit(self: *Builder, allocator: std.mem.Allocator) void {
         for (self.entries.items) |*entry| entry.deinit(allocator);
         self.entries.deinit(allocator);
+        self.clearSources(allocator);
         self.* = .{};
     }
 
@@ -18,6 +20,9 @@ pub const Builder = struct {
         kind: render.ResourceKind,
         path: []const u8,
     ) !render.ResourceId {
+        for (self.sources.items) |source| {
+            if (source.kind == kind and std.mem.eql(u8, source.path, path)) return source.id;
+        }
         const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
         errdefer allocator.free(bytes);
         const id = render.identifyResource(kind, bytes);
@@ -25,6 +30,9 @@ pub const Builder = struct {
             if (std.mem.eql(u8, &entry.id, &id)) {
                 allocator.free(bytes);
                 if (entry.kind != kind) return error.RenderResourceKindConflict;
+                const source_path = try allocator.dupe(u8, path);
+                errdefer allocator.free(source_path);
+                try self.sources.append(allocator, .{ .kind = kind, .path = source_path, .id = id });
                 return id;
             }
         }
@@ -32,12 +40,18 @@ pub const Builder = struct {
         errdefer allocator.free(name);
         var metadata = try probeMetadata(allocator, path, kind, bytes);
         errdefer metadata.deinit(allocator);
-        try self.entries.append(allocator, .{ .id = id, .kind = kind, .name = name, .bytes = bytes, .metadata = metadata });
+        const source_path = try allocator.dupe(u8, path);
+        errdefer allocator.free(source_path);
+        try self.entries.ensureUnusedCapacity(allocator, 1);
+        try self.sources.ensureUnusedCapacity(allocator, 1);
+        self.entries.appendAssumeCapacity(.{ .id = id, .kind = kind, .name = name, .bytes = bytes, .metadata = metadata });
+        self.sources.appendAssumeCapacity(.{ .kind = kind, .path = source_path, .id = id });
         return id;
     }
 
     pub fn take(self: *Builder, allocator: std.mem.Allocator) !render.ResourceGraph {
         const entries = try self.entries.toOwnedSlice(allocator);
+        self.clearSources(allocator);
         self.* = .{};
         return .{ .entries = entries };
     }
@@ -48,6 +62,18 @@ pub const Builder = struct {
         }
         return null;
     }
+
+    fn clearSources(self: *Builder, allocator: std.mem.Allocator) void {
+        for (self.sources.items) |source| allocator.free(source.path);
+        self.sources.deinit(allocator);
+        self.sources = .empty;
+    }
+};
+
+const Source = struct {
+    kind: render.ResourceKind,
+    path: []const u8,
+    id: render.ResourceId,
 };
 
 fn probeMetadata(

@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { PNG } from "pngjs";
-import { captureHtmlPages, capturePdfPages, withBrowser } from "./capture.mjs";
+import { captureHtmlPages, capturePdfPages, preparePdfViewer, withBrowser } from "./capture.mjs";
 import { compareImages, decodePng, defaultThresholds, encodePng } from "./compare.mjs";
 
 const exec = promisify(execFile);
@@ -21,13 +21,12 @@ const fixtures = [
 ];
 if (full) {
   fixtures.push({ name: "math", source: path.join(repository, "tests/fixtures/render/math.ss") });
+  fixtures.push({ name: "markdown-math", source: path.join(repository, "tests/fixtures/render/parity/math/markdown.ss") });
 }
 
 await rm(output, { recursive: true, force: true });
-await mkdir(path.join(output, "pdfjs"), { recursive: true });
-await cp(path.join(repository, "third_party/pdfjs/pdf.mjs"), path.join(output, "pdfjs/pdf.mjs"));
-await cp(path.join(repository, "third_party/pdfjs/pdf.worker.mjs"), path.join(output, "pdfjs/pdf.worker.mjs"));
-await writeFile(path.join(output, "pdf-viewer.html"), pdfViewerHtml(), "utf8");
+await mkdir(output, { recursive: true });
+await preparePdfViewer(output, repository);
 
 for (const fixture of fixtures) {
   await run(driver, [fixture.source, path.join(output, `${fixture.name}.pdf`), path.join(output, `${fixture.name}-html`)]);
@@ -117,32 +116,4 @@ if (failed) throw new Error(`rendering parity exceeded thresholds; inspect ${out
 
 async function run(file, args) {
   await exec(file, args, { cwd: repository, timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
-}
-
-function pdfViewerHtml() {
-  return `<!doctype html>
-<meta charset="utf-8">
-<style>html,body{margin:0}canvas{display:block}</style>
-<main></main>
-<script type="module">
-import * as pdfjs from "./pdfjs/pdf.mjs";
-try {
-  pdfjs.GlobalWorkerOptions.workerSrc = "./pdfjs/pdf.worker.mjs";
-  const source = new URL(location.href).searchParams.get("source");
-  const pdf = await pdfjs.getDocument({url:source,isEvalSupported:false}).promise;
-  for (let index=1;index<=pdf.numPages;index++) {
-    const page = await pdf.getPage(index);
-    const viewport = page.getViewport({scale:2});
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.floor(viewport.width);
-    canvas.height = Math.floor(viewport.height);
-    document.querySelector("main").append(canvas);
-    await page.render({canvasContext:canvas.getContext("2d"),viewport}).promise;
-  }
-} catch (error) {
-  globalThis.ssPdfError = error instanceof Error ? error.stack : String(error);
-} finally {
-  globalThis.ssPdfReady = true;
-}
-</script>`;
 }

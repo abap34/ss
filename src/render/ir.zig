@@ -160,15 +160,34 @@ pub const PdfPage = struct {
     copy_annotations: bool,
 };
 
+pub const StructuredMath = struct {
+    layout: MathLayout,
+    color: core.render_policy.Color,
+};
+
+pub const RawMathPdf = struct {
+    resource: ResourceId,
+    page_index: usize,
+    box: core.render_policy.PdfPageBox,
+};
+
+pub const MathContent = union(enum) {
+    structured: StructuredMath,
+    raw_pdf: RawMathPdf,
+
+    fn deinit(self: *MathContent, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .structured => |*value| value.layout.deinit(allocator),
+            .raw_pdf => {},
+        }
+    }
+};
+
 pub const Math = struct {
     header: ItemHeader,
     rect: Rect,
     tree: MathTreeId,
-    layout: ?MathLayout = null,
-    color: core.render_policy.Color,
-    pdf_resource: ?ResourceId = null,
-    page_index: usize,
-    box: core.render_policy.PdfPageBox,
+    content: MathContent,
 };
 
 pub const Item = union(enum) {
@@ -184,7 +203,7 @@ pub const Item = union(enum) {
     pub fn deinit(self: *Item, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .text => |*item| item.deinit(allocator),
-            .math => |*item| if (item.layout) |*layout| layout.deinit(allocator),
+            .math => |*item| item.content.deinit(allocator),
             .fill_rect, .stroke_line, .rounded_rect, .raster, .svg, .pdf_page => {},
         }
     }
@@ -263,7 +282,7 @@ pub const Page = struct {
     pub fn hasPdfPages(self: *const Page) bool {
         for (self.items.items) |item| {
             if (item == .pdf_page) return true;
-            if (item == .math and item.math.pdf_resource != null) return true;
+            if (item == .math and item.math.content == .raw_pdf) return true;
         }
         return false;
     }
@@ -416,29 +435,40 @@ pub const Page = struct {
         } });
     }
 
-    pub fn appendMath(
+    pub fn appendStructuredMath(
         self: *Page,
         allocator: std.mem.Allocator,
         node_id: ?core.NodeId,
         rect: Rect,
         tree: MathTreeId,
-        layout: ?MathLayout,
+        layout: MathLayout,
         color: core.render_policy.Color,
-        pdf_resource: ?ResourceId,
-        page_index: usize,
-        box: core.render_policy.PdfPageBox,
     ) !void {
         var owned_layout = layout;
-        errdefer if (owned_layout) |*value| value.deinit(allocator);
+        errdefer owned_layout.deinit(allocator);
         try self.items.append(allocator, .{ .math = .{
             .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
             .tree = tree,
-            .layout = owned_layout,
-            .color = color,
-            .pdf_resource = pdf_resource,
-            .page_index = page_index,
-            .box = box,
+            .content = .{ .structured = .{ .layout = owned_layout, .color = color } },
+        } });
+    }
+
+    pub fn appendRawMathPdf(
+        self: *Page,
+        allocator: std.mem.Allocator,
+        node_id: ?core.NodeId,
+        rect: Rect,
+        tree: MathTreeId,
+        resource: ResourceId,
+        page_index: usize,
+        box: core.render_policy.PdfPageBox,
+    ) !void {
+        try self.items.append(allocator, .{ .math = .{
+            .header = self.itemHeader(node_id, rect, rect),
+            .rect = rect,
+            .tree = tree,
+            .content = .{ .raw_pdf = .{ .resource = resource, .page_index = page_index, .box = box } },
         } });
     }
 

@@ -39,27 +39,33 @@ async function renderPdfPage(container, pdfjs) {
   const layer = new pdfjs.TextLayer({ textContentSource: textContent, container: textLayer, viewport });
   await layer.render();
 
-  const annotations = (await page.getAnnotations({ intent: "display" })).filter(safeAnnotation);
-  const annotationLayer = container.querySelector(".annotationLayer");
-  await pdfjs.AnnotationLayer.render({
-    annotations,
-    div: annotationLayer,
-    page,
-    viewport,
-    linkService: {
-      getDestinationHash: () => "",
-      getAnchorUrl: (value) => value,
-      goToDestination() {},
-      executeNamedAction() {},
-      addLinkAttributes(link, url, newWindow) {
-        if (!safeUrl(url)) return;
-        link.href = url;
-        link.rel = "noopener noreferrer nofollow";
-        if (newWindow) link.target = "_blank";
+  const copyAnnotations = container.dataset.copyAnnotations;
+  if (copyAnnotations !== "true" && copyAnnotations !== "false") {
+    throw new Error("invalid PDF annotation policy");
+  }
+  if (copyAnnotations === "true") {
+    const annotations = (await page.getAnnotations({ intent: "display" })).filter(safeAnnotation);
+    const annotationLayer = container.querySelector(".annotationLayer");
+    await pdfjs.AnnotationLayer.render({
+      annotations,
+      div: annotationLayer,
+      page,
+      viewport,
+      linkService: {
+        getDestinationHash: () => "",
+        getAnchorUrl: (value) => value,
+        goToDestination() {},
+        executeNamedAction() {},
+        addLinkAttributes(link, url, newWindow) {
+          if (!safeUrl(url)) return;
+          link.href = url;
+          link.rel = "noopener noreferrer nofollow";
+          if (newWindow) link.target = "_blank";
+        },
       },
-    },
-    renderForms: false,
-  });
+      renderForms: false,
+    });
+  }
 }
 
 function applySelectedPageBox(page, container) {

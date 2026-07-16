@@ -163,6 +163,7 @@ const DrawContext = struct {
     link_annotations: ?*std.ArrayList(LinkAnnotation) = null,
     destinations: ?*std.ArrayList(DestinationAnnotation) = null,
     emitter: ?render_emitter.Emitter = null,
+    tex_preamble: []const TexPreambleEntry = &.{},
 };
 
 fn activeEmitter(ctx: *DrawContext) *render_emitter.Emitter {
@@ -198,8 +199,32 @@ const DestinationAnnotation = struct {
     }
 };
 
+const MathKind = enum { inline_math, display, block, raw_block };
+
+const AtomContent = union(enum) {
+    text,
+    structured_math: struct {
+        tree: render_ir.MathTreeId,
+        layout: render_ir.MathLayout,
+    },
+    raw_math: struct {
+        path: []const u8,
+        page_index: usize,
+    },
+    icon: struct { path: []const u8 },
+
+    fn deinit(self: *AtomContent, allocator: Allocator) void {
+        switch (self.*) {
+            .text => {},
+            .structured_math => |*math| math.layout.deinit(allocator),
+            .raw_math => |math| allocator.free(math.path),
+            .icon => |icon| allocator.free(icon.path),
+        }
+    }
+};
+
 const Atom = struct {
-    kind: enum { text, math, icon } = .text,
+    content: AtomContent = .text,
     text: []const u8,
     font: FontFace,
     color: Color,
@@ -209,9 +234,6 @@ const Atom = struct {
     is_emoji: bool = false,
     strikethrough: bool = false,
     underline: bool = false,
-    asset_path: ?[]const u8 = null,
-    asset_page_index: usize = 0,
-    math_kind: MathKind = .inline_math,
     link_url: ?[]const u8 = null,
 };
 
@@ -232,8 +254,6 @@ const AtomVisualLine = struct {
     end: usize,
     width: f32,
 };
-
-const MathKind = enum { inline_math, display, block, raw_block };
 
 const SvgAsset = struct {
     path: []const u8,
@@ -927,7 +947,9 @@ fn hashObjectCommand(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(F
     hashString(hasher, command.content);
     hashOptionalString(hasher, command.link_id);
     hashString(hasher, @tagName(command.parse_mode));
-    try hashTexPreambleEntries(ctx, asset_fingerprints, hasher, command.tex_preamble);
+    if (command.render.kind == .vector_math and command.math_kind == .raw_block) {
+        try hashTexPreambleEntries(ctx, asset_fingerprints, hasher, command.tex_preamble);
+    }
     hashResolvedRender(hasher, command);
     switch (command.render.kind) {
         .vector_math => hashString(hasher, @tagName(command.math_kind)),
@@ -1274,18 +1296,17 @@ fn collectPreparedObjectPreloads(
     for (object.asset_deps) |dep| {
         const dep_target = targetWithContentSpan(target, dep.content_start, dep.content_end);
         switch (dep.kind) {
-            .inline_math => try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
-                .source = try ctx.allocator.dupe(u8, dep.source),
-                .preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
-                .kind = .inline_math,
-                .target = dep_target,
-            } }),
-            .display_math => try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
-                .source = try ctx.allocator.dupe(u8, dep.source),
-                .preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
-                .kind = .display,
-                .target = dep_target,
-            } }),
+            .inline_math, .display_math => {
+                const kind: MathKind = if (dep.kind == .display_math) .display else .inline_math;
+                if (object.tex_preamble.len != 0 and !try supportsStructuredMath(ctx.allocator, dep.source, kind)) {
+                    try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
+                        .source = try ctx.allocator.dupe(u8, dep.source),
+                        .preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
+                        .kind = kind,
+                        .target = dep_target,
+                    } });
+                }
+            },
             .block_math => {
                 const kind = mathKindForPreparedObject(object);
                 if (kind == .raw_block) try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
@@ -1390,18 +1411,17 @@ fn collectAssetDepsForPlan(
     for (command.asset_deps) |dep| {
         const dep_target = targetWithContentSpan(target, dep.content_start, dep.content_end);
         switch (dep.kind) {
-            .inline_math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
-                .source = try ctx.allocator.dupe(u8, dep.source),
-                .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
-                .kind = .inline_math,
-                .target = dep_target,
-            } }),
-            .display_math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
-                .source = try ctx.allocator.dupe(u8, dep.source),
-                .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
-                .kind = .display,
-                .target = dep_target,
-            } }),
+            .inline_math, .display_math => {
+                const kind: MathKind = if (dep.kind == .display_math) .display else .inline_math;
+                if (command.tex_preamble.len != 0 and !try supportsStructuredMath(ctx.allocator, dep.source, kind)) {
+                    try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
+                        .source = try ctx.allocator.dupe(u8, dep.source),
+                        .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
+                        .kind = kind,
+                        .target = dep_target,
+                    } });
+                }
+            },
             .block_math => {
                 if (command.math_kind == .raw_block) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                     .source = try ctx.allocator.dupe(u8, dep.source),
@@ -1545,6 +1565,8 @@ fn addObjectCommandDiagnostic(state: *core.DocumentState, command: *const Object
 }
 
 fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, maybe_message: ?[]const u8) !void {
+    if (err == error.UnsupportedMathSyntax and try addUnsupportedMathDiagnostic(ctx, state, command)) return;
+
     var tasks = std.ArrayList(PreloadTask).empty;
     defer {
         freePreloadTasks(ctx.allocator, tasks.items);
@@ -1576,6 +1598,32 @@ fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: *core.DocumentState,
     }
 
     try addObjectCommandDiagnostic(state, command, err, maybe_message);
+}
+
+fn addUnsupportedMathDiagnostic(
+    ctx: *DrawContext,
+    state: *core.DocumentState,
+    command: *const ObjectCommand,
+) !bool {
+    const target = objectDiagnosticTarget(command);
+    for (command.asset_deps) |dep| {
+        const kind: MathKind = switch (dep.kind) {
+            .inline_math => .inline_math,
+            .display_math => .display,
+            .block_math => if (command.math_kind == .raw_block) continue else command.math_kind,
+            .icon, .vector_pdf, .raster_asset => continue,
+        };
+        if (try supportsStructuredMath(ctx.allocator, dep.source, kind)) continue;
+        try addTargetedRenderDiagnostic(
+            state,
+            targetWithContentSpan(target, dep.content_start, dep.content_end),
+            "math expression",
+            error.UnsupportedMathSyntax,
+            null,
+        );
+        return true;
+    }
+    return false;
 }
 
 fn objectCommandDiagnosticTarget(command: *const ObjectCommand) RenderDiagnosticTarget {
@@ -2038,6 +2086,9 @@ fn deinitDestinationAnnotations(allocator: Allocator, destinations: []const Dest
 }
 
 fn drawObjectCommand(ctx: *DrawContext, command: *const ObjectCommand) !void {
+    const previous_preamble = ctx.tex_preamble;
+    ctx.tex_preamble = command.tex_preamble;
+    defer ctx.tex_preamble = previous_preamble;
     const visual_frame = try measuredObjectCommandVisualFrame(ctx, command);
     try addDestination(ctx, command.link_id, visual_frame);
     try drawObjectChrome(ctx, visual_frame, command.render);
@@ -2201,6 +2252,9 @@ fn measureObjectCommandContent(ctx: *DrawContext, command: *const ObjectCommand,
 }
 
 fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, outer_width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
+    const previous_preamble = ctx.tex_preamble;
+    ctx.tex_preamble = command.tex_preamble;
+    defer ctx.tex_preamble = previous_preamble;
     var render = command.render;
     if (mode == .natural) {
         if (render.text) |*text| text.wrap = false;
@@ -2268,14 +2322,14 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
             try measurement.begin();
             defer measurement.deinit();
             const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = Defaults.height };
-            const next_bl = try drawMarkdownBlocksAt(ctx, frame, baseline_bl, doc.blocks.items, text, 0, command.tex_preamble);
+            const next_bl = try drawMarkdownBlocksAt(ctx, frame, baseline_bl, doc.blocks.items, text, 0);
             var measured = try measurementFromInk(&measurement, baseline_bl, next_bl, text.font_size, text.line_height);
             if (mode == .natural) {
-                if (try markdownBlocksNaturalInlineAdvance(ctx, doc.blocks.items, text, 0, command.tex_preamble)) |natural_width| {
+                if (try markdownBlocksNaturalInlineAdvance(ctx, doc.blocks.items, text, 0)) |natural_width| {
                     measured.width = @max(measured.width, guardedNaturalMeasurementWidth(natural_width));
                 }
             } else {
-                measured.width = @max(try markdownBlocksConstrainedLogicalWidth(ctx, doc.blocks.items, text, 0, width, command.tex_preamble), 1);
+                measured.width = @max(try markdownBlocksConstrainedLogicalWidth(ctx, doc.blocks.items, text, 0, width), 1);
             }
             break :blk measured;
         },
@@ -2291,14 +2345,14 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
             var measurement = MeasurementScope.init(ctx);
             try measurement.begin();
             defer measurement.deinit();
-            const next_bl = try drawInlineLines(ctx, 0, baseline_bl, @max(width, 1), layout.lines.items, inline_text, inline_text.wrap, command.tex_preamble);
+            const next_bl = try drawInlineLines(ctx, 0, baseline_bl, @max(width, 1), layout.lines.items, inline_text, inline_text.wrap);
             var measured = try measurementFromInk(&measurement, baseline_bl, next_bl, inline_text.font_size, inline_text.line_height);
             if (mode == .natural) {
-                if (try inlineLinesNaturalAdvance(ctx, layout.lines.items, inline_text, command.tex_preamble)) |natural_width| {
+                if (try inlineLinesNaturalAdvance(ctx, layout.lines.items, inline_text)) |natural_width| {
                     measured.width = @max(measured.width, guardedNaturalMeasurementWidth(natural_width));
                 }
             } else {
-                measured.width = @max(try inlineLinesConstrainedLogicalWidth(ctx, layout.lines.items, inline_text, width, inline_text.wrap, command.tex_preamble), 1);
+                measured.width = @max(try inlineLinesConstrainedLogicalWidth(ctx, layout.lines.items, inline_text, width, inline_text.wrap), 1);
             }
             break :blk measured;
         },
@@ -2658,7 +2712,7 @@ fn drawTextCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Fram
                 owned_doc = try core.markdown.parseMarkdownContent(ctx.allocator, command.content);
                 break :blk &owned_doc.?;
             };
-            _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0, command.tex_preamble);
+            _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0);
         },
         .@"inline" => {
             var owned_layout: ?core.markdown.TextLayout = null;
@@ -2668,34 +2722,34 @@ fn drawTextCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Fram
                 break :blk &owned_layout.?;
             };
             const baseline = baselineBlForBox(frame, text.font_size);
-            _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap, command.tex_preamble);
+            _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap);
         },
     }
 }
 
-fn drawMarkdownBlocks(ctx: *DrawContext, frame: Frame, blocks: []const *Block, text: TextPaint, list_depth: usize, preamble: []const TexPreambleEntry) anyerror!f32 {
-    return drawMarkdownBlocksAt(ctx, frame, baselineBlForBox(frame, text.font_size), blocks, text, list_depth, preamble);
+fn drawMarkdownBlocks(ctx: *DrawContext, frame: Frame, blocks: []const *Block, text: TextPaint, list_depth: usize) anyerror!f32 {
+    return drawMarkdownBlocksAt(ctx, frame, baselineBlForBox(frame, text.font_size), blocks, text, list_depth);
 }
 
-fn drawMarkdownBlocksAt(ctx: *DrawContext, frame: Frame, baseline_bl: f32, blocks: []const *Block, text: TextPaint, list_depth: usize, preamble: []const TexPreambleEntry) anyerror!f32 {
+fn drawMarkdownBlocksAt(ctx: *DrawContext, frame: Frame, baseline_bl: f32, blocks: []const *Block, text: TextPaint, list_depth: usize) anyerror!f32 {
     var cursor_bl = baseline_bl;
     for (blocks, 0..) |block, index| {
         switch (block.kind) {
             .paragraph, .heading => {
                 if (block.paragraph) |paragraph| {
-                    cursor_bl = try drawInlineLines(ctx, frame.x, cursor_bl, frame.width, paragraph.lines.items, text, text.wrap, preamble);
+                    cursor_bl = try drawInlineLines(ctx, frame.x, cursor_bl, frame.width, paragraph.lines.items, text, text.wrap);
                 }
             },
             .code_block => cursor_bl = try drawMarkdownCodeBlock(ctx, frame.x, cursor_bl, frame.width, block, text),
-            .bullet_list, .ordered_list => cursor_bl = try drawList(ctx, frame, cursor_bl, block, text, list_depth, preamble),
-            .table => cursor_bl = try drawTable(ctx, frame.x, cursor_bl, frame.width, block, text, preamble),
+            .bullet_list, .ordered_list => cursor_bl = try drawList(ctx, frame, cursor_bl, block, text, list_depth),
+            .table => cursor_bl = try drawTable(ctx, frame.x, cursor_bl, frame.width, block, text),
         }
         if (index + 1 < blocks.len) cursor_bl -= text.markdown_block_gap;
     }
     return cursor_bl;
 }
 
-fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Block, text: TextPaint, list_depth: usize, preamble: []const TexPreambleEntry) anyerror!f32 {
+fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Block, text: TextPaint, list_depth: usize) anyerror!f32 {
     const list = block.list orelse return baseline_bl;
     var cursor_bl = baseline_bl;
     const list_inset: f32 = if (list_depth == 0) @max(text.markdown_list_inset, 0) else @max(text.markdown_list_indent, 0);
@@ -2713,7 +2767,7 @@ fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Blo
             .width = @max(item_width - marker_width - @max(@as(f32, 8.0), text.font_size * 0.35), 1),
             .height = frame.height,
         };
-        cursor_bl = try drawMarkdownBlocksAt(ctx, content_frame, cursor_bl, item.blocks.items, text, list_depth + 1, preamble);
+        cursor_bl = try drawMarkdownBlocksAt(ctx, content_frame, cursor_bl, item.blocks.items, text, list_depth + 1);
         if (item_index + 1 < list.items.items.len) cursor_bl -= text.markdown_block_gap;
     }
     return cursor_bl;
@@ -2852,7 +2906,7 @@ fn markdownCodeBlockContent(allocator: Allocator, block: *const Block) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint, preamble: []const TexPreambleEntry) !f32 {
+fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint) !f32 {
     const table = block.table orelse return baseline_bl;
     const columns = core.markdown.tableColumnCount(table);
     const border_width = if (text.markdown_table_border != null and text.markdown_table_line_width > 0) text.markdown_table_line_width else 0;
@@ -2870,7 +2924,7 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
         for (row.cells.items) |cell| {
             var cell_text = text;
             cell_text.font = if (row.header) text.bold_font else text.font;
-            const measured = try measureInlineLinesInkBlock(ctx, cell.lines.items, cell_text, content_width, preamble);
+            const measured = try measureInlineLinesInkBlock(ctx, cell.lines.items, cell_text, content_width);
             row_top_overhang = @max(row_top_overhang, measured.top_overhang);
             row_bottom_depth = @max(row_bottom_depth, measured.bottom_depth);
         }
@@ -2911,7 +2965,6 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
                         one_line[0..],
                         cell_text,
                         true,
-                        preamble,
                         tableCellHorizontalAlign(cell.alignment),
                     );
                 }
@@ -2930,34 +2983,34 @@ fn tableCellHorizontalAlign(alignment: core.markdown.Align) HorizontalAlign {
     };
 }
 
-fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
+fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool) !f32 {
     var cursor_bl = baseline_bl;
     for (lines) |line| {
         if (lineContainsDisplayMath(line)) {
-            cursor_bl = try drawLineWithDisplayMath(ctx, x, cursor_bl, width, line, text, wrap, preamble);
+            cursor_bl = try drawLineWithDisplayMath(ctx, x, cursor_bl, width, line, text, wrap);
             continue;
         }
         var atoms = std.ArrayList(Atom).empty;
         defer atoms.deinit(ctx.allocator);
         defer freeAtoms(ctx.allocator, atoms.items);
-        try layoutAtoms(ctx, line, text, preamble, &atoms);
+        try layoutAtoms(ctx, line, text, &atoms);
         cursor_bl = try drawAtoms(ctx, x, cursor_bl, width, atoms.items, atomPaint(text), wrap);
     }
     if (lines.len == 0) cursor_bl -= text.line_height;
     return cursor_bl;
 }
 
-fn drawInlineLinesAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry, horizontal_align: HorizontalAlign) !f32 {
+fn drawInlineLinesAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool, horizontal_align: HorizontalAlign) !f32 {
     var cursor_bl = baseline_bl;
     for (lines) |line| {
         if (lineContainsDisplayMath(line)) {
-            cursor_bl = try drawLineWithDisplayMathAligned(ctx, x, cursor_bl, width, line, text, wrap, preamble, horizontal_align);
+            cursor_bl = try drawLineWithDisplayMathAligned(ctx, x, cursor_bl, width, line, text, wrap, horizontal_align);
             continue;
         }
         var atoms = std.ArrayList(Atom).empty;
         defer atoms.deinit(ctx.allocator);
         defer freeAtoms(ctx.allocator, atoms.items);
-        try layoutAtoms(ctx, line, text, preamble, &atoms);
+        try layoutAtoms(ctx, line, text, &atoms);
         cursor_bl = try drawAtomsAligned(ctx, x, cursor_bl, width, atoms.items, atomPaint(text), wrap, horizontal_align);
     }
     if (lines.len == 0) cursor_bl -= text.line_height;
@@ -2968,14 +3021,14 @@ fn guardedNaturalMeasurementWidth(width: f32) f32 {
     return @max(width + natural_measurement_width_guard, 1);
 }
 
-fn markdownBlocksNaturalInlineAdvance(ctx: *DrawContext, blocks: []const *Block, text: TextPaint, list_depth: usize, preamble: []const TexPreambleEntry) !?f32 {
+fn markdownBlocksNaturalInlineAdvance(ctx: *DrawContext, blocks: []const *Block, text: TextPaint, list_depth: usize) !?f32 {
     var max_width: f32 = 0;
     var found = false;
     for (blocks) |block| {
         switch (block.kind) {
             .paragraph, .heading => {
                 if (block.paragraph) |paragraph| {
-                    if (try inlineLinesNaturalAdvance(ctx, paragraph.lines.items, text, preamble)) |width| {
+                    if (try inlineLinesNaturalAdvance(ctx, paragraph.lines.items, text)) |width| {
                         max_width = @max(max_width, width);
                         found = true;
                     }
@@ -2989,7 +3042,7 @@ fn markdownBlocksNaturalInlineAdvance(ctx: *DrawContext, blocks: []const *Block,
                     defer ctx.allocator.free(marker);
                     const marker_width = try measureText(ctx, marker, text.font, text.font_size);
                     const marker_gap = @max(@as(f32, 8.0), text.font_size * 0.35);
-                    const content_width = (try markdownBlocksNaturalInlineAdvance(ctx, item.blocks.items, text, list_depth + 1, preamble)) orelse 0;
+                    const content_width = (try markdownBlocksNaturalInlineAdvance(ctx, item.blocks.items, text, list_depth + 1)) orelse 0;
                     max_width = @max(max_width, list_inset + marker_width + marker_gap + content_width);
                     found = true;
                 }
@@ -3001,7 +3054,7 @@ fn markdownBlocksNaturalInlineAdvance(ctx: *DrawContext, blocks: []const *Block,
     return max_width;
 }
 
-fn inlineLinesNaturalAdvance(ctx: *DrawContext, lines: []const Line, text: TextPaint, preamble: []const TexPreambleEntry) !?f32 {
+fn inlineLinesNaturalAdvance(ctx: *DrawContext, lines: []const Line, text: TextPaint) !?f32 {
     var max_width: f32 = 0;
     var found = false;
     for (lines) |line| {
@@ -3009,7 +3062,7 @@ fn inlineLinesNaturalAdvance(ctx: *DrawContext, lines: []const Line, text: TextP
         var atoms = std.ArrayList(Atom).empty;
         defer atoms.deinit(ctx.allocator);
         defer freeAtoms(ctx.allocator, atoms.items);
-        try layoutAtoms(ctx, line, text, preamble, &atoms);
+        try layoutAtoms(ctx, line, text, &atoms);
         max_width = @max(max_width, atomLineAdvance(atoms.items, atomPaint(text)));
         found = true;
     }
@@ -3017,24 +3070,24 @@ fn inlineLinesNaturalAdvance(ctx: *DrawContext, lines: []const Line, text: TextP
     return max_width;
 }
 
-fn markdownBlocksConstrainedLogicalWidth(ctx: *DrawContext, blocks: []const *Block, text: TextPaint, list_depth: usize, width: f32, preamble: []const TexPreambleEntry) anyerror!f32 {
+fn markdownBlocksConstrainedLogicalWidth(ctx: *DrawContext, blocks: []const *Block, text: TextPaint, list_depth: usize, width: f32) anyerror!f32 {
     var max_width: f32 = 0;
     for (blocks) |block| {
         const block_width = switch (block.kind) {
             .paragraph, .heading => blk: {
                 const paragraph = block.paragraph orelse break :blk 0;
-                break :blk try inlineLinesConstrainedLogicalWidth(ctx, paragraph.lines.items, text, width, text.wrap, preamble);
+                break :blk try inlineLinesConstrainedLogicalWidth(ctx, paragraph.lines.items, text, width, text.wrap);
             },
             .code_block => try markdownCodeBlockConstrainedLogicalWidth(ctx, block, text, width),
-            .bullet_list, .ordered_list => try markdownListConstrainedLogicalWidth(ctx, block, text, list_depth, width, preamble),
-            .table => try markdownTableConstrainedLogicalWidth(ctx, block, text, width, preamble),
+            .bullet_list, .ordered_list => try markdownListConstrainedLogicalWidth(ctx, block, text, list_depth, width),
+            .table => try markdownTableConstrainedLogicalWidth(ctx, block, text, width),
         };
         max_width = @max(max_width, block_width);
     }
     return max_width;
 }
 
-fn markdownListConstrainedLogicalWidth(ctx: *DrawContext, block: *const Block, text: TextPaint, list_depth: usize, width: f32, preamble: []const TexPreambleEntry) anyerror!f32 {
+fn markdownListConstrainedLogicalWidth(ctx: *DrawContext, block: *const Block, text: TextPaint, list_depth: usize, width: f32) anyerror!f32 {
     const list = block.list orelse return 0;
     const list_inset: f32 = if (list_depth == 0) @max(text.markdown_list_inset, 0) else @max(text.markdown_list_indent, 0);
     const item_width = @max(width - list_inset, 1);
@@ -3045,7 +3098,7 @@ fn markdownListConstrainedLogicalWidth(ctx: *DrawContext, block: *const Block, t
         const marker_width = try measureText(ctx, marker, text.font, text.font_size);
         const marker_gap = @max(@as(f32, 8.0), text.font_size * 0.35);
         const content_width = @max(item_width - marker_width - marker_gap, 1);
-        const item_content_width = try markdownBlocksConstrainedLogicalWidth(ctx, item.blocks.items, text, list_depth + 1, content_width, preamble);
+        const item_content_width = try markdownBlocksConstrainedLogicalWidth(ctx, item.blocks.items, text, list_depth + 1, content_width);
         max_width = @max(max_width, list_inset + marker_width + marker_gap + item_content_width);
     }
     return max_width;
@@ -3061,7 +3114,7 @@ fn markdownCodeBlockConstrainedLogicalWidth(ctx: *DrawContext, block: *const Blo
     return placement.frame.width;
 }
 
-fn markdownTableConstrainedLogicalWidth(ctx: *DrawContext, block: *const Block, text: TextPaint, width: f32, preamble: []const TexPreambleEntry) !f32 {
+fn markdownTableConstrainedLogicalWidth(ctx: *DrawContext, block: *const Block, text: TextPaint, width: f32) !f32 {
     const table = block.table orelse return 0;
     const columns = core.markdown.tableColumnCount(table);
     const border_width = if (text.markdown_table_border != null and text.markdown_table_line_width > 0) text.markdown_table_line_width else 0;
@@ -3073,27 +3126,27 @@ fn markdownTableConstrainedLogicalWidth(ctx: *DrawContext, block: *const Block, 
         for (row.cells.items) |cell| {
             var cell_text = text;
             cell_text.font = if (row.header) text.bold_font else text.font;
-            const cell_content_width = try inlineLinesConstrainedLogicalWidth(ctx, cell.lines.items, cell_text, content_width, true, preamble);
+            const cell_content_width = try inlineLinesConstrainedLogicalWidth(ctx, cell.lines.items, cell_text, content_width, true);
             required_column_width = @max(required_column_width, cell_content_width + text.markdown_table_cell_pad_x * 2);
         }
     }
     return required_column_width * @as(f32, @floatFromInt(columns)) + border_width;
 }
 
-fn inlineLinesConstrainedLogicalWidth(ctx: *DrawContext, lines: []const Line, text: TextPaint, width: f32, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
+fn inlineLinesConstrainedLogicalWidth(ctx: *DrawContext, lines: []const Line, text: TextPaint, width: f32, wrap: bool) !f32 {
     var max_width: f32 = 0;
     for (lines) |line| {
-        max_width = @max(max_width, try inlineLineConstrainedLogicalWidth(ctx, line, text, width, wrap, preamble));
+        max_width = @max(max_width, try inlineLineConstrainedLogicalWidth(ctx, line, text, width, wrap));
     }
     return max_width;
 }
 
-fn inlineLineConstrainedLogicalWidth(ctx: *DrawContext, line: Line, text: TextPaint, width: f32, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
+fn inlineLineConstrainedLogicalWidth(ctx: *DrawContext, line: Line, text: TextPaint, width: f32, wrap: bool) !f32 {
     if (!lineContainsDisplayMath(line)) {
         var atoms = std.ArrayList(Atom).empty;
         defer atoms.deinit(ctx.allocator);
         defer freeAtoms(ctx.allocator, atoms.items);
-        try layoutAtoms(ctx, line, text, preamble, &atoms);
+        try layoutAtoms(ctx, line, text, &atoms);
         return atomLinesLogicalWidth(atoms.items, atomPaint(text), width, wrap, false);
     }
 
@@ -3108,7 +3161,7 @@ fn inlineLineConstrainedLogicalWidth(ctx: *DrawContext, line: Line, text: TextPa
         }
 
         if (segment_start < index) {
-            max_width = @max(max_width, try inlineRunSliceConstrainedLogicalWidth(ctx, runs[segment_start..index], text, width, wrap, preamble));
+            max_width = @max(max_width, try inlineRunSliceConstrainedLogicalWidth(ctx, runs[segment_start..index], text, width, wrap));
         }
 
         const display_start = index;
@@ -3116,25 +3169,36 @@ fn inlineLineConstrainedLogicalWidth(ctx: *DrawContext, line: Line, text: TextPa
         const source_text = try displayMathSource(ctx.allocator, runs[display_start..index]);
         defer ctx.allocator.free(source_text);
         if (source_text.len > 0) {
-            const math = try renderMathToPdf(ctx, source_text, preamble, .display);
-            defer ctx.allocator.free(math.path);
-            const fitted = fitDisplayMathBlockSize(math.width, math.height, width, text);
+            const fitted = if (try compileMarkdownMath(ctx, source_text, .display)) |result| blk: {
+                var compiled = result;
+                defer compiled.layout.deinit(ctx.allocator);
+                break :blk fitDisplayMathBlockSize(
+                    @floatCast(compiled.layout.width),
+                    @floatCast(compiled.layout.height),
+                    width,
+                    text,
+                );
+            } else blk: {
+                const asset = try renderMathToPdf(ctx, source_text, ctx.tex_preamble, .display);
+                defer ctx.allocator.free(asset.path);
+                break :blk fitDisplayMathBlockSize(asset.width, asset.height, width, text);
+            };
             max_width = @max(max_width, fitted.width);
         }
         segment_start = index;
     }
 
     if (segment_start < runs.len) {
-        max_width = @max(max_width, try inlineRunSliceConstrainedLogicalWidth(ctx, runs[segment_start..], text, width, wrap, preamble));
+        max_width = @max(max_width, try inlineRunSliceConstrainedLogicalWidth(ctx, runs[segment_start..], text, width, wrap));
     }
     return max_width;
 }
 
-fn inlineRunSliceConstrainedLogicalWidth(ctx: *DrawContext, runs: []const Run, text: TextPaint, width: f32, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
+fn inlineRunSliceConstrainedLogicalWidth(ctx: *DrawContext, runs: []const Run, text: TextPaint, width: f32, wrap: bool) !f32 {
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
-    try layoutRunAtoms(ctx, runs, text, preamble, &atoms);
+    try layoutRunAtoms(ctx, runs, text, &atoms);
     return atomLinesLogicalWidth(atoms.items, atomPaint(text), width, wrap, false);
 }
 
@@ -3164,14 +3228,14 @@ const InlineInkBlock = struct {
     bottom_depth: f32,
 };
 
-fn measureInlineLinesInkBlock(ctx: *DrawContext, lines: []const Line, text: TextPaint, width: f32, preamble: []const TexPreambleEntry) !InlineInkBlock {
+fn measureInlineLinesInkBlock(ctx: *DrawContext, lines: []const Line, text: TextPaint, width: f32) !InlineInkBlock {
     const baseline_bl = Defaults.height * 0.5;
     const content_top_bl = baseline_bl + text.font_size;
     var measurement = MeasurementScope.init(ctx);
     try measurement.begin();
     defer measurement.deinit();
 
-    const next_bl = try drawInlineLines(ctx, 0, baseline_bl, width, lines, text, true, preamble);
+    const next_bl = try drawInlineLines(ctx, 0, baseline_bl, width, lines, text, true);
     var top_overhang: f32 = 0;
     var bottom_depth = @max(baseline_bl - next_bl, text.line_height);
     if (try measurement.inkFrame()) |ink| {
@@ -3184,15 +3248,15 @@ fn measureInlineLinesInkBlock(ctx: *DrawContext, lines: []const Line, text: Text
     };
 }
 
-fn layoutAtoms(ctx: *DrawContext, line: Line, text: TextPaint, preamble: []const TexPreambleEntry, atoms: *std.ArrayList(Atom)) !void {
-    try layoutRunAtoms(ctx, line.runs.items, text, preamble, atoms);
+fn layoutAtoms(ctx: *DrawContext, line: Line, text: TextPaint, atoms: *std.ArrayList(Atom)) !void {
+    try layoutRunAtoms(ctx, line.runs.items, text, atoms);
 }
 
-fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, preamble: []const TexPreambleEntry, atoms: *std.ArrayList(Atom)) !void {
+fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, atoms: *std.ArrayList(Atom)) !void {
     for (runs) |run| {
         switch (run.kind) {
             .math, .display_math => {
-                try appendMathAtom(ctx, atoms, run.text, text, preamble, if (run.kind == .display_math) .display else .inline_math);
+                try appendMathAtom(ctx, atoms, run.text, text, if (run.kind == .display_math) .display else .inline_math);
             },
             .icon => if (run.icon) |source| try appendIconAtom(ctx, atoms, source, text),
             .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.markdown_bold_color orelse text.color, text.font_size, null, run.strikethrough, run.underline),
@@ -3211,12 +3275,12 @@ fn lineContainsDisplayMath(line: Line) bool {
     return false;
 }
 
-fn drawLineWithDisplayMath(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line: Line, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
-    return drawLineWithDisplayMathWithAlign(ctx, x, baseline_bl, width, line, text, wrap, preamble, .left, text.math_align);
+fn drawLineWithDisplayMath(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line: Line, text: TextPaint, wrap: bool) !f32 {
+    return drawLineWithDisplayMathWithAlign(ctx, x, baseline_bl, width, line, text, wrap, .left, text.math_align);
 }
 
-fn drawLineWithDisplayMathAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line: Line, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry, horizontal_align: HorizontalAlign) !f32 {
-    return drawLineWithDisplayMathWithAlign(ctx, x, baseline_bl, width, line, text, wrap, preamble, horizontal_align, horizontal_align);
+fn drawLineWithDisplayMathAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line: Line, text: TextPaint, wrap: bool, horizontal_align: HorizontalAlign) !f32 {
+    return drawLineWithDisplayMathWithAlign(ctx, x, baseline_bl, width, line, text, wrap, horizontal_align, horizontal_align);
 }
 
 fn drawLineWithDisplayMathWithAlign(
@@ -3227,7 +3291,6 @@ fn drawLineWithDisplayMathWithAlign(
     line: Line,
     text: TextPaint,
     wrap: bool,
-    preamble: []const TexPreambleEntry,
     inline_align: HorizontalAlign,
     display_math_align: HorizontalAlign,
 ) !f32 {
@@ -3242,7 +3305,7 @@ fn drawLineWithDisplayMathWithAlign(
         }
 
         if (segment_start < index) {
-            cursor_bl = try drawInlineRunSliceAligned(ctx, x, cursor_bl, width, runs[segment_start..index], text, wrap, preamble, inline_align);
+            cursor_bl = try drawInlineRunSliceAligned(ctx, x, cursor_bl, width, runs[segment_start..index], text, wrap, inline_align);
         }
 
         const display_start = index;
@@ -3250,42 +3313,64 @@ fn drawLineWithDisplayMathWithAlign(
         const source = try displayMathSource(ctx.allocator, runs[display_start..index]);
         defer ctx.allocator.free(source);
         if (source.len > 0) {
-            cursor_bl = try drawDisplayMathBlockAligned(ctx, x, cursor_bl, width, source, text, preamble, display_math_align);
+            cursor_bl = try drawDisplayMathBlockAligned(ctx, x, cursor_bl, width, source, text, display_math_align);
         }
         segment_start = index;
     }
 
     if (segment_start < runs.len) {
-        cursor_bl = try drawInlineRunSliceAligned(ctx, x, cursor_bl, width, runs[segment_start..], text, wrap, preamble, inline_align);
+        cursor_bl = try drawInlineRunSliceAligned(ctx, x, cursor_bl, width, runs[segment_start..], text, wrap, inline_align);
     }
     return cursor_bl;
 }
 
-fn drawInlineRunSliceAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, runs: []const Run, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry, horizontal_align: HorizontalAlign) !f32 {
+fn drawInlineRunSliceAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, runs: []const Run, text: TextPaint, wrap: bool, horizontal_align: HorizontalAlign) !f32 {
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
-    try layoutRunAtoms(ctx, runs, text, preamble, &atoms);
+    try layoutRunAtoms(ctx, runs, text, &atoms);
     if (atoms.items.len == 0) return baseline_bl;
     return try drawAtomsAligned(ctx, x, baseline_bl, width, atoms.items, atomPaint(text), wrap, horizontal_align);
 }
 
-fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, preamble: []const TexPreambleEntry, horizontal_align: HorizontalAlign) !f32 {
-    const math = try renderMathToPdf(ctx, source, preamble, .display);
-    defer ctx.allocator.free(math.path);
-
-    const fitted = fitDisplayMathBlockSize(math.width, math.height, width, text);
+fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, horizontal_align: HorizontalAlign) !f32 {
+    var compiled = try compileMarkdownMath(ctx, source, .display);
+    defer if (compiled) |*value| value.layout.deinit(ctx.allocator);
+    var raw_asset: ?MathAsset = null;
+    defer if (raw_asset) |asset| ctx.allocator.free(asset.path);
+    const source_size: Size = if (compiled) |value|
+        .{ .width = @floatCast(value.layout.width), .height = @floatCast(value.layout.height) }
+    else blk: {
+        raw_asset = try renderMathToPdf(ctx, source, ctx.tex_preamble, .display);
+        break :blk .{ .width = raw_asset.?.width, .height = raw_asset.?.height };
+    };
+    const fitted = fitDisplayMathBlockSize(source_size.width, source_size.height, width, text);
+    if (compiled) |*value| try scaleMathLayoutToSize(&value.layout, fitted);
+    const draw_width = if (compiled) |value| @as(f32, @floatCast(value.layout.width)) else fitted.width;
+    const draw_height = if (compiled) |value| @as(f32, @floatCast(value.layout.height)) else fitted.height;
     const vertical_pad = @max(text.line_height * 0.2, 2.0);
-    const block_height = fitted.height + vertical_pad * 2.0;
+    const block_height = draw_height + vertical_pad * 2.0;
     const block_top = baseline_bl + text.font_size;
     const block_bottom = block_top - block_height;
     const draw_frame = Frame{
-        .x = alignedX(x, width, fitted.width, horizontal_align),
+        .x = alignedX(x, width, draw_width, horizontal_align),
         .y = block_bottom + vertical_pad,
-        .width = fitted.width,
-        .height = fitted.height,
+        .width = draw_width,
+        .height = draw_height,
     };
-    try placeMathPdf(ctx, draw_frame, math.path, math.page_index, source, .display);
+    if (compiled) |*value| {
+        const owned_layout = value.layout;
+        value.layout = emptyMathLayout();
+        try activeEmitter(ctx).structuredMath(ctx.allocator, .{
+            .x = draw_frame.x,
+            .y = topOf(draw_frame),
+            .width = draw_frame.width,
+            .height = draw_frame.height,
+        }, value.tree, owned_layout, text.color);
+    } else {
+        const asset = raw_asset.?;
+        try placeRawMathPdf(ctx, draw_frame, asset.path, asset.page_index, source);
+    }
     return block_bottom - text.font_size;
 }
 
@@ -3306,10 +3391,8 @@ fn fitDisplayMathBlockSize(source_width: f32, source_height: f32, max_width: f32
     return .{ .width = @max(source_width * scale, 1), .height = @max(source_height * scale, 1) };
 }
 
-fn freeAtoms(allocator: Allocator, atoms: []const Atom) void {
-    for (atoms) |atom| {
-        if (atom.asset_path) |path| allocator.free(path);
-    }
+fn freeAtoms(allocator: Allocator, atoms: []Atom) void {
+    for (atoms) |*atom| atom.content.deinit(allocator);
 }
 
 fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: FontFace, color: Color, font_size: f32, link_url: ?[]const u8, strikethrough: bool, underline: bool) !void {
@@ -3322,7 +3405,7 @@ fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []cons
             try measureText(ctx, token, font, font_size);
         const width = measured_width;
         try atoms.append(ctx.allocator, .{
-            .kind = .text,
+            .content = .text,
             .text = token,
             .font = font,
             .color = color,
@@ -3336,22 +3419,37 @@ fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []cons
     }
 }
 
-fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, text: TextPaint, preamble: []const TexPreambleEntry, kind: MathKind) !void {
-    const math = try renderMathToPdf(ctx, value, preamble, kind);
-    errdefer ctx.allocator.free(math.path);
+fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, text: TextPaint, kind: MathKind) !void {
     const target_height = @max(text.font_size * text.inline_math_height_factor, 1);
-    const scale = if (math.height > 0) target_height / math.height else 1;
+    if (try compileMarkdownMath(ctx, value, kind)) |result| {
+        var compiled = result;
+        errdefer compiled.layout.deinit(ctx.allocator);
+        const scale = @as(f64, target_height) / @max(compiled.layout.height, 1);
+        try render_math.scale(&compiled.layout, scale);
+        try atoms.append(ctx.allocator, .{
+            .content = .{ .structured_math = .{ .tree = compiled.tree, .layout = compiled.layout } },
+            .text = value,
+            .font = text.font,
+            .color = text.color,
+            .width = @floatCast(@max(compiled.layout.width, 1)),
+            .height = @floatCast(@max(compiled.layout.height, 1)),
+            .is_space = false,
+        });
+        compiled.layout = emptyMathLayout();
+        return;
+    }
+
+    const asset = try renderMathToPdf(ctx, value, ctx.tex_preamble, kind);
+    errdefer ctx.allocator.free(asset.path);
+    const scale = if (asset.height > 0) target_height / asset.height else 1;
     try atoms.append(ctx.allocator, .{
-        .kind = .math,
+        .content = .{ .raw_math = .{ .path = asset.path, .page_index = asset.page_index } },
         .text = value,
         .font = text.font,
         .color = text.color,
-        .width = @max(math.width * scale, 1),
+        .width = @max(asset.width * scale, 1),
         .height = target_height,
         .is_space = false,
-        .asset_path = math.path,
-        .asset_page_index = math.page_index,
-        .math_kind = kind,
     });
 }
 
@@ -3361,14 +3459,13 @@ fn appendIconAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), source: []cons
     const target_height = @max(text.font_size, 1);
     const scale = if (svg.height > 0) target_height / svg.height else 1;
     try atoms.append(ctx.allocator, .{
-        .kind = .icon,
+        .content = .{ .icon = .{ .path = svg.path } },
         .text = source,
         .font = text.font,
         .color = text.link_color,
         .width = @max(svg.width * scale, 1),
         .height = target_height,
         .is_space = false,
-        .asset_path = svg.path,
     });
 }
 
@@ -3381,11 +3478,11 @@ fn atomPaint(text: TextPaint) AtomPaint {
     };
 }
 
-fn drawAtoms(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, atoms: []const Atom, paint: AtomPaint, wrap: bool) !f32 {
+fn drawAtoms(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, atoms: []Atom, paint: AtomPaint, wrap: bool) !f32 {
     return drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms, paint, wrap, false, .left);
 }
 
-fn drawAtomsAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, atoms: []const Atom, paint: AtomPaint, wrap: bool, horizontal_align: HorizontalAlign) !f32 {
+fn drawAtomsAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, atoms: []Atom, paint: AtomPaint, wrap: bool, horizontal_align: HorizontalAlign) !f32 {
     return drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms, paint, wrap, false, horizontal_align);
 }
 
@@ -3394,7 +3491,7 @@ fn drawAtomsWithOptions(
     x: f32,
     baseline_bl: f32,
     width: f32,
-    atoms: []const Atom,
+    atoms: []Atom,
     paint: AtomPaint,
     wrap: bool,
     preserve_leading_space: bool,
@@ -3431,7 +3528,7 @@ fn drawAtomsWithOptions(
         const line_x = alignedX(x, width, line.width, horizontal_align);
         const line_bl = baseline_bl - @as(f32, @floatFromInt(line_index)) * paint.line_height;
         for (positions.items[line.start..line.end]) |position| {
-            try drawPositionedAtom(ctx, atoms[position.index], line_x + position.offset, line_bl, paint);
+            try drawPositionedAtom(ctx, &atoms[position.index], line_x + position.offset, line_bl, paint);
         }
     }
     return baseline_bl - @as(f32, @floatFromInt(lines.items.len)) * paint.line_height;
@@ -3446,27 +3543,35 @@ fn appendAtomVisualLine(allocator: Allocator, lines: *std.ArrayList(AtomVisualLi
     });
 }
 
-fn drawPositionedAtom(ctx: *DrawContext, atom: Atom, x: f32, baseline_bl: f32, paint: AtomPaint) !void {
-    switch (atom.kind) {
+fn drawPositionedAtom(ctx: *DrawContext, atom: *Atom, x: f32, baseline_bl: f32, paint: AtomPaint) !void {
+    switch (atom.content) {
         .text => {
             const y_top = baselineTop(baseline_bl, paint.font_size);
             if (atom.link_url) |url| {
-                try drawLinkedRawText(ctx, x, y_top, @max(atom.width, 1), paint.line_height, atom, paint, url);
+                try drawLinkedRawText(ctx, x, y_top, @max(atom.width, 1), paint.line_height, atom.*, paint, url);
             } else {
-                try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
+                try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom.*, paint, false);
             }
-            if (atom.strikethrough) try drawStrikethrough(ctx, x, y_top, atom, paint);
-            if (atom.underline) try drawUnderline(ctx, x, y_top, atom, paint);
+            if (atom.strikethrough) try drawStrikethrough(ctx, x, y_top, atom.*, paint);
+            if (atom.underline) try drawUnderline(ctx, x, y_top, atom.*, paint);
         },
-        .math => {
-            const path = atom.asset_path orelse return;
+        .structured_math => |*math| {
+            const layout = math.layout;
+            math.layout = emptyMathLayout();
+            try activeEmitter(ctx).structuredMath(ctx.allocator, .{
+                .x = x,
+                .y = Defaults.height - baseline_bl - layout.baseline,
+                .width = layout.width,
+                .height = layout.height,
+            }, math.tree, layout, atom.color);
+        },
+        .raw_math => |math| {
             const frame = Frame{ .x = x, .y = baseline_bl - atom.height * 0.25, .width = atom.width, .height = atom.height };
-            try placeMathPdf(ctx, frame, path, atom.asset_page_index, atom.text, atom.math_kind);
+            try placeRawMathPdf(ctx, frame, math.path, math.page_index, atom.text);
         },
-        .icon => {
-            const path = atom.asset_path orelse return;
+        .icon => |icon| {
             const frame = Frame{ .x = x, .y = baseline_bl - atom.height * 0.2, .width = atom.width, .height = atom.height };
-            try drawSvgFrameTinted(ctx, frame, path, atom.color);
+            try drawSvgFrameTinted(ctx, frame, icon.path, atom.color);
         },
     }
 }
@@ -3488,9 +3593,9 @@ fn atomLineAdvance(atoms: []const Atom, paint: AtomPaint) f32 {
 
 fn atomAdvance(atoms: []const Atom, index: usize, paint: AtomPaint) f32 {
     const atom = atoms[index];
-    return switch (atom.kind) {
+    return switch (atom.content) {
         .text => atom.width + atomSpacingAfter(atoms, index, paint),
-        .math => atom.width + paint.font_size * paint.inline_math_spacing,
+        .structured_math, .raw_math => atom.width + paint.font_size * paint.inline_math_spacing,
         .icon => atom.width,
     };
 }
@@ -4146,7 +4251,7 @@ fn drawVectorMathCommand(ctx: *DrawContext, command: *const ObjectCommand, frame
         .width = fitted.width,
         .height = fitted.height,
     };
-    try placeMathPdf(ctx, draw_frame, asset.path, asset.page_index, command.content, command.math_kind);
+    try placeRawMathPdf(ctx, draw_frame, asset.path, asset.page_index, command.content);
 }
 
 const structured_math_design_size: f64 = 48;
@@ -4160,9 +4265,9 @@ fn mathInputKind(kind: MathKind) render_ir.MathInputKind {
     };
 }
 
-fn drawStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind, frame: Frame, maybe_paint: ?MathPaint) !void {
+fn compileStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind) !render_math.Compiled {
     const emitter = activeEmitter(ctx);
-    var compiled = try render_math.compile(
+    return render_math.compile(
         ctx.allocator,
         ctx.io,
         emitter.resources,
@@ -4172,6 +4277,39 @@ fn drawStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind, fra
         mathInputKind(kind),
         .{ .font_size = structured_math_design_size, .display = kind != .inline_math },
     );
+}
+
+fn supportsStructuredMath(allocator: Allocator, source: []const u8, kind: MathKind) !bool {
+    var math = render_ir.MathBuilder{};
+    defer math.deinit(allocator);
+    _ = math.add(allocator, source, mathInputKind(kind)) catch |err| switch (err) {
+        error.UnsupportedMathSyntax => return false,
+        else => return err,
+    };
+    return true;
+}
+
+fn compileMarkdownMath(ctx: *DrawContext, source: []const u8, kind: MathKind) !?render_math.Compiled {
+    return compileStructuredMath(ctx, source, kind) catch |err| switch (err) {
+        error.UnsupportedMathSyntax => if (ctx.tex_preamble.len != 0) null else return err,
+        else => return err,
+    };
+}
+
+fn scaleMathLayoutToSize(layout: *render_ir.MathLayout, size: Size) !void {
+    const factor = @min(
+        @as(f64, size.width) / @max(layout.width, 1),
+        @as(f64, size.height) / @max(layout.height, 1),
+    );
+    try render_math.scale(layout, factor);
+}
+
+fn emptyMathLayout() render_ir.MathLayout {
+    return .{ .width = 0, .height = 0, .baseline = 0, .elements = &.{} };
+}
+
+fn drawStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind, frame: Frame, maybe_paint: ?MathPaint) !void {
+    var compiled = try compileStructuredMath(ctx, source, kind);
     errdefer compiled.layout.deinit(ctx.allocator);
     const fitted = fitVectorMathSize(
         @floatCast(compiled.layout.width),
@@ -4181,11 +4319,7 @@ fn drawStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind, fra
         kind,
         maybe_paint,
     );
-    const factor = @min(
-        @as(f64, fitted.width) / @max(compiled.layout.width, 1),
-        @as(f64, fitted.height) / @max(compiled.layout.height, 1),
-    );
-    try render_math.scale(&compiled.layout, factor);
+    try scaleMathLayoutToSize(&compiled.layout, fitted);
     const width: f32 = @floatCast(compiled.layout.width);
     const height: f32 = @floatCast(compiled.layout.height);
     const paint = maybe_paint orelse defaultMathPaint();
@@ -4201,18 +4335,8 @@ fn drawStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind, fra
         .height = height,
     };
     const owned_layout = compiled.layout;
-    compiled.layout = .{ .width = 0, .height = 0, .baseline = 0, .elements = &.{} };
-    try emitter.page.appendMath(
-        ctx.allocator,
-        emitter.node_id,
-        rect,
-        compiled.tree,
-        owned_layout,
-        paint.color,
-        null,
-        0,
-        .crop,
-    );
+    compiled.layout = emptyMathLayout();
+    try activeEmitter(ctx).structuredMath(ctx.allocator, rect, compiled.tree, owned_layout, paint.color);
 }
 
 fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: ?core.render_policy.AssetPaint) !void {
@@ -4399,16 +4523,15 @@ fn drawSvgFrameTinted(ctx: *DrawContext, frame: Frame, svg_path: []const u8, col
     try activeEmitter(ctx).svg(ctx.allocator, .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height }, svg_path, color);
 }
 
-fn placeMathPdf(
+fn placeRawMathPdf(
     ctx: *DrawContext,
     frame: Frame,
     path: []const u8,
     page_index: usize,
     source: []const u8,
-    kind: MathKind,
 ) !void {
     const rect = render_ir.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
-    try activeEmitter(ctx).mathItem(ctx.allocator, rect, source, mathInputKind(kind), path, page_index);
+    try activeEmitter(ctx).rawMathPdf(ctx.allocator, rect, source, path, page_index);
 }
 
 const Size = struct { width: f32, height: f32 };

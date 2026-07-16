@@ -98,17 +98,27 @@ pub const Emitter = struct {
         try self.page.appendPdfPage(allocator, self.node_id, rect, resource, page_index, box, copy_annotations);
     }
 
-    pub fn mathItem(
+    pub fn rawMathPdf(
         self: *Emitter,
         allocator: Allocator,
         rect: render.Rect,
         source: []const u8,
-        input_kind: render.MathInputKind,
         path: []const u8,
         page_index: usize,
     ) !void {
-        const tree = try self.math.add(allocator, source, input_kind);
+        const tree = try self.math.add(allocator, source, .raw);
         const resource = try self.resources.addPath(allocator, self.io, .math_pdf, path);
-        try self.page.appendMath(allocator, self.node_id, rect, tree, null, .{ .r = 0, .g = 0, .b = 0 }, resource, page_index, .crop);
+        try self.page.appendRawMathPdf(allocator, self.node_id, rect, tree, resource, page_index, .crop);
+    }
+
+    pub fn structuredMath(
+        self: *Emitter,
+        allocator: Allocator,
+        rect: render.Rect,
+        tree: render.MathTreeId,
+        layout: render.MathLayout,
+        color: Color,
+    ) !void {
+        try self.page.appendStructuredMath(allocator, self.node_id, rect, tree, layout, color);
     }
 };
