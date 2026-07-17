@@ -147,6 +147,11 @@ export interface LayoutEditResult {
   };
 }
 
+export type HostMessage =
+  | { type: "snapshot"; revision: number; snapshot: EditorSnapshot }
+  | { type: "error"; message: string }
+  | { type: "editResult"; status: Exclude<LayoutEditResult["status"], "ok">; message?: string };
+
 export type WebviewMessage =
   | { type: "ready" }
   | { type: "revealSource"; path: string; start: number; end: number }

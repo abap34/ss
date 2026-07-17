@@ -30,6 +30,30 @@ const webviewCheckOptions = {
   external: ["../../out/render/pdf.js", "../../out/pdfjs/pdf.mjs"],
 };
 
+const pdfSourceRoot = path.join(repoRoot, "src", "render", "html", "pdf");
+const pdfRuntimeImports = {
+  name: "ss-pdf-runtime-imports",
+  setup(build) {
+    build.onResolve({ filter: /^@ss\/pdf\/[^/]+$/ }, (args) => {
+      const name = args.path.slice("@ss/pdf/".length);
+      if (!/^[a-z][a-z0-9-]*$/.test(name)) {
+        return { errors: [{ text: `Invalid PDF runtime module: ${args.path}` }] };
+      }
+      return { path: path.join(pdfSourceRoot, `${name}.js`) };
+    });
+  },
+};
+
+const pdfRuntimeOptions = {
+  entryPoints: [path.join(pdfSourceRoot, "index.js")],
+  bundle: true,
+  outfile: path.join(outDir, "render", "pdf.js"),
+  format: "esm",
+  platform: "browser",
+  target: "chrome120",
+  plugins: [pdfRuntimeImports],
+};
+
 function typecheck() {
   childProcess.execFileSync(process.execPath, [
     require.resolve("typescript/bin/tsc"),
@@ -63,8 +87,8 @@ function copyRenderAssets() {
     path.join(pdfjsRoot, "pdf.worker.mjs"),
   );
   fs.copyFileSync(
-    path.join(repoRoot, "src", "render", "html", "pdf.js"),
-    path.join(renderRoot, "pdf.js"),
+    path.join(repoRoot, "third_party", "pdfjs", "LICENSE"),
+    path.join(pdfjsRoot, "LICENSE"),
   );
 }
 
@@ -75,14 +99,19 @@ async function main() {
   copyRenderAssets();
 
   if (watch) {
-    const context = await esbuild.context(buildOptions);
-    await context.watch();
+    const extensionContext = await esbuild.context(buildOptions);
+    const pdfRuntimeContext = await esbuild.context(pdfRuntimeOptions);
+    await Promise.all([
+      extensionContext.watch(),
+      pdfRuntimeContext.watch(),
+    ]);
     console.log("Watching VS Code extension sources.");
     return;
   }
 
   typecheck();
   await esbuild.build(webviewCheckOptions);
+  await esbuild.build(pdfRuntimeOptions);
   await esbuild.build(buildOptions);
 }
 

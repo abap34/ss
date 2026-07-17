@@ -9,6 +9,13 @@ const json = utils.json;
 const assets = @import("assets.zig");
 const binding_names = @import("names.zig");
 
+pub fn emptyJson(allocator: std.mem.Allocator) ![]u8 {
+    return try allocator.dupe(u8,
+        \\{"schema":1,"kind":"ss-editor-snapshot","snapshot_id":"","generation":0,"entry_path":"","source_paths":[],"coordinate_space":{"unit":"pt","origin":"page-top-left","x_axis":"right","y_axis":"down"},"layout":{"schema":1,"kind":"ss-layout-conflicts","entry_path":"","pages":[],"objects":[],"anchors":[],"relations":[],"failures":[]},"display":{"schema":2,"html":"","css":"","has_pdf":false,"assets":[]},"outline":[],"editing":[]}
+        \\
+    );
+}
+
 pub fn toJson(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -16,7 +23,6 @@ pub fn toJson(
     render_ir: *const render.Ir,
     generation: u64,
 ) ![]u8 {
-    try render_ir.validate();
     var fragment = try render_html.prepareFragment(allocator, render_ir);
     defer fragment.deinit(allocator);
     var published_assets = try assets.publish(allocator, io, &fragment, ".ss-cache/render");

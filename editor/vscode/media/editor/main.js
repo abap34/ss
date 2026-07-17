@@ -1,5 +1,7 @@
 import { element } from "./dom.js";
+import { disposePages } from "./document.js";
 import { EditorNavigation } from "./navigation.js";
+import { disposePdfItems, disposePdfRuntime } from "./pdf.js";
 import { renderActivityRail, renderSidebar } from "./sidebar.js";
 import { WorkspaceView } from "./workspace.js";
 
@@ -7,6 +9,7 @@ const vscode = acquireVsCodeApi();
 const persistedState = vscode.getState() || {};
 const state = {
   snapshot: null,
+  revision: -1,
   sidebar: "pages",
   mode: "single",
   currentPageId: null,
@@ -31,6 +34,10 @@ const navigation = new EditorNavigation(state);
 const workspace = new WorkspaceView(state, actions);
 const resizeObserver = new ResizeObserver(() => workspace.updateScale());
 
+app.addEventListener("ss-pdf-error", (event) => {
+  showError(event.detail?.message || "PDF preview rendering failed.");
+});
+
 window.addEventListener("message", (event) => {
   const message = event.data || {};
   if (message.type === "snapshot") {
@@ -45,6 +52,11 @@ window.addEventListener("message", (event) => {
 });
 
 function acceptSnapshot(message) {
+  if (!Number.isSafeInteger(message.revision) ||
+      message.revision <= state.revision || !message.snapshot) return;
+  if (state.snapshot) disposePages(state.snapshot);
+  disposePdfItems(app);
+  state.revision = message.revision;
   state.snapshot = message.snapshot;
   let renderStyle = document.getElementById("ss-render-style");
   if (!renderStyle) {
@@ -139,3 +151,8 @@ function initialTheme() {
 
 render();
 vscode.postMessage({ type: "ready" });
+window.addEventListener("beforeunload", () => {
+  if (state.snapshot) disposePages(state.snapshot);
+  disposePdfItems(app);
+  void disposePdfRuntime();
+});

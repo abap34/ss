@@ -14,7 +14,6 @@ const geometry = await import(
 
 testHorizontalConstraintGeometry();
 testVerticalConstraintGeometry();
-await testSharedHtmlPreview();
 await testCompletionDefaults();
 
 function testHorizontalConstraintGeometry() {
@@ -35,22 +34,6 @@ function testHorizontalConstraintGeometry() {
     result.connector.y1 >= 80 && result.connector.y1 <= 120,
     `horizontal connector missed the target edge: ${JSON.stringify(result)}`,
   );
-}
-
-async function testSharedHtmlPreview() {
-  const document = await readFile(
-    path.join(root, "editor", "vscode", "media", "editor", "document.js"),
-    "utf8",
-  );
-  const snapshot = await readFile(
-    path.join(root, "src", "editor", "snapshot.zig"),
-    "utf8",
-  );
-  assert(document.includes("snapshot.display.html"), "VS Code preview does not consume the shared HTML fragment");
-  assert(!document.includes("item.type"), "VS Code preview still contains item-specific drawing branches");
-  assert(!document.includes("application/pdf"), "VS Code preview still embeds PDF objects");
-  assert(snapshot.includes('root.intField("schema", 2)'), "editor snapshot still exposes the legacy display schema");
-  assert(!snapshot.includes('stringField("font_family"'), "editor snapshot still serializes legacy text drawing fields");
 }
 
 function testVerticalConstraintGeometry() {

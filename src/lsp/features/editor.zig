@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const editor_snapshot = @import("../../editor/snapshot.zig");
 const protocol = @import("../protocol.zig");
 const lsp_state = @import("../state.zig");
 
@@ -19,7 +20,7 @@ pub fn snapshotResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     const snapshot = blk: {
         if (doc_path) |path| break :blk try ctx.provider.forDocument(path, &owned_snapshot);
         break :blk ctx.provider.current;
-    } orelse return try emptySnapshot(ctx.allocator);
+    } orelse return try editor_snapshot.emptyJson(ctx.allocator);
 
     if (snapshot.generation == ctx.documents.generation) {
         if (snapshot.layout_output) |*layout| {
@@ -35,7 +36,7 @@ pub fn snapshotResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         defer ctx.allocator.free(cached);
         return try staleSnapshot(ctx.allocator, cached);
     }
-    return try emptySnapshot(ctx.allocator);
+    return try editor_snapshot.emptyJson(ctx.allocator);
 }
 
 fn staleSnapshot(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
@@ -46,11 +47,4 @@ fn staleSnapshot(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
     try out.appendSlice(allocator, trimmed[0 .. trimmed.len - 1]);
     try out.appendSlice(allocator, ",\"stale\":true}\n");
     return try out.toOwnedSlice(allocator);
-}
-
-pub fn emptySnapshot(allocator: std.mem.Allocator) ![]const u8 {
-    return try allocator.dupe(u8,
-        \\{"schema":1,"kind":"ss-editor-snapshot","snapshot_id":"","generation":0,"entry_path":"","source_paths":[],"coordinate_space":{"unit":"pt","origin":"page-top-left","x_axis":"right","y_axis":"down"},"layout":{"schema":1,"kind":"ss-layout-conflicts","entry_path":"","pages":[],"objects":[],"anchors":[],"relations":[],"failures":[]},"display":{"schema":1,"pages":[]},"outline":[],"editing":[]}
-        \\
-    );
 }
