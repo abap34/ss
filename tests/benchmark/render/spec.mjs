@@ -12,7 +12,7 @@ const testRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const repository = path.resolve(testRoot, "..");
 const optimize = process.argv[2];
 const ss = path.resolve(repository, process.argv[3] ?? "zig-out/bin/ss");
-const sampleCount = 5;
+const sampleCount = 7;
 const output = path.join(repository, ".ss-cache/render-benchmark");
 const project = path.join(output, "project");
 const cache = path.join(project, ".ss-cache");
@@ -26,10 +26,11 @@ await prepareProject();
 const metrics = {
   pdf_cold: await measureCold(["render", "slide.ss", "out.pdf"]),
   pdf_warm: await measureWarm(["render", "slide.ss", "out.pdf"]),
-  html_warm: await measureWarm(["render", "--format", "html", "slide.ss", "out-html"]),
+  html_cold: await measureCold(["render", "--format", "html", "slide.ss", "out.html"]),
+  html_warm: await measureWarm(["render", "--format", "html", "slide.ss", "out.html"]),
 };
 const result = {
-  schema: 1,
+  schema: 2,
   optimize,
   platform: process.platform,
   architecture: process.arch,
@@ -94,7 +95,7 @@ async function timedRun(args) {
   const maximumRssBytes = parseMaximumRss(result.stderr);
   const target = path.join(project, args.at(-1));
   const info = await stat(target);
-  assert(info.isFile() || info.isDirectory(), `benchmark output was not published: ${target}`);
+  assert(info.isFile(), `benchmark output was not published as one file: ${target}`);
   return { elapsed_ms: elapsedMs, maximum_rss_bytes: maximumRssBytes };
 }
 
@@ -133,7 +134,7 @@ function compareToBaseline(current, baseline) {
   assert.equal(baseline.optimize, current.optimize, "benchmark baseline optimization mode differs");
   assert.equal(baseline.platform, current.platform, "benchmark baseline operating system differs");
   assert.equal(baseline.architecture, current.architecture, "benchmark baseline architecture differs");
-  for (const name of ["pdf_cold", "pdf_warm", "html_warm"]) {
+  for (const name of ["pdf_cold", "pdf_warm", "html_cold", "html_warm"]) {
     const actual = current.metrics[name];
     const expected = baseline.metrics?.[name];
     assert(expected, `benchmark baseline omitted ${name}`);

@@ -237,6 +237,19 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
     const parity_step = b.step("test-render-parity", "Compare PDF and HTML pixels locally");
     parity_step.dependOn(&parity.step);
 
+    const navigation = b.addSystemCommand(&.{ "node", "tests/visual/render/navigation/spec.mjs" });
+    navigation.addFileArg(driver.getEmittedBin());
+    navigation.setCwd(b.path("."));
+    navigation.stdio = .inherit;
+    const navigation_step = b.step("test-render-html-navigation", "Inspect standalone HTML page navigation locally");
+    navigation_step.dependOn(&navigation.step);
+
+    const pdf_runtime = b.addSystemCommand(&.{ "node", "tests/visual/render/pdf/runtime_spec.mjs" });
+    pdf_runtime.setCwd(b.path("."));
+    pdf_runtime.stdio = .inherit;
+    const pdf_runtime_step = b.step("test-render-pdf-runtime", "Inspect PDF image loading and cancellation locally");
+    pdf_runtime_step.dependOn(&pdf_runtime.step);
+
     const full = b.addSystemCommand(&.{ "node", "tests/visual/render/spec.mjs", "--full" });
     full.addFileArg(driver.getEmittedBin());
     full.setCwd(b.path("."));
@@ -250,6 +263,12 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
     behavior.stdio = .inherit;
     const behavior_step = b.step("test-render-behavior", "Inspect rendered PDF behavior locally with Chromium");
     behavior_step.dependOn(&behavior.step);
+
+    const editor_ui = b.addSystemCommand(&.{ "node", "tests/visual/editor/spec.mjs" });
+    editor_ui.setCwd(b.path("."));
+    editor_ui.stdio = .inherit;
+    const editor_ui_step = b.step("test-editor-ui", "Exercise VS Code editor webview interactions locally with Chromium");
+    editor_ui_step.dependOn(&editor_ui.step);
 
     const benchmark = b.addSystemCommand(&.{ "node", "tests/benchmark/render/spec.mjs", @tagName(ctx.optimize) });
     benchmark.addFileArg(exe.getEmittedBin());
@@ -441,6 +460,22 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/utils/json/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);
+    const progress_spec_mod = createModule(ctx, "tests/utils/progress/spec_tests.zig", &.{
+        import("utils", modules.utils),
+    }, true);
+    const progress_spec_tests = b.addTest(.{ .root_module = progress_spec_mod });
+    const run_progress_spec_tests = b.addRunArtifact(progress_spec_tests);
+    test_step.dependOn(&run_progress_spec_tests.step);
+    const progress_runtime_spec = b.addSystemCommand(&.{"node"});
+    progress_runtime_spec.setName("node tests/runtime/progress/spec.mjs");
+    progress_runtime_spec.addFileArg(b.path("tests/runtime/progress/spec.mjs"));
+    progress_runtime_spec.addFileArg(exe.getEmittedBin());
+    progress_runtime_spec.setCwd(b.path("."));
+    progress_runtime_spec.stdio = .inherit;
+    test_step.dependOn(&progress_runtime_spec.step);
+    const progress_test_step = b.step("test-progress", "Run focused progress display tests");
+    progress_test_step.dependOn(&run_progress_spec_tests.step);
+    progress_test_step.dependOn(&progress_runtime_spec.step);
     addModuleTest(ctx, test_step, "tests/project/config/spec_tests.zig", &.{
         import("project", modules.project),
         import("utils", modules.utils),
@@ -642,13 +677,14 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         "tests/runtime/completion_runtime_spec.mjs",
         "tests/runtime/debug_runtime_spec.mjs",
         "tests/runtime/doctor_runtime_spec.mjs",
-        "tests/runtime/editor/names_spec.mjs",
+        "tests/runtime/editor/empty/spec.mjs",
+        "tests/runtime/editor/names/spec.mjs",
         "tests/runtime/editor/relations/spec.mjs",
         "tests/runtime/editor/spec.mjs",
         "tests/runtime/layout/frame_too_small_spec.mjs",
         "tests/runtime/layout/measurement_spec.mjs",
         "tests/runtime/layout/vflow/policy_spec.mjs",
-        "tests/runtime/lsp/cancellation_spec.mjs",
+        "tests/runtime/lsp/cancellation/spec.mjs",
         "tests/runtime/lsp_completion_runtime_spec.mjs",
         "tests/runtime/lsp_editor_runtime_spec.mjs",
         "tests/runtime/markdown_table_alignment_runtime_spec.mjs",

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -9,6 +9,7 @@ import { PNG } from "pngjs";
 import { pdfAsset, rasterAsset } from "./assets.mjs";
 import { captureHtmlPages, capturePdfPages, preparePdfViewer, withBrowser } from "./capture.mjs";
 import { compareImages, decodePng, defaultThresholds, encodePng } from "./compare.mjs";
+import { inspectStandaloneNavigation } from "./navigation/spec.mjs";
 
 const exec = promisify(execFile);
 const testRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -16,6 +17,14 @@ const repository = path.resolve(testRoot, "../..");
 const output = path.join(repository, ".ss-cache/render-parity");
 const driver = path.resolve(repository, process.argv.slice(2).find((argument) => !argument.startsWith("--")) ?? "zig-out/bin/ss-render-parity-driver");
 const full = process.argv.includes("--full");
+const pdfViewerThresholds = Object.freeze({
+  ...defaultThresholds,
+  largeDifferenceRatio: 0.006,
+  spatialTolerance: 1,
+});
+const canRenderAlgorithm2e = full &&
+  await commandSucceeds("pdflatex", ["--version"]) &&
+  await commandSucceeds("kpsewhich", ["algorithm2e.sty"]);
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await preparePdfViewer(output, repository);
@@ -25,6 +34,7 @@ const fixtures = [
   { name: "fonts", source: path.join(repository, "tests/fixtures/render/parity/text/fonts.ss") },
   { name: "geometry", source: path.join(repository, "tests/fixtures/render/parity/geometry/slide.ss") },
   { name: "images", source: await prepareGeneratedFixture("images", "asset.png", rasterAsset()) },
+  { name: "navigation", source: path.join(repository, "tests/fixtures/render/parity/navigation/slide.ss") },
 ];
 if (full) {
   fixtures.push({ name: "vector", source: path.join(repository, "tests/fixtures/render/parity/vector/slide.ss") });
@@ -32,22 +42,28 @@ if (full) {
   fixtures.push({ name: "semantics", source: path.join(repository, "tests/fixtures/render/parity/semantics/slide.ss") });
   fixtures.push({ name: "math", source: path.join(repository, "tests/fixtures/render/math.ss") });
   fixtures.push({ name: "markdown-math", source: path.join(repository, "tests/fixtures/render/parity/math/markdown.ss") });
+  if (canRenderAlgorithm2e) {
+    fixtures.push({ name: "algorithm2e", source: path.join(repository, "tests/fixtures/render/parity/math/algorithm2e/slide.ss") });
+  }
 }
 
 for (const fixture of fixtures) {
-  await run(driver, [fixture.source, path.join(output, `${fixture.name}.pdf`), path.join(output, `${fixture.name}-html`)]);
+  await run(driver, [fixture.source, path.join(output, `${fixture.name}.pdf`), path.join(output, `${fixture.name}.html`)]);
 }
 
 let failed = false;
 await withBrowser(output, async (browser, baseUrl) => {
   for (const fixture of fixtures) {
     const pdf = await capturePdfPages(browser, baseUrl, `${fixture.name}.pdf`);
-    const html = await captureHtmlPages(browser, baseUrl, `${fixture.name}-html`);
+    const html = await captureHtmlPages(browser, baseUrl, `${fixture.name}.html`);
     assert.equal(html.length, pdf.length, `${fixture.name}: PDF and HTML page counts differ`);
     for (let index = 0; index < pdf.length; index += 1) {
       const expected = decodePng(pdf[index]);
       const actual = decodePng(html[index].image);
-      const result = compareImages(expected, actual);
+      const hasPdfViewer = html[index].items.some((item) => item.usesPdfViewer);
+      const result = compareImages(expected, actual, hasPdfViewer
+        ? pdfViewerThresholds
+        : defaultThresholds);
       await writeFile(path.join(output, `${fixture.name}-${index + 1}-pdf.png`), pdf[index]);
       await writeFile(path.join(output, `${fixture.name}-${index + 1}-html.png`), html[index].image);
       if (result.diff) await writeFile(path.join(output, `${fixture.name}-${index + 1}-diff.png`), encodePng(result.diff));
@@ -57,7 +73,7 @@ await withBrowser(output, async (browser, baseUrl) => {
         const expectedItem = cropRegion(expected, region, 2);
         const actualItem = cropRegion(actual, region, 2);
         if (!expectedItem || !actualItem) continue;
-        const itemResult = compareImages(expectedItem, actualItem, itemThresholds(region.kind));
+        const itemResult = compareImages(expectedItem, actualItem, itemThresholds(region));
         if (!itemResult.pass) {
           process.stdout.write(`${fixture.name} page ${index + 1} item ${region.id}: MAE=${itemResult.meanAbsoluteError ?? "dimension mismatch"}, large=${itemResult.largeDifferenceRatio ?? "dimension mismatch"}\n`);
         }
@@ -66,10 +82,13 @@ await withBrowser(output, async (browser, baseUrl) => {
     }
   }
 
+  await inspectStandaloneNavigation(browser, baseUrl);
+
   if (full) {
     await inspectNormalHtml(browser, baseUrl);
     await inspectEmbeddedPdf(browser, baseUrl);
     await inspectStructuredMath(browser, baseUrl);
+    if (canRenderAlgorithm2e) await inspectRawMath(browser, baseUrl);
   }
 
   const baselinePath = process.env.SS_RENDER_BASELINE_PDF;
@@ -99,8 +118,8 @@ function cropRegion(source, region, padding) {
   return result;
 }
 
-function itemThresholds(kind) {
-  if (kind === "line") {
+function itemThresholds(item) {
+  if (item.kind === "line") {
     return {
       ...defaultThresholds,
       meanAbsoluteError: 0.012,
@@ -108,19 +127,19 @@ function itemThresholds(kind) {
       spatialTolerance: 1,
     };
   }
-  if (kind === "math") {
+  if (item.usesPdfViewer) {
+    return {
+      ...defaultThresholds,
+      meanAbsoluteError: 0.0045,
+      largeDifferenceRatio: 0.045,
+      spatialTolerance: 1,
+    };
+  }
+  if (item.kind === "math") {
     return {
       ...defaultThresholds,
       meanAbsoluteError: 0.005,
       largeDifferenceRatio: 0.025,
-      spatialTolerance: 1,
-    };
-  }
-  if (kind === "pdf") {
-    return {
-      ...defaultThresholds,
-      meanAbsoluteError: 0.005,
-      largeDifferenceRatio: 0.05,
       spatialTolerance: 1,
     };
   }
@@ -135,21 +154,14 @@ function itemThresholds(kind) {
 async function inspectNormalHtml(browser, baseUrl) {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
   try {
-    await page.goto(`${baseUrl}/semantics-html/index.html`, { waitUntil: "networkidle" });
+    await page.goto(`${baseUrl}/semantics.html`, { waitUntil: "networkidle" });
     await page.evaluate(() => document.fonts.ready);
     const visibleText = await page.locator(".ss-text").allTextContents();
     assert(
       visibleText.some((value) => value.includes("SelectableTextToken")),
       `normal HTML text was not present in selectable elements: ${JSON.stringify(visibleText)}`,
     );
-    const selected = await page.locator(".ss-text", { hasText: "SelectableTextToken" }).first().evaluate((element) => {
-      const selection = getSelection();
-      selection.removeAllRanges();
-      const range = document.createRange();
-      range.selectNodeContents(element);
-      selection.addRange(range);
-      return selection.toString();
-    });
+    const selected = await selectedText(page.locator(".ss-text", { hasText: "SelectableTextToken" }).first());
     assert(selected.includes("SelectableTextToken"), `normal HTML selection lost text: ${JSON.stringify(selected)}`);
     assert.equal(
       await page.locator('.ss-semantic-layer a[href="https://example.com/semantic"]').count(),
@@ -185,38 +197,167 @@ async function inspectNormalHtml(browser, baseUrl) {
 async function inspectEmbeddedPdf(browser, baseUrl) {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
   try {
-    await page.goto(`${baseUrl}/pdf-html/index.html`, { waitUntil: "networkidle" });
+    await page.goto(`${baseUrl}/pdf.html`, { waitUntil: "networkidle" });
     await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: 120_000 });
-    const container = page.locator(".ss-pdf");
+    const container = page.locator('.ss-page[data-ss-page-index="1"] .ss-pdf');
     assert.equal(await container.getAttribute("data-page"), "2", "HTML selected the wrong PDF source page");
     const textLayer = container.locator(".textLayer");
     const text = await textLayer.textContent();
     assert(text?.includes("SelectablePdfToken"), `PDF.js text layer omitted source text: ${JSON.stringify(text)}`);
-    const selected = await textLayer.evaluate((element) => {
-      const selection = getSelection();
-      selection.removeAllRanges();
-      const range = document.createRange();
-      range.selectNodeContents(element);
-      selection.addRange(range);
-      return selection.toString();
-    });
+    const textBounds = await textLayer.boundingBox();
+    assert(textBounds && textBounds.width > 0 && textBounds.height > 0,
+      "PDF.js text layer had no pointer-selectable area");
+    const textSpan = textLayer.locator("span:not(.markedContent)", { hasText: "SelectablePdfToken" }).first();
+    const textSpanBounds = await textSpan.boundingBox();
+    assert(textSpanBounds && textSpanBounds.width > 0 && textSpanBounds.height > 0,
+      "PDF.js selectable text had no rendered area");
+    const selected = await selectedText(textLayer);
     assert(selected.includes("SelectablePdfToken"), `PDF.js text selection lost source text: ${JSON.stringify(selected)}`);
+    const dragSpan = textLayer.locator("span:not(.markedContent)", {
+      hasText: "DragSelectablePdfToken",
+    }).first();
+    const dragged = await dragSelectedText(page, dragSpan);
+    assert(dragged.includes("DragSelectablePdfToken"),
+      `pointer drag could not select PDF text: ${JSON.stringify(dragged)}`);
     const link = container.locator('.annotationLayer a[href="https://example.com/pdf"]');
     assert.equal(await link.count(), 1, "PDF.js annotation layer omitted the URI link");
+    assert.equal(await container.locator(".annotationLayer a").count(), 1,
+      "PDF.js exposed an internal destination that the HTML document cannot resolve");
+    const linkBounds = await link.boundingBox();
+    assert(linkBounds && linkBounds.width > 0 && linkBounds.height > 0,
+      "PDF.js annotation link had no clickable area");
+    const linkGeometry = await link.evaluate((element) => {
+      const item = element.closest(".ss-pdf");
+      const itemBounds = item.getBoundingClientRect();
+      const bounds = element.getBoundingClientRect();
+      return {
+        left: (bounds.left - itemBounds.left) / itemBounds.width,
+        top: (bounds.top - itemBounds.top) / itemBounds.height,
+        width: bounds.width / itemBounds.width,
+        height: bounds.height / itemBounds.height,
+        rotation: getComputedStyle(element.closest(".annotationLayer")).transform,
+        hiddenAncestor: element.closest('[aria-hidden="true"]')?.className ?? null,
+      };
+    });
+    assertNormalizedGeometry(linkGeometry, { left: 0.56, top: 0.01, width: 0.28, height: 0.95 });
+    assert.notEqual(linkGeometry.rotation, "none", "PDF.js annotation layer ignored the source page rotation");
+    assert.equal(linkGeometry.hiddenAncestor, null, "copied PDF annotation was hidden from assistive technology");
+    assert.equal(await link.getAttribute("aria-label"), "https://example.com/pdf",
+      "copied PDF annotation had no accessible name");
+    assert.equal(await link.locator("xpath=parent::section").getAttribute("tabindex"), null,
+      "copied PDF annotation created a duplicate keyboard stop");
+    assert(await link.evaluate((element) => element.tabIndex >= 0),
+      "copied PDF annotation was not reachable with keyboard navigation");
+    await page.evaluate(() => {
+      window.__ssPdfLinkClicked = false;
+      document.addEventListener("click", (event) => {
+        if (!(event.target instanceof Element) || !event.target.closest(".annotationLayer")) return;
+        event.preventDefault();
+        window.__ssPdfLinkClicked = true;
+      }, { capture: true, once: true });
+    });
+    await link.focus();
+    assert(await link.evaluate((element) => document.activeElement === element),
+      "copied PDF annotation was not keyboard-focusable");
+    await link.click();
+    assert(await page.evaluate(() => window.__ssPdfLinkClicked),
+      "PDF.js annotation did not receive a pointer click at its rendered location");
+
+    await page.evaluate(() => {
+      location.hash = "2";
+    });
+    await page.waitForFunction(() =>
+      document.querySelector('.ss-page[data-ss-page-index="2"]')?.dataset.ssActive === "true"
+    );
+    const mediaContainer = page.locator('.ss-page[data-ss-page-index="2"] .ss-pdf');
+    await page.waitForFunction(() =>
+      document.querySelector('.ss-page[data-ss-page-index="2"] .ss-pdf')?.dataset.ssPdfRendered === "true"
+    );
+    const paintedOutsideCropBox = await mediaContainer.locator(":scope > canvas").evaluate((canvas) => {
+      const context = canvas.getContext("2d");
+      if (!context || canvas.width <= 0 || canvas.height <= 0) return null;
+      const width = Math.max(1, Math.ceil(canvas.width * 0.1));
+      const pixels = context.getImageData(0, 0, width, canvas.height).data;
+      let count = 0;
+      let minX = width;
+      let minY = canvas.height;
+      let maxX = -1;
+      let maxY = -1;
+      for (let index = 0; index < pixels.length; index += 4) {
+        if (pixels[index + 3] > 0 && pixels[index] < 100 &&
+            pixels[index + 1] < 100 && pixels[index + 2] < 100) {
+          const pixel = index / 4;
+          const x = pixel % width;
+          const y = Math.floor(pixel / width);
+          count += 1;
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+      return { count, minX, minY, maxX, maxY, width, height: canvas.height };
+    });
+    assert(paintedOutsideCropBox && paintedOutsideCropBox.count >= 80 &&
+      paintedOutsideCropBox.maxX - paintedOutsideCropBox.minX >= 5 &&
+      paintedOutsideCropBox.maxY - paintedOutsideCropBox.minY >= 50,
+    `PDF.js MediaBox rendering omitted or distorted source content outside the CropBox: ${JSON.stringify(paintedOutsideCropBox)}`);
   } finally {
     await page.close();
+  }
+}
+
+function assertNormalizedGeometry(actual, expected) {
+  for (const key of ["left", "top", "width", "height"]) {
+    const error = Math.abs(actual[key] - expected[key]);
+    assert(error <= 0.015,
+      `PDF.js annotation ${key} differs from the rotated CropBox geometry: ${actual[key]} instead of ${expected[key]}`);
   }
 }
 
 async function inspectStructuredMath(browser, baseUrl) {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
   try {
-    await page.goto(`${baseUrl}/markdown-math-html/index.html`, { waitUntil: "networkidle" });
+    await page.goto(`${baseUrl}/markdown-math.html`, { waitUntil: "networkidle" });
     await page.evaluate(() => document.fonts.ready);
     assert(await page.locator(".ss-math-text").count() > 0, "structured mathematics omitted its selectable HTML text layer");
     assert(await page.locator(".ss-semantic-layer math.ss-mathml").count() >= 2, "structured mathematics omitted MathML semantics");
     assert.equal(await page.locator(".ss-math svg").count(), 0, "structured mathematics used an SVG display fallback");
     assert.equal(await page.locator(".ss-math.ss-pdf").count(), 0, "structured mathematics used a PDF display fallback");
+  } finally {
+    await page.close();
+  }
+}
+
+async function inspectRawMath(browser, baseUrl) {
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
+  try {
+    await page.goto(`${baseUrl}/algorithm2e.html`, { waitUntil: "networkidle" });
+    await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: 120_000 });
+    const container = page.locator(".ss-math.ss-pdf");
+    assert.equal(await container.count(), 1, "raw TeX did not use one scoped PDF.js viewer");
+    assert.equal(await container.getAttribute("data-canvas-background"), "transparent", "raw TeX did not request a transparent PDF canvas");
+    assert.equal(await page.locator('object[type="application/pdf"]').count(), 0, "raw TeX used a PDF object element");
+    const cornerAlpha = await container.locator("canvas").evaluate((canvas) =>
+      canvas.getContext("2d").getImageData(0, 0, 1, 1).data[3]);
+    assert.equal(cornerAlpha, 0, "raw TeX PDF canvas painted an opaque background");
+    const textLayer = container.locator(".textLayer");
+    const text = await textLayer.textContent();
+    const textBounds = await textLayer.boundingBox();
+    assert(textBounds && textBounds.width > 0 && textBounds.height > 0,
+      "raw TeX text layer had no pointer-selectable area");
+    assert(text?.includes("SelectableAlgorithmInput"), `algorithm2e input text was not selectable: ${JSON.stringify(text)}`);
+    assert(text?.includes("SelectableAlgorithmResult"), `algorithm2e result text was not selectable: ${JSON.stringify(text)}`);
+    const selected = await selectedText(textLayer);
+    assert(selected.includes("SelectableAlgorithmInput") && selected.includes("SelectableAlgorithmResult"),
+      `algorithm2e selection lost text: ${JSON.stringify(selected)}`);
+    const dragSpan = textLayer.locator("span:not(.markedContent)", {
+      hasText: "SelectableAlgorithmInput",
+    }).first();
+    const dragged = await dragSelectedText(page, dragSpan);
+    assert(dragged.includes("SelectableAlgorithmInput"),
+      `pointer drag could not select raw TeX text: ${JSON.stringify(dragged)}`);
+    assert.equal(await page.locator('.ss-semantic-layer [role="math"]').count(), 1, "raw TeX omitted its math semantics");
   } finally {
     await page.close();
   }
@@ -233,8 +374,51 @@ async function prepareGeneratedFixture(name, assetName, assetBytes) {
   return path.join(directory, "slide.ss");
 }
 
+async function selectedText(locator) {
+  return await locator.evaluate((element) => {
+    const selection = getSelection();
+    selection.removeAllRanges();
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    selection.addRange(range);
+    return selection.toString();
+  });
+}
+
+async function dragSelectedText(page, locator) {
+  const bounds = await locator.boundingBox();
+  assert(bounds && bounds.width > 0 && bounds.height > 0,
+    "selectable text had no pointer target");
+  const horizontal = bounds.width >= bounds.height;
+  const start = horizontal
+    ? { x: bounds.x + 1, y: bounds.y + bounds.height / 2 }
+    : { x: bounds.x + bounds.width / 2, y: bounds.y + 1 };
+  const end = horizontal
+    ? { x: bounds.x + bounds.width - 1, y: start.y }
+    : { x: start.x, y: bounds.y + bounds.height - 1 };
+  for (const [from, to] of [[start, end], [end, start]]) {
+    await page.evaluate(() => getSelection()?.removeAllRanges());
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 20 });
+    await page.mouse.up();
+    const selected = await page.evaluate(() => getSelection()?.toString() ?? "");
+    if (selected) return selected;
+  }
+  return "";
+}
+
 if (failed) throw new Error(`rendering parity exceeded thresholds; inspect ${output}`);
 
 async function run(file, args) {
   await exec(file, args, { cwd: repository, timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
+}
+
+async function commandSucceeds(file, args) {
+  try {
+    await exec(file, args, { cwd: repository, timeout: 10_000, maxBuffer: 1024 * 1024 });
+    return true;
+  } catch {
+    return false;
+  }
 }
