@@ -59,9 +59,9 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
                 return false;
             };
             var progress = if (options.quiet)
-                utils.progress.Progress.disabled(8)
+                utils.progress.Progress.disabled(app.render_progress_steps)
             else
-                utils.progress.Progress.init(8);
+                utils.progress.Progress.init(app.render_progress_steps);
             const render_options = app.RenderOptions{
                 .jobs = options.jobs,
                 .highlight_languages = options.highlight_languages,
@@ -79,7 +79,7 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
                 }, &progress),
                 .html => app.writeHtml(io, allocator, .{
                     .source = source,
-                    .output_directory = output_path,
+                    .output_path = output_path,
                     .options = .{ .render = render_options },
                 }, &progress),
             }) catch |err| {

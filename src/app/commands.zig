@@ -16,6 +16,9 @@ const types = @import("types.zig");
 const error_report = utils.err;
 const Progress = utils.progress.Progress;
 
+pub const render_progress_steps = 8;
+pub const pdf_and_html_progress_steps = 9;
+
 const CompiledRendering = struct {
     state: core.DocumentState,
     pages: core.prepared.PreparedPages,
@@ -100,8 +103,9 @@ pub fn layoutConflictReportJson(
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     const artifact_progress = if (progress) |p| app_progress.render(p) else null;
     if (progress) |p| p.begin("Solve layouts");
+    errdefer if (progress) |p| p.abort();
     render_layout.preloadPreparedPageArtifacts(io, &analyzed.state, &pages, artifact_progress, request.layout_jobs) catch |err| {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(analyzed.state.projectPath(), analyzed.state.projectSource(), &analyzed.state);
         if (error_report.hasDocumentStateErrors(&analyzed.state)) return error.DiagnosticsFailed;
         return err;
@@ -111,13 +115,13 @@ pub fn layoutConflictReportJson(
         error.NegativeFrameSize,
         => null,
         else => {
-            if (progress) |p| p.endStatusLine();
+            if (progress) |p| p.abort();
             error_report.printDocumentStateDiagnostics(analyzed.state.projectPath(), analyzed.state.projectSource(), &analyzed.state);
             return err;
         },
     };
     defer if (maybe_layouts) |*layouts| layouts.deinit(analyzed.state.allocator);
-    if (progress) |p| p.step("Solve layouts");
+    if (progress) |p| p.complete();
     const data = try core.layout.conflicts.toJson(allocator, &analyzed.state);
     if (progress) |p| p.step("Serialize report");
     return data;
@@ -139,24 +143,30 @@ pub fn writeLayoutConflictReportFile(
 pub fn writePdf(io: std.Io, allocator: std.mem.Allocator, request: types.PdfWriteRequest, progress: *Progress) !void {
     var compiled = try compileRendering(io, allocator, request.source, request.options.render, request.options.diagnostics_json_path, progress);
     defer compiled.deinit();
+    progress.begin("Render PDF");
+    errdefer progress.abort();
     try app_output.writePdfOrPrintDiagnostics(allocator, io, &compiled.state, &compiled.ir, request.output_path, request.options.render, progress, request.options.diagnostics_json_path);
     try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &compiled.state, request.options.diagnostics_json_path);
     try utils.render_cache.pruneFromEnv(io, allocator);
-    progress.step("Render PDF");
+    progress.complete();
 }
 
 pub fn writeHtml(io: std.Io, allocator: std.mem.Allocator, request: types.HtmlWriteRequest, progress: *Progress) !void {
     var compiled = try compileRendering(io, allocator, request.source, request.options.render, request.options.diagnostics_json_path, progress);
     defer compiled.deinit();
-    try render_html.write(allocator, io, &compiled.ir, request.output_directory, request.options.html);
-    progress.step("Write HTML bundle");
+    progress.begin("Write HTML");
+    errdefer progress.abort();
+    try render_html.write(allocator, io, &compiled.ir, request.output_path);
     try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &compiled.state, request.options.diagnostics_json_path);
     try utils.render_cache.pruneFromEnv(io, allocator);
+    progress.complete();
 }
 
 pub fn writePdfAndHtml(io: std.Io, allocator: std.mem.Allocator, request: types.PdfAndHtmlWriteRequest, progress: *Progress) !void {
     var compiled = try compileRendering(io, allocator, request.source, request.options.render, request.options.diagnostics_json_path, progress);
     defer compiled.deinit();
+    progress.begin("Render PDF");
+    errdefer progress.abort();
     try app_output.writePdfOrPrintDiagnostics(
         allocator,
         io,
@@ -167,11 +177,12 @@ pub fn writePdfAndHtml(io: std.Io, allocator: std.mem.Allocator, request: types.
         progress,
         request.options.diagnostics_json_path,
     );
-    progress.step("Write PDF");
-    try render_html.write(allocator, io, &compiled.ir, request.html_output_directory, request.options.html);
-    progress.step("Write HTML bundle");
+    progress.complete();
+    progress.begin("Write HTML");
+    try render_html.write(allocator, io, &compiled.ir, request.html_output_path);
     try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &compiled.state, request.options.diagnostics_json_path);
     try utils.render_cache.pruneFromEnv(io, allocator);
+    progress.complete();
 }
 
 fn compileRendering(
@@ -205,17 +216,19 @@ fn compileRendering(
     pages_errdefer_active = false;
 
     progress.begin("Compile rendering");
-    var ir = render_compile.compile(state.allocator, io, &state, &pages, .{
+    errdefer progress.abort();
+    var ir = render_compile.compilePrepared(state.allocator, io, &state, &pages, .{
+        .jobs = options.jobs,
         .cache_dir = options.cache_dir,
         .highlight_languages = options.highlight_languages,
     }) catch |err| {
-        progress.endStatusLine();
+        progress.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), &state);
         try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &state, diagnostics_json_path);
         if (error_report.hasDocumentStateErrors(&state)) return error.DiagnosticsFailed;
         return err;
     };
     errdefer ir.deinit(state.allocator);
-    progress.step("Compile rendering IR");
+    progress.complete();
     return .{ .state = state, .pages = pages, .layouts = layouts, .ir = ir };
 }

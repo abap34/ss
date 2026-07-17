@@ -24,7 +24,7 @@ pub fn writePdfOrPrintDiagnostics(
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
     }, app_progress.pdfWrite(progress)) catch |err| {
-        progress.endStatusLine();
+        progress.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         try writeDiagnosticsJsonIfRequested(io, allocator, state, diagnostics_json_path);
         if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;

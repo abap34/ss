@@ -104,7 +104,7 @@ fn PageWork(comptime ContextPtr: type) type {
         options: SolveOptions,
         outputs: []PageLayoutJobOutput,
         next_job: std.atomic.Value(usize) = .init(0),
-        completed: std.atomic.Value(usize) = .init(0),
+        completed: usize = 0,
         failed: std.atomic.Value(bool) = .init(false),
         progress_lock: std.atomic.Value(bool) = .init(false),
     };
@@ -192,16 +192,16 @@ fn layoutJobWorker(comptime ContextPtr: type, work: *PageWork(ContextPtr)) void 
             break;
         };
         work.outputs[index].result = result;
-        const completed = work.completed.fetchAdd(1, .release) + 1;
-        notifyLayoutProgress(ContextPtr, work, completed);
+        notifyLayoutProgress(ContextPtr, work);
     }
 }
 
-fn notifyLayoutProgress(comptime ContextPtr: type, work: *PageWork(ContextPtr), completed: usize) void {
+fn notifyLayoutProgress(comptime ContextPtr: type, work: *PageWork(ContextPtr)) void {
     const progress = work.options.progress orelse return;
     lockProgress(&work.progress_lock);
     defer unlockProgress(&work.progress_lock);
-    progress.pageCompleted(progress.context, completed, work.jobs.len);
+    work.completed += 1;
+    progress.pageCompleted(progress.context, work.completed, work.jobs.len);
 }
 
 fn lockProgress(lock: *std.atomic.Value(bool)) void {
