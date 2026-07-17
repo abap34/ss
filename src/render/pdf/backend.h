@@ -151,6 +151,12 @@ typedef struct SsTextShape {
     SsPdfInkExtents ink_bounds;
 } SsTextShape;
 
+typedef struct SsTextMeasurement {
+    SsPdfInkExtents logical_bounds;
+    SsPdfInkExtents ink_bounds;
+    double first_baseline;
+} SsTextMeasurement;
+
 typedef struct SsReplayGlyph {
     unsigned long id;
     double x;
@@ -200,7 +206,6 @@ const char *ss_qpdf_version_string(void);
 int ss_font_register(const char *path);
 
 SsPdf *ss_pdf_create(const char *path, double width, double height);
-SsPdf *ss_pdf_create_scratch(void);
 void ss_pdf_destroy(SsPdf *pdf);
 void ss_pdf_set_creator(SsPdf *pdf, const char *creator);
 void ss_pdf_begin_page(SsPdf *pdf, double width, double height);
@@ -223,10 +228,6 @@ int ss_pdf_begin_item(
     int blend_mode
 );
 int ss_pdf_end_item(SsPdf *pdf, double opacity, int blend_mode);
-int ss_pdf_begin_measurement(SsPdf *pdf);
-int ss_pdf_measurement_ink_extents(SsPdf *pdf, SsPdfInkExtents *extents);
-int ss_pdf_end_measurement(SsPdf *pdf);
-
 void ss_pdf_fill_rect(SsPdf *pdf, double x, double y, double width, double height, double r, double g, double b);
 void ss_pdf_stroke_line(
     SsPdf *pdf,
@@ -278,10 +279,19 @@ int ss_pdf_draw_glyph_run(
     int cluster_count,
     int backward
 );
-double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
-double ss_pdf_measure_text_visual_width(SsPdf *pdf, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
 double ss_text_measure_text(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
 double ss_text_measure_text_visual_width(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
+int ss_text_measure_layout(
+    const char *text,
+    const char *font_family,
+    int font_weight,
+    int font_style,
+    int font_stretch,
+    double font_size,
+    double width,
+    int wrap,
+    SsTextMeasurement *measurement
+);
 int ss_text_shape(
     const char *text,
     const char *font_family,

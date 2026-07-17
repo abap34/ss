@@ -65,7 +65,7 @@ pub fn layout(
     );
     defer probe.deinit(allocator);
     if (probe.runs.len == 0) return error.MissingMathFont;
-    const font = fonts.find(probe.runs[0].font_instance) orelse return error.MissingMathFont;
+    const font = fonts.get(io, probe.runs[0].font_instance) orelse return error.MissingMathFont;
     const constants = font.math orelse return error.MissingMathTable;
 
     var builder = Builder{

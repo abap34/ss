@@ -5,6 +5,8 @@ const render = @import("render");
 pub const Builder = struct {
     entries: std.ArrayList(render.Resource) = .empty,
     sources: std.ArrayList(Source) = .empty,
+    mutex: std.Io.Mutex = .init,
+    source_ready: std.Io.Condition = .init,
 
     pub fn deinit(self: *Builder, allocator: std.mem.Allocator) void {
         for (self.entries.items) |*entry| entry.deinit(allocator);
@@ -20,47 +22,105 @@ pub const Builder = struct {
         kind: render.ResourceKind,
         path: []const u8,
     ) !render.ResourceId {
-        for (self.sources.items) |source| {
-            if (source.kind == kind and std.mem.eql(u8, source.path, path)) return source.id;
+        if (try self.claimSource(allocator, io, kind, path)) |id| return id;
+        return self.loadSource(allocator, io, kind, path) catch |err| {
+            self.failSource(io, kind, path, err);
+            return err;
+        };
+    }
+
+    fn claimSource(
+        self: *Builder,
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        kind: render.ResourceKind,
+        path: []const u8,
+    ) !?render.ResourceId {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        while (true) {
+            if (self.findSource(kind, path)) |source| switch (source.state) {
+                .loading => {
+                    self.source_ready.waitUncancelable(io, &self.mutex);
+                    continue;
+                },
+                .ready => |id| return id,
+                .failed => |err| return err,
+            };
+            const source_path = try allocator.dupe(u8, path);
+            errdefer allocator.free(source_path);
+            try self.sources.append(allocator, .{ .kind = kind, .path = source_path });
+            return null;
         }
+    }
+
+    fn loadSource(
+        self: *Builder,
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        kind: render.ResourceKind,
+        path: []const u8,
+    ) !render.ResourceId {
         const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
         errdefer allocator.free(bytes);
         const id = render.identifyResource(kind, bytes);
-        for (self.entries.items) |entry| {
-            if (std.mem.eql(u8, &entry.id, &id)) {
-                allocator.free(bytes);
-                if (entry.kind != kind) return error.RenderResourceKindConflict;
-                const source_path = try allocator.dupe(u8, path);
-                errdefer allocator.free(source_path);
-                try self.sources.append(allocator, .{ .kind = kind, .path = source_path, .id = id });
-                return id;
-            }
-        }
         const name = try allocator.dupe(u8, std.fs.path.basename(path));
         errdefer allocator.free(name);
         var metadata = try probeMetadata(allocator, path, kind, bytes);
         errdefer metadata.deinit(allocator);
-        const source_path = try allocator.dupe(u8, path);
-        errdefer allocator.free(source_path);
-        try self.entries.ensureUnusedCapacity(allocator, 1);
-        try self.sources.ensureUnusedCapacity(allocator, 1);
-        self.entries.appendAssumeCapacity(.{ .id = id, .kind = kind, .name = name, .bytes = bytes, .metadata = metadata });
-        self.sources.appendAssumeCapacity(.{ .kind = kind, .path = source_path, .id = id });
+
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        const source = self.findSource(kind, path) orelse return error.MissingRenderResource;
+        if (source.state != .loading) return error.InvalidRenderResourceState;
+        for (self.entries.items) |entry| {
+            if (!std.mem.eql(u8, &entry.id, &id)) continue;
+            if (entry.kind != kind) return error.RenderResourceKindConflict;
+            allocator.free(name);
+            allocator.free(bytes);
+            metadata.deinit(allocator);
+            source.state = .{ .ready = id };
+            self.source_ready.broadcast(io);
+            return id;
+        }
+        try self.entries.append(allocator, .{ .id = id, .kind = kind, .name = name, .bytes = bytes, .metadata = metadata });
+        source.state = .{ .ready = id };
+        self.source_ready.broadcast(io);
         return id;
     }
 
+    fn failSource(self: *Builder, io: std.Io, kind: render.ResourceKind, path: []const u8, err: anyerror) void {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        const source = self.findSource(kind, path) orelse return;
+        if (source.state == .loading) source.state = .{ .failed = err };
+        self.source_ready.broadcast(io);
+    }
+
     pub fn take(self: *Builder, allocator: std.mem.Allocator) !render.ResourceGraph {
+        std.mem.sort(render.Resource, self.entries.items, {}, lessThan);
         const entries = try self.entries.toOwnedSlice(allocator);
         self.clearSources(allocator);
         self.* = .{};
         return .{ .entries = entries };
     }
 
-    pub fn find(self: *const Builder, id: render.ResourceId) ?*const render.Resource {
+    fn find(self: *const Builder, id: render.ResourceId) ?*const render.Resource {
         for (self.entries.items) |*entry| {
             if (std.mem.eql(u8, &entry.id, &id)) return entry;
         }
         return null;
+    }
+
+    pub fn get(self: *Builder, io: std.Io, id: render.ResourceId) ?render.Resource {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        const resource = self.find(id) orelse return null;
+        return resource.*;
+    }
+
+    fn lessThan(_: void, lhs: render.Resource, rhs: render.Resource) bool {
+        return std.mem.order(u8, &lhs.id, &rhs.id) == .lt;
     }
 
     fn clearSources(self: *Builder, allocator: std.mem.Allocator) void {
@@ -68,12 +128,25 @@ pub const Builder = struct {
         self.sources.deinit(allocator);
         self.sources = .empty;
     }
+
+    fn findSource(self: *Builder, kind: render.ResourceKind, path: []const u8) ?*Source {
+        for (self.sources.items) |*source| {
+            if (source.kind == kind and std.mem.eql(u8, source.path, path)) return source;
+        }
+        return null;
+    }
 };
 
 const Source = struct {
     kind: render.ResourceKind,
     path: []const u8,
-    id: render.ResourceId,
+    state: State = .loading,
+
+    const State = union(enum) {
+        loading,
+        ready: render.ResourceId,
+        failed: anyerror,
+    };
 };
 
 fn probeMetadata(

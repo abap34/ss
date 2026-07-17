@@ -1,9 +1,12 @@
 const std = @import("std");
+const math_validation = @import("validation/math.zig");
+const text_validation = @import("validation/text.zig");
 
 pub const Error = error{
     UnsupportedSchema,
     InvalidPageIndex,
     InvalidPageSize,
+    InvalidPageName,
     InvalidItemId,
     InvalidPaintIndex,
     InvalidBounds,
@@ -22,20 +25,28 @@ pub const Error = error{
 pub fn document(ir: anytype) Error!void {
     if (ir.schema_version != 6) return error.UnsupportedSchema;
     for (ir.resources.entries, 0..) |resource, resource_index| {
+        if (resource_index > 0 and
+            std.mem.order(u8, &ir.resources.entries[resource_index - 1].id, &resource.id) != .lt)
+        {
+            return error.InvalidResource;
+        }
         const expected = @import("resources.zig").identify(resource.kind, resource.bytes);
         if (!std.mem.eql(u8, &resource.id, &expected)) return error.InvalidResource;
+        if (resource.bytes.len == 0 or resource.name.len == 0 or !std.unicode.utf8ValidateSlice(resource.name) or
+            std.fs.path.isAbsolute(resource.name) or std.mem.indexOfAny(u8, resource.name, "/\\") != null)
+        {
+            return error.InvalidResource;
+        }
         if (std.meta.activeTag(resource.metadata) != resource.kind) return error.InvalidResource;
         try resourceMetadata(resource.metadata);
-        for (ir.resources.entries[0..resource_index]) |previous| {
-            if (std.mem.eql(u8, &previous.id, &resource.id)) return error.InvalidResource;
-        }
     }
     try fontCatalog(ir);
     try semanticTree(ir);
-    try mathCatalog(ir);
+    try math_validation.catalog(ir);
     for (ir.pages, 0..) |*page, page_index| {
         if (page.index != page_index) return error.InvalidPageIndex;
         if (!positiveFinite(page.width) or !positiveFinite(page.height)) return error.InvalidPageSize;
+        if (!std.unicode.utf8ValidateSlice(page.name)) return error.InvalidPageName;
         for (page.items.items, 0..) |item, paint_index| {
             const header = item.header();
             if (header.paint_index != paint_index) return error.InvalidPaintIndex;
@@ -241,72 +252,32 @@ fn rejectSemanticCycle(ir: anytype, origin: anytype, current: anytype, depth: us
 
 fn itemGeometry(ir: anytype, item: anytype) Error!void {
     switch (item) {
-        .fill_rect => |value| if (!value.rect.isValid()) return error.InvalidItemGeometry,
+        .fill_rect => |value| if (!value.rect.isValid() or !validColor(value.color)) return error.InvalidItemGeometry,
         .stroke_line => |value| {
             if (!pointFinite(value.start) or !pointFinite(value.end) or
                 !nonNegativeFinite(value.line_width) or
                 !nonNegativeFinite(value.dash_on) or
-                !nonNegativeFinite(value.dash_off)) return error.InvalidItemGeometry;
+                !nonNegativeFinite(value.dash_off) or !validColor(value.color)) return error.InvalidItemGeometry;
         },
         .rounded_rect => |value| {
-            if (!value.rect.isValid() or !nonNegativeFinite(value.radius) or !nonNegativeFinite(value.line_width)) {
+            if (!value.rect.isValid() or !nonNegativeFinite(value.radius) or !nonNegativeFinite(value.line_width) or
+                (value.fill != null and !validColor(value.fill.?)) or
+                (value.stroke != null and !validColor(value.stroke.?)))
+            {
                 return error.InvalidItemGeometry;
             }
         },
         .text => |value| {
             if (!std.math.isFinite(value.x) or !std.math.isFinite(value.y) or
-                !nonNegativeFinite(value.width) or !positiveFinite(value.font_size)) return error.InvalidItemGeometry;
-            if (!value.layout.logical_bounds.isValid() or !value.layout.ink_bounds.isValid()) return error.InvalidItemGeometry;
-            if (!std.unicode.utf8ValidateSlice(value.layout.source_text)) return error.InvalidItemGeometry;
-            for (value.layout.lines) |line| {
-                if (!line.logical_bounds.isValid() or !line.ink_bounds.isValid() or !std.math.isFinite(line.baseline_y)) return error.InvalidItemGeometry;
-                if (line.source.start > line.source.end or line.source.end > value.layout.source_text.len) return error.InvalidItemGeometry;
-                if (line.run_range.start > line.run_range.end or line.run_range.end > value.layout.runs.len) return error.InvalidItemGeometry;
-            }
-            for (value.layout.runs) |run| {
-                if (!std.math.isFinite(run.x) or !std.math.isFinite(run.baseline_y) or !std.math.isFinite(run.advance)) return error.InvalidItemGeometry;
-                if (run.source.start > run.source.end or run.source.end > value.layout.source_text.len) return error.InvalidItemGeometry;
-                if (run.glyph_range.start > run.glyph_range.end or run.glyph_range.end > value.layout.glyphs.len) return error.InvalidItemGeometry;
-                if (run.cluster_range.start > run.cluster_range.end or run.cluster_range.end > value.layout.clusters.len) return error.InvalidItemGeometry;
-                if (ir.fonts.find(run.font_instance) == null) return error.MissingFont;
-                if (!std.unicode.utf8ValidateSlice(run.language)) return error.InvalidItemGeometry;
-                if ((run.direction == .right_to_left) != (run.bidi_level & 1 == 1)) return error.InvalidItemGeometry;
-                var source_bytes: usize = 0;
-                var glyph_count: usize = 0;
-                const run_clusters = value.layout.clusters[run.cluster_range.start..run.cluster_range.end];
-                for (run_clusters, 0..) |cluster, cluster_index| {
-                    if (cluster.source.start < run.source.start or cluster.source.end > run.source.end) return error.InvalidItemGeometry;
-                    if (cluster.glyph_range.start < run.glyph_range.start or cluster.glyph_range.end > run.glyph_range.end) return error.InvalidItemGeometry;
-                    source_bytes += cluster.source.end - cluster.source.start;
-                    glyph_count += cluster.glyph_range.end - cluster.glyph_range.start;
-                    for (run_clusters[0..cluster_index]) |previous| {
-                        if (rangesOverlap(cluster.source, previous.source) or rangesOverlap(cluster.glyph_range, previous.glyph_range)) {
-                            return error.InvalidItemGeometry;
-                        }
-                    }
-                }
-                if (source_bytes != run.source.end - run.source.start or glyph_count != run.glyph_range.end - run.glyph_range.start) {
-                    return error.InvalidItemGeometry;
-                }
-            }
-            for (value.layout.clusters) |cluster| {
-                if (cluster.source.start > cluster.source.end or cluster.source.end > value.layout.source_text.len) return error.InvalidItemGeometry;
-                if (cluster.glyph_range.start > cluster.glyph_range.end or cluster.glyph_range.end > value.layout.glyphs.len) return error.InvalidItemGeometry;
-                if (!std.math.isFinite(cluster.x) or !std.math.isFinite(cluster.baseline_y) or
-                    !std.math.isFinite(cluster.advance_x) or !std.math.isFinite(cluster.advance_y) or
-                    !cluster.logical_bounds.isValid() or !cluster.ink_bounds.isValid()) return error.InvalidItemGeometry;
-            }
-            for (value.layout.glyphs) |glyph| {
-                if (!std.math.isFinite(glyph.offset_x) or !std.math.isFinite(glyph.offset_y) or
-                    !std.math.isFinite(glyph.advance_x) or !std.math.isFinite(glyph.advance_y)) return error.InvalidItemGeometry;
-            }
+                !nonNegativeFinite(value.width) or !positiveFinite(value.font_size) or !validColor(value.color)) return error.InvalidItemGeometry;
+            try text_validation.layout(ir, value.layout);
         },
         .raster => |value| {
             if (!value.rect.isValid()) return error.InvalidItemGeometry;
             try requireResource(ir, value.resource, .raster);
         },
         .svg => |value| {
-            if (!value.rect.isValid()) return error.InvalidItemGeometry;
+            if (!value.rect.isValid() or (value.tint != null and !validColor(value.tint.?))) return error.InvalidItemGeometry;
             try requireResource(ir, value.resource, .svg);
         },
         .math => |value| {
@@ -314,19 +285,18 @@ fn itemGeometry(ir: anytype, item: anytype) Error!void {
             const tree = ir.math.find(value.tree) orelse return error.InvalidItemGeometry;
             switch (value.content) {
                 .structured => |structured| {
-                    if (tree.input_kind == .raw or !colorValid(structured.color)) return error.InvalidItemGeometry;
+                    if (tree.input_kind == .raw or !validColor(structured.color)) return error.InvalidItemGeometry;
                     const layout = structured.layout;
                     if (!nonNegativeFinite(layout.width) or !nonNegativeFinite(layout.height) or
                         !nonNegativeFinite(layout.baseline) or layout.baseline > layout.height) return error.InvalidItemGeometry;
                     for (layout.elements) |element| switch (element) {
                         .text => |text| {
                             if (tree.find(text.node) == null or !std.math.isFinite(text.x) or !std.math.isFinite(text.y) or
-                                !positiveFinite(text.font_size) or !text.layout.logical_bounds.isValid() or
-                                !text.layout.ink_bounds.isValid() or !std.unicode.utf8ValidateSlice(text.layout.source_text))
+                                !positiveFinite(text.font_size))
                             {
                                 return error.InvalidItemGeometry;
                             }
-                            for (text.layout.runs) |run| if (ir.fonts.find(run.font_instance) == null) return error.MissingFont;
+                            try text_validation.layout(ir, text.layout);
                         },
                         .rule => |rule| if (tree.find(rule.node) == null or !rule.rect.isValid()) return error.InvalidItemGeometry,
                     };
@@ -397,27 +367,6 @@ fn fontCatalog(ir: anytype) Error!void {
     }
 }
 
-fn mathCatalog(ir: anytype) Error!void {
-    for (ir.math.trees, 0..) |tree, tree_index| {
-        for (ir.math.trees[0..tree_index]) |previous| if (previous.id == tree.id) return error.InvalidItemGeometry;
-        if (tree.find(tree.root) == null) return error.InvalidItemGeometry;
-        for (tree.nodes, 0..) |node, node_index| {
-            if (node.id != node_index) return error.InvalidItemGeometry;
-            for (node.children) |child| if (tree.find(child) == null) return error.InvalidItemGeometry;
-            try rejectMathCycle(&tree, node.id, node.id, 0);
-        }
-    }
-}
-
-fn rejectMathCycle(tree: anytype, origin: anytype, current: anytype, depth: usize) Error!void {
-    if (depth > tree.nodes.len) return error.InvalidItemGeometry;
-    const node = tree.find(current) orelse return error.InvalidItemGeometry;
-    for (node.children) |child| {
-        if (child == origin) return error.InvalidItemGeometry;
-        try rejectMathCycle(tree, origin, child, depth + 1);
-    }
-}
-
 fn requireResource(ir: anytype, id: anytype, kind: anytype) Error!void {
     const resource = ir.resources.find(id) orelse return error.MissingResource;
     if (resource.kind != kind) return error.InvalidResource;
@@ -425,10 +374,6 @@ fn requireResource(ir: anytype, id: anytype, kind: anytype) Error!void {
 
 fn pointFinite(point: anytype) bool {
     return std.math.isFinite(point.x) and std.math.isFinite(point.y);
-}
-
-fn rangesOverlap(lhs: anytype, rhs: anytype) bool {
-    return lhs.start < rhs.end and rhs.start < lhs.end;
 }
 
 fn nonNegativeFinite(value: f64) bool {
@@ -439,7 +384,7 @@ fn positiveFinite(value: f64) bool {
     return std.math.isFinite(value) and value > 0;
 }
 
-fn colorValid(value: anytype) bool {
+fn validColor(value: anytype) bool {
     return std.math.isFinite(value.r) and value.r >= 0 and value.r <= 1 and
         std.math.isFinite(value.g) and value.g >= 0 and value.g <= 1 and
         std.math.isFinite(value.b) and value.b >= 0 and value.b <= 1;
