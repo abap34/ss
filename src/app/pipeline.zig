@@ -61,14 +61,15 @@ pub fn analyzeFile(
     mode: analysis.AnalysisMode,
 ) !AnalyzedProject {
     if (progress) |p| p.begin("Read inputs");
+    errdefer if (progress) |p| p.abort();
     var source = try readSource(io, allocator, request);
     errdefer allocator.free(source);
-    if (progress) |p| p.step("Read inputs");
+    if (progress) |p| p.complete();
 
     if (progress) |p| p.begin("Parse source");
     var parsed = try app_diagnostics.parseSource(allocator, source, request.input_path, progress);
     errdefer parsed.deinit(allocator);
-    if (progress) |p| p.step("Parse source");
+    if (progress) |p| p.complete();
 
     if (progress) |p| p.begin("Analyze");
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
@@ -78,7 +79,7 @@ pub fn analyzeFile(
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
     }) catch |err| {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         if (load_diagnostics.items.items.len != 0) {
             app_diagnostics.printLoadDiagnostics(&load_diagnostics);
             app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, request.asset_base_dir, &parsed.module, request.overlay, &load_diagnostics);
@@ -93,7 +94,7 @@ pub fn analyzeFile(
     var state = analysis.buildDocumentStateWithOptions(allocator, request.input_path, request.asset_base_dir, &source, &parsed.module, &index, .{
         .parse_holes = parsed.holes,
     }) catch |err| {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         if (err == error.UnknownImport) {
             try printUnknownImportDiagnostic(allocator, io, request, source, parsed.module);
         } else if (err != error.DiagnosticsFailed) {
@@ -113,15 +114,15 @@ pub fn analyzeFile(
     errdefer state.deinit();
 
     var execution_graph = analysis.analyzeDocumentStateWithMode(allocator, &state, mode) catch |err| {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), &state);
         return err;
     };
     errdefer if (execution_graph) |*graph| graph.deinit();
-    if (progress) |p| p.step("Analyze");
+    if (progress) |p| p.complete();
 
     if (error_report.hasDocumentStateErrors(&state)) {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), &state);
         return error.DiagnosticsFailed;
     }
@@ -130,14 +131,15 @@ pub fn analyzeFile(
 
 pub fn evaluateDocument(state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph, progress: ?*Progress) !void {
     if (progress) |p| p.begin("Evaluate document");
+    errdefer if (progress) |p| p.abort();
     lowering.evaluateDocument(state, graph) catch |err| {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         return err;
     };
-    if (progress) |p| p.step("Evaluate document");
+    if (progress) |p| p.complete();
     if (error_report.hasDocumentStateErrors(state)) {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         return error.DiagnosticsFailed;
     }
@@ -145,15 +147,16 @@ pub fn evaluateDocument(state: *core.DocumentState, graph: *const analysis.execu
 
 pub fn preparePages(state: *core.DocumentState, progress: ?*Progress) !core.prepared.PreparedPages {
     if (progress) |p| p.begin("Prepare pages");
+    errdefer if (progress) |p| p.abort();
     var pages = core.prepared.prepare(state.allocator, state) catch |err| {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         return err;
     };
     errdefer pages.deinit(state.allocator);
     if (progress) |p| {
         p.detail("pages", pages.pages.len, pages.pages.len);
-        p.step("Prepare pages");
+        p.complete();
     }
     return pages;
 }
@@ -167,14 +170,15 @@ pub fn solveLayouts(
 ) !core.layout.Document {
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
+    errdefer if (progress) |p| p.abort();
     try preloadLayoutArtifacts(io, state, pages, progress, jobs);
     var layouts = render_layout.solvePreparedPages(io, state, pages, layout_progress, jobs) catch |err| {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         try reportLayoutFailure(state, err);
         return err;
     };
     errdefer layouts.deinit(state.allocator);
-    if (progress) |p| p.step("Solve layouts");
+    if (progress) |p| p.complete();
     error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
     if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
     return layouts;
@@ -190,14 +194,15 @@ pub fn solveLayoutsWithTracePath(
 ) !core.layout.Document {
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
+    errdefer if (progress) |p| p.abort();
     try preloadLayoutArtifacts(io, state, pages, progress, jobs);
     var layouts = render_layout.solvePreparedPagesWithTrace(io, state, pages, trace_path, layout_progress, jobs) catch |err| {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         try reportLayoutFailure(state, err);
         return err;
     };
     errdefer layouts.deinit(state.allocator);
-    if (progress) |p| p.step("Solve layouts");
+    if (progress) |p| p.complete();
     error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
     if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
     return layouts;
@@ -212,7 +217,7 @@ fn preloadLayoutArtifacts(
 ) !void {
     const artifact_progress = if (progress) |p| app_progress.render(p) else null;
     render_layout.preloadPreparedPageArtifacts(io, state, pages, artifact_progress, jobs) catch |err| {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
         return err;

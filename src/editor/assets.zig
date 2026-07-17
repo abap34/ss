@@ -1,11 +1,12 @@
 const std = @import("std");
+const render = @import("render");
 const render_html = @import("../render/html.zig");
 
 var temporary_counter: usize = 0;
 
 pub const Asset = struct {
-    kind: render_html.ResourceKind,
-    resource_id: render_html.ResourceId,
+    kind: render.ResourceKind,
+    resource_id: render.ResourceId,
     digest: [32]u8,
     media_type: []const u8,
     relative_path: []u8,

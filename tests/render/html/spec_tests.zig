@@ -20,45 +20,36 @@ fn addDocumentSemantics(ir: *render.Ir) !void {
     ir.semantics = .{ .root = 1, .nodes = nodes };
 }
 
-fn expectValidManifestResources(output: []const u8, manifest: []const u8) !void {
-    var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, manifest, .{});
-    defer parsed.deinit();
-    const object = parsed.value.object;
-    try testing.expectEqual(@as(i64, 1), object.get("schema").?.integer);
-    try testing.expectEqualStrings("ss-html-bundle", object.get("kind").?.string);
-    const manifest_resources = object.get("resources").?.array.items;
-    try testing.expect(manifest_resources.len != 0);
-    for (manifest_resources) |resource_value| {
-        const resource = resource_value.object;
-        const resource_id = resource.get("resource_id").?.string;
-        const media_type = resource.get("media_type").?.string;
-        const digest = resource.get("digest").?.string;
-        const relative_path = resource.get("path").?.string;
-        try testing.expectEqual(@as(usize, 64), resource_id.len);
-        try testing.expect(std.mem.allEqual(u8, resource_id, '0') == false);
-        try testing.expect(media_type.len != 0);
-        try testing.expect(std.mem.startsWith(u8, digest, "sha256:"));
-        try testing.expectEqual(@as(usize, 71), digest.len);
-        try testing.expect(!std.fs.path.isAbsolute(relative_path));
-        try testing.expect(std.mem.indexOf(u8, relative_path, "..") == null);
-        try testing.expect(std.mem.indexOfScalar(u8, relative_path, '\\') == null);
+fn deleteOutput(path: []const u8) void {
+    const cwd = std.Io.Dir.cwd();
+    cwd.deleteFile(testing.io, path) catch {};
+    cwd.deleteTree(testing.io, path) catch {};
+}
 
-        const path = try std.fs.path.join(testing.allocator, &.{ output, relative_path });
-        defer testing.allocator.free(path);
-        const bytes = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, testing.allocator, .unlimited);
-        defer testing.allocator.free(bytes);
-        try testing.expectEqual(@as(i64, @intCast(bytes.len)), resource.get("bytes").?.integer);
-        var actual_digest: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(bytes, &actual_digest, .{});
-        const actual_hex = std.fmt.bytesToHex(actual_digest, .lower);
-        try testing.expectEqualStrings(digest["sha256:".len..], &actual_hex);
-    }
+fn embeddedStyleSheet(document: []const u8) ![]u8 {
+    const prefix = "<script type=\"text/plain\" data-ss-stylesheet>data:text/css;charset=utf-8;base64,";
+    const start = (std.mem.indexOf(u8, document, prefix) orelse return error.MissingEmbeddedStyleSheet) + prefix.len;
+    const end_offset = std.mem.indexOf(u8, document[start..], "</script>") orelse return error.InvalidEmbeddedStyleSheet;
+    const encoded = document[start .. start + end_offset];
+    const size = try std.base64.standard.Decoder.calcSizeForSlice(encoded);
+    const decoded = try testing.allocator.alloc(u8, size);
+    errdefer testing.allocator.free(decoded);
+    try std.base64.standard.Decoder.decode(decoded, encoded);
+    return decoded;
+}
+
+fn pdfItemOpeningTag(document: []const u8, copy_annotations: bool) ![]const u8 {
+    const policy = if (copy_annotations) "data-copy-annotations=\"true\"" else "data-copy-annotations=\"false\"";
+    const policy_index = std.mem.indexOf(u8, document, policy) orelse return error.MissingPdfItem;
+    const start = std.mem.lastIndexOf(u8, document[0..policy_index], "<div class=\"ss-item ss-pdf\"") orelse return error.MissingPdfItem;
+    const end_offset = std.mem.indexOfScalar(u8, document[policy_index..], '>') orelse return error.InvalidPdfItem;
+    return document[start .. policy_index + end_offset + 1];
 }
 
 test "HTML renderer writes deterministic normal elements with escaped text" {
-    const output = ".ss-cache/test-render-html/basic";
-    std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
-    defer std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
+    const output = ".ss-cache/test-render-html/basic.html";
+    deleteOutput(output);
+    defer deleteOutput(output);
 
     var pages = try testing.allocator.alloc(render.Page, 1);
     pages[0] = .{ .page_id = 8, .index = 0, .width = 1280, .height = 720 };
@@ -94,10 +85,11 @@ test "HTML renderer writes deterministic normal elements with escaped text" {
     ir.resources = catalogs.resources;
     ir.fonts = catalogs.fonts;
 
-    try html.write(testing.allocator, testing.io, &ir, output, .{});
-    const first = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/index.html", testing.allocator, .unlimited);
+    try html.write(testing.allocator, testing.io, &ir, output);
+    const first = try std.Io.Dir.cwd().readFileAlloc(testing.io, output, testing.allocator, .unlimited);
     defer testing.allocator.free(first);
     try testing.expect(std.mem.indexOf(u8, first, "<section class=\"ss-page\"") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "data-ss-page-index=\"1\" data-ss-active=\"true\" aria-hidden=\"false\"") != null);
     try testing.expect(std.mem.indexOf(u8, first, "<span class=\"ss-item ss-text\"") != null);
     try testing.expect(std.mem.indexOf(u8, first, "&lt;") != null);
     try testing.expect(std.mem.indexOf(u8, first, "&amp;") != null);
@@ -107,28 +99,24 @@ test "HTML renderer writes deterministic normal elements with escaped text" {
     try testing.expect(std.mem.indexOf(u8, first, "application/pdf") == null);
     try testing.expect(std.mem.indexOf(u8, first, "ss.js") == null);
     try testing.expect(std.mem.indexOf(u8, first, "data-pango-baseline") == null);
-    const first_css = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/ss.css", testing.allocator, .unlimited);
+    try testing.expect(std.mem.indexOf(u8, first, "data:text/css;charset=utf-8;base64,") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "html:not([data-ss-ready]):not([data-ss-error]) body{visibility:hidden}") != null);
+    const first_css = try embeddedStyleSheet(first);
     defer testing.allocator.free(first_css);
-    const first_manifest = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/manifest.json", testing.allocator, .unlimited);
-    defer testing.allocator.free(first_manifest);
-    try expectValidManifestResources(output, first_manifest);
+    try testing.expect(std.mem.indexOf(u8, first_css, ".ss-page") != null);
+    try testing.expect(std.mem.indexOf(u8, first_css, "ss-resource:font:") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "data-ss-resource=\"ss-resource:font:") != null);
 
-    try html.write(testing.allocator, testing.io, &ir, output, .{});
-    const second = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/index.html", testing.allocator, .unlimited);
+    try html.write(testing.allocator, testing.io, &ir, output);
+    const second = try std.Io.Dir.cwd().readFileAlloc(testing.io, output, testing.allocator, .unlimited);
     defer testing.allocator.free(second);
-    const second_css = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/ss.css", testing.allocator, .unlimited);
-    defer testing.allocator.free(second_css);
-    const second_manifest = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/manifest.json", testing.allocator, .unlimited);
-    defer testing.allocator.free(second_manifest);
     try testing.expectEqualStrings(first, second);
-    try testing.expectEqualStrings(first_css, second_css);
-    try testing.expectEqualStrings(first_manifest, second_manifest);
 }
 
 test "HTML renderer keeps emoji selectable when the resolved font forbids embedding" {
-    const output = ".ss-cache/test-render-html/emoji";
-    std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
-    defer std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
+    const output = ".ss-cache/test-render-html/emoji.html";
+    deleteOutput(output);
+    defer deleteOutput(output);
 
     var pages = try testing.allocator.alloc(render.Page, 1);
     pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
@@ -158,24 +146,21 @@ test "HTML renderer keeps emoji selectable when the resolved font forbids embedd
     ir.resources = catalogs.resources;
     ir.fonts = catalogs.fonts;
 
-    try html.write(testing.allocator, testing.io, &ir, output, .{});
-    const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/index.html", testing.allocator, .unlimited);
+    try html.write(testing.allocator, testing.io, &ir, output);
+    const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output, testing.allocator, .unlimited);
     defer testing.allocator.free(document);
-    const css = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/ss.css", testing.allocator, .unlimited);
+    const css = try embeddedStyleSheet(document);
     defer testing.allocator.free(css);
-    const manifest = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/manifest.json", testing.allocator, .unlimited);
-    defer testing.allocator.free(manifest);
     try testing.expect(std.mem.indexOf(u8, document, "👍") != null);
-    try testing.expect(std.mem.indexOf(u8, manifest, "\"local_fonts\":[") != null);
     if (std.mem.indexOf(u8, css, "Apple Color Emoji") != null) {
         try testing.expect(std.mem.indexOf(u8, css, "local('Apple Color Emoji')") != null);
     }
 }
 
 test "HTML renderer applies page labels transforms clips opacity and blending" {
-    const output = ".ss-cache/test-render-html/effects";
-    std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
-    defer std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
+    const output = ".ss-cache/test-render-html/effects.html";
+    deleteOutput(output);
+    defer deleteOutput(output);
 
     var pages = try testing.allocator.alloc(render.Page, 1);
     pages[0] = .{
@@ -209,8 +194,8 @@ test "HTML renderer applies page labels transforms clips opacity and blending" {
         6,
     );
 
-    try html.write(testing.allocator, testing.io, &ir, output, .{});
-    const generated = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/index.html", testing.allocator, .unlimited);
+    try html.write(testing.allocator, testing.io, &ir, output);
+    const generated = try std.Io.Dir.cwd().readFileAlloc(testing.io, output, testing.allocator, .unlimited);
     defer testing.allocator.free(generated);
     try testing.expect(std.mem.indexOf(u8, generated, "aria-label=\"Effects &amp; labels\"") != null);
     try testing.expect(std.mem.indexOf(u8, generated, "opacity:0.500000;mix-blend-mode:screen;") != null);
@@ -221,9 +206,9 @@ test "HTML renderer applies page labels transforms clips opacity and blending" {
 }
 
 test "HTML renderer emits structured MathML without SVG or PDF fallback" {
-    const output = ".ss-cache/test-render-html/math";
-    std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
-    defer std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
+    const output = ".ss-cache/test-render-html/math.html";
+    deleteOutput(output);
+    defer deleteOutput(output);
 
     var resource_builder = render_resources.Builder{};
     defer resource_builder.deinit(testing.allocator);
@@ -291,8 +276,8 @@ test "HTML renderer emits structured MathML without SVG or PDF fallback" {
     };
     ir.semantics = .{ .root = 1, .nodes = semantic_nodes };
 
-    try html.write(testing.allocator, testing.io, &ir, output, .{});
-    const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/index.html", testing.allocator, .unlimited);
+    try html.write(testing.allocator, testing.io, &ir, output);
+    const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output, testing.allocator, .unlimited);
     defer testing.allocator.free(document);
     try testing.expect(std.mem.indexOf(u8, document, "class=\"ss-mathml\" xmlns=\"http://www.w3.org/1998/Math/MathML\"") != null);
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, document, "class=\"ss-mathml\""));
@@ -305,16 +290,16 @@ test "HTML renderer emits structured MathML without SVG or PDF fallback" {
     try testing.expect(std.mem.indexOf(u8, document, "α") != null);
     try testing.expect(std.mem.indexOf(u8, document, "<svg") == null);
     try testing.expect(std.mem.indexOf(u8, document, "data-pdf-src") == null);
-    const css = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/ss.css", testing.allocator, .unlimited);
+    const css = try embeddedStyleSheet(document);
     defer testing.allocator.free(css);
     try testing.expect(std.mem.indexOf(u8, css, "ascent-override:0.000000000%") == null);
 }
 
 test "HTML renderer packages PDF.js with explicit page geometry" {
-    const output = ".ss-cache/test-render-html/pdf";
+    const output = ".ss-cache/test-render-html/pdf.html";
     const resource_path = ".ss-cache/test-render-html/pdf-source.pdf";
-    std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
-    defer std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
+    deleteOutput(output);
+    defer deleteOutput(output);
     try std.Io.Dir.cwd().createDirPath(testing.io, ".ss-cache/test-render-html");
     const resource_path_z = try testing.allocator.dupeZ(u8, resource_path);
     defer testing.allocator.free(resource_path_z);
@@ -345,24 +330,52 @@ test "HTML renderer packages PDF.js with explicit page geometry" {
         .crop,
         true,
     );
+    try pages[0].appendPdfPage(
+        testing.allocator,
+        45,
+        .{ .x = 20, .y = 30, .width = 240, .height = 120 },
+        pdf_resource,
+        0,
+        .crop,
+        false,
+    );
 
-    try html.write(testing.allocator, testing.io, &ir, output, .{});
-    const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/index.html", testing.allocator, .unlimited);
+    try html.write(testing.allocator, testing.io, &ir, output);
+    const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output, testing.allocator, .unlimited);
     defer testing.allocator.free(document);
     try testing.expect(std.mem.indexOf(u8, document, "class=\"ss-item ss-pdf\"") != null);
     try testing.expect(std.mem.indexOf(u8, document, "data-view-box=\"0.000000000,0.000000000,120.000000000,60.000000000\"") != null);
     try testing.expect(std.mem.indexOf(u8, document, "data-rotation=\"0\"") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "data-canvas-background=\"transparent\"") != null);
     try testing.expect(std.mem.indexOf(u8, document, "data-copy-annotations=\"true\"") != null);
-    try testing.expect(std.mem.indexOf(u8, document, "<script type=\"module\" src=\"ss.js\"></script>") != null);
-    try std.Io.Dir.cwd().access(testing.io, output ++ "/pdfjs/pdf.mjs", .{});
-    try std.Io.Dir.cwd().access(testing.io, output ++ "/pdfjs/pdf.worker.mjs", .{});
-    try std.Io.Dir.cwd().access(testing.io, output ++ "/pdfjs/LICENSE", .{});
+    try testing.expect(std.mem.indexOf(u8, document, "<canvas") == null);
+    const css = try embeddedStyleSheet(document);
+    defer testing.allocator.free(css);
+    try testing.expect(std.mem.indexOf(u8, css, ".ss-pdf .textLayer { overflow: visible;") != null);
+    try testing.expect(std.mem.indexOf(u8, css, ".ss-pdf [data-main-rotation=\"90\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, css, "html[data-ss-print-layout] .ss-document > .ss-page") != null);
+    const interactive_pdf = try pdfItemOpeningTag(document, true);
+    try testing.expect(std.mem.indexOf(u8, interactive_pdf, "aria-hidden") == null);
+    const decorative_pdf = try pdfItemOpeningTag(document, false);
+    try testing.expect(std.mem.indexOf(u8, decorative_pdf, "aria-hidden=\"true\"") != null);
+    try testing.expect(std.mem.count(u8, document, "class=\"ss-pdf-layer ss-pdf-text\" aria-hidden=\"true\"") == 2);
+    try testing.expect(std.mem.indexOf(u8, document, "class=\"ss-pdf-layer ss-pdf-annotations\" aria-hidden") == null);
+    try testing.expect(std.mem.indexOf(u8, document, "data-pdf-src=\"ss-resource:pdf:") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "data-media-type=\"application/pdf\"") != null);
+    try testing.expect(std.mem.count(u8, document, "data:text/javascript;charset=utf-8;base64,") >= 5);
+    try testing.expect(std.mem.indexOf(u8, document, "<script type=\"importmap\">") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "\"@ss/pdf/controller\":\"data:text/javascript;charset=utf-8;base64,") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "<script type=\"module\">") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "globalThis.ssDocument=Object.freeze({prepareForPrint,finishPrint,print:printDocument})") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "data-ss-third-party-license=\"pdf.js\"") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "Apache License") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "pdfjs/") == null);
 }
 
 test "HTML renderer preserves semantic headings zero-based ordered lists and links" {
-    const output = ".ss-cache/test-render-html/semantics";
-    std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
-    defer std.Io.Dir.cwd().deleteTree(testing.io, output) catch {};
+    const output = ".ss-cache/test-render-html/semantics.html";
+    deleteOutput(output);
+    defer deleteOutput(output);
 
     var pages = try testing.allocator.alloc(render.Page, 1);
     pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
@@ -388,8 +401,8 @@ test "HTML renderer preserves semantic headings zero-based ordered lists and lin
     };
     ir.semantics = .{ .root = 1, .nodes = nodes };
 
-    try html.write(testing.allocator, testing.io, &ir, output, .{});
-    const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output ++ "/index.html", testing.allocator, .unlimited);
+    try html.write(testing.allocator, testing.io, &ir, output);
+    const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output, testing.allocator, .unlimited);
     defer testing.allocator.free(document);
     try testing.expect(std.mem.indexOf(u8, document, "<h2 data-ss-semantic-id=\"3\"><span data-ss-semantic-id=\"4\">Overview</span></h2>") != null);
     try testing.expect(std.mem.indexOf(u8, document, "<ol data-ss-semantic-id=\"5\" start=\"0\">") != null);

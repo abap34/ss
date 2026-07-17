@@ -6,8 +6,11 @@ const resources = @import("resources.zig");
 const document_css =
     \\:root { color-scheme: light dark; --ss-canvas: #e8edf3; }
     \\* { box-sizing: border-box; }
-    \\html, body { margin: 0; min-height: 100%; background: var(--ss-canvas); }
-    \\body { display: flex; flex-direction: column; align-items: center; gap: 24pt; padding: 24pt; }
+    \\html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: var(--ss-canvas); }
+    \\.ss-document { position: fixed; inset: 0; overflow: hidden; }
+    \\.ss-document > .ss-page { display: none; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) scale(var(--ss-page-scale, 1)); transform-origin: center; }
+    \\.ss-document > .ss-page[data-ss-active="true"] { display: block; }
+    \\.ss-runtime-error { position: fixed; left: 50%; bottom: 16px; z-index: 2147483647; max-width: min(720px, calc(100% - 32px)); transform: translateX(-50%); padding: 10px 14px; border: 1px solid #b94838; border-radius: 6px; color: #fff; background: #7f281f; box-shadow: 0 4px 18px rgb(0 0 0 / 25%); font: 13px/1.4 system-ui, sans-serif; }
 ;
 
 pub const fragment_css =
@@ -25,18 +28,34 @@ pub const fragment_css =
     \\.ss-math-rule { position: absolute; }
     \\.ss-mathml { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
     \\.ss-pdf { overflow: hidden; }
-    \\.ss-pdf canvas, .ss-pdf .textLayer, .ss-pdf .annotationLayer { position: absolute; inset: 0; width: 100%; height: 100%; }
-    \\.ss-pdf .textLayer { overflow: hidden; line-height: 1; opacity: 1; }
-    \\.ss-pdf .textLayer span { position: absolute; color: transparent; white-space: pre; transform-origin: 0 0; }
+    \\.ss-pdf > canvas, .ss-pdf-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
+    \\.ss-pdf > canvas { display: block; }
+    \\.ss-pdf-layer { overflow: hidden; }
+    \\.ss-pdf-layer-content { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+    \\.ss-pdf .textLayer, .ss-pdf .annotationLayer { position: absolute; inset: 0; width: 100%; height: 100%; transform-origin: 0 0; }
+    \\.ss-pdf .textLayer { overflow: visible; line-height: 1; opacity: 1; text-align: initial; text-size-adjust: none; forced-color-adjust: none; user-select: text; }
+    \\.ss-pdf .textLayer :is(span, br) { position: absolute; color: transparent; white-space: pre; cursor: text; transform-origin: 0 0; }
+    \\.ss-pdf .textLayer > :not(.markedContent), .ss-pdf .textLayer .markedContent span:not(.markedContent) { z-index: 1; }
+    \\.ss-pdf .textLayer span.markedContent { top: 0; height: 0; }
+    \\.ss-pdf .textLayer span[role="img"] { cursor: default; user-select: none; }
+    \\.ss-pdf .ss-pdf-annotations, .ss-pdf .annotationLayer { pointer-events: none; }
+    \\.ss-pdf .annotationLayer section { position: absolute; box-sizing: border-box; pointer-events: auto; transform-origin: 0 0; }
+    \\.ss-pdf .annotationLayer .linkAnnotation > a { position: absolute; inset: 0; width: 100%; height: 100%; }
+    \\.ss-pdf [data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+    \\.ss-pdf [data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+    \\.ss-pdf [data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
     \\.ss-link { position: absolute; display: block; }
     \\.ss-destination { position: absolute; width: 0; height: 0; }
 ;
 
 const print_css =
-    \\@media print { body { gap: 0; padding: 0; background: transparent; } .ss-page { box-shadow: none; break-after: page; } }
+    \\html[data-ss-print-layout], html[data-ss-print-layout] body { width: auto; height: auto; overflow: visible; background: transparent; }
+    \\html[data-ss-print-layout] .ss-document { position: static; overflow: visible; }
+    \\html[data-ss-print-layout] .ss-document > .ss-page { display: block; position: relative; left: auto; top: auto; transform: none; box-shadow: none; break-after: page; }
+    \\@media print { html, body { width: auto; height: auto; overflow: visible; background: transparent; } .ss-document { position: static; overflow: visible; } .ss-document > .ss-page { display: block; position: relative; left: auto; top: auto; transform: none; box-shadow: none; break-after: page; } }
 ;
 
-pub fn styleSheet(allocator: std.mem.Allocator, ir: *const render.Ir, assets: *const resources.Set, standalone: bool) ![]u8 {
+pub fn styleSheet(allocator: std.mem.Allocator, ir: *const render.Ir, assets: resources.References, standalone: bool) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     if (standalone) try out.appendSlice(allocator, document_css);
@@ -48,7 +67,7 @@ pub fn styleSheet(allocator: std.mem.Allocator, ir: *const render.Ir, assets: *c
         try appendFontFamily(allocator, &out, font.id);
         try out.appendSlice(allocator, "'; src: ");
         switch (source) {
-            .embedded => |path| {
+            .resource => |path| {
                 try out.appendSlice(allocator, "url('");
                 try appendCssUrl(allocator, &out, path);
                 try out.appendSlice(allocator, "')");
@@ -79,22 +98,95 @@ fn cssAscentOverride(font: render.FontInstance) f64 {
     return @max(font.ascent_ratio - win_overflow / 2, 0);
 }
 
-pub fn generate(allocator: std.mem.Allocator, ir: *const render.Ir, assets: *const resources.Set) ![]u8 {
+pub const PdfRuntime = struct {
+    import_map: []const u8,
+    renderer_module: []const u8,
+    pdfjs_module: []const u8,
+    worker_module: []const u8,
+    license: []const u8,
+};
+
+pub const Runtime = struct {
+    resource_module: []const u8,
+    navigation_module: []const u8,
+    pdf: ?PdfRuntime,
+};
+
+pub fn generate(
+    allocator: std.mem.Allocator,
+    ir: *const render.Ir,
+    assets: resources.References,
+    style_sheet_url: []const u8,
+    runtime: Runtime,
+) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     try out.appendSlice(allocator, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">" ++
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" ++
-        "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self'; connect-src 'self'; font-src 'self'\">" ++
-        "<title>ss document</title><link rel=\"stylesheet\" href=\"ss.css\"></head><body>");
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: blob:; style-src 'unsafe-inline' data: blob:; script-src 'unsafe-inline' data:; worker-src data: blob:; connect-src data: blob:; font-src data: blob:\">" ++
+        "<title>ss document</title><style>html:not([data-ss-ready]):not([data-ss-error]) body{visibility:hidden}</style>" ++
+        "<script type=\"text/plain\" data-ss-stylesheet>");
+    try appendText(allocator, &out, style_sheet_url);
+    try out.appendSlice(allocator, "</script></head><body>");
     const content = try fragment(allocator, ir, assets);
     defer allocator.free(content);
     try out.appendSlice(allocator, content);
-    if (assets.has_pdf) try out.appendSlice(allocator, "<script type=\"module\" src=\"ss.js\"></script>");
+    try appendEmbeddedResources(allocator, &out, assets);
+    if (runtime.pdf) |pdf| {
+        try out.appendSlice(allocator, "<script type=\"text/plain\" data-ss-third-party-license=\"pdf.js\">");
+        try appendText(allocator, &out, pdf.license);
+        try out.appendSlice(allocator, "</script>");
+        try appendPdfImportMap(allocator, &out, pdf);
+    }
+    try out.appendSlice(allocator, "<script type=\"module\">let resourceStore=null,pdfRuntime=null,pdfController=null;const reportError=error=>{const message=error instanceof Error?error.message:String(error);document.documentElement.dataset.ssError=message;let alert=document.querySelector('.ss-runtime-error');if(!alert){alert=document.createElement('div');alert.className='ss-runtime-error';alert.setAttribute('role','alert');document.body.append(alert)}alert.textContent=message;console.error(error)};try{const navigation=await import(\"");
+    try out.appendSlice(allocator, runtime.navigation_module);
+    try out.appendSlice(allocator, "\");const pager=navigation.start(document);const resources=await import(\"");
+    try out.appendSlice(allocator, runtime.resource_module);
+    try out.appendSlice(allocator, "\");resourceStore=await resources.prepareDocumentResources(document);addEventListener(\"beforeunload\",()=>{void pdfRuntime?.disposePdfRuntime();resourceStore?.dispose()},{once:true});");
+    if (runtime.pdf) |pdf| {
+        try out.appendSlice(allocator, "const renderer=await import(\"");
+        try out.appendSlice(allocator, pdf.renderer_module);
+        try out.appendSlice(allocator, "\");pdfRuntime=renderer;pdfController=await renderer.renderPdfPages(document,()=>import(\"");
+        try out.appendSlice(allocator, pdf.pdfjs_module);
+        try out.appendSlice(allocator, "\"),\"");
+        try out.appendSlice(allocator, pdf.worker_module);
+        try out.appendSlice(allocator, "\",{resolveSource:resourceStore.resolve,onError:reportError});");
+    }
+    try out.appendSlice(allocator, "const prepareForPrint=()=>pager.prepareForPrint(()=>pdfController?.renderAll());const finishPrint=()=>{pager.finishPrint();pdfController?.restoreAfterPrint()};const nativePrint=window.print.bind(window);const printDocument=async()=>{await prepareForPrint();try{nativePrint()}finally{finishPrint()}};const requestPrint=()=>{void printDocument().catch(reportError)};pager.setPrintHandler(requestPrint);window.print=requestPrint;globalThis.ssDocument=Object.freeze({prepareForPrint,finishPrint,print:printDocument});pager.refresh();document.documentElement.dataset.ssReady=\"true\"}catch(error){void pdfRuntime?.disposePdfRuntime();resourceStore?.dispose();if(!document.documentElement.dataset.ssError)reportError(error);throw error}</script>");
     try out.appendSlice(allocator, "</body></html>\n");
     return try out.toOwnedSlice(allocator);
 }
 
-pub fn fragment(allocator: std.mem.Allocator, ir: *const render.Ir, assets: *const resources.Set) ![]u8 {
+fn appendPdfImportMap(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    pdf: PdfRuntime,
+) !void {
+    try out.appendSlice(allocator, "<script type=\"importmap\">");
+    try out.appendSlice(allocator, pdf.import_map);
+    try out.appendSlice(allocator, "</script>");
+}
+
+fn appendEmbeddedResources(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    references: resources.References,
+) !void {
+    if (!references.isEmbedded()) return;
+    for (references.set.assets) |asset| {
+        const data = asset.embedded_data orelse continue;
+        const reference = asset.embedded_reference orelse return error.MissingHtmlResource;
+        try out.appendSlice(allocator, "<script type=\"application/octet-stream\" data-ss-resource=\"");
+        try appendAttribute(allocator, out, reference);
+        try out.appendSlice(allocator, "\" data-media-type=\"");
+        try appendAttribute(allocator, out, asset.media_type);
+        try out.appendSlice(allocator, "\">");
+        try out.appendSlice(allocator, data);
+        try out.appendSlice(allocator, "</script>");
+    }
+}
+
+pub fn fragment(allocator: std.mem.Allocator, ir: *const render.Ir, assets: resources.References) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     try out.appendSlice(allocator, "<main class=\"ss-document\">");
@@ -108,10 +200,11 @@ fn appendPage(
     out: *std.ArrayList(u8),
     ir: *const render.Ir,
     page: *const render.Page,
-    assets: *const resources.Set,
+    assets: resources.References,
 ) !void {
-    try appendFormat(allocator, out, "<section class=\"ss-page\" data-ss-page-id=\"{d}\" data-ss-page-index=\"{d}\" aria-label=\"", .{
-        page.page_id, page.index + 1,
+    try appendFormat(allocator, out, "<section class=\"ss-page\" data-ss-page-id=\"{d}\" data-ss-page-index=\"{d}\" data-ss-active=\"{s}\" aria-hidden=\"{s}\" aria-label=\"", .{
+        page.page_id,                             page.index + 1,
+        if (page.index == 0) "true" else "false", if (page.index == 0) "false" else "true",
     });
     try appendAttribute(allocator, out, page.name);
     try appendFormat(allocator, out, "\" style=\"width:{d:.6}pt;height:{d:.6}pt\">", .{ normalized(page.width), normalized(page.height) });
@@ -229,14 +322,16 @@ fn appendItem(
     out: *std.ArrayList(u8),
     ir: *const render.Ir,
     item: render.Item,
-    assets: *const resources.Set,
+    assets: resources.References,
 ) !void {
     const header = item.header();
     switch (item) {
         .fill_rect => |value| {
-            try appendItemStart(allocator, out, "div", "ss-box", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
+            try appendItemStart(allocator, out, "div", "ss-box", header, .{ .x = value.rect.x, .y = value.rect.y }, null, .{});
             try appendRectStyle(allocator, out, value.rect);
-            try appendFormat(allocator, out, "background:{s}\"></div>", .{color(value.color)});
+            try out.appendSlice(allocator, "background:");
+            try appendColor(allocator, out, value.color);
+            try out.appendSlice(allocator, "\"></div>");
         },
         .rounded_rect => |value| {
             const half_stroke = if (value.stroke != null) @max(value.line_width / 2, 0) else 0;
@@ -246,10 +341,18 @@ fn appendItem(
                 .width = value.rect.width + half_stroke * 2,
                 .height = value.rect.height + half_stroke * 2,
             };
-            try appendItemStart(allocator, out, "div", "ss-box", header, .{ .x = css_rect.x, .y = css_rect.y }, null);
+            try appendItemStart(allocator, out, "div", "ss-box", header, .{ .x = css_rect.x, .y = css_rect.y }, null, .{});
             try appendRectStyle(allocator, out, css_rect);
-            if (value.fill) |fill| try appendFormat(allocator, out, "background:{s};", .{color(fill)});
-            if (value.stroke) |stroke| try appendFormat(allocator, out, "border:{d:.6}pt solid {s};", .{ normalized(value.line_width), color(stroke) });
+            if (value.fill) |fill| {
+                try out.appendSlice(allocator, "background:");
+                try appendColor(allocator, out, fill);
+                try out.append(allocator, ';');
+            }
+            if (value.stroke) |stroke| {
+                try appendFormat(allocator, out, "border:{d:.6}pt solid ", .{normalized(value.line_width)});
+                try appendColor(allocator, out, stroke);
+                try out.append(allocator, ';');
+            }
             try appendFormat(allocator, out, "border-radius:{d:.6}pt\"></div>", .{normalized(value.radius + half_stroke)});
         },
         .stroke_line => |value| {
@@ -259,25 +362,29 @@ fn appendItem(
             try appendItemStart(allocator, out, "div", "ss-line", header, value.start, .{
                 .rotation = rotation,
                 .translate_y = -value.line_width / 2,
-            });
+            }, .{});
             try appendFormat(allocator, out, "left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt;", .{
                 normalized(value.start.x), normalized(value.start.y), normalized(@sqrt(dx * dx + dy * dy)), normalized(value.line_width),
             });
             if (value.dash_on > 0 and value.dash_off > 0) {
-                try appendFormat(allocator, out, "background:repeating-linear-gradient(to right,{s} 0,{s} {d:.6}pt,transparent {d:.6}pt,transparent {d:.6}pt);", .{
-                    color(value.color),
-                    color(value.color),
+                try out.appendSlice(allocator, "background:repeating-linear-gradient(to right,");
+                try appendColor(allocator, out, value.color);
+                try out.appendSlice(allocator, " 0,");
+                try appendColor(allocator, out, value.color);
+                try appendFormat(allocator, out, " {d:.6}pt,transparent {d:.6}pt,transparent {d:.6}pt);", .{
                     normalized(value.dash_on),
                     normalized(value.dash_on),
                     normalized(value.dash_on + value.dash_off),
                 });
             } else {
-                try appendFormat(allocator, out, "background:{s};", .{color(value.color)});
+                try out.appendSlice(allocator, "background:");
+                try appendColor(allocator, out, value.color);
+                try out.append(allocator, ';');
             }
             try out.appendSlice(allocator, "\"></div>");
         },
         .text => |value| {
-            try appendItemStart(allocator, out, "span", "ss-text", header, .{ .x = value.x, .y = value.y }, null);
+            try appendItemStart(allocator, out, "span", "ss-text", header, .{ .x = value.x, .y = value.y }, null, .{});
             try appendFormat(allocator, out, "left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt\">", .{
                 normalized(value.x), normalized(value.y), normalized(value.width), normalized(value.layout.logical_bounds.height),
             });
@@ -285,25 +392,27 @@ fn appendItem(
             try out.appendSlice(allocator, "</span>");
         },
         .raster => |value| {
-            const path = assets.path(.raster, value.resource) orelse return error.MissingHtmlResource;
-            try appendItemStart(allocator, out, "img", "ss-image", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
+            const path = assets.reference(.raster, value.resource) orelse return error.MissingHtmlResource;
+            try appendItemStart(allocator, out, "img", "ss-image", header, .{ .x = value.rect.x, .y = value.rect.y }, null, .{});
             try appendRectStyle(allocator, out, value.rect);
-            try out.appendSlice(allocator, "\" alt=\"\" src=\"");
+            try out.appendSlice(allocator, if (assets.isEmbedded()) "\" alt=\"\" data-ss-src=\"" else "\" alt=\"\" src=\"");
             try appendAttribute(allocator, out, path);
             try out.appendSlice(allocator, "\">");
         },
         .svg => |value| {
-            const path = assets.path(.svg, value.resource) orelse return error.MissingHtmlResource;
+            const path = assets.reference(.svg, value.resource) orelse return error.MissingHtmlResource;
             if (value.tint) |tint| {
-                try appendItemStart(allocator, out, "span", "ss-image", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
+                try appendItemStart(allocator, out, "span", "ss-image", header, .{ .x = value.rect.x, .y = value.rect.y }, null, .{});
                 try appendRectStyle(allocator, out, value.rect);
-                try appendFormat(allocator, out, "background:{s};mask:url('", .{color(tint)});
+                try out.appendSlice(allocator, "background:");
+                try appendColor(allocator, out, tint);
+                try out.appendSlice(allocator, ";mask:url('");
                 try appendCssUrl(allocator, out, path);
                 try out.appendSlice(allocator, "') center/100% 100% no-repeat\"></span>");
             } else {
-                try appendItemStart(allocator, out, "img", "ss-image", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
+                try appendItemStart(allocator, out, "img", "ss-image", header, .{ .x = value.rect.x, .y = value.rect.y }, null, .{});
                 try appendRectStyle(allocator, out, value.rect);
-                try out.appendSlice(allocator, "\" alt=\"\" src=\"");
+                try out.appendSlice(allocator, if (assets.isEmbedded()) "\" alt=\"\" data-ss-src=\"" else "\" alt=\"\" src=\"");
                 try appendAttribute(allocator, out, path);
                 try out.appendSlice(allocator, "\">");
             }
@@ -314,7 +423,7 @@ fn appendItem(
                 .structured => |structured| {
                     if (tree.input_kind == .raw) return error.InvalidMathTree;
                     const layout = structured.layout;
-                    try appendItemStart(allocator, out, "span", "ss-math", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
+                    try appendItemStart(allocator, out, "span", "ss-math", header, .{ .x = value.rect.x, .y = value.rect.y }, null, .{});
                     try appendRectStyle(allocator, out, value.rect);
                     try out.appendSlice(allocator, "\">");
                     for (layout.elements) |element| switch (element) {
@@ -328,19 +437,22 @@ fn appendItem(
                             try appendTextRuns(allocator, out, ir, &text.layout, text.font_size, structured.color);
                             try out.appendSlice(allocator, "</span>");
                         },
-                        .rule => |rule| try appendFormat(allocator, out, "<span class=\"ss-math-rule\" style=\"left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt;background:{s}\"></span>", .{
-                            normalized(rule.rect.x),
-                            normalized(rule.rect.y),
-                            normalized(rule.rect.width),
-                            normalized(rule.rect.height),
-                            color(structured.color),
-                        }),
+                        .rule => |rule| {
+                            try appendFormat(allocator, out, "<span class=\"ss-math-rule\" style=\"left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt;background:", .{
+                                normalized(rule.rect.x),
+                                normalized(rule.rect.y),
+                                normalized(rule.rect.width),
+                                normalized(rule.rect.height),
+                            });
+                            try appendColor(allocator, out, structured.color);
+                            try out.appendSlice(allocator, "\"></span>");
+                        },
                     };
                     try out.appendSlice(allocator, "</span>");
                 },
                 .raw_pdf => |raw| {
                     if (tree.input_kind != .raw) return error.InvalidMathTree;
-                    const path = assets.path(.math_pdf, raw.resource) orelse return error.MissingHtmlResource;
+                    const path = assets.reference(.math_pdf, raw.resource) orelse return error.MissingHtmlResource;
                     const resource = ir.resources.find(raw.resource) orelse return error.MissingHtmlResource;
                     const metadata = switch (resource.metadata) {
                         .math_pdf => |metadata| metadata,
@@ -351,7 +463,7 @@ fn appendItem(
             }
         },
         .pdf_page => |value| {
-            const path = assets.path(.pdf, value.resource) orelse return error.MissingHtmlResource;
+            const path = assets.reference(.pdf, value.resource) orelse return error.MissingHtmlResource;
             const resource = ir.resources.find(value.resource) orelse return error.MissingHtmlResource;
             const metadata = switch (resource.metadata) {
                 .pdf => |metadata| metadata,
@@ -377,11 +489,13 @@ fn appendPdfViewer(
     if (page_index >= metadata.pages.len) return error.MissingHtmlResource;
     const page = &metadata.pages[page_index];
     const box = page.box(box_kind);
-    try appendItemStart(allocator, out, "div", class, header, .{ .x = rect.x, .y = rect.y }, null);
+    try appendItemStart(allocator, out, "div", class, header, .{ .x = rect.x, .y = rect.y }, null, .{
+        .hide_from_accessibility = !copy_annotations,
+    });
     try appendRectStyle(allocator, out, rect);
     try out.appendSlice(allocator, "\" data-pdf-src=\"");
     try appendAttribute(allocator, out, path);
-    try appendFormat(allocator, out, "\" data-page=\"{d}\" data-box=\"{s}\" data-view-box=\"{d:.9},{d:.9},{d:.9},{d:.9}\" data-rotation=\"{d}\" data-copy-annotations=\"{s}\"><canvas></canvas><div class=\"textLayer\"></div><div class=\"annotationLayer\"></div></div>", .{
+    try appendFormat(allocator, out, "\" data-page=\"{d}\" data-box=\"{s}\" data-view-box=\"{d:.9},{d:.9},{d:.9},{d:.9}\" data-rotation=\"{d}\" data-canvas-background=\"transparent\" data-copy-annotations=\"{s}\"><div class=\"ss-pdf-layer ss-pdf-text\" aria-hidden=\"true\"></div><div class=\"ss-pdf-layer ss-pdf-annotations\"></div></div>", .{
         page_index + 1,
         @tagName(box_kind),
         normalized(box.left),
@@ -426,7 +540,7 @@ fn appendTextRuns(
             try out.appendSlice(allocator, ",'Noto Color Emoji','Segoe UI Emoji'");
         }
         try out.appendSlice(allocator, ",sans-serif");
-        try appendFormat(allocator, out, ";width:{d:.6}pt;height:{d:.6}pt;font-size:{d:.6}pt;font-weight:{d};font-style:{s};font-stretch:{s};line-height:{d:.6}pt;color:{s};", .{
+        try appendFormat(allocator, out, ";width:{d:.6}pt;height:{d:.6}pt;font-size:{d:.6}pt;font-weight:{d};font-style:{s};font-stretch:{s};line-height:{d:.6}pt;color:", .{
             normalized(run.advance),
             normalized(ascent + descent),
             normalized(font_size),
@@ -434,8 +548,9 @@ fn appendTextRuns(
             fontStyle(font.style),
             fontStretch(font.stretch),
             normalized(ascent + descent),
-            color(text_color),
         });
+        try appendColor(allocator, out, text_color);
+        try out.append(allocator, ';');
         try appendFontSettings(allocator, out, font);
         try out.appendSlice(allocator, "\">");
         const clusters = layout.clusters[run.cluster_range.start..run.cluster_range.end];
@@ -494,6 +609,10 @@ fn appendMathNode(
     try appendFormat(allocator, out, "</{s}>", .{tag});
 }
 
+const ItemStartOptions = struct {
+    hide_from_accessibility: bool = true,
+};
+
 fn appendItemStart(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
@@ -502,11 +621,12 @@ fn appendItemStart(
     header: render.ItemHeader,
     origin: render.Point,
     local_transform: ?LocalTransform,
+    options: ItemStartOptions,
 ) !void {
     try appendFormat(allocator, out, "<{s} class=\"ss-item {s}\" data-ss-item-id=\"{d}\"", .{ tag, class, header.item_id });
     if (header.node_id) |node_id| try appendFormat(allocator, out, " data-ss-node-id=\"{d}\"", .{node_id});
     if (header.semantic_id) |semantic_id| try appendFormat(allocator, out, " data-ss-semantic-id=\"{d}\"", .{semantic_id});
-    try out.appendSlice(allocator, " aria-hidden=\"true\"");
+    if (options.hide_from_accessibility) try out.appendSlice(allocator, " aria-hidden=\"true\"");
     try appendFormat(allocator, out, " style=\"z-index:{d};opacity:{d:.6};mix-blend-mode:{s};", .{
         header.paint_index,
         normalized(header.opacity),
@@ -648,16 +768,10 @@ fn normalized(value: f64) f64 {
     return if (value == 0) 0 else value;
 }
 
-fn color(value: anytype) []const u8 {
-    const Palette = struct {
-        var buffers: [8][64]u8 = undefined;
-        var next: usize = 0;
-    };
-    const slot = Palette.next;
-    Palette.next = (Palette.next + 1) % Palette.buffers.len;
-    return std.fmt.bufPrint(&Palette.buffers[slot], "rgb({d:.6}% {d:.6}% {d:.6}%)", .{
+fn appendColor(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: anytype) !void {
+    try appendFormat(allocator, out, "rgb({d:.6}% {d:.6}% {d:.6}%)", .{
         @as(f64, value.r) * 100, @as(f64, value.g) * 100, @as(f64, value.b) * 100,
-    }) catch "rgb(0% 0% 0%)";
+    });
 }
 
 fn fontStyle(value: anytype) []const u8 {

@@ -7,12 +7,13 @@ const types = @import("app/types.zig");
 
 pub const RenderOptions = types.RenderOptions;
 pub const RenderFormat = types.RenderFormat;
-pub const PdfWriteOptions = types.PdfWriteOptions;
+pub const WriteOptions = types.WriteOptions;
 pub const SourceRequest = types.SourceRequest;
 pub const PdfWriteRequest = types.PdfWriteRequest;
-pub const HtmlWriteOptions = types.HtmlWriteOptions;
 pub const HtmlWriteRequest = types.HtmlWriteRequest;
 pub const PdfAndHtmlWriteRequest = types.PdfAndHtmlWriteRequest;
+pub const render_progress_steps = commands.render_progress_steps;
+pub const pdf_and_html_progress_steps = commands.pdf_and_html_progress_steps;
 
 const Progress = utils.progress.Progress;
 

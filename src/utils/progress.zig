@@ -25,16 +25,30 @@ pub const Progress = struct {
     }
 
     pub fn step(self: *Progress, label: []const u8) void {
-        if (!self.enabled) return;
+        std.debug.assert(self.active_label == null);
+        self.finish(label);
+    }
+
+    pub fn complete(self: *Progress) void {
+        const label = self.active_label orelse {
+            std.debug.assert(false);
+            return;
+        };
+        self.active_label = null;
+        self.finish(label);
+    }
+
+    fn finish(self: *Progress, label: []const u8) void {
+        std.debug.assert(self.current < self.total);
         const now = monotonicNowNs();
         const stage_elapsed_ns = now - self.last_step_at_ns;
         const total_elapsed_ns = now - self.started_at_ns;
         self.current += 1;
         self.last_step_at_ns = now;
         const replace_status = self.status_active;
+        self.status_active = false;
+        if (!self.enabled) return;
         if (replace_status) {
-            self.status_active = false;
-            self.active_label = null;
             std.debug.print("\r", .{});
         }
         printProgress(
@@ -48,12 +62,14 @@ pub const Progress = struct {
     }
 
     pub fn begin(self: *Progress, label: []const u8) void {
+        std.debug.assert(self.active_label == null);
+        std.debug.assert(self.current < self.total);
+        self.active_label = label;
         if (!self.enabled) return;
         const now = monotonicNowNs();
         const stage_elapsed_ns = now - self.last_step_at_ns;
         const total_elapsed_ns = now - self.started_at_ns;
         self.status_active = true;
-        self.active_label = label;
         std.debug.print("\r", .{});
         printProgressStatus(
             @min(self.current + 1, self.total),
@@ -68,6 +84,10 @@ pub const Progress = struct {
     }
 
     pub fn detail(self: *Progress, label: []const u8, detail_current: usize, detail_total: usize) void {
+        const stage_label = self.active_label orelse {
+            std.debug.assert(false);
+            return;
+        };
         if (!self.enabled) return;
         const now = monotonicNowNs();
         const stage_elapsed_ns = now - self.last_step_at_ns;
@@ -77,7 +97,7 @@ pub const Progress = struct {
         printProgressStatus(
             @min(self.current + 1, self.total),
             self.total,
-            self.active_label orelse label,
+            stage_label,
             label,
             detail_current,
             detail_total,
@@ -86,12 +106,11 @@ pub const Progress = struct {
         );
     }
 
-    pub fn endStatusLine(self: *Progress) void {
-        if (!self.enabled) return;
-        if (!self.status_active) return;
+    pub fn abort(self: *Progress) void {
+        const status_active = self.status_active;
         self.status_active = false;
         self.active_label = null;
-        std.debug.print("\n", .{});
+        if (self.enabled and status_active) std.debug.print("\n", .{});
     }
 };
 

@@ -38,17 +38,18 @@ end
     await renderAndExtract(project);
     const text = await readFile(path.join(project, "out.txt"), "utf8");
     assert(text.replace(/\s+/g, "").includes("MacroToken42"), `Markdown math did not preserve the TeX preamble fallback:\n${text}`);
-    const htmlRender = await spawnCollect(ssBin, ["render", "--format", "html", "slide.ss", "out-html"], project);
+    const htmlRender = await spawnCollect(ssBin, ["render", "--format", "html", "slide.ss", "out.html"], project);
     assert(htmlRender.code === 0, `HTML render failed:\n${combinedOutput(htmlRender)}`);
-    const html = await readFile(path.join(project, "out-html", "index.html"), "utf8");
-    const manifest = await readFile(path.join(project, "out-html", "manifest.json"), "utf8");
+    const html = await readFile(path.join(project, "out.html"), "utf8");
     assert(html.includes('class="ss-item ss-math ss-pdf"'), "raw Markdown math did not use the scoped PDF.js fallback");
     assert(html.includes('role="math" aria-label="\\ArchiveMacro"'), "raw Markdown math did not preserve its TeX semantics");
     assert(
       /<span[^>]*role="math" aria-label="\\ArchiveMacro"[^>]*>[^<]*<\/span>/.test(html),
       "raw Markdown math emitted mismatched semantic tags",
     );
-    assert(manifest.includes('"kind":"math_pdf"'), "raw Markdown math PDF was not published in the HTML manifest");
+    assert(html.includes('data-pdf-src="ss-resource:math_pdf:'), "raw Markdown math did not reference its embedded PDF");
+    assert(html.includes('data-media-type="application/pdf"'), "raw Markdown math PDF was not embedded in the HTML file");
+    assert(html.includes("data:text/javascript;charset=utf-8;base64,"), "raw Markdown math omitted its embedded PDF.js runtime");
   } finally {
     await rm(project, { recursive: true, force: true });
   }

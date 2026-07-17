@@ -1104,7 +1104,7 @@ fn run(init: std.process.Init) !void {
         );
         try validateOutputParentOrCliError(io, output_path);
         if (options.diagnostics_json_path) |diagnostics_json_path| try validateOutputParentOrCliError(io, diagnostics_json_path);
-        var progress = commandProgress(8, options);
+        var progress = commandProgress(app.render_progress_steps, options);
         const render_options = app.RenderOptions{
             .jobs = options.jobs,
             .highlight_languages = resolved.highlight.languages,
@@ -1125,7 +1125,7 @@ fn run(init: std.process.Init) !void {
             }, &progress),
             .html => try app.writeHtml(io, allocator, .{
                 .source = source,
-                .output_directory = output_path,
+                .output_path = output_path,
                 .options = .{
                     .render = render_options,
                     .diagnostics_json_path = options.diagnostics_json_path,

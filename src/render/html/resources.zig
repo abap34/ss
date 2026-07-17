@@ -12,10 +12,14 @@ pub const Asset = struct {
     media_type: []const u8,
     relative_path: []u8,
     bytes: []u8,
+    embedded_reference: ?[]u8 = null,
+    embedded_data: ?[]u8 = null,
 
     fn deinit(self: *Asset, allocator: std.mem.Allocator) void {
         allocator.free(self.relative_path);
         allocator.free(self.bytes);
+        if (self.embedded_reference) |reference| allocator.free(reference);
+        if (self.embedded_data) |data| allocator.free(data);
     }
 };
 
@@ -32,21 +36,68 @@ pub const Set = struct {
         self.* = .{ .assets = &.{}, .local_fonts = &.{}, .has_pdf = false };
     }
 
-    pub fn path(self: *const Set, kind: Kind, resource: render.ResourceId) ?[]const u8 {
-        for (self.assets) |asset| {
-            if (asset.kind == kind and asset.font_index == null and std.mem.eql(u8, &asset.resource, &resource)) return asset.relative_path;
+    pub fn prepareEmbeddedResources(self: *Set, allocator: std.mem.Allocator) !void {
+        for (self.assets, 0..) |*asset, index| {
+            if (asset.embedded_reference != null) continue;
+            const digest_hex = std.fmt.bytesToHex(asset.digest, .lower);
+            asset.embedded_reference = try std.fmt.allocPrint(allocator, "ss-resource:{s}:{s}", .{ @tagName(asset.kind), digest_hex });
+            var duplicate = false;
+            for (self.assets[0..index]) |previous| {
+                if (std.mem.eql(u8, previous.embedded_reference.?, asset.embedded_reference.?)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) asset.embedded_data = try base64(allocator, asset.bytes);
+        }
+    }
+
+    fn findAsset(self: *const Set, kind: Kind, resource: render.ResourceId, font_index: ?u32) ?*const Asset {
+        for (self.assets) |*asset| {
+            if (asset.kind == kind and asset.font_index == font_index and std.mem.eql(u8, &asset.resource, &resource)) return asset;
         }
         return null;
     }
 
-    pub fn fontSource(self: *const Set, resource: render.ResourceId, face_index: u32) ?FontSource {
-        for (self.assets) |asset| {
-            if (asset.kind == .font and asset.font_index == face_index and std.mem.eql(u8, &asset.resource, &resource)) {
-                return .{ .embedded = asset.relative_path };
-            }
+    fn hasLocalFont(self: *const Set, resource: render.ResourceId, face_index: u32) bool {
+        for (self.local_fonts) |local| {
+            if (local.face_index == face_index and std.mem.eql(u8, &local.resource, &resource)) return true;
         }
-        for (self.local_fonts) |local| if (local.face_index == face_index and std.mem.eql(u8, &local.resource, &resource)) return .local;
-        return null;
+        return false;
+    }
+};
+
+pub const ReferenceMode = enum { external, embedded };
+
+pub const References = struct {
+    set: *const Set,
+    mode: ReferenceMode,
+
+    pub fn hasPdf(self: References) bool {
+        return self.set.has_pdf;
+    }
+
+    pub fn isEmbedded(self: References) bool {
+        return self.mode == .embedded;
+    }
+
+    pub fn reference(self: References, kind: Kind, resource: render.ResourceId) ?[]const u8 {
+        const asset = self.set.findAsset(kind, resource, null) orelse return null;
+        return switch (self.mode) {
+            .external => asset.relative_path,
+            .embedded => asset.embedded_reference,
+        };
+    }
+
+    pub fn fontSource(self: References, resource: render.ResourceId, face_index: u32) ?FontSource {
+        if (self.set.findAsset(.font, resource, face_index)) |asset| {
+            const source = switch (self.mode) {
+                .external => asset.relative_path,
+                .embedded => asset.embedded_reference orelse return null,
+            };
+            return .{ .resource = source };
+        }
+        return if (self.set.hasLocalFont(resource, face_index)) .local else null;
     }
 };
 
@@ -57,7 +108,7 @@ pub const LocalFont = struct {
 };
 
 pub const FontSource = union(enum) {
-    embedded: []const u8,
+    resource: []const u8,
     local,
 };
 
@@ -180,4 +231,20 @@ fn identify(allocator: std.mem.Allocator, bytes: []const u8, extension: []const 
     std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
     return .{ .digest = digest, .relative_path = try std.fmt.allocPrint(allocator, "assets/{s}.{s}", .{ hex, extension }) };
+}
+
+pub fn dataUrl(allocator: std.mem.Allocator, media_type: []const u8, bytes: []const u8) ![]u8 {
+    const prefix = try std.fmt.allocPrint(allocator, "data:{s};base64,", .{media_type});
+    defer allocator.free(prefix);
+    const encoded_len = std.base64.standard.Encoder.calcSize(bytes.len);
+    const url = try allocator.alloc(u8, prefix.len + encoded_len);
+    @memcpy(url[0..prefix.len], prefix);
+    _ = std.base64.standard.Encoder.encode(url[prefix.len..], bytes);
+    return url;
+}
+
+fn base64(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
+    const encoded = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(bytes.len));
+    _ = std.base64.standard.Encoder.encode(encoded, bytes);
+    return encoded;
 }
