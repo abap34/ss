@@ -24,14 +24,8 @@
 
 #define SS_PI 3.14159265358979323846
 
-static GMutex ss_text_context_mutex;
-
-typedef struct SsPdfMeasurementFrame {
-    cairo_surface_t *surface;
-    cairo_t *cr;
-    cairo_t *saved_cr;
-    struct SsPdfMeasurementFrame *previous;
-} SsPdfMeasurementFrame;
+static GMutex ss_font_registration_mutex;
+static GRWLock ss_font_config_lock;
 
 typedef struct SsPdfFontFace {
     char *path;
@@ -44,33 +38,8 @@ struct SsPdf {
     cairo_surface_t *surface;
     cairo_t *pdf_cr;
     cairo_t *cr;
-    SsPdfMeasurementFrame *measurement;
     SsPdfFontFace *font_faces;
 };
-
-static void ss_pdf_destroy_measurements(SsPdf *pdf) {
-    if (pdf == NULL) return;
-    while (pdf->measurement != NULL) {
-        SsPdfMeasurementFrame *frame = pdf->measurement;
-        pdf->measurement = frame->previous;
-        if (frame->cr != NULL) cairo_destroy(frame->cr);
-        if (frame->surface != NULL) cairo_surface_destroy(frame->surface);
-        pdf->cr = frame->saved_cr;
-        free(frame);
-    }
-}
-
-static int ss_pdf_surface_ink_extents(cairo_surface_t *surface, SsPdfInkExtents *extents) {
-    if (surface == NULL || extents == NULL) return 1;
-    cairo_recording_surface_ink_extents(
-        surface,
-        &extents->x,
-        &extents->y,
-        &extents->width,
-        &extents->height
-    );
-    return cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS ? 0 : 1;
-}
 
 static void ss_pdf_set_rgb(double r, double g, double b, cairo_t *cr) {
     cairo_set_source_rgb(cr, r, g, b);
@@ -191,14 +160,16 @@ const char *ss_pdf_harfbuzz_version_string(void) {
 
 int ss_font_register(const char *path) {
     if (path == NULL || path[0] == '\0') return 1;
-    g_mutex_lock(&ss_text_context_mutex);
+    g_mutex_lock(&ss_font_registration_mutex);
+    g_rw_lock_writer_lock(&ss_font_config_lock);
     FcConfig *config = FcConfigGetCurrent();
     const FcBool added = config != NULL ? FcConfigAppFontAddFile(config, (const FcChar8 *)path) : FcFalse;
     if (added == FcTrue) {
         PangoFontMap *font_map = pango_cairo_font_map_get_default();
         if (font_map != NULL && PANGO_IS_FC_FONT_MAP(font_map)) pango_fc_font_map_config_changed(PANGO_FC_FONT_MAP(font_map));
     }
-    g_mutex_unlock(&ss_text_context_mutex);
+    g_rw_lock_writer_unlock(&ss_font_config_lock);
+    g_mutex_unlock(&ss_font_registration_mutex);
     return added == FcTrue ? 0 : 1;
 }
 
@@ -319,29 +290,8 @@ SsPdf *ss_pdf_create(const char *path, double width, double height) {
     return pdf;
 }
 
-SsPdf *ss_pdf_create_scratch(void) {
-    SsPdf *pdf = (SsPdf *)calloc(1, sizeof(SsPdf));
-    if (pdf == NULL) return NULL;
-
-    pdf->surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
-    if (pdf->surface == NULL || cairo_surface_status(pdf->surface) != CAIRO_STATUS_SUCCESS) {
-        ss_pdf_destroy(pdf);
-        return NULL;
-    }
-
-    pdf->pdf_cr = cairo_create(pdf->surface);
-    pdf->cr = pdf->pdf_cr;
-    if (pdf->pdf_cr == NULL || cairo_status(pdf->pdf_cr) != CAIRO_STATUS_SUCCESS) {
-        ss_pdf_destroy(pdf);
-        return NULL;
-    }
-
-    return pdf;
-}
-
 void ss_pdf_destroy(SsPdf *pdf) {
     if (pdf == NULL) return;
-    ss_pdf_destroy_measurements(pdf);
     if (pdf->pdf_cr != NULL) cairo_destroy(pdf->pdf_cr);
     ss_pdf_destroy_font_faces(pdf);
     if (pdf->surface != NULL) cairo_surface_destroy(pdf->surface);
@@ -364,7 +314,7 @@ void ss_pdf_end_page(SsPdf *pdf) {
 }
 
 int ss_pdf_finish(SsPdf *pdf) {
-    if (pdf == NULL || pdf->surface == NULL || pdf->pdf_cr == NULL || pdf->measurement != NULL) return 1;
+    if (pdf == NULL || pdf->surface == NULL || pdf->pdf_cr == NULL) return 1;
     cairo_surface_finish(pdf->surface);
     if (cairo_status(pdf->pdf_cr) != CAIRO_STATUS_SUCCESS) return 1;
     if (cairo_surface_status(pdf->surface) != CAIRO_STATUS_SUCCESS) return 1;
@@ -409,53 +359,6 @@ int ss_pdf_end_item(SsPdf *pdf, double opacity, int blend_mode) {
     }
     cairo_restore(pdf->cr);
     return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
-}
-
-int ss_pdf_begin_measurement(SsPdf *pdf) {
-    if (pdf == NULL || pdf->cr == NULL) return 1;
-
-    SsPdfMeasurementFrame *frame = (SsPdfMeasurementFrame *)calloc(1, sizeof(SsPdfMeasurementFrame));
-    if (frame == NULL) return 1;
-
-    frame->surface = cairo_recording_surface_create(CAIRO_CONTENT_COLOR_ALPHA, NULL);
-    if (frame->surface == NULL || cairo_surface_status(frame->surface) != CAIRO_STATUS_SUCCESS) {
-        if (frame->surface != NULL) cairo_surface_destroy(frame->surface);
-        free(frame);
-        return 1;
-    }
-
-    frame->cr = cairo_create(frame->surface);
-    if (frame->cr == NULL || cairo_status(frame->cr) != CAIRO_STATUS_SUCCESS) {
-        if (frame->cr != NULL) cairo_destroy(frame->cr);
-        cairo_surface_destroy(frame->surface);
-        free(frame);
-        return 1;
-    }
-
-    frame->saved_cr = pdf->cr;
-    frame->previous = pdf->measurement;
-    pdf->measurement = frame;
-    pdf->cr = frame->cr;
-    return 0;
-}
-
-int ss_pdf_measurement_ink_extents(SsPdf *pdf, SsPdfInkExtents *extents) {
-    if (pdf == NULL || pdf->measurement == NULL || extents == NULL) return 1;
-    return ss_pdf_surface_ink_extents(pdf->measurement->surface, extents);
-}
-
-int ss_pdf_end_measurement(SsPdf *pdf) {
-    if (pdf == NULL || pdf->measurement == NULL) return 1;
-    SsPdfMeasurementFrame *frame = pdf->measurement;
-    pdf->measurement = frame->previous;
-    pdf->cr = frame->saved_cr;
-    const int ok =
-        cairo_status(frame->cr) == CAIRO_STATUS_SUCCESS &&
-        cairo_surface_status(frame->surface) == CAIRO_STATUS_SUCCESS;
-    cairo_destroy(frame->cr);
-    cairo_surface_destroy(frame->surface);
-    free(frame);
-    return ok ? 0 : 1;
 }
 
 void ss_pdf_fill_rect(SsPdf *pdf, double x, double y, double width, double height, double r, double g, double b) {
@@ -704,40 +607,43 @@ static double ss_measure_text_on_cairo(cairo_t *cr, const char *text, const char
     return ((double)width) / PANGO_SCALE;
 }
 
-static cairo_t *ss_text_measure_context(void) {
-    static cairo_surface_t *surface = NULL;
-    static cairo_t *cr = NULL;
+typedef struct SsThreadTextContext {
+    cairo_surface_t *surface;
+    cairo_t *cr;
+} SsThreadTextContext;
 
-    if (cr != NULL && cairo_status(cr) == CAIRO_STATUS_SUCCESS) return cr;
-    if (cr != NULL) {
-        cairo_destroy(cr);
-        cr = NULL;
-    }
-    if (surface != NULL) {
-        cairo_surface_destroy(surface);
-        surface = NULL;
+static void ss_thread_text_context_destroy(void *opaque) {
+    SsThreadTextContext *context = (SsThreadTextContext *)opaque;
+    if (context == NULL) return;
+    if (context->cr != NULL) cairo_destroy(context->cr);
+    if (context->surface != NULL) cairo_surface_destroy(context->surface);
+    free(context);
+}
+
+static GPrivate ss_thread_text_context_key = G_PRIVATE_INIT(ss_thread_text_context_destroy);
+
+static cairo_t *ss_thread_text_measure_context(void) {
+    SsThreadTextContext *context = (SsThreadTextContext *)g_private_get(&ss_thread_text_context_key);
+    if (context != NULL && context->cr != NULL && cairo_status(context->cr) == CAIRO_STATUS_SUCCESS) return context->cr;
+    if (context != NULL) {
+        g_private_set(&ss_thread_text_context_key, NULL);
+        ss_thread_text_context_destroy(context);
     }
 
-    surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
-    if (surface == NULL || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
-        if (surface != NULL) {
-            cairo_surface_destroy(surface);
-            surface = NULL;
-        }
+    context = (SsThreadTextContext *)calloc(1, sizeof(SsThreadTextContext));
+    if (context == NULL) return NULL;
+    context->surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+    if (context->surface == NULL || cairo_surface_status(context->surface) != CAIRO_STATUS_SUCCESS) {
+        ss_thread_text_context_destroy(context);
         return NULL;
     }
-
-    cr = cairo_create(surface);
-    if (cr == NULL || cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
-        if (cr != NULL) {
-            cairo_destroy(cr);
-            cr = NULL;
-        }
-        cairo_surface_destroy(surface);
-        surface = NULL;
+    context->cr = cairo_create(context->surface);
+    if (context->cr == NULL || cairo_status(context->cr) != CAIRO_STATUS_SUCCESS) {
+        ss_thread_text_context_destroy(context);
         return NULL;
     }
-    return cr;
+    g_private_set(&ss_thread_text_context_key, context);
+    return context->cr;
 }
 
 static SsPdfInkExtents ss_pango_extents(PangoRectangle rect) {
@@ -901,6 +807,64 @@ void ss_text_shape_free(SsTextShape *shape) {
     memset(shape, 0, sizeof(*shape));
 }
 
+int ss_text_measure_layout(
+    const char *text,
+    const char *font_family,
+    int font_weight,
+    int font_style,
+    int font_stretch,
+    double font_size,
+    double width,
+    int wrap,
+    SsTextMeasurement *measurement
+) {
+    if (text == NULL || measurement == NULL || font_size <= 0) return 1;
+    memset(measurement, 0, sizeof(*measurement));
+    g_rw_lock_reader_lock(&ss_font_config_lock);
+    cairo_t *cr = ss_thread_text_measure_context();
+    if (cr == NULL) {
+        g_rw_lock_reader_unlock(&ss_font_config_lock);
+        return 1;
+    }
+    PangoLayout *layout = pango_cairo_create_layout(cr);
+    if (layout == NULL) {
+        g_rw_lock_reader_unlock(&ss_font_config_lock);
+        return 1;
+    }
+    PangoFontDescription *description = ss_font_description(font_family, font_weight, font_style, font_stretch, font_size);
+    if (description == NULL) {
+        g_object_unref(layout);
+        g_rw_lock_reader_unlock(&ss_font_config_lock);
+        return 1;
+    }
+    pango_layout_set_font_description(layout, description);
+    pango_font_description_free(description);
+    char *valid_text = g_utf8_make_valid(text, -1);
+    if (valid_text == NULL) {
+        g_object_unref(layout);
+        g_rw_lock_reader_unlock(&ss_font_config_lock);
+        return 1;
+    }
+    pango_layout_set_text(layout, valid_text, -1);
+    g_free(valid_text);
+    if (wrap && width > 0) {
+        pango_layout_set_width(layout, (int)(width * PANGO_SCALE));
+        pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+    } else {
+        pango_layout_set_width(layout, -1);
+    }
+
+    PangoRectangle ink = {0};
+    PangoRectangle logical = {0};
+    pango_layout_get_extents(layout, &ink, &logical);
+    measurement->ink_bounds = ss_pango_extents(ink);
+    measurement->logical_bounds = ss_pango_extents(logical);
+    measurement->first_baseline = ((double)pango_layout_get_baseline(layout)) / PANGO_SCALE;
+    g_object_unref(layout);
+    g_rw_lock_reader_unlock(&ss_font_config_lock);
+    return 0;
+}
+
 int ss_text_shape(
     const char *text,
     const char *font_family,
@@ -914,21 +878,21 @@ int ss_text_shape(
 ) {
     if (text == NULL || shape == NULL || font_size <= 0) return 1;
     memset(shape, 0, sizeof(*shape));
-    g_mutex_lock(&ss_text_context_mutex);
-    cairo_t *cr = ss_text_measure_context();
+    g_rw_lock_reader_lock(&ss_font_config_lock);
+    cairo_t *cr = ss_thread_text_measure_context();
     if (cr == NULL) {
-        g_mutex_unlock(&ss_text_context_mutex);
+        g_rw_lock_reader_unlock(&ss_font_config_lock);
         return 1;
     }
     PangoLayout *layout = pango_cairo_create_layout(cr);
     if (layout == NULL) {
-        g_mutex_unlock(&ss_text_context_mutex);
+        g_rw_lock_reader_unlock(&ss_font_config_lock);
         return 1;
     }
     PangoFontDescription *description = ss_font_description(font_family, font_weight, font_style, font_stretch, font_size);
     if (description == NULL) {
         g_object_unref(layout);
-        g_mutex_unlock(&ss_text_context_mutex);
+        g_rw_lock_reader_unlock(&ss_font_config_lock);
         return 1;
     }
     pango_layout_set_font_description(layout, description);
@@ -936,7 +900,7 @@ int ss_text_shape(
     char *valid_text = g_utf8_make_valid(text, -1);
     if (valid_text == NULL) {
         g_object_unref(layout);
-        g_mutex_unlock(&ss_text_context_mutex);
+        g_rw_lock_reader_unlock(&ss_font_config_lock);
         return 1;
     }
     pango_layout_set_text(layout, valid_text, -1);
@@ -974,7 +938,7 @@ int ss_text_shape(
         (cluster_count > 0 && shape->clusters == NULL) || (glyph_count > 0 && shape->glyphs == NULL)) {
         g_free(valid_text);
         g_object_unref(layout);
-        g_mutex_unlock(&ss_text_context_mutex);
+        g_rw_lock_reader_unlock(&ss_font_config_lock);
         ss_text_shape_free(shape);
         return 1;
     }
@@ -995,7 +959,7 @@ int ss_text_shape(
     if (iterator == NULL) {
         g_free(valid_text);
         g_object_unref(layout);
-        g_mutex_unlock(&ss_text_context_mutex);
+        g_rw_lock_reader_unlock(&ss_font_config_lock);
         ss_text_shape_free(shape);
         return 1;
     }
@@ -1128,31 +1092,21 @@ int ss_text_shape(
     pango_layout_iter_free(iterator);
     g_free(valid_text);
     g_object_unref(layout);
-    g_mutex_unlock(&ss_text_context_mutex);
+    g_rw_lock_reader_unlock(&ss_font_config_lock);
     return 0;
 }
 
-double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
-    if (pdf == NULL || pdf->cr == NULL) return 0.0;
-    return ss_measure_text_on_cairo(pdf->cr, text, font_family, font_weight, font_style, font_stretch, font_size, 0);
-}
-
-double ss_pdf_measure_text_visual_width(SsPdf *pdf, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
-    if (pdf == NULL || pdf->cr == NULL) return 0.0;
-    return ss_measure_text_on_cairo(pdf->cr, text, font_family, font_weight, font_style, font_stretch, font_size, 1);
-}
-
 double ss_text_measure_text(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
-    g_mutex_lock(&ss_text_context_mutex);
-    const double width = ss_measure_text_on_cairo(ss_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size, 0);
-    g_mutex_unlock(&ss_text_context_mutex);
+    g_rw_lock_reader_lock(&ss_font_config_lock);
+    const double width = ss_measure_text_on_cairo(ss_thread_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size, 0);
+    g_rw_lock_reader_unlock(&ss_font_config_lock);
     return width;
 }
 
 double ss_text_measure_text_visual_width(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
-    g_mutex_lock(&ss_text_context_mutex);
-    const double width = ss_measure_text_on_cairo(ss_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size, 1);
-    g_mutex_unlock(&ss_text_context_mutex);
+    g_rw_lock_reader_lock(&ss_font_config_lock);
+    const double width = ss_measure_text_on_cairo(ss_thread_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size, 1);
+    g_rw_lock_reader_unlock(&ss_font_config_lock);
     return width;
 }
 
@@ -1271,6 +1225,41 @@ int ss_pdf_draw_raster(SsPdf *pdf, const char *path, double x, double y, double 
     return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
+static int ss_svg_intrinsic_size(RsvgHandle *handle, double *width, double *height) {
+    double intrinsic_width = 0;
+    double intrinsic_height = 0;
+    if (rsvg_handle_get_intrinsic_size_in_pixels(handle, &intrinsic_width, &intrinsic_height) &&
+        intrinsic_width > 0 && intrinsic_height > 0) {
+        if (width != NULL) *width = intrinsic_width;
+        if (height != NULL) *height = intrinsic_height;
+        return 0;
+    }
+
+    gboolean has_width = FALSE;
+    gboolean has_height = FALSE;
+    gboolean has_view_box = FALSE;
+    RsvgLength width_length;
+    RsvgLength height_length;
+    RsvgRectangle view_box;
+    rsvg_handle_get_intrinsic_dimensions(
+        handle,
+        &has_width,
+        &width_length,
+        &has_height,
+        &height_length,
+        &has_view_box,
+        &view_box
+    );
+    (void)has_width;
+    (void)width_length;
+    (void)has_height;
+    (void)height_length;
+    if (!has_view_box || view_box.width <= 0 || view_box.height <= 0) return 1;
+    if (width != NULL) *width = view_box.width;
+    if (height != NULL) *height = view_box.height;
+    return 0;
+}
+
 int ss_svg_size(const char *path, double *width, double *height) {
     GError *error = NULL;
     RsvgHandle *handle = rsvg_handle_new_from_file(path, &error);
@@ -1279,12 +1268,9 @@ int ss_svg_size(const char *path, double *width, double *height) {
         return 1;
     }
 
-    RsvgDimensionData dimensions;
-    rsvg_handle_get_dimensions(handle, &dimensions);
-    if (width != NULL) *width = dimensions.width;
-    if (height != NULL) *height = dimensions.height;
+    const int result = ss_svg_intrinsic_size(handle, width, height);
     g_object_unref(handle);
-    return dimensions.width > 0 && dimensions.height > 0 ? 0 : 1;
+    return result;
 }
 
 int ss_svg_metadata(const char *path, SsSvgMetadata *metadata) {
@@ -1297,10 +1283,10 @@ int ss_svg_metadata(const char *path, SsSvgMetadata *metadata) {
         return 1;
     }
 
-    RsvgDimensionData dimensions;
-    rsvg_handle_get_dimensions(handle, &dimensions);
-    metadata->width = dimensions.width;
-    metadata->height = dimensions.height;
+    if (ss_svg_intrinsic_size(handle, &metadata->width, &metadata->height) != 0) {
+        g_object_unref(handle);
+        return 1;
+    }
 
     gboolean has_width = FALSE;
     gboolean has_height = FALSE;
@@ -1329,7 +1315,7 @@ int ss_svg_metadata(const char *path, SsSvgMetadata *metadata) {
         metadata->view_box_height = view_box.height;
     }
     g_object_unref(handle);
-    return dimensions.width > 0 && dimensions.height > 0 ? 0 : 1;
+    return 0;
 }
 
 int ss_pdf_draw_svg(SsPdf *pdf, const char *path, double x, double y, double width, double height) {
@@ -1342,19 +1328,13 @@ int ss_pdf_draw_svg(SsPdf *pdf, const char *path, double x, double y, double wid
         return 1;
     }
 
-    RsvgDimensionData dimensions;
-    rsvg_handle_get_dimensions(handle, &dimensions);
-    if (dimensions.width <= 0 || dimensions.height <= 0) {
-        g_object_unref(handle);
-        return 1;
-    }
-
+    RsvgRectangle viewport = {x, y, width, height};
+    GError *render_error = NULL;
     cairo_save(pdf->cr);
-    cairo_translate(pdf->cr, x, y);
-    cairo_scale(pdf->cr, width / dimensions.width, height / dimensions.height);
-    gboolean ok = rsvg_handle_render_cairo(handle, pdf->cr);
+    gboolean ok = rsvg_handle_render_document(handle, pdf->cr, &viewport, &render_error);
     cairo_restore(pdf->cr);
     g_object_unref(handle);
+    if (render_error != NULL) g_error_free(render_error);
     if (!ok) return 1;
     return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
@@ -1369,18 +1349,11 @@ int ss_pdf_draw_svg_tinted(SsPdf *pdf, const char *path, double x, double y, dou
         return 1;
     }
 
-    RsvgDimensionData dimensions;
-    rsvg_handle_get_dimensions(handle, &dimensions);
-    if (dimensions.width <= 0 || dimensions.height <= 0) {
-        g_object_unref(handle);
-        return 1;
-    }
-
+    RsvgRectangle viewport = {x, y, width, height};
+    GError *render_error = NULL;
     cairo_save(pdf->cr);
-    cairo_translate(pdf->cr, x, y);
-    cairo_scale(pdf->cr, width / dimensions.width, height / dimensions.height);
     cairo_push_group(pdf->cr);
-    gboolean ok = rsvg_handle_render_cairo(handle, pdf->cr);
+    gboolean ok = rsvg_handle_render_document(handle, pdf->cr, &viewport, &render_error);
     cairo_pattern_t *mask = cairo_pop_group(pdf->cr);
     if (ok) {
         cairo_set_source_rgb(pdf->cr, r, g, b);
@@ -1389,6 +1362,7 @@ int ss_pdf_draw_svg_tinted(SsPdf *pdf, const char *path, double x, double y, dou
     cairo_pattern_destroy(mask);
     cairo_restore(pdf->cr);
     g_object_unref(handle);
+    if (render_error != NULL) g_error_free(render_error);
     if (!ok) return 1;
     return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }

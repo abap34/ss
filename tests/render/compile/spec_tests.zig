@@ -72,6 +72,24 @@ fn preparedPage(page_id: core.NodeId, index: usize) core.prepared.PreparedPage {
     };
 }
 
+const ConcurrentResourceAdd = struct {
+    builder: *render_resources.Builder,
+    io: std.Io,
+    path: []const u8,
+    ready: std.atomic.Value(usize) = .init(0),
+    results: [4]?render.ResourceId = .{null} ** 4,
+    errors: [4]?anyerror = .{null} ** 4,
+
+    fn run(self: *ConcurrentResourceAdd, index: usize) void {
+        _ = self.ready.fetchAdd(1, .seq_cst);
+        while (self.ready.load(.seq_cst) != self.results.len) std.atomic.spinLoopHint();
+        self.results[index] = self.builder.addPath(std.heap.c_allocator, self.io, .svg, self.path) catch |err| {
+            self.errors[index] = err;
+            return;
+        };
+    }
+};
+
 test "render compiler prepares once and preserves page order" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
@@ -107,6 +125,30 @@ test "render compiler releases completed pages after a later failure" {
         render_compile.document(testing.allocator, &state, &prepared_pages, &compiler),
     );
     try testing.expectEqual(@as(usize, 1), compiler.page_count);
+}
+
+test "render compiler produces deterministic document fingerprints" {
+    var first_state = try initEmptyDocumentState();
+    defer first_state.deinit();
+    var second_state = try initEmptyDocumentState();
+    defer second_state.deinit();
+    var source_pages = [_]core.prepared.PreparedPage{
+        preparedPage(10, 0),
+        preparedPage(20, 1),
+    };
+    const prepared_pages = core.prepared.PreparedPages{ .pages = &source_pages };
+    var first_compiler = FakeCompiler{};
+    var second_compiler = FakeCompiler{};
+
+    var first = try render_compile.document(testing.allocator, &first_state, &prepared_pages, &first_compiler);
+    defer first.deinit(testing.allocator);
+    var second = try render_compile.document(testing.allocator, &second_state, &prepared_pages, &second_compiler);
+    defer second.deinit(testing.allocator);
+
+    try testing.expectEqualSlices(u8, &first.fingerprint(), &second.fingerprint());
+    for (first.pages, second.pages) |*first_page, *second_page| {
+        try testing.expectEqualSlices(u8, &render.pageFingerprint(first_page), &render.pageFingerprint(second_page));
+    }
 }
 
 test "resource compiler records deterministic raster SVG and PDF metadata" {
@@ -146,14 +188,14 @@ test "resource compiler records deterministic raster SVG and PDF metadata" {
     try testing.expectEqual(raster_id, try builder.addPath(testing.allocator, testing.io, .raster, png_path));
     try testing.expectEqual(@as(usize, 3), builder.entries.items.len);
 
-    const raster = builder.find(raster_id) orelse return error.MissingRenderResource;
+    const raster = builder.get(testing.io, raster_id) orelse return error.MissingRenderResource;
     const raster_metadata = raster.metadata.raster;
     try testing.expectEqual(@as(usize, 1), raster_metadata.pixel_width);
     try testing.expectEqual(@as(usize, 1), raster_metadata.pixel_height);
     try testing.expectEqual(render.RasterOrientation.normal, raster_metadata.orientation);
     try testing.expect(raster_metadata.has_alpha);
 
-    const svg = builder.find(svg_id) orelse return error.MissingRenderResource;
+    const svg = builder.get(testing.io, svg_id) orelse return error.MissingRenderResource;
     const svg_metadata = svg.metadata.svg;
     try testing.expectEqual(@as(f64, 80), svg_metadata.width);
     try testing.expectEqual(@as(f64, 40), svg_metadata.height);
@@ -162,7 +204,7 @@ test "resource compiler records deterministic raster SVG and PDF metadata" {
     try testing.expectEqual(@as(f64, 1), svg_metadata.view_box.?.x);
     try testing.expectEqual(@as(f64, 2), svg_metadata.view_box.?.y);
 
-    const pdf_resource = builder.find(pdf_id) orelse return error.MissingRenderResource;
+    const pdf_resource = builder.get(testing.io, pdf_id) orelse return error.MissingRenderResource;
     const pdf_metadata = pdf_resource.metadata.pdf;
     try testing.expectEqual(@as(usize, 1), pdf_metadata.pages.len);
     try testing.expectApproxEqAbs(@as(f64, 120), pdf_metadata.pages[0].crop.width(), 0.001);
@@ -170,4 +212,41 @@ test "resource compiler records deterministic raster SVG and PDF metadata" {
     try testing.expectEqual(@as(f64, 1), pdf_metadata.pages[0].user_unit);
     try testing.expect(!pdf_metadata.encrypted);
     try testing.expect(!pdf_metadata.has_javascript);
+
+    var catalog = try builder.take(testing.allocator);
+    defer catalog.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 3), catalog.entries.len);
+    for (catalog.entries[1..], catalog.entries[0 .. catalog.entries.len - 1]) |current, previous| {
+        try testing.expect(std.mem.order(u8, &previous.id, &current.id) == .lt);
+    }
+}
+
+test "resource compiler shares one in-flight load across workers" {
+    const root = ".ss-cache/test-render-resources-concurrent";
+    const svg_path = root ++ "/shape.svg";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = svg_path,
+        .data = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><rect width=\"80\" height=\"40\"/></svg>",
+        .flags = .{ .truncate = true },
+    });
+
+    var builder = render_resources.Builder{};
+    defer builder.deinit(std.heap.c_allocator);
+    var work = ConcurrentResourceAdd{ .builder = &builder, .io = testing.io, .path = svg_path };
+    var threads: [work.results.len]std.Thread = undefined;
+    var started: usize = 0;
+    errdefer for (threads[0..started]) |thread| thread.join();
+    while (started < threads.len) : (started += 1) {
+        threads[started] = try std.Thread.spawn(.{}, ConcurrentResourceAdd.run, .{ &work, started });
+    }
+    for (threads) |thread| thread.join();
+
+    for (work.errors) |err| try testing.expect(err == null);
+    const expected = work.results[0] orelse return error.MissingRenderResource;
+    for (work.results[1..]) |result| try testing.expectEqual(expected, result orelse return error.MissingRenderResource);
+    try testing.expectEqual(@as(usize, 1), builder.entries.items.len);
+    try testing.expectEqual(@as(usize, 1), builder.sources.items.len);
 }

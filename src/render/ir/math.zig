@@ -147,6 +147,28 @@ pub const Builder = struct {
         return null;
     }
 
+    pub fn mergeFrom(self: *Builder, allocator: std.mem.Allocator, other: *Builder) ![]TreeId {
+        const mapping = try allocator.alloc(TreeId, other.trees.items.len);
+        errdefer allocator.free(mapping);
+        try self.trees.ensureUnusedCapacity(allocator, other.trees.items.len);
+        for (other.trees.items, 0..) |*tree, index| {
+            const existing = for (self.trees.items) |candidate| {
+                if (candidate.input_kind == tree.input_kind and std.mem.eql(u8, candidate.source, tree.source)) break candidate.id;
+            } else null;
+            if (existing) |id| {
+                mapping[index] = id;
+                tree.deinit(allocator);
+            } else {
+                const id: TreeId = @intCast(self.trees.items.len + 1);
+                tree.id = id;
+                mapping[index] = id;
+                self.trees.appendAssumeCapacity(tree.*);
+            }
+        }
+        other.trees.items.len = 0;
+        return mapping;
+    }
+
     pub fn take(self: *Builder, allocator: std.mem.Allocator) !Catalog {
         const trees = try self.trees.toOwnedSlice(allocator);
         self.* = .{};

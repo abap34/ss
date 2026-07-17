@@ -76,7 +76,7 @@ fn copy(
         if (font_path.len == 0) return error.MissingFontResource;
         if (run.synthetic_bold != 0 or run.synthetic_italic != 0) return error.UnsupportedSyntheticFont;
         const font_resource = try resources.addPath(allocator, io, .font, font_path);
-        const font_instance = try fonts.add(allocator, .{
+        const font_instance = try fonts.add(allocator, io, .{
             .resource = font_resource,
             .face_index = @intCast(run.font_index),
             .family = family,

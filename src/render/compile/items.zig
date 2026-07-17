@@ -114,7 +114,7 @@ const NativePdfError = error{
 };
 
 pub const native_artifact_cache_version = "ss-native-artifacts-v5";
-const layout_measurement_cache_version = "ss-native-layout-measure-v12";
+const layout_measurement_cache_version = "ss-native-layout-measure-v13";
 const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
 const external_command_timeout = std.Io.Clock.Duration{
@@ -155,7 +155,6 @@ pub fn nativeRuntimeVersions() NativeRuntimeVersions {
 const DrawContext = struct {
     allocator: Allocator,
     io: std.Io,
-    metrics_pdf: ?*c.SsPdf = null,
     asset_base_dir: []const u8,
     cache_dir: []const u8,
     highlight_languages: []const utils.highlight.Language,
@@ -163,15 +162,21 @@ const DrawContext = struct {
     link_annotations: ?*std.ArrayList(LinkAnnotation) = null,
     destinations: ?*std.ArrayList(DestinationAnnotation) = null,
     emitter: ?render_emitter.Emitter = null,
+    measurement_bounds: ?*MeasurementBounds = null,
     tex_preamble: []const TexPreambleEntry = &.{},
+};
+
+const MeasurementBounds = struct {
+    ink: ?render_ir.Rect = null,
+
+    fn include(self: *MeasurementBounds, rect: render_ir.Rect) void {
+        if (rect.width <= 0 or rect.height <= 0) return;
+        self.ink = if (self.ink) |current| current.unioned(rect) else rect;
+    }
 };
 
 fn activeEmitter(ctx: *DrawContext) *render_emitter.Emitter {
     return if (ctx.emitter) |*emitter| emitter else unreachable;
-}
-
-fn metricsPdf(ctx: *DrawContext) *c.SsPdf {
-    return ctx.metrics_pdf orelse unreachable;
 }
 
 const LinkAnnotation = struct {
@@ -468,14 +473,12 @@ var temp_cache_counter: usize = 0;
 pub const LayoutMeasurementScope = struct {
     allocator: Allocator,
     io: std.Io,
-    pdf: *c.SsPdf,
     asset_cache_dir: []const u8,
     measurement_cache_dir: []const u8,
     measurement_cache_path: []const u8,
     ctx: DrawContext,
     prepared_objects: std.AutoHashMap(core.NodeId, *const core.prepared.PreparedObject),
     cache_mutex: std.Io.Mutex = std.Io.Mutex.init,
-    measure_mutex: std.Io.Mutex = std.Io.Mutex.init,
     persistent_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
     run_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
     measurement_cache_dirty: bool = false,
@@ -498,9 +501,6 @@ pub const LayoutMeasurementScope = struct {
         const measurement_cache_path = try std.fs.path.join(allocator, &.{ measurement_cache_dir, "measurements.tsv" });
         errdefer allocator.free(measurement_cache_path);
 
-        const pdf = c.ss_pdf_create_scratch() orelse return NativePdfError.CairoCreateFailed;
-        errdefer c.ss_pdf_destroy(pdf);
-
         var persistent_measurements = std.AutoHashMap(u64, core.LayoutMeasurement).init(allocator);
         errdefer persistent_measurements.deinit();
         try readPersistedMeasurements(allocator, io, measurement_cache_path, &persistent_measurements);
@@ -511,14 +511,12 @@ pub const LayoutMeasurementScope = struct {
         return .{
             .allocator = allocator,
             .io = io,
-            .pdf = pdf,
             .asset_cache_dir = asset_cache_dir,
             .measurement_cache_dir = measurement_cache_dir,
             .measurement_cache_path = measurement_cache_path,
             .ctx = .{
                 .allocator = allocator,
                 .io = io,
-                .metrics_pdf = pdf,
                 .asset_base_dir = if (state.asset_base_dir.len == 0) "." else state.asset_base_dir,
                 .cache_dir = asset_cache_dir,
                 .highlight_languages = &.{},
@@ -534,7 +532,6 @@ pub const LayoutMeasurementScope = struct {
         self.prepared_objects.deinit();
         self.persistent_measurements.deinit();
         self.run_measurements.deinit();
-        c.ss_pdf_destroy(self.pdf);
         self.allocator.free(self.measurement_cache_path);
         self.allocator.free(self.measurement_cache_dir);
         self.allocator.free(self.asset_cache_dir);
@@ -577,11 +574,6 @@ pub const LayoutMeasurementScope = struct {
         utils.measure_profile.recordLayoutMeasurementCacheKey(profile_cache_key);
 
         if (try self.cachedMeasurement(cache_key, true)) |cached| return cached;
-
-        const profile_lock = utils.measure_profile.start();
-        self.measure_mutex.lockUncancelable(self.io);
-        utils.measure_profile.recordLayoutMeasurementLockWait(profile_lock);
-        defer self.measure_mutex.unlock(self.io);
 
         if (try self.cachedMeasurement(cache_key, false)) |cached| return cached;
 
@@ -2003,9 +1995,6 @@ fn buildRenderPage(
     fonts: *render_ir.FontBuilder,
     math: *render_ir.MathBuilder,
 ) !render_ir.Page {
-    const pdf = c.ss_pdf_create_scratch() orelse return NativePdfError.CairoCreateFailed;
-    defer c.ss_pdf_destroy(pdf);
-
     var page = render_ir.Page{
         .page_id = page_id,
         .index = page_index,
@@ -2017,7 +2006,6 @@ fn buildRenderPage(
     var ctx = DrawContext{
         .allocator = parent_ctx.allocator,
         .io = parent_ctx.io,
-        .metrics_pdf = pdf,
         .asset_base_dir = parent_ctx.asset_base_dir,
         .cache_dir = parent_ctx.cache_dir,
         .highlight_languages = parent_ctx.highlight_languages,
@@ -2165,6 +2153,8 @@ const MeasurementScope = struct {
     previous_links: ?*std.ArrayList(LinkAnnotation),
     previous_destinations: ?*std.ArrayList(DestinationAnnotation),
     previous_emitter: ?render_emitter.Emitter,
+    previous_measurement_bounds: ?*MeasurementBounds,
+    bounds: MeasurementBounds = .{},
     page: render_ir.Page = .{
         .page_id = 0,
         .index = 0,
@@ -2183,6 +2173,7 @@ const MeasurementScope = struct {
             .previous_links = ctx.link_annotations,
             .previous_destinations = ctx.destinations,
             .previous_emitter = ctx.emitter,
+            .previous_measurement_bounds = ctx.measurement_bounds,
         };
     }
 
@@ -2200,16 +2191,11 @@ const MeasurementScope = struct {
         };
         self.ctx.link_annotations = &self.links;
         self.ctx.destinations = &self.destinations;
+        self.ctx.measurement_bounds = &self.bounds;
     }
 
     fn inkFrame(self: *MeasurementScope) !?Frame {
-        var bounds: ?render_ir.Rect = null;
-        for (self.page.items.items) |item| {
-            const ink = item.header().ink_bounds;
-            if (ink.width <= 0 or ink.height <= 0) continue;
-            bounds = if (bounds) |current| current.unioned(ink) else ink;
-        }
-        const ink = bounds orelse return null;
+        const ink = self.bounds.ink orelse return null;
         return .{
             .x = @floatCast(ink.x),
             .y = @floatCast(Defaults.height - ink.y - ink.height),
@@ -2222,6 +2208,7 @@ const MeasurementScope = struct {
         self.ctx.link_annotations = self.previous_links;
         self.ctx.destinations = self.previous_destinations;
         self.ctx.emitter = self.previous_emitter;
+        self.ctx.measurement_bounds = self.previous_measurement_bounds;
         deinitLinkAnnotations(self.ctx.allocator, self.links.items);
         self.links.deinit(self.ctx.allocator);
         deinitDestinationAnnotations(self.ctx.allocator, self.destinations.items);
@@ -2564,23 +2551,14 @@ fn addDestination(ctx: *DrawContext, maybe_link_id: ?[]const u8, frame: Frame) !
     if (link_id.len == 0) return;
     const x = frame.x;
     const y = topOf(frame);
-    if (ctx.destinations) |destinations| {
-        const owned_name = try ctx.allocator.dupe(u8, link_id);
-        errdefer ctx.allocator.free(owned_name);
-        try destinations.append(ctx.allocator, .{
-            .name = owned_name,
-            .x = x,
-            .y = y,
-        });
-        return;
-    }
-    try emitDestination(ctx, link_id, @floatCast(x), @floatCast(y));
-}
-
-fn emitDestination(ctx: *DrawContext, name: []const u8, x: f64, y: f64) !void {
-    const name_z = try ctx.allocator.dupeZ(u8, name);
-    defer ctx.allocator.free(name_z);
-    if (c.ss_pdf_add_destination(metricsPdf(ctx), name_z.ptr, x, y) != 0) return NativePdfError.CairoFailed;
+    const destinations = ctx.destinations orelse return error.MissingRenderAnnotationSink;
+    const owned_name = try ctx.allocator.dupe(u8, link_id);
+    errdefer ctx.allocator.free(owned_name);
+    try destinations.append(ctx.allocator, .{
+        .name = owned_name,
+        .x = x,
+        .y = y,
+    });
 }
 
 fn contentFrameForRender(frame: Frame, render: ResolvedRender) Frame {
@@ -2632,6 +2610,21 @@ fn drawArrowHead(ctx: *DrawContext, tip_x: f32, tip_y: f32, dir_x: f32, dir_y: f
 }
 
 fn strokeLine(ctx: *DrawContext, x1: f32, y1: f32, x2: f32, y2: f32, line_width: f32, color: Color, dash_on: f32, dash_off: f32) !void {
+    if (ctx.measurement_bounds) |bounds| {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const length = @sqrt(dx * dx + dy * dy);
+        const half_width = @max(line_width / 2, 0);
+        const x_padding = if (length > 0) half_width * @abs(dy) / length else 0;
+        const y_padding = if (length > 0) half_width * @abs(dx) / length else 0;
+        bounds.include(.{
+            .x = @min(x1, x2) - x_padding,
+            .y = @min(y1, y2) - y_padding,
+            .width = @abs(dx) + x_padding * 2,
+            .height = @abs(dy) + y_padding * 2,
+        });
+        return;
+    }
     try activeEmitter(ctx).strokeLine(ctx.allocator, .{ .x = x1, .y = y1 }, .{ .x = x2, .y = y2 }, line_width, color, dash_on, dash_off);
 }
 
@@ -2640,15 +2633,7 @@ fn drawObjectChrome(ctx: *DrawContext, frame: Frame, render: ResolvedRender) !vo
         const line_width = render.rule.line_width;
         const y = toTopY(frame.y + @max(frame.height / 2.0, 1.5));
         const dash = render.rule.dash;
-        try activeEmitter(ctx).strokeLine(
-            ctx.allocator,
-            .{ .x = frame.x, .y = y },
-            .{ .x = frame.x + frame.width, .y = y },
-            line_width,
-            stroke,
-            if (dash) |d| d.on else 0,
-            if (dash) |d| d.off else 0,
-        );
+        try strokeLine(ctx, frame.x, y, frame.x + frame.width, y, line_width, stroke, if (dash) |d| d.on else 0, if (dash) |d| d.off else 0);
     }
 
     if (render.chrome.fill != null or render.chrome.stroke != null) {
@@ -2668,19 +2653,21 @@ fn drawObjectChrome(ctx: *DrawContext, frame: Frame, render: ResolvedRender) !vo
 
     if (render.underline.color) |color| {
         const y = toTopY(frame.y + render.underline.offset);
-        try activeEmitter(ctx).strokeLine(
-            ctx.allocator,
-            .{ .x = frame.x, .y = y },
-            .{ .x = frame.x + frame.width, .y = y },
-            render.underline.width,
-            color,
-            0,
-            0,
-        );
+        try strokeLine(ctx, frame.x, y, frame.x + frame.width, y, render.underline.width, color, 0, 0);
     }
 }
 
 fn drawRoundedRect(ctx: *DrawContext, frame: Frame, radius: f32, fill: ?Color, stroke: ?Color, line_width: f32) !void {
+    if (ctx.measurement_bounds) |bounds| {
+        const half_width = if (stroke != null) @max(line_width / 2, 0) else 0;
+        bounds.include(.{
+            .x = frame.x - half_width,
+            .y = topOf(frame) - half_width,
+            .width = frame.width + half_width * 2,
+            .height = frame.height + half_width * 2,
+        });
+        return;
+    }
     try activeEmitter(ctx).roundedRect(
         ctx.allocator,
         .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height },
@@ -2782,14 +2769,7 @@ fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32
     const placement = markdownCodeBlockPlacement(x, baseline_bl, width, measured, text);
     const frame = placement.frame;
 
-    try activeEmitter(ctx).roundedRect(
-        ctx.allocator,
-        .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height },
-        text.markdown_code_radius,
-        text.markdown_code_fill,
-        text.markdown_code_stroke,
-        text.markdown_code_line_width,
-    );
+    try drawRoundedRect(ctx, frame, text.markdown_code_radius, text.markdown_code_fill, text.markdown_code_stroke, text.markdown_code_line_width);
 
     try drawMarkdownCodeBlockContent(ctx, placement.content_x, placement.first_baseline_bl, placement.content_width, source, text, code_paint);
     return placement.next_baseline_bl;
@@ -2941,14 +2921,7 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
         for (0..columns) |column_index| {
             const cell_x = table_x + @as(f32, @floatFromInt(column_index)) * column_width;
             const cell_frame = Frame{ .x = cell_x, .y = row_bottom, .width = column_width, .height = row_height };
-            try activeEmitter(ctx).roundedRect(
-                ctx.allocator,
-                .{ .x = cell_frame.x, .y = topOf(cell_frame), .width = cell_frame.width, .height = cell_frame.height },
-                0,
-                fill,
-                text.markdown_table_border,
-                text.markdown_table_line_width,
-            );
+            try drawRoundedRect(ctx, cell_frame, 0, fill, text.markdown_table_border, text.markdown_table_line_width);
 
             if (column_index < row.cells.items.len) {
                 const cell = row.cells.items[column_index];
@@ -3361,7 +3334,7 @@ fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, widt
     if (compiled) |*value| {
         const owned_layout = value.layout;
         value.layout = emptyMathLayout();
-        try activeEmitter(ctx).structuredMath(ctx.allocator, .{
+        try emitStructuredMath(ctx, .{
             .x = draw_frame.x,
             .y = topOf(draw_frame),
             .width = draw_frame.width,
@@ -3558,7 +3531,7 @@ fn drawPositionedAtom(ctx: *DrawContext, atom: *Atom, x: f32, baseline_bl: f32, 
         .structured_math => |*math| {
             const layout = math.layout;
             math.layout = emptyMathLayout();
-            try activeEmitter(ctx).structuredMath(ctx.allocator, .{
+            try emitStructuredMath(ctx, .{
                 .x = x,
                 .y = Defaults.height - baseline_bl - layout.baseline,
                 .width = layout.width,
@@ -3653,13 +3626,13 @@ fn drawPlainTextAtTopWithOptions(
 fn drawStrikethrough(ctx: *DrawContext, x: f32, y_top: f32, atom: Atom, paint: AtomPaint) !void {
     const y = y_top + paint.font_size * 0.55;
     const line_width = @max(@as(f32, 1.0), paint.font_size * 0.065);
-    try activeEmitter(ctx).strokeLine(ctx.allocator, .{ .x = x, .y = y }, .{ .x = x + @max(atom.width, 1), .y = y }, line_width, atom.color, 0, 0);
+    try strokeLine(ctx, x, y, x + @max(atom.width, 1), y, line_width, atom.color, 0, 0);
 }
 
 fn drawUnderline(ctx: *DrawContext, x: f32, y_top: f32, atom: Atom, paint: AtomPaint) !void {
     const y = y_top + paint.font_size * 1.25;
     const line_width = @max(@as(f32, 0.8), paint.font_size * 0.055);
-    try activeEmitter(ctx).strokeLine(ctx.allocator, .{ .x = x, .y = y }, .{ .x = x + @max(atom.width, 1), .y = y }, line_width, atom.color, 0, 0);
+    try strokeLine(ctx, x, y, x + @max(atom.width, 1), y, line_width, atom.color, 0, 0);
 }
 
 fn highlightLanguageFor(ctx: *DrawContext, language: []const u8) ?*const utils.highlight.Language {
@@ -4279,6 +4252,22 @@ fn compileStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind) 
     );
 }
 
+fn emitStructuredMath(
+    ctx: *DrawContext,
+    rect: render_ir.Rect,
+    tree: render_ir.MathTreeId,
+    layout: render_ir.MathLayout,
+    color: Color,
+) !void {
+    if (ctx.measurement_bounds) |bounds| {
+        var owned_layout = layout;
+        defer owned_layout.deinit(ctx.allocator);
+        bounds.include(rect);
+        return;
+    }
+    try activeEmitter(ctx).structuredMath(ctx.allocator, rect, tree, layout, color);
+}
+
 fn supportsStructuredMath(allocator: Allocator, source: []const u8, kind: MathKind) !bool {
     var math = render_ir.MathBuilder{};
     defer math.deinit(allocator);
@@ -4336,7 +4325,7 @@ fn drawStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind, fra
     };
     const owned_layout = compiled.layout;
     compiled.layout = emptyMathLayout();
-    try activeEmitter(ctx).structuredMath(ctx.allocator, rect, compiled.tree, owned_layout, paint.color);
+    try emitStructuredMath(ctx, rect, compiled.tree, owned_layout, paint.color);
 }
 
 fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: ?core.render_policy.AssetPaint) !void {
@@ -4355,14 +4344,12 @@ fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: 
             .pdf_page = 1,
             .pdf_box = .crop,
         };
-        try activeEmitter(ctx).pdfPage(
-            ctx.allocator,
-            .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height },
-            source,
-            paint.pdf_page - 1,
-            paint.pdf_box,
-            true,
-        );
+        const rect = render_ir.Rect{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height };
+        if (ctx.measurement_bounds) |bounds| {
+            bounds.include(rect);
+        } else {
+            try activeEmitter(ctx).pdfPage(ctx.allocator, rect, source, paint.pdf_page - 1, paint.pdf_box, true);
+        }
         return;
     }
     return NativePdfError.UnsupportedAssetType;
@@ -4400,6 +4387,33 @@ fn drawRawText(
     wrap: bool,
 ) !void {
     const baseline_y = y_top + font_size;
+    if (ctx.measurement_bounds) |bounds| {
+        if (content.len == 0) return;
+        const family_z = try ctx.allocator.dupeZ(u8, font.family);
+        defer ctx.allocator.free(family_z);
+        const content_z = try ctx.allocator.dupeZ(u8, content);
+        defer ctx.allocator.free(content_z);
+        var measurement = std.mem.zeroes(c.SsTextMeasurement);
+        if (c.ss_text_measure_layout(
+            content_z.ptr,
+            family_z.ptr,
+            @intCast(font.weight),
+            core.font.styleCode(font.style),
+            core.font.stretchCode(font.stretch),
+            font_size,
+            width,
+            @intFromBool(wrap),
+            &measurement,
+        ) != 0) return NativePdfError.PangoCreateFailed;
+        const ink = measurement.ink_bounds;
+        bounds.include(.{
+            .x = x + ink.x,
+            .y = baseline_y - measurement.first_baseline + ink.y,
+            .width = ink.width,
+            .height = ink.height,
+        });
+        return;
+    }
     try activeEmitter(ctx).textBaseline(ctx.allocator, x, baseline_y, width, content, font, font_size, color, wrap);
 }
 
@@ -4425,39 +4439,22 @@ fn drawLinkedRawText(
 
     const kind: LinkAnnotation.Kind = if (isInternalLink(url)) .dest else .uri;
     const resolved_width = @max(link_width, 1);
-    if (ctx.link_annotations) |links| {
-        const owned_target = try ctx.allocator.dupe(u8, target);
-        errdefer ctx.allocator.free(owned_target);
-        try links.append(ctx.allocator, .{
-            .kind = kind,
-            .target = owned_target,
-            .x = x,
-            .y = y_top,
-            .width = resolved_width,
-            .height = height,
-        });
-        try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
-        return;
-    }
-
-    try beginLinkAnnotation(ctx, kind, target, @floatCast(x), @floatCast(y_top), @floatCast(resolved_width), @floatCast(height));
-    defer c.ss_pdf_end_link(metricsPdf(ctx));
+    const links = ctx.link_annotations orelse return error.MissingRenderAnnotationSink;
+    const owned_target = try ctx.allocator.dupe(u8, target);
+    errdefer ctx.allocator.free(owned_target);
+    try links.append(ctx.allocator, .{
+        .kind = kind,
+        .target = owned_target,
+        .x = x,
+        .y = y_top,
+        .width = resolved_width,
+        .height = height,
+    });
     try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
 }
 
 fn isInternalLink(url: []const u8) bool {
     return url.len > 1 and url[0] == '#';
-}
-
-fn beginLinkAnnotation(ctx: *DrawContext, kind: LinkAnnotation.Kind, target: []const u8, x: f64, y: f64, width: f64, height: f64) !void {
-    const target_z = try ctx.allocator.dupeZ(u8, target);
-    defer ctx.allocator.free(target_z);
-    const pdf = metricsPdf(ctx);
-    const result = switch (kind) {
-        .dest => c.ss_pdf_begin_dest_link(pdf, x, y, width, height, target_z.ptr),
-        .uri => c.ss_pdf_begin_uri_link(pdf, x, y, width, height, target_z.ptr),
-    };
-    if (result != 0) return NativePdfError.CairoFailed;
 }
 
 fn measureText(ctx: *DrawContext, content: []const u8, font: FontFace, font_size: f32) !f32 {
@@ -4466,8 +4463,7 @@ fn measureText(ctx: *DrawContext, content: []const u8, font: FontFace, font_size
     defer ctx.allocator.free(family_z);
     const content_z = try ctx.allocator.dupeZ(u8, content);
     defer ctx.allocator.free(content_z);
-    return @floatCast(c.ss_pdf_measure_text(
-        metricsPdf(ctx),
+    return @floatCast(c.ss_text_measure_text(
         content_z.ptr,
         family_z.ptr,
         @intCast(font.weight),
@@ -4483,8 +4479,7 @@ fn measureTextVisualWidth(ctx: *DrawContext, content: []const u8, font: FontFace
     defer ctx.allocator.free(family_z);
     const content_z = try ctx.allocator.dupeZ(u8, content);
     defer ctx.allocator.free(content_z);
-    return @floatCast(c.ss_pdf_measure_text_visual_width(
-        metricsPdf(ctx),
+    return @floatCast(c.ss_text_measure_text_visual_width(
         content_z.ptr,
         family_z.ptr,
         @intCast(font.weight),
@@ -4510,17 +4505,32 @@ fn listMarker(allocator: Allocator, kind: core.markdown.BlockKind, depth: usize,
 fn drawRasterNatural(ctx: *DrawContext, frame: Frame, source: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const size = try rasterAssetSize(ctx, source);
     const fitted = naturalAssetFrame(frame, scaledAssetSize(size, asset));
-    try activeEmitter(ctx).raster(ctx.allocator, .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height }, source);
+    const rect = render_ir.Rect{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height };
+    if (ctx.measurement_bounds) |bounds| {
+        bounds.include(rect);
+    } else {
+        try activeEmitter(ctx).raster(ctx.allocator, rect, source);
+    }
 }
 
 fn drawSvgNatural(ctx: *DrawContext, frame: Frame, svg_path: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const svg = try svgAsset(ctx, svg_path);
     const fitted = naturalAssetFrame(frame, scaledAssetSize(.{ .width = svg.width, .height = svg.height }, asset));
-    try activeEmitter(ctx).svg(ctx.allocator, .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height }, svg_path, null);
+    const rect = render_ir.Rect{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height };
+    if (ctx.measurement_bounds) |bounds| {
+        bounds.include(rect);
+    } else {
+        try activeEmitter(ctx).svg(ctx.allocator, rect, svg_path, null);
+    }
 }
 
 fn drawSvgFrameTinted(ctx: *DrawContext, frame: Frame, svg_path: []const u8, color: Color) !void {
-    try activeEmitter(ctx).svg(ctx.allocator, .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height }, svg_path, color);
+    const rect = render_ir.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
+    if (ctx.measurement_bounds) |bounds| {
+        bounds.include(rect);
+    } else {
+        try activeEmitter(ctx).svg(ctx.allocator, rect, svg_path, color);
+    }
 }
 
 fn placeRawMathPdf(
@@ -4531,7 +4541,11 @@ fn placeRawMathPdf(
     source: []const u8,
 ) !void {
     const rect = render_ir.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
-    try activeEmitter(ctx).rawMathPdf(ctx.allocator, rect, source, path, page_index);
+    if (ctx.measurement_bounds) |bounds| {
+        bounds.include(rect);
+    } else {
+        try activeEmitter(ctx).rawMathPdf(ctx.allocator, rect, source, path, page_index);
+    }
 }
 
 const Size = struct { width: f32, height: f32 };
@@ -4539,7 +4553,7 @@ const Size = struct { width: f32, height: f32 };
 fn rasterAssetSize(ctx: *DrawContext, source: []const u8) !Size {
     if (ctx.emitter) |*emitter| {
         const id = try emitter.resources.addPath(ctx.allocator, ctx.io, .raster, source);
-        const resource = emitter.resources.find(id) orelse return error.MissingRenderResource;
+        const resource = emitter.resources.get(ctx.io, id) orelse return error.MissingRenderResource;
         const metadata = switch (resource.metadata) {
             .raster => |value| value,
             else => return error.RenderResourceKindConflict,
@@ -4562,7 +4576,7 @@ fn pdfAssetSize(
 ) !Size {
     if (ctx.emitter) |*emitter| {
         const id = try emitter.resources.addPath(ctx.allocator, ctx.io, kind, source);
-        const resource = emitter.resources.find(id) orelse return error.MissingRenderResource;
+        const resource = emitter.resources.get(ctx.io, id) orelse return error.MissingRenderResource;
         const metadata = switch (resource.metadata) {
             .pdf => |value| value,
             .math_pdf => |value| value,
@@ -5033,7 +5047,7 @@ fn cachedSvgAsset(ctx: *DrawContext, path: []const u8) !?SvgAsset {
 fn svgAsset(ctx: *DrawContext, path: []const u8) !SvgAsset {
     if (ctx.emitter) |*emitter| {
         const id = try emitter.resources.addPath(ctx.allocator, ctx.io, .svg, path);
-        const resource = emitter.resources.find(id) orelse return error.MissingRenderResource;
+        const resource = emitter.resources.get(ctx.io, id) orelse return error.MissingRenderResource;
         const metadata = switch (resource.metadata) {
             .svg => |value| value,
             else => return error.RenderResourceKindConflict,

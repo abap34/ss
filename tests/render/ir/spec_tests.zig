@@ -156,6 +156,59 @@ test "render IR validation rejects non-finite geometry and unstable ordering" {
     try testing.expectError(error.InvalidItemGeometry, ir.validate());
 }
 
+test "render IR validation rejects invalid colors and page names" {
+    var pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+    try pages[0].appendFillRect(
+        testing.allocator,
+        null,
+        .{ .x = 0, .y = 0, .width = 10, .height = 10 },
+        .{ .r = 1, .g = 1, .b = 1 },
+    );
+
+    try ir.validate();
+    pages[0].items.items[0].fill_rect.color.r = 1.01;
+    try testing.expectError(error.InvalidItemGeometry, ir.validate());
+    pages[0].items.items[0].fill_rect.color.r = 1;
+    pages[0].name = try testing.allocator.dupe(u8, &.{0xff});
+    try testing.expectError(error.InvalidPageName, ir.validate());
+}
+
+test "render IR validation rejects non-basename resource names" {
+    var pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+
+    const bytes = try testing.allocator.dupe(u8, &.{0});
+    const entries = try testing.allocator.alloc(render_ir.Resource, 1);
+    entries[0] = .{
+        .id = render_ir.identifyResource(.raster, bytes),
+        .kind = .raster,
+        .name = try testing.allocator.dupe(u8, "asset.png"),
+        .bytes = bytes,
+        .metadata = .{ .raster = .{
+            .pixel_width = 1,
+            .pixel_height = 1,
+            .oriented_width = 1,
+            .oriented_height = 1,
+            .orientation = .normal,
+            .color_space = .unknown,
+            .has_alpha = false,
+        } },
+    };
+    ir.resources = .{ .entries = entries };
+
+    try ir.validate();
+    testing.allocator.free(entries[0].name);
+    entries[0].name = try testing.allocator.dupe(u8, "../asset.png");
+    try testing.expectError(error.InvalidResource, ir.validate());
+}
+
 test "render IR fingerprints page source and visual effect metadata" {
     var pages = try testing.allocator.alloc(render_ir.Page, 1);
     pages[0] = .{
@@ -216,7 +269,7 @@ test "render IR validation rejects invalid source and clip ranges" {
     try testing.expectError(error.InvalidBounds, ir.validate());
 }
 
-test "render IR stores resolved fonts and bidirectional glyph clusters" {
+test "render IR validates resolved fonts and bidirectional text partitions" {
     var pages = try testing.allocator.alloc(render_ir.Page, 1);
     pages[0] = .{ .page_id = 1, .index = 0, .width = 1280, .height = 720 };
     var ir = render_ir.Ir{ .pages = pages };
@@ -262,13 +315,23 @@ test "render IR stores resolved fonts and bidirectional glyph clusters" {
         try testing.expect(cluster.glyph_range.start < cluster.glyph_range.end);
     }
     try testing.expect(found_right_to_left);
+
+    const line_run_start = layout.lines[0].run_range.start;
+    layout.lines[0].run_range.start += 1;
+    try testing.expectError(error.InvalidItemGeometry, ir.validate());
+    layout.lines[0].run_range.start = line_run_start;
+
+    const run_cluster_start = layout.runs[0].cluster_range.start;
+    layout.runs[0].cluster_range.start += 1;
+    try testing.expectError(error.InvalidItemGeometry, ir.validate());
+    layout.runs[0].cluster_range.start = run_cluster_start;
 }
 
 test "font instances use content-derived identities and deterministic catalog order" {
     var builder = render_ir.FontBuilder{};
     defer builder.deinit(testing.allocator);
     const resource: render_ir.ResourceId = @splat(7);
-    const first = try builder.add(testing.allocator, .{
+    const first = try builder.add(testing.allocator, testing.io, .{
         .resource = resource,
         .face_index = 1,
         .family = "Example Sans",
@@ -280,7 +343,7 @@ test "font instances use content-derived identities and deterministic catalog or
         .descent_ratio = 0.2,
         .line_gap_ratio = 0,
     });
-    const second = try builder.add(testing.allocator, .{
+    const second = try builder.add(testing.allocator, testing.io, .{
         .resource = resource,
         .face_index = 0,
         .family = "Example Sans",
@@ -292,7 +355,7 @@ test "font instances use content-derived identities and deterministic catalog or
         .descent_ratio = 0.2,
         .line_gap_ratio = 0,
     });
-    const duplicate = try builder.add(testing.allocator, .{
+    const duplicate = try builder.add(testing.allocator, testing.io, .{
         .resource = resource,
         .face_index = 1,
         .family = "Example Sans",
@@ -391,4 +454,25 @@ test "math IR distinguishes raw TeX and rejects unsupported structured commands"
     const raw = catalog.find(raw_id) orelse return error.MissingMathTree;
     try testing.expectEqual(render_ir.MathInputKind.raw, raw.input_kind);
     try testing.expectEqual(render_ir.MathNodeKind.raw_tex, raw.nodes[raw.root].kind);
+}
+
+test "render IR validation rejects malformed math catalogs" {
+    var pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+
+    var builder = render_ir.MathBuilder{};
+    defer builder.deinit(testing.allocator);
+    _ = try builder.add(testing.allocator, "x", .display);
+    ir.math = try builder.take(testing.allocator);
+
+    try ir.validate();
+    ir.math.trees[0].id = 2;
+    try testing.expectError(error.InvalidItemGeometry, ir.validate());
+    ir.math.trees[0].id = 1;
+    ir.math.trees[0].nodes[0].kind = .fraction;
+
+    try testing.expectError(error.InvalidItemGeometry, ir.validate());
 }

@@ -119,6 +119,7 @@ pub const Spec = struct {
 
 pub const Builder = struct {
     instances: std.ArrayList(Instance) = .empty,
+    mutex: std.Io.Mutex = .init,
 
     pub fn deinit(self: *Builder, allocator: std.mem.Allocator) void {
         for (self.instances.items) |*instance| instance.deinit(allocator);
@@ -126,7 +127,13 @@ pub const Builder = struct {
         self.* = .{};
     }
 
-    pub fn add(self: *Builder, allocator: std.mem.Allocator, spec: Spec) !Id {
+    pub fn add(self: *Builder, allocator: std.mem.Allocator, io: std.Io, spec: Spec) !Id {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        return try self.addUnlocked(allocator, spec);
+    }
+
+    fn addUnlocked(self: *Builder, allocator: std.mem.Allocator, spec: Spec) !Id {
         const id = identify(spec);
         for (self.instances.items) |instance| {
             if (std.mem.eql(u8, &instance.id, &id)) return id;
@@ -163,11 +170,18 @@ pub const Builder = struct {
         return id;
     }
 
-    pub fn find(self: *const Builder, id: Id) ?*const Instance {
+    fn find(self: *const Builder, id: Id) ?*const Instance {
         for (self.instances.items) |*instance| {
             if (std.mem.eql(u8, &instance.id, &id)) return instance;
         }
         return null;
+    }
+
+    pub fn get(self: *Builder, io: std.Io, id: Id) ?Instance {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        const instance = self.find(id) orelse return null;
+        return instance.*;
     }
 
     pub fn take(self: *Builder, allocator: std.mem.Allocator) !Catalog {
