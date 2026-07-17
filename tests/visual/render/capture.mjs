@@ -26,19 +26,63 @@ export async function withBrowser(root, body) {
 export async function captureHtmlPages(browser, baseUrl, relativePath) {
   const page = await browser.newPage({ deviceScaleFactor: 1.5, viewport: { width: 1920, height: 1200 } });
   try {
-    await page.goto(`${baseUrl}/${relativePath}/index.html`, { waitUntil: "networkidle" });
+    await page.goto(`${baseUrl}/${relativePath}`, { waitUntil: "networkidle" });
+    await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: 120_000 });
     await page.evaluate(() => document.fonts.ready);
     await page.evaluate(() => Promise.all([...document.images].map((image) => image.decode())));
-    if (await page.locator(".ss-pdf").count()) {
-      await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: 120_000 });
-    }
+    await page.addStyleTag({
+      content: ".ss-document > .ss-page { --ss-page-scale: 1 !important; }",
+    });
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
     const pages = page.locator(".ss-page");
     const count = await pages.count();
     const images = [];
     for (let index = 0; index < count; index += 1) {
+      await page.evaluate((pageNumber) => {
+        location.hash = String(pageNumber);
+      }, index + 1);
+      await page.waitForFunction((pageNumber) =>
+        document.querySelector(`.ss-page[data-ss-page-index="${pageNumber}"]`)?.dataset.ssActive === "true",
+      index + 1);
+      await page.waitForFunction((pageNumber) => {
+        const active = document.querySelector(`.ss-page[data-ss-page-index="${pageNumber}"]`);
+        if (!active) return false;
+        return [...active.querySelectorAll(".ss-pdf")].every((item) => {
+          if (item.dataset.error) return true;
+          if (item.dataset.ssPdfRendered !== "true") return false;
+          const bounds = item.getBoundingClientRect();
+          let width = Math.max(1, Math.round(bounds.width * devicePixelRatio));
+          let height = Math.max(1, Math.round(bounds.height * devicePixelRatio));
+          const maximumPixels = 16 * 1024 * 1024;
+          if (width * height > maximumPixels) {
+            const scale = Math.sqrt(maximumPixels / (width * height));
+            width = Math.max(1, Math.floor(width * scale));
+            height = Math.max(1, Math.floor(height * scale));
+          }
+          const canvas = item.querySelector(":scope > canvas");
+          return canvas?.width === width && canvas.height === height;
+        });
+      }, index + 1);
       const item = pages.nth(index);
       const box = await item.boundingBox();
-      if (!box || box.width <= 0 || box.height <= 0) throw new Error(`HTML page ${index + 1} has no visible bounds`);
+      if (!box || box.width <= 0 || box.height <= 0) {
+        const diagnostics = await item.evaluate((element) => {
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return {
+            connected: element.isConnected,
+            display: style.display,
+            position: style.position,
+            width: style.width,
+            height: style.height,
+            rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+            documentError: document.documentElement.dataset.ssError ?? null,
+          };
+        });
+        throw new Error(`HTML page ${index + 1} has no visible bounds: ${JSON.stringify(diagnostics)}`);
+      }
       const size = await item.evaluate((element) => ({
         width: Number.parseFloat(element.style.width),
         height: Number.parseFloat(element.style.height),
@@ -70,17 +114,15 @@ async function itemRegions(page, pageBox, targetWidth, targetHeight) {
   return await page.locator(":scope > .ss-item").evaluateAll((items, geometry) =>
     items.map((item) => {
       const box = item.getBoundingClientRect();
+      let kind = "other";
+      if (item.classList.contains("ss-line")) kind = "line";
+      else if (item.classList.contains("ss-math")) kind = "math";
+      else if (item.classList.contains("ss-pdf")) kind = "pdf";
+      else if (item.classList.contains("ss-text")) kind = "text";
       return {
         id: item.dataset.ssItemId || "unknown",
-        kind: item.classList.contains("ss-line")
-          ? "line"
-          : item.classList.contains("ss-math")
-          ? "math"
-          : item.classList.contains("ss-pdf")
-          ? "pdf"
-          : item.classList.contains("ss-text")
-          ? "text"
-          : "other",
+        kind,
+        usesPdfViewer: item.classList.contains("ss-pdf"),
         x: Math.floor((box.x - geometry.pageX) * geometry.scaleX),
         y: Math.floor((box.y - geometry.pageY) * geometry.scaleY),
         right: Math.ceil((box.right - geometry.pageX) * geometry.scaleX),

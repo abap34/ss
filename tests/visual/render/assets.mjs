@@ -22,16 +22,17 @@ export function rasterAsset() {
 
 export function pdfAsset() {
   const firstContent = "q\n0.18 0.44 0.56 rg\n0 0 240 120 re\nf\nQ\n";
-  const secondContent = "q\n0.93 0.96 0.98 rg\n0 0 240 120 re\nf\n0.94 0.32 0.22 rg\n30 24 160 24 re\nf\nQ\nBT\n/F1 18 Tf\n24 72 Td\n(SelectablePdfToken) Tj\nET\n";
+  const secondContent = "q\n0.93 0.96 0.98 rg\n0 0 240 120 re\nf\n0.94 0.32 0.22 rg\n30 24 160 24 re\nf\nQ\nBT\n/F1 18 Tf\n24 72 Td\n(SelectablePdfToken) Tj\nET\nBT\n/F1 10 Tf\n24 36 Td\n(DragSelectablePdfToken) Tj\nET\nBT\n/F1 6 Tf\n2 4 Td\n(MediaMarginToken) Tj\nET\n";
   return buildPdf([
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 120] /Contents 5 0 R >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 120] /CropBox [20 10 220 110] /Rotate 90 /UserUnit 1.25 /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R /Annots [8 0 R] >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 120] /CropBox [20 10 220 110] /Rotate 90 /UserUnit 1.25 /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R /Annots [8 0 R 9 0 R] >>",
     stream(firstContent),
     stream(secondContent),
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     "<< /Type /Annot /Subtype /Link /Rect [22 66 212 94] /Border [0 0 0] /A << /S /URI /URI (https://example.com/pdf) >> >>",
+    "<< /Type /Annot /Subtype /Link /Rect [30 30 60 60] /Border [0 0 0] /Dest [3 0 R /Fit] >>",
   ]);
 }
 

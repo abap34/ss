@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { PNG } from "pngjs";
-import { compareImages, decodePng, encodePng } from "./compare.mjs";
+import { compareImages, decodePng, encodePng } from "../compare.mjs";
 
 const white = image(4, 3, [255, 255, 255, 255]);
 const same = decodePng(encodePng(white));
