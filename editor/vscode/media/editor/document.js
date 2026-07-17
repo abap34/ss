@@ -1,13 +1,26 @@
 import { element } from "./dom.js";
-import { renderPdfItems } from "./pdf.js";
+import { disposePdfItems, renderPdfItems } from "./pdf.js";
 
 const templates = new WeakMap();
+const previews = new WeakMap();
 
 export function renderPage(snapshot, pageId, thumbnail = false) {
+  let cached = previews.get(snapshot);
+  if (!cached) {
+    cached = new Map();
+    previews.set(snapshot, cached);
+  }
+  const key = String(pageId) + ":" + String(thumbnail);
+  const existing = cached.get(key);
+  if (existing) return existing;
+
   const preview = element("div", thumbnail ? "thumbnail-preview" : "preview");
   if (thumbnail) preview.setAttribute("aria-hidden", "true");
   const page = pageTemplate(snapshot, pageId);
-  if (!page) return preview;
+  if (!page) {
+    cached.set(key, preview);
+    return preview;
+  }
   const clone = page.cloneNode(true);
   clone.classList.add("preview-page");
   if (thumbnail) {
@@ -18,10 +31,24 @@ export function renderPage(snapshot, pageId, thumbnail = false) {
     if (layout) preview.style.setProperty("--preview-scale", String(64 / layout.width));
   }
   preview.append(clone);
-  void renderPdfItems(preview).catch((error) => {
+  cached.set(key, preview);
+  void renderPdfItems(preview, {
+    thumbnail,
+    textLayer: false,
+    annotationLayer: false,
+  }).catch((error) => {
     preview.dataset.error = error instanceof Error ? error.message : String(error);
   });
   return preview;
+}
+
+export function disposePages(snapshot) {
+  const cached = previews.get(snapshot);
+  if (cached) {
+    for (const preview of cached.values()) disposePdfItems(preview);
+    previews.delete(snapshot);
+  }
+  templates.delete(snapshot);
 }
 
 function pageTemplate(snapshot, pageId) {

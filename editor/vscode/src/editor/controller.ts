@@ -2,7 +2,12 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { LanguageClient } from "vscode-languageclient/node";
 import { projectSettings } from "../projectConfig";
-import { EditorSnapshot, LayoutEditResult, WebviewMessage } from "./protocol";
+import {
+  EditorSnapshot,
+  HostMessage,
+  LayoutEditResult,
+  WebviewMessage,
+} from "./protocol";
 import {
   documentVersions,
   revealSource,
@@ -180,13 +185,21 @@ export class EditorController implements vscode.Disposable {
         this.schedule(session, 0);
         return;
       }
-      if (result.status !== "ok" || !result.workspaceEdit) {
+      if (result.status !== "ok") {
         await this.post(session, {
           type: "editResult",
           status: result.status,
           message: result.message ?? "The edit could not be applied.",
         });
         if (result.status === "stale") this.schedule(session, 0);
+        return;
+      }
+      if (!result.workspaceEdit) {
+        await this.post(session, {
+          type: "editResult",
+          status: "rejected",
+          message: result.message ?? "The language server returned no source edit.",
+        });
         return;
       }
       const edit = toWorkspaceEdit(result.workspaceEdit);
@@ -274,6 +287,7 @@ export class EditorController implements vscode.Disposable {
       );
       await this.post(session, {
         type: "snapshot",
+        revision: serial,
         snapshot: prepared,
       });
     } catch (error) {
@@ -298,7 +312,7 @@ export class EditorController implements vscode.Disposable {
       : 0;
   }
 
-  private post(session: Session, message: unknown): Thenable<boolean> {
+  private post(session: Session, message: HostMessage): Thenable<boolean> {
     if (session.disposed) return Promise.resolve(false);
     return session.panel.webview.postMessage(message);
   }
