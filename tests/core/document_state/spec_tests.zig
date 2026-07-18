@@ -15,6 +15,21 @@ fn initEmptyDocumentState() !core.DocumentState {
     return try core.DocumentState.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
 }
 
+fn expectConstraint(
+    state: *const core.DocumentState,
+    target_node: core.NodeId,
+    target_anchor: core.Anchor,
+    role: core.ConstraintRole,
+    from_update: bool,
+) !void {
+    for (state.constraints.items) |constraint| {
+        if (constraint.target_node != target_node or constraint.target_anchor != target_anchor) continue;
+        if (constraint.role != role or constraint.from_update != from_update) continue;
+        return;
+    }
+    return error.TestExpectedConstraint;
+}
+
 test "core IR spec: pages are ordered document children with one-based page indexes" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
@@ -109,6 +124,73 @@ test "core IR spec: position updates replace deeper constraints across anchors o
     try testing.expectEqual(core.ConstraintRole.size, state.constraints.items[0].role);
     try testing.expectEqual(core.Anchor.left, state.constraints.items[1].target_anchor);
     try testing.expect(state.constraints.items[1].from_update);
+}
+
+test "core IR spec: group position updates replace external placement of descendants" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    const page = try state.addPage("Page");
+    const title = try state.makeObject(page, "title", null, .text, .text, "Title");
+    const rule = try state.makeObject(page, "rule", null, .text, .text, "");
+    const inner = try state.makeGroupWithOrigin(page, true, &.{ title, rule }, "inner-group");
+    const root = try state.makeGroupWithOrigin(page, true, &.{inner}, "root-group");
+
+    try state.addAnchorConstraintAtScope(title, .left, .{ .page = .left }, 72, "component-left", 1);
+    try state.addAnchorConstraintAtScope(title, .top, .{ .page = .top }, -100, "component-top", 1);
+    try state.addAnchorConstraintAtScope(title, .right, .{ .node = .{ .node_id = title, .anchor = .left } }, 240, "component-width", 1);
+    try state.addAnchorConstraintAtScope(rule, .left, .{ .node = .{ .node_id = title, .anchor = .left } }, 0, "component-align", 1);
+    try state.addAnchorConstraintAtScope(rule, .top, .{ .node = .{ .node_id = title, .anchor = .bottom } }, -30, "component-rule", 1);
+    try state.addConstraintUpdate(root, .left, .position, 0, .{ .page = .left }, 180, "caller-left");
+    try state.addConstraintUpdate(root, .top, .position, 0, .{ .page = .top }, -140, "caller-top");
+
+    try core.constraint_updates.resolve(&state);
+
+    try testing.expectEqual(@as(usize, 5), state.constraints.items.len);
+    try testing.expectEqual(@as(usize, 2), state.overridden_constraints.items.len);
+    try testing.expectEqualStrings("component-left", state.overridden_constraints.items[0].origin.?);
+    try testing.expectEqualStrings("component-top", state.overridden_constraints.items[1].origin.?);
+    try expectConstraint(&state, title, .right, .size, false);
+    try expectConstraint(&state, rule, .left, .position, false);
+    try expectConstraint(&state, rule, .top, .position, false);
+    try expectConstraint(&state, root, .left, .position, true);
+    try expectConstraint(&state, root, .top, .position, true);
+}
+
+test "core IR spec: overlapping group and descendant updates use scope and source order" {
+    var later_descendant = try initEmptyDocumentState();
+    defer later_descendant.deinit();
+
+    const first_page = try later_descendant.addPage("Page");
+    const first_child = try later_descendant.makeObject(first_page, "child", null, .text, .text, "Child");
+    const first_group = try later_descendant.makeGroupWithOrigin(first_page, true, &.{first_child}, "group");
+    try later_descendant.addConstraintUpdate(first_group, .left, .position, 0, .{ .page = .left }, 100, "group-first");
+    try later_descendant.addConstraintUpdate(first_child, .left, .position, 0, .{ .page = .left }, 160, "child-last");
+
+    try core.constraint_updates.resolve(&later_descendant);
+
+    try testing.expect(!later_descendant.constraint_updates.items[0].active);
+    try testing.expect(later_descendant.constraint_updates.items[1].active);
+    try testing.expectEqual(@as(usize, 1), later_descendant.constraints.items.len);
+    try testing.expectEqual(first_child, later_descendant.constraints.items[0].target_node);
+    try testing.expectEqual(@as(usize, 1), later_descendant.overridden_constraints.items.len);
+
+    var shallower_group = try initEmptyDocumentState();
+    defer shallower_group.deinit();
+
+    const second_page = try shallower_group.addPage("Page");
+    const second_child = try shallower_group.makeObject(second_page, "child", null, .text, .text, "Child");
+    const second_group = try shallower_group.makeGroupWithOrigin(second_page, true, &.{second_child}, "group");
+    try shallower_group.addConstraintUpdate(second_group, .left, .position, 0, .{ .page = .left }, 100, "caller-group");
+    try shallower_group.addConstraintUpdate(second_child, .left, .position, 1, .{ .page = .left }, 160, "component-child");
+
+    try core.constraint_updates.resolve(&shallower_group);
+
+    try testing.expect(shallower_group.constraint_updates.items[0].active);
+    try testing.expect(!shallower_group.constraint_updates.items[1].active);
+    try testing.expectEqual(@as(usize, 1), shallower_group.constraints.items.len);
+    try testing.expectEqual(second_group, shallower_group.constraints.items[0].target_node);
+    try testing.expectEqual(@as(usize, 1), shallower_group.overridden_constraints.items.len);
 }
 
 test "core IR spec: size updates preserve position constraints" {
