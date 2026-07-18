@@ -409,9 +409,7 @@ fn validateLayoutEdit(
     node_id: u32,
     expected_x: f64,
     expected_y: f64,
-    expected_width: f64,
-    expected_height: f64,
-) !bool {
+) !feature_edit.ValidationResult {
     const server: *Server = @ptrCast(@alignCast(context));
     try server.checkCanceled();
     var diagnostics = DiagnosticSet.init(server.allocator);
@@ -419,14 +417,19 @@ fn validateLayoutEdit(
     var snapshot = server.buildAnalysisWithOverride(path, &diagnostics, .{
         .path = path,
         .source = source,
-    }, false) catch return false;
+    }, false) catch |err| switch (err) {
+        error.Canceled => return err,
+        else => return .analysis_failed,
+    };
     defer snapshot.deinit();
-    const layout = if (snapshot.layout_output) |*value| value else return false;
-    var parsed = utils.json.parseValue(server.allocator, layout.conflicts_json, .{}) catch return false;
+    const layout = if (snapshot.layout_output) |*value| value else return .analysis_failed;
+    var parsed = utils.json.parseValue(server.allocator, layout.conflicts_json, .{}) catch return .analysis_failed;
     defer parsed.deinit();
-    if (parsed.value != .object) return false;
-    const objects = utils.json.arrayFieldObject(&parsed.value.object, "objects") orelse return false;
-    const pages = utils.json.arrayFieldObject(&parsed.value.object, "pages") orelse return false;
+    if (parsed.value != .object) return .analysis_failed;
+    const failures = utils.json.arrayFieldObject(&parsed.value.object, "failures") orelse return .analysis_failed;
+    if (failures.items.len != 0) return .layout_conflict;
+    const objects = utils.json.arrayFieldObject(&parsed.value.object, "objects") orelse return .analysis_failed;
+    const pages = utils.json.arrayFieldObject(&parsed.value.object, "pages") orelse return .analysis_failed;
 
     var object: ?*const utils.json.ObjectMap = null;
     for (objects.items) |*item| {
@@ -436,8 +439,8 @@ fn validateLayoutEdit(
             break;
         }
     }
-    const value = object orelse return false;
-    const page_id = utils.json.intField(value, "page_id") orelse return false;
+    const value = object orelse return .target_missing;
+    const page_id = utils.json.intField(value, "page_id") orelse return .analysis_failed;
     var page_height: ?f64 = null;
     for (pages.items) |*item| {
         if (item.* != .object) continue;
@@ -445,16 +448,13 @@ fn validateLayoutEdit(
         page_height = utils.json.numberField(&item.object, "height");
         break;
     }
-    const core_x = utils.json.numberField(value, "x") orelse return false;
-    const core_y = utils.json.numberField(value, "y") orelse return false;
-    const width = utils.json.numberField(value, "width") orelse return false;
-    const height = utils.json.numberField(value, "height") orelse return false;
-    const preview_y = (page_height orelse return false) - core_y - height;
+    const core_x = utils.json.numberField(value, "x") orelse return .analysis_failed;
+    const core_y = utils.json.numberField(value, "y") orelse return .analysis_failed;
+    const height = utils.json.numberField(value, "height") orelse return .analysis_failed;
+    const preview_y = (page_height orelse return .analysis_failed) - core_y - height;
     const tolerance: f64 = core.layout.graph.ConstraintTolerance;
-    return @abs(core_x - expected_x) <= tolerance and
-        @abs(preview_y - expected_y) <= tolerance and
-        @abs(width - expected_width) <= tolerance and
-        @abs(height - expected_height) <= tolerance;
+    if (@abs(core_x - expected_x) > tolerance or @abs(preview_y - expected_y) > tolerance) return .position_mismatch;
+    return .matched;
 }
 
 const AnalysisLayoutContext = struct {

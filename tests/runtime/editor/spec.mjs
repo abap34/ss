@@ -14,7 +14,9 @@ import {
 } from "./support.mjs";
 
 await testSnapshotAndSourceEdits();
+await testPositionEditsAllowReflowAndMoveReturnedGroups();
 await testSnapshotAssetsUseContentAddressedFiles();
+await testSnapshotRecoversAfterInvalidEdit();
 await testLastGoodSnapshotsAreKeptPerEntry();
 
 async function testSnapshotAndSourceEdits() {
@@ -351,6 +353,140 @@ end
 `;
 }
 
+async function testPositionEditsAllowReflowAndMoveReturnedGroups() {
+  const project = await mkdtemp(
+    path.join(os.tmpdir(), "ss-lsp-wysiwyg-position-"),
+  );
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = `import std:themes/default as *
+
+fn/! grouped() -> Object
+  let title = text("Grouped title")
+  let rule = text("-")
+  ~ title.left == page.left + 72
+  ~ title.top == page.top - 100
+  ~ rule.left == title.left
+  ~ rule.top == title.bottom - 30
+  return group(title, rule)
+end
+
+page demo
+text! <<
+This line is deliberately wide enough to use the default text width and reflow when it moves toward the right page edge.
+>>
+grouped!()
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source });
+      const initialDiagnostics = (await diagnosticsPromise).params.diagnostics;
+      assert(
+        initialDiagnostics.length === 0,
+        `position validation fixture produced diagnostics: ${JSON.stringify(initialDiagnostics)}`,
+      );
+
+      let snapshot = await editorSnapshot(client, uri);
+      const textTarget = editingTarget(snapshot, "text_item");
+      const textFrom = previewBounds(snapshot, textTarget.node_id);
+      const textTo = {
+        ...textFrom,
+        x: textFrom.x + 140,
+        y: textFrom.y + 20,
+      };
+      const textEdit = await requestEdit(
+        client,
+        uri,
+        snapshot,
+        textTarget,
+        textFrom,
+        textTo,
+        "absolute",
+        textTarget.page_id,
+      );
+      assert(
+        textEdit.status === "ok",
+        `reflowing text edit was rejected: ${JSON.stringify(textEdit)}`,
+      );
+      let updated = applyProtocolEdits(
+        source,
+        textEdit.workspaceEdit?.changes?.[uri] ?? [],
+      );
+      let diagnostics = client.waitForDiagnostics(uri);
+      client.changeDocument({ uri, version: 2, text: updated });
+      assert(
+        (await diagnostics).params.diagnostics.length === 0,
+        "reflowing text edit produced diagnostics",
+      );
+      snapshot = await editorSnapshot(client, uri);
+      const textAfter = previewBounds(
+        snapshot,
+        editingTarget(snapshot, "text_item").node_id,
+      );
+      assertBounds(textAfter, textTo.x, textTo.y, "reflowing text edit");
+      assert(
+        textAfter.width < textFrom.width,
+        `text did not exercise width reflow: ${JSON.stringify({ textFrom, textAfter })}`,
+      );
+
+      const groupTarget = editingTarget(snapshot, "grouped_item");
+      const groupFrom = previewBounds(snapshot, groupTarget.node_id);
+      const groupTo = {
+        ...groupFrom,
+        x: groupFrom.x + 90,
+        y: groupFrom.y + 70,
+      };
+      const groupEdit = await requestEdit(
+        client,
+        uri,
+        snapshot,
+        groupTarget,
+        groupFrom,
+        groupTo,
+        "absolute",
+        groupTarget.page_id,
+      );
+      assert(
+        groupEdit.status === "ok",
+        `returned group edit was rejected: ${JSON.stringify(groupEdit)}`,
+      );
+      updated = applyProtocolEdits(
+        updated,
+        groupEdit.workspaceEdit?.changes?.[uri] ?? [],
+      );
+      assert(
+        updated.includes("let grouped_item = grouped!()") &&
+          updated.includes("~!~ grouped_item.left == page.left") &&
+          updated.includes("~!~ grouped_item.top == page.top"),
+        `returned group edit omitted its caller update: ${updated}`,
+      );
+      diagnostics = client.waitForDiagnostics(uri);
+      client.changeDocument({ uri, version: 3, text: updated });
+      assert(
+        (await diagnostics).params.diagnostics.length === 0,
+        "returned group edit produced diagnostics",
+      );
+      snapshot = await editorSnapshot(client, uri);
+      assertBounds(
+        previewBounds(
+          snapshot,
+          editingTarget(snapshot, "grouped_item").node_id,
+        ),
+        groupTo.x,
+        groupTo.y,
+        "returned group edit",
+      );
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
 async function testSnapshotAssetsUseContentAddressedFiles() {
   const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-wysiwyg-assets-"));
   try {
@@ -480,6 +616,75 @@ async function testLastGoodSnapshotsAreKeptPerEntry() {
         restoredFirst.stale === true && restoredFirst.entry_path === first,
         `first cached snapshot was replaced by the second: ${
           JSON.stringify(restoredFirst)
+        }`,
+      );
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testSnapshotRecoversAfterInvalidEdit() {
+  const project = await mkdtemp(
+    path.join(os.tmpdir(), "ss-lsp-wysiwyg-recovery-"),
+  );
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const initialSource = simpleSource("initial");
+    const invalidSource = "page broken\nlet item =\nend\n";
+    const recoveredSource = simpleSource("recovered");
+    await writeFile(slide, initialSource, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      let diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: initialSource });
+      assert(
+        (await diagnosticsPromise).params.diagnostics.length === 0,
+        "initial WYSIWYG recovery fixture produced diagnostics",
+      );
+      const initial = await editorSnapshot(client, uri);
+      assert(initial.stale !== true, "initial editor snapshot was stale");
+
+      diagnosticsPromise = client.waitForDiagnostics(
+        uri,
+        (diagnostics) => diagnostics.length > 0,
+      );
+      client.changeDocument({ uri, version: 2, text: invalidSource });
+      await diagnosticsPromise;
+      const stale = await client.request("ss/editorSnapshot", {
+        textDocument: { uri },
+      });
+      assert(
+        stale.stale === true && stale.snapshot_id === initial.snapshot_id,
+        `invalid source did not retain the last successful snapshot: ${
+          JSON.stringify(stale)
+        }`,
+      );
+
+      diagnosticsPromise = client.waitForDiagnostics(
+        uri,
+        (diagnostics) => diagnostics.length === 0,
+      );
+      client.changeDocument({ uri, version: 3, text: recoveredSource });
+      const recoveredDiagnostics = await diagnosticsPromise;
+      assert(
+        recoveredDiagnostics.params.version === 3,
+        `recovery diagnostics used version ${recoveredDiagnostics.params.version}`,
+      );
+      const recovered = await editorSnapshot(client, uri);
+      assert(recovered.stale !== true, "recovered editor snapshot remained stale");
+      assert(
+        recovered.generation > stale.generation &&
+          recovered.snapshot_id !== initial.snapshot_id,
+        `recovered editor snapshot was not rebuilt: ${JSON.stringify(recovered)}`,
+      );
+      assert(
+        recovered.layout.pages.some((page) => page.name === "recovered") &&
+          recovered.display.html.includes("recovered"),
+        `recovered editor snapshot retained the old output: ${
+          JSON.stringify(recovered)
         }`,
       );
     });

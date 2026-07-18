@@ -6,6 +6,14 @@ const protocol = @import("../protocol.zig");
 const lsp_state = @import("../state.zig");
 const utils = @import("utils");
 
+pub const ValidationResult = enum {
+    matched,
+    analysis_failed,
+    layout_conflict,
+    target_missing,
+    position_mismatch,
+};
+
 pub const Context = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -13,7 +21,7 @@ pub const Context = struct {
     active_editor_paths: *const std.StringHashMap(void),
     provider: *lsp_state.AnalysisProvider,
     validation_context: *anyopaque,
-    validate: *const fn (context: *anyopaque, path: []const u8, source: []const u8, node_id: u32, x: f64, y: f64, width: f64, height: f64) anyerror!bool,
+    validate: *const fn (context: *anyopaque, path: []const u8, source: []const u8, node_id: u32, x: f64, y: f64) anyerror!ValidationResult,
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
@@ -85,9 +93,9 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         return try statusJson(ctx.allocator, "unsupported", "Invalid target bounds.");
     const to_y = protocol.numberField(to_bounds, "y") orelse
         return try statusJson(ctx.allocator, "unsupported", "Invalid target bounds.");
-    const to_width = protocol.numberField(to_bounds, "width") orelse
+    _ = protocol.numberField(to_bounds, "width") orelse
         return try statusJson(ctx.allocator, "unsupported", "Invalid target bounds.");
-    const to_height = protocol.numberField(to_bounds, "height") orelse
+    _ = protocol.numberField(to_bounds, "height") orelse
         return try statusJson(ctx.allocator, "unsupported", "Invalid target bounds.");
     const mode = protocol.stringField(request_object, "mode") orelse "absolute";
     if (!std.mem.eql(u8, mode, "absolute") and !std.mem.eql(u8, mode, "relative")) {
@@ -130,8 +138,12 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
 
     const edited_source = try editor_edit.applyEdits(ctx.allocator, source, edit_result.edits);
     defer ctx.allocator.free(edited_source);
-    if (!try ctx.validate(ctx.validation_context, path, edited_source, node_id, to_x, to_y, to_width, to_height)) {
-        return try statusJson(ctx.allocator, "rejected", "The proposed source edit did not reproduce the requested position.");
+    switch (try ctx.validate(ctx.validation_context, path, edited_source, node_id, to_x, to_y)) {
+        .matched => {},
+        .analysis_failed => return try statusJson(ctx.allocator, "rejected", "The proposed source edit does not compile."),
+        .layout_conflict => return try statusJson(ctx.allocator, "rejected", "The proposed source edit conflicts with existing layout constraints."),
+        .target_missing => return try statusJson(ctx.allocator, "rejected", "The edited object could not be identified after recompilation."),
+        .position_mismatch => return try statusJson(ctx.allocator, "rejected", "The proposed source edit did not reproduce the requested position."),
     }
 
     const uri = try protocol.uriFromPath(ctx.allocator, path);
