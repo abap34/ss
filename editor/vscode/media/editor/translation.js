@@ -58,7 +58,7 @@ export class TranslationController {
     if (message.status === "applied") {
       this.pending.phase = "applied";
       this.pending.appliedDocumentVersion = message.documentVersion;
-      return null;
+      return { status: "applied" };
     }
     if (message.status === "stale") {
       this.pending.phase = "stale";
@@ -67,7 +67,7 @@ export class TranslationController {
 
     const error = message.message || "The edit could not be applied.";
     this.pending = null;
-    return error;
+    return { status: "failed", message: error };
   }
 
   reconcile(snapshot, documentVersion) {
@@ -101,7 +101,7 @@ export class TranslationController {
     const authoritative = previewFrame(page, object);
     if (samePosition(authoritative, pending.desired)) {
       this.pending = null;
-      return { status: "updated" };
+      return null;
     }
     const needsFollowUp = pending.phase === "stale" ||
       pending.changedAfterRequest;

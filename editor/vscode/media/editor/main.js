@@ -60,19 +60,19 @@ window.addEventListener("message", (event) => {
     translation.cancel();
     showError(message.message || "WYSIWYG preview update failed.");
   } else if (message.type === "editResult") {
-    const error = translation.acceptResult(message);
-    if (error) showError(error);
+    const editOutcome = translation.acceptResult(message);
+    if (editOutcome?.status === "applied") {
+      showSuccess("Constraint applied to source.");
+    } else if (editOutcome?.status === "failed") {
+      showError(editOutcome.message);
+    }
   }
 });
 
 function acceptSnapshot(message) {
   if (!Number.isSafeInteger(message.revision) ||
       message.revision <= state.revision || !message.snapshot) return;
-  if (toastTimer != null) {
-    clearTimeout(toastTimer);
-    toastTimer = null;
-  }
-  state.toast = null;
+  if (state.toast?.kind === "error") clearToast();
   textAlignmentFailed = false;
   if (state.snapshot) disposePages(state.snapshot);
   disposePdfItems(app);
@@ -86,9 +86,6 @@ function acceptSnapshot(message) {
   let toastDuration = null;
   if (buildFailure) {
     state.toast = { kind: "error", message: buildFailure };
-  } else if (editOutcome?.status === "updated") {
-    state.toast = { kind: "success", message: "Position updated." };
-    toastDuration = successToastDuration;
   } else if (editOutcome?.status === "failed") {
     state.toast = { kind: "error", message: editOutcome.message };
     toastDuration = errorToastDuration;
@@ -105,10 +102,22 @@ function acceptSnapshot(message) {
   if (toastDuration != null) scheduleToastClear(toastDuration);
 }
 
+function showSuccess(message) {
+  state.toast = { kind: "success", message };
+  render();
+  scheduleToastClear(successToastDuration);
+}
+
 function showError(message) {
   state.toast = { kind: "error", message };
   render();
   scheduleToastClear(errorToastDuration);
+}
+
+function clearToast() {
+  if (toastTimer != null) clearTimeout(toastTimer);
+  toastTimer = null;
+  state.toast = null;
 }
 
 function scheduleToastClear(duration) {

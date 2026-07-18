@@ -68,6 +68,12 @@ export async function exerciseTranslationLifecycle(page, current) {
     status: "applied",
     documentVersion: 2,
   });
+  await page.waitForSelector(".toast--success");
+  assert.equal(
+    await page.locator(".toast--success").textContent(),
+    "Constraint applied to source.",
+    "the applied source edit did not report its constraint update immediately",
+  );
   const firstApplied = translatedSnapshot(
     current,
     translate.toBounds,
@@ -101,11 +107,7 @@ export async function exerciseTranslationLifecycle(page, current) {
     status: "applied",
     documentVersion: 3,
   });
-  assert.equal(
-    await page.locator(".toast--success").count(),
-    0,
-    "the source-edit acknowledgement reported success before the preview was verified",
-  );
+  await page.waitForSelector(".toast--success");
   const finalSnapshot = translatedSnapshot(
     firstApplied,
     followUp.toBounds,
@@ -118,8 +120,8 @@ export async function exerciseTranslationLifecycle(page, current) {
   await page.waitForSelector(".toast--success");
   assert.equal(
     await page.locator(".toast--success").textContent(),
-    "Position updated.",
-    "a verified position update did not report success",
+    "Constraint applied to source.",
+    "the verified preview discarded the source-update acknowledgement",
   );
   assert.equal(
     await page.locator(".toast--success").getAttribute("role"),
