@@ -90,6 +90,10 @@ function copyRenderAssets() {
     path.join(repoRoot, "third_party", "pdfjs", "LICENSE"),
     path.join(pdfjsRoot, "LICENSE"),
   );
+  fs.copyFileSync(
+    path.join(repoRoot, "src", "render", "html", "text.js"),
+    path.join(renderRoot, "text.js"),
+  );
 }
 
 async function main() {

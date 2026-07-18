@@ -39,7 +39,7 @@ export function editorSnapshot() {
     display: {
       schema: 2,
       html: sharedHtml(),
-      css: ".ss-page{position:relative;overflow:hidden;background:#fff}.ss-item{position:absolute}.ss-box{background:#b7d8d0}.ss-pdf{overflow:hidden}.ss-pdf>canvas,.ss-pdf-layer{position:absolute;inset:0;width:100%;height:100%}.ss-pdf-layer{overflow:hidden}",
+      css: ".ss-page{position:relative;overflow:hidden;background:#fff}.ss-item,.ss-text-run,.ss-text-cluster{position:absolute}.ss-text,.ss-text-run,.ss-text-cluster{white-space:pre}.ss-box{background:#b7d8d0}.ss-pdf{overflow:hidden}.ss-pdf>canvas,.ss-pdf-layer{position:absolute;inset:0;width:100%;height:100%}.ss-pdf-layer{overflow:hidden}",
       has_pdf: true,
       assets: [],
     },
@@ -85,5 +85,5 @@ function relation(index, kind, axis, offset, expression, sourceType, sourceNode,
 }
 
 function sharedHtml() {
-  return `<section class="ss-page" data-ss-page-id="11" style="width:1280pt;height:720pt"><div class="ss-item ss-box" data-ss-item-id="4294967297" data-ss-node-id="101" style="left:100pt;top:120pt;width:360pt;height:100pt"></div><div class="ss-item ss-pdf" data-pdf-src="asset.pdf" data-page="1" data-view-box="0,0,240,120" data-rotation="0" data-canvas-background="transparent" data-copy-annotations="false" style="left:600pt;top:120pt;width:200pt;height:100pt"><div class="ss-pdf-layer ss-pdf-text"></div><div class="ss-pdf-layer ss-pdf-annotations"></div></div></section><section class="ss-page" data-ss-page-id="22" style="width:1280pt;height:720pt"><div class="ss-item ss-box" data-ss-item-id="8589934593" data-ss-node-id="201" style="left:60pt;top:130pt;width:120pt;height:60pt"></div><div class="ss-item ss-box" data-ss-item-id="8589934594" data-ss-node-id="202" style="left:240pt;top:130pt;width:380pt;height:120pt"></div></section>`;
+  return `<section class="ss-page" data-ss-page-id="11" style="width:1280pt;height:720pt"><div class="ss-item ss-box" data-ss-item-id="4294967297" data-ss-node-id="101" style="left:100pt;top:120pt;width:360pt;height:100pt"></div><span class="ss-item ss-text" style="left:100pt;top:260pt;width:200pt;height:30pt"><span class="ss-text-run" data-ss-baseline-y="24" style="left:0;top:0;font:20pt/30pt sans-serif"><span class="ss-text-cluster" style="left:0">Preview text</span></span></span><div class="ss-item ss-pdf" data-pdf-src="asset.pdf" data-page="1" data-view-box="0,0,240,120" data-rotation="0" data-canvas-background="transparent" data-copy-annotations="false" style="left:600pt;top:120pt;width:200pt;height:100pt"><div class="ss-pdf-layer ss-pdf-text"></div><div class="ss-pdf-layer ss-pdf-annotations"></div></div></section><section class="ss-page" data-ss-page-id="22" style="width:1280pt;height:720pt"><div class="ss-item ss-box" data-ss-item-id="8589934593" data-ss-node-id="201" style="left:60pt;top:130pt;width:120pt;height:60pt"></div><div class="ss-item ss-box" data-ss-item-id="8589934594" data-ss-node-id="202" style="left:240pt;top:130pt;width:380pt;height:120pt"></div></section>`;
 }

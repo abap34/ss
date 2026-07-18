@@ -1,4 +1,5 @@
 import { element } from "./dom.js";
+import { alignTextBaselines } from "../../out/render/text.js";
 import { disposePages } from "./document.js";
 import { EditorNavigation } from "./navigation.js";
 import { disposePdfItems, disposePdfRuntime } from "./pdf.js";
@@ -22,6 +23,8 @@ const state = {
 const app = document.getElementById("app");
 document.documentElement.dataset.theme = state.theme;
 let toastTimer = null;
+let renderGeneration = 0;
+let textAlignmentFailed = false;
 
 const actions = {
   post: (message) => vscode.postMessage(message),
@@ -43,6 +46,9 @@ window.addEventListener("message", (event) => {
   if (message.type === "snapshot") {
     acceptSnapshot(message);
   } else if (message.type === "error") {
+    if (!Number.isSafeInteger(message.revision) ||
+        message.revision <= state.revision) return;
+    state.revision = message.revision;
     showError(message.message || "WYSIWYG preview update failed.");
   } else if (message.type === "editResult") {
     if (message.status !== "stale") {
@@ -54,6 +60,12 @@ window.addEventListener("message", (event) => {
 function acceptSnapshot(message) {
   if (!Number.isSafeInteger(message.revision) ||
       message.revision <= state.revision || !message.snapshot) return;
+  if (toastTimer != null) {
+    clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+  state.toast = null;
+  textAlignmentFailed = false;
   if (state.snapshot) disposePages(state.snapshot);
   disposePdfItems(app);
   state.revision = message.revision;
@@ -81,14 +93,24 @@ function showError(message) {
 }
 
 function render() {
+  const generation = ++renderGeneration;
   navigation.rememberViewport(workspace.viewport);
   resizeObserver.disconnect();
   app.replaceChildren();
+  delete app.dataset.ssTextAligned;
   const shell = element("div", "editor-shell");
   shell.append(renderActivityRail(state, { toggleSidebar, toggleTheme }));
   if (state.sidebar) shell.append(renderSidebar(state, actions));
   shell.append(workspace.render());
   app.append(shell);
+  void alignTextBaselines(app).then(() => {
+    if (generation !== renderGeneration) return;
+    app.dataset.ssTextAligned = "true";
+  }).catch((error) => {
+    if (generation !== renderGeneration || textAlignmentFailed) return;
+    textAlignmentFailed = true;
+    showError(error instanceof Error ? error.message : String(error));
+  });
   navigation.restoreViewport(workspace.viewport);
   if (workspace.viewport) resizeObserver.observe(workspace.viewport);
   requestAnimationFrame(() => {

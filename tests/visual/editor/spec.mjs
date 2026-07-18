@@ -38,6 +38,7 @@ await esbuild.build({
     },
   }],
 });
+await cp(path.join(repository, "src/render/html/text.js"), path.join(output, "out/render/text.js"));
 await cp(path.join(repository, "third_party/pdfjs/pdf.mjs"), path.join(output, "out/pdfjs/pdf.mjs"));
 await cp(path.join(repository, "third_party/pdfjs/pdf.worker.mjs"), path.join(output, "out/pdfjs/pdf.worker.mjs"));
 await writeFile(path.join(output, "asset.pdf"), pdfAsset());
@@ -63,6 +64,12 @@ await withBrowser(output, async (browser, baseUrl) => {
     const current = editorSnapshot();
     await postSnapshot(page, 100, current);
     await page.waitForSelector('.page-shell[data-page-id="11"]');
+    await page.waitForFunction(() => document.getElementById("app")?.dataset.ssTextAligned === "true");
+    assert.match(
+      await page.locator(".ss-text-run[data-ss-baseline-y]").first().getAttribute("style"),
+      /top:\s*calc\(/,
+      "editor preview did not align an HTML text run to its IR baseline",
+    );
     assert.equal(await page.locator(".ss-pdf > canvas").count(), 0,
       "editor exposed an empty PDF canvas while the source was loading");
     releasePdfRequest();
@@ -117,6 +124,15 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas').evaluate((canvas) => {
       canvas.dataset.identity = "retained";
     });
+
+    await page.locator('.page-shell[data-page-id="22"] .object-hit[data-object-id="201"]').click();
+    await page.waitForSelector(".object-sheet");
+    assert.equal(
+      await page.locator(".sheet-heading strong").textContent(),
+      "label",
+      "an object without a source edit target could not be selected",
+    );
+    await page.locator(".close-button").click();
 
     await page.locator('.page-shell[data-page-id="22"] .object-hit[data-object-id="202"]').click();
     await page.waitForSelector(".object-sheet");
@@ -182,6 +198,36 @@ await withBrowser(output, async (browser, baseUrl) => {
       "theme change recreated a rendered PDF canvas",
     );
 
+    await page.evaluate(() => {
+      window.postMessage({
+        type: "error",
+        revision: 101,
+        message: "WYSIWYG preview update failed.",
+      }, "*");
+    });
+    await page.waitForSelector(".error-toast");
+    await postSnapshot(page, 102, current);
+    await page.waitForFunction(() => !document.querySelector(".error-toast"));
+    assert.equal(
+      await page.locator(".error-toast").count(),
+      0,
+      "a successful recovery retained the previous preview error",
+    );
+
+    await page.evaluate(() => {
+      window.postMessage({
+        type: "error",
+        revision: 101,
+        message: "obsolete preview failure",
+      }, "*");
+    });
+    await page.waitForTimeout(50);
+    assert.equal(
+      await page.locator(".error-toast").count(),
+      0,
+      "an obsolete preview error replaced a newer snapshot",
+    );
+
     await page.getByRole("button", { name: "Pages" }).click();
     assert.equal(await page.locator("aside.sidebar").count(), 0, "active sidebar did not close through its activity button");
     await page.getByRole("button", { name: "Outline" }).click();
@@ -192,7 +238,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     restarted.generation = 1;
     restarted.snapshot_id = "1-restarted";
     restarted.layout.pages[1].name = "Restarted";
-    await postSnapshot(page, 101, restarted);
+    await postSnapshot(page, 103, restarted);
     await page.waitForFunction(() => [...document.querySelectorAll(".page-caption")]
       .some((caption) => caption.textContent === "Restarted"));
     assert.equal(await page.evaluate(() => globalThis.__retiringPdfRoots.every((root) =>
