@@ -260,6 +260,11 @@ export class EditorController implements vscode.Disposable {
     // Invalidate an in-flight response as soon as an edit is observed, not
     // after the debounce timer expires.
     session.serial += 1;
+    void this.post(session, {
+      type: "buildStatus",
+      revision: session.serial,
+      status: "building",
+    });
     if (session.timer) clearTimeout(session.timer);
     const serial = session.serial;
     session.timer = setTimeout(() => {
@@ -269,8 +274,16 @@ export class EditorController implements vscode.Disposable {
   }
 
   private async refresh(session: Session, serial: number): Promise<void> {
+    if (session.disposed || serial !== session.serial) return;
     const client = this.clientProvider();
-    if (!client || session.disposed || serial !== session.serial) return;
+    if (!client) {
+      await this.post(session, {
+        type: "buildStatus",
+        revision: serial,
+        status: "unavailable",
+      });
+      return;
+    }
     if (session.requestRunning) {
       // The server handles requests serially. Coalescing here prevents obsolete
       // snapshot work from forming a queue during rapid edits.

@@ -64,8 +64,12 @@ await withBrowser(output, async (browser, baseUrl) => {
     });
     await page.goto(`${baseUrl}/index.html`, { waitUntil: "networkidle" });
     await page.waitForFunction(() => globalThis.__messages?.some((message) => message.type === "ready"));
+    await expectBuildStatus(page, "starting", "Starting…");
+    await postBuildStatus(page, 100, "building");
+    await expectBuildStatus(page, "building", "Building…");
     const current = editorSnapshot();
     await postSnapshot(page, 100, current);
+    await expectBuildStatus(page, "complete", "Build complete");
     await page.waitForSelector('.page-shell[data-page-id="11"]');
     await page.waitForFunction(() => document.getElementById("app")?.dataset.ssTextAligned === "true");
     assert.match(
@@ -208,6 +212,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     ];
     await postSnapshot(page, 107, failed, 6);
     await page.waitForSelector(".toast--error");
+    await expectBuildStatus(page, "failed", "Build failed");
     assert.equal(
       await page.locator(".toast--error").textContent(),
       "Build failed. The preview is showing the last successful result.\n" +
@@ -222,6 +227,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     );
     await postSnapshot(page, 109, finalSnapshot, 7);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
+    await expectBuildStatus(page, "complete", "Build complete");
 
     await page.evaluate(() => {
       window.postMessage({
@@ -231,8 +237,14 @@ await withBrowser(output, async (browser, baseUrl) => {
       }, "*");
     });
     await page.waitForSelector(".toast--error");
+    await expectBuildStatus(page, "failed", "Build failed");
     await postSnapshot(page, 111, finalSnapshot, 7);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
+    await expectBuildStatus(page, "complete", "Build complete");
+    await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas')
+      .evaluate((canvas) => {
+        canvas.dataset.identity = "retained-through-status";
+      });
     assert.equal(
       await page.locator(".toast--error").count(),
       0,
@@ -253,6 +265,27 @@ await withBrowser(output, async (browser, baseUrl) => {
       "an obsolete preview error replaced a newer snapshot",
     );
 
+    await postBuildStatus(page, 112, "building");
+    await expectBuildStatus(page, "building", "Building…");
+    await postBuildStatus(page, 112, "unavailable");
+    await expectBuildStatus(
+      page,
+      "unavailable",
+      "Language server unavailable",
+    );
+    await postBuildStatus(page, 111, "building");
+    await expectBuildStatus(
+      page,
+      "unavailable",
+      "Language server unavailable",
+    );
+    assert.equal(
+      await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas')
+        .getAttribute("data-identity"),
+      "retained-through-status",
+      "build status changes recreated the rendered preview",
+    );
+
     await page.getByRole("button", { name: "Pages" }).click();
     assert.equal(await page.locator("aside.sidebar").count(), 0, "active sidebar did not close through its activity button");
     await page.getByRole("button", { name: "Outline" }).click();
@@ -263,7 +296,10 @@ await withBrowser(output, async (browser, baseUrl) => {
     restarted.generation = 1;
     restarted.snapshot_id = "1-restarted";
     restarted.layout.pages[1].name = "Restarted";
-    await postSnapshot(page, 112, restarted, 7);
+    await postBuildStatus(page, 113, "building");
+    await expectBuildStatus(page, "building", "Building…");
+    await postSnapshot(page, 113, restarted, 7);
+    await expectBuildStatus(page, "complete", "Build complete");
     await page.waitForFunction(() => [...document.querySelectorAll(".page-caption")]
       .some((caption) => caption.textContent === "Restarted"));
     assert.equal(await page.evaluate(() => globalThis.__retiringPdfRoots.every((root) =>
@@ -310,6 +346,25 @@ async function postSnapshot(page, revision, value, documentVersion = 1) {
       snapshot: snapshotValue,
     }, "*");
   }, { deliveryRevision: revision, snapshotValue: value, version: documentVersion });
+}
+
+async function postBuildStatus(page, revision, status) {
+  await page.evaluate((message) => window.postMessage(message, "*"), {
+    type: "buildStatus",
+    revision,
+    status,
+  });
+}
+
+async function expectBuildStatus(page, status, label) {
+  await page.waitForFunction(({ expectedStatus, expectedLabel }) => {
+    const node = document.querySelector(".build-status");
+    return node?.classList.contains(`build-status--${expectedStatus}`) &&
+      node.querySelector(".build-status-label")?.textContent === expectedLabel;
+  }, { expectedStatus: status, expectedLabel: label });
+  const node = page.locator(".build-status");
+  assert.equal(await node.getAttribute("role"), "status");
+  assert.equal(await node.getAttribute("title"), label);
 }
 
 async function lastMessage(page, type) {

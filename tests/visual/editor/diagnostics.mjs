@@ -15,6 +15,10 @@ export async function exerciseBuildDiagnosticMessages(
     const initialFailure = emptyFailedSnapshot(successfulSnapshot);
     await postSnapshot(page, 1, initialFailure, 1);
     await page.waitForSelector(".toast--error");
+    assert.equal(
+      await page.locator(".build-status-label").textContent(),
+      "Build failed",
+    );
     const initialMessage = await page.locator(".toast--error").textContent();
     assert(initialMessage.startsWith("Build failed. No preview is available yet."));
     assert(initialMessage.includes(
@@ -27,6 +31,10 @@ export async function exerciseBuildDiagnosticMessages(
 
     await postSnapshot(page, 2, successfulSnapshot, 2);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
+    assert.equal(
+      await page.locator(".build-status-label").textContent(),
+      "Build complete",
+    );
 
     const failedUpdate = structuredClone(successfulSnapshot);
     failedUpdate.stale = true;
