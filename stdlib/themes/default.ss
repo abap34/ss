@@ -78,6 +78,45 @@ fn default_theme() -> Theme
         right_inset = 96
       }
     }
+    h4 = TextBlockStyle {
+      text = TextStyle {
+        font = FontFace { family = "Helvetica", weight = 700 }
+        size = 22
+        line_height = 29
+        color = c"0.12,0.14,0.18"
+      }
+      layout = LayoutStyle {
+        spacing_after = 24
+        x = 96
+        right_inset = 96
+      }
+    }
+    h5 = TextBlockStyle {
+      text = TextStyle {
+        font = FontFace { family = "Helvetica", weight = 700 }
+        size = 20
+        line_height = 27
+        color = c"0.14,0.16,0.20"
+      }
+      layout = LayoutStyle {
+        spacing_after = 22
+        x = 96
+        right_inset = 96
+      }
+    }
+    h6 = TextBlockStyle {
+      text = TextStyle {
+        font = FontFace { family = "Helvetica", weight = 700 }
+        size = 18
+        line_height = 25
+        color = c"0.16,0.18,0.22"
+      }
+      layout = LayoutStyle {
+        spacing_after = 20
+        x = 96
+        right_inset = 96
+      }
+    }
     head = TextBlockStyle {
       text = TextStyle {
         font = FontFace { family = "Helvetica", weight = 700 }
@@ -405,35 +444,39 @@ end
 
 fn/! h1(title_text: String, theme: Theme = current_theme()) -> Object
   let title = objects::title_obj(title_text)
-  title.text = theme.h1.text
-  title.layout = theme.h1.layout
-  title.underline = theme.h1.underline
-  return title
+  return base::apply_text_block_style(title, theme.h1)
 end
 
 fn/! h2(subtitle_text: String, theme: Theme = current_theme()) -> Object
   let subtitle = objects::sub_obj(subtitle_text)
-  subtitle.text = theme.h2.text
-  subtitle.layout = theme.h2.layout
-  subtitle.underline = theme.h2.underline
-  return subtitle
+  return base::apply_text_block_style(subtitle, theme.h2)
 end
 
 fn/! h3(subtitle_text: String, theme: Theme = current_theme()) -> Object
   let subtitle = objects::sub_obj(subtitle_text)
-  subtitle.text = theme.h3.text
-  subtitle.layout = theme.h3.layout
-  subtitle.underline = theme.h3.underline
-  return subtitle
+  return base::apply_text_block_style(subtitle, theme.h3)
+end
+
+fn/! h4(subtitle_text: String, theme: Theme = current_theme()) -> Object
+  let subtitle = objects::sub_obj(subtitle_text)
+  return base::apply_text_block_style(subtitle, theme.h4)
+end
+
+fn/! h5(subtitle_text: String, theme: Theme = current_theme()) -> Object
+  let subtitle = objects::sub_obj(subtitle_text)
+  return base::apply_text_block_style(subtitle, theme.h5)
+end
+
+fn/! h6(subtitle_text: String, theme: Theme = current_theme()) -> Object
+  let subtitle = objects::sub_obj(subtitle_text)
+  return base::apply_text_block_style(subtitle, theme.h6)
 end
 
 fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
   let rule = components::rule()
   let title = objects::title_obj(title_text)
-  title.text = theme.head.text
-  title.layout = theme.head.layout
-  title.underline = theme.head.underline
-  rule.rule = theme.cover.accent.rule
+  base::apply_text_block_style(title, theme.head)
+  base::apply_rule_block_style(rule, theme.cover.accent)
   rule.layout.spacing_after = 48
   ~ title.left == page.left + 72
   ~ title.top == page.top - 56
@@ -445,9 +488,7 @@ end
 
 fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
   let subtitle = objects::sub_obj(subtitle_text)
-  subtitle.text = theme.subhead.text
-  subtitle.layout = theme.subhead.layout
-  subtitle.underline = theme.subhead.underline
+  base::apply_text_block_style(subtitle, theme.subhead)
   ~ subtitle.left == page.left + 96
   ~ subtitle.right == page.right - 96
   ~ subtitle.top == page.top - 124
@@ -456,19 +497,42 @@ end
 
 fn/! text(text_value: String, theme: Theme = current_theme()) -> Object
   let body = objects::body_obj(text_value)
-  body.text = theme.body.text
-  body.layout = theme.body.layout
-  body.underline = theme.body.underline
+  base::apply_markdown_text_style(body, theme)
   render::code_theme(body, theme.code.highlight)
   return body
 end
 
 fn/! note(text_value: String, theme: Theme = current_theme()) -> Object
   let note = objects::note_obj(text_value)
-  note.text = theme.note.text
-  note.layout = theme.note.layout
-  note.underline = theme.note.underline
-  return note
+  return base::apply_text_block_style(note, theme.note)
+end
+
+fn/! byline(text_value: String, theme: Theme = current_theme()) -> Object
+  return base::byline_with_style(text_value, theme.byline)
+end
+
+fn/! label(text_value: String, theme: Theme = current_theme()) -> Object
+  return base::label_with_style(text_value, theme.label)
+end
+
+fn/! citation(target: Object, number: Number, reference_text: String, theme: Theme = current_theme()) -> Object
+  return base::citation_with_style(target, number, reference_text, theme.citation)
+end
+
+fn/! pageno(theme: Theme = current_theme()) -> Object
+  return base::pageno_with_style(theme.generated.pageno)
+end
+
+fn pagenos!(format: String? = none, theme: Theme = current_theme()) -> Void
+  base::pagenos_with_style!(format, theme.generated.pageno)
+end
+
+fn footers!(text_value: String, theme: Theme = current_theme()) -> Void
+  base::footers_with_style!(text_value, theme.generated.footer)
+end
+
+fn watermark!(text_value: String, theme: Theme = current_theme()) -> Void
+  base::watermark_with_style!(text_value, theme.generated.watermark)
 end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
@@ -482,13 +546,9 @@ end
 
 fn/! figure(text_value: String, theme: Theme = current_theme()) -> Object
   let obj = objects::raw_obj(text_value, "figure", "figure_text")
-  obj.text = theme.figure.text
-  obj.layout = theme.figure.layout
+  base::apply_figure_block_style(obj, theme.figure)
+  base::apply_markdown_heading_styles(obj, theme)
   render::code_theme(obj, theme.code.highlight)
-  let chrome = components::panel()
-  chrome.chrome = theme.figure.chrome
-  chrome.layout.spacing_after = theme.figure.layout.spacing_after
-  layout::surround(chrome, obj, theme.figure.chrome.pad_x, theme.figure.chrome.pad_y)
   return obj
 end
 
@@ -497,8 +557,7 @@ fn/! image(path_value: String, factor: Number = 1, theme: Theme = current_theme(
   let image_style = theme.image with {
     asset.scale = factor
   }
-  obj.layout = image_style.layout
-  obj.asset = image_style.asset
+  base::apply_asset_block_style(obj, image_style)
   require_asset_exists(obj)
   return obj
 end
@@ -510,12 +569,7 @@ fn/! pdf(path_value: String, factor: Number = 1, page_number: Number = 1, page_b
     asset.pdf_page = page_number
     asset.pdf_box = page_box
   }
-  obj.layout = pdf_style.layout
-  obj.asset = pdf_style.asset
-  let chrome = components::panel()
-  chrome.chrome = theme.pdf.chrome
-  chrome.layout.spacing_after = theme.pdf.layout.spacing_after
-  layout::surround(chrome, obj, theme.pdf.chrome.pad_x, theme.pdf.chrome.pad_y)
+  base::apply_asset_block_style(obj, pdf_style)
   require_asset_exists(obj)
   return obj
 end
@@ -523,13 +577,8 @@ end
 fn/! code(text_value: String, language_name: String = "python", theme: Theme = current_theme()) -> Object
   let code = objects::code_obj(text_value)
   code.language = language_name
-  code.text = theme.code.text
-  code.layout = theme.code.layout
+  base::apply_code_block_style(code, theme.code)
   render::code_theme(code, theme.code.highlight)
-  let chrome = components::panel()
-  chrome.chrome = theme.code.chrome
-  chrome.layout.spacing_after = theme.code.layout.spacing_after
-  layout::surround(chrome, code, theme.code.chrome.pad_x, theme.code.chrome.pad_y)
   return code
 end
 
@@ -539,13 +588,9 @@ end
 
 fn toc(title_text: String, theme: Theme = current_theme()) -> Object
   let title = objects::lab_obj(title_text)
-  title.text = theme.toc.title.text
-  title.layout = theme.toc.title.layout
-  title.underline = theme.toc.title.underline
+  base::apply_text_block_style(title, theme.toc.title)
   let list = generated::toc_obj()
-  list.text = theme.toc.body.text
-  list.layout = theme.toc.body.layout
-  list.underline = theme.toc.body.underline
+  base::apply_text_block_style(list, theme.toc.body)
   let chrome = components::panel()
   chrome.chrome = theme.toc.chrome
   ~ list.top == title.bottom - 34
@@ -555,7 +600,7 @@ end
 
 fn toc!(title_text: String, theme: Theme = current_theme()) -> Object
   let contents = objects::place!(toc(title_text, theme))
-  components::pageno!()
+  pageno!(theme)
   return contents
 end
 
@@ -564,16 +609,10 @@ fn/! cover(title_text: String, subtitle_text: String, author_name: String, theme
   let subtitle = objects::sub_obj(subtitle_text)
   let author = objects::by_obj(author_name)
   let accent = components::rule()
-  title.text = theme.cover.title.text
-  title.layout = theme.cover.title.layout
-  title.underline = theme.cover.title.underline
-  subtitle.text = theme.cover.subtitle.text
-  subtitle.layout = theme.cover.subtitle.layout
-  subtitle.underline = theme.cover.subtitle.underline
-  author.text = theme.cover.author.text
-  author.layout = theme.cover.author.layout
-  author.underline = theme.cover.author.underline
-  accent.rule = theme.cover.accent.rule
+  base::apply_text_block_style(title, theme.cover.title)
+  base::apply_text_block_style(subtitle, theme.cover.subtitle)
+  base::apply_text_block_style(author, theme.cover.author)
+  base::apply_rule_block_style(accent, theme.cover.accent)
 
   ~ title.left == page.left + 72
   ~ title.top == page.top - 148

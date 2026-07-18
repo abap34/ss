@@ -1610,7 +1610,7 @@ test "layout diagnostics: one-pixel text reports frame too small" {
     try testing.expect(found);
 }
 
-test "layout metrics use enlarged rendered text size" {
+test "layout font size resolves consistently for measurement and rendering" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -1622,6 +1622,9 @@ test "layout metrics use enlarged rendered text size" {
 
     const node = state.getNode(object).?;
     try expectFloat(90, metrics.intrinsicHeight(&state, node));
+    const resolved = core.render_policy.resolve(&state, node);
+    try expectFloat(20, resolved.text.?.font_size);
+    try expectFloat(45, resolved.text.?.line_height);
 }
 
 test "layout metrics derive line height from explicit text size" {
@@ -1657,7 +1660,7 @@ test "layout metrics honor explicit text and layout line heights" {
     try expectFloat(100, metrics.intrinsicHeight(&state, state.getNode(layout_override).?));
 
     const resolved = core.render_policy.resolve(&state, state.getNode(layout_override).?);
-    try expectFloat(45, resolved.text.?.line_height);
+    try expectFloat(50, resolved.text.?.line_height);
 }
 
 test "layout metrics treat zero line heights as automatic" {
@@ -1746,6 +1749,70 @@ test "render policy: markdown bold color is optional and resolves as text paint"
     try setTextMarkdownBoldColor(&state, object, "0.2,0.4,0.6");
     resolved = core.render_policy.resolve(&state, state.getNode(object).?);
     try expectColor(0.2, 0.4, 0.6, resolved.text.?.markdown_bold_color.?);
+}
+
+test "render policy: markdown headings resolve their own text paint" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    const page = try state.addPage("Page");
+    const object = try state.makeObject(page, "body", null, .text, .text, "## Heading");
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "size" }, .{ .number = 35 });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "line_height" }, .{ .number = 42 });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "color" }, .{ .string = "0.1,0.6,0.2" });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "font", "family" }, .{ .string = "Avenir Next" });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "font", "weight" }, .{ .number = 650 });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "inline_math_height_factor" }, .{ .number = 1.3 });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "inline_math_spacing" }, .{ .number = 0.2 });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "display_math_height_factor" }, .{ .number = 2.4 });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math_align" }, .{ .string = "left" });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "emoji_spacing" }, .{ .number = 0.25 });
+
+    const resolved = core.render_policy.resolve(&state, state.getNode(object).?);
+    const heading = resolved.text.?.markdown_headings[1].?;
+    try expectFloat(35, heading.font_size);
+    try expectFloat(42, heading.line_height);
+    try expectColor(0.1, 0.6, 0.2, heading.color);
+    try testing.expectEqualStrings("Avenir Next", heading.font.family);
+    try testing.expectEqual(@as(u16, 650), heading.font.weight);
+
+    const selected = resolved.text.?.forMarkdownHeading(2);
+    try expectFloat(35, selected.font_size);
+    try expectFloat(42, selected.line_height);
+    try expectColor(0.1, 0.6, 0.2, selected.color);
+    try expectFloat(1.3, selected.inline_math_height_factor);
+    try expectFloat(0.2, selected.inline_math_spacing);
+    try expectFloat(2.4, selected.display_math_height_factor);
+    try testing.expectEqual(core.render_policy.HorizontalAlign.left, selected.math_align);
+    try expectFloat(0.25, selected.emoji_spacing);
+}
+
+test "layout metrics use the markdown block gap after a heading" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    const page = try state.addPage("Page");
+    const compact = try state.makeObject(page, "compact", null, .text, .text, "## Heading\n\nBody");
+    const relaxed = try state.makeObject(page, "relaxed", null, .text, .text, "## Heading\n\nBody");
+    for ([_]model.NodeId{ compact, relaxed }) |object| {
+        try setLayoutWrap(&state, object, "on");
+        try setTextParse(&state, object, "block");
+        try setTextFontFamily(&state, object, "Helvetica");
+        try setTextSize(&state, object, "23");
+        try setTextLineHeight(&state, object, "31");
+        try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "font", "family" }, .{ .string = "Helvetica" });
+        try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "size" }, .{ .number = 30 });
+        try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "line_height" }, .{ .number = 37 });
+        // Standalone heading layout spacing must not override spacing inside a Markdown document.
+        try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "spacing_after" }, .{ .number = 97 });
+        state.getNode(object).?.frame.width = 1000;
+    }
+    try setRecordNumberField(&state, compact, "text", "markdown_block_gap", 8);
+    try setRecordNumberField(&state, relaxed, "text", "markdown_block_gap", 20);
+
+    const compact_height = metrics.intrinsicHeight(&state, state.getNode(compact).?);
+    const relaxed_height = metrics.intrinsicHeight(&state, state.getNode(relaxed).?);
+    try expectFloat(12, relaxed_height - compact_height);
 }
 
 test "render policy: math alignment applies to markdown and vector math" {

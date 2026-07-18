@@ -56,40 +56,26 @@ pub fn textFacesForNode(state: anytype, node: *const Node) TextFaces {
     );
     const markdown_bold_weight = fontWeightNumber(fields.read(state.allocator, state, node, "text", &.{"bold_weight"}, .number)) orelse default_bold_weight;
     const markdown_italic_style = parseStyle(fields.read(state.allocator, state, node, "text", &.{"italic_style"}, .text) orelse "") orelse .italic;
-    return .{
-        .normal = normal,
-        .bold = .{
-            .family = normal.family,
-            .weight = @max(normal.weight, markdown_bold_weight),
-            .style = normal.style,
-            .stretch = normal.stretch,
+    const code = faceFromRecord(
+        state.allocator,
+        state,
+        node,
+        "code_font",
+        .{
+            .family = default_code_family,
+            .weight = default_weight,
+            .style = .normal,
+            .stretch = .normal,
         },
-        .italic = .{
-            .family = normal.family,
-            .weight = normal.weight,
-            .style = markdown_italic_style,
-            .stretch = normal.stretch,
-        },
-        .code = faceFromRecord(
-            state.allocator,
-            state,
-            node,
-            "code_font",
-            .{
-                .family = default_code_family,
-                .weight = default_weight,
-                .style = .normal,
-                .stretch = .normal,
-            },
-        ),
-    };
+    );
+    return textFaces(normal, markdown_bold_weight, markdown_italic_style, code);
 }
 
-pub fn textFacesForNodeWithEnv(allocator: std.mem.Allocator, node: *const Node, sema: anytype) TextFaces {
-    const normal = faceFromRecordWithEnv(
-        allocator,
+pub fn markdownHeadingTextFacesForNode(node: *const Node, heading_field: []const u8) ?TextFaces {
+    if (fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", "size" }, .number) == null) return null;
+    const normal = faceFromNestedRecord(
         node,
-        sema,
+        heading_field,
         "font",
         .{
             .family = default_family,
@@ -98,34 +84,38 @@ pub fn textFacesForNodeWithEnv(allocator: std.mem.Allocator, node: *const Node, 
             .stretch = .normal,
         },
     );
-    const markdown_bold_weight = fontWeightNumber(fields.readWithEnv(allocator, node, "text", &.{"bold_weight"}, sema, .number)) orelse default_bold_weight;
-    const markdown_italic_style = parseStyle(fields.readWithEnv(allocator, node, "text", &.{"italic_style"}, sema, .text) orelse "") orelse .italic;
+    const bold_weight = fontWeightNumber(fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", "bold_weight" }, .number)) orelse default_bold_weight;
+    const italic_style = parseStyle(fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", "italic_style" }, .text) orelse "") orelse .italic;
+    const code = faceFromNestedRecord(
+        node,
+        heading_field,
+        "code_font",
+        .{
+            .family = default_code_family,
+            .weight = default_weight,
+            .style = .normal,
+            .stretch = .normal,
+        },
+    );
+    return textFaces(normal, bold_weight, italic_style, code);
+}
+
+fn textFaces(normal: Face, bold_weight: u16, italic_style: Style, code: Face) TextFaces {
     return .{
         .normal = normal,
         .bold = .{
             .family = normal.family,
-            .weight = @max(normal.weight, markdown_bold_weight),
+            .weight = @max(normal.weight, bold_weight),
             .style = normal.style,
             .stretch = normal.stretch,
         },
         .italic = .{
             .family = normal.family,
             .weight = normal.weight,
-            .style = markdown_italic_style,
+            .style = italic_style,
             .stretch = normal.stretch,
         },
-        .code = faceFromRecordWithEnv(
-            allocator,
-            node,
-            sema,
-            "code_font",
-            .{
-                .family = default_code_family,
-                .weight = default_weight,
-                .style = .normal,
-                .stretch = .normal,
-            },
-        ),
+        .code = code,
     };
 }
 
@@ -174,18 +164,17 @@ fn faceFromRecord(
     };
 }
 
-fn faceFromRecordWithEnv(
-    allocator: std.mem.Allocator,
+fn faceFromNestedRecord(
     node: *const Node,
-    sema: anytype,
+    style_field: []const u8,
     font_field: []const u8,
     fallback: Face,
 ) Face {
     return .{
-        .family = cleanFamily(fields.readWithEnv(allocator, node, "text", &.{ font_field, "family" }, sema, .text) orelse fallback.family),
-        .weight = fontWeightNumber(fields.readWithEnv(allocator, node, "text", &.{ font_field, "weight" }, sema, .number)) orelse fallback.weight,
-        .style = parseStyle(fields.readWithEnv(allocator, node, "text", &.{ font_field, "style" }, sema, .text) orelse "") orelse fallback.style,
-        .stretch = parseStretch(fields.readWithEnv(allocator, node, "text", &.{ font_field, "stretch" }, sema, .text) orelse "") orelse fallback.stretch,
+        .family = cleanFamily(fields.readExplicit(node, "markdown_headings", &.{ style_field, "text", font_field, "family" }, .text) orelse fallback.family),
+        .weight = fontWeightNumber(fields.readExplicit(node, "markdown_headings", &.{ style_field, "text", font_field, "weight" }, .number)) orelse fallback.weight,
+        .style = parseStyle(fields.readExplicit(node, "markdown_headings", &.{ style_field, "text", font_field, "style" }, .text) orelse "") orelse fallback.style,
+        .stretch = parseStretch(fields.readExplicit(node, "markdown_headings", &.{ style_field, "text", font_field, "stretch" }, .text) orelse "") orelse fallback.stretch,
     };
 }
 

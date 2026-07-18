@@ -3,7 +3,6 @@ const model = @import("model");
 const color_utils = @import("utils").color;
 const fields = @import("fields.zig");
 const font_model = @import("font.zig");
-const layout = @import("layout.zig");
 
 const Node = model.Node;
 
@@ -41,6 +40,28 @@ pub const HorizontalAlign = enum {
 
 pub const FontFace = font_model.Face;
 
+pub const TextMetrics = struct {
+    font_size: f32,
+    line_height: f32,
+};
+
+pub const MarkdownHeadingPaint = struct {
+    font: FontFace,
+    bold_font: FontFace,
+    italic_font: FontFace,
+    code_font: FontFace,
+    font_size: f32,
+    line_height: f32,
+    color: Color,
+    link_color: Color,
+    markdown_bold_color: ?Color,
+    inline_math_height_factor: f32,
+    inline_math_spacing: f32,
+    display_math_height_factor: f32,
+    math_align: HorizontalAlign,
+    emoji_spacing: f32,
+};
+
 pub const TextPaint = struct {
     font: FontFace,
     bold_font: FontFace,
@@ -51,6 +72,7 @@ pub const TextPaint = struct {
     color: Color,
     link_color: Color,
     markdown_bold_color: ?Color,
+    markdown_headings: [6]?MarkdownHeadingPaint,
     inline_math_height_factor: f32,
     inline_math_spacing: f32,
     display_math_height_factor: f32,
@@ -84,6 +106,27 @@ pub const TextPaint = struct {
     markdown_table_header_fill: ?Color,
     markdown_table_alt_row_fill: ?Color,
     wrap: bool,
+
+    pub fn forMarkdownHeading(self: TextPaint, level: u8) TextPaint {
+        if (level < 1 or level > self.markdown_headings.len) return self;
+        const heading = self.markdown_headings[level - 1] orelse return self;
+        var result = self;
+        result.font = heading.font;
+        result.bold_font = heading.bold_font;
+        result.italic_font = heading.italic_font;
+        result.code_font = heading.code_font;
+        result.font_size = heading.font_size;
+        result.line_height = heading.line_height;
+        result.color = heading.color;
+        result.link_color = heading.link_color;
+        result.markdown_bold_color = heading.markdown_bold_color;
+        result.inline_math_height_factor = heading.inline_math_height_factor;
+        result.inline_math_spacing = heading.inline_math_spacing;
+        result.display_math_height_factor = heading.display_math_height_factor;
+        result.math_align = heading.math_align;
+        result.emoji_spacing = heading.emoji_spacing;
+        return result;
+    }
 };
 
 pub const MathPaint = struct {
@@ -197,14 +240,36 @@ pub fn resolveKind(state: anytype, node: *const Node) RenderKind {
     return .text;
 }
 
+pub fn resolveTextForNode(state: anytype, node: *const Node) ?TextPaint {
+    return resolveText(state, node, resolveKind(state, node));
+}
+
+pub fn resolveTextMetrics(state: anytype, node: *const Node) TextMetrics {
+    const text_font_size = positiveRecordFloatProperty(state, node, "text", "size") orelse 20;
+    const font_size = positiveRecordFloatProperty(state, node, "layout", "font_size") orelse text_font_size;
+    const text_line_height = positiveRecordFloatProperty(state, node, "text", "line_height") orelse font_size * 1.45;
+    return .{
+        .font_size = font_size,
+        .line_height = positiveRecordFloatProperty(state, node, "layout", "line_height") orelse text_line_height,
+    };
+}
+
+pub fn shouldWrapText(state: anytype, node: *const Node) bool {
+    if (positiveFloatProperty(state, node, "asset_width") != null) return false;
+    if (fields.read(state.allocator, state, node, "layout", &.{"wrap"}, .text)) |wrap_mode| {
+        if (std.mem.eql(u8, wrap_mode, "on")) return true;
+        if (std.mem.eql(u8, wrap_mode, "off")) return false;
+    }
+    return recordFloatProperty(state, node, "layout", "right_inset") != null;
+}
+
 fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
     switch (kind) {
         .text, .code => {},
         else => return null,
     }
 
-    const layout_style = layout.styleForNode(state, node);
-    const text_metrics = layout.style.textMetricsForNode(state, node);
+    const text_metrics = resolveTextMetrics(state, node);
     const fonts = font_model.textFacesForNode(state, node);
     return .{
         .font = fonts.normal,
@@ -216,6 +281,14 @@ fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .color = parseRecordColorProperty(state, node, "text", "color") orelse FALLBACK_TEXT_COLOR,
         .link_color = parseRecordColorProperty(state, node, "text", "link_color") orelse FALLBACK_LINK_COLOR,
         .markdown_bold_color = parseRecordColorProperty(state, node, "text", "markdown_bold_color"),
+        .markdown_headings = .{
+            resolveMarkdownHeading(node, "h1"),
+            resolveMarkdownHeading(node, "h2"),
+            resolveMarkdownHeading(node, "h3"),
+            resolveMarkdownHeading(node, "h4"),
+            resolveMarkdownHeading(node, "h5"),
+            resolveMarkdownHeading(node, "h6"),
+        },
         .inline_math_height_factor = positiveRecordFloatProperty(state, node, "text", "inline_math_height_factor") orelse 1,
         .inline_math_spacing = nonNegativeRecordFloatProperty(state, node, "text", "inline_math_spacing") orelse 0,
         .display_math_height_factor = positiveRecordFloatProperty(state, node, "text", "display_math_height_factor") orelse 2,
@@ -224,8 +297,8 @@ fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .markdown_block_gap = nonNegativeRecordFloatProperty(state, node, "text", "markdown_block_gap") orelse 0,
         .markdown_list_inset = nonNegativeRecordFloatProperty(state, node, "text", "markdown_list_inset") orelse 0,
         .markdown_list_indent = nonNegativeRecordFloatProperty(state, node, "text", "markdown_list_indent") orelse 0,
-        .markdown_code_font_size = positiveRecordFloatProperty(state, node, "text", "markdown_code_font_size") orelse layout_style.font_size,
-        .markdown_code_line_height = positiveRecordFloatProperty(state, node, "text", "markdown_code_line_height") orelse layout_style.line_height,
+        .markdown_code_font_size = positiveRecordFloatProperty(state, node, "text", "markdown_code_font_size") orelse text_metrics.font_size,
+        .markdown_code_line_height = positiveRecordFloatProperty(state, node, "text", "markdown_code_line_height") orelse text_metrics.line_height,
         .markdown_code_pad_x = nonNegativeRecordFloatProperty(state, node, "text", "markdown_code_pad_x") orelse 0,
         .markdown_code_pad_y = nonNegativeRecordFloatProperty(state, node, "text", "markdown_code_pad_y") orelse 0,
         .markdown_code_fill = themedRecordColorProperty(state, node, "text", "markdown_code_fill", "code_theme_fill"),
@@ -242,13 +315,34 @@ fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .markdown_code_operator_color = themedRecordColorProperty(state, node, "text", "markdown_code_operator_color", "code_theme_operator_color"),
         .markdown_code_comment_color = themedRecordColorProperty(state, node, "text", "markdown_code_comment_color", "code_theme_comment_color"),
         .markdown_code_string_color = themedRecordColorProperty(state, node, "text", "markdown_code_string_color", "code_theme_string_color"),
-        .markdown_table_cell_pad_x = nonNegativeRecordFloatProperty(state, node, "text", "markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), layout_style.font_size * 0.55),
-        .markdown_table_cell_pad_y = nonNegativeRecordFloatProperty(state, node, "text", "markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), layout_style.font_size * 0.32),
+        .markdown_table_cell_pad_x = nonNegativeRecordFloatProperty(state, node, "text", "markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), text_metrics.font_size * 0.55),
+        .markdown_table_cell_pad_y = nonNegativeRecordFloatProperty(state, node, "text", "markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), text_metrics.font_size * 0.32),
         .markdown_table_border = parseRecordColorProperty(state, node, "text", "markdown_table_border"),
         .markdown_table_line_width = nonNegativeRecordFloatProperty(state, node, "text", "markdown_table_line_width") orelse 0.8,
         .markdown_table_header_fill = parseRecordColorProperty(state, node, "text", "markdown_table_header_fill"),
         .markdown_table_alt_row_fill = parseRecordColorProperty(state, node, "text", "markdown_table_alt_row_fill"),
-        .wrap = layout.shouldWrapNode(state, node),
+        .wrap = shouldWrapText(state, node),
+    };
+}
+
+fn resolveMarkdownHeading(node: *const Node, field_name: []const u8) ?MarkdownHeadingPaint {
+    const font_size = positiveMarkdownHeadingTextFloatProperty(node, field_name, "size") orelse return null;
+    const fonts = font_model.markdownHeadingTextFacesForNode(node, field_name) orelse return null;
+    return .{
+        .font = fonts.normal,
+        .bold_font = fonts.bold,
+        .italic_font = fonts.italic,
+        .code_font = fonts.code,
+        .font_size = font_size,
+        .line_height = positiveMarkdownHeadingTextFloatProperty(node, field_name, "line_height") orelse font_size * 1.45,
+        .color = parseMarkdownHeadingTextColor(node, field_name, "color") orelse FALLBACK_TEXT_COLOR,
+        .link_color = parseMarkdownHeadingTextColor(node, field_name, "link_color") orelse FALLBACK_LINK_COLOR,
+        .markdown_bold_color = parseMarkdownHeadingTextColor(node, field_name, "markdown_bold_color"),
+        .inline_math_height_factor = positiveMarkdownHeadingTextFloatProperty(node, field_name, "inline_math_height_factor") orelse 1,
+        .inline_math_spacing = nonNegativeMarkdownHeadingTextFloatProperty(node, field_name, "inline_math_spacing") orelse 0,
+        .display_math_height_factor = positiveMarkdownHeadingTextFloatProperty(node, field_name, "display_math_height_factor") orelse 2,
+        .math_align = parseMarkdownHeadingHorizontalAlign(node, field_name) orelse .center,
+        .emoji_spacing = nonNegativeMarkdownHeadingTextFloatProperty(node, field_name, "emoji_spacing") orelse 0,
     };
 }
 
@@ -359,9 +453,33 @@ fn nonNegativeRecordFloatProperty(state: anytype, node: *const Node, record_key:
     return if (value >= 0) value else null;
 }
 
+fn markdownHeadingTextFloatProperty(node: *const Node, heading_field: []const u8, field_name: []const u8) ?f32 {
+    return fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", field_name }, .number);
+}
+
+fn positiveMarkdownHeadingTextFloatProperty(node: *const Node, heading_field: []const u8, field_name: []const u8) ?f32 {
+    const value = markdownHeadingTextFloatProperty(node, heading_field, field_name) orelse return null;
+    return if (value > 0) value else null;
+}
+
+fn nonNegativeMarkdownHeadingTextFloatProperty(node: *const Node, heading_field: []const u8, field_name: []const u8) ?f32 {
+    const value = markdownHeadingTextFloatProperty(node, heading_field, field_name) orelse return null;
+    return if (value >= 0) value else null;
+}
+
 fn parseRecordColorProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?Color {
     const value = fields.read(state.allocator, state, node, record_key, &.{field_name}, .text) orelse return null;
     return parseColor(value);
+}
+
+fn parseMarkdownHeadingTextColor(node: *const Node, heading_field: []const u8, field_name: []const u8) ?Color {
+    const value = fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", field_name }, .text) orelse return null;
+    return parseColor(value);
+}
+
+fn parseMarkdownHeadingHorizontalAlign(node: *const Node, heading_field: []const u8) ?HorizontalAlign {
+    const value = fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", "math_align" }, .text) orelse return null;
+    return parseHorizontalAlign(value);
 }
 
 fn parseRecordDashProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?Dash {
