@@ -2,6 +2,11 @@ const std = @import("std");
 const compiler_semantics = @import("compiler_semantics");
 
 const testing = std.testing;
+const fixture_root = "tests/fixtures/compiler/semantics";
+
+fn fixturePath(allocator: std.mem.Allocator, fixture: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &.{ fixture_root, fixture, "slide.ss" });
+}
 
 fn buildSource(source: []const u8) !void {
     var tmp = testing.tmpDir(.{});
@@ -77,6 +82,16 @@ fn buildSourceWithAssetFixtures(source: []const u8) !void {
     });
 
     try compiler_semantics.buildSource(testing.io, allocator, slide_path, source);
+}
+
+fn expectFixtureObjectFieldPath(fixture: []const u8, root_key: []const u8, field_path: []const []const u8, expected: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try fixturePath(allocator, fixture);
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, allocator, .limited(256 * 1024));
+    try compiler_semantics.expectObjectFieldPath(testing.io, allocator, path, source, root_key, field_path, expected);
 }
 
 fn expectObjectContentWithFile(source: []const u8, file_name: []const u8, file_content: []const u8, expected: []const u8) !void {
@@ -1517,6 +1532,10 @@ test "compiler semantics: structured style values expand to render properties" {
     try expectObjectFieldPath(source, "text", &.{"color"}, "0.07058824,0.20392157,0.3372549");
     try expectObjectFieldPath(source, "text", &.{ "font", "family" }, "Menlo");
     try expectObjectFieldPath(source, "text", &.{ "font", "weight" }, "700");
+}
+
+test "compiler semantics: set_prop updates an existing property" {
+    try expectFixtureObjectFieldPath("theme/set-prop", "text", &.{"size"}, "37");
 }
 
 test "compiler semantics: nested property assignment updates style records" {
