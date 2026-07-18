@@ -11,12 +11,9 @@ const declarations = compiler.declarations;
 const semantic_env = compiler.semantic_env;
 
 pub const BodyTextDefaults = struct {
-    link_underline_width: f32,
-    link_underline_offset: f32,
     inline_math_height_factor: f32,
     inline_math_spacing: f32,
     markdown_table_line_width: f32,
-    cjk_bold_dx: f32,
 };
 
 pub const ObjectStateExpectation = struct {
@@ -323,12 +320,9 @@ pub fn expectBodyTextDefaults(
         if (!std.mem.eql(u8, role, "body")) continue;
         const render = core.render_policy.resolve(&state, &node);
         const text = render.text orelse continue;
-        try std.testing.expectApproxEqAbs(expected.link_underline_width, text.link_underline_width, 0.0001);
-        try std.testing.expectApproxEqAbs(expected.link_underline_offset, text.link_underline_offset, 0.0001);
         try std.testing.expectApproxEqAbs(expected.inline_math_height_factor, text.inline_math_height_factor, 0.0001);
         try std.testing.expectApproxEqAbs(expected.inline_math_spacing, text.inline_math_spacing, 0.0001);
         try std.testing.expectApproxEqAbs(expected.markdown_table_line_width, text.markdown_table_line_width, 0.0001);
-        try std.testing.expectApproxEqAbs(expected.cjk_bold_dx, text.cjk_bold_dx, 0.0001);
         return;
     }
     return error.ExpectedObjectContentMissing;

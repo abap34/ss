@@ -99,8 +99,10 @@ typedef struct SsTextRun {
     double ascent;
     double descent;
     double line_gap;
-    double win_ascent;
-    double win_descent;
+    double underline_position;
+    double underline_thickness;
+    double strikethrough_position;
+    double strikethrough_thickness;
     SsMathConstants math;
     char *font_family;
     char *font_path;

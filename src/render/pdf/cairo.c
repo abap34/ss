@@ -20,7 +20,6 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
-#include FT_TRUETYPE_TABLES_H
 
 #define SS_PI 3.14159265358979323846
 
@@ -731,28 +730,6 @@ static void ss_font_source_copy(
     if (owned_match != NULL) FcPatternDestroy(owned_match);
 }
 
-static void ss_font_win_metrics(
-    const char *path,
-    unsigned int index,
-    double font_size,
-    double *ascent,
-    double *descent
-) {
-    if (path == NULL || path[0] == '\0' || ascent == NULL || descent == NULL || font_size <= 0) return;
-    FT_Library library = NULL;
-    FT_Face face = NULL;
-    if (FT_Init_FreeType(&library) != 0) return;
-    if (FT_New_Face(library, path, index, &face) == 0 && face->units_per_EM > 0) {
-        TT_OS2 *os2 = (TT_OS2 *)FT_Get_Sfnt_Table(face, ft_sfnt_os2);
-        if (os2 != NULL && os2->usWinAscent > 0) {
-            *ascent = ((double)os2->usWinAscent / face->units_per_EM) * font_size;
-            *descent = ((double)os2->usWinDescent / face->units_per_EM) * font_size;
-        }
-    }
-    if (face != NULL) FT_Done_Face(face);
-    FT_Done_FreeType(library);
-}
-
 static double ss_math_constant_ratio(hb_font_t *font, hb_ot_math_constant_t constant, double font_size) {
     return ((double)hb_ot_math_get_constant(font, constant) / PANGO_SCALE) / font_size;
 }
@@ -1015,11 +992,12 @@ int ss_text_shape(
                     run->descent = ((double)pango_font_metrics_get_descent(metrics)) / PANGO_SCALE;
                     const double height = ((double)pango_font_metrics_get_height(metrics)) / PANGO_SCALE;
                     run->line_gap = fmax(height - run->ascent - run->descent, 0);
+                    run->underline_position = ((double)pango_font_metrics_get_underline_position(metrics)) / PANGO_SCALE;
+                    run->underline_thickness = ((double)pango_font_metrics_get_underline_thickness(metrics)) / PANGO_SCALE;
+                    run->strikethrough_position = ((double)pango_font_metrics_get_strikethrough_position(metrics)) / PANGO_SCALE;
+                    run->strikethrough_thickness = ((double)pango_font_metrics_get_strikethrough_thickness(metrics)) / PANGO_SCALE;
                     pango_font_metrics_unref(metrics);
                 }
-                run->win_ascent = run->ascent;
-                run->win_descent = run->descent;
-                ss_font_win_metrics(run->font_path, run->font_index, font_size, &run->win_ascent, &run->win_descent);
                 ss_font_math_constants(item->analysis.font, font_size, &run->math);
                 double advance = 0;
                 for (int glyph_index = 0; glyph_index < glyphs->num_glyphs; glyph_index++) {

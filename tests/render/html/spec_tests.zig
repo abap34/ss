@@ -99,12 +99,16 @@ test "HTML renderer writes deterministic normal elements with escaped text" {
     try testing.expect(std.mem.indexOf(u8, first, "application/pdf") == null);
     try testing.expect(std.mem.indexOf(u8, first, "ss.js") == null);
     try testing.expect(std.mem.indexOf(u8, first, "data-pango-baseline") == null);
+    try testing.expect(std.mem.indexOf(u8, first, "data-ss-baseline-y=\"") != null);
     try testing.expect(std.mem.indexOf(u8, first, "data:text/css;charset=utf-8;base64,") != null);
     try testing.expect(std.mem.indexOf(u8, first, "html:not([data-ss-ready]):not([data-ss-error]) body{visibility:hidden}") != null);
     const first_css = try embeddedStyleSheet(first);
     defer testing.allocator.free(first_css);
     try testing.expect(std.mem.indexOf(u8, first_css, ".ss-page") != null);
     try testing.expect(std.mem.indexOf(u8, first_css, "ss-resource:font:") != null);
+    try testing.expect(std.mem.indexOf(u8, first_css, "ascent-override") == null);
+    try testing.expect(std.mem.indexOf(u8, first_css, "descent-override") == null);
+    try testing.expect(std.mem.indexOf(u8, first_css, "line-gap-override") == null);
     try testing.expect(std.mem.indexOf(u8, first, "data-ss-resource=\"ss-resource:font:") != null);
 
     try html.write(testing.allocator, testing.io, &ir, output);
@@ -292,7 +296,7 @@ test "HTML renderer emits structured MathML without SVG or PDF fallback" {
     try testing.expect(std.mem.indexOf(u8, document, "data-pdf-src") == null);
     const css = try embeddedStyleSheet(document);
     defer testing.allocator.free(css);
-    try testing.expect(std.mem.indexOf(u8, css, "ascent-override:0.000000000%") == null);
+    try testing.expect(std.mem.indexOf(u8, css, "ascent-override") == null);
 }
 
 test "HTML renderer packages PDF.js with explicit page geometry" {

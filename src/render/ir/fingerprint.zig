@@ -24,8 +24,10 @@ pub fn document(ir: anytype) Digest {
         hash.float(font.ascent_ratio);
         hash.float(font.descent_ratio);
         hash.float(font.line_gap_ratio);
-        hash.float(font.win_ascent_ratio);
-        hash.float(font.win_descent_ratio);
+        hash.float(font.underline_position_ratio);
+        hash.float(font.underline_thickness_ratio);
+        hash.float(font.strikethrough_position_ratio);
+        hash.float(font.strikethrough_thickness_ratio);
         if (font.math) |constants| {
             hash.boolean(true);
             inline for (std.meta.fields(@TypeOf(constants))) |field| hash.float(@field(constants, field.name));

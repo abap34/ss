@@ -202,8 +202,6 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     try writeColor(&text, "color", text_spec.color);
     try writeColor(&text, "link_color", text_spec.link_color);
     try writeOptionalColor(&text, "markdown_bold_color", text_spec.markdown_bold_color);
-    try text.floatField("link_underline_width", text_spec.link_underline_width, "{d:.1}");
-    try text.floatField("link_underline_offset", text_spec.link_underline_offset, "{d:.1}");
     try text.floatField("inline_math_height_factor", text_spec.inline_math_height_factor, "{d:.4}");
     try text.floatField("inline_math_spacing", text_spec.inline_math_spacing, "{d:.4}");
     try text.floatField("display_math_height_factor", text_spec.display_math_height_factor, "{d:.4}");
@@ -236,8 +234,6 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     try text.floatField("markdown_table_line_width", text_spec.markdown_table_line_width, "{d:.1}");
     try writeOptionalColor(&text, "markdown_table_header_fill", text_spec.markdown_table_header_fill);
     try writeOptionalColor(&text, "markdown_table_alt_row_fill", text_spec.markdown_table_alt_row_fill);
-    try text.intField("cjk_bold_passes", text_spec.cjk_bold_passes);
-    try text.floatField("cjk_bold_dx", text_spec.cjk_bold_dx, "{d:.4}");
     try text.boolField("wrap", text_spec.wrap);
     try text.end();
 }

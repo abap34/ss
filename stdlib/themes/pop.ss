@@ -40,8 +40,6 @@ fn default_theme() -> Theme
     subhead.text.line_height = 30
     subhead.text.color = c"0.1569,0.1333,0.2196"
     subhead.text.font.weight = 700
-    subhead.text.cjk_bold_passes = 3
-    subhead.text.cjk_bold_dx = 0.04
     subhead.layout.spacing_after = 22
     note.layout.x = 124
     note.layout.right_inset = 124

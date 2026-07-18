@@ -7,6 +7,17 @@ const text = @import("render_text");
 const Allocator = std.mem.Allocator;
 const Color = core.render_policy.Color;
 
+pub const TextDecoration = struct {
+    strikethrough: bool = false,
+    underline: bool = false,
+};
+
+const DecorationSegment = struct {
+    start: render.Point,
+    end: render.Point,
+    line_width: f64,
+};
+
 pub const Emitter = struct {
     page: *render.Page,
     resources: *resources_compile.Builder,
@@ -61,8 +72,38 @@ pub const Emitter = struct {
         font_size: f64,
         color: Color,
         wrap: bool,
+        decoration: TextDecoration,
     ) !void {
-        const layout = try text.shape(allocator, self.io, self.resources, self.fonts, content, font, font_size, width, wrap);
+        var layout = try text.shape(allocator, self.io, self.resources, self.fonts, content, font, font_size, width, wrap);
+        var owns_layout = true;
+        errdefer if (owns_layout) layout.deinit(allocator);
+        var segments = std.ArrayList(DecorationSegment).empty;
+        defer segments.deinit(allocator);
+        const layout_y = baseline_y - layout.firstBaseline();
+        if (decoration.strikethrough or decoration.underline) {
+            for (layout.runs) |run| {
+                const instance = self.fonts.get(self.io, run.font_instance) orelse return error.MissingRenderFont;
+                const run_baseline = layout_y + run.baseline_y;
+                if (decoration.strikethrough) try appendDecorationSegment(
+                    allocator,
+                    &segments,
+                    x + run.x,
+                    run_baseline,
+                    run.advance,
+                    font_size * instance.strikethrough_position_ratio,
+                    font_size * instance.strikethrough_thickness_ratio,
+                );
+                if (decoration.underline) try appendDecorationSegment(
+                    allocator,
+                    &segments,
+                    x + run.x,
+                    run_baseline,
+                    run.advance,
+                    font_size * instance.underline_position_ratio,
+                    font_size * instance.underline_thickness_ratio,
+                );
+            }
+        }
         try self.page.appendTextLayout(
             allocator,
             self.node_id,
@@ -72,6 +113,17 @@ pub const Emitter = struct {
             layout,
             font_size,
             color,
+        );
+        owns_layout = false;
+        for (segments.items) |segment| try self.page.appendStrokeLine(
+            allocator,
+            self.node_id,
+            segment.start,
+            segment.end,
+            segment.line_width,
+            color,
+            0,
+            0,
         );
     }
 
@@ -122,3 +174,20 @@ pub const Emitter = struct {
         try self.page.appendStructuredMath(allocator, self.node_id, rect, tree, layout, color);
     }
 };
+
+fn appendDecorationSegment(
+    allocator: Allocator,
+    segments: *std.ArrayList(DecorationSegment),
+    x: f64,
+    baseline_y: f64,
+    advance: f64,
+    position: f64,
+    thickness: f64,
+) !void {
+    const center_y = baseline_y - position + thickness / 2;
+    try segments.append(allocator, .{
+        .start = .{ .x = x, .y = center_y },
+        .end = .{ .x = x + advance, .y = center_y },
+        .line_width = thickness,
+    });
+}
