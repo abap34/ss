@@ -1121,13 +1121,7 @@ const BuiltinContext = struct {
     }
 
     pub fn setNodeFieldValue(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: core.Value) !void {
-        self.state.setNodeFieldValue(object_id, key, value) catch |err| switch (err) {
-            error.DuplicatePropertyDefinition => {
-                try reportDuplicatePropertyDefinition(self.state, self.current_origin, key);
-                return err;
-            },
-            else => return err,
-        };
+        try self.state.replaceNodeFieldValue(object_id, key, value);
     }
 
     pub fn setNodeReprFunction(self: *BuiltinContext, object_id: core.NodeId, function: core.FunctionRef) !void {

@@ -690,6 +690,18 @@ pub const DocumentState = struct {
         });
     }
 
+    pub fn replaceNodeFieldValue(self: *DocumentState, node_id: NodeId, key: []const u8, value: Value) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        for (node.fields.items) |*field| {
+            if (!std.mem.eql(u8, field.key, key)) continue;
+            const replacement = try value.clone(self.allocator);
+            field.value.deinit(self.allocator);
+            field.value = replacement;
+            return;
+        }
+        try self.setNodeFieldValue(node_id, key, value);
+    }
+
     pub fn unsetNodeField(self: *DocumentState, node_id: NodeId, key: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         for (node.fields.items, 0..) |field, index| {
