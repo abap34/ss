@@ -154,6 +154,16 @@ fn expectObjectContent(source: []const u8, expected: []const u8) !void {
     try compiler_semantics.expectObjectContent(testing.io, allocator, path, source, expected);
 }
 
+fn expectFixtureObjectContent(fixture: []const u8, expected: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try fixturePath(allocator, fixture);
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, allocator, .limited(256 * 1024));
+    try compiler_semantics.expectObjectContent(testing.io, allocator, path, source, expected);
+}
+
 fn expectObjectContentWithTwoOverlays(source: []const u8, first_source: []const u8, second_source: []const u8, expected: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -3533,6 +3543,10 @@ test "compiler semantics: functions can return captured function values" {
         \\end
         \\
     , "made");
+}
+
+test "compiler semantics: callbacks keep their defining module scope" {
+    try expectFixtureObjectContent("functions/module-callback", "module");
 }
 
 test "compiler semantics: function values use ordinary application" {
