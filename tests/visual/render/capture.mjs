@@ -100,12 +100,44 @@ export async function captureHtmlPages(browser, baseUrl, relativePath) {
       images.push({
         image: cropPng(screenshot, targetWidth, targetHeight),
         items: await itemRegions(item, box, targetWidth, targetHeight),
+        textBaselineError: await maximumTextBaselineError(item),
       });
     }
     return images;
   } finally {
     await page.close();
   }
+}
+
+export async function maximumTextBaselineError(page) {
+  return await page.locator(".ss-text-run[data-ss-baseline-y]").evaluateAll((runs) => {
+    let maximum = 0;
+    for (const run of runs) {
+      const parent = run.offsetParent;
+      if (!(parent instanceof HTMLElement)) continue;
+      const expected = Number(run.dataset.ssBaselineY);
+      if (!Number.isFinite(expected)) continue;
+
+      const marker = document.createElement("span");
+      Object.assign(marker.style, {
+        display: "inline-block",
+        width: "0",
+        height: "0",
+        padding: "0",
+        margin: "0",
+        verticalAlign: "baseline",
+      });
+      run.append(marker);
+      const parentBox = parent.getBoundingClientRect();
+      const markerBox = marker.getBoundingClientRect();
+      const parentWidth = Number.parseFloat(parent.style.width);
+      const scale = parentWidth > 0 ? parentBox.width / parentWidth : 0;
+      marker.remove();
+      if (!(scale > 0)) continue;
+      maximum = Math.max(maximum, Math.abs((markerBox.bottom - parentBox.top) / scale - expected));
+    }
+    return maximum;
+  });
 }
 
 async function itemRegions(page, pageBox, targetWidth, targetHeight) {
