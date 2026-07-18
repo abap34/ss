@@ -594,6 +594,11 @@ async function testLastGoodSnapshotsAreKeptPerEntry() {
         staleFirst.stale === true && staleFirst.entry_path === first,
         `first stale snapshot was lost: ${JSON.stringify(staleFirst)}`,
       );
+      assert(
+        staleFirst.build_diagnostics?.length > 0 &&
+          staleFirst.build_diagnostics.every((item) => item.uri === firstUri),
+        `first stale snapshot used another entry's diagnostics: ${JSON.stringify(staleFirst)}`,
+      );
 
       diagnosticsPromise = client.waitForDiagnostics(
         secondUri,
@@ -608,6 +613,11 @@ async function testLastGoodSnapshotsAreKeptPerEntry() {
         staleSecond.stale === true && staleSecond.entry_path === second,
         `second stale snapshot was lost: ${JSON.stringify(staleSecond)}`,
       );
+      assert(
+        staleSecond.build_diagnostics?.length > 0 &&
+          staleSecond.build_diagnostics.every((item) => item.uri === secondUri),
+        `second stale snapshot used another entry's diagnostics: ${JSON.stringify(staleSecond)}`,
+      );
 
       const restoredFirst = await client.request("ss/editorSnapshot", {
         textDocument: { uri: firstUri },
@@ -615,6 +625,15 @@ async function testLastGoodSnapshotsAreKeptPerEntry() {
       assert(
         restoredFirst.stale === true && restoredFirst.entry_path === first,
         `first cached snapshot was replaced by the second: ${
+          JSON.stringify(restoredFirst)
+        }`,
+      );
+      assert(
+        restoredFirst.build_diagnostics?.length > 0 &&
+          restoredFirst.build_diagnostics.every((item) =>
+            item.uri === firstUri
+          ),
+        `restored first snapshot used another entry's diagnostics: ${
           JSON.stringify(restoredFirst)
         }`,
       );
@@ -662,6 +681,16 @@ async function testSnapshotRecoversAfterInvalidEdit() {
           JSON.stringify(stale)
         }`,
       );
+      assert(
+        stale.build_diagnostics?.length > 0 &&
+          stale.build_diagnostics.every((diagnostic) =>
+            diagnostic.uri === uri &&
+            typeof diagnostic.code === "string" &&
+            diagnostic.message.length > 0 &&
+            Number.isSafeInteger(diagnostic.range?.start?.line)
+          ),
+        `stale snapshot omitted its build diagnostics: ${JSON.stringify(stale)}`,
+      );
 
       diagnosticsPromise = client.waitForDiagnostics(
         uri,
@@ -675,6 +704,10 @@ async function testSnapshotRecoversAfterInvalidEdit() {
       );
       const recovered = await editorSnapshot(client, uri);
       assert(recovered.stale !== true, "recovered editor snapshot remained stale");
+      assert(
+        recovered.build_diagnostics == null,
+        "recovered editor snapshot retained obsolete build diagnostics",
+      );
       assert(
         recovered.generation > stale.generation &&
           recovered.snapshot_id !== initial.snapshot_id,

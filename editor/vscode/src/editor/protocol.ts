@@ -11,6 +11,17 @@ export interface EditorSnapshot {
   outline: OutlineItem[];
   editing: EditingTarget[];
   stale?: boolean;
+  build_diagnostics?: BuildDiagnostic[];
+}
+
+export interface BuildDiagnostic {
+  uri: string;
+  range: {
+    start: { line: number; character: number };
+    end: { line: number; character: number };
+  };
+  code: string;
+  message: string;
 }
 
 export interface CoordinateSpace {
@@ -148,11 +159,36 @@ export interface LayoutEditResult {
 }
 
 export type HostMessage =
-  | { type: "snapshot"; revision: number; snapshot: EditorSnapshot }
+  | {
+    type: "snapshot";
+    revision: number;
+    documentVersion: number;
+    snapshot: EditorSnapshot;
+  }
   | { type: "error"; revision: number; message: string }
-  | { type: "editResult"; status: Exclude<LayoutEditResult["status"], "ok">; message?: string };
+  | {
+    type: "editResult";
+    requestId: number;
+    status: "applied";
+    documentVersion: number;
+  }
+  | {
+    type: "editResult";
+    requestId: number;
+    status: Exclude<LayoutEditResult["status"], "ok">;
+    message?: string;
+  };
 
 export type WebviewMessage =
   | { type: "ready" }
   | { type: "revealSource"; path: string; start: number; end: number }
-  | { type: "translate"; snapshotId: string; nodeId: number; pageId: number; mode: "absolute" | "relative"; fromBounds: Rect; toBounds: Rect };
+  | {
+    type: "translate";
+    requestId: number;
+    snapshotId: string;
+    nodeId: number;
+    pageId: number;
+    mode: "absolute" | "relative";
+    fromBounds: Rect;
+    toBounds: Rect;
+  };

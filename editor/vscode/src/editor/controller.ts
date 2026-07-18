@@ -154,6 +154,7 @@ export class EditorController implements vscode.Disposable {
     if (!client) {
       await this.post(session, {
         type: "editResult",
+        requestId: message.requestId,
         status: "unsupported",
         message: "Language server is not running.",
       });
@@ -179,6 +180,7 @@ export class EditorController implements vscode.Disposable {
       ) {
         await this.post(session, {
           type: "editResult",
+          requestId: message.requestId,
           status: "stale",
           message: "The document changed before the edit was applied.",
         });
@@ -188,6 +190,7 @@ export class EditorController implements vscode.Disposable {
       if (result.status !== "ok") {
         await this.post(session, {
           type: "editResult",
+          requestId: message.requestId,
           status: result.status,
           message: result.message ?? "The edit could not be applied.",
         });
@@ -197,6 +200,7 @@ export class EditorController implements vscode.Disposable {
       if (!result.workspaceEdit) {
         await this.post(session, {
           type: "editResult",
+          requestId: message.requestId,
           status: "rejected",
           message: result.message ?? "The language server returned no source edit.",
         });
@@ -207,16 +211,24 @@ export class EditorController implements vscode.Disposable {
       if (!applied) {
         await this.post(session, {
           type: "editResult",
+          requestId: message.requestId,
           status: "rejected",
           message: "VS Code rejected the source edit.",
         });
         return;
       }
+      await this.post(session, {
+        type: "editResult",
+        requestId: message.requestId,
+        status: "applied",
+        documentVersion: session.document.version,
+      });
       this.schedule(session, 0);
     } catch (error) {
       this.output.appendLine(`[editor] layout edit failed: ${String(error)}`);
       await this.post(session, {
         type: "editResult",
+        requestId: message.requestId,
         status: "rejected",
         message: String(error),
       });
@@ -288,6 +300,7 @@ export class EditorController implements vscode.Disposable {
       await this.post(session, {
         type: "snapshot",
         revision: serial,
+        documentVersion,
         snapshot: prepared,
       });
     } catch (error) {
@@ -296,7 +309,7 @@ export class EditorController implements vscode.Disposable {
       await this.post(session, {
         type: "error",
         revision: serial,
-        message: "WYSIWYG preview update failed.",
+        message: snapshotFailureMessage(error),
       });
     } finally {
       session.requestRunning = false;
@@ -321,4 +334,12 @@ export class EditorController implements vscode.Disposable {
 
 function normalizePath(filePath: string): string {
   return path.resolve(filePath);
+}
+
+function snapshotFailureMessage(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  const normalized = detail.trim();
+  return normalized.length > 0
+    ? `WYSIWYG build failed: ${normalized}`
+    : "WYSIWYG build failed.";
 }

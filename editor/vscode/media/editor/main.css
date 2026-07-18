@@ -361,6 +361,8 @@ button {
   background: color-mix(in srgb, var(--error) 17%, var(--panel-background));
   box-shadow: var(--sheet-shadow);
   font-size: 9px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 .viewport {
   position: absolute;

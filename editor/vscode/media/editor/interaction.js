@@ -37,6 +37,7 @@ export class InteractionController {
           this.state.snapshot,
           page,
           this.state.selectedObjectId,
+          (nodeId) => this.frameByNode(page, nodeId),
         ),
       );
     }
@@ -51,6 +52,7 @@ export class InteractionController {
   isMovable(nodeId) {
     return Boolean(
       !this.state.snapshot?.stale &&
+        this.actions.translation.canDrag(nodeId) &&
         this.state.snapshot?.editing.some((target) =>
           target.node_id === nodeId
         ),
@@ -58,7 +60,7 @@ export class InteractionController {
   }
 
   hitTarget(page, object) {
-    const frame = previewFrame(page, object);
+    const frame = this.actions.translation.frame(page, object);
     const selected = object.id === this.state.selectedObjectId;
     const editableNodeId = editableAncestorNodeId(
       this.state.snapshot,
@@ -93,7 +95,7 @@ export class InteractionController {
         page,
         target,
         group,
-        previewFrame(page, target),
+        this.actions.translation.frame(page, target),
       ),
     );
     return group;
@@ -113,6 +115,7 @@ export class InteractionController {
       svg,
       start: svgPoint(svg, event),
       from: frame,
+      base: previewFrame(page, object),
       to: { ...frame },
       relative: event.shiftKey,
       nodeIds: subtreeNodeIds(this.state.snapshot, object.id),
@@ -134,9 +137,13 @@ export class InteractionController {
     drag.to = { ...drag.from, x: drag.from.x + dx, y: drag.from.y + dy };
     drag.group.setAttribute("transform", `translate(${dx} ${dy})`);
     const preview = drag.svg.previousElementSibling;
+    const totalX = drag.to.x - drag.base.x;
+    const totalY = drag.to.y - drag.base.y;
     for (const nodeId of drag.nodeIds) {
-      for (const item of preview.querySelectorAll(`[data-node-id="${nodeId}"]`)) {
-        item.style.transform = `translate(${dx}px, ${dy}px)`;
+      for (
+        const item of preview.querySelectorAll(`[data-ss-node-id="${nodeId}"]`)
+      ) {
+        item.style.translate = `${totalX}pt ${totalY}pt`;
       }
     }
   }
@@ -151,8 +158,7 @@ export class InteractionController {
       this.actions.render();
       return;
     }
-    this.actions.post({
-      type: "translate",
+    this.actions.translation.submit({
       snapshotId: this.state.snapshot.snapshot_id,
       nodeId: drag.object.id,
       pageId: drag.object.page_id,
@@ -175,6 +181,16 @@ export class InteractionController {
     drag.group.removeEventListener("pointerup", this.finishDrag);
     drag.group.removeEventListener("pointercancel", this.cancelDrag);
     this.drag = null;
+  }
+
+  frameByNode(page, nodeId) {
+    if (nodeId === page.id) {
+      return { x: 0, y: 0, width: page.width, height: page.height };
+    }
+    const object = this.state.snapshot.layout.objects.find((candidate) =>
+      candidate.id === nodeId
+    );
+    return object ? this.actions.translation.frame(page, object) : null;
   }
 }
 
