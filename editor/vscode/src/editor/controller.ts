@@ -295,6 +295,7 @@ export class EditorController implements vscode.Disposable {
       this.output.appendLine(`[editor] snapshot failed: ${String(error)}`);
       await this.post(session, {
         type: "error",
+        revision: serial,
         message: "WYSIWYG preview update failed.",
       });
     } finally {
