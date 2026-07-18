@@ -1,9 +1,11 @@
 import { element } from "./dom.js";
 import { alignTextBaselines } from "../../out/render/text.js";
+import { buildFailureMessage } from "./diagnostics.js";
 import { disposePages } from "./document.js";
 import { EditorNavigation } from "./navigation.js";
 import { disposePdfItems, disposePdfRuntime } from "./pdf.js";
 import { renderActivityRail, renderSidebar } from "./sidebar.js";
+import { TranslationController } from "./translation.js";
 import { WorkspaceView } from "./workspace.js";
 
 const vscode = acquireVsCodeApi();
@@ -26,12 +28,16 @@ let toastTimer = null;
 let renderGeneration = 0;
 let textAlignmentFailed = false;
 
-const actions = {
+const translation = new TranslationController(state, {
   post: (message) => vscode.postMessage(message),
+  render,
+});
+const actions = {
   render,
   revealSource,
   selectObject,
   selectPage,
+  translation,
 };
 const navigation = new EditorNavigation(state);
 const workspace = new WorkspaceView(state, actions);
@@ -49,11 +55,11 @@ window.addEventListener("message", (event) => {
     if (!Number.isSafeInteger(message.revision) ||
         message.revision <= state.revision) return;
     state.revision = message.revision;
+    translation.cancel();
     showError(message.message || "WYSIWYG preview update failed.");
   } else if (message.type === "editResult") {
-    if (message.status !== "stale") {
-      showError(message.message || "The edit could not be applied.");
-    }
+    const error = translation.acceptResult(message);
+    if (error) showError(error);
   }
 });
 
@@ -70,6 +76,8 @@ function acceptSnapshot(message) {
   disposePdfItems(app);
   state.revision = message.revision;
   state.snapshot = message.snapshot;
+  translation.reconcile(message.snapshot, message.documentVersion);
+  state.toast = buildFailureMessage(message.snapshot);
   let renderStyle = document.getElementById("ss-render-style");
   if (!renderStyle) {
     renderStyle = document.createElement("style");

@@ -82,7 +82,9 @@ export class WorkspaceView {
     shell.append(this.ruler("horizontal", page.width));
     shell.append(this.ruler("vertical", page.height));
     const surface = element("div", "page-surface");
-    surface.append(renderPage(this.state.snapshot, page.id));
+    const preview = renderPage(this.state.snapshot, page.id);
+    this.actions.translation.applyPreview(preview, page.id);
+    surface.append(preview);
     surface.append(this.interaction.renderLayer(page));
     shell.append(surface);
     if (this.state.mode === "continuous") {

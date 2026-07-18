@@ -9,6 +9,7 @@ pub const Context = struct {
     documents: *lsp_state.DocumentStore,
     provider: *lsp_state.AnalysisProvider,
     responses: *lsp_state.ResponseStore,
+    diagnostics: *const lsp_state.ResponseStore,
 };
 
 pub fn snapshotResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
@@ -34,17 +35,32 @@ pub fn snapshotResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     }
     if (try ctx.responses.cloneForEntry(ctx.allocator, snapshot.project.entry_path)) |cached| {
         defer ctx.allocator.free(cached);
-        return try staleSnapshot(ctx.allocator, cached);
+        return try staleSnapshotWithErrors(ctx, snapshot.project.entry_path, cached);
     }
-    return try editor_snapshot.emptyJson(ctx.allocator);
+    const empty = try editor_snapshot.emptyJson(ctx.allocator);
+    defer ctx.allocator.free(empty);
+    return try staleSnapshotWithErrors(ctx, snapshot.project.entry_path, empty);
 }
 
-fn staleSnapshot(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
+fn staleSnapshotWithErrors(ctx: *Context, entry_path: []const u8, source: []const u8) ![]u8 {
+    const diagnostics = try ctx.diagnostics.cloneForEntry(ctx.allocator, entry_path) orelse
+        return try staleSnapshot(ctx.allocator, source, "[]");
+    defer ctx.allocator.free(diagnostics);
+    return try staleSnapshot(ctx.allocator, source, diagnostics);
+}
+
+fn staleSnapshot(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    diagnostics_json: []const u8,
+) ![]u8 {
     const trimmed = std.mem.trim(u8, source, " \t\r\n");
     if (trimmed.len == 0 or trimmed[trimmed.len - 1] != '}') return try allocator.dupe(u8, source);
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     try out.appendSlice(allocator, trimmed[0 .. trimmed.len - 1]);
-    try out.appendSlice(allocator, ",\"stale\":true}\n");
+    try out.appendSlice(allocator, ",\"stale\":true,\"build_diagnostics\":");
+    try out.appendSlice(allocator, diagnostics_json);
+    try out.appendSlice(allocator, "}\n");
     return try out.toOwnedSlice(allocator);
 }

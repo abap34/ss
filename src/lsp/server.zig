@@ -48,6 +48,7 @@ const Server = struct {
     analysis: ?AnalysisSnapshot = null,
     layout_responses: ResponseStore = .{},
     editor_responses: ResponseStore = .{},
+    editor_diagnostics: ResponseStore = .{},
     published_diagnostic_uris: std.StringHashMap(void),
     pending_rebuild_path: ?[]u8 = null,
     pending_rebuild_due_ms: u64 = 0,
@@ -73,6 +74,7 @@ const Server = struct {
         if (self.analysis) |*snapshot| snapshot.deinit();
         self.layout_responses.deinit(self.allocator);
         self.editor_responses.deinit(self.allocator);
+        self.editor_diagnostics.deinit(self.allocator);
         lsp_state.deinitStringSet(self.allocator, &self.published_diagnostic_uris);
         lsp_state.deinitStringSet(self.allocator, &self.wysiwyg_paths);
         self.clearPendingRebuild();
@@ -96,6 +98,14 @@ const Server = struct {
             defer empty.deinit();
             try self.publishDiagnostics(&empty);
         }
+        var editor_diagnostics = std.ArrayList(u8).empty;
+        defer editor_diagnostics.deinit(self.allocator);
+        try diagnostics.appendEditorErrorsJson(self.allocator, &editor_diagnostics);
+        try self.editor_diagnostics.store(
+            self.allocator,
+            &self.analysis.?,
+            editor_diagnostics.items,
+        );
     }
 
     fn rebuildImmediately(self: *Server, changed_path: []const u8) !void {
@@ -772,7 +782,12 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         if (doc_path) |path| {
             const first_for_path = !server.wysiwyg_paths.contains(path);
             if (first_for_path) try putStringSet(server.allocator, &server.wysiwyg_paths, path);
-            if (first_for_path or server.analysis == null or server.analysis.?.layout_output == null or server.analysis.?.layout_output.?.editor_json == null) {
+            if (first_for_path or
+                server.analysis == null or
+                !server.analysis.?.coversPath(path) or
+                server.analysis.?.layout_output == null or
+                server.analysis.?.layout_output.?.editor_json == null)
+            {
                 try server.rebuildImmediately(path);
             }
         }
@@ -782,6 +797,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
             .documents = &server.documents,
             .provider = &provider,
             .responses = &server.editor_responses,
+            .diagnostics = &server.editor_diagnostics,
         };
         const result = try feature_editor.snapshotResult(&ctx, params);
         defer server.allocator.free(result);

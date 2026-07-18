@@ -6,7 +6,7 @@ import {
   signed,
 } from "./geometry.js";
 
-export function renderConstraints(snapshot, page, objectId) {
+export function renderConstraints(snapshot, page, objectId, resolveFrame) {
   const group = svgElement("g", "constraint-layer");
   for (
     const relation of snapshot.layout.relations.filter((item) =>
@@ -15,8 +15,10 @@ export function renderConstraints(snapshot, page, objectId) {
   ) {
     const sourceFrame = relation.source.type === "page"
       ? { x: 0, y: 0, width: page.width, height: page.height }
-      : frameByNode(snapshot, page, relation.source.node_id);
-    const targetFrame = frameByNode(snapshot, page, relation.target.node_id);
+      : resolveFrame?.(relation.source.node_id) ??
+        frameByNode(snapshot, page, relation.source.node_id);
+    const targetFrame = resolveFrame?.(relation.target.node_id) ??
+      frameByNode(snapshot, page, relation.target.node_id);
     if (!sourceFrame || !targetFrame) continue;
     const sourceSegment = anchorSegment(sourceFrame, relation.source.anchor);
     const targetSegment = anchorSegment(targetFrame, relation.target.anchor);

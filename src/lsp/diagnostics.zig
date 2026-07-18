@@ -42,7 +42,7 @@ pub const DiagnosticSet = struct {
         span: ?source.ByteSpan,
         related: []const LspRelatedInput,
     ) !void {
-        const primary_span = span orelse return;
+        const primary_span = span orelse source.ByteSpan{ .start = 0, .end = 0 };
         const uri = try protocol.uriFromPath(self.allocator, path);
         const range = protocol.rangeFromSpan(text, primary_span);
         const code_copy = self.allocator.dupe(u8, code) catch |err| {
@@ -86,6 +86,22 @@ pub const DiagnosticSet = struct {
         for (bag.items.items) |item| {
             try self.addAnalysisDiagnostic(item);
         }
+    }
+
+    pub fn appendEditorErrorsJson(
+        self: *const DiagnosticSet,
+        allocator: std.mem.Allocator,
+        out: *std.ArrayList(u8),
+    ) !void {
+        try out.append(allocator, '[');
+        var count: usize = 0;
+        for (self.items.items) |*item| {
+            if (item.severity != .@"error") continue;
+            if (count != 0) try out.append(allocator, ',');
+            try item.appendEditorJson(allocator, out);
+            count += 1;
+        }
+        try out.append(allocator, ']');
     }
 
     pub fn addConstraintFailure(self: *DiagnosticSet, state: *core.DocumentState, err: anyerror) !void {
@@ -139,7 +155,7 @@ pub const DiagnosticSet = struct {
 
     fn addAnalysisDiagnostic(self: *DiagnosticSet, item: analysis_diagnostics.Diagnostic) !void {
         if (item.severity == .warning and isLayoutOverflowCode(item.code)) return;
-        const span = item.span orelse return;
+        const span = item.span orelse source.ByteSpan{ .start = 0, .end = 0 };
         const uri = try protocol.uriFromPath(self.allocator, item.path);
         errdefer self.allocator.free(uri);
         const code = try self.allocator.dupe(u8, item.code);
@@ -321,6 +337,18 @@ const LspDiagnostic = struct {
             }
             try out.append(allocator, ']');
         }
+        try out.append(allocator, '}');
+    }
+
+    fn appendEditorJson(self: *const LspDiagnostic, allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
+        try out.appendSlice(allocator, "{\"uri\":");
+        try protocol.appendJsonString(allocator, out, self.uri);
+        try out.appendSlice(allocator, ",\"range\":");
+        try protocol.appendRange(allocator, out, self.range);
+        try out.appendSlice(allocator, ",\"code\":");
+        try protocol.appendJsonString(allocator, out, self.code);
+        try out.appendSlice(allocator, ",\"message\":");
+        try protocol.appendJsonString(allocator, out, self.message);
         try out.append(allocator, '}');
     }
 };

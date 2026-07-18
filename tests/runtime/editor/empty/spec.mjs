@@ -31,6 +31,26 @@ end
         Array.isArray(snapshot.display.assets),
       `empty snapshot used an obsolete display schema: ${JSON.stringify(snapshot)}`,
     );
+    assert(
+      snapshot.stale === true && snapshot.build_diagnostics?.length > 0,
+      `initial build failure omitted its diagnostics: ${JSON.stringify(snapshot)}`,
+    );
+
+    const missing = path.join(project, "missing.ss");
+    const missingUri = pathToFileURL(missing).toString();
+    const missingSnapshot = await client.request("ss/editorSnapshot", {
+      textDocument: { uri: missingUri },
+    });
+    const missingDiagnostic = missingSnapshot.build_diagnostics?.find(
+      (item) => item.code === "ProjectReadFailed",
+    );
+    assert(
+      missingSnapshot.stale === true &&
+        missingDiagnostic?.uri === missingUri &&
+        missingDiagnostic.range.start.line === 0 &&
+        missingDiagnostic.range.start.character === 0,
+      `unlocated build failure was omitted: ${JSON.stringify(missingSnapshot)}`,
+    );
   });
 } finally {
   await rm(project, { recursive: true, force: true });

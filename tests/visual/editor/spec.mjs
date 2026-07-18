@@ -6,7 +6,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { pdfAsset } from "../render/assets.mjs";
 import { withBrowser } from "../render/capture.mjs";
+import { exerciseBuildDiagnosticMessages } from "./diagnostics.mjs";
 import { editorSnapshot, testDocument } from "./fixture.mjs";
+import { exerciseTranslationLifecycle } from "./translation.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(repository, "editor/vscode/media/editor");
@@ -45,6 +47,7 @@ await writeFile(path.join(output, "asset.pdf"), pdfAsset());
 await writeFile(path.join(output, "index.html"), testDocument(), "utf8");
 
 await withBrowser(output, async (browser, baseUrl) => {
+  await exerciseBuildDiagnosticMessages(browser, baseUrl, editorSnapshot());
   const page = await browser.newPage({ viewport: { width: 560, height: 920 } });
   let releasePdfRequest;
   try {
@@ -170,23 +173,15 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(await page.locator(".page-shell").count(), 2, "an older snapshot replaced the current editor view");
     assert.equal(await page.locator(".object-sheet").count(), 1, "an older snapshot cleared the current selection");
 
-    const target = page.locator('.page-shell[data-page-id="22"] .object-hit[data-object-id="202"]');
-    const box = await target.boundingBox();
-    assert(box && box.width > 0 && box.height > 0, "movable object had no interactive bounds");
-    await page.keyboard.down("Shift");
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2 + 14, box.y + box.height / 2 + 9, { steps: 3 });
-    await page.mouse.up();
-    await page.keyboard.up("Shift");
-    const translate = await lastMessage(page, "translate");
-    assert.equal(translate.snapshotId, current.snapshot_id);
-    assert.equal(translate.nodeId, 202);
-    assert.equal(translate.pageId, 22);
-    assert.equal(translate.mode, "relative");
-    assert(translate.toBounds.x > translate.fromBounds.x && translate.toBounds.y > translate.fromBounds.y,
-      `drag did not update both coordinates: ${JSON.stringify(translate)}`);
+    const finalSnapshot = await exerciseTranslationLifecycle(page, current);
 
+    await page.waitForFunction(() =>
+      document.querySelector('.page-shell[data-page-id="11"] .ss-pdf')
+        ?.dataset.ssPdfRendered === "true"
+    );
+    await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas').evaluate((canvas) => {
+      canvas.dataset.identity = "retained-after-update";
+    });
     await page.locator(".close-button").click();
     assert.equal(await page.locator(".object-sheet").count(), 0, "details sheet did not close");
     await page.locator(".activity-theme").click();
@@ -194,19 +189,49 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(await page.evaluate(() => globalThis.__persisted.theme), "light");
     assert.equal(
       await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas').getAttribute("data-identity"),
-      "retained",
+      "retained-after-update",
       "theme change recreated a rendered PDF canvas",
     );
+
+    const failed = structuredClone(finalSnapshot);
+    failed.stale = true;
+    failed.build_diagnostics = [
+      {
+        uri: "file:///workspace/slide.ss",
+        range: {
+          start: { line: 11, character: 3 },
+          end: { line: 11, character: 8 },
+        },
+        code: "ExpectedExpression",
+        message: "expected an expression after '='",
+      },
+    ];
+    await postSnapshot(page, 107, failed, 6);
+    await page.waitForSelector(".error-toast");
+    assert.equal(
+      await page.locator(".error-toast").textContent(),
+      "Build failed. The preview is showing the last successful result.\n" +
+        "slide.ss:12:4 [ExpectedExpression] expected an expression after '='",
+      "stale preview did not explain its build failure",
+    );
+    await postSnapshot(page, 108, failed, 6);
+    assert.equal(
+      await page.locator(".error-toast").count(),
+      1,
+      "a repeated failed build cleared its diagnostic message",
+    );
+    await postSnapshot(page, 109, finalSnapshot, 7);
+    await page.waitForFunction(() => !document.querySelector(".error-toast"));
 
     await page.evaluate(() => {
       window.postMessage({
         type: "error",
-        revision: 101,
+        revision: 110,
         message: "WYSIWYG preview update failed.",
       }, "*");
     });
     await page.waitForSelector(".error-toast");
-    await postSnapshot(page, 102, current);
+    await postSnapshot(page, 111, finalSnapshot, 7);
     await page.waitForFunction(() => !document.querySelector(".error-toast"));
     assert.equal(
       await page.locator(".error-toast").count(),
@@ -217,7 +242,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.evaluate(() => {
       window.postMessage({
         type: "error",
-        revision: 101,
+        revision: 110,
         message: "obsolete preview failure",
       }, "*");
     });
@@ -234,11 +259,11 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(await page.locator(".sidebar-title").textContent(), "Outline");
     assert(await page.locator(".outline-row").count() >= 4, "outline sidebar omitted document structure");
 
-    const restarted = structuredClone(current);
+    const restarted = structuredClone(finalSnapshot);
     restarted.generation = 1;
     restarted.snapshot_id = "1-restarted";
     restarted.layout.pages[1].name = "Restarted";
-    await postSnapshot(page, 103, restarted);
+    await postSnapshot(page, 112, restarted, 7);
     await page.waitForFunction(() => [...document.querySelectorAll(".page-caption")]
       .some((caption) => caption.textContent === "Restarted"));
     assert.equal(await page.evaluate(() => globalThis.__retiringPdfRoots.every((root) =>
@@ -276,10 +301,15 @@ await withBrowser(output, async (browser, baseUrl) => {
   }
 });
 
-async function postSnapshot(page, revision, value) {
-  await page.evaluate(({ deliveryRevision, snapshotValue }) => {
-    window.postMessage({ type: "snapshot", revision: deliveryRevision, snapshot: snapshotValue }, "*");
-  }, { deliveryRevision: revision, snapshotValue: value });
+async function postSnapshot(page, revision, value, documentVersion = 1) {
+  await page.evaluate(({ deliveryRevision, snapshotValue, version }) => {
+    window.postMessage({
+      type: "snapshot",
+      revision: deliveryRevision,
+      documentVersion: version,
+      snapshot: snapshotValue,
+    }, "*");
+  }, { deliveryRevision: revision, snapshotValue: value, version: documentVersion });
 }
 
 async function lastMessage(page, type) {
