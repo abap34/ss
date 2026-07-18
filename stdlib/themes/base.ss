@@ -156,11 +156,11 @@ fn label_with_style(text_value: String, style: TextBlockStyle) -> Object
 end
 
 fn citation_with_style(target: Object, number: Number, reference_text: String, style: TextBlockStyle) -> Object
-  return apply_text_block_style(components::citation(target, number, reference_text), style)
+  return components::citation_with(target, number, reference_text, (ref: Object) |-> apply_text_block_style(ref, style))
 end
 
 fn pageno_with_style(style: TextBlockStyle) -> Object
-  return apply_text_block_style(components::pageno(), style)
+  return generated::pageno_obj((page_no: Object) |-> apply_text_block_style(page_no, style))
 end
 
 fn pagenos_with_style!(format: String?, style: TextBlockStyle) -> Void

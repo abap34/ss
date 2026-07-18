@@ -445,17 +445,28 @@ fn/! note(text_value: String) -> Object
   return obj
 end
 
-fn/! citation(target: Object, number: Number, reference_text: String) -> Object
+fn style_citation(ref: Object) -> Object
+  ref.layout = LayoutStyle {
+    x = 120
+    right_inset = 90
+    wrap = WrapMode.on
+  }
+  return ref
+end
+
+fn/! citation_with(target: Object, number: Number, reference_text: String, decorate: Object -> Object) -> Object
   let number_text = str(number)
   let marker = "[" ++ number_text ++ "]"
   let id = "citation:" ++ str(page_index(pagectx())) ++ ":" ++ number_text
 
   let ref = render::link(objects::cite_obj(marker ++ " " ++ reference_text), id)
-  ref.layout.x = 120
-  ref.layout.right_inset = 90
-  ref.layout.wrap = WrapMode.on
+  decorate(ref)
   ~ ref.top == page.top - add(632, mul(sub(number, 1), 20))
   return ref
+end
+
+fn/! citation(target: Object, number: Number, reference_text: String) -> Object
+  return citation_with(target, number, reference_text, style_citation)
 end
 
 fn/! pageno() -> Object
