@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { PNG } from "pngjs";
 import { pdfAsset, rasterAsset } from "./assets.mjs";
-import { captureHtmlPages, capturePdfPages, preparePdfViewer, withBrowser } from "./capture.mjs";
+import { captureHtmlPages, capturePdfPages, maximumTextBaselineError, preparePdfViewer, withBrowser } from "./capture.mjs";
 import { compareImages, decodePng, defaultThresholds, encodePng } from "./compare.mjs";
 import { inspectStandaloneNavigation } from "./navigation/spec.mjs";
 
@@ -17,9 +17,19 @@ const repository = path.resolve(testRoot, "../..");
 const output = path.join(repository, ".ss-cache/render-parity");
 const driver = path.resolve(repository, process.argv.slice(2).find((argument) => !argument.startsWith("--")) ?? "zig-out/bin/ss-render-parity-driver");
 const full = process.argv.includes("--full");
+const textBaselineTolerance = 0.03;
 const pdfViewerThresholds = Object.freeze({
   ...defaultThresholds,
   largeDifferenceRatio: 0.006,
+  spatialTolerance: 1,
+});
+const largeGlyphThresholds = Object.freeze({
+  ...defaultThresholds,
+  spatialTolerance: 1,
+});
+const largeGlyphItemThresholds = Object.freeze({
+  meanAbsoluteError: 0.014,
+  largeDifferenceRatio: 0.045,
   spatialTolerance: 1,
 });
 const canRenderAlgorithm2e = full &&
@@ -32,6 +42,12 @@ await preparePdfViewer(output, repository);
 const fixtures = [
   { name: "basic", source: path.join(repository, "tests/fixtures/project-basic/slide.ss") },
   { name: "fonts", source: path.join(repository, "tests/fixtures/render/parity/text/fonts.ss") },
+  {
+    name: "large-glyphs",
+    source: path.join(repository, "tests/fixtures/render/parity/text/large/slide.ss"),
+    pageThresholds: largeGlyphThresholds,
+    itemThresholds: largeGlyphItemThresholds,
+  },
   { name: "geometry", source: path.join(repository, "tests/fixtures/render/parity/geometry/slide.ss") },
   { name: "images", source: await prepareGeneratedFixture("images", "asset.png", rasterAsset()) },
   { name: "navigation", source: path.join(repository, "tests/fixtures/render/parity/navigation/slide.ss") },
@@ -42,6 +58,7 @@ if (full) {
   fixtures.push({ name: "semantics", source: path.join(repository, "tests/fixtures/render/parity/semantics/slide.ss") });
   fixtures.push({ name: "math", source: path.join(repository, "tests/fixtures/render/math.ss") });
   fixtures.push({ name: "markdown-math", source: path.join(repository, "tests/fixtures/render/parity/math/markdown.ss") });
+  fixtures.push({ name: "math-fallback", source: path.join(repository, "tests/fixtures/render/parity/math/fallback/slide.ss") });
   if (canRenderAlgorithm2e) {
     fixtures.push({ name: "algorithm2e", source: path.join(repository, "tests/fixtures/render/parity/math/algorithm2e/slide.ss") });
   }
@@ -58,22 +75,33 @@ await withBrowser(output, async (browser, baseUrl) => {
     const html = await captureHtmlPages(browser, baseUrl, `${fixture.name}.html`);
     assert.equal(html.length, pdf.length, `${fixture.name}: PDF and HTML page counts differ`);
     for (let index = 0; index < pdf.length; index += 1) {
+      assert(
+        html[index].textBaselineError <= textBaselineTolerance,
+        `${fixture.name} page ${index + 1}: browser text baseline differs from render IR by ${html[index].textBaselineError} pt`,
+      );
       const expected = decodePng(pdf[index]);
       const actual = decodePng(html[index].image);
       const hasPdfViewer = html[index].items.some((item) => item.usesPdfViewer);
       const result = compareImages(expected, actual, hasPdfViewer
         ? pdfViewerThresholds
-        : defaultThresholds);
+        : fixture.pageThresholds ?? defaultThresholds);
       await writeFile(path.join(output, `${fixture.name}-${index + 1}-pdf.png`), pdf[index]);
       await writeFile(path.join(output, `${fixture.name}-${index + 1}-html.png`), html[index].image);
       if (result.diff) await writeFile(path.join(output, `${fixture.name}-${index + 1}-diff.png`), encodePng(result.diff));
       process.stdout.write(`${fixture.name} page ${index + 1}: MAE=${result.meanAbsoluteError ?? "dimension mismatch"}, large=${result.largeDifferenceRatio ?? "dimension mismatch"}\n`);
       failed ||= !result.pass;
       for (const region of html[index].items) {
-        const expectedItem = cropRegion(expected, region, 2);
-        const actualItem = cropRegion(actual, region, 2);
+        // Thin rules and small PDF.js canvases need enough surrounding pixels for
+        // their normalized error to describe page placement instead of glyph area.
+        const padding = region.kind === "line" || region.usesPdfViewer ? 20 : 2;
+        const expectedItem = cropRegion(expected, region, padding);
+        const actualItem = cropRegion(actual, region, padding);
         if (!expectedItem || !actualItem) continue;
-        const itemResult = compareImages(expectedItem, actualItem, itemThresholds(region));
+        const itemResult = compareImages(
+          expectedItem,
+          actualItem,
+          itemThresholds(region, region.kind === "line" ? undefined : fixture.itemThresholds),
+        );
         if (!itemResult.pass) {
           process.stdout.write(`${fixture.name} page ${index + 1} item ${region.id}: MAE=${itemResult.meanAbsoluteError ?? "dimension mismatch"}, large=${itemResult.largeDifferenceRatio ?? "dimension mismatch"}\n`);
         }
@@ -83,6 +111,7 @@ await withBrowser(output, async (browser, baseUrl) => {
   }
 
   await inspectStandaloneNavigation(browser, baseUrl);
+  await inspectTextBaselineDetection(browser, baseUrl);
 
   if (full) {
     await inspectNormalHtml(browser, baseUrl);
@@ -105,6 +134,25 @@ await withBrowser(output, async (browser, baseUrl) => {
   }
 });
 
+async function inspectTextBaselineDetection(browser, baseUrl) {
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
+  try {
+    await page.goto(`${baseUrl}/large-glyphs.html#1`, { waitUntil: "networkidle" });
+    await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true");
+    const active = page.locator('.ss-page[data-ss-active="true"]');
+    assert(await maximumTextBaselineError(active) <= textBaselineTolerance, "unaltered text baseline failed its geometry check");
+    await active.locator(".ss-text-run[data-ss-baseline-y]").first().evaluate((run) => {
+      run.style.transform = "translateY(0.5pt)";
+    });
+    assert(
+      await maximumTextBaselineError(active) >= 0.49,
+      "text baseline geometry check did not detect a 0.5 pt vertical shift",
+    );
+  } finally {
+    await page.close();
+  }
+}
+
 function cropRegion(source, region, padding) {
   const x = Math.max(0, region.x - padding);
   const y = Math.max(0, region.y - padding);
@@ -118,37 +166,38 @@ function cropRegion(source, region, padding) {
   return result;
 }
 
-function itemThresholds(item) {
+function itemThresholds(item, overrides) {
+  let thresholds;
   if (item.kind === "line") {
-    return {
+    thresholds = {
       ...defaultThresholds,
       meanAbsoluteError: 0.012,
       largeDifferenceRatio: 0.06,
       spatialTolerance: 1,
     };
-  }
-  if (item.usesPdfViewer) {
-    return {
+  } else if (item.usesPdfViewer) {
+    thresholds = {
       ...defaultThresholds,
       meanAbsoluteError: 0.0045,
       largeDifferenceRatio: 0.045,
       spatialTolerance: 1,
     };
-  }
-  if (item.kind === "math") {
-    return {
+  } else if (item.kind === "math") {
+    thresholds = {
       ...defaultThresholds,
       meanAbsoluteError: 0.005,
       largeDifferenceRatio: 0.025,
       spatialTolerance: 1,
     };
+  } else {
+    thresholds = {
+      ...defaultThresholds,
+      meanAbsoluteError: 0.004,
+      largeDifferenceRatio: 0.04,
+      spatialTolerance: 1,
+    };
   }
-  return {
-    ...defaultThresholds,
-    meanAbsoluteError: 0.004,
-    largeDifferenceRatio: 0.025,
-    spatialTolerance: 1,
-  };
+  return overrides ? { ...thresholds, ...overrides } : thresholds;
 }
 
 async function inspectNormalHtml(browser, baseUrl) {
