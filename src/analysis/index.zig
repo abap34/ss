@@ -19,20 +19,6 @@ pub fn populateDocumentStateAnalysis(allocator: std.mem.Allocator, state: *core.
     try collectModuleHints(allocator, state, &state.hints, state.projectSource(), state.projectPath(), state.projectSyntax(), state.project_module_id, &state.functions);
 }
 
-pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
-    var write_index: usize = 0;
-    for (state.hints.items) |hint| {
-        if (hint.kind == .solved_frame) {
-            allocator.free(hint.label);
-            continue;
-        }
-        state.hints.items[write_index] = hint;
-        write_index += 1;
-    }
-    state.hints.items.len = write_index;
-    try collectSolvedSizeHints(allocator, state, &state.hints);
-}
-
 fn collectDefinitionsFromModule(
     allocator: std.mem.Allocator,
     source: []const u8,
@@ -254,50 +240,8 @@ fn hintForCallExpr(
     for (0..hint_count) |index| {
         const param_name = sema.callCalleeParamName(call.callee, index) orelse continue;
         const label = try std.fmt.allocPrint(allocator, "{s}:", .{param_name});
-        try appendInlayHint(allocator, hints, source, source_path, module_id, call.arg_spans.items[index].start, label, .parameter_names);
+        try appendInlayHint(allocator, hints, source, source_path, module_id, call.arg_spans.items[index].start, label);
     }
-}
-
-fn collectSolvedSizeHints(
-    allocator: std.mem.Allocator,
-    state: *core.DocumentState,
-    hints: *std.ArrayList(core.InlayHint),
-) !void {
-    var best_by_origin = std.StringHashMap(core.NodeId).init(allocator);
-    defer best_by_origin.deinit();
-
-    for (state.nodes.items) |node| {
-        if (node.kind != .object or !node.attached) continue;
-        const origin = node.origin orelse continue;
-        if (node.role != null and std.mem.eql(u8, node.role.?, "panel")) continue;
-        if (best_by_origin.get(origin)) |existing| {
-            if (node.id > existing) try best_by_origin.put(origin, node.id);
-        } else {
-            try best_by_origin.put(origin, node.id);
-        }
-    }
-
-    var iterator = best_by_origin.iterator();
-    while (iterator.next()) |entry| {
-        const origin = utils.err.parseLocatedOrigin(entry.key_ptr.*) orelse continue;
-        const module = moduleForHintOrigin(state, origin.path);
-        const node = state.getNode(entry.value_ptr.*) orelse continue;
-        const label = try std.fmt.allocPrint(
-            allocator,
-            " x={d:.0} y={d:.0} w={d:.0} h={d:.0}",
-            .{ node.frame.x, node.frame.y, node.frame.width, node.frame.height },
-        );
-        try appendInlayHint(allocator, hints, module.source, module.file, module.id, utils.source.lineAt(module.source, origin.span.end).span.end, label, .solved_frame);
-    }
-}
-
-fn moduleForHintOrigin(state: *const core.DocumentState, file: ?[]const u8) struct { id: core.SourceModuleId, source: []const u8, file: ?[]const u8 } {
-    if (file) |origin_path| {
-        if (state.moduleByPathOrSpec(origin_path)) |module| {
-            return .{ .id = module.id, .source = module.source, .file = module.path orelse origin_path };
-        }
-    }
-    return .{ .id = state.project_module_id, .source = state.projectSource(), .file = state.projectPath() };
 }
 
 fn appendInlayHint(
@@ -308,14 +252,12 @@ fn appendInlayHint(
     module_id: core.SourceModuleId,
     byte_index: usize,
     label: []const u8,
-    kind: core.InlayHintKind,
 ) !void {
     const loc = utils.source.locationAt(source, @min(byte_index, source.len));
     try hints.append(allocator, .{
         .line = loc.line,
         .column = loc.column,
         .label = label,
-        .kind = kind,
         .module_id = module_id,
         .file = source_path,
     });

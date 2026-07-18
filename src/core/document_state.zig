@@ -180,16 +180,10 @@ pub const Definition = struct {
     scope_name: ?[]const u8 = null,
 };
 
-pub const InlayHintKind = enum {
-    parameter_names,
-    solved_frame,
-};
-
 pub const InlayHint = struct {
     line: usize,
     column: usize,
     label: []const u8,
-    kind: InlayHintKind,
     module_id: SourceModuleId,
     file: ?[]const u8 = null,
 };

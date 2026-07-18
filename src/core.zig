@@ -62,7 +62,6 @@ pub const constKey = @import("core/document_state.zig").constKey;
 pub const DefinitionKind = @import("core/document_state.zig").DefinitionKind;
 pub const DefinitionScopeKind = @import("core/document_state.zig").DefinitionScopeKind;
 pub const Definition = @import("core/document_state.zig").Definition;
-pub const InlayHintKind = @import("core/document_state.zig").InlayHintKind;
 pub const InlayHint = @import("core/document_state.zig").InlayHint;
 pub const layout = @import("core/layout.zig");
 pub const fields = @import("core/fields.zig");

@@ -54,7 +54,6 @@ test "project spec: editor settings parse from ss.toml" {
         \\[editor.lsp.inlay_hints]
         \\enabled = true
         \\arguments = false
-        \\positions = false
         \\
         \\[editor.wysiwyg]
         \\debounce = 50
@@ -73,7 +72,6 @@ test "project spec: editor settings parse from ss.toml" {
     try testing.expectEqual(@as(u64, 25), cfg.lsp.debounce_ms);
     try testing.expect(cfg.lsp.inlay_hints);
     try testing.expect(!cfg.lsp.inlay_hint_arguments);
-    try testing.expect(!cfg.lsp.inlay_hint_positions);
     try testing.expectEqual(@as(u64, 50), cfg.wysiwyg.debounce_ms);
     try testing.expect(!cfg.wysiwyg.refresh_on_dependency_change);
     try testing.expect(!cfg.page_guide.enabled);

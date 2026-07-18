@@ -52,7 +52,6 @@ fn appendSettings(allocator: std.mem.Allocator, out: *std.ArrayList(u8), facts: 
     try appendBoolField(allocator, out, "definition", facts.lsp.definition, false);
     try appendBoolField(allocator, out, "inlayHints", facts.lsp.inlay_hints, false);
     try appendBoolField(allocator, out, "inlayHintArguments", facts.lsp.inlay_hint_arguments, false);
-    try appendBoolField(allocator, out, "inlayHintPositions", facts.lsp.inlay_hint_positions, false);
     try appendBoolField(allocator, out, "documentSymbols", facts.lsp.document_symbols, false);
     try appendBoolField(allocator, out, "foldingRanges", facts.lsp.folding_ranges, false);
     try appendBoolField(allocator, out, "semanticTokens", facts.lsp.semantic_tokens, false);

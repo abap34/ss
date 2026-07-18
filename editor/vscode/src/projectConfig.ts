@@ -17,7 +17,6 @@ export interface LspSettings {
   definition: boolean;
   inlayHints: boolean;
   inlayHintArguments: boolean;
-  inlayHintPositions: boolean;
   documentSymbols: boolean;
   foldingRanges: boolean;
   semanticTokens: boolean;
@@ -49,7 +48,6 @@ const defaultSettings: ProjectSettings = {
     definition: true,
     inlayHints: true,
     inlayHintArguments: true,
-    inlayHintPositions: true,
     documentSymbols: true,
     foldingRanges: true,
     semanticTokens: true,
@@ -91,7 +89,6 @@ export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
       definition: boolValue(table, "editor.lsp", "definition", defaultSettings.lsp.definition),
       inlayHints,
       inlayHintArguments: boolValue(table, "editor.lsp.inlay_hints", "arguments", inlayHints),
-      inlayHintPositions: boolValue(table, "editor.lsp.inlay_hints", "positions", inlayHints),
       documentSymbols: boolValue(table, "editor.lsp", "document_symbols", defaultSettings.lsp.documentSymbols),
       foldingRanges: boolValue(table, "editor.lsp", "folding_ranges", defaultSettings.lsp.foldingRanges),
       semanticTokens: boolValue(table, "editor.lsp", "semantic_tokens", defaultSettings.lsp.semanticTokens),
