@@ -8,6 +8,7 @@ import {
   LayoutEditResult,
   WebviewMessage,
 } from "./protocol";
+import { isRetryableSnapshotError } from "./request";
 import {
   documentVersions,
   revealSource,
@@ -305,6 +306,10 @@ export class EditorController implements vscode.Disposable {
       });
     } catch (error) {
       if (session.disposed || serial !== session.serial) return;
+      if (isRetryableSnapshotError(error)) {
+        session.refreshPending = true;
+        return;
+      }
       this.output.appendLine(`[editor] snapshot failed: ${String(error)}`);
       await this.post(session, {
         type: "error",
