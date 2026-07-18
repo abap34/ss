@@ -1180,7 +1180,6 @@ fn cloneHints(allocator: std.mem.Allocator, hints: []const core.InlayHint) ![]co
             .line = hint.line,
             .column = hint.column,
             .label = try allocator.dupe(u8, hint.label),
-            .kind = hint.kind,
             .module_id = hint.module_id,
             .file = if (hint.file) |file| try allocator.dupe(u8, file) else null,
         });

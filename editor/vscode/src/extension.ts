@@ -112,7 +112,7 @@ function createMiddleware(): Middleware {
     provideDefinition: (document, position, token, next) =>
       featureEnabled(document, "definition") ? next(document, position, token) : null,
     provideInlayHints: (document, viewPort, token, next) =>
-      inlayHintsEnabled(document) ? filterInlayHints(document, next(document, viewPort, token)) : [],
+      inlayHintsEnabled(document) ? next(document, viewPort, token) : [],
     provideDocumentSymbols: (document, token, next) =>
       featureEnabled(document, "documentSymbols") ? next(document, token) : [],
     provideFoldingRanges: (document, context, token, next) =>
@@ -145,25 +145,5 @@ function featureEnabled(document: vscode.TextDocument, feature: LspFeatureName):
 
 function inlayHintsEnabled(document: vscode.TextDocument): boolean {
   const settings = projectSettings(document.uri).lsp;
-  return settings.enabled && settings.inlayHints && (settings.inlayHintArguments || settings.inlayHintPositions);
-}
-
-async function filterInlayHints(
-  document: vscode.TextDocument,
-  value: vscode.ProviderResult<vscode.InlayHint[]>,
-): Promise<vscode.InlayHint[]> {
-  const hints = await Promise.resolve(value);
-  if (!hints) {
-    return [];
-  }
-  const settings = projectSettings(document.uri).lsp;
-  return hints.filter((hint) => {
-    if (hint.kind === vscode.InlayHintKind.Parameter) {
-      return settings.inlayHintArguments;
-    }
-    if (hint.kind === vscode.InlayHintKind.Type) {
-      return settings.inlayHintPositions;
-    }
-    return true;
-  });
+  return settings.enabled && settings.inlayHints && settings.inlayHintArguments;
 }

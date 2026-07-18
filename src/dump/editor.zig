@@ -66,7 +66,6 @@ pub fn writeHintsField(root: *json.Object, hints: []const core.InlayHint) !void 
         try item.intField("line", hint.line);
         try item.intField("column", hint.column);
         try item.stringField("label", hint.label);
-        try item.enumTagField("kind", hint.kind);
         try item.intField("moduleId", hint.module_id);
         try item.optionalStringField("file", hint.file);
         try item.end();

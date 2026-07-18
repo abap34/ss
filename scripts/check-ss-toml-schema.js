@@ -19,7 +19,7 @@ assert.strictEqual(properties.project.properties.entry.type, "string");
 assert.strictEqual(inlayHints.type, "object");
 assert.strictEqual(inlayHints.properties.enabled.type, "boolean");
 assert.strictEqual(inlayHints.properties.arguments.type, "boolean");
-assert.strictEqual(inlayHints.properties.positions.type, "boolean");
+assert(!("positions" in inlayHints.properties), "position inlay hints must not be configurable");
 assert(!("inlay_hints" in lsp && lsp.inlay_hints.type === "boolean"), "inlay_hints must be a table in the schema");
 
 assert.strictEqual(wysiwyg.debounce.type, "integer");

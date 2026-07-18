@@ -98,11 +98,6 @@
                   "type": "boolean",
                   "default": true,
                   "description": "Show argument inlay hints."
-                },
-                "positions": {
-                  "type": "boolean",
-                  "default": true,
-                  "description": "Show position inlay hints."
                 }
               }
             }
