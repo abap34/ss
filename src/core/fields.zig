@@ -114,6 +114,10 @@ pub fn roleClass(state: anytype, role_name: []const u8) ?[]const u8 {
 fn defaultValue(allocator: std.mem.Allocator, state: anytype, node: *const Node, key: []const u8) !?ValueSlot {
     const class_name = className(state, node) orelse return null;
     const descriptor = fieldDescriptor(state, class_name, key) orelse return null;
+    const text = descriptor.default_property_value orelse return null;
+    if (!isNoneDefault(text) and value_text.typedPropertyValueOwnsTaggedText(descriptor.value_type)) {
+        return .{ .value = try state.cachedFieldDefault(text, descriptor.value_type) };
+    }
     return try parseDefault(allocator, descriptor.default_property_value, descriptor.value_type);
 }
 

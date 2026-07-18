@@ -2,6 +2,7 @@ const std = @import("std");
 const model = @import("model");
 const layout = @import("layout.zig");
 const ast = @import("ast");
+const value_text = @import("value_text.zig");
 
 const Allocator = model.Allocator;
 const NodeId = model.NodeId;
@@ -36,6 +37,49 @@ const roleEq = model.roleEq;
 const nodeField = model.nodeField;
 
 pub const SourceModuleId = u32;
+
+const DefaultValueKey = struct {
+    pointer: usize,
+    length: usize,
+};
+
+const DefaultValueCache = struct {
+    allocator: Allocator,
+    values: std.AutoHashMap(DefaultValueKey, Value),
+    mutex: std.atomic.Mutex = .unlocked,
+
+    fn create(allocator: Allocator) !*DefaultValueCache {
+        const cache = try allocator.create(DefaultValueCache);
+        cache.* = .{
+            .allocator = allocator,
+            .values = std.AutoHashMap(DefaultValueKey, Value).init(allocator),
+        };
+        return cache;
+    }
+
+    fn destroy(self: *DefaultValueCache) void {
+        var iterator = self.values.valueIterator();
+        while (iterator.next()) |value| value_text.deinitParsedPropertyValue(self.allocator, value);
+        self.values.deinit();
+        self.allocator.destroy(self);
+    }
+
+    fn getOrParse(self: *DefaultValueCache, text: []const u8, value_type: ast.Type) !Value {
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+        defer self.mutex.unlock();
+
+        const key = DefaultValueKey{
+            .pointer = @intFromPtr(text.ptr),
+            .length = text.len,
+        };
+        if (self.values.get(key)) |value| return value;
+
+        var value = try value_text.typedPropertyValue(self.allocator, text, value_type);
+        errdefer value_text.deinitParsedPropertyValue(self.allocator, &value);
+        try self.values.put(key, value);
+        return value;
+    }
+};
 
 pub const FunctionKey = struct {
     module_id: SourceModuleId,
@@ -175,6 +219,7 @@ pub const DocumentState = struct {
     constraint_failures: std.ArrayList(ConstraintFailure),
     runtime_strings: std.ArrayList([]u8),
     string_provenance: std.AutoHashMap(usize, std.ArrayList(ContentProvenance)),
+    default_values: *DefaultValueCache,
     next_id: NodeId,
     document_id: NodeId,
 
@@ -185,6 +230,7 @@ pub const DocumentState = struct {
         project_source: []u8,
         project_syntax: ast.Module,
     ) !DocumentState {
+        const default_values = try DefaultValueCache.create(allocator);
         var state = DocumentState{
             .allocator = allocator,
             .asset_base_dir = asset_base_dir,
@@ -210,6 +256,7 @@ pub const DocumentState = struct {
             .constraint_failures = .empty,
             .runtime_strings = .empty,
             .string_provenance = std.AutoHashMap(usize, std.ArrayList(ContentProvenance)).init(allocator),
+            .default_values = default_values,
             .next_id = 1,
             .document_id = 0,
         };
@@ -267,6 +314,7 @@ pub const DocumentState = struct {
         self.clearConstraintFailures();
         self.constraint_failures.deinit(self.allocator);
         self.deinitStringProvenance();
+        self.deinitDefaultValues();
         self.runtime_strings.deinit(self.allocator);
     }
 
@@ -311,6 +359,7 @@ pub const DocumentState = struct {
         self.clearConstraintFailures();
         self.constraint_failures.deinit(self.allocator);
         self.deinitStringProvenance();
+        self.deinitDefaultValues();
         for (self.runtime_strings.items) |text| self.allocator.free(text);
         self.runtime_strings.deinit(self.allocator);
     }
@@ -319,6 +368,15 @@ pub const DocumentState = struct {
         var iterator = self.string_provenance.valueIterator();
         while (iterator.next()) |entries| self.deinitProvenanceList(entries);
         self.string_provenance.deinit();
+    }
+
+    fn deinitDefaultValues(self: *DocumentState) void {
+        self.default_values.destroy();
+    }
+
+    pub fn cachedFieldDefault(self: *DocumentState, text: []const u8, value_type: ast.Type) !Value {
+        std.debug.assert(value_text.typedPropertyValueOwnsTaggedText(value_type));
+        return self.default_values.getOrParse(text, value_type);
     }
 
     fn stringKey(text: []const u8) usize {
