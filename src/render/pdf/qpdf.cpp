@@ -1,3 +1,6 @@
+// qpdf 11 requires an explicit opt-in to the shared-pointer API that qpdf 12 uses by default.
+#define POINTERHOLDER_TRANSITION 4
+
 #include "backend.h"
 
 #include <qpdf/QPDF.hh>
@@ -10,11 +13,24 @@
 #include <cmath>
 #include <cctype>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 static thread_local std::string ss_qpdf_error;
+
+struct SsQpdfDocument {
+    explicit SsQpdfDocument(char const* path, bool suppress_warnings = false) {
+        if (suppress_warnings) pdf.setSuppressWarnings(true);
+        pdf.processFile(path);
+        QPDFPageDocumentHelper page_document(pdf);
+        pages = page_document.getAllPages();
+    }
+
+    QPDF pdf;
+    std::vector<QPDFPageObjectHelper> pages;
+};
 
 static bool ss_qpdf_finite(double value) {
     return std::isfinite(value);
@@ -78,8 +94,11 @@ static QPDFObjectHandle ss_qpdf_page_box(QPDFPageObjectHelper& page, int box) {
     }
 }
 
-static QPDFPageObjectHelper ss_qpdf_selected_page(QPDF& pdf, size_t page_index, int box) {
-    auto pages = QPDFPageDocumentHelper::get(pdf).getAllPages();
+static QPDFPageObjectHelper ss_qpdf_selected_page(
+    std::vector<QPDFPageObjectHelper> const& pages,
+    size_t page_index,
+    int box
+) {
     if (page_index >= pages.size()) throw std::runtime_error("PDF page index is out of range");
     auto page = pages.at(page_index);
     auto selected_box = ss_qpdf_page_box(page, box);
@@ -112,22 +131,21 @@ extern "C" int ss_qpdf_merge(
         QPDF destination;
         destination.emptyPDF();
         QPDFPageDocumentHelper destination_pages(destination);
-        std::vector<std::unique_ptr<QPDF>> sources;
+        std::vector<std::unique_ptr<SsQpdfDocument>> sources;
         sources.reserve(input_count);
         for (size_t index = 0; index < input_count; ++index) {
             if (inputs[index] == nullptr) throw std::runtime_error("null PDF input path");
             stage = "read PDF merge input";
-            sources.push_back(std::make_unique<QPDF>());
+            sources.push_back(std::make_unique<SsQpdfDocument>(inputs[index], true));
             auto& source = *sources.back();
-            source.setSuppressWarnings(true);
-            source.processFile(inputs[index]);
             stage = "copy PDF merge pages";
-            auto pages = QPDFPageDocumentHelper::get(source).getAllPages();
             if (single_page_inputs) {
-                if (pages.empty()) throw std::runtime_error("single-page PDF merge input has no pages");
-                destination_pages.addPage(pages.at(0), false);
+                if (source.pages.empty()) {
+                    throw std::runtime_error("single-page PDF merge input has no pages");
+                }
+                destination_pages.addPage(source.pages.at(0), false);
             } else {
-                for (auto& page: pages) destination_pages.addPage(page, false);
+                for (auto& page: source.pages) destination_pages.addPage(page, false);
             }
         }
         stage = "write merged PDF";
@@ -174,9 +192,8 @@ extern "C" int ss_qpdf_page_size(
     ss_qpdf_error.clear();
     try {
         if (path == nullptr) throw std::runtime_error("null PDF input path");
-        QPDF pdf;
-        pdf.processFile(path);
-        auto page = ss_qpdf_selected_page(pdf, page_index, box);
+        SsQpdfDocument source(path);
+        auto page = ss_qpdf_selected_page(source.pages, page_index, box);
         auto rectangle = ss_qpdf_visible_form_box(page);
         const double page_width = rectangle.urx - rectangle.llx;
         const double page_height = rectangle.ury - rectangle.lly;
@@ -204,17 +221,15 @@ extern "C" int ss_qpdf_page_sizes(
         if (path == nullptr || widths == nullptr || heights == nullptr) {
             throw std::runtime_error("invalid PDF page geometry arguments");
         }
-        QPDF pdf;
-        pdf.processFile(path);
-        auto pages = QPDFPageDocumentHelper::get(pdf).getAllPages();
-        if (pages.size() != page_count) {
+        SsQpdfDocument source(path);
+        if (source.pages.size() != page_count) {
             throw std::runtime_error(
                 "PDF page count does not match requested geometry count: " +
-                std::to_string(pages.size()) + " != " + std::to_string(page_count)
+                std::to_string(source.pages.size()) + " != " + std::to_string(page_count)
             );
         }
         for (size_t index = 0; index < page_count; ++index) {
-            auto page = ss_qpdf_selected_page(pdf, index, box);
+            auto page = ss_qpdf_selected_page(source.pages, index, box);
             auto rectangle = ss_qpdf_visible_form_box(page);
             widths[index] = rectangle.urx - rectangle.llx;
             heights[index] = rectangle.ury - rectangle.lly;
@@ -251,7 +266,7 @@ static bool ss_qpdf_safe_uri(std::string const& value) {
     return scheme == "http" || scheme == "https" || scheme == "mailto";
 }
 
-static bool ss_qpdf_safe_link_annotation(QPDFObjectHandle const& annotation) {
+static bool ss_qpdf_safe_link_annotation(QPDFObjectHandle annotation) {
     if (!annotation.isDictionary()) return false;
     auto subtype = annotation.getKey("/Subtype");
     if (!subtype.isName() || subtype.getName() != "/Link") return false;
@@ -276,7 +291,7 @@ static bool ss_qpdf_unsafe_annotations(QPDFPageObjectHelper& page) {
     return false;
 }
 
-static QPDFObjectHandle ss_qpdf_sanitized_action(QPDFObjectHandle const& action) {
+static QPDFObjectHandle ss_qpdf_sanitized_action(QPDFObjectHandle action) {
     auto result = QPDFObjectHandle::newDictionary();
     auto kind = action.getKey("/S");
     result.replaceKey("/S", kind.shallowCopy());
@@ -329,19 +344,16 @@ extern "C" int ss_qpdf_metadata(
     ss_qpdf_error.clear();
     try {
         if (path == nullptr || document == nullptr) throw std::runtime_error("invalid PDF metadata arguments");
-        QPDF pdf;
-        pdf.setSuppressWarnings(true);
-        pdf.processFile(path);
-        auto pages = QPDFPageDocumentHelper::get(pdf).getAllPages();
-        document->page_count = pages.size();
-        document->encrypted = pdf.isEncrypted() ? 1 : 0;
-        document->has_javascript = ss_qpdf_has_javascript(pdf) ? 1 : 0;
+        SsQpdfDocument source(path, true);
+        document->page_count = source.pages.size();
+        document->encrypted = source.pdf.isEncrypted() ? 1 : 0;
+        document->has_javascript = ss_qpdf_has_javascript(source.pdf) ? 1 : 0;
         if (page_capacity == 0) return 0;
-        if (page_metadata == nullptr || page_capacity < pages.size()) {
+        if (page_metadata == nullptr || page_capacity < source.pages.size()) {
             throw std::runtime_error("PDF metadata page buffer is too small");
         }
-        for (size_t page_index = 0; page_index < pages.size(); ++page_index) {
-            auto& page = pages.at(page_index);
+        for (size_t page_index = 0; page_index < source.pages.size(); ++page_index) {
+            auto& page = source.pages.at(page_index);
             auto& metadata = page_metadata[page_index];
             for (int box = 0; box < 5; ++box) {
                 auto rectangle = ss_qpdf_page_box(page, box).getArrayAsRectangle();
@@ -382,12 +394,13 @@ extern "C" int ss_qpdf_compose(char const* output, SsQpdfLayer const* layers, si
         QPDF destination;
         destination.setSuppressWarnings(true);
         destination.processFile(layers[0].path);
-        auto destination_pages = QPDFPageDocumentHelper::get(destination).getAllPages();
+        QPDFPageDocumentHelper destination_page_document(destination);
+        auto destination_pages = destination_page_document.getAllPages();
         if (destination_pages.size() != 1) throw std::runtime_error("base PDF layer must contain one page");
         auto destination_page = destination_pages.at(0);
-        std::vector<std::unique_ptr<QPDF>> sources;
+        std::vector<std::unique_ptr<SsQpdfDocument>> sources;
         sources.reserve(layer_count - 1);
-        std::unordered_map<std::string, QPDF*> sources_by_path;
+        std::unordered_map<std::string, SsQpdfDocument*> sources_by_path;
 
         for (size_t index = 1; index < layer_count; ++index) {
             stage = "validate PDF layer";
@@ -397,20 +410,21 @@ extern "C" int ss_qpdf_compose(char const* output, SsQpdfLayer const* layers, si
                 throw std::runtime_error("invalid PDF layer");
             }
             stage = "read PDF layer";
-            QPDF* source_pointer = nullptr;
+            SsQpdfDocument* source_pointer = nullptr;
             auto source_it = sources_by_path.find(layer.path);
             if (source_it == sources_by_path.end()) {
-                sources.push_back(std::make_unique<QPDF>());
+                sources.push_back(std::make_unique<SsQpdfDocument>(layer.path, true));
                 source_pointer = sources.back().get();
-                source_pointer->setSuppressWarnings(true);
-                source_pointer->processFile(layer.path);
                 sources_by_path.emplace(layer.path, source_pointer);
             } else {
                 source_pointer = source_it->second;
             }
-            auto& source = *source_pointer;
             stage = "select PDF layer page";
-            auto source_page = ss_qpdf_selected_page(source, layer.page_index, layer.box);
+            auto source_page = ss_qpdf_selected_page(
+                source_pointer->pages,
+                layer.page_index,
+                layer.box
+            );
             stage = "create PDF form";
             auto foreign_form = source_page.getFormXObjectForPage();
             stage = "copy PDF form";
