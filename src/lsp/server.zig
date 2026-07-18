@@ -309,6 +309,25 @@ const Server = struct {
         try diagnostics.add(path, text, .@"error", @errorName(err), message, project.configErrorSpan(text, err));
     }
 
+    fn clearChangedDocumentDiagnostics(self: *Server, uri: []const u8) !void {
+        try self.sendEmptyDiagnostics(uri, self.documents.versionForUri(uri));
+        try putStringSet(self.allocator, &self.published_diagnostic_uris, uri);
+    }
+
+    fn sendEmptyDiagnostics(self: *Server, uri: []const u8, version: ?i64) !void {
+        try self.checkCanceled();
+        var body = std.ArrayList(u8).empty;
+        defer body.deinit(self.allocator);
+        try body.appendSlice(self.allocator, "{\"uri\":");
+        try appendJsonString(self.allocator, &body, uri);
+        if (version) |value| {
+            try body.appendSlice(self.allocator, ",\"version\":");
+            try protocol.appendInt(self.allocator, &body, value);
+        }
+        try body.appendSlice(self.allocator, ",\"diagnostics\":[]}");
+        try sendNotification(self.allocator, "textDocument/publishDiagnostics", body.items);
+    }
+
     fn publishDiagnostics(self: *Server, diagnostics: *DiagnosticSet) !void {
         try self.checkCanceled();
         var grouped = std.StringHashMap(std.ArrayList(usize)).init(self.allocator);
@@ -354,16 +373,7 @@ const Server = struct {
             const uri = try uriFromPath(self.allocator, entry.key_ptr.*);
             defer self.allocator.free(uri);
             if (current_published.contains(uri)) continue;
-            var body = std.ArrayList(u8).empty;
-            defer body.deinit(self.allocator);
-            try body.appendSlice(self.allocator, "{\"uri\":");
-            try appendJsonString(self.allocator, &body, uri);
-            if (self.documents.versionForPath(entry.key_ptr.*)) |version| {
-                try body.appendSlice(self.allocator, ",\"version\":");
-                try protocol.appendInt(self.allocator, &body, version);
-            }
-            try body.appendSlice(self.allocator, ",\"diagnostics\":[]}");
-            try sendNotification(self.allocator, "textDocument/publishDiagnostics", body.items);
+            try self.sendEmptyDiagnostics(uri, self.documents.versionForPath(entry.key_ptr.*));
             try putStringSet(self.allocator, &current_published, uri);
         }
 
@@ -371,12 +381,7 @@ const Server = struct {
         while (previous_iterator.next()) |entry| {
             try self.checkCanceled();
             if (current_published.contains(entry.key_ptr.*)) continue;
-            var body = std.ArrayList(u8).empty;
-            defer body.deinit(self.allocator);
-            try body.appendSlice(self.allocator, "{\"uri\":");
-            try appendJsonString(self.allocator, &body, entry.key_ptr.*);
-            try body.appendSlice(self.allocator, ",\"diagnostics\":[]}");
-            try sendNotification(self.allocator, "textDocument/publishDiagnostics", body.items);
+            try self.sendEmptyDiagnostics(entry.key_ptr.*, null);
         }
 
         lsp_state.deinitStringSet(self.allocator, &self.published_diagnostic_uris);
@@ -610,6 +615,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                         if (change.* == .object) try server.documents.applyChangeAtPath(path, &change.object);
                     }
                     if (intField(doc, "version")) |version| try server.documents.setVersionAtPath(path, version);
+                    try server.clearChangedDocumentDiagnostics(uri);
                     try server.scheduleRebuild(path);
                 };
             }

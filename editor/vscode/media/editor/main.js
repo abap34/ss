@@ -112,7 +112,10 @@ function acceptSnapshot(message) {
 
 function acceptBuildStatus(message) {
   if (!setBuildStatus(message.status, message.revision)) return;
-  if (!workspace.updateBuildStatus()) render();
+  const clearedError = (message.status === "starting" || message.status === "building") &&
+    state.toast?.kind === "error";
+  if (clearedError) clearToast();
+  if (clearedError || !workspace.updateBuildStatus()) render();
 }
 
 function setBuildStatus(status, revision) {
