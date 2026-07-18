@@ -348,6 +348,65 @@ button {
   color: var(--accent-text);
   outline: none;
 }
+.build-status {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+.build-status-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.build-status-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  place-items: center;
+  border: 1px solid var(--control-border);
+  border-radius: 50%;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+.build-status--starting .build-status-icon,
+.build-status--building .build-status-icon {
+  border-color: var(--text-faint);
+  border-top-color: var(--accent);
+  animation: build-status-spin 800ms linear infinite;
+}
+.build-status--complete {
+  color: var(--accent-text);
+}
+.build-status--complete .build-status-icon {
+  border-color: var(--accent-border);
+  background: var(--accent-background);
+}
+.build-status--failed {
+  color: var(--error);
+}
+.build-status--failed .build-status-icon {
+  border-color: color-mix(in srgb, var(--error) 65%, var(--control-border));
+}
+.build-status--unavailable .build-status-icon {
+  color: var(--text-faint);
+}
+@keyframes build-status-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .build-status--starting .build-status-icon,
+  .build-status--building .build-status-icon {
+    animation: none;
+  }
+}
 .toast {
   position: absolute;
   z-index: 30;

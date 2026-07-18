@@ -13,6 +13,8 @@ const persistedState = vscode.getState() || {};
 const state = {
   snapshot: null,
   revision: -1,
+  buildRevision: -1,
+  buildStatus: "starting",
   sidebar: "pages",
   mode: "single",
   currentPageId: null,
@@ -53,10 +55,14 @@ window.addEventListener("message", (event) => {
   const message = event.data || {};
   if (message.type === "snapshot") {
     acceptSnapshot(message);
+  } else if (message.type === "buildStatus") {
+    acceptBuildStatus(message);
   } else if (message.type === "error") {
     if (!Number.isSafeInteger(message.revision) ||
-        message.revision <= state.revision) return;
+        message.revision <= state.revision ||
+        message.revision < state.buildRevision) return;
     state.revision = message.revision;
+    setBuildStatus("failed", message.revision);
     translation.cancel();
     showError(message.message || "WYSIWYG preview update failed.");
   } else if (message.type === "editResult") {
@@ -71,7 +77,8 @@ window.addEventListener("message", (event) => {
 
 function acceptSnapshot(message) {
   if (!Number.isSafeInteger(message.revision) ||
-      message.revision <= state.revision || !message.snapshot) return;
+      message.revision <= state.revision ||
+      message.revision < state.buildRevision || !message.snapshot) return;
   if (state.toast?.kind === "error") clearToast();
   textAlignmentFailed = false;
   if (state.snapshot) disposePages(state.snapshot);
@@ -83,6 +90,7 @@ function acceptSnapshot(message) {
     message.documentVersion,
   );
   const buildFailure = buildFailureMessage(message.snapshot);
+  setBuildStatus(buildFailure ? "failed" : "complete", message.revision);
   let toastDuration = null;
   if (buildFailure) {
     state.toast = { kind: "error", message: buildFailure };
@@ -100,6 +108,24 @@ function acceptSnapshot(message) {
   navigation.reconcile(state.snapshot);
   render();
   if (toastDuration != null) scheduleToastClear(toastDuration);
+}
+
+function acceptBuildStatus(message) {
+  if (!setBuildStatus(message.status, message.revision)) return;
+  if (!workspace.updateBuildStatus()) render();
+}
+
+function setBuildStatus(status, revision) {
+  if (!buildStatuses.has(status) || !Number.isSafeInteger(revision) ||
+      revision < state.buildRevision) return false;
+  if (revision === state.buildRevision &&
+      terminalBuildStatuses.has(state.buildStatus)) return false;
+  if (revision === state.buildRevision && status === state.buildStatus) {
+    return false;
+  }
+  state.buildRevision = revision;
+  state.buildStatus = status;
+  return true;
 }
 
 function showSuccess(message) {
@@ -207,6 +233,15 @@ function initialTheme() {
     ? "light"
     : "dark";
 }
+
+const buildStatuses = new Set([
+  "starting",
+  "building",
+  "complete",
+  "failed",
+  "unavailable",
+]);
+const terminalBuildStatuses = new Set(["complete", "failed", "unavailable"]);
 
 render();
 vscode.postMessage({ type: "ready" });

@@ -5,6 +5,13 @@ import { renderPage } from "./document.js";
 
 const rulerSize = 26;
 const singlePageMargin = 32;
+const buildStatusPresentation = {
+  starting: { label: "Starting…", icon: "" },
+  building: { label: "Building…", icon: "" },
+  complete: { label: "Build complete", icon: "✓" },
+  failed: { label: "Build failed", icon: "!" },
+  unavailable: { label: "Language server unavailable", icon: "×" },
+};
 
 export class WorkspaceView {
   constructor(state, actions) {
@@ -32,7 +39,7 @@ export class WorkspaceView {
       for (const page of visiblePages) pages.append(this.pageShell(page));
     } else {
       const empty = element("div", "empty-state");
-      empty.textContent = "Building WYSIWYG preview…";
+      empty.textContent = emptyPreviewMessage(this.state.buildStatus);
       pages.append(empty);
     }
     viewport.append(pages);
@@ -76,8 +83,22 @@ export class WorkspaceView {
       this.state.mode = mode.value;
       this.actions.render();
     });
-    bar.append(mode);
+    const status = element("div", "build-status");
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    status.setAttribute("aria-atomic", "true");
+    applyBuildStatus(status, this.state.buildStatus);
+    bar.append(mode, status);
     return bar;
+  }
+
+  updateBuildStatus() {
+    const status = this.root?.querySelector(".build-status");
+    if (!status) return false;
+    applyBuildStatus(status, this.state.buildStatus);
+    const empty = this.root.querySelector(".empty-state");
+    if (empty) empty.textContent = emptyPreviewMessage(this.state.buildStatus);
+    return true;
   }
 
   pageShell(page) {
@@ -159,6 +180,29 @@ export class WorkspaceView {
     return this.state.snapshot?.layout.objects.find(
       (object) => object.id === this.state.selectedObjectId,
     ) || null;
+  }
+}
+
+function applyBuildStatus(node, status) {
+  const presentation = buildStatusPresentation[status] ||
+    buildStatusPresentation.starting;
+  node.className = `build-status build-status--${status}`;
+  node.title = presentation.label;
+  const icon = element("span", "build-status-icon");
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = presentation.icon;
+  const label = element("span", "build-status-label");
+  label.textContent = presentation.label;
+  node.replaceChildren(icon, label);
+}
+
+function emptyPreviewMessage(status) {
+  switch (status) {
+  case "starting": return "Starting WYSIWYG preview…";
+  case "building": return "Building WYSIWYG preview…";
+  case "unavailable": return "Language server unavailable.";
+  case "failed": return "No preview is available.";
+  default: return "No preview is available.";
   }
 }
 

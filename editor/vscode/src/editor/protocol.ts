@@ -158,12 +158,24 @@ export interface LayoutEditResult {
   };
 }
 
+export type BuildStatus =
+  "starting" |
+  "building" |
+  "complete" |
+  "failed" |
+  "unavailable";
+
 export type HostMessage =
   | {
     type: "snapshot";
     revision: number;
     documentVersion: number;
     snapshot: EditorSnapshot;
+  }
+  | {
+    type: "buildStatus";
+    revision: number;
+    status: BuildStatus;
   }
   | { type: "error"; revision: number; message: string }
   | {
