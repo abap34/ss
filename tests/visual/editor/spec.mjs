@@ -225,6 +225,9 @@ await withBrowser(output, async (browser, baseUrl) => {
       1,
       "a repeated failed build cleared its diagnostic message",
     );
+    await postBuildStatus(page, 109, "building");
+    await page.waitForFunction(() => !document.querySelector(".toast--error"));
+    await expectBuildStatus(page, "building", "Building…");
     await postSnapshot(page, 109, finalSnapshot, 7);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "complete", "Build complete");

@@ -746,10 +746,27 @@ end
       client.openDocument({ uri, text: initial });
       await initialDiagnostics;
 
-      const debouncedDiagnostics = client.waitForDiagnostics(uri);
+      const clearedIntermediate = client.waitForDiagnostics(
+        uri,
+        (diagnostics, message) => diagnostics.length === 0 && message.params.version === 2,
+        "cleared diagnostics for intermediate source",
+      );
+      const clearedLatest = client.waitForDiagnostics(
+        uri,
+        (diagnostics, message) => diagnostics.length === 0 && message.params.version === 3,
+        "cleared diagnostics for latest source",
+      );
       client.changeDocument({ uri, version: 2, text: invalid });
       client.changeDocument({ uri, version: 3, text: fixed });
-      const message = await debouncedDiagnostics;
+      await clearedIntermediate;
+      await clearedLatest;
+
+      const rebuiltLatest = client.waitForDiagnostics(
+        uri,
+        (diagnostics, message) => diagnostics.length === 0 && message.params.version === 3,
+        "rebuilt diagnostics for latest source",
+      );
+      const message = await rebuiltLatest;
       assert(
         message.params.diagnostics.length === 0,
         `debounced diagnostics used an intermediate source: ${JSON.stringify(message.params.diagnostics)}`,

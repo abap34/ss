@@ -1,0 +1,6 @@
+[project]
+entry = "slide.ss"
+asset_base_dir = "."
+
+[editor.lsp]
+debounce = 500
