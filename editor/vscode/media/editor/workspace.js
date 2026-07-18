@@ -48,9 +48,15 @@ export class WorkspaceView {
       }));
     }
     if (this.state.toast) {
-      const toast = element("div", "error-toast");
-      toast.setAttribute("role", "alert");
-      toast.textContent = this.state.toast;
+      const toast = element(
+        "div",
+        `toast toast--${this.state.toast.kind}`,
+      );
+      toast.setAttribute(
+        "role",
+        this.state.toast.kind === "error" ? "alert" : "status",
+      );
+      toast.textContent = this.state.toast.message;
       main.append(toast);
     }
     this.root = main;

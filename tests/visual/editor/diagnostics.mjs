@@ -14,8 +14,8 @@ export async function exerciseBuildDiagnosticMessages(
 
     const initialFailure = emptyFailedSnapshot(successfulSnapshot);
     await postSnapshot(page, 1, initialFailure, 1);
-    await page.waitForSelector(".error-toast");
-    const initialMessage = await page.locator(".error-toast").textContent();
+    await page.waitForSelector(".toast--error");
+    const initialMessage = await page.locator(".toast--error").textContent();
     assert(initialMessage.startsWith("Build failed. No preview is available yet."));
     assert(initialMessage.includes(
       "my slide.ss:4:5 [FirstError] first error with extra whitespace",
@@ -26,20 +26,20 @@ export async function exerciseBuildDiagnosticMessages(
     assert(initialMessage.endsWith("2 more errors."));
 
     await postSnapshot(page, 2, successfulSnapshot, 2);
-    await page.waitForFunction(() => !document.querySelector(".error-toast"));
+    await page.waitForFunction(() => !document.querySelector(".toast--error"));
 
     const failedUpdate = structuredClone(successfulSnapshot);
     failedUpdate.stale = true;
     failedUpdate.build_diagnostics = [];
     await postSnapshot(page, 3, failedUpdate, 3);
     assert.equal(
-      await page.locator(".error-toast").textContent(),
+      await page.locator(".toast--error").textContent(),
       "Build failed. The preview is showing the last successful result.",
       "failed build without a located diagnostic used an ambiguous message",
     );
 
     await postSnapshot(page, 4, successfulSnapshot, 4);
-    await page.waitForFunction(() => !document.querySelector(".error-toast"));
+    await page.waitForFunction(() => !document.querySelector(".toast--error"));
   } finally {
     await page.close();
   }

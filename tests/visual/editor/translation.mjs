@@ -101,6 +101,11 @@ export async function exerciseTranslationLifecycle(page, current) {
     status: "applied",
     documentVersion: 3,
   });
+  assert.equal(
+    await page.locator(".toast--success").count(),
+    0,
+    "the source-edit acknowledgement reported success before the preview was verified",
+  );
   const finalSnapshot = translatedSnapshot(
     firstApplied,
     followUp.toBounds,
@@ -109,6 +114,17 @@ export async function exerciseTranslationLifecycle(page, current) {
   await postSnapshot(page, 102, finalSnapshot, 3);
   await page.waitForFunction(() =>
     !document.querySelector("[data-ss-pending-translation]")
+  );
+  await page.waitForSelector(".toast--success");
+  assert.equal(
+    await page.locator(".toast--success").textContent(),
+    "Position updated.",
+    "a verified position update did not report success",
+  );
+  assert.equal(
+    await page.locator(".toast--success").getAttribute("role"),
+    "status",
+    "a successful update used an error announcement role",
   );
   await settleLayout(page);
   const authoritativePreviewBox = await previewTarget.boundingBox();
@@ -158,9 +174,9 @@ export async function exerciseTranslationLifecycle(page, current) {
     status: "rejected",
     message: "The requested position conflicts with a fixed constraint.",
   });
-  await page.waitForSelector(".error-toast");
+  await page.waitForSelector(".toast--error");
   assert.equal(
-    await page.locator(".error-toast").textContent(),
+    await page.locator(".toast--error").textContent(),
     "The requested position conflicts with a fixed constraint.",
   );
   assert.equal(
@@ -176,7 +192,7 @@ export async function exerciseTranslationLifecycle(page, current) {
     "a rejected source edit did not restore the authoritative position",
   );
   await postSnapshot(page, 104, finalSnapshot, 3);
-  await page.waitForFunction(() => !document.querySelector(".error-toast"));
+  await page.waitForFunction(() => !document.querySelector(".toast--error"));
 
   await drag(page, await target.boundingBox(), 8, 5);
   const failedBuildRequest = await lastMessage(page, "translate");
@@ -198,7 +214,7 @@ export async function exerciseTranslationLifecycle(page, current) {
     message: "the generated source did not satisfy its constraints",
   }];
   await postSnapshot(page, 105, failedBuild, 4);
-  await page.waitForSelector(".error-toast");
+  await page.waitForSelector(".toast--error");
   assert.equal(
     await page.locator("[data-ss-pending-translation]").count(),
     0,
@@ -212,7 +228,7 @@ export async function exerciseTranslationLifecycle(page, current) {
     "a failed rebuild did not restore the last successful position",
   );
   await postSnapshot(page, 106, finalSnapshot, 5);
-  await page.waitForFunction(() => !document.querySelector(".error-toast"));
+  await page.waitForFunction(() => !document.querySelector(".toast--error"));
   return finalSnapshot;
 }
 
