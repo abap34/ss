@@ -27,6 +27,8 @@ document.documentElement.dataset.theme = state.theme;
 let toastTimer = null;
 let renderGeneration = 0;
 let textAlignmentFailed = false;
+const successToastDuration = 2500;
+const errorToastDuration = 5000;
 
 const translation = new TranslationController(state, {
   post: (message) => vscode.postMessage(message),
@@ -76,8 +78,21 @@ function acceptSnapshot(message) {
   disposePdfItems(app);
   state.revision = message.revision;
   state.snapshot = message.snapshot;
-  translation.reconcile(message.snapshot, message.documentVersion);
-  state.toast = buildFailureMessage(message.snapshot);
+  const editOutcome = translation.reconcile(
+    message.snapshot,
+    message.documentVersion,
+  );
+  const buildFailure = buildFailureMessage(message.snapshot);
+  let toastDuration = null;
+  if (buildFailure) {
+    state.toast = { kind: "error", message: buildFailure };
+  } else if (editOutcome?.status === "updated") {
+    state.toast = { kind: "success", message: "Position updated." };
+    toastDuration = successToastDuration;
+  } else if (editOutcome?.status === "failed") {
+    state.toast = { kind: "error", message: editOutcome.message };
+    toastDuration = errorToastDuration;
+  }
   let renderStyle = document.getElementById("ss-render-style");
   if (!renderStyle) {
     renderStyle = document.createElement("style");
@@ -87,17 +102,22 @@ function acceptSnapshot(message) {
   renderStyle.textContent = state.snapshot.display.css;
   navigation.reconcile(state.snapshot);
   render();
+  if (toastDuration != null) scheduleToastClear(toastDuration);
 }
 
 function showError(message) {
-  state.toast = message;
+  state.toast = { kind: "error", message };
   render();
+  scheduleToastClear(errorToastDuration);
+}
+
+function scheduleToastClear(duration) {
   if (toastTimer != null) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     toastTimer = null;
     state.toast = null;
     render();
-  }, 5000);
+  }, duration);
 }
 
 function render() {

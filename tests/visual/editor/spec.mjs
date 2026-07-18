@@ -207,21 +207,21 @@ await withBrowser(output, async (browser, baseUrl) => {
       },
     ];
     await postSnapshot(page, 107, failed, 6);
-    await page.waitForSelector(".error-toast");
+    await page.waitForSelector(".toast--error");
     assert.equal(
-      await page.locator(".error-toast").textContent(),
+      await page.locator(".toast--error").textContent(),
       "Build failed. The preview is showing the last successful result.\n" +
         "slide.ss:12:4 [ExpectedExpression] expected an expression after '='",
       "stale preview did not explain its build failure",
     );
     await postSnapshot(page, 108, failed, 6);
     assert.equal(
-      await page.locator(".error-toast").count(),
+      await page.locator(".toast--error").count(),
       1,
       "a repeated failed build cleared its diagnostic message",
     );
     await postSnapshot(page, 109, finalSnapshot, 7);
-    await page.waitForFunction(() => !document.querySelector(".error-toast"));
+    await page.waitForFunction(() => !document.querySelector(".toast--error"));
 
     await page.evaluate(() => {
       window.postMessage({
@@ -230,11 +230,11 @@ await withBrowser(output, async (browser, baseUrl) => {
         message: "WYSIWYG preview update failed.",
       }, "*");
     });
-    await page.waitForSelector(".error-toast");
+    await page.waitForSelector(".toast--error");
     await postSnapshot(page, 111, finalSnapshot, 7);
-    await page.waitForFunction(() => !document.querySelector(".error-toast"));
+    await page.waitForFunction(() => !document.querySelector(".toast--error"));
     assert.equal(
-      await page.locator(".error-toast").count(),
+      await page.locator(".toast--error").count(),
       0,
       "a successful recovery retained the previous preview error",
     );
@@ -248,7 +248,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     });
     await page.waitForTimeout(50);
     assert.equal(
-      await page.locator(".error-toast").count(),
+      await page.locator(".toast--error").count(),
       0,
       "an obsolete preview error replaced a newer snapshot",
     );

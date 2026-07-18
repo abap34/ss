@@ -348,21 +348,27 @@ button {
   color: var(--accent-text);
   outline: none;
 }
-.error-toast {
+.toast {
   position: absolute;
   z-index: 30;
   top: calc(var(--toolbar) + 10px);
   right: 10px;
   max-width: min(360px, calc(100% - 20px));
   padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--error) 55%, var(--border));
   border-radius: 6px;
   color: var(--text);
-  background: color-mix(in srgb, var(--error) 17%, var(--panel-background));
   box-shadow: var(--sheet-shadow);
   font-size: 9px;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+.toast--error {
+  border: 1px solid color-mix(in srgb, var(--error) 55%, var(--border));
+  background: color-mix(in srgb, var(--error) 17%, var(--panel-background));
+}
+.toast--success {
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 17%, var(--panel-background));
 }
 .viewport {
   position: absolute;

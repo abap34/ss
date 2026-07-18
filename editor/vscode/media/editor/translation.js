@@ -72,17 +72,17 @@ export class TranslationController {
 
   reconcile(snapshot, documentVersion) {
     const pending = this.pending;
-    if (!pending) return;
+    if (!pending) return null;
     if (snapshot.stale) {
       this.pending = null;
-      return;
+      return null;
     }
-    if (pending.phase === "requested") return;
+    if (pending.phase === "requested") return null;
     if (
       pending.phase === "applied" &&
       (!Number.isSafeInteger(documentVersion) ||
         documentVersion < pending.appliedDocumentVersion)
-    ) return;
+    ) return null;
 
     const page = snapshot.layout.pages.find((candidate) =>
       candidate.id === pending.pageId
@@ -92,15 +92,25 @@ export class TranslationController {
     );
     if (!page || !object) {
       this.pending = null;
-      return;
+      return {
+        status: "failed",
+        message: "The updated object is no longer present in the preview.",
+      };
     }
 
     const authoritative = previewFrame(page, object);
+    if (samePosition(authoritative, pending.desired)) {
+      this.pending = null;
+      return { status: "updated" };
+    }
     const needsFollowUp = pending.phase === "stale" ||
       pending.changedAfterRequest;
-    if (!needsFollowUp || samePosition(authoritative, pending.desired)) {
+    if (!needsFollowUp) {
       this.pending = null;
-      return;
+      return {
+        status: "failed",
+        message: "The updated source did not reproduce the requested position.",
+      };
     }
 
     const toBounds = {
@@ -119,6 +129,7 @@ export class TranslationController {
       fromBounds: authoritative,
       toBounds,
     });
+    return null;
   }
 
   cancel() {
