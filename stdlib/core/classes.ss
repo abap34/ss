@@ -71,6 +71,19 @@ record TextStyle {
   markdown_table_alt_row_fill: Color? = none
 }
 
+record MarkdownHeadingStyle {
+  text: TextStyle = TextStyle {}
+}
+
+record MarkdownHeadingStyles {
+  h1: MarkdownHeadingStyle? = none
+  h2: MarkdownHeadingStyle? = none
+  h3: MarkdownHeadingStyle? = none
+  h4: MarkdownHeadingStyle? = none
+  h5: MarkdownHeadingStyle? = none
+  h6: MarkdownHeadingStyle? = none
+}
+
 record MathStyle {
   scale: Number = 1
   min_height: Number = 30
@@ -182,6 +195,7 @@ type Text = object {
   base = Flow
 
   text: TextStyle = TextStyle {}
+  markdown_headings: MarkdownHeadingStyles = MarkdownHeadingStyles {}
   code: CodeStyle = CodeStyle {}
   underline: UnderlineStyle = UnderlineStyle {}
   math_align: Align = Align.center

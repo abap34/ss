@@ -48,6 +48,7 @@ const fixtures = [
     pageThresholds: largeGlyphThresholds,
     itemThresholds: largeGlyphItemThresholds,
   },
+  { name: "markdown-headings", source: path.join(repository, "tests/fixtures/render/parity/text/headings/slide.ss") },
   { name: "geometry", source: path.join(repository, "tests/fixtures/render/parity/geometry/slide.ss") },
   { name: "images", source: await prepareGeneratedFixture("images", "asset.png", rasterAsset()) },
   { name: "navigation", source: path.join(repository, "tests/fixtures/render/parity/navigation/slide.ss") },
@@ -112,6 +113,7 @@ await withBrowser(output, async (browser, baseUrl) => {
 
   await inspectStandaloneNavigation(browser, baseUrl);
   await inspectTextBaselineDetection(browser, baseUrl);
+  await inspectMarkdownHeadingStyles(browser, baseUrl);
 
   if (full) {
     await inspectNormalHtml(browser, baseUrl);
@@ -133,6 +135,48 @@ await withBrowser(output, async (browser, baseUrl) => {
     }
   }
 });
+
+async function inspectMarkdownHeadingStyles(browser, baseUrl) {
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
+  try {
+    await page.goto(`${baseUrl}/markdown-headings.html`, { waitUntil: "networkidle" });
+    await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true");
+    const styles = await page.locator(".ss-text-run").evaluateAll((runs) => {
+      const normalizeColor = (value) => {
+        const probe = document.createElement("span");
+        probe.style.color = value;
+        document.body.append(probe);
+        const result = getComputedStyle(probe).color;
+        probe.remove();
+        return result;
+      };
+      return {
+        values: runs.map((run) => ({
+          size: Number.parseFloat(run.style.fontSize),
+          color: getComputedStyle(run).color,
+        })),
+        expectedColors: [
+          normalizeColor("rgb(80% 10% 10%)"),
+          normalizeColor("rgb(10% 60% 20%)"),
+          normalizeColor("rgb(10% 20% 80%)"),
+          normalizeColor("rgb(70% 10% 60%)"),
+          normalizeColor("rgb(10% 60% 70%)"),
+          normalizeColor("rgb(80% 40% 10%)"),
+        ],
+      };
+    });
+    for (const size of [44, 36, 28, 24, 20, 18]) {
+      assert(styles.values.some((value) => Math.abs(value.size - size) <= 0.001),
+        `markdown heading did not render at ${size} pt`);
+    }
+    for (const color of styles.expectedColors) {
+      assert(styles.values.some((value) => value.color === color),
+        `markdown heading did not render with ${color}`);
+    }
+  } finally {
+    await page.close();
+  }
+}
 
 async function inspectTextBaselineDetection(browser, baseUrl) {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });

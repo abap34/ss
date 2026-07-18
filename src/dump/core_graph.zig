@@ -193,20 +193,13 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     };
 
     var text = try object.objectField("text");
-    try writeFontFace(&text, "font", text_spec.font);
-    try writeFontFace(&text, "bold_font", text_spec.bold_font);
-    try writeFontFace(&text, "italic_font", text_spec.italic_font);
-    try writeFontFace(&text, "code_font", text_spec.code_font);
-    try text.floatField("font_size", text_spec.font_size, "{d:.1}");
-    try text.floatField("line_height", text_spec.line_height, "{d:.1}");
-    try writeColor(&text, "color", text_spec.color);
-    try writeColor(&text, "link_color", text_spec.link_color);
-    try writeOptionalColor(&text, "markdown_bold_color", text_spec.markdown_bold_color);
-    try text.floatField("inline_math_height_factor", text_spec.inline_math_height_factor, "{d:.4}");
-    try text.floatField("inline_math_spacing", text_spec.inline_math_spacing, "{d:.4}");
-    try text.floatField("display_math_height_factor", text_spec.display_math_height_factor, "{d:.4}");
-    try text.enumTagField("math_align", text_spec.math_align);
-    try text.floatField("emoji_spacing", text_spec.emoji_spacing, "{d:.4}");
+    try writeInlineTextPaint(&text, text_spec);
+    var headings = try text.objectField("markdown_headings");
+    const names = [_][]const u8{ "h1", "h2", "h3", "h4", "h5", "h6" };
+    for (names, text_spec.markdown_headings) |name, heading| {
+        try writeOptionalMarkdownHeadingPaint(&headings, name, heading);
+    }
+    try headings.end();
     try text.floatField("markdown_block_gap", text_spec.markdown_block_gap, "{d:.4}");
     try text.floatField("markdown_list_inset", text_spec.markdown_list_inset, "{d:.4}");
     try text.floatField("markdown_list_indent", text_spec.markdown_list_indent, "{d:.4}");
@@ -236,6 +229,38 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     try writeOptionalColor(&text, "markdown_table_alt_row_fill", text_spec.markdown_table_alt_row_fill);
     try text.boolField("wrap", text_spec.wrap);
     try text.end();
+}
+
+fn writeInlineTextPaint(object: *json.Object, spec: anytype) !void {
+    try writeFontFace(object, "font", spec.font);
+    try writeFontFace(object, "bold_font", spec.bold_font);
+    try writeFontFace(object, "italic_font", spec.italic_font);
+    try writeFontFace(object, "code_font", spec.code_font);
+    try object.floatField("font_size", spec.font_size, "{d:.1}");
+    try object.floatField("line_height", spec.line_height, "{d:.1}");
+    try writeColor(object, "color", spec.color);
+    try writeColor(object, "link_color", spec.link_color);
+    try writeOptionalColor(object, "markdown_bold_color", spec.markdown_bold_color);
+    try object.floatField("inline_math_height_factor", spec.inline_math_height_factor, "{d:.4}");
+    try object.floatField("inline_math_spacing", spec.inline_math_spacing, "{d:.4}");
+    try object.floatField("display_math_height_factor", spec.display_math_height_factor, "{d:.4}");
+    try object.enumTagField("math_align", spec.math_align);
+    try object.floatField("emoji_spacing", spec.emoji_spacing, "{d:.4}");
+}
+
+fn writeOptionalMarkdownHeadingPaint(
+    object: *json.Object,
+    key: []const u8,
+    maybe_heading: ?core.render_policy.MarkdownHeadingPaint,
+) !void {
+    const heading_spec = maybe_heading orelse {
+        try object.nullField(key);
+        return;
+    };
+
+    var heading = try object.objectField(key);
+    try writeInlineTextPaint(&heading, heading_spec);
+    try heading.end();
 }
 
 fn writeFontFace(object: *json.Object, key: []const u8, face: core.font.Face) !void {

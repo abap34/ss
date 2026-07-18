@@ -1548,6 +1548,36 @@ test "compiler semantics: set_prop updates an existing property" {
     try expectFixtureObjectFieldPath("theme/set-prop", "text", &.{"size"}, "37");
 }
 
+test "compiler semantics: text carries themed markdown heading styles" {
+    try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h2", "text", "size" }, "35");
+    try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h2", "text", "color" }, "0.08235294,0.47843137,0.16862746");
+    try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h6", "text", "size" }, "17");
+    try expectFixtureObjectFieldPath("theme/markdown-heading-figure", "markdown_headings", &.{ "h2", "text", "size" }, "38");
+}
+
+test "compiler semantics: shared theme style application keeps text decoration and layout" {
+    try expectFixtureObjectFieldPath("theme/text-decoration-layout", "layout", &.{"x"}, "137");
+    try expectFixtureObjectFieldPath("theme/text-decoration-layout", "underline", &.{"color"}, "0.6313726,0.14901961,0.30980393");
+    try expectFixtureObjectFieldPath("theme/text-decoration-layout", "underline", &.{"width"}, "3");
+}
+
+test "compiler semantics: all themed text constructors apply their theme records" {
+    try expectFixtureObjectFieldPath("theme/direct-constructors", "text", &.{"size"}, "29");
+    try expectFixtureObjectFieldPath("theme/direct-constructors", "text", &.{"size"}, "18");
+    try expectFixtureObjectFieldPath("theme/direct-constructors", "text", &.{"size"}, "16");
+    try expectFixtureObjectFieldPath("theme/direct-constructors", "text", &.{"size"}, "17");
+    try expectFixtureObjectFieldPath("theme/generated-constructors", "text", &.{"size"}, "17");
+    try expectFixtureObjectFieldPath("theme/generated-constructors", "text", &.{"size"}, "18");
+    try expectFixtureObjectFieldPath("theme/generated-constructors", "text", &.{"size"}, "19");
+}
+
+test "compiler semantics: image and academic toc apply their chrome theme records" {
+    try expectFixtureObjectFieldPath("theme/image", "chrome", &.{"stroke"}, "0.19215687,0.36078432,0.65882355");
+    try expectFixtureObjectFieldPath("theme/image", "chrome", &.{"pad_x"}, "17");
+    try expectFixtureObjectFieldPath("theme/academic-toc", "chrome", &.{"fill"}, "0.93333334,0.9529412,0.9764706");
+    try expectFixtureObjectFieldPath("theme/academic-toc", "chrome", &.{"pad_y"}, "11");
+}
+
 test "compiler semantics: nested property assignment updates style records" {
     const source =
         \\import std:themes/default as *

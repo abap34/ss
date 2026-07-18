@@ -65,17 +65,6 @@ pub fn readExplicit(
     return readValue(field, as);
 }
 
-pub fn readWithEnv(
-    allocator: std.mem.Allocator,
-    node: *const Node,
-    key: []const u8,
-    path: []const []const u8,
-    sema: anytype,
-    comptime as: ReadAs,
-) ?ReadResult(as) {
-    return readSlotPath(allocator, getWithEnv(allocator, node, key, sema), path, as);
-}
-
 pub fn className(state: anytype, node: *const Node) ?[]const u8 {
     return switch (node.kind) {
         .document => "Doc",

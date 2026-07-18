@@ -1037,6 +1037,7 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?TextPaint) void {
         hashColor(hasher, text.color);
         hashColor(hasher, text.link_color);
         hashOptionalColor(hasher, text.markdown_bold_color);
+        for (text.markdown_headings) |heading| hashOptionalMarkdownHeadingPaint(hasher, heading);
         hashF32(hasher, text.inline_math_height_factor);
         hashF32(hasher, text.inline_math_spacing);
         hashF32(hasher, text.display_math_height_factor);
@@ -1070,6 +1071,26 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?TextPaint) void {
         hashOptionalColor(hasher, text.markdown_table_header_fill);
         hashOptionalColor(hasher, text.markdown_table_alt_row_fill);
         hashBool(hasher, text.wrap);
+    }
+}
+
+fn hashOptionalMarkdownHeadingPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.MarkdownHeadingPaint) void {
+    hashBool(hasher, maybe != null);
+    if (maybe) |heading| {
+        hashFontFace(hasher, heading.font);
+        hashFontFace(hasher, heading.bold_font);
+        hashFontFace(hasher, heading.italic_font);
+        hashFontFace(hasher, heading.code_font);
+        hashF32(hasher, heading.font_size);
+        hashF32(hasher, heading.line_height);
+        hashColor(hasher, heading.color);
+        hashColor(hasher, heading.link_color);
+        hashOptionalColor(hasher, heading.markdown_bold_color);
+        hashF32(hasher, heading.inline_math_height_factor);
+        hashF32(hasher, heading.inline_math_spacing);
+        hashF32(hasher, heading.display_math_height_factor);
+        std.hash.autoHash(hasher, @intFromEnum(heading.math_align));
+        hashF32(hasher, heading.emoji_spacing);
     }
 }
 
@@ -2309,13 +2330,14 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
             try measurement.begin();
             defer measurement.deinit();
             const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = Defaults.height };
+            const first_text = markdownFirstBlockText(text, doc.blocks.items);
             const next_bl = try drawMarkdownBlocksAt(ctx, frame, baseline_bl, doc.blocks.items, text, 0);
             var measured = try measurementFromInk(
                 &measurement,
                 baseline_bl,
                 next_bl,
-                try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height),
-                text.line_height,
+                try lineBaselineFromTop(ctx, first_text.font, first_text.font_size, first_text.line_height),
+                first_text.line_height,
             );
             if (mode == .natural) {
                 if (try markdownBlocksNaturalInlineAdvance(ctx, doc.blocks.items, text, 0)) |natural_width| {
@@ -2727,16 +2749,25 @@ fn drawTextCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Fram
 }
 
 fn drawMarkdownBlocks(ctx: *DrawContext, frame: Frame, blocks: []const *Block, text: TextPaint, list_depth: usize) anyerror!f32 {
-    return drawMarkdownBlocksAt(ctx, frame, try baselineBlForBox(ctx, frame, text.font, text.font_size, text.line_height), blocks, text, list_depth);
+    const first_text = markdownFirstBlockText(text, blocks);
+    return drawMarkdownBlocksAt(
+        ctx,
+        frame,
+        try baselineBlForBox(ctx, frame, first_text.font, first_text.font_size, first_text.line_height),
+        blocks,
+        text,
+        list_depth,
+    );
 }
 
 fn drawMarkdownBlocksAt(ctx: *DrawContext, frame: Frame, baseline_bl: f32, blocks: []const *Block, text: TextPaint, list_depth: usize) anyerror!f32 {
     var cursor_bl = baseline_bl;
     for (blocks, 0..) |block, index| {
+        const block_text = markdownBlockText(text, block);
         switch (block.kind) {
             .paragraph, .heading => {
                 if (block.paragraph) |paragraph| {
-                    cursor_bl = try drawInlineLines(ctx, frame.x, cursor_bl, frame.width, paragraph.lines.items, text, text.wrap);
+                    cursor_bl = try drawInlineLines(ctx, frame.x, cursor_bl, frame.width, paragraph.lines.items, block_text, block_text.wrap);
                 }
             },
             .code_block => cursor_bl = try drawMarkdownCodeBlock(ctx, frame.x, cursor_bl, frame.width, block, text),
@@ -2746,6 +2777,16 @@ fn drawMarkdownBlocksAt(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block
         if (index + 1 < blocks.len) cursor_bl -= text.markdown_block_gap;
     }
     return cursor_bl;
+}
+
+fn markdownFirstBlockText(text: TextPaint, blocks: []const *Block) TextPaint {
+    if (blocks.len == 0) return text;
+    return markdownBlockText(text, blocks[0]);
+}
+
+fn markdownBlockText(text: TextPaint, block: *const Block) TextPaint {
+    if (block.kind != .heading) return text;
+    return text.forMarkdownHeading(block.heading_level orelse 2);
 }
 
 fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Block, text: TextPaint, list_depth: usize) anyerror!f32 {
@@ -3011,7 +3052,7 @@ fn markdownBlocksNaturalInlineAdvance(ctx: *DrawContext, blocks: []const *Block,
         switch (block.kind) {
             .paragraph, .heading => {
                 if (block.paragraph) |paragraph| {
-                    if (try inlineLinesNaturalAdvance(ctx, paragraph.lines.items, text)) |width| {
+                    if (try inlineLinesNaturalAdvance(ctx, paragraph.lines.items, markdownBlockText(text, block))) |width| {
                         max_width = @max(max_width, width);
                         found = true;
                     }
@@ -3059,7 +3100,8 @@ fn markdownBlocksConstrainedLogicalWidth(ctx: *DrawContext, blocks: []const *Blo
         const block_width = switch (block.kind) {
             .paragraph, .heading => blk: {
                 const paragraph = block.paragraph orelse break :blk 0;
-                break :blk try inlineLinesConstrainedLogicalWidth(ctx, paragraph.lines.items, text, width, text.wrap);
+                const block_text = markdownBlockText(text, block);
+                break :blk try inlineLinesConstrainedLogicalWidth(ctx, paragraph.lines.items, block_text, width, block_text.wrap);
             },
             .code_block => try markdownCodeBlockConstrainedLogicalWidth(ctx, block, text, width),
             .bullet_list, .ordered_list => try markdownListConstrainedLogicalWidth(ctx, block, text, list_depth, width),

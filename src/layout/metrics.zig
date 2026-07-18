@@ -3,6 +3,7 @@ const model = @import("model");
 const fields = @import("../core/fields.zig");
 const font_model = @import("../core/font.zig");
 const markdown = @import("../core/markdown.zig");
+const render_policy = @import("../core/render_policy.zig");
 const text_measure = @import("../render/text/measure.zig");
 const text_tokenize = @import("../core/text_tokenize.zig");
 const wrap_layout = @import("../render/text/wrap.zig");
@@ -12,7 +13,8 @@ const source = utils.source;
 
 const Node = model.Node;
 const Defaults = @import("document.zig").Defaults;
-const TextStyle = model.TextStyle;
+const LayoutStyle = model.TextStyle;
+const TextPaint = render_policy.TextPaint;
 
 const MeasurementKind = enum {
     advance,
@@ -182,11 +184,11 @@ fn measurementKey(kind: MeasurementKind, text: []const u8, font: font_model.Face
     };
 }
 
-fn styleForNode(state: anytype, node: *const Node) TextStyle {
+fn styleForNode(state: anytype, node: *const Node) LayoutStyle {
     return style_defaults.styleForNode(state, node);
 }
 
-fn maxWidthForStyle(style: TextStyle) f32 {
+fn maxWidthForStyle(style: LayoutStyle) f32 {
     return @min(Defaults.max_visual_width, Defaults.width - style.default_x - style.default_right_inset);
 }
 
@@ -228,14 +230,14 @@ pub fn intrinsicWidthCached(state: anytype, node: *const Node, cache: *Measureme
 }
 
 fn intrinsicWidthWithCache(state: anytype, node: *const Node, cache: ?*MeasurementCache) !f32 {
-    const style = styleForNode(state, node);
+    const layout_style = styleForNode(state, node);
     const content = model.nodeDisplayContent(node);
     const chrome_width = 2.0 * chromePadX(state, node);
     if (intrinsicAssetSize(state, node)) |asset| {
         return asset.width * assetScale(state, node) + chrome_width;
     }
     if (cache) |measurements| {
-        const available_width = maxWidthForStyle(style) + chrome_width;
+        const available_width = maxWidthForStyle(layout_style) + chrome_width;
         if (try measurements.renderedMeasurement(state, node, available_width, .natural)) |measured| {
             if (measured.width > 0) {
                 return switch (node.payload_kind orelse .text) {
@@ -247,18 +249,19 @@ fn intrinsicWidthWithCache(state: anytype, node: *const Node, cache: ?*Measureme
     }
     switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => {
-            const base_width = positiveNodeFloatProperty(state, node, "asset_width") orelse @min(maxWidthForStyle(style), Defaults.default_asset_width);
+            const base_width = positiveNodeFloatProperty(state, node, "asset_width") orelse @min(maxWidthForStyle(layout_style), Defaults.default_asset_width);
             return base_width * assetScale(state, node) + chrome_width;
         },
-        .figure_text => return maxWidthForStyle(style) + chrome_width,
-        .math_text, .math_tex => return maxWidthForStyle(style) + chrome_width,
+        .figure_text => return maxWidthForStyle(layout_style) + chrome_width,
+        .math_text, .math_tex => return maxWidthForStyle(layout_style) + chrome_width,
         else => {},
     }
 
     if (shouldUseFullWrapWidth(state, node, content)) {
-        return maxWidthForStyle(style) + chrome_width;
+        return maxWidthForStyle(layout_style) + chrome_width;
     }
 
+    const text_style = render_policy.resolveTextForNode(state, node) orelse return maxWidthForStyle(layout_style) + chrome_width;
     var max_width: f32 = 0;
     if (markdown.shouldParseBlocksNode(state, node)) {
         var doc = markdown.parseMarkdownDocumentForNode(
@@ -269,23 +272,23 @@ fn intrinsicWidthWithCache(state: anytype, node: *const Node, cache: ?*Measureme
         ) catch null;
         if (doc) |*parsed| {
             defer parsed.deinit();
-            if (markdownBlocksNaturalWidth(state, node, cache, style, parsed.blocks.items)) |width| {
+            if (markdownBlocksNaturalWidth(state, cache, text_style, parsed.blocks.items)) |width| {
                 max_width = @max(max_width, width);
             }
         }
     }
 
     if (max_width <= 0) {
-        const fonts = font_model.textFacesForNode(state, node);
+        const fonts = textFaces(text_style);
         const plain_font = plainTextFaceForNode(state, node, fonts);
         var lines = source.lineIterator(content);
         while (lines.next()) |line_view| {
             const line = line_view.text(content);
-            max_width = @max(max_width, measuredTextDrawExtent(cache, state.allocator, line, plain_font, style, textEmojiSpacing(state, node)));
+            max_width = @max(max_width, measuredTextDrawExtent(cache, state.allocator, line, plain_font, text_style, textEmojiSpacing(text_style)));
         }
     }
     if (max_width <= 0) max_width = 1;
-    return @min(maxWidthForStyle(style), max_width) + chrome_width;
+    return @min(maxWidthForStyle(layout_style), max_width) + chrome_width;
 }
 
 pub fn intrinsicHeight(state: anytype, node: *const Node) f32 {
@@ -308,7 +311,7 @@ pub fn frameConstrainedMeasurementCached(state: anytype, node: *const Node, cach
 }
 
 fn intrinsicHeightWithCache(state: anytype, node: *const Node, cache: ?*MeasurementCache) !f32 {
-    const style = styleForNode(state, node);
+    const layout_style = styleForNode(state, node);
     const chrome_height = 2.0 * chromePadY(state, node);
     if (intrinsicAssetSize(state, node)) |asset| {
         return asset.height * assetScale(state, node) + chrome_height;
@@ -337,21 +340,22 @@ fn intrinsicHeightWithCache(state: anytype, node: *const Node, cache: ?*Measurem
         else => blk: {
             const content = model.nodeDisplayContent(node);
             const width = @max(@as(f32, 1.0), measured_outer_width - 2.0 * chromePadX(state, node));
+            const text_style = render_policy.resolveTextForNode(state, node) orelse break :blk layout_style.line_height + chrome_height;
             if (shouldWrapNode(state, node) and markdown.shouldParseBlocksNode(state, node)) {
                 var doc = markdown.parseMarkdownDocumentForNode(
                     state.allocator,
                     state,
                     node,
                     content,
-                ) catch break :blk measuredPlainTextHeight(state, node, cache, style, content, width);
+                ) catch break :blk measuredPlainTextHeight(state, node, cache, text_style, content, width);
                 defer doc.deinit();
-                break :blk markdownBlocksHeight(state, node, cache, style, doc.blocks.items, width, 0) + chrome_height;
+                break :blk markdownBlocksHeight(state, node, cache, text_style, doc.blocks.items, width, 0) + chrome_height;
             }
             const lines = if (shouldWrapNode(state, node))
-                wrappedLineCount(state, node, cache, style, content, width)
+                wrappedLineCount(state, node, cache, text_style, content, width)
             else
                 source.lineCount(content);
-            break :blk @as(f32, @floatFromInt(lines)) * style.line_height + chrome_height;
+            break :blk @as(f32, @floatFromInt(lines)) * text_style.line_height + chrome_height;
         },
     };
 }
@@ -367,7 +371,7 @@ fn intrinsicAssetSize(state: anytype, node: *const Node) ?AssetIntrinsicSize {
     };
 }
 
-fn measuredPlainTextHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, content: []const u8, width: f32) f32 {
+fn measuredPlainTextHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, content: []const u8, width: f32) f32 {
     const lines = if (shouldWrapNode(state, node))
         wrappedLineCount(state, node, cache, style, content, width)
     else
@@ -375,77 +379,65 @@ fn measuredPlainTextHeight(state: anytype, node: *const Node, cache: ?*Measureme
     return @as(f32, @floatFromInt(lines)) * style.line_height;
 }
 
-fn markdownBlockGap(state: anytype, node: *const Node, style: TextStyle) f32 {
-    return nonNegativeRecordFloatProperty(state, node, "text", "markdown_block_gap") orelse style.line_height * 0.15;
+fn markdownBlockGap(style: TextPaint) f32 {
+    return style.markdown_block_gap;
 }
 
-fn markdownGapBetweenBlocks(state: anytype, node: *const Node, style: TextStyle, current: *const markdown.Block, next: *const markdown.Block) f32 {
-    const base = markdownBlockGap(state, node, style);
+fn markdownGapBetweenBlocks(style: TextPaint, current: *const markdown.Block, next: *const markdown.Block) f32 {
+    const base = markdownBlockGap(style);
     if (current.kind == .code_block or next.kind == .code_block) {
         return @max(base, style.line_height);
     }
     return base;
 }
 
-fn markdownListIndent(state: anytype, node: *const Node, style: TextStyle) f32 {
-    return nonNegativeRecordFloatProperty(state, node, "text", "markdown_list_indent") orelse style.font_size * 1.3;
+fn markdownListIndent(style: TextPaint) f32 {
+    return style.markdown_list_indent;
 }
 
-fn markdownListInset(state: anytype, node: *const Node, style: TextStyle) f32 {
-    return nonNegativeRecordFloatProperty(state, node, "text", "markdown_list_inset") orelse style.font_size * 0.4;
+fn markdownListInset(style: TextPaint) f32 {
+    return style.markdown_list_inset;
 }
 
-fn markdownCodeLineHeight(state: anytype, node: *const Node) f32 {
-    return positiveRecordFloatProperty(state, node, "text", "markdown_code_line_height") orelse 20.0;
-}
-
-fn markdownCodePadY(state: anytype, node: *const Node) f32 {
-    return nonNegativeRecordFloatProperty(state, node, "text", "markdown_code_pad_y") orelse 10.0;
-}
-
-fn displayMathHeightFactor(state: anytype, node: *const Node) f32 {
-    return positiveRecordFloatProperty(state, node, "text", "display_math_height_factor") orelse 2.0;
-}
-
-fn markdownBlocksHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, blocks: []const *markdown.Block, max_width: f32, list_depth: usize) f32 {
+fn markdownBlocksHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, blocks: []const *markdown.Block, max_width: f32, list_depth: usize) f32 {
     if (blocks.len == 0) return style.line_height;
 
     var total: f32 = 0;
     for (blocks, 0..) |block, index| {
         total += markdownBlockHeight(state, node, cache, style, block, max_width, list_depth);
-        if (index != blocks.len - 1) total += markdownGapBetweenBlocks(state, node, style, block, blocks[index + 1]);
+        if (index != blocks.len - 1) total += markdownGapBetweenBlocks(style, block, blocks[index + 1]);
     }
     return total;
 }
 
-fn markdownBlockHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
+fn markdownBlockHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
     return switch (block.kind) {
-        .paragraph, .heading => markdownLinesHeight(state, node, cache, style, block.paragraph.?.lines.items, max_width),
+        .paragraph, .heading => markdownLinesHeight(state, cache, markdownBlockTextStyle(style, block), block.paragraph.?.lines.items, max_width),
         .code_block => blk: {
             const lines = markdown.codeBlockPhysicalLineCount(block);
-            break :blk @as(f32, @floatFromInt(lines)) * markdownCodeLineHeight(state, node) + 2.0 * markdownCodePadY(state, node);
+            break :blk @as(f32, @floatFromInt(lines)) * style.markdown_code_line_height + 2.0 * style.markdown_code_pad_y;
         },
         .bullet_list, .ordered_list => blk: {
-            const list_inset = if (list_depth == 0) markdownListInset(state, node, style) else 0;
+            const list_inset = if (list_depth == 0) markdownListInset(style) else 0;
             break :blk markdownListHeight(state, node, cache, style, block, @max(@as(f32, 1.0), max_width - list_inset), list_depth);
         },
-        .table => markdownTableHeight(state, node, cache, style, block, max_width),
+        .table => markdownTableHeight(state, cache, style, block, max_width),
     };
 }
 
-fn markdownListHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
+fn markdownListHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
     const list = block.list.?;
     if (list.items.items.len == 0) return style.line_height;
 
     var total: f32 = 0;
     for (list.items.items, 0..) |item, item_index| {
         total += markdownListItemHeight(state, node, cache, style, block.kind, item, max_width, list_depth, list.start + item_index);
-        if (item_index != list.items.items.len - 1) total += markdownBlockGap(state, node, style);
+        if (item_index != list.items.items.len - 1) total += markdownBlockGap(style);
     }
     return total;
 }
 
-fn markdownListItemHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, kind: markdown.BlockKind, item: *const markdown.ListItem, max_width: f32, list_depth: usize, ordinal: usize) f32 {
+fn markdownListItemHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, kind: markdown.BlockKind, item: *const markdown.ListItem, max_width: f32, list_depth: usize, ordinal: usize) f32 {
     const marker_gap = @max(@as(f32, 8.0), style.font_size * 0.35);
     const marker_width = markdownListMarkerWidth(state, node, cache, style, kind, list_depth, ordinal);
     const content_width = @max(@as(f32, 1.0), max_width - marker_width - marker_gap);
@@ -454,49 +446,45 @@ fn markdownListItemHeight(state: anytype, node: *const Node, cache: ?*Measuremen
     var total: f32 = 0;
     for (item.blocks.items, 0..) |block, block_index| {
         const block_width = if (block.kind == .bullet_list or block.kind == .ordered_list)
-            @max(@as(f32, 1.0), content_width - markdownListIndent(state, node, style))
+            @max(@as(f32, 1.0), content_width - markdownListIndent(style))
         else
             content_width;
         total += markdownBlockHeight(state, node, cache, style, block, block_width, list_depth + 1);
-        if (block_index != item.blocks.items.len - 1) total += markdownGapBetweenBlocks(state, node, style, block, item.blocks.items[block_index + 1]);
+        if (block_index != item.blocks.items.len - 1) total += markdownGapBetweenBlocks(style, block, item.blocks.items[block_index + 1]);
     }
     return total;
 }
 
-fn markdownListMarkerWidth(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, kind: markdown.BlockKind, depth: usize, ordinal: usize) f32 {
-    const fonts = font_model.textFacesForNode(state, node);
+fn markdownListMarkerWidth(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, kind: markdown.BlockKind, depth: usize, ordinal: usize) f32 {
+    const fonts = textFaces(style);
     const font = plainTextFaceForNode(state, node, fonts);
     return switch (kind) {
         .ordered_list => blk: {
             var buffer: [32]u8 = undefined;
             const marker = std.fmt.bufPrint(&buffer, "{d}.", .{ordinal}) catch return 0;
-            break :blk measuredTextDrawExtent(cache, state.allocator, marker, font, style, textEmojiSpacing(state, node));
+            break :blk measuredTextDrawExtent(cache, state.allocator, marker, font, style, textEmojiSpacing(style));
         },
-        .bullet_list => measuredTextDrawExtent(cache, state.allocator, if (depth == 0) "•" else "◦", font, style, textEmojiSpacing(state, node)),
+        .bullet_list => measuredTextDrawExtent(cache, state.allocator, if (depth == 0) "•" else "◦", font, style, textEmojiSpacing(style)),
         else => 0,
     };
 }
 
-fn markdownTableCellPadX(state: anytype, node: *const Node, style: TextStyle) f32 {
-    return nonNegativeRecordFloatProperty(state, node, "text", "markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), style.font_size * 0.55);
+fn markdownTableCellPadX(style: TextPaint) f32 {
+    return style.markdown_table_cell_pad_x;
 }
 
-fn markdownTableCellPadY(state: anytype, node: *const Node, style: TextStyle) f32 {
-    return nonNegativeRecordFloatProperty(state, node, "text", "markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), style.font_size * 0.32);
+fn markdownTableCellPadY(style: TextPaint) f32 {
+    return style.markdown_table_cell_pad_y;
 }
 
-fn markdownTableLineWidth(state: anytype, node: *const Node) f32 {
-    return nonNegativeRecordFloatProperty(state, node, "text", "markdown_table_line_width") orelse 0.8;
-}
-
-fn markdownTableHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, block: *const markdown.Block, max_width: f32) f32 {
+fn markdownTableHeight(state: anytype, cache: ?*MeasurementCache, style: TextPaint, block: *const markdown.Block, max_width: f32) f32 {
     const table = block.table.?;
     if (table.rows.items.len == 0) return style.line_height;
 
     const columns = markdown.tableColumnCount(table);
-    const pad_x = markdownTableCellPadX(state, node, style);
-    const pad_y = markdownTableCellPadY(state, node, style);
-    const line_width = markdownTableLineWidth(state, node);
+    const pad_x = markdownTableCellPadX(style);
+    const pad_y = markdownTableCellPadY(style);
+    const line_width = style.markdown_table_line_width;
     const cell_width = @max(@as(f32, 1.0), max_width / @as(f32, @floatFromInt(columns)));
     const content_width = @max(@as(f32, 1.0), cell_width - 2.0 * pad_x);
 
@@ -504,30 +492,30 @@ fn markdownTableHeight(state: anytype, node: *const Node, cache: ?*MeasurementCa
     for (table.rows.items) |row| {
         var row_content_height = style.line_height;
         for (row.cells.items) |cell| {
-            row_content_height = @max(row_content_height, markdownLinesHeight(state, node, cache, style, cell.lines.items, content_width));
+            row_content_height = @max(row_content_height, markdownLinesHeight(state, cache, style, cell.lines.items, content_width));
         }
         total += row_content_height + 2.0 * pad_y + line_width;
     }
     return total;
 }
 
-fn markdownLinesHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, lines: []const markdown.Line, max_width: f32) f32 {
-    const count = markdownWrappedLineCount(state, node, cache, style, lines, max_width);
+fn markdownLinesHeight(state: anytype, cache: ?*MeasurementCache, style: TextPaint, lines: []const markdown.Line, max_width: f32) f32 {
+    const count = markdownWrappedLineCount(state, cache, style, lines, max_width);
     return @as(f32, @floatFromInt(count)) * style.line_height;
 }
 
-fn markdownWrappedLineCount(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, lines: []const markdown.Line, max_width: f32) usize {
+fn markdownWrappedLineCount(state: anytype, cache: ?*MeasurementCache, style: TextPaint, lines: []const markdown.Line, max_width: f32) usize {
     if (lines.len == 0) return 1;
     var total: usize = 0;
     for (lines) |line| {
-        total += markdownLineVisualLineCount(state, node, cache, style, line, max_width);
+        total += markdownLineVisualLineCount(state, cache, style, line, max_width);
     }
     return total;
 }
 
-fn markdownLineVisualLineCount(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, line: markdown.Line, max_width: f32) usize {
+fn markdownLineVisualLineCount(state: anytype, cache: ?*MeasurementCache, style: TextPaint, line: markdown.Line, max_width: f32) usize {
     if (!markdownLineContainsDisplayMath(line)) {
-        return @max(markdownRunSliceVisualLineCount(state, node, cache, style, line.runs.items, max_width), 1);
+        return @max(markdownRunSliceVisualLineCount(state, cache, style, line.runs.items, max_width), 1);
     }
 
     const runs = line.runs.items;
@@ -540,37 +528,37 @@ fn markdownLineVisualLineCount(state: anytype, node: *const Node, cache: ?*Measu
             continue;
         }
 
-        total += markdownRunSliceVisualLineCount(state, node, cache, style, runs[segment_start..index], max_width);
+        total += markdownRunSliceVisualLineCount(state, cache, style, runs[segment_start..index], max_width);
 
         const display_start = index;
         while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
         const visual_lines = displayMathRunLineCount(runs[display_start..index]);
         if (visual_lines > 0) {
-            const block_height = displayMathBlockHeightForLines(style, visual_lines, displayMathHeightFactor(state, node));
+            const block_height = displayMathBlockHeightForLines(style, visual_lines, style.display_math_height_factor);
             total += @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(block_height / @max(style.line_height, 1)))));
         }
         segment_start = index;
     }
 
-    total += markdownRunSliceVisualLineCount(state, node, cache, style, runs[segment_start..], max_width);
+    total += markdownRunSliceVisualLineCount(state, cache, style, runs[segment_start..], max_width);
     return @max(total, 1);
 }
 
-fn markdownBlocksNaturalWidth(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, blocks: []const *markdown.Block) ?f32 {
+fn markdownBlocksNaturalWidth(state: anytype, cache: ?*MeasurementCache, style: TextPaint, blocks: []const *markdown.Block) ?f32 {
     if (blocks.len != 1) return null;
     const block = blocks[0];
     return switch (block.kind) {
-        .paragraph, .heading => markdownParagraphNaturalWidth(state, node, cache, style, block.paragraph.?.lines.items),
+        .paragraph, .heading => markdownParagraphNaturalWidth(state, cache, markdownBlockTextStyle(style, block), block.paragraph.?.lines.items),
         else => null,
     };
 }
 
-fn markdownParagraphNaturalWidth(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, lines: []const markdown.Line) ?f32 {
+fn markdownParagraphNaturalWidth(state: anytype, cache: ?*MeasurementCache, style: TextPaint, lines: []const markdown.Line) ?f32 {
     if (lines.len == 0) return 0;
     var max_width: f32 = 0;
     for (lines) |line| {
         if (markdownLineContainsMeasuredRenderArtifact(line)) return null;
-        max_width = @max(max_width, markdownRunSliceDrawExtent(state, node, cache, style, line.runs.items) orelse return null);
+        max_width = @max(max_width, markdownRunSliceDrawExtent(state, cache, style, line.runs.items) orelse return null);
     }
     return max_width;
 }
@@ -650,7 +638,7 @@ fn displayMathRunLineCount(runs: []const markdown.Run) usize {
     return count;
 }
 
-fn displayMathBlockHeightForLines(style: TextStyle, visual_lines: usize, height_factor: f32) f32 {
+fn displayMathBlockHeightForLines(style: TextPaint, visual_lines: usize, height_factor: f32) f32 {
     const line_count = @as(f32, @floatFromInt(@max(visual_lines, 1)));
     const target_height = line_count * @max(style.line_height, style.font_size * height_factor);
     return target_height + @max(style.line_height * 0.2, 2.0) * 2.0;
@@ -712,8 +700,13 @@ fn nonNegativeRecordFloatProperty(state: anytype, node: *const Node, record_key:
     return if (value >= 0) value else null;
 }
 
-fn wrappedLineCount(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, text: []const u8, max_width: f32) usize {
-    const fonts = font_model.textFacesForNode(state, node);
+fn markdownBlockTextStyle(base: TextPaint, block: *const markdown.Block) TextPaint {
+    if (block.kind != .heading) return base;
+    return base.forMarkdownHeading(block.heading_level orelse 2);
+}
+
+fn wrappedLineCount(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, text: []const u8, max_width: f32) usize {
+    const fonts = textFaces(style);
     const plain_font = plainTextFaceForNode(state, node, fonts);
     var total: usize = 0;
     var lines = source.lineIterator(text);
@@ -725,7 +718,7 @@ fn wrappedLineCount(state: anytype, node: *const Node, cache: ?*MeasurementCache
             continue;
         }
 
-        total += measuredWrappedTextLineCount(cache, state.allocator, trimmed, plain_font, style, max_width, textEmojiSpacing(state, node));
+        total += measuredWrappedTextLineCount(cache, state.allocator, trimmed, plain_font, style, max_width, textEmojiSpacing(style));
     }
     return total;
 }
@@ -738,23 +731,23 @@ fn plainTextFaceForNode(state: anytype, node: *const Node, faces: font_model.Tex
     return faces.normal;
 }
 
-fn markdownRunSliceVisualLineCount(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, runs: []const markdown.Run, max_width: f32) usize {
+fn markdownRunSliceVisualLineCount(state: anytype, cache: ?*MeasurementCache, style: TextPaint, runs: []const markdown.Run, max_width: f32) usize {
     if (runs.len == 0) return 0;
     var atoms = std.ArrayList(MeasuredAtom).empty;
     defer atoms.deinit(state.allocator);
-    appendMarkdownRunSliceMeasuredAtoms(state, node, cache, style, runs, &atoms) catch return 1;
-    return measuredAtomVisualLineCount(atoms.items, max_width, textEmojiSpacing(state, node));
+    appendMarkdownRunSliceMeasuredAtoms(state, cache, style, runs, &atoms) catch return 1;
+    return measuredAtomVisualLineCount(atoms.items, max_width, textEmojiSpacing(style));
 }
 
-fn markdownRunSliceDrawExtent(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, runs: []const markdown.Run) ?f32 {
+fn markdownRunSliceDrawExtent(state: anytype, cache: ?*MeasurementCache, style: TextPaint, runs: []const markdown.Run) ?f32 {
     var atoms = std.ArrayList(MeasuredAtom).empty;
     defer atoms.deinit(state.allocator);
-    appendMarkdownRunSliceMeasuredAtoms(state, node, cache, style, runs, &atoms) catch return null;
-    return measuredAtomLineExtent(atoms.items, textEmojiSpacing(state, node));
+    appendMarkdownRunSliceMeasuredAtoms(state, cache, style, runs, &atoms) catch return null;
+    return measuredAtomLineExtent(atoms.items, textEmojiSpacing(style));
 }
 
-fn appendMarkdownRunSliceMeasuredAtoms(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, runs: []const markdown.Run, atoms: *std.ArrayList(MeasuredAtom)) !void {
-    const fonts = font_model.textFacesForNode(state, node);
+fn appendMarkdownRunSliceMeasuredAtoms(state: anytype, cache: ?*MeasurementCache, style: TextPaint, runs: []const markdown.Run, atoms: *std.ArrayList(MeasuredAtom)) !void {
+    const fonts = textFaces(style);
     for (runs) |run| {
         switch (run.kind) {
             .icon, .math, .display_math => return error.RenderArtifactMeasuredAtDraw,
@@ -766,7 +759,16 @@ fn appendMarkdownRunSliceMeasuredAtoms(state: anytype, node: *const Node, cache:
     }
 }
 
-fn measuredWrappedTextLineCount(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle, max_width: f32, emoji_spacing: f32) usize {
+fn textFaces(style: TextPaint) font_model.TextFaces {
+    return .{
+        .normal = style.font,
+        .bold = style.bold_font,
+        .italic = style.italic_font,
+        .code = style.code_font,
+    };
+}
+
+fn measuredWrappedTextLineCount(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextPaint, max_width: f32, emoji_spacing: f32) usize {
     var atoms = std.ArrayList(MeasuredAtom).empty;
     defer atoms.deinit(allocator);
     appendMeasuredTextAtoms(cache, allocator, &atoms, text, font, style) catch return 1;
@@ -796,7 +798,7 @@ const MeasuredAtom = struct {
     is_emoji: bool,
 };
 
-fn appendMeasuredTextAtoms(cache: ?*MeasurementCache, allocator: std.mem.Allocator, atoms: *std.ArrayList(MeasuredAtom), text: []const u8, font: font_model.Face, style: TextStyle) !void {
+fn appendMeasuredTextAtoms(cache: ?*MeasurementCache, allocator: std.mem.Allocator, atoms: *std.ArrayList(MeasuredAtom), text: []const u8, font: font_model.Face, style: TextPaint) !void {
     var tokenizer = text_tokenize.Tokenizer.init(text);
     while (tokenizer.next()) |token| {
         const is_emoji = text_tokenize.isEmojiToken(token);
@@ -832,7 +834,7 @@ fn fontForRun(fonts: font_model.TextFaces, kind: markdown.RunKind) font_model.Fa
     };
 }
 
-fn measuredTextWidth(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle) f32 {
+fn measuredTextWidth(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextPaint) f32 {
     const measured = if (cache) |measurements|
         measurements.advanceWidth(text, font, style.font_size) catch 0
     else
@@ -840,7 +842,7 @@ fn measuredTextWidth(cache: ?*MeasurementCache, allocator: std.mem.Allocator, te
     return if (measured > 0) measured else 0;
 }
 
-fn measuredTextVisualWidth(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle) f32 {
+fn measuredTextVisualWidth(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextPaint) f32 {
     const measured = if (cache) |measurements|
         measurements.visualWidth(text, font, style.font_size) catch 0
     else
@@ -848,7 +850,7 @@ fn measuredTextVisualWidth(cache: ?*MeasurementCache, allocator: std.mem.Allocat
     return if (measured > 0) measured else 0;
 }
 
-fn measuredTextDrawExtent(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle, emoji_spacing: f32) f32 {
+fn measuredTextDrawExtent(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextPaint, emoji_spacing: f32) f32 {
     var atoms = std.ArrayList(MeasuredAtom).empty;
     defer atoms.deinit(allocator);
     appendMeasuredTextAtoms(cache, allocator, &atoms, text, font, style) catch return 0;
@@ -871,6 +873,6 @@ fn measuredAtomSpacingAfter(atoms: []const MeasuredAtom, index: usize, emoji_spa
     return emoji_spacing;
 }
 
-fn textEmojiSpacing(state: anytype, node: *const Node) f32 {
-    return styleForNode(state, node).font_size * (nonNegativeRecordFloatProperty(state, node, "text", "emoji_spacing") orelse 0);
+fn textEmojiSpacing(style: TextPaint) f32 {
+    return style.font_size * style.emoji_spacing;
 }

@@ -41,6 +41,10 @@ fn watermark!(text_value: String) -> Void
   mk_marks!(docctx(), text_value)
 end
 
+fn identity_object(obj: Object) -> Object
+  return obj
+end
+
 fn need_titles() -> Void
   chk_titles(docctx())
 end
@@ -75,13 +79,14 @@ fn numbering!(counter_name: String, format: String = "{number}. {text}") -> Void
   )
 end
 
-fn mk_pagenos!(doc: Document, format: String?) -> Void
-  foreach(selectors::pages(doc), (page_value: Page) |-> mk_pageno!(page_value, doc, format))
+fn mk_pagenos!(doc: Document, format: String?, decorate: Object -> Object = identity_object) -> Void
+  foreach(selectors::pages(doc), (page_value: Page) |-> mk_pageno!(page_value, doc, format, decorate))
 end
 
-fn mk_pageno!(page_value: Page, doc: Document, format: String?) -> Page
+fn mk_pageno!(page_value: Page, doc: Document, format: String?, decorate: Object -> Object = identity_object) -> Page
   let page_no = place_on!(page_value, new("", "pageno", "text"))
   pageno_s(page_no)
+  decorate(page_no)
   set_pageno(page_no, doc, format)
   return page_value
 end
@@ -108,14 +113,14 @@ fn pageno_repr(page_no: Object) -> String
   return str(page_index(page_value)) ++ "/" ++ str(page_count(docctx()))
 end
 
-fn mk_footers!(doc: Document, text_value: String) -> Void
+fn mk_footers!(doc: Document, text_value: String, decorate: Object -> Object = identity_object) -> Void
   foreach(
     selectors::pages(doc),
-    (page_value: Page) |-> mk_footer!(page_value, text_value)
+    (page_value: Page) |-> mk_footer!(page_value, text_value, decorate)
   )
 end
 
-fn mk_footer!(page_value: Page, text_value: String) -> Page
+fn mk_footer!(page_value: Page, text_value: String, decorate: Object -> Object = identity_object) -> Page
   let footer = place_on!(page_value, new(text_value, "footer", "text"))
   footer.text = TextStyle {
     font = FontFace { family = "Helvetica" }
@@ -129,6 +134,7 @@ fn mk_footer!(page_value: Page, text_value: String) -> Page
     right_inset = 160
     wrap = WrapMode.off
   }
+  decorate(footer)
   ~ footer.left == page.left + 72
   ~ footer.bottom == page.bottom + 20
   return page_value
@@ -153,14 +159,14 @@ fn mk_logo!(page_value: Page, path_value: String, scale: Number) -> Page
   return page_value
 end
 
-fn mk_marks!(doc: Document, text_value: String) -> Void
+fn mk_marks!(doc: Document, text_value: String, decorate: Object -> Object = identity_object) -> Void
   foreach(
     selectors::pages(doc),
-    (page_value: Page) |-> mk_mark!(page_value, text_value)
+    (page_value: Page) |-> mk_mark!(page_value, text_value, decorate)
   )
 end
 
-fn mk_mark!(page_value: Page, text_value: String) -> Page
+fn mk_mark!(page_value: Page, text_value: String, decorate: Object -> Object = identity_object) -> Page
   let mark = place_on!(page_value, new(text_value, "watermark", "text"))
   mark.text = TextStyle {
     font = FontFace { family = "Helvetica" }
@@ -174,6 +180,7 @@ fn mk_mark!(page_value: Page, text_value: String) -> Page
     right_inset = 0
     wrap = WrapMode.off
   }
+  decorate(mark)
   ~ mark.width == 800
   ~ mark.height == 90
   ~ mark.center_x == page.center_x
