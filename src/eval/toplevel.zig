@@ -2121,7 +2121,7 @@ fn invokeFunctionRef(
     args: []const core.Value,
 ) anyerror!core.Value {
     if (function.closure_id) |closure_id| {
-        return try invokeClosureValues(state, page_id, context, mode, env, functions, closures, closure_id, current_origin, args);
+        return try invokeClosureValues(state, page_id, context, mode, env, functions, closures, function.module_id, closure_id, current_origin, args);
     }
     const sema = SemanticEnv.init(state, null, functions).forModule(function.module_id);
     const resolved = sema.resolvedFunction(ast.CallableName.bare(function.name)) orelse {
@@ -2139,6 +2139,7 @@ fn invokeClosureValues(
     caller_env: *std.StringHashMap(core.Value),
     functions: *const core.FunctionMap,
     closures: *ClosureStore,
+    module_id: core.SourceModuleId,
     closure_id: usize,
     current_origin: []const u8,
     args: []const core.Value,
@@ -2166,6 +2167,9 @@ fn invokeClosureValues(
         try putEnvValue(state.allocator, &local_env, param.name, value);
     }
     const start_node_count = state.nodeCount();
+    const previous_module_id = active_module_id;
+    active_module_id = module_id;
+    defer active_module_id = previous_module_id;
     const value = try evalExpr(state, page_id, context, mode, &local_env, functions, closures, current_origin, closure.lambda.body.*);
     try connectReturnedObject(state, value, start_node_count, current_origin);
     return value;
