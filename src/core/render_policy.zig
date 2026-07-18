@@ -51,8 +51,6 @@ pub const TextPaint = struct {
     color: Color,
     link_color: Color,
     markdown_bold_color: ?Color,
-    link_underline_width: f32,
-    link_underline_offset: f32,
     inline_math_height_factor: f32,
     inline_math_spacing: f32,
     display_math_height_factor: f32,
@@ -85,8 +83,6 @@ pub const TextPaint = struct {
     markdown_table_line_width: f32,
     markdown_table_header_fill: ?Color,
     markdown_table_alt_row_fill: ?Color,
-    cjk_bold_passes: u32,
-    cjk_bold_dx: f32,
     wrap: bool,
 };
 
@@ -220,8 +216,6 @@ fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .color = parseRecordColorProperty(state, node, "text", "color") orelse FALLBACK_TEXT_COLOR,
         .link_color = parseRecordColorProperty(state, node, "text", "link_color") orelse FALLBACK_LINK_COLOR,
         .markdown_bold_color = parseRecordColorProperty(state, node, "text", "markdown_bold_color"),
-        .link_underline_width = nonNegativeRecordFloatProperty(state, node, "text", "link_underline_width") orelse 0,
-        .link_underline_offset = recordFloatProperty(state, node, "text", "link_underline_offset") orelse 0,
         .inline_math_height_factor = positiveRecordFloatProperty(state, node, "text", "inline_math_height_factor") orelse 1,
         .inline_math_spacing = nonNegativeRecordFloatProperty(state, node, "text", "inline_math_spacing") orelse 0,
         .display_math_height_factor = positiveRecordFloatProperty(state, node, "text", "display_math_height_factor") orelse 2,
@@ -254,8 +248,6 @@ fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .markdown_table_line_width = nonNegativeRecordFloatProperty(state, node, "text", "markdown_table_line_width") orelse 0.8,
         .markdown_table_header_fill = parseRecordColorProperty(state, node, "text", "markdown_table_header_fill"),
         .markdown_table_alt_row_fill = parseRecordColorProperty(state, node, "text", "markdown_table_alt_row_fill"),
-        .cjk_bold_passes = recordIntProperty(state, node, "text", "cjk_bold_passes") orelse 1,
-        .cjk_bold_dx = recordFloatProperty(state, node, "text", "cjk_bold_dx") orelse 0,
         .wrap = layout.shouldWrapNode(state, node),
     };
 }
@@ -365,12 +357,6 @@ fn positiveRecordFloatProperty(state: anytype, node: *const Node, record_key: []
 fn nonNegativeRecordFloatProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
     const value = recordFloatProperty(state, node, record_key, field_name) orelse return null;
     return if (value >= 0) value else null;
-}
-
-fn recordIntProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?u32 {
-    const value = recordFloatProperty(state, node, record_key, field_name) orelse return null;
-    if (!std.math.isFinite(value) or value < 0) return null;
-    return @intFromFloat(@round(value));
 }
 
 fn parseRecordColorProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?Color {

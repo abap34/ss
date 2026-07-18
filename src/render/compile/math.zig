@@ -236,7 +236,8 @@ const Builder = struct {
         defer denominator.deinit(self.allocator);
 
         const axis = self.constants.axis_height * font_size;
-        const thickness = @max(self.constants.fraction_rule_thickness * font_size, font_size / 24);
+        const thickness = self.constants.fraction_rule_thickness * font_size;
+        if (!(thickness > 0) or !std.math.isFinite(thickness)) return error.InvalidMathTable;
         const numerator_gap = (if (self.display and script_level == 0)
             self.constants.fraction_numerator_display_gap_min
         else
@@ -256,8 +257,7 @@ const Builder = struct {
         numerator_shift = @max(numerator_shift, numerator.descent + axis + thickness / 2 + numerator_gap);
         denominator_shift = @max(denominator_shift, denominator.ascent - axis + thickness / 2 + denominator_gap);
 
-        const padding = font_size * 0.08;
-        const width = @max(numerator.width, denominator.width) + padding * 2;
+        const width = @max(numerator.width, denominator.width);
         const rule_top = -axis - thickness / 2;
         const top = @min(-numerator_shift - numerator.ascent, rule_top);
         const bottom = @max(denominator_shift + denominator.descent, rule_top + thickness);
@@ -337,7 +337,8 @@ const Builder = struct {
         if (node_value.children.len != 1) return error.InvalidMathTree;
         var radicand = try self.node(node_value.children[0], font_size, script_level);
         defer radicand.deinit(self.allocator);
-        const thickness = @max(self.constants.radical_rule_thickness * font_size, font_size / 24);
+        const thickness = self.constants.radical_rule_thickness * font_size;
+        if (!(thickness > 0) or !std.math.isFinite(thickness)) return error.InvalidMathTable;
         const gap = (if (self.display and script_level == 0)
             self.constants.radical_display_vertical_gap
         else
@@ -356,11 +357,12 @@ const Builder = struct {
         var result = Box{ .width = width, .ascent = baseline, .descent = @max(height - baseline, 0) };
         errdefer result.deinit(self.allocator);
         const radical_width = radical.width;
+        const rule_start = std.math.clamp(radical.inkRight() - thickness, 0, radical_width);
         try result.absorb(self.allocator, &radical, 0, radical_y);
         try result.absorb(self.allocator, &radicand, radical_width, radicand_top);
         try result.elements.append(self.allocator, .{ .rule = .{
             .node = node_value.id,
-            .rect = .{ .x = radical_width * 0.72, .y = rule_top + extra, .width = width - radical_width * 0.72, .height = thickness },
+            .rect = .{ .x = rule_start, .y = rule_top + extra, .width = width - rule_start, .height = thickness },
         } });
         return result;
     }
@@ -391,6 +393,15 @@ const Box = struct {
             try self.elements.append(allocator, element.*);
         }
         child.elements.clearRetainingCapacity();
+    }
+
+    fn inkRight(self: *const Box) f64 {
+        var right: f64 = 0;
+        for (self.elements.items) |element| switch (element) {
+            .text => |text| right = @max(right, text.x + text.layout.ink_bounds.x + text.layout.ink_bounds.width),
+            .rule => |rule| right = @max(right, rule.rect.x + rule.rect.width),
+        };
+        return right;
     }
 };
 

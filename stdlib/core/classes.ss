@@ -37,8 +37,6 @@ record TextStyle {
   color: Color = c"0.08,0.08,0.08"
   link_color: Color = c"0.1,0.25,0.75"
   markdown_bold_color: Color? = none
-  link_underline_width: Number = 0.8
-  link_underline_offset: Number = -1.5
   inline_math_height_factor: Number = 1.02
   inline_math_spacing: Number = 0.08
   display_math_height_factor: Number = 2
@@ -71,8 +69,6 @@ record TextStyle {
   markdown_table_line_width: Number = 0.8
   markdown_table_header_fill: Color = c"0.94,0.96,0.98"
   markdown_table_alt_row_fill: Color? = none
-  cjk_bold_passes: Number = 1
-  cjk_bold_dx: Number = 0.05
 }
 
 record MathStyle {

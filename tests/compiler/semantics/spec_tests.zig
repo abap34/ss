@@ -2698,12 +2698,9 @@ test "compiler semantics: object field defaults are statically typed" {
         \\end
         \\
     , .{
-        .link_underline_width = 0.8,
-        .link_underline_offset = -1.5,
         .inline_math_height_factor = 1.02,
         .inline_math_spacing = 0.08,
         .markdown_table_line_width = 0.8,
-        .cjk_bold_dx = 0.05,
     });
 
     try expectDiagnostic(

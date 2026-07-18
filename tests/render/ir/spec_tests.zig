@@ -342,6 +342,10 @@ test "font instances use content-derived identities and deterministic catalog or
         .ascent_ratio = 0.8,
         .descent_ratio = 0.2,
         .line_gap_ratio = 0,
+        .underline_position_ratio = -0.1,
+        .underline_thickness_ratio = 0.05,
+        .strikethrough_position_ratio = 0.3,
+        .strikethrough_thickness_ratio = 0.05,
     });
     const second = try builder.add(testing.allocator, testing.io, .{
         .resource = resource,
@@ -354,6 +358,10 @@ test "font instances use content-derived identities and deterministic catalog or
         .ascent_ratio = 0.8,
         .descent_ratio = 0.2,
         .line_gap_ratio = 0,
+        .underline_position_ratio = -0.1,
+        .underline_thickness_ratio = 0.05,
+        .strikethrough_position_ratio = 0.3,
+        .strikethrough_thickness_ratio = 0.05,
     });
     const duplicate = try builder.add(testing.allocator, testing.io, .{
         .resource = resource,
@@ -366,14 +374,37 @@ test "font instances use content-derived identities and deterministic catalog or
         .ascent_ratio = 0.8,
         .descent_ratio = 0.2,
         .line_gap_ratio = 0,
+        .underline_position_ratio = -0.1,
+        .underline_thickness_ratio = 0.05,
+        .strikethrough_position_ratio = 0.3,
+        .strikethrough_thickness_ratio = 0.05,
+    });
+    const different_metrics = try builder.add(testing.allocator, testing.io, .{
+        .resource = resource,
+        .face_index = 1,
+        .family = "Example Sans",
+        .postscript_name = "ExampleSans-Regular",
+        .weight = 400,
+        .style = .normal,
+        .stretch = .normal,
+        .ascent_ratio = 0.8,
+        .descent_ratio = 0.2,
+        .line_gap_ratio = 0,
+        .underline_position_ratio = -0.12,
+        .underline_thickness_ratio = 0.05,
+        .strikethrough_position_ratio = 0.3,
+        .strikethrough_thickness_ratio = 0.05,
     });
     try testing.expectEqual(first, duplicate);
     try testing.expect(!std.mem.eql(u8, &first, &second));
+    try testing.expect(!std.mem.eql(u8, &first, &different_metrics));
 
     var catalog = try builder.take(testing.allocator);
     defer catalog.deinit(testing.allocator);
-    try testing.expectEqual(@as(usize, 2), catalog.instances.len);
-    try testing.expect(std.mem.order(u8, &catalog.instances[0].id, &catalog.instances[1].id) == .lt);
+    try testing.expectEqual(@as(usize, 3), catalog.instances.len);
+    for (catalog.instances[1..], catalog.instances[0 .. catalog.instances.len - 1]) |current, previous| {
+        try testing.expect(std.mem.order(u8, &previous.id, &current.id) == .lt);
+    }
 }
 
 test "semantic validation rejects unsafe link targets" {

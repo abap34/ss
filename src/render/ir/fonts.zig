@@ -54,8 +54,10 @@ pub const Instance = struct {
     ascent_ratio: f64,
     descent_ratio: f64,
     line_gap_ratio: f64,
-    win_ascent_ratio: f64,
-    win_descent_ratio: f64,
+    underline_position_ratio: f64,
+    underline_thickness_ratio: f64,
+    strikethrough_position_ratio: f64,
+    strikethrough_thickness_ratio: f64,
     math: ?MathConstants,
     variations: []Variation = &.{},
     features: []Feature = &.{},
@@ -107,8 +109,10 @@ pub const Spec = struct {
     ascent_ratio: f64,
     descent_ratio: f64,
     line_gap_ratio: f64,
-    win_ascent_ratio: ?f64 = null,
-    win_descent_ratio: ?f64 = null,
+    underline_position_ratio: f64,
+    underline_thickness_ratio: f64,
+    strikethrough_position_ratio: f64,
+    strikethrough_thickness_ratio: f64,
     math: ?MathConstants = null,
     variations: []const Variation = &.{},
     features: []const Feature = &.{},
@@ -158,8 +162,10 @@ pub const Builder = struct {
             .ascent_ratio = spec.ascent_ratio,
             .descent_ratio = spec.descent_ratio,
             .line_gap_ratio = spec.line_gap_ratio,
-            .win_ascent_ratio = spec.win_ascent_ratio orelse spec.ascent_ratio,
-            .win_descent_ratio = spec.win_descent_ratio orelse spec.descent_ratio,
+            .underline_position_ratio = spec.underline_position_ratio,
+            .underline_thickness_ratio = spec.underline_thickness_ratio,
+            .strikethrough_position_ratio = spec.strikethrough_position_ratio,
+            .strikethrough_thickness_ratio = spec.strikethrough_thickness_ratio,
             .math = spec.math,
             .variations = variations,
             .features = features,
@@ -198,7 +204,7 @@ pub const Builder = struct {
 
 pub fn identify(spec: Spec) Id {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("ss-render-font-instance-v1\x00");
+    hasher.update("ss-render-font-instance-v2\x00");
     hasher.update(&spec.resource);
     hashInteger(&hasher, spec.face_index);
     hashBytes(&hasher, spec.family);
@@ -209,8 +215,10 @@ pub fn identify(spec: Spec) Id {
     hashInteger(&hasher, @as(u64, @bitCast(spec.ascent_ratio)));
     hashInteger(&hasher, @as(u64, @bitCast(spec.descent_ratio)));
     hashInteger(&hasher, @as(u64, @bitCast(spec.line_gap_ratio)));
-    hashInteger(&hasher, @as(u64, @bitCast(spec.win_ascent_ratio orelse spec.ascent_ratio)));
-    hashInteger(&hasher, @as(u64, @bitCast(spec.win_descent_ratio orelse spec.descent_ratio)));
+    hashInteger(&hasher, @as(u64, @bitCast(spec.underline_position_ratio)));
+    hashInteger(&hasher, @as(u64, @bitCast(spec.underline_thickness_ratio)));
+    hashInteger(&hasher, @as(u64, @bitCast(spec.strikethrough_position_ratio)));
+    hashInteger(&hasher, @as(u64, @bitCast(spec.strikethrough_thickness_ratio)));
     if (spec.math) |constants| {
         hasher.update(&.{1});
         inline for (std.meta.fields(MathConstants)) |field| {

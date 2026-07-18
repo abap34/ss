@@ -78,24 +78,13 @@ pub fn styleSheet(allocator: std.mem.Allocator, ir: *const render.Ir, assets: re
                 try out.append(allocator, ')');
             },
         }
-        try appendFormat(allocator, &out, "; font-weight:{d}; font-style:{s}; font-stretch:{s}; ascent-override:{d:.9}%; descent-override:{d:.9}%; line-gap-override:{d:.9}%; font-display:block; }}\n", .{
+        try appendFormat(allocator, &out, "; font-weight:{d}; font-style:{s}; font-stretch:{s}; font-display:block; }}\n", .{
             font.weight,
             fontStyle(font.style),
             fontStretch(font.stretch),
-            normalized(cssAscentOverride(font) * 100),
-            normalized(font.descent_ratio * 100),
-            normalized(font.line_gap_ratio * 100),
         });
     }
     return try out.toOwnedSlice(allocator);
-}
-
-fn cssAscentOverride(font: render.FontInstance) f64 {
-    const pango_height = font.ascent_ratio + font.descent_ratio;
-    const win_height = font.win_ascent_ratio + font.win_descent_ratio;
-    const win_overflow = @max(win_height - pango_height, 0);
-    if (win_overflow >= pango_height) return font.ascent_ratio;
-    return @max(font.ascent_ratio - win_overflow / 2, 0);
 }
 
 pub const PdfRuntime = struct {
@@ -109,6 +98,7 @@ pub const PdfRuntime = struct {
 pub const Runtime = struct {
     resource_module: []const u8,
     navigation_module: []const u8,
+    text_module: []const u8,
     pdf: ?PdfRuntime,
 };
 
@@ -142,7 +132,9 @@ pub fn generate(
     try out.appendSlice(allocator, runtime.navigation_module);
     try out.appendSlice(allocator, "\");const pager=navigation.start(document);const resources=await import(\"");
     try out.appendSlice(allocator, runtime.resource_module);
-    try out.appendSlice(allocator, "\");resourceStore=await resources.prepareDocumentResources(document);addEventListener(\"beforeunload\",()=>{void pdfRuntime?.disposePdfRuntime();resourceStore?.dispose()},{once:true});");
+    try out.appendSlice(allocator, "\");resourceStore=await resources.prepareDocumentResources(document);const text=await import(\"");
+    try out.appendSlice(allocator, runtime.text_module);
+    try out.appendSlice(allocator, "\");await text.alignTextBaselines(document);addEventListener(\"beforeunload\",()=>{void pdfRuntime?.disposePdfRuntime();resourceStore?.dispose()},{once:true});");
     if (runtime.pdf) |pdf| {
         try out.appendSlice(allocator, "const renderer=await import(\"");
         try out.appendSlice(allocator, pdf.renderer_module);
@@ -521,7 +513,7 @@ fn appendTextRuns(
         const ascent = font_size * font.ascent_ratio;
         const descent = font_size * font.descent_ratio;
         const run_top = run.baseline_y - ascent;
-        try out.appendSlice(allocator, "<span class=\"ss-text-run\"");
+        try appendFormat(allocator, out, "<span class=\"ss-text-run\" data-ss-baseline-y=\"{d:.6}\"", .{normalized(run.baseline_y)});
         if (run.language.len != 0) {
             try out.appendSlice(allocator, " lang=\"");
             try appendAttribute(allocator, out, run.language);
@@ -536,9 +528,6 @@ fn appendTextRuns(
         try appendFontFamily(allocator, out, font.id);
         try out.appendSlice(allocator, "',");
         try appendCssString(allocator, out, font.family);
-        if (std.mem.indexOf(u8, font.family, "Emoji") != null) {
-            try out.appendSlice(allocator, ",'Noto Color Emoji','Segoe UI Emoji'");
-        }
         try out.appendSlice(allocator, ",sans-serif");
         try appendFormat(allocator, out, ";width:{d:.6}pt;height:{d:.6}pt;font-size:{d:.6}pt;font-weight:{d};font-style:{s};font-stretch:{s};line-height:{d:.6}pt;color:", .{
             normalized(run.advance),

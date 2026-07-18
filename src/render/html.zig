@@ -7,6 +7,7 @@ const resources = @import("html/resources.zig");
 
 const resource_runtime = @embedFile("html/resources.js");
 const navigation_runtime = @embedFile("html/navigation.js");
+const text_runtime = @embedFile("html/text.js");
 
 var publication_counter: usize = 0;
 
@@ -54,6 +55,8 @@ pub fn write(
     defer allocator.free(resource_module_url);
     const navigation_module_url = try resources.dataUrl(allocator, "text/javascript;charset=utf-8", navigation_runtime);
     defer allocator.free(navigation_module_url);
+    const text_module_url = try resources.dataUrl(allocator, "text/javascript;charset=utf-8", text_runtime);
+    defer allocator.free(text_module_url);
 
     const embedded_pdf: ?pdf_runtime.Embedded = if (references.hasPdf())
         try pdf_runtime.Embedded.init(allocator)
@@ -67,6 +70,7 @@ pub fn write(
     const html = try document.generate(allocator, ir, references, style_sheet_url, .{
         .resource_module = resource_module_url,
         .navigation_module = navigation_module_url,
+        .text_module = text_module_url,
         .pdf = pdf,
     });
     defer allocator.free(html);

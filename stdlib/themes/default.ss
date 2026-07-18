@@ -97,8 +97,6 @@ fn default_theme() -> Theme
         size = 26
         line_height = 33
         color = c"0.08,0.10,0.14"
-        cjk_bold_passes = 3
-        cjk_bold_dx = 0.04
       }
       layout = LayoutStyle {
         spacing_after = 30

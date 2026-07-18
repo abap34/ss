@@ -340,8 +340,10 @@ fn fontCatalog(ir: anytype) Error!void {
             .ascent_ratio = instance.ascent_ratio,
             .descent_ratio = instance.descent_ratio,
             .line_gap_ratio = instance.line_gap_ratio,
-            .win_ascent_ratio = instance.win_ascent_ratio,
-            .win_descent_ratio = instance.win_descent_ratio,
+            .underline_position_ratio = instance.underline_position_ratio,
+            .underline_thickness_ratio = instance.underline_thickness_ratio,
+            .strikethrough_position_ratio = instance.strikethrough_position_ratio,
+            .strikethrough_thickness_ratio = instance.strikethrough_thickness_ratio,
             .math = instance.math,
             .variations = instance.variations,
             .features = instance.features,
@@ -353,8 +355,11 @@ fn fontCatalog(ir: anytype) Error!void {
         if (instance.family.len == 0 or instance.weight < 1 or instance.weight > 1000) return error.InvalidFont;
         if (instance.synthetic_bold or instance.synthetic_italic) return error.InvalidFont;
         if (!positiveFinite(instance.ascent_ratio) or !nonNegativeFinite(instance.descent_ratio) or
-            !nonNegativeFinite(instance.line_gap_ratio) or !positiveFinite(instance.win_ascent_ratio) or
-            !nonNegativeFinite(instance.win_descent_ratio)) return error.InvalidFont;
+            !nonNegativeFinite(instance.line_gap_ratio)) return error.InvalidFont;
+        if (!std.math.isFinite(instance.underline_position_ratio) or
+            !positiveFinite(instance.underline_thickness_ratio) or
+            !std.math.isFinite(instance.strikethrough_position_ratio) or
+            !positiveFinite(instance.strikethrough_thickness_ratio)) return error.InvalidFont;
         if (!std.unicode.utf8ValidateSlice(instance.family) or !std.unicode.utf8ValidateSlice(instance.postscript_name)) return error.InvalidFont;
         for (instance.variations) |variation| if (!std.math.isFinite(variation.value)) return error.InvalidFont;
         if (instance.math) |constants| {

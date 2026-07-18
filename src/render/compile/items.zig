@@ -13,6 +13,7 @@ const render_ir = @import("render");
 const render_resources = @import("render_resources");
 const render_math = @import("render_math");
 const render_compile = @import("../compile.zig");
+const text_measure = core.render_text_measure;
 
 const TSLanguage = opaque {};
 const TSParser = opaque {};
@@ -103,9 +104,6 @@ const Run = core.markdown.Run;
 const TexPreambleEntry = core.render_env.TexPreambleEntry;
 
 const NativePdfError = error{
-    CairoCreateFailed,
-    CairoFailed,
-    PangoCreateFailed,
     ImageDecodeFailed,
     AssetConversionFailed,
     InvalidPdfCache,
@@ -113,7 +111,7 @@ const NativePdfError = error{
     UnsupportedAssetType,
 };
 
-pub const native_artifact_cache_version = "ss-native-artifacts-v5";
+pub const native_artifact_cache_version = "ss-native-artifacts-v6";
 const layout_measurement_cache_version = "ss-native-layout-measure-v13";
 const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
@@ -126,7 +124,6 @@ const warm_render_job_cap: usize = 4;
 const cold_render_job_cap: usize = 16;
 const artifact_job_slack: usize = 2;
 const highlight_query_read_limit = 1024 * 1024;
-const natural_measurement_width_guard: f32 = 1.0;
 pub const tree_sitter_language_version: u32 = build_options.tree_sitter_language_version;
 pub const tree_sitter_min_compatible_language_version: u32 = build_options.tree_sitter_min_compatible_language_version;
 
@@ -235,6 +232,7 @@ const Atom = struct {
     color: Color,
     width: f32,
     height: f32 = 0,
+    baseline_from_bottom: f32 = 0,
     is_space: bool,
     is_emoji: bool = false,
     strikethrough: bool = false,
@@ -271,6 +269,7 @@ const MathAsset = struct {
     page_index: usize,
     width: f32,
     height: f32,
+    baseline_from_bottom: f32,
 };
 
 const IconSpec = struct {
@@ -1038,8 +1037,6 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?TextPaint) void {
         hashColor(hasher, text.color);
         hashColor(hasher, text.link_color);
         hashOptionalColor(hasher, text.markdown_bold_color);
-        hashF32(hasher, text.link_underline_width);
-        hashF32(hasher, text.link_underline_offset);
         hashF32(hasher, text.inline_math_height_factor);
         hashF32(hasher, text.inline_math_spacing);
         hashF32(hasher, text.display_math_height_factor);
@@ -1072,8 +1069,6 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?TextPaint) void {
         hashF32(hasher, text.markdown_table_line_width);
         hashOptionalColor(hasher, text.markdown_table_header_fill);
         hashOptionalColor(hasher, text.markdown_table_alt_row_fill);
-        hashU32(hasher, text.cjk_bold_passes);
-        hashF32(hasher, text.cjk_bold_dx);
         hashBool(hasher, text.wrap);
     }
 }
@@ -1783,18 +1778,21 @@ fn preloadMathBatchGroup(
     defer ctx.allocator.free(tex_path);
     const pdf_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.pdf" });
     defer ctx.allocator.free(pdf_path);
+    const metrics_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.ssm" });
+    defer ctx.allocator.free(metrics_path);
 
     const tex = try mathBatchDocumentSource(ctx, entries);
     defer ctx.allocator.free(tex);
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = tex, .flags = .{ .truncate = true } });
     try runChecked(ctx, &.{ "pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
-    try publishMathBatch(ctx, entries, pdf_path, progress, completed, total);
+    try publishMathBatch(ctx, entries, pdf_path, metrics_path, progress, completed, total);
 }
 
 fn publishMathBatch(
     ctx: *DrawContext,
     entries: []const MathBatchEntry,
     generated_pdf_path: []const u8,
+    metrics_path: []const u8,
     progress: ?Progress,
     completed: *usize,
     total: usize,
@@ -1810,13 +1808,15 @@ fn publishMathBatch(
     defer ctx.allocator.free(widths);
     const heights = try ctx.allocator.alloc(f64, entries.len);
     defer ctx.allocator.free(heights);
+    const baseline_ratios = try readMathBaselineRatios(ctx, metrics_path, entries.len);
+    defer ctx.allocator.free(baseline_ratios);
     if (c.ss_qpdf_page_sizes(batch_path_z.ptr, @intFromEnum(core.render_policy.PdfPageBox.crop), widths.ptr, heights.ptr, entries.len) != 0) {
         try recordQpdfFailure(ctx, "read TeX PDF page geometry");
         return NativePdfError.AssetConversionFailed;
     }
 
     for (entries, 0..) |entry, index| {
-        try writeMathReference(ctx, entry.out, batch_path, index, widths[index], heights[index]);
+        try writeMathReference(ctx, entry.out, batch_path, index, widths[index], heights[index], heights[index] * baseline_ratios[index]);
         completed.* += 1;
         if (progress) |p| p.artifactCompleted(p.context, completed.*, total);
     }
@@ -1841,8 +1841,8 @@ fn publishGeneratedPdf(ctx: *DrawContext, generated_path: []const u8, output: []
     try publishCacheFile(ctx, tmp, output);
 }
 
-fn writeMathReference(ctx: *DrawContext, output: []const u8, pdf_path: []const u8, page_index: usize, width: f64, height: f64) !void {
-    const contents = try std.fmt.allocPrint(ctx.allocator, "{d}\t{d}\t{d}\t{s}\n", .{ page_index, width, height, std.fs.path.basename(pdf_path) });
+fn writeMathReference(ctx: *DrawContext, output: []const u8, pdf_path: []const u8, page_index: usize, width: f64, height: f64, baseline_from_bottom: f64) !void {
+    const contents = try std.fmt.allocPrint(ctx.allocator, "{d}\t{d}\t{d}\t{d}\t{s}\n", .{ page_index, width, height, baseline_from_bottom, std.fs.path.basename(pdf_path) });
     defer ctx.allocator.free(contents);
     const tmp = try tempCachePath(ctx, output, "ref");
     defer ctx.allocator.free(tmp);
@@ -2310,10 +2310,16 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
             defer measurement.deinit();
             const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = Defaults.height };
             const next_bl = try drawMarkdownBlocksAt(ctx, frame, baseline_bl, doc.blocks.items, text, 0);
-            var measured = try measurementFromInk(&measurement, baseline_bl, next_bl, text.font_size, text.line_height);
+            var measured = try measurementFromInk(
+                &measurement,
+                baseline_bl,
+                next_bl,
+                try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height),
+                text.line_height,
+            );
             if (mode == .natural) {
                 if (try markdownBlocksNaturalInlineAdvance(ctx, doc.blocks.items, text, 0)) |natural_width| {
-                    measured.width = @max(measured.width, guardedNaturalMeasurementWidth(natural_width));
+                    measured.width = @max(measured.width, natural_width, 1);
                 }
             } else {
                 measured.width = @max(try markdownBlocksConstrainedLogicalWidth(ctx, doc.blocks.items, text, 0, width), 1);
@@ -2333,10 +2339,16 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
             try measurement.begin();
             defer measurement.deinit();
             const next_bl = try drawInlineLines(ctx, 0, baseline_bl, @max(width, 1), layout.lines.items, inline_text, inline_text.wrap);
-            var measured = try measurementFromInk(&measurement, baseline_bl, next_bl, inline_text.font_size, inline_text.line_height);
+            var measured = try measurementFromInk(
+                &measurement,
+                baseline_bl,
+                next_bl,
+                try lineBaselineFromTop(ctx, inline_text.font, inline_text.font_size, inline_text.line_height),
+                inline_text.line_height,
+            );
             if (mode == .natural) {
                 if (try inlineLinesNaturalAdvance(ctx, layout.lines.items, inline_text)) |natural_width| {
-                    measured.width = @max(measured.width, guardedNaturalMeasurementWidth(natural_width));
+                    measured.width = @max(measured.width, natural_width, 1);
                 }
             } else {
                 measured.width = @max(try inlineLinesConstrainedLogicalWidth(ctx, layout.lines.items, inline_text, width, inline_text.wrap), 1);
@@ -2411,8 +2423,8 @@ fn measureAssetIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width
     return .{ .width = @max(scaled.width, 1), .height = @max(scaled.height, 1) };
 }
 
-fn measurementFromInk(measurement: *MeasurementScope, baseline_bl: f32, next_bl: f32, font_size: f32, line_height: f32) !core.LayoutMeasurement {
-    const content_top_bl = baseline_bl + font_size;
+fn measurementFromInk(measurement: *MeasurementScope, baseline_bl: f32, next_bl: f32, baseline_from_top: f32, line_height: f32) !core.LayoutMeasurement {
+    const content_top_bl = baseline_bl + baseline_from_top;
     var left: f32 = 0;
     var right: f32 = 1;
     var top_overhang: f32 = 0;
@@ -2708,14 +2720,14 @@ fn drawTextCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Fram
                 owned_layout = try core.markdown.parseTextLayoutContent(ctx.allocator, command.content);
                 break :blk &owned_layout.?;
             };
-            const baseline = baselineBlForBox(frame, text.font_size);
+            const baseline = try baselineBlForBox(ctx, frame, text.font, text.font_size, text.line_height);
             _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap);
         },
     }
 }
 
 fn drawMarkdownBlocks(ctx: *DrawContext, frame: Frame, blocks: []const *Block, text: TextPaint, list_depth: usize) anyerror!f32 {
-    return drawMarkdownBlocksAt(ctx, frame, baselineBlForBox(frame, text.font_size), blocks, text, list_depth);
+    return drawMarkdownBlocksAt(ctx, frame, try baselineBlForBox(ctx, frame, text.font, text.font_size, text.line_height), blocks, text, list_depth);
 }
 
 fn drawMarkdownBlocksAt(ctx: *DrawContext, frame: Frame, baseline_bl: f32, blocks: []const *Block, text: TextPaint, list_depth: usize) anyerror!f32 {
@@ -2745,7 +2757,7 @@ fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Blo
     for (list.items.items, 0..) |item, item_index| {
         const marker = try listMarker(ctx.allocator, block.kind, list_depth, list.start + item_index);
         defer ctx.allocator.free(marker);
-        try drawRawText(ctx, item_x, baselineTop(cursor_bl, text.font_size), item_width, marker, text.font, text.font_size, text.color, false);
+        try drawRawText(ctx, item_x, baselineTop(cursor_bl, text.font_size), item_width, marker, text.font, text.font_size, text.color, false, .{});
         const marker_width = try measureText(ctx, marker, text.font, text.font_size);
         const content_x = item_x + marker_width + @max(@as(f32, 8.0), text.font_size * 0.35);
         const content_frame = Frame{
@@ -2766,7 +2778,7 @@ fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32
     const code_paint = markdownCodeBlockPaint(block, text);
     const initial_content_width = @max(width - text.markdown_code_pad_x * 2, 1);
     const measured = try measureMarkdownCodeBlockContent(ctx, source, initial_content_width, text, code_paint);
-    const placement = markdownCodeBlockPlacement(x, baseline_bl, width, measured, text);
+    const placement = markdownCodeBlockPlacement(x, baseline_bl, width, measured, text, try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height));
     const frame = placement.frame;
 
     try drawRoundedRect(ctx, frame, text.markdown_code_radius, text.markdown_code_fill, text.markdown_code_stroke, text.markdown_code_line_width);
@@ -2841,12 +2853,13 @@ fn measureMarkdownCodeBlockContent(ctx: *DrawContext, source: []const u8, width:
     }
 
     const line_count: f32 = @floatFromInt(@max(physicalCodeLineCount(source), 1));
-    const default_height = @max(line_count * text.markdown_code_line_height, text.markdown_code_font_size);
+    const baseline_from_top = try lineBaselineFromTop(ctx, text.code_font, text.markdown_code_font_size, text.markdown_code_line_height);
+    const default_height = @max(line_count * text.markdown_code_line_height, baseline_from_top);
     return .{
         .left = 0,
         .right = 1,
-        .top_over_baseline = text.markdown_code_font_size,
-        .bottom_under_baseline = @max(default_height - text.markdown_code_font_size, 0),
+        .top_over_baseline = baseline_from_top,
+        .bottom_under_baseline = @max(default_height - baseline_from_top, 0),
     };
 }
 
@@ -2857,8 +2870,8 @@ fn physicalCodeLineCount(source: []const u8) usize {
     return count;
 }
 
-fn markdownCodeBlockPlacement(x: f32, baseline_bl: f32, width: f32, measured: MarkdownCodeBlockMeasure, text: TextPaint) MarkdownCodeBlockPlacement {
-    const box_top = baseline_bl + text.font_size;
+fn markdownCodeBlockPlacement(x: f32, baseline_bl: f32, width: f32, measured: MarkdownCodeBlockMeasure, text: TextPaint, baseline_from_top: f32) MarkdownCodeBlockPlacement {
+    const box_top = baseline_bl + baseline_from_top;
     const first_baseline_bl = box_top - text.markdown_code_pad_y - measured.top_over_baseline;
     const content_left = x + text.markdown_code_pad_x + measured.left;
     const content_right = x + text.markdown_code_pad_x + measured.right;
@@ -2871,7 +2884,7 @@ fn markdownCodeBlockPlacement(x: f32, baseline_bl: f32, width: f32, measured: Ma
         .content_x = x + text.markdown_code_pad_x,
         .content_width = @max(width - text.markdown_code_pad_x * 2, 1),
         .first_baseline_bl = first_baseline_bl,
-        .next_baseline_bl = box_bottom - text.font_size,
+        .next_baseline_bl = box_bottom - baseline_from_top,
     };
 }
 
@@ -2894,7 +2907,8 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
     const table_x = x + stroke_inset;
     const table_width = @max(width - border_width, 1);
     const column_width = table_width / @as(f32, @floatFromInt(columns));
-    var cursor_top_bl = baseline_bl + text.font_size - stroke_inset;
+    const baseline_from_top = try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height);
+    var cursor_top_bl = baseline_bl + baseline_from_top - stroke_inset;
     var body_row_index: usize = 0;
 
     for (table.rows.items) |row| {
@@ -2927,7 +2941,7 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
                 const cell = row.cells.items[column_index];
                 var cell_text = text;
                 cell_text.font = if (row.header) text.bold_font else text.font;
-                var line_bl = cursor_top_bl - text.markdown_table_cell_pad_y - row_top_overhang - text.font_size;
+                var line_bl = cursor_top_bl - text.markdown_table_cell_pad_y - row_top_overhang - baseline_from_top;
                 for (cell.lines.items) |line| {
                     const one_line = [_]Line{line};
                     line_bl = try drawInlineLinesAligned(
@@ -2945,7 +2959,7 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
         }
         cursor_top_bl = row_bottom;
     }
-    return cursor_top_bl - text.font_size;
+    return cursor_top_bl - baseline_from_top;
 }
 
 fn tableCellHorizontalAlign(alignment: core.markdown.Align) HorizontalAlign {
@@ -2988,10 +3002,6 @@ fn drawInlineLinesAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f3
     }
     if (lines.len == 0) cursor_bl -= text.line_height;
     return cursor_bl;
-}
-
-fn guardedNaturalMeasurementWidth(width: f32) f32 {
-    return @max(width + natural_measurement_width_guard, 1);
 }
 
 fn markdownBlocksNaturalInlineAdvance(ctx: *DrawContext, blocks: []const *Block, text: TextPaint, list_depth: usize) !?f32 {
@@ -3083,7 +3093,14 @@ fn markdownCodeBlockConstrainedLogicalWidth(ctx: *DrawContext, block: *const Blo
     const code_paint = markdownCodeBlockPaint(block, text);
     const content_width = @max(width - text.markdown_code_pad_x * 2, 1);
     const measured = try measureMarkdownCodeBlockContent(ctx, source_text, content_width, text, code_paint);
-    const placement = markdownCodeBlockPlacement(0, Defaults.height * 0.5, width, measured, text);
+    const placement = markdownCodeBlockPlacement(
+        0,
+        Defaults.height * 0.5,
+        width,
+        measured,
+        text,
+        try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height),
+    );
     return placement.frame.width;
 }
 
@@ -3203,7 +3220,7 @@ const InlineInkBlock = struct {
 
 fn measureInlineLinesInkBlock(ctx: *DrawContext, lines: []const Line, text: TextPaint, width: f32) !InlineInkBlock {
     const baseline_bl = Defaults.height * 0.5;
-    const content_top_bl = baseline_bl + text.font_size;
+    const content_top_bl = baseline_bl + try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height);
     var measurement = MeasurementScope.init(ctx);
     try measurement.begin();
     defer measurement.deinit();
@@ -3235,7 +3252,7 @@ fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, atoms: 
             .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.markdown_bold_color orelse text.color, text.font_size, null, run.strikethrough, run.underline),
             .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size, null, run.strikethrough, run.underline),
             .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size, null, run.strikethrough, run.underline),
-            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url, run.strikethrough, run.underline),
+            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url, run.strikethrough, true),
             .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size, null, run.strikethrough, run.underline),
         }
     }
@@ -3323,7 +3340,8 @@ fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, widt
     const draw_height = if (compiled) |value| @as(f32, @floatCast(value.layout.height)) else fitted.height;
     const vertical_pad = @max(text.line_height * 0.2, 2.0);
     const block_height = draw_height + vertical_pad * 2.0;
-    const block_top = baseline_bl + text.font_size;
+    const baseline_from_top = try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height);
+    const block_top = baseline_bl + baseline_from_top;
     const block_bottom = block_top - block_height;
     const draw_frame = Frame{
         .x = alignedX(x, width, draw_width, horizontal_align),
@@ -3344,7 +3362,7 @@ fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, widt
         const asset = raw_asset.?;
         try placeRawMathPdf(ctx, draw_frame, asset.path, asset.page_index, source);
     }
-    return block_bottom - text.font_size;
+    return block_bottom - baseline_from_top;
 }
 
 fn displayMathSource(allocator: Allocator, runs: []const Run) ![]const u8 {
@@ -3422,6 +3440,7 @@ fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const
         .color = text.color,
         .width = @max(asset.width * scale, 1),
         .height = target_height,
+        .baseline_from_bottom = asset.baseline_from_bottom * scale,
         .is_space = false,
     });
 }
@@ -3431,6 +3450,8 @@ fn appendIconAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), source: []cons
     errdefer ctx.allocator.free(svg.path);
     const target_height = @max(text.font_size, 1);
     const scale = if (svg.height > 0) target_height / svg.height else 1;
+    const font_metrics = try text_measure.lineMetrics(ctx.allocator, text.font, text.font_size);
+    const font_height = font_metrics.ascent + font_metrics.descent;
     try atoms.append(ctx.allocator, .{
         .content = .{ .icon = .{ .path = svg.path } },
         .text = source,
@@ -3438,6 +3459,7 @@ fn appendIconAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), source: []cons
         .color = text.link_color,
         .width = @max(svg.width * scale, 1),
         .height = target_height,
+        .baseline_from_bottom = target_height * font_metrics.descent / font_height,
         .is_space = false,
     });
 }
@@ -3525,8 +3547,6 @@ fn drawPositionedAtom(ctx: *DrawContext, atom: *Atom, x: f32, baseline_bl: f32, 
             } else {
                 try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom.*, paint, false);
             }
-            if (atom.strikethrough) try drawStrikethrough(ctx, x, y_top, atom.*, paint);
-            if (atom.underline) try drawUnderline(ctx, x, y_top, atom.*, paint);
         },
         .structured_math => |*math| {
             const layout = math.layout;
@@ -3539,11 +3559,11 @@ fn drawPositionedAtom(ctx: *DrawContext, atom: *Atom, x: f32, baseline_bl: f32, 
             }, math.tree, layout, atom.color);
         },
         .raw_math => |math| {
-            const frame = Frame{ .x = x, .y = baseline_bl - atom.height * 0.25, .width = atom.width, .height = atom.height };
+            const frame = Frame{ .x = x, .y = baseline_bl - atom.baseline_from_bottom, .width = atom.width, .height = atom.height };
             try placeRawMathPdf(ctx, frame, math.path, math.page_index, atom.text);
         },
         .icon => |icon| {
-            const frame = Frame{ .x = x, .y = baseline_bl - atom.height * 0.2, .width = atom.width, .height = atom.height };
+            const frame = Frame{ .x = x, .y = baseline_bl - atom.baseline_from_bottom, .width = atom.width, .height = atom.height };
             try drawSvgFrameTinted(ctx, frame, icon.path, atom.color);
         },
     }
@@ -3623,18 +3643,6 @@ fn drawPlainTextAtTopWithOptions(
     return atomLineAdvance(atoms.items, paint);
 }
 
-fn drawStrikethrough(ctx: *DrawContext, x: f32, y_top: f32, atom: Atom, paint: AtomPaint) !void {
-    const y = y_top + paint.font_size * 0.55;
-    const line_width = @max(@as(f32, 1.0), paint.font_size * 0.065);
-    try strokeLine(ctx, x, y, x + @max(atom.width, 1), y, line_width, atom.color, 0, 0);
-}
-
-fn drawUnderline(ctx: *DrawContext, x: f32, y_top: f32, atom: Atom, paint: AtomPaint) !void {
-    const y = y_top + paint.font_size * 1.25;
-    const line_width = @max(@as(f32, 0.8), paint.font_size * 0.055);
-    try strokeLine(ctx, x, y, x + @max(atom.width, 1), y, line_width, atom.color, 0, 0);
-}
-
 fn highlightLanguageFor(ctx: *DrawContext, language: []const u8) ?*const utils.highlight.Language {
     for (ctx.highlight_languages) |*configured| {
         if (std.ascii.eqlIgnoreCase(configured.name, language)) return configured;
@@ -3643,7 +3651,7 @@ fn highlightLanguageFor(ctx: *DrawContext, language: []const u8) ?*const utils.h
 }
 
 fn drawTreeSitterCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: TextPaint, code: CodePaint, font_size: f32, line_height: f32) !void {
-    const first_baseline_bl = baselineBlForBox(frame, font_size);
+    const first_baseline_bl = try baselineBlForBox(ctx, frame, text.code_font, font_size, line_height);
     try drawHighlightedCodeLines(ctx, frame.x, first_baseline_bl, frame.width, content, text.code_font, font_size, line_height, code, text.emoji_spacing, false);
 }
 
@@ -4137,7 +4145,7 @@ fn drawCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: Tex
             return drawTreeSitterCodeBlock(ctx, frame, content, text, code_paint, text.font_size, text.line_height);
         }
     }
-    var cursor_bl = baselineBlForBox(frame, text.font_size);
+    var cursor_bl = try baselineBlForBox(ctx, frame, text.code_font, text.font_size, text.line_height);
     var lines = utils.source.lineIterator(content);
     while (lines.next()) |line_view| {
         const line = line_view.text(content);
@@ -4385,40 +4393,39 @@ fn drawRawText(
     font_size: f32,
     color: Color,
     wrap: bool,
+    decoration: render_emitter.TextDecoration,
 ) !void {
     const baseline_y = y_top + font_size;
     if (ctx.measurement_bounds) |bounds| {
         if (content.len == 0) return;
-        const family_z = try ctx.allocator.dupeZ(u8, font.family);
-        defer ctx.allocator.free(family_z);
-        const content_z = try ctx.allocator.dupeZ(u8, content);
-        defer ctx.allocator.free(content_z);
-        var measurement = std.mem.zeroes(c.SsTextMeasurement);
-        if (c.ss_text_measure_layout(
-            content_z.ptr,
-            family_z.ptr,
-            @intCast(font.weight),
-            core.font.styleCode(font.style),
-            core.font.stretchCode(font.stretch),
-            font_size,
-            width,
-            @intFromBool(wrap),
-            &measurement,
-        ) != 0) return NativePdfError.PangoCreateFailed;
+        const measurement = try text_measure.layout(ctx.allocator, content, font, font_size, width, wrap, .{
+            .strikethrough = decoration.strikethrough,
+            .underline = decoration.underline,
+        });
+        const layout_y = baseline_y - measurement.first_baseline;
         const ink = measurement.ink_bounds;
         bounds.include(.{
             .x = x + ink.x,
-            .y = baseline_y - measurement.first_baseline + ink.y,
+            .y = layout_y + ink.y,
             .width = ink.width,
             .height = ink.height,
         });
+        if (measurement.decoration_bounds) |decorated| bounds.include(.{
+            .x = x + decorated.x,
+            .y = layout_y + decorated.y,
+            .width = decorated.width,
+            .height = decorated.height,
+        });
         return;
     }
-    try activeEmitter(ctx).textBaseline(ctx.allocator, x, baseline_y, width, content, font, font_size, color, wrap);
+    try activeEmitter(ctx).textBaseline(ctx.allocator, x, baseline_y, width, content, font, font_size, color, wrap, decoration);
 }
 
 fn drawAtomRawText(ctx: *DrawContext, x: f32, y_top: f32, width: f32, atom: Atom, paint: AtomPaint, wrap: bool) !void {
-    try drawRawText(ctx, x, y_top, width, atom.text, atom.font, paint.font_size, atom.color, wrap);
+    try drawRawText(ctx, x, y_top, width, atom.text, atom.font, paint.font_size, atom.color, wrap, .{
+        .strikethrough = atom.strikethrough,
+        .underline = atom.underline,
+    });
 }
 
 fn drawLinkedRawText(
@@ -4458,39 +4465,20 @@ fn isInternalLink(url: []const u8) bool {
 }
 
 fn measureText(ctx: *DrawContext, content: []const u8, font: FontFace, font_size: f32) !f32 {
-    if (content.len == 0) return 0;
-    const family_z = try ctx.allocator.dupeZ(u8, font.family);
-    defer ctx.allocator.free(family_z);
-    const content_z = try ctx.allocator.dupeZ(u8, content);
-    defer ctx.allocator.free(content_z);
-    return @floatCast(c.ss_text_measure_text(
-        content_z.ptr,
-        family_z.ptr,
-        @intCast(font.weight),
-        core.font.styleCode(font.style),
-        core.font.stretchCode(font.stretch),
-        font_size,
-    ));
+    return text_measure.advanceWidth(ctx.allocator, content, font, font_size);
 }
 
 fn measureTextVisualWidth(ctx: *DrawContext, content: []const u8, font: FontFace, font_size: f32) !f32 {
-    if (content.len == 0) return 0;
-    const family_z = try ctx.allocator.dupeZ(u8, font.family);
-    defer ctx.allocator.free(family_z);
-    const content_z = try ctx.allocator.dupeZ(u8, content);
-    defer ctx.allocator.free(content_z);
-    return @floatCast(c.ss_text_measure_text_visual_width(
-        content_z.ptr,
-        family_z.ptr,
-        @intCast(font.weight),
-        core.font.styleCode(font.style),
-        core.font.stretchCode(font.stretch),
-        font_size,
-    ));
+    return text_measure.visualWidth(ctx.allocator, content, font, font_size);
 }
 
-fn baselineBlForBox(frame: Frame, font_size: f32) f32 {
-    return frame.y + frame.height - font_size;
+fn lineBaselineFromTop(ctx: *DrawContext, font: FontFace, font_size: f32, line_height: f32) !f32 {
+    const metrics = try text_measure.lineMetrics(ctx.allocator, font, font_size);
+    return metrics.ascent + (line_height - metrics.ascent - metrics.descent) / 2;
+}
+
+fn baselineBlForBox(ctx: *DrawContext, frame: Frame, font: FontFace, font_size: f32, line_height: f32) !f32 {
+    return frame.y + frame.height - try lineBaselineFromTop(ctx, font, font_size, line_height);
 }
 
 fn baselineTop(baseline_bl: f32, font_size: f32) f32 {
@@ -4624,6 +4612,7 @@ fn readMathReference(ctx: *DrawContext, reference_path: []const u8) !MathAsset {
     const page_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
     const width_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
     const height_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
+    const baseline_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
     const pdf_name = fields.next() orelse return NativePdfError.InvalidPdfCache;
     if (fields.next() != null or pdf_name.len == 0 or !std.mem.eql(u8, std.fs.path.basename(pdf_name), pdf_name)) {
         return NativePdfError.InvalidPdfCache;
@@ -4631,14 +4620,23 @@ fn readMathReference(ctx: *DrawContext, reference_path: []const u8) !MathAsset {
     const page_index = std.fmt.parseInt(usize, page_text, 10) catch return NativePdfError.InvalidPdfCache;
     const width = std.fmt.parseFloat(f32, width_text) catch return NativePdfError.InvalidPdfCache;
     const height = std.fmt.parseFloat(f32, height_text) catch return NativePdfError.InvalidPdfCache;
-    if (!std.math.isFinite(width) or !std.math.isFinite(height) or width <= 0 or height <= 0) {
+    const baseline_from_bottom = std.fmt.parseFloat(f32, baseline_text) catch return NativePdfError.InvalidPdfCache;
+    if (!std.math.isFinite(width) or !std.math.isFinite(height) or !std.math.isFinite(baseline_from_bottom) or
+        width <= 0 or height <= 0)
+    {
         return NativePdfError.InvalidPdfCache;
     }
     const directory = std.fs.path.dirname(reference_path) orelse ".";
     const pdf_path = try std.fs.path.join(ctx.allocator, &.{ directory, pdf_name });
     errdefer ctx.allocator.free(pdf_path);
     if (!try cachedPdfAvailable(ctx, pdf_path)) return NativePdfError.InvalidPdfCache;
-    return .{ .path = pdf_path, .page_index = page_index, .width = width, .height = height };
+    return .{
+        .path = pdf_path,
+        .page_index = page_index,
+        .width = width,
+        .height = height,
+        .baseline_from_bottom = baseline_from_bottom,
+    };
 }
 
 fn naturalAssetFrame(frame: Frame, size: Size) Frame {
@@ -4746,13 +4744,22 @@ fn renderMathToPdf(ctx: *DrawContext, source: []const u8, preamble: []const TexP
     defer ctx.allocator.free(tex_path);
     const pdf_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.pdf" });
     defer ctx.allocator.free(pdf_path);
+    const metrics_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.ssm" });
+    defer ctx.allocator.free(metrics_path);
     const tex = try mathDocumentSource(ctx, source, preamble, kind);
     defer ctx.allocator.free(tex);
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = tex, .flags = .{ .truncate = true } });
     try runChecked(ctx, &.{ "pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
     try publishGeneratedPdf(ctx, pdf_path, output_pdf_path);
     const size = try pdfAssetSize(ctx, output_pdf_path, null, .math_pdf);
-    try writeMathReference(ctx, reference_path, output_pdf_path, 0, size.width, size.height);
+    const baseline_from_bottom = if (kind == .raw_block)
+        0
+    else blk: {
+        const ratios = try readMathBaselineRatios(ctx, metrics_path, 1);
+        defer ctx.allocator.free(ratios);
+        break :blk size.height * ratios[0];
+    };
+    try writeMathReference(ctx, reference_path, output_pdf_path, 0, size.width, size.height, baseline_from_bottom);
     return (try cachedMathReference(ctx, reference_path)) orelse NativePdfError.InvalidPdfCache;
 }
 
@@ -4826,12 +4833,46 @@ fn isValidIconName(name: []const u8) bool {
     return true;
 }
 
+fn readMathBaselineRatios(ctx: *DrawContext, path: []const u8, expected_count: usize) ![]f64 {
+    const contents = std.Io.Dir.cwd().readFileAlloc(ctx.io, path, ctx.allocator, .limited(1024 * 1024)) catch {
+        return NativePdfError.AssetConversionFailed;
+    };
+    defer ctx.allocator.free(contents);
+    const ratios = try ctx.allocator.alloc(f64, expected_count);
+    errdefer ctx.allocator.free(ratios);
+    var count: usize = 0;
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        if (count >= expected_count) return NativePdfError.AssetConversionFailed;
+        var fields = std.mem.tokenizeAny(u8, trimmed, " \t,");
+        const width_sp = std.fmt.parseInt(i64, fields.next() orelse return NativePdfError.AssetConversionFailed, 10) catch {
+            return NativePdfError.AssetConversionFailed;
+        };
+        const height_sp = std.fmt.parseInt(i64, fields.next() orelse return NativePdfError.AssetConversionFailed, 10) catch {
+            return NativePdfError.AssetConversionFailed;
+        };
+        const depth_sp = std.fmt.parseInt(i64, fields.next() orelse return NativePdfError.AssetConversionFailed, 10) catch {
+            return NativePdfError.AssetConversionFailed;
+        };
+        const total_height_sp = std.math.add(i64, height_sp, depth_sp) catch return NativePdfError.AssetConversionFailed;
+        if (fields.next() != null or width_sp <= 0 or total_height_sp <= 0) {
+            return NativePdfError.AssetConversionFailed;
+        }
+        ratios[count] = @as(f64, @floatFromInt(depth_sp)) / @as(f64, @floatFromInt(total_height_sp));
+        count += 1;
+    }
+    if (count != expected_count) return NativePdfError.AssetConversionFailed;
+    return ratios;
+}
+
 fn mathDocumentSource(ctx: *DrawContext, source: []const u8, preamble: []const TexPreambleEntry, kind: MathKind) ![]const u8 {
     const preamble_lines = try mathPreambleLines(ctx, preamble);
     defer ctx.allocator.free(preamble_lines);
     const fragment = try mathTexFragment(ctx.allocator, source, kind);
     defer ctx.allocator.free(fragment);
-    return std.fmt.allocPrint(ctx.allocator,
+    if (kind == .raw_block) return std.fmt.allocPrint(ctx.allocator,
         \\ \documentclass[border=0pt]{{standalone}}
         \\ \usepackage{{amsmath,amssymb}}
         \\ \usepackage{{graphicx}}
@@ -4839,6 +4880,22 @@ fn mathDocumentSource(ctx: *DrawContext, source: []const u8, preamble: []const T
         \\{s}
         \\ \begin{{document}}
         \\{s}
+        \\ \end{{document}}
+        \\
+    , .{ preamble_lines, fragment });
+    return std.fmt.allocPrint(ctx.allocator,
+        \\ \documentclass[border=0pt]{{standalone}}
+        \\ \usepackage{{amsmath,amssymb}}
+        \\ \usepackage{{graphicx}}
+        \\ \usepackage{{xcolor}}
+        \\{s}
+        \\ \newwrite\ssmetrics
+        \\ \begin{{document}}
+        \\ \immediate\openout\ssmetrics=main.ssm
+        \\ \setbox0=\hbox{{{s}}}
+        \\ \immediate\write\ssmetrics{{\number\wd0,\number\ht0,\number\dp0}}
+        \\ \copy0
+        \\ \immediate\closeout\ssmetrics
         \\ \end{{document}}
         \\
     , .{ preamble_lines, fragment });
@@ -4857,29 +4914,32 @@ fn mathBatchDocumentSource(ctx: *DrawContext, entries: []const MathBatchEntry) !
         \\ \usepackage{amsmath,amssymb}
         \\ \usepackage{graphicx}
         \\ \usepackage{xcolor}
+        \\ \newwrite\ssmetrics
         \\
     );
     try out.appendSlice(ctx.allocator, preamble_lines);
     try out.appendSlice(ctx.allocator,
         \\ \pagestyle{empty}
         \\ \begin{document}
+        \\ \immediate\openout\ssmetrics=main.ssm
         \\
     );
     for (entries) |entry| {
         const fragment = try mathTexFragment(ctx.allocator, entry.source, entry.kind);
         defer ctx.allocator.free(fragment);
-        try out.appendSlice(ctx.allocator,
-            \\ \begin{preview}
-            \\
-        );
+        try out.appendSlice(ctx.allocator, "\\setbox0=\\hbox{");
         try out.appendSlice(ctx.allocator, fragment);
-        if (fragment.len == 0 or fragment[fragment.len - 1] != '\n') try out.append(ctx.allocator, '\n');
         try out.appendSlice(ctx.allocator,
+            \\ }
+            \\ \immediate\write\ssmetrics{\number\wd0,\number\ht0,\number\dp0}
+            \\ \begin{preview}
+            \\ \copy0
             \\ \end{preview}
             \\
         );
     }
     try out.appendSlice(ctx.allocator,
+        \\ \immediate\closeout\ssmetrics
         \\ \end{document}
         \\
     );

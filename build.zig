@@ -567,6 +567,7 @@ fn addTestStep(
         import("pdf_ffi", modules.pdf_ffi),
         import("render", modules.render),
         import("render_compile", render_compile_mod),
+        import("render_emitter", modules.render_emitter),
         import("render_resources", modules.render_resources),
     }, null);
     const render_compile_spec_tests = b.addTest(.{ .root_module = render_compile_spec_mod });
