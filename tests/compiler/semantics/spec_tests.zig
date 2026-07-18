@@ -94,6 +94,16 @@ fn expectFixtureObjectFieldPath(fixture: []const u8, root_key: []const u8, field
     try compiler_semantics.expectObjectFieldPath(testing.io, allocator, path, source, root_key, field_path, expected);
 }
 
+fn expectFixtureLoweringErrorDiagnostic(fixture: []const u8, expected_message: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try fixturePath(allocator, fixture);
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, allocator, .limited(256 * 1024));
+    try compiler_semantics.expectLoweringErrorDiagnostic(testing.io, allocator, path, source, expected_message);
+}
+
 fn expectObjectContentWithFile(source: []const u8, file_name: []const u8, file_content: []const u8, expected: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1544,8 +1554,11 @@ test "compiler semantics: structured style values expand to render properties" {
     try expectObjectFieldPath(source, "text", &.{ "font", "weight" }, "700");
 }
 
-test "compiler semantics: set_prop updates an existing property" {
-    try expectFixtureObjectFieldPath("theme/set-prop", "text", &.{"size"}, "37");
+test "compiler semantics: set_prop rejects a duplicate property definition" {
+    try expectFixtureLoweringErrorDiagnostic(
+        "theme/set-prop",
+        "DuplicatePropertyDefinition: property 'text' is already defined on this target",
+    );
 }
 
 test "compiler semantics: text carries themed markdown heading styles" {
