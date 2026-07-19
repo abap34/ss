@@ -3,6 +3,7 @@ const core = @import("core");
 const ast = @import("ast");
 const registry = @import("../language/registry.zig");
 const eval_value = @import("value.zig");
+const path_eval = @import("path.zig");
 
 pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!core.Value {
     try ctx.checkArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity);
@@ -533,6 +534,13 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const object_id = try ctx.evalObjectArg(call, 0);
             try ctx.checkAssetExists(object_id);
             break :blk .{ .object = object_id };
+        },
+        .path => blk: {
+            var values = std.ArrayList(core.Value).empty;
+            defer values.deinit(ctx.state.allocator);
+            defer deinitValues(ctx.state.allocator, values.items);
+            for (call.args.items) |arg| try values.append(ctx.state.allocator, try ctx.evalExprValue(arg));
+            break :blk .{ .path = try path_eval.build(ctx.state.allocator, values.items) };
         },
     };
 }

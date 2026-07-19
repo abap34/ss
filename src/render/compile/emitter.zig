@@ -61,6 +61,16 @@ pub const Emitter = struct {
         try self.page.appendRoundedRect(allocator, self.node_id, rect, radius, fill, stroke, line_width);
     }
 
+    pub fn vectorPath(
+        self: *Emitter,
+        allocator: Allocator,
+        commands: []const render.PathCommand,
+        fill: render.FillPaint,
+        stroke: ?render.StrokePaint,
+    ) !void {
+        try self.page.appendVectorPath(allocator, self.node_id, commands, fill, stroke);
+    }
+
     pub fn textBaseline(
         self: *Emitter,
         allocator: Allocator,

@@ -1412,6 +1412,7 @@ pub const DocumentState = struct {
             .string => .string,
             .enum_case => .enum_case,
             .record => .record,
+            .path => .path,
             .number => .number,
             .boolean => .boolean,
             .constraints => .constraints,

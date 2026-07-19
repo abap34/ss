@@ -6,7 +6,6 @@ const c = pdf_ffi.c;
 const Color = core.render_policy.Color;
 const FontFace = core.font.Face;
 const HorizontalAlign = core.render_policy.HorizontalAlign;
-const ShapeMarker = core.render_policy.ShapeMarker;
 const TexPreambleEntry = core.render_env.TexPreambleEntry;
 
 pub const Context = struct {
@@ -164,7 +163,8 @@ fn hashResolvedRender(hasher: *std.hash.Wyhash, render: core.render_policy.Resol
     hashOptionalMathPaint(hasher, render.math);
     hashOptionalAssetPaint(hasher, render.asset);
     hashOptionalCodePaint(hasher, render.code);
-    hashOptionalShapePaint(hasher, render.shape);
+    hashOptionalVectorPathPaint(hasher, render.vector_path);
+    hashOptionalConnectorPaint(hasher, render.connector);
     hashChromePaint(hasher, render.chrome);
     hashUnderlinePaint(hasher, render.underline);
     hashRulePaint(hasher, render.rule);
@@ -276,23 +276,105 @@ fn hashOptionalCodePaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.Co
     }
 }
 
-fn hashOptionalShapePaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.ShapePaint) void {
+fn hashOptionalVectorPathPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.VectorPathPaint) void {
     hashBool(hasher, maybe != null);
-    if (maybe) |shape| {
-        hashOptionalColor(hasher, shape.stroke);
-        hashF32(hasher, shape.line_width);
-        hashBool(hasher, shape.dash != null);
-        if (shape.dash) |dash| {
-            hashF32(hasher, dash.on);
-            hashF32(hasher, dash.off);
+    if (maybe) |path| {
+        hashCorePath(hasher, path.path);
+        hashVectorFill(hasher, path.fill);
+        hashOptionalVectorStroke(hasher, path.stroke);
+    }
+}
+
+fn hashVectorFill(hasher: *std.hash.Wyhash, fill: core.render_policy.VectorFillPaint) void {
+    hashString(hasher, @tagName(fill.kind));
+    hashOptionalColor(hasher, fill.color);
+    hashOptionalColor(hasher, fill.color2);
+    hashF32(hasher, fill.start_x);
+    hashF32(hasher, fill.start_y);
+    hashF32(hasher, fill.start_radius);
+    hashF32(hasher, fill.end_x);
+    hashF32(hasher, fill.end_y);
+    hashF32(hasher, fill.end_radius);
+    hashString(hasher, @tagName(fill.spread));
+    hashString(hasher, @tagName(fill.space));
+    hashString(hasher, @tagName(fill.rule));
+    hashF32(hasher, fill.opacity);
+    hashBool(hasher, fill.pattern != null);
+    if (fill.pattern) |pattern| {
+        hashCorePath(hasher, pattern.path);
+        hashF32(hasher, pattern.cell_width);
+        hashF32(hasher, pattern.cell_height);
+        hashF32(hasher, pattern.xx);
+        hashF32(hasher, pattern.yx);
+        hashF32(hasher, pattern.xy);
+        hashF32(hasher, pattern.yy);
+        hashF32(hasher, pattern.x0);
+        hashF32(hasher, pattern.y0);
+        hashString(hasher, @tagName(pattern.space));
+        hashOptionalColor(hasher, pattern.fill);
+        hashOptionalVectorStroke(hasher, pattern.stroke);
+    }
+}
+
+fn hashCorePath(hasher: *std.hash.Wyhash, path: core.Path) void {
+    hashU64(hasher, path.commands.len);
+    for (path.commands) |command| {
+        hashString(hasher, @tagName(command));
+        switch (command) {
+            .move_to, .line_to => |point| {
+                hashF32(hasher, point.x);
+                hashF32(hasher, point.y);
+            },
+            .cubic_to => |cubic| {
+                hashF32(hasher, cubic.control1.x);
+                hashF32(hasher, cubic.control1.y);
+                hashF32(hasher, cubic.control2.x);
+                hashF32(hasher, cubic.control2.y);
+                hashF32(hasher, cubic.end.x);
+                hashF32(hasher, cubic.end.y);
+            },
+            .close => {},
         }
-        hashF32(hasher, shape.start_x);
-        hashF32(hasher, shape.start_y);
-        hashF32(hasher, shape.end_x);
-        hashF32(hasher, shape.end_y);
-        hashShapeMarker(hasher, shape.marker_start);
-        hashShapeMarker(hasher, shape.marker_end);
-        hashF32(hasher, shape.marker_size);
+    }
+}
+
+fn hashOptionalVectorStroke(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.VectorStrokePaint) void {
+    hashBool(hasher, maybe != null);
+    if (maybe) |stroke| {
+        hashColor(hasher, stroke.color);
+        hashF32(hasher, stroke.width);
+        hashString(hasher, @tagName(stroke.cap));
+        hashString(hasher, @tagName(stroke.join));
+        hashF32(hasher, stroke.miter_limit);
+        hashU64(hasher, stroke.dash.count);
+        for (stroke.dash.slice()) |entry| hashF32(hasher, entry);
+        hashF32(hasher, stroke.dash.offset);
+    }
+}
+
+fn hashOptionalConnectorPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.ConnectorPaint) void {
+    hashBool(hasher, maybe != null);
+    if (maybe) |connector| {
+        hashU64(hasher, connector.source);
+        hashU64(hasher, connector.target);
+        hashString(hasher, @tagName(connector.source_anchor));
+        hashString(hasher, @tagName(connector.target_anchor));
+        hashString(hasher, @tagName(connector.route));
+        hashF32(hasher, connector.curve);
+        hashOptionalVectorStroke(hasher, connector.stroke);
+        hashOptionalMarker(hasher, connector.marker_start);
+        hashOptionalMarker(hasher, connector.marker_end);
+    }
+}
+
+fn hashOptionalMarker(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.MarkerPaint) void {
+    hashBool(hasher, maybe != null);
+    if (maybe) |marker| {
+        hashCorePath(hasher, marker.path);
+        hashF32(hasher, marker.width);
+        hashF32(hasher, marker.height);
+        hashVectorFill(hasher, marker.fill);
+        hashOptionalVectorStroke(hasher, marker.stroke);
     }
 }
 
@@ -364,10 +446,6 @@ fn hashFontFace(hasher: *std.hash.Wyhash, face: FontFace) void {
 }
 
 fn hashHorizontalAlign(hasher: *std.hash.Wyhash, value: HorizontalAlign) void {
-    hashU32(hasher, @intFromEnum(value));
-}
-
-fn hashShapeMarker(hasher: *std.hash.Wyhash, value: ShapeMarker) void {
     hashU32(hasher, @intFromEnum(value));
 }
 

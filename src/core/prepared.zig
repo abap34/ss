@@ -220,7 +220,7 @@ pub fn prepareObjectWithRender(
             .content_start = 0,
             .content_end = content.len,
         }),
-        .code, .shape, .chrome_only => {},
+        .code, .vector_path, .connector, .chrome_only => {},
     }
     const asset_dep_slice = try asset_deps.toOwnedSlice(allocator);
     asset_deps = .empty;

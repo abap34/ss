@@ -1,3 +1,5 @@
+import std:core/classes as classes
+
 fn/! obj(text_value: String, role_name: String, payload_name: String) -> Object
   return new(text_value, role_name, payload_name)
 end
@@ -43,9 +45,14 @@ fn/! rule_obj() -> Object
   return obj
 end
 
-fn/! shape_obj() -> Object
-  let obj = txt_obj("", "shape")
+fn/! path_obj(path_value: Path) -> Object
+  let obj = txt_obj("", "vector_path")
+  obj.path = path_value
   return obj
+end
+
+fn/! connector_obj() -> Object
+  return txt_obj("", "connector")
 end
 
 fn/! panel_obj() -> Object

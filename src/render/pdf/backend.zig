@@ -306,6 +306,7 @@ fn replayItem(
             value.dash_on,
             value.dash_off,
         ),
+        .vector_path => |value| try replayVectorPath(allocator, pdf, value),
         .rounded_rect => |value| c.ss_pdf_fill_stroke_rounded_rect(
             pdf,
             value.rect.x,
@@ -341,6 +342,184 @@ fn replayItem(
         .math => |value| try replayMath(allocator, pdf, ir, value, resources),
         .pdf_page => return error.UnsupportedAssetType,
     }
+}
+
+fn replayVectorPath(allocator: Allocator, pdf: *c.SsPdf, value: render_ir.VectorPath) !void {
+    switch (value.fill.base) {
+        .none => {},
+        .solid => |color| {
+            appendPdfPath(pdf, value.commands, .{}, 0, 0);
+            c.ss_pdf_path_fill_solid(pdf, color.r, color.g, color.b, value.fill.opacity, @intFromEnum(value.fill.rule));
+        },
+        .linear => |gradient| {
+            const arrays = try gradientArrays(allocator, gradient.stops);
+            defer arrays.deinit(allocator);
+            appendPdfPath(pdf, value.commands, .{}, 0, 0);
+            c.ss_pdf_path_fill_linear(
+                pdf,
+                gradient.start.x,
+                gradient.start.y,
+                gradient.end.x,
+                gradient.end.y,
+                arrays.offsets.ptr,
+                arrays.colors.ptr,
+                gradient.stops.len,
+                @intFromEnum(gradient.spread),
+                value.fill.opacity,
+                @intFromEnum(value.fill.rule),
+            );
+        },
+        .radial => |gradient| {
+            const arrays = try gradientArrays(allocator, gradient.stops);
+            defer arrays.deinit(allocator);
+            appendPdfPath(pdf, value.commands, .{}, 0, 0);
+            c.ss_pdf_path_fill_radial(
+                pdf,
+                gradient.start_center.x,
+                gradient.start_center.y,
+                gradient.start_radius,
+                gradient.end_center.x,
+                gradient.end_center.y,
+                gradient.end_radius,
+                arrays.offsets.ptr,
+                arrays.colors.ptr,
+                gradient.stops.len,
+                @intFromEnum(gradient.spread),
+                value.fill.opacity,
+                @intFromEnum(value.fill.rule),
+            );
+        },
+    }
+    if (value.fill.overlay) |pattern| try replayTilePattern(pdf, value, pattern);
+    if (value.stroke) |stroke| {
+        appendPdfPath(pdf, value.commands, .{}, 0, 0);
+        strokePdfPath(pdf, stroke, 1);
+    }
+}
+
+const GradientArrays = struct {
+    offsets: []f64,
+    colors: []f64,
+
+    fn deinit(self: GradientArrays, allocator: Allocator) void {
+        allocator.free(self.offsets);
+        allocator.free(self.colors);
+    }
+};
+
+fn gradientArrays(allocator: Allocator, stops: []const render_ir.GradientStop) !GradientArrays {
+    const offsets = try allocator.alloc(f64, stops.len);
+    errdefer allocator.free(offsets);
+    const colors = try allocator.alloc(f64, stops.len * 3);
+    errdefer allocator.free(colors);
+    for (stops, 0..) |stop, index| {
+        offsets[index] = stop.offset;
+        colors[index * 3] = stop.color.r;
+        colors[index * 3 + 1] = stop.color.g;
+        colors[index * 3 + 2] = stop.color.b;
+    }
+    return .{ .offsets = offsets, .colors = colors };
+}
+
+fn replayTilePattern(pdf: *c.SsPdf, value: render_ir.VectorPath, pattern: render_ir.TilePatternPaint) !void {
+    c.ss_pdf_state_save(pdf);
+    defer c.ss_pdf_state_restore(pdf);
+    appendPdfPath(pdf, value.commands, .{}, 0, 0);
+    c.ss_pdf_path_clip(pdf, @intFromEnum(value.fill.rule));
+
+    const bounds = try inverseTransformBounds(value.header.bounds, pattern.transform);
+    const first_x = @floor(bounds.x / pattern.cell_width) * pattern.cell_width - pattern.cell_width;
+    const first_y = @floor(bounds.y / pattern.cell_height) * pattern.cell_height - pattern.cell_height;
+    const last_x = bounds.x + bounds.width + pattern.cell_width;
+    const last_y = bounds.y + bounds.height + pattern.cell_height;
+    var tile_count: usize = 0;
+    var y = first_y;
+    while (y <= last_y) : (y += pattern.cell_height) {
+        var x = first_x;
+        while (x <= last_x) : (x += pattern.cell_width) {
+            tile_count += 1;
+            if (tile_count > 1_000_000) return error.InvalidItemGeometry;
+            if (pattern.fill) |color| {
+                appendPdfPath(pdf, pattern.commands, pattern.transform, x, y);
+                c.ss_pdf_path_fill_solid(pdf, color.r, color.g, color.b, value.fill.opacity, @intFromEnum(value.fill.rule));
+            }
+            if (pattern.stroke) |stroke| {
+                appendPdfPath(pdf, pattern.commands, pattern.transform, x, y);
+                strokePdfPath(pdf, stroke, value.fill.opacity);
+            }
+        }
+    }
+}
+
+fn inverseTransformBounds(bounds: render_ir.Rect, transform: render_ir.Transform) !render_ir.Rect {
+    const determinant = transform.xx * transform.yy - transform.xy * transform.yx;
+    if (!std.math.isFinite(determinant) or @abs(determinant) <= 1e-12) return error.InvalidItemGeometry;
+    const corners = [_]render_ir.Point{
+        .{ .x = bounds.x, .y = bounds.y },
+        .{ .x = bounds.x + bounds.width, .y = bounds.y },
+        .{ .x = bounds.x, .y = bounds.y + bounds.height },
+        .{ .x = bounds.x + bounds.width, .y = bounds.y + bounds.height },
+    };
+    var min_x = std.math.inf(f64);
+    var min_y = std.math.inf(f64);
+    var max_x = -std.math.inf(f64);
+    var max_y = -std.math.inf(f64);
+    for (corners) |corner| {
+        const x = corner.x - transform.x0;
+        const y = corner.y - transform.y0;
+        const local_x = (transform.yy * x - transform.xy * y) / determinant;
+        const local_y = (-transform.yx * x + transform.xx * y) / determinant;
+        min_x = @min(min_x, local_x);
+        min_y = @min(min_y, local_y);
+        max_x = @max(max_x, local_x);
+        max_y = @max(max_y, local_y);
+    }
+    return .{ .x = min_x, .y = min_y, .width = max_x - min_x, .height = max_y - min_y };
+}
+
+fn strokePdfPath(pdf: *c.SsPdf, stroke: render_ir.StrokePaint, opacity: f64) void {
+    c.ss_pdf_path_stroke(
+        pdf,
+        stroke.color.r,
+        stroke.color.g,
+        stroke.color.b,
+        opacity,
+        stroke.width,
+        @intFromEnum(stroke.cap),
+        @intFromEnum(stroke.join),
+        stroke.miter_limit,
+        if (stroke.dash.len == 0) null else stroke.dash.ptr,
+        stroke.dash.len,
+        stroke.dash_offset,
+    );
+}
+
+fn appendPdfPath(pdf: *c.SsPdf, commands: []const render_ir.PathCommand, transform: render_ir.Transform, offset_x: f64, offset_y: f64) void {
+    c.ss_pdf_path_new(pdf);
+    for (commands) |command| switch (command) {
+        .move_to => |point| {
+            const value = transformPoint(point, transform, offset_x, offset_y);
+            c.ss_pdf_path_move_to(pdf, value.x, value.y);
+        },
+        .line_to => |point| {
+            const value = transformPoint(point, transform, offset_x, offset_y);
+            c.ss_pdf_path_line_to(pdf, value.x, value.y);
+        },
+        .cubic_to => |cubic| {
+            const control1 = transformPoint(cubic.control1, transform, offset_x, offset_y);
+            const control2 = transformPoint(cubic.control2, transform, offset_x, offset_y);
+            const end = transformPoint(cubic.end, transform, offset_x, offset_y);
+            c.ss_pdf_path_curve_to(pdf, control1.x, control1.y, control2.x, control2.y, end.x, end.y);
+        },
+        .close => c.ss_pdf_path_close(pdf),
+    };
+}
+
+fn transformPoint(point: render_ir.Point, transform: render_ir.Transform, offset_x: f64, offset_y: f64) render_ir.Point {
+    return .{
+        .x = transform.xx * (point.x + offset_x) + transform.xy * (point.y + offset_y) + transform.x0,
+        .y = transform.yx * (point.x + offset_x) + transform.yy * (point.y + offset_y) + transform.y0,
+    };
 }
 
 fn itemEffects(header: render_ir.ItemHeader) c.SsLayerEffects {

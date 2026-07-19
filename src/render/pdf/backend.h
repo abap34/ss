@@ -246,6 +246,57 @@ void ss_pdf_fill_stroke_rounded_rect(
     double stroke_b,
     double line_width
 );
+void ss_pdf_state_save(SsPdf *pdf);
+void ss_pdf_state_restore(SsPdf *pdf);
+void ss_pdf_path_new(SsPdf *pdf);
+void ss_pdf_path_move_to(SsPdf *pdf, double x, double y);
+void ss_pdf_path_line_to(SsPdf *pdf, double x, double y);
+void ss_pdf_path_curve_to(SsPdf *pdf, double x1, double y1, double x2, double y2, double x3, double y3);
+void ss_pdf_path_close(SsPdf *pdf);
+void ss_pdf_path_clip(SsPdf *pdf, int fill_rule);
+void ss_pdf_path_fill_solid(SsPdf *pdf, double r, double g, double b, double alpha, int fill_rule);
+void ss_pdf_path_fill_linear(
+    SsPdf *pdf,
+    double x1,
+    double y1,
+    double x2,
+    double y2,
+    const double *offsets,
+    const double *colors,
+    size_t stop_count,
+    int spread,
+    double alpha,
+    int fill_rule
+);
+void ss_pdf_path_fill_radial(
+    SsPdf *pdf,
+    double x1,
+    double y1,
+    double radius1,
+    double x2,
+    double y2,
+    double radius2,
+    const double *offsets,
+    const double *colors,
+    size_t stop_count,
+    int spread,
+    double alpha,
+    int fill_rule
+);
+void ss_pdf_path_stroke(
+    SsPdf *pdf,
+    double r,
+    double g,
+    double b,
+    double alpha,
+    double line_width,
+    int line_cap,
+    int line_join,
+    double miter_limit,
+    const double *dashes,
+    size_t dash_count,
+    double dash_offset
+);
 int ss_pdf_begin_uri_link(SsPdf *pdf, double x, double y, double width, double height, const char *uri);
 int ss_pdf_begin_dest_link(SsPdf *pdf, double x, double y, double width, double height, const char *dest);
 void ss_pdf_end_link(SsPdf *pdf);

@@ -172,6 +172,12 @@ fn pageDigest(page_value: anytype, comptime include_metadata: bool) Digest {
                 hash.float(value.dash_on);
                 hash.float(value.dash_off);
             },
+            .vector_path => |value| {
+                hashPathCommands(&hash, value.commands);
+                hashFill(&hash, value.fill);
+                hash.boolean(value.stroke != null);
+                if (value.stroke) |stroke| hashStroke(&hash, stroke);
+            },
             .rounded_rect => |value| {
                 hashRect(&hash, value.rect);
                 hash.float(value.radius);
@@ -252,6 +258,75 @@ fn pageDigest(page_value: anytype, comptime include_metadata: bool) Digest {
     return hash.final();
 }
 
+fn hashPathCommands(hash: *Hash, commands: anytype) void {
+    hash.integer(commands.len);
+    for (commands) |command| {
+        hash.tag(command);
+        switch (command) {
+            .move_to, .line_to => |point| hashPoint(hash, point),
+            .cubic_to => |cubic| {
+                hashPoint(hash, cubic.control1);
+                hashPoint(hash, cubic.control2);
+                hashPoint(hash, cubic.end);
+            },
+            .close => {},
+        }
+    }
+}
+
+fn hashFill(hash: *Hash, fill: anytype) void {
+    hash.tag(fill.base);
+    switch (fill.base) {
+        .none => {},
+        .solid => |color| hashColor(hash, color),
+        .linear => |gradient| {
+            hashPoint(hash, gradient.start);
+            hashPoint(hash, gradient.end);
+            hashStops(hash, gradient.stops);
+            hash.tag(gradient.spread);
+        },
+        .radial => |gradient| {
+            hashPoint(hash, gradient.start_center);
+            hash.float(gradient.start_radius);
+            hashPoint(hash, gradient.end_center);
+            hash.float(gradient.end_radius);
+            hashStops(hash, gradient.stops);
+            hash.tag(gradient.spread);
+        },
+    }
+    hash.boolean(fill.overlay != null);
+    if (fill.overlay) |pattern| {
+        hashPathCommands(hash, pattern.commands);
+        hash.float(pattern.cell_width);
+        hash.float(pattern.cell_height);
+        hashTransform(hash, pattern.transform);
+        hashOptionalColor(hash, pattern.fill);
+        hash.boolean(pattern.stroke != null);
+        if (pattern.stroke) |stroke| hashStroke(hash, stroke);
+    }
+    hash.tag(fill.rule);
+    hash.float(fill.opacity);
+}
+
+fn hashStops(hash: *Hash, stops: anytype) void {
+    hash.integer(stops.len);
+    for (stops) |stop| {
+        hash.float(stop.offset);
+        hashColor(hash, stop.color);
+    }
+}
+
+fn hashStroke(hash: *Hash, stroke: anytype) void {
+    hashColor(hash, stroke.color);
+    hash.float(stroke.width);
+    hash.tag(stroke.cap);
+    hash.tag(stroke.join);
+    hash.float(stroke.miter_limit);
+    hash.integer(stroke.dash.len);
+    for (stroke.dash) |entry| hash.float(entry);
+    hash.float(stroke.dash_offset);
+}
+
 fn hashHeader(hash: *Hash, header: anytype, comptime include_metadata: bool) void {
     if (include_metadata) {
         hash.integer(header.item_id);
@@ -267,12 +342,7 @@ fn hashHeader(hash: *Hash, header: anytype, comptime include_metadata: bool) voi
         hashRect(hash, header.ink_bounds);
         hash.integer(header.paint_index);
     }
-    hash.float(header.transform.xx);
-    hash.float(header.transform.yx);
-    hash.float(header.transform.xy);
-    hash.float(header.transform.yy);
-    hash.float(header.transform.x0);
-    hash.float(header.transform.y0);
+    hashTransform(hash, header.transform);
     if (header.clip) |clip| {
         hash.boolean(true);
         hash.tag(clip);
@@ -282,6 +352,15 @@ fn hashHeader(hash: *Hash, header: anytype, comptime include_metadata: bool) voi
     } else hash.boolean(false);
     hash.float(header.opacity);
     hash.tag(header.blend_mode);
+}
+
+fn hashTransform(hash: *Hash, transform: anytype) void {
+    hash.float(transform.xx);
+    hash.float(transform.yx);
+    hash.float(transform.xy);
+    hash.float(transform.yy);
+    hash.float(transform.x0);
+    hash.float(transform.y0);
 }
 
 fn hashText(hash: *Hash, value: anytype) void {

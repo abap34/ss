@@ -438,10 +438,6 @@ fn annotate!(source_text: String, target_text: String, note_text: String, style:
   return base::annotate_with_style!(source_text, target_text, note_text, style)
 end
 
-fn annotate_down!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
-  return base::annotate_down_with_style!(source_text, target_text, note_text, style)
-end
-
 fn/! h1(title_text: String, theme: Theme = current_theme()) -> Object
   let title = objects::title_obj(title_text)
   return base::apply_text_block_style(title, theme.h1)

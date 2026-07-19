@@ -1,11 +1,455 @@
 import std:core/classes as classes
 import std:core/layout as layout
 import std:core/objects as objects
+import std:core/paths as paths
+import std:core/fills as fills
+import std:core/shapes as shapes
+import std:core/connectors as connectors
 import std:core/render as render
 import std:core/selectors as selectors
 import std:core/utils as utils
 import std:core/generated as generated
 import std:core/components as components
+
+fn move_to(x: Number, y: Number) -> PathCommand
+  return paths::move_to(x, y)
+end
+
+fn line_to(x: Number, y: Number) -> PathCommand
+  return paths::line_to(x, y)
+end
+
+fn quadratic_to(control_x: Number, control_y: Number, x: Number, y: Number) -> PathCommand
+  return paths::quadratic_to(control_x, control_y, x, y)
+end
+
+fn cubic_to(control1_x: Number, control1_y: Number, control2_x: Number, control2_y: Number, x: Number, y: Number) -> PathCommand
+  return paths::cubic_to(control1_x, control1_y, control2_x, control2_y, x, y)
+end
+
+fn arc_to(radius_x: Number, radius_y: Number, rotation: Number, large_arc: Bool, clockwise: Bool, x: Number, y: Number) -> PathCommand
+  return paths::arc_to(radius_x, radius_y, rotation, large_arc, clockwise, x, y)
+end
+
+fn close_path() -> PathCommand
+  return paths::close_path()
+end
+
+fn vector_stroke(color_name: Color?, width: Number = 1, cap: LineCap = LineCap.butt, join: LineJoin = LineJoin.miter, dash: String = "", dash_offset: Number = 0) -> VectorStrokeStyle
+  return fills::vector_stroke(color_name, width, cap, join, dash, dash_offset)
+end
+
+fn no_stroke() -> VectorStrokeStyle
+  return fills::no_stroke()
+end
+
+fn solid_stroke(color_name: Color = c"#4b5563", width: Number = 1.6, cap: LineCap = LineCap.butt, join: LineJoin = LineJoin.miter) -> VectorStrokeStyle
+  return fills::solid_stroke(color_name, width, cap, join)
+end
+
+fn dashed_stroke(color_name: Color = c"#4b5563", width: Number = 1.6, dash: Number = 8, gap: Number = 5) -> VectorStrokeStyle
+  return fills::dashed_stroke(color_name, width, dash, gap)
+end
+
+fn dotted_stroke(color_name: Color = c"#4b5563", width: Number = 1.6, gap: Number = 4) -> VectorStrokeStyle
+  return fills::dotted_stroke(color_name, width, gap)
+end
+
+fn dash_dot_stroke(color_name: Color = c"#4b5563", width: Number = 1.6, dash: Number = 8, gap: Number = 4) -> VectorStrokeStyle
+  return fills::dash_dot_stroke(color_name, width, dash, gap)
+end
+
+fn vector_style(fill_value: FillStyle = FillStyle {}, stroke_value: VectorStrokeStyle = VectorStrokeStyle {}) -> VectorStyle
+  return fills::vector_style(fill_value, stroke_value)
+end
+
+fn no_fill() -> FillStyle
+  return fills::no_fill()
+end
+
+fn solid_fill(color_name: Color, opacity: Number = 1) -> FillStyle
+  return fills::solid_fill(color_name, opacity)
+end
+
+fn linear_fill(color1: Color, color2: Color, start_x: Number = 0, start_y: Number = 0, end_x: Number = 1, end_y: Number = 1, spread: GradientSpread = GradientSpread.pad, opacity: Number = 1, space: PaintSpace = PaintSpace.local) -> FillStyle
+  return fills::linear_fill(color1, color2, start_x, start_y, end_x, end_y, spread, opacity, space)
+end
+
+fn radial_fill(color1: Color, color2: Color, center_x: Number = 0.5, center_y: Number = 0.5, radius: Number = 0.5, opacity: Number = 1, space: PaintSpace = PaintSpace.local) -> FillStyle
+  return fills::radial_fill(color1, color2, center_x, center_y, radius, opacity, space)
+end
+
+fn pattern_fill(pattern_value: PatternStyle, base: FillStyle = FillStyle {}) -> FillStyle
+  return fills::pattern_fill(pattern_value, base)
+end
+
+fn with_pattern(fill_value: FillStyle, pattern_value: PatternStyle) -> FillStyle
+  return fills::with_pattern(fill_value, pattern_value)
+end
+
+fn hatch_up(color_name: Color = c"#4b5563", spacing: Number = 8, width: Number = 1) -> PatternStyle
+  return fills::hatch_up(color_name, spacing, width)
+end
+
+fn hatch_down(color_name: Color = c"#4b5563", spacing: Number = 8, width: Number = 1) -> PatternStyle
+  return fills::hatch_down(color_name, spacing, width)
+end
+
+fn crosshatch(color_name: Color = c"#4b5563", spacing: Number = 8, width: Number = 1) -> PatternStyle
+  return fills::crosshatch(color_name, spacing, width)
+end
+
+fn horizontal_hatch(color_name: Color = c"#4b5563", spacing: Number = 8, width: Number = 1) -> PatternStyle
+  return fills::horizontal_hatch(color_name, spacing, width)
+end
+
+fn vertical_hatch(color_name: Color = c"#4b5563", spacing: Number = 8, width: Number = 1) -> PatternStyle
+  return fills::vertical_hatch(color_name, spacing, width)
+end
+
+fn grid_pattern(color_name: Color = c"#4b5563", spacing: Number = 8, width: Number = 1) -> PatternStyle
+  return fills::grid_pattern(color_name, spacing, width)
+end
+
+fn dot_pattern(color_name: Color = c"#4b5563", spacing: Number = 8, radius: Number = 1.2) -> PatternStyle
+  return fills::dot_pattern(color_name, spacing, radius)
+end
+
+fn checker_pattern(color_name: Color = c"#4b5563", cell_size: Number = 8) -> PatternStyle
+  return fills::checker_pattern(color_name, cell_size)
+end
+
+fn wave_pattern(color_name: Color = c"#4b5563", width: Number = 16, height: Number = 8, line_width: Number = 1) -> PatternStyle
+  return fills::wave_pattern(color_name, width, height, line_width)
+end
+
+fn gradient_right() -> GradientDirection
+  return fills::gradient_right()
+end
+
+fn gradient_left() -> GradientDirection
+  return fills::gradient_left()
+end
+
+fn gradient_down() -> GradientDirection
+  return fills::gradient_down()
+end
+
+fn gradient_up() -> GradientDirection
+  return fills::gradient_up()
+end
+
+fn gradient_down_right() -> GradientDirection
+  return fills::gradient_down_right()
+end
+
+fn gradient_up_right() -> GradientDirection
+  return fills::gradient_up_right()
+end
+
+fn gradient_down_left() -> GradientDirection
+  return fills::gradient_down_left()
+end
+
+fn gradient_up_left() -> GradientDirection
+  return fills::gradient_up_left()
+end
+
+fn linear_gradient_fill(start_color: Color, end_color: Color, direction: GradientDirection = GradientDirection {}, spread: GradientSpread = GradientSpread.pad, opacity: Number = 1, space: PaintSpace = PaintSpace.local) -> FillStyle
+  return fills::linear_gradient_fill(start_color, end_color, direction, spread, opacity, space)
+end
+
+fn radial_gradient_fill(inner_color: Color, outer_color: Color, opacity: Number = 1, space: PaintSpace = PaintSpace.local) -> FillStyle
+  return fills::radial_gradient_fill(inner_color, outer_color, opacity, space)
+end
+
+fn hatch_fill(color_name: Color, background: Color? = none, angle: Number = 45, spacing: Number = 8, width: Number = 1) -> FillStyle
+  return fills::hatch_fill(color_name, background, angle, spacing, width)
+end
+
+fn crosshatch_fill(color_name: Color, background: Color? = none, angle: Number = 45, spacing: Number = 8, width: Number = 1) -> FillStyle
+  return fills::crosshatch_fill(color_name, background, angle, spacing, width)
+end
+
+fn grid_fill(color_name: Color, background: Color? = none, spacing: Number = 8, width: Number = 1) -> FillStyle
+  return fills::grid_fill(color_name, background, spacing, width)
+end
+
+fn dots_fill(color_name: Color, background: Color? = none, spacing: Number = 8, diameter: Number = 2) -> FillStyle
+  return fills::dots_fill(color_name, background, spacing, diameter)
+end
+
+fn checker_fill(color_name: Color, background: Color? = none, size: Number = 8) -> FillStyle
+  return fills::checker_fill(color_name, background, size)
+end
+
+fn brick_fill(color_name: Color, background: Color? = none, width: Number = 16, height: Number = 8, line_width: Number = 1) -> FillStyle
+  return fills::brick_fill(color_name, background, width, height, line_width)
+end
+
+fn waves_fill(color_name: Color, background: Color? = none, spacing: Number = 10, width: Number = 1) -> FillStyle
+  return fills::waves_fill(color_name, background, spacing, width)
+end
+
+fn stipple_sparse_fill(color_name: Color, background: Color? = none) -> FillStyle
+  return fills::stipple_sparse_fill(color_name, background)
+end
+
+fn stipple_fill(color_name: Color, background: Color? = none) -> FillStyle
+  return fills::stipple_fill(color_name, background)
+end
+
+fn stipple_dense_fill(color_name: Color, background: Color? = none) -> FillStyle
+  return fills::stipple_dense_fill(color_name, background)
+end
+
+fn/! path_shape_unit(path_value: Path, fill_value: FillStyle = FillStyle {}, stroke_value: VectorStrokeStyle = VectorStrokeStyle {}) -> Object
+  return shapes::path_shape_unit(path_value, fill_value, stroke_value)
+end
+
+fn/! path_shape(path_value: Path, width: Number, height: Number, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::path_shape(path_value, width, height, style)
+end
+
+fn shape_size(obj: Object, width: Number, height: Number) -> Object
+  return shapes::shape_size(obj, width, height)
+end
+
+fn/! rectangle(width: Number = 160, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::rectangle(width, height, style)
+end
+
+fn/! rounded_rectangle(width: Number = 160, height: Number = 100, radius: Number = 0.12, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::rounded_rectangle(width, height, radius, style)
+end
+
+fn/! ellipse(width: Number = 160, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::ellipse(width, height, style)
+end
+
+fn/! circle(diameter: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::circle(diameter, style)
+end
+
+fn/! capsule(width: Number = 180, height: Number = 80, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::capsule(width, height, style)
+end
+
+fn/! triangle(width: Number = 120, height: Number = 110, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::triangle(width, height, style)
+end
+
+fn/! right_triangle(width: Number = 120, height: Number = 110, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::right_triangle(width, height, style)
+end
+
+fn/! diamond(width: Number = 120, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::diamond(width, height, style)
+end
+
+fn/! parallelogram(width: Number = 160, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::parallelogram(width, height, style)
+end
+
+fn/! trapezoid(width: Number = 160, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::trapezoid(width, height, style)
+end
+
+fn/! pentagon(size: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::pentagon(size, style)
+end
+
+fn/! hexagon(width: Number = 150, height: Number = 110, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::hexagon(width, height, style)
+end
+
+fn/! octagon(size: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::octagon(size, style)
+end
+
+fn/! star(size: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::star(size, style)
+end
+
+fn/! chevron(width: Number = 150, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::chevron(width, height, style)
+end
+
+fn/! arrow_shape(width: Number = 170, height: Number = 90, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::arrow_shape(width, height, style)
+end
+
+fn/! plus_shape(size: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::plus_shape(size, style)
+end
+
+fn/! heart(width: Number = 140, height: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::heart(width, height, style)
+end
+
+fn/! speech_bubble(width: Number = 180, height: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::speech_bubble(width, height, style)
+end
+
+fn/! cloud(width: Number = 180, height: Number = 110, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::cloud(width, height, style)
+end
+
+fn/! rect(width: Number = 160, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::rect(width, height, style)
+end
+
+fn/! rounded_rect(width: Number = 160, height: Number = 100, radius: Number = 0.12, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::rounded_rect(width, height, radius, style)
+end
+
+fn/! triangle_up(width: Number = 120, height: Number = 110, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::triangle_up(width, height, style)
+end
+
+fn/! triangle_right(width: Number = 120, height: Number = 110, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::triangle_right(width, height, style)
+end
+
+fn/! triangle_down(width: Number = 120, height: Number = 110, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::triangle_down(width, height, style)
+end
+
+fn/! triangle_left(width: Number = 120, height: Number = 110, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::triangle_left(width, height, style)
+end
+
+fn/! star4(size: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::star4(size, style)
+end
+
+fn/! star5(size: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::star5(size, style)
+end
+
+fn/! star6(size: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::star6(size, style)
+end
+
+fn/! cross_shape(size: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::cross_shape(size, style)
+end
+
+fn/! chevron_right(width: Number = 150, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::chevron_right(width, height, style)
+end
+
+fn/! chevron_left(width: Number = 150, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::chevron_left(width, height, style)
+end
+
+fn/! chevron_down(width: Number = 100, height: Number = 150, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::chevron_down(width, height, style)
+end
+
+fn/! chevron_up(width: Number = 100, height: Number = 150, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::chevron_up(width, height, style)
+end
+
+fn/! block_arrow_right(width: Number = 170, height: Number = 90, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::block_arrow_right(width, height, style)
+end
+
+fn/! block_arrow_left(width: Number = 170, height: Number = 90, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::block_arrow_left(width, height, style)
+end
+
+fn/! block_arrow_down(width: Number = 90, height: Number = 170, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::block_arrow_down(width, height, style)
+end
+
+fn/! block_arrow_up(width: Number = 90, height: Number = 170, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::block_arrow_up(width, height, style)
+end
+
+fn/! semicircle(width: Number = 140, height: Number = 80, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::semicircle(width, height, style)
+end
+
+fn/! quarter_circle(size: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
+  return shapes::quarter_circle(size, style)
+end
+
+fn marker_arrow_open(size: Number = 10, color_name: Color = c"#4b5563", line_width: Number = 1.6) -> MarkerStyle
+  return shapes::marker_arrow_open(size, color_name, line_width)
+end
+
+fn marker_arrow_filled(size: Number = 10, color_name: Color = c"#4b5563") -> MarkerStyle
+  return shapes::marker_arrow_filled(size, color_name)
+end
+
+fn marker_triangle(size: Number = 10, color_name: Color = c"#4b5563") -> MarkerStyle
+  return shapes::marker_triangle(size, color_name)
+end
+
+fn marker_circle(size: Number = 9, color_name: Color = c"#4b5563") -> MarkerStyle
+  return shapes::marker_circle(size, color_name)
+end
+
+fn marker_square(size: Number = 9, color_name: Color = c"#4b5563") -> MarkerStyle
+  return shapes::marker_square(size, color_name)
+end
+
+fn marker_diamond(size: Number = 10, color_name: Color = c"#4b5563") -> MarkerStyle
+  return shapes::marker_diamond(size, color_name)
+end
+
+fn marker_bar(size: Number = 10, color_name: Color = c"#4b5563", line_width: Number = 1.6) -> MarkerStyle
+  return shapes::marker_bar(size, color_name, line_width)
+end
+
+fn default_connector_style() -> ConnectorStyle
+  return connectors::default_connector_style()
+end
+
+fn/! connector(source: Object, target: Object, style: ConnectorStyle = connectors::default_connector_style()) -> Object
+  return connectors::connector(source, target, style)
+end
+
+fn/! connect(source: Object, target: Object, style: ConnectorStyle = connectors::default_connector_style()) -> Object
+  return connectors::connect(source, target, style)
+end
+
+fn/! connect_straight(source: Object, target: Object, style: ConnectorStyle = connectors::default_connector_style()) -> Object
+  return connectors::connect_straight(source, target, style)
+end
+
+fn/! connect_orthogonal(source: Object, target: Object, style: ConnectorStyle = connectors::default_connector_style()) -> Object
+  return connectors::connect_orthogonal(source, target, style)
+end
+
+fn/! connect_curve(source: Object, target: Object, style: ConnectorStyle = connectors::default_connector_style()) -> Object
+  return connectors::connect_curve(source, target, style)
+end
+
+fn/! straight_connector(source: Object, target: Object, stroke_value: VectorStrokeStyle = VectorStrokeStyle { color = c"#4b5563" width = 1.6 }) -> Object
+  return connectors::straight_connector(source, target, stroke_value)
+end
+
+fn/! horizontal_connector(source: Object, target: Object, stroke_value: VectorStrokeStyle = VectorStrokeStyle { color = c"#4b5563" width = 1.6 }) -> Object
+  return connectors::horizontal_connector(source, target, stroke_value)
+end
+
+fn/! vertical_connector(source: Object, target: Object, stroke_value: VectorStrokeStyle = VectorStrokeStyle { color = c"#4b5563" width = 1.6 }) -> Object
+  return connectors::vertical_connector(source, target, stroke_value)
+end
+
+fn/! curve_connector(source: Object, target: Object, stroke_value: VectorStrokeStyle = VectorStrokeStyle { color = c"#4b5563" width = 1.6 }) -> Object
+  return connectors::curve_connector(source, target, stroke_value)
+end
+
+fn/! arrow_connector(source: Object, target: Object, route: ConnectorRoute = ConnectorRoute.straight, source_anchor: ConnectorAnchor = ConnectorAnchor.right, target_anchor: ConnectorAnchor = ConnectorAnchor.left, stroke_value: VectorStrokeStyle = VectorStrokeStyle { color = c"#4b5563" width = 1.6 }, marker_size: Number = 10) -> Object
+  return connectors::arrow_connector(source, target, route, source_anchor, target_anchor, stroke_value, marker_size)
+end
+
+fn/! double_arrow_connector(source: Object, target: Object, route: ConnectorRoute = ConnectorRoute.straight, source_anchor: ConnectorAnchor = ConnectorAnchor.right, target_anchor: ConnectorAnchor = ConnectorAnchor.left, stroke_value: VectorStrokeStyle = VectorStrokeStyle { color = c"#4b5563" width = 1.6 }, marker_size: Number = 10) -> Object
+  return connectors::double_arrow_connector(source, target, route, source_anchor, target_anchor, stroke_value, marker_size)
+end
 
 fn vflow(policy: LayoutPolicy, center_offset: Number = 0) -> Void
   layout::vflow(policy, center_offset)
@@ -71,8 +515,8 @@ fn/! rule_obj() -> Object
   return objects::rule_obj()
 end
 
-fn/! shape_obj() -> Object
-  return objects::shape_obj()
+fn/! path_obj(path_value: Path) -> Object
+  return objects::path_obj(path_value)
 end
 
 fn/! panel_obj() -> Object
@@ -475,30 +919,6 @@ fn/! rule() -> Object
   return components::rule()
 end
 
-fn/! line() -> Object
-  return components::line()
-end
-
-fn line_s(obj: Object, style: LineStyle) -> Object
-  return components::line_s(obj, style)
-end
-
-fn/! line_up(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
-  return components::line_up(from, to, style)
-end
-
-fn/! line_down(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
-  return components::line_down(from, to, style)
-end
-
-fn/! arrow_up(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
-  return components::arrow_up(from, to, style)
-end
-
-fn/! arrow_down(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
-  return components::arrow_down(from, to, style)
-end
-
 fn/! callout_text(text_value: String, style: CalloutStyle) -> Object
   return components::callout_text(text_value, style)
 end
@@ -533,10 +953,6 @@ end
 
 fn annotate!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = MarkedCalloutStyle {}) -> Object
   return components::annotate!(source_text, target_text, note_text, style)
-end
-
-fn annotate_down!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = MarkedCalloutStyle {}) -> Object
-  return components::annotate_down!(source_text, target_text, note_text, style)
 end
 
 fn page_bg(fill_name: Color?) -> Void
