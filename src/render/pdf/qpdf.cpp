@@ -36,7 +36,7 @@ static bool ss_qpdf_finite(double value) {
     return std::isfinite(value);
 }
 
-static bool ss_qpdf_valid_effects(SsQpdfLayerEffects const& effects) {
+static bool ss_qpdf_valid_effects(SsLayerEffects const& effects) {
     return ss_qpdf_finite(effects.xx) && ss_qpdf_finite(effects.yx) &&
         ss_qpdf_finite(effects.xy) && ss_qpdf_finite(effects.yy) &&
         ss_qpdf_finite(effects.x0) && ss_qpdf_finite(effects.y0) &&
