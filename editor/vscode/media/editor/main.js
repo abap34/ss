@@ -200,12 +200,6 @@ function toggleTheme() {
 function selectPage(pageId) {
   if (!navigation.selectPage(pageId)) return;
   render();
-  if (state.mode === "continuous") {
-    requestAnimationFrame(() => {
-      app.querySelector(`.page-shell[data-page-id="${pageId}"]`)
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
-  }
 }
 
 function selectObject(objectId, pageId, rerender = true) {
