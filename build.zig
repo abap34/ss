@@ -506,13 +506,32 @@ fn addTestStep(
     const editor_edit_spec_tests = addTestArtifact(ctx, editor_edit_spec_mod);
     const run_editor_edit_spec_tests = b.addRunArtifact(editor_edit_spec_tests);
     test_step.dependOn(&run_editor_edit_spec_tests.step);
-    const editor_edit_test_step = b.step("test-editor-edit", "Run focused WYSIWYG source edit tests");
-    editor_edit_test_step.dependOn(&run_editor_edit_spec_tests.step);
+    addFocusedTestStep(b, "test-editor-edit", "Run focused WYSIWYG source edit tests", &run_editor_edit_spec_tests.step);
     const watch_mod = createCommonModule(ctx, "src/watch.zig", modules, true);
     addNativePdfHeadersAndLibraries(b, watch_mod);
     addModuleTest(ctx, test_step, "tests/watch/fingerprint/spec_tests.zig", &.{
         import("watch", watch_mod),
     }, true);
+    addRenderTests(ctx, modules, test_step);
+    const render_wrap_mod = createModule(ctx, "src/render/text/wrap.zig", &.{}, null);
+    addModuleTest(ctx, test_step, "tests/render/wrap/spec_tests.zig", &.{
+        import("render_wrap", render_wrap_mod),
+    }, null);
+
+    const compiler_semantics_support_mod = createModule(ctx, "tests/compiler/semantics/support.zig", &.{
+        import("utils", modules.utils),
+        import("compiler", compiler_mod),
+    }, true);
+    addModuleTest(ctx, test_step, "tests/compiler/semantics/spec_tests.zig", &.{
+        import("compiler_semantics", compiler_semantics_support_mod),
+    }, true);
+
+    addNodeSpecTests(b, test_step, exe);
+    addSmokeChecks(b, test_step, exe);
+}
+
+fn addRenderTests(ctx: BuildContext, modules: ProjectModules, test_step: *Step) void {
+    const b = ctx.b;
     const render_pdf_document_mod = createModule(ctx, "src/render/pdf.zig", &.{
         import("pdf_backend", modules.pdf_backend),
         import("pdf_ffi", modules.pdf_ffi),
@@ -537,8 +556,7 @@ fn addTestStep(
     const render_pdf_spec_tests = addQpdfTestArtifact(ctx, render_pdf_spec_mod);
     const run_render_pdf_spec_tests = b.addRunArtifact(render_pdf_spec_tests);
     test_step.dependOn(&run_render_pdf_spec_tests.step);
-    const render_pdf_test_step = b.step("test-render-pdf", "Run focused native PDF renderer tests");
-    render_pdf_test_step.dependOn(&run_render_pdf_spec_tests.step);
+    addFocusedTestStep(b, "test-render-pdf", "Run focused native PDF renderer tests", &run_render_pdf_spec_tests.step);
     const render_spec_mod = createModule(ctx, "tests/render/ir/spec_tests.zig", &.{
         import("render", modules.render),
         import("render_resources", modules.render_resources),
@@ -547,8 +565,7 @@ fn addTestStep(
     const render_spec_tests = addQpdfTestArtifact(ctx, render_spec_mod);
     const run_render_spec_tests = b.addRunArtifact(render_spec_tests);
     test_step.dependOn(&run_render_spec_tests.step);
-    const render_test_step = b.step("test-render-ir", "Run focused render IR tests");
-    render_test_step.dependOn(&run_render_spec_tests.step);
+    addFocusedTestStep(b, "test-render-ir", "Run focused render IR tests", &run_render_spec_tests.step);
     const render_html_mod = createModule(ctx, "src/render/html.zig", &.{
         import("core", modules.core),
         import("render", modules.render),
@@ -566,8 +583,7 @@ fn addTestStep(
     const render_html_spec_tests = addQpdfTestArtifact(ctx, render_html_spec_mod);
     const run_render_html_spec_tests = b.addRunArtifact(render_html_spec_tests);
     test_step.dependOn(&run_render_html_spec_tests.step);
-    const render_html_test_step = b.step("test-render-html", "Run focused HTML renderer tests");
-    render_html_test_step.dependOn(&run_render_html_spec_tests.step);
+    addFocusedTestStep(b, "test-render-html", "Run focused HTML renderer tests", &run_render_html_spec_tests.step);
     const render_compile_mod = createModule(ctx, "src/render/compile.zig", &.{
         import("core", modules.core),
         import("render", modules.render),
@@ -586,23 +602,11 @@ fn addTestStep(
     const render_compile_spec_tests = addQpdfTestArtifact(ctx, render_compile_spec_mod);
     const run_render_compile_spec_tests = b.addRunArtifact(render_compile_spec_tests);
     test_step.dependOn(&run_render_compile_spec_tests.step);
-    const render_compile_test_step = b.step("test-render-compile", "Run focused render compiler tests");
-    render_compile_test_step.dependOn(&run_render_compile_spec_tests.step);
-    const render_wrap_mod = createModule(ctx, "src/render/text/wrap.zig", &.{}, null);
-    addModuleTest(ctx, test_step, "tests/render/wrap/spec_tests.zig", &.{
-        import("render_wrap", render_wrap_mod),
-    }, null);
+    addFocusedTestStep(b, "test-render-compile", "Run focused render compiler tests", &run_render_compile_spec_tests.step);
+}
 
-    const compiler_semantics_support_mod = createModule(ctx, "tests/compiler/semantics/support.zig", &.{
-        import("utils", modules.utils),
-        import("compiler", compiler_mod),
-    }, true);
-    addModuleTest(ctx, test_step, "tests/compiler/semantics/spec_tests.zig", &.{
-        import("compiler_semantics", compiler_semantics_support_mod),
-    }, true);
-
-    addNodeSpecTests(b, test_step, exe);
-    addSmokeChecks(b, test_step, exe);
+fn addFocusedTestStep(b: *std.Build, name: []const u8, description: []const u8, dependency: *Step) void {
+    b.step(name, description).dependOn(dependency);
 }
 
 fn createModule(
@@ -798,7 +802,6 @@ fn addTreeSitterSources(ctx: BuildContext, module: *Module, tree_sitter: TreeSit
 }
 
 fn prepareTreeSitterBundle(b: *std.Build) TreeSitterBundle {
-    std.debug.print("preparing tree-sitter bundle...\n", .{});
     const manifest_text = b.build_root.handle.readFileAlloc(
         b.graph.io,
         "third_party/tree-sitter-languages/manifest.json",
