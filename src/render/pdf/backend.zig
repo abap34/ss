@@ -40,7 +40,7 @@ fn renderCairo(
     try replayItems(allocator, pdf, ir, page.items.items, resources);
     try emitAnnotations(pdf, page);
     c.ss_pdf_end_page(pdf);
-    if (c.ss_pdf_finish(pdf) != 0) return error.CairoFailed;
+    if (c.ss_pdf_finish(pdf) != 0) return cairoFailure(pdf);
 }
 
 fn renderComposed(
@@ -253,7 +253,7 @@ fn renderNativeLayer(
     if (first_layer) try emitAnnotations(pdf, page);
     try replayItems(allocator, pdf, ir, page.items.items[start..end], resources);
     c.ss_pdf_end_page(pdf);
-    if (c.ss_pdf_finish(pdf) != 0) return error.CairoFailed;
+    if (c.ss_pdf_finish(pdf) != 0) return cairoFailure(pdf);
 }
 
 fn replayItems(
@@ -270,7 +270,7 @@ fn replayItems(
             _ = c.ss_pdf_end_item(pdf, header.opacity, @intFromEnum(header.blend_mode));
             return err;
         };
-        if (c.ss_pdf_end_item(pdf, header.opacity, @intFromEnum(header.blend_mode)) != 0) return error.CairoFailed;
+        if (c.ss_pdf_end_item(pdf, header.opacity, @intFromEnum(header.blend_mode)) != 0) return cairoFailure(pdf);
     }
 }
 
@@ -366,7 +366,7 @@ fn beginItem(pdf: *c.SsPdf, header: render_ir.ItemHeader) !void {
         clip.height,
         header.opacity,
         @intFromEnum(header.blend_mode),
-    ) != 0) return error.CairoFailed;
+    ) != 0) return cairoFailure(pdf);
 }
 
 fn replayText(
@@ -481,14 +481,14 @@ fn replayTextLayout(
             clusters.ptr,
             @intCast(clusters.len),
             @intFromBool(run.direction == .right_to_left),
-        ) != 0) return error.CairoFailed;
+        ) != 0) return cairoFailure(pdf);
     }
 }
 
 fn emitAnnotations(pdf: *c.SsPdf, page: *const render_ir.Page) !void {
     for (page.destinations.items) |destination| {
         if (c.ss_pdf_add_destination(pdf, destination.name.ptr, destination.point.x, destination.point.y) != 0) {
-            return error.CairoFailed;
+            return cairoFailure(pdf);
         }
     }
     for (page.links.items) |link| {
@@ -496,9 +496,14 @@ fn emitAnnotations(pdf: *c.SsPdf, page: *const render_ir.Page) !void {
             .destination => c.ss_pdf_begin_dest_link(pdf, link.rect.x, link.rect.y, link.rect.width, link.rect.height, link.target.ptr),
             .uri => c.ss_pdf_begin_uri_link(pdf, link.rect.x, link.rect.y, link.rect.width, link.rect.height, link.target.ptr),
         };
-        if (result != 0) return error.CairoFailed;
+        if (result != 0) return cairoFailure(pdf);
         c.ss_pdf_end_link(pdf);
     }
+}
+
+fn cairoFailure(pdf: *c.SsPdf) error{CairoFailed} {
+    std.log.err("Cairo PDF backend failed: {s}", .{std.mem.span(c.ss_pdf_status_string(pdf))});
+    return error.CairoFailed;
 }
 
 fn layerPath(allocator: Allocator, output: []const u8, index: usize) ![]u8 {

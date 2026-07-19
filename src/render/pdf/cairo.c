@@ -297,6 +297,17 @@ void ss_pdf_destroy(SsPdf *pdf) {
     free(pdf);
 }
 
+const char *ss_pdf_status_string(const SsPdf *pdf) {
+    if (pdf == NULL) return "invalid PDF renderer";
+    if (pdf->cr != NULL && cairo_status(pdf->cr) != CAIRO_STATUS_SUCCESS) {
+        return cairo_status_to_string(cairo_status(pdf->cr));
+    }
+    if (pdf->surface != NULL && cairo_surface_status(pdf->surface) != CAIRO_STATUS_SUCCESS) {
+        return cairo_status_to_string(cairo_surface_status(pdf->surface));
+    }
+    return cairo_status_to_string(CAIRO_STATUS_SUCCESS);
+}
+
 void ss_pdf_set_creator(SsPdf *pdf, const char *creator) {
     if (pdf == NULL || pdf->surface == NULL) return;
     cairo_pdf_surface_set_metadata(pdf->surface, CAIRO_PDF_METADATA_CREATOR, creator);

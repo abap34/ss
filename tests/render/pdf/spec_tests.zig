@@ -188,6 +188,7 @@ test "render PDF spec: Cairo shim writes URI and destination link annotations" {
 
     const pdf = c.ss_pdf_create(pdf_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
     defer c.ss_pdf_destroy(pdf);
+    try expectCString(c.ss_pdf_status_string(pdf));
     c.ss_pdf_begin_page(pdf, 320, 180);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_add_destination(pdf, "target", 20, 20));
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_uri_link(pdf, 20, 20, 120, 24, "https://example.com"));
