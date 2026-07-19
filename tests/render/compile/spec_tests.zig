@@ -252,6 +252,37 @@ test "text decorations and measurements use resolved font run metrics" {
     try testing.expectApproxEqAbs(@as(f64, decorated.height), drawn_bottom - drawn_top, 0.0001);
 }
 
+test "generic monospace text keeps narrow and wide glyph advances equal" {
+    var page = render.Page{
+        .page_id = 1,
+        .index = 0,
+        .width = 1280,
+        .height = 720,
+    };
+    defer page.deinit(testing.allocator);
+    var resources = render_resources.Builder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    var math = render.MathBuilder{};
+    defer math.deinit(testing.allocator);
+    var emitter = render_emitter.Emitter{
+        .page = &page,
+        .resources = &resources,
+        .fonts = &fonts,
+        .math = &math,
+        .io = testing.io,
+    };
+
+    const face = core.font.Face{ .family = "monospace", .weight = 400, .style = .normal, .stretch = .normal };
+    try emitter.textBaseline(testing.allocator, 40, 100, 800, "iiiiiiii", face, 24, .{ .r = 0, .g = 0, .b = 0 }, false, .{});
+    try emitter.textBaseline(testing.allocator, 40, 140, 800, "WWWWWWWW", face, 24, .{ .r = 0, .g = 0, .b = 0 }, false, .{});
+
+    const narrow = page.items.items[0].text.layout.runs[0].advance;
+    const wide = page.items.items[1].text.layout.runs[0].advance;
+    try testing.expectApproxEqAbs(narrow, wide, 0.0001);
+}
+
 test "markdown underline paint controls color opacity width offset and dash" {
     var page = render.Page{
         .page_id = 1,

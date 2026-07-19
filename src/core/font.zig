@@ -37,7 +37,7 @@ pub const TextFaces = struct {
 };
 
 pub const default_family = "Helvetica";
-pub const default_code_family = "Courier";
+pub const default_code_family = "monospace";
 pub const default_weight: u16 = 400;
 pub const default_bold_weight: u16 = 700;
 
