@@ -106,7 +106,27 @@ await withBrowser(output, async (browser, baseUrl) => {
     const mainCanvasWidth = await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas').evaluate((canvas) => canvas.width);
     const thumbnailCanvasWidth = await page.locator('.page-thumbnail .ss-pdf > canvas').evaluate((canvas) => canvas.width);
     assert(thumbnailCanvasWidth < mainCanvasWidth, "PDF thumbnail rendered at the central preview resolution");
+    await page.setViewportSize({ width: 1200, height: 920 });
+    await page.waitForFunction(() =>
+      !document.querySelector(".viewport")?.classList.contains("viewport--rulers-hidden")
+    );
     assert(!((await page.locator(".ruler-tick small").allTextContents()).includes("0")), "rulers displayed a zero label");
+    const verticalRulerPositions = await page.locator(".ruler--vertical small").evaluateAll((labels) =>
+      Object.fromEntries(labels.map((label) => [
+        label.textContent,
+        label.parentElement.getBoundingClientRect().top,
+      ]))
+    );
+    assert(verticalRulerPositions[100] > verticalRulerPositions[700],
+      "vertical ruler values did not increase upward from the page bottom");
+
+    await page.setViewportSize({ width: 480, height: 560 });
+    await page.waitForFunction(() =>
+      document.querySelector(".viewport")?.classList.contains("viewport--rulers-hidden")
+    );
+    assert.equal(await page.locator(".ruler--vertical").isVisible(), false,
+      "rulers remained visible at a scale where their fixed labels obscure the page");
+    await page.setViewportSize({ width: 560, height: 920 });
     await page.evaluate(() => {
       globalThis.__retiringPdfRoots = [
         ...document.querySelectorAll("[data-ss-pdf-render-root='true']"),
