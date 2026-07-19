@@ -7,28 +7,17 @@ const utils = @import("utils");
 
 const error_report = utils.err;
 
-pub const ParsedSource = struct {
-    program: parser.Program,
-    holes: parser.HoleTable,
-
-    pub fn deinit(self: *ParsedSource, allocator: std.mem.Allocator) void {
-        self.program.deinit(allocator);
-        self.holes.deinit(allocator);
-    }
-
-    pub fn clearHoles(self: *ParsedSource, allocator: std.mem.Allocator) void {
-        self.holes.deinit(allocator);
-        self.holes = .{ .holes = &.{}, .diagnostics = &.{} };
-    }
-};
-
-pub fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8, progress: ?*utils.progress.Progress) !ParsedSource {
-    const result = parser.parseRecoveringWithSourceName(allocator, source, path) catch |err| {
-        if (progress) |p| p.endStatusLine();
+pub fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8, progress: ?*utils.progress.Progress) !parser.ParseResult {
+    return parser.parseRecoveringWithSourceName(allocator, source, path) catch |err| {
+        if (progress) |p| p.abort();
         error_report.printParseError(path, source, err, parser.lastParseDiagnostic());
         return err;
     };
-    return .{ .program = result.program, .holes = result.holes };
+}
+
+pub fn clearParseHoles(result: *parser.ParseResult, allocator: std.mem.Allocator) void {
+    result.holes.deinit(allocator);
+    result.holes = .{ .holes = &.{}, .diagnostics = &.{} };
 }
 
 pub fn printLoadDiagnostics(diagnostics: *const module_loader.LoadDiagnostics) void {
@@ -49,11 +38,11 @@ pub fn printImportFailureDiagnostic(
     path: []const u8,
     source: []const u8,
     asset_base_dir: []const u8,
-    program: *const ast.Program,
+    module: *const ast.Module,
     overlay: ?*const module_loader.SourceOverlay,
     diagnostics: *const module_loader.LoadDiagnostics,
 ) void {
-    const span = module_loader.importFailureSpan(allocator, io, asset_base_dir, program, overlay, diagnostics) orelse return;
+    const span = module_loader.importFailureSpan(allocator, io, asset_base_dir, module, overlay, diagnostics) orelse return;
     error_report.print(.{
         .path = path,
         .source = source,

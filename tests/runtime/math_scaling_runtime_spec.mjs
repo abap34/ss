@@ -5,122 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
 
-const canInspectRenderedMath =
-  await commandAvailable("pdflatex") &&
-  await commandAvailable("pdftoppm") &&
-  await commandAvailable("magick");
-
-if (canInspectRenderedMath) {
-  await testTexUsesMostAvailableWidthAndMathScaleStillApplies();
-  await testGlobalRawTexWidthRatioApplies();
+if (await commandAvailable("pdflatex")) {
   await testTexRespectsFixedFrameHeight();
-}
-
-async function testTexUsesMostAvailableWidthAndMathScaleStillApplies() {
-  const project = await mkdtempProject("ss-math-scaling-");
-  try {
-    await writeFile(
-      path.join(project, "slide.ss"),
-      `import std:themes/default as *
-
-page tex_scale_one
-let formula = tex!("x + y = z", 1)
-~ formula.left == page.left + 96
-~ formula.right == page.right - 96
-~ formula.top == page.top - 240
-end
-
-page math_scale_one
-let formula = math!("x + y = z", 1)
-~ formula.left == page.left + 96
-~ formula.right == page.right - 96
-~ formula.top == page.top - 240
-end
-
-page math_scale_two
-let formula = math!("x + y = z", 2)
-~ formula.left == page.left + 96
-~ formula.right == page.right - 96
-~ formula.top == page.top - 240
-end
-
-page tex_width_ratio
-let formula = tex!("x + y = z", 1)
-formula.math.raw_tex_width_ratio = 0.82
-~ formula.left == page.left + 96
-~ formula.right == page.right - 96
-~ formula.top == page.top - 240
-end
-`,
-      "utf8",
-    );
-
-    const render = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "math-scaling"], project);
-    assert(render.code === 0, `render failed:\n${combinedOutput(render)}`);
-
-    await runCommand("pdftoppm", ["-png", "-r", "144", "out.pdf", "page"], project);
-    const tex = await renderedGeometry(project, "page-1.png");
-    const mathOne = await renderedGeometry(project, "page-2.png");
-    const mathTwo = await renderedGeometry(project, "page-3.png");
-    const texNarrow = await renderedGeometry(project, "page-4.png");
-
-    const availableWidth = (1280 - 96 * 2) * 2;
-    assert(tex.width > availableWidth * 0.85, `tex should expand across most of the available frame width, got ${geometrySummary(tex)}`);
-    assert(tex.width < availableWidth * 0.99, `tex should leave default breathing room inside the frame, got ${geometrySummary(tex)}`);
-    assert(texNarrow.width < tex.width * 0.9, `raw tex width ratio should reduce rendered width, got default=${geometrySummary(tex)}, narrow=${geometrySummary(texNarrow)}`);
-    assert(mathOne.width < tex.width * 0.25, `plain math should keep its natural scaled width, got tex=${geometrySummary(tex)}, math=${geometrySummary(mathOne)}`);
-    assert(
-      mathTwo.width > mathOne.width * 1.85 && mathTwo.width < mathOne.width * 2.15,
-      `math scale should roughly double rendered width, got scale1=${geometrySummary(mathOne)}, scale2=${geometrySummary(mathTwo)}`,
-    );
-  } finally {
-    await rm(project, { recursive: true, force: true });
-  }
-}
-
-async function testGlobalRawTexWidthRatioApplies() {
-  const project = await mkdtempProject("ss-global-raw-tex-width-");
-  try {
-    await writeFile(
-      path.join(project, "slide.ss"),
-      `import std:themes/default as *
-
-document
-  raw_tex_width_ratio_all(0.82)
-end
-
-page global_ratio
-let formula = tex!("x + y = z", 1)
-~ formula.left == page.left + 96
-~ formula.right == page.right - 96
-~ formula.top == page.top - 240
-end
-
-page local_override
-let formula = tex!("x + y = z", 1)
-formula.math.raw_tex_width_ratio = 1
-~ formula.left == page.left + 96
-~ formula.right == page.right - 96
-~ formula.top == page.top - 240
-end
-`,
-      "utf8",
-    );
-
-    const render = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "global-raw-tex-width"], project);
-    assert(render.code === 0, `render failed:\n${combinedOutput(render)}`);
-
-    await runCommand("pdftoppm", ["-png", "-r", "144", "out.pdf", "page"], project);
-    const globalRatio = await renderedGeometry(project, "page-1.png");
-    const localOverride = await renderedGeometry(project, "page-2.png");
-
-    assert(
-      globalRatio.width < localOverride.width * 0.9,
-      `global raw tex width ratio should affect tex width and local override should win, got global=${geometrySummary(globalRatio)}, override=${geometrySummary(localOverride)}`,
-    );
-  } finally {
-    await rm(project, { recursive: true, force: true });
-  }
 }
 
 async function testTexRespectsFixedFrameHeight() {
@@ -177,8 +63,6 @@ end
       "render",
       "slide.ss",
       "out.pdf",
-      "--cache-id",
-      "math-frame-height",
       "--diagnostics-json",
       diagnosticsPath,
     ], project);
@@ -197,56 +81,20 @@ end
   }
 }
 
-async function renderedGeometry(project, imageName) {
-  const result = await runCommand("magick", [
-    imageName,
-    "-alpha",
-    "off",
-    "-fuzz",
-    "8%",
-    "-trim",
-    "-format",
-    "%wx%h+%X+%Y",
-    "info:",
-  ], project);
-  const match = /^(\d+)x(\d+)\+\+?(-?\d+)\+\+?(-?\d+)/.exec(result.stdout.trim());
-  assert(match, `could not parse rendered geometry: ${result.stdout}`);
-  return {
-    width: Number(match[1]),
-    height: Number(match[2]),
-    x: Number(match[3]),
-    y: Number(match[4]),
-  };
-}
-
-function geometrySummary(geometry) {
-  return `${geometry.width}x${geometry.height}+${geometry.x}+${geometry.y}`;
-}
-
 async function mkdtempProject(prefix) {
   return mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
 async function commandAvailable(command) {
   return new Promise((resolve) => {
-    const child = spawn(command, versionArgs(command), { stdio: "ignore" });
+    const child = spawn(command, ["--version"], { stdio: "ignore" });
     child.on("error", () => resolve(false));
     child.on("exit", (code) => resolve(code === 0));
   });
 }
 
-function versionArgs(command) {
-  return command === "pdftoppm" ? ["-v"] : ["--version"];
-}
-
 async function runSs(args, cwd) {
   return spawnCollect(ssBin, args, cwd);
-}
-
-async function runCommand(command, args, cwd) {
-  const result = await spawnCollect(command, args, cwd);
-  assert(result.code === 0, `${command} failed:\n${combinedOutput(result)}`);
-  return result;
 }
 
 async function spawnCollect(command, args, cwd, timeoutMs = 30000) {

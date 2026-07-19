@@ -16,6 +16,8 @@ else
   property title "text_color" c"#111111"
 end
 ~ title.left == page.left + 24
+~!~title.center_x
+~!~title.left == page.left + 48
 text! <<
 body
 >>

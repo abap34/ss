@@ -3,21 +3,21 @@ const core = @import("core");
 
 const json = @import("utils").json;
 
-pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
+pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, state: *core.DocumentState) !void {
     var nodes = try root.arrayField("nodes");
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind == .object and !node.attached) continue;
-        try writeNode(allocator, &nodes, ir, node);
+        try writeNode(allocator, &nodes, state, node);
     }
     try nodes.end();
 }
 
-fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, node: core.Node) !void {
-    const render = core.render_policy.resolve(ir, &node);
+fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.DocumentState, node: core.Node) !void {
+    const render = core.render_policy.resolve(state, &node);
     const display_content = core.nodeDisplayContent(&node);
     const has_display_content = display_content.len != 0 or node.content != null or node.display_content != null;
-    const should_parse_blocks = core.markdown.shouldParseBlocksNode(ir, &node) and has_display_content;
-    const should_parse_inline = core.markdown.shouldParseInlineNode(ir, &node) and has_display_content and !should_parse_blocks;
+    const should_parse_blocks = core.markdown.shouldParseBlocksNode(state, &node) and has_display_content;
+    const should_parse_inline = core.markdown.shouldParseInlineNode(state, &node) and has_display_content and !should_parse_blocks;
 
     var markdown_doc_storage = core.markdown.MarkdownDocument.init(allocator);
     defer markdown_doc_storage.deinit();
@@ -26,7 +26,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, nod
     if (should_parse_blocks) {
         markdown_doc_storage = try core.markdown.parseMarkdownDocumentForNode(
             allocator,
-            ir,
+            state,
             &node,
             display_content,
         );
@@ -34,7 +34,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, nod
     if (should_parse_inline) {
         inline_layout_storage = try core.markdown.parseTextLayoutForNode(
             allocator,
-            ir,
+            state,
             &node,
             display_content,
         );
@@ -62,7 +62,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, nod
         try item.nullField("inline_lines");
     }
     try writeFields(allocator, &item, node.fields.items);
-    var render_env = try core.render_env.resolveForNode(allocator, ir, &node);
+    var render_env = try core.render_env.resolveForNode(allocator, state, &node);
     defer render_env.deinit(allocator);
     try writeRenderEnv(&item, render_env);
     try item.optionalIntField("page_index", node.page_index);
@@ -133,7 +133,8 @@ fn writeMarkdownBlock(blocks: *json.Array, block: *const core.markdown.Block) an
     var item = try blocks.objectItem();
     try item.enumTagField("kind", block.kind);
     switch (block.kind) {
-        .paragraph => {
+        .paragraph, .heading => {
+            if (block.heading_level) |level| try item.intField("level", level);
             try writeInlineLines(&item, "lines", block.paragraph.?.lines.items);
         },
         .code_block => {
@@ -192,22 +193,13 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     };
 
     var text = try object.objectField("text");
-    try writeFontFace(&text, "font", text_spec.font);
-    try writeFontFace(&text, "bold_font", text_spec.bold_font);
-    try writeFontFace(&text, "italic_font", text_spec.italic_font);
-    try writeFontFace(&text, "code_font", text_spec.code_font);
-    try text.floatField("font_size", text_spec.font_size, "{d:.1}");
-    try text.floatField("line_height", text_spec.line_height, "{d:.1}");
-    try writeColor(&text, "color", text_spec.color);
-    try writeColor(&text, "link_color", text_spec.link_color);
-    try writeOptionalColor(&text, "markdown_bold_color", text_spec.markdown_bold_color);
-    try text.floatField("link_underline_width", text_spec.link_underline_width, "{d:.1}");
-    try text.floatField("link_underline_offset", text_spec.link_underline_offset, "{d:.1}");
-    try text.floatField("inline_math_height_factor", text_spec.inline_math_height_factor, "{d:.4}");
-    try text.floatField("inline_math_spacing", text_spec.inline_math_spacing, "{d:.4}");
-    try text.floatField("display_math_height_factor", text_spec.display_math_height_factor, "{d:.4}");
-    try text.enumTagField("math_align", text_spec.math_align);
-    try text.floatField("emoji_spacing", text_spec.emoji_spacing, "{d:.4}");
+    try writeInlineTextPaint(&text, text_spec);
+    var headings = try text.objectField("markdown_headings");
+    const names = [_][]const u8{ "h1", "h2", "h3", "h4", "h5", "h6" };
+    for (names, text_spec.markdown_headings) |name, heading| {
+        try writeOptionalMarkdownHeadingPaint(&headings, name, heading);
+    }
+    try headings.end();
     try text.floatField("markdown_block_gap", text_spec.markdown_block_gap, "{d:.4}");
     try text.floatField("markdown_list_inset", text_spec.markdown_list_inset, "{d:.4}");
     try text.floatField("markdown_list_indent", text_spec.markdown_list_indent, "{d:.4}");
@@ -235,10 +227,40 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     try text.floatField("markdown_table_line_width", text_spec.markdown_table_line_width, "{d:.1}");
     try writeOptionalColor(&text, "markdown_table_header_fill", text_spec.markdown_table_header_fill);
     try writeOptionalColor(&text, "markdown_table_alt_row_fill", text_spec.markdown_table_alt_row_fill);
-    try text.intField("cjk_bold_passes", text_spec.cjk_bold_passes);
-    try text.floatField("cjk_bold_dx", text_spec.cjk_bold_dx, "{d:.4}");
     try text.boolField("wrap", text_spec.wrap);
     try text.end();
+}
+
+fn writeInlineTextPaint(object: *json.Object, spec: anytype) !void {
+    try writeFontFace(object, "font", spec.font);
+    try writeFontFace(object, "bold_font", spec.bold_font);
+    try writeFontFace(object, "italic_font", spec.italic_font);
+    try writeFontFace(object, "code_font", spec.code_font);
+    try object.floatField("font_size", spec.font_size, "{d:.1}");
+    try object.floatField("line_height", spec.line_height, "{d:.1}");
+    try writeColor(object, "color", spec.color);
+    try writeColor(object, "link_color", spec.link_color);
+    try writeOptionalColor(object, "markdown_bold_color", spec.markdown_bold_color);
+    try object.floatField("inline_math_height_factor", spec.inline_math_height_factor, "{d:.4}");
+    try object.floatField("inline_math_spacing", spec.inline_math_spacing, "{d:.4}");
+    try object.floatField("display_math_height_factor", spec.display_math_height_factor, "{d:.4}");
+    try object.enumTagField("math_align", spec.math_align);
+    try object.floatField("emoji_spacing", spec.emoji_spacing, "{d:.4}");
+}
+
+fn writeOptionalMarkdownHeadingPaint(
+    object: *json.Object,
+    key: []const u8,
+    maybe_heading: ?core.render_policy.MarkdownHeadingPaint,
+) !void {
+    const heading_spec = maybe_heading orelse {
+        try object.nullField(key);
+        return;
+    };
+
+    var heading = try object.objectField(key);
+    try writeInlineTextPaint(&heading, heading_spec);
+    try heading.end();
 }
 
 fn writeFontFace(object: *json.Object, key: []const u8, face: core.font.Face) !void {

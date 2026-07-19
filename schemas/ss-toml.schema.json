@@ -98,90 +98,36 @@
                   "type": "boolean",
                   "default": true,
                   "description": "Show argument inlay hints."
-                },
-                "positions": {
-                  "type": "boolean",
-                  "default": true,
-                  "description": "Show position inlay hints."
                 }
               }
             }
           }
         },
-        "preview": {
+        "wysiwyg": {
           "type": "object",
-          "description": "Live preview behavior.",
+          "description": "WYSIWYG editor behavior.",
           "additionalProperties": false,
           "properties": {
             "enabled": {
               "type": "boolean",
               "default": true,
-              "description": "Enable live preview."
+              "description": "Enable the WYSIWYG editor."
             },
             "debounce": {
               "type": "integer",
               "minimum": 0,
-              "default": 350,
-              "description": "Debounce time for live preview renders in milliseconds."
-            },
-            "open": {
-              "type": "string",
-              "enum": ["vscode", "external"],
-              "default": "vscode",
-              "description": "Preview target. \"vscode\" opens the bundled PDF.js viewer; \"external\" opens the generated PDF with the operating system."
-            },
-            "reveal": {
-              "type": "boolean",
-              "default": true,
-              "description": "Reveal the preview after rendering."
+              "default": 140,
+              "description": "Debounce time for WYSIWYG updates in milliseconds."
             },
             "refresh": {
               "type": "object",
-              "description": "Live preview refresh triggers.",
+              "description": "WYSIWYG refresh triggers.",
               "additionalProperties": false,
               "properties": {
-                "save": {
-                  "type": "boolean",
-                  "default": true,
-                  "description": "Refresh after saves."
-                },
                 "dependency": {
                   "type": "boolean",
                   "default": true,
                   "description": "Refresh when a dependency file changes."
-                }
-              }
-            },
-            "render": {
-              "type": "object",
-              "description": "Live preview render process.",
-              "additionalProperties": false,
-              "properties": {
-                "timeout": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "default": 30000,
-                  "description": "Render timeout in milliseconds."
-                },
-                "extra_args": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "default": [],
-                  "description": "Additional arguments passed to ss render."
-                }
-              }
-            },
-            "path": {
-              "type": "object",
-              "description": "Live preview output paths.",
-              "additionalProperties": false,
-              "properties": {
-                "output": {
-                  "type": "string",
-                  "default": ".ss-cache/vscode-preview",
-                  "description": "Generated PDF directory, relative to the workspace root unless absolute."
                 }
               }
             }

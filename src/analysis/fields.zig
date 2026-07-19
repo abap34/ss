@@ -9,32 +9,32 @@ const semantic_types = @import("types.zig");
 const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
 
-pub fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir, sema: *const SemanticEnv) !void {
+pub fn checkObjectDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
     var roles = std.StringHashMap([]const u8).init(allocator);
     defer roles.deinit();
 
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
         const origin_path = originPathForModule(module);
-        try checkObjectNamesUnique(allocator, ir, origin_path, module.program.objects.items);
-        try checkRecordNamesUnique(allocator, ir, origin_path, module.program.records.items);
-        for (module.program.records.items) |record_decl| {
-            try checkRecordDeclaration(allocator, ir, sema, origin_path, record_decl);
+        try checkObjectNamesUnique(allocator, state, origin_path, module.syntax.objects.items);
+        try checkRecordNamesUnique(allocator, state, origin_path, module.syntax.records.items);
+        for (module.syntax.records.items) |record_decl| {
+            try checkRecordDeclaration(allocator, state, sema, origin_path, record_decl);
         }
-        for (module.program.objects.items) |object_decl| {
-            try checkObjectDeclaration(allocator, ir, sema, origin_path, object_decl);
-            try checkRolesUnique(allocator, ir, origin_path, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
+        for (module.syntax.objects.items) |object_decl| {
+            try checkObjectDeclaration(allocator, state, sema, origin_path, object_decl);
+            try checkRolesUnique(allocator, state, origin_path, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
         }
-        for (module.program.object_extensions.items) |extension| {
-            try checkObjectExtension(allocator, ir, sema, origin_path, extension);
-            try checkRolesUnique(allocator, ir, origin_path, &roles, extension.target, extension.roles.items, extension.span);
+        for (module.syntax.object_extensions.items) |extension| {
+            try checkObjectExtension(allocator, state, sema, origin_path, extension);
+            try checkRolesUnique(allocator, state, origin_path, &roles, extension.target, extension.roles.items, extension.span);
         }
     }
 }
 
 fn checkRecordNamesUnique(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     origin_path: []const u8,
     records: []const ast.RecordDecl,
 ) !void {
@@ -44,7 +44,7 @@ fn checkRecordNamesUnique(
         if (names.contains(record_decl.name)) {
             const origin = try statementOrigin(allocator, origin_path, record_decl.span);
             defer allocator.free(origin);
-            try addUserReport(ir, origin, "DuplicateRecordType: record type '{s}' is already defined in this module", .{record_decl.name});
+            try addUserReport(state, origin, "DuplicateRecordType: record type '{s}' is already defined in this module", .{record_decl.name});
             return error.InvalidType;
         }
         try names.put(record_decl.name, {});
@@ -53,17 +53,17 @@ fn checkRecordNamesUnique(
 
 fn checkRecordDeclaration(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     record_decl: ast.RecordDecl,
 ) !void {
-    try checkObjectFields(allocator, ir, sema, origin_path, record_decl.fields.items);
+    try checkObjectFields(allocator, state, sema, origin_path, record_decl.fields.items);
 }
 
 fn checkObjectNamesUnique(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     origin_path: []const u8,
     objects: []const ast.ObjectDecl,
 ) !void {
@@ -73,7 +73,7 @@ fn checkObjectNamesUnique(
         if (names.contains(object_decl.name)) {
             const origin = try statementOrigin(allocator, origin_path, object_decl.span);
             defer allocator.free(origin);
-            try addUserReport(ir, origin, "DuplicateObjectClass: object class '{s}' is already defined in this module", .{object_decl.name});
+            try addUserReport(state, origin, "DuplicateObjectClass: object class '{s}' is already defined in this module", .{object_decl.name});
             return error.InvalidType;
         }
         try names.put(object_decl.name, {});
@@ -82,7 +82,7 @@ fn checkObjectNamesUnique(
 
 fn checkObjectDeclaration(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     object_decl: ast.ObjectDecl,
@@ -91,16 +91,16 @@ fn checkObjectDeclaration(
     defer allocator.free(origin);
     if (object_decl.base) |base| {
         if (!sema.classExists(base)) {
-            try addUserReport(ir, origin, "InvalidObjectDeclaration: unknown base object class: {s}", .{base});
+            try addUserReport(state, origin, "InvalidObjectDeclaration: unknown base object class: {s}", .{base});
             return error.InvalidType;
         }
     }
-    try checkObjectFields(allocator, ir, sema, origin_path, object_decl.fields.items);
+    try checkObjectFields(allocator, state, sema, origin_path, object_decl.fields.items);
 }
 
 fn checkObjectExtension(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     extension: ast.ObjectExtensionDecl,
@@ -108,21 +108,21 @@ fn checkObjectExtension(
     const origin = try statementOrigin(allocator, origin_path, extension.span);
     defer allocator.free(origin);
     if (!sema.classExists(extension.target)) {
-        try addUserReport(ir, origin, "InvalidObjectExtension: unknown object class: {s}", .{extension.target});
+        try addUserReport(state, origin, "InvalidObjectExtension: unknown object class: {s}", .{extension.target});
         return error.InvalidType;
     }
     if (extension.implements) |implements| {
         if (!sema.classExists(implements)) {
-            try addUserReport(ir, origin, "InvalidObjectExtension: unknown protocol: {s}", .{implements});
+            try addUserReport(state, origin, "InvalidObjectExtension: unknown protocol: {s}", .{implements});
             return error.InvalidType;
         }
     }
-    try checkObjectFields(allocator, ir, sema, origin_path, extension.fields.items);
+    try checkObjectFields(allocator, state, sema, origin_path, extension.fields.items);
 }
 
 fn checkObjectFields(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     fields: []const ast.ObjectFieldDecl,
@@ -133,14 +133,14 @@ fn checkObjectFields(
         const field_type = field.value_type;
         if (field_type.kind == .hole) continue;
         if (field.default_value) |default_value| {
-            try checkFieldDefault(allocator, ir, sema, origin, field_type, default_value.*, field.default_property_value);
+            try checkFieldDefault(allocator, state, sema, origin, field_type, default_value.*, field.default_property_value);
         }
     }
 }
 
 fn checkFieldDefault(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     origin: []const u8,
     ty: ast.Type,
@@ -149,7 +149,7 @@ fn checkFieldDefault(
 ) !void {
     var env = TypeEnv.init(allocator);
     defer env.deinit();
-    const actual = infer.exprInfo(allocator, ir, sema, &env, default_value, origin) catch |err| switch (err) {
+    const actual = infer.exprInfo(allocator, state, sema, &env, default_value, origin) catch |err| switch (err) {
         error.InvalidType, error.UnknownIdentifier => return error.InvalidType,
         else => return err,
     };
@@ -157,7 +157,7 @@ fn checkFieldDefault(
     if (fieldDefaultHasStaticPropertyValue(default_value, default_property_value) and fieldDefaultTypeAccepts(ty, actual.ty, default_value)) return;
     const label = try fieldTypeLabel(allocator, ty);
     defer allocator.free(label);
-    try addUserReport(ir, origin, "InvalidFieldDefault: default value does not match field type {s}", .{label});
+    try addUserReport(state, origin, "InvalidFieldDefault: default value does not match field type {s}", .{label});
     return error.InvalidType;
 }
 
@@ -181,7 +181,7 @@ fn fieldTypeLabel(allocator: std.mem.Allocator, ty: ast.Type) ![]const u8 {
 
 fn checkRolesUnique(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     origin_path: []const u8,
     roles: *std.StringHashMap([]const u8),
     class_name: []const u8,
@@ -193,7 +193,7 @@ fn checkRolesUnique(
             const origin = try statementOrigin(allocator, origin_path, span);
             defer allocator.free(origin);
             try addUserReport(
-                ir,
+                state,
                 origin,
                 "DuplicateRole: role '{s}' is already provided by {s}",
                 .{ role_name, existing_class },
@@ -204,9 +204,9 @@ fn checkRolesUnique(
     }
 }
 
-fn addUserReport(ir: *core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
-    const message = try std.fmt.allocPrint(ir.allocator, fmt, args);
-    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+fn addUserReport(state: *core.DocumentState, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
+    const message = try std.fmt.allocPrint(state.allocator, fmt, args);
+    try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = message },
     });
 }

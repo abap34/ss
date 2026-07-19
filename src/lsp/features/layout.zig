@@ -7,18 +7,18 @@ const protocol = @import("../protocol.zig");
 const lsp_state = @import("../state.zig");
 
 const ProjectFacts = analysis_snapshot.ProjectFacts;
-const LayoutFacts = analysis_snapshot.LayoutFacts;
+const LayoutOutput = analysis_snapshot.LayoutOutput;
 
 pub const Context = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     documents: *lsp_state.DocumentStore,
-    provider: *lsp_state.SnapshotProvider,
-    layout_snapshots: *lsp_state.LayoutStore,
+    provider: *lsp_state.AnalysisProvider,
+    responses: *lsp_state.ResponseStore,
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
-    var owned_snapshot: ?lsp_state.Snapshot = null;
+    var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
 
     const doc_path = try protocol.docPathFromParams(ctx.allocator, params);
@@ -30,10 +30,10 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     } orelse return try emptyJson(ctx.allocator);
 
     if (snapshot.generation == ctx.documents.generation) {
-        if (snapshot.layout) |*layout| {
-            const report = try conflictsJsonFromFacts(ctx.allocator, layout);
+        if (snapshot.layout_output) |*layout| {
+            const report = try conflictsJsonFromOutput(ctx.allocator, layout);
             errdefer ctx.allocator.free(report);
-            try ctx.layout_snapshots.remember(ctx.allocator, snapshot, report);
+            try ctx.responses.store(ctx.allocator, snapshot, report);
             return report;
         }
     }
@@ -48,11 +48,11 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         &snapshot.project,
         &overlay,
     ) catch {
-        if (try ctx.layout_snapshots.jsonForEntry(ctx.allocator, snapshot.project.entry_path)) |cached| return cached;
+        if (try ctx.responses.cloneForEntry(ctx.allocator, snapshot.project.entry_path)) |cached| return cached;
         return try emptyJson(ctx.allocator);
     };
     errdefer ctx.allocator.free(report);
-    try ctx.layout_snapshots.remember(ctx.allocator, snapshot, report);
+    try ctx.responses.store(ctx.allocator, snapshot, report);
     return report;
 }
 
@@ -69,8 +69,8 @@ pub fn conflictsJson(
     }, null);
 }
 
-pub fn conflictsJsonFromFacts(allocator: std.mem.Allocator, layout: *const LayoutFacts) ![]const u8 {
-    return try allocator.dupe(u8, layout.conflict_report_json);
+pub fn conflictsJsonFromOutput(allocator: std.mem.Allocator, layout: *const LayoutOutput) ![]const u8 {
+    return try allocator.dupe(u8, layout.conflicts_json);
 }
 
 pub fn emptyJson(allocator: std.mem.Allocator) ![]const u8 {

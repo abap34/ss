@@ -14,43 +14,43 @@ const types = @import("types.zig");
 const error_report = utils.err;
 const Progress = utils.progress.Progress;
 
-pub const AnalyzedFile = struct {
-    ir: core.Ir,
-    program_analysis: analysis.ProgramAnalysis = .{},
+pub const AnalyzedProject = struct {
+    state: core.DocumentState,
+    execution_graph: ?analysis.execution.ExecutionGraph = null,
 
-    pub fn deinit(self: *AnalyzedFile) void {
-        self.program_analysis.deinit();
-        self.ir.deinit();
+    pub fn deinit(self: *AnalyzedProject) void {
+        if (self.execution_graph) |*graph| graph.deinit();
+        self.state.deinit();
     }
 
-    pub fn takeIr(self: *AnalyzedFile) core.Ir {
-        self.program_analysis.deinit();
-        const ir = self.ir;
+    pub fn takeState(self: *AnalyzedProject) core.DocumentState {
+        if (self.execution_graph) |*graph| graph.deinit();
+        const state = self.state;
         self.* = undefined;
-        return ir;
+        return state;
     }
 
-    pub fn scheduleGraph(self: *const AnalyzedFile) *const analysis.schedule.ScheduleGraph {
-        return self.program_analysis.scheduleGraph();
+    pub fn executionGraph(self: *const AnalyzedProject) *const analysis.execution.ExecutionGraph {
+        return &self.execution_graph.?;
     }
 };
 
-pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.Ir {
-    var analyzed = try analyzeFile(io, allocator, request, progress, .evaluation_schedule);
+pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.DocumentState {
+    var analyzed = try analyzeFile(io, allocator, request, progress, .evaluation);
     errdefer analyzed.deinit();
-    try evaluateDocument(&analyzed.ir, analyzed.scheduleGraph(), progress);
-    var pages = try preparePages(&analyzed.ir, progress);
-    const ir_allocator = analyzed.ir.allocator;
-    defer pages.deinit(ir_allocator);
-    var layouts = try solveLayouts(io, &analyzed.ir, &pages, progress, request.layout_jobs);
-    defer layouts.deinit(ir_allocator);
-    return analyzed.takeIr();
+    try evaluateDocument(&analyzed.state, analyzed.executionGraph(), progress);
+    var pages = try preparePages(&analyzed.state, progress);
+    const state_allocator = analyzed.state.allocator;
+    defer pages.deinit(state_allocator);
+    var layouts = try solveLayouts(io, &analyzed.state, &pages, progress, request.layout_jobs);
+    defer layouts.deinit(state_allocator);
+    return analyzed.takeState();
 }
 
-pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.Ir {
+pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.DocumentState {
     var analyzed = try analyzeFile(io, allocator, request, progress, .diagnostics_only);
     errdefer analyzed.deinit();
-    return analyzed.takeIr();
+    return analyzed.takeState();
 }
 
 pub fn analyzeFile(
@@ -59,43 +59,44 @@ pub fn analyzeFile(
     request: types.SourceRequest,
     progress: ?*Progress,
     mode: analysis.AnalysisMode,
-) !AnalyzedFile {
+) !AnalyzedProject {
     if (progress) |p| p.begin("Read inputs");
+    errdefer if (progress) |p| p.abort();
     var source = try readSource(io, allocator, request);
     errdefer allocator.free(source);
-    if (progress) |p| p.step("Read inputs");
+    if (progress) |p| p.complete();
 
     if (progress) |p| p.begin("Parse source");
     var parsed = try app_diagnostics.parseSource(allocator, source, request.input_path, progress);
     errdefer parsed.deinit(allocator);
-    if (progress) |p| p.step("Parse source");
+    if (progress) |p| p.complete();
 
     if (progress) |p| p.begin("Analyze");
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
-    var index = analysis.loadProgramIndexWithOptions(allocator, io, request.asset_base_dir, parsed.program, .{
+    var index = analysis.loadModuleIndex(allocator, io, request.asset_base_dir, parsed.module, .{
         .overlay = request.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
     }) catch |err| {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         if (load_diagnostics.items.items.len != 0) {
             app_diagnostics.printLoadDiagnostics(&load_diagnostics);
-            app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, request.asset_base_dir, &parsed.program, request.overlay, &load_diagnostics);
+            app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, request.asset_base_dir, &parsed.module, request.overlay, &load_diagnostics);
             return error.DiagnosticsFailed;
         } else if (err == error.UnknownImport) {
-            try printUnknownImportDiagnostic(allocator, io, request, source, parsed.program);
+            try printUnknownImportDiagnostic(allocator, io, request, source, parsed.module);
             return error.DiagnosticsFailed;
         }
         return err;
     };
     defer index.deinit();
-    var ir = analysis.buildIrWithOptions(allocator, request.input_path, request.asset_base_dir, &source, &parsed.program, &index, .{
+    var state = analysis.buildDocumentStateWithOptions(allocator, request.input_path, request.asset_base_dir, &source, &parsed.module, &index, .{
         .parse_holes = parsed.holes,
     }) catch |err| {
-        if (progress) |p| p.endStatusLine();
+        if (progress) |p| p.abort();
         if (err == error.UnknownImport) {
-            try printUnknownImportDiagnostic(allocator, io, request, source, parsed.program);
+            try printUnknownImportDiagnostic(allocator, io, request, source, parsed.module);
         } else if (err != error.DiagnosticsFailed) {
             const message = try std.fmt.allocPrint(allocator, "BuildFailed: {s}", .{@errorName(err)});
             defer allocator.free(message);
@@ -109,112 +110,116 @@ pub fn analyzeFile(
         }
         return err;
     };
-    parsed.clearHoles(allocator);
-    errdefer ir.deinit();
+    app_diagnostics.clearParseHoles(&parsed, allocator);
+    errdefer state.deinit();
 
-    var program_analysis = analysis.analyzeProgramWithMode(allocator, &ir, mode) catch |err| {
-        if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+    var execution_graph = analysis.analyzeDocumentStateWithMode(allocator, &state, mode) catch |err| {
+        if (progress) |p| p.abort();
+        error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), &state);
         return err;
     };
-    errdefer program_analysis.deinit();
-    if (progress) |p| p.step("Analyze");
+    errdefer if (execution_graph) |*graph| graph.deinit();
+    if (progress) |p| p.complete();
 
-    if (error_report.hasIrErrors(&ir)) {
-        if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+    if (error_report.hasDocumentStateErrors(&state)) {
+        if (progress) |p| p.abort();
+        error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), &state);
         return error.DiagnosticsFailed;
     }
-    return .{ .ir = ir, .program_analysis = program_analysis };
+    return .{ .state = state, .execution_graph = execution_graph };
 }
 
-pub fn evaluateDocument(ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph, progress: ?*Progress) !void {
+pub fn evaluateDocument(state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph, progress: ?*Progress) !void {
     if (progress) |p| p.begin("Evaluate document");
-    lowering.evaluateDocumentWithSchedule(ir, graph) catch |err| {
-        if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+    errdefer if (progress) |p| p.abort();
+    lowering.evaluateDocument(state, graph) catch |err| {
+        if (progress) |p| p.abort();
+        error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         return err;
     };
-    if (progress) |p| p.step("Evaluate document");
-    if (error_report.hasIrErrors(ir)) {
-        if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+    if (progress) |p| p.complete();
+    if (error_report.hasDocumentStateErrors(state)) {
+        if (progress) |p| p.abort();
+        error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         return error.DiagnosticsFailed;
     }
 }
 
-pub fn preparePages(ir: *core.Ir, progress: ?*Progress) !core.page_unit.PreparedPages {
+pub fn preparePages(state: *core.DocumentState, progress: ?*Progress) !core.prepared.PreparedPages {
     if (progress) |p| p.begin("Prepare pages");
-    var pages = core.page_unit.prepare(ir.allocator, ir) catch |err| {
-        if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+    errdefer if (progress) |p| p.abort();
+    var pages = core.prepared.prepare(state.allocator, state) catch |err| {
+        if (progress) |p| p.abort();
+        error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         return err;
     };
-    errdefer pages.deinit(ir.allocator);
+    errdefer pages.deinit(state.allocator);
     if (progress) |p| {
         p.detail("pages", pages.pages.len, pages.pages.len);
-        p.step("Prepare pages");
+        p.complete();
     }
     return pages;
 }
 
 pub fn solveLayouts(
     io: std.Io,
-    ir: *core.Ir,
-    pages: *const core.page_unit.PreparedPages,
+    state: *core.DocumentState,
+    pages: *const core.prepared.PreparedPages,
     progress: ?*Progress,
     jobs: ?usize,
-) !core.LayoutResults {
+) !core.layout.Document {
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
-    try preloadLayoutArtifacts(io, ir, pages, progress, jobs);
-    var layouts = render_layout.solvePreparedPages(io, ir, pages, layout_progress, jobs) catch |err| {
-        if (progress) |p| p.endStatusLine();
-        try reportLayoutFailure(ir, err);
+    errdefer if (progress) |p| p.abort();
+    try preloadLayoutArtifacts(io, state, pages, progress, jobs);
+    var layouts = render_layout.solvePreparedPages(io, state, pages, layout_progress, jobs) catch |err| {
+        if (progress) |p| p.abort();
+        try reportLayoutFailure(state, err);
         return err;
     };
-    errdefer layouts.deinit(ir.allocator);
-    if (progress) |p| p.step("Solve layouts");
-    error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
-    if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+    errdefer layouts.deinit(state.allocator);
+    if (progress) |p| p.complete();
+    error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
+    if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
     return layouts;
 }
 
 pub fn solveLayoutsWithTracePath(
     io: std.Io,
-    ir: *core.Ir,
-    pages: *const core.page_unit.PreparedPages,
+    state: *core.DocumentState,
+    pages: *const core.prepared.PreparedPages,
     trace_path: []const u8,
     progress: ?*Progress,
     jobs: ?usize,
-) !core.LayoutResults {
+) !core.layout.Document {
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
-    try preloadLayoutArtifacts(io, ir, pages, progress, jobs);
-    var layouts = render_layout.solvePreparedPagesWithTrace(io, ir, pages, trace_path, layout_progress, jobs) catch |err| {
-        if (progress) |p| p.endStatusLine();
-        try reportLayoutFailure(ir, err);
+    errdefer if (progress) |p| p.abort();
+    try preloadLayoutArtifacts(io, state, pages, progress, jobs);
+    var layouts = render_layout.solvePreparedPagesWithTrace(io, state, pages, trace_path, layout_progress, jobs) catch |err| {
+        if (progress) |p| p.abort();
+        try reportLayoutFailure(state, err);
         return err;
     };
-    errdefer layouts.deinit(ir.allocator);
-    if (progress) |p| p.step("Solve layouts");
-    error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
-    if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+    errdefer layouts.deinit(state.allocator);
+    if (progress) |p| p.complete();
+    error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
+    if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
     return layouts;
 }
 
 fn preloadLayoutArtifacts(
     io: std.Io,
-    ir: *core.Ir,
-    pages: *const core.page_unit.PreparedPages,
+    state: *core.DocumentState,
+    pages: *const core.prepared.PreparedPages,
     progress: ?*Progress,
     jobs: ?usize,
 ) !void {
     const artifact_progress = if (progress) |p| app_progress.render(p) else null;
-    render_layout.preloadPreparedPageArtifacts(io, ir, pages, artifact_progress, jobs) catch |err| {
-        if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
-        if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+    render_layout.preloadPreparedPageArtifacts(io, state, pages, artifact_progress, jobs) catch |err| {
+        if (progress) |p| p.abort();
+        error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
+        if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
         return err;
     };
 }
@@ -231,7 +236,7 @@ fn printUnknownImportDiagnostic(
     io: std.Io,
     request: types.SourceRequest,
     source: []const u8,
-    program: ast.Program,
+    program: ast.Module,
 ) !void {
     var report = try module_loader.findUnknownImportReport(allocator, io, request.asset_base_dir, program, request.overlay) orelse return error.UnknownImport;
     defer report.deinit(allocator);
@@ -247,12 +252,12 @@ fn printUnknownImportDiagnostic(
     });
 }
 
-fn reportLayoutFailure(ir: *core.Ir, err: anyerror) !void {
+fn reportLayoutFailure(state: *core.DocumentState, err: anyerror) !void {
     switch (err) {
-        error.ConstraintConflict, error.NegativeFrameSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), ir, err),
+        error.ConstraintConflict, error.NegativeFrameSize => error_report.printConstraintFailure(state.projectPath(), state.projectSource(), state, err),
         else => {
-            error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
-            if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+            error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
+            if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
         },
     }
 }

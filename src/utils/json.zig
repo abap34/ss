@@ -65,7 +65,7 @@ pub const Object = struct {
         try int(self.allocator, self.sink, value);
     }
 
-    pub fn floatField(self: *Object, key: []const u8, value: f32, comptime fmt: []const u8) !void {
+    pub fn floatField(self: *Object, key: []const u8, value: anytype, comptime fmt: []const u8) !void {
         try self.fieldName(key);
         try float(self.allocator, self.sink, value, fmt);
     }
@@ -116,7 +116,7 @@ pub const Object = struct {
         }
     }
 
-    pub fn optionalFloatField(self: *Object, key: []const u8, value: ?f32, comptime fmt: []const u8) !void {
+    pub fn optionalFloatField(self: *Object, key: []const u8, value: anytype, comptime fmt: []const u8) !void {
         try self.fieldName(key);
         if (value) |number| {
             try float(self.allocator, self.sink, number, fmt);
@@ -144,6 +144,12 @@ pub const Array = struct {
     allocator: std.mem.Allocator,
     sink: Sink,
     first: bool = true,
+
+    pub fn beginBuffer(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8)) !Array {
+        const sink: Sink = .{ .buffer = .{ .value = buffer, .allocator = allocator } };
+        try writeByte(sink, '[');
+        return .{ .allocator = allocator, .sink = sink };
+    }
 
     pub fn end(self: *Array) !void {
         try writeByte(self.sink, ']');
@@ -176,7 +182,7 @@ pub const Array = struct {
         try int(self.allocator, self.sink, value);
     }
 
-    pub fn floatItem(self: *Array, value: f32, comptime fmt: []const u8) !void {
+    pub fn floatItem(self: *Array, value: anytype, comptime fmt: []const u8) !void {
         try self.comma();
         try float(self.allocator, self.sink, value, fmt);
     }

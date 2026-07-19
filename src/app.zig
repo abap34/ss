@@ -6,17 +6,22 @@ const commands = @import("app/commands.zig");
 const types = @import("app/types.zig");
 
 pub const RenderOptions = types.RenderOptions;
-pub const PdfWriteOptions = types.PdfWriteOptions;
+pub const RenderFormat = types.RenderFormat;
+pub const WriteOptions = types.WriteOptions;
 pub const SourceRequest = types.SourceRequest;
 pub const PdfWriteRequest = types.PdfWriteRequest;
+pub const HtmlWriteRequest = types.HtmlWriteRequest;
+pub const PdfAndHtmlWriteRequest = types.PdfAndHtmlWriteRequest;
+pub const render_progress_steps = commands.render_progress_steps;
+pub const pdf_and_html_progress_steps = commands.pdf_and_html_progress_steps;
 
 const Progress = utils.progress.Progress;
 
-pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !core.Ir {
+pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !core.DocumentState {
     return try commands.buildFile(io, allocator, request, progress);
 }
 
-pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !core.Ir {
+pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !core.DocumentState {
     return try commands.buildTypedFile(io, allocator, request, progress);
 }
 
@@ -24,12 +29,12 @@ pub fn checkFile(io: std.Io, allocator: std.mem.Allocator, request: SourceReques
     try commands.checkFile(io, allocator, request, progress);
 }
 
-pub fn printIrJson(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: *Progress) !void {
-    try commands.printIrJson(io, allocator, request, progress);
+pub fn printContextJson(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: *Progress) !void {
+    try commands.printContextJson(io, allocator, request, progress);
 }
 
-pub fn writeIrJson(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, output_path: []const u8, progress: *Progress) !void {
-    try commands.writeIrJson(io, allocator, request, output_path, progress);
+pub fn writeContextJson(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, output_path: []const u8, progress: *Progress) !void {
+    try commands.writeContextJson(io, allocator, request, output_path, progress);
 }
 
 pub fn writeScheduleTraceJson(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, output_path: []const u8, progress: *Progress) !void {
@@ -61,4 +66,12 @@ pub fn writeLayoutConflictReportFile(
 
 pub fn writePdf(io: std.Io, allocator: std.mem.Allocator, request: PdfWriteRequest, progress: *Progress) !void {
     try commands.writePdf(io, allocator, request, progress);
+}
+
+pub fn writeHtml(io: std.Io, allocator: std.mem.Allocator, request: HtmlWriteRequest, progress: *Progress) !void {
+    try commands.writeHtml(io, allocator, request, progress);
+}
+
+pub fn writePdfAndHtml(io: std.Io, allocator: std.mem.Allocator, request: PdfAndHtmlWriteRequest, progress: *Progress) !void {
+    try commands.writePdfAndHtml(io, allocator, request, progress);
 }

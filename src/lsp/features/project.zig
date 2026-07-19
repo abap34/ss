@@ -8,13 +8,13 @@ const ProjectFacts = analysis_snapshot.ProjectFacts;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
-    provider: *lsp_state.SnapshotProvider,
+    provider: *lsp_state.AnalysisProvider,
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     if (try protocol.docPathFromParams(ctx.allocator, params)) |doc_path| {
         defer ctx.allocator.free(doc_path);
-        var owned_snapshot: ?lsp_state.Snapshot = null;
+        var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
         defer if (owned_snapshot) |*snapshot| snapshot.deinit();
         const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse return try json(ctx.allocator, null);
         return try json(ctx.allocator, &snapshot.project);
@@ -52,22 +52,16 @@ fn appendSettings(allocator: std.mem.Allocator, out: *std.ArrayList(u8), facts: 
     try appendBoolField(allocator, out, "definition", facts.lsp.definition, false);
     try appendBoolField(allocator, out, "inlayHints", facts.lsp.inlay_hints, false);
     try appendBoolField(allocator, out, "inlayHintArguments", facts.lsp.inlay_hint_arguments, false);
-    try appendBoolField(allocator, out, "inlayHintPositions", facts.lsp.inlay_hint_positions, false);
     try appendBoolField(allocator, out, "documentSymbols", facts.lsp.document_symbols, false);
     try appendBoolField(allocator, out, "foldingRanges", facts.lsp.folding_ranges, false);
     try appendBoolField(allocator, out, "semanticTokens", facts.lsp.semantic_tokens, false);
     try appendBoolField(allocator, out, "colors", facts.lsp.colors, false);
     try out.append(allocator, '}');
 
-    try out.appendSlice(allocator, ",\"preview\":{");
-    try appendBoolField(allocator, out, "enabled", facts.preview.enabled, true);
-    try appendIntField(allocator, out, "debounce", facts.preview.debounce_ms, false);
-    try appendBoolField(allocator, out, "refreshOnSave", facts.preview.refresh_on_save, false);
-    try appendBoolField(allocator, out, "refreshOnDependencyChange", facts.preview.refresh_on_dependency_change, false);
-    try out.appendSlice(allocator, ",\"open\":");
-    try protocol.appendJsonString(allocator, out, if (facts.preview.open_mode == .external) "external" else "vscode");
-    try appendBoolField(allocator, out, "reveal", facts.preview.reveal_after_render, false);
-    try appendIntField(allocator, out, "timeout", facts.preview.render_timeout_ms, false);
+    try out.appendSlice(allocator, ",\"wysiwyg\":{");
+    try appendBoolField(allocator, out, "enabled", facts.wysiwyg.enabled, true);
+    try appendIntField(allocator, out, "debounce", facts.wysiwyg.debounce_ms, false);
+    try appendBoolField(allocator, out, "refreshOnDependencyChange", facts.wysiwyg.refresh_on_dependency_change, false);
     try out.append(allocator, '}');
 
     try out.appendSlice(allocator, ",\"pageGuide\":{");

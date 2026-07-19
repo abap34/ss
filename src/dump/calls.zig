@@ -6,32 +6,32 @@ const query_signature = @import("../analysis/query/signature.zig");
 const registry = @import("../language/registry.zig");
 const json = @import("utils").json;
 
-pub fn writeFunctionsField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
+pub fn writeFunctionsField(allocator: std.mem.Allocator, root: *json.Object, state: *core.DocumentState) !void {
     var functions = try root.arrayField("functions");
     for (registry.primitiveDescriptors()) |descriptor| {
-        if (userValueNameExists(ir, descriptor.name)) continue;
+        if (userValueNameExists(state, descriptor.name)) continue;
         try writePrimitiveFunction(allocator, &functions, descriptor);
     }
-    var function_iterator = ir.functions.iterator();
+    var function_iterator = state.functions.iterator();
     while (function_iterator.next()) |entry| {
-        try writeUserFunction(allocator, &functions, ir, entry.value_ptr.name, entry.value_ptr.*, entry.key_ptr.module_id);
+        try writeUserFunction(allocator, &functions, state, entry.value_ptr.name, entry.value_ptr.*, entry.key_ptr.module_id);
     }
     try functions.end();
 
     var constants = try root.arrayField("constants");
-    var const_iterator = ir.constants.iterator();
+    var const_iterator = state.constants.iterator();
     while (const_iterator.next()) |entry| {
-        try writeUserConst(allocator, &constants, ir, entry.value_ptr.name, entry.value_ptr.*, entry.key_ptr.module_id);
+        try writeUserConst(allocator, &constants, state, entry.value_ptr.name, entry.value_ptr.*, entry.key_ptr.module_id);
     }
     try constants.end();
 }
 
-fn userValueNameExists(ir: *const core.Ir, name: []const u8) bool {
-    var iterator = ir.functions.iterator();
+fn userValueNameExists(state: *const core.DocumentState, name: []const u8) bool {
+    var iterator = state.functions.iterator();
     while (iterator.next()) |entry| {
         if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
     }
-    var const_iterator = ir.constants.iterator();
+    var const_iterator = state.constants.iterator();
     while (const_iterator.next()) |entry| {
         if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
     }
@@ -95,7 +95,7 @@ fn writePrimitiveFunction(allocator: std.mem.Allocator, functions: *json.Array, 
 fn writeUserFunction(
     allocator: std.mem.Allocator,
     functions: *json.Array,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     name: []const u8,
     func: ast.FunctionDecl,
     module_id: core.SourceModuleId,
@@ -110,7 +110,7 @@ fn writeUserFunction(
     const result_label = try func.result_type.formatAlloc(allocator);
     defer allocator.free(result_label);
     try item.stringField("resultType", result_label);
-    if (ir.moduleById(module_id)) |module| {
+    if (state.moduleById(module_id)) |module| {
         try item.enumTagField("source", module.kind);
         try item.intField("moduleId", module.id);
         try item.stringField("moduleSpec", module.spec);
@@ -134,7 +134,7 @@ fn writeUserFunction(
 fn writeUserConst(
     allocator: std.mem.Allocator,
     constants: *json.Array,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     name: []const u8,
     constant_decl: ast.ConstDecl,
     module_id: core.SourceModuleId,
@@ -149,7 +149,7 @@ fn writeUserConst(
     const result_label = try constant_decl.value_type.formatAlloc(allocator);
     defer allocator.free(result_label);
     try item.stringField("resultType", result_label);
-    if (ir.moduleById(module_id)) |module| {
+    if (state.moduleById(module_id)) |module| {
         try item.enumTagField("source", module.kind);
         try item.intField("moduleId", module.id);
         try item.stringField("moduleSpec", module.spec);

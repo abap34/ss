@@ -10,8 +10,48 @@ const pdftotextAvailable = await commandSucceeds("pdftotext", ["-v"]);
 
 if (pdflatexAvailable && pdftotextAvailable) {
   await testInlineMathRemainsSelectable();
+  await testMarkdownMathUsesPreambleFallback();
   if (await commandSucceeds("kpsewhich", ["algorithm2e.sty"])) {
     await testAlgorithm2eRemainsSelectable();
+  }
+}
+
+async function testMarkdownMathUsesPreambleFallback() {
+  const project = await mkdtempProject("ss-markdown-math-preamble-");
+  try {
+    await writeFile(path.join(project, "preamble.tex"), "\\newcommand{\\ArchiveMacro}{\\text{MacroToken42}}\n", "utf8");
+    await writeFile(
+      path.join(project, "slide.ss"),
+      `import std:themes/default as *
+
+page formula
+text!("Inline $\\ArchiveMacro$ fallback")
+end
+
+document
+  tex_preamble_file("preamble.tex")
+end
+`,
+      "utf8",
+    );
+
+    await renderAndExtract(project);
+    const text = await readFile(path.join(project, "out.txt"), "utf8");
+    assert(text.replace(/\s+/g, "").includes("MacroToken42"), `Markdown math did not preserve the TeX preamble fallback:\n${text}`);
+    const htmlRender = await spawnCollect(ssBin, ["render", "--format", "html", "slide.ss", "out.html"], project);
+    assert(htmlRender.code === 0, `HTML render failed:\n${combinedOutput(htmlRender)}`);
+    const html = await readFile(path.join(project, "out.html"), "utf8");
+    assert(html.includes('class="ss-item ss-math ss-pdf"'), "raw Markdown math did not use the scoped PDF.js fallback");
+    assert(html.includes('role="math" aria-label="\\ArchiveMacro"'), "raw Markdown math did not preserve its TeX semantics");
+    assert(
+      /<span[^>]*role="math" aria-label="\\ArchiveMacro"[^>]*>[^<]*<\/span>/.test(html),
+      "raw Markdown math emitted mismatched semantic tags",
+    );
+    assert(html.includes('data-pdf-src="ss-resource:math_pdf:'), "raw Markdown math did not reference its embedded PDF");
+    assert(html.includes('data-media-type="application/pdf"'), "raw Markdown math PDF was not embedded in the HTML file");
+    assert(html.includes("data:text/javascript;charset=utf-8;base64,"), "raw Markdown math omitted its embedded PDF.js runtime");
+  } finally {
+    await rm(project, { recursive: true, force: true });
   }
 }
 
@@ -31,7 +71,7 @@ end
       "utf8",
     );
 
-    await renderAndExtract(project, "math-pdf-selectable");
+    await renderAndExtract(project);
     const text = await readFile(path.join(project, "out.txt"), "utf8");
     assert(text.includes("SelectableMathToken"), `TeX math text was not selectable:\n${text}`);
   } finally {
@@ -69,7 +109,7 @@ end
       "utf8",
     );
 
-    await renderAndExtract(project, "algorithm2e-pdf-selectable");
+    await renderAndExtract(project);
     const text = await readFile(path.join(project, "out.txt"), "utf8");
     assert(text.includes("SelectableAlgorithmInput"), `algorithm2e input text was not selectable:\n${text}`);
     assert(text.includes("SelectableAlgorithmResult"), `algorithm2e result text was not selectable:\n${text}`);
@@ -78,8 +118,8 @@ end
   }
 }
 
-async function renderAndExtract(project, cacheId) {
-  const render = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf", "--cache-id", cacheId], project);
+async function renderAndExtract(project) {
+  const render = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project);
   assert(render.code === 0, `render failed:\n${combinedOutput(render)}`);
   const extraction = await spawnCollect("pdftotext", ["out.pdf", "out.txt"], project);
   assert(extraction.code === 0, `pdftotext failed:\n${combinedOutput(extraction)}`);

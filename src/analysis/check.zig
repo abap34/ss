@@ -219,47 +219,47 @@ pub fn originPathForModule(module: *const core.SourceModule) []const u8 {
     return module.path orelse module.spec;
 }
 
-fn statementOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: ast.Span) ![]const u8 {
+pub fn sourceOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: ast.Span) ![]const u8 {
     if (origin_path.len != 0) {
         return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ origin_path, span.start, span.end });
     }
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
-fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
-    const sink = ir orelse return;
+fn addUserReport(state: ?*core.DocumentState, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
+    const sink = state orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
     try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = message },
     });
 }
 
-fn continueAfterDiagnostic(ir: *const core.Ir, diagnostic_count_before: usize, err: anyerror) !void {
-    if (ir.diagnostics.items.len > diagnostic_count_before) return;
+pub fn continueAfterDiagnostic(state: *const core.DocumentState, diagnostic_count_before: usize, err: anyerror) !void {
+    if (state.diagnostics.items.len > diagnostic_count_before) return;
     return err;
 }
 
-fn rejectDuplicateBinding(ir: ?*core.Ir, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
+fn rejectDuplicateBinding(state: ?*core.DocumentState, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
     if (!env.contains(name)) return;
-    try addUserReport(ir, origin, "DuplicateBinding: binding '{s}' is already defined in this scope", .{name});
+    try addUserReport(state, origin, "DuplicateBinding: binding '{s}' is already defined in this scope", .{name});
     return error.DuplicateBinding;
 }
 
 pub fn checkPageNamesUnique(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
 ) !void {
     var pages = std.StringHashMap(void).init(allocator);
     defer pages.deinit();
 
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
         const origin_path = originPathForModule(module);
-        for (module.program.pages.items) |page| {
+        for (module.syntax.pages.items) |page| {
             if (pages.contains(page.name)) {
-                const origin = try statementOrigin(allocator, origin_path, page.span);
+                const origin = try sourceOrigin(allocator, origin_path, page.span);
                 defer allocator.free(origin);
-                try addUserReport(ir, origin, "DuplicatePage: page '{s}' is already defined", .{page.name});
+                try addUserReport(state, origin, "DuplicatePage: page '{s}' is already defined", .{page.name});
                 return error.DuplicatePage;
             }
             try pages.put(page.name, {});
@@ -269,7 +269,7 @@ pub fn checkPageNamesUnique(
 
 pub fn checkFunction(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     func: ast.FunctionDecl,
@@ -277,22 +277,22 @@ pub fn checkFunction(
     var env = TypeEnv.init(allocator);
     defer env.deinit();
 
-    const func_origin = try statementOrigin(allocator, origin_path, func.span);
+    const func_origin = try sourceOrigin(allocator, origin_path, func.span);
     defer allocator.free(func_origin);
     for (func.params.items) |param| {
-        try rejectDuplicateBinding(ir, &env, param.name, func_origin);
+        try rejectDuplicateBinding(state, &env, param.name, func_origin);
         if (param.default_value) |default_value| {
-            const info = try inferExprInfo(allocator, ir, sema, &env, default_value.*, func_origin);
-            try ensureType(ir, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
+            const info = try inferExprInfo(allocator, state, sema, &env, default_value.*, func_origin);
+            try ensureType(state, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
         }
         try env.put(param.name, infoFromType(param.ty));
     }
 
     var had_diagnostics = false;
     for (func.statements.items) |stmt| {
-        const diagnostic_count = ir.diagnostics.items.len;
-        checkStatement(allocator, ir, sema, origin_path, &env, func.result_type, stmt) catch |err| {
-            try continueAfterDiagnostic(ir, diagnostic_count, err);
+        const diagnostic_count = state.diagnostics.items.len;
+        checkStatement(allocator, state, sema, origin_path, &env, func.result_type, stmt) catch |err| {
+            try continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
         };
     }
@@ -301,12 +301,12 @@ pub fn checkFunction(
 
 pub fn checkConst(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     constant_decl: ast.ConstDecl,
 ) !void {
-    const origin = try statementOrigin(allocator, origin_path, constant_decl.span);
+    const origin = try sourceOrigin(allocator, origin_path, constant_decl.span);
     defer allocator.free(origin);
 
     var env = TypeEnv.init(allocator);
@@ -318,21 +318,21 @@ pub fn checkConst(
 
     var had_diagnostics = false;
     {
-        const diagnostic_count = ir.diagnostics.items.len;
-        rejectPageOnlyExpr(ir, .document, origin, &page_context, &scope, constant_decl.value) catch |err| {
-            try continueAfterDiagnostic(ir, diagnostic_count, err);
+        const diagnostic_count = state.diagnostics.items.len;
+        rejectPageOnlyExpr(state, .document, origin, &page_context, &scope, constant_decl.value) catch |err| {
+            try continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
         };
     }
     {
-        const diagnostic_count = ir.diagnostics.items.len;
-        const actual = inferExprInfo(allocator, ir, sema, &env, constant_decl.value, origin) catch |err| {
-            try continueAfterDiagnostic(ir, diagnostic_count, err);
+        const diagnostic_count = state.diagnostics.items.len;
+        const actual = inferExprInfo(allocator, state, sema, &env, constant_decl.value, origin) catch |err| {
+            try continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
             return error.DiagnosticsFailed;
         };
-        ensureType(ir, allocator, actual, constant_decl.value_type, origin, .UnmatchedReturnType) catch |err| {
-            try continueAfterDiagnostic(ir, diagnostic_count, err);
+        ensureType(state, allocator, actual, constant_decl.value_type, origin, .UnmatchedReturnType) catch |err| {
+            try continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
         };
     }
@@ -341,10 +341,10 @@ pub fn checkConst(
 
 pub fn checkPageStatements(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     origin_path: []const u8,
-    program: ast.Program,
+    program: ast.Module,
 ) !void {
     var page_context = PageContextRequirement.init(allocator, sema);
     defer page_context.deinit();
@@ -356,9 +356,9 @@ pub fn checkPageStatements(
         var scope = NameScope.init(allocator);
         defer scope.deinit();
         for (program.document_statements.items) |stmt| {
-            const diagnostic_count = ir.diagnostics.items.len;
-            checkTopLevelStatement(allocator, ir, sema, origin_path, .document, &env, &scope, &page_context, stmt) catch |err| {
-                try continueAfterDiagnostic(ir, diagnostic_count, err);
+            const diagnostic_count = state.diagnostics.items.len;
+            checkTopLevelStatement(allocator, state, sema, origin_path, .document, &env, &scope, &page_context, stmt) catch |err| {
+                try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
             };
         }
@@ -370,9 +370,9 @@ pub fn checkPageStatements(
         defer scope.deinit();
 
         for (page.statements.items) |stmt| {
-            const diagnostic_count = ir.diagnostics.items.len;
-            checkTopLevelStatement(allocator, ir, sema, origin_path, .page, &env, &scope, &page_context, stmt) catch |err| {
-                try continueAfterDiagnostic(ir, diagnostic_count, err);
+            const diagnostic_count = state.diagnostics.items.len;
+            checkTopLevelStatement(allocator, state, sema, origin_path, .page, &env, &scope, &page_context, stmt) catch |err| {
+                try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
             };
         }
@@ -382,7 +382,7 @@ pub fn checkPageStatements(
 
 fn checkTopLevelStatement(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     context: StatementContext,
@@ -391,94 +391,94 @@ fn checkTopLevelStatement(
     page_context: *PageContextRequirement,
     stmt: ast.Statement,
 ) !void {
-    const origin = try statementOrigin(allocator, origin_path, stmt.span);
+    const origin = try sourceOrigin(allocator, origin_path, stmt.span);
     defer allocator.free(origin);
     switch (stmt.kind) {
         .hole => return,
         .let_binding => |binding| {
             const binds_name = !language_names.isDiscardBindingName(binding.name);
-            if (binds_name) try rejectDuplicateBinding(ir, env, binding.name, origin);
-            try rejectPageOnlyExpr(ir, context, origin, page_context, scope, binding.expr);
-            const inferred = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
-            const info = try checkedLetBindingInfo(allocator, ir, binding, inferred, origin);
-            try rejectVoidValue(ir, info, origin);
+            if (binds_name) try rejectDuplicateBinding(state, env, binding.name, origin);
+            try rejectPageOnlyExpr(state, context, origin, page_context, scope, binding.expr);
+            const inferred = try inferExprInfo(allocator, state, sema, env, binding.expr, origin);
+            const info = try checkedLetBindingInfo(allocator, state, binding, inferred, origin);
+            try rejectVoidValue(state, info, origin);
             if (!binds_name) return;
             try env.put(binding.name, info);
             try scope.put(binding.name);
         },
         .return_expr => {
-            try addUserReport(ir, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
+            try addUserReport(state, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
             return error.ReturnOutsideFunction;
         },
         .return_void => {
-            try addUserReport(ir, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
+            try addUserReport(state, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
             return error.ReturnOutsideFunction;
         },
         .property_set => |property_set| {
-            try rejectPageOnlyExpr(ir, context, origin, page_context, scope, property_set.target);
-            try rejectPageOnlyExpr(ir, context, origin, page_context, scope, property_set.value);
-            try validatePropertySetStatement(allocator, ir, sema, env, property_set.target, property_set.path.items, property_set.value, origin);
+            try rejectPageOnlyExpr(state, context, origin, page_context, scope, property_set.target);
+            try rejectPageOnlyExpr(state, context, origin, page_context, scope, property_set.value);
+            try validatePropertySetStatement(allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
-            try rejectPageOnlyExpr(ir, context, origin, page_context, scope, if_stmt.condition);
-            const condition = try inferExprInfo(allocator, ir, sema, env, if_stmt.condition, origin);
-            try ensureType(ir, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
+            try rejectPageOnlyExpr(state, context, origin, page_context, scope, if_stmt.condition);
+            const condition = try inferExprInfo(allocator, state, sema, env, if_stmt.condition, origin);
+            try ensureType(state, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
             var then_env = try env.clone();
             defer then_env.deinit();
             var then_scope = try scope.clone();
             defer then_scope.deinit();
             for (if_stmt.then_statements.items) |nested| {
-                try checkTopLevelStatement(allocator, ir, sema, origin_path, context, &then_env, &then_scope, page_context, nested);
+                try checkTopLevelStatement(allocator, state, sema, origin_path, context, &then_env, &then_scope, page_context, nested);
             }
             var else_env = try env.clone();
             defer else_env.deinit();
             var else_scope = try scope.clone();
             defer else_scope.deinit();
             for (if_stmt.else_statements.items) |nested| {
-                try checkTopLevelStatement(allocator, ir, sema, origin_path, context, &else_env, &else_scope, page_context, nested);
+                try checkTopLevelStatement(allocator, state, sema, origin_path, context, &else_env, &else_scope, page_context, nested);
             }
         },
         .expr_stmt => |expr| {
-            try rejectPageOnlyExpr(ir, context, origin, page_context, scope, expr);
-            _ = try inferExprInfo(allocator, ir, sema, env, expr, origin);
+            try rejectPageOnlyExpr(state, context, origin, page_context, scope, expr);
+            _ = try inferExprInfo(allocator, state, sema, env, expr, origin);
         },
         .constrain => |decl| {
             if (context != .page) {
-                try addUserReport(ir, origin, "NoCurrentPage: constraints are only valid inside a page block", .{});
+                try addUserReport(state, origin, "NoCurrentPage: constraints are only valid inside a page block", .{});
                 return error.NoCurrentPage;
             }
-            try validateAnchorRef(allocator, ir, sema, env, origin, decl.target, true);
-            try validateAnchorRef(allocator, ir, sema, env, origin, decl.source, false);
+            try validateAnchorRef(allocator, state, sema, env, origin, decl.target, true);
+            if (decl.source) |source| try validateAnchorRef(allocator, state, sema, env, origin, source, false);
             if (decl.offset) |expr| {
-                try rejectPageOnlyExpr(ir, context, origin, page_context, scope, expr);
-                const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
-                try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
+                try rejectPageOnlyExpr(state, context, origin, page_context, scope, expr);
+                const actual = try inferExprInfo(allocator, state, sema, env, expr, origin);
+                try ensureType(state, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },
     }
 }
 
-fn rejectVoidValue(ir: *core.Ir, info: semantic_types.TypeInfo, origin: []const u8) !void {
+fn rejectVoidValue(state: *core.DocumentState, info: semantic_types.TypeInfo, origin: []const u8) !void {
     if (info.hole != null) return;
     if (info.ty.kind != .void) return;
-    try addUserReport(ir, origin, "VoidValue: void results can only be used as statements", .{});
+    try addUserReport(state, origin, "VoidValue: void results can only be used as statements", .{});
     return error.InvalidType;
 }
 
 fn checkedLetBindingInfo(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     binding: anytype,
     inferred: semantic_types.TypeInfo,
     origin: []const u8,
 ) !semantic_types.TypeInfo {
     const annotation = binding.type_annotation orelse return inferred;
-    try ensureType(ir, allocator, inferred, annotation, origin, .UnmatchedReturnType);
+    try ensureType(state, allocator, inferred, annotation, origin, .UnmatchedReturnType);
     return infoFromType(annotation);
 }
 
 fn rejectPageOnlyExpr(
-    ir: *core.Ir,
+    state: *core.DocumentState,
     context: StatementContext,
     origin: []const u8,
     page_context: *PageContextRequirement,
@@ -487,14 +487,14 @@ fn rejectPageOnlyExpr(
 ) !void {
     if (context == .page) return;
     if (try page_context.exprRequirement(scope, expr)) |requirement| {
-        try addUserReport(ir, origin, "NoCurrentPage: '{s}' is only valid inside a page block", .{requirement.displayName()});
+        try addUserReport(state, origin, "NoCurrentPage: '{s}' is only valid inside a page block", .{requirement.displayName()});
         return error.NoCurrentPage;
     }
 }
 
 fn validateAnchorRef(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     env: *TypeEnv,
     origin: []const u8,
@@ -503,15 +503,15 @@ fn validateAnchorRef(
 ) !void {
     switch (anchor_ref.kind) {
         .page => if (is_target) {
-            try addUserReport(ir, origin, "PageCannotBeConstraintTarget: page anchors cannot be constraint targets", .{});
+            try addUserReport(state, origin, "PageCannotBeConstraintTarget: page anchors cannot be constraint targets", .{});
             return error.PageCannotBeConstraintTarget;
         },
         .node => {
             const path = anchorObjectPath(anchor_ref) orelse return;
-            const info = try resolveAnchorPathInfo(ir, sema, env, origin, path);
+            const info = try resolveAnchorPathInfo(state, sema, env, origin, path);
             if (info.hole != null) return;
             if (!isObjectLike(info)) {
-                try ensureType(ir, allocator, info, Type.object, origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, info, Type.object, origin, .UnmatchedArgumentType);
             }
         },
     }
@@ -522,7 +522,7 @@ fn anchorObjectPath(anchor_ref: ast.AnchorRef) ?[]const u8 {
 }
 
 fn resolveAnchorPathInfo(
-    ir: *core.Ir,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     env: *TypeEnv,
     origin: []const u8,
@@ -531,21 +531,21 @@ fn resolveAnchorPathInfo(
     var iter = std.mem.splitScalar(u8, path, '.');
     const first = iter.next() orelse return error.UnknownIdentifier;
     var info = env.get(first) orelse {
-        try addUserReport(ir, origin, "UnknownIdentifier: unknown constraint object '{s}'", .{first});
+        try addUserReport(state, origin, "UnknownIdentifier: unknown constraint object '{s}'", .{first});
         return error.UnknownIdentifier;
     };
     while (iter.next()) |field_name| {
         if (info.hole != null) return info;
         if (info.ty.kind != .record) {
-            try addUserReport(ir, origin, "InvalidConstraintObject: anchor path '{s}' does not resolve through a record", .{path});
+            try addUserReport(state, origin, "InvalidConstraintObject: anchor path '{s}' does not resolve through a record", .{path});
             return error.InvalidType;
         }
         const record_name = info.ty.class_name orelse {
-            try addUserReport(ir, origin, "InvalidRecordType: record type has no name", .{});
+            try addUserReport(state, origin, "InvalidRecordType: record type has no name", .{});
             return error.InvalidType;
         };
         const field = sema.recordField(record_name, field_name) orelse {
-            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, field_name });
+            try addUserReport(state, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, field_name });
             return error.InvalidType;
         };
         info = infoFromType(field.value_type);
@@ -562,59 +562,59 @@ fn isObjectLike(info: semantic_types.TypeInfo) bool {
 
 fn checkStatement(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     env: *TypeEnv,
     result_type: Type,
     stmt: ast.Statement,
 ) !void {
-    const origin = try statementOrigin(allocator, origin_path, stmt.span);
+    const origin = try sourceOrigin(allocator, origin_path, stmt.span);
     defer allocator.free(origin);
     switch (stmt.kind) {
         .hole => return,
         .let_binding => |binding| {
             const binds_name = !language_names.isDiscardBindingName(binding.name);
-            if (binds_name) try rejectDuplicateBinding(ir, env, binding.name, origin);
-            const inferred = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
-            const info = try checkedLetBindingInfo(allocator, ir, binding, inferred, origin);
-            try rejectVoidValue(ir, info, origin);
+            if (binds_name) try rejectDuplicateBinding(state, env, binding.name, origin);
+            const inferred = try inferExprInfo(allocator, state, sema, env, binding.expr, origin);
+            const info = try checkedLetBindingInfo(allocator, state, binding, inferred, origin);
+            try rejectVoidValue(state, info, origin);
             if (!binds_name) return;
             try env.put(binding.name, info);
         },
         .return_expr => |expr| {
-            const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
-            try ensureType(ir, allocator, actual, result_type, origin, .UnmatchedReturnType);
+            const actual = try inferExprInfo(allocator, state, sema, env, expr, origin);
+            try ensureType(state, allocator, actual, result_type, origin, .UnmatchedReturnType);
         },
         .return_void => {
             if (result_type.kind != .void) {
-                try ensureType(ir, allocator, infoFromType(.{ .kind = .void }), result_type, origin, .UnmatchedReturnType);
+                try ensureType(state, allocator, infoFromType(.{ .kind = .void }), result_type, origin, .UnmatchedReturnType);
             }
         },
         .property_set => |property_set| {
-            try validatePropertySetStatement(allocator, ir, sema, env, property_set.target, property_set.path.items, property_set.value, origin);
+            try validatePropertySetStatement(allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
-            const condition = try inferExprInfo(allocator, ir, sema, env, if_stmt.condition, origin);
-            try ensureType(ir, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
+            const condition = try inferExprInfo(allocator, state, sema, env, if_stmt.condition, origin);
+            try ensureType(state, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
             var then_env = try env.clone();
             defer then_env.deinit();
             for (if_stmt.then_statements.items) |nested| {
-                try checkStatement(allocator, ir, sema, origin_path, &then_env, result_type, nested);
+                try checkStatement(allocator, state, sema, origin_path, &then_env, result_type, nested);
             }
             var else_env = try env.clone();
             defer else_env.deinit();
             for (if_stmt.else_statements.items) |nested| {
-                try checkStatement(allocator, ir, sema, origin_path, &else_env, result_type, nested);
+                try checkStatement(allocator, state, sema, origin_path, &else_env, result_type, nested);
             }
         },
         .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, ir, sema, env, expr, origin);
+            _ = try inferExprInfo(allocator, state, sema, env, expr, origin);
         },
         .constrain => |decl| {
             if (decl.offset) |expr| {
-                const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
-                try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
+                const actual = try inferExprInfo(allocator, state, sema, env, expr, origin);
+                try ensureType(state, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },
     }

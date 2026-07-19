@@ -42,7 +42,7 @@ pub fn general(output: Output) void {
     outputPrint(output,
         \\{s}Build:{s}
         \\  {s}ss check [input.ss]{s}     Check source
-        \\  {s}ss render [input.ss]{s}    Write PDF
+        \\  {s}ss render [input.ss]{s}    Write PDF or HTML
         \\  {s}ss dump [input.ss]{s}      Write IR JSON
         \\
         \\{s}Tools:{s}
@@ -275,14 +275,14 @@ fn render(output: Output) void {
     outputPrint(output,
         \\{s}Usage:{s}
         \\  {s}ss render [input.ss] [output.pdf]{s}
-        \\  {s}ss render --project FILE_OR_DIR --output output.pdf{s}
+        \\  {s}ss render --format html --output slides.html input.ss{s}
         \\
         \\{s}Options:{s}
         \\  {s}--project FILE_OR_DIR{s}   Load entry and asset base from ss.toml
         \\  {s}--asset-base-dir DIR{s}    Resolve relative assets from DIR
-        \\  {s}--output FILE{s}           PDF output path
+        \\  {s}--output FILE{s}           PDF or self-contained HTML file
+        \\  {s}--format pdf|html{s}        Output format
         \\  {s}--jobs N{s}                Parallel render jobs
-        \\  {s}--cache-id ID{s}           Stable cache identity for temporary inputs
         \\  {s}--diagnostics-json FILE{s} Write diagnostics JSON
         \\  {s}--color auto|always|never{s}
         \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
@@ -310,9 +310,11 @@ fn render(output: Output) void {
         \\  {s}ss render slide.ss{s}
         \\  {s}ss render slide.ss deck.pdf{s}
         \\  {s}ss render --project slides --output deck.pdf{s}
+        \\  {s}ss render --format html --output deck.html slide.ss{s}
         \\
     , .{
         s.heading, s.reset,
+        s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,
@@ -337,8 +339,8 @@ fn dump(output: Output) void {
         \\
         \\{s}Examples:{s}
         \\  {s}ss dump slide.ss{s}
-        \\  {s}ss dump slide.ss ir.json{s}
-        \\  {s}ss dump --project slides --output ir.json{s}
+        \\  {s}ss dump slide.ss state.json{s}
+        \\  {s}ss dump --project slides --output state.json{s}
         \\
     , .{
         s.heading, s.reset,
@@ -364,12 +366,13 @@ fn watch(output: Output) void {
     outputPrint(output,
         \\{s}Usage:{s}
         \\  {s}ss watch check [input.ss]{s}
-        \\  {s}ss watch render [input.ss] [output.pdf]{s}
+        \\  {s}ss watch render [--format pdf|html] [input.ss] [output]{s}
         \\
         \\{s}Options:{s}
         \\  {s}--project FILE_OR_DIR{s}   Load entry and asset base from ss.toml
         \\  {s}--asset-base-dir DIR{s}    Resolve relative assets from DIR
-        \\  {s}--output FILE{s}           Output path for watch render
+        \\  {s}--output FILE{s}           PDF or self-contained HTML file
+        \\  {s}--format pdf|html{s}       Output format for watch render
         \\  {s}--interval-ms N{s}         Poll interval
         \\  {s}--jobs N{s}                Parallel render jobs
         \\  {s}--color auto|always|never{s}
@@ -391,15 +394,18 @@ fn watch(output: Output) void {
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
+        s.option,  s.reset,
     });
     outputPrint(output,
         \\{s}Examples:{s}
         \\  {s}ss watch check slide.ss{s}
         \\  {s}ss watch render slide.ss deck.pdf{s}
+        \\  {s}ss watch render --format html --output deck.html slide.ss{s}
         \\  {s}ss watch render --project slides --output deck.pdf{s}
         \\
     , .{
         s.heading, s.reset,
+        s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,
@@ -424,7 +430,7 @@ fn debug(output: Output) void {
         \\  {s}--quiet{s}                 Hide progress and warning diagnostics
         \\
         \\{s}Examples:{s}
-        \\  {s}ss debug schedule slide.ss --output schedule.json{s}
+        \\  {s}ss debug schedule slide.ss --output execution.json{s}
         \\  {s}ss debug layout conflicts --project slides --output layout-conflicts.json{s}
         \\
     , .{
@@ -590,7 +596,7 @@ const bash_completion =
     \\  local common_opts="help --help -h"
     \\  local diagnostic_opts="--diagnostic-level --warnings --quiet"
     \\  local project_opts="--project --asset-base-dir --color $diagnostic_opts"
-    \\  local render_opts="--project --asset-base-dir --output --jobs --cache-id --diagnostics-json --color $diagnostic_opts"
+    \\  local render_opts="--project --asset-base-dir --output --format --jobs --diagnostics-json --color $diagnostic_opts"
     \\
     \\  case "$prev" in
     \\    --project|--asset-base-dir|--output|--diagnostics-json|--entry)
@@ -599,6 +605,10 @@ const bash_completion =
     \\      ;;
     \\    --jobs|--interval-ms)
     \\      COMPREPLY=( $(compgen -W "1 2 4 8" -- "$cur") )
+    \\      return 0
+    \\      ;;
+    \\    --format)
+    \\      COMPREPLY=( $(compgen -W "pdf html" -- "$cur") )
     \\      return 0
     \\      ;;
     \\    --color)
@@ -679,7 +689,7 @@ const zsh_completion =
     \\    'init:Create a project'
     \\    'doctor:Check local setup'
     \\    'check:Check source'
-    \\    'render:Write PDF'
+    \\    'render:Write PDF or HTML'
     \\    'dump:Write IR JSON'
     \\    'watch:Re-run check or render on changes'
     \\    'debug:Write schedule or layout JSON'
@@ -693,7 +703,7 @@ const zsh_completion =
     \\  local -a common_opts project_opts render_opts
     \\  common_opts=('help[show command help]' '--help[show command help]' '-h[show command help]')
     \\  project_opts=('--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--color[color mode]:(auto always never)' '--diagnostic-level[diagnostic display level]:(note warning error off)' '--warnings[warning display]:(off)' '--quiet[hide progress and warning diagnostics]')
-    \\  render_opts=($project_opts '--output[output path]:file:_files' '--jobs[parallel render jobs]:jobs:' '--cache-id[stable cache identity]:id:' '--diagnostics-json[diagnostics JSON path]:file:_files')
+    \\  render_opts=($project_opts '--output[output path]:file:_files' '--format[output format]:(pdf html)' '--jobs[parallel render jobs]:jobs:' '--diagnostics-json[diagnostics JSON path]:file:_files')
     \\
     \\  if (( CURRENT == 2 )); then
     \\    _describe 'command' commands
@@ -741,7 +751,7 @@ const fish_completion =
     \\complete -c ss -n '__fish_use_subcommand' -a init -d 'Create a project'
     \\complete -c ss -n '__fish_use_subcommand' -a doctor -d 'Check local setup'
     \\complete -c ss -n '__fish_use_subcommand' -a check -d 'Check source'
-    \\complete -c ss -n '__fish_use_subcommand' -a render -d 'Write PDF'
+    \\complete -c ss -n '__fish_use_subcommand' -a render -d 'Write PDF or HTML'
     \\complete -c ss -n '__fish_use_subcommand' -a dump -d 'Write IR JSON'
     \\complete -c ss -n '__fish_use_subcommand' -a watch -d 'Re-run check or render on changes'
     \\complete -c ss -n '__fish_use_subcommand' -a debug -d 'Write schedule or layout JSON'
@@ -764,8 +774,8 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l warnings -r -a 'off' -d 'Warning display'
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l quiet -d 'Hide progress and warning diagnostics'
     \\complete -c ss -n '__fish_seen_subcommand_from dump render watch debug' -l output -r -d 'Output path'
+    \\complete -c ss -n '__fish_seen_subcommand_from render watch' -l format -r -a 'pdf html' -d 'Output format'
     \\complete -c ss -n '__fish_seen_subcommand_from render watch' -l jobs -r -d 'Parallel render jobs'
-    \\complete -c ss -n '__fish_seen_subcommand_from render watch' -l cache-id -r -d 'Stable cache identity'
     \\complete -c ss -n '__fish_seen_subcommand_from render' -l diagnostics-json -r -d 'Diagnostics JSON path'
     \\complete -c ss -n '__fish_seen_subcommand_from watch' -l interval-ms -r -d 'Poll interval'
     \\complete -c ss -n '__fish_seen_subcommand_from doctor' -l strict -d 'Fail on issues'

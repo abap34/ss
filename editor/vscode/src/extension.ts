@@ -2,22 +2,22 @@ import * as vscode from "vscode";
 import { LanguageClient, LanguageClientOptions, Middleware, ServerOptions, Trace } from "vscode-languageclient/node";
 import { PageGuideDecorations } from "./pageGuide";
 import { projectSettings } from "./projectConfig";
-import { RenderController } from "./renderController";
+import { EditorController } from "./editor/controller";
 
 let client: LanguageClient | undefined;
 let pageGuide: PageGuideDecorations | undefined;
-let renderController: RenderController | undefined;
+let editorController: EditorController | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const output = vscode.window.createOutputChannel("ss");
   outputChannel = output;
   pageGuide = new PageGuideDecorations();
-  renderController = new RenderController(context, output, () => client);
+  editorController = new EditorController(context, output, () => client);
 
-  context.subscriptions.push(output, pageGuide, renderController);
-  context.subscriptions.push(vscode.commands.registerCommand("ss.preview.live", () => {
-    renderController?.openPreview(vscode.window.activeTextEditor?.document);
+  context.subscriptions.push(output, pageGuide, editorController);
+  context.subscriptions.push(vscode.commands.registerCommand("ss.editor.open", () => {
+    editorController?.open(vscode.window.activeTextEditor?.document);
   }));
   context.subscriptions.push(vscode.commands.registerCommand("ss.checkCurrentFile", async () => {
     const document = vscode.window.activeTextEditor?.document;
@@ -41,8 +41,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 export async function deactivate(): Promise<void> {
   pageGuide?.dispose();
   pageGuide = undefined;
-  renderController?.dispose();
-  renderController = undefined;
+  editorController?.dispose();
+  editorController = undefined;
   await stopLanguageClient();
   outputChannel = undefined;
 }
@@ -56,7 +56,7 @@ async function restartLanguageClient(context: vscode.ExtensionContext): Promise<
   client = active;
   context.subscriptions.push(active);
   await active.start();
-  renderController?.refreshOpenDocuments(0);
+  editorController?.refreshOpenDocuments(0);
 }
 
 async function stopLanguageClient(): Promise<void> {
@@ -112,7 +112,7 @@ function createMiddleware(): Middleware {
     provideDefinition: (document, position, token, next) =>
       featureEnabled(document, "definition") ? next(document, position, token) : null,
     provideInlayHints: (document, viewPort, token, next) =>
-      inlayHintsEnabled(document) ? filterInlayHints(document, next(document, viewPort, token)) : [],
+      inlayHintsEnabled(document) ? next(document, viewPort, token) : [],
     provideDocumentSymbols: (document, token, next) =>
       featureEnabled(document, "documentSymbols") ? next(document, token) : [],
     provideFoldingRanges: (document, context, token, next) =>
@@ -145,25 +145,5 @@ function featureEnabled(document: vscode.TextDocument, feature: LspFeatureName):
 
 function inlayHintsEnabled(document: vscode.TextDocument): boolean {
   const settings = projectSettings(document.uri).lsp;
-  return settings.enabled && settings.inlayHints && (settings.inlayHintArguments || settings.inlayHintPositions);
-}
-
-async function filterInlayHints(
-  document: vscode.TextDocument,
-  value: vscode.ProviderResult<vscode.InlayHint[]>,
-): Promise<vscode.InlayHint[]> {
-  const hints = await Promise.resolve(value);
-  if (!hints) {
-    return [];
-  }
-  const settings = projectSettings(document.uri).lsp;
-  return hints.filter((hint) => {
-    if (hint.kind === vscode.InlayHintKind.Parameter) {
-      return settings.inlayHintArguments;
-    }
-    if (hint.kind === vscode.InlayHintKind.Type) {
-      return settings.inlayHintPositions;
-    }
-    return true;
-  });
+  return settings.enabled && settings.inlayHints && settings.inlayHintArguments;
 }

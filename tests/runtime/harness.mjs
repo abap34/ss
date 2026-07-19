@@ -104,15 +104,24 @@ export class LspClient {
   }
 
   request(method, params) {
+    return this.startRequest(method, params).promise;
+  }
+
+  startRequest(method, params) {
     const id = this.nextId++;
     this.send({ jsonrpc: "2.0", id, method, params });
-    return new Promise((resolve, reject) => {
+    const promise = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`timed out waiting for response ${id} (${method}); stderr:\n${this.stderr}`));
       }, 10000);
       this.pending.set(id, { resolve, reject, timeout });
     });
+    return { id, promise };
+  }
+
+  cancelRequest(id) {
+    this.notify("$/cancelRequest", { id });
   }
 
   notify(method, params) {

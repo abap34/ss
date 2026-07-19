@@ -42,7 +42,7 @@ pub const DiagnosticSet = struct {
         span: ?source.ByteSpan,
         related: []const LspRelatedInput,
     ) !void {
-        const primary_span = span orelse return;
+        const primary_span = span orelse source.ByteSpan{ .start = 0, .end = 0 };
         const uri = try protocol.uriFromPath(self.allocator, path);
         const range = protocol.rangeFromSpan(text, primary_span);
         const code_copy = self.allocator.dupe(u8, code) catch |err| {
@@ -88,31 +88,47 @@ pub const DiagnosticSet = struct {
         }
     }
 
-    pub fn addConstraintFailure(self: *DiagnosticSet, ir: *core.Ir, err: anyerror) !void {
-        if (ir.constraint_failures.items.len > 0) {
-            try self.addConstraintFailureItem(ir, ir.constraint_failures.items[0]);
+    pub fn appendEditorErrorsJson(
+        self: *const DiagnosticSet,
+        allocator: std.mem.Allocator,
+        out: *std.ArrayList(u8),
+    ) !void {
+        try out.append(allocator, '[');
+        var count: usize = 0;
+        for (self.items.items) |*item| {
+            if (item.severity != .@"error") continue;
+            if (count != 0) try out.append(allocator, ',');
+            try item.appendEditorJson(allocator, out);
+            count += 1;
+        }
+        try out.append(allocator, ']');
+    }
+
+    pub fn addConstraintFailure(self: *DiagnosticSet, state: *core.DocumentState, err: anyerror) !void {
+        if (state.constraint_failures.items.len > 0) {
+            try self.addConstraintFailureItem(state, state.constraint_failures.items[0]);
             return;
         }
-        if (ir.last_constraint_failure) |failure| {
-            try self.addConstraintFailureItem(ir, failure);
+        if (state.last_constraint_failure) |failure| {
+            try self.addConstraintFailureItem(state, failure);
             return;
         }
 
         const message = try std.fmt.allocPrint(self.allocator, "BuildFailed: {s}", .{@errorName(err)});
         defer self.allocator.free(message);
-        try self.add(ir.projectPath(), ir.projectSource(), .@"error", @errorName(err), message, null);
+        try self.add(state.projectPath(), state.projectSource(), .@"error", @errorName(err), message, null);
     }
 
-    fn addConstraintFailureItem(self: *DiagnosticSet, ir: *core.Ir, failure: core.ConstraintFailure) !void {
+    fn addConstraintFailureItem(self: *DiagnosticSet, state: *core.DocumentState, failure: core.ConstraintFailure) !void {
         const kind_text = constraintFailureText(failure);
         const message = try formatConstraintFailureMessage(self.allocator, failure, kind_text);
         defer self.allocator.free(message);
 
-        const primary = constraintFailureLocation(ir, constraintFailureOrigin(failure));
+        const primary = constraintFailureLocation(state, constraintFailureOrigin(failure));
         var related = std.ArrayList(LspRelatedInput).empty;
         defer related.deinit(self.allocator);
         if (failure.existing_constraint) |constraint| {
-            const location = constraintFailureLocation(ir, constraint.origin);
+            const location = constraintFailureLocation(state, constraint.origin);
             if (location.span != null) {
                 try related.append(self.allocator, .{
                     .path = location.path,
@@ -123,7 +139,7 @@ pub const DiagnosticSet = struct {
             }
         }
         if (failure.constraint.origin != null and failure.existing_constraint == null) {
-            const location = constraintFailureLocation(ir, failure.constraint.origin);
+            const location = constraintFailureLocation(state, failure.constraint.origin);
             if (location.span != null and (primary.span == null or !spanEq(primary.span.?, location.span.?))) {
                 try related.append(self.allocator, .{
                     .path = location.path,
@@ -139,7 +155,7 @@ pub const DiagnosticSet = struct {
 
     fn addAnalysisDiagnostic(self: *DiagnosticSet, item: analysis_diagnostics.Diagnostic) !void {
         if (item.severity == .warning and isLayoutOverflowCode(item.code)) return;
-        const span = item.span orelse return;
+        const span = item.span orelse source.ByteSpan{ .start = 0, .end = 0 };
         const uri = try protocol.uriFromPath(self.allocator, item.path);
         errdefer self.allocator.free(uri);
         const code = try self.allocator.dupe(u8, item.code);
@@ -194,15 +210,15 @@ const ConstraintFailureLocation = struct {
     span: ?source.ByteSpan,
 };
 
-fn constraintFailureLocation(ir: *core.Ir, origin: ?[]const u8) ConstraintFailureLocation {
-    var report_path = ir.projectPath();
-    var report_source = ir.projectSource();
+fn constraintFailureLocation(state: *core.DocumentState, origin: ?[]const u8) ConstraintFailureLocation {
+    var report_path = state.projectPath();
+    var report_source = state.projectSource();
     var span: ?source.ByteSpan = null;
     if (origin) |origin_text| {
         if (utils.err.parseLocatedOrigin(origin_text)) |located| {
             span = located.span;
             if (located.path) |origin_path| {
-                if (ir.moduleByPathOrSpec(origin_path)) |module| {
+                if (state.moduleByPathOrSpec(origin_path)) |module| {
                     report_path = module.path orelse module.spec;
                     report_source = module.source;
                 } else {
@@ -321,6 +337,18 @@ const LspDiagnostic = struct {
             }
             try out.append(allocator, ']');
         }
+        try out.append(allocator, '}');
+    }
+
+    fn appendEditorJson(self: *const LspDiagnostic, allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
+        try out.appendSlice(allocator, "{\"uri\":");
+        try protocol.appendJsonString(allocator, out, self.uri);
+        try out.appendSlice(allocator, ",\"range\":");
+        try protocol.appendRange(allocator, out, self.range);
+        try out.appendSlice(allocator, ",\"code\":");
+        try protocol.appendJsonString(allocator, out, self.code);
+        try out.appendSlice(allocator, ",\"message\":");
+        try protocol.appendJsonString(allocator, out, self.message);
         try out.append(allocator, '}');
     }
 };

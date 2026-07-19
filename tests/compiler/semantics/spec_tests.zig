@@ -2,6 +2,33 @@ const std = @import("std");
 const compiler_semantics = @import("compiler_semantics");
 
 const testing = std.testing;
+const fixture_root = "tests/fixtures/compiler/semantics";
+
+fn fixturePath(allocator: std.mem.Allocator, fixture: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &.{ fixture_root, fixture, "slide.ss" });
+}
+
+fn fixtureSource(allocator: std.mem.Allocator, fixture: []const u8) !struct { path: []u8, source: []u8 } {
+    const path = try fixturePath(allocator, fixture);
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, allocator, .limited(256 * 1024));
+    return .{ .path = path, .source = source };
+}
+
+fn buildFixture(fixture: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const input = try fixtureSource(allocator, fixture);
+    try compiler_semantics.buildSource(testing.io, allocator, input.path, input.source);
+}
+
+fn expectFixtureDumpContains(fixture: []const u8, needles: []const []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const input = try fixtureSource(allocator, fixture);
+    try compiler_semantics.expectDumpContains(testing.io, allocator, input.path, input.source, needles);
+}
 
 fn buildSource(source: []const u8) !void {
     var tmp = testing.tmpDir(.{});
@@ -79,6 +106,26 @@ fn buildSourceWithAssetFixtures(source: []const u8) !void {
     try compiler_semantics.buildSource(testing.io, allocator, slide_path, source);
 }
 
+fn expectFixtureObjectFieldPath(fixture: []const u8, root_key: []const u8, field_path: []const []const u8, expected: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try fixturePath(allocator, fixture);
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, allocator, .limited(256 * 1024));
+    try compiler_semantics.expectObjectFieldPath(testing.io, allocator, path, source, root_key, field_path, expected);
+}
+
+fn expectFixtureLoweringErrorDiagnostic(fixture: []const u8, expected_message: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try fixturePath(allocator, fixture);
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, allocator, .limited(256 * 1024));
+    try compiler_semantics.expectLoweringErrorDiagnostic(testing.io, allocator, path, source, expected_message);
+}
+
 fn expectObjectContentWithFile(source: []const u8, file_name: []const u8, file_content: []const u8, expected: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -136,6 +183,16 @@ fn expectObjectContent(source: []const u8, expected: []const u8) !void {
     const allocator = arena.allocator();
 
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectObjectContent(testing.io, allocator, path, source, expected);
+}
+
+fn expectFixtureObjectContent(fixture: []const u8, expected: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try fixturePath(allocator, fixture);
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, allocator, .limited(256 * 1024));
     try compiler_semantics.expectObjectContent(testing.io, allocator, path, source, expected);
 }
 
@@ -1519,6 +1576,43 @@ test "compiler semantics: structured style values expand to render properties" {
     try expectObjectFieldPath(source, "text", &.{ "font", "weight" }, "700");
 }
 
+test "compiler semantics: set_prop rejects a duplicate property definition" {
+    try expectFixtureLoweringErrorDiagnostic(
+        "theme/set-prop",
+        "DuplicatePropertyDefinition: property 'text' is already defined on this target",
+    );
+}
+
+test "compiler semantics: text carries themed markdown heading styles" {
+    try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h2", "text", "size" }, "35");
+    try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h2", "text", "color" }, "0.08235294,0.47843137,0.16862746");
+    try expectFixtureObjectFieldPath("theme/markdown-heading-text", "markdown_headings", &.{ "h6", "text", "size" }, "17");
+    try expectFixtureObjectFieldPath("theme/markdown-heading-figure", "markdown_headings", &.{ "h2", "text", "size" }, "38");
+}
+
+test "compiler semantics: shared theme style application keeps text decoration and layout" {
+    try expectFixtureObjectFieldPath("theme/text-decoration-layout", "layout", &.{"x"}, "137");
+    try expectFixtureObjectFieldPath("theme/text-decoration-layout", "underline", &.{"color"}, "0.6313726,0.14901961,0.30980393");
+    try expectFixtureObjectFieldPath("theme/text-decoration-layout", "underline", &.{"width"}, "3");
+}
+
+test "compiler semantics: all themed text constructors apply their theme records" {
+    try expectFixtureObjectFieldPath("theme/direct-constructors", "text", &.{"size"}, "29");
+    try expectFixtureObjectFieldPath("theme/direct-constructors", "text", &.{"size"}, "18");
+    try expectFixtureObjectFieldPath("theme/direct-constructors", "text", &.{"size"}, "16");
+    try expectFixtureObjectFieldPath("theme/direct-constructors", "text", &.{"size"}, "17");
+    try expectFixtureObjectFieldPath("theme/generated-constructors", "text", &.{"size"}, "17");
+    try expectFixtureObjectFieldPath("theme/generated-constructors", "text", &.{"size"}, "18");
+    try expectFixtureObjectFieldPath("theme/generated-constructors", "text", &.{"size"}, "19");
+}
+
+test "compiler semantics: image and academic toc apply their chrome theme records" {
+    try expectFixtureObjectFieldPath("theme/image", "chrome", &.{"stroke"}, "0.19215687,0.36078432,0.65882355");
+    try expectFixtureObjectFieldPath("theme/image", "chrome", &.{"pad_x"}, "17");
+    try expectFixtureObjectFieldPath("theme/academic-toc", "chrome", &.{"fill"}, "0.93333334,0.9529412,0.9764706");
+    try expectFixtureObjectFieldPath("theme/academic-toc", "chrome", &.{"pad_y"}, "11");
+}
+
 test "compiler semantics: nested property assignment updates style records" {
     const source =
         \\import std:themes/default as *
@@ -2698,12 +2792,9 @@ test "compiler semantics: object field defaults are statically typed" {
         \\end
         \\
     , .{
-        .link_underline_width = 0.8,
-        .link_underline_offset = -1.5,
         .inline_math_height_factor = 1.02,
         .inline_math_spacing = 0.08,
         .markdown_table_line_width = 0.8,
-        .cjk_bold_dx = 0.05,
     });
 
     try expectDiagnostic(
@@ -2878,7 +2969,7 @@ test "compiler semantics: member sugar reads and writes properties and content" 
         \\  target.content = target.content ++ "!"
         \\end
         \\
-    , "ScheduledDependencyCycle: document evaluation dependencies contain a cycle");
+    , "ExecutionDependencyCycle: document evaluation dependencies contain a cycle");
 
     try expectObjectContent(
         \\import std:themes/default as *
@@ -3362,7 +3453,7 @@ test "compiler semantics: variable and property dependencies reject inverse cycl
         \\  set_content(item, current)
         \\end
         \\
-    , "ScheduledDependencyCycle: document evaluation dependencies contain a cycle");
+    , "ExecutionDependencyCycle: document evaluation dependencies contain a cycle");
 }
 
 test "compiler semantics: void functions may finish without explicit return" {
@@ -3517,6 +3608,10 @@ test "compiler semantics: functions can return captured function values" {
         \\end
         \\
     , "made");
+}
+
+test "compiler semantics: callbacks keep their defining module scope" {
+    try expectFixtureObjectContent("functions/module-callback", "module");
 }
 
 test "compiler semantics: function values use ordinary application" {
@@ -4789,6 +4884,39 @@ test "compiler semantics: explicit layout conflicts are rejected" {
         \\end
         \\
     );
+}
+
+test "compiler semantics: page constraint updates replace component positioning and preserve size" {
+    try buildFixture("constraints/update/position");
+    try expectFixtureDumpContains("constraints/update/position", &.{
+        "\"constraint_updates\":[",
+        "\"overridden_constraints\":[",
+        "\"active\":true",
+        "\"from_update\":true",
+        "\"role\":\"size\"",
+    });
+}
+
+test "compiler semantics: pure constraint updates leave fallback placement available" {
+    try buildFixture("constraints/update/pure");
+}
+
+test "compiler semantics: caller constraint updates override component updates" {
+    try buildFixture("constraints/update/caller");
+}
+
+test "compiler semantics: later constraint updates overwrite earlier updates on one axis" {
+    try buildFixture("constraints/update/order");
+}
+
+test "compiler semantics: size constraint updates replace inherited dimensions" {
+    try buildFixture("constraints/update/size");
+    try expectFixtureDumpContains("constraints/update/size", &.{
+        "\"target_anchor\":\"right\"",
+        "\"offset\":320.0",
+        "\"role\":\"size\"",
+        "\"from_update\":true",
+    });
 }
 
 test "compiler semantics: missing constraint anchors are rejected statically" {

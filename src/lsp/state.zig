@@ -9,17 +9,19 @@ const protocol = @import("protocol.zig");
 const source = utils.source;
 
 pub const JsonValue = protocol.JsonValue;
-pub const Snapshot = analysis_snapshot.AnalysisSnapshot;
+pub const AnalysisSnapshot = analysis_snapshot.AnalysisSnapshot;
 
 pub const DocumentStore = struct {
     allocator: std.mem.Allocator,
     items: std.StringHashMap([]u8),
+    versions: std.StringHashMap(i64),
     generation: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator) DocumentStore {
         return .{
             .allocator = allocator,
             .items = std.StringHashMap([]u8).init(allocator),
+            .versions = std.StringHashMap(i64).init(allocator),
         };
     }
 
@@ -30,12 +32,16 @@ pub const DocumentStore = struct {
             self.allocator.free(entry.value_ptr.*);
         }
         self.items.deinit();
+        var version_iterator = self.versions.iterator();
+        while (version_iterator.next()) |entry| self.allocator.free(entry.key_ptr.*);
+        self.versions.deinit();
     }
 
-    pub fn replaceUri(self: *DocumentStore, uri: []const u8, text: []const u8) ![]u8 {
+    pub fn replaceUri(self: *DocumentStore, uri: []const u8, text: []const u8, version: ?i64) ![]u8 {
         const path = try self.absolutePathFromUri(uri);
         errdefer self.allocator.free(path);
         try self.replacePath(path, text);
+        if (version) |value| try self.setVersionAtPath(path, value);
         return path;
     }
 
@@ -78,6 +84,7 @@ pub const DocumentStore = struct {
             self.allocator.free(entry.value);
             self.generation += 1;
         }
+        if (self.versions.fetchRemove(path)) |entry| self.allocator.free(entry.key);
         return path;
     }
 
@@ -92,6 +99,28 @@ pub const DocumentStore = struct {
         while (it.next()) |entry| {
             try overlay.put(entry.key_ptr.*, entry.value_ptr.*);
         }
+    }
+
+    pub fn setVersionAtPath(self: *DocumentStore, path: []const u8, version: i64) !void {
+        if (self.versions.getPtr(path)) |current| {
+            current.* = version;
+            return;
+        }
+        const owned_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(owned_path);
+        try self.versions.put(owned_path, version);
+    }
+
+    pub fn versionForPath(self: *const DocumentStore, path: []const u8) ?i64 {
+        const absolute = project.absolutePath(self.allocator, path) catch return null;
+        defer self.allocator.free(absolute);
+        return self.versions.get(absolute);
+    }
+
+    pub fn versionForUri(self: *const DocumentStore, uri: []const u8) ?i64 {
+        const path = protocol.pathFromUri(self.allocator, uri) catch return null;
+        defer self.allocator.free(path);
+        return self.versionForPath(path);
     }
 
     pub fn iterator(self: *DocumentStore) std.StringHashMap([]u8).Iterator {
@@ -214,22 +243,23 @@ pub fn featureEnabledInConfig(cfg: project.LspConfig, feature: Feature) bool {
     };
 }
 
-pub fn featureEnabledForSnapshot(snapshot: *const Snapshot, feature: Feature) bool {
+pub fn featureEnabledForAnalysis(snapshot: *const AnalysisSnapshot, feature: Feature) bool {
     return featureEnabledInConfig(snapshot.project.lsp, feature);
 }
 
-pub fn featureEnabledForCurrent(snapshot: ?*const Snapshot, feature: Feature) bool {
+pub fn featureEnabledForCurrent(snapshot: ?*const AnalysisSnapshot, feature: Feature) bool {
     const cfg = if (snapshot) |value| value.project.lsp else project.LspConfig{};
     return featureEnabledInConfig(cfg, feature);
 }
 
-pub const SnapshotProvider = struct {
+pub const AnalysisProvider = struct {
     context: *anyopaque,
-    current: ?*Snapshot,
+    current: ?*AnalysisSnapshot,
     generation: u64,
-    build: *const fn (context: *anyopaque, path: []const u8) anyerror!Snapshot,
+    cancellation: ?analysis_snapshot.Cancellation = null,
+    build: *const fn (context: *anyopaque, path: []const u8) anyerror!AnalysisSnapshot,
 
-    pub fn forDocument(self: *SnapshotProvider, doc_path: []const u8, owned_snapshot: *?Snapshot) !?*Snapshot {
+    pub fn forDocument(self: *AnalysisProvider, doc_path: []const u8, owned_snapshot: *?AnalysisSnapshot) !?*AnalysisSnapshot {
         if (self.current) |snapshot| {
             if (snapshot.generation == self.generation and snapshot.coversPath(doc_path)) return snapshot;
         }
@@ -239,7 +269,7 @@ pub const SnapshotProvider = struct {
     }
 };
 
-pub const LayoutSnapshot = struct {
+pub const CachedResponse = struct {
     entry_path: []u8,
     generation: u64,
     json: []u8,
@@ -249,7 +279,7 @@ pub const LayoutSnapshot = struct {
         entry_path: []const u8,
         generation: u64,
         json: []const u8,
-    ) !LayoutSnapshot {
+    ) !CachedResponse {
         const owned_entry_path = try allocator.dupe(u8, entry_path);
         errdefer allocator.free(owned_entry_path);
         return .{
@@ -259,44 +289,52 @@ pub const LayoutSnapshot = struct {
         };
     }
 
-    pub fn deinit(self: *LayoutSnapshot, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *CachedResponse, allocator: std.mem.Allocator) void {
         allocator.free(self.entry_path);
         allocator.free(self.json);
         self.* = .{ .entry_path = &.{}, .generation = 0, .json = &.{} };
     }
 
-    pub fn matchesEntry(self: *const LayoutSnapshot, entry_path: []const u8) bool {
+    pub fn matchesEntry(self: *const CachedResponse, entry_path: []const u8) bool {
         return std.mem.eql(u8, self.entry_path, entry_path);
     }
 
-    pub fn cloneJson(self: *const LayoutSnapshot, allocator: std.mem.Allocator) ![]u8 {
+    pub fn cloneJson(self: *const CachedResponse, allocator: std.mem.Allocator) ![]u8 {
         return try allocator.dupe(u8, self.json);
     }
 };
 
-pub const LayoutStore = struct {
-    last_good: ?LayoutSnapshot = null,
+pub const ResponseStore = struct {
+    items: std.ArrayList(CachedResponse) = .empty,
 
-    pub fn deinit(self: *LayoutStore, allocator: std.mem.Allocator) void {
-        if (self.last_good) |*layout| layout.deinit(allocator);
-        self.last_good = null;
+    pub fn deinit(self: *ResponseStore, allocator: std.mem.Allocator) void {
+        for (self.items.items) |*response| response.deinit(allocator);
+        self.items.deinit(allocator);
+        self.* = .{};
     }
 
-    pub fn remember(self: *LayoutStore, allocator: std.mem.Allocator, snapshot: *const Snapshot, json: []const u8) !void {
-        const next = try LayoutSnapshot.init(
+    pub fn store(self: *ResponseStore, allocator: std.mem.Allocator, snapshot: *const AnalysisSnapshot, json: []const u8) !void {
+        var next = try CachedResponse.init(
             allocator,
             snapshot.project.entry_path,
             snapshot.generation,
             json,
         );
-        if (self.last_good) |*layout| layout.deinit(allocator);
-        self.last_good = next;
+        errdefer next.deinit(allocator);
+        for (self.items.items) |*response| {
+            if (!response.matchesEntry(snapshot.project.entry_path)) continue;
+            response.deinit(allocator);
+            response.* = next;
+            return;
+        }
+        try self.items.append(allocator, next);
     }
 
-    pub fn jsonForEntry(self: *const LayoutStore, allocator: std.mem.Allocator, entry_path: []const u8) !?[]const u8 {
-        const layout = if (self.last_good) |*value| value else return null;
-        if (!layout.matchesEntry(entry_path)) return null;
-        return try layout.cloneJson(allocator);
+    pub fn cloneForEntry(self: *const ResponseStore, allocator: std.mem.Allocator, entry_path: []const u8) !?[]const u8 {
+        for (self.items.items) |*response| {
+            if (response.matchesEntry(entry_path)) return try response.cloneJson(allocator);
+        }
+        return null;
     }
 };
 

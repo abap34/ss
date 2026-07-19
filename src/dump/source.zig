@@ -29,7 +29,7 @@ fn writeModule(allocator: std.mem.Allocator, modules: *json.Array, module: core.
     }
     try implicit_imports.end();
     var imports = try item.arrayField("imports");
-    for (module.program.imports.items, 0..) |import_decl, index| {
+    for (module.syntax.imports.items, 0..) |import_decl, index| {
         var import_item = try imports.objectItem();
         try import_item.stringField("spec", import_decl.spec);
         try writeImportMode(&import_item, import_decl.mode);
@@ -43,7 +43,7 @@ fn writeModule(allocator: std.mem.Allocator, modules: *json.Array, module: core.
     }
     try imports.end();
     try item.stringField("source", module.source);
-    try writeProgram(allocator, &item, module.program);
+    try writeModuleSyntax(allocator, &item, module.syntax);
     try item.end();
 }
 
@@ -54,7 +54,7 @@ fn moduleSpecById(modules: []const core.SourceModule, module_id: core.SourceModu
     return null;
 }
 
-fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast.Program) !void {
+fn writeModuleSyntax(allocator: std.mem.Allocator, object: *json.Object, program: ast.Module) !void {
     var program_object = try object.objectField("program");
 
     var imports = try program_object.arrayField("imports");
@@ -360,8 +360,14 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
         },
         .constrain => |decl| {
             try item.stringField("kind", "constrain");
+            try item.enumTagField("action", decl.action);
+            try item.enumTagField("target_kind", decl.target_kind);
             try writeAnchorRef(&item, "target", decl.target);
-            try writeAnchorRef(&item, "source", decl.source);
+            if (decl.source) |source| {
+                try writeAnchorRef(&item, "source", source);
+            } else {
+                try item.nullField("source");
+            }
             if (decl.offset) |expr| {
                 try writeExpr(allocator, &item, "offset", expr);
             } else {

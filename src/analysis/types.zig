@@ -140,18 +140,18 @@ pub fn holeIdFromType(ty: Type) ?ast.HoleId {
 }
 
 pub fn ensureType(
-    ir: ?*core.Ir,
+    state: ?*core.DocumentState,
     allocator: std.mem.Allocator,
     actual: TypeInfo,
     expected: Type,
     origin: []const u8,
     code: core.TypeMismatchCode,
 ) !void {
-    return ensureTypeWithHoles(ir, allocator, actual, expected, origin, code, null);
+    return ensureTypeWithHoles(state, allocator, actual, expected, origin, code, null);
 }
 
 pub fn ensureTypeWithHoles(
-    ir: ?*core.Ir,
+    state: ?*core.DocumentState,
     allocator: std.mem.Allocator,
     actual: TypeInfo,
     expected: Type,
@@ -168,7 +168,7 @@ pub fn ensureTypeWithHoles(
         },
         .mismatch => {},
     }
-    if (ir) |sink| {
+    if (state) |sink| {
         const actual_label = try typeInfoLabelAlloc(allocator, actual);
         defer allocator.free(actual_label);
         const expected_label = try typeLabelAlloc(allocator, expected);

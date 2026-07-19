@@ -1,0 +1,1657 @@
+const std = @import("std");
+const model = @import("model");
+const layout = @import("../layout/root.zig");
+const ast = @import("ast");
+const value_text = @import("value_text.zig");
+
+const Allocator = model.Allocator;
+const NodeId = model.NodeId;
+const Node = model.Node;
+const NodeKind = model.NodeKind;
+const Role = model.Role;
+const ObjectKind = model.ObjectKind;
+const PayloadKind = model.PayloadKind;
+const Anchor = model.Anchor;
+const Constraint = model.Constraint;
+const ConstraintSet = model.ConstraintSet;
+const ConstraintRole = model.ConstraintRole;
+const ConstraintUpdate = model.ConstraintUpdate;
+const ContentProvenance = model.ContentProvenance;
+const ConstraintSource = model.ConstraintSource;
+const Selection = model.Selection;
+const SelectionItemTag = model.SelectionItemTag;
+const ValueTag = model.ValueTag;
+const Value = model.Value;
+const Axis = model.Axis;
+const FunctionRef = model.FunctionRef;
+const Query = model.Query;
+
+const Diagnostic = model.Diagnostic;
+const DiagnosticPhase = model.DiagnosticPhase;
+const DiagnosticSeverity = model.DiagnosticSeverity;
+const ConstraintFailure = model.ConstraintFailure;
+const ConstraintFailureKind = model.ConstraintFailureKind;
+const ConstraintFailureReason = model.ConstraintFailureReason;
+const GroupRole = model.GroupRole;
+const roleEq = model.roleEq;
+const nodeField = model.nodeField;
+
+pub const SourceModuleId = u32;
+
+const DefaultValueKey = struct {
+    pointer: usize,
+    length: usize,
+};
+
+const DefaultValueCache = struct {
+    allocator: Allocator,
+    values: std.AutoHashMap(DefaultValueKey, Value),
+    mutex: std.atomic.Mutex = .unlocked,
+
+    fn create(allocator: Allocator) !*DefaultValueCache {
+        const cache = try allocator.create(DefaultValueCache);
+        cache.* = .{
+            .allocator = allocator,
+            .values = std.AutoHashMap(DefaultValueKey, Value).init(allocator),
+        };
+        return cache;
+    }
+
+    fn destroy(self: *DefaultValueCache) void {
+        var iterator = self.values.valueIterator();
+        while (iterator.next()) |value| value_text.deinitParsedPropertyValue(self.allocator, value);
+        self.values.deinit();
+        self.allocator.destroy(self);
+    }
+
+    fn getOrParse(self: *DefaultValueCache, text: []const u8, value_type: ast.Type) !Value {
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+        defer self.mutex.unlock();
+
+        const key = DefaultValueKey{
+            .pointer = @intFromPtr(text.ptr),
+            .length = text.len,
+        };
+        if (self.values.get(key)) |value| return value;
+
+        var value = try value_text.typedPropertyValue(self.allocator, text, value_type);
+        errdefer value_text.deinitParsedPropertyValue(self.allocator, &value);
+        try self.values.put(key, value);
+        return value;
+    }
+};
+
+pub const FunctionKey = struct {
+    module_id: SourceModuleId,
+    name: []const u8,
+
+    pub fn eql(left: FunctionKey, right: FunctionKey) bool {
+        return left.module_id == right.module_id and std.mem.eql(u8, left.name, right.name);
+    }
+};
+
+pub const FunctionKeyContext = struct {
+    pub fn hash(_: FunctionKeyContext, key: FunctionKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(std.mem.asBytes(&key.module_id));
+        hasher.update(key.name);
+        return hasher.final();
+    }
+
+    pub fn eql(_: FunctionKeyContext, left: FunctionKey, right: FunctionKey) bool {
+        return left.eql(right);
+    }
+};
+
+pub const FunctionMap = std.HashMap(FunctionKey, ast.FunctionDecl, FunctionKeyContext, std.hash_map.default_max_load_percentage);
+pub const ConstMap = std.HashMap(FunctionKey, ast.ConstDecl, FunctionKeyContext, std.hash_map.default_max_load_percentage);
+pub const ConstValueMap = std.HashMap(FunctionKey, Value, FunctionKeyContext, std.hash_map.default_max_load_percentage);
+pub const ConstEvalStateMap = std.HashMap(FunctionKey, u8, FunctionKeyContext, std.hash_map.default_max_load_percentage);
+
+pub fn functionKey(module_id: SourceModuleId, name: []const u8) FunctionKey {
+    return .{ .module_id = module_id, .name = name };
+}
+
+pub fn constKey(module_id: SourceModuleId, name: []const u8) FunctionKey {
+    return .{ .module_id = module_id, .name = name };
+}
+
+pub const SourceModuleKind = enum {
+    project,
+    library,
+};
+
+pub const SourceModule = struct {
+    id: SourceModuleId,
+    kind: SourceModuleKind,
+    spec: []u8,
+    path: ?[]u8,
+    source: []u8,
+    syntax: ast.Module,
+    implicit_import_ids: std.ArrayList(SourceModuleId),
+    resolved_import_ids: std.ArrayList(SourceModuleId),
+
+    pub fn deinit(self: *SourceModule, allocator: Allocator) void {
+        self.syntax.deinit(allocator);
+        self.implicit_import_ids.deinit(allocator);
+        self.resolved_import_ids.deinit(allocator);
+        allocator.free(self.spec);
+        allocator.free(self.source);
+        if (self.path) |path| allocator.free(path);
+    }
+};
+
+pub const ObjectSource = struct {
+    node_id: NodeId,
+    page_id: NodeId,
+    module_id: SourceModuleId,
+    path: []const u8,
+    binding_base: ?[]const u8,
+    span_start: usize,
+    span_end: usize,
+};
+
+pub const DefinitionKind = enum {
+    function,
+    constant,
+    variable,
+};
+
+pub const DefinitionScopeKind = enum {
+    module,
+    function,
+    document,
+    page,
+};
+
+pub const Definition = struct {
+    name: []const u8,
+    line: usize,
+    column: usize,
+    length: usize,
+    span_start: usize,
+    span_end: usize,
+    visible_start: usize = 0,
+    visible_end: usize = std.math.maxInt(usize),
+    kind: DefinitionKind,
+    module_id: SourceModuleId,
+    file: ?[]const u8 = null,
+    scope_kind: DefinitionScopeKind = .module,
+    scope_name: ?[]const u8 = null,
+};
+
+pub const InlayHint = struct {
+    line: usize,
+    column: usize,
+    label: []const u8,
+    module_id: SourceModuleId,
+    file: ?[]const u8 = null,
+};
+
+pub const DocumentState = struct {
+    allocator: Allocator,
+    asset_base_dir: []u8,
+    modules: std.ArrayList(SourceModule),
+    module_order: std.ArrayList(SourceModuleId),
+    project_module_id: SourceModuleId,
+    constants: ConstMap,
+    const_values: ConstValueMap,
+    const_eval_states: ConstEvalStateMap,
+    functions: FunctionMap,
+    definitions: std.ArrayList(Definition),
+    hints: std.ArrayList(InlayHint),
+    nodes: std.ArrayList(Node),
+    page_order: std.ArrayList(NodeId),
+    contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
+    constraints: std.ArrayList(Constraint),
+    fallback_constraints: std.ArrayList(Constraint),
+    constraint_updates: std.ArrayList(ConstraintUpdate),
+    overridden_constraints: std.ArrayList(Constraint),
+    object_sources: std.ArrayList(ObjectSource),
+    diagnostics: std.ArrayList(Diagnostic),
+    last_constraint_failure: ?ConstraintFailure,
+    constraint_failures: std.ArrayList(ConstraintFailure),
+    runtime_strings: std.ArrayList([]u8),
+    string_provenance: std.AutoHashMap(usize, std.ArrayList(ContentProvenance)),
+    default_values: *DefaultValueCache,
+    next_id: NodeId,
+    document_id: NodeId,
+
+    pub fn init(
+        allocator: Allocator,
+        asset_base_dir: []u8,
+        project_path: []u8,
+        project_source: []u8,
+        project_syntax: ast.Module,
+    ) !DocumentState {
+        const default_values = try DefaultValueCache.create(allocator);
+        var state = DocumentState{
+            .allocator = allocator,
+            .asset_base_dir = asset_base_dir,
+            .modules = .empty,
+            .module_order = .empty,
+            .project_module_id = 0,
+            .constants = ConstMap.init(allocator),
+            .const_values = ConstValueMap.init(allocator),
+            .const_eval_states = ConstEvalStateMap.init(allocator),
+            .functions = FunctionMap.init(allocator),
+            .definitions = .empty,
+            .hints = std.ArrayList(InlayHint).empty,
+            .nodes = .empty,
+            .page_order = .empty,
+            .contains = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
+            .constraints = .empty,
+            .fallback_constraints = .empty,
+            .constraint_updates = .empty,
+            .overridden_constraints = .empty,
+            .object_sources = .empty,
+            .diagnostics = .empty,
+            .last_constraint_failure = null,
+            .constraint_failures = .empty,
+            .runtime_strings = .empty,
+            .string_provenance = std.AutoHashMap(usize, std.ArrayList(ContentProvenance)).init(allocator),
+            .default_values = default_values,
+            .next_id = 1,
+            .document_id = 0,
+        };
+        errdefer state.deinitPartial();
+
+        const project_spec = try allocator.dupe(u8, project_path);
+        errdefer allocator.free(project_spec);
+
+        const doc_id = try state.freshId();
+        try state.nodes.append(allocator, .{
+            .id = doc_id,
+            .kind = .document,
+            .name = "document",
+            .attached = true,
+        });
+        state.document_id = doc_id;
+
+        try state.modules.append(allocator, .{
+            .id = 0,
+            .kind = .project,
+            .spec = project_spec,
+            .path = project_path,
+            .source = project_source,
+            .syntax = project_syntax,
+            .implicit_import_ids = .empty,
+            .resolved_import_ids = .empty,
+        });
+
+        return state;
+    }
+
+    fn deinitPartial(self: *DocumentState) void {
+        self.modules.deinit(self.allocator);
+        self.module_order.deinit(self.allocator);
+        self.constants.deinit();
+        {
+            var iterator = self.const_values.valueIterator();
+            while (iterator.next()) |value| value.deinit(self.allocator);
+        }
+        self.const_values.deinit();
+        self.const_eval_states.deinit();
+        self.functions.deinit();
+        self.definitions.deinit(self.allocator);
+        self.hints.deinit(self.allocator);
+        self.contains.deinit();
+        for (self.nodes.items) |*node| node.deinit(self.allocator);
+        self.nodes.deinit(self.allocator);
+        self.page_order.deinit(self.allocator);
+        self.constraints.deinit(self.allocator);
+        self.fallback_constraints.deinit(self.allocator);
+        self.constraint_updates.deinit(self.allocator);
+        self.overridden_constraints.deinit(self.allocator);
+        self.object_sources.deinit(self.allocator);
+        self.diagnostics.deinit(self.allocator);
+        self.clearConstraintFailures();
+        self.constraint_failures.deinit(self.allocator);
+        self.deinitStringProvenance();
+        self.deinitDefaultValues();
+        self.runtime_strings.deinit(self.allocator);
+    }
+
+    pub fn deinit(self: *DocumentState) void {
+        for (self.modules.items) |*module| module.deinit(self.allocator);
+        self.modules.deinit(self.allocator);
+        self.module_order.deinit(self.allocator);
+        self.constants.deinit();
+        {
+            var iterator = self.const_values.valueIterator();
+            while (iterator.next()) |value| value.deinit(self.allocator);
+        }
+        self.const_values.deinit();
+        self.const_eval_states.deinit();
+        self.functions.deinit();
+        for (self.definitions.items) |definition| {
+            self.allocator.free(definition.name);
+            if (definition.file) |file| self.allocator.free(file);
+            if (definition.scope_name) |scope_name| self.allocator.free(scope_name);
+        }
+        self.definitions.deinit(self.allocator);
+        for (self.hints.items) |hint| self.allocator.free(hint.label);
+        self.hints.deinit(self.allocator);
+        self.allocator.free(self.asset_base_dir);
+        var it = self.contains.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.contains.deinit();
+        for (self.nodes.items) |*node| {
+            node.deinit(self.allocator);
+        }
+        self.nodes.deinit(self.allocator);
+        self.page_order.deinit(self.allocator);
+        self.constraints.deinit(self.allocator);
+        self.fallback_constraints.deinit(self.allocator);
+        self.constraint_updates.deinit(self.allocator);
+        self.overridden_constraints.deinit(self.allocator);
+        self.object_sources.deinit(self.allocator);
+        self.clearDiagnostics();
+        self.diagnostics.deinit(self.allocator);
+        self.clearConstraintFailures();
+        self.constraint_failures.deinit(self.allocator);
+        self.deinitStringProvenance();
+        self.deinitDefaultValues();
+        for (self.runtime_strings.items) |text| self.allocator.free(text);
+        self.runtime_strings.deinit(self.allocator);
+    }
+
+    fn deinitStringProvenance(self: *DocumentState) void {
+        var iterator = self.string_provenance.valueIterator();
+        while (iterator.next()) |entries| self.deinitProvenanceList(entries);
+        self.string_provenance.deinit();
+    }
+
+    fn deinitDefaultValues(self: *DocumentState) void {
+        self.default_values.destroy();
+    }
+
+    pub fn cachedFieldDefault(self: *DocumentState, text: []const u8, value_type: ast.Type) !Value {
+        std.debug.assert(value_text.typedPropertyValueOwnsTaggedText(value_type));
+        return self.default_values.getOrParse(text, value_type);
+    }
+
+    fn stringKey(text: []const u8) usize {
+        return @intFromPtr(text.ptr);
+    }
+
+    fn deinitProvenanceList(self: *DocumentState, entries: *std.ArrayList(ContentProvenance)) void {
+        for (entries.items) |*entry| entry.deinit(self.allocator);
+        entries.deinit(self.allocator);
+    }
+
+    fn cloneProvenanceList(self: *DocumentState, entries: []const ContentProvenance) !std.ArrayList(ContentProvenance) {
+        var cloned = std.ArrayList(ContentProvenance).empty;
+        errdefer self.deinitProvenanceList(&cloned);
+        for (entries) |entry| {
+            try cloned.append(self.allocator, try entry.clone(self.allocator));
+        }
+        return cloned;
+    }
+
+    pub fn setStringProvenance(self: *DocumentState, text: []const u8, entries: []const ContentProvenance) !void {
+        if (text.len == 0 or entries.len == 0) return;
+        var cloned = try self.cloneProvenanceList(entries);
+        errdefer self.deinitProvenanceList(&cloned);
+        const gop = try self.string_provenance.getOrPut(stringKey(text));
+        if (gop.found_existing) self.deinitProvenanceList(gop.value_ptr);
+        gop.value_ptr.* = cloned;
+    }
+
+    pub fn stringProvenance(self: *const DocumentState, text: []const u8) []const ContentProvenance {
+        if (text.len == 0) return &.{};
+        const entries = self.string_provenance.get(stringKey(text)) orelse return &.{};
+        return entries.items;
+    }
+
+    pub fn ownString(self: *DocumentState, text: []u8) ![]const u8 {
+        errdefer self.allocator.free(text);
+        try self.runtime_strings.append(self.allocator, text);
+        return text;
+    }
+
+    pub fn ownStringWithProvenance(self: *DocumentState, text: []u8, entries: []const ContentProvenance) ![]const u8 {
+        errdefer self.allocator.free(text);
+        try self.runtime_strings.append(self.allocator, text);
+        var appended = true;
+        errdefer {
+            if (appended) _ = self.runtime_strings.pop();
+        }
+        try self.setStringProvenance(text, entries);
+        appended = false;
+        return text;
+    }
+
+    pub fn copyString(self: *DocumentState, text: []const u8) ![]const u8 {
+        return self.ownString(try self.allocator.dupe(u8, text));
+    }
+
+    fn copyOptionalString(self: *DocumentState, text: ?[]const u8) !?[]const u8 {
+        return if (text) |value| try self.copyString(value) else null;
+    }
+
+    pub fn projectPath(self: *const DocumentState) []const u8 {
+        return self.projectModule().path orelse "";
+    }
+
+    pub fn projectSource(self: *const DocumentState) []const u8 {
+        return self.projectModule().source;
+    }
+
+    pub fn projectSyntax(self: *const DocumentState) ast.Module {
+        return self.projectModule().syntax;
+    }
+
+    pub fn projectModule(self: *const DocumentState) *const SourceModule {
+        return self.moduleById(self.project_module_id).?;
+    }
+
+    pub fn moduleById(self: *const DocumentState, id: SourceModuleId) ?*const SourceModule {
+        for (self.modules.items) |*module| {
+            if (module.id == id) return module;
+        }
+        return null;
+    }
+
+    pub fn moduleByPathOrSpec(self: *const DocumentState, key: []const u8) ?*const SourceModule {
+        for (self.modules.items) |*module| {
+            if (module.path) |module_path| {
+                if (std.mem.eql(u8, module_path, key)) return module;
+            }
+            if (std.mem.eql(u8, module.spec, key)) return module;
+        }
+        return null;
+    }
+
+    pub fn projectModuleMutable(self: *DocumentState) *SourceModule {
+        return self.moduleByIdMutable(self.project_module_id).?;
+    }
+
+    pub fn moduleByIdMutable(self: *DocumentState, id: SourceModuleId) ?*SourceModule {
+        for (self.modules.items) |*module| {
+            if (module.id == id) return module;
+        }
+        return null;
+    }
+
+    pub fn modulePath(self: *const DocumentState, id: SourceModuleId) ?[]const u8 {
+        const module = self.moduleById(id) orelse return null;
+        return module.path;
+    }
+
+    fn freshId(self: *DocumentState) !NodeId {
+        const id = self.next_id;
+        self.next_id += 1;
+        return id;
+    }
+
+    pub fn nodeCount(self: *const DocumentState) usize {
+        return self.nodes.items.len;
+    }
+
+    pub fn addContainment(self: *DocumentState, parent: NodeId, child: NodeId) !void {
+        const gop = try self.contains.getOrPut(parent);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .empty;
+        }
+        for (gop.value_ptr.items) |existing| {
+            if (existing == child) return;
+        }
+        try gop.value_ptr.append(self.allocator, child);
+    }
+
+    pub fn addPage(self: *DocumentState, name: []const u8) !NodeId {
+        const page_id = try self.freshId();
+        const index = self.page_order.items.len + 1;
+        const owned_name = try self.copyString(name);
+        try self.nodes.append(self.allocator, .{
+            .id = page_id,
+            .kind = .page,
+            .name = owned_name,
+            .attached = true,
+            .page_index = index,
+        });
+        try self.page_order.append(self.allocator, page_id);
+        try self.addContainment(self.document_id, page_id);
+        return page_id;
+    }
+
+    pub fn makeObject(
+        self: *DocumentState,
+        page_id: NodeId,
+        name: []const u8,
+        role: ?Role,
+        object_kind: ObjectKind,
+        payload_kind: PayloadKind,
+        content: ?[]const u8,
+    ) !NodeId {
+        return self.makeObjectWithOrigin(page_id, name, role, object_kind, payload_kind, content, null);
+    }
+
+    pub fn makeObjectWithOrigin(
+        self: *DocumentState,
+        page_id: NodeId,
+        name: []const u8,
+        role: ?Role,
+        object_kind: ObjectKind,
+        payload_kind: PayloadKind,
+        content: ?[]const u8,
+        origin: ?[]const u8,
+    ) !NodeId {
+        return self.makeNodeWithOrigin(page_id, true, .object, name, role, object_kind, payload_kind, content, origin);
+    }
+
+    pub fn createObjectWithOrigin(
+        self: *DocumentState,
+        name: []const u8,
+        role: ?Role,
+        object_kind: ObjectKind,
+        payload_kind: PayloadKind,
+        content: ?[]const u8,
+        origin: ?[]const u8,
+    ) !NodeId {
+        return self.makeNodeWithOrigin(self.document_id, false, .object, name, role, object_kind, payload_kind, content, origin);
+    }
+
+    pub fn makeGroupWithOrigin(
+        self: *DocumentState,
+        page_id: NodeId,
+        attached: bool,
+        children: []const NodeId,
+        origin: ?[]const u8,
+    ) !NodeId {
+        const group_id = try self.makeNodeWithOrigin(
+            page_id,
+            attached,
+            .object,
+            "group",
+            GroupRole,
+            .overlay,
+            .text,
+            "",
+            origin,
+        );
+        for (children) |child_id| {
+            try self.addContainment(group_id, child_id);
+        }
+        return group_id;
+    }
+
+    pub fn createGroupWithOrigin(
+        self: *DocumentState,
+        children: []const NodeId,
+        origin: ?[]const u8,
+    ) !NodeId {
+        return try self.makeGroupWithOrigin(self.document_id, false, children, origin);
+    }
+
+    pub fn placeObjectOnPage(self: *DocumentState, page_id: NodeId, object_id: NodeId) !void {
+        var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer visited.deinit();
+        try self.placeObjectSubtree(page_id, object_id, &visited);
+    }
+
+    fn placeObjectSubtree(self: *DocumentState, page_id: NodeId, object_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !void {
+        if (visited.contains(object_id)) return;
+        try visited.put(object_id, {});
+        const node = self.getNode(object_id) orelse return error.UnknownNode;
+        if (node.kind != .object) return error.InvalidValueTag;
+        node.attached = true;
+        node.discarded = false;
+        try self.addContainment(page_id, object_id);
+        const children = self.childrenOf(object_id) orelse return;
+        for (children) |child_id| try self.placeObjectSubtree(page_id, child_id, visited);
+    }
+
+    pub fn discardObjectSubtree(self: *DocumentState, object_id: NodeId) !void {
+        var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer visited.deinit();
+        try self.discardObjectSubtreeInner(object_id, &visited);
+    }
+
+    fn discardObjectSubtreeInner(self: *DocumentState, object_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !void {
+        if (visited.contains(object_id)) return;
+        try visited.put(object_id, {});
+        const node = self.getNode(object_id) orelse return error.UnknownNode;
+        if (node.kind != .object) return error.InvalidValueTag;
+        node.discarded = true;
+        const children = self.childrenOf(object_id) orelse return;
+        for (children) |child_id| try self.discardObjectSubtreeInner(child_id, visited);
+    }
+
+    pub fn connectGeneratedReturnObjects(self: *DocumentState, return_id: NodeId, start_index: usize, origin: ?[]const u8) !void {
+        const return_node = self.getNode(return_id) orelse return error.UnknownNode;
+        if (return_node.kind != .object) return;
+
+        var candidates = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer candidates.deinit();
+        try candidates.put(return_id, {});
+        if (start_index < self.nodes.items.len) {
+            for (self.nodes.items[start_index..]) |node| {
+                if (node.kind != .object or node.attached or node.discarded) continue;
+                try candidates.put(node.id, {});
+            }
+        }
+
+        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        var queue = std.ArrayList(NodeId).empty;
+        defer queue.deinit(self.allocator);
+        try seen.put(return_id, {});
+        try queue.append(self.allocator, return_id);
+
+        var index: usize = 0;
+        while (index < queue.items.len) : (index += 1) {
+            try self.appendConnectedCandidates(candidates, &seen, &queue, queue.items[index]);
+        }
+
+        if (origin) |value| {
+            for (queue.items) |candidate_id| {
+                try self.setGeneratedNodeOrigin(candidate_id, start_index, value);
+            }
+        }
+
+        const page_id = if (return_node.attached) self.parentPageOf(return_id) else null;
+        for (queue.items) |candidate_id| {
+            if (candidate_id == return_id) continue;
+            if (try self.containsDescendant(candidate_id, return_id)) continue;
+            try self.addContainment(return_id, candidate_id);
+        }
+        if (page_id) |page| try self.placeObjectOnPage(page, return_id);
+    }
+
+    fn setGeneratedNodeOrigin(self: *DocumentState, node_id: NodeId, start_index: usize, origin: []const u8) !void {
+        if (node_id == 0) return;
+        const node_index: usize = @intCast(node_id - 1);
+        if (node_index < start_index or node_index >= self.nodes.items.len) return;
+        const node = &self.nodes.items[node_index];
+        if (node.id != node_id) return;
+        node.origin = try self.copyString(origin);
+    }
+
+    fn appendConnectedCandidates(
+        self: *DocumentState,
+        candidates: std.AutoHashMap(NodeId, void),
+        seen: *std.AutoHashMap(NodeId, void),
+        queue: *std.ArrayList(NodeId),
+        current: NodeId,
+    ) !void {
+        var containment = self.contains.iterator();
+        while (containment.next()) |entry| {
+            const parent_id = entry.key_ptr.*;
+            for (entry.value_ptr.items) |child_id| {
+                if (parent_id == current) try self.appendCandidate(candidates, seen, queue, child_id);
+                if (child_id == current) try self.appendCandidate(candidates, seen, queue, parent_id);
+            }
+        }
+        for (self.constraints.items) |constraint| {
+            if (constraint.target_node == current) {
+                switch (constraint.source) {
+                    .page => {},
+                    .node => |source| try self.appendCandidate(candidates, seen, queue, source.node_id),
+                }
+            }
+            switch (constraint.source) {
+                .page => {},
+                .node => |source| if (source.node_id == current) try self.appendCandidate(candidates, seen, queue, constraint.target_node),
+            }
+        }
+    }
+
+    fn appendCandidate(
+        self: *DocumentState,
+        candidates: std.AutoHashMap(NodeId, void),
+        seen: *std.AutoHashMap(NodeId, void),
+        queue: *std.ArrayList(NodeId),
+        candidate: NodeId,
+    ) !void {
+        if (!candidates.contains(candidate) or seen.contains(candidate)) return;
+        try seen.put(candidate, {});
+        try queue.append(self.allocator, candidate);
+    }
+
+    fn containsDescendant(self: *DocumentState, parent_id: NodeId, child_id: NodeId) !bool {
+        var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer visited.deinit();
+        return try self.containsDescendantInner(parent_id, child_id, &visited);
+    }
+
+    fn containsDescendantInner(self: *DocumentState, parent_id: NodeId, child_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !bool {
+        if (visited.contains(parent_id)) return false;
+        try visited.put(parent_id, {});
+        const children = self.childrenOf(parent_id) orelse return false;
+        for (children) |candidate| {
+            if (candidate == child_id) return true;
+            if (try self.containsDescendantInner(candidate, child_id, visited)) return true;
+        }
+        return false;
+    }
+
+    pub fn setNodeFieldValue(self: *DocumentState, node_id: NodeId, key: []const u8, value: Value) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        for (node.fields.items) |field| {
+            if (std.mem.eql(u8, field.key, key)) {
+                return error.DuplicatePropertyDefinition;
+            }
+        }
+        try node.fields.append(self.allocator, .{
+            .key = try self.allocator.dupe(u8, key),
+            .value = try value.clone(self.allocator),
+        });
+    }
+
+    pub fn unsetNodeField(self: *DocumentState, node_id: NodeId, key: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        for (node.fields.items, 0..) |field, index| {
+            if (std.mem.eql(u8, field.key, key)) {
+                var removed = node.fields.orderedRemove(index);
+                removed.deinit(self.allocator);
+                return;
+            }
+        }
+    }
+
+    pub fn extendRenderEnv(self: *DocumentState, node_id: NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        for (node.render_env.items) |entry| {
+            if (std.mem.eql(u8, entry.op, op) and
+                std.mem.eql(u8, entry.key, key) and
+                std.mem.eql(u8, entry.value, value))
+            {
+                return;
+            }
+        }
+        try node.render_env.append(self.allocator, .{
+            .op = try self.allocator.dupe(u8, op),
+            .key = try self.allocator.dupe(u8, key),
+            .value = try self.allocator.dupe(u8, value),
+        });
+    }
+
+    pub fn getNodeField(self: *DocumentState, node_id: NodeId, key: []const u8) ?Value {
+        const node = self.getNode(node_id) orelse return null;
+        return nodeField(node, key);
+    }
+
+    fn clearNodeContentProvenance(self: *DocumentState, node: *Node) void {
+        for (node.content_provenance.items) |*entry| entry.deinit(self.allocator);
+        node.content_provenance.clearRetainingCapacity();
+    }
+
+    pub fn setNodeContent(self: *DocumentState, node_id: NodeId, value: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        if (node.content != null) return error.DuplicateContentDefinition;
+        const owned_value = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(owned_value);
+        const provenance = self.stringProvenance(value);
+        var owned_provenance = try self.cloneProvenanceList(provenance);
+        errdefer self.deinitProvenanceList(&owned_provenance);
+        try self.setStringProvenance(owned_value, owned_provenance.items);
+        if (node.content_owned) {
+            if (node.content) |content| self.allocator.free(content);
+        }
+        self.clearNodeContentProvenance(node);
+        node.content = owned_value;
+        node.content_owned = true;
+        node.content_provenance = owned_provenance;
+    }
+
+    pub fn setNodeDisplayContent(self: *DocumentState, node_id: NodeId, value: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        const owned_value = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(owned_value);
+        const provenance = self.stringProvenance(value);
+        var owned_provenance = try self.cloneProvenanceList(provenance);
+        errdefer self.deinitProvenanceList(&owned_provenance);
+        try self.setStringProvenance(owned_value, owned_provenance.items);
+        if (node.display_content_owned) {
+            if (node.display_content) |content| self.allocator.free(content);
+        }
+        for (node.display_content_provenance.items) |*entry| entry.deinit(self.allocator);
+        node.display_content_provenance.clearRetainingCapacity();
+        node.display_content = owned_value;
+        node.display_content_owned = true;
+        node.display_content_provenance = owned_provenance;
+    }
+
+    pub fn setNodeReprFunction(self: *DocumentState, node_id: NodeId, function: FunctionRef) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        if (node.repr_function != null) return error.DuplicateReprDefinition;
+        node.repr_function = try function.clone(self.allocator);
+    }
+
+    fn makeNodeWithOrigin(
+        self: *DocumentState,
+        page_id: NodeId,
+        attached: bool,
+        kind: NodeKind,
+        name: []const u8,
+        role: ?Role,
+        object_kind: ObjectKind,
+        payload_kind: PayloadKind,
+        content: ?[]const u8,
+        origin: ?[]const u8,
+    ) !NodeId {
+        const obj_id = try self.freshId();
+        const owned_name = try self.copyString(name);
+        const owned_role = try self.copyOptionalString(role);
+        const owned_content = try self.copyOptionalString(content);
+        const owned_origin = try self.copyOptionalString(origin);
+        var content_provenance = if (content) |value|
+            try self.cloneProvenanceList(self.stringProvenance(value))
+        else
+            std.ArrayList(ContentProvenance).empty;
+        var content_provenance_transferred = false;
+        errdefer {
+            if (!content_provenance_transferred) self.deinitProvenanceList(&content_provenance);
+        }
+        if (owned_content) |value| try self.setStringProvenance(value, content_provenance.items);
+        try self.nodes.append(self.allocator, .{
+            .id = obj_id,
+            .kind = kind,
+            .name = owned_name,
+            .attached = attached,
+            .role = owned_role,
+            .object_kind = object_kind,
+            .payload_kind = payload_kind,
+            .content = owned_content,
+            .origin = owned_origin,
+            .content_provenance = content_provenance,
+        });
+        content_provenance_transferred = true;
+        if (attached) try self.addContainment(page_id, obj_id);
+        return obj_id;
+    }
+
+    pub fn addConstraint(self: *DocumentState, expr: []const u8) !void {
+        _ = self;
+        _ = expr;
+        return error.StringConstraintsRemoved;
+    }
+
+    pub fn addAnchorConstraint(
+        self: *DocumentState,
+        target_node: NodeId,
+        target_anchor: Anchor,
+        source: ConstraintSource,
+        offset: f32,
+        origin: ?[]const u8,
+    ) !void {
+        try self.addAnchorConstraintAtScope(target_node, target_anchor, source, offset, origin, 0);
+    }
+
+    pub fn addAnchorConstraintAtScope(
+        self: *DocumentState,
+        target_node: NodeId,
+        target_anchor: Anchor,
+        source: ConstraintSource,
+        offset: f32,
+        origin: ?[]const u8,
+        scope_depth: u32,
+    ) !void {
+        const constraint = Constraint{
+            .target_node = target_node,
+            .target_anchor = target_anchor,
+            .source = source,
+            .offset = offset,
+            .origin = origin,
+            .role = model.constraintRoleForRelation(target_node, target_anchor, source),
+            .scope_depth = scope_depth,
+        };
+        try self.constraints.append(self.allocator, constraint);
+    }
+
+    pub fn addConstraintUpdate(
+        self: *DocumentState,
+        target_node: NodeId,
+        target_anchor: Anchor,
+        role: ConstraintRole,
+        scope_depth: u32,
+        replacement_source: ?ConstraintSource,
+        replacement_offset: f32,
+        origin: ?[]const u8,
+    ) !void {
+        try self.constraint_updates.append(self.allocator, .{
+            .target_node = target_node,
+            .target_anchor = target_anchor,
+            .role = role,
+            .scope_depth = scope_depth,
+            .replacement = if (replacement_source) |source| .{
+                .target_node = target_node,
+                .target_anchor = target_anchor,
+                .source = source,
+                .offset = replacement_offset,
+                .origin = origin,
+                .role = role,
+                .scope_depth = scope_depth,
+                .from_update = true,
+            } else null,
+            .origin = origin,
+        });
+    }
+
+    pub fn addObjectSource(
+        self: *DocumentState,
+        node_id: NodeId,
+        page_id: NodeId,
+        module_id: SourceModuleId,
+        path: []const u8,
+        binding_base: ?[]const u8,
+        span: ast.Span,
+    ) !void {
+        try self.object_sources.append(self.allocator, .{
+            .node_id = node_id,
+            .page_id = page_id,
+            .module_id = module_id,
+            .path = try self.copyString(path),
+            .binding_base = if (binding_base) |base| try self.copyString(base) else null,
+            .span_start = span.start,
+            .span_end = span.end,
+        });
+    }
+
+    pub fn addConstraintSet(self: *DocumentState, constraints: ConstraintSet) !void {
+        try self.constraints.appendSlice(self.allocator, constraints.items.items);
+    }
+
+    pub fn noteConstraintFailure(self: *DocumentState, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) void {
+        self.noteConstraintFailureDetailed(
+            page_id,
+            constraint,
+            existing_constraint,
+            kind,
+            defaultConstraintFailureReason(kind),
+            null,
+            null,
+            null,
+        );
+    }
+
+    pub fn noteConstraintFailureDetailed(
+        self: *DocumentState,
+        page_id: NodeId,
+        constraint: Constraint,
+        existing_constraint: ?Constraint,
+        kind: ConstraintFailureKind,
+        reason: ConstraintFailureReason,
+        axis: ?Axis,
+        actual: ?f32,
+        expected: ?f32,
+    ) void {
+        self.noteConstraintFailureDetailedWithPropagation(
+            page_id,
+            constraint,
+            existing_constraint,
+            kind,
+            reason,
+            axis,
+            actual,
+            expected,
+            null,
+        );
+    }
+
+    pub fn noteConstraintFailureDetailedWithPropagation(
+        self: *DocumentState,
+        page_id: NodeId,
+        constraint: Constraint,
+        existing_constraint: ?Constraint,
+        kind: ConstraintFailureKind,
+        reason: ConstraintFailureReason,
+        axis: ?Axis,
+        actual: ?f32,
+        expected: ?f32,
+        propagation: ?model.ConstraintPropagation,
+    ) void {
+        var failure: ConstraintFailure = .{
+            .kind = kind,
+            .reason = reason,
+            .page_id = page_id,
+            .axis = axis orelse layout.anchorAxis(constraint.target_anchor),
+            .constraint = constraint,
+            .existing_constraint = existing_constraint,
+            .actual = actual,
+            .expected = expected,
+            .propagation = propagation,
+        };
+        for (self.constraint_failures.items) |*existing| {
+            if (constraintFailureSame(existing.*, failure) or constraintFailureSameTarget(existing.*, failure)) {
+                if (constraintFailureDetailScore(failure) > constraintFailureDetailScore(existing.*)) {
+                    existing.deinit(self.allocator);
+                    existing.* = failure;
+                    self.last_constraint_failure = existing.*;
+                } else {
+                    self.last_constraint_failure = existing.*;
+                    failure.deinit(self.allocator);
+                }
+                return;
+            }
+        }
+        self.constraint_failures.append(self.allocator, failure) catch {
+            failure.deinit(self.allocator);
+            return;
+        };
+        self.last_constraint_failure = self.constraint_failures.items[self.constraint_failures.items.len - 1];
+    }
+
+    pub fn hasConstraintFailures(self: *const DocumentState) bool {
+        return self.constraint_failures.items.len > 0;
+    }
+
+    pub fn clearConstraintFailures(self: *DocumentState) void {
+        for (self.constraint_failures.items) |*failure| failure.deinit(self.allocator);
+        self.constraint_failures.clearRetainingCapacity();
+        self.last_constraint_failure = null;
+    }
+
+    pub fn clearDiagnostics(self: *DocumentState) void {
+        for (self.diagnostics.items) |*diagnostic| diagnostic.deinit(self.allocator);
+        self.diagnostics.clearRetainingCapacity();
+    }
+
+    pub fn clearDiagnosticsForPhase(self: *DocumentState, phase: DiagnosticPhase) void {
+        var write_index: usize = 0;
+        for (self.diagnostics.items) |*diagnostic| {
+            if (diagnostic.phase == phase) {
+                diagnostic.deinit(self.allocator);
+                continue;
+            }
+            self.diagnostics.items[write_index] = diagnostic.*;
+            write_index += 1;
+        }
+        self.diagnostics.items.len = write_index;
+    }
+
+    pub fn addDiagnostic(self: *DocumentState, diagnostic: Diagnostic) !void {
+        try self.diagnostics.append(self.allocator, diagnostic);
+    }
+
+    fn addLayoutDiagnostic(self: *DocumentState, severity: DiagnosticSeverity, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
+        const origin = if (node_id) |id| blk: {
+            const node = self.getNode(id) orelse break :blk null;
+            break :blk node.origin;
+        } else null;
+        var diagnostic = Diagnostic{
+            .phase = .layout,
+            .severity = severity,
+            .page_id = page_id,
+            .node_id = node_id,
+            .origin = if (origin) |value| try self.allocator.dupe(u8, value) else null,
+            .data = data,
+        };
+        errdefer diagnostic.deinit(self.allocator);
+        try self.addDiagnostic(diagnostic);
+    }
+
+    pub fn addLayoutWarning(self: *DocumentState, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
+        try self.addLayoutDiagnostic(.warning, page_id, node_id, data);
+    }
+
+    pub fn addLayoutError(self: *DocumentState, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
+        try self.addLayoutDiagnostic(.@"error", page_id, node_id, data);
+    }
+
+    pub fn addValidationDiagnostic(
+        self: *DocumentState,
+        severity: DiagnosticSeverity,
+        page_id: ?NodeId,
+        node_id: ?NodeId,
+        origin: ?[]const u8,
+        data: Diagnostic.Data,
+    ) !void {
+        var diagnostic = Diagnostic{
+            .phase = .validation,
+            .severity = severity,
+            .page_id = page_id,
+            .node_id = node_id,
+            .origin = if (origin) |value| try self.allocator.dupe(u8, value) else null,
+            .data = data,
+        };
+        errdefer diagnostic.deinit(self.allocator);
+        try self.addDiagnostic(diagnostic);
+    }
+
+    pub fn addRenderDiagnostic(
+        self: *DocumentState,
+        severity: DiagnosticSeverity,
+        page_id: ?NodeId,
+        node_id: ?NodeId,
+        origin: ?[]const u8,
+        data: Diagnostic.Data,
+    ) !void {
+        var diagnostic = Diagnostic{
+            .phase = .render,
+            .severity = severity,
+            .page_id = page_id,
+            .node_id = node_id,
+            .origin = if (origin) |value| try self.allocator.dupe(u8, value) else null,
+            .data = data,
+        };
+        errdefer diagnostic.deinit(self.allocator);
+        try self.addDiagnostic(diagnostic);
+    }
+
+    pub fn validatePageLocalLayout(self: *DocumentState) !void {
+        try self.addPageOwnershipDiagnostics();
+        try self.addUnplacedObjectDiagnostics(.warning);
+        for (self.constraints.items) |constraint| {
+            try self.addConstraintEndpointOwnershipDiagnostics(constraint);
+            try self.addCrossPageConstraintDiagnosticIfKnown(constraint);
+        }
+    }
+
+    fn addPageOwnershipDiagnostics(self: *DocumentState) !void {
+        for (self.nodes.items) |node| {
+            if (node.kind != .object or node.discarded) continue;
+            const ownership = self.directPageOwnershipInfo(node.id);
+            if (ownership.count > 1) {
+                const role = node.role orelse node.name;
+                const message = try std.fmt.allocPrint(self.allocator, "PageOwnershipConflict: object '{s}' belongs to multiple pages", .{role});
+                try self.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
+                    .user_report = .{ .message = message },
+                });
+            } else if (node.attached and ownership.count == 0) {
+                const role = node.role orelse node.name;
+                const message = try std.fmt.allocPrint(self.allocator, "PageOwnershipConflict: attached object '{s}' is not contained by a page", .{role});
+                try self.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
+                    .user_report = .{ .message = message },
+                });
+            }
+        }
+    }
+
+    pub fn addUnplacedObjectWarnings(self: *DocumentState) !void {
+        try self.addUnplacedObjectDiagnostics(.warning);
+    }
+
+    fn addUnplacedObjectDiagnostics(self: *DocumentState, severity: DiagnosticSeverity) !void {
+        for (self.nodes.items) |node| {
+            if (node.kind != .object or node.attached or node.discarded) continue;
+            if (try self.hasUnplacedObjectParent(node.id)) continue;
+            if (self.isConstraintReferencedGroupWithAttachedDescendant(node.id)) continue;
+            const role = node.role orelse node.name;
+            const message = try std.fmt.allocPrint(self.allocator, "UnplacedObject: object '{s}' was generated but not placed", .{role});
+            try self.addValidationDiagnostic(severity, null, node.id, node.origin, .{
+                .user_report = .{ .message = message },
+            });
+        }
+    }
+
+    const PageOwnershipInfo = struct {
+        first: ?NodeId = null,
+        count: usize = 0,
+    };
+
+    fn directPageOwnershipInfo(self: *DocumentState, child_id: NodeId) PageOwnershipInfo {
+        var result = PageOwnershipInfo{};
+        var it = self.contains.iterator();
+        while (it.next()) |entry| {
+            const parent_id = entry.key_ptr.*;
+            const parent = self.getNode(parent_id) orelse continue;
+            if (parent.kind != .page) continue;
+            for (entry.value_ptr.items) |candidate| {
+                if (candidate != child_id) continue;
+                if (result.first == null) result.first = parent_id;
+                result.count += 1;
+            }
+        }
+        return result;
+    }
+
+    pub fn layoutPageOf(self: *DocumentState, node_id: NodeId) ?NodeId {
+        const direct = self.directPageOwnershipInfo(node_id);
+        if (direct.count == 1) return direct.first;
+        if (direct.count > 1) return null;
+        if (!self.isConstraintReferencedGroupWithAttachedDescendant(node_id)) return null;
+        return self.uniqueAttachedDescendantPage(node_id);
+    }
+
+    fn uniqueAttachedDescendantPage(self: *DocumentState, node_id: NodeId) ?NodeId {
+        var result: ?NodeId = null;
+        const children = self.childrenOf(node_id) orelse return null;
+        for (children) |child_id| {
+            const child = self.getNode(child_id) orelse continue;
+            if (child.kind != .object or child.discarded) continue;
+            const direct = self.directPageOwnershipInfo(child_id);
+            const candidate = if (direct.count == 1)
+                direct.first
+            else if (direct.count == 0)
+                self.uniqueAttachedDescendantPage(child_id)
+            else
+                null;
+            const page_id = candidate orelse continue;
+            if (result) |existing| {
+                if (existing != page_id) return null;
+            } else {
+                result = page_id;
+            }
+        }
+        return result;
+    }
+
+    fn addCrossPageConstraintDiagnosticIfKnown(self: *DocumentState, constraint: Constraint) !void {
+        const target_page = self.layoutPageOf(constraint.target_node) orelse return;
+        const source_page = switch (constraint.source) {
+            .page => target_page,
+            .node => |source| self.layoutPageOf(source.node_id) orelse return,
+        };
+        if (target_page == source_page) return;
+        if (self.hasCrossPageConstraintDiagnostic(constraint)) return;
+
+        const target_node = self.getNode(constraint.target_node);
+        const target_role = if (target_node) |node| node.role orelse node.name else "unknown";
+        const message = try std.fmt.allocPrint(
+            self.allocator,
+            "CrossPageConstraint: constraint target object '{s}' belongs to page {d}, but source object belongs to page {d}",
+            .{ target_role, self.pageIndexOf(target_page), self.pageIndexOf(source_page) },
+        );
+        try self.addValidationDiagnostic(.@"error", target_page, constraint.target_node, constraint.origin, .{
+            .user_report = .{ .message = message },
+        });
+    }
+
+    fn addConstraintEndpointOwnershipDiagnostics(self: *DocumentState, constraint: Constraint) !void {
+        try self.addConstraintEndpointOwnershipDiagnostic(constraint.target_node, "target", constraint.origin);
+        switch (constraint.source) {
+            .page => {},
+            .node => |source| try self.addConstraintEndpointOwnershipDiagnostic(source.node_id, "source", constraint.origin),
+        }
+    }
+
+    fn addConstraintEndpointOwnershipDiagnostic(self: *DocumentState, node_id: NodeId, role: []const u8, origin: ?[]const u8) !void {
+        if (self.layoutPageOf(node_id) != null) return;
+        const ownership = self.directPageOwnershipInfo(node_id);
+        if (ownership.count > 1) return;
+        const node = self.getNode(node_id) orelse return;
+        if (node.kind != .object or node.discarded) return;
+        if (self.hasUnownedLayoutObjectDiagnostic(node_id, origin)) return;
+        const node_role = node.role orelse node.name;
+        const message = try std.fmt.allocPrint(
+            self.allocator,
+            "UnownedLayoutObject: constraint {s} object '{s}' does not belong to a page",
+            .{ role, node_role },
+        );
+        try self.addValidationDiagnostic(.@"error", null, node_id, origin orelse node.origin, .{
+            .user_report = .{ .message = message },
+        });
+    }
+
+    fn hasUnownedLayoutObjectDiagnostic(self: *DocumentState, node_id: NodeId, origin: ?[]const u8) bool {
+        for (self.diagnostics.items) |diagnostic| {
+            if (diagnostic.phase != .validation or diagnostic.node_id != node_id) continue;
+            switch (diagnostic.data) {
+                .user_report => |data| {
+                    if (!std.mem.startsWith(u8, data.message, "UnownedLayoutObject:")) continue;
+                    if (origin == null) return true;
+                    if (diagnostic.origin == null) continue;
+                    if (std.mem.eql(u8, origin.?, diagnostic.origin.?)) return true;
+                },
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    fn hasCrossPageConstraintDiagnostic(self: *DocumentState, constraint: Constraint) bool {
+        for (self.diagnostics.items) |diagnostic| {
+            if (diagnostic.phase != .validation or diagnostic.node_id != constraint.target_node) continue;
+            switch (diagnostic.data) {
+                .user_report => |data| {
+                    if (!std.mem.startsWith(u8, data.message, "CrossPageConstraint:")) continue;
+                    if (constraint.origin == null and diagnostic.origin == null) return true;
+                    if (constraint.origin == null or diagnostic.origin == null) continue;
+                    if (std.mem.eql(u8, constraint.origin.?, diagnostic.origin.?)) return true;
+                },
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    fn hasUnplacedObjectParent(self: *DocumentState, child_id: NodeId) !bool {
+        var it = self.contains.iterator();
+        while (it.next()) |entry| {
+            for (entry.value_ptr.items) |candidate| {
+                if (candidate != child_id) continue;
+                const parent = self.getNode(entry.key_ptr.*) orelse continue;
+                if (parent.kind == .object and !parent.attached and !parent.discarded) return true;
+            }
+        }
+        return false;
+    }
+
+    fn isConstraintReferencedGroupWithAttachedDescendant(self: *DocumentState, node_id: NodeId) bool {
+        const node = self.getNode(node_id) orelse return false;
+        if (!roleEq(node.role, GroupRole)) return false;
+        if (!self.constraintReferencesNode(node_id)) return false;
+        return self.hasAttachedDescendant(node_id);
+    }
+
+    fn constraintReferencesNode(self: *DocumentState, node_id: NodeId) bool {
+        for (self.constraints.items) |constraint| {
+            if (constraint.target_node == node_id) return true;
+            switch (constraint.source) {
+                .page => {},
+                .node => |source| if (source.node_id == node_id) return true,
+            }
+        }
+        return false;
+    }
+
+    fn hasAttachedDescendant(self: *DocumentState, node_id: NodeId) bool {
+        const children = self.childrenOf(node_id) orelse return false;
+        for (children) |child_id| {
+            const child = self.getNode(child_id) orelse continue;
+            if (child.attached) return true;
+            if (self.hasAttachedDescendant(child_id)) return true;
+        }
+        return false;
+    }
+
+    pub fn getNode(self: *DocumentState, id: NodeId) ?*Node {
+        if (id != 0) {
+            const index: usize = @intCast(id - 1);
+            if (index < self.nodes.items.len and self.nodes.items[index].id == id) {
+                return &self.nodes.items[index];
+            }
+        }
+        for (self.nodes.items) |*node| {
+            if (node.id == id) return node;
+        }
+        return null;
+    }
+
+    pub fn childrenOf(self: *DocumentState, parent: NodeId) ?[]const NodeId {
+        const children = self.contains.get(parent) orelse return null;
+        return children.items;
+    }
+
+    pub fn pageIndexOf(self: *DocumentState, page_id: NodeId) usize {
+        const node = self.getNode(page_id) orelse unreachable;
+        return node.page_index.?;
+    }
+
+    pub fn pageCount(self: *DocumentState) usize {
+        return self.page_order.items.len;
+    }
+
+    pub fn parentPageOf(self: *DocumentState, child_id: NodeId) ?NodeId {
+        var it = self.contains.iterator();
+        while (it.next()) |entry| {
+            const parent_id = entry.key_ptr.*;
+            const parent = self.getNode(parent_id) orelse continue;
+            if (parent.kind != .page) continue;
+            for (entry.value_ptr.items) |candidate| {
+                if (candidate == child_id) return parent_id;
+            }
+        }
+        return null;
+    }
+
+    fn previousPageOf(self: *DocumentState, page_id: NodeId) ?NodeId {
+        for (self.page_order.items, 0..) |candidate, index| {
+            if (candidate != page_id) continue;
+            if (index == 0) return null;
+            return self.page_order.items[index - 1];
+        }
+        return null;
+    }
+
+    fn ensureValueTag(self: *DocumentState, value: Value, expected: ValueTag, context: []const u8) !void {
+        _ = self;
+        const actual: ValueTag = switch (value) {
+            .none => .none,
+            .document => .document,
+            .page => .page,
+            .object => .object,
+            .selection => .selection,
+            .anchor => .anchor,
+            .function => .function,
+            .string => .string,
+            .enum_case => .enum_case,
+            .record => .record,
+            .number => .number,
+            .boolean => .boolean,
+            .constraints => .constraints,
+            .void => .void,
+        };
+        if (actual != expected) {
+            std.debug.print("runtime value type mismatch in {s}: expected {s}, got {s}\n", .{
+                context,
+                @tagName(expected),
+                @tagName(actual),
+            });
+            return error.InvalidValueTag;
+        }
+    }
+
+    fn singletonSelection(
+        self: *DocumentState,
+        allocator: Allocator,
+        item_tag: SelectionItemTag,
+        provenance: []const u8,
+        id: NodeId,
+    ) !Selection {
+        _ = self;
+        var selection = Selection.init(item_tag, provenance);
+        try selection.ids.append(allocator, id);
+        return selection;
+    }
+
+    fn selectPageObjectsByRole(
+        self: *DocumentState,
+        allocator: Allocator,
+        page_id: NodeId,
+        role: Role,
+        provenance: []const u8,
+    ) !Selection {
+        var selection = Selection.init(.object, provenance);
+        const children = self.contains.get(page_id) orelse return selection;
+        for (children.items) |child_id| {
+            const node = self.getNode(child_id) orelse continue;
+            if (roleEq(node.role, role)) {
+                try selection.ids.append(allocator, child_id);
+            }
+        }
+        return selection;
+    }
+
+    fn selectDocumentObjectsByRole(
+        self: *DocumentState,
+        allocator: Allocator,
+        role: Role,
+        provenance: []const u8,
+    ) !Selection {
+        var selection = Selection.init(.object, provenance);
+        for (self.page_order.items) |page_id| {
+            var page_selection = try self.selectPageObjectsByRole(allocator, page_id, role, provenance);
+            defer page_selection.deinit(allocator);
+            for (page_selection.ids.items) |id| {
+                try selection.ids.append(allocator, id);
+            }
+        }
+        return selection;
+    }
+
+    fn selectDocumentPages(self: *DocumentState, allocator: Allocator, provenance: []const u8) !Selection {
+        var selection = Selection.init(.page, provenance);
+        for (self.page_order.items) |page_id| {
+            try selection.ids.append(allocator, page_id);
+        }
+        return selection;
+    }
+
+    fn selectChildren(self: *DocumentState, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
+        var selection = Selection.init(.object, provenance);
+        const children = self.contains.get(parent_id) orelse return selection;
+        for (children.items) |child_id| {
+            const child = self.getNode(child_id) orelse continue;
+            if (child.kind == .object) try selection.ids.append(allocator, child_id);
+        }
+        return selection;
+    }
+
+    fn appendDescendants(self: *DocumentState, allocator: Allocator, parent_id: NodeId, selection: *Selection) !void {
+        const children = self.contains.get(parent_id) orelse return;
+        for (children.items) |child_id| {
+            const child = self.getNode(child_id) orelse continue;
+            if (child.kind == .object) try selection.ids.append(allocator, child_id);
+            try self.appendDescendants(allocator, child_id, selection);
+        }
+    }
+
+    fn selectDescendants(self: *DocumentState, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
+        var selection = Selection.init(.object, provenance);
+        try self.appendDescendants(allocator, parent_id, &selection);
+        return selection;
+    }
+
+    pub fn select(self: *DocumentState, allocator: Allocator, base: Value, query: Query) !Value {
+        try self.ensureValueTag(base, query.input, query.name);
+
+        return switch (query.op) {
+            .self_object => .{
+                .selection = try self.singletonSelection(allocator, .object, query.name, base.object),
+            },
+            .previous_page => .{
+                .page = self.previousPageOf(base.page) orelse return error.NoPreviousPage,
+            },
+            .parent_page => .{
+                .page = self.parentPageOf(base.object) orelse return error.MissingParentPage,
+            },
+            .children => .{
+                .selection = try self.selectChildren(allocator, base.object, query.name),
+            },
+            .descendants => .{
+                .selection = try self.selectDescendants(allocator, base.object, query.name),
+            },
+            .page_objects_by_role => |role| .{
+                .selection = try self.selectPageObjectsByRole(allocator, base.page, role, query.name),
+            },
+            .document_objects_by_role => |role| .{
+                .selection = try self.selectDocumentObjectsByRole(allocator, role, query.name),
+            },
+            .document_pages => .{
+                .selection = try self.selectDocumentPages(allocator, query.name),
+            },
+        };
+    }
+
+    pub fn finalizeDocument(self: *DocumentState, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !layout.Document {
+        self.clearDiagnosticsForPhase(.layout);
+        self.clearConstraintFailures();
+        var results = try layout.solveDocument(self, trace_path, options);
+        if (self.constraint_failures.items.len > 0) {
+            const first_kind = self.constraint_failures.items[0].kind;
+            results.deinit(self.allocator);
+            self.clearDiagnosticsForPhase(.layout);
+            self.clearConstraintFailures();
+            var propagation_options = options;
+            propagation_options.record_propagation = true;
+            results = try layout.solveDocument(self, trace_path, propagation_options);
+            if (self.constraint_failures.items.len == 0) {
+                results.deinit(self.allocator);
+                switch (first_kind) {
+                    .conflict => return error.ConstraintConflict,
+                    .negative_frame_size => return error.NegativeFrameSize,
+                }
+            }
+            const kind = self.constraint_failures.items[0].kind;
+            results.deinit(self.allocator);
+            switch (kind) {
+                .conflict => return error.ConstraintConflict,
+                .negative_frame_size => return error.NegativeFrameSize,
+            }
+        }
+        try layout.applyDocument(self, &results);
+        return results;
+    }
+
+    pub fn styleForNode(self: *DocumentState, node: *const Node) model.TextStyle {
+        return layout.styleForNode(self, node);
+    }
+
+    pub fn intrinsicWidth(self: *DocumentState, node: *const Node) f32 {
+        return layout.intrinsicWidth(self, node);
+    }
+
+    pub fn intrinsicHeight(self: *DocumentState, node: *const Node) f32 {
+        return layout.intrinsicHeight(self, node);
+    }
+
+    pub fn shouldWrapNode(self: *DocumentState, node: *const Node) bool {
+        return layout.shouldWrapNode(self, node);
+    }
+};
+
+fn defaultConstraintFailureReason(kind: ConstraintFailureKind) ConstraintFailureReason {
+    return switch (kind) {
+        .conflict => .anchor_value_conflict,
+        .negative_frame_size => .negative_frame_size,
+    };
+}
+
+fn constraintFailureSame(a: ConstraintFailure, b: ConstraintFailure) bool {
+    if (a.kind != b.kind) return false;
+    if (a.page_id != b.page_id) return false;
+    if (constraintFailureConstraintPairSame(a, b)) return true;
+    return false;
+}
+
+fn constraintFailureSameTarget(a: ConstraintFailure, b: ConstraintFailure) bool {
+    if (a.kind != b.kind) return false;
+    if (a.reason != b.reason) return false;
+    if (a.page_id != b.page_id) return false;
+    if (a.axis != b.axis) return false;
+    return a.constraint.target_node == b.constraint.target_node and a.constraint.target_anchor == b.constraint.target_anchor;
+}
+
+fn constraintFailureDetailScore(failure: ConstraintFailure) usize {
+    var score: usize = 0;
+    if (failure.propagation) |propagation| {
+        score += 100;
+        for (propagation.paths) |path| score += path.lines.len;
+        score += propagation.result.len;
+    }
+    if (failure.actual != null) score += 10;
+    if (failure.expected != null) score += 10;
+    if (failure.existing_constraint != null) score += 1;
+    return score;
+}
+
+fn constraintFailureConstraintPairSame(a: ConstraintFailure, b: ConstraintFailure) bool {
+    if (!constraintEq(a.constraint, b.constraint)) {
+        if (a.existing_constraint == null or b.existing_constraint == null) return false;
+        return constraintEq(a.constraint, b.existing_constraint.?) and constraintEq(a.existing_constraint.?, b.constraint);
+    }
+    if ((a.existing_constraint == null) != (b.existing_constraint == null)) return false;
+    if (a.existing_constraint) |existing_a| {
+        if (!constraintEq(existing_a, b.existing_constraint.?)) return false;
+    }
+    return true;
+}
+
+fn constraintEq(a: Constraint, b: Constraint) bool {
+    if (a.target_node != b.target_node) return false;
+    if (a.target_anchor != b.target_anchor) return false;
+    if (a.offset != b.offset) return false;
+    if (!constraintSourceEq(a.source, b.source)) return false;
+    const a_origin = a.origin orelse "";
+    const b_origin = b.origin orelse "";
+    return std.mem.eql(u8, a_origin, b_origin);
+}
+
+fn constraintSourceEq(a: ConstraintSource, b: ConstraintSource) bool {
+    return switch (a) {
+        .page => |a_anchor| switch (b) {
+            .page => |b_anchor| a_anchor == b_anchor,
+            .node => false,
+        },
+        .node => |a_node| switch (b) {
+            .page => false,
+            .node => |b_node| a_node.node_id == b_node.node_id and a_node.anchor == b_node.anchor,
+        },
+    };
+}

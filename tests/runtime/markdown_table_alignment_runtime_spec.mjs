@@ -34,7 +34,7 @@ end
       "utf8",
     );
 
-    const render = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "markdown-table-align"], project);
+    const render = await runSs(["render", "slide.ss", "out.pdf"], project);
     assert(render.code === 0, `render failed:\n${combinedOutput(render)}`);
 
     await runCommand("pdftotext", ["-bbox", "out.pdf", "out.bbox.html"], project);

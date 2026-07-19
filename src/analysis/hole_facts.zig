@@ -9,20 +9,20 @@ const syntax_hole = @import("../syntax/hole.zig");
 
 const SemanticEnv = semantic_env.SemanticEnv;
 
-pub fn populateExpectedTypes(allocator: std.mem.Allocator, ir: *core.Ir, holes: *syntax_hole.Result) !void {
-    var declaration_index = try declarations.build(allocator, ir);
+pub fn populateExpectedTypes(allocator: std.mem.Allocator, state: *core.DocumentState, holes: *syntax_hole.Result) !void {
+    var declaration_index = try declarations.build(allocator, state);
     defer declaration_index.deinit();
-    const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
-    for (ir.modules.items) |module| {
+    const sema = SemanticEnv.init(state, &declaration_index, &state.functions);
+    for (state.modules.items) |module| {
         var module_sema = sema.forModule(module.id);
-        try moduleExpectedTypes(allocator, &module_sema, module.program, holes);
+        try moduleExpectedTypes(allocator, &module_sema, module.syntax, holes);
     }
 }
 
 fn moduleExpectedTypes(
     allocator: std.mem.Allocator,
     sema: *const SemanticEnv,
-    program: ast.Program,
+    program: ast.Module,
     holes: *syntax_hole.Result,
 ) !void {
     for (program.constants.items) |decl| {

@@ -4,11 +4,11 @@ const core = @import("core");
 const analysis = @import("../analysis.zig");
 const json = @import("utils").json;
 
-pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
+pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, state: *core.DocumentState) !void {
     var variables = try root.arrayField("variables");
-    for (ir.modules.items) |module| {
+    for (state.modules.items) |module| {
         if (module.path == null) continue;
-        var variable_infos = try analysis.collectScopedVariableInfoFromProgram(allocator, &ir.functions, module.program, module.id, module.source.len, ir);
+        var variable_infos = try analysis.collectScopedVariableInfoFromModule(allocator, &state.functions, module.syntax, module.id, module.source.len, state);
         defer variable_infos.deinit(allocator);
         for (variable_infos.items) |entry| {
             var item = try variables.objectItem();
@@ -30,9 +30,9 @@ pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir:
     try variables.end();
 }
 
-pub fn writeDefinitionsField(root: *json.Object, ir: *core.Ir) !void {
+pub fn writeDefinitionsField(root: *json.Object, state: *core.DocumentState) !void {
     var definitions = try root.arrayField("definitions");
-    for (ir.definitions.items) |definition| {
+    for (state.definitions.items) |definition| {
         var item = try definitions.objectItem();
         try item.stringField("name", definition.name);
         try item.enumTagField("kind", definition.kind);
@@ -44,7 +44,7 @@ pub fn writeDefinitionsField(root: *json.Object, ir: *core.Ir) !void {
         try item.intField("visibleStart", definition.visible_start);
         try item.intField("visibleEnd", definition.visible_end);
         try item.intField("moduleId", definition.module_id);
-        if (ir.moduleById(definition.module_id)) |module| {
+        if (state.moduleById(definition.module_id)) |module| {
             try item.stringField("moduleSpec", module.spec);
             try item.enumTagField("moduleKind", module.kind);
         } else {
@@ -66,7 +66,6 @@ pub fn writeHintsField(root: *json.Object, hints: []const core.InlayHint) !void 
         try item.intField("line", hint.line);
         try item.intField("column", hint.column);
         try item.stringField("label", hint.label);
-        try item.enumTagField("kind", hint.kind);
         try item.intField("moduleId", hint.module_id);
         try item.optionalStringField("file", hint.file);
         try item.end();

@@ -73,7 +73,11 @@ await withLspClient({ cwd: root }, async (client) => {
     `definition did not jump to default theme cover: ${JSON.stringify(pairedDefinition)}`,
   );
 
-  const brokenDiagnosticsPromise = client.waitForDiagnostics(uri);
+  const brokenDiagnosticsPromise = client.waitForDiagnostics(
+    uri,
+    (diagnostics, message) => diagnostics.length > 0 && message.params.version === 2,
+    "diagnostics for broken ranged edit",
+  );
   client.changeDocumentRange({
     uri,
     version: 2,
@@ -83,7 +87,11 @@ await withLspClient({ cwd: root }, async (client) => {
   const brokenDiagnostics = await brokenDiagnosticsPromise;
   assert(brokenDiagnostics.params.diagnostics.length > 0, "ranged didChange did not publish diagnostics for broken source");
 
-  const fixedDiagnosticsPromise = client.waitForDiagnostics(uri);
+  const fixedDiagnosticsPromise = client.waitForDiagnostics(
+    uri,
+    (diagnostics, message) => diagnostics.length === 0 && message.params.version === 3,
+    "cleared diagnostics for restored ranged edit",
+  );
   client.changeDocumentRange({
     uri,
     version: 3,

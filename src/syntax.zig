@@ -1,6 +1,6 @@
 const ast = @import("ast");
 
-pub const Program = ast.Program;
+pub const Module = ast.Module;
 pub const PageDecl = ast.PageDecl;
 pub const ConstDecl = ast.ConstDecl;
 pub const FunctionDecl = ast.FunctionDecl;
