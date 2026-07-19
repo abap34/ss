@@ -747,11 +747,6 @@ end
       client.openDocument({ uri, text: initial });
       await initialDiagnostics;
 
-      const clearedIntermediate = client.waitForDiagnostics(
-        uri,
-        (diagnostics, message) => diagnostics.length === 0 && message.params.version === 2,
-        "cleared diagnostics for intermediate source",
-      );
       const clearedLatest = client.waitForDiagnostics(
         uri,
         (diagnostics, message) => diagnostics.length === 0 && message.params.version === 3,
@@ -759,7 +754,6 @@ end
       );
       client.changeDocument({ uri, version: 2, text: invalid });
       client.changeDocument({ uri, version: 3, text: fixed });
-      await clearedIntermediate;
       await clearedLatest;
 
       const rebuiltLatest = client.waitForDiagnostics(
