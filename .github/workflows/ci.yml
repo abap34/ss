@@ -30,7 +30,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          if command -v pkg-config >/dev/null && pkg-config --exists cairo gdk-pixbuf-2.0 libqpdf pangocairo librsvg-2.0; then
+          if command -v c++ >/dev/null && command -v pkg-config >/dev/null && command -v qpdf >/dev/null && pkg-config --exists cairo gdk-pixbuf-2.0 libqpdf pangocairo librsvg-2.0; then
             echo "system dependencies already installed"
           else
             APT_ARCHIVE_CACHE="$RUNNER_TEMP/apt-archives"
@@ -40,12 +40,14 @@ jobs:
               -o Dir::Cache::archives="$APT_ARCHIVE_CACHE" \
               -o Binary::apt-get::APT::Keep-Downloaded-Packages=true \
               install -y --no-install-recommends \
+              g++ \
               libcairo2-dev \
               libgdk-pixbuf-2.0-dev \
               librsvg2-dev \
               libpango1.0-dev \
               libqpdf-dev \
-              pkg-config
+              pkg-config \
+              qpdf
           fi
           if [ -d "$RUNNER_TEMP/apt-archives" ]; then
             sudo rm -rf "$RUNNER_TEMP/apt-archives/partial" "$RUNNER_TEMP/apt-archives/lock"

@@ -204,7 +204,6 @@ const char *ss_pdf_librsvg_version_string(void);
 const char *ss_pdf_gdk_pixbuf_version_string(void);
 int ss_pdf_fontconfig_version(void);
 const char *ss_pdf_harfbuzz_version_string(void);
-const char *ss_qpdf_version_string(void);
 int ss_font_register(const char *path);
 
 SsPdf *ss_pdf_create(const char *path, double width, double height);
@@ -313,13 +312,27 @@ int ss_svg_size(const char *path, double *width, double *height);
 int ss_svg_metadata(const char *path, SsSvgMetadata *metadata);
 int ss_pdf_draw_svg(SsPdf *pdf, const char *path, double x, double y, double width, double height);
 int ss_pdf_draw_svg_tinted(SsPdf *pdf, const char *path, double x, double y, double width, double height, double r, double g, double b);
-int ss_qpdf_merge(const char *output, const char *const *inputs, size_t input_count, int single_page_inputs);
-int ss_qpdf_empty(const char *output);
-int ss_qpdf_page_size(const char *path, size_t page_index, int box, double *width, double *height);
-int ss_qpdf_page_sizes(const char *path, int box, double *widths, double *heights, size_t page_count);
-int ss_qpdf_metadata(const char *path, SsPdfDocumentMetadata *document, SsPdfPageMetadata *pages, size_t page_capacity);
-int ss_qpdf_compose(const char *output, const SsQpdfLayer *layers, size_t layer_count);
-const char *ss_qpdf_last_error(void);
+#if defined(__GNUC__) || defined(__clang__)
+#define SS_QPDF_BRIDGE_API __attribute__((visibility("default")))
+#else
+#define SS_QPDF_BRIDGE_API
+#endif
+
+SS_QPDF_BRIDGE_API const char *ss_qpdf_version_string(void);
+SS_QPDF_BRIDGE_API int ss_qpdf_merge(const char *output, const char *const *inputs, size_t input_count, int single_page_inputs);
+SS_QPDF_BRIDGE_API int ss_qpdf_empty(const char *output);
+SS_QPDF_BRIDGE_API int ss_qpdf_page_size(const char *path, size_t page_index, int box, double *width, double *height);
+SS_QPDF_BRIDGE_API int ss_qpdf_page_sizes(const char *path, int box, double *widths, double *heights, size_t page_count);
+SS_QPDF_BRIDGE_API int ss_qpdf_metadata(
+    const char *path,
+    SsPdfDocumentMetadata *document,
+    SsPdfPageMetadata *pages,
+    size_t page_capacity
+);
+SS_QPDF_BRIDGE_API int ss_qpdf_compose(const char *output, const SsQpdfLayer *layers, size_t layer_count);
+SS_QPDF_BRIDGE_API const char *ss_qpdf_last_error(void);
+
+#undef SS_QPDF_BRIDGE_API
 
 #ifdef __cplusplus
 }
