@@ -6,7 +6,7 @@ import { renderPage } from "./document.js";
 const rulerSize = 26;
 const rulerInterval = 100;
 const minimumRulerTickSpacing = 50;
-const singlePageMargin = 32;
+const viewportMarginRatio = 0.04;
 const buildStatusPresentation = {
   starting: { label: "Starting…", icon: "" },
   building: { label: "Building…", icon: "" },
@@ -153,12 +153,12 @@ export class WorkspaceView {
     if (shells.length === 0) return;
     const widths = shells.map((shell) => Number(shell.dataset.pageWidth));
     const heights = shells.map((shell) => Number(shell.dataset.pageHeight));
-    const horizontalMargin = this.state.mode === "single"
-      ? singlePageMargin * 2
-      : 40;
-    const verticalMargin = this.state.mode === "single"
-      ? singlePageMargin * 2
-      : 32;
+    const viewportMarginX = viewport.clientWidth * viewportMarginRatio;
+    const viewportMarginY = viewport.clientHeight * viewportMarginRatio;
+    viewport.style.setProperty("--viewport-margin-x", `${viewportMarginX}px`);
+    viewport.style.setProperty("--viewport-margin-y", `${viewportMarginY}px`);
+    const horizontalMargin = viewportMarginX * 2;
+    const verticalMargin = viewportMarginY * 2;
     const fitScale = (reservedRulerSpace) => {
       const availableWidth = Math.max(
         80,

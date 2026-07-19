@@ -126,6 +126,13 @@ await withBrowser(output, async (browser, baseUrl) => {
     );
     assert.equal(await page.locator(".ruler--vertical").isVisible(), false,
       "rulers remained visible at a scale where their fixed labels obscure the page");
+    const narrowMarginRatio = await horizontalPageMarginRatio(page);
+    assert(Math.abs(narrowMarginRatio - 0.04) < 0.005,
+      `narrow editor margin was not proportional to its viewport: ${narrowMarginRatio}`);
+    await page.setViewportSize({ width: 400, height: 560 });
+    const narrowerMarginRatio = await horizontalPageMarginRatio(page);
+    assert(Math.abs(narrowerMarginRatio - narrowMarginRatio) < 0.005,
+      "editor margin occupied a growing proportion of a narrower viewport");
     await page.setViewportSize({ width: 560, height: 920 });
     await page.evaluate(() => {
       globalThis.__retiringPdfRoots = [
@@ -140,6 +147,8 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.locator("select.page-mode").selectOption("continuous");
     await page.waitForFunction(() => document.querySelectorAll(".page-shell").length === 2);
     assert.deepEqual(await page.locator(".page-caption").allTextContents(), ["Overview", "Details"]);
+    assert(Math.abs(await horizontalPageMarginRatio(page) - 0.04) < 0.005,
+      "continuous editor margin was not proportional to its viewport");
     await page.waitForFunction(() => {
       const shells = [...document.querySelectorAll(".page-shell")];
       if (shells.length !== 2) return false;
@@ -406,6 +415,23 @@ async function expectBuildStatus(page, status, label) {
   const node = page.locator(".build-status");
   assert.equal(await node.getAttribute("role"), "status");
   assert.equal(await node.getAttribute("title"), label);
+}
+
+async function horizontalPageMarginRatio(page) {
+  await page.waitForFunction(() => {
+    const viewport = document.querySelector(".viewport");
+    const surface = document.querySelector(".page-surface");
+    if (!viewport || !surface) return false;
+    const viewportRect = viewport.getBoundingClientRect();
+    const surfaceRect = surface.getBoundingClientRect();
+    const expectedMargin = viewportRect.width * 0.04;
+    return Math.abs(surfaceRect.left - viewportRect.left - expectedMargin) < 1;
+  });
+  return await page.evaluate(() => {
+    const viewportRect = document.querySelector(".viewport").getBoundingClientRect();
+    const surfaceRect = document.querySelector(".page-surface").getBoundingClientRect();
+    return (surfaceRect.left - viewportRect.left) / viewportRect.width;
+  });
 }
 
 async function lastMessage(page, type) {

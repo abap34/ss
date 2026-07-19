@@ -437,7 +437,7 @@ button {
   scrollbar-color: var(--text-faint) var(--shell-background);
 }
 .viewport--single {
-  padding: 32px;
+  padding: var(--viewport-margin-y, 4%) var(--viewport-margin-x, 4%);
 }
 .viewport--single .pages-stage {
   display: grid;
@@ -446,7 +446,7 @@ button {
   place-items: center;
 }
 .viewport--continuous {
-  padding: 34px 32px 48px 38px;
+  padding: var(--viewport-margin-y, 4%) var(--viewport-margin-x, 4%);
 }
 .viewport--continuous .pages-stage {
   display: flex;
