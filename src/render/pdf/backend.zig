@@ -193,7 +193,7 @@ const Composition = struct {
     }
 };
 
-fn identityLayerEffects() c.SsQpdfLayerEffects {
+fn identityLayerEffects() c.SsLayerEffects {
     return .{
         .xx = 1,
         .yx = 0,
@@ -211,7 +211,7 @@ fn identityLayerEffects() c.SsQpdfLayerEffects {
     };
 }
 
-fn layerEffects(header: render_ir.ItemHeader, page_height: f64) c.SsQpdfLayerEffects {
+fn layerEffects(header: render_ir.ItemHeader, page_height: f64) c.SsLayerEffects {
     const transform = header.transform;
     var effects = identityLayerEffects();
     effects.xx = transform.xx;
@@ -265,12 +265,13 @@ fn replayItems(
 ) !void {
     for (items) |item| {
         const header = item.header();
-        try beginItem(pdf, header);
+        const effects = itemEffects(header);
+        if (c.ss_pdf_begin_item(pdf, &effects) != 0) return cairoFailure(pdf);
         replayItem(allocator, pdf, ir, item, resources) catch |err| {
-            _ = c.ss_pdf_end_item(pdf, header.opacity, @intFromEnum(header.blend_mode));
+            _ = c.ss_pdf_end_item(pdf);
             return err;
         };
-        if (c.ss_pdf_end_item(pdf, header.opacity, @intFromEnum(header.blend_mode)) != 0) return cairoFailure(pdf);
+        if (c.ss_pdf_end_item(pdf) != 0) return cairoFailure(pdf);
     }
 }
 
@@ -342,31 +343,26 @@ fn replayItem(
     }
 }
 
-fn beginItem(pdf: *c.SsPdf, header: render_ir.ItemHeader) !void {
-    var has_clip: c_int = 0;
-    var clip = render_ir.Rect{ .x = 0, .y = 0, .width = 0, .height = 0 };
+fn itemEffects(header: render_ir.ItemHeader) c.SsLayerEffects {
+    var effects = identityLayerEffects();
+    effects.xx = header.transform.xx;
+    effects.yx = header.transform.yx;
+    effects.xy = header.transform.xy;
+    effects.yy = header.transform.yy;
+    effects.x0 = header.transform.x0;
+    effects.y0 = header.transform.y0;
+    effects.opacity = header.opacity;
+    effects.blend_mode = @intFromEnum(header.blend_mode);
     if (header.clip) |value| switch (value) {
         .rect => |rect| {
-            has_clip = 1;
-            clip = rect;
+            effects.has_clip = 1;
+            effects.clip_x = rect.x;
+            effects.clip_y = rect.y;
+            effects.clip_width = rect.width;
+            effects.clip_height = rect.height;
         },
     };
-    if (c.ss_pdf_begin_item(
-        pdf,
-        header.transform.xx,
-        header.transform.yx,
-        header.transform.xy,
-        header.transform.yy,
-        header.transform.x0,
-        header.transform.y0,
-        has_clip,
-        clip.x,
-        clip.y,
-        clip.width,
-        clip.height,
-        header.opacity,
-        @intFromEnum(header.blend_mode),
-    ) != 0) return cairoFailure(pdf);
+    return effects;
 }
 
 fn replayText(

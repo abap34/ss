@@ -170,7 +170,7 @@ typedef struct SsReplayCluster {
     int glyphs;
 } SsReplayCluster;
 
-typedef struct SsQpdfLayerEffects {
+typedef struct SsLayerEffects {
     double xx;
     double yx;
     double xy;
@@ -184,7 +184,7 @@ typedef struct SsQpdfLayerEffects {
     double clip_height;
     double opacity;
     int blend_mode;
-} SsQpdfLayerEffects;
+} SsLayerEffects;
 
 typedef struct SsQpdfLayer {
     const char *path;
@@ -195,7 +195,7 @@ typedef struct SsQpdfLayer {
     double width;
     double height;
     int copy_annotations;
-    SsQpdfLayerEffects effects;
+    SsLayerEffects effects;
 } SsQpdfLayer;
 
 const char *ss_pdf_cairo_version_string(void);
@@ -213,23 +213,8 @@ void ss_pdf_set_creator(SsPdf *pdf, const char *creator);
 void ss_pdf_begin_page(SsPdf *pdf, double width, double height);
 void ss_pdf_end_page(SsPdf *pdf);
 int ss_pdf_finish(SsPdf *pdf);
-int ss_pdf_begin_item(
-    SsPdf *pdf,
-    double xx,
-    double yx,
-    double xy,
-    double yy,
-    double x0,
-    double y0,
-    int has_clip,
-    double clip_x,
-    double clip_y,
-    double clip_width,
-    double clip_height,
-    double opacity,
-    int blend_mode
-);
-int ss_pdf_end_item(SsPdf *pdf, double opacity, int blend_mode);
+int ss_pdf_begin_item(SsPdf *pdf, const SsLayerEffects *effects);
+int ss_pdf_end_item(SsPdf *pdf);
 void ss_pdf_fill_rect(SsPdf *pdf, double x, double y, double width, double height, double r, double g, double b);
 void ss_pdf_stroke_line(
     SsPdf *pdf,

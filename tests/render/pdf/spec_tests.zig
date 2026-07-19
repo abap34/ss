@@ -209,6 +209,29 @@ test "render PDF spec: Cairo shim writes URI and destination link annotations" {
     try expectInternalDestination(json);
 }
 
+test "render PDF spec: Cairo item effects preserve drawing state" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const pdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/item-effects.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(pdf_path);
+    const pdf_path_z = try allocator.dupeZ(u8, pdf_path);
+    defer allocator.free(pdf_path_z);
+
+    const pdf = c.ss_pdf_create(pdf_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
+    defer c.ss_pdf_destroy(pdf);
+    c.ss_pdf_begin_page(pdf, 320, 180);
+    var effects = std.mem.zeroes(c.SsLayerEffects);
+    effects.xx = 1;
+    effects.yy = 1;
+    effects.opacity = 1;
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_item(pdf, &effects));
+    c.ss_pdf_fill_rect(pdf, 20, 20, 120, 24, 0, 0, 0);
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_end_item(pdf));
+    c.ss_pdf_end_page(pdf);
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
+}
+
 test "render PDF spec: page renderer replays and composes ordered resources" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

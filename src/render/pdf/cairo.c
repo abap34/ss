@@ -38,6 +38,10 @@ struct SsPdf {
     cairo_t *pdf_cr;
     cairo_t *cr;
     SsPdfFontFace *font_faces;
+    double item_opacity;
+    int item_blend_mode;
+    int item_active;
+    const char *error_message;
 };
 
 static void ss_pdf_set_rgb(double r, double g, double b, cairo_t *cr) {
@@ -299,6 +303,7 @@ void ss_pdf_destroy(SsPdf *pdf) {
 
 const char *ss_pdf_status_string(const SsPdf *pdf) {
     if (pdf == NULL) return "invalid PDF renderer";
+    if (pdf->error_message != NULL) return pdf->error_message;
     if (pdf->cr != NULL && cairo_status(pdf->cr) != CAIRO_STATUS_SUCCESS) {
         return cairo_status_to_string(cairo_status(pdf->cr));
     }
@@ -331,43 +336,62 @@ int ss_pdf_finish(SsPdf *pdf) {
     return 0;
 }
 
-int ss_pdf_begin_item(
-    SsPdf *pdf,
-    double xx,
-    double yx,
-    double xy,
-    double yy,
-    double x0,
-    double y0,
-    int has_clip,
-    double clip_x,
-    double clip_y,
-    double clip_width,
-    double clip_height,
-    double opacity,
-    int blend_mode
-) {
-    if (pdf == NULL || pdf->cr == NULL || opacity < 0 || opacity > 1) return 1;
+int ss_pdf_begin_item(SsPdf *pdf, const SsLayerEffects *effects) {
+    if (pdf == NULL || pdf->cr == NULL) return 1;
+    if (effects == NULL) {
+        pdf->error_message = "missing item effects";
+        return 1;
+    }
+    if (pdf->item_active) {
+        pdf->error_message = "nested PDF item";
+        return 1;
+    }
+    if (effects->opacity < 0 || effects->opacity > 1) {
+        pdf->error_message = "invalid item opacity";
+        return 1;
+    }
     cairo_save(pdf->cr);
+    pdf->item_opacity = effects->opacity;
+    pdf->item_blend_mode = effects->blend_mode;
+    pdf->item_active = 1;
     cairo_matrix_t matrix;
-    cairo_matrix_init(&matrix, xx, yx, xy, yy, x0, y0);
+    cairo_matrix_init(
+        &matrix,
+        effects->xx,
+        effects->yx,
+        effects->xy,
+        effects->yy,
+        effects->x0,
+        effects->y0
+    );
     cairo_transform(pdf->cr, &matrix);
-    if (has_clip) {
-        cairo_rectangle(pdf->cr, clip_x, clip_y, clip_width, clip_height);
+    if (effects->has_clip) {
+        cairo_rectangle(
+            pdf->cr,
+            effects->clip_x,
+            effects->clip_y,
+            effects->clip_width,
+            effects->clip_height
+        );
         cairo_clip(pdf->cr);
     }
-    if (opacity != 1 || blend_mode != 0) cairo_push_group(pdf->cr);
+    if (effects->opacity != 1 || effects->blend_mode != 0) cairo_push_group(pdf->cr);
     return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
-int ss_pdf_end_item(SsPdf *pdf, double opacity, int blend_mode) {
-    if (pdf == NULL || pdf->cr == NULL || opacity < 0 || opacity > 1) return 1;
-    if (opacity != 1 || blend_mode != 0) {
+int ss_pdf_end_item(SsPdf *pdf) {
+    if (pdf == NULL || pdf->cr == NULL) return 1;
+    if (!pdf->item_active) {
+        pdf->error_message = "PDF item is not active";
+        return 1;
+    }
+    if (pdf->item_opacity != 1 || pdf->item_blend_mode != 0) {
         cairo_pop_group_to_source(pdf->cr);
-        cairo_set_operator(pdf->cr, ss_pdf_blend_operator(blend_mode));
-        cairo_paint_with_alpha(pdf->cr, opacity);
+        cairo_set_operator(pdf->cr, ss_pdf_blend_operator(pdf->item_blend_mode));
+        cairo_paint_with_alpha(pdf->cr, pdf->item_opacity);
     }
     cairo_restore(pdf->cr);
+    pdf->item_active = 0;
     return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
