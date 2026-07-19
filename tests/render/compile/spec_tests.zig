@@ -190,20 +190,20 @@ test "text decorations and measurements use resolved font run metrics" {
     );
 
     try testing.expectEqual(@as(usize, 3), page.items.items.len);
-    const text_item = switch (page.items.items[0]) {
+    const underline = switch (page.items.items[0]) {
+        .stroke_line => |value| value,
+        else => return error.ExpectedUnderlineItem,
+    };
+    const text_item = switch (page.items.items[1]) {
         .text => |value| value,
         else => return error.ExpectedTextItem,
     };
     try testing.expectEqual(@as(usize, 1), text_item.layout.runs.len);
     const run = text_item.layout.runs[0];
     const instance = fonts.get(testing.io, run.font_instance) orelse return error.MissingRenderFont;
-    const strike = switch (page.items.items[1]) {
+    const strike = switch (page.items.items[2]) {
         .stroke_line => |value| value,
         else => return error.ExpectedStrikeItem,
-    };
-    const underline = switch (page.items.items[2]) {
-        .stroke_line => |value| value,
-        else => return error.ExpectedUnderlineItem,
     };
     const run_baseline = text_item.y + run.baseline_y;
     try testing.expectApproxEqAbs(
@@ -250,6 +250,79 @@ test "text decorations and measurements use resolved font run metrics" {
     try testing.expectApproxEqAbs(measured_layout_y + decorated.y, drawn_top, 0.0001);
     try testing.expectApproxEqAbs(@as(f64, decorated.width), @max(strike.end.x, underline.end.x) - 40, 0.0001);
     try testing.expectApproxEqAbs(@as(f64, decorated.height), drawn_bottom - drawn_top, 0.0001);
+}
+
+test "markdown underline paint controls color opacity width offset and dash" {
+    var page = render.Page{
+        .page_id = 1,
+        .index = 0,
+        .width = 1280,
+        .height = 720,
+    };
+    defer page.deinit(testing.allocator);
+    var resources = render_resources.Builder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    var math = render.MathBuilder{};
+    defer math.deinit(testing.allocator);
+    var emitter = render_emitter.Emitter{
+        .page = &page,
+        .resources = &resources,
+        .fonts = &fonts,
+        .math = &math,
+        .io = testing.io,
+    };
+
+    const baseline_y: f64 = 180;
+    const font_size: f64 = 48;
+    const underline_color = core.render_policy.Color{ .r = 0.8, .g = 0.2, .b = 0.4 };
+    try emitter.textBaseline(
+        testing.allocator,
+        40,
+        baseline_y,
+        800,
+        "custom underline",
+        .{ .family = "sans-serif", .weight = 400, .style = .normal, .stretch = .normal },
+        font_size,
+        .{ .r = 0, .g = 0, .b = 0 },
+        false,
+        .{
+            .underline = true,
+            .underline_color = underline_color,
+            .underline_opacity = 0.35,
+            .underline_width = 5,
+            .underline_offset = 3,
+            .underline_dash_on = 8,
+            .underline_dash_off = 4,
+        },
+    );
+
+    try testing.expectEqual(@as(usize, 2), page.items.items.len);
+    const underline = switch (page.items.items[0]) {
+        .stroke_line => |value| value,
+        else => return error.ExpectedUnderlineItem,
+    };
+    const text_item = switch (page.items.items[1]) {
+        .text => |value| value,
+        else => return error.ExpectedTextItem,
+    };
+    const run = text_item.layout.runs[0];
+    const instance = fonts.get(testing.io, run.font_instance) orelse return error.MissingRenderFont;
+    const run_baseline = text_item.y + run.baseline_y;
+    const native_thickness = font_size * instance.underline_thickness_ratio;
+    try testing.expectApproxEqAbs(
+        run_baseline - font_size * instance.underline_position_ratio + native_thickness / 2 + 3,
+        underline.start.y,
+        0.0001,
+    );
+    try testing.expectApproxEqAbs(@as(f64, 5), underline.line_width, 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.35), underline.header.opacity, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 0.8), underline.color.r, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 0.2), underline.color.g, 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 0.4), underline.color.b, 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 8), underline.dash_on, 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 4), underline.dash_off, 0.0001);
 }
 
 test "resource compiler records deterministic raster SVG and PDF metadata" {

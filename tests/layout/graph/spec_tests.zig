@@ -1750,6 +1750,28 @@ test "render policy: markdown bold color is optional and resolves as text paint"
     try expectColor(0.2, 0.4, 0.6, resolved.text.?.markdown_bold_color.?);
 }
 
+test "render policy: markdown underline style resolves as text paint" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    const page = try state.addPage("Page");
+    const object = try state.makeObject(page, "body", null, .text, .text, "_Hello_");
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_underline", "color" }, .{ .string = "0.2,0.4,0.6" });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_underline", "opacity" }, .{ .number = 0.35 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_underline", "width" }, .{ .number = 5 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_underline", "offset" }, .{ .number = 3 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_underline", "dash" }, .{ .string = "8,4" });
+
+    const resolved = core.render_policy.resolve(&state, state.getNode(object).?);
+    const underline = resolved.text.?.markdown_underline;
+    try expectColor(0.2, 0.4, 0.6, underline.color.?);
+    try expectFloat(0.35, underline.opacity);
+    try expectFloat(5, underline.width.?);
+    try expectFloat(3, underline.offset);
+    try expectFloat(8, underline.dash.?.on);
+    try expectFloat(4, underline.dash.?.off);
+}
+
 test "render policy: markdown headings resolve their own text paint" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
