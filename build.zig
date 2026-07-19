@@ -774,8 +774,9 @@ fn addPdfPkgConfigPath(b: *std.Build) void {
 
 fn addNativePdfBackend(b: *std.Build, module: *Module) void {
     addNativePdfHeadersAndLibraries(b, module);
-    module.addCSourceFile(.{
-        .file = b.path("src/render/pdf/cairo.c"),
+    module.addCSourceFiles(.{
+        .root = b.path("src/render/pdf"),
+        .files = &.{ "cairo.c", "assets.c" },
     });
 }
 

@@ -40,6 +40,12 @@ fn expectCString(ptr: [*c]const u8) !void {
     try testing.expect(std.mem.span(sentinel).len > 0);
 }
 
+fn cStringSlice(ptr: [*c]const u8) []const u8 {
+    if (ptr == null) return "";
+    const sentinel: [*:0]const u8 = @ptrCast(ptr);
+    return std.mem.span(sentinel);
+}
+
 fn expectDeterministicDocumentId(io: std.Io, pdf_path: []const u8) !void {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, pdf_path, testing.allocator, .limited(2 * 1024 * 1024));
     defer testing.allocator.free(bytes);
@@ -437,6 +443,37 @@ test "render PDF spec: raster shim decodes and draws without a converted PNG" {
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_draw_raster(pdf, "assets/logo.png", 20, 20, 120, 120));
     c.ss_pdf_end_page(pdf);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
+}
+
+test "render PDF spec: image loaders preserve native error details" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const raster_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/missing-raster.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(raster_path);
+    const raster_path_z = try allocator.dupeZ(u8, raster_path);
+    defer allocator.free(raster_path_z);
+
+    const raster_pdf = c.ss_pdf_create(raster_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
+    defer c.ss_pdf_destroy(raster_pdf);
+    c.ss_pdf_begin_page(raster_pdf, 320, 180);
+    try testing.expectEqual(@as(c_int, 1), c.ss_pdf_draw_raster(raster_pdf, "missing-raster.png", 20, 20, 120, 120));
+    const raster_error = cStringSlice(c.ss_pdf_status_string(raster_pdf));
+    try testing.expect(contains(raster_error, "could not load raster image"));
+    try testing.expect(contains(raster_error, "missing-raster.png"));
+
+    const svg_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/missing-svg.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(svg_path);
+    const svg_path_z = try allocator.dupeZ(u8, svg_path);
+    defer allocator.free(svg_path_z);
+
+    const svg_pdf = c.ss_pdf_create(svg_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
+    defer c.ss_pdf_destroy(svg_pdf);
+    c.ss_pdf_begin_page(svg_pdf, 320, 180);
+    try testing.expectEqual(@as(c_int, 1), c.ss_pdf_draw_svg(svg_pdf, "missing-vector.svg", 20, 20, 120, 120));
+    const svg_error = cStringSlice(c.ss_pdf_status_string(svg_pdf));
+    try testing.expect(contains(svg_error, "could not load SVG image"));
+    try testing.expect(contains(svg_error, "missing-vector.svg"));
 }
 
 test "render PDF spec: libqpdf composes a selectable page form and copies links" {
