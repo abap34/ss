@@ -19,7 +19,10 @@ pub const Context = struct {
     }
 
     pub fn initWithBudget(allocator: std.mem.Allocator, req: types.SourceRequest, budget: ?types.QueryBudget) !Context {
-        var parsed = syntax.parseRecoveringWithSourceName(allocator, req.source, req.path) catch null;
+        var parsed = syntax.parseRecoveringWithSourceName(allocator, req.source, req.path) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => null,
+        };
         errdefer if (parsed) |*result| result.deinit(allocator);
         if (budget) |query_budget| {
             if (query_budget.expired()) {

@@ -10,7 +10,8 @@ const hole_facts = @import("hole_facts.zig");
 const declarations = @import("../language/declarations.zig");
 const registry = @import("../language/registry.zig");
 const module_loader = @import("../modules/loader.zig");
-const document_state_analysis = @import("document_state.zig");
+const module_index = @import("module_index.zig");
+const analysis_pipeline = @import("pipeline.zig");
 const execution = @import("execution.zig");
 const query_completion = @import("query/completion.zig");
 const query_definition = @import("query/definition.zig");
@@ -277,23 +278,21 @@ pub const AnalysisSnapshot = struct {
         errdefer snapshot.deinit();
 
         snapshot.diagnostics.sortByPath();
-        var decls = declarations.build(allocator, state) catch null;
-        defer if (decls) |*items| items.deinit();
+        var decls = try declarations.build(allocator, state);
+        defer decls.deinit();
         snapshot.modules = try cloneModules(allocator, state.modules.items);
         snapshot.module_order = try allocator.dupe(core.SourceModuleId, state.module_order.items);
         snapshot.holes = if (holes) |hole_table| try cloneHoles(allocator, hole_table.holes) else &.{};
         snapshot.definitions = try cloneDefinitions(allocator, state.definitions.items);
         snapshot.type_definitions = try collectTypeDefinitions(allocator, state);
-        snapshot.value_bindings = collectValueBindings(allocator, state) catch &.{};
-        snapshot.variable_bindings = collectVariableBindings(allocator, state) catch &.{};
-        if (decls) |items| {
-            snapshot.role_bindings = collectRoleBindings(allocator, items.roles.items) catch &.{};
-            snapshot.classes = collectClasses(allocator, items.classes.items) catch &.{};
-            snapshot.fields = collectFields(allocator, items.fields.items) catch &.{};
-            snapshot.records = collectRecords(allocator, items.records.items) catch &.{};
-            snapshot.record_fields = collectRecordFields(allocator, items.record_fields.items) catch &.{};
-            snapshot.enum_cases = collectEnumCases(allocator, items.types.items) catch &.{};
-        }
+        snapshot.value_bindings = try collectValueBindings(allocator, state);
+        snapshot.variable_bindings = try collectVariableBindings(allocator, state);
+        snapshot.role_bindings = try collectRoleBindings(allocator, decls.roles.items);
+        snapshot.classes = try collectClasses(allocator, decls.classes.items);
+        snapshot.fields = try collectFields(allocator, decls.fields.items);
+        snapshot.records = try collectRecords(allocator, decls.records.items);
+        snapshot.record_fields = try collectRecordFields(allocator, decls.record_fields.items);
+        snapshot.enum_cases = try collectEnumCases(allocator, decls.types.items);
         snapshot.hints = try cloneHints(allocator, state.hints.items);
         return snapshot;
     }
@@ -440,7 +439,7 @@ pub fn build(
 
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
-    var index = document_state_analysis.loadModuleIndexWithOptions(allocator, sources.io, asset_base_dir, program, .{
+    var index = module_index.load(allocator, sources.io, asset_base_dir, program, .{
         .overlay = &sources.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
@@ -476,7 +475,7 @@ pub fn build(
         return err;
     };
 
-    var state = document_state_analysis.buildDocumentStateWithOptions(allocator, entry_path, asset_base_dir, &entry_source, &program, &index, .{
+    var state = analysis_pipeline.buildDocumentStateWithOptions(allocator, entry_path, asset_base_dir, &entry_source, &program, &index, .{
         .allow_diagnostics = true,
         .parse_holes = parse_holes,
     }) catch |err| {
@@ -490,7 +489,10 @@ pub fn build(
     defer state.deinit();
     try options.checkCanceled();
 
-    var execution_graph = document_state_analysis.analyzeDocumentStateWithMode(allocator, &state, .evaluation) catch null;
+    var execution_graph = analysis_pipeline.analyzeDocumentStateWithMode(allocator, &state, .evaluation) catch |err| switch (err) {
+        error.DiagnosticsFailed => null,
+        else => return err,
+    };
     defer if (execution_graph) |*graph| graph.deinit();
     try options.checkCanceled();
     try hole_facts.populateExpectedTypes(allocator, &state, &parse_holes);
@@ -967,7 +969,7 @@ fn collectVariableBindings(allocator: std.mem.Allocator, state: *core.DocumentSt
     }
     for (state.modules.items) |module| {
         if (module.path == null) continue;
-        var infos = try document_state_analysis.collectScopedVariableInfoFromModule(allocator, &state.functions, module.syntax, module.id, module.source.len, state);
+        var infos = try analysis_pipeline.collectScopedVariableInfoFromModule(allocator, &state.functions, module.syntax, module.id, module.source.len, state);
         defer infos.deinit(allocator);
         for (infos.items) |entry| {
             const type_label: []u8 = @constCast(try semantic_types.typeInfoLabelAlloc(allocator, entry.info));

@@ -8,6 +8,28 @@ fn fixturePath(allocator: std.mem.Allocator, fixture: []const u8) ![]u8 {
     return std.fs.path.join(allocator, &.{ fixture_root, fixture, "slide.ss" });
 }
 
+fn fixtureSource(allocator: std.mem.Allocator, fixture: []const u8) !struct { path: []u8, source: []u8 } {
+    const path = try fixturePath(allocator, fixture);
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, allocator, .limited(256 * 1024));
+    return .{ .path = path, .source = source };
+}
+
+fn buildFixture(fixture: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const input = try fixtureSource(allocator, fixture);
+    try compiler_semantics.buildSource(testing.io, allocator, input.path, input.source);
+}
+
+fn expectFixtureDumpContains(fixture: []const u8, needles: []const []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const input = try fixtureSource(allocator, fixture);
+    try compiler_semantics.expectDumpContains(testing.io, allocator, input.path, input.source, needles);
+}
+
 fn buildSource(source: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -4865,27 +4887,8 @@ test "compiler semantics: explicit layout conflicts are rejected" {
 }
 
 test "compiler semantics: page constraint updates replace component positioning and preserve size" {
-    const source =
-        \\import std:themes/default as *
-        \\
-        \\fn component!() -> Object
-        \\  let item = text!("move")
-        \\  ~ item.center_x == page.center_x
-        \\  ~ item.top == page.top - 60
-        \\  ~ item.width == 240
-        \\  return item
-        \\end
-        \\
-        \\page demo
-        \\  let item = component!()
-        \\  ~!~item.left == page.left + 80
-        \\  ~!~item.top == page.top - 120
-        \\end
-        \\
-    ;
-
-    try buildSource(source);
-    try expectDumpContains(source, &.{
+    try buildFixture("constraints/update/position");
+    try expectFixtureDumpContains("constraints/update/position", &.{
         "\"constraint_updates\":[",
         "\"overridden_constraints\":[",
         "\"active\":true",
@@ -4895,79 +4898,20 @@ test "compiler semantics: page constraint updates replace component positioning 
 }
 
 test "compiler semantics: pure constraint updates leave fallback placement available" {
-    try buildSource(
-        \\import std:themes/default as *
-        \\
-        \\fn component!() -> Object
-        \\  let item = text!("fallback")
-        \\  ~ item.center_x == page.center_x
-        \\  ~ item.top == page.top - 60
-        \\  return item
-        \\end
-        \\
-        \\page demo
-        \\  let item = component!()
-        \\  ~!~item.left
-        \\  ~!~item.top
-        \\end
-        \\
-    );
+    try buildFixture("constraints/update/pure");
 }
 
 test "compiler semantics: caller constraint updates override component updates" {
-    try buildSource(
-        \\import std:themes/default as *
-        \\
-        \\fn component!() -> Object
-        \\  let item = text!("caller")
-        \\  ~!~item.left == page.left + 40
-        \\  ~ item.top == page.top - 60
-        \\  return item
-        \\end
-        \\
-        \\page demo
-        \\  let item = component!()
-        \\  ~!~item.right == page.right - 80
-        \\end
-        \\
-    );
+    try buildFixture("constraints/update/caller");
 }
 
 test "compiler semantics: later constraint updates overwrite earlier updates on one axis" {
-    try buildSource(
-        \\import std:themes/default as *
-        \\
-        \\page demo
-        \\  let item = text!("duplicate")
-        \\  ~!~item.left == page.left + 40
-        \\  ~!~item.right == page.right - 40
-        \\  ~ item.top == page.top - 80
-        \\end
-        \\
-    );
+    try buildFixture("constraints/update/order");
 }
 
 test "compiler semantics: size constraint updates replace inherited dimensions" {
-    const source =
-        \\import std:themes/default as *
-        \\
-        \\fn component!() -> Object
-        \\  let item = text!("resize")
-        \\  ~ item.center_x == page.center_x
-        \\  ~ item.top == page.top - 60
-        \\  ~ item.width == 240
-        \\  return item
-        \\end
-        \\
-        \\page demo
-        \\  let item = component!()
-        \\  ~!~item.width == 320
-        \\end
-        \\
-    ;
-
-    try buildSource(source);
-    try expectDumpContains(source, &.{
+    try buildFixture("constraints/update/size");
+    try expectFixtureDumpContains("constraints/update/size", &.{
         "\"target_anchor\":\"right\"",
         "\"offset\":320.0",
         "\"role\":\"size\"",
