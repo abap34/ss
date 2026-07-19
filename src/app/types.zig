@@ -1,9 +1,18 @@
 const module_loader = @import("../modules/loader.zig");
-const pdf = @import("../render/pdf.zig");
+const utils = @import("utils");
 
-pub const RenderOptions = pdf.RenderOptions;
+pub const RenderFormat = enum {
+    pdf,
+    html,
+};
 
-pub const PdfWriteOptions = struct {
+pub const RenderOptions = struct {
+    jobs: ?usize = null,
+    cache_dir: []const u8 = ".ss-cache/render",
+    highlight_languages: []const utils.highlight.Language = &.{},
+};
+
+pub const WriteOptions = struct {
     render: RenderOptions = .{},
     diagnostics_json_path: ?[]const u8 = null,
 };
@@ -18,5 +27,18 @@ pub const SourceRequest = struct {
 pub const PdfWriteRequest = struct {
     source: SourceRequest,
     output_path: []const u8,
-    options: PdfWriteOptions = .{},
+    options: WriteOptions = .{},
+};
+
+pub const HtmlWriteRequest = struct {
+    source: SourceRequest,
+    output_path: []const u8,
+    options: WriteOptions = .{},
+};
+
+pub const PdfAndHtmlWriteRequest = struct {
+    source: SourceRequest,
+    pdf_output_path: []const u8,
+    html_output_path: []const u8,
+    options: WriteOptions = .{},
 };

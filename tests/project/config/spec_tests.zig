@@ -54,14 +54,12 @@ test "project spec: editor settings parse from ss.toml" {
         \\[editor.lsp.inlay_hints]
         \\enabled = true
         \\arguments = false
-        \\positions = false
         \\
-        \\[editor.preview]
+        \\[editor.wysiwyg]
         \\debounce = 50
-        \\open = "external"
         \\
-        \\[editor.preview.refresh]
-        \\save = false
+        \\[editor.wysiwyg.refresh]
+        \\dependency = false
         \\
         \\[editor.page_guide]
         \\enabled = false
@@ -74,10 +72,8 @@ test "project spec: editor settings parse from ss.toml" {
     try testing.expectEqual(@as(u64, 25), cfg.lsp.debounce_ms);
     try testing.expect(cfg.lsp.inlay_hints);
     try testing.expect(!cfg.lsp.inlay_hint_arguments);
-    try testing.expect(!cfg.lsp.inlay_hint_positions);
-    try testing.expectEqual(@as(u64, 50), cfg.preview.debounce_ms);
-    try testing.expectEqual(project.PreviewOpenMode.external, cfg.preview.open_mode);
-    try testing.expect(!cfg.preview.refresh_on_save);
+    try testing.expectEqual(@as(u64, 50), cfg.wysiwyg.debounce_ms);
+    try testing.expect(!cfg.wysiwyg.refresh_on_dependency_change);
     try testing.expect(!cfg.page_guide.enabled);
     try testing.expect(!cfg.page_guide.gutter_icon);
 }

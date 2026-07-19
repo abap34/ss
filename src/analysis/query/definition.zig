@@ -79,7 +79,7 @@ fn appendStructuredTarget(
         if (context.qualifier) |receiver| {
             if (try appendEnumCaseTarget(allocator, out, snapshot, current_module_id, receiver, context.target, request_path)) return true;
         }
-        const parsed = context.program() orelse return false;
+        const parsed = context.module() orelse return false;
         const member = cursor.memberAt(parsed, context.offset) orelse return false;
         if (try appendRecordMemberTarget(allocator, out, snapshot, current_module_id, context.offset, member, request_path)) return true;
         return false;
@@ -89,7 +89,7 @@ fn appendStructuredTarget(
         return appendRecordFieldTarget(allocator, out, snapshot, current_module_id, record_name, context.target, request_path);
     }
     if (context.targetKindIs(.record_update_path_segment)) {
-        const parsed = context.program() orelse return false;
+        const parsed = context.module() orelse return false;
         const path_target = cursor.recordUpdatePathAt(parsed, context.offset) orelse return false;
         return appendRecordUpdatePathTarget(allocator, out, snapshot, current_module_id, context.offset, path_target, request_path);
     }

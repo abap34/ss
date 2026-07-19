@@ -9,10 +9,10 @@ const pdflatexAvailable = await commandAvailable("pdflatex");
 
 if (pdflatexAvailable) {
   await testRenderFailureProducesDiagnostic();
-  await testRenderFailureWritesStructuredDiagnostic();
-  await testInlineMathRenderFailureLocatesFormula();
-  await testConcatenatedMathRenderFailureLocatesSourceLiteral();
 }
+await testRenderFailureWritesStructuredDiagnostic();
+await testInlineMathRenderFailureLocatesFormula();
+await testConcatenatedMathRenderFailureLocatesSourceLiteral();
 await testSvgAssetRenderFailureLocatesAssetReference();
 await testMissingAssetCheckLocatesPathLiteral();
 
@@ -31,7 +31,7 @@ end
       "utf8",
     );
 
-    const result = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "render-diagnostics"], project);
+    const result = await runSs(["render", "slide.ss", "out.pdf"], project);
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code !== 0, "render should fail for an invalid artifact");
     assert(output.includes("RenderFailed:"), `render failure did not produce a render diagnostic:\n${output}`);
@@ -65,8 +65,6 @@ end
       "render",
       "slide.ss",
       "out.pdf",
-      "--cache-id",
-      "render-diagnostics-json",
       "--diagnostics-json",
       diagnosticsPath,
     ], project);
@@ -85,7 +83,7 @@ end
     assert(diagnostic.path.endsWith("/slide.ss"), `unexpected diagnostic path: ${JSON.stringify(diagnostic)}`);
     assert(diagnostic.range.start.line === 3, `unexpected diagnostic start line: ${JSON.stringify(diagnostic)}`);
     assert(diagnostic.range.start.character === 25, `unexpected diagnostic start character: ${JSON.stringify(diagnostic)}`);
-    assertMathCommandSummary(diagnostic.message, `structured diagnostic omitted command output summary: ${diagnostic.message}`);
+    assert(diagnostic.message.includes("UnsupportedMathSyntax"), `structured diagnostic omitted the math syntax error: ${diagnostic.message}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -106,11 +104,11 @@ end
       "utf8",
     );
 
-    const result = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "inline-math-diagnostics"], project);
+    const result = await runSs(["render", "slide.ss", "out.pdf"], project);
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code !== 0, "render should fail for invalid inline math");
     assert(output.includes("RenderFailed:"), `inline math failure did not produce a render diagnostic:\n${output}`);
-    assertMathCommandSummary(output, "inline math diagnostic omitted command output summary");
+    assert(output.includes("UnsupportedMathSyntax"), `inline math diagnostic omitted the math syntax error:\n${output}`);
     assert(output.includes("slide.ss:4:26"), `inline math diagnostic did not point at the failing formula:\n${output}`);
     assert(output.includes('| text!("first $x$ second $\\notacommand$ third")'), `inline math diagnostic omitted source excerpt:\n${output}`);
   } finally {
@@ -134,11 +132,11 @@ end
       "utf8",
     );
 
-    const result = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "concat-math-diagnostics"], project);
+    const result = await runSs(["render", "slide.ss", "out.pdf"], project);
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code !== 0, "render should fail for invalid concatenated inline math");
     assert(output.includes("RenderFailed:"), `concatenated math failure did not produce a render diagnostic:\n${output}`);
-    assertMathCommandSummary(output, "concatenated math diagnostic omitted command output summary");
+    assert(output.includes("UnsupportedMathSyntax"), `concatenated math diagnostic omitted the math syntax error:\n${output}`);
     assert(output.includes("slide.ss:5:19"), `concatenated math diagnostic did not point at the source literal:\n${output}`);
     assert(output.includes('| text!(prefix ++ "$\\notacommand$ third")'), `concatenated math diagnostic omitted source excerpt:\n${output}`);
   } finally {
@@ -167,8 +165,6 @@ end
       "render",
       "slide.ss",
       "out.pdf",
-      "--cache-id",
-      "svg-asset-diagnostics",
       "--diagnostics-json",
       diagnosticsPath,
     ], project);

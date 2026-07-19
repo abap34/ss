@@ -1,4 +1,5 @@
 const std = @import("std");
+const ast = @import("ast");
 const model = @import("model");
 const utils = @import("utils");
 const graph = @import("graph.zig");
@@ -11,18 +12,242 @@ const ConstraintSource = model.ConstraintSource;
 const Node = model.Node;
 const NodeId = model.NodeId;
 
-pub fn toJson(allocator: std.mem.Allocator, ir: anytype) ![]u8 {
+pub const RelationKind = enum {
+    explicit,
+    fallback,
+};
+
+pub const Location = struct {
+    path: []u8,
+    start: usize,
+    end: usize,
+};
+
+pub const ConstraintSyntax = struct {
+    action: ast.ConstraintDecl.Action,
+    target: utils.source.ByteSpan,
+    source: ?utils.source.ByteSpan,
+    offset: ?utils.source.ByteSpan,
+};
+
+pub const Page = struct {
+    id: NodeId,
+    height: f32,
+};
+
+pub const Object = struct {
+    id: NodeId,
+    page_id: NodeId,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+};
+
+pub const Relation = struct {
+    kind: RelationKind,
+    target_node: NodeId,
+    target_anchor: Anchor,
+    source: ConstraintSource,
+    offset: f32,
+    axis: model.Axis,
+    role: model.ConstraintRole,
+    from_update: bool,
+    location: ?Location,
+    syntax: ?ConstraintSyntax,
+};
+
+pub const Report = struct {
+    allocator: std.mem.Allocator,
+    pages: []Page,
+    objects: []Object,
+    relations: []Relation,
+    failure_count: usize,
+
+    pub fn init(allocator: std.mem.Allocator, state: anytype) !Report {
+        var pages = std.ArrayList(Page).empty;
+        errdefer pages.deinit(allocator);
+        for (state.page_order.items) |page_id| {
+            const page = state.getNode(page_id) orelse continue;
+            try pages.append(allocator, .{ .id = page.id, .height = page.frame.height });
+        }
+
+        var objects = std.ArrayList(Object).empty;
+        errdefer objects.deinit(allocator);
+        for (state.nodes.items) |node| {
+            if (node.kind != .object) continue;
+            const page_id = state.parentPageOf(node.id) orelse continue;
+            try objects.append(allocator, .{
+                .id = node.id,
+                .page_id = page_id,
+                .x = node.frame.x,
+                .y = node.frame.y,
+                .width = node.frame.width,
+                .height = node.frame.height,
+            });
+        }
+
+        var relations = std.ArrayList(Relation).empty;
+        errdefer deinitRelationItems(allocator, relations.items);
+        errdefer relations.deinit(allocator);
+        for (state.constraints.items) |constraint| {
+            try appendRelationModel(allocator, &relations, state, .explicit, constraint);
+        }
+        for (state.fallback_constraints.items) |constraint| {
+            try appendRelationModel(allocator, &relations, state, .fallback, constraint);
+        }
+
+        const owned_pages = try pages.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_pages);
+        const owned_objects = try objects.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_objects);
+        const owned_relations = try relations.toOwnedSlice(allocator);
+        errdefer {
+            deinitRelationItems(allocator, owned_relations);
+            allocator.free(owned_relations);
+        }
+        return .{
+            .allocator = allocator,
+            .pages = owned_pages,
+            .objects = owned_objects,
+            .relations = owned_relations,
+            .failure_count = state.constraint_failures.items.len,
+        };
+    }
+
+    pub fn deinit(self: *Report) void {
+        self.allocator.free(self.pages);
+        self.allocator.free(self.objects);
+        deinitRelationItems(self.allocator, self.relations);
+        self.allocator.free(self.relations);
+        self.* = .{
+            .allocator = self.allocator,
+            .pages = &.{},
+            .objects = &.{},
+            .relations = &.{},
+            .failure_count = 0,
+        };
+    }
+
+    pub fn objectById(self: *const Report, node_id: NodeId) ?Object {
+        for (self.objects) |object| if (object.id == node_id) return object;
+        return null;
+    }
+
+    pub fn pageById(self: *const Report, page_id: NodeId) ?Page {
+        for (self.pages) |page| if (page.id == page_id) return page;
+        return null;
+    }
+};
+
+fn appendRelationModel(
+    allocator: std.mem.Allocator,
+    relations: *std.ArrayList(Relation),
+    state: anytype,
+    kind: RelationKind,
+    constraint: Constraint,
+) !void {
+    const relation = try initRelation(allocator, state, kind, constraint);
+    errdefer if (relation.location) |location| allocator.free(location.path);
+    try relations.append(allocator, relation);
+}
+
+fn initRelation(allocator: std.mem.Allocator, state: anytype, kind: RelationKind, constraint: Constraint) !Relation {
+    const located = try cloneLocation(allocator, state, constraint.origin);
+    errdefer if (located) |location| allocator.free(location.path);
+    return .{
+        .kind = kind,
+        .target_node = constraint.target_node,
+        .target_anchor = constraint.target_anchor,
+        .source = constraint.source,
+        .offset = constraint.offset,
+        .axis = graph.anchorAxis(constraint.target_anchor),
+        .role = constraint.role,
+        .from_update = constraint.from_update,
+        .location = located,
+        .syntax = constraintSourceSyntax(state, constraint.origin),
+    };
+}
+
+fn deinitRelationItems(allocator: std.mem.Allocator, relations: []Relation) void {
+    for (relations) |relation| if (relation.location) |location| allocator.free(location.path);
+}
+
+fn cloneLocation(allocator: std.mem.Allocator, state: anytype, origin: ?[]const u8) !?Location {
+    const origin_text = origin orelse return null;
+    const located = utils.err.parseLocatedOrigin(origin_text) orelse return null;
+    const module = if (located.path) |origin_path| state.moduleByPathOrSpec(origin_path) else state.projectModule();
+    const path = if (module) |value|
+        value.path orelse value.spec
+    else
+        located.path orelse state.projectPath();
+    return .{
+        .path = try allocator.dupe(u8, path),
+        .start = located.span.start,
+        .end = located.span.end,
+    };
+}
+
+fn constraintSourceSyntax(state: anytype, origin: ?[]const u8) ?ConstraintSyntax {
+    const located = utils.err.parseLocatedOrigin(origin orelse return null) orelse return null;
+    const module = if (located.path) |origin_path|
+        state.moduleByPathOrSpec(origin_path) orelse return null
+    else
+        state.projectModule();
+    const statement = findStatement(&module.syntax, .{
+        .start = located.span.start,
+        .end = located.span.end,
+    }) orelse return null;
+    const constraint = switch (statement.kind) {
+        .constrain => |value| value,
+        else => return null,
+    };
+    const syntax = constraint.syntax orelse return null;
+    return .{
+        .action = constraint.action,
+        .target = .{ .start = syntax.target.start, .end = syntax.target.end },
+        .source = if (syntax.source) |span| .{ .start = span.start, .end = span.end } else null,
+        .offset = if (syntax.offset) |span| .{ .start = span.start, .end = span.end } else null,
+    };
+}
+
+fn findStatement(module: *const ast.Module, span: ast.Span) ?*const ast.Statement {
+    if (findStatementInList(module.document_statements.items, span)) |statement| return statement;
+    for (module.functions.items) |*function| {
+        if (findStatementInList(function.statements.items, span)) |statement| return statement;
+    }
+    for (module.pages.items) |*page| {
+        if (findStatementInList(page.statements.items, span)) |statement| return statement;
+    }
+    return null;
+}
+
+fn findStatementInList(statements: []const ast.Statement, span: ast.Span) ?*const ast.Statement {
+    for (statements) |*statement| {
+        if (statement.span.start == span.start and statement.span.end == span.end) return statement;
+        switch (statement.kind) {
+            .if_stmt => |conditional| {
+                if (findStatementInList(conditional.then_statements.items, span)) |nested| return nested;
+                if (findStatementInList(conditional.else_statements.items, span)) |nested| return nested;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+pub fn toJson(allocator: std.mem.Allocator, state: anytype) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
 
     var root = try json.Object.beginBuffer(allocator, &buffer);
     try root.intField("schema", 1);
     try root.stringField("kind", "ss-layout-conflicts");
-    try root.stringField("entry_path", ir.projectPath());
+    try root.stringField("entry_path", state.projectPath());
 
     var pages = try root.arrayField("pages");
-    for (ir.page_order.items, 0..) |page_id, index| {
-        const page = ir.getNode(page_id) orelse continue;
+    for (state.page_order.items, 0..) |page_id, index| {
+        const page = state.getNode(page_id) orelse continue;
         var item = try pages.objectItem();
         try item.intField("id", page.id);
         try item.intField("index", index + 1);
@@ -30,15 +255,15 @@ pub fn toJson(allocator: std.mem.Allocator, ir: anytype) ![]u8 {
         try item.floatField("width", page.frame.width, "{d:.4}");
         try item.floatField("height", page.frame.height, "{d:.4}");
         try item.optionalStringField("origin", page.origin);
-        try appendOriginObject(&item, "location", ir, page.origin);
+        try appendOriginObject(&item, "location", state, page.origin);
         try item.end();
     }
     try pages.end();
 
     var objects = try root.arrayField("objects");
-    for (ir.nodes.items) |*node| {
+    for (state.nodes.items) |*node| {
         if (node.kind != .object) continue;
-        const page_id = ir.parentPageOf(node.id) orelse continue;
+        const page_id = state.parentPageOf(node.id) orelse continue;
         var item = try objects.objectItem();
         try item.intField("id", node.id);
         try item.intField("page_id", page_id);
@@ -53,43 +278,32 @@ pub fn toJson(allocator: std.mem.Allocator, ir: anytype) ![]u8 {
         try item.boolField("y_set", node.frame.y_set);
         try item.boolField("group", graph.isGroupNode(node));
         try item.optionalStringField("origin", node.origin);
-        try appendOriginObject(&item, "location", ir, node.origin);
+        try appendOriginObject(&item, "location", state, node.origin);
         try item.end();
     }
     try objects.end();
 
     var anchors = try root.arrayField("anchors");
-    for (ir.page_order.items) |page_id| {
-        const page = ir.getNode(page_id) orelse continue;
+    for (state.page_order.items) |page_id| {
+        const page = state.getNode(page_id) orelse continue;
         try appendAnchorSet(&anchors, page, page_id, page_id);
-        if (ir.childrenOf(page_id)) |children| {
-            for (children) |child_id| try appendNodeAnchors(&anchors, ir, page_id, child_id);
+        if (state.childrenOf(page_id)) |children| {
+            for (children) |child_id| try appendNodeAnchors(&anchors, state, page_id, child_id);
         }
     }
     try anchors.end();
 
     var relations = try root.arrayField("relations");
-    for (ir.constraints.items, 0..) |constraint, index| {
-        var item = try relations.objectItem();
-        try item.intField("index", index);
-        try item.stringField("kind", "explicit");
-        try item.enumTagField("axis", graph.anchorAxis(constraint.target_anchor));
-        try item.optionalStringField("origin", constraint.origin);
-        try appendOriginObject(&item, "location", ir, constraint.origin);
-        try item.floatField("offset", constraint.offset, "{d:.4}");
-        try appendConstraintExpression(&item, "expression", ir, constraint);
-        var target = try item.objectField("target");
-        try appendNodeEndpoint(&target, ir, constraint.target_node, constraint.target_anchor);
-        try target.end();
-        var source = try item.objectField("source");
-        try appendSourceEndpoint(&source, ir, constraint.source);
-        try source.end();
-        try item.end();
+    for (state.constraints.items, 0..) |constraint, index| {
+        try appendRelation(&relations, state, index, "explicit", constraint);
+    }
+    for (state.fallback_constraints.items, 0..) |constraint, index| {
+        try appendRelation(&relations, state, state.constraints.items.len + index, "fallback", constraint);
     }
     try relations.end();
 
     var failures = try root.arrayField("failures");
-    for (ir.constraint_failures.items, 0..) |failure, index| {
+    for (state.constraint_failures.items, 0..) |failure, index| {
         var item = try failures.objectItem();
         try item.intField("index", index);
         try item.stringField("code", failureCode(failure.kind));
@@ -98,11 +312,11 @@ pub fn toJson(allocator: std.mem.Allocator, ir: anytype) ![]u8 {
         try item.optionalEnumTagField("axis", failure.axis);
         try item.optionalFloatField("actual", failure.actual, "{d:.4}");
         try item.optionalFloatField("expected", failure.expected, "{d:.4}");
-        try item.optionalIntField("constraint_index", constraintIndex(ir, failure.constraint));
-        try item.optionalIntField("existing_constraint_index", if (failure.existing_constraint) |c| constraintIndex(ir, c) else null);
-        try appendConstraintObject(&item, "constraint", ir, failure.constraint);
+        try item.optionalIntField("constraint_index", constraintIndex(state, failure.constraint));
+        try item.optionalIntField("existing_constraint_index", if (failure.existing_constraint) |c| constraintIndex(state, c) else null);
+        try appendConstraintObject(&item, "constraint", state, failure.constraint);
         if (failure.existing_constraint) |constraint| {
-            try appendConstraintObject(&item, "existing_constraint", ir, constraint);
+            try appendConstraintObject(&item, "existing_constraint", state, constraint);
         } else {
             try item.nullField("existing_constraint");
         }
@@ -120,12 +334,32 @@ pub fn toJson(allocator: std.mem.Allocator, ir: anytype) ![]u8 {
     return buffer.toOwnedSlice(allocator);
 }
 
-fn appendNodeAnchors(anchors: *json.Array, ir: anytype, page_id: NodeId, node_id: NodeId) !void {
-    const node = ir.getNode(node_id) orelse return;
+fn appendRelation(relations: *json.Array, state: anytype, index: usize, kind: []const u8, constraint: Constraint) !void {
+    var item = try relations.objectItem();
+    try item.intField("index", index);
+    try item.stringField("kind", kind);
+    try item.enumTagField("axis", graph.anchorAxis(constraint.target_anchor));
+    try item.enumTagField("role", constraint.role);
+    try item.boolField("from_update", constraint.from_update);
+    try item.optionalStringField("origin", constraint.origin);
+    try appendOriginObject(&item, "location", state, constraint.origin);
+    try item.floatField("offset", constraint.offset, "{d:.4}");
+    try appendConstraintExpression(&item, "expression", state, constraint);
+    var target = try item.objectField("target");
+    try appendNodeEndpoint(&target, state, constraint.target_node, constraint.target_anchor);
+    try target.end();
+    var source = try item.objectField("source");
+    try appendSourceEndpoint(&source, state, constraint.source);
+    try source.end();
+    try item.end();
+}
+
+fn appendNodeAnchors(anchors: *json.Array, state: anytype, page_id: NodeId, node_id: NodeId) !void {
+    const node = state.getNode(node_id) orelse return;
     try appendAnchorSet(anchors, node, page_id, node_id);
     if (!graph.isGroupNode(node)) return;
-    if (ir.childrenOf(node_id)) |children| {
-        for (children) |child_id| try appendNodeAnchors(anchors, ir, page_id, child_id);
+    if (state.childrenOf(node_id)) |children| {
+        for (children) |child_id| try appendNodeAnchors(anchors, state, page_id, child_id);
     }
 }
 
@@ -142,19 +376,21 @@ fn appendAnchorSet(anchors: *json.Array, node: *const Node, page_id: NodeId, nod
     }
 }
 
-fn appendConstraintObject(object: *json.Object, field_name: []const u8, ir: anytype, constraint: Constraint) !void {
+fn appendConstraintObject(object: *json.Object, field_name: []const u8, state: anytype, constraint: Constraint) !void {
     var child = try object.objectField(field_name);
-    try child.optionalIntField("index", constraintIndex(ir, constraint));
+    try child.optionalIntField("index", constraintIndex(state, constraint));
     try child.optionalStringField("origin", constraint.origin);
-    try appendOriginObject(&child, "location", ir, constraint.origin);
+    try appendOriginObject(&child, "location", state, constraint.origin);
     try child.enumTagField("axis", graph.anchorAxis(constraint.target_anchor));
+    try child.enumTagField("role", constraint.role);
+    try child.boolField("from_update", constraint.from_update);
     try child.floatField("offset", constraint.offset, "{d:.4}");
-    try appendConstraintExpression(&child, "expression", ir, constraint);
+    try appendConstraintExpression(&child, "expression", state, constraint);
     var target = try child.objectField("target");
-    try appendNodeEndpoint(&target, ir, constraint.target_node, constraint.target_anchor);
+    try appendNodeEndpoint(&target, state, constraint.target_node, constraint.target_anchor);
     try target.end();
     var source = try child.objectField("source");
-    try appendSourceEndpoint(&source, ir, constraint.source);
+    try appendSourceEndpoint(&source, state, constraint.source);
     try source.end();
     try child.end();
 }
@@ -188,11 +424,11 @@ fn appendPropagationObject(object: *json.Object, field_name: []const u8, propaga
     try child.end();
 }
 
-fn appendConstraintExpression(object: *json.Object, field_name: []const u8, ir: anytype, constraint: Constraint) !void {
-    const target = nodeLabel(ir, constraint.target_node);
+fn appendConstraintExpression(object: *json.Object, field_name: []const u8, state: anytype, constraint: Constraint) !void {
+    const target = nodeLabel(state, constraint.target_node);
     const source = switch (constraint.source) {
         .page => "page",
-        .node => |node_source| nodeLabel(ir, node_source.node_id),
+        .node => |node_source| nodeLabel(state, node_source.node_id),
     };
     const source_anchor = switch (constraint.source) {
         .page => |anchor| @tagName(anchor),
@@ -214,17 +450,17 @@ fn appendConstraintExpression(object: *json.Object, field_name: []const u8, ir: 
     try object.stringField(field_name, text);
 }
 
-fn appendNodeEndpoint(object: *json.Object, ir: anytype, node_id: NodeId, anchor: Anchor) !void {
-    const node = ir.getNode(node_id);
+fn appendNodeEndpoint(object: *json.Object, state: anytype, node_id: NodeId, anchor: Anchor) !void {
+    const node = state.getNode(node_id);
     try object.stringField("type", "node");
     try object.intField("node_id", node_id);
     try object.stringField("name", if (node) |value| value.name else "unknown");
     try object.optionalStringField("role", if (node) |value| value.role else null);
-    try object.stringField("label", nodeLabel(ir, node_id));
+    try object.stringField("label", nodeLabel(state, node_id));
     try object.stringField("anchor", @tagName(anchor));
 }
 
-fn appendSourceEndpoint(object: *json.Object, ir: anytype, source: ConstraintSource) !void {
+fn appendSourceEndpoint(object: *json.Object, state: anytype, source: ConstraintSource) !void {
     switch (source) {
         .page => |anchor| {
             try object.stringField("type", "page");
@@ -232,11 +468,11 @@ fn appendSourceEndpoint(object: *json.Object, ir: anytype, source: ConstraintSou
             try object.stringField("label", "page");
             try object.stringField("anchor", @tagName(anchor));
         },
-        .node => |node_source| try appendNodeEndpoint(object, ir, node_source.node_id, node_source.anchor),
+        .node => |node_source| try appendNodeEndpoint(object, state, node_source.node_id, node_source.anchor),
     }
 }
 
-fn appendOriginObject(object: *json.Object, field_name: []const u8, ir: anytype, origin: ?[]const u8) !void {
+fn appendOriginObject(object: *json.Object, field_name: []const u8, state: anytype, origin: ?[]const u8) !void {
     const origin_text = origin orelse {
         try object.nullField(field_name);
         return;
@@ -245,17 +481,17 @@ fn appendOriginObject(object: *json.Object, field_name: []const u8, ir: anytype,
         try object.nullField(field_name);
         return;
     };
-    var path = ir.projectPath();
-    var source = ir.projectSource();
+    var path = state.projectPath();
+    var source = state.projectSource();
     if (located.path) |origin_path| {
-        if (ir.moduleByPathOrSpec(origin_path)) |module| {
+        if (state.moduleByPathOrSpec(origin_path)) |module| {
             path = module.path orelse module.spec;
             source = module.source;
         } else {
             path = origin_path;
         }
     } else {
-        const module = ir.projectModule();
+        const module = state.projectModule();
         path = module.path orelse module.spec;
         source = module.source;
     }
@@ -270,13 +506,13 @@ fn appendOriginObject(object: *json.Object, field_name: []const u8, ir: anytype,
     try child.end();
 }
 
-fn nodeLabel(ir: anytype, node_id: NodeId) []const u8 {
-    const node = ir.getNode(node_id) orelse return "unknown";
+fn nodeLabel(state: anytype, node_id: NodeId) []const u8 {
+    const node = state.getNode(node_id) orelse return "unknown";
     return node.role orelse node.name;
 }
 
-fn constraintIndex(ir: anytype, needle: Constraint) ?usize {
-    for (ir.constraints.items, 0..) |constraint, index| {
+fn constraintIndex(state: anytype, needle: Constraint) ?usize {
+    for (state.constraints.items, 0..) |constraint, index| {
         if (constraintsSame(constraint, needle)) return index;
     }
     return null;

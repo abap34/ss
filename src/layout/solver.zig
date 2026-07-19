@@ -1,6 +1,7 @@
 const std = @import("std");
 const model = @import("model");
 const diagnostics = @import("diagnostics.zig");
+const document = @import("document.zig");
 const fallback = @import("fallback.zig");
 const graph = @import("graph.zig");
 const groups = @import("groups.zig");
@@ -12,138 +13,124 @@ const utils = @import("utils");
 const NodeId = model.NodeId;
 const AxisState = model.AxisState;
 const Constraint = model.Constraint;
-const PageLayout = model.PageLayout;
+const Defaults = @import("document.zig").Defaults;
 const ConstraintTolerance = graph.ConstraintTolerance;
 
 pub const SolveOptions = graph.SolveOptions;
 
-pub fn solveLayout(ir: anytype) !void {
-    try solveLayoutWithTracePath(ir, null);
-}
+pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOptions) !document.Document {
+    layout_trace.beginSolve(state.allocator, trace_path);
+    defer layout_trace.endSolve(state.allocator);
 
-pub fn solveLayoutWithTracePath(ir: anytype, trace_path: ?[]const u8) !void {
-    try solveLayoutWithTracePathAndOptions(ir, trace_path, .{});
-}
-
-pub fn solveLayoutWithTracePathAndOptions(ir: anytype, trace_path: ?[]const u8, options: SolveOptions) !void {
-    var results = try solveLayoutResultsWithTracePathAndOptions(ir, trace_path, options);
-    defer results.deinit(ir.allocator);
-    try applyLayoutResults(ir, &results);
-}
-
-pub fn solveLayoutResultsWithTracePathAndOptions(ir: anytype, trace_path: ?[]const u8, options: SolveOptions) !model.LayoutResults {
-    layout_trace.beginSolve(ir.allocator, trace_path);
-    defer layout_trace.endSolve(ir.allocator);
-
-    for (ir.page_order.items) |page_id| {
-        const page = ir.getNode(page_id) orelse return error.UnknownNode;
+    for (state.page_order.items) |page_id| {
+        const page = state.getNode(page_id) orelse return error.UnknownNode;
         page.frame = .{
             .x = 0,
             .y = 0,
-            .width = PageLayout.width,
-            .height = PageLayout.height,
+            .width = Defaults.width,
+            .height = Defaults.height,
             .x_set = true,
             .y_set = true,
         };
     }
 
-    const page_count = ir.page_order.items.len;
+    const page_count = state.page_order.items.len;
     if (page_count > 0) {
         if (options.progress) |progress| progress.pageStarted(progress.context, 0, page_count);
     }
 
-    const page_jobs = try ir.allocator.alloc(PageLayoutJob, page_count);
-    defer ir.allocator.free(page_jobs);
-    for (ir.page_order.items, 0..) |page_id, page_index| {
+    const page_jobs = try state.allocator.alloc(PageJob, page_count);
+    defer state.allocator.free(page_jobs);
+    for (state.page_order.items, 0..) |page_id, page_index| {
         page_jobs[page_index] = .{
             .page_id = page_id,
             .page_index = page_index,
         };
     }
 
-    var page_results = std.ArrayList(model.PageLayoutResult).empty;
+    var page_results = std.ArrayList(document.Page).empty;
     errdefer {
-        for (page_results.items) |*result| result.deinit(ir.allocator);
-        page_results.deinit(ir.allocator);
+        for (page_results.items) |*result| result.deinit(state.allocator);
+        page_results.deinit(state.allocator);
     }
-    try runPageLayoutJobs(ir, page_jobs, options, trace_path == null and !options.record_propagation, &page_results);
-    return .{ .pages = try page_results.toOwnedSlice(ir.allocator) };
+    try runPageJobs(state, page_jobs, options, trace_path == null and !options.record_propagation, &page_results);
+    return .{ .pages = try page_results.toOwnedSlice(state.allocator) };
 }
 
-const PageLayoutJob = struct {
+const PageJob = struct {
     page_id: NodeId,
     page_index: usize,
 
-    fn run(self: PageLayoutJob, ir: anytype, options: SolveOptions) !model.PageLayoutResult {
-        var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(ir.allocator, options.measurement_provider);
+    fn run(self: PageJob, state: anytype, options: SolveOptions) !document.Page {
+        var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(state.allocator, options.measurement_provider);
         defer measurement_cache.deinit();
-        return try solvePageLayout(ir, self.page_id, self.page_index, &measurement_cache, options);
+        return try solvePageLayout(state, self.page_id, self.page_index, &measurement_cache, options);
     }
 
-    fn runIsolated(self: PageLayoutJob, ir: anytype, allocator: std.mem.Allocator, options: SolveOptions) !model.PageLayoutResult {
+    fn runIsolated(self: PageJob, state: anytype, allocator: std.mem.Allocator, options: SolveOptions) !document.Page {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
 
-        var local_ir = ir.*;
-        local_ir.allocator = arena.allocator();
-        local_ir.diagnostics = .empty;
-        local_ir.constraint_failures = .empty;
-        local_ir.last_constraint_failure = null;
+        var local_context = state.*;
+        local_context.allocator = arena.allocator();
+        local_context.diagnostics = .empty;
+        local_context.constraint_failures = .empty;
+        local_context.last_constraint_failure = null;
         defer {
-            for (local_ir.diagnostics.items) |*diagnostic| diagnostic.deinit(local_ir.allocator);
-            local_ir.diagnostics.deinit(local_ir.allocator);
-            for (local_ir.constraint_failures.items) |*failure| failure.deinit(local_ir.allocator);
-            local_ir.constraint_failures.deinit(local_ir.allocator);
+            for (local_context.diagnostics.items) |*diagnostic| diagnostic.deinit(local_context.allocator);
+            local_context.diagnostics.deinit(local_context.allocator);
+            for (local_context.constraint_failures.items) |*failure| failure.deinit(local_context.allocator);
+            local_context.constraint_failures.deinit(local_context.allocator);
         }
         var local_options = options;
         local_options.progress = null;
-        var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(local_ir.allocator, local_options.measurement_provider);
+        var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(local_context.allocator, local_options.measurement_provider);
         defer measurement_cache.deinit();
-        var result = try solvePageLayout(&local_ir, self.page_id, self.page_index, &measurement_cache, local_options);
-        defer result.deinit(local_ir.allocator);
-        return try clonePageLayoutResult(allocator, &result);
+        var result = try solvePageLayout(&local_context, self.page_id, self.page_index, &measurement_cache, local_options);
+        defer result.deinit(local_context.allocator);
+        return try clonePage(allocator, &result);
     }
 };
 
 const PageLayoutJobOutput = struct {
-    result: ?model.PageLayoutResult = null,
+    result: ?document.Page = null,
     err: ?anyerror = null,
 };
 
-fn PageLayoutWork(comptime IrPtr: type) type {
+fn PageWork(comptime ContextPtr: type) type {
     return struct {
-        ir: IrPtr,
-        jobs: []const PageLayoutJob,
+        state: ContextPtr,
+        jobs: []const PageJob,
         options: SolveOptions,
         outputs: []PageLayoutJobOutput,
         next_job: std.atomic.Value(usize) = .init(0),
-        completed: std.atomic.Value(usize) = .init(0),
+        completed: usize = 0,
         failed: std.atomic.Value(bool) = .init(false),
         progress_lock: std.atomic.Value(bool) = .init(false),
     };
 }
 
-fn runPageLayoutJobs(ir: anytype, jobs: []const PageLayoutJob, options: SolveOptions, parallel_allowed: bool, out: *std.ArrayList(model.PageLayoutResult)) !void {
+fn runPageJobs(state: anytype, jobs: []const PageJob, options: SolveOptions, parallel_allowed: bool, out: *std.ArrayList(document.Page)) !void {
     const worker_count = layoutWorkerCount(jobs.len, options, parallel_allowed);
-    if (worker_count <= 1) return try runPageLayoutJobsSequential(ir, jobs, options, out);
-    return try runPageLayoutJobsParallel(ir, jobs, options, worker_count, out);
+    if (worker_count <= 1) return try runPageJobsSequential(state, jobs, options, out);
+    return try runPageJobsParallel(state, jobs, options, worker_count, out);
 }
 
-fn runPageLayoutJobsSequential(ir: anytype, jobs: []const PageLayoutJob, options: SolveOptions, out: *std.ArrayList(model.PageLayoutResult)) !void {
+fn runPageJobsSequential(state: anytype, jobs: []const PageJob, options: SolveOptions, out: *std.ArrayList(document.Page)) !void {
     for (jobs, 0..) |job, completed_index| {
-        var result = try job.run(ir, options);
+        var result = try job.run(state, options);
         var result_transferred = false;
-        errdefer if (!result_transferred) result.deinit(ir.allocator);
-        try out.append(ir.allocator, result);
+        errdefer if (!result_transferred) result.deinit(state.allocator);
+        try out.append(state.allocator, result);
         result_transferred = true;
         if (options.progress) |progress| progress.pageCompleted(progress.context, completed_index + 1, jobs.len);
     }
 }
 
-fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: SolveOptions, worker_count: usize, out: *std.ArrayList(model.PageLayoutResult)) !void {
-    const IrPtr = @TypeOf(ir);
-    const outputs = try ir.allocator.alloc(PageLayoutJobOutput, jobs.len);
-    defer ir.allocator.free(outputs);
+fn runPageJobsParallel(state: anytype, jobs: []const PageJob, options: SolveOptions, worker_count: usize, out: *std.ArrayList(document.Page)) !void {
+    const ContextPtr = @TypeOf(state);
+    const outputs = try state.allocator.alloc(PageLayoutJobOutput, jobs.len);
+    defer state.allocator.free(outputs);
     for (outputs) |*output| output.* = .{};
     defer {
         for (outputs) |*output| {
@@ -151,15 +138,15 @@ fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: 
         }
     }
 
-    var work = PageLayoutWork(IrPtr){
-        .ir = ir,
+    var work = PageWork(ContextPtr){
+        .state = state,
         .jobs = jobs,
         .options = options,
         .outputs = outputs,
     };
 
-    var threads = try ir.allocator.alloc(std.Thread, worker_count);
-    defer ir.allocator.free(threads);
+    var threads = try state.allocator.alloc(std.Thread, worker_count);
+    defer state.allocator.free(threads);
 
     var started: usize = 0;
     var joined = false;
@@ -171,7 +158,7 @@ fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: 
     }
 
     while (started < worker_count) : (started += 1) {
-        threads[started] = try std.Thread.spawn(.{}, layoutJobWorker, .{ IrPtr, &work });
+        threads[started] = try std.Thread.spawn(.{}, layoutJobWorker, .{ ContextPtr, &work });
     }
 
     for (threads[0..started]) |thread| thread.join();
@@ -186,35 +173,35 @@ fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: 
 
     for (outputs) |*output| {
         const result = if (output.result) |*value| value else return error.LayoutJobFailed;
-        var cloned = try clonePageLayoutResult(ir.allocator, result);
+        var cloned = try clonePage(state.allocator, result);
         var cloned_transferred = false;
-        errdefer if (!cloned_transferred) cloned.deinit(ir.allocator);
-        try mergePageLayoutIssues(ir, &cloned);
-        try out.append(ir.allocator, cloned);
+        errdefer if (!cloned_transferred) cloned.deinit(state.allocator);
+        try mergePageLayoutIssues(state, &cloned);
+        try out.append(state.allocator, cloned);
         cloned_transferred = true;
     }
 }
 
-fn layoutJobWorker(comptime IrPtr: type, work: *PageLayoutWork(IrPtr)) void {
+fn layoutJobWorker(comptime ContextPtr: type, work: *PageWork(ContextPtr)) void {
     while (!work.failed.load(.monotonic)) {
         const index = work.next_job.fetchAdd(1, .monotonic);
         if (index >= work.jobs.len) break;
-        const result = work.jobs[index].runIsolated(work.ir, std.heap.smp_allocator, work.options) catch |err| {
+        const result = work.jobs[index].runIsolated(work.state, std.heap.smp_allocator, work.options) catch |err| {
             work.outputs[index].err = err;
             work.failed.store(true, .seq_cst);
             break;
         };
         work.outputs[index].result = result;
-        const completed = work.completed.fetchAdd(1, .release) + 1;
-        notifyLayoutProgress(IrPtr, work, completed);
+        notifyLayoutProgress(ContextPtr, work);
     }
 }
 
-fn notifyLayoutProgress(comptime IrPtr: type, work: *PageLayoutWork(IrPtr), completed: usize) void {
+fn notifyLayoutProgress(comptime ContextPtr: type, work: *PageWork(ContextPtr)) void {
     const progress = work.options.progress orelse return;
     lockProgress(&work.progress_lock);
     defer unlockProgress(&work.progress_lock);
-    progress.pageCompleted(progress.context, completed, work.jobs.len);
+    work.completed += 1;
+    progress.pageCompleted(progress.context, work.completed, work.jobs.len);
 }
 
 fn lockProgress(lock: *std.atomic.Value(bool)) void {
@@ -234,10 +221,13 @@ fn layoutWorkerCount(job_count: usize, options: SolveOptions, parallel_allowed: 
     return @min(requested, job_count);
 }
 
-fn clonePageLayoutResult(allocator: std.mem.Allocator, result: *const model.PageLayoutResult) !model.PageLayoutResult {
-    const object_frames = try allocator.dupe(model.ObjectLayoutFrame, result.object_frames);
+fn clonePage(allocator: std.mem.Allocator, result: *const document.Page) !document.Page {
+    const object_frames = try allocator.dupe(document.ObjectFrame, result.object_frames);
     var object_frames_transferred = false;
     errdefer if (!object_frames_transferred) allocator.free(object_frames);
+    const fallback_constraints = try allocator.dupe(Constraint, result.fallback_constraints);
+    var fallback_constraints_transferred = false;
+    errdefer if (!fallback_constraints_transferred) allocator.free(fallback_constraints);
 
     const diagnostics_slice = try allocator.alloc(model.Diagnostic, result.diagnostics.len);
     var diagnostics_transferred = false;
@@ -275,6 +265,7 @@ fn clonePageLayoutResult(allocator: std.mem.Allocator, result: *const model.Page
     errdefer if (!measurement_keys_transferred) allocator.free(measurement_keys);
 
     object_frames_transferred = true;
+    fallback_constraints_transferred = true;
     diagnostics_transferred = true;
     failures_transferred = true;
     asset_keys_transferred = true;
@@ -283,6 +274,7 @@ fn clonePageLayoutResult(allocator: std.mem.Allocator, result: *const model.Page
         .page_id = result.page_id,
         .index = result.index,
         .object_frames = object_frames,
+        .fallback_constraints = fallback_constraints,
         .diagnostics = diagnostics_slice,
         .constraint_failures = failure_slice,
         .asset_keys = asset_keys,
@@ -290,78 +282,80 @@ fn clonePageLayoutResult(allocator: std.mem.Allocator, result: *const model.Page
     };
 }
 
-fn mergePageLayoutIssues(ir: anytype, result: *const model.PageLayoutResult) !void {
+fn mergePageLayoutIssues(state: anytype, result: *const document.Page) !void {
     for (result.diagnostics) |diagnostic| {
-        var cloned = try diagnostic.clone(ir.allocator);
-        errdefer cloned.deinit(ir.allocator);
-        try ir.addDiagnostic(cloned);
+        var cloned = try diagnostic.clone(state.allocator);
+        errdefer cloned.deinit(state.allocator);
+        try state.addDiagnostic(cloned);
     }
     for (result.constraint_failures) |failure| {
-        var cloned = try failure.clone(ir.allocator);
+        var cloned = try failure.clone(state.allocator);
         var cloned_transferred = false;
-        errdefer if (!cloned_transferred) cloned.deinit(ir.allocator);
-        try ir.constraint_failures.append(ir.allocator, cloned);
+        errdefer if (!cloned_transferred) cloned.deinit(state.allocator);
+        try state.constraint_failures.append(state.allocator, cloned);
         cloned_transferred = true;
-        ir.last_constraint_failure = ir.constraint_failures.items[ir.constraint_failures.items.len - 1];
+        state.last_constraint_failure = state.constraint_failures.items[state.constraint_failures.items.len - 1];
     }
 }
 
-pub fn applyLayoutResults(ir: anytype, results: *const model.LayoutResults) !void {
+pub fn applyDocument(state: anytype, results: *const document.Document) !void {
+    state.fallback_constraints.clearRetainingCapacity();
     for (results.pages) |page| {
+        try state.fallback_constraints.appendSlice(state.allocator, page.fallback_constraints);
         for (page.object_frames) |entry| {
-            const node = ir.getNode(entry.node_id) orelse return error.UnknownNode;
+            const node = state.getNode(entry.node_id) orelse return error.UnknownNode;
             node.frame = entry.frame;
         }
     }
 }
 
-fn solvePageLayout(ir: anytype, page_id: NodeId, page_index: usize, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !model.PageLayoutResult {
-    const diagnostic_start = ir.diagnostics.items.len;
-    const constraint_failure_start = ir.constraint_failures.items.len;
+fn solvePageLayout(state: anytype, page_id: NodeId, page_index: usize, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !document.Page {
+    const diagnostic_start = state.diagnostics.items.len;
+    const constraint_failure_start = state.constraint_failures.items.len;
     const measurement_key_start = measurement_cache.usedKeyCount();
-    var page_graph = try graph.PageLayoutGraph.init(ir.allocator, ir, page_id);
+    var page_graph = try graph.PageLayoutGraph.init(state.allocator, state, page_id);
     defer page_graph.deinit();
-    if (page_graph.len() == 0) return try collectPageLayoutResult(ir, page_id, page_index, &.{}, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start);
-    try initializePageObjectMeasurements(ir, &page_graph, measurement_cache);
+    if (page_graph.len() == 0) return try collectPage(state, page_id, page_index, &.{}, &.{}, &.{}, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start);
+    try initializePageObjectMeasurements(state, &page_graph, measurement_cache);
 
-    var horizontal = try graph.AxisWorkspace.init(ir.allocator, ir, &page_graph, .horizontal);
+    var horizontal = try graph.AxisWorkspace.init(state.allocator, state, &page_graph, .horizontal);
     defer horizontal.deinit();
     var horizontal_propagation: ?graph.PropagationTracker = null;
     defer if (horizontal_propagation) |*tracker| tracker.deinit();
     if (options.record_propagation) {
-        horizontal_propagation = try graph.PropagationTracker.init(ir.allocator, page_graph.len());
+        horizontal_propagation = try graph.PropagationTracker.init(state.allocator, page_graph.len());
         if (horizontal_propagation) |*tracker| horizontal.propagation = tracker;
     }
 
-    try solvePageAxis(ir, &horizontal, options);
+    try solvePageAxis(state, &horizontal, options);
 
-    var horizontal_fallback = try fallback.buildHorizontalConstraints(ir, &horizontal);
-    defer horizontal_fallback.deinit(ir.allocator);
-    layout_trace.recordDefaultConstraints(ir.allocator, &horizontal, horizontal_fallback.items);
+    var horizontal_fallback = try fallback.buildHorizontalConstraints(state, &horizontal);
+    defer horizontal_fallback.deinit(state.allocator);
+    layout_trace.recordDefaultConstraints(state.allocator, &horizontal, horizontal_fallback.items);
     horizontal.soft_constraints = horizontal_fallback.items;
-    try solvePageAxis(ir, &horizontal, options);
-    try settleHorizontalAxis(ir, &horizontal, options);
-    applySolvedHorizontalFrames(ir, &horizontal, measurement_cache) catch return error.UnknownNode;
-    try groups.propagateTargetedWidthsCached(ir, &horizontal, measurement_cache);
+    try solvePageAxis(state, &horizontal, options);
+    try settleHorizontalAxis(state, &horizontal, options);
+    applySolvedHorizontalFrames(state, &horizontal, measurement_cache) catch return error.UnknownNode;
+    try groups.propagateTargetedWidthsCached(state, &horizontal, measurement_cache);
 
-    var vertical = try graph.AxisWorkspace.init(ir.allocator, ir, &page_graph, .vertical);
+    var vertical = try graph.AxisWorkspace.init(state.allocator, state, &page_graph, .vertical);
     defer vertical.deinit();
     var vertical_propagation: ?graph.PropagationTracker = null;
     defer if (vertical_propagation) |*tracker| tracker.deinit();
     if (options.record_propagation) {
-        vertical_propagation = try graph.PropagationTracker.init(ir.allocator, page_graph.len());
+        vertical_propagation = try graph.PropagationTracker.init(state.allocator, page_graph.len());
         if (vertical_propagation) |*tracker| vertical.propagation = tracker;
     }
 
-    try solvePageAxis(ir, &vertical, options);
-    var vertical_fallback = try fallback.buildVerticalConstraints(ir, &vertical);
-    defer vertical_fallback.deinit(ir.allocator);
-    layout_trace.recordDefaultConstraints(ir.allocator, &vertical, vertical_fallback.items);
+    try solvePageAxis(state, &vertical, options);
+    var vertical_fallback = try fallback.buildVerticalConstraints(state, &vertical);
+    defer vertical_fallback.deinit(state.allocator);
+    layout_trace.recordDefaultConstraints(state.allocator, &vertical, vertical_fallback.items);
     vertical.soft_constraints = vertical_fallback.items;
-    try solvePageAxis(ir, &vertical, options);
+    try solvePageAxis(state, &vertical, options);
 
     for (page_graph.child_ids, vertical.states) |child_id, v_state| {
-        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        const node = state.getNode(child_id) orelse return error.UnknownNode;
         node.frame.height = v_state.size orelse node.frame.height;
         node.frame.y_set = false;
         if (v_state.start) |y| {
@@ -370,81 +364,102 @@ fn solvePageLayout(ir: anytype, page_id: NodeId, page_index: usize, measurement_
         }
     }
 
-    try validatePageConstraints(ir, page_id, &page_graph, options);
-    try diagnostics.collectPageDiagnosticsCached(ir, page_id, page_graph.child_ids, measurement_cache);
-    return try collectPageLayoutResult(ir, page_id, page_index, page_graph.child_ids, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start);
+    try validatePageConstraints(state, page_id, &page_graph, options);
+    try diagnostics.collectPageDiagnosticsCached(state, page_id, page_graph.child_ids, measurement_cache);
+    return try collectPage(
+        state,
+        page_id,
+        page_index,
+        page_graph.child_ids,
+        horizontal_fallback.items,
+        vertical_fallback.items,
+        diagnostic_start,
+        constraint_failure_start,
+        measurement_cache,
+        measurement_key_start,
+    );
 }
 
-fn collectPageLayoutResult(
-    ir: anytype,
+fn collectPage(
+    state: anytype,
     page_id: NodeId,
     page_index: usize,
     child_ids: []const NodeId,
+    horizontal_fallback: []const Constraint,
+    vertical_fallback: []const Constraint,
     diagnostic_start: usize,
     constraint_failure_start: usize,
     measurement_cache: *const metrics.MeasurementCache,
     measurement_key_start: usize,
-) !model.PageLayoutResult {
-    var frames = std.ArrayList(model.ObjectLayoutFrame).empty;
+) !document.Page {
+    var frames = std.ArrayList(document.ObjectFrame).empty;
+    var fallback_constraints = std.ArrayList(Constraint).empty;
     var diagnostics_out = std.ArrayList(model.Diagnostic).empty;
     var failures_out = std.ArrayList(model.ConstraintFailure).empty;
     var measurement_keys = std.ArrayList(u64).empty;
     errdefer {
-        frames.deinit(ir.allocator);
-        for (diagnostics_out.items) |*diagnostic| diagnostic.deinit(ir.allocator);
-        diagnostics_out.deinit(ir.allocator);
-        for (failures_out.items) |*failure| failure.deinit(ir.allocator);
-        failures_out.deinit(ir.allocator);
-        measurement_keys.deinit(ir.allocator);
+        frames.deinit(state.allocator);
+        fallback_constraints.deinit(state.allocator);
+        for (diagnostics_out.items) |*diagnostic| diagnostic.deinit(state.allocator);
+        diagnostics_out.deinit(state.allocator);
+        for (failures_out.items) |*failure| failure.deinit(state.allocator);
+        failures_out.deinit(state.allocator);
+        measurement_keys.deinit(state.allocator);
     }
+    try fallback_constraints.appendSlice(state.allocator, horizontal_fallback);
+    try fallback_constraints.appendSlice(state.allocator, vertical_fallback);
     for (child_ids) |child_id| {
-        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        const node = state.getNode(child_id) orelse return error.UnknownNode;
         if (node.kind != .object) continue;
-        try frames.append(ir.allocator, .{
+        try frames.append(state.allocator, .{
             .node_id = child_id,
             .frame = node.frame,
         });
     }
-    for (ir.diagnostics.items[diagnostic_start..]) |diagnostic| {
+    for (state.diagnostics.items[diagnostic_start..]) |diagnostic| {
         if (diagnostic.page_id != null and diagnostic.page_id.? != page_id) continue;
-        var cloned = try diagnostic.clone(ir.allocator);
+        var cloned = try diagnostic.clone(state.allocator);
         var cloned_transferred = false;
-        errdefer if (!cloned_transferred) cloned.deinit(ir.allocator);
-        try diagnostics_out.append(ir.allocator, cloned);
+        errdefer if (!cloned_transferred) cloned.deinit(state.allocator);
+        try diagnostics_out.append(state.allocator, cloned);
         cloned_transferred = true;
     }
-    for (ir.constraint_failures.items[constraint_failure_start..]) |failure| {
+    for (state.constraint_failures.items[constraint_failure_start..]) |failure| {
         if (failure.page_id != page_id) continue;
-        var cloned = try failure.clone(ir.allocator);
+        var cloned = try failure.clone(state.allocator);
         var cloned_transferred = false;
-        errdefer if (!cloned_transferred) cloned.deinit(ir.allocator);
-        try failures_out.append(ir.allocator, cloned);
+        errdefer if (!cloned_transferred) cloned.deinit(state.allocator);
+        try failures_out.append(state.allocator, cloned);
         cloned_transferred = true;
     }
-    try measurement_cache.appendUsedKeysSince(ir.allocator, measurement_key_start, &measurement_keys);
-    const frame_slice = try frames.toOwnedSlice(ir.allocator);
+    try measurement_cache.appendUsedKeysSince(state.allocator, measurement_key_start, &measurement_keys);
+    const frame_slice = try frames.toOwnedSlice(state.allocator);
     var frame_slice_transferred = false;
-    errdefer if (!frame_slice_transferred) ir.allocator.free(frame_slice);
-    const diagnostic_slice = try diagnostics_out.toOwnedSlice(ir.allocator);
+    errdefer if (!frame_slice_transferred) state.allocator.free(frame_slice);
+    const fallback_slice = try fallback_constraints.toOwnedSlice(state.allocator);
+    var fallback_slice_transferred = false;
+    errdefer if (!fallback_slice_transferred) state.allocator.free(fallback_slice);
+    const diagnostic_slice = try diagnostics_out.toOwnedSlice(state.allocator);
     var diagnostic_slice_transferred = false;
     errdefer {
         if (!diagnostic_slice_transferred) {
-            for (diagnostic_slice) |*diagnostic| diagnostic.deinit(ir.allocator);
-            ir.allocator.free(diagnostic_slice);
+            for (diagnostic_slice) |*diagnostic| diagnostic.deinit(state.allocator);
+            state.allocator.free(diagnostic_slice);
         }
     }
-    const failure_slice = try failures_out.toOwnedSlice(ir.allocator);
+    const failure_slice = try failures_out.toOwnedSlice(state.allocator);
     var failure_slice_transferred = false;
     errdefer {
         if (!failure_slice_transferred) {
-            for (failure_slice) |*failure| failure.deinit(ir.allocator);
-            ir.allocator.free(failure_slice);
+            for (failure_slice) |*failure| failure.deinit(state.allocator);
+            state.allocator.free(failure_slice);
         }
     }
-    const measurement_key_slice = try measurement_keys.toOwnedSlice(ir.allocator);
+    const measurement_key_slice = try measurement_keys.toOwnedSlice(state.allocator);
     var measurement_key_slice_transferred = false;
-    errdefer if (!measurement_key_slice_transferred) ir.allocator.free(measurement_key_slice);
+    errdefer if (!measurement_key_slice_transferred) state.allocator.free(measurement_key_slice);
     frame_slice_transferred = true;
+    fallback_slice_transferred = true;
     diagnostic_slice_transferred = true;
     failure_slice_transferred = true;
     measurement_key_slice_transferred = true;
@@ -452,33 +467,34 @@ fn collectPageLayoutResult(
         .page_id = page_id,
         .index = page_index,
         .object_frames = frame_slice,
+        .fallback_constraints = fallback_slice,
         .diagnostics = diagnostic_slice,
         .constraint_failures = failure_slice,
         .measurement_keys = measurement_key_slice,
     };
 }
 
-fn initializePageObjectMeasurements(ir: anytype, page_graph: *const graph.PageLayoutGraph, measurement_cache: *metrics.MeasurementCache) !void {
+fn initializePageObjectMeasurements(state: anytype, page_graph: *const graph.PageLayoutGraph, measurement_cache: *metrics.MeasurementCache) !void {
     for (page_graph.child_ids) |node_id| {
-        const node = ir.getNode(node_id) orelse return error.UnknownNode;
+        const node = state.getNode(node_id) orelse return error.UnknownNode;
         if (node.kind != .object) continue;
         node.frame.x = 0;
         node.frame.y = 0;
         node.frame.x_set = false;
         node.frame.y_set = false;
-        node.frame.width = try metrics.intrinsicWidthCached(ir, node, measurement_cache);
-        node.frame.height = try metrics.intrinsicHeightCached(ir, node, measurement_cache);
+        node.frame.width = try metrics.intrinsicWidthCached(state, node, measurement_cache);
+        node.frame.height = try metrics.intrinsicHeightCached(state, node, measurement_cache);
     }
 }
 
-fn applySolvedHorizontalFrames(ir: anytype, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache) !void {
+fn applySolvedHorizontalFrames(state: anytype, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache) !void {
     for (workspace.graph.child_ids, workspace.states) |child_id, h_state| {
-        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        const node = state.getNode(child_id) orelse return error.UnknownNode;
         const old_width = node.frame.width;
         const solved_width = h_state.size orelse old_width;
         node.frame.width = solved_width;
-        if (metrics.shouldWrapNode(ir, node) and @abs(solved_width - old_width) > ConstraintTolerance) {
-            node.frame.height = try metrics.intrinsicHeightCached(ir, node, measurement_cache);
+        if (metrics.shouldWrapNode(state, node) and @abs(solved_width - old_width) > ConstraintTolerance) {
+            node.frame.height = try metrics.intrinsicHeightCached(state, node, measurement_cache);
         }
         node.frame.x_set = false;
         if (h_state.start) |x| {
@@ -488,77 +504,77 @@ fn applySolvedHorizontalFrames(ir: anytype, workspace: *const graph.AxisWorkspac
     }
 }
 
-fn settleHorizontalAxis(ir: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
+fn settleHorizontalAxis(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
     var pass: usize = 0;
     while (pass < 8) : (pass += 1) {
-        var changed = try finalizeHorizontalGroupStates(ir, workspace, options);
-        changed = (try runPageAxisPass(ir, workspace, options)) or changed;
+        var changed = try finalizeHorizontalGroupStates(state, workspace, options);
+        changed = (try runPageAxisPass(state, workspace, options)) or changed;
         if (!changed) break;
     }
 }
 
-fn finalizeHorizontalGroupStates(ir: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
+fn finalizeHorizontalGroupStates(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
     var any_changed = false;
     var pass: usize = 0;
     while (pass < 8) : (pass += 1) {
         var changed = false;
-        changed = (try capDefaultWrappedHorizontalWidths(ir, workspace)) or changed;
-        changed = (try groups.applyTargetConstraints(ir, workspace, options)) or changed;
-        changed = (try groups.updateAxisStates(ir, workspace)) or changed;
+        changed = (try capDefaultWrappedHorizontalWidths(state, workspace)) or changed;
+        changed = (try groups.applyTargetConstraints(state, workspace, options)) or changed;
+        changed = (try groups.updateAxisStates(state, workspace)) or changed;
         any_changed = changed or any_changed;
         if (!changed) break;
     }
     return any_changed;
 }
 
-fn capDefaultWrappedHorizontalWidths(ir: anytype, workspace: *graph.AxisWorkspace) !bool {
+fn capDefaultWrappedHorizontalWidths(state: anytype, workspace: *graph.AxisWorkspace) !bool {
     var changed = false;
-    for (workspace.graph.child_ids, workspace.states) |child_id, *state| {
-        if (!state.size_is_default) continue;
-        if (state.start == null or state.size == null) continue;
-        if (state.end_source != null or state.size_source != null) continue;
+    for (workspace.graph.child_ids, workspace.states) |child_id, *axis_state| {
+        if (!axis_state.size_is_default) continue;
+        if (axis_state.start == null or axis_state.size == null) continue;
+        if (axis_state.end_source != null or axis_state.size_source != null) continue;
 
-        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        const node = state.getNode(child_id) orelse return error.UnknownNode;
         if (groups.isGroupNode(node)) continue;
-        if (!metrics.shouldWrapNode(ir, node)) continue;
+        if (!metrics.shouldWrapNode(state, node)) continue;
 
-        const style = style_defaults.styleForNode(ir, node);
-        const max_right = PageLayout.width - style.default_right_inset;
-        const capped_width = @max(@as(f32, 1.0), max_right - state.start.?);
-        if (capped_width >= state.size.? - ConstraintTolerance) continue;
+        const style = style_defaults.styleForNode(state, node);
+        const max_right = Defaults.width - style.default_right_inset;
+        const capped_width = @max(@as(f32, 1.0), max_right - axis_state.start.?);
+        if (capped_width >= axis_state.size.? - ConstraintTolerance) continue;
 
-        state.size = capped_width;
-        state.end = state.start.? + capped_width;
-        state.center = state.start.? + capped_width / 2;
-        state.end_source = null;
-        state.center_source = null;
+        axis_state.size = capped_width;
+        axis_state.end = axis_state.start.? + capped_width;
+        axis_state.center = axis_state.start.? + capped_width / 2;
+        axis_state.end_source = null;
+        axis_state.center_source = null;
         changed = true;
     }
     return changed;
 }
 
-fn solvePageAxis(ir: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
-    _ = try runPageAxisPass(ir, workspace, options);
+fn solvePageAxis(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
+    _ = try runPageAxisPass(state, workspace, options);
 
-    for (workspace.graph.child_ids, workspace.states, 0..) |child_id, *state, index| {
-        if (state.size == null) {
-            const node = ir.getNode(child_id) orelse return error.UnknownNode;
-            state.size = switch (workspace.axis) {
+    for (workspace.graph.child_ids, workspace.states, 0..) |child_id, *axis_state, index| {
+        if (axis_state.size == null) {
+            const node = state.getNode(child_id) orelse return error.UnknownNode;
+            axis_state.size = switch (workspace.axis) {
                 .horizontal => node.frame.width,
                 .vertical => node.frame.height,
             };
-            state.size_is_default = true;
-            try recordDefaultSizePropagation(ir, workspace, index, state.size.?);
+            axis_state.size_is_default = true;
+            try recordDefaultSizePropagation(state, workspace, index, axis_state.size.?);
         }
     }
 
-    _ = try runPageAxisPass(ir, workspace, options);
+    _ = try runPageAxisPass(state, workspace, options);
 }
 
-pub fn runPageAxisPass(ir: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
+pub fn runPageAxisPass(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
     const trace_enabled = layout_trace.shouldTraceAxisPass(workspace);
     const run_id = if (trace_enabled) layout_trace.nextRunId() else 0;
-    if (trace_enabled) layout_trace.axisPassBegin(ir.allocator, ir, workspace, run_id);
+    if (trace_enabled) layout_trace.axisPassBegin(state.allocator, state, workspace, run_id);
 
     var pass: usize = 0;
     var iteration_count: usize = 0;
@@ -573,51 +589,51 @@ pub fn runPageAxisPass(ir: anytype, workspace: *graph.AxisWorkspace, options: So
             local_iterations += 1;
             var local_changed = false;
 
-            for (workspace.states, 0..) |*state, index| {
-                local_changed = (try reconcileAxisStateLocalized(ir, workspace, index, state, options)) or local_changed;
+            for (workspace.states, 0..) |*axis_state, index| {
+                local_changed = (try reconcileAxisStateLocalized(state, workspace, index, axis_state, options)) or local_changed;
             }
 
             for (workspace.hard_constraints) |constraint| {
-                if (groups.constraintTargetsGroup(ir, constraint)) continue;
-                if (groups.constraintUsesGroupSource(ir, constraint)) continue;
-                local_changed = (try applyAxisConstraint(ir, workspace, constraint, false, options)) or local_changed;
+                if (groups.constraintTargetsGroup(state, constraint)) continue;
+                if (groups.constraintUsesGroupSource(state, constraint)) continue;
+                local_changed = (try applyAxisConstraint(state, workspace, constraint, false, options)) or local_changed;
             }
 
             for (workspace.soft_constraints) |constraint| {
-                if (groups.constraintTargetsGroup(ir, constraint)) continue;
-                if (groups.constraintUsesGroupSource(ir, constraint)) continue;
-                local_changed = (try applyAxisConstraint(ir, workspace, constraint, true, options)) or local_changed;
+                if (groups.constraintTargetsGroup(state, constraint)) continue;
+                if (groups.constraintUsesGroupSource(state, constraint)) continue;
+                local_changed = (try applyAxisConstraint(state, workspace, constraint, true, options)) or local_changed;
             }
 
             changed = local_changed or changed;
             if (!local_changed) break;
         }
 
-        const group_bounds_changed = try groups.updateAxisStates(ir, workspace);
+        const group_bounds_changed = try groups.updateAxisStates(state, workspace);
         changed = group_bounds_changed or changed;
-        const group_targets_changed = try groups.applyTargetConstraints(ir, workspace, options);
+        const group_targets_changed = try groups.applyTargetConstraints(state, workspace, options);
         changed = group_targets_changed or changed;
 
         var group_sources_changed = false;
         for (workspace.hard_constraints) |constraint| {
-            if (!groups.constraintUsesGroupSource(ir, constraint)) continue;
-            const applied = try applyAxisConstraint(ir, workspace, constraint, false, options);
+            if (!groups.constraintUsesGroupSource(state, constraint)) continue;
+            const applied = try applyAxisConstraint(state, workspace, constraint, false, options);
             group_sources_changed = applied or group_sources_changed;
             changed = applied or changed;
         }
 
         var soft_group_sources_changed = false;
         for (workspace.soft_constraints) |constraint| {
-            if (!groups.constraintUsesGroupSource(ir, constraint)) continue;
-            const applied = try applyAxisConstraint(ir, workspace, constraint, true, options);
+            if (!groups.constraintUsesGroupSource(state, constraint)) continue;
+            const applied = try applyAxisConstraint(state, workspace, constraint, true, options);
             soft_group_sources_changed = applied or soft_group_sources_changed;
             changed = applied or changed;
         }
 
         if (trace_enabled) {
             layout_trace.axisPassIteration(
-                ir.allocator,
-                ir,
+                state.allocator,
+                state,
                 run_id,
                 workspace,
                 pass,
@@ -637,20 +653,20 @@ pub fn runPageAxisPass(ir: anytype, workspace: *graph.AxisWorkspace, options: So
         }
     }
 
-    if (trace_enabled) layout_trace.axisPassEnd(ir.allocator, ir, run_id, workspace, iteration_count, converged);
+    if (trace_enabled) layout_trace.axisPassEnd(state.allocator, state, run_id, workspace, iteration_count, converged);
     return any_changed;
 }
 
-fn reconcileAxisStateLocalized(ir: anytype, workspace: *graph.AxisWorkspace, index: usize, state: *AxisState, options: SolveOptions) !bool {
-    const changed = graph.reconcileAxisState(state) catch |err| switch (err) {
+fn reconcileAxisStateLocalized(state: anytype, workspace: *graph.AxisWorkspace, index: usize, axis_state: *AxisState, options: SolveOptions) !bool {
+    const changed = graph.reconcileAxisState(axis_state) catch |err| switch (err) {
         error.ConstraintConflict, error.NegativeFrameSize => blk: {
-            const incoming = state.size_source orelse state.end_source orelse state.start_source orelse state.center_source;
-            const existing = pickReconcileExistingSource(state, incoming);
+            const incoming = axis_state.size_source orelse axis_state.end_source orelse axis_state.start_source orelse axis_state.center_source;
+            const existing = pickReconcileExistingSource(axis_state, incoming);
             if (options.record_diagnostics) {
                 if (incoming) |c| {
                     const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_frame_size;
-                    const propagation = try reconciliationFailurePropagation(ir, workspace, index, state, err);
-                    ir.noteConstraintFailureDetailedWithPropagation(
+                    const propagation = try reconciliationFailurePropagation(state, workspace, index, axis_state, err);
+                    state.noteConstraintFailureDetailedWithPropagation(
                         workspace.graph.page_id,
                         c,
                         existing,
@@ -666,13 +682,13 @@ fn reconcileAxisStateLocalized(ir: anytype, workspace: *graph.AxisWorkspace, ind
             break :blk false;
         },
     };
-    if (changed) try recordReconciledPropagation(ir, workspace, index);
+    if (changed) try recordReconciledPropagation(state, workspace, index);
     return changed;
 }
 
-fn reconcileAppliedAxisState(ir: anytype, workspace: *graph.AxisWorkspace, index: usize) !void {
+fn reconcileAppliedAxisState(state: anytype, workspace: *graph.AxisWorkspace, index: usize) !void {
     const changed = graph.reconcileAxisState(&workspace.states[index]) catch return;
-    if (changed) try recordReconciledPropagation(ir, workspace, index);
+    if (changed) try recordReconciledPropagation(state, workspace, index);
 }
 
 fn pickReconcileExistingSource(state: *const AxisState, incoming: ?Constraint) ?Constraint {
@@ -703,11 +719,11 @@ fn constraintsSame(a: Constraint, b: Constraint) bool {
     };
 }
 
-fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint: Constraint, is_soft: bool, options: SolveOptions) !bool {
+fn applyAxisConstraint(state: anytype, workspace: *graph.AxisWorkspace, constraint: Constraint, is_soft: bool, options: SolveOptions) !bool {
     if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) return false;
 
     const target_index = workspace.indexOf(constraint.target_node) orelse return false;
-    const target_node = ir.getNode(constraint.target_node) orelse return error.UnknownNode;
+    const target_node = state.getNode(constraint.target_node) orelse return error.UnknownNode;
     if (groups.isGroupNode(target_node)) return false;
 
     switch (graph.classifySelfConstraint(constraint, workspace.axis)) {
@@ -715,7 +731,7 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
         .tautology => return false,
         .conflict => {
             if (!is_soft and options.record_diagnostics) {
-                ir.noteConstraintFailureDetailed(
+                state.noteConstraintFailureDetailed(
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor),
@@ -732,8 +748,8 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
             if (size < -ConstraintTolerance) {
                 if (is_soft) return false;
                 if (options.record_diagnostics) {
-                    const propagation = try negativeSizePropagation(ir, workspace, target_index, constraint, size);
-                    ir.noteConstraintFailureDetailedWithPropagation(
+                    const propagation = try negativeSizePropagation(state, workspace, target_index, constraint, size);
+                    state.noteConstraintFailureDetailedWithPropagation(
                         workspace.graph.page_id,
                         constraint,
                         workspace.states[target_index].size_source,
@@ -752,8 +768,8 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
                 if (is_soft) return false;
                 if (options.record_diagnostics) {
                     if (err == error.ConstraintConflict) {
-                        const propagation = try sizeConflictPropagation(ir, workspace, target_index, constraint, workspace.states[target_index].size, size);
-                        ir.noteConstraintFailureDetailedWithPropagation(
+                        const propagation = try sizeConflictPropagation(state, workspace, target_index, constraint, workspace.states[target_index].size, size);
+                        state.noteConstraintFailureDetailedWithPropagation(
                             workspace.graph.page_id,
                             constraint,
                             workspace.states[target_index].size_source,
@@ -765,8 +781,8 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
                             propagation,
                         );
                     } else {
-                        const propagation = try negativeSizePropagation(ir, workspace, target_index, constraint, size);
-                        ir.noteConstraintFailureDetailedWithPropagation(
+                        const propagation = try negativeSizePropagation(state, workspace, target_index, constraint, size);
+                        state.noteConstraintFailureDetailedWithPropagation(
                             workspace.graph.page_id,
                             constraint,
                             workspace.states[target_index].size_source,
@@ -782,10 +798,10 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
                 return false;
             };
             if (applied or shouldRecordSizeConstraintPropagation(workspace, target_index)) {
-                try recordSizeConstraintPropagation(ir, workspace, target_index, constraint, size);
+                try recordSizeConstraintPropagation(state, workspace, target_index, constraint, size);
             }
             if (applied) {
-                layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
+                layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
             }
             return applied;
         },
@@ -795,61 +811,61 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
         return false;
     }
 
-    const source_value = try graph.constraintSourceValue(ir, workspace, constraint.source);
+    const source_value = try graph.constraintSourceValue(state, workspace, constraint.source);
     if (source_value == null) {
-        return try applyReverseAxisConstraint(ir, workspace, constraint, is_soft, target_index, options);
+        return try applyReverseAxisConstraint(state, workspace, constraint, is_soft, target_index, options);
     }
 
     const target_value = source_value.? + constraint.offset;
-    if (!is_soft and canMoveDefaultSizedAnchor(ir, workspace, target_index)) {
+    if (!is_soft and canMoveDefaultSizedAnchor(state, workspace, target_index)) {
         if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
-            try reconcileAppliedAxisState(ir, workspace, target_index);
-            try recordAnchorConstraintPropagation(ir, workspace, target_index, constraint, target_value);
-            layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
+            try reconcileAppliedAxisState(state, workspace, target_index);
+            try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
+            layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
             return true;
         }
     }
 
-    if (!is_soft and shouldReplaceDefaultGeometry(ir, workspace, target_index, constraint.target_anchor)) {
+    if (!is_soft and shouldReplaceDefaultGeometry(state, workspace, target_index, constraint.target_anchor)) {
         if (graph.replaceAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
-            try reconcileAppliedAxisState(ir, workspace, target_index);
-            try recordAnchorConstraintPropagation(ir, workspace, target_index, constraint, target_value);
-            layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
+            try reconcileAppliedAxisState(state, workspace, target_index);
+            try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
+            layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
             return true;
         }
     }
 
     const applied = graph.setAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint) catch |err| {
-        if (!is_soft and err == error.ConstraintConflict and canMoveDefaultSizedAnchor(ir, workspace, target_index)) {
+        if (!is_soft and err == error.ConstraintConflict and canMoveDefaultSizedAnchor(state, workspace, target_index)) {
             if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
-                try reconcileAppliedAxisState(ir, workspace, target_index);
-                try recordAnchorConstraintPropagation(ir, workspace, target_index, constraint, target_value);
-                layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
+                try reconcileAppliedAxisState(state, workspace, target_index);
+                try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
+                layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
                 return true;
             }
         }
-        if (!is_soft and err == error.ConstraintConflict and canReplaceDuplicateDefaultAnchor(ir, workspace, target_index, constraint.target_anchor)) {
+        if (!is_soft and err == error.ConstraintConflict and canReplaceDuplicateDefaultAnchor(state, workspace, target_index, constraint.target_anchor)) {
             if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
-                try reconcileAppliedAxisState(ir, workspace, target_index);
-                try recordAnchorConstraintPropagation(ir, workspace, target_index, constraint, target_value);
-                layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
+                try reconcileAppliedAxisState(state, workspace, target_index);
+                try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
+                layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
                 return true;
             }
         }
         if (!is_soft and err == error.ConstraintConflict) {
             const existing = graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor);
             if (existing != null and constraintInSlice(workspace.soft_constraints, existing.?) and graph.replaceAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
-                try reconcileAppliedAxisState(ir, workspace, target_index);
-                try recordAnchorConstraintPropagation(ir, workspace, target_index, constraint, target_value);
-                layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
+                try reconcileAppliedAxisState(state, workspace, target_index);
+                try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
+                layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
                 return true;
             }
         }
         if (is_soft) return false;
         if (options.record_diagnostics) {
             if (err == error.ConstraintConflict) {
-                const propagation = try anchorConflictPropagation(ir, workspace, target_index, constraint, target_value);
-                ir.noteConstraintFailureDetailedWithPropagation(
+                const propagation = try anchorConflictPropagation(state, workspace, target_index, constraint, target_value);
+                state.noteConstraintFailureDetailedWithPropagation(
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor),
@@ -861,8 +877,8 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
                     propagation,
                 );
             } else {
-                const propagation = try negativeAnchorPropagation(ir, workspace, target_index);
-                ir.noteConstraintFailureDetailedWithPropagation(
+                const propagation = try negativeAnchorPropagation(state, workspace, target_index);
+                state.noteConstraintFailureDetailedWithPropagation(
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor),
@@ -878,18 +894,18 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
         return false;
     };
     if (applied) {
-        try recordAnchorConstraintPropagation(ir, workspace, target_index, constraint, target_value);
-        layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
+        try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
+        layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
     }
     return applied;
 }
 
-fn canMoveDefaultSizedAnchor(ir: anytype, workspace: *const graph.AxisWorkspace, target_index: usize) bool {
-    const state = workspace.states[target_index];
-    if (!state.size_is_default or state.size == null) return false;
-    _ = ir;
+fn canMoveDefaultSizedAnchor(state: anytype, workspace: *const graph.AxisWorkspace, target_index: usize) bool {
+    const axis_state = workspace.states[target_index];
+    if (!axis_state.size_is_default or axis_state.size == null) return false;
+    _ = state;
     if (workspace.graph.hardTargetAnchorCount(workspace.nodeAt(target_index), workspace.axis) > 1) return false;
-    const sources = [_]?Constraint{ state.size_source, state.start_source, state.end_source, state.center_source };
+    const sources = [_]?Constraint{ axis_state.size_source, axis_state.start_source, axis_state.end_source, axis_state.center_source };
     for (sources) |source| {
         const constraint = source orelse continue;
         if (!constraintInSlice(workspace.soft_constraints, constraint)) return false;
@@ -897,24 +913,24 @@ fn canMoveDefaultSizedAnchor(ir: anytype, workspace: *const graph.AxisWorkspace,
     return true;
 }
 
-fn canReplaceDuplicateDefaultAnchor(ir: anytype, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
-    const state = workspace.states[target_index];
-    if (!state.size_is_default or state.size == null) return false;
-    _ = ir;
+fn canReplaceDuplicateDefaultAnchor(state: anytype, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
+    const axis_state = workspace.states[target_index];
+    if (!axis_state.size_is_default or axis_state.size == null) return false;
+    _ = state;
     if (workspace.graph.hardTargetAnchorCount(workspace.nodeAt(target_index), workspace.axis) != 1) return false;
-    const existing = graph.axisAnchorSource(state, target_anchor) orelse return false;
+    const existing = graph.axisAnchorSource(axis_state, target_anchor) orelse return false;
     return !constraintInSlice(workspace.soft_constraints, existing);
 }
 
-fn shouldReplaceDefaultGeometry(ir: anytype, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
-    const state = workspace.states[target_index];
-    if (!state.size_is_default) return false;
-    _ = ir;
+fn shouldReplaceDefaultGeometry(state: anytype, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
+    const axis_state = workspace.states[target_index];
+    if (!axis_state.size_is_default) return false;
+    _ = state;
     if (workspace.graph.hardTargetAnchorCount(workspace.nodeAt(target_index), workspace.axis) <= 1) return false;
 
-    const existing_source = graph.axisAnchorSource(state, target_anchor);
+    const existing_source = graph.axisAnchorSource(axis_state, target_anchor);
     if (existing_source) |source| return constraintInSlice(workspace.soft_constraints, source);
-    return graph.axisAnchorValue(state, target_anchor) == null;
+    return graph.axisAnchorValue(axis_state, target_anchor) == null;
 }
 
 fn constraintInSlice(constraints: []const Constraint, needle: Constraint) bool {
@@ -925,7 +941,7 @@ fn constraintInSlice(constraints: []const Constraint, needle: Constraint) bool {
 }
 
 fn applyReverseAxisConstraint(
-    ir: anytype,
+    state: anytype,
     workspace: *graph.AxisWorkspace,
     constraint: Constraint,
     is_soft: bool,
@@ -940,7 +956,7 @@ fn applyReverseAxisConstraint(
     };
     if (graph.anchorAxis(node_source.anchor) != workspace.axis) return error.ConstraintAxisMismatch;
 
-    const source_node = ir.getNode(node_source.node_id) orelse return error.UnknownNode;
+    const source_node = state.getNode(node_source.node_id) orelse return error.UnknownNode;
     if (groups.isGroupNode(source_node)) return false;
 
     const source_index = workspace.indexOf(node_source.node_id) orelse return false;
@@ -959,8 +975,8 @@ fn applyReverseAxisConstraint(
         if (options.record_diagnostics) {
             const expected = target_value - constraint.offset;
             if (err == error.ConstraintConflict) {
-                const propagation = try reverseAnchorConflictPropagation(ir, workspace, source_index, constraint, expected);
-                ir.noteConstraintFailureDetailedWithPropagation(
+                const propagation = try reverseAnchorConflictPropagation(state, workspace, source_index, constraint, expected);
+                state.noteConstraintFailureDetailedWithPropagation(
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[source_index], node_source.anchor),
@@ -972,8 +988,8 @@ fn applyReverseAxisConstraint(
                     propagation,
                 );
             } else {
-                const propagation = try negativeAnchorPropagation(ir, workspace, source_index);
-                ir.noteConstraintFailureDetailedWithPropagation(
+                const propagation = try negativeAnchorPropagation(state, workspace, source_index);
+                state.noteConstraintFailureDetailedWithPropagation(
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[source_index], node_source.anchor),
@@ -989,40 +1005,40 @@ fn applyReverseAxisConstraint(
         return false;
     };
     if (applied) {
-        try recordReverseAnchorConstraintPropagation(ir, workspace, source_index, constraint, target_value - constraint.offset);
-        layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, true);
+        try recordReverseAnchorConstraintPropagation(state, workspace, source_index, constraint, target_value - constraint.offset);
+        layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, true);
     }
     return applied;
 }
 
-fn recordDefaultSizePropagation(ir: anytype, workspace: *graph.AxisWorkspace, index: usize, value: f32) !void {
+fn recordDefaultSizePropagation(state: anytype, workspace: *graph.AxisWorkspace, index: usize, value: f32) !void {
     const tracker = workspace.propagation orelse return;
     var trace = graph.PropagationTrace{};
-    errdefer trace.deinit(ir.allocator);
-    const size_label = try nodeSlotLabel(ir.allocator, ir, workspace, index, .size);
-    defer ir.allocator.free(size_label);
-    try trace.appendOwnedLine(ir.allocator, try std.fmt.allocPrint(
-        ir.allocator,
+    errdefer trace.deinit(state.allocator);
+    const size_label = try nodeSlotLabel(state.allocator, state, workspace, index, .size);
+    defer state.allocator.free(size_label);
+    try trace.appendOwnedLine(state.allocator, try std.fmt.allocPrint(
+        state.allocator,
         "{s} = {d:.1}",
         .{ size_label, value },
     ));
     tracker.setTrace(index, .size, trace);
 }
 
-fn recordAnchorConstraintPropagation(ir: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, value: f32) !void {
+fn recordAnchorConstraintPropagation(state: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, value: f32) !void {
     const tracker = workspace.propagation orelse return;
-    var trace = try sourceTraceForConstraint(ir, workspace, constraint);
-    errdefer trace.deinit(ir.allocator);
-    try appendConstraintLine(ir, &trace, constraint, value, false);
+    var trace = try sourceTraceForConstraint(state, workspace, constraint);
+    errdefer trace.deinit(state.allocator);
+    try appendConstraintLine(state, &trace, constraint, value, false);
     tracker.setTrace(target_index, anchorSlot(constraint.target_anchor), trace);
 }
 
-fn recordReverseAnchorConstraintPropagation(ir: anytype, workspace: *graph.AxisWorkspace, source_index: usize, constraint: Constraint, value: f32) !void {
+fn recordReverseAnchorConstraintPropagation(state: anytype, workspace: *graph.AxisWorkspace, source_index: usize, constraint: Constraint, value: f32) !void {
     const tracker = workspace.propagation orelse return;
     const target_value = graph.axisAnchorValue(workspace.states[workspace.indexOf(constraint.target_node) orelse return], constraint.target_anchor) orelse value + constraint.offset;
-    var trace = try traceForNodeAnchorOrSeed(ir, workspace, constraint.target_node, constraint.target_anchor, target_value);
-    errdefer trace.deinit(ir.allocator);
-    try appendConstraintLine(ir, &trace, constraint, value, true);
+    var trace = try traceForNodeAnchorOrSeed(state, workspace, constraint.target_node, constraint.target_anchor, target_value);
+    errdefer trace.deinit(state.allocator);
+    try appendConstraintLine(state, &trace, constraint, value, true);
     const node_source = switch (constraint.source) {
         .page => return,
         .node => |source| source,
@@ -1039,37 +1055,37 @@ fn shouldRecordSizeConstraintPropagation(workspace: *graph.AxisWorkspace, target
     return true;
 }
 
-fn recordSizeConstraintPropagation(ir: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, value: f32) !void {
+fn recordSizeConstraintPropagation(state: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, value: f32) !void {
     const tracker = workspace.propagation orelse return;
     var trace = graph.PropagationTrace{};
-    errdefer trace.deinit(ir.allocator);
-    try appendSizeLine(ir, workspace, &trace, target_index, constraint, value);
+    errdefer trace.deinit(state.allocator);
+    try appendSizeLine(state, workspace, &trace, target_index, constraint, value);
     tracker.setTrace(target_index, .size, trace);
-    try recordReconciledPropagation(ir, workspace, target_index);
+    try recordReconciledPropagation(state, workspace, target_index);
 }
 
-fn recordReconciledPropagation(ir: anytype, workspace: *graph.AxisWorkspace, index: usize) !void {
+fn recordReconciledPropagation(state: anytype, workspace: *graph.AxisWorkspace, index: usize) !void {
     if (workspace.propagation == null) return;
-    try recordDerivedSlot(ir, workspace, index, .start);
-    try recordDerivedSlot(ir, workspace, index, .end);
+    try recordDerivedSlot(state, workspace, index, .start);
+    try recordDerivedSlot(state, workspace, index, .end);
 }
 
-fn recordDerivedSlot(ir: anytype, workspace: *graph.AxisWorkspace, index: usize, slot: graph.PropagationSlot) !void {
+fn recordDerivedSlot(state: anytype, workspace: *graph.AxisWorkspace, index: usize, slot: graph.PropagationSlot) !void {
     const tracker = workspace.propagation orelse return;
-    const state = workspace.states[index];
+    const axis_state = workspace.states[index];
     if (tracker.trace(index, slot) != null) return;
-    if (slotConstraintSource(state, slot) != null) return;
-    if (slot == .size and state.size_is_default) return;
-    const after_value = slotValue(state, slot) orelse return;
+    if (slotConstraintSource(axis_state, slot) != null) return;
+    if (slot == .size and axis_state.size_is_default) return;
+    const after_value = slotValue(axis_state, slot) orelse return;
 
-    const pair = derivationPair(state, slot) orelse return;
+    const pair = derivationPair(axis_state, slot) orelse return;
     const first_trace = tracker.trace(index, pair.first) orelse return;
     const second_trace = tracker.trace(index, pair.second) orelse return;
     var trace = graph.PropagationTrace{};
-    errdefer trace.deinit(ir.allocator);
-    try trace.appendTrace(ir.allocator, first_trace);
-    try trace.appendTrace(ir.allocator, second_trace);
-    try appendDerivedLine(ir, workspace, &trace, index, slot, pair, after_value);
+    errdefer trace.deinit(state.allocator);
+    try trace.appendTrace(state.allocator, first_trace);
+    try trace.appendTrace(state.allocator, second_trace);
+    try appendDerivedLine(state, workspace, &trace, index, slot, pair, after_value);
     tracker.setTrace(index, slot, trace);
 }
 
@@ -1129,144 +1145,144 @@ fn slotValue(state: AxisState, slot: graph.PropagationSlot) ?f32 {
     };
 }
 
-fn sourceTraceForConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint: Constraint) !graph.PropagationTrace {
+fn sourceTraceForConstraint(state: anytype, workspace: *graph.AxisWorkspace, constraint: Constraint) !graph.PropagationTrace {
     return switch (constraint.source) {
-        .page => |anchor| try pageAnchorTrace(ir, workspace, anchor),
+        .page => |anchor| try pageAnchorTrace(state, workspace, anchor),
         .node => |source| blk: {
-            const source_value = (try graph.constraintSourceValue(ir, workspace, constraint.source)) orelse 0;
-            break :blk try traceForNodeAnchorOrSeed(ir, workspace, source.node_id, source.anchor, source_value);
+            const source_value = (try graph.constraintSourceValue(state, workspace, constraint.source)) orelse 0;
+            break :blk try traceForNodeAnchorOrSeed(state, workspace, source.node_id, source.anchor, source_value);
         },
     };
 }
 
-fn traceForNodeAnchorOrSeed(ir: anytype, workspace: *graph.AxisWorkspace, node_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
+fn traceForNodeAnchorOrSeed(state: anytype, workspace: *graph.AxisWorkspace, node_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
     if (workspace.propagation) |tracker| {
         if (workspace.indexOf(node_id)) |index| {
-            if (tracker.trace(index, anchorSlot(anchor))) |existing| return try existing.clone(ir.allocator);
+            if (tracker.trace(index, anchorSlot(anchor))) |existing| return try existing.clone(state.allocator);
         }
     }
     var trace = graph.PropagationTrace{};
-    errdefer trace.deinit(ir.allocator);
-    const label = try nodeAnchorLabel(ir.allocator, ir, node_id, anchor);
-    defer ir.allocator.free(label);
-    try trace.appendOwnedLine(ir.allocator, try std.fmt.allocPrint(
-        ir.allocator,
+    errdefer trace.deinit(state.allocator);
+    const label = try nodeAnchorLabel(state.allocator, state, node_id, anchor);
+    defer state.allocator.free(label);
+    try trace.appendOwnedLine(state.allocator, try std.fmt.allocPrint(
+        state.allocator,
         "{s} = {d:.1}",
         .{ label, value },
     ));
     return trace;
 }
 
-fn pageAnchorTrace(ir: anytype, workspace: *graph.AxisWorkspace, anchor: model.Anchor) !graph.PropagationTrace {
+fn pageAnchorTrace(state: anytype, workspace: *graph.AxisWorkspace, anchor: model.Anchor) !graph.PropagationTrace {
     var trace = graph.PropagationTrace{};
-    errdefer trace.deinit(ir.allocator);
-    const page = ir.getNode(workspace.graph.page_id) orelse return error.UnknownNode;
-    try trace.appendOwnedLine(ir.allocator, try std.fmt.allocPrint(
-        ir.allocator,
+    errdefer trace.deinit(state.allocator);
+    const page = state.getNode(workspace.graph.page_id) orelse return error.UnknownNode;
+    try trace.appendOwnedLine(state.allocator, try std.fmt.allocPrint(
+        state.allocator,
         "page.{s} = {d:.1}",
         .{ @tagName(anchor), graph.anchorValue(page.frame, anchor) },
     ));
     return trace;
 }
 
-fn appendConstraintLine(ir: anytype, trace: *graph.PropagationTrace, constraint: Constraint, value: f32, reverse: bool) !void {
+fn appendConstraintLine(state: anytype, trace: *graph.PropagationTrace, constraint: Constraint, value: f32, reverse: bool) !void {
     const prefix = if (trace.lines.items.len == 0) "" else "→ ";
     const target_label = if (reverse)
-        try reverseTargetLabel(ir.allocator, ir, constraint)
+        try reverseTargetLabel(state.allocator, state, constraint)
     else
-        try nodeAnchorLabel(ir.allocator, ir, constraint.target_node, constraint.target_anchor);
-    defer ir.allocator.free(target_label);
+        try nodeAnchorLabel(state.allocator, state, constraint.target_node, constraint.target_anchor);
+    defer state.allocator.free(target_label);
     const source_label = if (reverse)
-        try nodeAnchorLabel(ir.allocator, ir, constraint.target_node, constraint.target_anchor)
+        try nodeAnchorLabel(state.allocator, state, constraint.target_node, constraint.target_anchor)
     else
-        try constraintSourceLabel(ir.allocator, ir, constraint.source);
-    defer ir.allocator.free(source_label);
+        try constraintSourceLabel(state.allocator, state, constraint.source);
+    defer state.allocator.free(source_label);
     const offset = if (reverse) -constraint.offset else constraint.offset;
-    const source_text = try constraintOriginLabel(ir.allocator, ir, constraint);
+    const source_text = try constraintOriginLabel(state.allocator, state, constraint);
     const line = std.fmt.allocPrint(
-        ir.allocator,
+        state.allocator,
         "{s}{s} = {s} {s} {d:.1} = {d:.1}",
         .{ prefix, target_label, source_label, if (offset < 0) "-" else "+", @abs(offset), value },
     ) catch |err| {
-        ir.allocator.free(source_text);
+        state.allocator.free(source_text);
         return err;
     };
-    try trace.appendOwnedLineWithSource(ir.allocator, line, source_text);
+    try trace.appendOwnedLineWithSource(state.allocator, line, source_text);
 }
 
-fn appendSizeLine(ir: anytype, workspace: *graph.AxisWorkspace, trace: *graph.PropagationTrace, target_index: usize, constraint: Constraint, value: f32) !void {
+fn appendSizeLine(state: anytype, workspace: *graph.AxisWorkspace, trace: *graph.PropagationTrace, target_index: usize, constraint: Constraint, value: f32) !void {
     const prefix = if (trace.lines.items.len == 0) "" else "→ ";
-    const size_label = try nodeSlotLabel(ir.allocator, ir, workspace, target_index, .size);
-    defer ir.allocator.free(size_label);
+    const size_label = try nodeSlotLabel(state.allocator, state, workspace, target_index, .size);
+    defer state.allocator.free(size_label);
     if (constraint.source == .node) {
         const source = constraint.source.node;
         if (source.node_id == constraint.target_node and graph.anchorAxis(source.anchor) == workspace.axis) {
-            const target_label = try nodeAnchorLabel(ir.allocator, ir, constraint.target_node, constraint.target_anchor);
-            defer ir.allocator.free(target_label);
-            const source_label = try nodeAnchorLabel(ir.allocator, ir, source.node_id, source.anchor);
-            defer ir.allocator.free(source_label);
-            const start_label = try nodeSlotLabel(ir.allocator, ir, workspace, target_index, .start);
-            defer ir.allocator.free(start_label);
-            const end_label = try nodeSlotLabel(ir.allocator, ir, workspace, target_index, .end);
-            defer ir.allocator.free(end_label);
-            const source_text = try constraintOriginLabel(ir.allocator, ir, constraint);
+            const target_label = try nodeAnchorLabel(state.allocator, state, constraint.target_node, constraint.target_anchor);
+            defer state.allocator.free(target_label);
+            const source_label = try nodeAnchorLabel(state.allocator, state, source.node_id, source.anchor);
+            defer state.allocator.free(source_label);
+            const start_label = try nodeSlotLabel(state.allocator, state, workspace, target_index, .start);
+            defer state.allocator.free(start_label);
+            const end_label = try nodeSlotLabel(state.allocator, state, workspace, target_index, .end);
+            defer state.allocator.free(end_label);
+            const source_text = try constraintOriginLabel(state.allocator, state, constraint);
             const constraint_line = std.fmt.allocPrint(
-                ir.allocator,
+                state.allocator,
                 "{s}{s} = {s} {s} {d:.1}",
                 .{ prefix, target_label, source_label, if (constraint.offset < 0) "-" else "+", @abs(constraint.offset) },
             ) catch |err| {
-                ir.allocator.free(source_text);
+                state.allocator.free(source_text);
                 return err;
             };
-            try trace.appendOwnedLineWithSource(ir.allocator, constraint_line, source_text);
-            try trace.appendOwnedLine(ir.allocator, try std.fmt.allocPrint(
-                ir.allocator,
+            try trace.appendOwnedLineWithSource(state.allocator, constraint_line, source_text);
+            try trace.appendOwnedLine(state.allocator, try std.fmt.allocPrint(
+                state.allocator,
                 "→ {s} = {s} - {s} = {d:.1}",
                 .{ size_label, end_label, start_label, value },
             ));
             return;
         }
     }
-    const source_text = try constraintOriginLabel(ir.allocator, ir, constraint);
+    const source_text = try constraintOriginLabel(state.allocator, state, constraint);
     const line = std.fmt.allocPrint(
-        ir.allocator,
+        state.allocator,
         "{s}{s} = {d:.1}",
         .{ prefix, size_label, value },
     ) catch |err| {
-        ir.allocator.free(source_text);
+        state.allocator.free(source_text);
         return err;
     };
-    try trace.appendOwnedLineWithSource(ir.allocator, line, source_text);
+    try trace.appendOwnedLineWithSource(state.allocator, line, source_text);
 }
 
-fn appendDerivedLine(ir: anytype, workspace: *graph.AxisWorkspace, trace: *graph.PropagationTrace, index: usize, slot: graph.PropagationSlot, pair: DerivationPair, value: f32) !void {
-    const target_label = try nodeSlotLabel(ir.allocator, ir, workspace, index, slot);
-    defer ir.allocator.free(target_label);
-    const first_label = try nodeSlotLabel(ir.allocator, ir, workspace, index, pair.first);
-    defer ir.allocator.free(first_label);
-    const second_label = try nodeSlotLabel(ir.allocator, ir, workspace, index, pair.second);
-    defer ir.allocator.free(second_label);
-    try trace.appendOwnedLine(ir.allocator, try std.fmt.allocPrint(
-        ir.allocator,
+fn appendDerivedLine(state: anytype, workspace: *graph.AxisWorkspace, trace: *graph.PropagationTrace, index: usize, slot: graph.PropagationSlot, pair: DerivationPair, value: f32) !void {
+    const target_label = try nodeSlotLabel(state.allocator, state, workspace, index, slot);
+    defer state.allocator.free(target_label);
+    const first_label = try nodeSlotLabel(state.allocator, state, workspace, index, pair.first);
+    defer state.allocator.free(first_label);
+    const second_label = try nodeSlotLabel(state.allocator, state, workspace, index, pair.second);
+    defer state.allocator.free(second_label);
+    try trace.appendOwnedLine(state.allocator, try std.fmt.allocPrint(
+        state.allocator,
         "→ {s} = {s}, {s} = {d:.1}",
         .{ target_label, first_label, second_label, value },
     ));
 }
 
-fn constraintOriginLabel(allocator: std.mem.Allocator, ir: anytype, constraint: Constraint) ![]const u8 {
+fn constraintOriginLabel(allocator: std.mem.Allocator, state: anytype, constraint: Constraint) ![]const u8 {
     const origin_text = constraint.origin orelse return allocator.dupe(u8, "fallback");
     const located = utils.err.parseLocatedOrigin(origin_text) orelse return allocator.dupe(u8, "unknown");
-    var path = ir.projectPath();
-    var source = ir.projectSource();
+    var path = state.projectPath();
+    var source = state.projectSource();
     if (located.path) |origin_path| {
-        if (ir.moduleByPathOrSpec(origin_path)) |module| {
+        if (state.moduleByPathOrSpec(origin_path)) |module| {
             path = module.path orelse module.spec;
             source = module.source;
         } else {
             path = origin_path;
         }
     } else {
-        const module = ir.projectModule();
+        const module = state.projectModule();
         path = module.path orelse module.spec;
         source = module.source;
     }
@@ -1282,7 +1298,7 @@ fn anchorSlot(anchor: model.Anchor) graph.PropagationSlot {
     };
 }
 
-fn nodeSlotLabel(allocator: std.mem.Allocator, ir: anytype, workspace: *const graph.AxisWorkspace, index: usize, slot: graph.PropagationSlot) ![]const u8 {
+fn nodeSlotLabel(allocator: std.mem.Allocator, state: anytype, workspace: *const graph.AxisWorkspace, index: usize, slot: graph.PropagationSlot) ![]const u8 {
     const node_id = workspace.nodeAt(index);
     const suffix = switch (slot) {
         .start => if (workspace.axis == .horizontal) "left" else "bottom",
@@ -1290,51 +1306,51 @@ fn nodeSlotLabel(allocator: std.mem.Allocator, ir: anytype, workspace: *const gr
         .center => if (workspace.axis == .horizontal) "center_x" else "center_y",
         .size => if (workspace.axis == .horizontal) "width" else "height",
     };
-    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ nodeLabel(ir, node_id), suffix });
+    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ nodeLabel(state, node_id), suffix });
 }
 
-fn nodeAnchorLabel(allocator: std.mem.Allocator, ir: anytype, node_id: NodeId, anchor: model.Anchor) ![]const u8 {
-    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ nodeLabel(ir, node_id), @tagName(anchor) });
+fn nodeAnchorLabel(allocator: std.mem.Allocator, state: anytype, node_id: NodeId, anchor: model.Anchor) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ nodeLabel(state, node_id), @tagName(anchor) });
 }
 
-fn reverseTargetLabel(allocator: std.mem.Allocator, ir: anytype, constraint: Constraint) ![]const u8 {
+fn reverseTargetLabel(allocator: std.mem.Allocator, state: anytype, constraint: Constraint) ![]const u8 {
     return switch (constraint.source) {
         .page => std.fmt.allocPrint(allocator, "page.unknown", .{}),
-        .node => |source| nodeAnchorLabel(allocator, ir, source.node_id, source.anchor),
+        .node => |source| nodeAnchorLabel(allocator, state, source.node_id, source.anchor),
     };
 }
 
-fn constraintSourceLabel(allocator: std.mem.Allocator, ir: anytype, source: model.ConstraintSource) ![]const u8 {
+fn constraintSourceLabel(allocator: std.mem.Allocator, state: anytype, source: model.ConstraintSource) ![]const u8 {
     return switch (source) {
         .page => |anchor| std.fmt.allocPrint(allocator, "page.{s}", .{@tagName(anchor)}),
-        .node => |node_source| nodeAnchorLabel(allocator, ir, node_source.node_id, node_source.anchor),
+        .node => |node_source| nodeAnchorLabel(allocator, state, node_source.node_id, node_source.anchor),
     };
 }
 
-fn nodeLabel(ir: anytype, node_id: NodeId) []const u8 {
-    const node = ir.getNode(node_id) orelse return "unknown";
+fn nodeLabel(state: anytype, node_id: NodeId) []const u8 {
+    const node = state.getNode(node_id) orelse return "unknown";
     return node.role orelse node.name;
 }
 
-fn anchorConflictPropagation(ir: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, incoming_value: f32) !?model.ConstraintPropagation {
+fn anchorConflictPropagation(state: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, incoming_value: f32) !?model.ConstraintPropagation {
     if (workspace.propagation == null) return null;
     const current_value = graph.axisAnchorValue(workspace.states[target_index], constraint.target_anchor) orelse return null;
-    var current = try traceForNodeAnchorOrSeed(ir, workspace, constraint.target_node, constraint.target_anchor, current_value);
-    defer current.deinit(ir.allocator);
-    var incoming = try sourceTraceForConstraint(ir, workspace, constraint);
-    defer incoming.deinit(ir.allocator);
-    try appendConstraintLine(ir, &incoming, constraint, incoming_value, false);
-    const target_label = try nodeAnchorLabel(ir.allocator, ir, constraint.target_node, constraint.target_anchor);
-    defer ir.allocator.free(target_label);
+    var current = try traceForNodeAnchorOrSeed(state, workspace, constraint.target_node, constraint.target_anchor, current_value);
+    defer current.deinit(state.allocator);
+    var incoming = try sourceTraceForConstraint(state, workspace, constraint);
+    defer incoming.deinit(state.allocator);
+    try appendConstraintLine(state, &incoming, constraint, incoming_value, false);
+    const target_label = try nodeAnchorLabel(state.allocator, state, constraint.target_node, constraint.target_anchor);
+    defer state.allocator.free(target_label);
     return try twoPathPropagation(
-        ir.allocator,
+        state.allocator,
         target_label,
         "current value",
         &current,
         "incoming value",
         &incoming,
         try std.fmt.allocPrint(
-            ir.allocator,
+            state.allocator,
             "{s} is already fixed at {d:.1}, but this propagation requires {d:.1}.",
             .{ target_label, current_value, incoming_value },
         ),
@@ -1342,30 +1358,30 @@ fn anchorConflictPropagation(ir: anytype, workspace: *graph.AxisWorkspace, targe
     );
 }
 
-fn reverseAnchorConflictPropagation(ir: anytype, workspace: *graph.AxisWorkspace, source_index: usize, constraint: Constraint, incoming_value: f32) !?model.ConstraintPropagation {
+fn reverseAnchorConflictPropagation(state: anytype, workspace: *graph.AxisWorkspace, source_index: usize, constraint: Constraint, incoming_value: f32) !?model.ConstraintPropagation {
     if (workspace.propagation == null) return null;
     const node_source = switch (constraint.source) {
         .page => return null,
         .node => |source| source,
     };
     const current_value = graph.axisAnchorValue(workspace.states[source_index], node_source.anchor) orelse return null;
-    var current = try traceForNodeAnchorOrSeed(ir, workspace, node_source.node_id, node_source.anchor, current_value);
-    defer current.deinit(ir.allocator);
+    var current = try traceForNodeAnchorOrSeed(state, workspace, node_source.node_id, node_source.anchor, current_value);
+    defer current.deinit(state.allocator);
     const target_value = graph.axisAnchorValue(workspace.states[workspace.indexOf(constraint.target_node) orelse return null], constraint.target_anchor) orelse return null;
-    var incoming = try traceForNodeAnchorOrSeed(ir, workspace, constraint.target_node, constraint.target_anchor, target_value);
-    defer incoming.deinit(ir.allocator);
-    try appendConstraintLine(ir, &incoming, constraint, incoming_value, true);
-    const target_label = try nodeAnchorLabel(ir.allocator, ir, node_source.node_id, node_source.anchor);
-    defer ir.allocator.free(target_label);
+    var incoming = try traceForNodeAnchorOrSeed(state, workspace, constraint.target_node, constraint.target_anchor, target_value);
+    defer incoming.deinit(state.allocator);
+    try appendConstraintLine(state, &incoming, constraint, incoming_value, true);
+    const target_label = try nodeAnchorLabel(state.allocator, state, node_source.node_id, node_source.anchor);
+    defer state.allocator.free(target_label);
     return try twoPathPropagation(
-        ir.allocator,
+        state.allocator,
         target_label,
         "current value",
         &current,
         "incoming value",
         &incoming,
         try std.fmt.allocPrint(
-            ir.allocator,
+            state.allocator,
             "{s} is already fixed at {d:.1}, but this propagation requires {d:.1}.",
             .{ target_label, current_value, incoming_value },
         ),
@@ -1373,25 +1389,25 @@ fn reverseAnchorConflictPropagation(ir: anytype, workspace: *graph.AxisWorkspace
     );
 }
 
-fn sizeConflictPropagation(ir: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, current_value: ?f32, incoming_value: f32) !?model.ConstraintPropagation {
+fn sizeConflictPropagation(state: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, current_value: ?f32, incoming_value: f32) !?model.ConstraintPropagation {
     if (workspace.propagation == null) return null;
     const current_size = current_value orelse return null;
-    var current = try traceForSlotOrSeed(ir, workspace, target_index, .size, current_size);
-    defer current.deinit(ir.allocator);
+    var current = try traceForSlotOrSeed(state, workspace, target_index, .size, current_size);
+    defer current.deinit(state.allocator);
     var incoming = graph.PropagationTrace{};
-    defer incoming.deinit(ir.allocator);
-    try appendSizeLine(ir, workspace, &incoming, target_index, constraint, incoming_value);
-    const target_label = try nodeSlotLabel(ir.allocator, ir, workspace, target_index, .size);
-    defer ir.allocator.free(target_label);
+    defer incoming.deinit(state.allocator);
+    try appendSizeLine(state, workspace, &incoming, target_index, constraint, incoming_value);
+    const target_label = try nodeSlotLabel(state.allocator, state, workspace, target_index, .size);
+    defer state.allocator.free(target_label);
     return try twoPathPropagation(
-        ir.allocator,
+        state.allocator,
         target_label,
         "current value",
         &current,
         "incoming value",
         &incoming,
         try std.fmt.allocPrint(
-            ir.allocator,
+            state.allocator,
             "{s} is already fixed at {d:.1}, but this propagation requires {d:.1}.",
             .{ target_label, current_size, incoming_value },
         ),
@@ -1399,62 +1415,62 @@ fn sizeConflictPropagation(ir: anytype, workspace: *graph.AxisWorkspace, target_
     );
 }
 
-fn negativeSizePropagation(ir: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, size: f32) !?model.ConstraintPropagation {
+fn negativeSizePropagation(state: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, size: f32) !?model.ConstraintPropagation {
     if (workspace.propagation == null) return null;
     var trace = graph.PropagationTrace{};
-    defer trace.deinit(ir.allocator);
+    defer trace.deinit(state.allocator);
     if (workspace.propagation.?.trace(target_index, .size)) |existing| {
-        trace = try existing.clone(ir.allocator);
+        trace = try existing.clone(state.allocator);
     } else {
-        try appendSizeLine(ir, workspace, &trace, target_index, constraint, size);
+        try appendSizeLine(state, workspace, &trace, target_index, constraint, size);
     }
-    const target_label = try nodeSlotLabel(ir.allocator, ir, workspace, target_index, .size);
-    defer ir.allocator.free(target_label);
+    const target_label = try nodeSlotLabel(state.allocator, state, workspace, target_index, .size);
+    defer state.allocator.free(target_label);
     return try onePathPropagation(
-        ir.allocator,
+        state.allocator,
         target_label,
         if (workspace.axis == .horizontal) "width" else "height",
         &trace,
-        try std.fmt.allocPrint(ir.allocator, "{s} = {d:.1}", .{ target_label, size }),
+        try std.fmt.allocPrint(state.allocator, "{s} = {d:.1}", .{ target_label, size }),
     );
 }
 
-fn negativeAnchorPropagation(ir: anytype, workspace: *graph.AxisWorkspace, target_index: usize) !?model.ConstraintPropagation {
+fn negativeAnchorPropagation(state: anytype, workspace: *graph.AxisWorkspace, target_index: usize) !?model.ConstraintPropagation {
     if (workspace.propagation == null) return null;
     const start_value = workspace.states[target_index].start;
     const end_value = workspace.states[target_index].end;
     if (start_value == null or end_value == null) return null;
-    return try frameEdgePropagation(ir, workspace, target_index, start_value.?, end_value.?);
+    return try frameEdgePropagation(state, workspace, target_index, start_value.?, end_value.?);
 }
 
-fn reconciliationFailurePropagation(ir: anytype, workspace: *graph.AxisWorkspace, index: usize, state: *const AxisState, err: anyerror) !?model.ConstraintPropagation {
+fn reconciliationFailurePropagation(state: anytype, workspace: *graph.AxisWorkspace, index: usize, axis_state: *const AxisState, err: anyerror) !?model.ConstraintPropagation {
     if (workspace.propagation == null) return null;
-    if (err == error.NegativeFrameSize and state.start != null and state.end != null) {
-        return try frameEdgePropagation(ir, workspace, index, state.start.?, state.end.?);
+    if (err == error.NegativeFrameSize and axis_state.start != null and axis_state.end != null) {
+        return try frameEdgePropagation(state, workspace, index, axis_state.start.?, axis_state.end.?);
     }
     return null;
 }
 
-fn frameEdgePropagation(ir: anytype, workspace: *graph.AxisWorkspace, index: usize, start_value: f32, end_value: f32) !?model.ConstraintPropagation {
-    var start_trace = try traceForSlotOrSeed(ir, workspace, index, .start, start_value);
-    defer start_trace.deinit(ir.allocator);
-    var end_trace = try traceForSlotOrSeed(ir, workspace, index, .end, end_value);
-    defer end_trace.deinit(ir.allocator);
-    const size_label = try nodeSlotLabel(ir.allocator, ir, workspace, index, .size);
-    defer ir.allocator.free(size_label);
-    const start_label = try nodeSlotLabel(ir.allocator, ir, workspace, index, .start);
-    defer ir.allocator.free(start_label);
-    const end_label = try nodeSlotLabel(ir.allocator, ir, workspace, index, .end);
-    defer ir.allocator.free(end_label);
+fn frameEdgePropagation(state: anytype, workspace: *graph.AxisWorkspace, index: usize, start_value: f32, end_value: f32) !?model.ConstraintPropagation {
+    var start_trace = try traceForSlotOrSeed(state, workspace, index, .start, start_value);
+    defer start_trace.deinit(state.allocator);
+    var end_trace = try traceForSlotOrSeed(state, workspace, index, .end, end_value);
+    defer end_trace.deinit(state.allocator);
+    const size_label = try nodeSlotLabel(state.allocator, state, workspace, index, .size);
+    defer state.allocator.free(size_label);
+    const start_label = try nodeSlotLabel(state.allocator, state, workspace, index, .start);
+    defer state.allocator.free(start_label);
+    const end_label = try nodeSlotLabel(state.allocator, state, workspace, index, .end);
+    defer state.allocator.free(end_label);
     return try twoPathPropagation(
-        ir.allocator,
+        state.allocator,
         size_label,
         if (workspace.axis == .horizontal) "left" else "bottom",
         &start_trace,
         if (workspace.axis == .horizontal) "right" else "top",
         &end_trace,
         try std.fmt.allocPrint(
-            ir.allocator,
+            state.allocator,
             "{s} = {s} - {s} = {d:.1} - {d:.1} = {d:.1}",
             .{ size_label, end_label, start_label, end_value, start_value, end_value - start_value },
         ),
@@ -1462,15 +1478,15 @@ fn frameEdgePropagation(ir: anytype, workspace: *graph.AxisWorkspace, index: usi
     );
 }
 
-fn traceForSlotOrSeed(ir: anytype, workspace: *graph.AxisWorkspace, index: usize, slot: graph.PropagationSlot, value: f32) !graph.PropagationTrace {
+fn traceForSlotOrSeed(state: anytype, workspace: *graph.AxisWorkspace, index: usize, slot: graph.PropagationSlot, value: f32) !graph.PropagationTrace {
     if (workspace.propagation) |tracker| {
-        if (tracker.trace(index, slot)) |existing| return try existing.clone(ir.allocator);
+        if (tracker.trace(index, slot)) |existing| return try existing.clone(state.allocator);
     }
     var trace = graph.PropagationTrace{};
-    errdefer trace.deinit(ir.allocator);
-    const label = try nodeSlotLabel(ir.allocator, ir, workspace, index, slot);
-    defer ir.allocator.free(label);
-    try trace.appendOwnedLine(ir.allocator, try std.fmt.allocPrint(ir.allocator, "{s} = {d:.1}", .{ label, value }));
+    errdefer trace.deinit(state.allocator);
+    const label = try nodeSlotLabel(state.allocator, state, workspace, index, slot);
+    defer state.allocator.free(label);
+    try trace.appendOwnedLine(state.allocator, try std.fmt.allocPrint(state.allocator, "{s} = {d:.1}", .{ label, value }));
     return trace;
 }
 
@@ -1565,25 +1581,25 @@ fn modelPathFromTrace(allocator: std.mem.Allocator, title: []const u8, trace: *c
     };
 }
 
-fn validatePageConstraints(ir: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, options: SolveOptions) !void {
+fn validatePageConstraints(state: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, options: SolveOptions) !void {
     for (page_graph.constraints) |constraint| {
         if (page_graph.indexOf(constraint.target_node) == null) continue;
-        if (constraintAlreadyFailed(ir, constraint)) continue;
+        if (constraintAlreadyFailed(state, constraint)) continue;
 
-        const target_value = switch (try finalNodeAnchorValue(ir, constraint.target_node, constraint.target_anchor)) {
+        const target_value = switch (try finalNodeAnchorValue(state, constraint.target_node, constraint.target_anchor)) {
             .known => |value| value,
             .unknown => {
-                const propagation = if (options.record_propagation) try constraintCyclePropagation(ir, page_graph, constraint) else null;
-                ir.noteConstraintFailureDetailedWithPropagation(page_id, constraint, null, .conflict, .constraint_cycle, graph.anchorAxis(constraint.target_anchor), null, null, propagation);
+                const propagation = if (options.record_propagation) try constraintCyclePropagation(state, page_graph, constraint) else null;
+                state.noteConstraintFailureDetailedWithPropagation(page_id, constraint, null, .conflict, .constraint_cycle, graph.anchorAxis(constraint.target_anchor), null, null, propagation);
                 continue;
             },
         };
 
-        const source_value = switch (try finalConstraintSourceValue(ir, page_id, constraint.source)) {
+        const source_value = switch (try finalConstraintSourceValue(state, page_id, constraint.source)) {
             .known => |value| value,
             .unknown => {
-                const propagation = if (options.record_propagation) try constraintCyclePropagation(ir, page_graph, constraint) else null;
-                ir.noteConstraintFailureDetailedWithPropagation(page_id, constraint, null, .conflict, .constraint_cycle, graph.anchorAxis(constraint.target_anchor), target_value, null, propagation);
+                const propagation = if (options.record_propagation) try constraintCyclePropagation(state, page_graph, constraint) else null;
+                state.noteConstraintFailureDetailedWithPropagation(page_id, constraint, null, .conflict, .constraint_cycle, graph.anchorAxis(constraint.target_anchor), target_value, null, propagation);
                 continue;
             },
         };
@@ -1591,8 +1607,8 @@ fn validatePageConstraints(ir: anytype, page_id: NodeId, page_graph: *const grap
         const expected = source_value + constraint.offset;
         if (@abs(target_value - expected) > ConstraintTolerance) {
             const related = validationRelatedConstraint(page_graph, constraint);
-            const propagation = if (options.record_propagation) try validationConflictPropagation(ir, page_id, page_graph, constraint, related, target_value, expected) else null;
-            ir.noteConstraintFailureDetailedWithPropagation(page_id, constraint, related, .conflict, .anchor_value_conflict, graph.anchorAxis(constraint.target_anchor), target_value, expected, propagation);
+            const propagation = if (options.record_propagation) try validationConflictPropagation(state, page_id, page_graph, constraint, related, target_value, expected) else null;
+            state.noteConstraintFailureDetailedWithPropagation(page_id, constraint, related, .conflict, .anchor_value_conflict, graph.anchorAxis(constraint.target_anchor), target_value, expected, propagation);
         }
     }
 }
@@ -1602,32 +1618,32 @@ const ConstraintEndpoint = struct {
     anchor: model.Anchor,
 };
 
-fn constraintCyclePropagation(ir: anytype, page_graph: *const graph.PageLayoutGraph, start_constraint: Constraint) !?model.ConstraintPropagation {
+fn constraintCyclePropagation(state: anytype, page_graph: *const graph.PageLayoutGraph, start_constraint: Constraint) !?model.ConstraintPropagation {
     const axis = graph.anchorAxis(start_constraint.target_anchor);
     const start_endpoint: ConstraintEndpoint = .{ .node_id = start_constraint.target_node, .anchor = start_constraint.target_anchor };
     var current = start_constraint;
     var accumulated_offset: f32 = 0;
     var trace = graph.PropagationTrace{};
-    defer trace.deinit(ir.allocator);
+    defer trace.deinit(state.allocator);
 
     var steps: usize = 0;
     while (steps <= page_graph.constraints.len) : (steps += 1) {
         if (graph.anchorAxis(current.target_anchor) != axis) return null;
         accumulated_offset += current.offset;
-        try appendCycleConstraintLine(ir, &trace, current, accumulated_offset);
+        try appendCycleConstraintLine(state, &trace, current, accumulated_offset);
 
         const source_endpoint = constraintSourceEndpoint(current.source) orelse return null;
         if (graph.anchorAxis(source_endpoint.anchor) != axis) return null;
         if (constraintEndpointSame(source_endpoint, start_endpoint)) {
-            const target_label = try nodeAnchorLabel(ir.allocator, ir, start_endpoint.node_id, start_endpoint.anchor);
-            defer ir.allocator.free(target_label);
+            const target_label = try nodeAnchorLabel(state.allocator, state, start_endpoint.node_id, start_endpoint.anchor);
+            defer state.allocator.free(target_label);
             return try onePathPropagation(
-                ir.allocator,
+                state.allocator,
                 target_label,
                 "cycle",
                 &trace,
                 try std.fmt.allocPrint(
-                    ir.allocator,
+                    state.allocator,
                     "{s} depends on itself; accumulated offset = {d:.1}",
                     .{ target_label, accumulated_offset },
                 ),
@@ -1640,7 +1656,7 @@ fn constraintCyclePropagation(ir: anytype, page_graph: *const graph.PageLayoutGr
 }
 
 fn validationConflictPropagation(
-    ir: anytype,
+    state: anytype,
     page_id: NodeId,
     page_graph: *const graph.PageLayoutGraph,
     constraint: Constraint,
@@ -1649,32 +1665,32 @@ fn validationConflictPropagation(
     expected: f32,
 ) !?model.ConstraintPropagation {
     var current = if (related_constraint) |related|
-        try finalConstraintTrace(ir, page_id, page_graph, related, target_value, 0)
+        try finalConstraintTrace(state, page_id, page_graph, related, target_value, 0)
     else
         graph.PropagationTrace{};
-    defer current.deinit(ir.allocator);
-    const target_label = try nodeAnchorLabel(ir.allocator, ir, constraint.target_node, constraint.target_anchor);
-    defer ir.allocator.free(target_label);
+    defer current.deinit(state.allocator);
+    const target_label = try nodeAnchorLabel(state.allocator, state, constraint.target_node, constraint.target_anchor);
+    defer state.allocator.free(target_label);
     if (current.lines.items.len == 0) {
-        try current.appendOwnedLine(ir.allocator, try std.fmt.allocPrint(
-            ir.allocator,
+        try current.appendOwnedLine(state.allocator, try std.fmt.allocPrint(
+            state.allocator,
             "{s} = {d:.1}",
             .{ target_label, target_value },
         ));
     }
 
-    var incoming = try finalConstraintTrace(ir, page_id, page_graph, constraint, expected, 0);
-    defer incoming.deinit(ir.allocator);
+    var incoming = try finalConstraintTrace(state, page_id, page_graph, constraint, expected, 0);
+    defer incoming.deinit(state.allocator);
 
     return try twoPathPropagation(
-        ir.allocator,
+        state.allocator,
         target_label,
         "current value",
         &current,
         "incoming value",
         &incoming,
         try std.fmt.allocPrint(
-            ir.allocator,
+            state.allocator,
             "{s} is already fixed at {d:.1}, but this propagation requires {d:.1}.",
             .{ target_label, target_value, expected },
         ),
@@ -1682,67 +1698,67 @@ fn validationConflictPropagation(
     );
 }
 
-fn finalConstraintTrace(ir: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, constraint: Constraint, value: f32, depth: usize) anyerror!graph.PropagationTrace {
-    if (depth > page_graph.constraints.len) return finalNodeAnchorTrace(ir, constraint.target_node, constraint.target_anchor, value);
-    const source_value = switch (try finalConstraintSourceValue(ir, page_id, constraint.source)) {
+fn finalConstraintTrace(state: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, constraint: Constraint, value: f32, depth: usize) anyerror!graph.PropagationTrace {
+    if (depth > page_graph.constraints.len) return finalNodeAnchorTrace(state, constraint.target_node, constraint.target_anchor, value);
+    const source_value = switch (try finalConstraintSourceValue(state, page_id, constraint.source)) {
         .known => |known| known,
         .unknown => value - constraint.offset,
     };
-    var trace = try finalConstraintSourceTrace(ir, page_id, page_graph, constraint.source, source_value, depth + 1);
-    errdefer trace.deinit(ir.allocator);
-    try appendConstraintLine(ir, &trace, constraint, value, false);
+    var trace = try finalConstraintSourceTrace(state, page_id, page_graph, constraint.source, source_value, depth + 1);
+    errdefer trace.deinit(state.allocator);
+    try appendConstraintLine(state, &trace, constraint, value, false);
     return trace;
 }
 
-fn finalConstraintSourceTrace(ir: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, source: model.ConstraintSource, value: f32, depth: usize) anyerror!graph.PropagationTrace {
+fn finalConstraintSourceTrace(state: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, source: model.ConstraintSource, value: f32, depth: usize) anyerror!graph.PropagationTrace {
     return switch (source) {
-        .page => |anchor| try finalPageAnchorTrace(ir, page_id, anchor, value),
+        .page => |anchor| try finalPageAnchorTrace(state, page_id, anchor, value),
         .node => |node_source| blk: {
             if (findConstraintTargetingEndpoint(page_graph, .{ .node_id = node_source.node_id, .anchor = node_source.anchor }, graph.anchorAxis(node_source.anchor))) |source_constraint| {
-                break :blk try finalConstraintTrace(ir, page_id, page_graph, source_constraint, value, depth);
+                break :blk try finalConstraintTrace(state, page_id, page_graph, source_constraint, value, depth);
             }
-            break :blk try finalNodeAnchorTrace(ir, node_source.node_id, node_source.anchor, value);
+            break :blk try finalNodeAnchorTrace(state, node_source.node_id, node_source.anchor, value);
         },
     };
 }
 
-fn finalPageAnchorTrace(ir: anytype, page_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
+fn finalPageAnchorTrace(state: anytype, page_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
     _ = page_id;
     var trace = graph.PropagationTrace{};
-    errdefer trace.deinit(ir.allocator);
-    try trace.appendOwnedLine(ir.allocator, try std.fmt.allocPrint(
-        ir.allocator,
+    errdefer trace.deinit(state.allocator);
+    try trace.appendOwnedLine(state.allocator, try std.fmt.allocPrint(
+        state.allocator,
         "page.{s} = {d:.1}",
         .{ @tagName(anchor), value },
     ));
     return trace;
 }
 
-fn finalNodeAnchorTrace(ir: anytype, node_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
+fn finalNodeAnchorTrace(state: anytype, node_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
     var trace = graph.PropagationTrace{};
-    errdefer trace.deinit(ir.allocator);
-    const label = try nodeAnchorLabel(ir.allocator, ir, node_id, anchor);
-    defer ir.allocator.free(label);
-    try trace.appendOwnedLine(ir.allocator, try std.fmt.allocPrint(ir.allocator, "{s} = {d:.1}", .{ label, value }));
+    errdefer trace.deinit(state.allocator);
+    const label = try nodeAnchorLabel(state.allocator, state, node_id, anchor);
+    defer state.allocator.free(label);
+    try trace.appendOwnedLine(state.allocator, try std.fmt.allocPrint(state.allocator, "{s} = {d:.1}", .{ label, value }));
     return trace;
 }
 
-fn appendCycleConstraintLine(ir: anytype, trace: *graph.PropagationTrace, constraint: Constraint, accumulated_offset: f32) !void {
+fn appendCycleConstraintLine(state: anytype, trace: *graph.PropagationTrace, constraint: Constraint, accumulated_offset: f32) !void {
     const prefix = if (trace.lines.items.len == 0) "" else "→ ";
-    const target_label = try nodeAnchorLabel(ir.allocator, ir, constraint.target_node, constraint.target_anchor);
-    defer ir.allocator.free(target_label);
-    const source_label = try constraintSourceLabel(ir.allocator, ir, constraint.source);
-    defer ir.allocator.free(source_label);
-    const source_text = try constraintOriginLabel(ir.allocator, ir, constraint);
+    const target_label = try nodeAnchorLabel(state.allocator, state, constraint.target_node, constraint.target_anchor);
+    defer state.allocator.free(target_label);
+    const source_label = try constraintSourceLabel(state.allocator, state, constraint.source);
+    defer state.allocator.free(source_label);
+    const source_text = try constraintOriginLabel(state.allocator, state, constraint);
     const line = std.fmt.allocPrint(
-        ir.allocator,
+        state.allocator,
         "{s}{s} = {s} {s} {d:.1}; accumulated offset = {d:.1}",
         .{ prefix, target_label, source_label, if (constraint.offset < 0) "-" else "+", @abs(constraint.offset), accumulated_offset },
     ) catch |err| {
-        ir.allocator.free(source_text);
+        state.allocator.free(source_text);
         return err;
     };
-    try trace.appendOwnedLineWithSource(ir.allocator, line, source_text);
+    try trace.appendOwnedLineWithSource(state.allocator, line, source_text);
 }
 
 fn constraintSourceEndpoint(source: model.ConstraintSource) ?ConstraintEndpoint {
@@ -1764,8 +1780,8 @@ fn constraintEndpointSame(a: ConstraintEndpoint, b: ConstraintEndpoint) bool {
     return a.node_id == b.node_id and a.anchor == b.anchor;
 }
 
-fn constraintAlreadyFailed(ir: anytype, constraint: Constraint) bool {
-    for (ir.constraint_failures.items) |failure| {
+fn constraintAlreadyFailed(state: anytype, constraint: Constraint) bool {
+    for (state.constraint_failures.items) |failure| {
         if (constraintsSame(failure.constraint, constraint)) return true;
     }
     return false;
@@ -1786,19 +1802,19 @@ const FinalAnchorValue = union(enum) {
     unknown: void,
 };
 
-fn finalConstraintSourceValue(ir: anytype, page_id: NodeId, source: model.ConstraintSource) !FinalAnchorValue {
+fn finalConstraintSourceValue(state: anytype, page_id: NodeId, source: model.ConstraintSource) !FinalAnchorValue {
     return switch (source) {
         .page => |anchor| blk: {
-            const page = ir.getNode(page_id) orelse return error.UnknownNode;
+            const page = state.getNode(page_id) orelse return error.UnknownNode;
             if (!graph.anchorKnown(page.frame, anchor)) break :blk .{ .unknown = {} };
             break :blk .{ .known = graph.anchorValue(page.frame, anchor) };
         },
-        .node => |node_source| try finalNodeAnchorValue(ir, node_source.node_id, node_source.anchor),
+        .node => |node_source| try finalNodeAnchorValue(state, node_source.node_id, node_source.anchor),
     };
 }
 
-fn finalNodeAnchorValue(ir: anytype, node_id: NodeId, anchor: model.Anchor) !FinalAnchorValue {
-    const node = ir.getNode(node_id) orelse return error.UnknownNode;
+fn finalNodeAnchorValue(state: anytype, node_id: NodeId, anchor: model.Anchor) !FinalAnchorValue {
+    const node = state.getNode(node_id) orelse return error.UnknownNode;
     if (!graph.anchorKnown(node.frame, anchor)) return .{ .unknown = {} };
     return .{ .known = graph.anchorValue(node.frame, anchor) };
 }

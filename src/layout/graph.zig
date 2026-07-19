@@ -193,13 +193,13 @@ pub const PageLayoutGraph = struct {
     horizontal_target_anchor_mask: []u8,
     vertical_target_anchor_mask: []u8,
 
-    pub fn init(allocator: std.mem.Allocator, ir: anytype, page_id: NodeId) !PageLayoutGraph {
+    pub fn init(allocator: std.mem.Allocator, state: anytype, page_id: NodeId) !PageLayoutGraph {
         var child_ids_list = std.ArrayList(NodeId).empty;
         errdefer child_ids_list.deinit(allocator);
-        if (ir.contains.get(page_id)) |children| {
+        if (state.contains.get(page_id)) |children| {
             try child_ids_list.appendSlice(allocator, children.items);
         }
-        try appendImplicitLayoutNodes(allocator, ir, page_id, &child_ids_list);
+        try appendImplicitLayoutNodes(allocator, state, page_id, &child_ids_list);
         const child_ids = try child_ids_list.toOwnedSlice(allocator);
         errdefer allocator.free(child_ids);
 
@@ -227,7 +227,7 @@ pub const PageLayoutGraph = struct {
         errdefer horizontal_constraint_list.deinit(allocator);
         var vertical_constraint_list = std.ArrayList(Constraint).empty;
         errdefer vertical_constraint_list.deinit(allocator);
-        for (ir.constraints.items) |constraint| {
+        for (state.constraints.items) |constraint| {
             const target_index = index_by_node.get(constraint.target_node) orelse continue;
             try constraint_list.append(allocator, constraint);
             const axis = anchorAxis(constraint.target_anchor);
@@ -296,16 +296,16 @@ pub const PageLayoutGraph = struct {
         return self.child_ids[index];
     }
 
-    pub fn childrenOf(self: *const PageLayoutGraph, ir: anytype, node_id: NodeId) []const NodeId {
+    pub fn childrenOf(self: *const PageLayoutGraph, state: anytype, node_id: NodeId) []const NodeId {
         _ = self;
-        return ir.childrenOf(node_id) orelse &.{};
+        return state.childrenOf(node_id) orelse &.{};
     }
 
-    pub fn parentGroupOf(self: *const PageLayoutGraph, ir: anytype, child_id: NodeId) ?NodeId {
+    pub fn parentGroupOf(self: *const PageLayoutGraph, state: anytype, child_id: NodeId) ?NodeId {
         for (self.child_ids) |candidate_id| {
-            const candidate = ir.getNode(candidate_id) orelse continue;
+            const candidate = state.getNode(candidate_id) orelse continue;
             if (!isGroupNode(candidate)) continue;
-            const children = ir.childrenOf(candidate_id) orelse continue;
+            const children = state.childrenOf(candidate_id) orelse continue;
             for (children) |group_child_id| {
                 if (group_child_id == child_id) return candidate_id;
             }
@@ -313,8 +313,8 @@ pub const PageLayoutGraph = struct {
         return null;
     }
 
-    pub fn hasTargetConstraint(self: *const PageLayoutGraph, ir: anytype, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) bool {
-        _ = ir;
+    pub fn hasTargetConstraint(self: *const PageLayoutGraph, state: anytype, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) bool {
+        _ = state;
         if (self.indexOf(node_id)) |index| {
             switch (axis) {
                 .horizontal => if (self.has_horizontal_target_constraint[index]) return true,
@@ -343,25 +343,25 @@ pub const PageLayoutGraph = struct {
         };
     }
 
-    pub fn constraintsForAxis(self: *const PageLayoutGraph, allocator: std.mem.Allocator, ir: anytype, axis: Axis, extra_constraints: []const Constraint) !std.ArrayList(Constraint) {
+    pub fn constraintsForAxis(self: *const PageLayoutGraph, allocator: std.mem.Allocator, state: anytype, axis: Axis, extra_constraints: []const Constraint) !std.ArrayList(Constraint) {
         var result = std.ArrayList(Constraint).empty;
-        _ = ir;
+        _ = state;
         try result.appendSlice(allocator, self.constraintsOnAxis(axis));
         try self.appendConstraintsForAxis(allocator, extra_constraints, axis, &result);
         return result;
     }
 
-    pub fn targetConstraints(self: *const PageLayoutGraph, allocator: std.mem.Allocator, ir: anytype, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) !std.ArrayList(Constraint) {
+    pub fn targetConstraints(self: *const PageLayoutGraph, allocator: std.mem.Allocator, state: anytype, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) !std.ArrayList(Constraint) {
         var result = std.ArrayList(Constraint).empty;
-        _ = ir;
+        _ = state;
         try self.appendTargetConstraints(allocator, self.constraints, node_id, axis, &result);
         try self.appendTargetConstraints(allocator, extra_constraints, node_id, axis, &result);
         return result;
     }
 
-    pub fn sourceConstraints(self: *const PageLayoutGraph, allocator: std.mem.Allocator, ir: anytype, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) !std.ArrayList(Constraint) {
+    pub fn sourceConstraints(self: *const PageLayoutGraph, allocator: std.mem.Allocator, state: anytype, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) !std.ArrayList(Constraint) {
         var result = std.ArrayList(Constraint).empty;
-        _ = ir;
+        _ = state;
         try self.appendSourceConstraints(allocator, self.constraints, node_id, axis, &result);
         try self.appendSourceConstraints(allocator, extra_constraints, node_id, axis, &result);
         return result;
@@ -397,29 +397,29 @@ pub const PageLayoutGraph = struct {
         }
     }
 
-    pub fn groupChildren(self: *const PageLayoutGraph, ir: anytype, group_id: NodeId) []const NodeId {
-        return self.childrenOf(ir, group_id);
+    pub fn groupChildren(self: *const PageLayoutGraph, state: anytype, group_id: NodeId) []const NodeId {
+        return self.childrenOf(state, group_id);
     }
 
-    pub fn groupSubgraph(self: *const PageLayoutGraph, allocator: std.mem.Allocator, ir: anytype, group_id: NodeId) !NodeSubgraph {
+    pub fn groupSubgraph(self: *const PageLayoutGraph, allocator: std.mem.Allocator, state: anytype, group_id: NodeId) !NodeSubgraph {
         var subgraph = NodeSubgraph.init(allocator);
         errdefer subgraph.deinit();
-        try self.collectGroupSubgraph(ir, group_id, &subgraph);
+        try self.collectGroupSubgraph(state, group_id, &subgraph);
         return subgraph;
     }
 
-    fn collectGroupSubgraph(self: *const PageLayoutGraph, ir: anytype, group_id: NodeId, subgraph: *NodeSubgraph) !void {
-        const children = ir.childrenOf(group_id) orelse return;
+    fn collectGroupSubgraph(self: *const PageLayoutGraph, state: anytype, group_id: NodeId, subgraph: *NodeSubgraph) !void {
+        const children = state.childrenOf(group_id) orelse return;
         for (children) |child_id| {
             if (self.indexOf(child_id)) |index| try subgraph.add(index);
-            const child = ir.getNode(child_id) orelse return error.UnknownNode;
-            if (isGroupNode(child)) try self.collectGroupSubgraph(ir, child_id, subgraph);
+            const child = state.getNode(child_id) orelse return error.UnknownNode;
+            if (isGroupNode(child)) try self.collectGroupSubgraph(state, child_id, subgraph);
         }
     }
 
-    pub fn translateSubgraph(self: *const PageLayoutGraph, workspace: *AxisWorkspace, ir: anytype, group_id: NodeId, delta: f32) !bool {
+    pub fn translateSubgraph(self: *const PageLayoutGraph, workspace: *AxisWorkspace, state: anytype, group_id: NodeId, delta: f32) !bool {
         if (approxEq(delta, 0)) return false;
-        var subgraph = try self.groupSubgraph(self.allocator, ir, group_id);
+        var subgraph = try self.groupSubgraph(self.allocator, state, group_id);
         defer subgraph.deinit();
         var changed = false;
         for (subgraph.indexes.items) |index| {
@@ -428,11 +428,11 @@ pub const PageLayoutGraph = struct {
         return changed;
     }
 
-    pub fn constraintClass(self: *const PageLayoutGraph, ir: anytype, constraint: Constraint, axis: Axis) ConstraintClass {
+    pub fn constraintClass(self: *const PageLayoutGraph, state: anytype, constraint: Constraint, axis: Axis) ConstraintClass {
         if (anchorAxis(constraint.target_anchor) != axis) return .wrong_axis;
         const target_index = self.indexOf(constraint.target_node) orelse return .external_source;
         _ = target_index;
-        const target_node = ir.getNode(constraint.target_node) orelse return .external_source;
+        const target_node = state.getNode(constraint.target_node) orelse return .external_source;
         switch (classifySelfConstraint(constraint, axis)) {
             .none => {},
             .size => return .self_size,
@@ -443,7 +443,7 @@ pub const PageLayoutGraph = struct {
             .page => .page_source,
             .node => |source| blk: {
                 if (anchorAxis(source.anchor) != axis) break :blk .wrong_axis;
-                const source_node = ir.getNode(source.node_id) orelse break :blk .external_source;
+                const source_node = state.getNode(source.node_id) orelse break :blk .external_source;
                 if (isGroupNode(source_node)) break :blk .group_source;
                 if (self.indexOf(source.node_id) == null) break :blk .external_source;
                 break :blk .normal;
@@ -452,32 +452,32 @@ pub const PageLayoutGraph = struct {
     }
 };
 
-fn appendImplicitLayoutNodes(allocator: std.mem.Allocator, ir: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId)) !void {
+fn appendImplicitLayoutNodes(allocator: std.mem.Allocator, state: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId)) !void {
     var changed = true;
     while (changed) {
         const before = child_ids.items.len;
-        try appendConstraintConnectedObjects(allocator, ir, page_id, child_ids);
-        try appendImplicitConstraintGroups(allocator, ir, child_ids);
+        try appendConstraintConnectedObjects(allocator, state, page_id, child_ids);
+        try appendImplicitConstraintGroups(allocator, state, child_ids);
         changed = child_ids.items.len != before;
     }
 }
 
-fn appendConstraintConnectedObjects(allocator: std.mem.Allocator, ir: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId)) !void {
+fn appendConstraintConnectedObjects(allocator: std.mem.Allocator, state: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId)) !void {
     var changed = true;
     while (changed) {
         changed = false;
-        for (ir.constraints.items) |constraint| {
+        for (state.constraints.items) |constraint| {
             if (containsNodeId(child_ids.items, constraint.target_node)) {
                 switch (constraint.source) {
                     .page => {},
-                    .node => |source| changed = (try appendLayoutObjectCandidate(allocator, ir, page_id, child_ids, source.node_id)) or changed,
+                    .node => |source| changed = (try appendLayoutObjectCandidate(allocator, state, page_id, child_ids, source.node_id)) or changed,
                 }
             }
             switch (constraint.source) {
                 .page => {},
                 .node => |source| {
                     if (containsNodeId(child_ids.items, source.node_id)) {
-                        changed = (try appendLayoutObjectCandidate(allocator, ir, page_id, child_ids, constraint.target_node)) or changed;
+                        changed = (try appendLayoutObjectCandidate(allocator, state, page_id, child_ids, constraint.target_node)) or changed;
                     }
                 },
             }
@@ -485,29 +485,29 @@ fn appendConstraintConnectedObjects(allocator: std.mem.Allocator, ir: anytype, p
     }
 }
 
-fn appendLayoutObjectCandidate(allocator: std.mem.Allocator, ir: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId), node_id: NodeId) !bool {
+fn appendLayoutObjectCandidate(allocator: std.mem.Allocator, state: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId), node_id: NodeId) !bool {
     if (containsNodeId(child_ids.items, node_id)) return false;
-    const node = ir.getNode(node_id) orelse return false;
+    const node = state.getNode(node_id) orelse return false;
     if (node.kind != .object) return false;
-    if (!layoutObjectCanJoinPage(ir, page_id, node_id, node)) return false;
+    if (!layoutObjectCanJoinPage(state, page_id, node_id, node)) return false;
     try child_ids.append(allocator, node_id);
     return true;
 }
 
-fn layoutObjectCanJoinPage(ir: anytype, page_id: NodeId, node_id: NodeId, node: *const Node) bool {
+fn layoutObjectCanJoinPage(state: anytype, page_id: NodeId, node_id: NodeId, node: *const Node) bool {
     _ = node;
-    return (ir.layoutPageOf(node_id) orelse return false) == page_id;
+    return (state.layoutPageOf(node_id) orelse return false) == page_id;
 }
 
-fn appendImplicitConstraintGroups(allocator: std.mem.Allocator, ir: anytype, child_ids: *std.ArrayList(NodeId)) !void {
+fn appendImplicitConstraintGroups(allocator: std.mem.Allocator, state: anytype, child_ids: *std.ArrayList(NodeId)) !void {
     var changed = true;
     while (changed) {
         changed = false;
-        for (ir.nodes.items) |node| {
+        for (state.nodes.items) |node| {
             if (!isGroupNode(&node)) continue;
             if (containsNodeId(child_ids.items, node.id)) continue;
-            if (!groupHasLayoutDescendant(ir, child_ids.items, node.id)) continue;
-            if (!groupIsReferencedByConstraint(ir, node.id)) continue;
+            if (!groupHasLayoutDescendant(state, child_ids.items, node.id)) continue;
+            if (!groupIsReferencedByConstraint(state, node.id)) continue;
             try child_ids.append(allocator, node.id);
             changed = true;
         }
@@ -531,8 +531,8 @@ fn anchorMaskCount(mask: u8) usize {
     return count;
 }
 
-fn groupIsReferencedByConstraint(ir: anytype, group_id: NodeId) bool {
-    for (ir.constraints.items) |constraint| {
+fn groupIsReferencedByConstraint(state: anytype, group_id: NodeId) bool {
+    for (state.constraints.items) |constraint| {
         if (constraint.target_node == group_id) return true;
         switch (constraint.source) {
             .page => {},
@@ -542,12 +542,12 @@ fn groupIsReferencedByConstraint(ir: anytype, group_id: NodeId) bool {
     return false;
 }
 
-fn groupHasLayoutDescendant(ir: anytype, layout_nodes: []const NodeId, group_id: NodeId) bool {
-    const children = ir.childrenOf(group_id) orelse return false;
+fn groupHasLayoutDescendant(state: anytype, layout_nodes: []const NodeId, group_id: NodeId) bool {
+    const children = state.childrenOf(group_id) orelse return false;
     for (children) |child_id| {
         if (containsNodeId(layout_nodes, child_id)) return true;
-        const child = ir.getNode(child_id) orelse continue;
-        if (isGroupNode(child) and groupHasLayoutDescendant(ir, layout_nodes, child_id)) return true;
+        const child = state.getNode(child_id) orelse continue;
+        if (isGroupNode(child) and groupHasLayoutDescendant(state, layout_nodes, child_id)) return true;
     }
     return false;
 }
@@ -562,27 +562,27 @@ pub const AxisWorkspace = struct {
     propagation: ?*PropagationTracker = null,
     owns_states: bool = true,
 
-    pub fn init(allocator: std.mem.Allocator, ir: anytype, page_graph: *const PageLayoutGraph, axis: Axis) !AxisWorkspace {
+    pub fn init(allocator: std.mem.Allocator, state: anytype, page_graph: *const PageLayoutGraph, axis: Axis) !AxisWorkspace {
         const states = try allocator.alloc(AxisState, page_graph.len());
         errdefer allocator.free(states);
 
-        for (page_graph.child_ids, states) |child_id, *state| {
-            const node = ir.getNode(child_id) orelse return error.UnknownNode;
-            state.* = .{};
+        for (page_graph.child_ids, states) |child_id, *axis_state| {
+            const node = state.getNode(child_id) orelse return error.UnknownNode;
+            axis_state.* = .{};
             if (isGroupNode(node)) continue;
-            if (page_graph.hasTargetConstraint(ir, child_id, axis, &.{})) continue;
+            if (page_graph.hasTargetConstraint(state, child_id, axis, &.{})) continue;
             switch (axis) {
                 .horizontal => if (node.frame.x_set) {
-                    state.size = node.frame.width;
-                    state.start = node.frame.x;
-                    state.end = node.frame.x + node.frame.width;
-                    state.center = node.frame.x + node.frame.width / 2;
+                    axis_state.size = node.frame.width;
+                    axis_state.start = node.frame.x;
+                    axis_state.end = node.frame.x + node.frame.width;
+                    axis_state.center = node.frame.x + node.frame.width / 2;
                 },
                 .vertical => if (node.frame.y_set) {
-                    state.size = node.frame.height;
-                    state.start = node.frame.y;
-                    state.end = node.frame.y + node.frame.height;
-                    state.center = node.frame.y + node.frame.height / 2;
+                    axis_state.size = node.frame.height;
+                    axis_state.start = node.frame.y;
+                    axis_state.end = node.frame.y + node.frame.height;
+                    axis_state.center = node.frame.y + node.frame.height / 2;
                 },
             }
         }
@@ -631,8 +631,8 @@ pub const AxisWorkspace = struct {
         return &self.states[index];
     }
 
-    pub fn dependencyComponents(self: *const AxisWorkspace, allocator: std.mem.Allocator, ir: anytype, policy: ComponentPolicy) !ComponentSet {
-        return try ComponentSet.init(allocator, ir, self, policy);
+    pub fn dependencyComponents(self: *const AxisWorkspace, allocator: std.mem.Allocator, state: anytype, policy: ComponentPolicy) !ComponentSet {
+        return try ComponentSet.init(allocator, state, self, policy);
     }
 };
 
@@ -642,7 +642,7 @@ pub const ComponentSet = struct {
     parent: []usize,
     page_dependent: []bool,
 
-    pub fn init(allocator: std.mem.Allocator, ir: anytype, workspace: *const AxisWorkspace, policy: ComponentPolicy) !ComponentSet {
+    pub fn init(allocator: std.mem.Allocator, state: anytype, workspace: *const AxisWorkspace, policy: ComponentPolicy) !ComponentSet {
         const len = workspace.graph.len();
         const parent = try allocator.alloc(usize, len);
         errdefer allocator.free(parent);
@@ -660,10 +660,10 @@ pub const ComponentSet = struct {
             dependent.* = false;
         }
 
-        if (policy.include_containment) try set.unionContainment(ir);
-        try set.markKnownAnchors(ir);
-        try set.unionConstraintSlice(ir, workspace.hard_constraints, policy);
-        try set.unionConstraintSlice(ir, workspace.soft_constraints, policy);
+        if (policy.include_containment) try set.unionContainment(state);
+        try set.markKnownAnchors(state);
+        try set.unionConstraintSlice(state, workspace.hard_constraints, policy);
+        try set.unionConstraintSlice(state, workspace.soft_constraints, policy);
         return set;
     }
 
@@ -718,33 +718,33 @@ pub const ComponentSet = struct {
         return result;
     }
 
-    pub fn fallbackRootIndex(self: *const ComponentSet, ir: anytype, component_root: usize) ?usize {
+    pub fn fallbackRootIndex(self: *const ComponentSet, state: anytype, component_root: usize) ?usize {
         for (self.workspace.graph.child_ids, 0..) |child_id, index| {
             if (!self.contains(component_root, index)) continue;
-            const node = ir.getNode(child_id) orelse continue;
+            const node = state.getNode(child_id) orelse continue;
             if (isGroupNode(node)) continue;
             return index;
         }
         return null;
     }
 
-    pub fn axisFallbackRootIndex(self: *const ComponentSet, ir: anytype, component_root: usize) ?usize {
+    pub fn axisFallbackRootIndex(self: *const ComponentSet, state: anytype, component_root: usize) ?usize {
         var fallback: ?usize = null;
-        for (self.workspace.graph.child_ids, self.workspace.states, 0..) |child_id, state, index| {
+        for (self.workspace.graph.child_ids, self.workspace.states, 0..) |child_id, axis_state, index| {
             if (!self.contains(component_root, index)) continue;
-            const node = ir.getNode(child_id) orelse continue;
+            const node = state.getNode(child_id) orelse continue;
             if (isGroupNode(node)) continue;
             if (fallback == null) fallback = index;
-            if (state.start == null and !self.workspace.graph.hasTargetConstraint(ir, child_id, self.workspace.axis, self.workspace.soft_constraints)) return index;
+            if (axis_state.start == null and !self.workspace.graph.hasTargetConstraint(state, child_id, self.workspace.axis, self.workspace.soft_constraints)) return index;
         }
         return fallback;
     }
 
-    fn unionContainment(self: *ComponentSet, ir: anytype) !void {
+    fn unionContainment(self: *ComponentSet, state: anytype) !void {
         for (self.workspace.graph.child_ids, 0..) |node_id, index| {
-            const node = ir.getNode(node_id) orelse return error.UnknownNode;
+            const node = state.getNode(node_id) orelse return error.UnknownNode;
             if (!isGroupNode(node)) continue;
-            const children = ir.childrenOf(node_id) orelse continue;
+            const children = state.childrenOf(node_id) orelse continue;
             for (children) |child_id| {
                 const child_index = self.workspace.indexOf(child_id) orelse continue;
                 self.merge(index, child_index);
@@ -752,18 +752,18 @@ pub const ComponentSet = struct {
         }
     }
 
-    fn markKnownAnchors(self: *ComponentSet, ir: anytype) !void {
-        _ = ir;
-        for (self.workspace.states, 0..) |state, index| {
-            if (state.start != null or state.end != null or state.center != null) {
+    fn markKnownAnchors(self: *ComponentSet, state: anytype) !void {
+        _ = state;
+        for (self.workspace.states, 0..) |axis_state, index| {
+            if (axis_state.start != null or axis_state.end != null or axis_state.center != null) {
                 self.markPageDependent(index);
             }
         }
     }
 
-    fn unionConstraintSlice(self: *ComponentSet, ir: anytype, constraints: []const Constraint, policy: ComponentPolicy) !void {
+    fn unionConstraintSlice(self: *ComponentSet, state: anytype, constraints: []const Constraint, policy: ComponentPolicy) !void {
         for (constraints) |constraint| {
-            const class = self.workspace.graph.constraintClass(ir, constraint, self.workspace.axis);
+            const class = self.workspace.graph.constraintClass(state, constraint, self.workspace.axis);
             switch (class) {
                 .wrong_axis, .self_size, .self_anchor => continue,
                 .external_source => {
@@ -776,7 +776,7 @@ pub const ComponentSet = struct {
                     .include => {},
                     .ignore => continue,
                     .group_dependencies => {
-                        try self.mergeGroupTargetDependency(ir, constraint);
+                        try self.mergeGroupTargetDependency(state, constraint);
                         continue;
                     },
                 },
@@ -797,9 +797,9 @@ pub const ComponentSet = struct {
         }
     }
 
-    fn mergeGroupTargetDependency(self: *ComponentSet, ir: anytype, constraint: Constraint) !void {
+    fn mergeGroupTargetDependency(self: *ComponentSet, state: anytype, constraint: Constraint) !void {
         const target_index = self.workspace.indexOf(constraint.target_node) orelse return;
-        const target_node = ir.getNode(constraint.target_node) orelse return error.UnknownNode;
+        const target_node = state.getNode(constraint.target_node) orelse return error.UnknownNode;
         if (!isGroupNode(target_node)) return;
 
         const source = switch (constraint.source) {
@@ -835,12 +835,7 @@ pub fn isGroupNode(node: *const Node) bool {
     return roleEq(node.role, GroupRole);
 }
 
-pub fn anchorAxis(anchor: Anchor) Axis {
-    return switch (anchor) {
-        .left, .right, .center_x => .horizontal,
-        .top, .bottom, .center_y => .vertical,
-    };
-}
+pub const anchorAxis = model.anchorAxis;
 
 pub const SelfConstraint = union(enum) {
     none: void,
@@ -869,11 +864,11 @@ pub fn classifySelfConstraint(constraint: Constraint, axis: Axis) SelfConstraint
     return .{ .none = {} };
 }
 
-pub fn constraintSourceValue(ir: anytype, workspace: *const AxisWorkspace, source: ConstraintSource) !?f32 {
+pub fn constraintSourceValue(state: anytype, workspace: *const AxisWorkspace, source: ConstraintSource) !?f32 {
     return switch (source) {
         .page => |anchor| blk: {
             if (anchorAxis(anchor) != workspace.axis) return error.ConstraintAxisMismatch;
-            const page = ir.getNode(workspace.graph.page_id) orelse return error.UnknownNode;
+            const page = state.getNode(workspace.graph.page_id) orelse return error.UnknownNode;
             break :blk anchorValue(page.frame, anchor);
         },
         .node => |node_source| blk: {
@@ -882,7 +877,7 @@ pub fn constraintSourceValue(ir: anytype, workspace: *const AxisWorkspace, sourc
                 break :blk axisAnchorValue(workspace.states[index], node_source.anchor);
             }
 
-            const source_node = ir.getNode(node_source.node_id) orelse return error.UnknownNode;
+            const source_node = state.getNode(node_source.node_id) orelse return error.UnknownNode;
             if (!anchorKnown(source_node.frame, node_source.anchor)) break :blk null;
             break :blk anchorValue(source_node.frame, node_source.anchor);
         },

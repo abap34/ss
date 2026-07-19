@@ -10,23 +10,26 @@ const lsp_state = @import("../state.zig");
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
-    provider: *lsp_state.SnapshotProvider,
+    provider: *lsp_state.AnalysisProvider,
     documents: *lsp_state.DocumentStore,
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     var position = try lsp_state.requestPosition(ctx.allocator, ctx.documents, params) orelse return nullJson(ctx.allocator);
     defer position.deinit(ctx.allocator);
-    var owned_snapshot: ?lsp_state.Snapshot = null;
+    var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
     const snapshot = try ctx.provider.forDocument(position.doc_path, &owned_snapshot) orelse return nullJson(ctx.allocator);
-    if (!lsp_state.featureEnabledForSnapshot(snapshot, .definition)) return nullJson(ctx.allocator);
+    if (!lsp_state.featureEnabledForAnalysis(snapshot, .definition)) return nullJson(ctx.allocator);
     const targets = try analysis_snapshot.definitionAt(ctx.allocator, snapshot, .{
         .path = position.doc_path,
         .source = position.source,
         .offset = position.offset,
         .source_version = snapshot.generation,
-    }, .{ .budget_ms = query_budget.definition_ms });
+    }, .{
+        .budget_ms = query_budget.definition_ms,
+        .cancellation = ctx.provider.cancellation,
+    });
     defer ctx.allocator.free(targets);
     return json(ctx.allocator, targets);
 }

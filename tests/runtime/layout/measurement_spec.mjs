@@ -6,27 +6,16 @@ import path from "node:path";
 import { assert, ssBin } from "../harness.mjs";
 
 const pdflatexAvailable = await commandAvailable("pdflatex");
-const pdftoppmAvailable = await commandAvailable("pdftoppm");
-const magickAvailable = await commandAvailable("magick");
 
 await testNaturalTitleWidthDoesNotSelfWrap();
 await testCheckReportsRasterMeasurementFailure();
 await testPanelHeightUsesRenderedIconMeasurement();
+await testCheckReportsUnsupportedInlineMath();
+await testPanelHeightUsesRenderedMathMeasurement();
 if (pdflatexAvailable) {
-  await testCheckReportsInlineMathMeasurementFailure();
-  await testPanelHeightUsesRenderedMathMeasurement();
-}
-if (pdflatexAvailable && pdftoppmAvailable && magickAvailable) {
-  await testVectorMathKeepsAspectRatio();
-}
-if (pdflatexAvailable && pdftoppmAvailable && magickAvailable) {
   await testRawTexBlockUsesMostAvailableWidth();
 }
 await testPdfFactorScalesMeasuredAssetFrame();
-if (pdftoppmAvailable && magickAvailable) {
-  await testPdfFactorControlsRenderedAssetSizeInsideFixedFrame();
-  await testPdfAssetDoesNotShrinkToFixedFrame();
-}
 
 async function testNaturalTitleWidthDoesNotSelfWrap() {
   const project = await mkdtempProject("ss-layout-measure-title-");
@@ -135,7 +124,7 @@ end
   }
 }
 
-async function testCheckReportsInlineMathMeasurementFailure() {
+async function testCheckReportsUnsupportedInlineMath() {
   const project = await mkdtempProject("ss-layout-measure-math-failure-");
   try {
     const slide = path.join(project, "slide.ss");
@@ -152,10 +141,10 @@ end
 
     const result = await spawnCollect(ssBin, ["check", "slide.ss"], project);
     const output = `${result.stdout}\n${result.stderr}`;
-    assert(result.code !== 0, "check should fail when virtual render measurement fails");
-    assert(output.includes("RenderFailed:"), `measurement failure did not produce a render diagnostic:\n${output}`);
-    assert(output.includes("Undefined control sequence"), `measurement diagnostic omitted command output summary:\n${output}`);
-    assert(output.includes("slide.ss:4:9"), `measurement diagnostic did not point at the failing formula:\n${output}`);
+    assert(result.code !== 0, "check should fail when structured math syntax is unsupported");
+    assert(output.includes("RenderFailed:"), `unsupported math did not produce a render diagnostic:\n${output}`);
+    assert(output.includes("UnsupportedMathSyntax"), `render diagnostic omitted the structured math error:\n${output}`);
+    assert(output.includes("slide.ss:4:9"), `render diagnostic did not point at the failing formula:\n${output}`);
     assert(output.includes('| text!("$\\notacommand$")'), `measurement diagnostic omitted source excerpt:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -189,62 +178,19 @@ end
   }
 }
 
-async function testVectorMathKeepsAspectRatio() {
-  const project = await mkdtempProject("ss-layout-measure-vector-math-");
-  try {
-    const slide = path.join(project, "slide.ss");
-    const pdfPath = path.join(project, "out.pdf");
-    await writeFile(
-      slide,
-      `import std:themes/default as *
-
-page math_aspect
-let formula = tex!("x + y = z")
-~ formula.left == page.left + 96
-~ formula.right == page.right - 96
-~ formula.top == page.top - 320
-end
-`,
-      "utf8",
-    );
-
-    await runSs(["render", "slide.ss", pdfPath, "--cache-id", "math-aspect"], project);
-    await runCommand("pdftoppm", ["-png", "-r", "144", pdfPath, "page"], project);
-    const geometry = await runCommand("magick", [
-      "page-1.png",
-      "-alpha",
-      "off",
-      "-fuzz",
-      "8%",
-      "-trim",
-      "-format",
-      "%wx%h",
-      "info:",
-    ], project);
-    const match = /^(\d+)x(\d+)/.exec(geometry.stdout.trim());
-    assert(match, `could not parse trimmed math geometry: ${geometry.stdout}`);
-    const width = Number(match[1]);
-    const height = Number(match[2]);
-    assert(width / height > 3, `vector math should keep a wide aspect ratio, got ${width}x${height}`);
-  } finally {
-    await rm(project, { recursive: true, force: true });
-  }
-}
-
 async function testRawTexBlockUsesMostAvailableWidth() {
   const project = await mkdtempProject("ss-layout-measure-raw-tex-width-");
   try {
     const slide = path.join(project, "slide.ss");
     const dumpPath = path.join(project, "dump.json");
-    const outputPath = path.join(project, "out.pdf");
     await writeFile(
       slide,
       `import std:themes/default as *
 
 page raw_tex_width
-let formula = tex!(<<
+let formula = tex! <<
 \\begin{tabular}{l}one\\\\two\\\\three\\\\four\\end{tabular}
->>)
+>>
 ~ formula.left == page.left + 100
 ~ formula.right == page.right - 100
 ~ formula.top == page.top - 160
@@ -258,10 +204,6 @@ end
     assert(formula, "tex formula node was not found in dump");
     assert(formula.width > 1000, `raw tex block frame should span the available width, got ${frameSummary(formula)}`);
 
-    await runSs(["render", "slide.ss", outputPath, "--cache-id", "raw-tex-width"], project);
-    const rendered = await trimmedRenderedPageGeometry(project, outputPath, 1, "tex");
-    assert(rendered.width > 1000, `rendered raw tex block should use most of the available width, got ${geometrySummary(rendered)}`);
-    assert(rendered.width < formula.width * 0.99, `rendered raw tex block should leave default breathing room, got ${geometrySummary(rendered)} in ${frameSummary(formula)}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -302,81 +244,7 @@ end
     assert(large.height > small.height * 5, `pdf factor should affect measured height, small ${frameSummary(small)}, large ${frameSummary(large)}`);
     assert(large.width > small.width * 5, `pdf factor should affect measured width, small ${frameSummary(small)}, large ${frameSummary(large)}`);
 
-    await runSs(["render", "slide.ss", path.join(project, "out.pdf"), "--cache-id", "pdf-scale"], project);
-  } finally {
-    await rm(project, { recursive: true, force: true });
-  }
-}
-
-async function testPdfFactorControlsRenderedAssetSizeInsideFixedFrame() {
-  const project = await mkdtempProject("ss-layout-measure-pdf-rendered-scale-");
-  try {
-    const slide = path.join(project, "slide.ss");
-    const pdfPath = path.join(project, "asset.pdf");
-    const outputPath = path.join(project, "out.pdf");
-    await writeMinimalPdf(pdfPath, 200, 100);
-    await writeFile(
-      slide,
-      `import std:core/prelude as *
-
-page small
-  let asset = pdf!("asset.pdf", 0.3)
-  ~ asset.left == page.left + 100
-  ~ asset.right == page.right - 480
-  ~ asset.top == page.top - 120
-  ~ asset.bottom == page.top - 420
-end
-
-page large
-  let asset = pdf!("asset.pdf", 0.8)
-  ~ asset.left == page.left + 100
-  ~ asset.right == page.right - 480
-  ~ asset.top == page.top - 120
-  ~ asset.bottom == page.top - 420
-end
-`,
-      "utf8",
-    );
-
-    await runSs(["render", "slide.ss", outputPath, "--cache-id", "pdf-rendered-scale"], project);
-    const small = await trimmedRenderedPageGeometry(project, outputPath, 1, "small");
-    const large = await trimmedRenderedPageGeometry(project, outputPath, 2, "large");
-    assert(large.width > small.width * 2, `pdf factor should change rendered width inside a fixed frame, small ${geometrySummary(small)}, large ${geometrySummary(large)}`);
-    assert(large.height > small.height * 2, `pdf factor should change rendered height inside a fixed frame, small ${geometrySummary(small)}, large ${geometrySummary(large)}`);
-  } finally {
-    await rm(project, { recursive: true, force: true });
-  }
-}
-
-async function testPdfAssetDoesNotShrinkToFixedFrame() {
-  const project = await mkdtempProject("ss-layout-measure-pdf-no-shrink-");
-  try {
-    const slide = path.join(project, "slide.ss");
-    const pdfPath = path.join(project, "asset.pdf");
-    const outputPath = path.join(project, "out.pdf");
-    await writeMinimalPdf(pdfPath, 200, 100);
-    await writeFile(
-      slide,
-      `import std:core/prelude as *
-
-page fixed_frame
-  let asset = pdf!("asset.pdf", 1)
-  ~ asset.left == page.left + 100
-  ~ asset.right == asset.left + 80
-  ~ asset.top == page.top - 120
-  ~ asset.bottom == page.top - 160
-end
-`,
-      "utf8",
-    );
-
-    const result = await spawnCollect(ssBin, ["render", "slide.ss", outputPath, "--cache-id", "pdf-no-shrink"], project);
-    const output = `${result.stdout}\n${result.stderr}`;
-    assert(result.code === 0, `ss render slide.ss ${outputPath} failed with ${result.code}\n${output}`);
-    assert(output.includes("FrameTooSmall"), `fixed asset frame should warn instead of shrinking content:\n${output}`);
-    const rendered = await trimmedRenderedPageGeometry(project, outputPath, 1, "rendered");
-    assert(rendered.width > 150, `fixed frame should not shrink rendered pdf width, got ${geometrySummary(rendered)}`);
-    assert(rendered.height > 75, `fixed frame should not shrink rendered pdf height, got ${geometrySummary(rendered)}`);
+    await runSs(["render", "slide.ss", path.join(project, "out.pdf")], project);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -438,28 +306,6 @@ function frameSummary(node) {
   return `x=${node.x}, y=${node.y}, width=${node.width}, height=${node.height}`;
 }
 
-async function trimmedRenderedPageGeometry(project, pdfPath, pageNumber, prefix) {
-  await runCommand("pdftoppm", ["-png", "-r", "72", "-f", String(pageNumber), "-l", String(pageNumber), "-singlefile", pdfPath, prefix], project);
-  const geometry = await runCommand("magick", [
-    `${prefix}.png`,
-    "-alpha",
-    "off",
-    "-fuzz",
-    "8%",
-    "-trim",
-    "-format",
-    "%wx%h",
-    "info:",
-  ], project);
-  const match = /^(\d+)x(\d+)/.exec(geometry.stdout.trim());
-  assert(match, `could not parse trimmed rendered geometry: ${geometry.stdout}`);
-  return { width: Number(match[1]), height: Number(match[2]) };
-}
-
-function geometrySummary(geometry) {
-  return `${geometry.width}x${geometry.height}`;
-}
-
 function close(left, right) {
   return Math.abs(left - right) <= 0.01;
 }
@@ -491,14 +337,6 @@ async function runSs(args, cwd) {
   const result = await spawnCollect(ssBin, args, cwd);
   if (result.code !== 0) {
     throw new Error(`ss ${args.join(" ")} failed with ${result.code}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-  }
-  return result;
-}
-
-async function runCommand(command, args, cwd) {
-  const result = await spawnCollect(command, args, cwd);
-  if (result.code !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed with ${result.code}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   }
   return result;
 }

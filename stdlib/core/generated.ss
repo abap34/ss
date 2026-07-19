@@ -2,7 +2,7 @@ import std:core/classes as classes
 import std:core/objects as objects
 import std:core/selectors as selectors
 
-fn pageno_s(page_no: Object) -> Object
+fn style_pageno(page_no: Object) -> Object
   page_no.text = TextStyle {
     font = FontFace { family = "Helvetica" }
     size = 13
@@ -16,13 +16,24 @@ fn pageno_s(page_no: Object) -> Object
     wrap = WrapMode.off
     fit = FitPolicy.error
   }
+  return page_no
+end
+
+fn position_pageno(page_no: Object) -> Object
   ~ page_no.right == page.right - 24
   ~ page_no.bottom == page.bottom + 20
   return page_no
 end
 
-fn/! pageno_obj() -> Object
-  return pageno_s(objects::obj("", "pageno", "text"))
+fn pageno_s(page_no: Object) -> Object
+  style_pageno(page_no)
+  return position_pageno(page_no)
+end
+
+fn/! pageno_obj(decorate: Object -> Object = style_pageno) -> Object
+  let page_no = objects::obj("", "pageno", "text")
+  decorate(page_no)
+  return position_pageno(page_no)
 end
 
 fn pagenos!(format: String? = none) -> Void
@@ -75,13 +86,14 @@ fn numbering!(counter_name: String, format: String = "{number}. {text}") -> Void
   )
 end
 
-fn mk_pagenos!(doc: Document, format: String?) -> Void
-  foreach(selectors::pages(doc), (page_value: Page) |-> mk_pageno!(page_value, doc, format))
+fn mk_pagenos!(doc: Document, format: String?, decorate: Object -> Object = style_pageno) -> Void
+  foreach(selectors::pages(doc), (page_value: Page) |-> mk_pageno!(page_value, doc, format, decorate))
 end
 
-fn mk_pageno!(page_value: Page, doc: Document, format: String?) -> Page
+fn mk_pageno!(page_value: Page, doc: Document, format: String?, decorate: Object -> Object = style_pageno) -> Page
   let page_no = place_on!(page_value, new("", "pageno", "text"))
-  pageno_s(page_no)
+  decorate(page_no)
+  position_pageno(page_no)
   set_pageno(page_no, doc, format)
   return page_value
 end
@@ -108,15 +120,7 @@ fn pageno_repr(page_no: Object) -> String
   return str(page_index(page_value)) ++ "/" ++ str(page_count(docctx()))
 end
 
-fn mk_footers!(doc: Document, text_value: String) -> Void
-  foreach(
-    selectors::pages(doc),
-    (page_value: Page) |-> mk_footer!(page_value, text_value)
-  )
-end
-
-fn mk_footer!(page_value: Page, text_value: String) -> Page
-  let footer = place_on!(page_value, new(text_value, "footer", "text"))
+fn style_footer(footer: Object) -> Object
   footer.text = TextStyle {
     font = FontFace { family = "Helvetica" }
     size = 12
@@ -129,6 +133,19 @@ fn mk_footer!(page_value: Page, text_value: String) -> Page
     right_inset = 160
     wrap = WrapMode.off
   }
+  return footer
+end
+
+fn mk_footers!(doc: Document, text_value: String, decorate: Object -> Object = style_footer) -> Void
+  foreach(
+    selectors::pages(doc),
+    (page_value: Page) |-> mk_footer!(page_value, text_value, decorate)
+  )
+end
+
+fn mk_footer!(page_value: Page, text_value: String, decorate: Object -> Object = style_footer) -> Page
+  let footer = place_on!(page_value, new(text_value, "footer", "text"))
+  decorate(footer)
   ~ footer.left == page.left + 72
   ~ footer.bottom == page.bottom + 20
   return page_value
@@ -153,15 +170,7 @@ fn mk_logo!(page_value: Page, path_value: String, scale: Number) -> Page
   return page_value
 end
 
-fn mk_marks!(doc: Document, text_value: String) -> Void
-  foreach(
-    selectors::pages(doc),
-    (page_value: Page) |-> mk_mark!(page_value, text_value)
-  )
-end
-
-fn mk_mark!(page_value: Page, text_value: String) -> Page
-  let mark = place_on!(page_value, new(text_value, "watermark", "text"))
+fn style_watermark(mark: Object) -> Object
   mark.text = TextStyle {
     font = FontFace { family = "Helvetica" }
     size = 72
@@ -174,6 +183,19 @@ fn mk_mark!(page_value: Page, text_value: String) -> Page
     right_inset = 0
     wrap = WrapMode.off
   }
+  return mark
+end
+
+fn mk_marks!(doc: Document, text_value: String, decorate: Object -> Object = style_watermark) -> Void
+  foreach(
+    selectors::pages(doc),
+    (page_value: Page) |-> mk_mark!(page_value, text_value, decorate)
+  )
+end
+
+fn mk_mark!(page_value: Page, text_value: String, decorate: Object -> Object = style_watermark) -> Page
+  let mark = place_on!(page_value, new(text_value, "watermark", "text"))
+  decorate(mark)
   ~ mark.width == 800
   ~ mark.height == 90
   ~ mark.center_x == page.center_x

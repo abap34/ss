@@ -29,18 +29,18 @@ pub const FunctionResolution = name_resolution.Resolution(ResolvedFunction);
 pub const ConstResolution = name_resolution.Resolution(ResolvedConst);
 
 pub const SemanticEnv = struct {
-    ir: ?*const core.Ir,
+    state: ?*const core.DocumentState,
     declarations: ?*const declarations.DeclarationIndex,
     functions: *const core.FunctionMap,
     module_id: core.SourceModuleId = 0,
 
     pub fn init(
-        ir: ?*const core.Ir,
+        state: ?*const core.DocumentState,
         declaration_index: ?*const declarations.DeclarationIndex,
         functions: *const core.FunctionMap,
     ) SemanticEnv {
         return .{
-            .ir = ir,
+            .state = state,
             .declarations = declaration_index,
             .functions = functions,
         };
@@ -129,54 +129,42 @@ pub const SemanticEnv = struct {
     }
 
     pub fn class(self: *const SemanticEnv, name: []const u8) ?declarations.ClassDescriptor {
-        if (self.declarations) |index| return index.classByName(name);
-        if (self.ir) |ir| {
-            if (declarations.classExists(ir, name)) {
-                return .{ .name = name, .base = declarations.findClassBase(ir, name), .module_id = 0 };
-            }
-        }
+        if (self.declarationIndex()) |index| return index.classByName(name);
         return null;
     }
 
     pub fn classExists(self: *const SemanticEnv, name: []const u8) bool {
-        if (self.declarations) |index| return index.classExists(name);
-        if (self.ir) |ir| return declarations.classExists(ir, name);
+        if (self.declarationIndex()) |index| return index.classExists(name);
         return false;
     }
 
     pub fn record(self: *const SemanticEnv, name: []const u8) ?declarations.RecordDescriptor {
-        if (self.declarations) |index| return index.recordByName(name);
-        if (self.ir) |ir| return declarations.findRecord(ir, name);
+        if (self.declarationIndex()) |index| return index.recordByName(name);
         return null;
     }
 
     pub fn recordExists(self: *const SemanticEnv, name: []const u8) bool {
-        if (self.declarations) |index| return index.recordExists(name);
-        if (self.ir) |ir| return declarations.recordExists(ir, name);
+        if (self.declarationIndex()) |index| return index.recordExists(name);
         return false;
     }
 
     pub fn recordField(self: *const SemanticEnv, record_name: []const u8, field_name: []const u8) ?declarations.RecordFieldDescriptor {
-        if (self.declarations) |index| return index.recordField(record_name, field_name);
-        if (self.ir) |ir| return declarations.findRecordField(ir, record_name, field_name);
+        if (self.declarationIndex()) |index| return index.recordField(record_name, field_name);
         return null;
     }
 
     pub fn roleClass(self: *const SemanticEnv, role_name: []const u8) ?[]const u8 {
-        if (self.declarations) |index| return index.roleClass(role_name);
-        if (self.ir) |ir| return declarations.findRoleClass(ir, role_name);
+        if (self.declarationIndex()) |index| return index.roleClass(role_name);
         return null;
     }
 
     pub fn field(self: *const SemanticEnv, class_name: []const u8, field_name: []const u8) ?declarations.FieldDescriptor {
-        if (self.declarations) |index| return index.field(class_name, field_name);
-        if (self.ir) |ir| return declarations.findField(ir, class_name, field_name);
+        if (self.declarationIndex()) |index| return index.field(class_name, field_name);
         return null;
     }
 
     pub fn fieldByName(self: *const SemanticEnv, field_name: []const u8) ?declarations.FieldDescriptor {
-        if (self.declarations) |index| return index.fieldByName(field_name);
-        if (self.ir) |ir| return declarations.findFieldByName(ir, field_name);
+        if (self.declarationIndex()) |index| return index.fieldByName(field_name);
         return null;
     }
 
@@ -185,15 +173,15 @@ pub const SemanticEnv = struct {
         module_id: core.SourceModuleId,
         name: []const u8,
     ) ?declarations.TypeDescriptor {
-        if (self.declarations) |index| {
-            if (resolveTypeInModule(index, module_id, name)) |descriptor| return descriptor;
-            if (self.ir) |ir| {
-                var order_index = ir.module_order.items.len;
+        if (self.declarationIndex()) |index| {
+            if (index.typeInModule(module_id, name)) |descriptor| return descriptor;
+            if (self.state) |state| {
+                var order_index = state.module_order.items.len;
                 while (order_index > 0) {
                     order_index -= 1;
-                    const current_id = ir.module_order.items[order_index];
+                    const current_id = state.module_order.items[order_index];
                     if (current_id == module_id) continue;
-                    if (resolveTypeInModule(index, current_id, name)) |descriptor| return descriptor;
+                    if (index.typeInModule(current_id, name)) |descriptor| return descriptor;
                 }
             } else {
                 return index.typeByName(name);
@@ -201,7 +189,6 @@ pub const SemanticEnv = struct {
             return null;
         }
 
-        if (self.ir) |ir| return findTypeDescriptor(ir, module_id, name);
         return null;
     }
 
@@ -224,37 +211,16 @@ pub const SemanticEnv = struct {
     }
 
     pub fn enumHasCaseAny(self: *const SemanticEnv, name: []const u8, case_name: []const u8) bool {
-        if (self.declarations) |index| {
+        if (self.declarationIndex()) |index| {
             const descriptor = index.typeByName(name) orelse return false;
             return type_defs.enumCasesContain(descriptor.cases, case_name);
-        }
-        if (self.ir) |ir| {
-            var index = ir.module_order.items.len;
-            while (index > 0) {
-                index -= 1;
-                const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-                for (module.program.types.items) |decl| {
-                    if (!std.mem.eql(u8, decl.name, name)) continue;
-                    return type_defs.enumCasesContain(decl.cases.items, case_name);
-                }
-            }
         }
         return false;
     }
 
     pub fn enumExistsAny(self: *const SemanticEnv, name: []const u8) bool {
-        if (self.declarations) |index| {
+        if (self.declarationIndex()) |index| {
             return index.typeByName(name) != null;
-        }
-        if (self.ir) |ir| {
-            var index = ir.module_order.items.len;
-            while (index > 0) {
-                index -= 1;
-                const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-                for (module.program.types.items) |decl| {
-                    if (std.mem.eql(u8, decl.name, name)) return true;
-                }
-            }
         }
         return false;
     }
@@ -271,6 +237,12 @@ pub const SemanticEnv = struct {
             .found => |binding| binding.ty,
             else => null,
         };
+    }
+
+    fn declarationIndex(self: *const SemanticEnv) ?*const declarations.DeclarationIndex {
+        if (self.declarations) |index| return index;
+        std.debug.assert(self.state == null);
+        return null;
     }
 
     pub fn callParamName(self: *const SemanticEnv, call_name: []const u8, index: usize) ?[]const u8 {
@@ -295,12 +267,12 @@ pub const SemanticEnv = struct {
     }
 
     fn resolveAliasInModule(self: *const SemanticEnv, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
-        const ir = self.ir orelse return null;
-        const module = ir.moduleById(module_id) orelse return null;
-        var index = module.program.imports.items.len;
+        const state = self.state orelse return null;
+        const module = state.moduleById(module_id) orelse return null;
+        var index = module.syntax.imports.items.len;
         while (index > 0) {
             index -= 1;
-            const import_decl = module.program.imports.items[index];
+            const import_decl = module.syntax.imports.items[index];
             const alias_name = import_decl.mode.alias orelse continue;
             if (!std.mem.eql(u8, alias_name, alias)) continue;
             if (index >= module.resolved_import_ids.items.len) return null;
@@ -310,38 +282,29 @@ pub const SemanticEnv = struct {
     }
 
     fn findFunctionInModule(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ResolvedFunction {
-        const ir = self.ir orelse return self.findFunctionByName(name);
-        const module = ir.moduleById(module_id) orelse return null;
-        for (module.program.functions.items) |func| {
-            if (!std.mem.eql(u8, func.name, name)) continue;
-            const key = self.findFunctionKey(module_id, name) orelse core.functionKey(module_id, func.name);
-            return .{ .key = key, .module_id = module_id, .decl = func };
-        }
-        return null;
+        const key = core.functionKey(module_id, name);
+        const decl = self.functions.get(key) orelse return null;
+        return .{ .key = key, .module_id = module_id, .decl = decl };
     }
 
     fn findConstInModule(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ResolvedConst {
-        const ir = self.ir orelse return self.findConstByName(name);
-        const module = ir.moduleById(module_id) orelse return null;
-        for (module.program.constants.items) |constant_decl| {
-            if (!std.mem.eql(u8, constant_decl.name, name)) continue;
-            const key = self.findConstKey(module_id, name) orelse core.constKey(module_id, constant_decl.name);
-            return .{ .key = key, .module_id = module_id, .decl = constant_decl };
-        }
-        return null;
+        const state = self.state orelse return null;
+        const key = core.constKey(module_id, name);
+        const constant_decl = state.constants.get(key) orelse return null;
+        return .{ .key = key, .module_id = module_id, .decl = constant_decl };
     }
 
     fn explicitImportCount(self: *const SemanticEnv, module_id: core.SourceModuleId) usize {
-        const ir = self.ir orelse return 0;
-        const module = ir.moduleById(module_id) orelse return 0;
-        return module.program.imports.items.len;
+        const state = self.state orelse return 0;
+        const module = state.moduleById(module_id) orelse return 0;
+        return module.syntax.imports.items.len;
     }
 
     fn explicitImport(self: *const SemanticEnv, module_id: core.SourceModuleId, index: usize) ?name_resolution.OpenImport {
-        const ir = self.ir orelse return null;
-        const module = ir.moduleById(module_id) orelse return null;
-        if (index >= module.program.imports.items.len) return null;
-        const import_decl = module.program.imports.items[index];
+        const state = self.state orelse return null;
+        const module = state.moduleById(module_id) orelse return null;
+        if (index >= module.syntax.imports.items.len) return null;
+        const import_decl = module.syntax.imports.items[index];
         return .{
             .unqualified = import_decl.mode.unqualified,
             .module_id = if (index < module.resolved_import_ids.items.len) module.resolved_import_ids.items[index] else null,
@@ -349,56 +312,16 @@ pub const SemanticEnv = struct {
     }
 
     fn implicitImportCount(self: *const SemanticEnv, module_id: core.SourceModuleId) usize {
-        const ir = self.ir orelse return 0;
-        const module = ir.moduleById(module_id) orelse return 0;
+        const state = self.state orelse return 0;
+        const module = state.moduleById(module_id) orelse return 0;
         return module.implicit_import_ids.items.len;
     }
 
     fn implicitImport(self: *const SemanticEnv, module_id: core.SourceModuleId, index: usize) ?core.SourceModuleId {
-        const ir = self.ir orelse return null;
-        const module = ir.moduleById(module_id) orelse return null;
+        const state = self.state orelse return null;
+        const module = state.moduleById(module_id) orelse return null;
         if (index >= module.implicit_import_ids.items.len) return null;
         return module.implicit_import_ids.items[index];
-    }
-
-    fn findFunctionByName(self: *const SemanticEnv, name: []const u8) ?ResolvedFunction {
-        var iterator = self.functions.iterator();
-        while (iterator.next()) |entry| {
-            if (!std.mem.eql(u8, entry.value_ptr.name, name)) continue;
-            return .{
-                .key = entry.key_ptr.*,
-                .module_id = entry.key_ptr.module_id,
-                .decl = entry.value_ptr.*,
-            };
-        }
-        return null;
-    }
-
-    fn findConstByName(self: *const SemanticEnv, name: []const u8) ?ResolvedConst {
-        const ir = self.ir orelse return null;
-        var iterator = ir.constants.iterator();
-        while (iterator.next()) |entry| {
-            if (!std.mem.eql(u8, entry.value_ptr.name, name)) continue;
-            return .{
-                .key = entry.key_ptr.*,
-                .module_id = entry.key_ptr.module_id,
-                .decl = entry.value_ptr.*,
-            };
-        }
-        return null;
-    }
-
-    fn findFunctionKey(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?core.FunctionKey {
-        const key = core.functionKey(module_id, name);
-        if (self.functions.contains(key)) return key;
-        return null;
-    }
-
-    fn findConstKey(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?core.FunctionKey {
-        const ir = self.ir orelse return null;
-        const key = core.constKey(module_id, name);
-        if (ir.constants.contains(key)) return key;
-        return null;
     }
 };
 
@@ -480,40 +403,6 @@ const TypeResolver = struct {
         return null;
     }
 };
-
-fn resolveTypeInModule(
-    index: *const declarations.DeclarationIndex,
-    module_id: core.SourceModuleId,
-    name: []const u8,
-) ?declarations.TypeDescriptor {
-    for (index.types.items) |descriptor| {
-        if (descriptor.module_id != module_id) continue;
-        if (!std.mem.eql(u8, descriptor.name, name)) continue;
-        return descriptor;
-    }
-    return null;
-}
-
-fn findTypeDescriptor(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8) ?declarations.TypeDescriptor {
-    if (findTypeInModule(ir, module_id, name)) |descriptor| return descriptor;
-    var index = ir.module_order.items.len;
-    while (index > 0) {
-        index -= 1;
-        const current_id = ir.module_order.items[index];
-        if (current_id == module_id) continue;
-        if (findTypeInModule(ir, current_id, name)) |descriptor| return descriptor;
-    }
-    return null;
-}
-
-fn findTypeInModule(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8) ?declarations.TypeDescriptor {
-    const module = ir.moduleById(module_id) orelse return null;
-    for (module.program.types.items) |decl| {
-        if (!std.mem.eql(u8, decl.name, name)) continue;
-        return .{ .name = decl.name, .cases = decl.cases.items, .module_id = module.id };
-    }
-    return null;
-}
 
 pub fn isBuiltinTypeName(name: []const u8) bool {
     return type_resolution.isBuiltinTypeName(name);

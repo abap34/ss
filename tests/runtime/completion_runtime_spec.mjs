@@ -18,10 +18,21 @@ async function testCompletionPrintsScriptWithoutInstalling() {
     const result = await runCompletion(["completion", "bash", "--print"], home, { XDG_DATA_HOME: xdgData });
     assert(result.code === 0, `completion --print failed:\n${combined(result)}`);
     assert(result.stdout.includes("# ss bash completion"), `bash script was not printed:\n${combined(result)}`);
+    assertRenderFormatCompletion(result.stdout, "bash");
+    for (const shell of ["zsh", "fish"]) {
+      const printed = await runCompletion(["completion", shell, "--print"], home, { XDG_DATA_HOME: xdgData });
+      assert(printed.code === 0, `${shell} completion --print failed:\n${combined(printed)}`);
+      assertRenderFormatCompletion(printed.stdout, shell);
+    }
     assert(!(await exists(path.join(xdgData, "bash-completion", "completions", "ss"))), "--print should not install completion files");
   } finally {
     await rm(home, { recursive: true, force: true });
   }
+}
+
+function assertRenderFormatCompletion(script, shell) {
+  assert(script.includes("--format") || script.includes("-l format"), `${shell} completion omitted --format`);
+  assert(script.includes("pdf html"), `${shell} completion omitted PDF and HTML format values`);
 }
 
 async function testBashCompletionInstallsWithYes() {

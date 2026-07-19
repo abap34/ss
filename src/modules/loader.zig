@@ -72,14 +72,14 @@ const embedded_modules = [_]EmbeddedModule{
     .{ .spec = "std:themes/pop", .source = stdlib_assets.themes_pop },
 };
 
-pub const Graph = struct {
+pub const ModuleGraph = struct {
     allocator: std.mem.Allocator,
     modules: std.ArrayList(core.SourceModule),
     module_order: std.ArrayList(core.SourceModuleId),
     project_implicit_import_ids: std.ArrayList(core.SourceModuleId),
     project_import_ids: std.ArrayList(core.SourceModuleId),
 
-    pub fn deinit(self: *Graph) void {
+    pub fn deinit(self: *ModuleGraph) void {
         for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);
         self.module_order.deinit(self.allocator);
@@ -148,28 +148,28 @@ pub fn loadGraph(
     allocator: std.mem.Allocator,
     io: std.Io,
     project_dir: []const u8,
-    project_program: ast.Program,
-) !Graph {
-    return loadGraphWithOverlay(allocator, io, project_dir, project_program, null);
+    project_module: ast.Module,
+) !ModuleGraph {
+    return loadGraphWithOverlay(allocator, io, project_dir, project_module, null);
 }
 
 pub fn loadGraphWithOverlay(
     allocator: std.mem.Allocator,
     io: std.Io,
     project_dir: []const u8,
-    project_program: ast.Program,
+    project_module: ast.Module,
     overlay: ?*const SourceOverlay,
-) !Graph {
-    return loadGraphWithOptions(allocator, io, project_dir, project_program, .{ .overlay = overlay });
+) !ModuleGraph {
+    return loadGraphWithOptions(allocator, io, project_dir, project_module, .{ .overlay = overlay });
 }
 
 pub fn loadGraphWithOptions(
     allocator: std.mem.Allocator,
     io: std.Io,
     project_dir: []const u8,
-    project_program: ast.Program,
+    project_module: ast.Module,
     options: LoadOptions,
-) !Graph {
+) !ModuleGraph {
     var builder = Builder{
         .allocator = allocator,
         .io = io,
@@ -184,7 +184,7 @@ pub fn loadGraphWithOptions(
     };
     defer builder.deinit();
 
-    var graph = Graph{
+    var graph = ModuleGraph{
         .allocator = allocator,
         .modules = .empty,
         .module_order = .empty,
@@ -198,7 +198,7 @@ pub fn loadGraphWithOptions(
         try graph.project_implicit_import_ids.append(allocator, prelude_id);
     }
 
-    for (project_program.imports.items) |import_decl| {
+    for (project_module.imports.items) |import_decl| {
         const module_id = try builder.loadImport(project_dir, import_decl.spec);
         try graph.project_import_ids.append(allocator, module_id);
     }
@@ -250,7 +250,7 @@ pub fn findUnknownImportReport(
     allocator: std.mem.Allocator,
     io: std.Io,
     base_dir: []const u8,
-    program: ast.Program,
+    program: ast.Module,
     overlay: ?*const SourceOverlay,
 ) !?UnknownImportReport {
     for (program.imports.items) |import_decl| {
@@ -272,7 +272,7 @@ pub fn importFailureSpan(
     allocator: std.mem.Allocator,
     io: std.Io,
     base_dir: []const u8,
-    program: *const ast.Program,
+    program: *const ast.Module,
     overlay: ?*const SourceOverlay,
     diagnostics: *const LoadDiagnostics,
 ) ?source.ByteSpan {
@@ -406,22 +406,22 @@ const Builder = struct {
         var owns_source = true;
         errdefer if (owns_source) self.allocator.free(text);
         const parse_path = resolved.path orelse resolved.spec;
-        const program = if (self.recovering) blk: {
+        const module_syntax = if (self.recovering) blk: {
             var result = syntax.parseRecoveringWithSourceName(self.allocator, text, parse_path) catch |err| {
                 try self.addParseFailureDiagnostic(parse_path, text, err);
                 return err;
             };
-            errdefer result.program.deinit(self.allocator);
+            errdefer result.module.deinit(self.allocator);
             defer result.holes.deinit(self.allocator);
             try self.addParseHoleDiagnostics(parse_path, text, result.holes.diagnostics);
-            break :blk result.program;
+            break :blk result.module;
         } else syntax.parseWithSourceName(self.allocator, text, parse_path) catch |err| {
             try self.addParseFailureDiagnostic(parse_path, text, err);
             return err;
         };
-        var owns_program = true;
-        errdefer if (owns_program) {
-            var cleanup = program;
+        var owns_module_syntax = true;
+        errdefer if (owns_module_syntax) {
+            var cleanup = module_syntax;
             cleanup.deinit(self.allocator);
         };
         if (kind == .project) unreachable;
@@ -445,12 +445,12 @@ const Builder = struct {
             .spec = spec,
             .path = path,
             .source = text,
-            .program = program,
+            .syntax = module_syntax,
             .implicit_import_ids = .empty,
             .resolved_import_ids = .empty,
         });
         owns_source = false;
-        owns_program = false;
+        owns_module_syntax = false;
         owns_spec = false;
         owns_path = false;
 
@@ -460,7 +460,7 @@ const Builder = struct {
             const module = self.moduleByIdMutable(module_id).?;
             try module.implicit_import_ids.append(self.allocator, import_id);
         }
-        for (program.imports.items) |import_decl| {
+        for (module_syntax.imports.items) |import_decl| {
             const import_id = self.loadImport(importer_base_dir, import_decl.spec) catch |err| {
                 if (err == error.UnknownImport) {
                     const message = try formatUnknownImportMessage(self.allocator, importer_base_dir, import_decl.spec);
@@ -539,8 +539,8 @@ const Builder = struct {
     fn reportImportCycle(self: *Builder, module: *const core.SourceModule, import_index: ?usize) !void {
         const path = module.path orelse module.spec;
         const span: ?source.ByteSpan = if (import_index) |index| blk: {
-            if (index >= module.program.imports.items.len) break :blk null;
-            const import_span = module.program.imports.items[index].span;
+            if (index >= module.syntax.imports.items.len) break :blk null;
+            const import_span = module.syntax.imports.items[index].span;
             break :blk .{ .start = import_span.start, .end = import_span.end };
         } else null;
         const message = "ImportCycle: import graph contains a cycle";

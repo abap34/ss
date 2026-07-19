@@ -1,4 +1,5 @@
 const std = @import("std");
+const qpdf = @import("build/qpdf.zig");
 
 const Module = std.Build.Module;
 const Step = std.Build.Step;
@@ -10,6 +11,7 @@ const BuildContext = struct {
     optimize: std.builtin.OptimizeMode,
     tree_sitter_ubsan: bool,
     tree_sitter_c_flags: []const []const u8,
+    qpdf_bridge: qpdf.Bridge,
 };
 
 const ProjectModules = struct {
@@ -19,12 +21,17 @@ const ProjectModules = struct {
     ast: *Module,
     stdlib_assets: *Module,
     fontawesome_assets: *Module,
+    pdfjs_assets: *Module,
+    math_assets: *Module,
     project: *Module,
     core: *Module,
-    render_scene: *Module,
+    render: *Module,
+    render_resources: *Module,
     pdf_ffi: *Module,
-    render_sink: *Module,
-    pdf_scene: *Module,
+    render_text: *Module,
+    render_math: *Module,
+    render_emitter: *Module,
+    pdf_backend: *Module,
 };
 
 const BundledHighlightQuery = struct {
@@ -139,14 +146,6 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const tree_sitter_ubsan = b.option(bool, "tree-sitter-ubsan", "Compile upstream tree-sitter C sources with UBSan instrumentation") orelse false;
     const tree_sitter_c_flags: []const []const u8 = if (tree_sitter_ubsan) &.{} else &tree_sitter_c_flags_without_ubsan;
-    const ctx = BuildContext{
-        .b = b,
-        .target = target,
-        .optimize = optimize,
-        .tree_sitter_ubsan = tree_sitter_ubsan,
-        .tree_sitter_c_flags = tree_sitter_c_flags,
-    };
-
     const release_version = readReleaseVersion(b) catch @panic("release/VERSION must contain the release version.");
     const default_version = b.fmt("{s}-dev", .{release_version});
     const version = b.option([]const u8, "version", "Version string reported by `ss --version`") orelse default_version;
@@ -173,6 +172,14 @@ pub fn build(b: *std.Build) void {
     b.build_root.handle.access(b.graph.io, md4c_src ++ "/md4c.c", .{}) catch
         @panic("MD4C sources are missing; run `scripts/setup-md4c.sh` before `zig build`.");
     addPdfPkgConfigPath(b);
+    const ctx = BuildContext{
+        .b = b,
+        .target = target,
+        .optimize = optimize,
+        .tree_sitter_ubsan = tree_sitter_ubsan,
+        .tree_sitter_c_flags = tree_sitter_c_flags,
+        .qpdf_bridge = qpdf.create(b, target, optimize),
+    };
     const tree_sitter = prepareTreeSitterBundle(b);
     build_options.addOption([]const u8, "tree_sitter_manifest_hash", tree_sitter.manifest_hash);
     build_options.addOption(u32, "tree_sitter_language_version", tree_sitter.runtime_language_version);
@@ -184,13 +191,24 @@ pub fn build(b: *std.Build) void {
     const tree_sitter_abi_check = addTreeSitterAbiCheck(ctx, tree_sitter);
     const tree_sitter_check_step = b.step("tree-sitter-check", "Check bundled tree-sitter runtime and parsers");
     dependOnTreeSitterCheck(tree_sitter_check_step, tree_sitter_abi_check);
-    const exe_mod = createCliModule(ctx, modules, build_options, tree_sitter);
+    const exe_mod = createCliModule(ctx, modules, build_options);
+    qpdf.link(ctx.qpdf_bridge, b, exe_mod, ctx.target, .build);
     const exe = b.addExecutable(.{
         .name = "ss",
         .root_module = exe_mod,
     });
+    exe.step.dependOn(&ctx.qpdf_bridge.install.step);
     dependOnTreeSitterCheck(&exe.step, tree_sitter_abi_check);
-    b.installArtifact(exe);
+
+    const installed_exe_mod = createCliModule(ctx, modules, build_options);
+    qpdf.link(ctx.qpdf_bridge, b, installed_exe_mod, ctx.target, .installed);
+    const installed_exe = b.addExecutable(.{
+        .name = "ss",
+        .root_module = installed_exe_mod,
+    });
+    dependOnTreeSitterCheck(&installed_exe.step, tree_sitter_abi_check);
+    b.installArtifact(installed_exe);
+    b.getInstallStep().dependOn(&ctx.qpdf_bridge.install.step);
     b.installDirectory(.{
         .source_dir = b.path("stdlib"),
         .install_dir = .prefix,
@@ -210,7 +228,69 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the ss CLI");
     run_step.dependOn(&run_cmd.step);
 
-    addTestStep(ctx, modules, build_options, exe, tree_sitter_abi_check, tree_sitter);
+    addTestStep(ctx, modules, build_options, exe, tree_sitter_abi_check);
+    addVisualTestSteps(ctx, modules, build_options, exe);
+}
+
+fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options: *Step.Options, exe: *Step.Compile) void {
+    const b = ctx.b;
+    const app_mod = createCommonModule(ctx, "src/app.zig", modules, true);
+    app_mod.addOptions("build_options", build_options);
+    const driver_mod = createModule(ctx, "tests/visual/render/driver.zig", &.{
+        import("app", app_mod),
+        import("utils", modules.utils),
+    }, true);
+    addNativePdfHeadersAndLibraries(b, driver_mod);
+    qpdf.link(ctx.qpdf_bridge, b, driver_mod, ctx.target, .build);
+    const driver = b.addExecutable(.{ .name = "ss-render-parity-driver", .root_module = driver_mod });
+    driver.step.dependOn(&ctx.qpdf_bridge.install.step);
+
+    const parity = b.addSystemCommand(&.{ "node", "tests/visual/render/spec.mjs" });
+    parity.addFileArg(driver.getEmittedBin());
+    parity.setCwd(b.path("."));
+    parity.stdio = .inherit;
+    const parity_step = b.step("test-render-parity", "Compare PDF and HTML pixels locally");
+    parity_step.dependOn(&parity.step);
+
+    const navigation = b.addSystemCommand(&.{ "node", "tests/visual/render/navigation/spec.mjs" });
+    navigation.addFileArg(driver.getEmittedBin());
+    navigation.setCwd(b.path("."));
+    navigation.stdio = .inherit;
+    const navigation_step = b.step("test-render-html-navigation", "Inspect standalone HTML page navigation locally");
+    navigation_step.dependOn(&navigation.step);
+
+    const pdf_runtime = b.addSystemCommand(&.{ "node", "tests/visual/render/pdf/runtime_spec.mjs" });
+    pdf_runtime.setCwd(b.path("."));
+    pdf_runtime.stdio = .inherit;
+    const pdf_runtime_step = b.step("test-render-pdf-runtime", "Inspect PDF image loading and cancellation locally");
+    pdf_runtime_step.dependOn(&pdf_runtime.step);
+
+    const full = b.addSystemCommand(&.{ "node", "tests/visual/render/spec.mjs", "--full" });
+    full.addFileArg(driver.getEmittedBin());
+    full.setCwd(b.path("."));
+    full.stdio = .inherit;
+    const full_step = b.step("test-render-parity-full", "Compare the extended PDF and HTML fixture set locally");
+    full_step.dependOn(&full.step);
+
+    const behavior = b.addSystemCommand(&.{ "node", "tests/visual/render/behavior/spec.mjs" });
+    behavior.addFileArg(exe.getEmittedBin());
+    behavior.setCwd(b.path("."));
+    behavior.stdio = .inherit;
+    const behavior_step = b.step("test-render-behavior", "Inspect rendered PDF behavior locally with Chromium");
+    behavior_step.dependOn(&behavior.step);
+
+    const editor_ui = b.addSystemCommand(&.{ "node", "tests/visual/editor/spec.mjs" });
+    editor_ui.setCwd(b.path("."));
+    editor_ui.stdio = .inherit;
+    const editor_ui_step = b.step("test-editor-ui", "Exercise VS Code editor webview interactions locally with Chromium");
+    editor_ui_step.dependOn(&editor_ui.step);
+
+    const benchmark = b.addSystemCommand(&.{ "node", "tests/benchmark/render/spec.mjs", @tagName(ctx.optimize) });
+    benchmark.addFileArg(exe.getEmittedBin());
+    benchmark.setCwd(b.path("."));
+    benchmark.stdio = .inherit;
+    const benchmark_step = b.step("benchmark-render", "Measure fixed-document PDF and HTML rendering with ReleaseSafe");
+    benchmark_step.dependOn(&benchmark.step);
 }
 
 fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: std.Build.LazyPath, build_options: *Step.Options, tree_sitter: TreeSitterBundle) ProjectModules {
@@ -225,6 +305,8 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     }, null);
     const stdlib_assets_mod = createModule(ctx, "stdlib/embed.zig", &.{}, null);
     const fontawesome_assets_mod = createModule(ctx, "third_party/fontawesome-free/embed.zig", &.{}, null);
+    const pdfjs_assets_mod = createModule(ctx, "third_party/pdfjs/embed.zig", &.{}, null);
+    const math_assets_mod = createModule(ctx, "third_party/stix-two-math/embed.zig", &.{}, null);
     const project_mod = createModule(ctx, "src/project.zig", &.{
         import("utils", utils_mod),
     }, true);
@@ -241,23 +323,42 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .root = ctx.b.path(md4c_src),
         .files = &.{"md4c.c"},
     });
-    addNativePdfBackend(ctx, core_mod, tree_sitter);
+    addNativePdfBackend(ctx.b, core_mod);
+    addTreeSitterSources(ctx, core_mod, tree_sitter);
 
-    const render_scene_mod = createModule(ctx, "src/render/scene.zig", &.{
+    const render_mod = createModule(ctx, "src/render/ir.zig", &.{
         import("core", core_mod),
     }, null);
     const pdf_ffi_mod = createModule(ctx, "src/render/pdf/ffi.zig", &.{}, true);
-    addNativePdfHeadersAndLibraries(ctx.b, pdf_ffi_mod, tree_sitter);
-    const render_sink_mod = createModule(ctx, "src/render/sink.zig", &.{
-        import("core", core_mod),
+    addNativePdfHeadersAndLibraries(ctx.b, pdf_ffi_mod);
+    const render_resources_mod = createModule(ctx, "src/render/compile/resources.zig", &.{
         import("pdf_ffi", pdf_ffi_mod),
-        import("render_scene", render_scene_mod),
+        import("render", render_mod),
     }, true);
-    const pdf_scene_mod = createModule(ctx, "src/render/pdf/scene.zig", &.{
+    const render_text_mod = createModule(ctx, "src/render/compile/text.zig", &.{
         import("core", core_mod),
         import("pdf_ffi", pdf_ffi_mod),
-        import("render_scene", render_scene_mod),
-        import("render_sink", render_sink_mod),
+        import("render", render_mod),
+        import("render_resources", render_resources_mod),
+    }, true);
+    const render_math_mod = createModule(ctx, "src/render/compile/math.zig", &.{
+        import("core", core_mod),
+        import("math_assets", math_assets_mod),
+        import("pdf_ffi", pdf_ffi_mod),
+        import("render", render_mod),
+        import("render_resources", render_resources_mod),
+        import("render_text", render_text_mod),
+    }, true);
+    const render_emitter_mod = createModule(ctx, "src/render/compile/emitter.zig", &.{
+        import("core", core_mod),
+        import("render", render_mod),
+        import("render_resources", render_resources_mod),
+        import("render_text", render_text_mod),
+    }, true);
+    const pdf_backend_mod = createModule(ctx, "src/render/pdf/backend.zig", &.{
+        import("core", core_mod),
+        import("pdf_ffi", pdf_ffi_mod),
+        import("render", render_mod),
     }, true);
 
     return .{
@@ -267,19 +368,24 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .ast = ast_mod,
         .stdlib_assets = stdlib_assets_mod,
         .fontawesome_assets = fontawesome_assets_mod,
+        .pdfjs_assets = pdfjs_assets_mod,
+        .math_assets = math_assets_mod,
         .project = project_mod,
         .core = core_mod,
-        .render_scene = render_scene_mod,
+        .render = render_mod,
+        .render_resources = render_resources_mod,
         .pdf_ffi = pdf_ffi_mod,
-        .render_sink = render_sink_mod,
-        .pdf_scene = pdf_scene_mod,
+        .render_text = render_text_mod,
+        .render_math = render_math_mod,
+        .render_emitter = render_emitter_mod,
+        .pdf_backend = pdf_backend_mod,
     };
 }
 
-fn createCliModule(ctx: BuildContext, modules: ProjectModules, build_options: *Step.Options, tree_sitter: TreeSitterBundle) *Module {
+fn createCliModule(ctx: BuildContext, modules: ProjectModules, build_options: *Step.Options) *Module {
     const module = createCommonModule(ctx, "src/main.zig", modules, true);
     module.addOptions("build_options", build_options);
-    addNativePdfHeadersAndLibraries(ctx.b, module, tree_sitter);
+    addNativePdfHeadersAndLibraries(ctx.b, module);
     return module;
 }
 
@@ -289,17 +395,14 @@ fn addTestStep(
     build_options: *Step.Options,
     exe: *Step.Compile,
     tree_sitter_abi_check: TreeSitterCheck,
-    tree_sitter: TreeSitterBundle,
 ) void {
     const b = ctx.b;
     const test_step = b.step("test", "Run ss test targets");
     dependOnTreeSitterCheck(test_step, tree_sitter_abi_check);
 
-    addTestModule(b, test_step, modules.core);
-
     const syntax_mod = createCommonTestModule(ctx, test_step, "src/syntax.zig", modules, true);
-    const main_tests_mod = createCliModule(ctx, modules, build_options, tree_sitter);
-    addTestModule(b, test_step, main_tests_mod);
+    const main_tests_mod = createCliModule(ctx, modules, build_options);
+    addQpdfTestModule(ctx, test_step, main_tests_mod);
     addModuleTest(ctx, test_step, "tests/syntax/parser/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
@@ -342,7 +445,7 @@ fn addTestStep(
         import("language_type", modules.language_type),
         import("registry", registry_mod),
     }, true);
-    addModuleTest(ctx, test_step, "tests/core/ir/spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/core/document_state/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
         import("ast", modules.ast),
@@ -370,6 +473,22 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/utils/json/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);
+    const progress_spec_mod = createModule(ctx, "tests/utils/progress/spec_tests.zig", &.{
+        import("utils", modules.utils),
+    }, true);
+    const progress_spec_tests = addTestArtifact(ctx, progress_spec_mod);
+    const run_progress_spec_tests = b.addRunArtifact(progress_spec_tests);
+    test_step.dependOn(&run_progress_spec_tests.step);
+    const progress_runtime_spec = b.addSystemCommand(&.{"node"});
+    progress_runtime_spec.setName("node tests/runtime/progress/spec.mjs");
+    progress_runtime_spec.addFileArg(b.path("tests/runtime/progress/spec.mjs"));
+    progress_runtime_spec.addFileArg(exe.getEmittedBin());
+    progress_runtime_spec.setCwd(b.path("."));
+    progress_runtime_spec.stdio = .inherit;
+    test_step.dependOn(&progress_runtime_spec.step);
+    const progress_test_step = b.step("test-progress", "Run focused progress display tests");
+    progress_test_step.dependOn(&run_progress_spec_tests.step);
+    progress_test_step.dependOn(&progress_runtime_spec.step);
     addModuleTest(ctx, test_step, "tests/project/config/spec_tests.zig", &.{
         import("project", modules.project),
         import("utils", modules.utils),
@@ -378,28 +497,97 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/lsp/completion/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);
+    const editor_edit_mod = createModule(ctx, "src/editor/edit.zig", &.{
+        import("utils", modules.utils),
+    }, null);
+    const editor_edit_spec_mod = createModule(ctx, "tests/editor/edit/spec_tests.zig", &.{
+        import("editor_edit", editor_edit_mod),
+    }, null);
+    const editor_edit_spec_tests = addTestArtifact(ctx, editor_edit_spec_mod);
+    const run_editor_edit_spec_tests = b.addRunArtifact(editor_edit_spec_tests);
+    test_step.dependOn(&run_editor_edit_spec_tests.step);
+    const editor_edit_test_step = b.step("test-editor-edit", "Run focused WYSIWYG source edit tests");
+    editor_edit_test_step.dependOn(&run_editor_edit_spec_tests.step);
     const watch_mod = createCommonModule(ctx, "src/watch.zig", modules, true);
-    addNativePdfHeadersAndLibraries(b, watch_mod, tree_sitter);
+    addNativePdfHeadersAndLibraries(b, watch_mod);
     addModuleTest(ctx, test_step, "tests/watch/fingerprint/spec_tests.zig", &.{
         import("watch", watch_mod),
     }, true);
-    const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{
-        import("pdf_scene", modules.pdf_scene),
+    const render_pdf_document_mod = createModule(ctx, "src/render/pdf.zig", &.{
+        import("pdf_backend", modules.pdf_backend),
+        import("pdf_ffi", modules.pdf_ffi),
+        import("render", modules.render),
+        import("render_resources", modules.render_resources),
     }, true);
-    addNativePdfHeadersAndLibraries(b, render_pdf_spec_mod, tree_sitter);
-    const render_pdf_spec_tests = b.addTest(.{ .root_module = render_pdf_spec_mod });
+    const render_test_support_mod = createModule(ctx, "tests/render/support.zig", &.{
+        import("core", modules.core),
+        import("render", modules.render),
+        import("render_resources", modules.render_resources),
+        import("render_text", modules.render_text),
+        import("render_math", modules.render_math),
+    }, true);
+    const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{
+        import("pdf_backend", modules.pdf_backend),
+        import("pdf_document", render_pdf_document_mod),
+        import("render", modules.render),
+        import("render_resources", modules.render_resources),
+        import("render_test_support", render_test_support_mod),
+    }, true);
+    addNativePdfHeadersAndLibraries(b, render_pdf_spec_mod);
+    const render_pdf_spec_tests = addQpdfTestArtifact(ctx, render_pdf_spec_mod);
     const run_render_pdf_spec_tests = b.addRunArtifact(render_pdf_spec_tests);
     test_step.dependOn(&run_render_pdf_spec_tests.step);
     const render_pdf_test_step = b.step("test-render-pdf", "Run focused native PDF renderer tests");
     render_pdf_test_step.dependOn(&run_render_pdf_spec_tests.step);
-    const render_scene_spec_mod = createModule(ctx, "tests/render/scene/spec_tests.zig", &.{
-        import("render_scene", modules.render_scene),
+    const render_spec_mod = createModule(ctx, "tests/render/ir/spec_tests.zig", &.{
+        import("render", modules.render),
+        import("render_resources", modules.render_resources),
+        import("render_test_support", render_test_support_mod),
     }, null);
-    const render_scene_spec_tests = b.addTest(.{ .root_module = render_scene_spec_mod });
-    const run_render_scene_spec_tests = b.addRunArtifact(render_scene_spec_tests);
-    test_step.dependOn(&run_render_scene_spec_tests.step);
-    const render_scene_test_step = b.step("test-render-scene", "Run focused render scene tests");
-    render_scene_test_step.dependOn(&run_render_scene_spec_tests.step);
+    const render_spec_tests = addQpdfTestArtifact(ctx, render_spec_mod);
+    const run_render_spec_tests = b.addRunArtifact(render_spec_tests);
+    test_step.dependOn(&run_render_spec_tests.step);
+    const render_test_step = b.step("test-render-ir", "Run focused render IR tests");
+    render_test_step.dependOn(&run_render_spec_tests.step);
+    const render_html_mod = createModule(ctx, "src/render/html.zig", &.{
+        import("core", modules.core),
+        import("render", modules.render),
+        import("pdfjs_assets", modules.pdfjs_assets),
+        import("math_assets", modules.math_assets),
+    }, null);
+    const render_html_spec_mod = createModule(ctx, "tests/render/html/spec_tests.zig", &.{
+        import("pdf_ffi", modules.pdf_ffi),
+        import("render", modules.render),
+        import("render_html", render_html_mod),
+        import("render_math", modules.render_math),
+        import("render_resources", modules.render_resources),
+        import("render_test_support", render_test_support_mod),
+    }, null);
+    const render_html_spec_tests = addQpdfTestArtifact(ctx, render_html_spec_mod);
+    const run_render_html_spec_tests = b.addRunArtifact(render_html_spec_tests);
+    test_step.dependOn(&run_render_html_spec_tests.step);
+    const render_html_test_step = b.step("test-render-html", "Run focused HTML renderer tests");
+    render_html_test_step.dependOn(&run_render_html_spec_tests.step);
+    const render_compile_mod = createModule(ctx, "src/render/compile.zig", &.{
+        import("core", modules.core),
+        import("render", modules.render),
+        import("render_resources", modules.render_resources),
+        import("utils", modules.utils),
+    }, null);
+    const render_compile_spec_mod = createModule(ctx, "tests/render/compile/spec_tests.zig", &.{
+        import("ast", modules.ast),
+        import("core", modules.core),
+        import("pdf_ffi", modules.pdf_ffi),
+        import("render", modules.render),
+        import("render_compile", render_compile_mod),
+        import("render_emitter", modules.render_emitter),
+        import("render_resources", modules.render_resources),
+    }, null);
+    const render_compile_spec_tests = addQpdfTestArtifact(ctx, render_compile_spec_mod);
+    const run_render_compile_spec_tests = b.addRunArtifact(render_compile_spec_tests);
+    test_step.dependOn(&run_render_compile_spec_tests.step);
+    const render_compile_test_step = b.step("test-render-compile", "Run focused render compiler tests");
+    render_compile_test_step.dependOn(&run_render_compile_spec_tests.step);
     const render_wrap_mod = createModule(ctx, "src/render/text/wrap.zig", &.{}, null);
     addModuleTest(ctx, test_step, "tests/render/wrap/spec_tests.zig", &.{
         import("render_wrap", render_wrap_mod),
@@ -441,10 +629,14 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
         import("language_type", modules.language_type),
         import("stdlib_assets", modules.stdlib_assets),
         import("fontawesome_assets", modules.fontawesome_assets),
-        import("render_scene", modules.render_scene),
+        import("pdfjs_assets", modules.pdfjs_assets),
+        import("render", modules.render),
+        import("render_resources", modules.render_resources),
         import("pdf_ffi", modules.pdf_ffi),
-        import("render_sink", modules.render_sink),
-        import("pdf_scene", modules.pdf_scene),
+        import("render_text", modules.render_text),
+        import("render_math", modules.render_math),
+        import("render_emitter", modules.render_emitter),
+        import("pdf_backend", modules.pdf_backend),
     }, link_libc);
 }
 
@@ -470,7 +662,7 @@ fn createCommonTestModule(
     link_libc: ?bool,
 ) *Module {
     const test_mod = createCommonModule(ctx, root_source_file, modules, link_libc);
-    addTestModule(ctx.b, test_step, test_mod);
+    addTestModule(ctx, test_step, test_mod);
     return test_mod;
 }
 
@@ -482,24 +674,48 @@ fn createTestModule(
     link_libc: ?bool,
 ) *Module {
     const test_mod = createModule(ctx, root_source_file, imports, link_libc);
-    addTestModule(ctx.b, test_step, test_mod);
+    addTestModule(ctx, test_step, test_mod);
     return test_mod;
 }
 
-fn addTestModule(b: *std.Build, test_step: *Step, module: *Module) void {
-    const test_artifact = b.addTest(.{ .root_module = module });
-    test_step.dependOn(&b.addRunArtifact(test_artifact).step);
+fn addTestModule(ctx: BuildContext, test_step: *Step, module: *Module) void {
+    const test_artifact = addTestArtifact(ctx, module);
+    test_step.dependOn(&ctx.b.addRunArtifact(test_artifact).step);
+}
+
+fn addTestArtifact(ctx: BuildContext, module: *Module) *Step.Compile {
+    return ctx.b.addTest(.{ .root_module = module });
+}
+
+fn addQpdfTestModule(ctx: BuildContext, test_step: *Step, module: *Module) void {
+    const test_artifact = addQpdfTestArtifact(ctx, module);
+    test_step.dependOn(&ctx.b.addRunArtifact(test_artifact).step);
+}
+
+fn addQpdfTestArtifact(ctx: BuildContext, module: *Module) *Step.Compile {
+    qpdf.link(ctx.qpdf_bridge, ctx.b, module, ctx.target, .build);
+    const artifact = addTestArtifact(ctx, module);
+    artifact.step.dependOn(&ctx.qpdf_bridge.install.step);
+    return artifact;
 }
 
 fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
     const node_spec_files = [_][]const u8{
+        "tests/editor/navigation/spec.mjs",
+        "tests/editor/vscode/spec.mjs",
         "tests/runtime/cli_diagnostics_runtime_spec.mjs",
         "tests/runtime/completion_runtime_spec.mjs",
         "tests/runtime/debug_runtime_spec.mjs",
         "tests/runtime/doctor_runtime_spec.mjs",
+        "tests/runtime/editor/empty/spec.mjs",
+        "tests/runtime/editor/names/spec.mjs",
+        "tests/runtime/editor/relations/spec.mjs",
+        "tests/runtime/editor/spec.mjs",
         "tests/runtime/layout/frame_too_small_spec.mjs",
         "tests/runtime/layout/measurement_spec.mjs",
         "tests/runtime/layout/vflow/policy_spec.mjs",
+        "tests/runtime/lsp/cancellation/spec.mjs",
+        "tests/runtime/lsp/diagnostics/spec.mjs",
         "tests/runtime/lsp_completion_runtime_spec.mjs",
         "tests/runtime/lsp_editor_runtime_spec.mjs",
         "tests/runtime/markdown_table_alignment_runtime_spec.mjs",
@@ -508,7 +724,9 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         "tests/runtime/render_page_bounds_runtime_spec.mjs",
         "tests/runtime/render_cache_runtime_spec.mjs",
         "tests/runtime/render_diagnostics_runtime_spec.mjs",
+        "tests/runtime/render/html/spec.mjs",
         "tests/runtime/stdlib_wrappers_runtime_spec.mjs",
+        "tests/runtime/theme/spec.mjs",
     };
 
     for (node_spec_files) |path| {
@@ -554,17 +772,18 @@ fn addPdfPkgConfigPath(b: *std.Build) void {
     b.graph.environ_map.put("PKG_CONFIG_PATH", pkg_config_path) catch @panic("OOM");
 }
 
-fn addNativePdfBackend(ctx: BuildContext, module: *Module, tree_sitter: TreeSitterBundle) void {
+fn addNativePdfBackend(b: *std.Build, module: *Module) void {
+    addNativePdfHeadersAndLibraries(b, module);
+    module.addCSourceFiles(.{
+        .root = b.path("src/render/pdf"),
+        .files = &.{ "cairo.c", "assets.c" },
+    });
+}
+
+fn addTreeSitterSources(ctx: BuildContext, module: *Module, tree_sitter: TreeSitterBundle) void {
     const b = ctx.b;
-    addNativePdfHeadersAndLibraries(b, module, tree_sitter);
+    addTreeSitterIncludePaths(b, module, tree_sitter);
     addTreeSitterRuntimeSource(ctx, module, tree_sitter);
-    module.addCSourceFile(.{
-        .file = b.path("src/render/pdf/cairo.c"),
-    });
-    module.addCSourceFile(.{
-        .file = b.path("src/render/pdf/qpdf.cpp"),
-        .flags = &.{"-std=c++20"},
-    });
     addTreeSitterCSourceFile(ctx, module, b.path("editor/tree-sitter-ss/src/parser.c"));
     for (generated_tree_sitter_sources) |source| {
         addTreeSitterCSourceFile(ctx, module, cwdPath(b, b.fmt("{s}/{s}", .{ tree_sitter.generated_root, source })));
@@ -908,12 +1127,9 @@ fn readTreeSitterRuntimeDefine(b: *std.Build, bundle: TreeSitterBundle, name: []
     std.debug.panic("tree-sitter runtime header does not define {s}", .{name});
 }
 
-fn addNativePdfHeadersAndLibraries(b: *std.Build, module: *Module, tree_sitter: TreeSitterBundle) void {
+fn addNativePdfHeadersAndLibraries(b: *std.Build, module: *Module) void {
     module.addIncludePath(b.path("src/render/pdf"));
-    addTreeSitterIncludePaths(b, module, tree_sitter);
     module.linkSystemLibrary("ss-pdf", .{ .use_pkg_config = .force });
-    module.linkSystemLibrary("libqpdf", .{ .use_pkg_config = .force });
-    module.linkSystemLibrary("c++", .{});
 }
 
 fn addTreeSitterIncludePaths(b: *std.Build, module: *Module, tree_sitter: TreeSitterBundle) void {

@@ -542,9 +542,9 @@ pub const RunCache = struct {
         self.name_resolution.deinit();
     }
 
-    pub fn reserve(self: *RunCache, ir: *const core.Ir) !void {
-        try self.name_resolution.reserve(ir);
-        try self.summaries.ensureTotalCapacity(@intCast((ir.functions.count() * 8) + (ir.constants.count() * 2)));
+    pub fn reserve(self: *RunCache, state: *const core.DocumentState) !void {
+        try self.name_resolution.reserve(state);
+        try self.summaries.ensureTotalCapacity(@intCast((state.functions.count() * 8) + (state.constants.count() * 2)));
     }
 
     pub fn resolvedFunction(self: *RunCache, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedFunction {

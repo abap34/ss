@@ -9,15 +9,48 @@ They intentionally assert:
 - surface syntax and parse diagnostics under `tests/syntax/parser/`;
 - language-level type and registry rules under `tests/language/type/` and
   `tests/language/registry/`;
-- IR ownership and graph operations under `tests/core/ir/`;
+- document-state ownership and graph operations under
+  `tests/core/document_state/`;
 - page-local layout graph semantics, constraint classification, and axis state
   reconciliation under `tests/layout/graph/`;
+- rendering-IR ownership，document compilation，PDF backend behavior，and static
+  HTML generation under `tests/render/ir/`，`tests/render/compile/`，
+  `tests/render/pdf/`，and `tests/render/html/`;
 - compiler, project, render, LSP, watch, and utility contracts under their
   matching subsystem and topic directories;
 - smoke-check acceptance for stdlib, themes, and demo decks through
   `zig build test`.
 - focused CLI，render，and LSP regressions through spec files under
   `tests/runtime/` subsystem directories，also wired into `zig build test`.
+
+PDF and HTML visual parity is a local test boundary under `tests/visual/`．It
+uses the same in-memory `render.Ir` for both outputs，then renders both with the
+pinned Chromium and PDF.js versions．Run `zig build test-render-parity` for the
+normal set and `zig build test-render-parity-full` to include structured
+mathematics and，when available，an `algorithm2e` raw-TeX case．PDF.js-backed
+pages allow a one-device-pixel spatial rasterization tolerance while retaining
+the same numeric difference limits and separate exact DOM-coordinate checks．
+These steps are intentionally outside normal CI and do not use Poppler or
+ImageMagick．
+
+PDF-only pixel behavior is checked by `zig build test-render-behavior` with the
+same Chromium and PDF.js capture path．This local-only step covers off-page
+clipping，embedded PDF sizing，and math scaling．Raw TeX cases run only when
+`pdflatex` is available．No visual test uses Poppler or ImageMagick．
+
+Fixed-document rendering performance is measured with five runs per mode by
+`zig build -Doptimize=ReleaseSafe benchmark-render`．The first measured run is
+discarded before computing the median，while maximum RSS uses the largest
+remaining sample．Set `SS_RENDER_BENCHMARK_WRITE_BASELINE` to create a local
+JSON baseline，then set `SS_RENDER_BENCHMARK_BASELINE` to enforce the `1.05`
+time and `1.10` memory limits．Benchmark files remain under
+`.ss-cache/render-benchmark/`．
+
+The VS Code editor webview interaction boundary is exercised locally with
+Chromium by `zig build test-editor-ui`．It drives page and outline sidebars，
+single and continuous display，shared-HTML thumbnails，selection，constraints，
+drag editing，source reveal，theme state，and stale snapshot rejection．It is
+kept outside normal CI with the other browser tests．
 
 CLI and editor smoke tests live under `tests/smoke/`. They should stay thin:
 each script verifies a user-visible workflow end to end, not every bug fix that

@@ -71,6 +71,7 @@ pub const TextLayout = struct {
 
 pub const BlockKind = enum {
     paragraph,
+    heading,
     code_block,
     bullet_list,
     ordered_list,
@@ -126,6 +127,7 @@ pub const Block = struct {
     list: ?ListData = null,
     table: ?TableData = null,
     language: ?[]const u8 = null,
+    heading_level: ?u8 = null,
 };
 
 pub const MarkdownDocument = struct {
@@ -189,7 +191,7 @@ const ParserState = struct {
         const block = try arena.create(Block);
         block.* = .{ .kind = kind };
         switch (kind) {
-            .paragraph => block.paragraph = .{},
+            .paragraph, .heading => block.paragraph = .{},
             .code_block => block.paragraph = .{},
             .bullet_list => block.list = .{ .start = 1 },
             .ordered_list => block.list = .{ .start = 1 },
@@ -222,6 +224,15 @@ const ParserState = struct {
     fn startParagraph(self: *ParserState) !void {
         if (self.current_paragraph != null) return;
         const block = try self.newBlock(.paragraph);
+        try self.appendBlock(block);
+        self.current_paragraph = &block.paragraph.?;
+        self.current_line = .{};
+    }
+
+    fn startHeading(self: *ParserState, level: u8) !void {
+        if (self.current_paragraph != null) try self.endParagraph();
+        const block = try self.newBlock(.heading);
+        block.heading_level = std.math.clamp(level, 1, 6);
         try self.appendBlock(block);
         self.current_paragraph = &block.paragraph.?;
         self.current_line = .{};
@@ -266,28 +277,28 @@ const ImageState = struct {
     src: []const u8,
 };
 
-pub fn parseModeForNode(ir: anytype, node: anytype) ParseMode {
-    if (fields.read(ir.allocator, ir, node, "text", &.{"parse"}, .text)) |mode| {
+pub fn parseModeForNode(state: anytype, node: anytype) ParseMode {
+    if (fields.read(state.allocator, state, node, "text", &.{"parse"}, .text)) |mode| {
         if (std.meta.stringToEnum(ParseMode, mode)) |parsed| return parsed;
     }
     return .@"inline";
 }
 
-pub fn shouldParseInlineNode(ir: anytype, node: anytype) bool {
-    return parseModeForNode(ir, node) != .none;
+pub fn shouldParseInlineNode(state: anytype, node: anytype) bool {
+    return parseModeForNode(state, node) != .none;
 }
 
-pub fn shouldParseBlocksNode(ir: anytype, node: anytype) bool {
-    return parseModeForNode(ir, node) == .block;
+pub fn shouldParseBlocksNode(state: anytype, node: anytype) bool {
+    return parseModeForNode(state, node) == .block;
 }
 
 pub fn parseMarkdownDocumentForNode(
     allocator: Allocator,
-    ir: anytype,
+    state: anytype,
     node: anytype,
     content: []const u8,
 ) !MarkdownDocument {
-    if (!shouldParseBlocksNode(ir, node)) {
+    if (!shouldParseBlocksNode(state, node)) {
         return MarkdownDocument.init(allocator);
     }
     return parseMarkdownContent(allocator, content);
@@ -331,14 +342,14 @@ pub fn parseMarkdownContent(
 
 pub fn parseTextLayoutForNode(
     allocator: Allocator,
-    ir: anytype,
+    state: anytype,
     node: anytype,
     content: []const u8,
 ) !TextLayout {
     var layout = TextLayout{};
     errdefer layout.deinit(allocator);
 
-    if (!shouldParseInlineNode(ir, node)) {
+    if (!shouldParseInlineNode(state, node)) {
         return layout;
     }
 
@@ -472,7 +483,11 @@ fn enterBlock(
         return 0;
     }
     switch (block_type) {
-        c.MD_BLOCK_P, c.MD_BLOCK_H => state.startParagraph() catch return 1,
+        c.MD_BLOCK_P => state.startParagraph() catch return 1,
+        c.MD_BLOCK_H => {
+            const heading_detail: *const c.MD_BLOCK_H_DETAIL = @ptrCast(@alignCast(detail orelse return 1));
+            state.startHeading(@intCast(heading_detail.level)) catch return 1;
+        },
         c.MD_BLOCK_CODE => {
             state.endParagraph() catch return 1;
             const block = state.newBlock(.code_block) catch return 1;

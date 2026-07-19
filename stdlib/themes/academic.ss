@@ -124,11 +124,21 @@ fn/! h3(text_value: String, theme: Theme = current_theme()) -> Object
   return base::h3(text_value, theme)
 end
 
+fn/! h4(text_value: String, theme: Theme = current_theme()) -> Object
+  return base::h4(text_value, theme)
+end
+
+fn/! h5(text_value: String, theme: Theme = current_theme()) -> Object
+  return base::h5(text_value, theme)
+end
+
+fn/! h6(text_value: String, theme: Theme = current_theme()) -> Object
+  return base::h6(text_value, theme)
+end
+
 fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
   let title = objects::title_obj(title_text)
-  title.text = theme.head.text
-  title.layout = theme.head.layout
-  title.underline = theme.head.underline
+  theme_base::apply_text_block_style(title, theme.head)
   ~ title.left == page.left + 30
   ~ title.top == page.top - 30
   return title
@@ -136,9 +146,7 @@ end
 
 fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
   let subtitle = objects::sub_obj(subtitle_text)
-  subtitle.text = theme.subhead.text
-  subtitle.layout = theme.subhead.layout
-  subtitle.underline = theme.subhead.underline
+  theme_base::apply_text_block_style(subtitle, theme.subhead)
   ~ subtitle.left == page.left + 96
   ~ subtitle.right == page.right - 96
   ~ subtitle.top == page.top - 150
@@ -151,6 +159,34 @@ end
 
 fn/! note(text_value: String, theme: Theme = current_theme()) -> Object
   return base::note(text_value, theme)
+end
+
+fn/! byline(text_value: String, theme: Theme = current_theme()) -> Object
+  return theme_base::byline_with_style(text_value, theme.byline)
+end
+
+fn/! label(text_value: String, theme: Theme = current_theme()) -> Object
+  return theme_base::label_with_style(text_value, theme.label)
+end
+
+fn/! citation(target: Object, number: Number, reference_text: String, theme: Theme = current_theme()) -> Object
+  return theme_base::citation_with_style(target, number, reference_text, theme.citation)
+end
+
+fn/! pageno(theme: Theme = current_theme()) -> Object
+  return theme_base::pageno_with_style(theme.generated.pageno)
+end
+
+fn pagenos!(format: String? = none, theme: Theme = current_theme()) -> Void
+  theme_base::pagenos_with_style!(format, theme.generated.pageno)
+end
+
+fn footers!(text_value: String, theme: Theme = current_theme()) -> Void
+  theme_base::footers_with_style!(text_value, theme.generated.footer)
+end
+
+fn watermark!(text_value: String, theme: Theme = current_theme()) -> Void
+  theme_base::watermark_with_style!(text_value, theme.generated.watermark)
 end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
@@ -179,22 +215,21 @@ end
 
 fn toc(title_text: String, theme: Theme = current_theme()) -> Object
   let title = objects::lab_obj(title_text)
-  title.text = theme.toc.title.text
-  title.layout = theme.toc.title.layout
-  title.underline = theme.toc.title.underline
+  theme_base::apply_text_block_style(title, theme.toc.title)
   let list = generated::toc_obj()
-  list.text = theme.toc.body.text
-  list.layout = theme.toc.body.layout
-  list.underline = theme.toc.body.underline
+  theme_base::apply_text_block_style(list, theme.toc.body)
+  let chrome = components::panel()
+  chrome.chrome = theme.toc.chrome
   ~ title.left == page.left + 30
   ~ title.top == page.top - 30
   ~ list.top == title.bottom - 35
-  return group(title, list)
+  layout::surround(chrome, list, theme.toc.chrome.pad_x, theme.toc.chrome.pad_y)
+  return group(title, chrome, list)
 end
 
 fn toc!(title_text: String, theme: Theme = current_theme()) -> Object
   let contents = objects::place!(toc(title_text, theme))
-  components::pageno!()
+  pageno!(theme)
   return contents
 end
 
@@ -203,18 +238,10 @@ fn/! cover(title_text: String, subtitle_text: String, author_name: String, date:
   let subtitle = objects::sub_obj(subtitle_text)
   let author = objects::by_obj(author_name)
   let date_text = objects::by_obj(date)
-  title.text = theme.cover.title.text
-  title.layout = theme.cover.title.layout
-  title.underline = theme.cover.title.underline
-  subtitle.text = theme.cover.subtitle.text
-  subtitle.layout = theme.cover.subtitle.layout
-  subtitle.underline = theme.cover.subtitle.underline
-  author.text = theme.cover.author.text
-  author.layout = theme.cover.author.layout
-  author.underline = theme.cover.author.underline
-  date_text.text = theme.cover.date.text
-  date_text.layout = theme.cover.date.layout
-  date_text.underline = theme.cover.date.underline
+  theme_base::apply_text_block_style(title, theme.cover.title)
+  theme_base::apply_text_block_style(subtitle, theme.cover.subtitle)
+  theme_base::apply_text_block_style(author, theme.cover.author)
+  theme_base::apply_text_block_style(date_text, theme.cover.date)
 
   ~ title.left == page.left + 72
   ~ title.top == page.top - 240

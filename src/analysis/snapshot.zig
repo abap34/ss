@@ -1,15 +1,18 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
+const editor_snapshot = @import("../editor/snapshot.zig");
 const project = @import("../project.zig");
 
 const diagnostics = @import("diagnostics.zig");
+const cancellation_module = @import("cancellation.zig");
 const hole_facts = @import("hole_facts.zig");
 const declarations = @import("../language/declarations.zig");
 const registry = @import("../language/registry.zig");
 const module_loader = @import("../modules/loader.zig");
-const program_analysis = @import("program.zig");
-const schedule = @import("schedule.zig");
+const module_index = @import("module_index.zig");
+const analysis_pipeline = @import("pipeline.zig");
+const execution = @import("execution.zig");
 const query_completion = @import("query/completion.zig");
 const query_definition = @import("query/definition.zig");
 const query_folding = @import("query/folding.zig");
@@ -30,6 +33,7 @@ pub const DefinitionTarget = query_types.DefinitionTarget;
 pub const CompletionCandidate = query_types.CompletionCandidate;
 pub const CompletionKind = query_types.CompletionKind;
 pub const CompletionResult = query_types.CompletionResult;
+pub const Cancellation = cancellation_module.Cancellation;
 
 pub const SourceSet = struct {
     allocator: std.mem.Allocator,
@@ -58,16 +62,25 @@ pub const SourceSet = struct {
     }
 };
 
-pub const LayoutHook = struct {
-    context: *anyopaque,
-    run: *const fn (context: *anyopaque, ir: *core.Ir, graph: *const schedule.ScheduleGraph) anyerror!void,
-    on_error: ?*const fn (context: *anyopaque, ir: *core.Ir, err: anyerror) anyerror!void = null,
+pub const LayoutHookOutput = struct {
+    editor: ?editor_snapshot.Output = null,
 };
 
-pub const SnapshotOptions = struct {
+pub const LayoutHook = struct {
+    context: *anyopaque,
+    run: *const fn (context: *anyopaque, state: *core.DocumentState, graph: *const execution.ExecutionGraph) anyerror!LayoutHookOutput,
+    on_error: ?*const fn (context: *anyopaque, state: *core.DocumentState, err: anyerror) anyerror!void = null,
+};
+
+pub const Options = struct {
     generation: u64 = 0,
     project: ProjectOptions = .{},
-    layout: ?LayoutHook = null,
+    layout_hook: ?LayoutHook = null,
+    cancellation: ?Cancellation = null,
+
+    fn checkCanceled(self: Options) !void {
+        if (self.cancellation) |cancellation| try cancellation.check();
+    }
 };
 
 pub const ProjectFacts = struct {
@@ -75,7 +88,7 @@ pub const ProjectFacts = struct {
     asset_base_dir: []u8 = &.{},
     module_paths: [][]u8 = &.{},
     lsp: project.LspConfig = .{},
-    preview: project.PreviewConfig = .{},
+    wysiwyg: project.WysiwygConfig = .{},
     page_guide: project.PageGuideConfig = .{},
 
     pub fn deinit(self: *ProjectFacts, allocator: std.mem.Allocator) void {
@@ -89,7 +102,7 @@ pub const ProjectFacts = struct {
 
 pub const ProjectOptions = struct {
     lsp: project.LspConfig = .{},
-    preview: project.PreviewConfig = .{},
+    wysiwyg: project.WysiwygConfig = .{},
     page_guide: project.PageGuideConfig = .{},
 };
 
@@ -205,18 +218,27 @@ pub const EnumCaseFact = struct {
     name_span: ?ast.Span = null,
 };
 
-pub const LayoutFacts = struct {
-    conflict_report_json: []u8,
+pub const LayoutOutput = struct {
+    conflicts_json: []u8,
+    report: core.layout.conflicts.Report,
+    editor: ?editor_snapshot.Output = null,
 
-    pub fn fromIr(allocator: std.mem.Allocator, ir: *core.Ir) !LayoutFacts {
+    pub fn fromDocumentState(allocator: std.mem.Allocator, state: *core.DocumentState, owned_editor: ?editor_snapshot.Output) !LayoutOutput {
+        var editor = owned_editor;
+        errdefer if (editor) |*value| value.deinit();
+        const conflicts_json = try core.layout.conflicts.toJson(allocator, state);
+        errdefer allocator.free(conflicts_json);
         return .{
-            .conflict_report_json = try core.layout.conflicts.toJson(allocator, ir),
+            .conflicts_json = conflicts_json,
+            .report = try core.layout.conflicts.Report.init(allocator, state),
+            .editor = editor,
         };
     }
 
-    pub fn deinit(self: *LayoutFacts, allocator: std.mem.Allocator) void {
-        allocator.free(self.conflict_report_json);
-        self.* = .{ .conflict_report_json = &.{} };
+    pub fn deinit(self: *LayoutOutput, allocator: std.mem.Allocator) void {
+        allocator.free(self.conflicts_json);
+        self.report.deinit();
+        if (self.editor) |*value| value.deinit();
     }
 };
 
@@ -238,12 +260,12 @@ pub const AnalysisSnapshot = struct {
     record_fields: []RecordFieldFact = &.{},
     enum_cases: []EnumCaseFact = &.{},
     hints: []core.InlayHint = &.{},
-    layout: ?LayoutFacts = null,
+    layout_output: ?LayoutOutput = null,
     diagnostics: diagnostics.DiagnosticBag,
 
-    pub fn fromIr(
+    pub fn fromDocumentState(
         allocator: std.mem.Allocator,
-        ir: *core.Ir,
+        state: *core.DocumentState,
         diagnostic_bag: diagnostics.DiagnosticBag,
         holes: ?*const syntax_hole.Result,
         project_facts: ProjectFacts,
@@ -256,24 +278,22 @@ pub const AnalysisSnapshot = struct {
         errdefer snapshot.deinit();
 
         snapshot.diagnostics.sortByPath();
-        var decls = declarations.build(allocator, ir) catch null;
-        defer if (decls) |*items| items.deinit();
-        snapshot.modules = try cloneModules(allocator, ir.modules.items);
-        snapshot.module_order = try allocator.dupe(core.SourceModuleId, ir.module_order.items);
+        var decls = try declarations.build(allocator, state);
+        defer decls.deinit();
+        snapshot.modules = try cloneModules(allocator, state.modules.items);
+        snapshot.module_order = try allocator.dupe(core.SourceModuleId, state.module_order.items);
         snapshot.holes = if (holes) |hole_table| try cloneHoles(allocator, hole_table.holes) else &.{};
-        snapshot.definitions = try cloneDefinitions(allocator, ir.definitions.items);
-        snapshot.type_definitions = try collectTypeDefinitions(allocator, ir);
-        snapshot.value_bindings = collectValueBindings(allocator, ir) catch &.{};
-        snapshot.variable_bindings = collectVariableBindings(allocator, ir) catch &.{};
-        if (decls) |items| {
-            snapshot.role_bindings = collectRoleBindings(allocator, items.roles.items) catch &.{};
-            snapshot.classes = collectClasses(allocator, items.classes.items) catch &.{};
-            snapshot.fields = collectFields(allocator, items.fields.items) catch &.{};
-            snapshot.records = collectRecords(allocator, items.records.items) catch &.{};
-            snapshot.record_fields = collectRecordFields(allocator, items.record_fields.items) catch &.{};
-            snapshot.enum_cases = collectEnumCases(allocator, items.types.items) catch &.{};
-        }
-        snapshot.hints = try cloneHints(allocator, ir.hints.items);
+        snapshot.definitions = try cloneDefinitions(allocator, state.definitions.items);
+        snapshot.type_definitions = try collectTypeDefinitions(allocator, state);
+        snapshot.value_bindings = try collectValueBindings(allocator, state);
+        snapshot.variable_bindings = try collectVariableBindings(allocator, state);
+        snapshot.role_bindings = try collectRoleBindings(allocator, decls.roles.items);
+        snapshot.classes = try collectClasses(allocator, decls.classes.items);
+        snapshot.fields = try collectFields(allocator, decls.fields.items);
+        snapshot.records = try collectRecords(allocator, decls.records.items);
+        snapshot.record_fields = try collectRecordFields(allocator, decls.record_fields.items);
+        snapshot.enum_cases = try collectEnumCases(allocator, decls.types.items);
+        snapshot.hints = try cloneHints(allocator, state.hints.items);
         return snapshot;
     }
 
@@ -329,7 +349,7 @@ pub const AnalysisSnapshot = struct {
             if (hint.file) |file| self.allocator.free(file);
         }
         self.allocator.free(self.hints);
-        if (self.layout) |*layout| layout.deinit(self.allocator);
+        if (self.layout_output) |*layout| layout.deinit(self.allocator);
         self.diagnostics.deinit();
         self.* = .{
             .allocator = self.allocator,
@@ -371,22 +391,27 @@ pub const AnalysisSnapshot = struct {
     }
 };
 
-pub fn buildSnapshot(
+pub fn build(
     allocator: std.mem.Allocator,
     sources: *const SourceSet,
     entry_path: []const u8,
     asset_base_dir: []const u8,
-    options: SnapshotOptions,
+    options: Options,
 ) !AnalysisSnapshot {
+    try options.checkCanceled();
     var diagnostic_bag = diagnostics.DiagnosticBag.init(allocator);
     var diagnostics_moved = false;
     defer if (!diagnostics_moved) diagnostic_bag.deinit();
-    var layout_facts: ?LayoutFacts = null;
-    defer if (layout_facts) |*facts| facts.deinit(allocator);
+    var layout_output: ?LayoutOutput = null;
+    defer if (layout_output) |*facts| facts.deinit(allocator);
 
     var entry_source = sources.readFileAlloc(entry_path) catch |err| {
         try addBuildDiagnostic(&diagnostic_bag, entry_path, "", .@"error", "ProjectReadFailed", "ProjectReadFailed: could not read {s}: {s}", .{ entry_path, @errorName(err) }, null);
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
+    };
+    options.checkCanceled() catch |err| {
+        allocator.free(entry_source);
+        return err;
     };
 
     const parse_result = syntax.parseRecoveringWithSourceName(allocator, entry_source, entry_path) catch |err| {
@@ -403,12 +428,18 @@ pub fn buildSnapshot(
         allocator.free(entry_source);
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     };
-    var program = parse_result.program;
+    var program = parse_result.module;
     var parse_holes = parse_result.holes;
+    options.checkCanceled() catch |err| {
+        program.deinit(allocator);
+        parse_holes.deinit(allocator);
+        allocator.free(entry_source);
+        return err;
+    };
 
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
-    var index = program_analysis.loadProgramIndexWithOptions(allocator, sources.io, asset_base_dir, program, .{
+    var index = module_index.load(allocator, sources.io, asset_base_dir, program, .{
         .overlay = &sources.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
@@ -437,8 +468,14 @@ pub fn buildSnapshot(
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     };
     defer index.deinit();
+    options.checkCanceled() catch |err| {
+        program.deinit(allocator);
+        parse_holes.deinit(allocator);
+        allocator.free(entry_source);
+        return err;
+    };
 
-    var ir = program_analysis.buildIrWithOptions(allocator, entry_path, asset_base_dir, &entry_source, &program, &index, .{
+    var state = analysis_pipeline.buildDocumentStateWithOptions(allocator, entry_path, asset_base_dir, &entry_source, &program, &index, .{
         .allow_diagnostics = true,
         .parse_holes = parse_holes,
     }) catch |err| {
@@ -449,49 +486,60 @@ pub fn buildSnapshot(
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     };
     defer parse_holes.deinit(allocator);
-    defer ir.deinit();
+    defer state.deinit();
+    try options.checkCanceled();
 
-    var analyzed_program: ?program_analysis.ProgramAnalysis = program_analysis.analyzeProgramWithMode(allocator, &ir, .evaluation_schedule) catch null;
-    defer if (analyzed_program) |*analysis_result| analysis_result.deinit();
-    try hole_facts.populateExpectedTypes(allocator, &ir, &parse_holes);
-    try diagnostic_bag.addIr(&ir);
+    var execution_graph = analysis_pipeline.analyzeDocumentStateWithMode(allocator, &state, .evaluation) catch |err| switch (err) {
+        error.DiagnosticsFailed => null,
+        else => return err,
+    };
+    defer if (execution_graph) |*graph| graph.deinit();
+    try options.checkCanceled();
+    try hole_facts.populateExpectedTypes(allocator, &state, &parse_holes);
+    try options.checkCanceled();
+    try diagnostic_bag.addDocumentState(&state);
+    try options.checkCanceled();
     if (!diagnostic_bag.hasErrors()) {
-        if (options.layout) |hook| {
-            if (analyzed_program) |*analysis_result| {
-                if (hook.run(hook.context, &ir, analysis_result.scheduleGraph())) {
-                    try diagnostic_bag.addIr(&ir);
-                    layout_facts = try LayoutFacts.fromIr(allocator, &ir);
+        if (options.layout_hook) |hook| {
+            if (execution_graph) |*graph| {
+                try options.checkCanceled();
+                if (hook.run(hook.context, &state, graph)) |result| {
+                    layout_output = try LayoutOutput.fromDocumentState(allocator, &state, result.editor);
+                    try diagnostic_bag.addDocumentState(&state);
                 } else |err| switch (err) {
+                    error.Canceled => return error.Canceled,
                     error.ConstraintConflict,
                     error.NegativeFrameSize,
                     => {
                         if (hook.on_error) |on_error| {
-                            try on_error(hook.context, &ir, err);
-                            layout_facts = try LayoutFacts.fromIr(allocator, &ir);
+                            try on_error(hook.context, &state, err);
+                            layout_output = try LayoutOutput.fromDocumentState(allocator, &state, null);
                         } else {
-                            try addBuildDiagnostic(&diagnostic_bag, entry_path, ir.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
+                            try addBuildDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
                         }
                     },
                     else => {
-                        try diagnostic_bag.addIr(&ir);
+                        try diagnostic_bag.addDocumentState(&state);
                         if (!diagnostic_bag.hasErrors()) {
-                            try addBuildDiagnostic(&diagnostic_bag, entry_path, ir.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
+                            try addBuildDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
                         }
                     },
                 }
             } else {
-                try addBuildDiagnostic(&diagnostic_bag, entry_path, ir.projectSource(), .@"error", "ScheduleBuildFailed", "ScheduleBuildFailed: evaluation schedule was not available", .{}, null);
+                try addBuildDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), .@"error", "ScheduleBuildFailed", "ScheduleBuildFailed: evaluation schedule was not available", .{}, null);
             }
         }
     }
+    try options.checkCanceled();
 
-    const module_paths = try collectModulePaths(allocator, &ir);
+    const module_paths = try collectModulePaths(allocator, &state);
+    try options.checkCanceled();
     const project_facts = try initProjectFacts(allocator, entry_path, asset_base_dir, module_paths, options.project);
     diagnostics_moved = true;
-    var snapshot = try AnalysisSnapshot.fromIr(allocator, &ir, diagnostic_bag, &parse_holes, project_facts);
+    var snapshot = try AnalysisSnapshot.fromDocumentState(allocator, &state, diagnostic_bag, &parse_holes, project_facts);
     snapshot.generation = options.generation;
-    snapshot.layout = layout_facts;
-    layout_facts = null;
+    snapshot.layout_output = layout_output;
+    layout_output = null;
     return snapshot;
 }
 
@@ -522,7 +570,7 @@ fn initProjectFacts(
     var facts = ProjectFacts{
         .module_paths = module_paths,
         .lsp = options.lsp,
-        .preview = options.preview,
+        .wysiwyg = options.wysiwyg,
         .page_guide = options.page_guide,
     };
     errdefer facts.deinit(allocator);
@@ -552,7 +600,7 @@ fn addBuildDiagnostic(
     try bag.add(path, text, severity, code, message, span, null);
 }
 
-fn collectModulePaths(allocator: std.mem.Allocator, ir: *const core.Ir) ![][]u8 {
+fn collectModulePaths(allocator: std.mem.Allocator, state: *const core.DocumentState) ![][]u8 {
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     var out = std.ArrayList([]u8).empty;
@@ -560,7 +608,7 @@ fn collectModulePaths(allocator: std.mem.Allocator, ir: *const core.Ir) ![][]u8 
         for (out.items) |path| allocator.free(path);
         out.deinit(allocator);
     }
-    for (ir.modules.items) |module| {
+    for (state.modules.items) |module| {
         const module_path = module.path orelse continue;
         if (seen.contains(module_path)) continue;
         try seen.put(module_path, {});
@@ -698,9 +746,9 @@ fn cloneModules(allocator: std.mem.Allocator, modules: []const core.SourceModule
         errdefer deinitScopes(allocator, function_scopes);
         const page_scopes = try clonePageScopes(allocator, module);
         errdefer deinitScopes(allocator, page_scopes);
-        const symbols = try query_symbols.collect(allocator, module.source, module.program);
+        const symbols = try query_symbols.collect(allocator, module.source, module.syntax);
         errdefer query_symbols.deinit(allocator, symbols);
-        const folding_ranges = try query_folding.collect(allocator, module.source, module.program);
+        const folding_ranges = try query_folding.collect(allocator, module.source, module.syntax);
         errdefer allocator.free(folding_ranges);
 
         const fact = ModuleFact{
@@ -727,7 +775,7 @@ fn cloneFunctionScopes(allocator: std.mem.Allocator, module: core.SourceModule) 
         deinitScopeItems(allocator, out.items);
         out.deinit(allocator);
     }
-    for (module.program.functions.items) |func| {
+    for (module.syntax.functions.items) |func| {
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, func.name),
             .start = func.span.start,
@@ -743,7 +791,7 @@ fn clonePageScopes(allocator: std.mem.Allocator, module: core.SourceModule) ![]S
         deinitScopeItems(allocator, out.items);
         out.deinit(allocator);
     }
-    for (module.program.pages.items) |page| {
+    for (module.syntax.pages.items) |page| {
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, page.name),
             .start = page.span.start,
@@ -779,7 +827,7 @@ fn cloneImports(allocator: std.mem.Allocator, module: core.SourceModule) ![]Impo
         }
         out.deinit(allocator);
     }
-    for (module.program.imports.items, 0..) |import_decl, import_index| {
+    for (module.syntax.imports.items, 0..) |import_decl, import_index| {
         try out.append(allocator, .{
             .spec = try allocator.dupe(u8, import_decl.spec),
             .spec_span = import_decl.spec_span,
@@ -792,17 +840,17 @@ fn cloneImports(allocator: std.mem.Allocator, module: core.SourceModule) ![]Impo
     return out.toOwnedSlice(allocator);
 }
 
-fn collectTypeDefinitions(allocator: std.mem.Allocator, ir: *const core.Ir) ![]TypeDefinition {
+fn collectTypeDefinitions(allocator: std.mem.Allocator, state: *const core.DocumentState) ![]TypeDefinition {
     var out = std.ArrayList(TypeDefinition).empty;
     errdefer {
         for (out.items) |definition| allocator.free(definition.name);
         out.deinit(allocator);
     }
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
-        for (module.program.records.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .record, decl.name, decl.name_span);
-        for (module.program.objects.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .object, decl.name, decl.name_span);
-        for (module.program.types.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .enum_type, decl.name, decl.name_span);
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
+        for (module.syntax.records.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .record, decl.name, decl.name_span);
+        for (module.syntax.objects.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .object, decl.name, decl.name_span);
+        for (module.syntax.types.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .enum_type, decl.name, decl.name_span);
     }
     return out.toOwnedSlice(allocator);
 }
@@ -827,14 +875,14 @@ fn appendTypeDefinition(
     });
 }
 
-fn collectValueBindings(allocator: std.mem.Allocator, ir: *core.Ir) ![]ValueBinding {
+fn collectValueBindings(allocator: std.mem.Allocator, state: *core.DocumentState) ![]ValueBinding {
     var out = std.ArrayList(ValueBinding).empty;
     errdefer {
         deinitValueBindingItems(allocator, out.items);
         out.deinit(allocator);
     }
     for (registry.primitiveDescriptors()) |descriptor| {
-        if (valueNameExists(ir, descriptor.name)) continue;
+        if (valueNameExists(state, descriptor.name)) continue;
         const signature: []u8 = @constCast(try query_signature.formatPrimitiveSignature(allocator, descriptor));
         errdefer allocator.free(signature);
         const type_label: []u8 = @constCast(if (registry.primitiveResultType(descriptor)) |ty|
@@ -852,7 +900,7 @@ fn collectValueBindings(allocator: std.mem.Allocator, ir: *core.Ir) ![]ValueBind
             .primitive = true,
         });
     }
-    var function_iterator = ir.functions.iterator();
+    var function_iterator = state.functions.iterator();
     while (function_iterator.next()) |entry| {
         const func = entry.value_ptr.*;
         const signature: []u8 = @constCast(try query_signature.formatUserSignature(allocator, func.name, func));
@@ -868,7 +916,7 @@ fn collectValueBindings(allocator: std.mem.Allocator, ir: *core.Ir) ![]ValueBind
             .documentation = try allocator.dupe(u8, ""),
         });
     }
-    var constant_iterator = ir.constants.iterator();
+    var constant_iterator = state.constants.iterator();
     while (constant_iterator.next()) |entry| {
         const constant_decl = entry.value_ptr.*;
         const signature: []u8 = @constCast(try query_signature.formatConstSignature(allocator, constant_decl.name, constant_decl));
@@ -901,27 +949,27 @@ fn deinitValueBindingItems(allocator: std.mem.Allocator, bindings: []ValueBindin
     }
 }
 
-fn valueNameExists(ir: *const core.Ir, name: []const u8) bool {
-    var function_iterator = ir.functions.iterator();
+fn valueNameExists(state: *const core.DocumentState, name: []const u8) bool {
+    var function_iterator = state.functions.iterator();
     while (function_iterator.next()) |entry| {
         if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
     }
-    var constant_iterator = ir.constants.iterator();
+    var constant_iterator = state.constants.iterator();
     while (constant_iterator.next()) |entry| {
         if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
     }
     return false;
 }
 
-fn collectVariableBindings(allocator: std.mem.Allocator, ir: *core.Ir) ![]VariableBinding {
+fn collectVariableBindings(allocator: std.mem.Allocator, state: *core.DocumentState) ![]VariableBinding {
     var out = std.ArrayList(VariableBinding).empty;
     errdefer {
         deinitVariableBindingItems(allocator, out.items);
         out.deinit(allocator);
     }
-    for (ir.modules.items) |module| {
+    for (state.modules.items) |module| {
         if (module.path == null) continue;
-        var infos = try program_analysis.collectScopedVariableInfoFromProgram(allocator, &ir.functions, module.program, module.id, module.source.len, ir);
+        var infos = try analysis_pipeline.collectScopedVariableInfoFromModule(allocator, &state.functions, module.syntax, module.id, module.source.len, state);
         defer infos.deinit(allocator);
         for (infos.items) |entry| {
             const type_label: []u8 = @constCast(try semantic_types.typeInfoLabelAlloc(allocator, entry.info));
@@ -1140,7 +1188,6 @@ fn cloneHints(allocator: std.mem.Allocator, hints: []const core.InlayHint) ![]co
             .line = hint.line,
             .column = hint.column,
             .label = try allocator.dupe(u8, hint.label),
-            .kind = hint.kind,
             .module_id = hint.module_id,
             .file = if (hint.file) |file| try allocator.dupe(u8, file) else null,
         });

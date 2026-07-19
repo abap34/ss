@@ -1,6 +1,6 @@
 Name: ss-pdf
 Description: ss native PDF backend dependencies
 Version: 0
-Requires: librsvg-2.0 pangocairo gdk-pixbuf-2.0 fontconfig harfbuzz
+Requires: librsvg-2.0 pangocairo pangofc gdk-pixbuf-2.0 fontconfig harfbuzz
 Libs:
 Cflags:

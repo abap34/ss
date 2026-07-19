@@ -23,11 +23,11 @@
     "compile": "node scripts/build.js",
     "watch": "node scripts/build.js --watch",
     "package": "npm run compile && vsce package",
-    "test": "npm run compile && node scripts/test-render-diagnostics.js && node scripts/test-preview-server.js && node ../../scripts/check-ss-toml-schema.js"
+    "test": "npm run compile && node ../../scripts/check-ss-toml-schema.js && node ../../tests/editor/vscode/request/spec.mjs"
   },
   "activationEvents": [
     "onLanguage:ss-slide",
-    "onCommand:ss.preview.live",
+    "onCommand:ss.editor.open",
     "onCommand:ss.checkCurrentFile"
   ],
   "categories": [
@@ -68,8 +68,8 @@
     ],
     "commands": [
       {
-        "command": "ss.preview.live",
-        "title": "ss: Open Live Preview"
+        "command": "ss.editor.open",
+        "title": "ss: Open WYSIWYG Editor"
       },
       {
         "command": "ss.checkCurrentFile",
@@ -79,14 +79,14 @@
     "menus": {
       "editor/title": [
         {
-          "command": "ss.preview.live",
+          "command": "ss.editor.open",
           "when": "resourceLangId == ss-slide",
           "group": "navigation"
         }
       ],
       "commandPalette": [
         {
-          "command": "ss.preview.live"
+          "command": "ss.editor.open"
         },
         {
           "command": "ss.checkCurrentFile"
@@ -100,7 +100,8 @@
           "strings": "off",
           "other": "on"
         },
-        "editor.suggestOnTriggerCharacters": true
+        "editor.suggestOnTriggerCharacters": true,
+        "editor.wordBasedSuggestions": "off"
       }
     },
     "configuration": {
@@ -109,7 +110,7 @@
         "ss.cli.path": {
           "type": "string",
           "default": "ss",
-          "description": "Path to the ss executable used to launch `ss lsp` and render live previews."
+          "description": "Path to the ss executable used to launch `ss lsp`."
         },
         "ss.lsp.trace.server": {
           "type": "string",
@@ -125,7 +126,6 @@
     }
   },
   "dependencies": {
-    "pdfjs-dist": "^4.8.69",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {

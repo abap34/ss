@@ -114,11 +114,11 @@ pub const DiagnosticBag = struct {
         }
     }
 
-    pub fn addIr(self: *DiagnosticBag, ir: *core.Ir) !void {
-        for (ir.diagnostics.items) |diagnostic| {
-            const message = try utils.err.formatIrDiagnostic(self.allocator, diagnostic);
+    pub fn addDocumentState(self: *DiagnosticBag, state: *core.DocumentState) !void {
+        for (state.diagnostics.items) |diagnostic| {
+            const message = try utils.err.formatContextDiagnostic(self.allocator, diagnostic);
             defer self.allocator.free(message);
-            const location = diagnosticLocation(ir, diagnostic);
+            const location = diagnosticLocation(state, diagnostic);
             try self.add(location.path, location.source, diagnostic.severity, diagnosticCode(diagnostic), message, location.span, null);
         }
     }
@@ -139,18 +139,18 @@ const DiagnosticLocation = struct {
     span: ?source.ByteSpan,
 };
 
-fn diagnosticLocation(ir: *core.Ir, diagnostic: core.Diagnostic) DiagnosticLocation {
-    var report_path = ir.projectPath();
-    var report_source = ir.projectSource();
+fn diagnosticLocation(state: *core.DocumentState, diagnostic: core.Diagnostic) DiagnosticLocation {
+    var report_path = state.projectPath();
+    var report_source = state.projectSource();
     const located = if (diagnostic.origin) |origin|
         utils.err.parseLocatedOrigin(origin)
     else if (diagnostic.node_id) |node_id| blk: {
-        const node = ir.getNode(node_id) orelse break :blk null;
+        const node = state.getNode(node_id) orelse break :blk null;
         break :blk if (node.origin) |origin| utils.err.parseLocatedOrigin(origin) else null;
     } else null;
     const span = if (located) |origin| blk: {
         if (origin.path) |origin_path| {
-            if (ir.moduleByPathOrSpec(origin_path)) |module| {
+            if (state.moduleByPathOrSpec(origin_path)) |module| {
                 report_path = module.path orelse module.spec;
                 report_source = module.source;
             } else {

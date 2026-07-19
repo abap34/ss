@@ -20,6 +20,40 @@ const buildOptions = {
   sourcesContent: false,
 };
 
+const webviewCheckOptions = {
+  entryPoints: [path.join(root, "media", "editor", "main.js")],
+  bundle: true,
+  write: false,
+  format: "esm",
+  platform: "browser",
+  target: "chrome120",
+  external: ["../../out/render/pdf.js", "../../out/pdfjs/pdf.mjs"],
+};
+
+const pdfSourceRoot = path.join(repoRoot, "src", "render", "html", "pdf");
+const pdfRuntimeImports = {
+  name: "ss-pdf-runtime-imports",
+  setup(build) {
+    build.onResolve({ filter: /^@ss\/pdf\/[^/]+$/ }, (args) => {
+      const name = args.path.slice("@ss/pdf/".length);
+      if (!/^[a-z][a-z0-9-]*$/.test(name)) {
+        return { errors: [{ text: `Invalid PDF runtime module: ${args.path}` }] };
+      }
+      return { path: path.join(pdfSourceRoot, `${name}.js`) };
+    });
+  },
+};
+
+const pdfRuntimeOptions = {
+  entryPoints: [path.join(pdfSourceRoot, "index.js")],
+  bundle: true,
+  outfile: path.join(outDir, "render", "pdf.js"),
+  format: "esm",
+  platform: "browser",
+  target: "chrome120",
+  plugins: [pdfRuntimeImports],
+};
+
 function typecheck() {
   childProcess.execFileSync(process.execPath, [
     require.resolve("typescript/bin/tsc"),
@@ -27,23 +61,6 @@ function typecheck() {
     root,
     "--noEmit",
   ], { stdio: "inherit" });
-}
-
-function copyPdfJsAssets() {
-  const pdfjsRoot = path.join(root, "node_modules", "pdfjs-dist");
-  const targetRoot = path.join(outDir, "pdfjs");
-  fs.rmSync(targetRoot, { recursive: true, force: true });
-  fs.mkdirSync(path.join(targetRoot, "build"), { recursive: true });
-  fs.copyFileSync(
-    path.join(pdfjsRoot, "build", "pdf.min.mjs"),
-    path.join(targetRoot, "build", "pdf.min.mjs"),
-  );
-  fs.copyFileSync(
-    path.join(pdfjsRoot, "build", "pdf.worker.min.mjs"),
-    path.join(targetRoot, "build", "pdf.worker.min.mjs"),
-  );
-  fs.cpSync(path.join(pdfjsRoot, "cmaps"), path.join(targetRoot, "cmaps"), { recursive: true });
-  fs.cpSync(path.join(pdfjsRoot, "standard_fonts"), path.join(targetRoot, "standard_fonts"), { recursive: true });
 }
 
 function copySchemaAssets() {
@@ -56,20 +73,49 @@ function copySchemaAssets() {
   );
 }
 
+function copyRenderAssets() {
+  const pdfjsRoot = path.join(outDir, "pdfjs");
+  const renderRoot = path.join(outDir, "render");
+  fs.mkdirSync(pdfjsRoot, { recursive: true });
+  fs.mkdirSync(renderRoot, { recursive: true });
+  fs.copyFileSync(
+    path.join(repoRoot, "third_party", "pdfjs", "pdf.mjs"),
+    path.join(pdfjsRoot, "pdf.mjs"),
+  );
+  fs.copyFileSync(
+    path.join(repoRoot, "third_party", "pdfjs", "pdf.worker.mjs"),
+    path.join(pdfjsRoot, "pdf.worker.mjs"),
+  );
+  fs.copyFileSync(
+    path.join(repoRoot, "third_party", "pdfjs", "LICENSE"),
+    path.join(pdfjsRoot, "LICENSE"),
+  );
+  fs.copyFileSync(
+    path.join(repoRoot, "src", "render", "html", "text.js"),
+    path.join(renderRoot, "text.js"),
+  );
+}
+
 async function main() {
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
-  copyPdfJsAssets();
   copySchemaAssets();
+  copyRenderAssets();
 
   if (watch) {
-    const context = await esbuild.context(buildOptions);
-    await context.watch();
+    const extensionContext = await esbuild.context(buildOptions);
+    const pdfRuntimeContext = await esbuild.context(pdfRuntimeOptions);
+    await Promise.all([
+      extensionContext.watch(),
+      pdfRuntimeContext.watch(),
+    ]);
     console.log("Watching VS Code extension sources.");
     return;
   }
 
   typecheck();
+  await esbuild.build(webviewCheckOptions);
+  await esbuild.build(pdfRuntimeOptions);
   await esbuild.build(buildOptions);
 }
 

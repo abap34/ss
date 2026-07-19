@@ -22,17 +22,17 @@ pub fn runtimeKind(value: core.Value) core.ValueTag {
 }
 
 pub fn ensureValueType(
-    ir: anytype,
+    state: anytype,
     page_id: ?core.NodeId,
     value: core.Value,
     expected: core.ValueTag,
     origin: []const u8,
 ) !void {
-    return ensureValueTypeWithCode(ir, page_id, value, expected, origin, .UnmatchedArgumentType);
+    return ensureValueTypeWithCode(state, page_id, value, expected, origin, .UnmatchedArgumentType);
 }
 
 pub fn ensureValueTypeWithCode(
-    ir: anytype,
+    state: anytype,
     page_id: ?core.NodeId,
     value: core.Value,
     expected: core.ValueTag,
@@ -41,7 +41,7 @@ pub fn ensureValueTypeWithCode(
 ) !void {
     const actual = runtimeKind(value);
     if (actual != expected) {
-        try ir.addValidationDiagnostic(.@"error", page_id, null, origin, .{
+        try state.addValidationDiagnostic(.@"error", page_id, null, origin, .{
             .type_mismatch = .{ .code = code, .expected = expected, .actual = actual },
         });
         return error.InvalidValueTag;
@@ -49,7 +49,7 @@ pub fn ensureValueTypeWithCode(
 }
 
 pub fn ensureValueConformsToType(
-    ir: anytype,
+    state: anytype,
     page_id: ?core.NodeId,
     value: core.Value,
     expected: ast.Type,
@@ -60,14 +60,14 @@ pub fn ensureValueConformsToType(
 
     const actual = runtimeKind(value);
     if (expectedRuntimeKind(expected)) |expected_kind| {
-        try ir.addValidationDiagnostic(.@"error", page_id, null, origin, .{
+        try state.addValidationDiagnostic(.@"error", page_id, null, origin, .{
             .type_mismatch = .{ .code = code, .expected = expected_kind, .actual = actual },
         });
     } else {
-        try ir.addValidationDiagnostic(.@"error", page_id, null, origin, .{
+        try state.addValidationDiagnostic(.@"error", page_id, null, origin, .{
             .user_report = .{
                 .message = try std.fmt.allocPrint(
-                    ir.allocator,
+                    state.allocator,
                     "TypeMismatch: expected {s}, got {s}",
                     .{ expectedRuntimeLabel(expected), @tagName(actual) },
                 ),

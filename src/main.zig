@@ -6,6 +6,7 @@ const watcher = @import("watch.zig");
 const project = @import("project.zig");
 const lsp = @import("lsp.zig");
 const pdf = @import("render/pdf.zig");
+const render_compiler = @import("render/compile.zig");
 const cli_help = @import("cli/help.zig");
 const cli_completion = @import("cli/completion.zig");
 const error_report = utils.err;
@@ -22,7 +23,7 @@ fn failCli(comptime fmt: []const u8, args: anytype) error{InvalidUsage} {
 }
 
 fn version() void {
-    const native = pdf.nativeRuntimeVersions();
+    const native = render_compiler.nativeRuntimeVersions();
     var buffer: [2048]u8 = undefined;
     const text = std.fmt.bufPrint(&buffer,
         \\ss {s}
@@ -39,8 +40,7 @@ fn version() void {
         \\  HarfBuzz: {s}
         \\  qpdf: {s}
         \\render cache schema:
-        \\  Page PDF: {s}
-        \\  qpdf: {s}
+        \\  PDF: {s}
         \\  Native artifacts: {s}
         \\
     , .{
@@ -48,8 +48,8 @@ fn version() void {
         build_options.commit,
         build_options.uncommitted_changes,
         build_options.tree_sitter_manifest_hash,
-        pdf.tree_sitter_min_compatible_language_version,
-        pdf.tree_sitter_language_version,
+        render_compiler.tree_sitter_min_compatible_language_version,
+        render_compiler.tree_sitter_language_version,
         native.cairo,
         native.pango,
         native.librsvg,
@@ -57,9 +57,8 @@ fn version() void {
         native.fontconfig,
         native.harfbuzz,
         native.qpdf,
-        pdf.page_pdf_cache_version,
-        pdf.qpdf_cache_version,
-        pdf.native_artifact_cache_version,
+        pdf.cache_version,
+        render_compiler.native_artifact_cache_version,
     }) catch return;
     utils.io.writeStdoutAll(text) catch {};
 }
@@ -105,12 +104,14 @@ const CommandOptions = struct {
     asset_base_dir: ?[]const u8 = null,
     project_path: ?[]const u8 = null,
     jobs: ?usize = null,
-    cache_id: ?[]const u8 = null,
     diagnostics_json_path: ?[]const u8 = null,
     diagnostic_level: ?error_report.DiagnosticLevel = null,
     quiet: bool = false,
     interval_ms: u64 = 500,
+    format: RenderFormat = .pdf,
 };
+
+const RenderFormat = app.RenderFormat;
 
 const InitOptions = struct {
     dir: []const u8 = ".",
@@ -172,18 +173,24 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
             i += 1;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--format")) {
+            if (i + 1 >= args.len) return failUsage("missing value for --format", .{});
+            const value = args[i + 1];
+            options.format = if (std.mem.eql(u8, value, "pdf"))
+                .pdf
+            else if (std.mem.eql(u8, value, "html"))
+                .html
+            else
+                return failUsage("invalid --format value: {s}", .{value});
+            i += 1;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--jobs")) {
             if (i + 1 >= args.len) return failUsage("missing value for --jobs", .{});
             options.jobs = std.fmt.parseUnsigned(usize, args[i + 1], 10) catch {
                 return failUsage("invalid --jobs value: {s}", .{args[i + 1]});
             };
             if (options.jobs.? == 0) return failUsage("--jobs must be greater than zero", .{});
-            i += 1;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--cache-id")) {
-            if (i + 1 >= args.len) return failUsage("missing value for --cache-id", .{});
-            options.cache_id = args[i + 1];
             i += 1;
             continue;
         }
@@ -615,8 +622,8 @@ fn doctorTreeSitter(
     }
     std.debug.print("  ok manifest hash: {s}\n", .{build_options.tree_sitter_manifest_hash});
     std.debug.print("  ok runtime ABI range: {d}..{d}\n", .{
-        pdf.tree_sitter_min_compatible_language_version,
-        pdf.tree_sitter_language_version,
+        render_compiler.tree_sitter_min_compatible_language_version,
+        render_compiler.tree_sitter_language_version,
     });
 
     var default_config: ?utils.highlight.Config = null;
@@ -626,7 +633,7 @@ fn doctorTreeSitter(
         break :blk default_config.?.languages;
     };
 
-    var report = try pdf.treeSitterHealthReport(allocator, io, languages);
+    var report = try render_compiler.treeSitterHealthReport(allocator, io, languages);
     defer report.deinit(allocator);
 
     if (report.items.len == 0) {
@@ -804,7 +811,11 @@ fn runResolvedWatch(
     resolved: *const project.Resolved,
 ) !void {
     const output_path = if (mode == .render)
-        options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf")
+        options.output_path orelse try utils.fs.siblingPathWithExtension(
+            allocator,
+            resolved.entry_path,
+            if (options.format == .pdf) "pdf" else "html",
+        )
     else
         options.output_path;
     if (output_path) |path| try validateOutputParentOrCliError(io, path);
@@ -814,8 +825,8 @@ fn runResolvedWatch(
         .asset_base_dir = resolved.asset_base_dir,
         .project_file = resolved.project_file,
         .highlight_languages = resolved.highlight.languages,
+        .format = options.format,
         .jobs = options.jobs,
-        .cache_id = options.cache_id,
         .interval_ms = options.interval_ms,
         .quiet = options.quiet,
     });
@@ -1060,14 +1071,14 @@ fn run(init: std.process.Init) !void {
         if (options.output_path) |output_path| {
             try validateOutputParentOrCliError(io, output_path);
             var progress = commandProgress(7, options);
-            try app.writeIrJson(io, allocator, .{
+            try app.writeContextJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
                 .layout_jobs = options.jobs,
             }, output_path, &progress);
         } else {
             var progress = commandProgress(7, options);
-            try app.printIrJson(io, allocator, .{
+            try app.printContextJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
                 .layout_jobs = options.jobs,
@@ -1086,27 +1097,41 @@ fn run(init: std.process.Init) !void {
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         applyDiagnosticOptions(options, &resolved);
-        const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf");
+        const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(
+            allocator,
+            resolved.entry_path,
+            if (options.format == .pdf) "pdf" else "html",
+        );
         try validateOutputParentOrCliError(io, output_path);
         if (options.diagnostics_json_path) |diagnostics_json_path| try validateOutputParentOrCliError(io, diagnostics_json_path);
-        var progress = commandProgress(8, options);
+        var progress = commandProgress(app.render_progress_steps, options);
         const render_options = app.RenderOptions{
             .jobs = options.jobs,
-            .cache_id = options.cache_id,
             .highlight_languages = resolved.highlight.languages,
         };
-        try app.writePdf(io, allocator, .{
-            .source = .{
-                .input_path = resolved.entry_path,
-                .asset_base_dir = resolved.asset_base_dir,
-                .layout_jobs = options.jobs,
-            },
-            .output_path = output_path,
-            .options = .{
-                .render = render_options,
-                .diagnostics_json_path = options.diagnostics_json_path,
-            },
-        }, &progress);
+        const source = app.SourceRequest{
+            .input_path = resolved.entry_path,
+            .asset_base_dir = resolved.asset_base_dir,
+            .layout_jobs = options.jobs,
+        };
+        switch (options.format) {
+            .pdf => try app.writePdf(io, allocator, .{
+                .source = source,
+                .output_path = output_path,
+                .options = .{
+                    .render = render_options,
+                    .diagnostics_json_path = options.diagnostics_json_path,
+                },
+            }, &progress),
+            .html => try app.writeHtml(io, allocator, .{
+                .source = source,
+                .output_path = output_path,
+                .options = .{
+                    .render = render_options,
+                    .diagnostics_json_path = options.diagnostics_json_path,
+                },
+            }, &progress),
+        }
         return;
     }
 

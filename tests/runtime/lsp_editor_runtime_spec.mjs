@@ -262,18 +262,18 @@ asset_base_dir = "."
 [editor.lsp.inlay_hints]
 enabled = true
 arguments = false
-positions = true
 `, "utf8");
     await writeFile(slide, validSource, "utf8");
-    const positionOnly = await configuredResponses({
+    const argumentsDisabled = await configuredResponses({
       cwd: project,
       fixture: slide,
       source: validSource,
       completionPosition: positionAt(validSource, "cover!", 1),
     });
-    assert(positionOnly.inlayHints.length > 0, "position-only inlay hints did not return any hints");
-    assert(positionOnly.inlayHints.every((hint) => hint.kind !== 2), `argument hints were not filtered: ${JSON.stringify(positionOnly.inlayHints)}`);
-    assert(positionOnly.inlayHints.some((hint) => hint.kind === 1), `position hints were not present: ${JSON.stringify(positionOnly.inlayHints)}`);
+    assert(
+      argumentsDisabled.inlayHints.length === 0,
+      `disabled argument hints still returned entries: ${JSON.stringify(argumentsDisabled.inlayHints)}`,
+    );
 
     await writeFile(path.join(project, "ss.toml"), `[project]
 entry = "slide.ss"
@@ -282,17 +282,18 @@ asset_base_dir = "."
 [editor.lsp.inlay_hints]
 enabled = true
 arguments = true
-positions = false
 `, "utf8");
-    const argumentOnly = await configuredResponses({
+    const argumentsEnabled = await configuredResponses({
       cwd: project,
       fixture: slide,
       source: validSource,
       completionPosition: positionAt(validSource, "cover!", 1),
     });
-    assert(argumentOnly.inlayHints.length > 0, "argument-only inlay hints did not return any hints");
-    assert(argumentOnly.inlayHints.some((hint) => hint.kind === 2), `argument hints were not present: ${JSON.stringify(argumentOnly.inlayHints)}`);
-    assert(argumentOnly.inlayHints.every((hint) => hint.kind !== 1), `position hints were not filtered: ${JSON.stringify(argumentOnly.inlayHints)}`);
+    assert(argumentsEnabled.inlayHints.length > 0, "argument inlay hints did not return any hints");
+    assert(
+      argumentsEnabled.inlayHints.every((hint) => hint.kind === 2),
+      `an unexpected inlay-hint kind was returned: ${JSON.stringify(argumentsEnabled.inlayHints)}`,
+    );
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -746,14 +747,26 @@ end
       client.openDocument({ uri, text: initial });
       await initialDiagnostics;
 
-      const debouncedDiagnostics = client.waitForDiagnostics(uri);
+      const clearedLatest = client.waitForDiagnostics(
+        uri,
+        (diagnostics, message) => diagnostics.length === 0 && message.params.version === 3,
+        "cleared diagnostics for latest source",
+      );
       client.changeDocument({ uri, version: 2, text: invalid });
       client.changeDocument({ uri, version: 3, text: fixed });
-      const message = await debouncedDiagnostics;
+      await clearedLatest;
+
+      const rebuiltLatest = client.waitForDiagnostics(
+        uri,
+        (diagnostics, message) => diagnostics.length === 0 && message.params.version === 3,
+        "rebuilt diagnostics for latest source",
+      );
+      const message = await rebuiltLatest;
       assert(
         message.params.diagnostics.length === 0,
         `debounced diagnostics used an intermediate source: ${JSON.stringify(message.params.diagnostics)}`,
       );
+      assert(message.params.version === 3, `debounced diagnostics used version ${message.params.version} instead of 3`);
     });
   } finally {
     await rm(project, { recursive: true, force: true });

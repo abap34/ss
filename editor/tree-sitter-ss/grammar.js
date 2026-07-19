@@ -118,6 +118,7 @@ module.exports = grammar({
       $.let_statement,
       $.return_statement,
       $.constrain_statement,
+      $.constraint_update_statement,
       $.member_assignment_statement,
       $.property_statement,
       $.if_statement,
@@ -130,6 +131,12 @@ module.exports = grammar({
     let_statement: $ => seq("let", field("name", $.identifier), "=", field("value", $._expression), $._terminator),
     return_statement: $ => seq("return", optional(field("value", $._expression)), $._terminator),
     constrain_statement: $ => seq("~", field("left", $._expression), "==", field("right", $._expression), optional(seq(choice("+", "-"), $._expression)), $._terminator),
+    constraint_update_statement: $ => seq(
+      token(prec(1, "~!~")),
+      field("target", $._expression),
+      optional(seq("==", field("source", $._expression), optional(seq(choice("+", "-"), $._expression)))),
+      $._terminator,
+    ),
     member_assignment_statement: $ => seq(field("target", $.member_expression), "=", field("value", $._expression), $._terminator),
     property_statement: $ => seq("property", field("target", $.identifier), field("key", $.string), field("value", $._expression), $._terminator),
 

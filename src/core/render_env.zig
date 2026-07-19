@@ -48,11 +48,11 @@ pub fn isValidTexPreambleFilePath(path: []const u8) bool {
     return path.len != 0;
 }
 
-pub fn resolveForNode(allocator: std.mem.Allocator, ir: anytype, node: *const model.Node) !Resolved {
+pub fn resolveForNode(allocator: std.mem.Allocator, state: anytype, node: *const model.Node) !Resolved {
     var env = Resolved.init();
     errdefer env.deinit(allocator);
 
-    if (ir.getNode(ir.document_id)) |document| {
+    if (state.getNode(state.document_id)) |document| {
         try applyNode(allocator, &env, document);
     }
 
@@ -60,8 +60,8 @@ pub fn resolveForNode(allocator: std.mem.Allocator, ir: anytype, node: *const mo
         .document => {},
         .page => try applyNode(allocator, &env, node),
         .object => {
-            if (ir.parentPageOf(node.id)) |page_id| {
-                if (ir.getNode(page_id)) |page| try applyNode(allocator, &env, page);
+            if (state.parentPageOf(node.id)) |page_id| {
+                if (state.getNode(page_id)) |page| try applyNode(allocator, &env, page);
             }
             try applyNode(allocator, &env, node);
         },
