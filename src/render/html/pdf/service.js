@@ -31,7 +31,7 @@ export class PdfService {
         typeof this.pdfjsProvider === "function"
           ? this.pdfjsProvider()
           : this.pdfjsProvider,
-      ).then((pdfjs) => {
+      ).then(async (pdfjs) => {
         if (this.disposed) throw new Error("PDF service was disposed");
         const workerOptions = pdfjs?.GlobalWorkerOptions;
         if (typeof pdfjs?.getDocument !== "function" ||
@@ -42,7 +42,11 @@ export class PdfService {
           throw new Error("PDF.js worker API is unavailable");
         }
         workerOptions.workerSrc = this.workerSource;
-        const entry = workerEntryPoint(this.workerSource);
+        const entry = await workerEntryPoint(this.workerSource);
+        if (this.disposed) {
+          if (entry.owned) URL.revokeObjectURL(entry.url);
+          throw new Error("PDF service was disposed");
+        }
         let port = null;
         try {
           port = new Worker(entry.url, { type: "module" });
@@ -190,10 +194,10 @@ function destroyLoadingTask(task) {
   }
 }
 
-function workerEntryPoint(source) {
+async function workerEntryPoint(source) {
   const base = globalThis.location?.href;
   const resolved = new URL(source, base).href;
-  if (resolved.startsWith("data:")) {
+  if (resolved.startsWith("data:") || resolved.startsWith("blob:")) {
     return { url: resolved, owned: false };
   }
   if (base) {
@@ -203,9 +207,15 @@ function workerEntryPoint(source) {
       return { url: resolved, owned: false };
     }
   }
-  const wrapper = "await import(" + JSON.stringify(resolved) + ");";
+  const response = await fetch(resolved);
+  if (!response.ok) {
+    throw new Error(
+      `failed to load PDF.js worker: ${response.status} ${response.statusText}`,
+    );
+  }
+  const sourceBlob = await response.blob();
   return {
-    url: URL.createObjectURL(new Blob([wrapper], { type: "text/javascript" })),
+    url: URL.createObjectURL(sourceBlob),
     owned: true,
   };
 }

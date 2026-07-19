@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pdfAsset } from "../assets.mjs";
 import { withBrowser } from "../../render/capture.mjs";
 
 const repository = path.resolve(
@@ -18,6 +19,16 @@ await cp(
   path.join(output, "pdf"),
   { recursive: true },
 );
+await mkdir(path.join(output, "pdfjs"), { recursive: true });
+await cp(
+  path.join(repository, "third_party/pdfjs/pdf.mjs"),
+  path.join(output, "pdfjs/pdf.mjs"),
+);
+await cp(
+  path.join(repository, "third_party/pdfjs/pdf.worker.mjs"),
+  path.join(output, "pdfjs/pdf.worker.mjs"),
+);
+await writeFile(path.join(output, "asset.pdf"), pdfAsset());
 await writeFile(
   path.join(output, "index.html"),
   `<!doctype html><meta charset="utf-8">
@@ -49,10 +60,12 @@ await withBrowser(output, async (browser, baseUrl) => {
         sixK: displayPixelSize(6016, 3384),
       };
       const workerPorts = { created: 0, terminated: 0 };
+      const workerSources = [];
       const NativeWorker = globalThis.Worker;
       globalThis.Worker = class {
-        constructor() {
+        constructor(source) {
           workerPorts.created += 1;
+          workerSources.push(String(source));
           this.terminated = false;
         }
 
@@ -62,6 +75,41 @@ await withBrowser(output, async (browser, baseUrl) => {
           workerPorts.terminated += 1;
         }
       };
+      const crossOriginWorker = {
+        workers: 0,
+        workerDestroys: 0,
+        fetches: 0,
+        revoked: 0,
+        source: null,
+      };
+      const crossOriginWorkerUrl =
+        "https://vscode-resource.example/pdf.worker.mjs";
+      const nativeFetch = globalThis.fetch;
+      const nativeRevokeObjectUrl = URL.revokeObjectURL;
+      globalThis.fetch = async (source, options) => {
+        if (String(source) === crossOriginWorkerUrl) {
+          crossOriginWorker.fetches += 1;
+          return new Response("globalThis.onmessage=()=>{};", {
+            headers: { "Content-Type": "text/javascript" },
+          });
+        }
+        return nativeFetch(source, options);
+      };
+      URL.revokeObjectURL = (source) => {
+        if (source === crossOriginWorker.source) {
+          crossOriginWorker.revoked += 1;
+        }
+        return nativeRevokeObjectUrl.call(URL, source);
+      };
+      const crossOriginService = new PdfService(
+        fakePdfjs(crossOriginWorker, false),
+        crossOriginWorkerUrl,
+      );
+      await crossOriginService.pdfjs();
+      crossOriginWorker.source = workerSources.at(-1);
+      await crossOriginService.destroy();
+      globalThis.fetch = nativeFetch;
+      URL.revokeObjectURL = nativeRevokeObjectUrl;
       const counters = {
         documents: 0,
         pages: 0,
@@ -403,6 +451,36 @@ await withBrowser(output, async (browser, baseUrl) => {
       await runtimeDispose;
       await runtimeDrainController.ready;
       globalThis.Worker = NativeWorker;
+
+      const actualCrossOriginWorker = {
+        fetches: 0,
+        pageWidth: null,
+      };
+      const actualCrossOriginWorkerUrl =
+        "https://vscode-resource.example/actual-pdf.worker.mjs";
+      globalThis.fetch = async (source, options) => {
+        if (String(source) === actualCrossOriginWorkerUrl) {
+          actualCrossOriginWorker.fetches += 1;
+          return nativeFetch("./pdfjs/pdf.worker.mjs", options);
+        }
+        return nativeFetch(source, options);
+      };
+      const actualPdfjs = await import("./pdfjs/pdf.mjs");
+      const actualCrossOriginService = new PdfService(
+        actualPdfjs,
+        actualCrossOriginWorkerUrl,
+      );
+      await actualCrossOriginService.usePage(
+        "./asset.pdf",
+        1,
+        (pdfPage) => {
+          actualCrossOriginWorker.pageWidth =
+            pdfPage.view[2] - pdfPage.view[0];
+        },
+        new AbortController().signal,
+      );
+      await actualCrossOriginService.destroy();
+      globalThis.fetch = nativeFetch;
       return {
         counters,
         placeholderCanvasCount,
@@ -412,6 +490,7 @@ await withBrowser(output, async (browser, baseUrl) => {
         forced,
         forcedCanvasCountAfterRestore,
         workerPorts,
+        crossOriginWorker,
         blockedReady,
         reportedError,
         rejectedError,
@@ -430,6 +509,7 @@ await withBrowser(output, async (browser, baseUrl) => {
           retirementError,
         },
         runtimeLifecycle,
+        actualCrossOriginWorker,
         displaySizes,
       };
 
@@ -685,6 +765,18 @@ await withBrowser(output, async (browser, baseUrl) => {
       "PDF placements exposed an empty canvas before rendering");
     assert.equal(result.counters.pages, 2, "PDF pages were not shared by source and page");
     assert.equal(result.counters.workers, 1, "PDF.js worker was not shared");
+    assert.equal(result.crossOriginWorker.fetches, 1,
+      "a cross-origin PDF.js worker was not fetched before startup");
+    assert.match(result.crossOriginWorker.source, /^blob:/,
+      "a cross-origin PDF.js worker was not started from fetched bytes");
+    assert.equal(result.crossOriginWorker.revoked, 1,
+      "the fetched PDF.js worker URL was not released");
+    assert.equal(result.crossOriginWorker.workerDestroys, 1,
+      "the cross-origin PDF.js worker was not disposed");
+    assert.deepEqual(result.actualCrossOriginWorker, {
+      fetches: 1,
+      pageWidth: 240,
+    }, "a fetched cross-origin PDF.js module worker could not load a PDF page");
     assert.equal(result.counters.renders, 5, "a PDF placement was omitted or rendered twice");
     assert.equal(result.counters.maximumActive, 2, "PDF rendering ignored its concurrency limit");
     assert.equal(new Set(result.counters.transforms).size, 4,
@@ -785,7 +877,7 @@ await withBrowser(output, async (browser, baseUrl) => {
       "runtime disposal omitted document destruction after draining");
     assert.equal(result.runtimeLifecycle.workerDestroys, 1,
       "runtime disposal omitted worker destruction after draining");
-    assert.deepEqual(result.workerPorts, { created: 8, terminated: 8 },
+    assert.deepEqual(result.workerPorts, { created: 9, terminated: 9 },
       "PDF worker ports were not owned and released by the runtime");
   } finally {
     await page.close();
