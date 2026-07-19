@@ -10,12 +10,23 @@ const Color = core.render_policy.Color;
 pub const TextDecoration = struct {
     strikethrough: bool = false,
     underline: bool = false,
+    underline_color: ?Color = null,
+    underline_opacity: f64 = 1,
+    underline_width: ?f64 = null,
+    underline_offset: f64 = 0,
+    underline_dash_on: f64 = 0,
+    underline_dash_off: f64 = 0,
 };
 
 const DecorationSegment = struct {
     start: render.Point,
     end: render.Point,
     line_width: f64,
+    color: Color,
+    opacity: f64,
+    dash_on: f64,
+    dash_off: f64,
+    behind_text: bool,
 };
 
 pub const Emitter = struct {
@@ -102,6 +113,13 @@ pub const Emitter = struct {
                     run.advance,
                     font_size * instance.strikethrough_position_ratio,
                     font_size * instance.strikethrough_thickness_ratio,
+                    color,
+                    1,
+                    null,
+                    0,
+                    0,
+                    0,
+                    false,
                 );
                 if (decoration.underline) try appendDecorationSegment(
                     allocator,
@@ -111,8 +129,29 @@ pub const Emitter = struct {
                     run.advance,
                     font_size * instance.underline_position_ratio,
                     font_size * instance.underline_thickness_ratio,
+                    decoration.underline_color orelse color,
+                    decoration.underline_opacity,
+                    decoration.underline_width,
+                    decoration.underline_offset,
+                    decoration.underline_dash_on,
+                    decoration.underline_dash_off,
+                    true,
                 );
             }
+        }
+        for (segments.items) |segment| {
+            if (!segment.behind_text) continue;
+            try self.page.appendStrokeLineWithOpacity(
+                allocator,
+                self.node_id,
+                segment.start,
+                segment.end,
+                segment.line_width,
+                segment.color,
+                segment.dash_on,
+                segment.dash_off,
+                segment.opacity,
+            );
         }
         try self.page.appendTextLayout(
             allocator,
@@ -125,16 +164,20 @@ pub const Emitter = struct {
             color,
         );
         owns_layout = false;
-        for (segments.items) |segment| try self.page.appendStrokeLine(
-            allocator,
-            self.node_id,
-            segment.start,
-            segment.end,
-            segment.line_width,
-            color,
-            0,
-            0,
-        );
+        for (segments.items) |segment| {
+            if (segment.behind_text) continue;
+            try self.page.appendStrokeLineWithOpacity(
+                allocator,
+                self.node_id,
+                segment.start,
+                segment.end,
+                segment.line_width,
+                segment.color,
+                segment.dash_on,
+                segment.dash_off,
+                segment.opacity,
+            );
+        }
     }
 
     pub fn raster(self: *Emitter, allocator: Allocator, rect: render.Rect, path: []const u8) !void {
@@ -192,12 +235,27 @@ fn appendDecorationSegment(
     baseline_y: f64,
     advance: f64,
     position: f64,
-    thickness: f64,
+    native_thickness: f64,
+    color: Color,
+    opacity: f64,
+    width: ?f64,
+    offset: f64,
+    dash_on: f64,
+    dash_off: f64,
+    behind_text: bool,
 ) !void {
-    const center_y = baseline_y - position + thickness / 2;
+    const thickness = width orelse native_thickness;
+    if (!(advance > 0) or !(thickness > 0) or !(opacity > 0)) return;
+    const native_center_y = baseline_y - position + native_thickness / 2;
+    const center_y = native_center_y + offset;
     try segments.append(allocator, .{
         .start = .{ .x = x, .y = center_y },
         .end = .{ .x = x + advance, .y = center_y },
         .line_width = thickness,
+        .color = color,
+        .opacity = opacity,
+        .dash_on = dash_on,
+        .dash_off = dash_off,
+        .behind_text = behind_text,
     });
 }

@@ -242,6 +242,7 @@ const Atom = struct {
     is_emoji: bool = false,
     strikethrough: bool = false,
     underline: bool = false,
+    underline_paint: core.render_policy.MarkdownUnderlinePaint = .{},
     link_url: ?[]const u8 = null,
 };
 
@@ -3259,11 +3260,11 @@ fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, atoms: 
                 try appendMathAtom(ctx, atoms, run.text, text, if (run.kind == .display_math) .display else .inline_math);
             },
             .icon => if (run.icon) |source| try appendIconAtom(ctx, atoms, source, text),
-            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.markdown_bold_color orelse text.color, text.font_size, null, run.strikethrough, run.underline),
-            .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size, null, run.strikethrough, run.underline),
-            .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size, null, run.strikethrough, run.underline),
-            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url, run.strikethrough, true),
-            .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size, null, run.strikethrough, run.underline),
+            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.markdown_bold_color orelse text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline),
+            .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline),
+            .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline),
+            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url, run.strikethrough, true, .{}),
+            .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline),
         }
     }
 }
@@ -3396,7 +3397,7 @@ fn freeAtoms(allocator: Allocator, atoms: []Atom) void {
     for (atoms) |*atom| atom.content.deinit(allocator);
 }
 
-fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: FontFace, color: Color, font_size: f32, link_url: ?[]const u8, strikethrough: bool, underline: bool) !void {
+fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: FontFace, color: Color, font_size: f32, link_url: ?[]const u8, strikethrough: bool, underline: bool, underline_paint: core.render_policy.MarkdownUnderlinePaint) !void {
     var tokenizer = text_tokenize.Tokenizer.init(value);
     while (tokenizer.next()) |token| {
         const is_emoji = text_tokenize.isEmojiToken(token);
@@ -3415,6 +3416,7 @@ fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []cons
             .is_emoji = is_emoji,
             .strikethrough = strikethrough,
             .underline = underline,
+            .underline_paint = underline_paint,
             .link_url = link_url,
         });
     }
@@ -3641,7 +3643,7 @@ fn drawPlainTextAtTopWithOptions(
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
-    try appendTextAtoms(ctx, &atoms, content, font, color, font_size, null, false, false);
+    try appendTextAtoms(ctx, &atoms, content, font, color, font_size, null, false, false, .{});
     const paint = AtomPaint{
         .font_size = font_size,
         .line_height = line_height,
@@ -4411,6 +4413,9 @@ fn drawRawText(
         const measurement = try text_measure.layout(ctx.allocator, content, font, font_size, width, wrap, .{
             .strikethrough = decoration.strikethrough,
             .underline = decoration.underline,
+            .underline_opacity = @floatCast(decoration.underline_opacity),
+            .underline_width = if (decoration.underline_width) |value| @floatCast(value) else null,
+            .underline_offset = @floatCast(decoration.underline_offset),
         });
         const layout_y = baseline_y - measurement.first_baseline;
         const ink = measurement.ink_bounds;
@@ -4432,9 +4437,16 @@ fn drawRawText(
 }
 
 fn drawAtomRawText(ctx: *DrawContext, x: f32, y_top: f32, width: f32, atom: Atom, paint: AtomPaint, wrap: bool) !void {
+    const dash = atom.underline_paint.dash;
     try drawRawText(ctx, x, y_top, width, atom.text, atom.font, paint.font_size, atom.color, wrap, .{
         .strikethrough = atom.strikethrough,
         .underline = atom.underline,
+        .underline_color = atom.underline_paint.color,
+        .underline_opacity = atom.underline_paint.opacity,
+        .underline_width = if (atom.underline_paint.width) |value| @as(f64, value) else null,
+        .underline_offset = atom.underline_paint.offset,
+        .underline_dash_on = if (dash) |value| value.on else 0,
+        .underline_dash_off = if (dash) |value| value.off else 0,
     });
 }
 

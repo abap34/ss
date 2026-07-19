@@ -182,6 +182,7 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.Te
         hashColor(hasher, text.color);
         hashColor(hasher, text.link_color);
         hashOptionalColor(hasher, text.markdown_bold_color);
+        hashMarkdownUnderlinePaint(hasher, text.markdown_underline);
         for (text.markdown_headings) |heading| hashOptionalHeadingPaint(hasher, heading);
         hashF32(hasher, text.inline_math_height_factor);
         hashF32(hasher, text.inline_math_spacing);
@@ -231,11 +232,25 @@ fn hashOptionalHeadingPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy
         hashColor(hasher, heading.color);
         hashColor(hasher, heading.link_color);
         hashOptionalColor(hasher, heading.markdown_bold_color);
+        hashMarkdownUnderlinePaint(hasher, heading.markdown_underline);
         hashF32(hasher, heading.inline_math_height_factor);
         hashF32(hasher, heading.inline_math_spacing);
         hashF32(hasher, heading.display_math_height_factor);
         std.hash.autoHash(hasher, @intFromEnum(heading.math_align));
         hashF32(hasher, heading.emoji_spacing);
+    }
+}
+
+fn hashMarkdownUnderlinePaint(hasher: *std.hash.Wyhash, underline: core.render_policy.MarkdownUnderlinePaint) void {
+    hashOptionalColor(hasher, underline.color);
+    hashF32(hasher, underline.opacity);
+    hashBool(hasher, underline.width != null);
+    if (underline.width) |width| hashF32(hasher, width);
+    hashF32(hasher, underline.offset);
+    hashBool(hasher, underline.dash != null);
+    if (underline.dash) |dash| {
+        hashF32(hasher, dash.on);
+        hashF32(hasher, dash.off);
     }
 }
 

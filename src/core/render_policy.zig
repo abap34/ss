@@ -127,6 +127,14 @@ pub const TextMetrics = struct {
     line_height: f32,
 };
 
+pub const MarkdownUnderlinePaint = struct {
+    color: ?Color = null,
+    opacity: f32 = 1,
+    width: ?f32 = null,
+    offset: f32 = 0,
+    dash: ?Dash = null,
+};
+
 pub const MarkdownHeadingPaint = struct {
     font: FontFace,
     bold_font: FontFace,
@@ -137,6 +145,7 @@ pub const MarkdownHeadingPaint = struct {
     color: Color,
     link_color: Color,
     markdown_bold_color: ?Color,
+    markdown_underline: MarkdownUnderlinePaint,
     inline_math_height_factor: f32,
     inline_math_spacing: f32,
     display_math_height_factor: f32,
@@ -154,6 +163,7 @@ pub const TextPaint = struct {
     color: Color,
     link_color: Color,
     markdown_bold_color: ?Color,
+    markdown_underline: MarkdownUnderlinePaint,
     markdown_headings: [6]?MarkdownHeadingPaint,
     inline_math_height_factor: f32,
     inline_math_spacing: f32,
@@ -202,6 +212,7 @@ pub const TextPaint = struct {
         result.color = heading.color;
         result.link_color = heading.link_color;
         result.markdown_bold_color = heading.markdown_bold_color;
+        result.markdown_underline = heading.markdown_underline;
         result.inline_math_height_factor = heading.inline_math_height_factor;
         result.inline_math_spacing = heading.inline_math_spacing;
         result.display_math_height_factor = heading.display_math_height_factor;
@@ -352,6 +363,7 @@ fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .color = parseRecordColorProperty(state, node, "text", "color") orelse FALLBACK_TEXT_COLOR,
         .link_color = parseRecordColorProperty(state, node, "text", "link_color") orelse FALLBACK_LINK_COLOR,
         .markdown_bold_color = parseRecordColorProperty(state, node, "text", "markdown_bold_color"),
+        .markdown_underline = resolveMarkdownUnderline(state, node),
         .markdown_headings = .{
             resolveMarkdownHeading(node, "h1"),
             resolveMarkdownHeading(node, "h2"),
@@ -409,11 +421,34 @@ fn resolveMarkdownHeading(node: *const Node, field_name: []const u8) ?MarkdownHe
         .color = parseMarkdownHeadingTextColor(node, field_name, "color") orelse FALLBACK_TEXT_COLOR,
         .link_color = parseMarkdownHeadingTextColor(node, field_name, "link_color") orelse FALLBACK_LINK_COLOR,
         .markdown_bold_color = parseMarkdownHeadingTextColor(node, field_name, "markdown_bold_color"),
+        .markdown_underline = resolveMarkdownHeadingUnderline(node, field_name),
         .inline_math_height_factor = positiveMarkdownHeadingTextFloatProperty(node, field_name, "inline_math_height_factor") orelse 1,
         .inline_math_spacing = nonNegativeMarkdownHeadingTextFloatProperty(node, field_name, "inline_math_spacing") orelse 0,
         .display_math_height_factor = positiveMarkdownHeadingTextFloatProperty(node, field_name, "display_math_height_factor") orelse 2,
         .math_align = parseMarkdownHeadingHorizontalAlign(node, field_name) orelse .center,
         .emoji_spacing = nonNegativeMarkdownHeadingTextFloatProperty(node, field_name, "emoji_spacing") orelse 0,
+    };
+}
+
+fn resolveMarkdownUnderline(state: anytype, node: *const Node) MarkdownUnderlinePaint {
+    const opacity = markdownUnderlineFloatProperty(state, node, "opacity") orelse 1;
+    return .{
+        .color = parseMarkdownUnderlineColor(state, node),
+        .opacity = normalizedOpacity(opacity),
+        .width = nonNegativeMarkdownUnderlineFloatProperty(state, node, "width"),
+        .offset = markdownUnderlineFloatProperty(state, node, "offset") orelse 0,
+        .dash = parseMarkdownUnderlineDash(state, node),
+    };
+}
+
+fn resolveMarkdownHeadingUnderline(node: *const Node, heading_field: []const u8) MarkdownUnderlinePaint {
+    const opacity = markdownHeadingUnderlineFloatProperty(node, heading_field, "opacity") orelse 1;
+    return .{
+        .color = parseMarkdownHeadingUnderlineColor(node, heading_field),
+        .opacity = normalizedOpacity(opacity),
+        .width = nonNegativeMarkdownHeadingUnderlineFloatProperty(node, heading_field, "width"),
+        .offset = markdownHeadingUnderlineFloatProperty(node, heading_field, "offset") orelse 0,
+        .dash = parseMarkdownHeadingUnderlineDash(node, heading_field),
     };
 }
 
@@ -691,6 +726,49 @@ fn positiveMarkdownHeadingTextFloatProperty(node: *const Node, heading_field: []
 fn nonNegativeMarkdownHeadingTextFloatProperty(node: *const Node, heading_field: []const u8, field_name: []const u8) ?f32 {
     const value = markdownHeadingTextFloatProperty(node, heading_field, field_name) orelse return null;
     return if (value >= 0) value else null;
+}
+
+fn markdownUnderlineFloatProperty(state: anytype, node: *const Node, field_name: []const u8) ?f32 {
+    return fields.read(state.allocator, state, node, "text", &.{ "markdown_underline", field_name }, .number);
+}
+
+fn nonNegativeMarkdownUnderlineFloatProperty(state: anytype, node: *const Node, field_name: []const u8) ?f32 {
+    const value = markdownUnderlineFloatProperty(state, node, field_name) orelse return null;
+    return if (value >= 0) value else null;
+}
+
+fn parseMarkdownUnderlineColor(state: anytype, node: *const Node) ?Color {
+    const value = fields.read(state.allocator, state, node, "text", &.{ "markdown_underline", "color" }, .text) orelse return null;
+    return parseColor(value);
+}
+
+fn parseMarkdownUnderlineDash(state: anytype, node: *const Node) ?Dash {
+    const value = fields.read(state.allocator, state, node, "text", &.{ "markdown_underline", "dash" }, .text) orelse return null;
+    return parseDash(value);
+}
+
+fn markdownHeadingUnderlineFloatProperty(node: *const Node, heading_field: []const u8, field_name: []const u8) ?f32 {
+    return fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", "markdown_underline", field_name }, .number);
+}
+
+fn nonNegativeMarkdownHeadingUnderlineFloatProperty(node: *const Node, heading_field: []const u8, field_name: []const u8) ?f32 {
+    const value = markdownHeadingUnderlineFloatProperty(node, heading_field, field_name) orelse return null;
+    return if (value >= 0) value else null;
+}
+
+fn parseMarkdownHeadingUnderlineColor(node: *const Node, heading_field: []const u8) ?Color {
+    const value = fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", "markdown_underline", "color" }, .text) orelse return null;
+    return parseColor(value);
+}
+
+fn parseMarkdownHeadingUnderlineDash(node: *const Node, heading_field: []const u8) ?Dash {
+    const value = fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", "markdown_underline", "dash" }, .text) orelse return null;
+    return parseDash(value);
+}
+
+fn normalizedOpacity(value: f32) f32 {
+    if (!std.math.isFinite(value)) return 1;
+    return std.math.clamp(value, 0, 1);
 }
 
 fn parseRecordColorProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?Color {

@@ -128,6 +128,14 @@ record LayoutStyle {
   fit: FitPolicy = FitPolicy.warn
 }
 
+record MarkdownUnderlineStyle {
+  color: Color? = none
+  opacity: Number = 1
+  width: Number? = none
+  offset: Number = 0
+  dash: String = ""
+}
+
 record TextStyle {
   parse: TextParseMode = TextParseMode.inline
   font: FontFace = FontFace { family = "Helvetica" }
@@ -139,6 +147,7 @@ record TextStyle {
   color: Color = c"0.08,0.08,0.08"
   link_color: Color = c"0.1,0.25,0.75"
   markdown_bold_color: Color? = none
+  markdown_underline: MarkdownUnderlineStyle = MarkdownUnderlineStyle {}
   inline_math_height_factor: Number = 1.02
   inline_math_spacing: Number = 0.08
   display_math_height_factor: Number = 2
