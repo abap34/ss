@@ -9,6 +9,7 @@ export function renderObjectSheet(state, object, actions) {
   const sheet = element("section", "object-sheet");
   sheet.setAttribute("aria-label", "Object details");
   sheet.append(
+    closeButton(actions.close),
     heading(object, actions),
     bounds(frame),
     relations(state, object),
@@ -24,16 +25,20 @@ function heading(object, actions) {
   const name = element("strong");
   name.textContent = object.role || object.name || `Object ${object.id}`;
   title.append(eyebrow, name);
-  const close = element("button", "close-button");
-  close.type = "button";
-  close.textContent = "×";
-  close.setAttribute("aria-label", "Close details");
-  close.addEventListener("click", actions.close);
-  container.append(title, close);
+  container.append(title);
   if (object.location?.path) {
     container.append(sourceButton(object, actions.revealSource));
   }
   return container;
+}
+
+function closeButton(closeDetails) {
+  const close = element("button", "close-button");
+  close.type = "button";
+  close.textContent = "×";
+  close.setAttribute("aria-label", "Close details");
+  close.addEventListener("click", closeDetails);
+  return close;
 }
 
 function bounds(frame) {
