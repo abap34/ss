@@ -1576,6 +1576,34 @@ test "compiler semantics: structured style values expand to render properties" {
     try expectObjectFieldPath(source, "text", &.{ "font", "weight" }, "700");
 }
 
+test "compiler semantics: markdown underline helpers set structured style" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let body = body_obj("plain _underlined_ text")
+        \\  md_underline(body, md_underline_style(c"#cc3366", 0.35, 5, 3, "8,4"))
+        \\end
+        \\
+    ;
+
+    try expectObjectFieldPath(source, "text", &.{ "markdown_underline", "color" }, "0.8,0.2,0.4");
+    try expectObjectFieldPath(source, "text", &.{ "markdown_underline", "opacity" }, "0.35");
+    try expectObjectFieldPath(source, "text", &.{ "markdown_underline", "width" }, "5");
+    try expectObjectFieldPath(source, "text", &.{ "markdown_underline", "offset" }, "3");
+    try expectObjectFieldPath(source, "text", &.{ "markdown_underline", "dash" }, "8,4");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let body = body_obj("_bad_")
+        \\  body.text.markdown_underline.opacity = "opaque"
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown_underline.opacity' expects Number, got String");
+}
+
 test "compiler semantics: set_prop rejects a duplicate property definition" {
     try expectFixtureLoweringErrorDiagnostic(
         "theme/set-prop",
