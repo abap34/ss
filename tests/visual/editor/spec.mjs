@@ -159,6 +159,24 @@ await withBrowser(output, async (browser, baseUrl) => {
       "label",
       "an object without a source edit target could not be selected",
     );
+    assert.equal(
+      await page.locator(".close-button").evaluate((button) =>
+        button.parentElement?.classList.contains("object-sheet")
+      ),
+      true,
+      "details close button remained part of the title section",
+    );
+    const closePlacement = await page.locator(".object-sheet").evaluate((sheet) => {
+      const button = sheet.querySelector(":scope > .close-button");
+      const sheetRect = sheet.getBoundingClientRect();
+      const buttonRect = button.getBoundingClientRect();
+      return {
+        top: buttonRect.top - sheetRect.top,
+        right: sheetRect.right - buttonRect.right,
+      };
+    });
+    assert(closePlacement.top <= 10 && closePlacement.right <= 10,
+      "details close button was not placed at the modal's top-right corner");
     await page.locator(".close-button").click();
 
     await page.locator('.page-shell[data-page-id="22"] .object-hit[data-object-id="202"]').click();

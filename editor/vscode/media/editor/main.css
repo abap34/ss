@@ -639,7 +639,7 @@ button {
   min-height: 104px;
   max-height: min(42%, 240px);
   overflow: auto;
-  padding: 12px;
+  padding: 12px 42px 12px 12px;
   border: 1px solid var(--sheet-border);
   border-radius: 8px;
   background: var(--sheet-background);
@@ -647,11 +647,11 @@ button {
   backdrop-filter: blur(8px);
 }
 .sheet-heading {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   align-content: start;
   align-items: start;
-  gap: 8px 4px;
+  gap: 8px;
   min-width: 0;
 }
 .sheet-heading > div {
@@ -674,6 +674,10 @@ button {
   white-space: nowrap;
 }
 .close-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
   display: grid;
   width: 24px;
   height: 24px;
@@ -827,8 +831,7 @@ button {
   cursor: pointer;
 }
 .sheet-heading .source-button {
-  grid-column: 1 / -1;
-  justify-self: start;
+  flex: 0 0 auto;
 }
 .source-button:hover {
   border-color: var(--accent-border);
