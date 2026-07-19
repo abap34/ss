@@ -208,6 +208,7 @@ int ss_font_register(const char *path);
 
 SsPdf *ss_pdf_create(const char *path, double width, double height);
 void ss_pdf_destroy(SsPdf *pdf);
+const char *ss_pdf_status_string(const SsPdf *pdf);
 void ss_pdf_set_creator(SsPdf *pdf, const char *creator);
 void ss_pdf_begin_page(SsPdf *pdf, double width, double height);
 void ss_pdf_end_page(SsPdf *pdf);
