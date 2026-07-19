@@ -26,6 +26,12 @@ fn deleteOutput(path: []const u8) void {
     cwd.deleteTree(testing.io, path) catch {};
 }
 
+fn prepareOutput(path: []const u8) !void {
+    deleteOutput(path);
+    const parent = std.fs.path.dirname(path) orelse return;
+    try std.Io.Dir.cwd().createDirPath(testing.io, parent);
+}
+
 fn embeddedStyleSheet(document: []const u8) ![]u8 {
     const prefix = "<script type=\"text/plain\" data-ss-stylesheet>data:text/css;charset=utf-8;base64,";
     const start = (std.mem.indexOf(u8, document, prefix) orelse return error.MissingEmbeddedStyleSheet) + prefix.len;
@@ -48,7 +54,7 @@ fn pdfItemOpeningTag(document: []const u8, copy_annotations: bool) ![]const u8 {
 
 test "HTML renderer writes deterministic normal elements with escaped text" {
     const output = ".ss-cache/test-render-html/basic.html";
-    deleteOutput(output);
+    try prepareOutput(output);
     defer deleteOutput(output);
 
     var pages = try testing.allocator.alloc(render.Page, 1);
@@ -119,7 +125,7 @@ test "HTML renderer writes deterministic normal elements with escaped text" {
 
 test "HTML renderer keeps emoji selectable when the resolved font forbids embedding" {
     const output = ".ss-cache/test-render-html/emoji.html";
-    deleteOutput(output);
+    try prepareOutput(output);
     defer deleteOutput(output);
 
     var pages = try testing.allocator.alloc(render.Page, 1);
@@ -163,7 +169,7 @@ test "HTML renderer keeps emoji selectable when the resolved font forbids embedd
 
 test "HTML renderer applies page labels transforms clips opacity and blending" {
     const output = ".ss-cache/test-render-html/effects.html";
-    deleteOutput(output);
+    try prepareOutput(output);
     defer deleteOutput(output);
 
     var pages = try testing.allocator.alloc(render.Page, 1);
@@ -211,7 +217,7 @@ test "HTML renderer applies page labels transforms clips opacity and blending" {
 
 test "HTML renderer emits structured MathML without SVG or PDF fallback" {
     const output = ".ss-cache/test-render-html/math.html";
-    deleteOutput(output);
+    try prepareOutput(output);
     defer deleteOutput(output);
 
     var resource_builder = render_resources.Builder{};
@@ -302,9 +308,8 @@ test "HTML renderer emits structured MathML without SVG or PDF fallback" {
 test "HTML renderer packages PDF.js with explicit page geometry" {
     const output = ".ss-cache/test-render-html/pdf.html";
     const resource_path = ".ss-cache/test-render-html/pdf-source.pdf";
-    deleteOutput(output);
+    try prepareOutput(output);
     defer deleteOutput(output);
-    try std.Io.Dir.cwd().createDirPath(testing.io, ".ss-cache/test-render-html");
     const resource_path_z = try testing.allocator.dupeZ(u8, resource_path);
     defer testing.allocator.free(resource_path_z);
     const pdf = c.ss_pdf_create(resource_path_z.ptr, 120, 60) orelse return error.CairoCreateFailed;
@@ -378,7 +383,7 @@ test "HTML renderer packages PDF.js with explicit page geometry" {
 
 test "HTML renderer preserves semantic headings zero-based ordered lists and links" {
     const output = ".ss-cache/test-render-html/semantics.html";
-    deleteOutput(output);
+    try prepareOutput(output);
     defer deleteOutput(output);
 
     var pages = try testing.allocator.alloc(render.Page, 1);
