@@ -43,6 +43,12 @@ fn parseRecovering(source: []const u8) !ParsedRecoveringModule {
     return .{ .arena = arena, .result = result };
 }
 
+fn readFixture(path: []const u8) ![]u8 {
+    const full_path = try std.fs.path.join(testing.allocator, &.{ "tests/fixtures/syntax", path });
+    defer testing.allocator.free(full_path);
+    return std.Io.Dir.cwd().readFileAlloc(testing.io, full_path, testing.allocator, .limited(64 * 1024));
+}
+
 fn expectParseError(expected: anyerror, source: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -1218,6 +1224,19 @@ test "syntax spec: constraints accept record member anchor paths" {
     try testing.expectEqualStrings("parts", constraint.source.?.node_name.?);
     try testing.expectEqualStrings("parts.root", constraint.source.?.node_path.?);
     try testing.expectEqual(.bottom, constraint.source.?.anchor);
+}
+
+test "syntax spec: constraint syntax spans follow multiline source" {
+    const source = try readFixture("constraints/multiline.ss");
+    defer testing.allocator.free(source);
+    var parsed = try parse(source);
+    defer parsed.deinit();
+
+    const constraint = parsed.module.pages.items[0].statements.items[0].kind.constrain;
+    const source_spans = constraint.syntax.?;
+    try testing.expectEqualStrings("caption . top", source[source_spans.target.start..source_spans.target.end]);
+    try testing.expectEqualStrings("parts . root . bottom", source[source_spans.source.?.start..source_spans.source.?.end]);
+    try testing.expectEqualStrings("- (gap + 16)", source[source_spans.offset.?.start..source_spans.offset.?.end]);
 }
 
 test "syntax spec: constraint updates accept optional replacement relations" {

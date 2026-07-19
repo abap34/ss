@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,32 +13,18 @@ import {
   requestEdit,
 } from "../support.mjs";
 
+const fixtureRoot = path.resolve("tests/fixtures/runtime/editor/relations");
+
 await testInheritedRelativeEditAddsCallerUpdates();
 await testSymbolicRelativeEditKeepsExpressions();
+await testMultilineRelativeEditPreservesTrivia();
 
 async function testInheritedRelativeEditAddsCallerUpdates() {
   const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-relative-inherited-"));
   try {
     const slide = path.join(project, "slide.ss");
     const uri = pathToFileURL(slide).toString();
-    const source = `import std:themes/default as *
-
-const left_offset: Number = 72
-
-fn movable!(guide: Object) -> Object
-  let result = text!("Move me")
-  ~ result.left == guide.right + left_offset
-  ~ result.top == guide.bottom - 24
-  return result
-end
-
-page demo
-let guide = text!("Guide")
-let item = movable!(guide)
-~ guide.left == page.left + 100
-~ guide.top == page.top - 100
-end
-`;
+    const source = await readFile(path.join(fixtureRoot, "inherited", "slide.ss"), "utf8");
     await writeFile(slide, source, "utf8");
 
     await withLspClient({ cwd: project }, async (client) => {
@@ -111,20 +97,7 @@ async function testSymbolicRelativeEditKeepsExpressions() {
   try {
     const slide = path.join(project, "slide.ss");
     const uri = pathToFileURL(slide).toString();
-    const source = `import std:themes/default as *
-
-const horizontal_gap: Number = 20
-const vertical_gap: Number = 30
-
-page demo
-let guide = text!("Guide")
-let item = text!("Item")
-~ guide.left == page.left + 100
-~ guide.top == page.top - 100
-~ item.center_x == guide.right + horizontal_gap
-~ item.bottom == guide.top - vertical_gap
-end
-`;
+    const source = await readFile(path.join(fixtureRoot, "symbolic", "slide.ss"), "utf8");
     await writeFile(slide, source, "utf8");
 
     await withLspClient({ cwd: project }, async (client) => {
@@ -221,6 +194,50 @@ end
         secondBounds.x,
         secondBounds.y,
         "repeated symbolic relative edit",
+      );
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testMultilineRelativeEditPreservesTrivia() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-relative-multiline-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = await readFile(path.join(fixtureRoot, "multiline", "slide.ss"), "utf8");
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source });
+      assert(
+        (await diagnosticsPromise).params.diagnostics.length === 0,
+        "multiline relative fixture produced diagnostics",
+      );
+
+      const snapshot = await editorSnapshot(client, uri);
+      const target = editingTarget(snapshot, "item");
+      const fromBounds = previewBounds(snapshot, target.node_id);
+      const toBounds = { ...fromBounds, x: fromBounds.x + 15, y: fromBounds.y + 10 };
+      const result = await requestEdit(
+        client,
+        uri,
+        snapshot,
+        target,
+        fromBounds,
+        toBounds,
+        "relative",
+        target.page_id,
+      );
+      assert(result.status === "ok", `multiline relative edit was rejected: ${JSON.stringify(result)}`);
+      const updated = applyProtocolEdits(source, result.workspaceEdit?.changes?.[uri] ?? []);
+      assert(
+        updated.includes("# Keep horizontal context.\n  + (horizontal_gap) + 15") &&
+          updated.includes("# Keep vertical context.\n  + (-(vertical_gap)) - 10"),
+        `multiline relation trivia was not preserved: ${updated}`,
       );
     });
   } finally {

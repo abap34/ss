@@ -25,8 +25,8 @@ pub fn snapshotResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
 
     if (snapshot.generation == ctx.documents.generation) {
         if (snapshot.layout_output) |*layout| {
-            if (layout.editor_json) |editor_json| {
-                const result = try ctx.allocator.dupe(u8, editor_json);
+            if (layout.editor) |*editor| {
+                const result = try ctx.allocator.dupe(u8, editor.json);
                 errdefer ctx.allocator.free(result);
                 try ctx.responses.store(ctx.allocator, snapshot, result);
                 return result;

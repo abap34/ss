@@ -1895,13 +1895,17 @@ const Parser = struct {
                 .target_kind = if (target.dimension == null) .anchor else .dimension,
                 .target = target.anchor_ref,
                 .source = null,
+                .syntax = .{ .target = target.span },
             };
         }
         try self.expectEqualityOperator();
         if (target.dimension) |dimension| {
             if (target.anchor_ref.kind == .page) return self.fail(error.PageCannotBeConstraintTarget);
+            source.skipTriviaFrom(self.source, &self.pos);
+            const offset_start = self.pos;
             var offset = try self.parseExpr();
             errdefer offset.deinit(self.allocator);
+            const offset_end = self.pos;
             var target_anchor = try target.anchor_ref.cloneWithAnchor(self.allocator, dimension.target_anchor);
             errdefer target_anchor.deinit(self.allocator);
             const source_anchor = try target.anchor_ref.cloneWithAnchor(self.allocator, dimension.source_anchor);
@@ -1912,39 +1916,48 @@ const Parser = struct {
                 .target = target_anchor,
                 .source = source_anchor,
                 .offset = offset,
+                .syntax = .{
+                    .target = target.span,
+                    .offset = .{ .start = offset_start, .end = offset_end },
+                },
             };
         }
         const target_anchor = target.anchor_ref;
-        var source_anchor = try self.parseAnchorMemberRef();
-        errdefer source_anchor.deinit(self.allocator);
+        var source_member = try self.parseConstraintMemberRef(false);
+        errdefer source_member.anchor_ref.deinit(self.allocator);
         var offset: ?Expr = null;
+        var offset_span: ?ast.Span = null;
         source.skipTriviaFrom(self.source, &self.pos);
         if (!self.eof() and (self.source[self.pos] == '+' or self.source[self.pos] == '-')) {
+            const offset_start = self.pos;
             const sign = self.source[self.pos];
             self.pos += 1;
             var expr = try self.parseExpr();
             if (sign == '-') expr = try self.makeNegCall(expr);
             offset = expr;
+            offset_span = .{ .start = offset_start, .end = self.pos };
         }
         return .{
             .action = action,
             .target = target_anchor,
-            .source = source_anchor,
+            .source = source_member.anchor_ref,
             .offset = offset,
+            .syntax = .{
+                .target = target.span,
+                .source = source_member.span,
+                .offset = offset_span,
+            },
         };
     }
 
     const ConstraintMemberRef = struct {
         anchor_ref: AnchorRef,
+        span: ast.Span,
         dimension: ?struct {
             target_anchor: core.Anchor,
             source_anchor: core.Anchor,
         } = null,
     };
-
-    fn parseAnchorMemberRef(self: *Parser) !AnchorRef {
-        return (try self.parseConstraintMemberRef(false)).anchor_ref;
-    }
 
     fn parseConstraintMemberRef(self: *Parser, allow_dimension: bool) !ConstraintMemberRef {
         source.skipInlineSpaces(self.source, &self.pos);
@@ -1954,11 +1967,13 @@ const Parser = struct {
         var member_name: ?[]const u8 = null;
         defer if (member_name) |name| self.allocator.free(name);
         var path_end: usize = path_start;
+        var member_end: usize = path_start;
         while (true) {
             source.skipInlineSpaces(self.source, &self.pos);
             path_end = self.pos;
             try self.expectChar('.');
             const parsed_member = try self.parseIdentifier();
+            member_end = self.pos;
             if (member_name) |name| self.allocator.free(name);
             member_name = parsed_member;
             source.skipInlineSpaces(self.source, &self.pos);
@@ -1970,18 +1985,23 @@ const Parser = struct {
             if (std.mem.eql(u8, final_member_name, "width")) {
                 return .{
                     .anchor_ref = try self.makeParsedAnchorRef(object_path, .right),
+                    .span = .{ .start = path_start, .end = member_end },
                     .dimension = .{ .target_anchor = .right, .source_anchor = .left },
                 };
             }
             if (std.mem.eql(u8, final_member_name, "height")) {
                 return .{
                     .anchor_ref = try self.makeParsedAnchorRef(object_path, .top),
+                    .span = .{ .start = path_start, .end = member_end },
                     .dimension = .{ .target_anchor = .top, .source_anchor = .bottom },
                 };
             }
         }
         const anchor = names.parseAnchorName(final_member_name) orelse return self.fail(error.UnknownAnchor);
-        return .{ .anchor_ref = try self.makeParsedAnchorRef(object_path, anchor) };
+        return .{
+            .anchor_ref = try self.makeParsedAnchorRef(object_path, anchor),
+            .span = .{ .start = path_start, .end = member_end },
+        };
     }
 
     fn makeParsedAnchorRef(self: *Parser, object_path: []const u8, anchor: core.Anchor) !AnchorRef {

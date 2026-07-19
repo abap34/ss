@@ -793,11 +793,18 @@ pub const ConstraintDecl = struct {
         dimension,
     };
 
+    pub const Syntax = struct {
+        target: Span,
+        source: ?Span = null,
+        offset: ?Span = null,
+    };
+
     action: Action = .add,
     target_kind: TargetKind = .anchor,
     target: AnchorRef,
     source: ?AnchorRef,
     offset: ?Expr = null,
+    syntax: ?Syntax = null,
 
     pub fn deinit(self: *ConstraintDecl, allocator: Allocator) void {
         self.target.deinit(allocator);

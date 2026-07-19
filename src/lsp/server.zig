@@ -86,11 +86,13 @@ const Server = struct {
         defer diagnostics.deinit();
         const rebuild_generation = self.documents.generation;
         var snapshot = try self.buildAnalysis(changed_path, &diagnostics);
-        errdefer snapshot.deinit();
+        var snapshot_owned = true;
+        errdefer if (snapshot_owned) snapshot.deinit();
         try self.checkCanceled();
         if (snapshot.generation != self.documents.generation or rebuild_generation != self.documents.generation) return error.Canceled;
         if (self.analysis) |*old| old.deinit();
         self.analysis = snapshot;
+        snapshot_owned = false;
         if (self.analysis.?.project.lsp.enabled and self.analysis.?.project.lsp.diagnostics) {
             try self.publishDiagnostics(&diagnostics);
         } else {
@@ -301,7 +303,10 @@ const Server = struct {
         var owned_source: ?[]u8 = null;
         defer if (owned_source) |text| self.allocator.free(text);
         const text = self.documents.sourceForPath(path) orelse blk: {
-            owned_source = utils.fs.readFileAlloc(self.io, self.allocator, path) catch null;
+            owned_source = utils.fs.readFileAlloc(self.io, self.allocator, path) catch |read_err| switch (read_err) {
+                error.OutOfMemory => return read_err,
+                else => null,
+            };
             break :blk owned_source orelse "";
         };
         const message = try std.fmt.allocPrint(self.allocator, "ProjectConfigFailed: {s}", .{@errorName(err)});
@@ -438,37 +443,12 @@ fn validateLayoutEdit(
     };
     defer snapshot.deinit();
     const layout = if (snapshot.layout_output) |*value| value else return .analysis_failed;
-    var parsed = utils.json.parseValue(server.allocator, layout.conflicts_json, .{}) catch return .analysis_failed;
-    defer parsed.deinit();
-    if (parsed.value != .object) return .analysis_failed;
-    const failures = utils.json.arrayFieldObject(&parsed.value.object, "failures") orelse return .analysis_failed;
-    if (failures.items.len != 0) return .layout_conflict;
-    const objects = utils.json.arrayFieldObject(&parsed.value.object, "objects") orelse return .analysis_failed;
-    const pages = utils.json.arrayFieldObject(&parsed.value.object, "pages") orelse return .analysis_failed;
-
-    var object: ?*const utils.json.ObjectMap = null;
-    for (objects.items) |*item| {
-        if (item.* != .object) continue;
-        if ((utils.json.intField(&item.object, "id") orelse -1) == node_id) {
-            object = &item.object;
-            break;
-        }
-    }
-    const value = object orelse return .target_missing;
-    const page_id = utils.json.intField(value, "page_id") orelse return .analysis_failed;
-    var page_height: ?f64 = null;
-    for (pages.items) |*item| {
-        if (item.* != .object) continue;
-        if ((utils.json.intField(&item.object, "id") orelse -1) != page_id) continue;
-        page_height = utils.json.numberField(&item.object, "height");
-        break;
-    }
-    const core_x = utils.json.numberField(value, "x") orelse return .analysis_failed;
-    const core_y = utils.json.numberField(value, "y") orelse return .analysis_failed;
-    const height = utils.json.numberField(value, "height") orelse return .analysis_failed;
-    const preview_y = (page_height orelse return .analysis_failed) - core_y - height;
+    if (layout.report.failure_count != 0) return .layout_conflict;
+    const object = layout.report.objectById(node_id) orelse return .target_missing;
+    const page = layout.report.pageById(object.page_id) orelse return .analysis_failed;
+    const preview_y = page.height - object.y - object.height;
     const tolerance: f64 = core.layout.graph.ConstraintTolerance;
-    if (@abs(core_x - expected_x) > tolerance or @abs(preview_y - expected_y) > tolerance) return .position_mismatch;
+    if (@abs(object.x - expected_x) > tolerance or @abs(preview_y - expected_y) > tolerance) return .position_mismatch;
     return .matched;
 }
 
@@ -489,7 +469,7 @@ fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *co
     var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &pages, .{});
     defer render_ir.deinit(state.allocator);
     try hook.server.checkCanceled();
-    return .{ .editor_json = try editor_snapshot.toJson(state.allocator, hook.server.io, state, &render_ir, hook.server.documents.generation) };
+    return .{ .editor = try editor_snapshot.build(state.allocator, hook.server.io, state, &render_ir, hook.server.documents.generation) };
 }
 
 fn addAnalysisLayoutError(context: *anyopaque, state: *core.DocumentState, err: anyerror) !void {
@@ -792,7 +772,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                 server.analysis == null or
                 !server.analysis.?.coversPath(path) or
                 server.analysis.?.layout_output == null or
-                server.analysis.?.layout_output.?.editor_json == null)
+                server.analysis.?.layout_output.?.editor == null)
             {
                 try server.rebuildImmediately(path);
             }

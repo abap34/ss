@@ -1,4 +1,5 @@
 const std = @import("std");
+const ast = @import("ast");
 const model = @import("model");
 const utils = @import("utils");
 const graph = @import("graph.zig");
@@ -10,6 +11,230 @@ const Constraint = model.Constraint;
 const ConstraintSource = model.ConstraintSource;
 const Node = model.Node;
 const NodeId = model.NodeId;
+
+pub const RelationKind = enum {
+    explicit,
+    fallback,
+};
+
+pub const Location = struct {
+    path: []u8,
+    start: usize,
+    end: usize,
+};
+
+pub const ConstraintSyntax = struct {
+    action: ast.ConstraintDecl.Action,
+    target: utils.source.ByteSpan,
+    source: ?utils.source.ByteSpan,
+    offset: ?utils.source.ByteSpan,
+};
+
+pub const Page = struct {
+    id: NodeId,
+    height: f32,
+};
+
+pub const Object = struct {
+    id: NodeId,
+    page_id: NodeId,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+};
+
+pub const Relation = struct {
+    kind: RelationKind,
+    target_node: NodeId,
+    target_anchor: Anchor,
+    source: ConstraintSource,
+    offset: f32,
+    axis: model.Axis,
+    role: model.ConstraintRole,
+    from_update: bool,
+    location: ?Location,
+    syntax: ?ConstraintSyntax,
+};
+
+pub const Report = struct {
+    allocator: std.mem.Allocator,
+    pages: []Page,
+    objects: []Object,
+    relations: []Relation,
+    failure_count: usize,
+
+    pub fn init(allocator: std.mem.Allocator, state: anytype) !Report {
+        var pages = std.ArrayList(Page).empty;
+        errdefer pages.deinit(allocator);
+        for (state.page_order.items) |page_id| {
+            const page = state.getNode(page_id) orelse continue;
+            try pages.append(allocator, .{ .id = page.id, .height = page.frame.height });
+        }
+
+        var objects = std.ArrayList(Object).empty;
+        errdefer objects.deinit(allocator);
+        for (state.nodes.items) |node| {
+            if (node.kind != .object) continue;
+            const page_id = state.parentPageOf(node.id) orelse continue;
+            try objects.append(allocator, .{
+                .id = node.id,
+                .page_id = page_id,
+                .x = node.frame.x,
+                .y = node.frame.y,
+                .width = node.frame.width,
+                .height = node.frame.height,
+            });
+        }
+
+        var relations = std.ArrayList(Relation).empty;
+        errdefer deinitRelationItems(allocator, relations.items);
+        errdefer relations.deinit(allocator);
+        for (state.constraints.items) |constraint| {
+            try appendRelationModel(allocator, &relations, state, .explicit, constraint);
+        }
+        for (state.fallback_constraints.items) |constraint| {
+            try appendRelationModel(allocator, &relations, state, .fallback, constraint);
+        }
+
+        const owned_pages = try pages.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_pages);
+        const owned_objects = try objects.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_objects);
+        const owned_relations = try relations.toOwnedSlice(allocator);
+        errdefer {
+            deinitRelationItems(allocator, owned_relations);
+            allocator.free(owned_relations);
+        }
+        return .{
+            .allocator = allocator,
+            .pages = owned_pages,
+            .objects = owned_objects,
+            .relations = owned_relations,
+            .failure_count = state.constraint_failures.items.len,
+        };
+    }
+
+    pub fn deinit(self: *Report) void {
+        self.allocator.free(self.pages);
+        self.allocator.free(self.objects);
+        deinitRelationItems(self.allocator, self.relations);
+        self.allocator.free(self.relations);
+        self.* = .{
+            .allocator = self.allocator,
+            .pages = &.{},
+            .objects = &.{},
+            .relations = &.{},
+            .failure_count = 0,
+        };
+    }
+
+    pub fn objectById(self: *const Report, node_id: NodeId) ?Object {
+        for (self.objects) |object| if (object.id == node_id) return object;
+        return null;
+    }
+
+    pub fn pageById(self: *const Report, page_id: NodeId) ?Page {
+        for (self.pages) |page| if (page.id == page_id) return page;
+        return null;
+    }
+};
+
+fn appendRelationModel(
+    allocator: std.mem.Allocator,
+    relations: *std.ArrayList(Relation),
+    state: anytype,
+    kind: RelationKind,
+    constraint: Constraint,
+) !void {
+    const relation = try initRelation(allocator, state, kind, constraint);
+    errdefer if (relation.location) |location| allocator.free(location.path);
+    try relations.append(allocator, relation);
+}
+
+fn initRelation(allocator: std.mem.Allocator, state: anytype, kind: RelationKind, constraint: Constraint) !Relation {
+    const located = try cloneLocation(allocator, state, constraint.origin);
+    errdefer if (located) |location| allocator.free(location.path);
+    return .{
+        .kind = kind,
+        .target_node = constraint.target_node,
+        .target_anchor = constraint.target_anchor,
+        .source = constraint.source,
+        .offset = constraint.offset,
+        .axis = graph.anchorAxis(constraint.target_anchor),
+        .role = constraint.role,
+        .from_update = constraint.from_update,
+        .location = located,
+        .syntax = constraintSourceSyntax(state, constraint.origin),
+    };
+}
+
+fn deinitRelationItems(allocator: std.mem.Allocator, relations: []Relation) void {
+    for (relations) |relation| if (relation.location) |location| allocator.free(location.path);
+}
+
+fn cloneLocation(allocator: std.mem.Allocator, state: anytype, origin: ?[]const u8) !?Location {
+    const origin_text = origin orelse return null;
+    const located = utils.err.parseLocatedOrigin(origin_text) orelse return null;
+    const module = if (located.path) |origin_path| state.moduleByPathOrSpec(origin_path) else state.projectModule();
+    const path = if (module) |value|
+        value.path orelse value.spec
+    else
+        located.path orelse state.projectPath();
+    return .{
+        .path = try allocator.dupe(u8, path),
+        .start = located.span.start,
+        .end = located.span.end,
+    };
+}
+
+fn constraintSourceSyntax(state: anytype, origin: ?[]const u8) ?ConstraintSyntax {
+    const located = utils.err.parseLocatedOrigin(origin orelse return null) orelse return null;
+    const module = if (located.path) |origin_path|
+        state.moduleByPathOrSpec(origin_path) orelse return null
+    else
+        state.projectModule();
+    const statement = findStatement(&module.syntax, .{
+        .start = located.span.start,
+        .end = located.span.end,
+    }) orelse return null;
+    const constraint = switch (statement.kind) {
+        .constrain => |value| value,
+        else => return null,
+    };
+    const syntax = constraint.syntax orelse return null;
+    return .{
+        .action = constraint.action,
+        .target = .{ .start = syntax.target.start, .end = syntax.target.end },
+        .source = if (syntax.source) |span| .{ .start = span.start, .end = span.end } else null,
+        .offset = if (syntax.offset) |span| .{ .start = span.start, .end = span.end } else null,
+    };
+}
+
+fn findStatement(module: *const ast.Module, span: ast.Span) ?*const ast.Statement {
+    if (findStatementInList(module.document_statements.items, span)) |statement| return statement;
+    for (module.functions.items) |*function| {
+        if (findStatementInList(function.statements.items, span)) |statement| return statement;
+    }
+    for (module.pages.items) |*page| {
+        if (findStatementInList(page.statements.items, span)) |statement| return statement;
+    }
+    return null;
+}
+
+fn findStatementInList(statements: []const ast.Statement, span: ast.Span) ?*const ast.Statement {
+    for (statements) |*statement| {
+        if (statement.span.start == span.start and statement.span.end == span.end) return statement;
+        switch (statement.kind) {
+            .if_stmt => |conditional| {
+                if (findStatementInList(conditional.then_statements.items, span)) |nested| return nested;
+                if (findStatementInList(conditional.else_statements.items, span)) |nested| return nested;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
 
 pub fn toJson(allocator: std.mem.Allocator, state: anytype) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
