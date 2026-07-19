@@ -1807,6 +1807,29 @@ test "compiler semantics: default theme applies code theme to code and markdown"
     try expectObjectFieldPath(source, "text", &.{"markdown_code_fill"}, "0.9647059,0.972549,0.98039216");
 }
 
+test "compiler semantics: default code fonts use the generic monospace family" {
+    const code_source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  code!("const value = 1", "javascript")
+        \\end
+        \\
+    ;
+    try expectObjectFieldPath(code_source, "text", &.{ "font", "family" }, "monospace");
+    try expectObjectFieldPath(code_source, "text", &.{ "code_font", "family" }, "monospace");
+
+    const markdown_source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  text!("```javascript\nconst value = 1\n```")
+        \\end
+        \\
+    ;
+    try expectObjectFieldPath(markdown_source, "text", &.{ "code_font", "family" }, "monospace");
+}
+
 test "compiler semantics: structured style value members are typed" {
     try expectObjectFieldPath(
         \\import std:themes/default as *

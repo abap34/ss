@@ -141,7 +141,7 @@ record TextStyle {
   font: FontFace = FontFace { family = "Helvetica" }
   bold_weight: Number = 700
   italic_style: FontStyle = FontStyle.italic
-  code_font: FontFace = FontFace { family = "Courier" }
+  code_font: FontFace = FontFace { family = "monospace" }
   size: Number = 20
   line_height: Number? = none
   color: Color = c"0.08,0.08,0.08"
@@ -412,8 +412,8 @@ type Code = object {
   render_kind: RenderKind = RenderKind.code
   text: TextStyle = TextStyle {
     parse = TextParseMode.none
-    font = FontFace { family = "Courier" }
-    code_font = FontFace { family = "Courier" }
+    font = FontFace { family = "monospace" }
+    code_font = FontFace { family = "monospace" }
     size = 15
     color = c"0.12,0.12,0.12"
   }

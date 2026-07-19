@@ -13,7 +13,7 @@ fn default_theme() -> Theme
       text = TextStyle {
         parse = TextParseMode.block
         font = FontFace { family = "Helvetica" }
-        code_font = FontFace { family = "Courier" }
+        code_font = FontFace { family = "monospace" }
         size = 24
         line_height = 31
         color = c"0.07,0.08,0.10"
@@ -202,8 +202,8 @@ fn default_theme() -> Theme
     code = CodeBlockStyle {
       text = TextStyle {
         parse = TextParseMode.none
-        font = FontFace { family = "Menlo" }
-        code_font = FontFace { family = "Menlo" }
+        font = FontFace { family = "monospace" }
+        code_font = FontFace { family = "monospace" }
         size = 16
         line_height = none
         color = c"0.12,0.12,0.12"
