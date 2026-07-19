@@ -150,7 +150,7 @@ extern "C" int ss_qpdf_merge(
         }
         stage = "write merged PDF";
         QPDFWriter writer(destination, output);
-        writer.setStaticID(true);
+        writer.setDeterministicID(true);
         writer.write();
         return 0;
     } catch (std::exception const& error) {
@@ -171,7 +171,7 @@ extern "C" int ss_qpdf_empty(char const* output) {
         QPDF pdf;
         pdf.emptyPDF();
         QPDFWriter writer(pdf, output);
-        writer.setStaticID(true);
+        writer.setDeterministicID(true);
         writer.write();
         return 0;
     } catch (std::exception const& error) {
@@ -492,7 +492,7 @@ extern "C" int ss_qpdf_compose(char const* output, SsQpdfLayer const* layers, si
 
         stage = "write composed PDF";
         QPDFWriter writer(destination, output);
-        writer.setStaticID(true);
+        writer.setDeterministicID(true);
         writer.write();
         return 0;
     } catch (std::exception const& error) {

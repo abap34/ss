@@ -40,6 +40,12 @@ fn expectCString(ptr: [*c]const u8) !void {
     try testing.expect(std.mem.span(sentinel).len > 0);
 }
 
+fn expectDeterministicDocumentId(io: std.Io, pdf_path: []const u8) !void {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, pdf_path, testing.allocator, .limited(2 * 1024 * 1024));
+    defer testing.allocator.free(bytes);
+    try testing.expect(std.mem.indexOf(u8, bytes, "31415926535897932384626433832795") == null);
+}
+
 fn expectUriLinkRect(json: []const u8, uri: []const u8, expected: [4]f64) !void {
     var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
     defer parsed.deinit();
@@ -440,6 +446,7 @@ test "render PDF spec: libqpdf composes a selectable page form and copies links"
         qpdfLayer(source_path_z.ptr, 40, 30, 160, 90, true),
     };
     try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_compose(output_path_z.ptr, &layers, layers.len));
+    try expectDeterministicDocumentId(testing.io, output_path);
 
     const json = try qpdfJson(allocator, testing.io, output_path);
     defer allocator.free(json);
