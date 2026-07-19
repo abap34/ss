@@ -639,6 +639,14 @@ fn md_bold(obj: Object, color_name: Color?) -> Object
   return render::md_bold(obj, color_name)
 end
 
+fn md_underline_style(color_name: Color? = none, opacity_name: Number = 1, width_name: Number? = none, offset_name: Number = 0, dash_name: String = "") -> MarkdownUnderlineStyle
+  return render::md_underline_style(color_name, opacity_name, width_name, offset_name, dash_name)
+end
+
+fn md_underline(obj: Object, style: MarkdownUnderlineStyle = MarkdownUnderlineStyle {}) -> Object
+  return render::md_underline(obj, style)
+end
+
 fn md_table(obj: Object, pad_x_name: Number, pad_y_name: Number, border_name: Color, line_width_name: Number, header_fill_name: Color, alt_row_fill_name: Color? = none) -> Object
   return render::md_table(obj, pad_x_name, pad_y_name, border_name, line_width_name, header_fill_name, alt_row_fill_name)
 end

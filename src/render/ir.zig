@@ -445,6 +445,21 @@ pub const Page = struct {
         dash_on: f64,
         dash_off: f64,
     ) !void {
+        return self.appendStrokeLineWithOpacity(allocator, node_id, start, end, line_width, color, dash_on, dash_off, 1);
+    }
+
+    pub fn appendStrokeLineWithOpacity(
+        self: *Page,
+        allocator: std.mem.Allocator,
+        node_id: ?core.NodeId,
+        start: Point,
+        end: Point,
+        line_width: f64,
+        color: core.render_policy.Color,
+        dash_on: f64,
+        dash_off: f64,
+        opacity: f64,
+    ) !void {
         const half_width = @max(line_width / 2, 0);
         const dx = end.x - start.x;
         const dy = end.y - start.y;
@@ -463,8 +478,10 @@ pub const Page = struct {
             .width = bounds.width + x_padding * 2,
             .height = bounds.height + y_padding * 2,
         };
+        var header = self.itemHeader(node_id, bounds, ink_bounds);
+        header.opacity = opacity;
         try self.items.append(allocator, .{ .stroke_line = .{
-            .header = self.itemHeader(node_id, bounds, ink_bounds),
+            .header = header,
             .start = start,
             .end = end,
             .line_width = line_width,

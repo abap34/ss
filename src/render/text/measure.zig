@@ -8,6 +8,9 @@ const c = @cImport({
 pub const Decoration = struct {
     strikethrough: bool = false,
     underline: bool = false,
+    underline_opacity: f32 = 1,
+    underline_width: ?f32 = null,
+    underline_offset: f32 = 0,
 };
 
 pub const Bounds = struct {
@@ -125,14 +128,18 @@ pub fn layout(
             run.advance,
             run.strikethrough_position,
             run.strikethrough_thickness,
+            null,
+            0,
         );
-        if (decoration.underline) appendDecorationBounds(
+        if (decoration.underline and decoration.underline_opacity > 0) appendDecorationBounds(
             &decoration_bounds,
             run.x,
             run.baseline_y,
             run.advance,
             run.underline_position,
             run.underline_thickness,
+            decoration.underline_width,
+            decoration.underline_offset,
         );
     }
     return .{
@@ -160,14 +167,20 @@ fn appendDecorationBounds(
     baseline_y: f64,
     advance: f64,
     position: f64,
-    thickness: f64,
+    native_thickness: f64,
+    width: ?f32,
+    offset: f32,
 ) void {
+    const thickness = width orelse @as(f32, @floatCast(native_thickness));
     if (!(advance > 0) or !(thickness > 0)) return;
+    const native_center_y = baseline_y - position + native_thickness / 2;
+    const thickness_f64: f64 = thickness;
+    const offset_f64: f64 = offset;
     const value = Bounds{
         .x = @floatCast(x),
-        .y = @floatCast(baseline_y - position),
+        .y = @floatCast(native_center_y + offset_f64 - thickness_f64 / 2),
         .width = @floatCast(advance),
-        .height = @floatCast(thickness),
+        .height = thickness,
     };
     current.* = if (current.*) |bounds| bounds.unioned(value) else value;
 }

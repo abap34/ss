@@ -241,11 +241,29 @@ fn writeInlineTextPaint(object: *json.Object, spec: anytype) !void {
     try writeColor(object, "color", spec.color);
     try writeColor(object, "link_color", spec.link_color);
     try writeOptionalColor(object, "markdown_bold_color", spec.markdown_bold_color);
+    try writeMarkdownUnderlinePaint(object, spec.markdown_underline);
     try object.floatField("inline_math_height_factor", spec.inline_math_height_factor, "{d:.4}");
     try object.floatField("inline_math_spacing", spec.inline_math_spacing, "{d:.4}");
     try object.floatField("display_math_height_factor", spec.display_math_height_factor, "{d:.4}");
     try object.enumTagField("math_align", spec.math_align);
     try object.floatField("emoji_spacing", spec.emoji_spacing, "{d:.4}");
+}
+
+fn writeMarkdownUnderlinePaint(object: *json.Object, spec: core.render_policy.MarkdownUnderlinePaint) !void {
+    var underline = try object.objectField("markdown_underline");
+    try writeOptionalColor(&underline, "color", spec.color);
+    try underline.floatField("opacity", spec.opacity, "{d:.4}");
+    try underline.optionalFloatField("width", spec.width, "{d:.4}");
+    try underline.floatField("offset", spec.offset, "{d:.4}");
+    if (spec.dash) |dash| {
+        var dash_array = try underline.arrayField("dash");
+        try dash_array.floatItem(dash.on, "{d:.4}");
+        try dash_array.floatItem(dash.off, "{d:.4}");
+        try dash_array.end();
+    } else {
+        try underline.nullField("dash");
+    }
+    try underline.end();
 }
 
 fn writeOptionalMarkdownHeadingPaint(
