@@ -55,7 +55,7 @@ pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, s
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);
-    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program);
+    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{});
     defer index.deinit();
 
     var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
@@ -94,7 +94,7 @@ pub fn buildSourceWithOverlays(
 
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);
-    var index = try analysis.loadModuleIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
+    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{ .overlay = &overlay });
     defer index.deinit();
 
     var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
@@ -439,7 +439,7 @@ pub fn expectOverlayDiagnostic(
 
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);
-    var index = try analysis.loadModuleIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
+    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{ .overlay = &overlay });
     defer index.deinit();
 
     var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
@@ -477,7 +477,7 @@ pub fn expectDiagnosticWithOverlays(
 
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);
-    var index = try analysis.loadModuleIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
+    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{ .overlay = &overlay });
     defer index.deinit();
 
     var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
@@ -501,7 +501,7 @@ fn buildFinalizedDocumentState(io: std.Io, allocator: std.mem.Allocator, path: [
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);
-    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program);
+    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{});
     defer index.deinit();
 
     var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
@@ -529,7 +529,7 @@ fn buildFinalizedDocumentStateWithOverlays(
 
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);
-    var index = try analysis.loadModuleIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
+    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{ .overlay = &overlay });
     defer index.deinit();
 
     var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
@@ -552,7 +552,7 @@ pub fn expectDiagnostic(
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);
-    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program);
+    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{});
     defer index.deinit();
 
     var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
@@ -582,7 +582,7 @@ pub fn expectLoweringErrorDiagnostic(
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);
-    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program);
+    var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{});
     defer index.deinit();
 
     var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{

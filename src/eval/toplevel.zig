@@ -8,6 +8,7 @@ const fs_utils = utils.fs;
 const ast = @import("ast");
 const names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
+const declarations = @import("../language/declarations.zig");
 const registry = @import("../language/registry.zig");
 const execution = @import("../analysis/execution.zig");
 const value_contracts = @import("value_contracts.zig");
@@ -104,6 +105,7 @@ fn deinitValues(allocator: std.mem.Allocator, values: []core.Value) void {
 var diagnostic_path: []const u8 = "";
 threadlocal var active_module_id: core.SourceModuleId = 0;
 threadlocal var active_call_depth: u32 = 0;
+threadlocal var active_declarations: ?*const declarations.DeclarationIndex = null;
 
 const LowerDiagnostic = struct {
     err: anyerror,
@@ -278,6 +280,10 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
 }
 
 pub fn executeGraph(allocator: std.mem.Allocator, state: *core.DocumentState, graph: *const execution.ExecutionGraph) !void {
+    const previous_declarations = active_declarations;
+    active_declarations = &graph.declarations;
+    defer active_declarations = previous_declarations;
+
     var closures = ClosureStore.init(allocator);
     defer closures.deinit();
     var document_states = std.AutoHashMap(core.SourceModuleId, DocumentExecutionState).init(allocator);
@@ -445,7 +451,7 @@ fn evalExpr(
         .ident => |ident| blk: {
             const name = ident.name;
             if (env.get(name)) |value| break :blk try value.clone(state.allocator);
-            const sema = SemanticEnv.init(state, null, functions).forModule(active_module_id);
+            const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
             if (sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
                 break :blk try evalConstValue(state, page_id, context, mode, functions, closures, current_origin, resolved);
             }
@@ -866,7 +872,7 @@ fn evalCall(
             }
         }
     }
-    const sema = SemanticEnv.init(state, null, functions).forModule(active_module_id);
+    const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
     if (sema.resolvedConst(call.callee)) |resolved| {
         var const_value = try evalConstValue(state, page_id, context, mode, functions, closures, current_origin, resolved);
         defer const_value.deinit(state.allocator);
@@ -1841,7 +1847,7 @@ fn writePropertyPathToNode(
     }
 
     const node = state.getNode(node_id) orelse return error.UnknownNode;
-    const sema = SemanticEnv.init(state, null, functions).forModule(active_module_id);
+    const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
     const maybe_field = if (core.fields.classNameWithEnv(node, &sema)) |class_name|
         sema.field(class_name, property_name)
     else
@@ -1969,7 +1975,7 @@ fn executeStatement(
         .expr_stmt => |expr| {
             var value = switch (expr) {
                 .call => |call| blk: {
-                    const sema = SemanticEnv.init(state, null, functions).forModule(active_module_id);
+                    const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
                     if (sema.resolvedFunction(call.callee) != null) {
                         break :blk try executeCallStatement(state, page_id, context, mode, env, functions, closures, last_code_like, origin, call);
                     }
@@ -2065,7 +2071,7 @@ fn executeCallStatement(
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
-    const sema = SemanticEnv.init(state, null, functions).forModule(active_module_id);
+    const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
     const resolved = sema.resolvedFunction(call.callee) orelse {
         return try evalCall(state, page_id, context, mode, env, functions, closures, current_origin, call);
     };
@@ -2129,7 +2135,7 @@ fn invokeFunctionRef(
     if (function.closure_id) |closure_id| {
         return try invokeClosureValues(state, page_id, context, mode, env, functions, closures, function.module_id, closure_id, current_origin, args);
     }
-    const sema = SemanticEnv.init(state, null, functions).forModule(function.module_id);
+    const sema = SemanticEnv.init(state, active_declarations, functions).forModule(function.module_id);
     const resolved = sema.resolvedFunction(ast.CallableName.bare(function.name)) orelse {
         try reportUnknownFunction(state, function.name, current_origin);
         return error.UnknownFunction;

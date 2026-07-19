@@ -74,7 +74,7 @@ pub fn analyzeFile(
     if (progress) |p| p.begin("Analyze");
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
-    var index = analysis.loadModuleIndexWithOptions(allocator, io, request.asset_base_dir, parsed.module, .{
+    var index = analysis.loadModuleIndex(allocator, io, request.asset_base_dir, parsed.module, .{
         .overlay = request.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,

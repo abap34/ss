@@ -30,7 +30,7 @@ fn expectConstraint(
     return error.TestExpectedConstraint;
 }
 
-test "core IR spec: pages are ordered document children with one-based page indexes" {
+test "document state spec: pages are ordered document children with one-based page indexes" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -49,7 +49,7 @@ test "core IR spec: pages are ordered document children with one-based page inde
     try testing.expectEqual(second, document_children[1]);
 }
 
-test "core IR spec: containment is idempotent for the same parent-child pair" {
+test "document state spec: containment is idempotent for the same parent-child pair" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -63,7 +63,7 @@ test "core IR spec: containment is idempotent for the same parent-child pair" {
     try testing.expectEqual(object, children[0]);
 }
 
-test "core IR spec: page-local validation reports duplicate page ownership" {
+test "document state spec: page-local validation reports duplicate page ownership" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -77,7 +77,7 @@ test "core IR spec: page-local validation reports duplicate page ownership" {
     try expectDiagnosticCode(&state, "PageOwnershipConflict:");
 }
 
-test "core IR spec: page-local validation reports cross-page constraints" {
+test "document state spec: page-local validation reports cross-page constraints" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -92,7 +92,7 @@ test "core IR spec: page-local validation reports cross-page constraints" {
     try expectDiagnosticCode(&state, "CrossPageConstraint:");
 }
 
-test "core IR spec: page-local validation reports unowned layout objects" {
+test "document state spec: page-local validation reports unowned layout objects" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -106,7 +106,7 @@ test "core IR spec: page-local validation reports unowned layout objects" {
     try expectDiagnosticCode(&state, "UnownedLayoutObject:");
 }
 
-test "core IR spec: position updates replace deeper constraints across anchors on the same axis" {
+test "document state spec: position updates replace deeper constraints across anchors on the same axis" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -126,7 +126,7 @@ test "core IR spec: position updates replace deeper constraints across anchors o
     try testing.expect(state.constraints.items[1].from_update);
 }
 
-test "core IR spec: group position updates replace external placement of descendants" {
+test "document state spec: group position updates replace external placement of descendants" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -157,7 +157,7 @@ test "core IR spec: group position updates replace external placement of descend
     try expectConstraint(&state, root, .top, .position, true);
 }
 
-test "core IR spec: overlapping group and descendant updates use scope and source order" {
+test "document state spec: overlapping group and descendant updates use scope and source order" {
     var later_descendant = try initEmptyDocumentState();
     defer later_descendant.deinit();
 
@@ -193,7 +193,7 @@ test "core IR spec: overlapping group and descendant updates use scope and sourc
     try testing.expectEqual(@as(usize, 1), shallower_group.overridden_constraints.items.len);
 }
 
-test "core IR spec: size updates preserve position constraints" {
+test "document state spec: size updates preserve position constraints" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -222,7 +222,7 @@ test "core IR spec: size updates preserve position constraints" {
     try testing.expectEqual(@as(f32, 240), state.overridden_constraints.items[0].offset);
 }
 
-test "core IR spec: pure updates suppress inherited constraints without adding a replacement" {
+test "document state spec: pure updates suppress inherited constraints without adding a replacement" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -238,7 +238,7 @@ test "core IR spec: pure updates suppress inherited constraints without adding a
     try testing.expect(state.constraint_updates.items[0].active);
 }
 
-test "core IR spec: suppressed cross-page constraints are not diagnosed" {
+test "document state spec: suppressed cross-page constraints are not diagnosed" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -260,7 +260,7 @@ test "core IR spec: suppressed cross-page constraints are not diagnosed" {
     }
 }
 
-test "core IR spec: caller updates have authority over deeper updates" {
+test "document state spec: caller updates have authority over deeper updates" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -281,7 +281,7 @@ test "core IR spec: caller updates have authority over deeper updates" {
     try testing.expectEqual(@as(usize, 2), state.overridden_constraints.items.len);
 }
 
-test "core IR spec: later updates replace earlier updates in the same scope" {
+test "document state spec: later updates replace earlier updates in the same scope" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -301,7 +301,7 @@ test "core IR spec: later updates replace earlier updates in the same scope" {
     try testing.expectEqual(@as(usize, 1), state.overridden_constraints.items.len);
 }
 
-test "core IR spec: later pure updates suppress earlier replacements" {
+test "document state spec: later pure updates suppress earlier replacements" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -320,7 +320,7 @@ test "core IR spec: later pure updates suppress earlier replacements" {
     try testing.expect(state.overridden_constraints.items[1].from_update);
 }
 
-test "core IR spec: page unit collects inline math asset dependencies" {
+test "document state spec: prepared pages collect inline math asset dependencies" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -342,7 +342,7 @@ test "core IR spec: page unit collects inline math asset dependencies" {
     try testing.expectEqual(core.prepared.assetDependencyKey(object.asset_deps[0], object.tex_preamble), object.asset_keys[0]);
 }
 
-test "core IR spec: prepared page asset keys attach to layout results" {
+test "document state spec: prepared page asset keys attach to layout results" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -362,7 +362,7 @@ test "core IR spec: prepared page asset keys attach to layout results" {
     try testing.expectEqual(pages.pages[0].asset_keys[0], results.pages[0].asset_keys[0]);
 }
 
-test "core IR spec: layout results collect solved page frames" {
+test "document state spec: layout results collect solved page frames" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -384,7 +384,7 @@ test "core IR spec: layout results collect solved page frames" {
     try testing.expect(results.pages[0].measurement_keys.len > 0);
 }
 
-test "core IR spec: layout results own page diagnostics" {
+test "document state spec: layout results own page diagnostics" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -402,7 +402,7 @@ test "core IR spec: layout results own page diagnostics" {
     try testing.expectEqual(core.DiagnosticPhase.layout, results.pages[0].diagnostics[0].phase);
 }
 
-test "core IR spec: node fields reject duplicate keys" {
+test "document state spec: node fields reject duplicate keys" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -431,7 +431,7 @@ fn expectDiagnosticCode(state: *core.DocumentState, code: []const u8) !void {
     return error.ExpectedDiagnosticMissing;
 }
 
-test "core IR spec: explicit field reads ignore inherited class defaults" {
+test "document state spec: explicit field reads ignore inherited class defaults" {
     var state = try initDocumentStateWithLayoutClassDefaults();
     defer state.deinit();
 
@@ -454,7 +454,7 @@ test "core IR spec: explicit field reads ignore inherited class defaults" {
     try testing.expectApproxEqAbs(@as(f32, 40), explicit_offset, 0.0001);
 }
 
-test "core IR spec: render environment entries are deduplicated by full triple" {
+test "document state spec: render environment entries are deduplicated by full triple" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -520,7 +520,7 @@ fn zeroSpan() ast.Span {
     return .{ .start = 0, .end = 0 };
 }
 
-test "core IR spec: TeX preamble render environment resolves in document page object order" {
+test "document state spec: TeX preamble render environment resolves in document page object order" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 

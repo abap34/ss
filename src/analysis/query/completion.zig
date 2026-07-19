@@ -27,7 +27,10 @@ pub fn at(
 ) !Result {
     const budget = types.QueryBudget.start(opts);
     if (budget.expired()) return emptyResult(allocator);
-    var parsed = syntax.parseRecoveringWithSourceName(allocator, req.source, req.path) catch null;
+    var parsed = syntax.parseRecoveringWithSourceName(allocator, req.source, req.path) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => null,
+    };
     defer if (parsed) |*result| result.deinit(allocator);
     if (budget.expired()) {
         if (parsed) |*result| result.deinit(allocator);

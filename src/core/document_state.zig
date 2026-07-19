@@ -1,6 +1,6 @@
 const std = @import("std");
 const model = @import("model");
-const layout = @import("layout.zig");
+const layout = @import("../layout/root.zig");
 const ast = @import("ast");
 const value_text = @import("value_text.zig");
 

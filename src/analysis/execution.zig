@@ -5,6 +5,7 @@ const utils = @import("utils");
 
 const dependencies = @import("dependencies.zig");
 const semantic_env = @import("../language/env.zig");
+const declarations = @import("../language/declarations.zig");
 
 const SemanticEnv = semantic_env.SemanticEnv;
 
@@ -50,6 +51,7 @@ pub const DependencyEdge = struct {
 
 pub const ExecutionGraph = struct {
     allocator: std.mem.Allocator,
+    declarations: declarations.DeclarationIndex,
     units: std.ArrayList(ExecutionUnit),
     edges: std.ArrayList(DependencyEdge),
     order: []usize,
@@ -62,6 +64,7 @@ pub const ExecutionGraph = struct {
     ) !ExecutionGraph {
         var graph = ExecutionGraph{
             .allocator = allocator,
+            .declarations = try declarations.build(allocator, state),
             .units = .empty,
             .edges = .empty,
             .order = &.{},
@@ -78,6 +81,7 @@ pub const ExecutionGraph = struct {
             .state = state,
             .diagnostic_state = diagnostic_state,
             .functions = &state.functions,
+            .declarations = &graph.declarations,
             .units = &graph.units,
             .collected_modules = &collected_modules,
             .run_cache = &run_cache,
@@ -102,6 +106,7 @@ pub const ExecutionGraph = struct {
         self.edges.deinit(self.allocator);
         for (self.units.items) |*unit| unit.deinit();
         self.units.deinit(self.allocator);
+        self.declarations.deinit();
     }
 };
 
@@ -115,6 +120,7 @@ const GraphBuilder = struct {
     state: *const core.DocumentState,
     diagnostic_state: *core.DocumentState,
     functions: *const core.FunctionMap,
+    declarations: *const declarations.DeclarationIndex,
     units: *std.ArrayList(ExecutionUnit),
     collected_modules: *std.AutoHashMap(core.SourceModuleId, void),
     run_cache: *dependencies.RunCache,
@@ -161,7 +167,7 @@ const GraphBuilder = struct {
         statement_start: usize,
         statement_count: usize,
     ) !void {
-        const sema = SemanticEnv.init(self.state, null, self.functions).forModule(module.id);
+        const sema = SemanticEnv.init(self.state, self.declarations, self.functions).forModule(module.id);
         var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .document = sema.module_id }, self.run_cache);
         defer analyzer.deinit();
         const statement_end = @min(statement_start + statement_count, module.syntax.document_statements.items.len);
@@ -193,7 +199,7 @@ const GraphBuilder = struct {
         page: ast.PageDecl,
     ) !void {
         const page_id = try self.nextPageId(page.name);
-        const sema = SemanticEnv.init(self.diagnostic_state, null, self.functions).forModule(module.id);
+        const sema = SemanticEnv.init(self.diagnostic_state, self.declarations, self.functions).forModule(module.id);
         var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .page = page_id }, self.run_cache);
         defer analyzer.deinit();
         for (page.statements.items, 0..) |stmt, stmt_index| {

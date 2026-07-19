@@ -219,7 +219,7 @@ pub fn originPathForModule(module: *const core.SourceModule) []const u8 {
     return module.path orelse module.spec;
 }
 
-fn statementOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: ast.Span) ![]const u8 {
+pub fn sourceOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: ast.Span) ![]const u8 {
     if (origin_path.len != 0) {
         return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ origin_path, span.start, span.end });
     }
@@ -234,7 +234,7 @@ fn addUserReport(state: ?*core.DocumentState, origin: []const u8, comptime fmt: 
     });
 }
 
-fn continueAfterDiagnostic(state: *const core.DocumentState, diagnostic_count_before: usize, err: anyerror) !void {
+pub fn continueAfterDiagnostic(state: *const core.DocumentState, diagnostic_count_before: usize, err: anyerror) !void {
     if (state.diagnostics.items.len > diagnostic_count_before) return;
     return err;
 }
@@ -257,7 +257,7 @@ pub fn checkPageNamesUnique(
         const origin_path = originPathForModule(module);
         for (module.syntax.pages.items) |page| {
             if (pages.contains(page.name)) {
-                const origin = try statementOrigin(allocator, origin_path, page.span);
+                const origin = try sourceOrigin(allocator, origin_path, page.span);
                 defer allocator.free(origin);
                 try addUserReport(state, origin, "DuplicatePage: page '{s}' is already defined", .{page.name});
                 return error.DuplicatePage;
@@ -277,7 +277,7 @@ pub fn checkFunction(
     var env = TypeEnv.init(allocator);
     defer env.deinit();
 
-    const func_origin = try statementOrigin(allocator, origin_path, func.span);
+    const func_origin = try sourceOrigin(allocator, origin_path, func.span);
     defer allocator.free(func_origin);
     for (func.params.items) |param| {
         try rejectDuplicateBinding(state, &env, param.name, func_origin);
@@ -306,7 +306,7 @@ pub fn checkConst(
     origin_path: []const u8,
     constant_decl: ast.ConstDecl,
 ) !void {
-    const origin = try statementOrigin(allocator, origin_path, constant_decl.span);
+    const origin = try sourceOrigin(allocator, origin_path, constant_decl.span);
     defer allocator.free(origin);
 
     var env = TypeEnv.init(allocator);
@@ -391,7 +391,7 @@ fn checkTopLevelStatement(
     page_context: *PageContextRequirement,
     stmt: ast.Statement,
 ) !void {
-    const origin = try statementOrigin(allocator, origin_path, stmt.span);
+    const origin = try sourceOrigin(allocator, origin_path, stmt.span);
     defer allocator.free(origin);
     switch (stmt.kind) {
         .hole => return,
@@ -569,7 +569,7 @@ fn checkStatement(
     result_type: Type,
     stmt: ast.Statement,
 ) !void {
-    const origin = try statementOrigin(allocator, origin_path, stmt.span);
+    const origin = try sourceOrigin(allocator, origin_path, stmt.span);
     defer allocator.free(origin);
     switch (stmt.kind) {
         .hole => return,
