@@ -135,6 +135,20 @@ be painful.
 ss uses real local LaTeX for math rendering, so uncommon notation should not be
 a problem. Use `\lightning` as much as you want.
 
+The TeX engine can be selected for a document or an individual page. LuaLaTeX
+with `luatexja-fontspec` is suitable when raw TeX contains Japanese text:
+
+```text
+document
+  tex_engine(TexEngine.lualatex)
+  tex_preamble("\usepackage{luatexja-fontspec}")
+  tex_preamble("\setmainjfont{HaranoAjiMincho-Regular}")
+end
+```
+
+Use `page_tex_engine(TexEngine.lualatex)` for a page-local override. The
+available engine values are `TexEngine.pdflatex` and `TexEngine.lualatex`.
+
 ### 5. Carefully Designed for Analysis, Extensibility, and Performance
 
 ss is also designed with attention to properties such as termination of
@@ -207,7 +221,8 @@ brew install ss
 ```
 
 The Homebrew formula installs the dependencies **without** the TeX tools.
-LaTeX math rendering still needs a TeX distribution that provides `pdflatex`.
+Raw LaTeX math rendering still needs a TeX distribution that provides the
+configured engine.
 
 ### Build From Source
 
@@ -222,7 +237,7 @@ ss has the following dependencies:
 | tree-sitter | Syntax Highlight. |
 | `git` | Fetch pinned tree-sitter runtime and parser sources during the first build. |
 | libqpdf headers and library | In-process PDF assembly and embedded PDF placement. |
-| `pdflatex` | LaTeX math rendering, when math objects are used. |
+| `pdflatex` or `lualatex` | Raw LaTeX math rendering, according to the document or page setting. |
 
 Run `ss doctor` to check project discovery, render tools, and tree-sitter syntax
 highlighting health in the current environment.

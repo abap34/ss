@@ -488,11 +488,11 @@ fn relativePathEscapesRoot(path: []const u8) bool {
 const DoctorTool = struct {
     name: []const u8,
     purpose: []const u8,
-    required: bool = false,
 };
 
 const doctor_tools = [_]DoctorTool{
     .{ .name = "pdflatex", .purpose = "LaTeX math rendering" },
+    .{ .name = "lualatex", .purpose = "LuaLaTeX math rendering" },
 };
 
 fn runDoctor(
@@ -587,21 +587,20 @@ fn doctorResolvedProject(
 
 fn doctorTools(allocator: std.mem.Allocator, environ: std.process.Environ) !usize {
     std.debug.print("\nrender tools:\n", .{});
-    var issues: usize = 0;
+    var available: usize = 0;
     for (doctor_tools) |tool| {
         const found = try findOnPath(allocator, environ, tool.name);
         if (found) |path| {
             defer allocator.free(path);
             std.debug.print("  ok {s}: {s}\n", .{ tool.name, path });
-        } else if (tool.required) {
-            std.debug.print("  fail {s}: not found ({s})\n", .{ tool.name, tool.purpose });
-            issues += 1;
+            available += 1;
         } else {
-            std.debug.print("  warn {s}: not found ({s})\n", .{ tool.name, tool.purpose });
-            issues += 1;
+            std.debug.print("  info {s}: not found ({s})\n", .{ tool.name, tool.purpose });
         }
     }
-    return issues;
+    if (available != 0) return 0;
+    std.debug.print("  warn TeX engine: neither pdflatex nor lualatex was found\n", .{});
+    return 1;
 }
 
 fn doctorTreeSitter(

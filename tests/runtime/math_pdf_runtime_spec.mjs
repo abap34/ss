@@ -6,6 +6,7 @@ import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
 
 const pdflatexAvailable = await commandSucceeds("pdflatex", ["--version"]);
+const lualatexAvailable = await commandSucceeds("lualatex", ["--version"]);
 const pdftotextAvailable = await commandSucceeds("pdftotext", ["-v"]);
 
 if (pdflatexAvailable && pdftotextAvailable) {
@@ -13,6 +14,43 @@ if (pdflatexAvailable && pdftotextAvailable) {
   await testMarkdownMathUsesPreambleFallback();
   if (await commandSucceeds("kpsewhich", ["algorithm2e.sty"])) {
     await testAlgorithm2eRemainsSelectable();
+  }
+}
+if (
+  lualatexAvailable &&
+  await commandSucceeds("kpsewhich", ["luatexja-fontspec.sty"]) &&
+  await commandSucceeds("kpsewhich", ["HaranoAjiMincho-Regular.otf"])
+) {
+  await testLuaLaTeXRendersJapaneseText();
+}
+
+async function testLuaLaTeXRendersJapaneseText() {
+  const project = await mkdtempProject("ss-lualatex-japanese-");
+  try {
+    await writeFile(
+      path.join(project, "slide.ss"),
+      `import std:themes/default as *
+
+document
+  tex_engine(TexEngine.pdflatex)
+  tex_preamble("\\usepackage{luatexja-fontspec}")
+  tex_preamble("\\setmainjfont{HaranoAjiMincho-Regular}")
+end
+
+page formula
+page_tex_engine(TexEngine.lualatex)
+tex!("日本語を含む数式 $x^2$")
+end
+`,
+      "utf8",
+    );
+
+    const render = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project);
+    assert(render.code === 0, `LuaLaTeX render failed:\n${combinedOutput(render)}`);
+    const pdf = await readFile(path.join(project, "out.pdf"));
+    assert(pdf.subarray(0, 5).toString("ascii") === "%PDF-", "LuaLaTeX render did not produce a PDF");
+  } finally {
+    await rm(project, { recursive: true, force: true });
   }
 }
 

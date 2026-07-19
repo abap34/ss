@@ -1129,14 +1129,17 @@ fn validateExtendRenderEnvCall(
     const op = resolveStringLiteral(env, call.args.items[1]);
     const key = resolveStringLiteral(env, call.args.items[2]);
     if (op) |literal| {
-        if (!std.mem.eql(u8, literal, core.render_env.OpAdd)) {
+        if (!std.mem.eql(u8, literal, core.render_env.OpAdd) and
+            !std.mem.eql(u8, literal, core.render_env.OpSet))
+        {
             try addUserReport(state, origin, "InvalidRenderEnv: unsupported render environment op: {s}", .{literal});
             return error.InvalidType;
         }
     }
     if (key) |literal| {
         if (!std.mem.eql(u8, literal, core.render_env.KeyMathTexPreamble) and
-            !std.mem.eql(u8, literal, core.render_env.KeyMathTexPreambleFile))
+            !std.mem.eql(u8, literal, core.render_env.KeyMathTexPreambleFile) and
+            !std.mem.eql(u8, literal, core.render_env.KeyMathTexEngine))
         {
             try addUserReport(state, origin, "InvalidRenderEnv: unsupported render environment key: {s}", .{literal});
             return error.InvalidType;
@@ -1150,6 +1153,14 @@ fn validateExtendRenderEnvCall(
         if (resolveStringLiteral(env, call.args.items[3])) |path| {
             if (!core.render_env.isValidTexPreambleFilePath(path)) {
                 try addUserReport(state, origin, "InvalidRenderEnv: empty TeX preamble file path", .{});
+                return error.InvalidType;
+            }
+        }
+    }
+    if (key != null and core.render_env.isTexEngineKey(key.?)) {
+        if (resolveStringLiteral(env, call.args.items[3])) |engine| {
+            if (!core.render_env.isValidTexEngine(engine)) {
+                try addUserReport(state, origin, "InvalidRenderEnv: TeX engine must be pdflatex or lualatex", .{});
                 return error.InvalidType;
             }
         }

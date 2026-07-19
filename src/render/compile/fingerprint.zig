@@ -22,6 +22,7 @@ pub const Command = struct {
     parse_mode: []const u8,
     render: core.render_policy.ResolvedRender,
     tex_preamble: []const TexPreambleEntry,
+    tex_engine: core.render_env.TexEngine,
     math_kind: []const u8,
     raw_tex: bool,
 };
@@ -65,6 +66,7 @@ pub fn mathArtifactKey(
     cache_version: []const u8,
     source: []const u8,
     preamble: []const TexPreambleEntry,
+    engine: core.render_env.TexEngine,
     kind: []const u8,
 ) !u64 {
     var files = std.StringHashMap(File).init(ctx.allocator);
@@ -77,6 +79,7 @@ pub fn mathArtifactKey(
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, cache_version);
     hashString(&hasher, "math");
+    hashString(&hasher, @tagName(engine));
     hashString(&hasher, kind);
     hashString(&hasher, source);
     try hashTexPreamble(ctx, &files, &hasher, preamble);
@@ -88,7 +91,10 @@ fn hashCommand(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.
     hashString(hasher, command.content);
     hashOptionalString(hasher, command.link_id);
     hashString(hasher, command.parse_mode);
-    if (command.render.kind == .vector_math and command.raw_tex) {
+    if ((command.render.kind == .vector_math and command.raw_tex) or
+        (command.render.kind == .text and command.tex_preamble.len != 0))
+    {
+        hashString(hasher, @tagName(command.tex_engine));
         try hashTexPreamble(ctx, files, hasher, command.tex_preamble);
     }
     hashResolvedRender(hasher, command.render);

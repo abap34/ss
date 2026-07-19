@@ -8,6 +8,7 @@ type FitPolicy = warn | error | ignore
 type Align = left | center | right
 type FontStyle = normal | oblique | italic
 type FontStretch = ultra_condensed | extra_condensed | condensed | semi_condensed | normal | semi_expanded | expanded | extra_expanded | ultra_expanded
+type TexEngine = pdflatex | lualatex
 
 record FontFace {
   family: String = "Helvetica"

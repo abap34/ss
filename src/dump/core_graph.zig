@@ -89,6 +89,7 @@ fn writeRenderEnv(object: *json.Object, env: core.render_env.Resolved) !void {
     var root = try object.objectField("render_env");
     var math = try root.objectField("math");
     var tex = try math.objectField("tex");
+    try tex.enumTagField("engine", env.tex_engine);
     var preamble = try tex.arrayField("preamble");
     for (env.tex_preamble.items) |entry| {
         var item = try preamble.objectItem();

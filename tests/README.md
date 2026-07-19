@@ -36,7 +36,8 @@ ImageMagick．
 PDF-only pixel behavior is checked by `zig build test-render-behavior` with the
 same Chromium and PDF.js capture path．This local-only step covers off-page
 clipping，embedded PDF sizing，and math scaling．Raw TeX cases run only when
-`pdflatex` is available．No visual test uses Poppler or ImageMagick．
+their configured TeX engine is available．No visual test uses Poppler or
+ImageMagick．
 
 Fixed-document rendering performance is measured with five runs per mode by
 `zig build -Doptimize=ReleaseSafe benchmark-render`．The first measured run is

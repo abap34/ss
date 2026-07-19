@@ -1,6 +1,14 @@
 import std:core/classes as classes
 import std:core/objects as objects
 
+fn tex_engine(engine: classes::TexEngine) -> Void
+  extend_render_env(docctx(), "set", "math.tex.engine", engine)
+end
+
+fn page_tex_engine(engine: classes::TexEngine) -> Void
+  extend_render_env(pagectx(), "set", "math.tex.engine", engine)
+end
+
 fn tex_preamble(src: String) -> Void
   extend_render_env(docctx(), "add", "math.tex.preamble", src)
 end
