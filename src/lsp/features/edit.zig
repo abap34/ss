@@ -40,35 +40,24 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse
         return try statusJson(ctx.allocator, "unsupported", "No compiler snapshot is available.");
     const layout = if (snapshot.layout_output) |*value| value else return try statusJson(ctx.allocator, "unsupported", "No solved layout is available.");
-    const editor_json = layout.editor_json orelse
-        return try statusJson(ctx.allocator, "unsupported", "The WYSIWYG editor is not active.");
+    const editor = if (layout.editor) |*value| value else return try statusJson(ctx.allocator, "unsupported", "The WYSIWYG editor is not active.");
 
-    var parsed = try utils.json.parseValue(ctx.allocator, editor_json, .{});
-    defer parsed.deinit();
-    if (parsed.value != .object) return try statusJson(ctx.allocator, "unsupported", "Invalid compiler snapshot.");
-    const root = &parsed.value.object;
-    const expected_id = protocol.stringField(root, "snapshot_id") orelse "";
     const requested_id = protocol.stringField(request_object, "snapshotId") orelse "";
-    if (requested_id.len == 0 or !std.mem.eql(u8, expected_id, requested_id) or snapshot.generation != ctx.documents.generation) {
+    if (requested_id.len == 0 or !std.mem.eql(u8, editor.model.snapshot_id, requested_id) or snapshot.generation != ctx.documents.generation) {
         return try statusJson(ctx.allocator, "stale", "The document changed before the edit was applied.");
     }
 
     const node_id: u32 = @intCast(@max(0, protocol.intField(request_object, "nodeId") orelse 0));
-    const editing = edit_relations.editingTarget(root, node_id) orelse
+    const editing = editor.model.editingTarget(node_id) orelse
         return try statusJson(ctx.allocator, "unsupported", "This object has no editable binding in the page.");
     const requested_page_id = protocol.intField(request_object, "pageId") orelse -1;
-    const target_page_id = protocol.intField(editing, "page_id") orelse -1;
-    if (requested_page_id != target_page_id) {
+    if (requested_page_id != editing.page_id) {
         return try statusJson(ctx.allocator, "stale", "The selected object no longer belongs to this page.");
     }
-    const path = protocol.stringField(editing, "path") orelse doc_path;
-    const binding = protocol.stringField(editing, "binding") orelse
-        return try statusJson(ctx.allocator, "unsupported", "The object has no source binding.");
-    const binding_required = protocol.boolField(editing, "binding_required") orelse false;
-    const page_span = editor_edit.ByteSpan{
-        .start = protocol.usizeField(editing, "page_start") orelse 0,
-        .end = protocol.usizeField(editing, "page_end") orelse 0,
-    };
+    const path = editing.path;
+    const binding = editing.binding;
+    const binding_required = editing.binding_required;
+    const page_span = editing.page;
     var owned_source: ?[]u8 = null;
     defer if (owned_source) |source| ctx.allocator.free(source);
     const source = ctx.documents.sourceForPath(path) orelse blk: {
@@ -106,7 +95,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         if (binding_required) {
             return try statusJson(ctx.allocator, "unsupported", "Set an absolute position before keeping this object's relations.");
         }
-        const adjustments = try edit_relations.collect(ctx.allocator, root, source, path, node_id, binding, page_span, to_x - from_x, to_y - from_y);
+        const adjustments = try edit_relations.collect(ctx.allocator, &layout.report, &editor.model, path, node_id, binding, page_span, to_x - from_x, to_y - from_y);
         defer ctx.allocator.free(adjustments);
         if (!edit_relations.haveBothAxes(adjustments)) {
             return try statusJson(ctx.allocator, "unsupported", "Keeping relations requires expressible horizontal and vertical position relations.");
@@ -114,14 +103,9 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         break :blk (try editor_edit.relativePosition(ctx.allocator, source, page_span, adjustments)) orelse
             return try statusJson(ctx.allocator, "unsupported", "The page insertion point could not be located.");
     } else blk: {
-        const spans = try edit_relations.existingUpdateSpans(ctx.allocator, root, node_id, path, page_span);
-        defer ctx.allocator.free(spans);
-        const introduction: ?editor_edit.BindingIntroduction = if (binding_required) .{ .statement = .{
-            .start = protocol.usizeField(editing, "statement_start") orelse
-                return try statusJson(ctx.allocator, "unsupported", "The component statement has no source location."),
-            .end = protocol.usizeField(editing, "statement_end") orelse
-                return try statusJson(ctx.allocator, "unsupported", "The component statement has no source location."),
-        } } else null;
+        const updates = try edit_relations.existingUpdates(ctx.allocator, &layout.report, node_id, path, page_span);
+        defer ctx.allocator.free(updates);
+        const introduction: ?editor_edit.BindingIntroduction = if (binding_required) .{ .statement = editing.statement } else null;
         break :blk (try editor_edit.absolutePosition(
             ctx.allocator,
             source,
@@ -129,7 +113,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
             binding,
             to_x,
             to_y,
-            spans,
+            updates,
             introduction,
         )) orelse
             return try statusJson(ctx.allocator, "unsupported", "The page insertion point could not be located.");

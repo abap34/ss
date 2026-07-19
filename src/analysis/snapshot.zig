@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
+const editor_snapshot = @import("../editor/snapshot.zig");
 const project = @import("../project.zig");
 
 const diagnostics = @import("diagnostics.zig");
@@ -61,7 +62,7 @@ pub const SourceSet = struct {
 };
 
 pub const LayoutHookOutput = struct {
-    editor_json: ?[]u8 = null,
+    editor: ?editor_snapshot.Output = null,
 };
 
 pub const LayoutHook = struct {
@@ -218,20 +219,25 @@ pub const EnumCaseFact = struct {
 
 pub const LayoutOutput = struct {
     conflicts_json: []u8,
-    editor_json: ?[]u8 = null,
+    report: core.layout.conflicts.Report,
+    editor: ?editor_snapshot.Output = null,
 
-    pub fn fromDocumentState(allocator: std.mem.Allocator, state: *core.DocumentState, owned_editor_json: ?[]u8) !LayoutOutput {
-        errdefer if (owned_editor_json) |value| allocator.free(value);
+    pub fn fromDocumentState(allocator: std.mem.Allocator, state: *core.DocumentState, owned_editor: ?editor_snapshot.Output) !LayoutOutput {
+        var editor = owned_editor;
+        errdefer if (editor) |*value| value.deinit();
+        const conflicts_json = try core.layout.conflicts.toJson(allocator, state);
+        errdefer allocator.free(conflicts_json);
         return .{
-            .conflicts_json = try core.layout.conflicts.toJson(allocator, state),
-            .editor_json = owned_editor_json,
+            .conflicts_json = conflicts_json,
+            .report = try core.layout.conflicts.Report.init(allocator, state),
+            .editor = editor,
         };
     }
 
     pub fn deinit(self: *LayoutOutput, allocator: std.mem.Allocator) void {
         allocator.free(self.conflicts_json);
-        if (self.editor_json) |value| allocator.free(value);
-        self.* = .{ .conflicts_json = &.{}, .editor_json = null };
+        self.report.deinit();
+        if (self.editor) |*value| value.deinit();
     }
 };
 
@@ -496,7 +502,7 @@ pub fn build(
             if (execution_graph) |*graph| {
                 try options.checkCanceled();
                 if (hook.run(hook.context, &state, graph)) |result| {
-                    layout_output = try LayoutOutput.fromDocumentState(allocator, &state, result.editor_json);
+                    layout_output = try LayoutOutput.fromDocumentState(allocator, &state, result.editor);
                     try diagnostic_bag.addDocumentState(&state);
                 } else |err| switch (err) {
                     error.Canceled => return error.Canceled,
