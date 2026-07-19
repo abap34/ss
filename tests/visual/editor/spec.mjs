@@ -156,6 +156,22 @@ await withBrowser(output, async (browser, baseUrl) => {
       const second = shells[1].getBoundingClientRect();
       return second.top - first.bottom >= 45;
     });
+    await page.setViewportSize({ width: 560, height: 420 });
+    const pageSelectionScrollTop = await page.locator(".viewport").evaluate((viewport) => {
+      viewport.scrollTop = Math.min(37, viewport.scrollHeight - viewport.clientHeight);
+      return viewport.scrollTop;
+    });
+    assert(pageSelectionScrollTop > 0, "editor fixture did not produce a scrollable viewport");
+    await page.locator(".page-entry").first().click();
+    await page.evaluate(() => new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
+    assert.equal(
+      await page.locator(".viewport").evaluate((viewport) => viewport.scrollTop),
+      pageSelectionScrollTop,
+      "selecting a page from the sidebar forcibly scrolled the preview",
+    );
+    await page.setViewportSize({ width: 560, height: 920 });
     await page.waitForTimeout(100);
     await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas').evaluate((canvas) => {
       canvas.dataset.identity = "retained";
