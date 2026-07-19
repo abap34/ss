@@ -453,13 +453,26 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             var target = try ctx.materializeForUse(raw_target);
             const op = try ctx.evalStringArg(call, 1);
             const key = try ctx.evalStringArg(call, 2);
-            const value = try ctx.evalStringArg(call, 3);
+            var raw_value = try ctx.evalExprValue(call.args.items[3]);
+            defer raw_value.deinit(ctx.state.allocator);
+            const value = switch (raw_value) {
+                .string => |text| text,
+                .enum_case => |case| case.case_name,
+                else => {
+                    target.deinit(ctx.state.allocator);
+                    return error.ExpectedStringArgument;
+                },
+            };
             if (!core.render_env.isSupported(op, key)) {
-                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: supported render environment operations are add math.tex.preamble and add math.tex.preamble.file");
+                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: supported render environment operations are add math.tex.preamble, add math.tex.preamble.file, and set math.tex.engine");
                 break :blk target;
             }
             if (core.render_env.isTexPreambleFileKey(key) and !core.render_env.isValidTexPreambleFilePath(value)) {
                 try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: empty TeX preamble file path");
+                break :blk target;
+            }
+            if (core.render_env.isTexEngineKey(key) and !core.render_env.isValidTexEngine(value)) {
+                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: TeX engine must be pdflatex or lualatex");
                 break :blk target;
             }
             break :blk switch (target) {

@@ -18,6 +18,7 @@ pub const PreparedObject = struct {
     asset_deps: []AssetDependency = &.{},
     asset_keys: []u64 = &.{},
     tex_preamble: []const render_env.TexPreambleEntry,
+    tex_engine: render_env.TexEngine,
     origin: ?[]const u8,
     payload_kind: ?model.PayloadKind,
     attached: bool,
@@ -233,7 +234,7 @@ pub fn prepareObjectWithRender(
     const tex_preamble = try cloneTexPreambleEntries(allocator, env.tex_preamble.items);
     var tex_preamble_transferred = false;
     errdefer if (!tex_preamble_transferred) allocator.free(tex_preamble);
-    const asset_key_slice = try assetKeysForObject(allocator, asset_dep_slice, tex_preamble);
+    const asset_key_slice = try assetKeysForObject(allocator, asset_dep_slice, tex_preamble, env.tex_engine);
     var asset_keys_transferred = false;
     errdefer if (!asset_keys_transferred) allocator.free(asset_key_slice);
     asset_deps_transferred = true;
@@ -251,6 +252,7 @@ pub fn prepareObjectWithRender(
         .asset_deps = asset_dep_slice,
         .asset_keys = asset_key_slice,
         .tex_preamble = tex_preamble,
+        .tex_engine = env.tex_engine,
         .origin = node.origin,
         .payload_kind = node.payload_kind,
         .attached = node.attached,
@@ -278,13 +280,20 @@ pub fn pageById(pages: *const PreparedPages, page_id: model.NodeId) ?*const Prep
     return null;
 }
 
-pub fn assetDependencyKey(dep: AssetDependency, tex_preamble: []const render_env.TexPreambleEntry) u64 {
+pub fn assetDependencyKey(
+    dep: AssetDependency,
+    tex_preamble: []const render_env.TexPreambleEntry,
+    tex_engine: render_env.TexEngine,
+) u64 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, "ss-prepared-asset-v2");
     hashString(&hasher, @tagName(dep.kind));
     hashString(&hasher, dep.source);
     switch (dep.kind) {
-        .inline_math, .display_math, .block_math => hashTexPreamble(&hasher, tex_preamble),
+        .inline_math, .display_math, .block_math => {
+            hashString(&hasher, @tagName(tex_engine));
+            hashTexPreamble(&hasher, tex_preamble);
+        },
         .icon, .vector_pdf, .raster_asset => {},
     }
     return hasher.final();
@@ -294,10 +303,11 @@ fn assetKeysForObject(
     allocator: std.mem.Allocator,
     deps: []const AssetDependency,
     tex_preamble: []const render_env.TexPreambleEntry,
+    tex_engine: render_env.TexEngine,
 ) ![]u64 {
     var keys = std.ArrayList(u64).empty;
     errdefer keys.deinit(allocator);
-    for (deps) |dep| try appendUniqueKey(allocator, &keys, assetDependencyKey(dep, tex_preamble));
+    for (deps) |dep| try appendUniqueKey(allocator, &keys, assetDependencyKey(dep, tex_preamble, tex_engine));
     return try keys.toOwnedSlice(allocator);
 }
 

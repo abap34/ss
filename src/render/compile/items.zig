@@ -103,6 +103,7 @@ const Line = core.markdown.Line;
 const Block = core.markdown.Block;
 const Run = core.markdown.Run;
 const TexPreambleEntry = core.render_env.TexPreambleEntry;
+const TexEngine = core.render_env.TexEngine;
 
 const NativePdfError = error{
     ImageDecodeFailed,
@@ -162,6 +163,7 @@ const DrawContext = struct {
     emitter: ?render_emitter.Emitter = null,
     measurement_bounds: ?*MeasurementBounds = null,
     tex_preamble: []const TexPreambleEntry = &.{},
+    tex_engine: TexEngine = .pdflatex,
 };
 
 const MeasurementBounds = struct {
@@ -288,6 +290,7 @@ const PreloadTask = union(enum) {
 const MathPreload = struct {
     source: []const u8,
     preamble: []const TexPreambleEntry,
+    engine: TexEngine,
     kind: MathKind,
     target: RenderDiagnosticTarget = .{},
 };
@@ -419,6 +422,7 @@ const ObjectCommand = struct {
     text_layout: ?*const core.markdown.TextLayout = null,
     asset_deps: []const core.prepared.AssetDependency = &.{},
     tex_preamble: []const TexPreambleEntry,
+    tex_engine: TexEngine,
     math_kind: MathKind = .block,
     origin: ?[]const u8 = null,
     payload_kind: ?core.PayloadKind = null,
@@ -443,6 +447,7 @@ const MathBatchEntry = struct {
     task_index: usize,
     source: []const u8,
     preamble: []const TexPreambleEntry,
+    engine: TexEngine,
     kind: MathKind,
     out: []u8,
 };
@@ -584,6 +589,7 @@ pub const LayoutMeasurementScope = struct {
                 .parse_mode = @tagName(command.parse_mode),
                 .render = command.render,
                 .tex_preamble = command.tex_preamble,
+                .tex_engine = command.tex_engine,
                 .math_kind = @tagName(command.math_kind),
                 .raw_tex = command.math_kind == .raw_block,
             },
@@ -703,6 +709,7 @@ pub const LayoutMeasurementScope = struct {
             .text_layout = object.textLayout(),
             .asset_deps = object.asset_deps,
             .tex_preamble = try cloneTexPreambleEntries(allocator, object.tex_preamble),
+            .tex_engine = object.tex_engine,
             .math_kind = mathKindForNode(node),
             .origin = object.origin,
             .payload_kind = object.payload_kind,
@@ -917,6 +924,7 @@ fn initObjectCommand(
         .text_layout = object.textLayout(),
         .asset_deps = object.asset_deps,
         .tex_preamble = try cloneTexPreambleEntries(allocator, object.tex_preamble),
+        .tex_engine = object.tex_engine,
         .math_kind = mathKindForNode(node),
         .origin = object.origin,
         .payload_kind = object.payload_kind,
@@ -997,6 +1005,7 @@ fn collectPreparedObjectPreloads(
                     try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
                         .source = try ctx.allocator.dupe(u8, dep.source),
                         .preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
+                        .engine = object.tex_engine,
                         .kind = kind,
                         .target = dep_target,
                     } });
@@ -1007,6 +1016,7 @@ fn collectPreparedObjectPreloads(
                 if (kind == .raw_block) try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
                     .source = try ctx.allocator.dupe(u8, dep.source),
                     .preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
+                    .engine = object.tex_engine,
                     .kind = kind,
                     .target = dep_target,
                 } });
@@ -1065,6 +1075,7 @@ fn collectObjectPreloads(
             if (command.math_kind == .raw_block) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                 .source = try ctx.allocator.dupe(u8, command.content),
                 .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
+                .engine = command.tex_engine,
                 .kind = command.math_kind,
                 .target = targetWithContentSpan(target, 0, command.content.len),
             } });
@@ -1112,6 +1123,7 @@ fn collectAssetDepsForPlan(
                     try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                         .source = try ctx.allocator.dupe(u8, dep.source),
                         .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
+                        .engine = command.tex_engine,
                         .kind = kind,
                         .target = dep_target,
                     } });
@@ -1121,6 +1133,7 @@ fn collectAssetDepsForPlan(
                 if (command.math_kind == .raw_block) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                     .source = try ctx.allocator.dupe(u8, dep.source),
                     .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
+                    .engine = command.tex_engine,
                     .kind = command.math_kind,
                     .target = dep_target,
                 } });
@@ -1409,10 +1422,10 @@ fn preloadMathTaskBatches(
         };
         if (math.kind == .raw_block) continue;
 
-        const out = try cachedMathPath(ctx, math.source, math.preamble, math.kind, "ref");
+        const out = try cachedMathPath(ctx, math.source, math.preamble, math.engine, math.kind, "ref");
         var out_owned = true;
         errdefer if (out_owned) ctx.allocator.free(out);
-        const key = try mathBatchGroupKey(ctx, math.preamble);
+        const key = try mathBatchGroupKey(ctx, math.preamble, math.engine);
         var key_owned = true;
         errdefer if (key_owned) ctx.allocator.free(key);
 
@@ -1430,6 +1443,7 @@ fn preloadMathTaskBatches(
                 .task_index = index,
                 .source = math.source,
                 .preamble = math.preamble,
+                .engine = math.engine,
                 .kind = math.kind,
                 .out = out,
             });
@@ -1441,6 +1455,7 @@ fn preloadMathTaskBatches(
                 .task_index = index,
                 .source = math.source,
                 .preamble = math.preamble,
+                .engine = math.engine,
                 .kind = math.kind,
                 .out = out,
             });
@@ -1457,10 +1472,11 @@ fn preloadMathTaskBatches(
     }
 }
 
-fn mathBatchGroupKey(ctx: *DrawContext, preamble: []const TexPreambleEntry) ![]u8 {
+fn mathBatchGroupKey(ctx: *DrawContext, preamble: []const TexPreambleEntry, engine: TexEngine) ![]u8 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, native_artifact_cache_version);
     hashString(&hasher, "math-batch");
+    hashString(&hasher, @tagName(engine));
     for (preamble) |entry| {
         hashString(&hasher, @tagName(entry.source));
         hashString(&hasher, entry.value);
@@ -1492,7 +1508,7 @@ fn preloadMathBatchGroup(
     const tex = try mathBatchDocumentSource(ctx, entries);
     defer ctx.allocator.free(tex);
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = tex, .flags = .{ .truncate = true } });
-    try runChecked(ctx, &.{ "pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
+    try runChecked(ctx, &.{ entries[0].engine.executable(), "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
     try publishMathBatch(ctx, entries, pdf_path, metrics_path, progress, completed, total);
 }
 
@@ -1783,8 +1799,13 @@ fn deinitDestinationAnnotations(allocator: Allocator, destinations: []const Dest
 
 fn drawObjectCommand(ctx: *DrawContext, command: *const ObjectCommand) !void {
     const previous_preamble = ctx.tex_preamble;
+    const previous_engine = ctx.tex_engine;
     ctx.tex_preamble = command.tex_preamble;
-    defer ctx.tex_preamble = previous_preamble;
+    ctx.tex_engine = command.tex_engine;
+    defer {
+        ctx.tex_preamble = previous_preamble;
+        ctx.tex_engine = previous_engine;
+    }
     const visual_frame = try measuredObjectCommandVisualFrame(ctx, command);
     try addDestination(ctx, command.link_id, visual_frame);
     try drawObjectChrome(ctx, visual_frame, command.render);
@@ -1948,8 +1969,13 @@ fn measureObjectCommandContent(ctx: *DrawContext, command: *const ObjectCommand,
 
 fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, outer_width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
     const previous_preamble = ctx.tex_preamble;
+    const previous_engine = ctx.tex_engine;
     ctx.tex_preamble = command.tex_preamble;
-    defer ctx.tex_preamble = previous_preamble;
+    ctx.tex_engine = command.tex_engine;
+    defer {
+        ctx.tex_preamble = previous_preamble;
+        ctx.tex_engine = previous_engine;
+    }
     var render = command.render;
     if (mode == .natural) {
         if (render.text) |*text| text.wrap = false;
@@ -2108,7 +2134,7 @@ fn measureVectorMathIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, 
         );
         return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
     }
-    const math = try renderMathToPdf(ctx, command.content, command.tex_preamble, command.math_kind);
+    const math = try renderMathToPdf(ctx, command.content, command.tex_preamble, command.tex_engine, command.math_kind);
     defer ctx.allocator.free(math.path);
     const fitted = fitVectorMathSize(math.width, math.height, @max(width, 1), @max(height, 1), command.math_kind, command.render.math);
     return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
@@ -2174,7 +2200,7 @@ fn freePreloadTask(allocator: Allocator, task: PreloadTask) void {
 
 fn preloadTaskKey(ctx: *DrawContext, task: PreloadTask) ![]u8 {
     return switch (task) {
-        .math => |math| cachedMathPath(ctx, math.source, math.preamble, math.kind, "ref"),
+        .math => |math| cachedMathPath(ctx, math.source, math.preamble, math.engine, math.kind, "ref"),
         .icon => |icon| cachedIconPath(ctx, icon.source, "svg"),
         .vector_pdf => |asset| ctx.allocator.dupe(u8, asset.source),
         .raster => |raster| ctx.allocator.dupe(u8, raster.source),
@@ -2184,7 +2210,7 @@ fn preloadTaskKey(ctx: *DrawContext, task: PreloadTask) ![]u8 {
 fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
     switch (task) {
         .math => |math| {
-            const out = try cachedMathPath(ctx, math.source, math.preamble, math.kind, "ref");
+            const out = try cachedMathPath(ctx, math.source, math.preamble, math.engine, math.kind, "ref");
             defer ctx.allocator.free(out);
             const asset = try cachedMathReference(ctx, out) orelse return false;
             ctx.allocator.free(asset.path);
@@ -2203,7 +2229,7 @@ fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
 fn preloadTaskCached(ctx: *DrawContext, task: PreloadTask) !bool {
     switch (task) {
         .math => |math| {
-            const out = try cachedMathPath(ctx, math.source, math.preamble, math.kind, "ref");
+            const out = try cachedMathPath(ctx, math.source, math.preamble, math.engine, math.kind, "ref");
             defer ctx.allocator.free(out);
             const asset = try cachedMathReference(ctx, out) orelse return false;
             ctx.allocator.free(asset.path);
@@ -2222,7 +2248,7 @@ fn preloadTaskCached(ctx: *DrawContext, task: PreloadTask) !bool {
 fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
     switch (task) {
         .math => |math| {
-            const asset = try renderMathToPdf(ctx, math.source, math.preamble, math.kind);
+            const asset = try renderMathToPdf(ctx, math.source, math.preamble, math.engine, math.kind);
             ctx.allocator.free(asset.path);
         },
         .icon => |icon| {
@@ -2898,7 +2924,7 @@ fn inlineLineConstrainedLogicalWidth(ctx: *DrawContext, line: Line, text: TextPa
                     text,
                 );
             } else blk: {
-                const asset = try renderMathToPdf(ctx, source_text, ctx.tex_preamble, .display);
+                const asset = try renderMathToPdf(ctx, source_text, ctx.tex_preamble, ctx.tex_engine, .display);
                 defer ctx.allocator.free(asset.path);
                 break :blk fitDisplayMathBlockSize(asset.width, asset.height, width, text);
             };
@@ -3060,7 +3086,7 @@ fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, widt
     const source_size: Size = if (compiled) |value|
         .{ .width = @floatCast(value.layout.width), .height = @floatCast(value.layout.height) }
     else blk: {
-        raw_asset = try renderMathToPdf(ctx, source, ctx.tex_preamble, .display);
+        raw_asset = try renderMathToPdf(ctx, source, ctx.tex_preamble, ctx.tex_engine, .display);
         break :blk .{ .width = raw_asset.?.width, .height = raw_asset.?.height };
     };
     const fitted = fitDisplayMathBlockSize(source_size.width, source_size.height, width, text);
@@ -3159,7 +3185,7 @@ fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const
         return;
     }
 
-    const asset = try renderMathToPdf(ctx, value, ctx.tex_preamble, kind);
+    const asset = try renderMathToPdf(ctx, value, ctx.tex_preamble, ctx.tex_engine, kind);
     errdefer ctx.allocator.free(asset.path);
     const scale = if (asset.height > 0) target_height / asset.height else 1;
     try atoms.append(ctx.allocator, .{
@@ -3951,7 +3977,7 @@ fn drawVectorMathCommand(ctx: *DrawContext, command: *const ObjectCommand, frame
         try drawStructuredMath(ctx, command.content, command.math_kind, frame, math);
         return;
     }
-    const asset = try renderMathToPdf(ctx, command.content, command.tex_preamble, command.math_kind);
+    const asset = try renderMathToPdf(ctx, command.content, command.tex_preamble, command.tex_engine, command.math_kind);
     defer ctx.allocator.free(asset.path);
     const fitted = fitVectorMathSize(asset.width, asset.height, frame.width, frame.height, command.math_kind, math);
     const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
@@ -4439,11 +4465,17 @@ fn resolveAssetPath(ctx: *DrawContext, rel_path: []const u8) ![]const u8 {
     return std.fs.path.join(ctx.allocator, &.{ ctx.asset_base_dir, rel_path });
 }
 
-fn renderMathToPdf(ctx: *DrawContext, source: []const u8, preamble: []const TexPreambleEntry, kind: MathKind) !MathAsset {
-    const reference_path = try cachedMathPath(ctx, source, preamble, kind, "ref");
+fn renderMathToPdf(
+    ctx: *DrawContext,
+    source: []const u8,
+    preamble: []const TexPreambleEntry,
+    engine: TexEngine,
+    kind: MathKind,
+) !MathAsset {
+    const reference_path = try cachedMathPath(ctx, source, preamble, engine, kind, "ref");
     defer ctx.allocator.free(reference_path);
     if (try cachedMathReference(ctx, reference_path)) |asset| return asset;
-    const output_pdf_path = try cachedMathPath(ctx, source, preamble, kind, "pdf");
+    const output_pdf_path = try cachedMathPath(ctx, source, preamble, engine, kind, "pdf");
     defer ctx.allocator.free(output_pdf_path);
     const dir = try tempCachePath(ctx, reference_path, "dir");
     defer ctx.allocator.free(dir);
@@ -4459,7 +4491,7 @@ fn renderMathToPdf(ctx: *DrawContext, source: []const u8, preamble: []const TexP
     const tex = try mathDocumentSource(ctx, source, preamble, kind);
     defer ctx.allocator.free(tex);
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = tex, .flags = .{ .truncate = true } });
-    try runChecked(ctx, &.{ "pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
+    try runChecked(ctx, &.{ engine.executable(), "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
     try publishGeneratedPdf(ctx, pdf_path, output_pdf_path);
     const size = try pdfAssetSize(ctx, output_pdf_path, null, .math_pdf);
     const baseline_from_bottom = if (kind == .raw_block)
@@ -4722,7 +4754,14 @@ fn readTexPreambleFile(ctx: *DrawContext, path: []const u8) ![]const u8 {
     };
 }
 
-fn cachedMathPath(ctx: *DrawContext, source: []const u8, preamble: []const TexPreambleEntry, kind: MathKind, extension: []const u8) ![]u8 {
+fn cachedMathPath(
+    ctx: *DrawContext,
+    source: []const u8,
+    preamble: []const TexPreambleEntry,
+    engine: TexEngine,
+    kind: MathKind,
+    extension: []const u8,
+) ![]u8 {
     const key = try fingerprint.mathArtifactKey(
         .{
             .allocator = ctx.allocator,
@@ -4732,6 +4771,7 @@ fn cachedMathPath(ctx: *DrawContext, source: []const u8, preamble: []const TexPr
         native_artifact_cache_version,
         source,
         preamble,
+        engine,
         @tagName(kind),
     );
     return std.fmt.allocPrint(ctx.allocator, "{s}/math-{x}.{s}", .{ ctx.cache_dir, key, extension });

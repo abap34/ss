@@ -115,6 +115,14 @@ fn/! code_obj(text_value: String) -> Object
   return objects::code_obj(text_value)
 end
 
+fn tex_engine(engine: TexEngine) -> Void
+  render::tex_engine(engine)
+end
+
+fn page_tex_engine(engine: TexEngine) -> Void
+  render::page_tex_engine(engine)
+end
+
 fn tex_preamble(src: String) -> Void
   render::tex_preamble(src)
 end

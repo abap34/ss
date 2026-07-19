@@ -2,8 +2,25 @@ const std = @import("std");
 const model = @import("model");
 
 pub const OpAdd = "add";
+pub const OpSet = "set";
 pub const KeyMathTexPreamble = "math.tex.preamble";
 pub const KeyMathTexPreambleFile = "math.tex.preamble.file";
+pub const KeyMathTexEngine = "math.tex.engine";
+
+pub const TexEngine = enum {
+    pdflatex,
+    lualatex,
+
+    pub fn executable(self: TexEngine) []const u8 {
+        return @tagName(self);
+    }
+
+    pub fn parse(value: []const u8) ?TexEngine {
+        if (std.mem.eql(u8, value, "pdflatex")) return .pdflatex;
+        if (std.mem.eql(u8, value, "lualatex")) return .lualatex;
+        return null;
+    }
+};
 
 pub const TexPreambleSource = enum {
     text,
@@ -17,9 +34,10 @@ pub const TexPreambleEntry = struct {
 
 pub const Resolved = struct {
     tex_preamble: std.ArrayList(TexPreambleEntry),
+    tex_engine: TexEngine,
 
     pub fn init() Resolved {
-        return .{ .tex_preamble = .empty };
+        return .{ .tex_preamble = .empty, .tex_engine = .pdflatex };
     }
 
     pub fn deinit(self: *Resolved, allocator: std.mem.Allocator) void {
@@ -35,9 +53,11 @@ pub const Resolved = struct {
 };
 
 pub fn isSupported(op: []const u8, key: []const u8) bool {
-    return std.mem.eql(u8, op, OpAdd) and
-        (std.mem.eql(u8, key, KeyMathTexPreamble) or
-            std.mem.eql(u8, key, KeyMathTexPreambleFile));
+    if (std.mem.eql(u8, op, OpAdd)) {
+        return std.mem.eql(u8, key, KeyMathTexPreamble) or
+            std.mem.eql(u8, key, KeyMathTexPreambleFile);
+    }
+    return std.mem.eql(u8, op, OpSet) and std.mem.eql(u8, key, KeyMathTexEngine);
 }
 
 pub fn isTexPreambleFileKey(key: []const u8) bool {
@@ -46,6 +66,14 @@ pub fn isTexPreambleFileKey(key: []const u8) bool {
 
 pub fn isValidTexPreambleFilePath(path: []const u8) bool {
     return path.len != 0;
+}
+
+pub fn isTexEngineKey(key: []const u8) bool {
+    return std.mem.eql(u8, key, KeyMathTexEngine);
+}
+
+pub fn isValidTexEngine(value: []const u8) bool {
+    return TexEngine.parse(value) != null;
 }
 
 pub fn resolveForNode(allocator: std.mem.Allocator, state: anytype, node: *const model.Node) !Resolved {
@@ -77,6 +105,8 @@ fn applyNode(allocator: std.mem.Allocator, env: *Resolved, node: *const model.No
             try env.addTexPreamble(allocator, .text, entry.value);
         } else if (std.mem.eql(u8, entry.key, KeyMathTexPreambleFile)) {
             try env.addTexPreamble(allocator, .file, entry.value);
+        } else if (std.mem.eql(u8, entry.key, KeyMathTexEngine)) {
+            env.tex_engine = TexEngine.parse(entry.value) orelse continue;
         }
     }
 }

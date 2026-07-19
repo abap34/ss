@@ -1142,17 +1142,21 @@ test "compiler semantics: TeX preamble helpers extend scoped render environment"
         \\import std:themes/default as *
         \\
         \\document
+        \\tex_engine(TexEngine.lualatex)
         \\tex_preamble("doc preamble")
         \\tex_preamble_file("tex/preamble.tex")
         \\end
         \\
         \\page ok
+        \\  page_tex_engine(TexEngine.pdflatex)
         \\  page_tex_preamble("page preamble")
         \\  page_tex_preamble_file("tex/page.tex")
         \\  tex("x")
         \\end
         \\
     , &.{
+        "\"engine\":\"lualatex\"",
+        "\"engine\":\"pdflatex\"",
         "\"source\":\"text\",\"value\":\"doc preamble\"",
         "\"source\":\"file\",\"value\":\"tex/preamble.tex\"",
         "\"source\":\"text\",\"value\":\"page preamble\"",
