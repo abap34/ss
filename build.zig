@@ -725,6 +725,7 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         "tests/runtime/render_cache_runtime_spec.mjs",
         "tests/runtime/render_diagnostics_runtime_spec.mjs",
         "tests/runtime/render/html/spec.mjs",
+        "tests/runtime/render/vector_shapes/spec.mjs",
         "tests/runtime/stdlib_wrappers_runtime_spec.mjs",
         "tests/runtime/theme/spec.mjs",
     };
@@ -747,6 +748,10 @@ fn addSmokeChecks(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         "stdlib/core/generated.ss",
         "stdlib/core/layout.ss",
         "stdlib/core/objects.ss",
+        "stdlib/core/paths.ss",
+        "stdlib/core/fills.ss",
+        "stdlib/core/shapes.ss",
+        "stdlib/core/connectors.ss",
         "stdlib/core/render.ss",
         "stdlib/core/selectors.ss",
         "stdlib/core/utils.ss",

@@ -177,6 +177,67 @@ test "render IR validation rejects invalid colors and page names" {
     try testing.expectError(error.InvalidPageName, ir.validate());
 }
 
+test "render IR validates vector paths，gradients，patterns，and strokes" {
+    var pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+
+    const commands = [_]render_ir.PathCommand{
+        .{ .move_to = .{ .x = 10, .y = 20 } },
+        .{ .cubic_to = .{
+            .control1 = .{ .x = 40, .y = 0 },
+            .control2 = .{ .x = 80, .y = 80 },
+            .end = .{ .x = 110, .y = 20 },
+        } },
+        .{ .line_to = .{ .x = 110, .y = 100 } },
+        .{ .close = {} },
+    };
+    const stops = [_]render_ir.GradientStop{
+        .{ .offset = 0, .color = .{ .r = 1, .g = 0, .b = 0 } },
+        .{ .offset = 1, .color = .{ .r = 0, .g = 0, .b = 1 } },
+    };
+    const pattern_commands = [_]render_ir.PathCommand{
+        .{ .move_to = .{ .x = 0, .y = 0 } },
+        .{ .line_to = .{ .x = 8, .y = 8 } },
+    };
+    const dash = [_]f64{ 6, 3 };
+    try pages[0].appendVectorPath(
+        testing.allocator,
+        7,
+        &commands,
+        .{
+            .base = .{ .linear = .{
+                .start = .{ .x = 10, .y = 20 },
+                .end = .{ .x = 110, .y = 100 },
+                .stops = &stops,
+            } },
+            .overlay = .{
+                .commands = &pattern_commands,
+                .cell_width = 8,
+                .cell_height = 8,
+                .stroke = .{ .color = .{ .r = 0.25, .g = 0.25, .b = 0.25 }, .width = 1 },
+            },
+        },
+        .{ .color = .{ .r = 0, .g = 0, .b = 0 }, .width = 2, .cap = .round, .join = .round, .dash = &dash },
+    );
+
+    try ir.validate();
+    const path = &pages[0].items.items[0].vector_path;
+    try testing.expect(path.header.bounds.width > 0);
+    try testing.expect(path.header.bounds.height > 0);
+
+    const owned_pattern_commands = @constCast(path.fill.overlay.?.commands);
+    owned_pattern_commands[0] = .{ .line_to = .{ .x = 0, .y = 0 } };
+    try testing.expectError(error.InvalidItemGeometry, ir.validate());
+    owned_pattern_commands[0] = .{ .move_to = .{ .x = 0, .y = 0 } };
+    const owned_stops = @constCast(path.fill.base.linear.stops);
+    owned_stops[0].offset = 0.75;
+    owned_stops[1].offset = 0.25;
+    try testing.expectError(error.InvalidItemGeometry, ir.validate());
+}
+
 test "render IR validation rejects non-basename resource names" {
     var pages = try testing.allocator.alloc(render_ir.Page, 1);
     pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };

@@ -712,9 +712,8 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\  ~ source.top == page.top - 180
         \\  ~ target.left == source.right + 180
         \\  ~ target.top == source.top + 80
-        \\  arrow_up!(source, target)
         \\  bracket_callout!(source, "note", 560, 140, 220)
-        \\  annotate_down!("before target after", "target", "note", MarkedCalloutStyle {
+        \\  annotate!("before target after", "target", "note", MarkedCalloutStyle {
         \\    x = 160
         \\    top_y = 320
         \\    callout_x = 560
@@ -726,9 +725,9 @@ test "compiler semantics: stdlib core components build when called directly" {
     );
 }
 
-test "compiler semantics: shape components resolve render shape" {
+test "compiler semantics: connector components resolve generic connector rendering" {
     try expectDumpContains(
-        \\import std:core/components
+        \\import std:core/prelude
         \\
         \\page shapes
         \\  let source = text!("source")
@@ -737,16 +736,13 @@ test "compiler semantics: shape components resolve render shape" {
         \\  ~ source.top == page.top - 180
         \\  ~ target.left == source.right + 180
         \\  ~ target.top == source.top + 80
-        \\  arrow_up!(source, target, LineStyle {
-        \\    stroke = c"#2563eb"
-        \\    line_width = 2
-        \\  })
+        \\  arrow_connector!(source, target, ConnectorRoute.straight, ConnectorAnchor.right, ConnectorAnchor.left, vector_stroke(c"#2563eb", 2))
         \\end
         \\
     , &.{
-        "\"kind\":\"shape\"",
-        "\"marker_end\":\"arrow\"",
-        "\"line_width\":2.0",
+        "\"kind\":\"connector\"",
+        "\"role\":\"connector\"",
+        "\\\"marker_end\\\"",
     });
 }
 
@@ -764,7 +760,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  code!("print('x')", "python")
         \\  code_file!("snippet.zig", "zig")
         \\  toc!("Contents")
-        \\  annotate_down!("before target after", "target", "note")
+        \\  annotate!("before target after", "target", "note")
         \\end
         \\
         \\page default_cover
@@ -785,7 +781,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  code!("print('x')", "python")
         \\  code_file!("snippet.zig", "zig")
         \\  toc!("Contents")
-        \\  annotate_down!("before target after", "target", "note")
+        \\  annotate!("before target after", "target", "note")
         \\end
         \\
         \\page academic_cover
@@ -810,7 +806,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  code_file!("snippet.zig", "zig")
         \\  note!("note")
         \\  toc!("Contents")
-        \\  annotate_down!("before target after", "target", "note")
+        \\  annotate!("before target after", "target", "note")
         \\end
         \\
         \\page pop_cover

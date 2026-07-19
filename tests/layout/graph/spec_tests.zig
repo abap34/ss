@@ -141,7 +141,6 @@ fn recordTypeName(root_key: []const u8) []const u8 {
     if (std.mem.eql(u8, root_key, "text")) return "TextStyle";
     if (std.mem.eql(u8, root_key, "chrome")) return "ChromeStyle";
     if (std.mem.eql(u8, root_key, "rule")) return "RuleStyle";
-    if (std.mem.eql(u8, root_key, "shape")) return "ShapeStyle";
     if (std.mem.eql(u8, root_key, "math")) return "MathStyle";
     return root_key;
 }
