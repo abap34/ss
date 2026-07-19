@@ -35,6 +35,7 @@ pub const Type = struct {
         constraints,
         enum_type,
         record,
+        path,
         optional,
         hole,
         void,
@@ -52,6 +53,7 @@ pub const Type = struct {
     pub const number = Type{ .kind = .number };
     pub const boolean = Type{ .kind = .boolean };
     pub const constraints = Type{ .kind = .constraints };
+    pub const path = Type{ .kind = .path };
 
     pub fn objectClass(name: []const u8) Type {
         return .{ .kind = .object, .class_name = name };
@@ -335,6 +337,7 @@ pub const Type = struct {
             .constraints => "Constraints",
             .enum_type => "Enum",
             .record => "Record",
+            .path => "Path",
             .optional => "Optional",
             .hole => "HoleType",
             .void => "Void",

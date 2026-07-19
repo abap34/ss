@@ -29,6 +29,7 @@ const builtin_types = [_]BuiltinType{
     .{ .name = "Number", .ty = ast.Type.number },
     .{ .name = "Bool", .ty = ast.Type.boolean },
     .{ .name = "Constraints", .ty = ast.Type.constraints },
+    .{ .name = "Path", .ty = ast.Type.path },
     .{ .name = "Void", .ty = .{ .kind = .void } },
     .{ .name = "None", .ty = ast.Type.none },
     .{ .name = "Selection", .ty = ast.Type.selection(.any) },

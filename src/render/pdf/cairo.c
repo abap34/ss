@@ -459,6 +459,161 @@ void ss_pdf_fill_stroke_rounded_rect(
     }
 }
 
+void ss_pdf_state_save(SsPdf *pdf) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_save(pdf->cr);
+}
+
+void ss_pdf_state_restore(SsPdf *pdf) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_restore(pdf->cr);
+}
+
+void ss_pdf_path_new(SsPdf *pdf) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_new_path(pdf->cr);
+}
+
+void ss_pdf_path_move_to(SsPdf *pdf, double x, double y) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_move_to(pdf->cr, x, y);
+}
+
+void ss_pdf_path_line_to(SsPdf *pdf, double x, double y) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_line_to(pdf->cr, x, y);
+}
+
+void ss_pdf_path_curve_to(SsPdf *pdf, double x1, double y1, double x2, double y2, double x3, double y3) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_curve_to(pdf->cr, x1, y1, x2, y2, x3, y3);
+}
+
+void ss_pdf_path_close(SsPdf *pdf) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_close_path(pdf->cr);
+}
+
+static cairo_fill_rule_t ss_pdf_fill_rule(int fill_rule) {
+    return fill_rule == 1 ? CAIRO_FILL_RULE_EVEN_ODD : CAIRO_FILL_RULE_WINDING;
+}
+
+static cairo_extend_t ss_pdf_gradient_extend(int spread) {
+    switch (spread) {
+        case 1: return CAIRO_EXTEND_REPEAT;
+        case 2: return CAIRO_EXTEND_REFLECT;
+        default: return CAIRO_EXTEND_PAD;
+    }
+}
+
+static void ss_pdf_add_gradient_stops(
+    cairo_pattern_t *pattern,
+    const double *offsets,
+    const double *colors,
+    size_t stop_count,
+    double alpha
+) {
+    if (pattern == NULL || offsets == NULL || colors == NULL) return;
+    for (size_t index = 0; index < stop_count; index++) {
+        cairo_pattern_add_color_stop_rgba(
+            pattern,
+            offsets[index],
+            colors[index * 3],
+            colors[index * 3 + 1],
+            colors[index * 3 + 2],
+            alpha
+        );
+    }
+}
+
+void ss_pdf_path_clip(SsPdf *pdf, int fill_rule) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_set_fill_rule(pdf->cr, ss_pdf_fill_rule(fill_rule));
+    cairo_clip(pdf->cr);
+}
+
+void ss_pdf_path_fill_solid(SsPdf *pdf, double r, double g, double b, double alpha, int fill_rule) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_set_source_rgba(pdf->cr, r, g, b, alpha);
+    cairo_set_fill_rule(pdf->cr, ss_pdf_fill_rule(fill_rule));
+    cairo_fill(pdf->cr);
+}
+
+void ss_pdf_path_fill_linear(
+    SsPdf *pdf,
+    double x1,
+    double y1,
+    double x2,
+    double y2,
+    const double *offsets,
+    const double *colors,
+    size_t stop_count,
+    int spread,
+    double alpha,
+    int fill_rule
+) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_pattern_t *pattern = cairo_pattern_create_linear(x1, y1, x2, y2);
+    if (pattern == NULL) return;
+    ss_pdf_add_gradient_stops(pattern, offsets, colors, stop_count, alpha);
+    cairo_pattern_set_extend(pattern, ss_pdf_gradient_extend(spread));
+    cairo_set_source(pdf->cr, pattern);
+    cairo_set_fill_rule(pdf->cr, ss_pdf_fill_rule(fill_rule));
+    cairo_fill(pdf->cr);
+    cairo_pattern_destroy(pattern);
+}
+
+void ss_pdf_path_fill_radial(
+    SsPdf *pdf,
+    double x1,
+    double y1,
+    double radius1,
+    double x2,
+    double y2,
+    double radius2,
+    const double *offsets,
+    const double *colors,
+    size_t stop_count,
+    int spread,
+    double alpha,
+    int fill_rule
+) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_pattern_t *pattern = cairo_pattern_create_radial(x1, y1, radius1, x2, y2, radius2);
+    if (pattern == NULL) return;
+    ss_pdf_add_gradient_stops(pattern, offsets, colors, stop_count, alpha);
+    cairo_pattern_set_extend(pattern, ss_pdf_gradient_extend(spread));
+    cairo_set_source(pdf->cr, pattern);
+    cairo_set_fill_rule(pdf->cr, ss_pdf_fill_rule(fill_rule));
+    cairo_fill(pdf->cr);
+    cairo_pattern_destroy(pattern);
+}
+
+void ss_pdf_path_stroke(
+    SsPdf *pdf,
+    double r,
+    double g,
+    double b,
+    double alpha,
+    double line_width,
+    int line_cap,
+    int line_join,
+    double miter_limit,
+    const double *dashes,
+    size_t dash_count,
+    double dash_offset
+) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_set_source_rgba(pdf->cr, r, g, b, alpha);
+    cairo_set_line_width(pdf->cr, line_width);
+    cairo_set_line_cap(pdf->cr, line_cap == 1 ? CAIRO_LINE_CAP_ROUND : (line_cap == 2 ? CAIRO_LINE_CAP_SQUARE : CAIRO_LINE_CAP_BUTT));
+    cairo_set_line_join(pdf->cr, line_join == 1 ? CAIRO_LINE_JOIN_ROUND : (line_join == 2 ? CAIRO_LINE_JOIN_BEVEL : CAIRO_LINE_JOIN_MITER));
+    cairo_set_miter_limit(pdf->cr, miter_limit);
+    cairo_set_dash(pdf->cr, dashes, (int)dash_count, dash_offset);
+    cairo_stroke(pdf->cr);
+    cairo_set_dash(pdf->cr, NULL, 0, 0);
+}
+
 int ss_pdf_begin_uri_link(SsPdf *pdf, double x, double y, double width, double height, const char *uri) {
     return ss_pdf_begin_link(pdf, x, y, width, height, "uri", uri, "");
 }

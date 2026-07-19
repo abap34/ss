@@ -23,13 +23,95 @@ pub const RenderKind = enum {
     vector_math,
     vector_asset,
     raster_asset,
-    shape,
+    vector_path,
+    connector,
     chrome_only,
 };
 
-pub const ShapeMarker = enum {
-    plain,
-    arrow,
+pub const LineCap = enum { butt, round, square };
+pub const LineJoin = enum { miter, round, bevel };
+pub const FillRule = enum { nonzero, even_odd };
+pub const PaintSpace = enum { local, page };
+pub const GradientSpread = enum { pad, repeat, reflect };
+pub const VectorFillKind = enum { none, solid, linear, radial };
+pub const ConnectorAnchor = enum { center, left, right, top, bottom };
+pub const ConnectorRoute = enum { straight, horizontal_then_vertical, vertical_then_horizontal, curve };
+
+pub const DashPattern = struct {
+    values: [8]f32 = @splat(0),
+    count: u8 = 0,
+    offset: f32 = 0,
+
+    pub fn slice(self: *const DashPattern) []const f32 {
+        return self.values[0..self.count];
+    }
+};
+
+pub const VectorStrokePaint = struct {
+    color: Color,
+    width: f32,
+    cap: LineCap,
+    join: LineJoin,
+    miter_limit: f32,
+    dash: DashPattern,
+};
+
+pub const PatternPaint = struct {
+    path: model.Path,
+    cell_width: f32,
+    cell_height: f32,
+    xx: f32,
+    yx: f32,
+    xy: f32,
+    yy: f32,
+    x0: f32,
+    y0: f32,
+    space: PaintSpace,
+    fill: ?Color,
+    stroke: ?VectorStrokePaint,
+};
+
+pub const VectorFillPaint = struct {
+    kind: VectorFillKind,
+    color: ?Color,
+    color2: ?Color,
+    start_x: f32,
+    start_y: f32,
+    start_radius: f32,
+    end_x: f32,
+    end_y: f32,
+    end_radius: f32,
+    spread: GradientSpread,
+    space: PaintSpace,
+    rule: FillRule,
+    opacity: f32,
+    pattern: ?PatternPaint,
+};
+
+pub const MarkerPaint = struct {
+    path: model.Path,
+    width: f32,
+    height: f32,
+    fill: VectorFillPaint,
+    stroke: ?VectorStrokePaint,
+};
+
+pub const VectorPathPaint = struct {
+    path: model.Path,
+    fill: VectorFillPaint,
+    stroke: ?VectorStrokePaint,
+};
+
+pub const ConnectorPaint = struct {
+    source: model.NodeId,
+    target: model.NodeId,
+    source_anchor: ConnectorAnchor,
+    target_anchor: ConnectorAnchor,
+    route: ConnectorRoute,
+    curve: f32,
+    stroke: VectorStrokePaint,
+    marker_start: ?MarkerPaint,
+    marker_end: ?MarkerPaint,
 };
 
 pub const HorizontalAlign = enum {
@@ -186,26 +268,14 @@ pub const RulePaint = struct {
     dash: ?Dash,
 };
 
-pub const ShapePaint = struct {
-    stroke: ?Color,
-    line_width: f32,
-    dash: ?Dash,
-    start_x: f32,
-    start_y: f32,
-    end_x: f32,
-    end_y: f32,
-    marker_start: ShapeMarker,
-    marker_end: ShapeMarker,
-    marker_size: f32,
-};
-
 pub const ResolvedRender = struct {
     kind: RenderKind,
     text: ?TextPaint,
     math: ?MathPaint,
     asset: ?AssetPaint,
     code: ?CodePaint,
-    shape: ?ShapePaint,
+    vector_path: ?VectorPathPaint,
+    connector: ?ConnectorPaint,
     chrome: ChromePaint,
     underline: UnderlinePaint,
     rule: RulePaint,
@@ -222,7 +292,8 @@ pub fn resolve(state: anytype, node: *const Node) ResolvedRender {
         .math = resolveMath(state, node, kind),
         .asset = resolveAsset(state, node, kind),
         .code = resolveCode(state, node, kind),
-        .shape = resolveShape(state, node, kind),
+        .vector_path = resolveVectorPath(node, kind),
+        .connector = resolveConnector(node, kind),
         .chrome = resolveChrome(state, node),
         .underline = resolveUnderline(state, node),
         .rule = resolveRule(state, node),
@@ -396,19 +467,174 @@ fn resolveCode(state: anytype, node: *const Node, kind: RenderKind) ?CodePaint {
     };
 }
 
-fn resolveShape(state: anytype, node: *const Node, kind: RenderKind) ?ShapePaint {
-    if (kind != .shape) return null;
+fn resolveVectorPath(node: *const Node, kind: RenderKind) ?VectorPathPaint {
+    if (kind != .vector_path) return null;
+    const path_value = model.nodeField(node, "path") orelse return null;
+    const path = switch (path_value) {
+        .path => |value| value,
+        else => return null,
+    };
+    const fill = if (model.nodeField(node, "fill")) |fill_value| switch (fill_value) {
+        .record => |record| vectorFillFromRecord(record),
+        else => defaultVectorFill(),
+    } else defaultVectorFill();
+    const stroke = resolveVectorStroke(node, "stroke");
+    return .{ .path = path, .fill = fill, .stroke = stroke };
+}
+
+fn resolveConnector(node: *const Node, kind: RenderKind) ?ConnectorPaint {
+    if (kind != .connector) return null;
+    const value = model.nodeField(node, "connector") orelse return null;
+    const record = switch (value) {
+        .record => |record| record,
+        else => return null,
+    };
+    const source = recordObject(record, "source") orelse return null;
+    const target = recordObject(record, "target") orelse return null;
+    const stroke_value = record.field("stroke") orelse return null;
+    const stroke_record = switch (stroke_value) {
+        .record => |stroke_record| stroke_record,
+        else => return null,
+    };
+    const stroke = vectorStrokeFromRecord(stroke_record) orelse return null;
     return .{
-        .stroke = parseRecordColorProperty(state, node, "shape", "stroke"),
-        .line_width = nonNegativeRecordFloatProperty(state, node, "shape", "line_width") orelse 0,
-        .dash = parseRecordDashProperty(state, node, "shape", "dash"),
-        .start_x = recordFloatProperty(state, node, "shape", "start_x") orelse 0,
-        .start_y = recordFloatProperty(state, node, "shape", "start_y") orelse 0,
-        .end_x = recordFloatProperty(state, node, "shape", "end_x") orelse 1,
-        .end_y = recordFloatProperty(state, node, "shape", "end_y") orelse 1,
-        .marker_start = parseRecordShapeMarkerProperty(state, node, "shape", "marker_start") orelse .plain,
-        .marker_end = parseRecordShapeMarkerProperty(state, node, "shape", "marker_end") orelse .plain,
-        .marker_size = nonNegativeRecordFloatProperty(state, node, "shape", "marker_size") orelse 0,
+        .source = source,
+        .target = target,
+        .source_anchor = parseEnum(ConnectorAnchor, recordText(record, "source_anchor")) orelse .right,
+        .target_anchor = parseEnum(ConnectorAnchor, recordText(record, "target_anchor")) orelse .left,
+        .route = parseEnum(ConnectorRoute, recordText(record, "route")) orelse .straight,
+        .curve = recordNumber(record, "curve") orelse 0.5,
+        .stroke = stroke,
+        .marker_start = markerFromRecord(record, "marker_start"),
+        .marker_end = markerFromRecord(record, "marker_end"),
+    };
+}
+
+fn resolveVectorStroke(node: *const Node, key: []const u8) ?VectorStrokePaint {
+    const value = model.nodeField(node, key) orelse return null;
+    return switch (value) {
+        .record => |record| vectorStrokeFromRecord(record),
+        else => null,
+    };
+}
+
+fn defaultVectorFill() VectorFillPaint {
+    return .{
+        .kind = .none,
+        .color = null,
+        .color2 = null,
+        .start_x = 0,
+        .start_y = 0,
+        .start_radius = 0,
+        .end_x = 1,
+        .end_y = 1,
+        .end_radius = 1,
+        .spread = .pad,
+        .space = .local,
+        .rule = .nonzero,
+        .opacity = 1,
+        .pattern = null,
+    };
+}
+
+fn vectorFillFromRecord(record: model.RecordValue) VectorFillPaint {
+    return .{
+        .kind = parseEnum(VectorFillKind, recordText(record, "kind")) orelse .none,
+        .color = recordColor(record, "color"),
+        .color2 = recordColor(record, "color2"),
+        .start_x = recordNumber(record, "start_x") orelse 0,
+        .start_y = recordNumber(record, "start_y") orelse 0,
+        .start_radius = recordNumber(record, "start_radius") orelse 0,
+        .end_x = recordNumber(record, "end_x") orelse 1,
+        .end_y = recordNumber(record, "end_y") orelse 1,
+        .end_radius = recordNumber(record, "end_radius") orelse 1,
+        .spread = parseEnum(GradientSpread, recordText(record, "spread")) orelse .pad,
+        .space = parseEnum(PaintSpace, recordText(record, "space")) orelse .local,
+        .rule = parseEnum(FillRule, recordText(record, "rule")) orelse .nonzero,
+        .opacity = recordNumber(record, "opacity") orelse 1,
+        .pattern = resolvePattern(record),
+    };
+}
+
+fn markerFromRecord(record: model.RecordValue, field_name: []const u8) ?MarkerPaint {
+    const value = record.field(field_name) orelse return null;
+    const marker = switch (value) {
+        .record => |marker| marker,
+        else => return null,
+    };
+    const path_value = marker.field("path") orelse return null;
+    const path = switch (path_value) {
+        .path => |path| path,
+        else => return null,
+    };
+    const fill = if (marker.field("fill")) |fill_value| switch (fill_value) {
+        .record => |fill_record| vectorFillFromRecord(fill_record),
+        else => defaultVectorFill(),
+    } else defaultVectorFill();
+    const stroke = if (marker.field("stroke")) |stroke_value| switch (stroke_value) {
+        .record => |stroke_record| vectorStrokeFromRecord(stroke_record),
+        else => null,
+    } else null;
+    return .{
+        .path = path,
+        .width = recordNumber(marker, "width") orelse 10,
+        .height = recordNumber(marker, "height") orelse 10,
+        .fill = fill,
+        .stroke = stroke,
+    };
+}
+
+fn resolvePattern(fill_record: model.RecordValue) ?PatternPaint {
+    const pattern_value = fill_record.field("pattern") orelse return null;
+    const pattern = switch (pattern_value) {
+        .record => |record| record,
+        else => return null,
+    };
+    const path_value = pattern.field("path") orelse return null;
+    const path = switch (path_value) {
+        .path => |value| value,
+        else => return null,
+    };
+    const fill = recordColor(pattern, "fill");
+    const stroke = if (pattern.field("stroke")) |value| switch (value) {
+        .record => |record| vectorStrokeFromRecord(record),
+        else => null,
+    } else null;
+    if (fill == null and stroke == null) return null;
+    const rotation = (recordNumber(pattern, "rotation") orelse 0) * std.math.pi / 180;
+    const cosine = @cos(rotation);
+    const sine = @sin(rotation);
+    const xx = recordNumber(pattern, "xx") orelse 1;
+    const yx = recordNumber(pattern, "yx") orelse 0;
+    const xy = recordNumber(pattern, "xy") orelse 0;
+    const yy = recordNumber(pattern, "yy") orelse 1;
+    return .{
+        .path = path,
+        .cell_width = recordNumber(pattern, "cell_width") orelse 8,
+        .cell_height = recordNumber(pattern, "cell_height") orelse 8,
+        .xx = cosine * xx - sine * yx,
+        .yx = sine * xx + cosine * yx,
+        .xy = cosine * xy - sine * yy,
+        .yy = sine * xy + cosine * yy,
+        .x0 = recordNumber(pattern, "x0") orelse 0,
+        .y0 = recordNumber(pattern, "y0") orelse 0,
+        .space = parseEnum(PaintSpace, recordText(pattern, "space")) orelse .local,
+        .fill = fill,
+        .stroke = stroke,
+    };
+}
+
+fn vectorStrokeFromRecord(record: model.RecordValue) ?VectorStrokePaint {
+    const color = recordColor(record, "color") orelse return null;
+    var dash = parseDashPattern(recordText(record, "dash") orelse "");
+    dash.offset = recordNumber(record, "dash_offset") orelse 0;
+    return .{
+        .color = color,
+        .width = recordNumber(record, "width") orelse 1,
+        .cap = parseEnum(LineCap, recordText(record, "cap")) orelse .butt,
+        .join = parseEnum(LineJoin, recordText(record, "join")) orelse .miter,
+        .miter_limit = recordNumber(record, "miter_limit") orelse 10,
+        .dash = dash,
     };
 }
 
@@ -487,9 +713,59 @@ fn parseRecordDashProperty(state: anytype, node: *const Node, record_key: []cons
     return parseDash(value);
 }
 
-fn parseRecordShapeMarkerProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?ShapeMarker {
-    const value = fields.read(state.allocator, state, node, record_key, &.{field_name}, .text) orelse return null;
-    return parseShapeMarker(value);
+fn parseEnum(comptime T: type, maybe_value: ?[]const u8) ?T {
+    const value = maybe_value orelse return null;
+    return std.meta.stringToEnum(T, value);
+}
+
+fn recordNumber(record: model.RecordValue, field_name: []const u8) ?f32 {
+    const value = record.field(field_name) orelse return null;
+    return switch (value) {
+        .number => |number| if (std.math.isFinite(number)) number else null,
+        else => null,
+    };
+}
+
+fn recordText(record: model.RecordValue, field_name: []const u8) ?[]const u8 {
+    const value = record.field(field_name) orelse return null;
+    return switch (value) {
+        .string => |text| text,
+        .enum_case => |case| case.case_name,
+        else => null,
+    };
+}
+
+fn recordColor(record: model.RecordValue, field_name: []const u8) ?Color {
+    return parseColor(recordText(record, field_name) orelse return null);
+}
+
+fn recordObject(record: model.RecordValue, field_name: []const u8) ?model.NodeId {
+    const value = record.field(field_name) orelse return null;
+    return switch (value) {
+        .object => |node_id| node_id,
+        else => null,
+    };
+}
+
+fn parseDashPattern(value: []const u8) DashPattern {
+    var result = DashPattern{};
+    var parts = std.mem.splitScalar(u8, value, ',');
+    while (parts.next()) |part| {
+        if (result.count == result.values.len) return .{};
+        const trimmed = std.mem.trim(u8, part, " \t");
+        if (trimmed.len == 0) return .{};
+        const parsed = std.fmt.parseFloat(f32, trimmed) catch return .{};
+        if (!std.math.isFinite(parsed) or parsed <= 0) return .{};
+        result.values[result.count] = parsed;
+        result.count += 1;
+    }
+    if (result.count % 2 == 1) {
+        if (result.count * 2 > result.values.len) return .{};
+        const original_count = result.count;
+        for (0..original_count) |index| result.values[original_count + index] = result.values[index];
+        result.count *= 2;
+    }
+    return result;
 }
 
 fn inheritedTextHorizontalAlign(state: anytype, node: *const Node) ?HorizontalAlign {
@@ -580,15 +856,6 @@ fn parseRenderKindProperty(state: anytype, node: *const Node) ?RenderKind {
 
 fn parseRenderKind(value: []const u8) ?RenderKind {
     return std.meta.stringToEnum(RenderKind, value);
-}
-
-fn parseShapeMarkerProperty(state: anytype, node: *const Node, key: []const u8) ?ShapeMarker {
-    const value = fields.read(state.allocator, state, node, key, &.{}, .text) orelse return null;
-    return parseShapeMarker(value);
-}
-
-fn parseShapeMarker(value: []const u8) ?ShapeMarker {
-    return std.meta.stringToEnum(ShapeMarker, value);
 }
 
 fn parseHorizontalAlignProperty(state: anytype, node: *const Node, key: []const u8) ?HorizontalAlign {

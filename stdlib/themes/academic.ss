@@ -108,10 +108,6 @@ fn annotate!(source_text: String, target_text: String, note_text: String, style:
   return theme_base::annotate_with_style!(source_text, target_text, note_text, style)
 end
 
-fn annotate_down!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
-  return theme_base::annotate_down_with_style!(source_text, target_text, note_text, style)
-end
-
 fn/! h1(text_value: String, theme: Theme = current_theme()) -> Object
   return base::h1(text_value, theme)
 end

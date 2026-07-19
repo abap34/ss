@@ -10,6 +10,7 @@ pub fn propertyString(allocator: std.mem.Allocator, value: model.Value) ![]const
         .string => |text| text,
         .enum_case => |case| case.case_name,
         .record => |record| try recordPropertyString(allocator, record),
+        .path => |path| try pathPropertyString(allocator, path),
         .number => |number_value| std.fmt.allocPrint(allocator, "{d}", .{number_value}),
         .boolean => |boolean_value| if (boolean_value) "true" else "false",
         else => error.ExpectedStringArgument,
@@ -20,6 +21,7 @@ pub fn propertyStringNeedsFree(value: model.Value) bool {
     return switch (value) {
         .number => true,
         .record => true,
+        .path => true,
         .boolean => false,
         else => false,
     };
@@ -36,7 +38,7 @@ pub fn typedPropertyValueOwnsTaggedText(ty: ast.Type) bool {
         const child = ty.optional_child orelse return false;
         return typedPropertyValueOwnsTaggedText(child.*);
     }
-    return ty.kind == .record;
+    return ty.kind == .record or ty.kind == .path;
 }
 
 pub fn deinitParsedPropertyValue(allocator: std.mem.Allocator, value: *model.Value) void {
@@ -47,6 +49,7 @@ pub fn deinitParsedPropertyValue(allocator: std.mem.Allocator, value: *model.Val
             allocator.free(case.case_name);
         },
         .record => |*record| deinitParsedRecordValue(allocator, record),
+        .path => |*path| path.deinit(allocator),
         else => value.deinit(allocator),
     }
 }
@@ -77,6 +80,12 @@ pub fn typedPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: as
             }
             break :blk parsed;
         },
+        .path => blk: {
+            var parsed = try parsePropertyValue(allocator, text);
+            errdefer deinitParsedPropertyValue(allocator, &parsed);
+            if (parsed != .path) return error.InvalidValueTag;
+            break :blk parsed;
+        },
         .number => .{ .number = std.fmt.parseFloat(f32, text) catch return error.InvalidValueTag },
         .boolean => blk: {
             if (std.mem.eql(u8, text, "true")) break :blk .{ .boolean = true };
@@ -103,6 +112,13 @@ fn recordPropertyString(allocator: std.mem.Allocator, record: model.RecordValue)
     return out.toOwnedSlice(allocator);
 }
 
+fn pathPropertyString(allocator: std.mem.Allocator, path: model.Path) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try appendTaggedValueJson(allocator, &out, .{ .path = path });
+    return out.toOwnedSlice(allocator);
+}
+
 fn appendTaggedValueJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: model.Value) !void {
     switch (value) {
         .none => {
@@ -111,6 +127,13 @@ fn appendTaggedValueJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
         .string => |text| {
             try out.appendSlice(allocator, "{\"kind\":\"string\",\"value\":");
             try json.appendString(allocator, out, text);
+            try out.append(allocator, '}');
+        },
+        .object => |id| {
+            try out.appendSlice(allocator, "{\"kind\":\"object\",\"value\":");
+            const text = try std.fmt.allocPrint(allocator, "{d}", .{id});
+            defer allocator.free(text);
+            try out.appendSlice(allocator, text);
             try out.append(allocator, '}');
         },
         .enum_case => |case| {
@@ -136,6 +159,33 @@ fn appendTaggedValueJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
             }
             try out.appendSlice(allocator, "]}");
         },
+        .path => |path| {
+            try out.appendSlice(allocator, "{\"kind\":\"path\",\"commands\":[");
+            for (path.commands, 0..) |command, index| {
+                if (index > 0) try out.append(allocator, ',');
+                switch (command) {
+                    .move_to => |point| try appendPathPointJson(allocator, out, "move", point),
+                    .line_to => |point| try appendPathPointJson(allocator, out, "line", point),
+                    .cubic_to => |cubic| {
+                        try out.appendSlice(allocator, "{\"verb\":\"cubic\",\"control1_x\":");
+                        try appendFloatJson(allocator, out, cubic.control1.x);
+                        try out.appendSlice(allocator, ",\"control1_y\":");
+                        try appendFloatJson(allocator, out, cubic.control1.y);
+                        try out.appendSlice(allocator, ",\"control2_x\":");
+                        try appendFloatJson(allocator, out, cubic.control2.x);
+                        try out.appendSlice(allocator, ",\"control2_y\":");
+                        try appendFloatJson(allocator, out, cubic.control2.y);
+                        try out.appendSlice(allocator, ",\"x\":");
+                        try appendFloatJson(allocator, out, cubic.end.x);
+                        try out.appendSlice(allocator, ",\"y\":");
+                        try appendFloatJson(allocator, out, cubic.end.y);
+                        try out.append(allocator, '}');
+                    },
+                    .close => try out.appendSlice(allocator, "{\"verb\":\"close\"}"),
+                }
+            }
+            try out.appendSlice(allocator, "]}");
+        },
         .number => |number_value| {
             try out.appendSlice(allocator, "{\"kind\":\"number\",\"value\":");
             const text = try std.fmt.allocPrint(allocator, "{d}", .{number_value});
@@ -148,6 +198,23 @@ fn appendTaggedValueJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
         },
         else => return error.ExpectedStringArgument,
     }
+}
+
+fn appendPathPointJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), verb: []const u8, point: model.PathPoint) !void {
+    try out.appendSlice(allocator, "{\"verb\":");
+    try json.appendString(allocator, out, verb);
+    try out.appendSlice(allocator, ",\"x\":");
+    try appendFloatJson(allocator, out, point.x);
+    try out.appendSlice(allocator, ",\"y\":");
+    try appendFloatJson(allocator, out, point.y);
+    try out.append(allocator, '}');
+}
+
+fn appendFloatJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: f32) !void {
+    if (!std.math.isFinite(value)) return error.InvalidValueTag;
+    const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
+    defer allocator.free(text);
+    try out.appendSlice(allocator, text);
 }
 
 fn parseTaggedValue(allocator: std.mem.Allocator, value: json.Value) !model.Value {
@@ -166,6 +233,13 @@ fn parseTaggedValue(allocator: std.mem.Allocator, value: json.Value) !model.Valu
             .enum_name = try allocator.dupe(u8, type_value),
             .case_name = try allocator.dupe(u8, case_value),
         } };
+    }
+    if (std.mem.eql(u8, kind, "object")) {
+        const raw = json.numberField(object, "value") orelse return error.InvalidValueTag;
+        if (!std.math.isFinite(raw) or raw < 0 or raw > std.math.maxInt(model.NodeId) or @trunc(raw) != raw) {
+            return error.InvalidValueTag;
+        }
+        return .{ .object = @intFromFloat(raw) };
     }
     if (std.mem.eql(u8, kind, "record")) {
         const type_value = json.stringField(object, "type") orelse return error.InvalidValueTag;
@@ -197,6 +271,34 @@ fn parseTaggedValue(allocator: std.mem.Allocator, value: json.Value) !model.Valu
         }
         return .{ .record = record };
     }
+    if (std.mem.eql(u8, kind, "path")) {
+        const commands_value = json.fieldValue(object, "commands") orelse return error.InvalidValueTag;
+        if (commands_value.* != .array) return error.InvalidValueTag;
+        var commands = std.ArrayList(model.PathCommand).empty;
+        errdefer commands.deinit(allocator);
+        for (commands_value.array.items) |command_value| {
+            if (command_value != .object) return error.InvalidValueTag;
+            const command_object = &command_value.object;
+            const verb = json.stringField(command_object, "verb") orelse return error.InvalidValueTag;
+            const command: model.PathCommand = if (std.mem.eql(u8, verb, "move"))
+                .{ .move_to = try parsePathPoint(command_object) }
+            else if (std.mem.eql(u8, verb, "line"))
+                .{ .line_to = try parsePathPoint(command_object) }
+            else if (std.mem.eql(u8, verb, "cubic"))
+                .{ .cubic_to = .{
+                    .control1 = try parsePathPointNamed(command_object, "control1_x", "control1_y"),
+                    .control2 = try parsePathPointNamed(command_object, "control2_x", "control2_y"),
+                    .end = try parsePathPoint(command_object),
+                } }
+            else if (std.mem.eql(u8, verb, "close"))
+                .{ .close = {} }
+            else
+                return error.InvalidValueTag;
+            if (!command.isFinite()) return error.InvalidValueTag;
+            try commands.append(allocator, command);
+        }
+        return .{ .path = .init(try commands.toOwnedSlice(allocator)) };
+    }
     if (std.mem.eql(u8, kind, "number")) {
         const raw = json.numberField(object, "value") orelse return error.InvalidValueTag;
         return .{ .number = @floatCast(raw) };
@@ -206,4 +308,16 @@ fn parseTaggedValue(allocator: std.mem.Allocator, value: json.Value) !model.Valu
         return .{ .boolean = raw };
     }
     return error.InvalidValueTag;
+}
+
+fn parsePathPoint(object: *const json.ObjectMap) !model.PathPoint {
+    return parsePathPointNamed(object, "x", "y");
+}
+
+fn parsePathPointNamed(object: *const json.ObjectMap, x_name: []const u8, y_name: []const u8) !model.PathPoint {
+    const x = json.numberField(object, x_name) orelse return error.InvalidValueTag;
+    const y = json.numberField(object, y_name) orelse return error.InvalidValueTag;
+    const point: model.PathPoint = .{ .x = @floatCast(x), .y = @floatCast(y) };
+    if (!point.isFinite()) return error.InvalidValueTag;
+    return point;
 }

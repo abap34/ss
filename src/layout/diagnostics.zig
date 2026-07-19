@@ -225,7 +225,7 @@ fn contentVisualFrame(state: anytype, node: *const Node, render: render_policy.R
     return switch (render.kind) {
         .vector_math => mathContentVisualFrame(content_frame, content_width, content_height, render.math),
         .vector_asset, .raster_asset, .text, .code => topAnchoredContentVisualFrame(content_frame, content_width, content_height),
-        .shape, .chrome_only => null,
+        .vector_path, .connector, .chrome_only => null,
     };
 }
 
@@ -262,9 +262,6 @@ fn hasFrameInk(render: render_policy.ResolvedRender) bool {
     if (render.chrome.stroke != null and render.chrome.line_width > 0) return true;
     if (render.rule.stroke != null and render.rule.line_width > 0) return true;
     if (render.underline.color != null and render.underline.width > 0) return true;
-    if (render.shape) |shape| {
-        if (shape.stroke != null and shape.line_width > 0) return true;
-    }
     return false;
 }
 

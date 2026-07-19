@@ -8,6 +8,7 @@ const AxisState = model.AxisState;
 const Anchor = model.Anchor;
 const Constraint = model.Constraint;
 const GroupRole = model.GroupRole;
+const ConnectorRole = model.ConnectorRole;
 const roleEq = model.roleEq;
 
 pub fn constraintTargetsGroup(state: anytype, constraint: Constraint) bool {
@@ -64,6 +65,8 @@ fn computeTightGroupAxisState(state: anytype, workspace: *const graph.AxisWorksp
     var start: ?f32 = null;
     var end: ?f32 = null;
     for (group_children) |child_id| {
+        const child = state.getNode(child_id) orelse return error.UnknownNode;
+        if (roleEq(child.role, ConnectorRole)) continue;
         const child_start, const child_end = try groupChildAxisBounds(state, workspace, child_id);
         if (child_start == null or child_end == null) return .{};
         if (start == null or child_start.? < start.?) start = child_start.?;

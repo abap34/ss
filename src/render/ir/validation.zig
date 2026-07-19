@@ -23,7 +23,7 @@ pub const Error = error{
 };
 
 pub fn document(ir: anytype) Error!void {
-    if (ir.schema_version != 6) return error.UnsupportedSchema;
+    if (ir.schema_version != 7) return error.UnsupportedSchema;
     for (ir.resources.entries, 0..) |resource, resource_index| {
         if (resource_index > 0 and
             std.mem.order(u8, &ir.resources.entries[resource_index - 1].id, &resource.id) != .lt)
@@ -259,6 +259,7 @@ fn itemGeometry(ir: anytype, item: anytype) Error!void {
                 !nonNegativeFinite(value.dash_on) or
                 !nonNegativeFinite(value.dash_off) or !validColor(value.color)) return error.InvalidItemGeometry;
         },
+        .vector_path => |value| try vectorPathGeometry(value),
         .rounded_rect => |value| {
             if (!value.rect.isValid() or !nonNegativeFinite(value.radius) or !nonNegativeFinite(value.line_width) or
                 (value.fill != null and !validColor(value.fill.?)) or
@@ -324,6 +325,79 @@ fn itemGeometry(ir: anytype, item: anytype) Error!void {
             if (value.page_index >= metadata.pages.len) return error.InvalidResource;
         },
     }
+}
+
+fn vectorPathGeometry(value: anytype) Error!void {
+    if (!validPathCommands(value.commands) or !validFill(value.fill)) return error.InvalidItemGeometry;
+    if (value.stroke) |stroke| try validStroke(stroke);
+}
+
+fn validPathCommands(commands: anytype) bool {
+    if (commands.len == 0) return false;
+    var has_current = false;
+    var has_subpath = false;
+    for (commands) |command| switch (command) {
+        .move_to => |point| {
+            if (!pointFinite(point)) return false;
+            has_current = true;
+            has_subpath = true;
+        },
+        .line_to => |point| {
+            if (!has_current or !pointFinite(point)) return false;
+        },
+        .cubic_to => |cubic| {
+            if (!has_current or !pointFinite(cubic.control1) or !pointFinite(cubic.control2) or !pointFinite(cubic.end)) return false;
+        },
+        .close => {
+            if (!has_current or !has_subpath) return false;
+            has_current = false;
+            has_subpath = false;
+        },
+    };
+    return true;
+}
+
+fn validFill(fill: anytype) bool {
+    if (!std.math.isFinite(fill.opacity) or fill.opacity < 0 or fill.opacity > 1) return false;
+    switch (fill.base) {
+        .none => {},
+        .solid => |color| if (!validColor(color)) return false,
+        .linear => |gradient| {
+            if (!pointFinite(gradient.start) or !pointFinite(gradient.end) or
+                (gradient.start.x == gradient.end.x and gradient.start.y == gradient.end.y) or
+                !validStops(gradient.stops)) return false;
+        },
+        .radial => |gradient| {
+            if (!pointFinite(gradient.start_center) or !pointFinite(gradient.end_center) or
+                !nonNegativeFinite(gradient.start_radius) or !positiveFinite(gradient.end_radius) or
+                !validStops(gradient.stops)) return false;
+        },
+    }
+    if (fill.overlay) |pattern| {
+        if (!validPathCommands(pattern.commands) or !positiveFinite(pattern.cell_width) or !positiveFinite(pattern.cell_height) or
+            !pattern.transform.isFinite() or @abs(pattern.transform.xx * pattern.transform.yy - pattern.transform.xy * pattern.transform.yx) <= 1e-12 or
+            (pattern.fill == null and pattern.stroke == null)) return false;
+        if (pattern.fill) |color| if (!validColor(color)) return false;
+        if (pattern.stroke) |stroke| validStroke(stroke) catch return false;
+    }
+    return true;
+}
+
+fn validStops(stops: anytype) bool {
+    if (stops.len < 2) return false;
+    var previous: f64 = -1;
+    for (stops) |stop| {
+        if (!std.math.isFinite(stop.offset) or stop.offset < 0 or stop.offset > 1 or stop.offset < previous or !validColor(stop.color)) return false;
+        previous = stop.offset;
+    }
+    return true;
+}
+
+fn validStroke(stroke: anytype) Error!void {
+    if (!validColor(stroke.color) or !positiveFinite(stroke.width) or !positiveFinite(stroke.miter_limit) or !std.math.isFinite(stroke.dash_offset)) {
+        return error.InvalidItemGeometry;
+    }
+    for (stroke.dash) |entry| if (!positiveFinite(entry)) return error.InvalidItemGeometry;
 }
 
 fn fontCatalog(ir: anytype) Error!void {

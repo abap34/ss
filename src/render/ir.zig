@@ -105,6 +105,143 @@ pub const StrokeLine = struct {
     dash_off: f64 = 0,
 };
 
+pub const PathCommand = union(enum) {
+    move_to: Point,
+    line_to: Point,
+    cubic_to: struct {
+        control1: Point,
+        control2: Point,
+        end: Point,
+    },
+    close: void,
+};
+
+pub const LineCap = enum { butt, round, square };
+pub const LineJoin = enum { miter, round, bevel };
+pub const FillRule = enum { nonzero, even_odd };
+pub const GradientSpread = enum { pad, repeat, reflect };
+
+pub const StrokePaint = struct {
+    color: core.render_policy.Color,
+    width: f64,
+    cap: LineCap = .butt,
+    join: LineJoin = .miter,
+    miter_limit: f64 = 10,
+    dash: []const f64 = &.{},
+    dash_offset: f64 = 0,
+
+    fn clone(self: StrokePaint, allocator: std.mem.Allocator) !StrokePaint {
+        var result = self;
+        result.dash = try allocator.dupe(f64, self.dash);
+        return result;
+    }
+
+    fn deinit(self: *StrokePaint, allocator: std.mem.Allocator) void {
+        allocator.free(self.dash);
+        self.dash = &.{};
+    }
+};
+
+pub const GradientStop = struct {
+    offset: f64,
+    color: core.render_policy.Color,
+};
+
+pub const LinearGradientPaint = struct {
+    start: Point,
+    end: Point,
+    stops: []const GradientStop,
+    spread: GradientSpread = .pad,
+};
+
+pub const RadialGradientPaint = struct {
+    start_center: Point,
+    start_radius: f64,
+    end_center: Point,
+    end_radius: f64,
+    stops: []const GradientStop,
+    spread: GradientSpread = .pad,
+};
+
+pub const BaseFillPaint = union(enum) {
+    none: void,
+    solid: core.render_policy.Color,
+    linear: LinearGradientPaint,
+    radial: RadialGradientPaint,
+};
+
+pub const TilePatternPaint = struct {
+    commands: []const PathCommand,
+    cell_width: f64,
+    cell_height: f64,
+    transform: Transform = .{},
+    fill: ?core.render_policy.Color = null,
+    stroke: ?StrokePaint = null,
+
+    fn clone(self: TilePatternPaint, allocator: std.mem.Allocator) !TilePatternPaint {
+        var result = self;
+        result.commands = try allocator.dupe(PathCommand, self.commands);
+        errdefer allocator.free(result.commands);
+        if (self.stroke) |stroke| result.stroke = try stroke.clone(allocator);
+        return result;
+    }
+
+    fn deinit(self: *TilePatternPaint, allocator: std.mem.Allocator) void {
+        allocator.free(self.commands);
+        if (self.stroke) |*stroke| stroke.deinit(allocator);
+        self.commands = &.{};
+    }
+};
+
+pub const FillPaint = struct {
+    base: BaseFillPaint = .{ .none = {} },
+    overlay: ?TilePatternPaint = null,
+    rule: FillRule = .nonzero,
+    opacity: f64 = 1,
+
+    fn clone(self: FillPaint, allocator: std.mem.Allocator) !FillPaint {
+        var result = self;
+        switch (self.base) {
+            .linear => |linear| {
+                result.base.linear.stops = try allocator.dupe(GradientStop, linear.stops);
+            },
+            .radial => |radial| {
+                result.base.radial.stops = try allocator.dupe(GradientStop, radial.stops);
+            },
+            .none, .solid => {},
+        }
+        errdefer switch (result.base) {
+            .linear => |linear| allocator.free(linear.stops),
+            .radial => |radial| allocator.free(radial.stops),
+            .none, .solid => {},
+        };
+        if (self.overlay) |overlay| result.overlay = try overlay.clone(allocator);
+        return result;
+    }
+
+    fn deinit(self: *FillPaint, allocator: std.mem.Allocator) void {
+        switch (self.base) {
+            .linear => |linear| allocator.free(linear.stops),
+            .radial => |radial| allocator.free(radial.stops),
+            .none, .solid => {},
+        }
+        if (self.overlay) |*overlay| overlay.deinit(allocator);
+    }
+};
+
+pub const VectorPath = struct {
+    header: ItemHeader,
+    commands: []const PathCommand,
+    fill: FillPaint,
+    stroke: ?StrokePaint,
+
+    fn deinit(self: *VectorPath, allocator: std.mem.Allocator) void {
+        allocator.free(self.commands);
+        self.fill.deinit(allocator);
+        if (self.stroke) |*stroke| stroke.deinit(allocator);
+    }
+};
+
 pub const FillRect = struct {
     header: ItemHeader,
     rect: Rect,
@@ -193,6 +330,7 @@ pub const Math = struct {
 pub const Item = union(enum) {
     fill_rect: FillRect,
     stroke_line: StrokeLine,
+    vector_path: VectorPath,
     rounded_rect: RoundedRect,
     text: Text,
     raster: Raster,
@@ -204,6 +342,7 @@ pub const Item = union(enum) {
         switch (self.*) {
             .text => |*item| item.deinit(allocator),
             .math => |*item| item.content.deinit(allocator),
+            .vector_path => |*item| item.deinit(allocator),
             .fill_rect, .stroke_line, .rounded_rect, .raster, .svg, .pdf_page => {},
         }
     }
@@ -362,6 +501,37 @@ pub const Page = struct {
         } });
     }
 
+    pub fn appendVectorPath(
+        self: *Page,
+        allocator: std.mem.Allocator,
+        node_id: ?core.NodeId,
+        commands: []const PathCommand,
+        fill: FillPaint,
+        stroke: ?StrokePaint,
+    ) !void {
+        const owned_commands = try allocator.dupe(PathCommand, commands);
+        errdefer allocator.free(owned_commands);
+        var owned_fill = try fill.clone(allocator);
+        errdefer owned_fill.deinit(allocator);
+        var owned_stroke: ?StrokePaint = if (stroke) |value| try value.clone(allocator) else null;
+        errdefer if (owned_stroke) |*value| value.deinit(allocator);
+
+        const bounds = pathBounds(commands) orelse Rect{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        const stroke_inset = if (stroke) |value| strokeBoundsInset(value) else 0;
+        const ink_bounds = Rect{
+            .x = bounds.x - stroke_inset,
+            .y = bounds.y - stroke_inset,
+            .width = bounds.width + stroke_inset * 2,
+            .height = bounds.height + stroke_inset * 2,
+        };
+        try self.items.append(allocator, .{ .vector_path = .{
+            .header = self.itemHeader(node_id, bounds, ink_bounds),
+            .commands = owned_commands,
+            .fill = owned_fill,
+            .stroke = owned_stroke,
+        } });
+    }
+
     pub fn appendTextLayout(
         self: *Page,
         allocator: std.mem.Allocator,
@@ -504,7 +674,7 @@ pub const Page = struct {
 };
 
 pub const Ir = struct {
-    schema_version: u32 = 6,
+    schema_version: u32 = 7,
     resources: ResourceGraph = .{},
     fonts: FontCatalog = .{},
     semantics: SemanticTree = .{},
@@ -529,6 +699,83 @@ pub const Ir = struct {
         return ir_fingerprint.document(self);
     }
 };
+
+fn strokeBoundsInset(stroke: StrokePaint) f64 {
+    const half_width = @max(stroke.width / 2, 0);
+    const cap_inset = if (stroke.cap == .square) half_width * std.math.sqrt2 else half_width;
+    const join_inset = if (stroke.join == .miter) @max(stroke.width * stroke.miter_limit, half_width) else half_width;
+    return @max(cap_inset, join_inset);
+}
+
+fn pathBounds(commands: []const PathCommand) ?Rect {
+    var min_x = std.math.inf(f64);
+    var min_y = std.math.inf(f64);
+    var max_x = -std.math.inf(f64);
+    var max_y = -std.math.inf(f64);
+    var current: ?Point = null;
+    var subpath_start: ?Point = null;
+    for (commands) |command| switch (command) {
+        .move_to => |point| {
+            includePoint(point, &min_x, &min_y, &max_x, &max_y);
+            current = point;
+            subpath_start = point;
+        },
+        .line_to => |point| {
+            includePoint(point, &min_x, &min_y, &max_x, &max_y);
+            if (current) |value| includePoint(value, &min_x, &min_y, &max_x, &max_y);
+            current = point;
+        },
+        .cubic_to => |cubic| {
+            if (current) |start| includeCubicBounds(start, cubic.control1, cubic.control2, cubic.end, &min_x, &min_y, &max_x, &max_y);
+            current = cubic.end;
+        },
+        .close => {
+            if (subpath_start) |point| includePoint(point, &min_x, &min_y, &max_x, &max_y);
+            current = subpath_start;
+        },
+    };
+    if (!std.math.isFinite(min_x)) return null;
+    return .{ .x = min_x, .y = min_y, .width = max_x - min_x, .height = max_y - min_y };
+}
+
+fn includeCubicBounds(p0: Point, p1: Point, p2: Point, p3: Point, min_x: *f64, min_y: *f64, max_x: *f64, max_y: *f64) void {
+    includePoint(p0, min_x, min_y, max_x, max_y);
+    includePoint(p3, min_x, min_y, max_x, max_y);
+    includeCubicAxis(p0.x, p1.x, p2.x, p3.x, true, p0, p1, p2, p3, min_x, min_y, max_x, max_y);
+    includeCubicAxis(p0.y, p1.y, p2.y, p3.y, false, p0, p1, p2, p3, min_x, min_y, max_x, max_y);
+}
+
+fn includeCubicAxis(a0: f64, a1: f64, a2: f64, a3: f64, x_axis: bool, p0: Point, p1: Point, p2: Point, p3: Point, min_x: *f64, min_y: *f64, max_x: *f64, max_y: *f64) void {
+    const qa = -a0 + 3 * a1 - 3 * a2 + a3;
+    const qb = 2 * (a0 - 2 * a1 + a2);
+    const qc = a1 - a0;
+    if (@abs(qa) < 1e-12) {
+        if (@abs(qb) >= 1e-12) includeCubicAt(-qc / qb, p0, p1, p2, p3, min_x, min_y, max_x, max_y);
+        return;
+    }
+    const discriminant = qb * qb - 4 * qa * qc;
+    if (discriminant < 0) return;
+    const root = @sqrt(discriminant);
+    includeCubicAt((-qb + root) / (2 * qa), p0, p1, p2, p3, min_x, min_y, max_x, max_y);
+    includeCubicAt((-qb - root) / (2 * qa), p0, p1, p2, p3, min_x, min_y, max_x, max_y);
+    _ = x_axis;
+}
+
+fn includeCubicAt(t: f64, p0: Point, p1: Point, p2: Point, p3: Point, min_x: *f64, min_y: *f64, max_x: *f64, max_y: *f64) void {
+    if (t <= 0 or t >= 1 or !std.math.isFinite(t)) return;
+    const u = 1 - t;
+    includePoint(.{
+        .x = u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
+        .y = u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y,
+    }, min_x, min_y, max_x, max_y);
+}
+
+fn includePoint(point: Point, min_x: *f64, min_y: *f64, max_x: *f64, max_y: *f64) void {
+    min_x.* = @min(min_x.*, point.x);
+    min_y.* = @min(min_y.*, point.y);
+    max_x.* = @max(max_x.*, point.x);
+    max_y.* = @max(max_y.*, point.y);
+}
 
 pub fn pageFingerprint(page: *const Page) Fingerprint {
     return ir_fingerprint.page(page);

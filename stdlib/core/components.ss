@@ -1,8 +1,11 @@
 import std:core/classes as classes
+import std:core/connectors as connectors
+import std:core/fills as fills
 import std:core/layout as layout
 import std:core/objects as objects
 import std:core/render as render
 import std:core/selectors as selectors
+import std:core/shapes as shapes
 import std:core/utils as utils
 import std:core/generated as generated
 
@@ -40,15 +43,6 @@ fn/! rule() -> Object
   return objects::rule_obj()
 end
 
-record LineStyle {
-  stroke: Color? = c"#4b5563"
-  line_width: Number = 1.6
-  dash: String = ""
-  marker_start: ShapeMarker = ShapeMarker.plain
-  marker_end: ShapeMarker = ShapeMarker.plain
-  marker_size: Number = 10
-}
-
 record CalloutStyle {
   left_bracket: Bool = false
   stroke: Color? = c"#4b5563"
@@ -68,7 +62,6 @@ record CalloutStyle {
   radius: Number = 6
   pad_x: Number = 18
   pad_y: Number = 12
-  rises: Bool = true
 }
 
 record MarkedCalloutStyle {
@@ -89,57 +82,8 @@ record MarkedCalloutStyle {
   callout_x: Number = 780
   callout_top_y: Number = 486
   callout_width: Number = 300
-  rises: Bool = true
   callout: CalloutStyle = CalloutStyle {}
 }
-
-fn/! line() -> Object
-  return objects::shape_obj()
-end
-
-fn line_s(obj: Object, style: LineStyle) -> Object
-  obj.shape.stroke = style.stroke
-  obj.shape.line_width = style.line_width
-  obj.shape.dash = style.dash
-  obj.shape.marker_start = style.marker_start
-  obj.shape.marker_end = style.marker_end
-  obj.shape.marker_size = style.marker_size
-  return obj
-end
-
-fn/! line_up(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
-  let obj = line_s(line(), style)
-  obj.shape.start_y = 0
-  obj.shape.end_y = 1
-  ~ obj.left == from.right
-  ~ obj.bottom == from.center_y
-  ~ obj.right == to.left
-  ~ obj.top == to.center_y
-  return obj
-end
-
-fn/! line_down(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
-  let obj = line_s(line(), style)
-  obj.shape.start_y = 1
-  obj.shape.end_y = 0
-  ~ obj.left == from.right
-  ~ obj.top == from.center_y
-  ~ obj.right == to.left
-  ~ obj.bottom == to.center_y
-  return obj
-end
-
-fn/! arrow_up(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
-  return line_up(from, to, style with {
-    marker_end = ShapeMarker.arrow
-  })
-end
-
-fn/! arrow_down(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
-  return line_down(from, to, style with {
-    marker_end = ShapeMarker.arrow
-  })
-end
 
 fn/! callout_text(text_value: String, style: CalloutStyle) -> Object
   let obj = objects::body_obj(text_value)
@@ -195,6 +139,17 @@ fn/! callout_left_bracket(inner: Object, style: CalloutStyle) -> Object
   return group(side, top, bottom)
 end
 
+fn callout_connector_style(style: CalloutStyle) -> ConnectorStyle
+  let marker_color = style.stroke ?? c"#4b5563"
+  return ConnectorStyle {
+    source_anchor = ConnectorAnchor.right
+    target_anchor = ConnectorAnchor.left
+    route = ConnectorRoute.straight
+    stroke = fills::vector_stroke(style.stroke, style.line_width, LineCap.round, LineJoin.round, style.dash)
+    marker_end = shapes::marker_arrow_open(style.marker_size, marker_color, style.line_width)
+  }
+end
+
 fn/! bracket_callout(target: Object, text_value: String, x: Number, top_y: Number, width: Number, style: CalloutStyle = CalloutStyle {}) -> Object
   let note = callout_text(text_value, style)
   ~ note.left == page.left + x
@@ -205,49 +160,12 @@ fn/! bracket_callout(target: Object, text_value: String, x: Number, top_y: Numbe
   render::box(chrome, style.fill, style.border, style.border_width, style.radius)
   layout::surround(chrome, note, style.pad_x, style.pad_y)
 
-  let connector_style = LineStyle {
-    stroke = style.stroke
-    line_width = style.line_width
-    dash = style.dash
-    marker_end = ShapeMarker.arrow
-    marker_size = style.marker_size
-  }
-  let connector = line()
-  line_s(connector, connector_style)
   if style.left_bracket
     let bracket = callout_left_bracket(chrome, style)
-    if style.rises
-      connector.shape.start_y = 0
-      connector.shape.end_y = 1
-      ~ connector.left == target.right
-      ~ connector.bottom == target.center_y
-      ~ connector.right == bracket.left
-      ~ connector.top == bracket.center_y
-    else
-      connector.shape.start_y = 1
-      connector.shape.end_y = 0
-      ~ connector.left == target.right
-      ~ connector.top == target.center_y
-      ~ connector.right == bracket.left
-      ~ connector.bottom == bracket.center_y
-    end
+    let connector = connectors::connector(target, bracket, callout_connector_style(style))
     return group(note, chrome, bracket, connector)
   else
-    if style.rises
-      connector.shape.start_y = 0
-      connector.shape.end_y = 1
-      ~ connector.left == target.right
-      ~ connector.bottom == target.center_y
-      ~ connector.right == chrome.left
-      ~ connector.top == chrome.center_y
-    else
-      connector.shape.start_y = 1
-      connector.shape.end_y = 0
-      ~ connector.left == target.right
-      ~ connector.top == target.center_y
-      ~ connector.right == chrome.left
-      ~ connector.bottom == chrome.center_y
-    end
+    let connector = connectors::connector(target, chrome, callout_connector_style(style))
     return group(note, chrome, connector)
   end
 end
@@ -290,21 +208,12 @@ fn marked_callout!(source_text: String, target_text: String, note_text: String, 
   ~ after.left == target.right + style.target_pad_x
   ~ after.top == before.top
 
-  let callout_style = style.callout with {
-    rises = style.rises
-  }
-  let callout = bracket_callout!(target, note_text, style.callout_x, style.callout_top_y, style.callout_width, callout_style)
+  let callout = bracket_callout!(target, note_text, style.callout_x, style.callout_top_y, style.callout_width, style.callout)
   return objects::place!(group(before, target, after, target_back, callout))
 end
 
 fn annotate!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = MarkedCalloutStyle {}) -> Object
   return marked_callout!(source_text, target_text, note_text, style)
-end
-
-fn annotate_down!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = MarkedCalloutStyle {}) -> Object
-  return marked_callout!(source_text, target_text, note_text, style with {
-    rises = false
-  })
 end
 
 fn page_bg(fill_name: Color?) -> Void

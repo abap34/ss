@@ -96,8 +96,9 @@ const ResolvedRender = core.render_policy.ResolvedRender;
 const TextPaint = core.render_policy.TextPaint;
 const CodePaint = core.render_policy.CodePaint;
 const MathPaint = core.render_policy.MathPaint;
-const ShapePaint = core.render_policy.ShapePaint;
-const ShapeMarker = core.render_policy.ShapeMarker;
+const VectorPathPaint = core.render_policy.VectorPathPaint;
+const ConnectorPaint = core.render_policy.ConnectorPaint;
+const MarkerPaint = core.render_policy.MarkerPaint;
 const MarkdownDocument = core.markdown.MarkdownDocument;
 const Line = core.markdown.Line;
 const Block = core.markdown.Block;
@@ -164,6 +165,7 @@ const DrawContext = struct {
     measurement_bounds: ?*MeasurementBounds = null,
     tex_preamble: []const TexPreambleEntry = &.{},
     tex_engine: TexEngine = .pdflatex,
+    commands: ?[]const ObjectCommand = null,
 };
 
 const MeasurementBounds = struct {
@@ -1102,7 +1104,7 @@ fn collectObjectPreloads(
                 } });
             }
         },
-        .code, .shape, .chrome_only => {},
+        .code, .vector_path, .connector, .chrome_only => {},
     }
 }
 
@@ -1347,7 +1349,8 @@ fn objectCommandLabel(command: *const ObjectCommand) []const u8 {
         .text => "text object",
         .code => "code block",
         .chrome_only => "object chrome",
-        .shape => "shape object",
+        .vector_path => "vector path object",
+        .connector => "connector object",
         .vector_math => "math expression",
         .vector_asset => "vector asset",
         .raster_asset => "raster asset",
@@ -1361,7 +1364,8 @@ fn profileRenderMeasureKind(kind: RenderKind) utils.measure_profile.RenderMeasur
         .vector_math => .vector_math,
         .vector_asset => .vector_asset,
         .raster_asset => .raster_asset,
-        .shape => .shape,
+        .vector_path => .shape,
+        .connector => .shape,
         .chrome_only => .chrome_only,
     };
 }
@@ -1735,6 +1739,7 @@ fn buildRenderPage(
         .highlight_languages = parent_ctx.highlight_languages,
         .command_failure = parent_ctx.command_failure,
         .emitter = .{ .page = &page, .resources = resources, .fonts = fonts, .math = math, .io = parent_ctx.io },
+        .commands = commands,
     };
 
     const page_fill = background orelse Color{ .r = 1, .g = 1, .b = 1 };
@@ -1821,7 +1826,8 @@ fn drawObjectCommand(ctx: *DrawContext, command: *const ObjectCommand) !void {
         .vector_math => try drawVectorMathCommand(ctx, command, content_frame, command.render.math),
         .vector_asset => try drawVectorAsset(ctx, content_frame, command.content, command.render.asset),
         .raster_asset => try drawRasterAsset(ctx, content_frame, command.content, command.render.asset),
-        .shape => if (command.render.shape) |shape| try drawShapeOp(ctx, content_frame, shape),
+        .vector_path => if (command.render.vector_path) |path| try drawVectorPathOp(ctx, content_frame, path),
+        .connector => if (command.render.connector) |connector| try drawConnectorOp(ctx, connector),
     }
 }
 
@@ -1849,7 +1855,7 @@ fn measuredObjectCommandVisualFrame(ctx: *DrawContext, command: *const ObjectCom
             const measured = try measureObjectCommandContent(ctx, command, null);
             return expandFrameToMeasuredInk(command.frame, command.render, measured);
         },
-        .shape => return command.frame,
+        .vector_path, .connector => return command.frame,
         else => {},
     }
     return command.frame;
@@ -1961,7 +1967,8 @@ fn measureObjectCommandContent(ctx: *DrawContext, command: *const ObjectCommand,
         .vector_math => try drawVectorMathCommand(ctx, command, content_frame, command.render.math),
         .vector_asset => try drawVectorAsset(ctx, content_frame, command.content, command.render.asset),
         .raster_asset => try drawRasterAsset(ctx, content_frame, command.content, command.render.asset),
-        .shape => if (command.render.shape) |shape| try drawShapeOp(ctx, content_frame, shape),
+        .vector_path => if (command.render.vector_path) |path| try drawVectorPathOp(ctx, content_frame, path),
+        .connector => if (command.render.connector) |connector| try drawConnectorOp(ctx, connector),
         else => return null,
     }
     return try measurement.inkFrame();
@@ -1980,7 +1987,7 @@ fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectComman
     if (mode == .natural) {
         if (render.text) |*text| text.wrap = false;
     }
-    if (render.kind == .shape or render.kind == .chrome_only) {
+    if (render.kind == .vector_path or render.kind == .connector or render.kind == .chrome_only) {
         const frame_width: f32 = if (mode == .natural) 1 else @max(outer_width, 1);
         return try measureFrameIntrinsic(ctx, command, Frame{ .x = 0, .y = 0, .width = frame_width, .height = 1 });
     }
@@ -1998,7 +2005,7 @@ fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectComman
         } else return null,
         .vector_math => try measureVectorMathIntrinsic(ctx, command, content_frame.width, content_frame.height),
         .vector_asset, .raster_asset => try measureAssetIntrinsic(ctx, command, content_frame.width),
-        .shape, .chrome_only => unreachable,
+        .vector_path, .connector, .chrome_only => unreachable,
     };
     return expandContentMeasurement(render, content_measure);
 }
@@ -2011,7 +2018,8 @@ fn measureFrameIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, frame
     try drawObjectChrome(ctx, frame, command.render);
     const content_frame = contentFrameForRender(frame, command.render);
     switch (command.render.kind) {
-        .shape => if (command.render.shape) |shape| try drawShapeOp(ctx, content_frame, shape),
+        .vector_path => if (command.render.vector_path) |path| try drawVectorPathOp(ctx, content_frame, path),
+        .connector => if (command.render.connector) |connector| try drawConnectorOp(ctx, connector),
         .chrome_only => {},
         else => unreachable,
     }
@@ -2319,41 +2327,288 @@ fn contentFrameForRender(frame: Frame, render: ResolvedRender) Frame {
     };
 }
 
-fn drawShapeOp(ctx: *DrawContext, frame: Frame, shape: ShapePaint) !void {
-    const stroke = shape.stroke orelse return;
-    if (shape.line_width <= 0) return;
-
-    const x1 = frame.x + frame.width * shape.start_x;
-    const y1 = toTopY(frame.y + frame.height * shape.start_y);
-    const x2 = frame.x + frame.width * shape.end_x;
-    const y2 = toTopY(frame.y + frame.height * shape.end_y);
-    const dash_on = if (shape.dash) |dash| dash.on else 0;
-    const dash_off = if (shape.dash) |dash| dash.off else 0;
-
-    try strokeLine(ctx, x1, y1, x2, y2, shape.line_width, stroke, dash_on, dash_off);
-    if (shape.marker_start == .arrow) {
-        try drawArrowHead(ctx, x1, y1, x1 - x2, y1 - y2, shape.line_width, stroke, shape.marker_size);
-    }
-    if (shape.marker_end == .arrow) {
-        try drawArrowHead(ctx, x2, y2, x2 - x1, y2 - y1, shape.line_width, stroke, shape.marker_size);
-    }
+fn drawVectorPathOp(ctx: *DrawContext, frame: Frame, paint: VectorPathPaint) !void {
+    const mapping = PathMapping{
+        .xx = frame.width,
+        .yx = 0,
+        .xy = 0,
+        .yy = frame.height,
+        .x0 = frame.x,
+        .y0 = toTopY(frame.y + frame.height),
+        .radius_scale = @min(frame.width, frame.height),
+    };
+    try drawStyledPath(ctx, paint.path, mapping, paint.fill, paint.stroke);
 }
 
-fn drawArrowHead(ctx: *DrawContext, tip_x: f32, tip_y: f32, dir_x: f32, dir_y: f32, line_width: f32, color: Color, marker_size: f32) !void {
-    const length = @sqrt(dir_x * dir_x + dir_y * dir_y);
-    if (length <= 0.001) return;
+const PathMapping = struct {
+    xx: f64,
+    yx: f64,
+    xy: f64,
+    yy: f64,
+    x0: f64,
+    y0: f64,
+    radius_scale: f64,
 
-    const size = @max(marker_size, line_width * 3.0);
-    const ux = dir_x / length;
-    const uy = dir_y / length;
-    const px = -uy;
-    const py = ux;
-    const wing = size * 0.42;
-    const base_x = tip_x - ux * size;
-    const base_y = tip_y - uy * size;
+    fn point(self: PathMapping, value: core.PathPoint) render_ir.Point {
+        return .{
+            .x = self.xx * value.x + self.xy * value.y + self.x0,
+            .y = self.yx * value.x + self.yy * value.y + self.y0,
+        };
+    }
+};
 
-    try strokeLine(ctx, tip_x, tip_y, base_x + px * wing, base_y + py * wing, line_width, color, 0, 0);
-    try strokeLine(ctx, tip_x, tip_y, base_x - px * wing, base_y - py * wing, line_width, color, 0, 0);
+const identity_path_mapping = PathMapping{
+    .xx = 1,
+    .yx = 0,
+    .xy = 0,
+    .yy = 1,
+    .x0 = 0,
+    .y0 = 0,
+    .radius_scale = 1,
+};
+
+fn drawStyledPath(
+    ctx: *DrawContext,
+    path: core.Path,
+    mapping: PathMapping,
+    fill: core.render_policy.VectorFillPaint,
+    stroke_paint: ?core.render_policy.VectorStrokePaint,
+) !void {
+    var commands = try renderPathCommands(ctx.allocator, path, mapping);
+    defer commands.deinit(ctx.allocator);
+    if (commands.items.len == 0) return;
+
+    var stops: [2]render_ir.GradientStop = undefined;
+    var base: render_ir.BaseFillPaint = .{ .none = {} };
+    switch (fill.kind) {
+        .none => {},
+        .solid => {
+            if (fill.color) |color| base = .{ .solid = color };
+        },
+        .linear => {
+            if (fill.color) |color1| if (fill.color2) |color2| {
+                stops = .{ .{ .offset = 0, .color = color1 }, .{ .offset = 1, .color = color2 } };
+                base = .{ .linear = .{
+                    .start = paintPoint(fill.space, mapping, fill.start_x, fill.start_y),
+                    .end = paintPoint(fill.space, mapping, fill.end_x, fill.end_y),
+                    .stops = &stops,
+                    .spread = @enumFromInt(@intFromEnum(fill.spread)),
+                } };
+            };
+        },
+        .radial => {
+            if (fill.color) |color1| if (fill.color2) |color2| {
+                stops = .{ .{ .offset = 0, .color = color1 }, .{ .offset = 1, .color = color2 } };
+                base = .{ .radial = .{
+                    .start_center = paintPoint(fill.space, mapping, fill.start_x, fill.start_y),
+                    .start_radius = paintRadius(fill.space, mapping, fill.start_radius),
+                    .end_center = paintPoint(fill.space, mapping, fill.end_x, fill.end_y),
+                    .end_radius = paintRadius(fill.space, mapping, fill.end_radius),
+                    .stops = &stops,
+                    .spread = @enumFromInt(@intFromEnum(fill.spread)),
+                } };
+            };
+        },
+    }
+
+    var pattern_commands = std.ArrayList(render_ir.PathCommand).empty;
+    defer pattern_commands.deinit(ctx.allocator);
+    var pattern_dash_storage: [8]f64 = @splat(0);
+    var overlay: ?render_ir.TilePatternPaint = null;
+    if (fill.pattern) |pattern| {
+        pattern_commands = try renderPathCommands(ctx.allocator, pattern.path, identity_path_mapping);
+        overlay = .{
+            .commands = pattern_commands.items,
+            .cell_width = pattern.cell_width,
+            .cell_height = pattern.cell_height,
+            .transform = .{
+                .xx = pattern.xx,
+                .yx = pattern.yx,
+                .xy = pattern.xy,
+                .yy = pattern.yy,
+                .x0 = pattern.x0 + if (pattern.space == .local) mapping.x0 else 0,
+                .y0 = pattern.y0 + if (pattern.space == .local) mapping.y0 else 0,
+            },
+            .fill = pattern.fill,
+            .stroke = if (pattern.stroke) |stroke| renderStroke(stroke, &pattern_dash_storage) else null,
+        };
+    }
+
+    var dash_storage: [8]f64 = @splat(0);
+    const stroke = if (stroke_paint) |value| renderStroke(value, &dash_storage) else null;
+    try activeEmitter(ctx).vectorPath(ctx.allocator, commands.items, .{
+        .base = base,
+        .overlay = overlay,
+        .rule = @enumFromInt(@intFromEnum(fill.rule)),
+        .opacity = fill.opacity,
+    }, stroke);
+}
+
+fn paintPoint(space: core.render_policy.PaintSpace, mapping: PathMapping, x: f32, y: f32) render_ir.Point {
+    if (space == .page) return .{ .x = x, .y = y };
+    return mapping.point(.{ .x = x, .y = y });
+}
+
+fn paintRadius(space: core.render_policy.PaintSpace, mapping: PathMapping, value: f32) f64 {
+    return if (space == .page) value else mapping.radius_scale * value;
+}
+
+fn drawConnectorOp(ctx: *DrawContext, paint: ConnectorPaint) !void {
+    const commands = ctx.commands orelse return;
+    const source_frame = commandFrame(commands, paint.source) orelse return;
+    const target_frame = commandFrame(commands, paint.target) orelse return;
+    const start = connectorAnchorPoint(source_frame, paint.source_anchor);
+    const end = connectorAnchorPoint(target_frame, paint.target_anchor);
+
+    var path_commands: [4]render_ir.PathCommand = undefined;
+    var path_len: usize = 0;
+    var start_tangent = end;
+    var end_tangent = start;
+    path_commands[path_len] = .{ .move_to = start };
+    path_len += 1;
+    switch (paint.route) {
+        .straight => {
+            path_commands[path_len] = .{ .line_to = end };
+            path_len += 1;
+        },
+        .horizontal_then_vertical => {
+            const middle = render_ir.Point{ .x = end.x, .y = start.y };
+            path_commands[path_len] = .{ .line_to = middle };
+            path_len += 1;
+            path_commands[path_len] = .{ .line_to = end };
+            path_len += 1;
+            start_tangent = if (pointsDiffer(start, middle)) middle else end;
+            end_tangent = if (pointsDiffer(middle, end)) middle else start;
+        },
+        .vertical_then_horizontal => {
+            const middle = render_ir.Point{ .x = start.x, .y = end.y };
+            path_commands[path_len] = .{ .line_to = middle };
+            path_len += 1;
+            path_commands[path_len] = .{ .line_to = end };
+            path_len += 1;
+            start_tangent = if (pointsDiffer(start, middle)) middle else end;
+            end_tangent = if (pointsDiffer(middle, end)) middle else start;
+        },
+        .curve => {
+            const amount = std.math.clamp(@as(f64, paint.curve), 0, 1);
+            const distance = std.math.hypot(end.x - start.x, end.y - start.y) * amount;
+            const source_direction = connectorDirection(paint.source_anchor, start, end);
+            const target_direction = connectorDirection(paint.target_anchor, end, start);
+            const control1 = render_ir.Point{
+                .x = start.x + source_direction.x * distance,
+                .y = start.y + source_direction.y * distance,
+            };
+            const control2 = render_ir.Point{
+                .x = end.x + target_direction.x * distance,
+                .y = end.y + target_direction.y * distance,
+            };
+            path_commands[path_len] = .{ .cubic_to = .{ .control1 = control1, .control2 = control2, .end = end } };
+            path_len += 1;
+            start_tangent = control1;
+            end_tangent = control2;
+        },
+    }
+
+    var dash_storage: [8]f64 = @splat(0);
+    const stroke = renderStroke(paint.stroke, &dash_storage);
+    try activeEmitter(ctx).vectorPath(ctx.allocator, path_commands[0..path_len], .{}, stroke);
+    if (paint.marker_start) |marker| try drawMarker(ctx, marker, start, start_tangent);
+    if (paint.marker_end) |marker| try drawMarker(ctx, marker, end, end_tangent);
+}
+
+fn drawMarker(ctx: *DrawContext, marker: MarkerPaint, tip: render_ir.Point, tangent: render_ir.Point) !void {
+    const dx = tip.x - tangent.x;
+    const dy = tip.y - tangent.y;
+    const length = std.math.hypot(dx, dy);
+    const direction = if (length == 0)
+        render_ir.Point{ .x = 1, .y = 0 }
+    else
+        render_ir.Point{ .x = dx / length, .y = dy / length };
+    const perpendicular = render_ir.Point{ .x = -direction.y, .y = direction.x };
+    const xx = direction.x * marker.width;
+    const yx = direction.y * marker.width;
+    const xy = perpendicular.x * marker.height;
+    const yy = perpendicular.y * marker.height;
+    try drawStyledPath(ctx, marker.path, .{
+        .xx = xx,
+        .yx = yx,
+        .xy = xy,
+        .yy = yy,
+        .x0 = tip.x - xx - xy * 0.5,
+        .y0 = tip.y - yx - yy * 0.5,
+        .radius_scale = @min(marker.width, marker.height),
+    }, marker.fill, marker.stroke);
+}
+
+fn connectorDirection(anchor: core.render_policy.ConnectorAnchor, point: render_ir.Point, other: render_ir.Point) render_ir.Point {
+    return switch (anchor) {
+        .left => .{ .x = -1, .y = 0 },
+        .right => .{ .x = 1, .y = 0 },
+        .top => .{ .x = 0, .y = -1 },
+        .bottom => .{ .x = 0, .y = 1 },
+        .center => blk: {
+            const dx = other.x - point.x;
+            const dy = other.y - point.y;
+            const length = std.math.hypot(dx, dy);
+            if (length == 0) break :blk .{ .x = 1, .y = 0 };
+            break :blk .{ .x = dx / length, .y = dy / length };
+        },
+    };
+}
+
+fn pointsDiffer(left: render_ir.Point, right: render_ir.Point) bool {
+    return left.x != right.x or left.y != right.y;
+}
+
+fn commandFrame(commands: []const ObjectCommand, node_id: core.NodeId) ?Frame {
+    for (commands) |command| if (command.node_id == node_id) return command.frame;
+    return null;
+}
+
+fn connectorAnchorPoint(frame: Frame, anchor: core.render_policy.ConnectorAnchor) render_ir.Point {
+    const left = @as(f64, frame.x);
+    const right = @as(f64, frame.x + frame.width);
+    const top = @as(f64, toTopY(frame.y + frame.height));
+    const bottom = @as(f64, toTopY(frame.y));
+    return switch (anchor) {
+        .center => .{ .x = (left + right) / 2, .y = (top + bottom) / 2 },
+        .left => .{ .x = left, .y = (top + bottom) / 2 },
+        .right => .{ .x = right, .y = (top + bottom) / 2 },
+        .top => .{ .x = (left + right) / 2, .y = top },
+        .bottom => .{ .x = (left + right) / 2, .y = bottom },
+    };
+}
+
+fn renderPathCommands(allocator: Allocator, path: core.Path, mapping: PathMapping) !std.ArrayList(render_ir.PathCommand) {
+    var result = std.ArrayList(render_ir.PathCommand).empty;
+    errdefer result.deinit(allocator);
+    for (path.commands) |command| {
+        const converted: render_ir.PathCommand = switch (command) {
+            .move_to => |point| .{ .move_to = mapping.point(point) },
+            .line_to => |point| .{ .line_to = mapping.point(point) },
+            .cubic_to => |cubic| .{ .cubic_to = .{
+                .control1 = mapping.point(cubic.control1),
+                .control2 = mapping.point(cubic.control2),
+                .end = mapping.point(cubic.end),
+            } },
+            .close => .{ .close = {} },
+        };
+        try result.append(allocator, converted);
+    }
+    return result;
+}
+
+fn renderStroke(paint: core.render_policy.VectorStrokePaint, storage: *[8]f64) render_ir.StrokePaint {
+    for (paint.dash.slice(), 0..) |value, index| storage[index] = value;
+    return .{
+        .color = paint.color,
+        .width = paint.width,
+        .cap = @enumFromInt(@intFromEnum(paint.cap)),
+        .join = @enumFromInt(@intFromEnum(paint.join)),
+        .miter_limit = paint.miter_limit,
+        .dash = storage[0..paint.dash.count],
+        .dash_offset = paint.dash.offset,
+    };
 }
 
 fn strokeLine(ctx: *DrawContext, x1: f32, y1: f32, x2: f32, y2: f32, line_width: f32, color: Color, dash_on: f32, dash_off: f32) !void {

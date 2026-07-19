@@ -58,6 +58,7 @@ pub const PrimitiveCall = enum {
     report_error,
     report_warning,
     require_asset_exists,
+    path,
 };
 
 pub const QueryOp = enum {
@@ -176,6 +177,7 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .report_error, .name = "report_error", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_types = &.{Type.string}, .result_type = Type.string, .summary = "Report error diagnostics from user-defined checks" },
     .{ .op = .report_warning, .name = "report_warning", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_types = &.{Type.string}, .result_type = Type.string, .summary = "Report warning diagnostics from user-defined checks" },
     .{ .op = .require_asset_exists, .name = "require_asset_exists", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_types = &.{Type.object}, .result_type = Type.object, .summary = "Check that the referenced file for an asset object exists" },
+    .{ .op = .path, .name = "path", .min_arity = 1, .max_arity = 255, .arg_names = &.{"command"}, .arg_types = &.{Type.recordType("PathCommand")}, .result_type = Type.path, .summary = "Build an immutable vector path from path commands" },
 };
 
 const query_descriptors = [_]QueryDescriptor{

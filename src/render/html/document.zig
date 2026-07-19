@@ -375,6 +375,7 @@ fn appendItem(
             }
             try out.appendSlice(allocator, "\"></div>");
         },
+        .vector_path => |value| try appendVectorPathItem(allocator, out, header, value),
         .text => |value| {
             try appendItemStart(allocator, out, "span", "ss-text", header, .{ .x = value.x, .y = value.y }, null, .{});
             try appendFormat(allocator, out, "left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt\">", .{
@@ -464,6 +465,154 @@ fn appendItem(
             try appendPdfViewer(allocator, out, header, value.rect, "ss-pdf", path, value.page_index, value.box, &metadata, value.copy_annotations);
         },
     }
+}
+
+fn appendVectorPathItem(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    header: render.ItemHeader,
+    value: render.VectorPath,
+) !void {
+    const rect = header.ink_bounds;
+    try appendItemStart(allocator, out, "svg", "ss-vector-path", header, .{ .x = rect.x, .y = rect.y }, null, .{});
+    try appendFormat(allocator, out, "left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt\" viewBox=\"{d:.9} {d:.9} {d:.9} {d:.9}\" preserveAspectRatio=\"none\">", .{
+        normalized(rect.x), normalized(rect.y), normalized(rect.width), normalized(rect.height),
+        normalized(rect.x), normalized(rect.y), normalized(rect.width), normalized(rect.height),
+    });
+    try out.appendSlice(allocator, "<defs>");
+    switch (value.fill.base) {
+        .linear => |gradient| try appendLinearGradient(allocator, out, header.item_id, gradient),
+        .radial => |gradient| try appendRadialGradient(allocator, out, header.item_id, gradient),
+        .none, .solid => {},
+    }
+    if (value.fill.overlay) |pattern| try appendTilePattern(allocator, out, header.item_id, pattern);
+    try out.appendSlice(allocator, "</defs>");
+
+    if (value.fill.base != .none) {
+        try out.appendSlice(allocator, "<path d=\"");
+        try appendSvgPathData(allocator, out, value.commands);
+        try out.appendSlice(allocator, "\" fill=\"");
+        switch (value.fill.base) {
+            .none => unreachable,
+            .solid => |color| try appendColor(allocator, out, color),
+            .linear => try appendFormat(allocator, out, "url(#ss-gradient-{d})", .{header.item_id}),
+            .radial => try appendFormat(allocator, out, "url(#ss-gradient-{d})", .{header.item_id}),
+        }
+        try appendFormat(allocator, out, "\" fill-rule=\"{s}\" fill-opacity=\"{d:.6}\"/>", .{
+            svgFillRule(value.fill.rule), normalized(value.fill.opacity),
+        });
+    }
+    if (value.fill.overlay != null) {
+        try out.appendSlice(allocator, "<path d=\"");
+        try appendSvgPathData(allocator, out, value.commands);
+        try appendFormat(allocator, out, "\" fill=\"url(#ss-pattern-{d})\" fill-rule=\"{s}\" fill-opacity=\"{d:.6}\"/>", .{
+            header.item_id, svgFillRule(value.fill.rule), normalized(value.fill.opacity),
+        });
+    }
+    if (value.stroke) |stroke| {
+        try out.appendSlice(allocator, "<path d=\"");
+        try appendSvgPathData(allocator, out, value.commands);
+        try out.appendSlice(allocator, "\" fill=\"none\" stroke=\"");
+        try appendColor(allocator, out, stroke.color);
+        try appendFormat(allocator, out, "\" stroke-width=\"{d:.9}\" stroke-linecap=\"{s}\" stroke-linejoin=\"{s}\" stroke-miterlimit=\"{d:.9}\"", .{
+            normalized(stroke.width), @tagName(stroke.cap), @tagName(stroke.join), normalized(stroke.miter_limit),
+        });
+        if (stroke.dash.len != 0) {
+            try out.appendSlice(allocator, " stroke-dasharray=\"");
+            for (stroke.dash, 0..) |dash, index| {
+                if (index != 0) try out.append(allocator, ' ');
+                try appendFormat(allocator, out, "{d:.9}", .{normalized(dash)});
+            }
+            try appendFormat(allocator, out, "\" stroke-dashoffset=\"{d:.9}\"", .{normalized(stroke.dash_offset)});
+        }
+        try out.appendSlice(allocator, "/>");
+    }
+    try out.appendSlice(allocator, "</svg>");
+}
+
+fn appendLinearGradient(allocator: std.mem.Allocator, out: *std.ArrayList(u8), item_id: render.ItemId, gradient: render.LinearGradientPaint) !void {
+    try appendFormat(allocator, out, "<linearGradient id=\"ss-gradient-{d}\" gradientUnits=\"userSpaceOnUse\" x1=\"{d:.9}\" y1=\"{d:.9}\" x2=\"{d:.9}\" y2=\"{d:.9}\" spreadMethod=\"{s}\">", .{
+        item_id, normalized(gradient.start.x), normalized(gradient.start.y), normalized(gradient.end.x), normalized(gradient.end.y), svgSpread(gradient.spread),
+    });
+    try appendGradientStops(allocator, out, gradient.stops);
+    try out.appendSlice(allocator, "</linearGradient>");
+}
+
+fn appendRadialGradient(allocator: std.mem.Allocator, out: *std.ArrayList(u8), item_id: render.ItemId, gradient: render.RadialGradientPaint) !void {
+    try appendFormat(allocator, out, "<radialGradient id=\"ss-gradient-{d}\" gradientUnits=\"userSpaceOnUse\" fx=\"{d:.9}\" fy=\"{d:.9}\" fr=\"{d:.9}\" cx=\"{d:.9}\" cy=\"{d:.9}\" r=\"{d:.9}\" spreadMethod=\"{s}\">", .{
+        item_id,
+        normalized(gradient.start_center.x),
+        normalized(gradient.start_center.y),
+        normalized(gradient.start_radius),
+        normalized(gradient.end_center.x),
+        normalized(gradient.end_center.y),
+        normalized(gradient.end_radius),
+        svgSpread(gradient.spread),
+    });
+    try appendGradientStops(allocator, out, gradient.stops);
+    try out.appendSlice(allocator, "</radialGradient>");
+}
+
+fn appendGradientStops(allocator: std.mem.Allocator, out: *std.ArrayList(u8), stops: []const render.GradientStop) !void {
+    for (stops) |stop| {
+        try appendFormat(allocator, out, "<stop offset=\"{d:.9}\" stop-color=\"", .{normalized(stop.offset)});
+        try appendColor(allocator, out, stop.color);
+        try out.appendSlice(allocator, "\"/>");
+    }
+}
+
+fn appendTilePattern(allocator: std.mem.Allocator, out: *std.ArrayList(u8), item_id: render.ItemId, pattern: render.TilePatternPaint) !void {
+    try appendFormat(allocator, out, "<pattern id=\"ss-pattern-{d}\" patternUnits=\"userSpaceOnUse\" width=\"{d:.9}\" height=\"{d:.9}\" patternTransform=\"matrix({d:.12} {d:.12} {d:.12} {d:.12} {d:.9} {d:.9})\"><path d=\"", .{
+        item_id,                          normalized(pattern.cell_width),   normalized(pattern.cell_height),
+        normalized(pattern.transform.xx), normalized(pattern.transform.yx), normalized(pattern.transform.xy),
+        normalized(pattern.transform.yy), normalized(pattern.transform.x0), normalized(pattern.transform.y0),
+    });
+    try appendSvgPathData(allocator, out, pattern.commands);
+    try out.appendSlice(allocator, "\"");
+    if (pattern.fill) |color| {
+        try out.appendSlice(allocator, " fill=\"");
+        try appendColor(allocator, out, color);
+        try out.append(allocator, '"');
+    } else try out.appendSlice(allocator, " fill=\"none\"");
+    if (pattern.stroke) |stroke| {
+        try out.appendSlice(allocator, " stroke=\"");
+        try appendColor(allocator, out, stroke.color);
+        try appendFormat(allocator, out, "\" stroke-width=\"{d:.9}\" stroke-linecap=\"{s}\" stroke-linejoin=\"{s}\" stroke-miterlimit=\"{d:.9}\"", .{
+            normalized(stroke.width), @tagName(stroke.cap), @tagName(stroke.join), normalized(stroke.miter_limit),
+        });
+        if (stroke.dash.len != 0) {
+            try out.appendSlice(allocator, " stroke-dasharray=\"");
+            for (stroke.dash, 0..) |dash, index| {
+                if (index != 0) try out.append(allocator, ' ');
+                try appendFormat(allocator, out, "{d:.9}", .{normalized(dash)});
+            }
+            try appendFormat(allocator, out, "\" stroke-dashoffset=\"{d:.9}\"", .{normalized(stroke.dash_offset)});
+        }
+    }
+    try out.appendSlice(allocator, "/></pattern>");
+}
+
+fn appendSvgPathData(allocator: std.mem.Allocator, out: *std.ArrayList(u8), commands: []const render.PathCommand) !void {
+    for (commands) |command| switch (command) {
+        .move_to => |point| try appendFormat(allocator, out, "M {d:.9} {d:.9} ", .{ normalized(point.x), normalized(point.y) }),
+        .line_to => |point| try appendFormat(allocator, out, "L {d:.9} {d:.9} ", .{ normalized(point.x), normalized(point.y) }),
+        .cubic_to => |cubic| try appendFormat(allocator, out, "C {d:.9} {d:.9} {d:.9} {d:.9} {d:.9} {d:.9} ", .{
+            normalized(cubic.control1.x), normalized(cubic.control1.y), normalized(cubic.control2.x), normalized(cubic.control2.y), normalized(cubic.end.x), normalized(cubic.end.y),
+        }),
+        .close => try out.appendSlice(allocator, "Z "),
+    };
+}
+
+fn svgFillRule(value: render.FillRule) []const u8 {
+    return if (value == .even_odd) "evenodd" else "nonzero";
+}
+
+fn svgSpread(value: render.GradientSpread) []const u8 {
+    return switch (value) {
+        .pad => "pad",
+        .repeat => "repeat",
+        .reflect => "reflect",
+    };
 }
 
 fn appendPdfViewer(

@@ -1,9 +1,16 @@
 const std = @import("std");
+const path_model = @import("path.zig");
+
+pub const Path = path_model.Path;
+pub const PathCommand = path_model.Command;
+pub const PathPoint = path_model.Point;
+pub const PathCubic = path_model.Cubic;
 
 pub const Allocator = std.mem.Allocator;
 pub const NodeId = u32;
 pub const Role = []const u8;
 pub const GroupRole: Role = "group";
+pub const ConnectorRole: Role = "connector";
 
 pub const Field = struct {
     key: []const u8,
@@ -390,6 +397,7 @@ pub const ValueTag = enum {
     string,
     enum_case,
     record,
+    path,
     number,
     boolean,
     constraints,
@@ -553,6 +561,7 @@ pub const Value = union(ValueTag) {
     string: []const u8,
     enum_case: EnumCaseValue,
     record: RecordValue,
+    path: Path,
     number: f32,
     boolean: bool,
     constraints: ConstraintSet,
@@ -563,6 +572,7 @@ pub const Value = union(ValueTag) {
             .selection => |*selection| selection.deinit(allocator),
             .function => |*function| function.deinit(allocator),
             .record => |*record| record.deinit(allocator),
+            .path => |*value| value.deinit(allocator),
             .constraints => |*constraints| constraints.deinit(allocator),
             else => {},
         }
@@ -580,6 +590,7 @@ pub const Value = union(ValueTag) {
             .string => |text| .{ .string = text },
             .enum_case => |enum_case| .{ .enum_case = enum_case },
             .record => |record| .{ .record = try record.clone(allocator) },
+            .path => |value| .{ .path = try value.clone(allocator) },
             .number => |number| .{ .number = number },
             .boolean => |boolean| .{ .boolean = boolean },
             .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
@@ -593,7 +604,7 @@ pub const Value = union(ValueTag) {
             .page => |id| id,
             .object => |id| id,
             .selection => |selection| selection.first(),
-            .none, .anchor, .function, .string, .enum_case, .record, .number, .boolean, .constraints, .void => null,
+            .none, .anchor, .function, .string, .enum_case, .record, .path, .number, .boolean, .constraints, .void => null,
         };
     }
 };
