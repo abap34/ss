@@ -472,6 +472,9 @@ button {
   pointer-events: none;
   user-select: none;
 }
+.viewport--rulers-hidden .ruler {
+  display: none;
+}
 .ruler--horizontal {
   top: -17px;
   right: 0;

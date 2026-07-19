@@ -4,6 +4,8 @@ import { InteractionController } from "./interaction.js";
 import { renderPage } from "./document.js";
 
 const rulerSize = 26;
+const rulerInterval = 100;
+const minimumRulerTickSpacing = 50;
 const singlePageMargin = 32;
 const buildStatusPresentation = {
   starting: { label: "Starting…", icon: "" },
@@ -124,15 +126,16 @@ export class WorkspaceView {
 
   ruler(axis, extent) {
     const node = element("div", `ruler ruler--${axis}`);
-    for (let value = 0; value <= extent; value += 100) {
-      const major = value % 200 === 0;
+    node.setAttribute("aria-hidden", "true");
+    for (let value = 0; value <= extent; value += rulerInterval) {
+      const major = value % (rulerInterval * 2) === 0;
       const tick = element(
         "span",
         `ruler-tick${major ? " ruler-tick--major" : ""}`,
       );
       const percent = `${(value / extent) * 100}%`;
       if (axis === "horizontal") tick.style.left = percent;
-      else tick.style.top = percent;
+      else tick.style.bottom = percent;
       if (value !== 0) {
         const label = element("small");
         label.textContent = String(value);
@@ -156,17 +159,24 @@ export class WorkspaceView {
     const verticalMargin = this.state.mode === "single"
       ? singlePageMargin * 2
       : 32;
-    const availableWidth = Math.max(
-      80,
-      viewport.clientWidth - horizontalMargin - rulerSize,
-    );
-    const availableHeight = Math.max(
-      60,
-      viewport.clientHeight - verticalMargin - rulerSize,
-    );
-    const scale = this.state.mode === "single"
-      ? Math.min(availableWidth / widths[0], availableHeight / heights[0])
-      : Math.min(1, availableWidth / Math.max(...widths));
+    const fitScale = (reservedRulerSpace) => {
+      const availableWidth = Math.max(
+        80,
+        viewport.clientWidth - horizontalMargin - reservedRulerSpace,
+      );
+      const availableHeight = Math.max(
+        60,
+        viewport.clientHeight - verticalMargin - reservedRulerSpace,
+      );
+      return this.state.mode === "single"
+        ? Math.min(availableWidth / widths[0], availableHeight / heights[0])
+        : Math.min(1, availableWidth / Math.max(...widths));
+    };
+    const scaleWithRulers = fitScale(rulerSize);
+    const showRulers = scaleWithRulers * rulerInterval >=
+      minimumRulerTickSpacing;
+    const scale = showRulers ? scaleWithRulers : fitScale(0);
+    viewport.classList.toggle("viewport--rulers-hidden", !showRulers);
     for (const shell of shells) {
       const width = Number(shell.dataset.pageWidth);
       const height = Number(shell.dataset.pageHeight);
