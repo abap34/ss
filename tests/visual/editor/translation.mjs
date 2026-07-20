@@ -236,7 +236,31 @@ export async function exerciseTranslationLifecycle(page, current) {
   );
   await postSnapshot(page, 106, finalSnapshot, 5);
   await page.waitForFunction(() => !document.querySelector(".toast--error"));
-  return finalSnapshot;
+  await previewTarget.evaluate((item) => {
+    item.dataset.ssCacheIdentity = "retained";
+  });
+  const unchangedSnapshot = structuredClone(finalSnapshot);
+  unchangedSnapshot.generation += 1;
+  unchangedSnapshot.snapshot_id = "13-unchanged-display";
+  unchangedSnapshot.display = {
+    schema: 3,
+    kind: "translation_patch",
+    base_snapshot_id: finalSnapshot.snapshot_id,
+    translations: [],
+  };
+  await postSnapshot(page, 107, unchangedSnapshot, 6);
+  await page.waitForFunction(() =>
+    document.querySelector('[data-ss-cache-identity="retained"]') !== null
+  );
+  assert.equal(
+    await page.locator('[data-ss-cache-identity="retained"]').count(),
+    1,
+    "an empty display patch rebuilt the retained preview DOM",
+  );
+  const materializedUnchanged = structuredClone(finalSnapshot);
+  materializedUnchanged.generation = unchangedSnapshot.generation;
+  materializedUnchanged.snapshot_id = unchangedSnapshot.snapshot_id;
+  return materializedUnchanged;
 }
 
 async function drag(page, box, dx, dy) {

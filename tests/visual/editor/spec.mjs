@@ -442,7 +442,7 @@ await withBrowser(output, async (browser, baseUrl) => {
         message: "expected an expression after '='",
       },
     ];
-    await postSnapshot(page, 107, failed, 6);
+    await postSnapshot(page, 108, failed, 6);
     await page.waitForSelector(".toast--error");
     await expectBuildStatus(page, "failed", "Build failed");
     assert.equal(
@@ -451,25 +451,25 @@ await withBrowser(output, async (browser, baseUrl) => {
         "slide.ss:12:4 [ExpectedExpression] expected an expression after '='",
       "stale preview did not explain its build failure",
     );
-    await postSnapshot(page, 108, failed, 6);
+    await postSnapshot(page, 109, failed, 6);
     assert.equal(
       await page.locator(".toast--error").count(),
       1,
       "a repeated failed build cleared its diagnostic message",
     );
-    await postBuildStatus(page, 109, "building");
+    await postBuildStatus(page, 110, "building");
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "building", "Building…");
     assert.equal(await page.locator(".build-status-duration").count(), 0,
       "a new build retained the previous build duration");
-    await postSnapshot(page, 109, finalSnapshot, 7);
+    await postSnapshot(page, 110, finalSnapshot, 7);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "complete", "Build complete");
 
     await page.evaluate(() => {
       window.postMessage({
         type: "error",
-        revision: 110,
+        revision: 111,
         buildDurationMs: 456,
         message: "WYSIWYG preview update failed.",
       }, "*");
@@ -477,7 +477,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.waitForSelector(".toast--error");
     await expectBuildStatus(page, "failed", "Build failed");
     assert.equal(await page.locator(".build-status-duration").textContent(), "456 ms");
-    await postSnapshot(page, 111, finalSnapshot, 7);
+    await postSnapshot(page, 112, finalSnapshot, 7);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "complete", "Build complete");
     await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas')
@@ -493,7 +493,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.evaluate(() => {
       window.postMessage({
         type: "error",
-        revision: 110,
+        revision: 111,
         buildDurationMs: 1,
         message: "obsolete preview failure",
       }, "*");
@@ -505,15 +505,15 @@ await withBrowser(output, async (browser, baseUrl) => {
       "an obsolete preview error replaced a newer snapshot",
     );
 
-    await postBuildStatus(page, 112, "building");
+    await postBuildStatus(page, 113, "building");
     await expectBuildStatus(page, "building", "Building…");
-    await postBuildStatus(page, 112, "unavailable");
+    await postBuildStatus(page, 113, "unavailable");
     await expectBuildStatus(
       page,
       "unavailable",
       "Language server unavailable",
     );
-    await postBuildStatus(page, 111, "building");
+    await postBuildStatus(page, 112, "building");
     await expectBuildStatus(
       page,
       "unavailable",
@@ -545,9 +545,9 @@ await withBrowser(output, async (browser, baseUrl) => {
     restarted.generation = 1;
     restarted.snapshot_id = "1-restarted";
     restarted.layout.pages[1].name = "Restarted";
-    await postBuildStatus(page, 113, "building");
+    await postBuildStatus(page, 114, "building");
     await expectBuildStatus(page, "building", "Building…");
-    await postSnapshot(page, 113, restarted, 7);
+    await postSnapshot(page, 114, restarted, 7);
     await expectBuildStatus(page, "complete", "Build complete");
     await page.waitForFunction(() => [...document.querySelectorAll(".page-caption")]
       .some((caption) => caption.textContent === "Restarted"));

@@ -105,8 +105,9 @@ function acceptSnapshot(message) {
   }
   if (state.toast?.kind === "error") clearToast();
   textAlignmentFailed = false;
-  if (state.snapshot) disposePages(state.snapshot);
-  disposePdfItems(app);
+  const preservesDisplay = state.snapshot?.display === snapshot.display;
+  if (state.snapshot && !preservesDisplay) disposePages(state.snapshot);
+  if (!preservesDisplay) disposePdfItems(app);
   state.revision = message.revision;
   state.snapshot = snapshot;
   const editOutcome = translation.reconcile(
@@ -158,6 +159,10 @@ function materializeSnapshotDisplay(snapshot) {
   ) return null;
 
   const materialized = structuredClone(snapshot);
+  if ((snapshot.display.translations || []).length === 0) {
+    materialized.display = state.snapshot.display;
+    return materialized;
+  }
   const display = structuredClone(state.snapshot.display);
   const translations = new Map(
     (display.translations || []).map((item) => [item.node_id, { ...item }]),
