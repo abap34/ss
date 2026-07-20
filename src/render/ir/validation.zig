@@ -126,8 +126,7 @@ fn semanticTree(ir: anytype) Error!void {
     if (root_node.role != .document) return error.InvalidSemantics;
     if (root_node.children.len != ir.pages.len) return error.InvalidSemantics;
     for (ir.semantics.nodes, 0..) |node, index| {
-        if (node.id == 0) return error.InvalidSemantics;
-        for (ir.semantics.nodes[0..index]) |previous| if (previous.id == node.id) return error.InvalidSemantics;
+        if (node.id != index + 1) return error.InvalidSemantics;
         try semanticNode(node);
         if (node.role == .math) {
             const tree_id = node.math_tree orelse return error.InvalidSemantics;

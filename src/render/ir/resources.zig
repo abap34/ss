@@ -194,8 +194,15 @@ pub const Graph = struct {
     }
 
     pub fn find(self: *const Graph, id: Id) ?*const Resource {
-        for (self.entries) |*entry| {
-            if (std.mem.eql(u8, &entry.id, &id)) return entry;
+        var low: usize = 0;
+        var high: usize = self.entries.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            switch (std.mem.order(u8, &self.entries[middle].id, &id)) {
+                .lt => low = middle + 1,
+                .gt => high = middle,
+                .eq => return &self.entries[middle],
+            }
         }
         return null;
     }
