@@ -1,6 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const pdf_ffi = @import("pdf_ffi");
+const render_resources = @import("render_resources");
 
 const c = pdf_ffi.c;
 const Color = core.render_policy.Color;
@@ -12,6 +13,7 @@ pub const Context = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     asset_base_dir: []const u8,
+    resource_cache: ?*render_resources.SourceCache = null,
 };
 
 pub const Command = struct {
@@ -52,6 +54,7 @@ pub fn layoutMeasurementKey(
     hashString(&hasher, cache_version);
     hashString(&hasher, native_cache_version);
     hashNativeRuntime(&hasher);
+    hashU64(&hasher, c.ss_font_generation());
     hashF32(&hasher, page_width);
     hashF32(&hasher, page_height);
     hashString(&hasher, @tagName(mode));
@@ -140,6 +143,10 @@ fn fileFingerprint(ctx: Context, files: *std.StringHashMap(File), source: []cons
 }
 
 fn readFileFingerprint(ctx: Context, source: []const u8) !File {
+    if (ctx.resource_cache) |cache| {
+        const fingerprint = try cache.fileFingerprint(source);
+        return .{ .present = fingerprint.present, .digest = fingerprint.digest };
+    }
     var file = std.Io.Dir.cwd().openFile(ctx.io, source, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{ .present = false, .digest = 0 },
         else => return err,

@@ -3,6 +3,7 @@ const core = @import("core");
 const utils = @import("utils");
 const lowering = @import("../lowering.zig");
 const compiler = @import("compile.zig");
+const render_resources = @import("render_resources");
 const execution = @import("../analysis/execution.zig");
 
 pub const Options = struct {
@@ -10,6 +11,7 @@ pub const Options = struct {
     progress: ?core.layout.graph.LayoutProgress = null,
     jobs: ?usize = null,
     cancellation: ?utils.Cancellation = null,
+    resource_cache: ?*render_resources.SourceCache = null,
 
     fn checkCanceled(self: Options) !void {
         if (self.cancellation) |cancellation| try cancellation.check();
@@ -53,7 +55,13 @@ pub fn solvePreparedPages(
     options: Options,
 ) !core.layout.Document {
     try options.checkCanceled();
-    var measurement_scope = try compiler.LayoutMeasurementScope.init(state.allocator, io, state, pages);
+    var measurement_scope = try compiler.LayoutMeasurementScope.init(
+        state.allocator,
+        io,
+        state,
+        pages,
+        options.resource_cache,
+    );
     defer measurement_scope.deinit();
     var results = try lowering.solveDocument(state, options.trace_path, .{
         .measurement_provider = measurement_scope.provider(),
