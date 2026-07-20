@@ -137,7 +137,7 @@ function setPageIconRatio(icon, page) {
   );
 }
 
-function sourceButton(object, revealSource) {
+export function sourceButton(object, revealSource) {
   const source = element("button", "source-button");
   source.type = "button";
   source.append(editorIcon(), document.createTextNode("Open in Editor"));

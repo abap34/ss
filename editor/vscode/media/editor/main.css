@@ -568,6 +568,18 @@ button {
   font-size: 8px;
   font-weight: 700;
 }
+.page-source-button {
+  position: absolute;
+  z-index: 5;
+  top: 8px;
+  right: 8px;
+  opacity: 0.82;
+  box-shadow: var(--thumbnail-shadow);
+}
+.page-shell:hover .page-source-button,
+.page-source-button:focus-visible {
+  opacity: 1;
+}
 .object-hit {
   cursor: default;
 }

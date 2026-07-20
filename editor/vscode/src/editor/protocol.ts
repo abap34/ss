@@ -45,6 +45,7 @@ export interface LayoutPage {
   name: string;
   width: number;
   height: number;
+  location?: SourceLocation | null;
 }
 
 export interface LayoutObject {
