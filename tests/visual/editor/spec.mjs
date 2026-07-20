@@ -70,6 +70,11 @@ await withBrowser(output, async (browser, baseUrl) => {
     const current = editorSnapshot();
     await postSnapshot(page, 100, current);
     await expectBuildStatus(page, "complete", "Build complete");
+    assert.equal(await page.locator(".build-status-duration").textContent(), "1.2 s");
+    assert.equal(
+      await page.locator(".build-status-duration").getAttribute("title"),
+      "Build time: 1.2 s",
+    );
     await page.waitForSelector('.page-shell[data-page-id="11"]');
     await page.waitForFunction(() => document.getElementById("app")?.dataset.ssTextAligned === "true");
     assert.match(
@@ -455,6 +460,8 @@ await withBrowser(output, async (browser, baseUrl) => {
     await postBuildStatus(page, 109, "building");
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "building", "Building…");
+    assert.equal(await page.locator(".build-status-duration").count(), 0,
+      "a new build retained the previous build duration");
     await postSnapshot(page, 109, finalSnapshot, 7);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "complete", "Build complete");
@@ -463,11 +470,13 @@ await withBrowser(output, async (browser, baseUrl) => {
       window.postMessage({
         type: "error",
         revision: 110,
+        buildDurationMs: 456,
         message: "WYSIWYG preview update failed.",
       }, "*");
     });
     await page.waitForSelector(".toast--error");
     await expectBuildStatus(page, "failed", "Build failed");
+    assert.equal(await page.locator(".build-status-duration").textContent(), "456 ms");
     await postSnapshot(page, 111, finalSnapshot, 7);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "complete", "Build complete");
@@ -485,6 +494,7 @@ await withBrowser(output, async (browser, baseUrl) => {
       window.postMessage({
         type: "error",
         revision: 110,
+        buildDurationMs: 1,
         message: "obsolete preview failure",
       }, "*");
     });
@@ -582,6 +592,7 @@ async function postSnapshot(page, revision, value, documentVersion = 1) {
       type: "snapshot",
       revision: deliveryRevision,
       documentVersion: version,
+      buildDurationMs: 1234,
       snapshot: snapshotValue,
     }, "*");
   }, { deliveryRevision: revision, snapshotValue: value, version: documentVersion });

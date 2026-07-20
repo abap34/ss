@@ -92,7 +92,11 @@ export class WorkspaceView {
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
     status.setAttribute("aria-atomic", "true");
-    applyBuildStatus(status, this.state.buildStatus);
+    applyBuildStatus(
+      status,
+      this.state.buildStatus,
+      this.state.buildDurationMs,
+    );
     const tools = element("div", "shape-tools");
     tools.setAttribute("role", "group");
     tools.setAttribute("aria-label", "Drawing tools");
@@ -240,7 +244,11 @@ export class WorkspaceView {
   updateBuildStatus() {
     const status = this.root?.querySelector(".build-status");
     if (!status) return false;
-    applyBuildStatus(status, this.state.buildStatus);
+    applyBuildStatus(
+      status,
+      this.state.buildStatus,
+      this.state.buildDurationMs,
+    );
     const empty = this.root.querySelector(".empty-state");
     if (empty) empty.textContent = emptyPreviewMessage(this.state.buildStatus);
     return true;
@@ -343,7 +351,7 @@ export class WorkspaceView {
   }
 }
 
-function applyBuildStatus(node, status) {
+function applyBuildStatus(node, status, durationMs) {
   const presentation = buildStatusPresentation[status] ||
     buildStatusPresentation.starting;
   node.className = `build-status build-status--${status}`;
@@ -353,7 +361,22 @@ function applyBuildStatus(node, status) {
   icon.textContent = presentation.icon;
   const label = element("span", "build-status-label");
   label.textContent = presentation.label;
-  node.replaceChildren(icon, label);
+  const duration = formatBuildDuration(durationMs);
+  if (duration == null) {
+    node.replaceChildren(icon, label);
+    return;
+  }
+  const timing = element("span", "build-status-duration");
+  timing.textContent = duration;
+  timing.title = `Build time: ${duration}`;
+  node.replaceChildren(icon, label, timing);
+}
+
+export function formatBuildDuration(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs < 0) return null;
+  if (durationMs < 1) return "<1 ms";
+  if (durationMs < 999.5) return `${Math.round(durationMs)} ms`;
+  return `${Number((durationMs / 1000).toFixed(1))} s`;
 }
 
 function emptyPreviewMessage(status) {

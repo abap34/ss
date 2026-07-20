@@ -17,6 +17,7 @@ const state = {
   revision: -1,
   buildRevision: -1,
   buildStatus: "starting",
+  buildDurationMs: null,
   sidebar: "pages",
   mode: "single",
   currentPageId: null,
@@ -77,7 +78,7 @@ window.addEventListener("message", (event) => {
         message.revision <= state.revision ||
         message.revision < state.buildRevision) return;
     state.revision = message.revision;
-    setBuildStatus("failed", message.revision);
+    setBuildStatus("failed", message.revision, message.buildDurationMs);
     translation.cancel();
     showError(message.message || "WYSIWYG preview update failed.");
   } else if (message.type === "editResult") {
@@ -113,7 +114,11 @@ function acceptSnapshot(message) {
     message.documentVersion,
   );
   const buildFailure = buildFailureMessage(snapshot);
-  setBuildStatus(buildFailure ? "failed" : "complete", message.revision);
+  setBuildStatus(
+    buildFailure ? "failed" : "complete",
+    message.revision,
+    message.buildDurationMs,
+  );
   let toastDuration = null;
   if (buildFailure) {
     state.toast = { kind: "error", message: buildFailure };
@@ -182,7 +187,7 @@ function acceptBuildStatus(message) {
   if (clearedError || !workspace.updateBuildStatus()) render();
 }
 
-function setBuildStatus(status, revision) {
+function setBuildStatus(status, revision, durationMs = null) {
   if (!buildStatuses.has(status) || !Number.isSafeInteger(revision) ||
       revision < state.buildRevision) return false;
   if (revision === state.buildRevision &&
@@ -192,8 +197,13 @@ function setBuildStatus(status, revision) {
   }
   state.buildRevision = revision;
   state.buildStatus = status;
+  state.buildDurationMs = validBuildDuration(durationMs) ? durationMs : null;
   return true;
 }
+function validBuildDuration(value) {
+  return Number.isFinite(value) && value >= 0;
+}
+
 
 function showSuccess(message) {
   state.toast = { kind: "success", message };

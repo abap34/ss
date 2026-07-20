@@ -780,6 +780,7 @@ fn addQpdfTestArtifact(ctx: BuildContext, module: *Module) *Step.Compile {
 
 fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
     const node_spec_files = [_][]const u8{
+        "tests/editor/build-status/spec.mjs",
         "tests/editor/locks/spec.mjs",
         "tests/editor/navigation/spec.mjs",
         "tests/editor/shapes/spec.mjs",

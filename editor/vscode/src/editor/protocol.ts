@@ -229,6 +229,7 @@ export type HostMessage =
     type: "snapshot";
     revision: number;
     documentVersion: number;
+    buildDurationMs: number;
     snapshot: EditorSnapshot;
   }
   | {
@@ -236,7 +237,12 @@ export type HostMessage =
     revision: number;
     status: BuildStatus;
   }
-  | { type: "error"; revision: number; message: string }
+  | {
+    type: "error";
+    revision: number;
+    buildDurationMs: number;
+    message: string;
+  }
   | {
     type: "editResult";
     requestId: number;

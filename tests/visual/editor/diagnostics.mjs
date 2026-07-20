@@ -109,6 +109,7 @@ async function postSnapshot(page, revision, snapshot, documentVersion) {
       type: "snapshot",
       revision: deliveryRevision,
       documentVersion: version,
+      buildDurationMs: 875,
       snapshot: value,
     }, "*");
   }, { value: snapshot, deliveryRevision: revision, version: documentVersion });
