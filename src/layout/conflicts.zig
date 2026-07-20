@@ -259,7 +259,6 @@ pub fn toJson(allocator: std.mem.Allocator, state: anytype) ![]u8 {
         try item.stringField("name", page.name);
         try item.floatField("width", page.frame.width, "{d:.4}");
         try item.floatField("height", page.frame.height, "{d:.4}");
-        try item.optionalStringField("origin", page.origin);
         try appendOriginObject(&item, "location", state, page.origin);
         try item.end();
     }
@@ -274,29 +273,15 @@ pub fn toJson(allocator: std.mem.Allocator, state: anytype) ![]u8 {
         try item.intField("page_id", page_id);
         try item.stringField("name", node.name);
         try item.optionalStringField("role", node.role);
-        try item.optionalEnumTagField("object_kind", node.object_kind);
         try item.floatField("x", node.frame.x, "{d:.4}");
         try item.floatField("y", node.frame.y, "{d:.4}");
         try item.floatField("width", node.frame.width, "{d:.4}");
         try item.floatField("height", node.frame.height, "{d:.4}");
-        try item.boolField("x_set", node.frame.x_set);
-        try item.boolField("y_set", node.frame.y_set);
         try item.boolField("group", graph.isGroupNode(node));
-        try item.optionalStringField("origin", node.origin);
         try appendOriginObject(&item, "location", state, node.origin);
         try item.end();
     }
     try objects.end();
-
-    var anchors = try root.arrayField("anchors");
-    for (state.page_order.items) |page_id| {
-        const page = state.getNode(page_id) orelse continue;
-        try appendAnchorSet(&anchors, page, page_id, page_id);
-        if (state.childrenOf(page_id)) |children| {
-            for (children) |child_id| try appendNodeAnchors(&anchors, state, page_id, child_id);
-        }
-    }
-    try anchors.end();
 
     var relations = try root.arrayField("relations");
     for (state.constraints.items, 0..) |constraint, index| {
@@ -344,9 +329,6 @@ fn appendRelation(relations: *json.Array, state: anytype, index: usize, kind: []
     try item.intField("index", index);
     try item.stringField("kind", kind);
     try item.enumTagField("axis", graph.anchorAxis(constraint.target_anchor));
-    try item.enumTagField("role", constraint.role);
-    try item.boolField("from_update", constraint.from_update);
-    try item.optionalStringField("origin", constraint.origin);
     try appendOriginObject(&item, "location", state, constraint.origin);
     try item.floatField("offset", constraint.offset, "{d:.4}");
     try appendConstraintExpression(&item, "expression", state, constraint);
@@ -357,28 +339,6 @@ fn appendRelation(relations: *json.Array, state: anytype, index: usize, kind: []
     try appendSourceEndpoint(&source, state, constraint.source);
     try source.end();
     try item.end();
-}
-
-fn appendNodeAnchors(anchors: *json.Array, state: anytype, page_id: NodeId, node_id: NodeId) !void {
-    const node = state.getNode(node_id) orelse return;
-    try appendAnchorSet(anchors, node, page_id, node_id);
-    if (!graph.isGroupNode(node)) return;
-    if (state.childrenOf(node_id)) |children| {
-        for (children) |child_id| try appendNodeAnchors(anchors, state, page_id, child_id);
-    }
-}
-
-fn appendAnchorSet(anchors: *json.Array, node: *const Node, page_id: NodeId, node_id: NodeId) !void {
-    const all_anchors = [_]Anchor{ .left, .right, .center_x, .bottom, .top, .center_y };
-    for (all_anchors) |anchor| {
-        if (!graph.anchorKnown(node.frame, anchor)) continue;
-        var item = try anchors.objectItem();
-        try item.intField("page_id", page_id);
-        try item.intField("node_id", node_id);
-        try item.stringField("anchor", @tagName(anchor));
-        try item.floatField("value", graph.anchorValue(node.frame, anchor), "{d:.4}");
-        try item.end();
-    }
 }
 
 fn appendConstraintObject(object: *json.Object, field_name: []const u8, state: anytype, constraint: Constraint) !void {
@@ -456,11 +416,8 @@ fn appendConstraintExpression(object: *json.Object, field_name: []const u8, stat
 }
 
 fn appendNodeEndpoint(object: *json.Object, state: anytype, node_id: NodeId, anchor: Anchor) !void {
-    const node = state.getNode(node_id);
     try object.stringField("type", "node");
     try object.intField("node_id", node_id);
-    try object.stringField("name", if (node) |value| value.name else "unknown");
-    try object.optionalStringField("role", if (node) |value| value.role else null);
     try object.stringField("label", nodeLabel(state, node_id));
     try object.stringField("anchor", @tagName(anchor));
 }
@@ -469,7 +426,6 @@ fn appendSourceEndpoint(object: *json.Object, state: anytype, source: Constraint
     switch (source) {
         .page => |anchor| {
             try object.stringField("type", "page");
-            try object.stringField("name", "page");
             try object.stringField("label", "page");
             try object.stringField("anchor", @tagName(anchor));
         },

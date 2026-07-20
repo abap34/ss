@@ -65,7 +65,7 @@ async function testDebugLayoutConflictsJson() {
     assert(payload.kind === "ss-layout-conflicts", `unexpected conflict kind: ${JSON.stringify(payload)}`);
     assert(Array.isArray(payload.pages), "conflict report should include pages");
     assert(Array.isArray(payload.objects), "conflict report should include objects");
-    assert(Array.isArray(payload.anchors), "conflict report should include anchors");
+    assert(!("anchors" in payload), "conflict report should omit redundant anchor expansions");
     assert(Array.isArray(payload.relations), "conflict report should include relations");
     assert(Array.isArray(payload.failures), "conflict report should include failures");
     assert(payload.failures.length > 0, "conflict report should include at least one failure");

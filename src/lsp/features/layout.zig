@@ -75,7 +75,7 @@ pub fn conflictsJsonFromOutput(allocator: std.mem.Allocator, layout: *const Layo
 
 pub fn emptyJson(allocator: std.mem.Allocator) ![]const u8 {
     return allocator.dupe(u8,
-        \\{"schema":1,"kind":"ss-layout-conflicts","entry_path":"","pages":[],"objects":[],"anchors":[],"relations":[],"failures":[]}
+        \\{"schema":1,"kind":"ss-layout-conflicts","entry_path":"","pages":[],"objects":[],"relations":[],"failures":[]}
         \\
     );
 }
