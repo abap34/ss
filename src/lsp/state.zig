@@ -73,6 +73,11 @@ pub const DocumentStore = struct {
         const document_text = try next.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(document_text);
 
+        if (std.mem.eql(u8, old_source, document_text)) {
+            self.allocator.free(document_text);
+            return;
+        }
+
         try self.putOwned(path, document_text);
         self.generation += 1;
     }
@@ -134,6 +139,9 @@ pub const DocumentStore = struct {
     }
 
     fn replacePath(self: *DocumentStore, path: []const u8, text: []const u8) !void {
+        if (self.items.get(path)) |current| {
+            if (std.mem.eql(u8, current, text)) return;
+        }
         const document_text = try self.allocator.dupe(u8, text);
         errdefer self.allocator.free(document_text);
         try self.putOwned(path, document_text);

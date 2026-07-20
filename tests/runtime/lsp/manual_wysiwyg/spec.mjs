@@ -47,10 +47,51 @@ automatic = false
       `explicit manual build did not produce a snapshot: ${JSON.stringify(initial)}`,
     );
 
-    client.changeDocument({ uri, version: 2, text: pendingSource });
-    const pending = await client.request("ss/editorSnapshot", {
+    client.changeDocument({ uri, version: 2, text: initialSource });
+    const unchanged = await client.request("ss/editorSnapshot", {
       textDocument: { uri },
       baseSnapshotId: initial.snapshot_id,
+    });
+    assert(
+      unchanged.snapshot_id === initial.snapshot_id &&
+        unchanged.display?.kind === "translation_patch" &&
+        unchanged.display?.base_snapshot_id === initial.snapshot_id &&
+        unchanged.display?.translations?.length === 0,
+      `identical content rebuilt the preview: ${JSON.stringify(unchanged)}`,
+    );
+
+    client.notify("textDocument/didSave", { textDocument: { uri } });
+    client.notify("workspace/didChangeWatchedFiles", {
+      changes: [{ uri, type: 2 }],
+    });
+    const afterSave = await client.request("ss/editorSnapshot", {
+      textDocument: { uri },
+      baseSnapshotId: unchanged.snapshot_id,
+    });
+    assert(
+      afterSave.snapshot_id === unchanged.snapshot_id &&
+        afterSave.display?.kind === "translation_patch" &&
+        afterSave.display?.translations?.length === 0,
+      `save notifications rebuilt an unchanged open document: ${JSON.stringify(afterSave)}`,
+    );
+
+    client.changeDocument({ uri, version: 3, text: `${initialSource}\n` });
+    const visuallyUnchanged = await client.request("ss/editorSnapshot", {
+      textDocument: { uri },
+      baseSnapshotId: afterSave.snapshot_id,
+    });
+    assert(
+      visuallyUnchanged.snapshot_id !== afterSave.snapshot_id &&
+        visuallyUnchanged.display?.kind === "translation_patch" &&
+        visuallyUnchanged.display?.base_snapshot_id === afterSave.snapshot_id &&
+        visuallyUnchanged.display?.translations?.length === 0,
+      `visually unchanged source resent the complete display: ${JSON.stringify(visuallyUnchanged)}`,
+    );
+
+    client.changeDocument({ uri, version: 4, text: pendingSource });
+    const pending = await client.request("ss/editorSnapshot", {
+      textDocument: { uri },
+      baseSnapshotId: visuallyUnchanged.snapshot_id,
     });
     assert(
       pending.kind === "ss-editor-snapshot" &&
@@ -59,13 +100,19 @@ automatic = false
       `explicit build did not flush pending analysis: ${JSON.stringify(pending)}`,
     );
 
-    const changedDiagnostics = client.waitForDiagnostics(
+    const clearedDiagnostics = client.waitForDiagnostics(
       uri,
-      (_diagnostics, message) => message.params.version === 3,
-      "manual WYSIWYG changed diagnostics",
+      (_diagnostics, message) => message.params.version === 5,
+      "manual WYSIWYG cleared diagnostics",
     );
-    client.changeDocument({ uri, version: 3, text: changedSource });
-    await changedDiagnostics;
+    client.changeDocument({ uri, version: 5, text: changedSource });
+    await clearedDiagnostics;
+    const rebuiltDiagnostics = client.waitForDiagnostics(
+      uri,
+      (_diagnostics, message) => message.params.version === 5,
+      "manual WYSIWYG rebuilt diagnostics",
+    );
+    await rebuiltDiagnostics;
 
     const editBeforeBuild = await client.request("ss/layoutEdit", {
       textDocument: { uri },
