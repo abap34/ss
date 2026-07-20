@@ -129,15 +129,17 @@ pub fn analyzeDocumentState(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
 ) !void {
+    var declaration_index: declarations.DeclarationIndex = undefined;
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.static_semantics, measure_start);
-        try analyzeDocumentStateSemantics(allocator, state);
+        declaration_index = try analyzeDocumentStateSemantics(allocator, state);
     }
+    defer declaration_index.deinit();
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.execution_graph, measure_start);
-        try execution.validateDependencies(allocator, state);
+        try execution.validateDependencies(allocator, state, &declaration_index);
     }
 }
 
@@ -146,51 +148,74 @@ pub fn analyzeDocumentStateWithMode(
     state: *core.DocumentState,
     mode: AnalysisMode,
 ) !?execution.ExecutionGraph {
+    var declaration_index: declarations.DeclarationIndex = undefined;
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.static_semantics, measure_start);
-        try analyzeDocumentStateSemantics(allocator, state);
+        declaration_index = try analyzeDocumentStateSemantics(allocator, state);
     }
+    defer declaration_index.deinit();
     const measure_start = utils.measure_profile.start();
     defer utils.measure_profile.recordAnalysis(.execution_graph, measure_start);
     return switch (mode) {
         .diagnostics_only => blk: {
-            try execution.validateDependencies(allocator, state);
+            try execution.validateDependencies(allocator, state, &declaration_index);
             break :blk null;
         },
-        .evaluation => try execution.ExecutionGraph.build(allocator, state, state, .{ .page_id_mode = .create }),
+        .evaluation => try execution.ExecutionGraph.build(allocator, state, state, &declaration_index, .{ .page_id_mode = .create }),
     };
 }
 
 fn analyzeDocumentStateSemantics(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
-) !void {
+) !declarations.DeclarationIndex {
     var declaration_index = try declarations.build(allocator, state);
-    defer declaration_index.deinit();
+    errdefer declaration_index.deinit();
     var sema = SemanticEnv.init(state, &declaration_index, &state.functions);
 
-    try semantics.checkTypeDeclarations(allocator, state);
-    try semantics.resolveTypeReferences(allocator, state, &sema);
-    try semantics.resolveEnumCaseExpressionsAndDefaults(allocator, state, &sema);
-    const next_declaration_index = try declarations.build(allocator, state);
-    declaration_index.deinit();
-    declaration_index = next_declaration_index;
-    sema = SemanticEnv.init(state, &declaration_index, &state.functions);
-    try semantics.rebuildConstDeclarations(allocator, state);
-    try semantics.rebuildFunctionDeclarations(allocator, state);
-    try semantics.checkDuplicateValueDeclarations(allocator, state);
-    try semantics.checkTypeAnnotations(allocator, state, &sema);
-    try fields.checkObjectDeclarations(allocator, state, &sema);
-    try checker.checkPageNamesUnique(allocator, state);
-    try checkPlacementEffectDeclarations(allocator, state, &sema);
-    try checkFunctionDefinitionsWithEnv(allocator, state, &sema);
-    for (state.module_order.items) |module_id| {
-        const module = state.moduleById(module_id) orelse continue;
-        const module_sema = sema.forModule(module_id);
-        try checker.checkPageStatements(allocator, state, &module_sema, checker.originPathForModule(module), module.syntax);
+    {
+        const measure_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordAnalysis(.semantics_types, measure_start);
+        try semantics.checkTypeDeclarations(allocator, state);
+        try semantics.resolveTypeReferences(allocator, state, &sema);
+        try semantics.resolveEnumCaseExpressionsAndDefaults(allocator, state, &sema);
+        const next_declaration_index = try declarations.build(allocator, state);
+        declaration_index.deinit();
+        declaration_index = next_declaration_index;
+        sema = SemanticEnv.init(state, &declaration_index, &state.functions);
+        try semantics.rebuildConstDeclarations(allocator, state);
+        try semantics.rebuildFunctionDeclarations(allocator, state);
     }
-    try addDependencyQueryDiagnostics(allocator, state, &sema);
+    {
+        const measure_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordAnalysis(.semantics_fields, measure_start);
+        try semantics.checkDuplicateValueDeclarations(allocator, state);
+        try semantics.checkTypeAnnotations(allocator, state, &sema);
+        try fields.checkObjectDeclarations(allocator, state, &sema);
+        try checker.checkPageNamesUnique(allocator, state);
+        try checkPlacementEffectDeclarations(allocator, state, &sema);
+    }
+    {
+        const measure_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordAnalysis(.semantics_functions, measure_start);
+        try checkFunctionDefinitionsWithEnv(allocator, state, &sema);
+    }
+    {
+        const measure_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordAnalysis(.semantics_pages, measure_start);
+        for (state.module_order.items) |module_id| {
+            const module = state.moduleById(module_id) orelse continue;
+            const module_sema = sema.forModule(module_id);
+            try checker.checkPageStatements(allocator, state, &module_sema, checker.originPathForModule(module), module.syntax);
+        }
+    }
+    {
+        const measure_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordAnalysis(.semantics_dependency_queries, measure_start);
+        try addDependencyQueryDiagnostics(allocator, state, &sema);
+    }
+    return declaration_index;
 }
 
 const DependencyQuery = struct {
@@ -421,19 +446,13 @@ pub fn collectVariableInfoFromModule(
 
 pub fn collectScopedVariableInfoFromModule(
     allocator: std.mem.Allocator,
-    functions: *const core.FunctionMap,
+    state: *core.DocumentState,
+    declaration_index: *const declarations.DeclarationIndex,
     program: ast.Module,
     module_id: core.SourceModuleId,
     source_len: usize,
-    diagnostic_state: ?*core.DocumentState,
 ) !std.ArrayList(ScopedVariableInfo) {
-    var declaration_index: ?declarations.DeclarationIndex = if (diagnostic_state) |state|
-        try declarations.build(allocator, state)
-    else
-        null;
-    defer if (declaration_index) |*index| index.deinit();
-    const declaration_ptr = if (declaration_index) |*index| index else null;
-    const root_sema = SemanticEnv.init(diagnostic_state, declaration_ptr, functions);
+    const root_sema = SemanticEnv.init(state, declaration_index, &state.functions);
     const sema = root_sema.forModule(module_id);
     var variables = std.ArrayList(ScopedVariableInfo).empty;
     errdefer variables.deinit(allocator);
@@ -446,8 +465,8 @@ pub fn collectScopedVariableInfoFromModule(
             if (param.default_value) |default_value| {
                 const origin = try statementOrigin(allocator, func.span);
                 defer allocator.free(origin);
-                const info = try inferExprInfo(allocator, diagnostic_state, &sema, &env, default_value.*, origin);
-                try ensureType(diagnostic_state, allocator, info, param.ty, origin, .UnmatchedArgumentType);
+                const info = try inferExprInfo(allocator, state, &sema, &env, default_value.*, origin);
+                try ensureType(state, allocator, info, param.ty, origin, .UnmatchedArgumentType);
             }
             const info = semantic_types.infoFromType(param.ty);
             try env.put(param.name, info);
@@ -457,7 +476,7 @@ pub fn collectScopedVariableInfoFromModule(
         }
 
         for (func.statements.items) |stmt| {
-            try collectScopedVariableTypesFromStatement(allocator, diagnostic_state, &env, &sema, stmt, &variables, module_id, analysis_scope.functionScope(func), func.span.end);
+            try collectScopedVariableTypesFromStatement(allocator, state, &env, &sema, stmt, &variables, module_id, analysis_scope.functionScope(func), func.span.end);
         }
     }
 
@@ -466,7 +485,7 @@ pub fn collectScopedVariableInfoFromModule(
         defer env.deinit();
         const document_scope = analysis_scope.documentScope(source_len);
         for (program.document_statements.items) |stmt| {
-            try collectScopedVariableTypesFromStatement(allocator, diagnostic_state, &env, &sema, stmt, &variables, module_id, document_scope, source_len);
+            try collectScopedVariableTypesFromStatement(allocator, state, &env, &sema, stmt, &variables, module_id, document_scope, source_len);
         }
     }
 
@@ -476,7 +495,7 @@ pub fn collectScopedVariableInfoFromModule(
         const page_scope = analysis_scope.pageScope(page);
 
         for (page.statements.items) |stmt| {
-            try collectScopedVariableTypesFromStatement(allocator, diagnostic_state, &env, &sema, stmt, &variables, module_id, page_scope, page.span.end);
+            try collectScopedVariableTypesFromStatement(allocator, state, &env, &sema, stmt, &variables, module_id, page_scope, page.span.end);
         }
     }
 
