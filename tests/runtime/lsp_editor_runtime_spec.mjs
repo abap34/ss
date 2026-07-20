@@ -226,9 +226,6 @@ asset_base_dir = "."
 [editor.lsp]
 diagnostics = false
 completion = false
-
-[editor.lsp.inlay_hints]
-enabled = false
 `, "utf8");
     const disabledSource = `import std:themes/default as *
 
@@ -243,57 +240,6 @@ pag broken
     });
     assert(disabled.diagnostics.length === 0, `disabled diagnostics still published entries: ${JSON.stringify(disabled.diagnostics)}`);
     assert(disabled.completion.items?.length === 0, `disabled completion still returned entries: ${JSON.stringify(disabled.completion)}`);
-    assert(Array.isArray(disabled.inlayHints) && disabled.inlayHints.length === 0, `disabled inlay hints still returned entries: ${JSON.stringify(disabled.inlayHints)}`);
-
-    const validSource = `import std:themes/default as *
-
-page configured
-cover!(
-  "Title",
-  "Subtitle",
-  "Author"
-)
-end
-`;
-    await writeFile(path.join(project, "ss.toml"), `[project]
-entry = "slide.ss"
-asset_base_dir = "."
-
-[editor.lsp.inlay_hints]
-enabled = true
-arguments = false
-`, "utf8");
-    await writeFile(slide, validSource, "utf8");
-    const argumentsDisabled = await configuredResponses({
-      cwd: project,
-      fixture: slide,
-      source: validSource,
-      completionPosition: positionAt(validSource, "cover!", 1),
-    });
-    assert(
-      argumentsDisabled.inlayHints.length === 0,
-      `disabled argument hints still returned entries: ${JSON.stringify(argumentsDisabled.inlayHints)}`,
-    );
-
-    await writeFile(path.join(project, "ss.toml"), `[project]
-entry = "slide.ss"
-asset_base_dir = "."
-
-[editor.lsp.inlay_hints]
-enabled = true
-arguments = true
-`, "utf8");
-    const argumentsEnabled = await configuredResponses({
-      cwd: project,
-      fixture: slide,
-      source: validSource,
-      completionPosition: positionAt(validSource, "cover!", 1),
-    });
-    assert(argumentsEnabled.inlayHints.length > 0, "argument inlay hints did not return any hints");
-    assert(
-      argumentsEnabled.inlayHints.every((hint) => hint.kind === 2),
-      `an unexpected inlay-hint kind was returned: ${JSON.stringify(argumentsEnabled.inlayHints)}`,
-    );
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -498,6 +444,7 @@ async function testLspFeatureSurface() {
       assert(initialize.capabilities?.completionProvider, `initialize missing completion capability: ${JSON.stringify(initialize)}`);
       assert(initialize.capabilities?.hoverProvider === true, `initialize missing hover capability: ${JSON.stringify(initialize)}`);
       assert(initialize.capabilities?.definitionProvider === true, `initialize missing definition capability: ${JSON.stringify(initialize)}`);
+      assert(!("inlayHintProvider" in initialize.capabilities), `initialize unexpectedly advertised inlay hints: ${JSON.stringify(initialize)}`);
       assert(initialize.capabilities?.documentSymbolProvider === true, `initialize missing document symbol capability: ${JSON.stringify(initialize)}`);
       assert(initialize.capabilities?.foldingRangeProvider === true, `initialize missing folding capability: ${JSON.stringify(initialize)}`);
       assert(initialize.capabilities?.semanticTokensProvider?.full === true, `initialize missing semantic tokens capability: ${JSON.stringify(initialize)}`);
@@ -535,15 +482,6 @@ async function testLspFeatureSurface() {
         themeDefinitionResult.some((location) => isDefinitionLocation(location, themeDefinition)),
         `feature surface Theme definition did not jump to stdlib base: ${JSON.stringify(themeDefinitionResult)}`,
       );
-
-      const inlayHints = await client.request("textDocument/inlayHint", {
-        textDocument: { uri },
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: source.split("\n").length, character: 0 },
-        },
-      });
-      assert(Array.isArray(inlayHints), `feature surface inlay hints were not an array: ${JSON.stringify(inlayHints)}`);
 
       const symbols = await client.request("textDocument/documentSymbol", { textDocument: { uri } });
       assert(
@@ -624,7 +562,7 @@ end
 
       let version = 1;
       for (let step = 0; step < 32; step += 1) {
-        const op = Math.floor(random() * 10);
+        const op = Math.floor(random() * 9);
         if (op === 0) {
           slideSource = randomizedSource(`Main ${step}`, "0.1,0.2,0.3");
           version += 1;
@@ -689,20 +627,11 @@ end
           });
           assert(definition === null || Array.isArray(definition), `random definition returned invalid value at step ${step}: ${JSON.stringify(definition)}`);
         } else if (op === 6) {
-          const inlayHints = await client.request("textDocument/inlayHint", {
-            textDocument: { uri: slideUri },
-            range: {
-              start: { line: 0, character: 0 },
-              end: { line: slideSource.split("\n").length, character: 0 },
-            },
-          });
-          assert(Array.isArray(inlayHints), `random inlay hints did not return an array at step ${step}: ${JSON.stringify(inlayHints)}`);
-        } else if (op === 7) {
           const symbols = await client.request("textDocument/documentSymbol", { textDocument: { uri: slideUri } });
           assert(Array.isArray(symbols), `random symbols did not return an array at step ${step}: ${JSON.stringify(symbols)}`);
           const foldingRanges = await client.request("textDocument/foldingRange", { textDocument: { uri: slideUri } });
           assert(Array.isArray(foldingRanges), `random folding did not return an array at step ${step}: ${JSON.stringify(foldingRanges)}`);
-        } else if (op === 8) {
+        } else if (op === 7) {
           const semanticTokens = await client.request("textDocument/semanticTokens/full", { textDocument: { uri: slideUri } });
           assert(Array.isArray(semanticTokens.data), `random semantic tokens did not return data at step ${step}: ${JSON.stringify(semanticTokens)}`);
           const colors = await client.request("textDocument/documentColor", { textDocument: { uri: slideUri } });
@@ -1104,13 +1033,6 @@ async function configuredResponses({ cwd, fixture, source, completionPosition })
       textDocument: { uri },
       position: completionPosition,
     });
-    const inlayHints = await client.request("textDocument/inlayHint", {
-      textDocument: { uri },
-      range: {
-        start: { line: 0, character: 0 },
-        end: { line: source.split("\n").length, character: 0 },
-      },
-    });
-    return { diagnostics: diagnostics.params.diagnostics, completion, inlayHints };
+    return { diagnostics: diagnostics.params.diagnostics, completion };
   });
 }

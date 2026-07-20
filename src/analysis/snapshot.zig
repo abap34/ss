@@ -17,7 +17,6 @@ const query_completion = @import("query/completion.zig");
 const query_definition = @import("query/definition.zig");
 const query_folding = @import("query/folding.zig");
 const query_hover = @import("query/hover.zig");
-const query_inlay = @import("query/inlay.zig");
 const query_signature = @import("query/signature.zig");
 const query_symbols = @import("query/symbols.zig");
 const query_types = @import("query/types.zig");
@@ -260,7 +259,6 @@ pub const AnalysisSnapshot = struct {
     records: []RecordFact = &.{},
     record_fields: []RecordFieldFact = &.{},
     enum_cases: []EnumCaseFact = &.{},
-    hints: []core.InlayHint = &.{},
     layout_output: ?LayoutOutput = null,
     diagnostics: diagnostics.DiagnosticBag,
 
@@ -294,7 +292,6 @@ pub const AnalysisSnapshot = struct {
         snapshot.records = try collectRecords(allocator, decls.records.items);
         snapshot.record_fields = try collectRecordFields(allocator, decls.record_fields.items);
         snapshot.enum_cases = try collectEnumCases(allocator, decls.types.items);
-        snapshot.hints = try cloneHints(allocator, state.hints.items);
         return snapshot;
     }
 
@@ -345,11 +342,6 @@ pub const AnalysisSnapshot = struct {
         deinitRecords(self.allocator, self.records);
         deinitRecordFields(self.allocator, self.record_fields);
         deinitEnumCases(self.allocator, self.enum_cases);
-        for (self.hints) |hint| {
-            self.allocator.free(hint.label);
-            if (hint.file) |file| self.allocator.free(file);
-        }
-        self.allocator.free(self.hints);
         if (self.layout_output) |*layout| layout.deinit(self.allocator);
         self.diagnostics.deinit();
         self.* = .{
@@ -644,10 +636,6 @@ pub fn definitionAt(
     opts: QueryOptions,
 ) ![]DefinitionTarget {
     return query_definition.at(allocator, snapshot, req, opts);
-}
-
-pub fn inlayHints(snapshot: *const AnalysisSnapshot, path: []const u8, opts: QueryOptions) []const core.InlayHint {
-    return query_inlay.hints(snapshot, path, opts);
 }
 
 pub fn documentSymbols(snapshot: *const AnalysisSnapshot, path: []const u8) []const query_symbols.Symbol {
@@ -1174,25 +1162,4 @@ fn deinitEnumCaseItems(allocator: std.mem.Allocator, cases: []EnumCaseFact) void
         allocator.free(item.name);
         allocator.free(item.enum_name);
     }
-}
-
-fn cloneHints(allocator: std.mem.Allocator, hints: []const core.InlayHint) ![]core.InlayHint {
-    var out = std.ArrayList(core.InlayHint).empty;
-    errdefer {
-        for (out.items) |hint| {
-            allocator.free(hint.label);
-            if (hint.file) |file| allocator.free(file);
-        }
-        out.deinit(allocator);
-    }
-    for (hints) |hint| {
-        try out.append(allocator, .{
-            .line = hint.line,
-            .column = hint.column,
-            .label = try allocator.dupe(u8, hint.label),
-            .module_id = hint.module_id,
-            .file = if (hint.file) |file| try allocator.dupe(u8, file) else null,
-        });
-    }
-    return out.toOwnedSlice(allocator);
 }

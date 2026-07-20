@@ -27,7 +27,6 @@ pub fn toOwnedString(allocator: std.mem.Allocator, state: *core.DocumentState) !
     try dump_declarations.writeField(&root, allocator, state);
     try dump_calls.writeQueryContractsField(allocator, &root);
     try dump_editor.writeDefinitionsField(&root, state);
-    try dump_editor.writeHintsField(&root, state.hints.items);
 
     try root.intField("document_id", state.document_id);
     try dump_layout.writePageOrderField(&root, state.page_order.items);

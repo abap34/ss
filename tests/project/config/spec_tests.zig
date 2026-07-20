@@ -51,10 +51,6 @@ test "project spec: editor settings parse from ss.toml" {
         \\debounce = 25
         \\diagnostics = false
         \\
-        \\[editor.lsp.inlay_hints]
-        \\enabled = true
-        \\arguments = false
-        \\
         \\[editor.wysiwyg]
         \\debounce = 50
         \\max_wait = 325
@@ -71,8 +67,6 @@ test "project spec: editor settings parse from ss.toml" {
 
     try testing.expect(!cfg.lsp.diagnostics);
     try testing.expectEqual(@as(u64, 25), cfg.lsp.debounce_ms);
-    try testing.expect(cfg.lsp.inlay_hints);
-    try testing.expect(!cfg.lsp.inlay_hint_arguments);
     try testing.expectEqual(@as(u64, 50), cfg.wysiwyg.debounce_ms);
     try testing.expectEqual(@as(u64, 325), cfg.wysiwyg.max_wait_ms);
     try testing.expect(!cfg.wysiwyg.refresh_on_dependency_change);

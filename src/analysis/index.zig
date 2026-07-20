@@ -3,20 +3,15 @@ const ast = @import("ast");
 const core = @import("core");
 
 const language_names = @import("../language/names.zig");
-const semantic_env = @import("../language/env.zig");
 const analysis_scope = @import("scope.zig");
 const utils = @import("utils");
-
-const SemanticEnv = semantic_env.SemanticEnv;
 
 pub fn populateDocumentStateAnalysis(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
     for (state.modules.items) |module| {
         if (module.kind == .project) continue;
         try collectDefinitionsFromModule(allocator, module.source, module.syntax, module.id, module.path, false, &state.definitions);
-        try collectModuleHints(allocator, state, &state.hints, module.source, module.path, module.syntax, module.id, &state.functions);
     }
     try collectDefinitionsFromModule(allocator, state.projectSource(), state.projectSyntax(), state.project_module_id, null, true, &state.definitions);
-    try collectModuleHints(allocator, state, &state.hints, state.projectSource(), state.projectPath(), state.projectSyntax(), state.project_module_id, &state.functions);
 }
 
 fn collectDefinitionsFromModule(
@@ -131,134 +126,5 @@ fn putDefinition(
         .file = if (file) |path| try allocator.dupe(u8, path) else null,
         .scope_kind = scope_kind,
         .scope_name = if (scope_name) |scope| try allocator.dupe(u8, scope) else null,
-    });
-}
-
-fn collectModuleHints(
-    allocator: std.mem.Allocator,
-    state: *const core.DocumentState,
-    hints: *std.ArrayList(core.InlayHint),
-    source: []const u8,
-    source_path: ?[]const u8,
-    program: ast.Module,
-    module_id: core.SourceModuleId,
-    functions: *const core.FunctionMap,
-) !void {
-    for (program.functions.items) |func| {
-        for (func.statements.items) |stmt| {
-            try collectStatementHints(allocator, state, hints, functions, source, source_path, module_id, stmt);
-        }
-    }
-    for (program.constants.items) |constant_decl| {
-        try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, constant_decl.span, constant_decl.value);
-    }
-    for (program.document_statements.items) |stmt| {
-        try collectStatementHints(allocator, state, hints, functions, source, source_path, module_id, stmt);
-    }
-    for (program.pages.items) |page| {
-        for (page.statements.items) |stmt| {
-            try collectStatementHints(allocator, state, hints, functions, source, source_path, module_id, stmt);
-        }
-    }
-}
-
-fn collectStatementHints(
-    allocator: std.mem.Allocator,
-    state: *const core.DocumentState,
-    hints: *std.ArrayList(core.InlayHint),
-    functions: *const core.FunctionMap,
-    source: []const u8,
-    source_path: ?[]const u8,
-    module_id: core.SourceModuleId,
-    stmt: ast.Statement,
-) !void {
-    switch (stmt.kind) {
-        .let_binding => |binding| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, stmt.span, binding.expr),
-        .return_expr => |expr| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, stmt.span, expr),
-        .property_set => |property_set| {
-            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, stmt.span, property_set.target);
-            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, stmt.span, property_set.value);
-        },
-        .if_stmt => |if_stmt| {
-            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, stmt.span, if_stmt.condition);
-            for (if_stmt.then_statements.items) |nested| try collectStatementHints(allocator, state, hints, functions, source, source_path, module_id, nested);
-            for (if_stmt.else_statements.items) |nested| try collectStatementHints(allocator, state, hints, functions, source, source_path, module_id, nested);
-        },
-        .expr_stmt => |expr| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, stmt.span, expr),
-        else => {},
-    }
-}
-
-fn collectExprHints(
-    allocator: std.mem.Allocator,
-    state: *const core.DocumentState,
-    hints: *std.ArrayList(core.InlayHint),
-    functions: *const core.FunctionMap,
-    source: []const u8,
-    source_path: ?[]const u8,
-    module_id: core.SourceModuleId,
-    span: ast.Span,
-    expr: ast.Expr,
-) !void {
-    switch (expr) {
-        .call => |call| {
-            try hintForCallExpr(allocator, state, hints, functions, source, source_path, module_id, call);
-            for (call.args.items) |arg| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, arg);
-        },
-        .apply => |apply| {
-            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, apply.callee.*);
-            for (apply.args.items) |arg| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, arg);
-        },
-        .lambda => |lambda| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, lambda.body.*),
-        .record_update => |update| {
-            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, update.target.*);
-            for (update.fields.items) |field| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, field.value);
-        },
-        .member => |member| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, member.target.*),
-        .optional_check => |check| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, check.target.*),
-        .coalesce => |coalesce| {
-            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, coalesce.target.*);
-            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, coalesce.fallback.*);
-        },
-        else => {},
-    }
-}
-
-fn hintForCallExpr(
-    allocator: std.mem.Allocator,
-    state: *const core.DocumentState,
-    hints: *std.ArrayList(core.InlayHint),
-    functions: *const core.FunctionMap,
-    source: []const u8,
-    source_path: ?[]const u8,
-    module_id: core.SourceModuleId,
-    call: ast.CallExpr,
-) !void {
-    if (call.args.items.len == 0) return;
-    const hint_count = @min(call.args.items.len, call.arg_spans.items.len);
-    const sema = SemanticEnv.init(state, null, functions).forModule(module_id);
-    for (0..hint_count) |index| {
-        const param_name = sema.callCalleeParamName(call.callee, index) orelse continue;
-        const label = try std.fmt.allocPrint(allocator, "{s}:", .{param_name});
-        try appendInlayHint(allocator, hints, source, source_path, module_id, call.arg_spans.items[index].start, label);
-    }
-}
-
-fn appendInlayHint(
-    allocator: std.mem.Allocator,
-    hints: *std.ArrayList(core.InlayHint),
-    source: []const u8,
-    source_path: ?[]const u8,
-    module_id: core.SourceModuleId,
-    byte_index: usize,
-    label: []const u8,
-) !void {
-    const loc = utils.source.locationAt(source, @min(byte_index, source.len));
-    try hints.append(allocator, .{
-        .line = loc.line,
-        .column = loc.column,
-        .label = label,
-        .module_id = module_id,
-        .file = source_path,
     });
 }

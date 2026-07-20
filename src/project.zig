@@ -31,8 +31,6 @@ pub const LspConfig = struct {
     completion: bool = true,
     hover: bool = true,
     definition: bool = true,
-    inlay_hints: bool = true,
-    inlay_hint_arguments: bool = true,
     document_symbols: bool = true,
     folding_ranges: bool = true,
     semantic_tokens: bool = true,
@@ -243,7 +241,6 @@ pub fn tomlKeySpan(text: []const u8, section_name: []const u8, key: []const u8) 
 }
 
 fn parseLspConfig(text: []const u8) LspConfig {
-    const inlay_hints = parseBool(text, "editor.lsp.inlay_hints", "enabled", true);
     return .{
         .enabled = parseBool(text, "editor.lsp", "enabled", true),
         .debounce_ms = parseU64(text, "editor.lsp", "debounce", 120),
@@ -251,8 +248,6 @@ fn parseLspConfig(text: []const u8) LspConfig {
         .completion = parseBool(text, "editor.lsp", "completion", true),
         .hover = parseBool(text, "editor.lsp", "hover", true),
         .definition = parseBool(text, "editor.lsp", "definition", true),
-        .inlay_hints = inlay_hints,
-        .inlay_hint_arguments = parseBool(text, "editor.lsp.inlay_hints", "arguments", inlay_hints),
         .document_symbols = parseBool(text, "editor.lsp", "document_symbols", true),
         .folding_ranges = parseBool(text, "editor.lsp", "folding_ranges", true),
         .semantic_tokens = parseBool(text, "editor.lsp", "semantic_tokens", true),

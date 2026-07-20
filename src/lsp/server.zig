@@ -18,7 +18,6 @@ const feature_editor = @import("features/editor.zig");
 const feature_edit = @import("features/edit.zig");
 const feature_folding = @import("features/folding.zig");
 const feature_hover = @import("features/hover.zig");
-const feature_inlay = @import("features/inlay.zig");
 const feature_layout = @import("features/layout.zig");
 const feature_project = @import("features/project.zig");
 const feature_shape_edit = @import("features/shape_edit.zig");
@@ -759,17 +758,6 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         try server.respondResult(id, result);
         return;
     }
-    if (std.mem.eql(u8, method, "textDocument/inlayHint")) {
-        var provider = analysisProvider(server);
-        var ctx = feature_inlay.Context{
-            .allocator = server.allocator,
-            .provider = &provider,
-        };
-        const result = try feature_inlay.result(&ctx, params);
-        defer server.allocator.free(result);
-        try server.respondResult(id, result);
-        return;
-    }
     if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
         var provider = analysisProvider(server);
         var ctx = feature_symbols.Context{
@@ -952,7 +940,7 @@ fn editorDisplayMatches(model: editor_snapshot.Model, base_snapshot_id: []const 
 }
 
 const initializeResultPrefix =
-    \\{"capabilities":{"textDocumentSync":2,"completionProvider":{"triggerCharacters":[".","\"","@",":"]},"hoverProvider":true,"definitionProvider":true,"inlayHintProvider":true,"documentSymbolProvider":true,"foldingRangeProvider":true,"semanticTokensProvider":{"legend":{"tokenTypes":["keyword","function","variable","string","number","type","property","operator"],"tokenModifiers":[]},"full":true},"colorProvider":true},"serverInfo":{"name":"ss-lsp","version":
+    \\{"capabilities":{"textDocumentSync":2,"completionProvider":{"triggerCharacters":[".","\"","@",":"]},"hoverProvider":true,"definitionProvider":true,"documentSymbolProvider":true,"foldingRangeProvider":true,"semanticTokensProvider":{"legend":{"tokenTypes":["keyword","function","variable","string","number","type","property","operator"],"tokenModifiers":[]},"full":true},"colorProvider":true},"serverInfo":{"name":"ss-lsp","version":
 ;
 
 fn initializeResult(allocator: std.mem.Allocator) ![]const u8 {

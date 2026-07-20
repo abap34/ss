@@ -40,11 +40,6 @@ folding_ranges = true
 semantic_tokens = true
 colors = true
 
-[editor.lsp.inlay_hints]
-enabled = true
-arguments = true
-positions = true
-
 [editor.wysiwyg]
 enabled = true
 debounce = 140

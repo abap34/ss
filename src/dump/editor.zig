@@ -58,17 +58,3 @@ pub fn writeDefinitionsField(root: *json.Object, state: *core.DocumentState) !vo
     }
     try definitions.end();
 }
-
-pub fn writeHintsField(root: *json.Object, hints: []const core.InlayHint) !void {
-    var array = try root.arrayField("hints");
-    for (hints) |hint| {
-        var item = try array.objectItem();
-        try item.intField("line", hint.line);
-        try item.intField("column", hint.column);
-        try item.stringField("label", hint.label);
-        try item.intField("moduleId", hint.module_id);
-        try item.optionalStringField("file", hint.file);
-        try item.end();
-    }
-    try array.end();
-}
