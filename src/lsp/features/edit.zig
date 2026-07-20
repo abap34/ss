@@ -6,22 +6,14 @@ const protocol = @import("../protocol.zig");
 const lsp_state = @import("../state.zig");
 const utils = @import("utils");
 
-pub const ValidationResult = enum {
-    matched,
-    analysis_failed,
-    layout_conflict,
-    target_missing,
-    position_mismatch,
-};
-
 pub const Context = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     documents: *lsp_state.DocumentStore,
     active_editor_paths: *const std.StringHashMap(void),
     provider: *lsp_state.AnalysisProvider,
-    validation_context: *anyopaque,
-    validate: *const fn (context: *anyopaque, path: []const u8, source: []const u8, node_id: u32, x: f64, y: f64) anyerror!ValidationResult,
+    generated_context: *anyopaque,
+    on_generated: *const fn (context: *anyopaque, path: []const u8, source: []const u8) anyerror!void,
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
@@ -120,16 +112,12 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     };
     defer edit_result.deinit(ctx.allocator);
 
+    // Applying the generated edit triggers the authoritative analysis and
+    // layout pass. Running it here as a preflight would evaluate the document
+    // twice for every pointer gesture.
     const edited_source = try editor_edit.applyEdits(ctx.allocator, source, edit_result.edits);
     defer ctx.allocator.free(edited_source);
-    switch (try ctx.validate(ctx.validation_context, path, edited_source, node_id, to_x, to_y)) {
-        .matched => {},
-        .analysis_failed => return try statusJson(ctx.allocator, "rejected", "The proposed source edit does not compile."),
-        .layout_conflict => return try statusJson(ctx.allocator, "rejected", "The proposed source edit conflicts with existing layout constraints."),
-        .target_missing => return try statusJson(ctx.allocator, "rejected", "The edited object could not be identified after recompilation."),
-        .position_mismatch => return try statusJson(ctx.allocator, "rejected", "The proposed source edit did not reproduce the requested position."),
-    }
-
+    try ctx.on_generated(ctx.generated_context, path, edited_source);
     const uri = try protocol.uriFromPath(ctx.allocator, path);
     defer ctx.allocator.free(uri);
     return try editStatusJson(ctx.allocator, uri, source, edit_result.edits);

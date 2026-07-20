@@ -32,6 +32,7 @@ pub const ConstraintSyntax = struct {
 
 pub const Page = struct {
     id: NodeId,
+    width: f32,
     height: f32,
 };
 
@@ -69,7 +70,11 @@ pub const Report = struct {
         errdefer pages.deinit(allocator);
         for (state.page_order.items) |page_id| {
             const page = state.getNode(page_id) orelse continue;
-            try pages.append(allocator, .{ .id = page.id, .height = page.frame.height });
+            try pages.append(allocator, .{
+                .id = page.id,
+                .width = page.frame.width,
+                .height = page.frame.height,
+            });
         }
 
         var objects = std.ArrayList(Object).empty;

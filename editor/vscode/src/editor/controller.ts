@@ -30,6 +30,7 @@ interface Session {
   pendingRefreshSinceMs?: number;
   disposed: boolean;
   dependencyPaths: Set<string>;
+  snapshotId?: string;
 }
 
 export class EditorController implements vscode.Disposable {
@@ -140,6 +141,11 @@ export class EditorController implements vscode.Disposable {
       this.schedule(session, 0);
       return;
     }
+    if (message.type === "refreshFull") {
+      session.snapshotId = undefined;
+      this.schedule(session, 0);
+      return;
+    }
     if (message.type === "revealSource") {
       await revealSource(message.path, message.start, message.end);
       return;
@@ -226,7 +232,6 @@ export class EditorController implements vscode.Disposable {
         status: "applied",
         documentVersion: session.document.version,
       });
-      this.schedule(session, 0);
     } catch (error) {
       this.output.appendLine(`[editor] layout edit failed: ${String(error)}`);
       await this.post(session, {
@@ -317,6 +322,7 @@ export class EditorController implements vscode.Disposable {
         "ss/editorSnapshot",
         {
           textDocument: { uri: session.document.uri.toString() },
+          baseSnapshotId: session.snapshotId ?? "",
         },
       );
       if (
@@ -337,6 +343,7 @@ export class EditorController implements vscode.Disposable {
         documentVersion,
         snapshot: prepared,
       });
+      session.snapshotId = snapshot.snapshot_id;
     } catch (error) {
       if (session.disposed || serial !== session.serial) return;
       if (isRetryableSnapshotError(error)) {

@@ -23,6 +23,7 @@ export function renderPage(snapshot, pageId, thumbnail = false) {
   }
   const clone = page.cloneNode(true);
   clone.classList.add("preview-page");
+  applyDisplayTranslations(clone, snapshot.display.translations || []);
   if (thumbnail) {
     clone.querySelectorAll(".ss-semantic-layer, .ss-link, .ss-destination").forEach((node) => node.remove());
     const layout = snapshot.layout.pages.find((candidate) =>
@@ -40,6 +41,20 @@ export function renderPage(snapshot, pageId, thumbnail = false) {
     preview.dataset.error = error instanceof Error ? error.message : String(error);
   });
   return preview;
+}
+
+function applyDisplayTranslations(root, translations) {
+  for (const translation of translations) {
+    for (
+      const item of root.querySelectorAll(
+        `[data-ss-node-id="${translation.node_id}"]`,
+      )
+    ) {
+      item.style.translate = `${translation.x}pt ${translation.y}pt`;
+      item.dataset.ssBaseTranslationX = String(translation.x);
+      item.dataset.ssBaseTranslationY = String(translation.y);
+    }
+  }
 }
 
 export function disposePages(snapshot) {

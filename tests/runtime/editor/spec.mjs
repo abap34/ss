@@ -220,7 +220,19 @@ end
         (await diagnosticsPromise).params.diagnostics.length === 0,
         "absolute source edit produced diagnostics",
       );
-      const afterAbsolute = await editorSnapshot(client, uri);
+      const afterAbsolute = await client.request("ss/editorSnapshot", {
+        textDocument: { uri },
+        baseSnapshotId: dependencyUpdate.snapshot_id,
+      });
+      assert(
+        afterAbsolute.display?.schema === 3 &&
+          afterAbsolute.display.kind === "translation_patch" &&
+          afterAbsolute.display.base_snapshot_id === dependencyUpdate.snapshot_id &&
+          afterAbsolute.display.translations.some((item) =>
+            item.node_id === target.node_id
+          ),
+        `absolute position edit regenerated full HTML: ${JSON.stringify(afterAbsolute.display)}`,
+      );
       const absoluteTarget = editingTarget(afterAbsolute, "item");
       const absoluteFrame = previewBounds(
         afterAbsolute,
@@ -423,7 +435,16 @@ end
         (await diagnostics).params.diagnostics.length === 0,
         "reflowing text edit produced diagnostics",
       );
-      snapshot = await editorSnapshot(client, uri);
+      const beforeReflowSnapshotId = snapshot.snapshot_id;
+      snapshot = await client.request("ss/editorSnapshot", {
+        textDocument: { uri },
+        baseSnapshotId: beforeReflowSnapshotId,
+      });
+      assert(
+        snapshot.display?.schema === 2 &&
+          snapshot.display.html.includes("class=\"ss-item ss-text\""),
+        `text reflow incorrectly reused translated HTML: ${JSON.stringify(snapshot.display)}`,
+      );
       const textAfter = previewBounds(
         snapshot,
         editingTarget(snapshot, "text_item").node_id,

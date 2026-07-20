@@ -24,10 +24,12 @@ pub const EditingTarget = struct {
 pub const Model = struct {
     allocator: std.mem.Allocator,
     snapshot_id: []u8,
+    display_base_snapshot_id: ?[]u8 = null,
     editing: []EditingTarget,
 
     pub fn deinit(self: *Model) void {
         self.allocator.free(self.snapshot_id);
+        if (self.display_base_snapshot_id) |value| self.allocator.free(value);
         deinitEditingTargets(self.allocator, self.editing);
         self.allocator.free(self.editing);
         self.* = .{ .allocator = self.allocator, .snapshot_id = &.{}, .editing = &.{} };
@@ -56,6 +58,12 @@ pub const Output = struct {
     }
 };
 
+pub const Translation = struct {
+    node_id: core.NodeId,
+    x: f32,
+    y: f32,
+};
+
 pub fn emptyJson(allocator: std.mem.Allocator) ![]u8 {
     return try allocator.dupe(u8,
         \\{"schema":1,"kind":"ss-editor-snapshot","snapshot_id":"","generation":0,"entry_path":"","source_paths":[],"coordinate_space":{"unit":"pt","origin":"page-top-left","x_axis":"right","y_axis":"down"},"layout":{"schema":1,"kind":"ss-layout-conflicts","entry_path":"","pages":[],"objects":[],"anchors":[],"relations":[],"failures":[]},"display":{"schema":2,"html":"","css":"","has_pdf":false,"assets":[]},"outline":[],"editing":[]}
@@ -74,10 +82,32 @@ pub fn build(
     defer fragment.deinit(allocator);
     var published_assets = try assets.publish(allocator, io, &fragment, ".ss-cache/render");
     defer published_assets.deinit(allocator);
-    const layout_json = try core.layout.conflicts.toJson(allocator, state);
-    defer allocator.free(layout_json);
     const display_json = try displayJson(allocator, &fragment, &published_assets);
     defer allocator.free(display_json);
+    return try buildFromDisplayJson(allocator, state, generation, display_json, null);
+}
+
+pub fn buildTranslationPatch(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    generation: u64,
+    base_snapshot_id: []const u8,
+    translations: []const Translation,
+) !Output {
+    const display_json = try translationPatchJson(allocator, base_snapshot_id, translations);
+    defer allocator.free(display_json);
+    return try buildFromDisplayJson(allocator, state, generation, display_json, base_snapshot_id);
+}
+
+fn buildFromDisplayJson(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    generation: u64,
+    display_json: []const u8,
+    display_base_snapshot_id: ?[]const u8,
+) !Output {
+    const layout_json = try core.layout.conflicts.toJson(allocator, state);
+    defer allocator.free(layout_json);
     const outline_json = try outlineJson(allocator, state);
     defer allocator.free(outline_json);
     const editing = try collectEditingTargets(allocator, state);
@@ -103,6 +133,8 @@ pub fn build(
         hasher.final(),
     });
     errdefer allocator.free(snapshot_id);
+    const owned_display_base_snapshot_id = if (display_base_snapshot_id) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (owned_display_base_snapshot_id) |value| allocator.free(value);
 
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
@@ -128,6 +160,7 @@ pub fn build(
         .model = .{
             .allocator = allocator,
             .snapshot_id = snapshot_id,
+            .display_base_snapshot_id = owned_display_base_snapshot_id,
             .editing = editing,
         },
     };
@@ -175,6 +208,26 @@ fn displayJson(allocator: std.mem.Allocator, fragment: *const render_html.Fragme
         try value.end();
     }
     try asset_values.end();
+    try root.end();
+    return try buffer.toOwnedSlice(allocator);
+}
+
+fn translationPatchJson(allocator: std.mem.Allocator, base_snapshot_id: []const u8, translations: []const Translation) ![]u8 {
+    var buffer = std.ArrayList(u8).empty;
+    errdefer buffer.deinit(allocator);
+    var root = try json.Object.beginBuffer(allocator, &buffer);
+    try root.intField("schema", 3);
+    try root.stringField("kind", "translation_patch");
+    try root.stringField("base_snapshot_id", base_snapshot_id);
+    var values = try root.arrayField("translations");
+    for (translations) |translation| {
+        var value = try values.objectItem();
+        try value.intField("node_id", translation.node_id);
+        try value.floatField("x", translation.x, "{d:.4}");
+        try value.floatField("y", translation.y, "{d:.4}");
+        try value.end();
+    }
+    try values.end();
     try root.end();
     return try buffer.toOwnedSlice(allocator);
 }

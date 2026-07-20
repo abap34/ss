@@ -74,7 +74,7 @@ export async function exerciseTranslationLifecycle(page, current) {
     "Constraint applied to source.",
     "the applied source edit did not report its constraint update immediately",
   );
-  const firstApplied = translatedSnapshot(
+  const firstApplied = translatedPatch(
     current,
     translate.toBounds,
     "11-first-applied",
@@ -93,6 +93,11 @@ export async function exerciseTranslationLifecycle(page, current) {
   assert(Math.abs(followUp.fromBounds.y - translate.toBounds.y) < 0.001);
   assert(followUp.toBounds.x > followUp.fromBounds.x);
   assert(followUp.toBounds.y > followUp.fromBounds.y);
+  assert.equal(
+    Number(await previewTarget.getAttribute("data-ss-base-translation-x")),
+    translate.toBounds.x - translate.fromBounds.x,
+    "the translation patch was not composed onto the retained HTML",
+  );
   await settleLayout(page);
   const rebasedPreviewBox = await previewTarget.boundingBox();
   assert(
@@ -109,7 +114,7 @@ export async function exerciseTranslationLifecycle(page, current) {
   });
   await page.waitForSelector(".toast--success");
   const finalSnapshot = translatedSnapshot(
-    firstApplied,
+    current,
     followUp.toBounds,
     "12-second-applied",
   );
@@ -295,5 +300,30 @@ function translatedSnapshot(source, frame, snapshotId) {
     /(data-ss-node-id="202" style="[^\"]*left:)[^;]+(;top:)[^;]+/,
     `$1${frame.x}pt$2${frame.y}pt`,
   );
+  return result;
+}
+
+function translatedPatch(source, frame, snapshotId) {
+  const result = structuredClone(source);
+  result.generation += 1;
+  result.snapshot_id = snapshotId;
+  const page = result.layout.pages.find((candidate) => candidate.id === 22);
+  const object = result.layout.objects.find((candidate) => candidate.id === 202);
+  const from = {
+    x: object.x,
+    y: page.height - object.y - object.height,
+  };
+  object.x = frame.x;
+  object.y = page.height - frame.y - object.height;
+  result.display = {
+    schema: 3,
+    kind: "translation_patch",
+    base_snapshot_id: source.snapshot_id,
+    translations: [{
+      node_id: object.id,
+      x: frame.x - from.x,
+      y: frame.y - from.y,
+    }],
+  };
   return result;
 }

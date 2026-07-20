@@ -6,185 +6,212 @@ export class TranslationController {
   constructor(state, actions) {
     this.state = state;
     this.actions = actions;
-    this.pending = null;
+    this.pending = new Map();
+    this.inFlight = null;
     this.nextRequestId = 1;
   }
 
-  canDrag(nodeId) {
-    return this.pending == null || this.pending.nodeId === nodeId;
+  canDrag(_nodeId) {
+    return true;
   }
 
   frame(page, object) {
     const frame = previewFrame(page, object);
-    if (!this.affects(page.id, object.id)) return frame;
-    const offset = this.offset();
+    const offset = this.offsetFor(page.id, object.id);
     return { ...frame, x: frame.x + offset.x, y: frame.y + offset.y };
   }
 
   submit(edit) {
-    if (this.pending) {
-      if (
-        this.pending.nodeId !== edit.nodeId ||
-        this.pending.pageId !== edit.pageId
-      ) return false;
-      this.pending.desired = { ...edit.toBounds };
-      this.pending.mode = edit.mode;
-      this.pending.changedAfterRequest = !samePosition(
-        this.pending.sent.toBounds,
-        this.pending.desired,
-      );
-      this.actions.render();
+    const existing = this.pending.get(edit.nodeId);
+    if (existing) {
+      if (existing.pageId !== edit.pageId) return false;
+      existing.desired = { ...edit.toBounds };
+      existing.mode = edit.mode;
       return true;
     }
 
-    this.pending = {
+    const pending = {
       nodeId: edit.nodeId,
       pageId: edit.pageId,
       nodeIds: new Set(subtreeNodeIds(this.state.snapshot, edit.nodeId)),
+      base: { ...edit.fromBounds },
       desired: { ...edit.toBounds },
       mode: edit.mode,
-      phase: "requested",
-      changedAfterRequest: false,
-      sent: this.send(edit),
+      phase: "queued",
+      sent: null,
     };
-    this.actions.render();
+    this.pending.set(edit.nodeId, pending);
+    this.dispatch();
     return true;
   }
 
   acceptResult(message) {
-    if (!this.pending || message.requestId !== this.pending.sent.requestId) {
+    const pending = this.inFlight;
+    if (!pending || message.requestId !== pending.sent?.requestId) {
       return null;
     }
     if (message.status === "applied") {
-      this.pending.phase = "applied";
-      this.pending.appliedDocumentVersion = message.documentVersion;
+      pending.phase = "applied";
+      pending.appliedDocumentVersion = message.documentVersion;
+      this.inFlight = null;
       return { status: "applied" };
     }
     if (message.status === "stale") {
-      this.pending.phase = "stale";
+      pending.phase = "stale";
+      this.inFlight = null;
       return null;
     }
 
     const error = message.message || "The edit could not be applied.";
-    this.pending = null;
+    this.pending.delete(pending.nodeId);
+    this.inFlight = null;
+    this.dispatch();
     return { status: "failed", message: error };
   }
 
   reconcile(snapshot, documentVersion) {
-    const pending = this.pending;
-    if (!pending) return null;
+    if (this.pending.size === 0) return null;
     if (snapshot.stale) {
-      this.pending = null;
+      this.pending.clear();
+      this.inFlight = null;
       return null;
     }
-    if (pending.phase === "requested") return null;
-    if (
-      pending.phase === "applied" &&
-      (!Number.isSafeInteger(documentVersion) ||
-        documentVersion < pending.appliedDocumentVersion)
-    ) return null;
+    let failure = null;
+    for (const pending of [...this.pending.values()]) {
+      if (pending.phase === "requested") continue;
+      if (
+        pending.phase === "applied" &&
+        (!Number.isSafeInteger(documentVersion) ||
+          documentVersion < pending.appliedDocumentVersion)
+      ) continue;
 
-    const page = snapshot.layout.pages.find((candidate) =>
-      candidate.id === pending.pageId
-    );
-    const object = snapshot.layout.objects.find((candidate) =>
-      candidate.id === pending.nodeId
-    );
-    if (!page || !object) {
-      this.pending = null;
-      return {
-        status: "failed",
-        message: "The updated object is no longer present in the preview.",
-      };
-    }
+      const page = snapshot.layout.pages.find((candidate) =>
+        candidate.id === pending.pageId
+      );
+      const object = snapshot.layout.objects.find((candidate) =>
+        candidate.id === pending.nodeId
+      );
+      if (!page || !object) {
+        this.pending.delete(pending.nodeId);
+        failure ??= {
+          status: "failed",
+          message: "The updated object is no longer present in the preview.",
+        };
+        continue;
+      }
 
-    const authoritative = previewFrame(page, object);
-    if (samePosition(authoritative, pending.desired)) {
-      this.pending = null;
-      return null;
-    }
-    const needsFollowUp = pending.phase === "stale" ||
-      pending.changedAfterRequest;
-    if (!needsFollowUp) {
-      this.pending = null;
-      return {
+      const authoritative = previewFrame(page, object);
+      if (samePosition(authoritative, pending.desired)) {
+        this.pending.delete(pending.nodeId);
+        continue;
+      }
+      if (pending.phase === "applied" && samePosition(
+        authoritative,
+        pending.sent.toBounds,
+      )) {
+        pending.base = authoritative;
+        pending.nodeIds = new Set(subtreeNodeIds(snapshot, pending.nodeId));
+        pending.phase = "queued";
+        pending.sent = null;
+        continue;
+      }
+      if (pending.phase === "stale" || pending.phase === "queued") {
+        pending.base = authoritative;
+        pending.nodeIds = new Set(subtreeNodeIds(snapshot, pending.nodeId));
+        pending.phase = "queued";
+        pending.sent = null;
+        continue;
+      }
+
+      this.pending.delete(pending.nodeId);
+      failure ??= {
         status: "failed",
         message: "The updated source did not reproduce the requested position.",
       };
     }
-
-    const toBounds = {
-      ...authoritative,
-      x: pending.desired.x,
-      y: pending.desired.y,
-    };
-    pending.nodeIds = new Set(subtreeNodeIds(snapshot, pending.nodeId));
-    pending.phase = "requested";
-    pending.changedAfterRequest = false;
-    pending.sent = this.send({
-      snapshotId: snapshot.snapshot_id,
-      nodeId: pending.nodeId,
-      pageId: pending.pageId,
-      mode: pending.mode,
-      fromBounds: authoritative,
-      toBounds,
-    });
-    return null;
+    this.dispatch();
+    return failure;
   }
 
   cancel() {
-    const changed = this.pending != null;
-    this.pending = null;
+    const changed = this.pending.size !== 0;
+    this.pending.clear();
+    this.inFlight = null;
     return changed;
   }
 
   applyPreview(root, pageId) {
     for (const item of root.querySelectorAll("[data-ss-pending-translation]")) {
-      item.style.removeProperty("translate");
+      const base = baseTranslation(item);
+      if (base.x === 0 && base.y === 0) item.style.removeProperty("translate");
+      else item.style.translate = `${base.x}pt ${base.y}pt`;
       delete item.dataset.ssPendingTranslation;
     }
-    if (!this.pending || this.pending.pageId !== pageId) return;
-    const offset = this.offset();
-    for (const nodeId of this.pending.nodeIds) {
-      for (
-        const item of root.querySelectorAll(`[data-ss-node-id="${nodeId}"]`)
-      ) {
-        item.style.translate = `${offset.x}pt ${offset.y}pt`;
-        item.dataset.ssPendingTranslation = "true";
+    for (const pending of this.pending.values()) {
+      if (pending.pageId !== pageId) continue;
+      const offset = this.offset(pending);
+      for (const nodeId of pending.nodeIds) {
+        for (
+          const item of root.querySelectorAll(`[data-ss-node-id="${nodeId}"]`)
+        ) {
+          const base = baseTranslation(item);
+          item.style.translate = `${base.x + offset.x}pt ${base.y + offset.y}pt`;
+          item.dataset.ssPendingTranslation = "true";
+        }
       }
     }
   }
 
-  offset() {
-    const pending = this.pending;
-    if (!pending) return { x: 0, y: 0 };
+  offset(pending) {
     return {
-      x: pending.desired.x - pending.sent.fromBounds.x,
-      y: pending.desired.y - pending.sent.fromBounds.y,
+      x: pending.desired.x - pending.base.x,
+      y: pending.desired.y - pending.base.y,
     };
   }
 
-  affects(pageId, nodeId) {
-    return Boolean(
-      this.pending?.pageId === pageId && this.pending.nodeIds.has(nodeId),
-    );
+  offsetFor(pageId, nodeId) {
+    let x = 0;
+    let y = 0;
+    for (const pending of this.pending.values()) {
+      if (pending.pageId !== pageId || !pending.nodeIds.has(nodeId)) continue;
+      const offset = this.offset(pending);
+      x += offset.x;
+      y += offset.y;
+    }
+    return { x, y };
   }
 
-  send(edit) {
+  dispatch() {
+    if (this.inFlight || !this.state.snapshot || this.state.snapshot.stale) {
+      return;
+    }
+    const pending = [...this.pending.values()].find((candidate) =>
+      candidate.phase === "queued"
+    );
+    if (!pending) return;
     const requestId = this.nextRequestId++;
     const message = {
       type: "translate",
       requestId,
-      snapshotId: edit.snapshotId,
-      nodeId: edit.nodeId,
-      pageId: edit.pageId,
-      mode: edit.mode,
-      fromBounds: { ...edit.fromBounds },
-      toBounds: { ...edit.toBounds },
+      snapshotId: this.state.snapshot.snapshot_id,
+      nodeId: pending.nodeId,
+      pageId: pending.pageId,
+      mode: pending.mode,
+      fromBounds: { ...pending.base },
+      toBounds: { ...pending.desired },
     };
+    pending.phase = "requested";
+    pending.sent = message;
+    this.inFlight = pending;
     this.actions.post(message);
-    return message;
   }
+}
+
+function baseTranslation(item) {
+  return {
+    x: Number(item.dataset.ssBaseTranslationX || 0),
+    y: Number(item.dataset.ssBaseTranslationY || 0),
+  };
 }
 
 function samePosition(left, right) {

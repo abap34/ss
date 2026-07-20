@@ -96,12 +96,28 @@ export interface SourceLocation {
   end: number;
 }
 
-export interface DisplaySnapshot {
+export type DisplaySnapshot = FullDisplaySnapshot | TranslationDisplayPatch;
+
+export interface FullDisplaySnapshot {
   schema: 2;
   html: string;
   css: string;
   has_pdf: boolean;
   assets: DisplayAsset[];
+  translations?: DisplayTranslation[];
+}
+
+export interface TranslationDisplayPatch {
+  schema: 3;
+  kind: "translation_patch";
+  base_snapshot_id: string;
+  translations: DisplayTranslation[];
+}
+
+export interface DisplayTranslation {
+  node_id: number;
+  x: number;
+  y: number;
 }
 
 export interface DisplayAsset {
@@ -193,6 +209,7 @@ export type HostMessage =
 
 export type WebviewMessage =
   | { type: "ready" }
+  | { type: "refreshFull" }
   | { type: "revealSource"; path: string; start: number; end: number }
   | {
     type: "translate";
