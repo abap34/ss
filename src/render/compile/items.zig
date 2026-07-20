@@ -13,6 +13,7 @@ const c = @import("pdf_ffi").c;
 const render_ir = @import("render");
 const render_resources = @import("render_resources");
 const render_math = @import("render_math");
+const render_text = @import("render_text");
 const render_compile = @import("../compile.zig");
 const fingerprint = @import("fingerprint.zig");
 const text_measure = core.render_text_measure;
@@ -212,6 +213,8 @@ const DrawContext = struct {
     asset_base_dir: []const u8,
     cache_dir: []const u8,
     highlight_languages: []const utils.highlight.Language,
+    text_cache: ?*render_text.Cache = null,
+    resource_cache: ?*render_resources.SourceCache = null,
     command_failure: ?*CommandFailure = null,
     link_annotations: ?*std.ArrayList(LinkAnnotation) = null,
     destinations: ?*std.ArrayList(DestinationAnnotation) = null,
@@ -545,6 +548,7 @@ pub const LayoutMeasurementScope = struct {
         io: std.Io,
         state: *core.DocumentState,
         pages: *const core.prepared.PreparedPages,
+        resource_cache: ?*render_resources.SourceCache,
     ) !LayoutMeasurementScope {
         const default_options: Options = .{};
         const cache_dir = default_options.cache_dir;
@@ -577,6 +581,7 @@ pub const LayoutMeasurementScope = struct {
                 .asset_base_dir = if (state.asset_base_dir.len == 0) "." else state.asset_base_dir,
                 .cache_dir = asset_cache_dir,
                 .highlight_languages = &.{},
+                .resource_cache = resource_cache,
             },
             .prepared_objects = prepared_objects,
             .persistent_measurements = persistent_measurements,
@@ -633,6 +638,7 @@ pub const LayoutMeasurementScope = struct {
                 .allocator = key_ctx.allocator,
                 .io = key_ctx.io,
                 .asset_base_dir = key_ctx.asset_base_dir,
+                .resource_cache = key_ctx.resource_cache,
             },
             layout_measurement_cache_version,
             native_artifact_cache_version,
@@ -5094,6 +5100,7 @@ fn cachedMathPath(
             .allocator = ctx.allocator,
             .io = ctx.io,
             .asset_base_dir = ctx.asset_base_dir,
+            .resource_cache = ctx.resource_cache,
         },
         native_artifact_cache_version,
         source,
