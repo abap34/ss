@@ -28,13 +28,178 @@ pub const Asset = struct {
     media_type: []const u8,
     relative_path: []u8,
     bytes: []u8,
+    owns_bytes: bool = true,
+    shared_bytes: ?*SharedBytes = null,
     embedded_reference: ?[]u8 = null,
     emit_embedded_data: bool = false,
 
     fn deinit(self: *Asset, allocator: std.mem.Allocator) void {
         allocator.free(self.relative_path);
-        allocator.free(self.bytes);
+        if (self.shared_bytes) |owner| {
+            owner.release();
+        } else if (self.owns_bytes) {
+            allocator.free(self.bytes);
+        }
         if (self.embedded_reference) |reference| allocator.free(reference);
+    }
+};
+
+const SharedBytes = struct {
+    allocator: std.mem.Allocator,
+    references: std.atomic.Value(usize) = .init(1),
+    bytes: []u8,
+
+    fn create(allocator: std.mem.Allocator, bytes: []u8) !*SharedBytes {
+        const owner = try allocator.create(SharedBytes);
+        owner.* = .{ .allocator = allocator, .bytes = bytes };
+        return owner;
+    }
+
+    fn retain(self: *SharedBytes) void {
+        _ = self.references.fetchAdd(1, .monotonic);
+    }
+
+    fn release(self: *SharedBytes) void {
+        if (self.references.fetchSub(1, .acq_rel) != 1) return;
+        self.allocator.free(self.bytes);
+        self.allocator.destroy(self);
+    }
+};
+
+const FontCacheKey = struct {
+    resource: render.ResourceId,
+    face_index: u32,
+};
+
+const CachedFont = union(enum) {
+    local,
+    resource: struct {
+        digest: [32]u8,
+        extension: []const u8,
+        bytes: *SharedBytes,
+    },
+};
+
+const CachedFontEntry = struct {
+    value: CachedFont,
+    last_used: u64,
+
+    fn byteSize(self: *const CachedFontEntry) usize {
+        return switch (self.value) {
+            .local => 0,
+            .resource => |resource| resource.bytes.bytes.len,
+        };
+    }
+
+    fn deinit(self: *CachedFontEntry) void {
+        switch (self.value) {
+            .local => {},
+            .resource => |resource| resource.bytes.release(),
+        }
+    }
+};
+
+const max_cached_font_bytes = 256 * 1024 * 1024;
+
+pub const Cache = struct {
+    allocator: std.mem.Allocator,
+    fonts: std.AutoHashMap(FontCacheKey, CachedFontEntry),
+    resource_digests: std.AutoHashMap(render.ResourceId, [32]u8),
+    font_bytes: usize = 0,
+    access_clock: u64 = 0,
+
+    const max_font_entries = 32;
+    const max_resource_digests = 4096;
+
+    pub fn init(allocator: std.mem.Allocator) Cache {
+        return .{
+            .allocator = allocator,
+            .fonts = std.AutoHashMap(FontCacheKey, CachedFontEntry).init(allocator),
+            .resource_digests = std.AutoHashMap(render.ResourceId, [32]u8).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Cache) void {
+        var values = self.fonts.valueIterator();
+        while (values.next()) |cached_font| cached_font.deinit();
+        self.fonts.deinit();
+        self.resource_digests.deinit();
+        self.* = undefined;
+    }
+
+    fn resourceDigest(self: *Cache, resource: *const render.Resource) ![32]u8 {
+        if (self.resource_digests.get(resource.id)) |digest| return digest;
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(resource.bytes, &digest, .{});
+        if (self.resource_digests.count() >= max_resource_digests) self.resource_digests.clearRetainingCapacity();
+        try self.resource_digests.putNoClobber(resource.id, digest);
+        return digest;
+    }
+
+    fn font(self: *Cache, graph: *const render.ResourceGraph, id: render.ResourceId, face_index: u32) !*const CachedFont {
+        const key = FontCacheKey{ .resource = id, .face_index = face_index };
+        if (self.fonts.getPtr(key)) |cached| {
+            cached.last_used = self.nextAccess();
+            return &cached.value;
+        }
+        const source = graph.find(id) orelse return error.MissingRenderResource;
+        if (source.kind != .font) return error.RenderResourceKindConflict;
+        const cached: CachedFont = blk: {
+            const face = font_tools.extractFace(self.allocator, source.bytes, face_index) catch |err| switch (err) {
+                error.FontEmbeddingRestricted => break :blk .local,
+                else => return err,
+            };
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(face.bytes, &digest, .{});
+            const owned_bytes = SharedBytes.create(self.allocator, face.bytes) catch |err| {
+                self.allocator.free(face.bytes);
+                return err;
+            };
+            break :blk .{ .resource = .{
+                .digest = digest,
+                .extension = face.extension,
+                .bytes = owned_bytes,
+            } };
+        };
+        errdefer switch (cached) {
+            .local => {},
+            .resource => |value| value.bytes.release(),
+        };
+        const byte_size = switch (cached) {
+            .local => 0,
+            .resource => |value| value.bytes.bytes.len,
+        };
+        if (byte_size > max_cached_font_bytes) return error.FontCacheEntryTooLarge;
+        while (self.fonts.count() > 0 and
+            (self.fonts.count() >= max_font_entries or
+                byte_size > max_cached_font_bytes or self.font_bytes > max_cached_font_bytes - byte_size))
+        {
+            self.evictLeastRecentlyUsedFont();
+        }
+        try self.fonts.putNoClobber(key, .{ .value = cached, .last_used = self.nextAccess() });
+        self.font_bytes += byte_size;
+        return &self.fonts.getPtr(key).?.value;
+    }
+
+    fn nextAccess(self: *Cache) u64 {
+        self.access_clock +%= 1;
+        if (self.access_clock == 0) self.access_clock = 1;
+        return self.access_clock;
+    }
+
+    fn evictLeastRecentlyUsedFont(self: *Cache) void {
+        var oldest_key: ?FontCacheKey = null;
+        var oldest_access: u64 = std.math.maxInt(u64);
+        var iterator = self.fonts.iterator();
+        while (iterator.next()) |entry| {
+            if (entry.value_ptr.last_used >= oldest_access) continue;
+            oldest_key = entry.key_ptr.*;
+            oldest_access = entry.value_ptr.last_used;
+        }
+        const removed = self.fonts.fetchRemove(oldest_key orelse return) orelse return;
+        self.font_bytes -= removed.value.byteSize();
+        var entry = removed.value;
+        entry.deinit();
     }
 };
 
@@ -122,7 +287,7 @@ pub const FontSource = union(enum) {
     local,
 };
 
-pub fn collect(allocator: std.mem.Allocator, ir: *const render.Ir) !Set {
+pub fn collect(allocator: std.mem.Allocator, ir: *const render.Ir, cache: ?*Cache) !Set {
     var assets = std.ArrayList(Asset).empty;
     var local_fonts = std.ArrayList(LocalFont).empty;
     var asset_index = std.AutoHashMap(AssetKey, usize).init(allocator);
@@ -137,23 +302,23 @@ pub fn collect(allocator: std.mem.Allocator, ir: *const render.Ir) !Set {
     }
     var has_pdf = false;
     for (ir.fonts.instances) |instance| {
-        try addFont(allocator, &assets, &local_fonts, &asset_index, &local_font_index, &ir.resources, instance.resource, instance.face_index, instance.family);
+        try addFont(allocator, &assets, &local_fonts, &asset_index, &local_font_index, &ir.resources, instance.resource, instance.face_index, instance.family, cache);
     }
     for (ir.pages) |page| {
         for (page.items.items) |item| switch (item) {
             .text => {},
-            .raster => |value| try add(allocator, &assets, &asset_index, &ir.resources, .raster, value.resource),
-            .svg => |value| try add(allocator, &assets, &asset_index, &ir.resources, .svg, value.resource),
+            .raster => |value| try add(allocator, &assets, &asset_index, &ir.resources, .raster, value.resource, cache),
+            .svg => |value| try add(allocator, &assets, &asset_index, &ir.resources, .svg, value.resource, cache),
             .math => |value| switch (value.content) {
                 .structured => {},
                 .raw_pdf => |raw| {
                     has_pdf = true;
-                    try add(allocator, &assets, &asset_index, &ir.resources, .math_pdf, raw.resource);
+                    try add(allocator, &assets, &asset_index, &ir.resources, .math_pdf, raw.resource, cache);
                 },
             },
             .pdf_page => |value| {
                 has_pdf = true;
-                try add(allocator, &assets, &asset_index, &ir.resources, .pdf, value.resource);
+                try add(allocator, &assets, &asset_index, &ir.resources, .pdf, value.resource, cache);
             },
             else => {},
         };
@@ -179,25 +344,32 @@ fn add(
     graph: *const render.ResourceGraph,
     kind: Kind,
     id: render.ResourceId,
+    cache: ?*Cache,
 ) !void {
     const key = AssetKey{ .kind = kind, .resource = id, .font_index = null };
     if (asset_index.contains(key)) return;
     const resource = graph.find(id) orelse return error.MissingRenderResource;
     if (resource.kind != kind) return error.RenderResourceKindConflict;
-    const bytes = try allocator.dupe(u8, resource.bytes);
-    errdefer allocator.free(bytes);
-    const identity = try identify(allocator, bytes, resource.extension());
-    errdefer allocator.free(identity.relative_path);
-    try assets.append(allocator, .{
+    const digest = if (cache) |resource_cache| try resource_cache.resourceDigest(resource) else blk: {
+        var value: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(resource.bytes, &value, .{});
+        break :blk value;
+    };
+    try assets.ensureUnusedCapacity(allocator, 1);
+    try asset_index.ensureUnusedCapacity(1);
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    const relative_path = try std.fmt.allocPrint(allocator, "assets/{s}.{s}", .{ hex, resource.extension() });
+    assets.appendAssumeCapacity(.{
         .kind = kind,
         .resource = id,
         .font_index = null,
-        .digest = identity.digest,
+        .digest = digest,
         .media_type = resource.mediaType(),
-        .relative_path = identity.relative_path,
-        .bytes = bytes,
+        .relative_path = relative_path,
+        .bytes = resource.bytes,
+        .owns_bytes = false,
     });
-    try asset_index.put(key, assets.items.len - 1);
+    asset_index.putAssumeCapacityNoClobber(key, assets.items.len - 1);
 }
 
 fn addFont(
@@ -210,18 +382,56 @@ fn addFont(
     id: render.ResourceId,
     face_index: u32,
     family: []const u8,
+    cache: ?*Cache,
 ) !void {
     const asset_key = AssetKey{ .kind = .font, .resource = id, .font_index = face_index };
     const local_key = LocalFontKey{ .resource = id, .face_index = face_index };
     if (asset_index.contains(asset_key) or local_font_index.contains(local_key)) return;
     const resource = graph.find(id) orelse return error.MissingRenderResource;
     if (resource.kind != .font) return error.RenderResourceKindConflict;
+    if (resource.bytes.len <= max_cached_font_bytes) if (cache) |font_cache| {
+        const cached = font_cache.font(graph, id, face_index) catch |err| switch (err) {
+            error.FontCacheEntryTooLarge => null,
+            else => return err,
+        };
+        if (cached) |cached_font| switch (cached_font.*) {
+            .local => {
+                try local_fonts.ensureUnusedCapacity(allocator, 1);
+                try local_font_index.ensureUnusedCapacity(1);
+                const owned_family = try allocator.dupe(u8, family);
+                local_fonts.appendAssumeCapacity(.{ .resource = id, .face_index = face_index, .family = owned_family });
+                local_font_index.putAssumeCapacityNoClobber(local_key, local_fonts.items.len - 1);
+                return;
+            },
+            .resource => |face| {
+                try assets.ensureUnusedCapacity(allocator, 1);
+                try asset_index.ensureUnusedCapacity(1);
+                const hex = std.fmt.bytesToHex(face.digest, .lower);
+                const relative_path = try std.fmt.allocPrint(allocator, "assets/{s}.{s}", .{ hex, face.extension });
+                face.bytes.retain();
+                assets.appendAssumeCapacity(.{
+                    .kind = .font,
+                    .resource = id,
+                    .font_index = face_index,
+                    .digest = face.digest,
+                    .media_type = if (std.mem.eql(u8, face.extension, "otf")) "font/otf" else "font/ttf",
+                    .relative_path = relative_path,
+                    .bytes = face.bytes.bytes,
+                    .owns_bytes = false,
+                    .shared_bytes = face.bytes,
+                });
+                asset_index.putAssumeCapacityNoClobber(asset_key, assets.items.len - 1);
+                return;
+            },
+        };
+    };
     const face = font_tools.extractFace(allocator, resource.bytes, face_index) catch |err| switch (err) {
         error.FontEmbeddingRestricted => {
+            try local_fonts.ensureUnusedCapacity(allocator, 1);
+            try local_font_index.ensureUnusedCapacity(1);
             const owned_family = try allocator.dupe(u8, family);
-            errdefer allocator.free(owned_family);
-            try local_fonts.append(allocator, .{ .resource = id, .face_index = face_index, .family = owned_family });
-            try local_font_index.put(local_key, local_fonts.items.len - 1);
+            local_fonts.appendAssumeCapacity(.{ .resource = id, .face_index = face_index, .family = owned_family });
+            local_font_index.putAssumeCapacityNoClobber(local_key, local_fonts.items.len - 1);
             return;
         },
         else => return err,
@@ -229,7 +439,9 @@ fn addFont(
     errdefer allocator.free(face.bytes);
     const identity = try identify(allocator, face.bytes, face.extension);
     errdefer allocator.free(identity.relative_path);
-    try assets.append(allocator, .{
+    try assets.ensureUnusedCapacity(allocator, 1);
+    try asset_index.ensureUnusedCapacity(1);
+    assets.appendAssumeCapacity(.{
         .kind = .font,
         .resource = id,
         .font_index = face_index,
@@ -238,7 +450,7 @@ fn addFont(
         .relative_path = identity.relative_path,
         .bytes = face.bytes,
     });
-    try asset_index.put(asset_key, assets.items.len - 1);
+    asset_index.putAssumeCapacityNoClobber(asset_key, assets.items.len - 1);
 }
 
 const Identity = struct {

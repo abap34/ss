@@ -17,6 +17,7 @@ await testSnapshotAndSourceEdits();
 await testPositionEditsAllowReflowAndMoveReturnedGroups();
 await testSnapshotAssetsUseContentAddressedFiles();
 await testSnapshotRecoversAfterInvalidEdit();
+await testStaleSnapshotAfterTranslationPatchUsesFullDisplay();
 await testLastGoodSnapshotsAreKeptPerEntry();
 
 async function testSnapshotAndSourceEdits() {
@@ -740,6 +741,89 @@ async function testSnapshotRecoversAfterInvalidEdit() {
         `recovered editor snapshot retained the old output: ${
           JSON.stringify(recovered)
         }`,
+      );
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testStaleSnapshotAfterTranslationPatchUsesFullDisplay() {
+  const project = await mkdtemp(
+    path.join(os.tmpdir(), "ss-lsp-wysiwyg-patch-recovery-"),
+  );
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = simpleSource("patch-recovery");
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      let diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source, version: 1 });
+      assert(
+        (await diagnosticsPromise).params.diagnostics.length === 0,
+        "translation patch recovery fixture produced diagnostics",
+      );
+      const initial = await editorSnapshot(client, uri);
+      const target = editingTarget(initial, "item");
+      const fromBounds = previewBounds(initial, target.node_id);
+      const edit = await requestEdit(
+        client,
+        uri,
+        initial,
+        target,
+        fromBounds,
+        { ...fromBounds, x: fromBounds.x + 24 },
+        "absolute",
+        target.page_id,
+      );
+      assert(edit.status === "ok", `translation patch edit failed: ${JSON.stringify(edit)}`);
+      const updated = applyProtocolEdits(
+        source,
+        edit.workspaceEdit?.changes?.[uri] ?? [],
+      );
+      diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.changeDocument({ uri, version: 2, text: updated });
+      assert(
+        (await diagnosticsPromise).params.diagnostics.length === 0,
+        "translation patch source edit produced diagnostics",
+      );
+      const patch = await client.request("ss/editorSnapshot", {
+        textDocument: { uri },
+        baseSnapshotId: initial.snapshot_id,
+      });
+      assert(
+        patch.display?.schema === 3 && patch.display.kind === "translation_patch",
+        `position edit did not produce a translation patch: ${JSON.stringify(patch.display)}`,
+      );
+
+      diagnosticsPromise = client.waitForDiagnostics(
+        uri,
+        (diagnostics) => diagnostics.length > 0,
+      );
+      client.changeDocument({
+        uri,
+        version: 3,
+        text: "page broken\nlet item =\nend\n",
+      });
+      await diagnosticsPromise;
+      const stale = await client.request("ss/editorSnapshot", {
+        textDocument: { uri },
+        baseSnapshotId: patch.snapshot_id,
+      });
+      assert(
+        stale.stale === true && stale.display?.schema === 2 &&
+          stale.snapshot_id === initial.snapshot_id,
+        `stale translation patch was returned without its base: ${JSON.stringify(stale)}`,
+      );
+      const refreshed = await client.request("ss/editorSnapshot", {
+        textDocument: { uri },
+      });
+      assert(
+        refreshed.stale === true && refreshed.display?.schema === 2,
+        `full stale refresh repeated a translation patch: ${JSON.stringify(refreshed)}`,
       );
     });
   } finally {

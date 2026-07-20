@@ -3,6 +3,8 @@ const build_options = @import("build_options");
 const core = @import("core");
 const render_layout = @import("../render/layout.zig");
 const render_compiler = @import("../render/compile.zig");
+const render_resources = @import("render_resources");
+const render_text = @import("render_text");
 const editor_snapshot = @import("../editor/snapshot.zig");
 const analysis = @import("../analysis.zig");
 const module_loader = @import("../modules/loader.zig");
@@ -52,6 +54,10 @@ const Server = struct {
     ingress: *transport.Ingress,
     documents: DocumentStore,
     embedded_cache: module_loader.EmbeddedSyntaxCache,
+    render_resource_cache: render_resources.SourceCache,
+    text_shape_cache: render_text.Cache,
+    render_page_cache: render_compiler.PageCache,
+    editor_snapshot_cache: editor_snapshot.Cache,
     analysis: ?AnalysisSnapshot = null,
     analysis_revision: u64 = 0,
     layout_responses: ResponseStore = .{},
@@ -76,6 +82,10 @@ const Server = struct {
             .ingress = ingress,
             .documents = DocumentStore.init(allocator),
             .embedded_cache = module_loader.EmbeddedSyntaxCache.init(allocator),
+            .render_resource_cache = render_resources.SourceCache.init(allocator, io),
+            .text_shape_cache = render_text.Cache.init(allocator, io),
+            .render_page_cache = render_compiler.PageCache.init(allocator, io),
+            .editor_snapshot_cache = editor_snapshot.Cache.init(allocator, io),
             .published_diagnostic_uris = std.StringHashMap(void).init(allocator),
             .wysiwyg_paths = std.StringHashMap(void).init(allocator),
         };
@@ -85,6 +95,10 @@ const Server = struct {
         self.documents.deinit();
         if (self.analysis) |*snapshot| snapshot.deinit();
         self.embedded_cache.deinit();
+        self.render_resource_cache.deinit();
+        self.text_shape_cache.deinit();
+        self.render_page_cache.deinit();
+        self.editor_snapshot_cache.deinit();
         self.layout_responses.deinit(self.allocator);
         self.editor_responses.deinit(self.allocator);
         self.editor_diagnostics.deinit(self.allocator);
@@ -533,7 +547,7 @@ fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *co
     var result_buffer: [2]AnalysisLayoutTaskResult = undefined;
     var tasks = std.Io.Select(AnalysisLayoutTaskResult).init(hook.server.io, &result_buffer);
     try tasks.concurrent(.layout, runAnalysisLayoutWork, .{ context, state, graph });
-    defer cancelAnalysisLayoutTasks(&tasks);
+    defer cancelAnalysisLayoutTasks(&tasks, state.allocator);
     try tasks.concurrent(.canceled, waitForAnalysisCancellation, .{hook.server});
 
     return switch (try tasks.await()) {
@@ -545,16 +559,23 @@ fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *co
 fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph) !analysis.snapshot.LayoutHookOutput {
     const hook: *AnalysisLayoutContext = @ptrCast(@alignCast(context));
     try hook.server.checkCanceled();
+    const layout_start = utils.measure_profile.start();
     var pages = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph, .{
         .jobs = 1,
+        .resource_cache = &hook.server.render_resource_cache,
         .cancellation = .{
             .context = hook.server,
             .is_canceled = analysisCanceled,
         },
     });
+    utils.measure_profile.recordWysiwyg(.evaluate_solve, layout_start);
     defer pages.deinit(state.allocator);
     try hook.server.checkCanceled();
-    if (!hook.include_editor_snapshot or hook.server.wysiwyg_paths.count() == 0) return .{};
+    const conflicts_json = try core.layout.conflicts.toJson(state.allocator, state);
+    errdefer state.allocator.free(conflicts_json);
+    if (!hook.include_editor_snapshot or hook.server.wysiwyg_paths.count() == 0) {
+        return .{ .conflicts_json = conflicts_json };
+    }
 
     if (hook.prefer_translation_patch) {
         if (hook.server.analysis) |*previous| {
@@ -568,17 +589,35 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
                             hook.server.documents.generation,
                             previous_editor.model.snapshot_id,
                             translations,
-                        ) };
+                            conflicts_json,
+                        ), .conflicts_json = conflicts_json };
                     }
                 }
             }
         }
     }
 
-    var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &pages, .{ .jobs = 1 });
+    const render_start = utils.measure_profile.start();
+    var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &pages, .{
+        .jobs = 1,
+        .resource_cache = &hook.server.render_resource_cache,
+        .text_cache = &hook.server.text_shape_cache,
+        .page_cache = &hook.server.render_page_cache,
+    });
+    utils.measure_profile.recordWysiwyg(.render_compile, render_start);
     defer render_ir.deinit(state.allocator);
     try hook.server.checkCanceled();
-    return .{ .editor = try editor_snapshot.build(state.allocator, hook.server.io, state, &render_ir, hook.server.documents.generation) };
+    const snapshot_start = utils.measure_profile.start();
+    defer utils.measure_profile.recordWysiwyg(.snapshot, snapshot_start);
+    return .{ .editor = try editor_snapshot.build(
+        state.allocator,
+        hook.server.io,
+        state,
+        &render_ir,
+        hook.server.documents.generation,
+        conflicts_json,
+        &hook.server.editor_snapshot_cache,
+    ), .conflicts_json = conflicts_json };
 }
 
 fn waitForAnalysisCancellation(server: *Server) void {
@@ -587,11 +626,11 @@ fn waitForAnalysisCancellation(server: *Server) void {
     }
 }
 
-fn cancelAnalysisLayoutTasks(tasks: *std.Io.Select(AnalysisLayoutTaskResult)) void {
+fn cancelAnalysisLayoutTasks(tasks: *std.Io.Select(AnalysisLayoutTaskResult), allocator: std.mem.Allocator) void {
     while (tasks.cancel()) |result| switch (result) {
         .layout => |layout_result| {
             var output = layout_result catch continue;
-            if (output.editor) |*editor| editor.deinit();
+            output.deinit(allocator);
         },
         .canceled => {},
     };
@@ -957,6 +996,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
             .provider = &provider,
             .responses = &server.editor_responses,
             .diagnostics = &server.editor_diagnostics,
+            .snapshot_cache = &server.editor_snapshot_cache,
         };
         const result = try feature_editor.snapshotResult(&ctx, params);
         defer server.allocator.free(result);

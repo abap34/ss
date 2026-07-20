@@ -156,6 +156,181 @@ test "HTML renderer leaves a directory destination intact" {
     directory.close(testing.io);
 }
 
+test "HTML fragment cache reuses display text and invalidates visual changes" {
+    var pages = try testing.allocator.alloc(render.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    var ir = render.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+    try pages[0].appendFillRect(
+        testing.allocator,
+        7,
+        .{ .x = 10, .y = 20, .width = 30, .height = 40 },
+        .{ .r = 1, .g = 0, .b = 0 },
+    );
+    try ir.validate();
+
+    var cache = html.Cache.init(testing.allocator);
+    defer cache.deinit();
+    var first = try html.prepareFragment(testing.allocator, &ir, ir.displayFingerprint(), &cache);
+    defer first.deinit(testing.allocator);
+    var second = try html.prepareFragment(testing.allocator, &ir, ir.displayFingerprint(), &cache);
+    defer second.deinit(testing.allocator);
+    try testing.expectEqual(@intFromPtr(first.html.ptr), @intFromPtr(second.html.ptr));
+    try testing.expectEqual(@intFromPtr(first.css.ptr), @intFromPtr(second.css.ptr));
+    const first_html = try testing.allocator.dupe(u8, first.html);
+    defer testing.allocator.free(first_html);
+
+    pages[0].items.items[0].fill_rect.color = .{ .r = 0, .g = 0, .b = 1 };
+    var changed = try html.prepareFragment(testing.allocator, &ir, ir.displayFingerprint(), &cache);
+    defer changed.deinit(testing.allocator);
+    try testing.expect(@intFromPtr(first.html.ptr) != @intFromPtr(changed.html.ptr));
+    for (0..3) |index| {
+        pages[0].items.items[0].fill_rect.color = .{
+            .r = @as(f32, @floatFromInt(index + 1)) / 10,
+            .g = 0.25,
+            .b = 0.75,
+        };
+        var replacement = try html.prepareFragment(testing.allocator, &ir, ir.displayFingerprint(), &cache);
+        replacement.deinit(testing.allocator);
+    }
+    try testing.expectEqualStrings(first_html, first.html);
+}
+
+test "HTML fragment asset digest matches the published bytes" {
+    const resources = blk: {
+        const bytes = try testing.allocator.dupe(u8, "raster resource bytes");
+        errdefer testing.allocator.free(bytes);
+        const entries = try testing.allocator.alloc(render.Resource, 1);
+        errdefer testing.allocator.free(entries);
+        const name = try testing.allocator.dupe(u8, "resource.bin");
+        errdefer testing.allocator.free(name);
+        entries[0] = .{
+            .id = render.identifyResource(.raster, bytes),
+            .kind = .raster,
+            .name = name,
+            .bytes = bytes,
+            .metadata = .{ .raster = .{
+                .pixel_width = 1,
+                .pixel_height = 1,
+                .oriented_width = 1,
+                .oriented_height = 1,
+                .orientation = .normal,
+                .color_space = .unknown,
+                .has_alpha = false,
+            } },
+        };
+        break :blk render.ResourceGraph{ .entries = entries };
+    };
+    const resource_id = resources.entries[0].id;
+    var pages = try testing.allocator.alloc(render.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    var ir = render.Ir{
+        .pages = pages,
+        .resources = resources,
+    };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+    try pages[0].appendRaster(
+        testing.allocator,
+        7,
+        .{ .x = 10, .y = 20, .width = 30, .height = 40 },
+        resource_id,
+    );
+
+    var cache = html.Cache.init(testing.allocator);
+    defer cache.deinit();
+    var fragment = try html.prepareFragment(testing.allocator, &ir, ir.displayFingerprint(), &cache);
+    defer fragment.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), fragment.assets.assets.len);
+    const asset = fragment.assets.assets[0];
+    var expected_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(asset.bytes, &expected_digest, .{});
+    try testing.expectEqualSlices(u8, &expected_digest, &asset.digest);
+    try testing.expectEqual(@intFromPtr(resources.entries[0].bytes.ptr), @intFromPtr(asset.bytes.ptr));
+}
+
+test "HTML fragment keeps font assets alive across cache eviction" {
+    var source: [32]u8 = @splat(0);
+    @memcpy(source[0..4], "\x00\x01\x00\x00");
+    std.mem.writeInt(u16, source[4..6], 1, .big);
+    @memcpy(source[12..16], "TEST");
+    std.mem.writeInt(u32, source[20..24], 28, .big);
+    std.mem.writeInt(u32, source[24..28], 1, .big);
+    const font_count = 33;
+    var ir = blk: {
+        const entries = try testing.allocator.alloc(render.Resource, font_count);
+        var initialized: usize = 0;
+        errdefer {
+            for (entries[0..initialized]) |*resource| resource.deinit(testing.allocator);
+            testing.allocator.free(entries);
+        }
+        var font_builder = render.FontBuilder{};
+        defer font_builder.deinit(testing.allocator);
+        for (entries, 0..) |*entry, index| {
+            entry.* = resource: {
+                const bytes = try testing.allocator.dupe(u8, &source);
+                errdefer testing.allocator.free(bytes);
+                bytes[28] = @intCast(index + 1);
+                const name = try std.fmt.allocPrint(testing.allocator, "font-{d}.ttf", .{index});
+                errdefer testing.allocator.free(name);
+                break :resource .{
+                    .id = render.identifyResource(.font, bytes),
+                    .kind = .font,
+                    .name = name,
+                    .bytes = bytes,
+                    .metadata = .{ .font = .{ .collection = false } },
+                    .identity_verified = true,
+                };
+            };
+            initialized += 1;
+            _ = try font_builder.add(testing.allocator, testing.io, .{
+                .resource = entry.id,
+                .face_index = 0,
+                .family = "Cache lifetime test",
+                .postscript_name = "CacheLifetimeTest",
+                .weight = 400,
+                .style = .normal,
+                .stretch = .normal,
+                .ascent_ratio = 0.8,
+                .descent_ratio = 0.2,
+                .line_gap_ratio = 0,
+                .underline_position_ratio = -0.1,
+                .underline_thickness_ratio = 0.05,
+                .strikethrough_position_ratio = 0.3,
+                .strikethrough_thickness_ratio = 0.05,
+            });
+        }
+        std.mem.sort(render.Resource, entries, {}, struct {
+            fn lessThan(_: void, lhs: render.Resource, rhs: render.Resource) bool {
+                return std.mem.order(u8, &lhs.id, &rhs.id) == .lt;
+            }
+        }.lessThan);
+        var fonts = try font_builder.take(testing.allocator);
+        errdefer fonts.deinit(testing.allocator);
+        const pages = try testing.allocator.alloc(render.Page, 0);
+        errdefer testing.allocator.free(pages);
+        break :blk render.Ir{
+            .pages = pages,
+            .resources = .{ .entries = entries },
+            .fonts = fonts,
+        };
+    };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+
+    var cache = html.Cache.init(testing.allocator);
+    defer cache.deinit();
+    var fragment = try html.prepareFragment(testing.allocator, &ir, ir.displayFingerprint(), &cache);
+    defer fragment.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, font_count), fragment.assets.assets.len);
+    for (fragment.assets.assets) |asset| {
+        var expected_digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(asset.bytes, &expected_digest, .{});
+        try testing.expectEqualSlices(u8, &expected_digest, &asset.digest);
+    }
+}
+
 test "HTML renderer keeps emoji selectable when the resolved font forbids embedding" {
     const output = ".ss-cache/test-render-html/emoji.html";
     try prepareOutput(output);

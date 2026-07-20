@@ -304,6 +304,10 @@ pub const CachedResponse = struct {
 
 pub const ResponseStore = struct {
     items: std.ArrayList(CachedResponse) = .empty,
+    total_bytes: usize = 0,
+
+    const max_entries = 16;
+    const max_bytes = 64 * 1024 * 1024;
 
     pub fn deinit(self: *ResponseStore, allocator: std.mem.Allocator) void {
         for (self.items.items) |*response| response.deinit(allocator);
@@ -312,6 +316,31 @@ pub const ResponseStore = struct {
     }
 
     pub fn store(self: *ResponseStore, allocator: std.mem.Allocator, snapshot: *const AnalysisSnapshot, json: []const u8) !void {
+        if (json.len > max_bytes) return;
+        for (self.items.items, 0..) |*response, index| {
+            if (!response.matchesEntry(snapshot.project.entry_path)) continue;
+            if (response.generation == snapshot.generation and std.mem.eql(u8, response.json, json)) {
+                return;
+            }
+            var next = try CachedResponse.init(
+                allocator,
+                snapshot.project.entry_path,
+                snapshot.generation,
+                json,
+            );
+            errdefer next.deinit(allocator);
+            const remaining_bytes = self.total_bytes - response.json.len;
+            if (remaining_bytes > max_bytes - next.json.len) {
+                self.clear(allocator);
+                try self.items.append(allocator, next);
+                self.total_bytes = next.json.len;
+                return;
+            }
+            self.total_bytes = remaining_bytes + next.json.len;
+            response.deinit(allocator);
+            self.items.items[index] = next;
+            return;
+        }
         var next = try CachedResponse.init(
             allocator,
             snapshot.project.entry_path,
@@ -319,13 +348,11 @@ pub const ResponseStore = struct {
             json,
         );
         errdefer next.deinit(allocator);
-        for (self.items.items) |*response| {
-            if (!response.matchesEntry(snapshot.project.entry_path)) continue;
-            response.deinit(allocator);
-            response.* = next;
-            return;
+        if (self.items.items.len >= max_entries or self.total_bytes > max_bytes - next.json.len) {
+            self.clear(allocator);
         }
         try self.items.append(allocator, next);
+        self.total_bytes += next.json.len;
     }
 
     pub fn cloneForEntry(self: *const ResponseStore, allocator: std.mem.Allocator, entry_path: []const u8) !?[]const u8 {
@@ -333,6 +360,12 @@ pub const ResponseStore = struct {
             if (response.matchesEntry(entry_path)) return try response.cloneJson(allocator);
         }
         return null;
+    }
+
+    fn clear(self: *ResponseStore, allocator: std.mem.Allocator) void {
+        for (self.items.items) |*response| response.deinit(allocator);
+        self.items.clearRetainingCapacity();
+        self.total_bytes = 0;
     }
 };
 
