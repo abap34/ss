@@ -60,6 +60,13 @@ pub const SourceSet = struct {
 
 pub const LayoutHookOutput = struct {
     editor: ?editor_snapshot.Output = null,
+    conflicts_json: ?[]u8 = null,
+
+    pub fn deinit(self: *LayoutHookOutput, allocator: std.mem.Allocator) void {
+        if (self.editor) |*value| value.deinit();
+        if (self.conflicts_json) |value| allocator.free(value);
+        self.* = .{};
+    }
 };
 
 pub const LayoutHook = struct {
@@ -74,9 +81,22 @@ pub const Options = struct {
     layout_hook: ?LayoutHook = null,
     cancellation: ?utils.Cancellation = null,
     embedded_cache: ?*module_loader.EmbeddedSyntaxCache = null,
+    retain_layout_inputs: bool = false,
 
     fn checkCanceled(self: Options) !void {
         if (self.cancellation) |cancellation| try cancellation.check();
+    }
+};
+
+pub const RetainedLayoutInputs = struct {
+    state: core.DocumentState,
+    graph: execution.ExecutionGraph,
+    diagnostic_count: usize,
+
+    pub fn deinit(self: *RetainedLayoutInputs) void {
+        self.graph.deinit();
+        self.state.deinit();
+        self.* = undefined;
     }
 };
 
@@ -220,10 +240,15 @@ pub const LayoutOutput = struct {
     report: core.layout.conflicts.Report,
     editor: ?editor_snapshot.Output = null,
 
-    pub fn fromDocumentState(allocator: std.mem.Allocator, state: *core.DocumentState, owned_editor: ?editor_snapshot.Output) !LayoutOutput {
+    pub fn fromDocumentState(
+        allocator: std.mem.Allocator,
+        state: *core.DocumentState,
+        owned_editor: ?editor_snapshot.Output,
+        owned_conflicts_json: ?[]u8,
+    ) !LayoutOutput {
         var editor = owned_editor;
         errdefer if (editor) |*value| value.deinit();
-        const conflicts_json = try core.layout.conflicts.toJson(allocator, state);
+        const conflicts_json = owned_conflicts_json orelse try core.layout.conflicts.toJson(allocator, state);
         errdefer allocator.free(conflicts_json);
         return .{
             .conflicts_json = conflicts_json,
@@ -257,6 +282,7 @@ pub const AnalysisSnapshot = struct {
     record_fields: []RecordFieldFact = &.{},
     enum_cases: []EnumCaseFact = &.{},
     layout_output: ?LayoutOutput = null,
+    retained_layout_inputs: ?RetainedLayoutInputs = null,
     diagnostics: diagnostics.DiagnosticBag,
 
     pub fn fromDocumentState(
@@ -339,6 +365,7 @@ pub const AnalysisSnapshot = struct {
         deinitRecordFields(self.allocator, self.record_fields);
         deinitEnumCases(self.allocator, self.enum_cases);
         if (self.layout_output) |*layout| layout.deinit(self.allocator);
+        if (self.retained_layout_inputs) |*inputs| inputs.deinit();
         self.diagnostics.deinit();
         self.* = .{
             .allocator = self.allocator,
@@ -377,6 +404,48 @@ pub const AnalysisSnapshot = struct {
             if (std.mem.eql(u8, module_path, path)) return true;
         }
         return false;
+    }
+
+    pub fn completeRetainedLayout(
+        self: *AnalysisSnapshot,
+        hook: LayoutHook,
+        cancellation: ?utils.Cancellation,
+    ) !bool {
+        var inputs = self.retained_layout_inputs orelse return false;
+        self.retained_layout_inputs = null;
+        defer inputs.deinit();
+
+        if (cancellation) |value| try value.check();
+        if (hook.run(hook.context, &inputs.state, &inputs.graph)) |result| {
+            self.layout_output = try LayoutOutput.fromDocumentState(
+                self.allocator,
+                &inputs.state,
+                result.editor,
+                result.conflicts_json,
+            );
+            try self.diagnostics.addDocumentStateFrom(&inputs.state, inputs.diagnostic_count);
+        } else |err| switch (err) {
+            error.Canceled => return error.Canceled,
+            error.ConstraintConflict,
+            error.NegativeFrameSize,
+            => {
+                if (hook.on_error) |on_error| {
+                    try on_error(hook.context, &inputs.state, err);
+                    self.layout_output = try LayoutOutput.fromDocumentState(self.allocator, &inputs.state, null, null);
+                } else {
+                    try addBuildDiagnostic(&self.diagnostics, self.project.entry_path, inputs.state.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
+                }
+            },
+            else => {
+                try self.diagnostics.addDocumentStateFrom(&inputs.state, inputs.diagnostic_count);
+                if (!self.diagnostics.hasErrors()) {
+                    try addBuildDiagnostic(&self.diagnostics, self.project.entry_path, inputs.state.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
+                }
+            },
+        }
+        self.diagnostics.sortByPath();
+        if (cancellation) |value| try value.check();
+        return true;
     }
 };
 
@@ -476,7 +545,8 @@ pub fn build(
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     };
     defer parse_holes.deinit(allocator);
-    defer state.deinit();
+    var state_owned = true;
+    defer if (state_owned) state.deinit();
     try options.checkCanceled();
 
     var execution_graph = analysis_pipeline.analyzeDocumentStateWithMode(allocator, &state, .evaluation) catch |err| switch (err) {
@@ -495,15 +565,16 @@ pub fn build(
     };
     try hole_facts.populateExpectedTypes(allocator, &state, declaration_index, &parse_holes);
     try options.checkCanceled();
-    try diagnostic_bag.addDocumentState(&state);
+    try diagnostic_bag.addDocumentStateFrom(&state, 0);
+    const analyzed_diagnostic_count = state.diagnostics.items.len;
     try options.checkCanceled();
     if (!diagnostic_bag.hasErrors()) {
         if (options.layout_hook) |hook| {
             if (execution_graph) |*graph| {
                 try options.checkCanceled();
                 if (hook.run(hook.context, &state, graph)) |result| {
-                    layout_output = try LayoutOutput.fromDocumentState(allocator, &state, result.editor);
-                    try diagnostic_bag.addDocumentState(&state);
+                    layout_output = try LayoutOutput.fromDocumentState(allocator, &state, result.editor, result.conflicts_json);
+                    try diagnostic_bag.addDocumentStateFrom(&state, analyzed_diagnostic_count);
                 } else |err| switch (err) {
                     error.Canceled => return error.Canceled,
                     error.ConstraintConflict,
@@ -511,13 +582,13 @@ pub fn build(
                     => {
                         if (hook.on_error) |on_error| {
                             try on_error(hook.context, &state, err);
-                            layout_output = try LayoutOutput.fromDocumentState(allocator, &state, null);
+                            layout_output = try LayoutOutput.fromDocumentState(allocator, &state, null, null);
                         } else {
                             try addBuildDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
                         }
                     },
                     else => {
-                        try diagnostic_bag.addDocumentState(&state);
+                        try diagnostic_bag.addDocumentStateFrom(&state, analyzed_diagnostic_count);
                         if (!diagnostic_bag.hasErrors()) {
                             try addBuildDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
                         }
@@ -540,6 +611,15 @@ pub fn build(
     snapshot.generation = options.generation;
     snapshot.layout_output = layout_output;
     layout_output = null;
+    if (options.retain_layout_inputs and snapshot.layout_output == null and execution_graph != null and !snapshot.diagnostics.hasErrors()) {
+        snapshot.retained_layout_inputs = .{
+            .state = state,
+            .graph = execution_graph.?,
+            .diagnostic_count = analyzed_diagnostic_count,
+        };
+        execution_graph = null;
+        state_owned = false;
+    }
     return snapshot;
 }
 
