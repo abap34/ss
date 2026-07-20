@@ -4,15 +4,20 @@ const render = @import("render");
 const utils = @import("utils");
 const items = @import("compile/items.zig");
 const resource_compile = @import("render_resources");
+const text_compile = @import("render_text");
 const semantics = @import("compile/semantics.zig");
 
 pub const Options = struct {
     jobs: ?usize = null,
     cache_dir: []const u8 = ".ss-cache/render",
     highlight_languages: []const utils.highlight.Language = &.{},
+    resource_cache: ?*resource_compile.SourceCache = null,
+    text_cache: ?*text_compile.Cache = null,
+    page_cache: ?*items.PageCache = null,
 };
 
 pub const Progress = items.Progress;
+pub const PageCache = items.PageCache;
 pub const LayoutMeasurementScope = items.LayoutMeasurementScope;
 pub const TreeSitterHealthItem = items.TreeSitterHealthItem;
 pub const TreeSitterHealthReport = items.TreeSitterHealthReport;
@@ -35,9 +40,12 @@ pub fn compile(
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
         .highlight_languages = options.highlight_languages,
+        .resource_cache = options.resource_cache,
+        .text_cache = options.text_cache,
+        .page_cache = options.page_cache,
     } };
     try item_compiler.prepare(allocator, state, pages);
-    return try preparedDocument(allocator, state, pages, &item_compiler);
+    return try preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache);
 }
 
 pub fn compilePrepared(
@@ -51,8 +59,11 @@ pub fn compilePrepared(
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
         .highlight_languages = options.highlight_languages,
+        .resource_cache = options.resource_cache,
+        .text_cache = options.text_cache,
+        .page_cache = options.page_cache,
     } };
-    return try preparedDocument(allocator, state, pages, &item_compiler);
+    return try preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache);
 }
 
 pub fn preload(
@@ -77,7 +88,7 @@ pub fn document(
     compiler: anytype,
 ) !render.Ir {
     try compiler.prepare(allocator, state, prepared_pages);
-    return try sequentialDocument(allocator, state, prepared_pages, compiler);
+    return try sequentialDocument(allocator, state, prepared_pages, compiler, null);
 }
 
 fn preparedDocument(
@@ -85,10 +96,15 @@ fn preparedDocument(
     state: *core.DocumentState,
     prepared_pages: *const core.prepared.PreparedPages,
     compiler: *items.Compiler,
+    resource_cache: ?*resource_compile.SourceCache,
 ) !render.Ir {
+    if (compiler.options.page_cache) |page_cache| {
+        page_cache.beginDocument(prepared_pages.pages.len);
+        return try sequentialDocument(allocator, state, prepared_pages, compiler, resource_cache);
+    }
     const worker_count = renderWorkerCount(prepared_pages.pages.len, compiler.options.jobs);
-    if (worker_count <= 1) return try sequentialDocument(allocator, state, prepared_pages, compiler);
-    return try parallelPreparedDocument(allocator, state, prepared_pages, compiler, worker_count);
+    if (worker_count <= 1) return try sequentialDocument(allocator, state, prepared_pages, compiler, resource_cache);
+    return try parallelPreparedDocument(allocator, state, prepared_pages, compiler, resource_cache, worker_count);
 }
 
 fn sequentialDocument(
@@ -96,8 +112,9 @@ fn sequentialDocument(
     state: *core.DocumentState,
     prepared_pages: *const core.prepared.PreparedPages,
     compiler: anytype,
+    resource_cache: ?*resource_compile.SourceCache,
 ) !render.Ir {
-    var resources = resource_compile.Builder{};
+    var resources = resource_compile.Builder{ .cache = resource_cache };
     defer resources.deinit(allocator);
     var fonts = render.FontBuilder{};
     defer fonts.deinit(allocator);
@@ -149,6 +166,7 @@ fn parallelPreparedDocument(
     state: *core.DocumentState,
     prepared_pages: *const core.prepared.PreparedPages,
     compiler: *items.Compiler,
+    resource_cache: ?*resource_compile.SourceCache,
     worker_count: usize,
 ) !render.Ir {
     var locked_allocator = LockedAllocator{ .child = allocator, .io = compiler.io };
@@ -158,7 +176,7 @@ fn parallelPreparedDocument(
     for (outputs) |*output| output.* = .{};
     defer for (outputs) |*output| output.deinit(allocator);
 
-    var resources = resource_compile.Builder{};
+    var resources = resource_compile.Builder{ .cache = resource_cache };
     defer resources.deinit(allocator);
     var fonts = render.FontBuilder{};
     defer fonts.deinit(allocator);

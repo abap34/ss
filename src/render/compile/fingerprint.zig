@@ -63,6 +63,59 @@ pub fn layoutMeasurementKey(
     return hasher.final();
 }
 
+pub fn renderPageKey(
+    ctx: Context,
+    cache_version: []const u8,
+    page_id: core.NodeId,
+    page_index: usize,
+    background: ?Color,
+    highlight_languages: anytype,
+    commands: anytype,
+) !u64 {
+    var files = std.StringHashMap(File).init(ctx.allocator);
+    defer {
+        var keys = files.keyIterator();
+        while (keys.next()) |key| ctx.allocator.free(key.*);
+        files.deinit();
+    }
+
+    var hasher = std.hash.Wyhash.init(0);
+    hashString(&hasher, cache_version);
+    hashNativeRuntime(&hasher);
+    hashU64(&hasher, c.ss_font_generation());
+    hashU64(&hasher, page_id);
+    hashUsize(&hasher, page_index);
+    hashOptionalColor(&hasher, background);
+    hashUsize(&hasher, highlight_languages.len);
+    for (highlight_languages) |language| {
+        hashString(&hasher, language.name);
+        hashString(&hasher, language.parser);
+        hashString(&hasher, language.query);
+        if (!std.mem.startsWith(u8, language.query, "builtin:")) {
+            const fingerprint = try fileFingerprint(ctx, &files, language.query);
+            hashBool(&hasher, fingerprint.present);
+            hashU64(&hasher, fingerprint.digest);
+        }
+    }
+    hashUsize(&hasher, commands.len);
+    for (commands) |command| {
+        hashU64(&hasher, command.page_id);
+        hashU64(&hasher, command.node_id);
+        try hashCommand(ctx, &files, &hasher, .{
+            .frame = command.frame,
+            .content = command.content,
+            .link_id = command.link_id,
+            .parse_mode = @tagName(command.parse_mode),
+            .render = command.render,
+            .tex_preamble = command.tex_preamble,
+            .tex_engine = command.tex_engine,
+            .math_kind = @tagName(command.math_kind),
+            .raw_tex = command.math_kind == .raw_block,
+        });
+    }
+    return hasher.final();
+}
+
 pub fn mathArtifactKey(
     ctx: Context,
     cache_version: []const u8,
