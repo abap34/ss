@@ -427,6 +427,7 @@ export class EditorController implements vscode.Disposable {
     }
     session.requestRunning = true;
     const documentVersion = session.document.version;
+    const buildStartedAt = performance.now();
     try {
       const snapshot = await client.sendRequest<EditorSnapshot>(
         "ss/editorSnapshot",
@@ -451,6 +452,7 @@ export class EditorController implements vscode.Disposable {
         type: "snapshot",
         revision: serial,
         documentVersion,
+        buildDurationMs: performance.now() - buildStartedAt,
         snapshot: prepared,
       });
       session.snapshotId = snapshot.snapshot_id;
@@ -464,6 +466,7 @@ export class EditorController implements vscode.Disposable {
       await this.post(session, {
         type: "error",
         revision: serial,
+        buildDurationMs: performance.now() - buildStartedAt,
         message: snapshotFailureMessage(error),
       });
     } finally {

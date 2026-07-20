@@ -713,6 +713,15 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.build-status-duration {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.build-status-duration::before {
+  margin-right: 5px;
+  content: "·";
+}
 .build-status-icon {
   display: grid;
   flex: 0 0 auto;
