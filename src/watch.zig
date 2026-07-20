@@ -2,6 +2,7 @@ const std = @import("std");
 const app = @import("app.zig");
 const syntax = @import("syntax.zig");
 const names = @import("language/names.zig");
+const module_loader = @import("modules/loader.zig");
 const utils = @import("utils");
 
 pub const Mode = enum {
@@ -24,9 +25,11 @@ pub const Options = struct {
 pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Options) !void {
     const interval_ms = @max(options.interval_ms, 50);
     var last_fingerprint = try fingerprint(io, allocator, options);
+    var embedded_cache = module_loader.EmbeddedSyntaxCache.init(allocator);
+    defer embedded_cache.deinit();
 
     std.debug.print("watch: {s} {s} every {d}ms\n", .{ @tagName(mode), options.input_path, interval_ms });
-    _ = runOnce(io, allocator, mode, options);
+    _ = runOnce(io, allocator, mode, options, &embedded_cache);
 
     while (true) {
         const sleep_ms: i64 = @intCast(@min(interval_ms, @as(u64, std.math.maxInt(i64))));
@@ -38,16 +41,17 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
         if (next_fingerprint == last_fingerprint) continue;
         last_fingerprint = next_fingerprint;
         std.debug.print("watch: change detected\n", .{});
-        _ = runOnce(io, allocator, mode, options);
+        _ = runOnce(io, allocator, mode, options, &embedded_cache);
     }
 }
 
-fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Options) bool {
+fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Options, embedded_cache: *module_loader.EmbeddedSyntaxCache) bool {
     switch (mode) {
         .check => {
             app.checkFile(io, allocator, .{
                 .input_path = options.input_path,
                 .asset_base_dir = options.asset_base_dir,
+                .embedded_cache = embedded_cache,
             }, null) catch |err| {
                 reportRunError("check", err);
                 return false;
@@ -70,6 +74,7 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
                 .input_path = options.input_path,
                 .asset_base_dir = options.asset_base_dir,
                 .layout_jobs = options.jobs,
+                .embedded_cache = embedded_cache,
             };
             (switch (options.format) {
                 .pdf => app.writePdf(io, allocator, .{

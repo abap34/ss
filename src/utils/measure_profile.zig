@@ -64,6 +64,17 @@ pub const CommandKind = enum {
     other,
 };
 
+pub const AnalysisKind = enum {
+    embedded_parse,
+    embedded_clone,
+    module_parse,
+    module_graph,
+    module_index,
+    document_state,
+    static_semantics,
+    execution_graph,
+};
+
 var enabled_state: std.atomic.Value(u8) = .init(0);
 
 var text_advance_hits = CountTime{};
@@ -107,6 +118,15 @@ var artifact_build_wall = CountTime{};
 var command_latex = CountTime{};
 var command_other = CountTime{};
 var command_failures = CountTime{};
+
+var analysis_embedded_parse = CountTime{};
+var analysis_embedded_clone = CountTime{};
+var analysis_module_parse = CountTime{};
+var analysis_module_graph = CountTime{};
+var analysis_module_index = CountTime{};
+var analysis_document_state = CountTime{};
+var analysis_static_semantics = CountTime{};
+var analysis_execution_graph = CountTime{};
 
 pub fn isEnabled() bool {
     const state = enabled_state.load(.monotonic);
@@ -197,6 +217,11 @@ pub fn recordCommand(argv0: []const u8, failed: bool, start_ns: i128) void {
     if (failed) command_failures.add(duration);
 }
 
+pub fn recordAnalysis(kind: AnalysisKind, start_ns: i128) void {
+    if (start_ns == 0) return;
+    analysisCounter(kind).add(elapsed(start_ns));
+}
+
 pub fn printIfEnabled() void {
     if (!isEnabled()) return;
 
@@ -235,6 +260,28 @@ pub fn printIfEnabled() void {
     printCounter("command latex", &command_latex);
     printCounter("command other", &command_other);
     printCounter("command failures", &command_failures);
+
+    printCounter("analysis embedded parse", &analysis_embedded_parse);
+    printCounter("analysis embedded clone", &analysis_embedded_clone);
+    printCounter("analysis module parse", &analysis_module_parse);
+    printCounter("analysis module graph", &analysis_module_graph);
+    printCounter("analysis module index", &analysis_module_index);
+    printCounter("analysis document state", &analysis_document_state);
+    printCounter("analysis static semantics", &analysis_static_semantics);
+    printCounter("analysis execution graph", &analysis_execution_graph);
+}
+
+fn analysisCounter(kind: AnalysisKind) *CountTime {
+    return switch (kind) {
+        .embedded_parse => &analysis_embedded_parse,
+        .embedded_clone => &analysis_embedded_clone,
+        .module_parse => &analysis_module_parse,
+        .module_graph => &analysis_module_graph,
+        .module_index => &analysis_module_index,
+        .document_state => &analysis_document_state,
+        .static_semantics => &analysis_static_semantics,
+        .execution_graph => &analysis_execution_graph,
+    };
 }
 
 fn detectEnabled() bool {

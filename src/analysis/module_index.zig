@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 const module_loader = @import("../modules/loader.zig");
+const utils = @import("utils");
 
 pub const Index = struct {
     module_graph: module_loader.ModuleGraph,
@@ -20,6 +21,7 @@ pub const LoadOptions = struct {
     diagnostics: ?*module_loader.LoadDiagnostics = null,
     print_diagnostics: bool = true,
     recovering: bool = false,
+    embedded_cache: ?*module_loader.EmbeddedSyntaxCache = null,
 };
 
 pub fn load(
@@ -29,11 +31,14 @@ pub fn load(
     project_syntax: ast.Module,
     options: LoadOptions,
 ) !Index {
+    const measure_start = utils.measure_profile.start();
+    defer utils.measure_profile.recordAnalysis(.module_index, measure_start);
     const module_graph = try module_loader.loadGraphWithOptions(allocator, io, base_dir, project_syntax, .{
         .overlay = options.overlay,
         .diagnostics = options.diagnostics,
         .print_diagnostics = options.print_diagnostics,
         .recovering = options.recovering,
+        .embedded_cache = options.embedded_cache,
     });
     var index = Index{
         .module_graph = module_graph,

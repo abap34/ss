@@ -76,6 +76,44 @@ const embedded_modules = [_]EmbeddedModule{
     .{ .spec = "std:themes/pop", .source = stdlib_assets.themes_pop },
 };
 
+pub const EmbeddedSyntaxCache = struct {
+    arena: std.heap.ArenaAllocator,
+    modules: [embedded_modules.len]?ast.Module = [_]?ast.Module{null} ** embedded_modules.len,
+    mutex: std.atomic.Mutex = .unlocked,
+
+    pub fn init(allocator: std.mem.Allocator) EmbeddedSyntaxCache {
+        return .{ .arena = std.heap.ArenaAllocator.init(allocator) };
+    }
+
+    pub fn deinit(self: *EmbeddedSyntaxCache) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+
+    pub fn parsedModuleCount(self: *EmbeddedSyntaxCache) usize {
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+        defer self.mutex.unlock();
+        var count: usize = 0;
+        for (self.modules) |maybe_module| if (maybe_module != null) {
+            count += 1;
+        };
+        return count;
+    }
+
+    fn cloneModule(self: *EmbeddedSyntaxCache, allocator: std.mem.Allocator, index: usize) !ast.Module {
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+        defer self.mutex.unlock();
+        if (self.modules[index] == null) {
+            const parse_start = utils.measure_profile.start();
+            defer utils.measure_profile.recordAnalysis(.embedded_parse, parse_start);
+            self.modules[index] = try syntax.parseWithSourceName(self.arena.allocator(), embedded_modules[index].source, embedded_modules[index].spec);
+        }
+        const clone_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordAnalysis(.embedded_clone, clone_start);
+        return try self.modules[index].?.clone(allocator);
+    }
+};
+
 pub const ModuleGraph = struct {
     allocator: std.mem.Allocator,
     modules: std.ArrayList(core.SourceModule),
@@ -146,6 +184,7 @@ pub const LoadOptions = struct {
     diagnostics: ?*LoadDiagnostics = null,
     print_diagnostics: bool = true,
     recovering: bool = false,
+    embedded_cache: ?*EmbeddedSyntaxCache = null,
 };
 
 pub fn loadGraph(
@@ -174,6 +213,8 @@ pub fn loadGraphWithOptions(
     project_module: ast.Module,
     options: LoadOptions,
 ) !ModuleGraph {
+    const measure_start = utils.measure_profile.start();
+    defer utils.measure_profile.recordAnalysis(.module_graph, measure_start);
     var builder = Builder{
         .allocator = allocator,
         .io = io,
@@ -181,6 +222,7 @@ pub fn loadGraphWithOptions(
         .diagnostics = options.diagnostics,
         .print_diagnostics = options.print_diagnostics,
         .recovering = options.recovering,
+        .embedded_cache = options.embedded_cache,
         .modules = std.ArrayList(core.SourceModule).empty,
         .by_key = std.StringHashMap(core.SourceModuleId).init(allocator),
         .state_by_id = std.AutoHashMap(core.SourceModuleId, VisitState).init(allocator),
@@ -328,6 +370,7 @@ const Builder = struct {
     diagnostics: ?*LoadDiagnostics,
     print_diagnostics: bool,
     recovering: bool,
+    embedded_cache: ?*EmbeddedSyntaxCache,
     modules: std.ArrayList(core.SourceModule),
     by_key: std.StringHashMap(core.SourceModuleId),
     state_by_id: std.AutoHashMap(core.SourceModuleId, VisitState),
@@ -410,18 +453,26 @@ const Builder = struct {
         var owns_source = true;
         errdefer if (owns_source) self.allocator.free(text);
         const parse_path = resolved.path orelse resolved.spec;
-        const module_syntax = if (self.recovering) blk: {
-            var result = syntax.parseRecoveringWithSourceName(self.allocator, text, parse_path) catch |err| {
+        const cached_index = if (self.embedded_cache != null and resolved.path == null) embeddedModuleIndex(resolved.spec) else null;
+        const module_syntax = if (cached_index) |index| self.embedded_cache.?.cloneModule(self.allocator, index) catch |err| {
+            try self.addParseFailureDiagnostic(parse_path, text, err);
+            return err;
+        } else blk: {
+            const parse_start = utils.measure_profile.start();
+            defer utils.measure_profile.recordAnalysis(if (embeddedModuleIndex(resolved.spec) != null) .embedded_parse else .module_parse, parse_start);
+            break :blk if (self.recovering) recover: {
+                var result = syntax.parseRecoveringWithSourceName(self.allocator, text, parse_path) catch |err| {
+                    try self.addParseFailureDiagnostic(parse_path, text, err);
+                    return err;
+                };
+                errdefer result.module.deinit(self.allocator);
+                defer result.holes.deinit(self.allocator);
+                try self.addParseHoleDiagnostics(parse_path, text, result.holes.diagnostics);
+                break :recover result.module;
+            } else syntax.parseWithSourceName(self.allocator, text, parse_path) catch |err| {
                 try self.addParseFailureDiagnostic(parse_path, text, err);
                 return err;
             };
-            errdefer result.module.deinit(self.allocator);
-            defer result.holes.deinit(self.allocator);
-            try self.addParseHoleDiagnostics(parse_path, text, result.holes.diagnostics);
-            break :blk result.module;
-        } else syntax.parseWithSourceName(self.allocator, text, parse_path) catch |err| {
-            try self.addParseFailureDiagnostic(parse_path, text, err);
-            return err;
         };
         var owns_module_syntax = true;
         errdefer if (owns_module_syntax) {
@@ -563,6 +614,13 @@ const Builder = struct {
 fn shouldImplicitlyImportPrelude(kind: core.SourceModuleKind, spec: []const u8) bool {
     if (kind == .project) return true;
     return !std.mem.startsWith(u8, spec, "std:core/");
+}
+
+fn embeddedModuleIndex(spec: []const u8) ?usize {
+    for (embedded_modules, 0..) |module, index| {
+        if (std.mem.eql(u8, module.spec, spec)) return index;
+    }
+    return null;
 }
 
 fn shouldProjectImplicitlyImportPrelude(project_dir: []const u8) bool {

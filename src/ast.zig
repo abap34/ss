@@ -52,6 +52,33 @@ pub const Module = struct {
         }
         self.pages.deinit(allocator);
     }
+
+    pub fn clone(self: Module, allocator: Allocator) anyerror!Module {
+        var result = Module.init();
+        errdefer result.deinit(allocator);
+
+        try result.imports.ensureTotalCapacity(allocator, self.imports.items.len);
+        for (self.imports.items) |value| result.imports.appendAssumeCapacity(try value.clone(allocator));
+        try result.top_level_items.appendSlice(allocator, self.top_level_items.items);
+        try result.types.ensureTotalCapacity(allocator, self.types.items.len);
+        for (self.types.items) |value| result.types.appendAssumeCapacity(try value.clone(allocator));
+        try result.records.ensureTotalCapacity(allocator, self.records.items.len);
+        for (self.records.items) |value| result.records.appendAssumeCapacity(try value.clone(allocator));
+        try result.objects.ensureTotalCapacity(allocator, self.objects.items.len);
+        for (self.objects.items) |value| result.objects.appendAssumeCapacity(try value.clone(allocator));
+        try result.object_extensions.ensureTotalCapacity(allocator, self.object_extensions.items.len);
+        for (self.object_extensions.items) |value| result.object_extensions.appendAssumeCapacity(try value.clone(allocator));
+        try result.constants.ensureTotalCapacity(allocator, self.constants.items.len);
+        for (self.constants.items) |value| result.constants.appendAssumeCapacity(try value.clone(allocator));
+        try result.functions.ensureTotalCapacity(allocator, self.functions.items.len);
+        for (self.functions.items) |value| result.functions.appendAssumeCapacity(try value.clone(allocator));
+        try result.document_blocks.appendSlice(allocator, self.document_blocks.items);
+        try result.document_statements.ensureTotalCapacity(allocator, self.document_statements.items.len);
+        for (self.document_statements.items) |value| result.document_statements.appendAssumeCapacity(try value.clone(allocator));
+        try result.pages.ensureTotalCapacity(allocator, self.pages.items.len);
+        for (self.pages.items) |value| result.pages.appendAssumeCapacity(try value.clone(allocator));
+        return result;
+    }
 };
 
 pub const TopLevelItem = union(enum) {
@@ -71,6 +98,21 @@ pub const ImportDecl = struct {
     mode: Mode,
     alias_span: ?Span = null,
     span: Span,
+
+    pub fn clone(self: ImportDecl, allocator: Allocator) !ImportDecl {
+        const spec = try allocator.dupe(u8, self.spec);
+        errdefer allocator.free(spec);
+        return .{
+            .spec = spec,
+            .spec_span = self.spec_span,
+            .mode = .{
+                .alias = if (self.mode.alias) |alias| try allocator.dupe(u8, alias) else null,
+                .unqualified = self.mode.unqualified,
+            },
+            .alias_span = self.alias_span,
+            .span = self.span,
+        };
+    }
 };
 
 pub const TypeDecl = struct {
@@ -84,6 +126,19 @@ pub const TypeDecl = struct {
         for (self.cases.items) |*case_decl| case_decl.deinit(allocator);
         self.cases.deinit(allocator);
     }
+
+    pub fn clone(self: TypeDecl, allocator: Allocator) !TypeDecl {
+        var result = TypeDecl{
+            .name = try allocator.dupe(u8, self.name),
+            .name_span = self.name_span,
+            .cases = .empty,
+            .span = self.span,
+        };
+        errdefer result.deinit(allocator);
+        try result.cases.ensureTotalCapacity(allocator, self.cases.items.len);
+        for (self.cases.items) |value| result.cases.appendAssumeCapacity(try value.clone(allocator));
+        return result;
+    }
 };
 
 pub const EnumCaseDecl = struct {
@@ -92,6 +147,10 @@ pub const EnumCaseDecl = struct {
 
     pub fn deinit(self: *EnumCaseDecl, allocator: Allocator) void {
         allocator.free(self.name);
+    }
+
+    pub fn clone(self: EnumCaseDecl, allocator: Allocator) !EnumCaseDecl {
+        return .{ .name = try allocator.dupe(u8, self.name), .name_span = self.name_span };
     }
 };
 
@@ -112,6 +171,24 @@ pub const ObjectFieldDecl = struct {
         }
         if (self.default_property_value) |value| allocator.free(value);
     }
+
+    pub fn clone(self: ObjectFieldDecl, allocator: Allocator) anyerror!ObjectFieldDecl {
+        var result = ObjectFieldDecl{
+            .name = try allocator.dupe(u8, self.name),
+            .name_span = self.name_span,
+            .value_type = try self.value_type.clone(allocator),
+            .span = self.span,
+        };
+        errdefer result.deinit(allocator);
+        if (self.default_value) |value| {
+            const copy = try allocator.create(Expr);
+            errdefer allocator.destroy(copy);
+            copy.* = try value.clone(allocator);
+            result.default_value = copy;
+        }
+        if (self.default_property_value) |value| result.default_property_value = try allocator.dupe(u8, value);
+        return result;
+    }
 };
 
 pub const ObjectDecl = struct {
@@ -130,6 +207,24 @@ pub const ObjectDecl = struct {
         for (self.fields.items) |*field| field.deinit(allocator);
         self.fields.deinit(allocator);
     }
+
+    pub fn clone(self: ObjectDecl, allocator: Allocator) anyerror!ObjectDecl {
+        var result = ObjectDecl{
+            .name = try allocator.dupe(u8, self.name),
+            .name_span = self.name_span,
+            .base = null,
+            .roles = .empty,
+            .fields = .empty,
+            .span = self.span,
+        };
+        errdefer result.deinit(allocator);
+        if (self.base) |value| result.base = try allocator.dupe(u8, value);
+        try result.roles.ensureTotalCapacity(allocator, self.roles.items.len);
+        for (self.roles.items) |value| result.roles.appendAssumeCapacity(try allocator.dupe(u8, value));
+        try result.fields.ensureTotalCapacity(allocator, self.fields.items.len);
+        for (self.fields.items) |value| result.fields.appendAssumeCapacity(try value.clone(allocator));
+        return result;
+    }
 };
 
 pub const RecordDecl = struct {
@@ -142,6 +237,19 @@ pub const RecordDecl = struct {
         allocator.free(self.name);
         for (self.fields.items) |*field| field.deinit(allocator);
         self.fields.deinit(allocator);
+    }
+
+    pub fn clone(self: RecordDecl, allocator: Allocator) anyerror!RecordDecl {
+        var result = RecordDecl{
+            .name = try allocator.dupe(u8, self.name),
+            .name_span = self.name_span,
+            .fields = .empty,
+            .span = self.span,
+        };
+        errdefer result.deinit(allocator);
+        try result.fields.ensureTotalCapacity(allocator, self.fields.items.len);
+        for (self.fields.items) |value| result.fields.appendAssumeCapacity(try value.clone(allocator));
+        return result;
     }
 };
 
@@ -161,6 +269,24 @@ pub const ObjectExtensionDecl = struct {
         for (self.fields.items) |*field| field.deinit(allocator);
         self.fields.deinit(allocator);
     }
+
+    pub fn clone(self: ObjectExtensionDecl, allocator: Allocator) anyerror!ObjectExtensionDecl {
+        var result = ObjectExtensionDecl{
+            .target = try allocator.dupe(u8, self.target),
+            .target_span = self.target_span,
+            .implements = null,
+            .roles = .empty,
+            .fields = .empty,
+            .span = self.span,
+        };
+        errdefer result.deinit(allocator);
+        if (self.implements) |value| result.implements = try allocator.dupe(u8, value);
+        try result.roles.ensureTotalCapacity(allocator, self.roles.items.len);
+        for (self.roles.items) |value| result.roles.appendAssumeCapacity(try allocator.dupe(u8, value));
+        try result.fields.ensureTotalCapacity(allocator, self.fields.items.len);
+        for (self.fields.items) |value| result.fields.appendAssumeCapacity(try value.clone(allocator));
+        return result;
+    }
 };
 
 pub const PageDecl = struct {
@@ -168,6 +294,22 @@ pub const PageDecl = struct {
     name_span: ?Span = null,
     statements: std.ArrayList(Statement),
     span: Span,
+
+    pub fn clone(self: PageDecl, allocator: Allocator) anyerror!PageDecl {
+        var statements = std.ArrayList(Statement).empty;
+        errdefer {
+            for (statements.items) |*value| value.deinit(allocator);
+            statements.deinit(allocator);
+        }
+        try statements.ensureTotalCapacity(allocator, self.statements.items.len);
+        for (self.statements.items) |value| statements.appendAssumeCapacity(try value.clone(allocator));
+        return .{
+            .name = try allocator.dupe(u8, self.name),
+            .name_span = self.name_span,
+            .statements = statements,
+            .span = self.span,
+        };
+    }
 };
 
 pub const DocumentBlockDecl = struct {
@@ -187,6 +329,20 @@ pub const ConstDecl = struct {
         allocator.free(self.name);
         self.value_type.deinit(allocator);
         self.value.deinit(allocator);
+    }
+
+    pub fn clone(self: ConstDecl, allocator: Allocator) anyerror!ConstDecl {
+        const name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(name);
+        var value_type = try self.value_type.clone(allocator);
+        errdefer value_type.deinit(allocator);
+        return .{
+            .name = name,
+            .name_span = self.name_span,
+            .span = self.span,
+            .value_type = value_type,
+            .value = try self.value.clone(allocator),
+        };
     }
 };
 
@@ -225,6 +381,23 @@ pub const FunctionDecl = struct {
             .result_type = try self.result_type.clone(allocator),
             .statements = .empty,
         };
+    }
+
+    pub fn clone(self: FunctionDecl, allocator: Allocator) anyerror!FunctionDecl {
+        var result = FunctionDecl{
+            .name = try allocator.dupe(u8, self.name),
+            .name_span = self.name_span,
+            .span = self.span,
+            .params = .empty,
+            .result_type = try self.result_type.clone(allocator),
+            .statements = .empty,
+        };
+        errdefer result.deinit(allocator);
+        try result.params.ensureTotalCapacity(allocator, self.params.items.len);
+        for (self.params.items) |value| result.params.appendAssumeCapacity(try value.clone(allocator));
+        try result.statements.ensureTotalCapacity(allocator, self.statements.items.len);
+        for (self.statements.items) |value| result.statements.appendAssumeCapacity(try value.clone(allocator));
+        return result;
     }
 };
 
@@ -811,6 +984,21 @@ pub const ConstraintDecl = struct {
         if (self.source) |*source| source.deinit(allocator);
         if (self.offset) |*offset| offset.deinit(allocator);
     }
+
+    pub fn clone(self: ConstraintDecl, allocator: Allocator) anyerror!ConstraintDecl {
+        var result = ConstraintDecl{
+            .action = self.action,
+            .target_kind = self.target_kind,
+            .target = try self.target.cloneWithAnchor(allocator, self.target.anchor),
+            .source = null,
+            .offset = null,
+            .syntax = self.syntax,
+        };
+        errdefer result.deinit(allocator);
+        if (self.source) |value| result.source = try value.cloneWithAnchor(allocator, value.anchor);
+        if (self.offset) |value| result.offset = try value.clone(allocator);
+        return result;
+    }
 };
 
 pub const Statement = struct {
@@ -867,5 +1055,69 @@ pub const Statement = struct {
             },
             .expr_stmt => |*expr| expr.deinit(allocator),
         }
+    }
+
+    pub fn clone(self: Statement, allocator: Allocator) anyerror!Statement {
+        return .{
+            .span = self.span,
+            .kind = switch (self.kind) {
+                .hole => |value| .{ .hole = value },
+                .let_binding => |value| blk: {
+                    const name = try allocator.dupe(u8, value.name);
+                    errdefer allocator.free(name);
+                    var annotation: ?Type = if (value.type_annotation) |ty| try ty.clone(allocator) else null;
+                    errdefer if (annotation) |*ty| ty.deinit(allocator);
+                    break :blk .{ .let_binding = .{
+                        .name = name,
+                        .name_span = value.name_span,
+                        .type_annotation = annotation,
+                        .expr = try value.expr.clone(allocator),
+                    } };
+                },
+                .return_expr => |value| .{ .return_expr = try value.clone(allocator) },
+                .return_void => .return_void,
+                .constrain => |value| .{ .constrain = try value.clone(allocator) },
+                .property_set => |value| blk: {
+                    var target = try value.target.clone(allocator);
+                    errdefer target.deinit(allocator);
+                    var path = std.ArrayList(RecordPathSegment).empty;
+                    errdefer {
+                        for (path.items) |*segment| segment.deinit(allocator);
+                        path.deinit(allocator);
+                    }
+                    try path.ensureTotalCapacity(allocator, value.path.items.len);
+                    for (value.path.items) |segment| path.appendAssumeCapacity(try segment.clone(allocator));
+                    break :blk .{ .property_set = .{
+                        .target = target,
+                        .path = path,
+                        .value = try value.value.clone(allocator),
+                    } };
+                },
+                .if_stmt => |value| blk: {
+                    var condition = try value.condition.clone(allocator);
+                    errdefer condition.deinit(allocator);
+                    var then_statements = std.ArrayList(Statement).empty;
+                    errdefer {
+                        for (then_statements.items) |*statement| statement.deinit(allocator);
+                        then_statements.deinit(allocator);
+                    }
+                    try then_statements.ensureTotalCapacity(allocator, value.then_statements.items.len);
+                    for (value.then_statements.items) |statement| then_statements.appendAssumeCapacity(try statement.clone(allocator));
+                    var else_statements = std.ArrayList(Statement).empty;
+                    errdefer {
+                        for (else_statements.items) |*statement| statement.deinit(allocator);
+                        else_statements.deinit(allocator);
+                    }
+                    try else_statements.ensureTotalCapacity(allocator, value.else_statements.items.len);
+                    for (value.else_statements.items) |statement| else_statements.appendAssumeCapacity(try statement.clone(allocator));
+                    break :blk .{ .if_stmt = .{
+                        .condition = condition,
+                        .then_statements = then_statements,
+                        .else_statements = else_statements,
+                    } };
+                },
+                .expr_stmt => |value| .{ .expr_stmt = try value.clone(allocator) },
+            },
+        };
     }
 };

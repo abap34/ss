@@ -5,6 +5,7 @@ const render_layout = @import("../render/layout.zig");
 const render_compiler = @import("../render/compile.zig");
 const editor_snapshot = @import("../editor/snapshot.zig");
 const analysis = @import("../analysis.zig");
+const module_loader = @import("../modules/loader.zig");
 const project = @import("../project.zig");
 const utils = @import("utils");
 const lsp_diagnostics = @import("diagnostics.zig");
@@ -45,6 +46,7 @@ const Server = struct {
     allocator: std.mem.Allocator,
     ingress: *transport.Ingress,
     documents: DocumentStore,
+    embedded_cache: module_loader.EmbeddedSyntaxCache,
     analysis: ?AnalysisSnapshot = null,
     layout_responses: ResponseStore = .{},
     editor_responses: ResponseStore = .{},
@@ -64,6 +66,7 @@ const Server = struct {
             .allocator = allocator,
             .ingress = ingress,
             .documents = DocumentStore.init(allocator),
+            .embedded_cache = module_loader.EmbeddedSyntaxCache.init(allocator),
             .published_diagnostic_uris = std.StringHashMap(void).init(allocator),
             .wysiwyg_paths = std.StringHashMap(void).init(allocator),
         };
@@ -72,6 +75,7 @@ const Server = struct {
     fn deinit(self: *Server) void {
         self.documents.deinit();
         if (self.analysis) |*snapshot| snapshot.deinit();
+        self.embedded_cache.deinit();
         self.layout_responses.deinit(self.allocator);
         self.editor_responses.deinit(self.allocator);
         self.editor_diagnostics.deinit(self.allocator);
@@ -270,6 +274,7 @@ const Server = struct {
                 .context = self,
                 .is_canceled = analysisCanceled,
             },
+            .embedded_cache = &self.embedded_cache,
         });
         errdefer analysis_snapshot.deinit();
         try diagnostics.addAnalysisBag(&analysis_snapshot.diagnostics);
@@ -293,6 +298,7 @@ const Server = struct {
                 .context = self,
                 .is_canceled = analysisCanceled,
             },
+            .embedded_cache = &self.embedded_cache,
         });
         errdefer analysis_snapshot.deinit();
         try diagnostics.addAnalysisBag(&analysis_snapshot.diagnostics);

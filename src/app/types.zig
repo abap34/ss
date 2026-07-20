@@ -22,6 +22,7 @@ pub const SourceRequest = struct {
     asset_base_dir: []const u8,
     layout_jobs: ?usize = null,
     overlay: ?*const module_loader.SourceOverlay = null,
+    embedded_cache: ?*module_loader.EmbeddedSyntaxCache = null,
 };
 
 pub const PdfWriteRequest = struct {

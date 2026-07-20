@@ -78,6 +78,7 @@ pub fn analyzeFile(
         .overlay = request.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
+        .embedded_cache = request.embedded_cache,
     }) catch |err| {
         if (progress) |p| p.abort();
         if (load_diagnostics.items.items.len != 0) {
