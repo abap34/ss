@@ -825,6 +825,10 @@ pub const Ir = struct {
     pub fn fingerprint(self: *const Ir) Fingerprint {
         return ir_fingerprint.document(self);
     }
+
+    pub fn displayFingerprint(self: *const Ir) Fingerprint {
+        return ir_fingerprint.displayDocument(self);
+    }
 };
 
 fn strokeBoundsInset(stroke: StrokePaint) f64 {

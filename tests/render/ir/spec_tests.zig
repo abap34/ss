@@ -329,13 +329,16 @@ test "render IR fingerprints page source and visual effect metadata" {
     try ir.validate();
 
     const original = ir.fingerprint();
+    const original_display = ir.displayFingerprint();
     const original_page = render_ir.pageFingerprint(&pages[0]);
     header.source.?.end += 1;
     try testing.expect(!std.mem.eql(u8, &original, &ir.fingerprint()));
+    try testing.expectEqualSlices(u8, &original_display, &ir.displayFingerprint());
     try testing.expectEqualSlices(u8, &original_page, &render_ir.pageFingerprint(&pages[0]));
     header.source.?.end -= 1;
     pages[0].name[0] = 'o';
     try testing.expect(!std.mem.eql(u8, &original, &ir.fingerprint()));
+    try testing.expect(!std.mem.eql(u8, &original_display, &ir.displayFingerprint()));
     try testing.expectEqualSlices(u8, &original_page, &render_ir.pageFingerprint(&pages[0]));
 
     header.opacity = 0.5;
