@@ -10,6 +10,13 @@ export function shouldStartPendingRefresh(
   return refreshPending && !timerPending;
 }
 
+export function shouldScheduleRefresh(
+  refreshAutomatically: boolean,
+  editorReconciliationPending: boolean,
+): boolean {
+  return refreshAutomatically || editorReconciliationPending;
+}
+
 export function refreshTiming(
   nowMs: number,
   pendingSinceMs: number | undefined,

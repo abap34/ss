@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { assert, withLspClient } from "../../harness.mjs";
+import {
+  applyProtocolEdits,
+  editingTarget,
+  previewBounds,
+  requestEdit,
+} from "../../editor/support.mjs";
 
 const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-manual-wysiwyg-"));
 
@@ -124,9 +130,9 @@ automatic = false
       toBounds: { x: 10, y: 10, width: 10, height: 10 },
     });
     assert(
-      editBeforeBuild.status === "unsupported" &&
-        editBeforeBuild.message === "No solved layout is available.",
-      `automatic reanalysis retained a WYSIWYG layout: ${JSON.stringify(editBeforeBuild)}`,
+      editBeforeBuild.status === "stale" &&
+        editBeforeBuild.message === "The document changed before the edit was applied.",
+      `an unbuilt document did not request editor reconciliation: ${JSON.stringify(editBeforeBuild)}`,
     );
 
     const rebuilt = await client.request("ss/editorSnapshot", {
@@ -142,4 +148,130 @@ automatic = false
   });
 } finally {
   await rm(project, { recursive: true, force: true });
+}
+
+await testContinuousPositionEdits(250);
+await testContinuousPositionEdits(0);
+
+async function testContinuousPositionEdits(debounceMs) {
+  const fixture = await mkdtemp(
+    path.join(os.tmpdir(), `ss-lsp-manual-position-${debounceMs}-`),
+  );
+  try {
+    const slide = path.join(fixture, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    let source = `import std:themes/default as *
+
+page demo
+let item = text!("Move me")
+end
+`;
+    await writeFile(path.join(fixture, "ss.toml"), `[project]
+entry = "slide.ss"
+
+[editor.lsp]
+debounce = ${debounceMs}
+
+[editor.wysiwyg.refresh]
+automatic = false
+`, "utf8");
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: fixture }, async (client) => {
+      await client.initialize();
+      const initialDiagnostics = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source, version: 1 });
+      assert(
+        (await initialDiagnostics).params.diagnostics.length === 0,
+        `manual position fixture produced diagnostics with debounce ${debounceMs}`,
+      );
+
+      const initial = await client.request("ss/editorSnapshot", {
+        textDocument: { uri },
+      });
+      const initialTarget = editingTarget(initial, "item");
+      const initialBounds = previewBounds(initial, initialTarget.node_id);
+      const firstBounds = { ...initialBounds, x: 120, y: 140 };
+      const firstEdit = await requestEdit(
+        client,
+        uri,
+        initial,
+        initialTarget,
+        initialBounds,
+        firstBounds,
+        "absolute",
+        initialTarget.page_id,
+      );
+      assert(
+        firstEdit.status === "ok",
+        `first manual position edit failed with debounce ${debounceMs}: ${JSON.stringify(firstEdit)}`,
+      );
+      source = applyProtocolEdits(
+        source,
+        firstEdit.workspaceEdit?.changes?.[uri] ?? [],
+      );
+      client.changeDocument({ uri, version: 2, text: source });
+
+      const afterFirst = await client.request("ss/editorSnapshot", {
+        textDocument: { uri },
+        baseSnapshotId: initial.snapshot_id,
+      });
+      assert(
+        afterFirst.display?.kind === "translation_patch" &&
+          afterFirst.display.base_snapshot_id === initial.snapshot_id,
+        `first manual position edit rebuilt the display with debounce ${debounceMs}: ${JSON.stringify(afterFirst.display)}`,
+      );
+      assertPosition(afterFirst, "item", 120, 140, `first edit with debounce ${debounceMs}`);
+
+      const secondTarget = editingTarget(afterFirst, "item");
+      const secondFrom = previewBounds(afterFirst, secondTarget.node_id);
+      const secondBounds = { ...secondFrom, x: 155, y: 175 };
+      const secondEdit = await requestEdit(
+        client,
+        uri,
+        afterFirst,
+        secondTarget,
+        secondFrom,
+        secondBounds,
+        "absolute",
+        secondTarget.page_id,
+      );
+      assert(
+        secondEdit.status === "ok",
+        `second manual position edit failed with debounce ${debounceMs}: ${JSON.stringify(secondEdit)}`,
+      );
+      source = applyProtocolEdits(
+        source,
+        secondEdit.workspaceEdit?.changes?.[uri] ?? [],
+      );
+      client.changeDocument({ uri, version: 3, text: source });
+
+      const afterSecond = await client.request("ss/editorSnapshot", {
+        textDocument: { uri },
+        baseSnapshotId: afterFirst.snapshot_id,
+      });
+      assert(
+        afterSecond.display?.kind === "translation_patch" &&
+          afterSecond.display.base_snapshot_id === afterFirst.snapshot_id,
+        `second manual position edit broke the patch chain with debounce ${debounceMs}: ${JSON.stringify(afterSecond.display)}`,
+      );
+      assertPosition(afterSecond, "item", 155, 175, `second edit with debounce ${debounceMs}`);
+      assert(
+        source.includes("~!~ item.left == page.left + 155") &&
+          source.includes("~!~ item.top == page.top - 175"),
+        `second manual position edit did not reach source with debounce ${debounceMs}: ${source}`,
+      );
+    });
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+}
+
+function assertPosition(snapshot, binding, x, y, label) {
+  const target = editingTarget(snapshot, binding);
+  const bounds = previewBounds(snapshot, target.node_id);
+  assert(
+    Math.abs(bounds.x - x) < 0.1 && Math.abs(bounds.y - y) < 0.1,
+    `${label} was (${bounds.x}, ${bounds.y}), expected (${x}, ${y})`,
+  );
 }

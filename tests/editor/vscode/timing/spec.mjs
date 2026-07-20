@@ -18,7 +18,11 @@ const compiled = ts.transpileModule(source, {
     target: ts.ScriptTarget.ES2020,
   },
 }).outputText;
-const { refreshTiming, shouldStartPendingRefresh } = await import(
+const {
+  refreshTiming,
+  shouldScheduleRefresh,
+  shouldStartPendingRefresh,
+} = await import(
   `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`
 );
 
@@ -51,4 +55,20 @@ assert.equal(
   shouldStartPendingRefresh(false, false),
   false,
   "a completed request should not create an unrequested refresh",
+);
+
+assert.equal(
+  shouldScheduleRefresh(false, false),
+  false,
+  "manual source edits should wait for an explicit build",
+);
+assert.equal(
+  shouldScheduleRefresh(false, true),
+  true,
+  "a manual position reconciliation should survive a newer source edit",
+);
+assert.equal(
+  shouldScheduleRefresh(true, false),
+  true,
+  "automatic refresh should not depend on position reconciliation",
 );

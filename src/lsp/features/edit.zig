@@ -31,10 +31,18 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
     const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse
         return try statusJson(ctx.allocator, "unsupported", "No compiler snapshot is available.");
-    const layout = if (snapshot.layout_output) |*value| value else return try statusJson(ctx.allocator, "unsupported", "No solved layout is available.");
-    const editor = if (layout.editor) |*value| value else return try statusJson(ctx.allocator, "unsupported", "The WYSIWYG editor is not active.");
-
     const requested_id = protocol.stringField(request_object, "snapshotId") orelse "";
+    const layout = if (snapshot.layout_output) |*value| value else return try statusJson(
+        ctx.allocator,
+        if (requested_id.len == 0) "unsupported" else "stale",
+        if (requested_id.len == 0) "No solved layout is available." else "The document changed before the edit was applied.",
+    );
+    const editor = if (layout.editor) |*value| value else return try statusJson(
+        ctx.allocator,
+        if (requested_id.len == 0) "unsupported" else "stale",
+        if (requested_id.len == 0) "The WYSIWYG editor is not active." else "The document changed before the edit was applied.",
+    );
+
     if (requested_id.len == 0 or !std.mem.eql(u8, editor.model.snapshot_id, requested_id) or snapshot.generation != ctx.documents.generation) {
         return try statusJson(ctx.allocator, "stale", "The document changed before the edit was applied.");
     }

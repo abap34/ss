@@ -16,7 +16,11 @@ import {
   toWorkspaceEdit,
   workspaceEditTargetsAreCurrent,
 } from "./source";
-import { refreshTiming, shouldStartPendingRefresh } from "./timing";
+import {
+  refreshTiming,
+  shouldScheduleRefresh,
+  shouldStartPendingRefresh,
+} from "./timing";
 import { ViewResources } from "./view";
 
 type ClientProvider = () => LanguageClient | undefined;
@@ -31,6 +35,7 @@ interface Session {
   requestRunning: boolean;
   requestCancellation?: vscode.CancellationTokenSource;
   refreshPending: boolean;
+  editorReconciliationPending: boolean;
   pendingRefreshSinceMs?: number;
   disposed: boolean;
   dependencyPaths: Set<string>;
@@ -116,6 +121,7 @@ export class EditorController implements vscode.Disposable {
       serial: 0,
       requestRunning: false,
       refreshPending: false,
+      editorReconciliationPending: false,
       disposed: false,
       dependencyPaths: new Set([normalizePath(document.uri.fsPath)]),
     };
@@ -342,7 +348,7 @@ export class EditorController implements vscode.Disposable {
           status: "stale",
           message: "The document changed before the edit was applied.",
         });
-        this.scheduleAutomatic(session, 0);
+        this.scheduleEditorReconciliation(session);
         return;
       }
       if (result.status !== "ok") {
@@ -352,7 +358,9 @@ export class EditorController implements vscode.Disposable {
           status: result.status,
           message: result.message ?? "The edit could not be applied.",
         });
-        if (result.status === "stale") this.scheduleAutomatic(session, 0);
+        if (result.status === "stale") {
+          this.scheduleEditorReconciliation(session);
+        }
         return;
       }
       if (!result.workspaceEdit) {
@@ -381,6 +389,7 @@ export class EditorController implements vscode.Disposable {
         status: "applied",
         documentVersion: session.document.version,
       });
+      this.scheduleEditorReconciliation(session);
     } catch (error) {
       this.output.appendLine(`[editor] layout edit failed: ${String(error)}`);
       await this.post(session, {
@@ -421,13 +430,22 @@ export class EditorController implements vscode.Disposable {
     delayMs: number,
     maxWaitMs = delayMs,
   ): void {
-    if (
-      projectSettings(session.document.uri).wysiwyg.refreshAutomatically
-    ) {
+    if (shouldScheduleRefresh(
+      projectSettings(session.document.uri).wysiwyg.refreshAutomatically,
+      session.editorReconciliationPending,
+    )) {
       this.schedule(session, delayMs, maxWaitMs);
       return;
     }
     this.markBuildRequired(session);
+  }
+
+  private scheduleEditorReconciliation(session: Session): void {
+    // Direct manipulation must receive an authoritative editing model before
+    // another source edit can be generated. The server reuses the current
+    // display and returns a translation patch for position-only changes.
+    session.editorReconciliationPending = true;
+    this.schedule(session, 0);
   }
 
   private markBuildRequired(session: Session): void {
@@ -542,6 +560,11 @@ export class EditorController implements vscode.Disposable {
         buildDurationMs: performance.now() - buildStartedAt,
         snapshot: prepared,
       });
+      if (
+        session.disposed || serial !== session.serial ||
+        documentVersion !== session.document.version
+      ) return;
+      session.editorReconciliationPending = false;
       session.snapshotId = snapshot.snapshot_id;
     } catch (error) {
       if (session.disposed || serial !== session.serial) return;
@@ -556,6 +579,9 @@ export class EditorController implements vscode.Disposable {
         buildDurationMs: performance.now() - buildStartedAt,
         message: snapshotFailureMessage(error),
       });
+      if (!session.disposed && serial === session.serial) {
+        session.editorReconciliationPending = false;
+      }
     } finally {
       requestCancellation.dispose();
       if (session.requestCancellation === requestCancellation) {
