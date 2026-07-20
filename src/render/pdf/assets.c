@@ -86,15 +86,32 @@ int ss_raster_size(const char *path, double *width, double *height) {
     return source_width > 0 && source_height > 0 ? 0 : 1;
 }
 
-int ss_raster_metadata(const char *path, SsRasterMetadata *metadata) {
-    if (path == NULL || metadata == NULL) return 1;
-    memset(metadata, 0, sizeof(*metadata));
+static GdkPixbuf *ss_raster_load_bytes(const unsigned char *bytes, size_t length) {
+    if (bytes == NULL || length == 0) return NULL;
+    GdkPixbufLoader *loader = gdk_pixbuf_loader_new();
+    if (loader == NULL) return NULL;
     GError *error = NULL;
-    GdkPixbuf *source = gdk_pixbuf_new_from_file(path, &error);
-    if (source == NULL) {
+    if (!gdk_pixbuf_loader_write(loader, bytes, length, &error)) {
         if (error != NULL) g_error_free(error);
-        return 1;
+        g_object_unref(loader);
+        return NULL;
     }
+    if (!gdk_pixbuf_loader_close(loader, &error)) {
+        if (error != NULL) g_error_free(error);
+        g_object_unref(loader);
+        return NULL;
+    }
+    GdkPixbuf *pixbuf = gdk_pixbuf_loader_get_pixbuf(loader);
+    if (pixbuf != NULL) g_object_ref(pixbuf);
+    g_object_unref(loader);
+    return pixbuf;
+}
+
+int ss_raster_metadata_bytes(const unsigned char *bytes, size_t length, SsRasterMetadata *metadata) {
+    if (metadata == NULL) return 1;
+    memset(metadata, 0, sizeof(*metadata));
+    GdkPixbuf *source = ss_raster_load_bytes(bytes, length);
+    if (source == NULL) return 1;
     const int pixel_width = gdk_pixbuf_get_width(source);
     const int pixel_height = gdk_pixbuf_get_height(source);
     const char *orientation_value = gdk_pixbuf_get_option(source, "orientation");
@@ -208,11 +225,11 @@ int ss_svg_size(const char *path, double *width, double *height) {
     return result;
 }
 
-int ss_svg_metadata(const char *path, SsSvgMetadata *metadata) {
-    if (path == NULL || metadata == NULL) return 1;
+int ss_svg_metadata_bytes(const unsigned char *bytes, size_t length, SsSvgMetadata *metadata) {
+    if (bytes == NULL || length == 0 || metadata == NULL) return 1;
     memset(metadata, 0, sizeof(*metadata));
     GError *error = NULL;
-    RsvgHandle *handle = rsvg_handle_new_from_file(path, &error);
+    RsvgHandle *handle = rsvg_handle_new_from_data(bytes, length, &error);
     if (handle == NULL) {
         if (error != NULL) g_error_free(error);
         return 1;
