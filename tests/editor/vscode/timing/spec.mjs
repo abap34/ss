@@ -18,7 +18,7 @@ const compiled = ts.transpileModule(source, {
     target: ts.ScriptTarget.ES2020,
   },
 }).outputText;
-const { refreshTiming } = await import(
+const { refreshTiming, shouldStartPendingRefresh } = await import(
   `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`
 );
 
@@ -36,3 +36,19 @@ assert.deepEqual(due, { pendingSinceMs: 1_000, delayMs: 0 });
 
 const immediate = refreshTiming(2_000, undefined, 140, 0);
 assert.deepEqual(immediate, { pendingSinceMs: 2_000, delayMs: 0 });
+
+assert.equal(
+  shouldStartPendingRefresh(true, true),
+  false,
+  "an existing debounce timer should own the pending refresh",
+);
+assert.equal(
+  shouldStartPendingRefresh(true, false),
+  true,
+  "an elapsed debounce timer should refresh after the request finishes",
+);
+assert.equal(
+  shouldStartPendingRefresh(false, false),
+  false,
+  "a completed request should not create an unrequested refresh",
+);

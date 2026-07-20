@@ -1,5 +1,6 @@
 const std = @import("std");
 const model = @import("model");
+const utils = @import("utils");
 
 const NodeId = model.NodeId;
 const Node = model.Node;
@@ -42,7 +43,12 @@ pub const SolveOptions = struct {
     measurement_provider: ?model.LayoutMeasurementProvider = null,
     progress: ?LayoutProgress = null,
     jobs: ?usize = null,
+    cancellation: ?utils.Cancellation = null,
 };
+
+pub fn checkCancellation(options: SolveOptions) !void {
+    if (options.cancellation) |cancellation| try cancellation.check();
+}
 
 pub const LayoutProgress = struct {
     context: *anyopaque,

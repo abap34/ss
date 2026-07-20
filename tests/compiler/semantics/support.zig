@@ -40,7 +40,7 @@ fn analyzeAndFinalizeDocumentState(allocator: std.mem.Allocator, state: *core.Do
     var execution_graph = (try analysis.analyzeDocumentStateWithMode(allocator, state, .evaluation)).?;
     defer execution_graph.deinit();
     if (utils.err.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
-    try lowering.evaluateDocument(state, &execution_graph);
+    try lowering.evaluateDocument(state, &execution_graph, .{});
     if (utils.err.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
     try solveDocumentAndDiscard(state);
     if (utils.err.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
@@ -594,7 +594,7 @@ pub fn expectLoweringErrorDiagnostic(
     defer if (execution_graph) |*graph| graph.deinit();
     if (!utils.err.hasDocumentStateErrors(&state)) {
         if (execution_graph) |*graph| {
-            lowering.evaluateDocument(&state, graph) catch {};
+            lowering.evaluateDocument(&state, graph, .{}) catch {};
             if (!utils.err.hasDocumentStateErrors(&state)) {
                 solveDocumentAndDiscard(&state) catch {};
             }

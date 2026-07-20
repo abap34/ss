@@ -19,10 +19,12 @@ const ConstraintTolerance = graph.ConstraintTolerance;
 pub const SolveOptions = graph.SolveOptions;
 
 pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOptions) !document.Document {
+    try graph.checkCancellation(options);
     layout_trace.beginSolve(state.allocator, trace_path);
     defer layout_trace.endSolve(state.allocator);
 
     for (state.page_order.items) |page_id| {
+        try graph.checkCancellation(options);
         const page = state.getNode(page_id) orelse return error.UnknownNode;
         page.frame = .{
             .x = 0,
@@ -42,6 +44,7 @@ pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOpti
     const page_jobs = try state.allocator.alloc(PageJob, page_count);
     defer state.allocator.free(page_jobs);
     for (state.page_order.items, 0..) |page_id, page_index| {
+        try graph.checkCancellation(options);
         page_jobs[page_index] = .{
             .page_id = page_id,
             .page_index = page_index,
@@ -54,6 +57,7 @@ pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOpti
         page_results.deinit(state.allocator);
     }
     try runPageJobs(state, page_jobs, options, trace_path == null and !options.record_propagation, &page_results);
+    try graph.checkCancellation(options);
     return .{ .pages = try page_results.toOwnedSlice(state.allocator) };
 }
 
@@ -62,12 +66,17 @@ const PageJob = struct {
     page_index: usize,
 
     fn run(self: PageJob, state: anytype, options: SolveOptions) !document.Page {
+        try graph.checkCancellation(options);
         var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(state.allocator, options.measurement_provider);
         defer measurement_cache.deinit();
-        return try solvePageLayout(state, self.page_id, self.page_index, &measurement_cache, options);
+        var result = try solvePageLayout(state, self.page_id, self.page_index, &measurement_cache, options);
+        errdefer result.deinit(state.allocator);
+        try graph.checkCancellation(options);
+        return result;
     }
 
     fn runIsolated(self: PageJob, state: anytype, allocator: std.mem.Allocator, options: SolveOptions) !document.Page {
+        try graph.checkCancellation(options);
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
 
@@ -88,6 +97,7 @@ const PageJob = struct {
         defer measurement_cache.deinit();
         var result = try solvePageLayout(&local_context, self.page_id, self.page_index, &measurement_cache, local_options);
         defer result.deinit(local_context.allocator);
+        try graph.checkCancellation(options);
         return try clonePage(allocator, &result);
     }
 };
@@ -118,6 +128,7 @@ fn runPageJobs(state: anytype, jobs: []const PageJob, options: SolveOptions, par
 
 fn runPageJobsSequential(state: anytype, jobs: []const PageJob, options: SolveOptions, out: *std.ArrayList(document.Page)) !void {
     for (jobs, 0..) |job, completed_index| {
+        try graph.checkCancellation(options);
         var result = try job.run(state, options);
         var result_transferred = false;
         errdefer if (!result_transferred) result.deinit(state.allocator);
@@ -128,6 +139,7 @@ fn runPageJobsSequential(state: anytype, jobs: []const PageJob, options: SolveOp
 }
 
 fn runPageJobsParallel(state: anytype, jobs: []const PageJob, options: SolveOptions, worker_count: usize, out: *std.ArrayList(document.Page)) !void {
+    try graph.checkCancellation(options);
     const ContextPtr = @TypeOf(state);
     const outputs = try state.allocator.alloc(PageLayoutJobOutput, jobs.len);
     defer state.allocator.free(outputs);
@@ -164,6 +176,8 @@ fn runPageJobsParallel(state: anytype, jobs: []const PageJob, options: SolveOpti
     for (threads[0..started]) |thread| thread.join();
     joined = true;
 
+    try graph.checkCancellation(options);
+
     if (work.failed.load(.seq_cst)) {
         for (outputs) |output| {
             if (output.err) |err| return err;
@@ -172,6 +186,7 @@ fn runPageJobsParallel(state: anytype, jobs: []const PageJob, options: SolveOpti
     }
 
     for (outputs) |*output| {
+        try graph.checkCancellation(options);
         const result = if (output.result) |*value| value else return error.LayoutJobFailed;
         var cloned = try clonePage(state.allocator, result);
         var cloned_transferred = false;
@@ -186,6 +201,11 @@ fn layoutJobWorker(comptime ContextPtr: type, work: *PageWork(ContextPtr)) void 
     while (!work.failed.load(.monotonic)) {
         const index = work.next_job.fetchAdd(1, .monotonic);
         if (index >= work.jobs.len) break;
+        graph.checkCancellation(work.options) catch |err| {
+            work.outputs[index].err = err;
+            work.failed.store(true, .seq_cst);
+            break;
+        };
         const result = work.jobs[index].runIsolated(work.state, std.heap.smp_allocator, work.options) catch |err| {
             work.outputs[index].err = err;
             work.failed.store(true, .seq_cst);
@@ -310,13 +330,16 @@ pub fn applyDocument(state: anytype, results: *const document.Document) !void {
 }
 
 fn solvePageLayout(state: anytype, page_id: NodeId, page_index: usize, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !document.Page {
+    try graph.checkCancellation(options);
     const diagnostic_start = state.diagnostics.items.len;
     const constraint_failure_start = state.constraint_failures.items.len;
     const measurement_key_start = measurement_cache.usedKeyCount();
     var page_graph = try graph.PageLayoutGraph.init(state.allocator, state, page_id);
     defer page_graph.deinit();
-    if (page_graph.len() == 0) return try collectPage(state, page_id, page_index, &.{}, &.{}, &.{}, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start);
-    try initializePageObjectMeasurements(state, &page_graph, measurement_cache);
+    try graph.checkCancellation(options);
+    if (page_graph.len() == 0) return try collectPage(state, page_id, page_index, &.{}, &.{}, &.{}, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start, options);
+    try initializePageObjectMeasurements(state, &page_graph, measurement_cache, options);
+    try graph.checkCancellation(options);
 
     var horizontal = try graph.AxisWorkspace.init(state.allocator, state, &page_graph, .horizontal);
     defer horizontal.deinit();
@@ -328,6 +351,7 @@ fn solvePageLayout(state: anytype, page_id: NodeId, page_index: usize, measureme
     }
 
     try solvePageAxis(state, &horizontal, options);
+    try graph.checkCancellation(options);
 
     var horizontal_fallback = try fallback.buildHorizontalConstraints(state, &horizontal);
     defer horizontal_fallback.deinit(state.allocator);
@@ -335,8 +359,13 @@ fn solvePageLayout(state: anytype, page_id: NodeId, page_index: usize, measureme
     horizontal.soft_constraints = horizontal_fallback.items;
     try solvePageAxis(state, &horizontal, options);
     try settleHorizontalAxis(state, &horizontal, options);
-    applySolvedHorizontalFrames(state, &horizontal, measurement_cache) catch return error.UnknownNode;
+    applySolvedHorizontalFrames(state, &horizontal, measurement_cache, options) catch |err| switch (err) {
+        error.Canceled => return error.Canceled,
+        else => return error.UnknownNode,
+    };
+    try graph.checkCancellation(options);
     try groups.propagateTargetedWidthsCached(state, &horizontal, measurement_cache);
+    try graph.checkCancellation(options);
 
     var vertical = try graph.AxisWorkspace.init(state.allocator, state, &page_graph, .vertical);
     defer vertical.deinit();
@@ -348,6 +377,7 @@ fn solvePageLayout(state: anytype, page_id: NodeId, page_index: usize, measureme
     }
 
     try solvePageAxis(state, &vertical, options);
+    try graph.checkCancellation(options);
     var vertical_fallback = try fallback.buildVerticalConstraints(state, &vertical);
     defer vertical_fallback.deinit(state.allocator);
     layout_trace.recordDefaultConstraints(state.allocator, &vertical, vertical_fallback.items);
@@ -355,6 +385,7 @@ fn solvePageLayout(state: anytype, page_id: NodeId, page_index: usize, measureme
     try solvePageAxis(state, &vertical, options);
 
     for (page_graph.child_ids, vertical.states) |child_id, v_state| {
+        try graph.checkCancellation(options);
         const node = state.getNode(child_id) orelse return error.UnknownNode;
         node.frame.height = v_state.size orelse node.frame.height;
         node.frame.y_set = false;
@@ -365,7 +396,9 @@ fn solvePageLayout(state: anytype, page_id: NodeId, page_index: usize, measureme
     }
 
     try validatePageConstraints(state, page_id, &page_graph, options);
+    try graph.checkCancellation(options);
     try diagnostics.collectPageDiagnosticsCached(state, page_id, page_graph.child_ids, measurement_cache);
+    try graph.checkCancellation(options);
     return try collectPage(
         state,
         page_id,
@@ -377,6 +410,7 @@ fn solvePageLayout(state: anytype, page_id: NodeId, page_index: usize, measureme
         constraint_failure_start,
         measurement_cache,
         measurement_key_start,
+        options,
     );
 }
 
@@ -391,7 +425,9 @@ fn collectPage(
     constraint_failure_start: usize,
     measurement_cache: *const metrics.MeasurementCache,
     measurement_key_start: usize,
+    options: SolveOptions,
 ) !document.Page {
+    try graph.checkCancellation(options);
     var frames = std.ArrayList(document.ObjectFrame).empty;
     var fallback_constraints = std.ArrayList(Constraint).empty;
     var diagnostics_out = std.ArrayList(model.Diagnostic).empty;
@@ -409,6 +445,7 @@ fn collectPage(
     try fallback_constraints.appendSlice(state.allocator, horizontal_fallback);
     try fallback_constraints.appendSlice(state.allocator, vertical_fallback);
     for (child_ids) |child_id| {
+        try graph.checkCancellation(options);
         const node = state.getNode(child_id) orelse return error.UnknownNode;
         if (node.kind != .object) continue;
         try frames.append(state.allocator, .{
@@ -417,6 +454,7 @@ fn collectPage(
         });
     }
     for (state.diagnostics.items[diagnostic_start..]) |diagnostic| {
+        try graph.checkCancellation(options);
         if (diagnostic.page_id != null and diagnostic.page_id.? != page_id) continue;
         var cloned = try diagnostic.clone(state.allocator);
         var cloned_transferred = false;
@@ -425,6 +463,7 @@ fn collectPage(
         cloned_transferred = true;
     }
     for (state.constraint_failures.items[constraint_failure_start..]) |failure| {
+        try graph.checkCancellation(options);
         if (failure.page_id != page_id) continue;
         var cloned = try failure.clone(state.allocator);
         var cloned_transferred = false;
@@ -432,6 +471,7 @@ fn collectPage(
         try failures_out.append(state.allocator, cloned);
         cloned_transferred = true;
     }
+    try graph.checkCancellation(options);
     try measurement_cache.appendUsedKeysSince(state.allocator, measurement_key_start, &measurement_keys);
     const frame_slice = try frames.toOwnedSlice(state.allocator);
     var frame_slice_transferred = false;
@@ -474,8 +514,9 @@ fn collectPage(
     };
 }
 
-fn initializePageObjectMeasurements(state: anytype, page_graph: *const graph.PageLayoutGraph, measurement_cache: *metrics.MeasurementCache) !void {
+fn initializePageObjectMeasurements(state: anytype, page_graph: *const graph.PageLayoutGraph, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !void {
     for (page_graph.child_ids) |node_id| {
+        try graph.checkCancellation(options);
         const node = state.getNode(node_id) orelse return error.UnknownNode;
         if (node.kind != .object) continue;
         node.frame.x = 0;
@@ -487,8 +528,9 @@ fn initializePageObjectMeasurements(state: anytype, page_graph: *const graph.Pag
     }
 }
 
-fn applySolvedHorizontalFrames(state: anytype, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache) !void {
+fn applySolvedHorizontalFrames(state: anytype, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !void {
     for (workspace.graph.child_ids, workspace.states) |child_id, h_state| {
+        try graph.checkCancellation(options);
         const node = state.getNode(child_id) orelse return error.UnknownNode;
         const old_width = node.frame.width;
         const solved_width = h_state.size orelse old_width;
@@ -507,6 +549,7 @@ fn applySolvedHorizontalFrames(state: anytype, workspace: *const graph.AxisWorks
 fn settleHorizontalAxis(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
     var pass: usize = 0;
     while (pass < 8) : (pass += 1) {
+        try graph.checkCancellation(options);
         var changed = try finalizeHorizontalGroupStates(state, workspace, options);
         changed = (try runPageAxisPass(state, workspace, options)) or changed;
         if (!changed) break;
@@ -517,8 +560,9 @@ fn finalizeHorizontalGroupStates(state: anytype, workspace: *graph.AxisWorkspace
     var any_changed = false;
     var pass: usize = 0;
     while (pass < 8) : (pass += 1) {
+        try graph.checkCancellation(options);
         var changed = false;
-        changed = (try capDefaultWrappedHorizontalWidths(state, workspace)) or changed;
+        changed = (try capDefaultWrappedHorizontalWidths(state, workspace, options)) or changed;
         changed = (try groups.applyTargetConstraints(state, workspace, options)) or changed;
         changed = (try groups.updateAxisStates(state, workspace)) or changed;
         any_changed = changed or any_changed;
@@ -527,9 +571,10 @@ fn finalizeHorizontalGroupStates(state: anytype, workspace: *graph.AxisWorkspace
     return any_changed;
 }
 
-fn capDefaultWrappedHorizontalWidths(state: anytype, workspace: *graph.AxisWorkspace) !bool {
+fn capDefaultWrappedHorizontalWidths(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
     var changed = false;
     for (workspace.graph.child_ids, workspace.states) |child_id, *axis_state| {
+        try graph.checkCancellation(options);
         if (!axis_state.size_is_default) continue;
         if (axis_state.start == null or axis_state.size == null) continue;
         if (axis_state.end_source != null or axis_state.size_source != null) continue;
@@ -554,9 +599,11 @@ fn capDefaultWrappedHorizontalWidths(state: anytype, workspace: *graph.AxisWorks
 }
 
 fn solvePageAxis(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
+    try graph.checkCancellation(options);
     _ = try runPageAxisPass(state, workspace, options);
 
     for (workspace.graph.child_ids, workspace.states, 0..) |child_id, *axis_state, index| {
+        try graph.checkCancellation(options);
         if (axis_state.size == null) {
             const node = state.getNode(child_id) orelse return error.UnknownNode;
             axis_state.size = switch (workspace.axis) {
@@ -568,6 +615,7 @@ fn solvePageAxis(state: anytype, workspace: *graph.AxisWorkspace, options: Solve
         }
     }
 
+    try graph.checkCancellation(options);
     _ = try runPageAxisPass(state, workspace, options);
 }
 
@@ -581,25 +629,30 @@ pub fn runPageAxisPass(state: anytype, workspace: *graph.AxisWorkspace, options:
     var converged = false;
     var any_changed = false;
     while (pass < 32) : (pass += 1) {
+        try graph.checkCancellation(options);
         iteration_count = pass + 1;
         var changed = false;
         var local_pass: usize = 0;
         var local_iterations: usize = 0;
         while (local_pass < 32) : (local_pass += 1) {
+            try graph.checkCancellation(options);
             local_iterations += 1;
             var local_changed = false;
 
             for (workspace.states, 0..) |*axis_state, index| {
+                try graph.checkCancellation(options);
                 local_changed = (try reconcileAxisStateLocalized(state, workspace, index, axis_state, options)) or local_changed;
             }
 
             for (workspace.hard_constraints) |constraint| {
+                try graph.checkCancellation(options);
                 if (groups.constraintTargetsGroup(state, constraint)) continue;
                 if (groups.constraintUsesGroupSource(state, constraint)) continue;
                 local_changed = (try applyAxisConstraint(state, workspace, constraint, false, options)) or local_changed;
             }
 
             for (workspace.soft_constraints) |constraint| {
+                try graph.checkCancellation(options);
                 if (groups.constraintTargetsGroup(state, constraint)) continue;
                 if (groups.constraintUsesGroupSource(state, constraint)) continue;
                 local_changed = (try applyAxisConstraint(state, workspace, constraint, true, options)) or local_changed;
@@ -616,6 +669,7 @@ pub fn runPageAxisPass(state: anytype, workspace: *graph.AxisWorkspace, options:
 
         var group_sources_changed = false;
         for (workspace.hard_constraints) |constraint| {
+            try graph.checkCancellation(options);
             if (!groups.constraintUsesGroupSource(state, constraint)) continue;
             const applied = try applyAxisConstraint(state, workspace, constraint, false, options);
             group_sources_changed = applied or group_sources_changed;
@@ -624,6 +678,7 @@ pub fn runPageAxisPass(state: anytype, workspace: *graph.AxisWorkspace, options:
 
         var soft_group_sources_changed = false;
         for (workspace.soft_constraints) |constraint| {
+            try graph.checkCancellation(options);
             if (!groups.constraintUsesGroupSource(state, constraint)) continue;
             const applied = try applyAxisConstraint(state, workspace, constraint, true, options);
             soft_group_sources_changed = applied or soft_group_sources_changed;
@@ -720,6 +775,7 @@ fn constraintsSame(a: Constraint, b: Constraint) bool {
 }
 
 fn applyAxisConstraint(state: anytype, workspace: *graph.AxisWorkspace, constraint: Constraint, is_soft: bool, options: SolveOptions) !bool {
+    try graph.checkCancellation(options);
     if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) return false;
 
     const target_index = workspace.indexOf(constraint.target_node) orelse return false;
@@ -948,6 +1004,7 @@ fn applyReverseAxisConstraint(
     target_index: usize,
     options: SolveOptions,
 ) !bool {
+    try graph.checkCancellation(options);
     if (is_soft) return false;
 
     const node_source = switch (constraint.source) {
@@ -1583,6 +1640,7 @@ fn modelPathFromTrace(allocator: std.mem.Allocator, title: []const u8, trace: *c
 
 fn validatePageConstraints(state: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, options: SolveOptions) !void {
     for (page_graph.constraints) |constraint| {
+        try graph.checkCancellation(options);
         if (page_graph.indexOf(constraint.target_node) == null) continue;
         if (constraintAlreadyFailed(state, constraint)) continue;
 

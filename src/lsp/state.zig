@@ -254,7 +254,7 @@ pub const AnalysisProvider = struct {
     context: *anyopaque,
     current: ?*AnalysisSnapshot,
     generation: u64,
-    cancellation: ?analysis_snapshot.Cancellation = null,
+    cancellation: ?utils.Cancellation = null,
     build: *const fn (context: *anyopaque, path: []const u8) anyerror!AnalysisSnapshot,
 
     pub fn forDocument(self: *AnalysisProvider, doc_path: []const u8, owned_snapshot: *?AnalysisSnapshot) !?*AnalysisSnapshot {
