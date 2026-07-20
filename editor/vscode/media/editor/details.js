@@ -1,12 +1,18 @@
 import { element, setAttributes, svgElement } from "./dom.js";
 import { formatNumber, previewFrame } from "./geometry.js";
+import { strokeStyleSelect } from "./shape-style.js";
 
 export function renderObjectSheet(state, object, actions) {
   const page = state.snapshot.layout.pages.find((candidate) =>
     candidate.id === object.page_id
   );
   const frame = previewFrame(page, object);
-  const sheet = element("section", "object-sheet");
+  const shapeTarget = actions.shape?.styleTarget(object.id);
+  const locked = actions.objectLocks?.isLocked(object.id) || false;
+  const sheet = element(
+    "section",
+    `object-sheet${shapeTarget ? " object-sheet--shape" : ""}`,
+  );
   sheet.setAttribute("aria-label", "Object details");
   sheet.append(
     closeButton(actions.close),
@@ -14,7 +20,120 @@ export function renderObjectSheet(state, object, actions) {
     bounds(frame),
     relations(state, object),
   );
+  if (shapeTarget) {
+    sheet.append(shapeStyleEditor(shapeTarget, actions.shape, locked));
+  }
   return sheet;
+}
+
+function shapeStyleEditor(target, shape, locked) {
+  const disabled = shape.isBusy() || locked;
+  const container = element("div", "shape-style-editor");
+  const title = element("h2");
+  title.textContent = "Shape style";
+  container.append(title);
+  const controls = element("div", "shape-style-fields");
+  controls.append(
+    styleCheckbox("Fill", target.fill.enabled, (enabled) => {
+      if (!enabled && !target.stroke.enabled) return;
+      shape.editStyle(target, {
+        fill: { ...target.fill, enabled },
+        stroke: { ...target.stroke },
+      });
+    }),
+    styleColor("Fill color", target.fill.color, (color) => {
+      shape.editStyle(target, {
+        fill: { ...target.fill, color },
+        stroke: { ...target.stroke },
+      });
+    }),
+    styleNumber("Opacity", target.fill.opacity, 0, 1, 0.05, (opacity) => {
+      shape.editStyle(target, {
+        fill: { ...target.fill, opacity },
+        stroke: { ...target.stroke },
+      });
+    }),
+    styleCheckbox("Stroke", target.stroke.enabled, (enabled) => {
+      if (!enabled && !target.fill.enabled) return;
+      shape.editStyle(target, {
+        fill: { ...target.fill },
+        stroke: { ...target.stroke, enabled },
+      });
+    }),
+    styleColor("Stroke color", target.stroke.color, (color) => {
+      shape.editStyle(target, {
+        fill: { ...target.fill },
+        stroke: { ...target.stroke, color },
+      });
+    }),
+    strokeStyleSelect(target.stroke.style, {
+      label: "Line",
+      ariaLabel: "Shape stroke style",
+      disabled,
+      change: (style) => {
+        shape.editStyle(target, {
+          fill: { ...target.fill },
+          stroke: { ...target.stroke, style },
+        });
+      },
+    }),
+    styleNumber("Width", target.stroke.width, 0.1, 24, 0.1, (width) => {
+      shape.editStyle(target, {
+        fill: { ...target.fill },
+        stroke: { ...target.stroke, width },
+      });
+    }),
+  );
+  for (const input of controls.querySelectorAll("input")) {
+    input.disabled = disabled;
+  }
+  if (locked) {
+    const notice = element("small", "shape-style-locked");
+    notice.textContent = "Unlock the object to edit its style.";
+    container.append(notice);
+  }
+  container.append(controls);
+  return container;
+}
+
+function styleCheckbox(label, checked, change) {
+  const control = element("label", "shape-style-checkbox");
+  const input = element("input");
+  input.type = "checkbox";
+  input.checked = checked;
+  input.addEventListener("change", () => change(input.checked));
+  control.append(input, document.createTextNode(label));
+  return control;
+}
+
+function styleColor(label, value, change) {
+  const control = element("label", "shape-style-color");
+  const caption = element("span");
+  caption.textContent = label;
+  const input = element("input");
+  input.type = "color";
+  input.value = value;
+  input.addEventListener("change", () => change(input.value));
+  control.append(caption, input);
+  return control;
+}
+
+function styleNumber(label, value, min, max, step, change) {
+  const control = element("label", "shape-style-number");
+  const caption = element("span");
+  caption.textContent = label;
+  const input = element("input");
+  input.type = "number";
+  input.value = String(value);
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.addEventListener("change", () => {
+    const next = Number(input.value);
+    if (Number.isFinite(next)) change(Math.min(max, Math.max(min, next)));
+  });
+  control.append(caption, input);
+  return control;
 }
 
 function heading(object, actions) {
@@ -26,10 +145,32 @@ function heading(object, actions) {
   name.textContent = object.role || object.name || `Object ${object.id}`;
   title.append(eyebrow, name);
   container.append(title);
-  if (object.location?.path) {
-    container.append(sourceButton(object, actions.revealSource));
+  const actionsContainer = element("div", "sheet-heading-actions");
+  if (actions.objectLocks?.canLock(object.id)) {
+    actionsContainer.append(objectLockButton(object, actions.objectLocks));
   }
+  if (object.location?.path) {
+    actionsContainer.append(sourceButton(object, actions.revealSource));
+  }
+  if (actionsContainer.childElementCount > 0) container.append(actionsContainer);
   return container;
+}
+
+function objectLockButton(object, objectLocks) {
+  const locked = objectLocks.isLocked(object.id);
+  const button = element(
+    "button",
+    `object-lock-button${locked ? " is-locked" : ""}`,
+  );
+  button.type = "button";
+  button.setAttribute("aria-pressed", String(locked));
+  button.setAttribute("aria-label", locked ? "Unlock object" : "Lock object");
+  button.append(element("span", "object-lock-icon"));
+  const label = element("span");
+  label.textContent = locked ? "Unlock" : "Lock";
+  button.append(label);
+  button.addEventListener("click", () => objectLocks.toggle(object.id));
+  return button;
 }
 
 function closeButton(closeDetails) {

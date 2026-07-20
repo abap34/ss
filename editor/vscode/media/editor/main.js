@@ -3,13 +3,15 @@ import { alignTextBaselines } from "../../out/render/text.js";
 import { buildFailureMessage } from "./diagnostics.js";
 import { disposePages } from "./document.js";
 import { EditorNavigation } from "./navigation.js";
+import { ObjectLockController } from "./object-locks.js";
 import { disposePdfItems, disposePdfRuntime } from "./pdf.js";
 import { renderActivityRail, renderSidebar } from "./sidebar.js";
+import { defaultShapeStyle, ShapeController } from "./shape-insertion.js";
 import { TranslationController } from "./translation.js";
 import { WorkspaceView } from "./workspace.js";
 
 const vscode = acquireVsCodeApi();
-const persistedState = vscode.getState() || {};
+let persistedState = vscode.getState() || {};
 const state = {
   snapshot: null,
   revision: -1,
@@ -19,6 +21,8 @@ const state = {
   mode: "single",
   currentPageId: null,
   selectedObjectId: null,
+  shapeTool: "select",
+  shapeStyle: structuredClone(defaultShapeStyle),
   theme: persistedState.theme === "light" || persistedState.theme === "dark"
     ? persistedState.theme
     : initialTheme(),
@@ -36,12 +40,23 @@ const translation = new TranslationController(state, {
   post: (message) => vscode.postMessage(message),
   render,
 });
+const shape = new ShapeController(state, {
+  post: (message) => vscode.postMessage(message),
+  render,
+  selectObject,
+});
+const objectLocks = new ObjectLockController(state, {
+  persist: (value) => persistWebviewState({ objectLocks: value }),
+  render,
+}, persistedState.objectLocks);
 const actions = {
   render,
   revealSource,
   selectObject,
   selectPage,
   translation,
+  shape,
+  objectLocks,
 };
 const navigation = new EditorNavigation(state);
 const workspace = new WorkspaceView(state, actions);
@@ -72,6 +87,9 @@ window.addEventListener("message", (event) => {
     } else if (editOutcome?.status === "failed") {
       showError(editOutcome.message);
     }
+  } else if (message.type === "shapeEditResult") {
+    const editOutcome = shape.acceptResult(message);
+    if (editOutcome?.status === "failed") showError(editOutcome.message);
   }
 });
 
@@ -111,6 +129,17 @@ function acceptSnapshot(message) {
   }
   renderStyle.textContent = state.snapshot.display.css;
   navigation.reconcile(state.snapshot);
+  objectLocks.reconcile(state.snapshot);
+  const shapeOutcome = shape.reconcile(state.snapshot);
+  if (!buildFailure && shapeOutcome?.status === "applied") {
+    state.toast = {
+      kind: "success",
+      message: shapeOutcome.operation === "insert"
+        ? "Shape inserted into source."
+        : "Shape style applied to source.",
+    };
+    toastDuration = successToastDuration;
+  }
   render();
   if (toastDuration != null) scheduleToastClear(toastDuration);
 }
@@ -228,8 +257,13 @@ function toggleSidebar(view) {
 function toggleTheme() {
   state.theme = state.theme === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = state.theme;
-  vscode.setState({ ...persistedState, theme: state.theme });
+  persistWebviewState({ theme: state.theme });
   render();
+}
+
+function persistWebviewState(update) {
+  persistedState = { ...persistedState, ...update };
+  vscode.setState(persistedState);
 }
 
 function selectPage(pageId) {
