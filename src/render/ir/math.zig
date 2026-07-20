@@ -81,6 +81,15 @@ pub const Layout = struct {
         allocator.free(self.elements);
         self.* = .{ .width = 0, .height = 0, .baseline = 0, .elements = &.{} };
     }
+
+    pub fn ownedByteSize(self: *const Layout) usize {
+        var total = self.elements.len *| @sizeOf(Element);
+        for (self.elements) |element| switch (element) {
+            .text => |value| total +|= value.layout.ownedByteSize(),
+            .rule => {},
+        };
+        return total;
+    }
 };
 
 pub const Tree = struct {

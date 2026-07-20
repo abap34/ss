@@ -149,11 +149,75 @@ pub const Resource = struct {
     name: []u8,
     bytes: []u8,
     metadata: Metadata,
+    identity_verified: bool = false,
+    shared_owner: ?*SharedOwner = null,
 
     pub fn deinit(self: *Resource, allocator: std.mem.Allocator) void {
-        allocator.free(self.name);
-        allocator.free(self.bytes);
-        self.metadata.deinit(allocator);
+        if (self.shared_owner) |owner| {
+            if (owner.refs.fetchSub(1, .acq_rel) == 1) {
+                owner.allocator.free(self.name);
+                owner.allocator.free(self.bytes);
+                self.metadata.deinit(owner.allocator);
+                owner.allocator.destroy(owner);
+            }
+        } else {
+            allocator.free(self.name);
+            allocator.free(self.bytes);
+            self.metadata.deinit(allocator);
+        }
+        self.* = undefined;
+    }
+
+    pub fn share(self: *Resource, allocator: std.mem.Allocator) !void {
+        if (self.shared_owner != null) return;
+        const owner = try allocator.create(SharedOwner);
+        owner.* = .{ .allocator = allocator };
+        self.shared_owner = owner;
+    }
+
+    pub fn clone(self: *const Resource, allocator: std.mem.Allocator) !Resource {
+        if (self.shared_owner) |owner| {
+            _ = owner.refs.fetchAdd(1, .monotonic);
+            return self.*;
+        }
+        const name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(name);
+        const bytes = try allocator.dupe(u8, self.bytes);
+        errdefer allocator.free(bytes);
+        const metadata: Metadata = switch (self.metadata) {
+            .font => |value| .{ .font = value },
+            .raster => |value| .{ .raster = value },
+            .svg => |value| .{ .svg = value },
+            .pdf => |value| .{ .pdf = .{
+                .pages = try allocator.dupe(PdfPageMetadata, value.pages),
+                .encrypted = value.encrypted,
+                .has_javascript = value.has_javascript,
+            } },
+            .math_pdf => |value| .{ .math_pdf = .{
+                .pages = try allocator.dupe(PdfPageMetadata, value.pages),
+                .encrypted = value.encrypted,
+                .has_javascript = value.has_javascript,
+            } },
+        };
+        return .{
+            .id = self.id,
+            .kind = self.kind,
+            .name = name,
+            .bytes = bytes,
+            .metadata = metadata,
+            .identity_verified = self.identity_verified,
+        };
+    }
+
+    pub fn retainedByteSize(self: *const Resource) usize {
+        var total = self.name.len +| self.bytes.len;
+        switch (self.metadata) {
+            .pdf => |value| total +|= value.pages.len *| @sizeOf(PdfPageMetadata),
+            .math_pdf => |value| total +|= value.pages.len *| @sizeOf(PdfPageMetadata),
+            .font, .raster, .svg => {},
+        }
+        if (self.shared_owner != null) total +|= @sizeOf(SharedOwner);
+        return total;
     }
 
     pub fn extension(self: *const Resource) []const u8 {
@@ -182,6 +246,11 @@ pub const Resource = struct {
                 "application/octet-stream",
         };
     }
+};
+
+const SharedOwner = struct {
+    allocator: std.mem.Allocator,
+    refs: std.atomic.Value(usize) = .init(1),
 };
 
 pub const Graph = struct {

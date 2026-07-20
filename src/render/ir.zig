@@ -29,6 +29,7 @@ pub const MathConstants = fonts.MathConstants;
 pub const FontInstance = fonts.Instance;
 pub const FontCatalog = fonts.Catalog;
 pub const FontBuilder = fonts.Builder;
+pub const FontSpec = fonts.Spec;
 pub const ResourceId = resources.Id;
 pub const ResourceKind = resources.Kind;
 pub const Resource = resources.Resource;
@@ -396,6 +397,52 @@ pub const Destination = struct {
     }
 };
 
+pub const PageContent = struct {
+    owner_allocator: std.mem.Allocator,
+    content_allocator: std.mem.Allocator,
+    references: std.atomic.Value(usize) = .init(1),
+    items: std.ArrayList(Item),
+    links: std.ArrayList(Link),
+    destinations: std.ArrayList(Destination),
+
+    fn retain(self: *PageContent) void {
+        _ = self.references.fetchAdd(1, .monotonic);
+    }
+
+    pub fn release(self: *PageContent) void {
+        if (self.references.fetchSub(1, .acq_rel) != 1) return;
+        for (self.items.items) |*item| item.deinit(self.content_allocator);
+        self.items.deinit(self.content_allocator);
+        for (self.links.items) |*link| link.deinit(self.content_allocator);
+        self.links.deinit(self.content_allocator);
+        for (self.destinations.items) |*destination| destination.deinit(self.content_allocator);
+        self.destinations.deinit(self.content_allocator);
+        self.owner_allocator.destroy(self);
+    }
+
+    pub fn materialize(
+        self: *PageContent,
+        allocator: std.mem.Allocator,
+        page_id: core.NodeId,
+        index: usize,
+        width: f64,
+        height: f64,
+    ) !Page {
+        const copied_items = try self.items.clone(allocator);
+        self.retain();
+        return .{
+            .page_id = page_id,
+            .index = index,
+            .width = width,
+            .height = height,
+            .items = copied_items,
+            .links = self.links,
+            .destinations = self.destinations,
+            .shared_content = self,
+        };
+    }
+};
+
 pub const Page = struct {
     page_id: core.NodeId,
     index: usize,
@@ -406,16 +453,66 @@ pub const Page = struct {
     links: std.ArrayList(Link) = .empty,
     destinations: std.ArrayList(Destination) = .empty,
     reading_order: []SemanticId = &.{},
+    shared_content: ?*PageContent = null,
 
     pub fn deinit(self: *Page, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
-        for (self.items.items) |*item| item.deinit(allocator);
+        if (self.shared_content == null) for (self.items.items) |*item| item.deinit(allocator);
         self.items.deinit(allocator);
-        for (self.links.items) |*link| link.deinit(allocator);
-        self.links.deinit(allocator);
-        for (self.destinations.items) |*destination| destination.deinit(allocator);
-        self.destinations.deinit(allocator);
+        if (self.shared_content) |content| {
+            content.release();
+        } else {
+            for (self.links.items) |*link| link.deinit(allocator);
+            self.links.deinit(allocator);
+            for (self.destinations.items) |*destination| destination.deinit(allocator);
+            self.destinations.deinit(allocator);
+        }
         allocator.free(self.reading_order);
+    }
+
+    pub fn takeContent(
+        self: *Page,
+        owner_allocator: std.mem.Allocator,
+        content_allocator: std.mem.Allocator,
+    ) !*PageContent {
+        std.debug.assert(self.shared_content == null);
+        std.debug.assert(self.name.len == 0);
+        std.debug.assert(self.reading_order.len == 0);
+        const content = try owner_allocator.create(PageContent);
+        content.* = .{
+            .owner_allocator = owner_allocator,
+            .content_allocator = content_allocator,
+            .items = self.items,
+            .links = self.links,
+            .destinations = self.destinations,
+        };
+        self.items = .empty;
+        self.links = .empty;
+        self.destinations = .empty;
+        return content;
+    }
+
+    pub fn ownedContentByteSize(self: *const Page) usize {
+        var total = @sizeOf(PageContent) +|
+            self.items.capacity *| @sizeOf(Item) +|
+            self.links.capacity *| @sizeOf(Link) +|
+            self.destinations.capacity *| @sizeOf(Destination);
+        for (self.items.items) |item| switch (item) {
+            .text => |value| total +|= value.layout.ownedByteSize(),
+            .math => |value| switch (value.content) {
+                .structured => |structured| total +|= structured.layout.ownedByteSize(),
+                .raw_pdf => {},
+            },
+            .vector_path => |value| {
+                total +|= value.commands.len *| @sizeOf(PathCommand);
+                total +|= fillPaintOwnedByteSize(value.fill);
+                if (value.stroke) |stroke| total +|= stroke.dash.len *| @sizeOf(f64);
+            },
+            .fill_rect, .stroke_line, .rounded_rect, .raster, .svg, .pdf_page => {},
+        };
+        for (self.links.items) |link| total +|= link.target.len +| 1;
+        for (self.destinations.items) |destination| total +|= destination.name.len +| 1;
+        return total;
     }
 
     pub fn hasPdfPages(self: *const Page) bool {
@@ -689,6 +786,19 @@ pub const Page = struct {
         };
     }
 };
+
+fn fillPaintOwnedByteSize(fill: FillPaint) usize {
+    var total: usize = switch (fill.base) {
+        .linear => |value| value.stops.len *| @sizeOf(GradientStop),
+        .radial => |value| value.stops.len *| @sizeOf(GradientStop),
+        .none, .solid => 0,
+    };
+    if (fill.overlay) |overlay| {
+        total +|= overlay.commands.len *| @sizeOf(PathCommand);
+        if (overlay.stroke) |stroke| total +|= stroke.dash.len *| @sizeOf(f64);
+    }
+    return total;
+}
 
 pub const Ir = struct {
     schema_version: u32 = 7,

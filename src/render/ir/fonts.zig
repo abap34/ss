@@ -65,11 +65,74 @@ pub const Instance = struct {
     synthetic_italic: bool = false,
     family_substitution: bool = false,
 
-    fn deinit(self: *Instance, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Instance, allocator: std.mem.Allocator) void {
         allocator.free(self.family);
         allocator.free(self.postscript_name);
         allocator.free(self.variations);
         allocator.free(self.features);
+    }
+
+    pub fn spec(self: *const Instance) Spec {
+        return .{
+            .resource = self.resource,
+            .face_index = self.face_index,
+            .family = self.family,
+            .postscript_name = self.postscript_name,
+            .weight = self.weight,
+            .style = self.style,
+            .stretch = self.stretch,
+            .ascent_ratio = self.ascent_ratio,
+            .descent_ratio = self.descent_ratio,
+            .line_gap_ratio = self.line_gap_ratio,
+            .underline_position_ratio = self.underline_position_ratio,
+            .underline_thickness_ratio = self.underline_thickness_ratio,
+            .strikethrough_position_ratio = self.strikethrough_position_ratio,
+            .strikethrough_thickness_ratio = self.strikethrough_thickness_ratio,
+            .math = self.math,
+            .variations = self.variations,
+            .features = self.features,
+            .synthetic_bold = self.synthetic_bold,
+            .synthetic_italic = self.synthetic_italic,
+            .family_substitution = self.family_substitution,
+        };
+    }
+
+    pub fn clone(self: *const Instance, allocator: std.mem.Allocator) !Instance {
+        const family = try allocator.dupeZ(u8, self.family);
+        errdefer allocator.free(family);
+        const postscript_name = try allocator.dupeZ(u8, self.postscript_name);
+        errdefer allocator.free(postscript_name);
+        const variations = try allocator.dupe(Variation, self.variations);
+        errdefer allocator.free(variations);
+        const features = try allocator.dupe(Feature, self.features);
+        return .{
+            .id = self.id,
+            .resource = self.resource,
+            .face_index = self.face_index,
+            .family = family,
+            .postscript_name = postscript_name,
+            .weight = self.weight,
+            .style = self.style,
+            .stretch = self.stretch,
+            .ascent_ratio = self.ascent_ratio,
+            .descent_ratio = self.descent_ratio,
+            .line_gap_ratio = self.line_gap_ratio,
+            .underline_position_ratio = self.underline_position_ratio,
+            .underline_thickness_ratio = self.underline_thickness_ratio,
+            .strikethrough_position_ratio = self.strikethrough_position_ratio,
+            .strikethrough_thickness_ratio = self.strikethrough_thickness_ratio,
+            .math = self.math,
+            .variations = variations,
+            .features = features,
+            .synthetic_bold = self.synthetic_bold,
+            .synthetic_italic = self.synthetic_italic,
+            .family_substitution = self.family_substitution,
+        };
+    }
+
+    pub fn ownedByteSize(self: *const Instance) usize {
+        return @sizeOf(Instance) +| self.family.len +| 1 +| self.postscript_name.len +| 1 +|
+            self.variations.len *| @sizeOf(Variation) +| self.features.len *| @sizeOf(Feature);
     }
 };
 

@@ -75,6 +75,46 @@ pub const Layout = struct {
         self.* = empty;
     }
 
+    pub fn clone(self: *const Layout, allocator: std.mem.Allocator) !Layout {
+        const source_text = try allocator.dupeZ(u8, self.source_text);
+        errdefer allocator.free(source_text);
+        const lines = try allocator.dupe(Line, self.lines);
+        errdefer allocator.free(lines);
+        const runs = try allocator.alloc(Run, self.runs.len);
+        var initialized_runs: usize = 0;
+        errdefer {
+            for (runs[0..initialized_runs]) |*run| run.deinit(allocator);
+            allocator.free(runs);
+        }
+        for (self.runs, 0..) |run, index| {
+            runs[index] = run;
+            runs[index].language = try allocator.dupeZ(u8, run.language);
+            initialized_runs += 1;
+        }
+        const clusters = try allocator.dupe(Cluster, self.clusters);
+        errdefer allocator.free(clusters);
+        const glyphs = try allocator.dupe(Glyph, self.glyphs);
+        return .{
+            .source_text = source_text,
+            .lines = lines,
+            .runs = runs,
+            .clusters = clusters,
+            .glyphs = glyphs,
+            .logical_bounds = self.logical_bounds,
+            .ink_bounds = self.ink_bounds,
+        };
+    }
+
+    pub fn ownedByteSize(self: *const Layout) usize {
+        var total = self.source_text.len +| 1;
+        total +|= self.lines.len *| @sizeOf(Line);
+        total +|= self.runs.len *| @sizeOf(Run);
+        for (self.runs) |run| total +|= run.language.len +| 1;
+        total +|= self.clusters.len *| @sizeOf(Cluster);
+        total +|= self.glyphs.len *| @sizeOf(Glyph);
+        return total;
+    }
+
     pub fn firstBaseline(self: *const Layout) f64 {
         return if (self.lines.len == 0) 0 else self.lines[0].baseline_y;
     }

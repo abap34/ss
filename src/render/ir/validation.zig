@@ -30,8 +30,10 @@ pub fn document(ir: anytype) Error!void {
         {
             return error.InvalidResource;
         }
-        const expected = @import("resources.zig").identify(resource.kind, resource.bytes);
-        if (!std.mem.eql(u8, &resource.id, &expected)) return error.InvalidResource;
+        if (!resource.identity_verified) {
+            const expected = @import("resources.zig").identify(resource.kind, resource.bytes);
+            if (!std.mem.eql(u8, &resource.id, &expected)) return error.InvalidResource;
+        }
         if (resource.bytes.len == 0 or resource.name.len == 0 or !std.unicode.utf8ValidateSlice(resource.name) or
             std.fs.path.isAbsolute(resource.name) or std.mem.indexOfAny(u8, resource.name, "/\\") != null)
         {
