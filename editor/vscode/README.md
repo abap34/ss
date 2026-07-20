@@ -48,6 +48,7 @@ positions = true
 [editor.wysiwyg]
 enabled = true
 debounce = 140
+max_wait = 700
 
 [editor.wysiwyg.refresh]
 dependency = true
@@ -89,7 +90,9 @@ Add this to your workspace settings:
 
 Run `ss: Open WYSIWYG Editor` from the command palette or the editor title
 button. The editor uses the open VS Code buffers through the language server, so
-unsaved source edits are reflected after the configured debounce interval.
+unsaved source edits are reflected after the configured debounce interval. If
+editing continues, `max_wait` bounds how long the next preview update can be
+postponed.
 
 The editor displays the shared HTML document used by the PDF and HTML renderers together
 with the compiler's page structure and anchor relations. Pages and the document

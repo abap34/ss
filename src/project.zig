@@ -42,6 +42,7 @@ pub const LspConfig = struct {
 pub const WysiwygConfig = struct {
     enabled: bool = true,
     debounce_ms: u64 = 140,
+    max_wait_ms: u64 = 700,
     refresh_on_dependency_change: bool = true,
 };
 
@@ -263,6 +264,7 @@ fn parseWysiwygConfig(text: []const u8) WysiwygConfig {
     return .{
         .enabled = parseBool(text, "editor.wysiwyg", "enabled", true),
         .debounce_ms = parseU64(text, "editor.wysiwyg", "debounce", 140),
+        .max_wait_ms = parseU64(text, "editor.wysiwyg", "max_wait", 700),
         .refresh_on_dependency_change = parseBool(text, "editor.wysiwyg.refresh", "dependency", true),
     };
 }

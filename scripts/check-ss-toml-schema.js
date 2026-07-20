@@ -24,4 +24,6 @@ assert(!("inlay_hints" in lsp && lsp.inlay_hints.type === "boolean"), "inlay_hin
 
 assert.strictEqual(wysiwyg.debounce.type, "integer");
 assert.strictEqual(wysiwyg.debounce.default, 140);
+assert.strictEqual(wysiwyg.max_wait.type, "integer");
+assert.strictEqual(wysiwyg.max_wait.default, 700);
 assert.strictEqual(wysiwyg.refresh.properties.dependency.type, "boolean");

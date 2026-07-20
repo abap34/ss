@@ -15,6 +15,7 @@ import {
   toWorkspaceEdit,
   workspaceEditTargetsAreCurrent,
 } from "./source";
+import { refreshTiming } from "./timing";
 import { ViewResources } from "./view";
 
 type ClientProvider = () => LanguageClient | undefined;
@@ -26,6 +27,7 @@ interface Session {
   serial: number;
   requestRunning: boolean;
   refreshPending: boolean;
+  pendingRefreshSinceMs?: number;
   disposed: boolean;
   dependencyPaths: Set<string>;
 }
@@ -240,11 +242,16 @@ export class EditorController implements vscode.Disposable {
     if (uri.scheme !== "file" || path.extname(uri.fsPath) !== ".ss") return;
     const changedPath = normalizePath(uri.fsPath);
     for (const session of this.sessions.values()) {
+      const settings = projectSettings(session.document.uri).wysiwyg;
       const direct = session.document.uri.toString() === uri.toString();
       const dependency = session.dependencyPaths.has(changedPath) &&
-        projectSettings(session.document.uri).wysiwyg.refreshOnDependencyChange;
+        settings.refreshOnDependencyChange;
       if (direct || dependency) {
-        this.schedule(session, delayMs ?? this.debounceFor(session.document));
+        this.schedule(
+          session,
+          delayMs ?? settings.debounceMs,
+          delayMs ?? settings.maxWaitMs,
+        );
       }
     }
   }
@@ -255,8 +262,13 @@ export class EditorController implements vscode.Disposable {
     }
   }
 
-  private schedule(session: Session, delayMs: number): void {
+  private schedule(
+    session: Session,
+    delayMs: number,
+    maxWaitMs = delayMs,
+  ): void {
     if (session.disposed) return;
+    if (session.requestRunning) session.refreshPending = true;
     // Invalidate an in-flight response as soon as an edit is observed, not
     // after the debounce timer expires.
     session.serial += 1;
@@ -266,11 +278,19 @@ export class EditorController implements vscode.Disposable {
       status: "building",
     });
     if (session.timer) clearTimeout(session.timer);
+    const timing = refreshTiming(
+      Date.now(),
+      session.pendingRefreshSinceMs,
+      delayMs,
+      maxWaitMs,
+    );
+    session.pendingRefreshSinceMs = timing.pendingSinceMs;
     const serial = session.serial;
     session.timer = setTimeout(() => {
       session.timer = undefined;
+      session.pendingRefreshSinceMs = undefined;
       void this.refresh(session, serial);
-    }, delayMs);
+    }, timing.delayMs);
   }
 
   private async refresh(session: Session, serial: number): Promise<void> {
@@ -336,12 +356,6 @@ export class EditorController implements vscode.Disposable {
         this.schedule(session, 0);
       }
     }
-  }
-
-  private debounceFor(document: vscode.TextDocument): number {
-    return document.languageId === "ss-slide"
-      ? projectSettings(document.uri).wysiwyg.debounceMs
-      : 0;
   }
 
   private post(session: Session, message: HostMessage): Thenable<boolean> {
