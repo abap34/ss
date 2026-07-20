@@ -9,6 +9,67 @@ const json = utils.json;
 const assets = @import("assets.zig");
 const binding_names = @import("names.zig");
 
+pub const Cache = struct {
+    allocator: std.mem.Allocator,
+    html: render_html.Cache,
+    assets: assets.Cache,
+    displays: std.AutoHashMap(render.Fingerprint, []u8),
+    snapshot_displays: std.StringHashMap(render.Fingerprint),
+    display_bytes: usize = 0,
+
+    const max_displays = 4;
+    const max_display_bytes = 64 * 1024 * 1024;
+    const max_snapshot_displays = 16;
+
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) Cache {
+        return .{
+            .allocator = allocator,
+            .html = render_html.Cache.init(allocator),
+            .assets = assets.Cache.init(allocator, io),
+            .displays = std.AutoHashMap(render.Fingerprint, []u8).init(allocator),
+            .snapshot_displays = std.StringHashMap(render.Fingerprint).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Cache) void {
+        self.clearSnapshotDisplays();
+        self.snapshot_displays.deinit();
+        self.clearDisplays();
+        self.displays.deinit();
+        self.assets.deinit();
+        self.html.deinit();
+        self.* = undefined;
+    }
+
+    fn clearDisplays(self: *Cache) void {
+        var values = self.displays.valueIterator();
+        while (values.next()) |display| self.allocator.free(display.*);
+        self.displays.clearRetainingCapacity();
+        self.display_bytes = 0;
+    }
+
+    fn clearSnapshotDisplays(self: *Cache) void {
+        var keys = self.snapshot_displays.keyIterator();
+        while (keys.next()) |snapshot_id| self.allocator.free(snapshot_id.*);
+        self.snapshot_displays.clearRetainingCapacity();
+    }
+
+    fn rememberDisplay(self: *Cache, snapshot_id: []const u8, fingerprint: render.Fingerprint) !void {
+        if (self.snapshot_displays.getPtr(snapshot_id)) |stored| {
+            stored.* = fingerprint;
+            return;
+        }
+        if (self.snapshot_displays.count() >= max_snapshot_displays) self.clearSnapshotDisplays();
+        const owned_snapshot_id = try self.allocator.dupe(u8, snapshot_id);
+        errdefer self.allocator.free(owned_snapshot_id);
+        try self.snapshot_displays.putNoClobber(owned_snapshot_id, fingerprint);
+    }
+
+    pub fn displayForSnapshot(self: *const Cache, snapshot_id: []const u8) ?render.Fingerprint {
+        return self.snapshot_displays.get(snapshot_id);
+    }
+};
+
 pub const EditingTarget = struct {
     node_id: core.NodeId,
     page_id: core.NodeId,
@@ -74,6 +135,9 @@ pub const Model = struct {
     allocator: std.mem.Allocator,
     snapshot_id: []u8,
     display_base_snapshot_id: ?[]u8 = null,
+    display_fingerprint: ?render.Fingerprint = null,
+    display_json_start: usize = 0,
+    display_json_end: usize = 0,
     editing: []EditingTarget,
     page_editing: []PageEditingTarget,
     shape_editing: []ShapeEditingTarget,
@@ -142,14 +206,36 @@ pub fn build(
     state: *core.DocumentState,
     render_ir: *const render.Ir,
     generation: u64,
+    layout_json: []const u8,
+    cache: *Cache,
 ) !Output {
-    var fragment = try render_html.prepareFragment(allocator, render_ir);
+    const display_key = render_ir.displayFingerprint();
+    var fragment = try render_html.prepareFragment(allocator, render_ir, display_key, &cache.html);
     defer fragment.deinit(allocator);
-    var published_assets = try assets.publish(allocator, io, &fragment, ".ss-cache/render");
+    var published_assets = try assets.publish(allocator, io, &fragment, ".ss-cache/render", &cache.assets);
     defer published_assets.deinit(allocator);
-    const display_json = try displayJson(allocator, &fragment, &published_assets);
-    defer allocator.free(display_json);
-    return try buildFromDisplayJson(allocator, state, generation, display_json, null);
+    var uncached_display: ?[]u8 = null;
+    defer if (uncached_display) |value| allocator.free(value);
+    const display_json = cache.displays.get(display_key) orelse blk: {
+        const generated = try displayJson(allocator, &fragment, &published_assets);
+        errdefer allocator.free(generated);
+        if (generated.len > Cache.max_display_bytes) {
+            uncached_display = generated;
+            break :blk generated;
+        }
+        if (cache.displays.count() >= Cache.max_displays or
+            cache.display_bytes > Cache.max_display_bytes - generated.len)
+        {
+            cache.clearDisplays();
+        }
+        try cache.displays.putNoClobber(display_key, generated);
+        cache.display_bytes += generated.len;
+        break :blk generated;
+    };
+    var output = try buildFromDisplayJson(allocator, state, generation, display_json, null, display_key, layout_json);
+    errdefer output.deinit();
+    try cache.rememberDisplay(output.model.snapshot_id, display_key);
+    return output;
 }
 
 pub fn buildTranslationPatch(
@@ -158,10 +244,28 @@ pub fn buildTranslationPatch(
     generation: u64,
     base_snapshot_id: []const u8,
     translations: []const Translation,
+    layout_json: []const u8,
 ) !Output {
     const display_json = try translationPatchJson(allocator, base_snapshot_id, translations);
     defer allocator.free(display_json);
-    return try buildFromDisplayJson(allocator, state, generation, display_json, base_snapshot_id);
+    return try buildFromDisplayJson(allocator, state, generation, display_json, base_snapshot_id, null, layout_json);
+}
+
+pub fn rebaseUnchangedDisplayJson(
+    allocator: std.mem.Allocator,
+    output: *const Output,
+    base_snapshot_id: []const u8,
+) ![]u8 {
+    const patch = try translationPatchJson(allocator, base_snapshot_id, &.{});
+    defer allocator.free(patch);
+    var result = std.ArrayList(u8).empty;
+    errdefer result.deinit(allocator);
+    try result.ensureTotalCapacity(allocator, output.json.len -
+        (output.model.display_json_end - output.model.display_json_start) + patch.len);
+    try result.appendSlice(allocator, output.json[0..output.model.display_json_start]);
+    try result.appendSlice(allocator, patch);
+    try result.appendSlice(allocator, output.json[output.model.display_json_end..]);
+    return try result.toOwnedSlice(allocator);
 }
 
 fn buildFromDisplayJson(
@@ -170,9 +274,9 @@ fn buildFromDisplayJson(
     generation: u64,
     display_json: []const u8,
     display_base_snapshot_id: ?[]const u8,
+    display_fingerprint: ?render.Fingerprint,
+    layout_json: []const u8,
 ) !Output {
-    const layout_json = try core.layout.conflicts.toJson(allocator, state);
-    defer allocator.free(layout_json);
     const outline_json = try outlineJson(allocator, state);
     defer allocator.free(outline_json);
     const editing = try collectEditingTargets(allocator, state);
@@ -230,7 +334,9 @@ fn buildFromDisplayJson(
     try out.appendSlice(allocator, ",\"coordinate_space\":{\"unit\":\"pt\",\"origin\":\"page-top-left\",\"x_axis\":\"right\",\"y_axis\":\"down\"},\"layout\":");
     try out.appendSlice(allocator, std.mem.trim(u8, layout_json, "\r\n"));
     try out.appendSlice(allocator, ",\"display\":");
+    const display_json_start = out.items.len;
     try out.appendSlice(allocator, display_json);
+    const display_json_end = out.items.len;
     try out.appendSlice(allocator, ",\"outline\":");
     try out.appendSlice(allocator, outline_json);
     try out.appendSlice(allocator, ",\"editing\":");
@@ -246,6 +352,9 @@ fn buildFromDisplayJson(
             .allocator = allocator,
             .snapshot_id = snapshot_id,
             .display_base_snapshot_id = owned_display_base_snapshot_id,
+            .display_fingerprint = display_fingerprint,
+            .display_json_start = display_json_start,
+            .display_json_end = display_json_end,
             .editing = editing,
             .page_editing = page_editing,
             .shape_editing = shape_editing,

@@ -25,12 +25,18 @@ pub fn evaluateAndSolvePreparedPages(
     options: Options,
 ) !core.prepared.PreparedPages {
     try options.checkCanceled();
+    const evaluate_start = utils.measure_profile.start();
     try lowering.evaluateDocument(state, graph, .{ .cancellation = options.cancellation });
+    utils.measure_profile.recordWysiwyg(.evaluate, evaluate_start);
     try options.checkCanceled();
+    const prepare_start = utils.measure_profile.start();
     var pages = try core.prepared.prepare(state.allocator, state);
+    utils.measure_profile.recordWysiwyg(.prepare, prepare_start);
     errdefer pages.deinit(state.allocator);
     try options.checkCanceled();
+    const solve_start = utils.measure_profile.start();
     var results = try solvePreparedPages(io, state, &pages, options);
+    utils.measure_profile.recordWysiwyg(.solve, solve_start);
     defer results.deinit(state.allocator);
     try options.checkCanceled();
     return pages;

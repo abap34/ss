@@ -4,6 +4,93 @@ const render_html = @import("../render/html.zig");
 
 var temporary_counter: usize = 0;
 
+const CachedFile = struct {
+    inode: std.Io.File.INode,
+    size: u64,
+    mtime_ns: i96,
+    ctime_ns: i96,
+};
+
+pub const Cache = struct {
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    mutex: std.Io.Mutex = .init,
+    files: std.StringHashMap(CachedFile),
+
+    const max_files = 4096;
+
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) Cache {
+        return .{
+            .allocator = allocator,
+            .io = io,
+            .files = std.StringHashMap(CachedFile).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Cache) void {
+        self.clear();
+        self.files.deinit();
+        self.* = undefined;
+    }
+
+    fn clear(self: *Cache) void {
+        var keys = self.files.keyIterator();
+        while (keys.next()) |path| self.allocator.free(path.*);
+        self.files.clearRetainingCapacity();
+    }
+
+    fn matches(self: *Cache, path: []const u8, expected_size: usize) !bool {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        const cached = self.files.get(path) orelse return false;
+        var file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return false,
+            else => return err,
+        };
+        defer file.close(self.io);
+        const info = try file.stat(self.io);
+        return info.kind == .file and
+            info.size == @as(u64, @intCast(expected_size)) and
+            cached.inode == info.inode and
+            cached.size == info.size and
+            cached.mtime_ns == info.mtime.nanoseconds and
+            cached.ctime_ns == info.ctime.nanoseconds;
+    }
+
+    fn remember(self: *Cache, path: []const u8) !void {
+        var file = try std.Io.Dir.cwd().openFile(self.io, path, .{});
+        defer file.close(self.io);
+        const info = try file.stat(self.io);
+
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        if (self.files.getPtr(path)) |cached| {
+            cached.* = .{
+                .inode = info.inode,
+                .size = info.size,
+                .mtime_ns = info.mtime.nanoseconds,
+                .ctime_ns = info.ctime.nanoseconds,
+            };
+            return;
+        }
+        if (self.files.count() >= max_files) self.clear();
+        const owned_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(owned_path);
+        const entry = try self.files.getOrPut(owned_path);
+        if (entry.found_existing) {
+            self.allocator.free(owned_path);
+        } else {
+            entry.key_ptr.* = owned_path;
+        }
+        entry.value_ptr.* = .{
+            .inode = info.inode,
+            .size = info.size,
+            .mtime_ns = info.mtime.nanoseconds,
+            .ctime_ns = info.ctime.nanoseconds,
+        };
+    }
+};
+
 pub const Asset = struct {
     kind: render.ResourceKind,
     resource_id: render.ResourceId,
@@ -33,6 +120,7 @@ pub fn publish(
     io: std.Io,
     fragment: *const render_html.Fragment,
     cache_directory: []const u8,
+    cache: ?*Cache,
 ) !Set {
     const storage_directory = try std.fs.path.join(allocator, &.{ cache_directory, "editor" });
     defer allocator.free(storage_directory);
@@ -49,7 +137,7 @@ pub fn publish(
         const storage_path = try std.fs.path.join(allocator, &.{ storage_directory, source.relative_path });
         defer allocator.free(storage_path);
         if (std.fs.path.dirname(storage_path)) |parent| try std.Io.Dir.cwd().createDirPath(io, parent);
-        try publishResource(allocator, io, storage_path, source.bytes, source.digest);
+        try publishResource(allocator, io, storage_path, source.bytes, source.digest, cache);
         const absolute_path = try std.fs.path.resolve(allocator, &.{ cwd_buffer[0..cwd_length], storage_path });
         errdefer allocator.free(absolute_path);
         const relative_path = try allocator.dupe(u8, source.relative_path);
@@ -72,8 +160,13 @@ fn publishResource(
     path: []const u8,
     bytes: []const u8,
     digest: [32]u8,
+    cache: ?*Cache,
 ) !void {
-    if (try fileMatches(io, path, bytes.len, digest)) return;
+    if (cache) |file_cache| if (try file_cache.matches(path, bytes.len)) return;
+    if (try fileMatches(io, path, bytes.len, digest)) {
+        if (cache) |file_cache| try file_cache.remember(path);
+        return;
+    }
     const serial = @atomicRmw(usize, &temporary_counter, .Add, 1, .monotonic);
     const temporary = try std.fmt.allocPrint(allocator, "{s}.tmp-{d}-{d}", .{ path, std.c.getpid(), serial });
     defer allocator.free(temporary);
@@ -83,10 +176,12 @@ fn publishResource(
     cwd.rename(temporary, cwd, path, io) catch |err| {
         if (try fileMatches(io, path, bytes.len, digest)) {
             cwd.deleteFile(io, temporary) catch {};
+            if (cache) |file_cache| try file_cache.remember(path);
             return;
         }
         return err;
     };
+    if (cache) |file_cache| try file_cache.remember(path);
 }
 
 fn fileMatches(io: std.Io, path: []const u8, expected_size: usize, expected_digest: [32]u8) !bool {
