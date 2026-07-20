@@ -28,6 +28,22 @@ struct SsQpdfDocument {
         pages = page_document.getAllPages();
     }
 
+    explicit SsQpdfDocument(
+        unsigned char const* bytes,
+        size_t length,
+        bool suppress_warnings = false
+    ) {
+        if (bytes == nullptr || length == 0) throw std::runtime_error("empty PDF input");
+        if (suppress_warnings) pdf.setSuppressWarnings(true);
+        pdf.processMemoryFile(
+            "embedded PDF resource",
+            reinterpret_cast<char const*>(bytes),
+            length
+        );
+        QPDFPageDocumentHelper page_document(pdf);
+        pages = page_document.getAllPages();
+    }
+
     QPDF pdf;
     std::vector<QPDFPageObjectHelper> pages;
 };
@@ -335,16 +351,19 @@ static void ss_qpdf_copy_safe_annotations(
     }
 }
 
-extern "C" int ss_qpdf_metadata(
-    char const* path,
+extern "C" int ss_qpdf_metadata_bytes(
+    unsigned char const* bytes,
+    size_t length,
     SsPdfDocumentMetadata* document,
     SsPdfPageMetadata* page_metadata,
     size_t page_capacity
 ) {
     ss_qpdf_error.clear();
     try {
-        if (path == nullptr || document == nullptr) throw std::runtime_error("invalid PDF metadata arguments");
-        SsQpdfDocument source(path, true);
+        if (bytes == nullptr || length == 0 || document == nullptr) {
+            throw std::runtime_error("invalid PDF metadata arguments");
+        }
+        SsQpdfDocument source(bytes, length, true);
         document->page_count = source.pages.size();
         document->encrypted = source.pdf.isEncrypted() ? 1 : 0;
         document->has_javascript = ss_qpdf_has_javascript(source.pdf) ? 1 : 0;

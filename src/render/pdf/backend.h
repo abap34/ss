@@ -343,10 +343,10 @@ int ss_text_shape(
 );
 void ss_text_shape_free(SsTextShape *shape);
 int ss_raster_size(const char *path, double *width, double *height);
-int ss_raster_metadata(const char *path, SsRasterMetadata *metadata);
+int ss_raster_metadata_bytes(const unsigned char *bytes, size_t length, SsRasterMetadata *metadata);
 int ss_pdf_draw_raster(SsPdf *pdf, const char *path, double x, double y, double width, double height);
 int ss_svg_size(const char *path, double *width, double *height);
-int ss_svg_metadata(const char *path, SsSvgMetadata *metadata);
+int ss_svg_metadata_bytes(const unsigned char *bytes, size_t length, SsSvgMetadata *metadata);
 int ss_pdf_draw_svg(SsPdf *pdf, const char *path, double x, double y, double width, double height);
 int ss_pdf_draw_svg_tinted(SsPdf *pdf, const char *path, double x, double y, double width, double height, double r, double g, double b);
 #if defined(__GNUC__) || defined(__clang__)
@@ -360,8 +360,9 @@ SS_QPDF_BRIDGE_API int ss_qpdf_merge(const char *output, const char *const *inpu
 SS_QPDF_BRIDGE_API int ss_qpdf_empty(const char *output);
 SS_QPDF_BRIDGE_API int ss_qpdf_page_size(const char *path, size_t page_index, int box, double *width, double *height);
 SS_QPDF_BRIDGE_API int ss_qpdf_page_sizes(const char *path, int box, double *widths, double *heights, size_t page_count);
-SS_QPDF_BRIDGE_API int ss_qpdf_metadata(
-    const char *path,
+SS_QPDF_BRIDGE_API int ss_qpdf_metadata_bytes(
+    const unsigned char *bytes,
+    size_t length,
     SsPdfDocumentMetadata *document,
     SsPdfPageMetadata *pages,
     size_t page_capacity
