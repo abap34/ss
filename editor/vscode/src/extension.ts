@@ -111,8 +111,6 @@ function createMiddleware(): Middleware {
       featureEnabled(document, "hover") ? next(document, position, token) : null,
     provideDefinition: (document, position, token, next) =>
       featureEnabled(document, "definition") ? next(document, position, token) : null,
-    provideInlayHints: (document, viewPort, token, next) =>
-      inlayHintsEnabled(document) ? next(document, viewPort, token) : [],
     provideDocumentSymbols: (document, token, next) =>
       featureEnabled(document, "documentSymbols") ? next(document, token) : [],
     provideFoldingRanges: (document, context, token, next) =>
@@ -132,7 +130,6 @@ type LspFeatureName =
   "completion" |
   "hover" |
   "definition" |
-  "inlayHints" |
   "documentSymbols" |
   "foldingRanges" |
   "semanticTokens" |
@@ -141,9 +138,4 @@ type LspFeatureName =
 function featureEnabled(document: vscode.TextDocument, feature: LspFeatureName): boolean {
   const settings = projectSettings(document.uri).lsp;
   return settings.enabled && settings[feature];
-}
-
-function inlayHintsEnabled(document: vscode.TextDocument): boolean {
-  const settings = projectSettings(document.uri).lsp;
-  return settings.enabled && settings.inlayHints && settings.inlayHintArguments;
 }

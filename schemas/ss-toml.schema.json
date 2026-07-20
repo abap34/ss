@@ -83,23 +83,6 @@
               "type": "boolean",
               "default": true,
               "description": "Provide color decorators and presentations."
-            },
-            "inlay_hints": {
-              "type": "object",
-              "description": "Inlay hint categories.",
-              "additionalProperties": false,
-              "properties": {
-                "enabled": {
-                  "type": "boolean",
-                  "default": true,
-                  "description": "Provide inlay hints."
-                },
-                "arguments": {
-                  "type": "boolean",
-                  "default": true,
-                  "description": "Show argument inlay hints."
-                }
-              }
             }
           }
         },

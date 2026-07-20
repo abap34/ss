@@ -15,8 +15,6 @@ export interface LspSettings {
   completion: boolean;
   hover: boolean;
   definition: boolean;
-  inlayHints: boolean;
-  inlayHintArguments: boolean;
   documentSymbols: boolean;
   foldingRanges: boolean;
   semanticTokens: boolean;
@@ -47,8 +45,6 @@ const defaultSettings: ProjectSettings = {
     completion: true,
     hover: true,
     definition: true,
-    inlayHints: true,
-    inlayHintArguments: true,
     documentSymbols: true,
     foldingRanges: true,
     semanticTokens: true,
@@ -80,7 +76,6 @@ export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
     return cloneDefaults();
   }
   const table = parseTomlSubset(source);
-  const inlayHints = boolValue(table, "editor.lsp.inlay_hints", "enabled", defaultSettings.lsp.inlayHints);
   return {
     lsp: {
       enabled: boolValue(table, "editor.lsp", "enabled", defaultSettings.lsp.enabled),
@@ -89,8 +84,6 @@ export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
       completion: boolValue(table, "editor.lsp", "completion", defaultSettings.lsp.completion),
       hover: boolValue(table, "editor.lsp", "hover", defaultSettings.lsp.hover),
       definition: boolValue(table, "editor.lsp", "definition", defaultSettings.lsp.definition),
-      inlayHints,
-      inlayHintArguments: boolValue(table, "editor.lsp.inlay_hints", "arguments", inlayHints),
       documentSymbols: boolValue(table, "editor.lsp", "document_symbols", defaultSettings.lsp.documentSymbols),
       foldingRanges: boolValue(table, "editor.lsp", "folding_ranges", defaultSettings.lsp.foldingRanges),
       semanticTokens: boolValue(table, "editor.lsp", "semantic_tokens", defaultSettings.lsp.semanticTokens),

@@ -5,7 +5,6 @@ pub const definition = @import("query/definition.zig");
 pub const folding = @import("query/folding.zig");
 pub const hover = @import("query/hover.zig");
 pub const imports = @import("query/imports.zig");
-pub const inlay = @import("query/inlay.zig");
 pub const resolve = @import("query/resolve.zig");
 pub const signature = @import("query/signature.zig");
 pub const symbols = @import("query/symbols.zig");

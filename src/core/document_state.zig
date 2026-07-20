@@ -188,14 +188,6 @@ pub const Definition = struct {
     scope_name: ?[]const u8 = null,
 };
 
-pub const InlayHint = struct {
-    line: usize,
-    column: usize,
-    label: []const u8,
-    module_id: SourceModuleId,
-    file: ?[]const u8 = null,
-};
-
 pub const DocumentState = struct {
     allocator: Allocator,
     asset_base_dir: []u8,
@@ -207,7 +199,6 @@ pub const DocumentState = struct {
     const_eval_states: ConstEvalStateMap,
     functions: FunctionMap,
     definitions: std.ArrayList(Definition),
-    hints: std.ArrayList(InlayHint),
     nodes: std.ArrayList(Node),
     page_order: std.ArrayList(NodeId),
     contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
@@ -245,7 +236,6 @@ pub const DocumentState = struct {
             .const_eval_states = ConstEvalStateMap.init(allocator),
             .functions = FunctionMap.init(allocator),
             .definitions = .empty,
-            .hints = std.ArrayList(InlayHint).empty,
             .nodes = .empty,
             .page_order = .empty,
             .contains = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
@@ -304,7 +294,6 @@ pub const DocumentState = struct {
         self.const_eval_states.deinit();
         self.functions.deinit();
         self.definitions.deinit(self.allocator);
-        self.hints.deinit(self.allocator);
         self.contains.deinit();
         for (self.nodes.items) |*node| node.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
@@ -341,8 +330,6 @@ pub const DocumentState = struct {
             if (definition.scope_name) |scope_name| self.allocator.free(scope_name);
         }
         self.definitions.deinit(self.allocator);
-        for (self.hints.items) |hint| self.allocator.free(hint.label);
-        self.hints.deinit(self.allocator);
         self.allocator.free(self.asset_base_dir);
         var it = self.contains.iterator();
         while (it.next()) |entry| {
