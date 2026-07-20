@@ -3,7 +3,15 @@ const std = @import("std");
 pub const Digest = [32]u8;
 
 pub fn document(ir: anytype) Digest {
-    var hash = Hash.init("ss-render-ir-document-v1");
+    return documentDigest(ir, true, "ss-render-ir-document-v1");
+}
+
+pub fn displayDocument(ir: anytype) Digest {
+    return documentDigest(ir, false, "ss-render-ir-display-v1");
+}
+
+fn documentDigest(ir: anytype, comptime include_source_ranges: bool, domain: []const u8) Digest {
+    var hash = Hash.init(domain);
     hash.integer(ir.schema_version);
     hash.integer(ir.resources.entries.len);
     for (ir.resources.entries) |resource| {
@@ -83,7 +91,7 @@ pub fn document(ir: anytype) Digest {
     }
     hash.integer(ir.pages.len);
     for (ir.pages) |*page_value| {
-        const digest = pageDigest(page_value, true);
+        const digest = pageDigest(page_value, true, include_source_ranges);
         hash.bytes(&digest);
     }
     return hash.final();
@@ -143,10 +151,10 @@ fn hashPdfBox(hash: *Hash, box: anytype) void {
 }
 
 pub fn page(page_value: anytype) Digest {
-    return pageDigest(page_value, false);
+    return pageDigest(page_value, false, false);
 }
 
-fn pageDigest(page_value: anytype, comptime include_metadata: bool) Digest {
+fn pageDigest(page_value: anytype, comptime include_metadata: bool, comptime include_source_ranges: bool) Digest {
     var hash = Hash.init("ss-render-ir-page-v1");
     if (include_metadata) {
         hash.integer(page_value.page_id);
@@ -158,7 +166,7 @@ fn pageDigest(page_value: anytype, comptime include_metadata: bool) Digest {
     hash.integer(page_value.items.items.len);
     for (page_value.items.items) |item| {
         hash.tag(item);
-        hashHeader(&hash, item.header(), include_metadata);
+        hashHeader(&hash, item.header(), include_metadata, include_source_ranges);
         switch (item) {
             .fill_rect => |value| {
                 hashRect(&hash, value.rect);
@@ -327,16 +335,18 @@ fn hashStroke(hash: *Hash, stroke: anytype) void {
     hash.float(stroke.dash_offset);
 }
 
-fn hashHeader(hash: *Hash, header: anytype, comptime include_metadata: bool) void {
+fn hashHeader(hash: *Hash, header: anytype, comptime include_metadata: bool, comptime include_source_ranges: bool) void {
     if (include_metadata) {
         hash.integer(header.item_id);
         hash.optionalInteger(header.node_id);
-        if (header.source) |source| {
-            hash.boolean(true);
-            hash.integer(source.module_id);
-            hash.integer(source.start);
-            hash.integer(source.end);
-        } else hash.boolean(false);
+        if (include_source_ranges) {
+            if (header.source) |source| {
+                hash.boolean(true);
+                hash.integer(source.module_id);
+                hash.integer(source.start);
+                hash.integer(source.end);
+            } else hash.boolean(false);
+        }
         hash.optionalInteger(header.semantic_id);
         hashRect(hash, header.bounds);
         hashRect(hash, header.ink_bounds);
