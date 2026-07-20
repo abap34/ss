@@ -71,8 +71,23 @@ pub const AnalysisKind = enum {
     module_graph,
     module_index,
     document_state,
+    snapshot_facts,
     static_semantics,
+    semantics_types,
+    semantics_fields,
+    semantics_functions,
+    semantics_pages,
+    semantics_dependency_queries,
     execution_graph,
+};
+
+pub const WysiwygKind = enum {
+    evaluate_solve,
+    evaluate,
+    prepare,
+    solve,
+    render_compile,
+    snapshot,
 };
 
 var enabled_state: std.atomic.Value(u8) = .init(0);
@@ -81,6 +96,10 @@ var text_advance_hits = CountTime{};
 var text_advance_misses = CountTime{};
 var text_visual_hits = CountTime{};
 var text_visual_misses = CountTime{};
+var text_shape_hits = CountTime{};
+var text_shape_misses = CountTime{};
+var render_page_hits = CountTime{};
+var render_page_misses = CountTime{};
 
 var layout_measure_total = CountTime{};
 var layout_measure_lock_wait = CountTime{};
@@ -125,8 +144,21 @@ var analysis_module_parse = CountTime{};
 var analysis_module_graph = CountTime{};
 var analysis_module_index = CountTime{};
 var analysis_document_state = CountTime{};
+var analysis_snapshot_facts = CountTime{};
 var analysis_static_semantics = CountTime{};
+var analysis_semantics_types = CountTime{};
+var analysis_semantics_fields = CountTime{};
+var analysis_semantics_functions = CountTime{};
+var analysis_semantics_pages = CountTime{};
+var analysis_semantics_dependency_queries = CountTime{};
 var analysis_execution_graph = CountTime{};
+
+var wysiwyg_evaluate_solve = CountTime{};
+var wysiwyg_evaluate = CountTime{};
+var wysiwyg_prepare = CountTime{};
+var wysiwyg_solve = CountTime{};
+var wysiwyg_render_compile = CountTime{};
+var wysiwyg_snapshot = CountTime{};
 
 pub fn isEnabled() bool {
     const state = enabled_state.load(.monotonic);
@@ -156,6 +188,22 @@ pub fn recordText(kind: TextKind, hit: bool, start_ns: i128) void {
         .advance => if (hit) text_advance_hits.add(duration) else text_advance_misses.add(duration),
         .visual => if (hit) text_visual_hits.add(duration) else text_visual_misses.add(duration),
     }
+}
+
+pub fn recordTextShape(hit: bool, start_ns: i128) void {
+    if (start_ns == 0) return;
+    if (hit)
+        text_shape_hits.add(elapsed(start_ns))
+    else
+        text_shape_misses.add(elapsed(start_ns));
+}
+
+pub fn recordRenderPage(hit: bool, start_ns: i128) void {
+    if (start_ns == 0) return;
+    if (hit)
+        render_page_hits.add(elapsed(start_ns))
+    else
+        render_page_misses.add(elapsed(start_ns));
 }
 
 pub fn recordLayoutMeasurementTotal(start_ns: i128) void {
@@ -222,12 +270,27 @@ pub fn recordAnalysis(kind: AnalysisKind, start_ns: i128) void {
     analysisCounter(kind).add(elapsed(start_ns));
 }
 
+pub fn recordWysiwyg(kind: WysiwygKind, start_ns: i128) void {
+    if (start_ns == 0) return;
+    const counter = switch (kind) {
+        .evaluate_solve => &wysiwyg_evaluate_solve,
+        .evaluate => &wysiwyg_evaluate,
+        .prepare => &wysiwyg_prepare,
+        .solve => &wysiwyg_solve,
+        .render_compile => &wysiwyg_render_compile,
+        .snapshot => &wysiwyg_snapshot,
+    };
+    counter.add(elapsed(start_ns));
+}
+
 pub fn printIfEnabled() void {
     if (!isEnabled()) return;
 
     std.debug.print("\n[measure-profile]\n", .{});
     printCachePair("text advance", &text_advance_hits, &text_advance_misses);
     printCachePair("text visual", &text_visual_hits, &text_visual_misses);
+    printCachePair("text shape", &text_shape_hits, &text_shape_misses);
+    printCachePair("render page", &render_page_hits, &render_page_misses);
 
     printCounter("layout provider total", &layout_measure_total);
     printCounter("layout provider lock wait", &layout_measure_lock_wait);
@@ -267,8 +330,21 @@ pub fn printIfEnabled() void {
     printCounter("analysis module graph", &analysis_module_graph);
     printCounter("analysis module index", &analysis_module_index);
     printCounter("analysis document state", &analysis_document_state);
+    printCounter("analysis snapshot facts", &analysis_snapshot_facts);
     printCounter("analysis static semantics", &analysis_static_semantics);
+    printCounter("analysis semantics types", &analysis_semantics_types);
+    printCounter("analysis semantics fields", &analysis_semantics_fields);
+    printCounter("analysis semantics functions", &analysis_semantics_functions);
+    printCounter("analysis semantics pages", &analysis_semantics_pages);
+    printCounter("analysis semantics dependency queries", &analysis_semantics_dependency_queries);
     printCounter("analysis execution graph", &analysis_execution_graph);
+
+    printCounter("WYSIWYG evaluate and solve", &wysiwyg_evaluate_solve);
+    printCounter("WYSIWYG evaluate", &wysiwyg_evaluate);
+    printCounter("WYSIWYG prepare", &wysiwyg_prepare);
+    printCounter("WYSIWYG solve", &wysiwyg_solve);
+    printCounter("WYSIWYG render compile", &wysiwyg_render_compile);
+    printCounter("WYSIWYG snapshot", &wysiwyg_snapshot);
 }
 
 fn analysisCounter(kind: AnalysisKind) *CountTime {
@@ -279,7 +355,13 @@ fn analysisCounter(kind: AnalysisKind) *CountTime {
         .module_graph => &analysis_module_graph,
         .module_index => &analysis_module_index,
         .document_state => &analysis_document_state,
+        .snapshot_facts => &analysis_snapshot_facts,
         .static_semantics => &analysis_static_semantics,
+        .semantics_types => &analysis_semantics_types,
+        .semantics_fields => &analysis_semantics_fields,
+        .semantics_functions => &analysis_semantics_functions,
+        .semantics_pages => &analysis_semantics_pages,
+        .semantics_dependency_queries => &analysis_semantics_dependency_queries,
         .execution_graph => &analysis_execution_graph,
     };
 }
