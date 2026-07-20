@@ -16,7 +16,7 @@ import {
   toWorkspaceEdit,
   workspaceEditTargetsAreCurrent,
 } from "./source";
-import { refreshTiming } from "./timing";
+import { refreshTiming, shouldStartPendingRefresh } from "./timing";
 import { ViewResources } from "./view";
 
 type ClientProvider = () => LanguageClient | undefined;
@@ -24,9 +24,12 @@ type ClientProvider = () => LanguageClient | undefined;
 interface Session {
   document: vscode.TextDocument;
   panel: vscode.WebviewPanel;
+  ready: boolean;
+  buildOnReady: boolean;
   timer?: NodeJS.Timeout;
   serial: number;
   requestRunning: boolean;
+  requestCancellation?: vscode.CancellationTokenSource;
   refreshPending: boolean;
   pendingRefreshSinceMs?: number;
   disposed: boolean;
@@ -92,7 +95,6 @@ export class EditorController implements vscode.Disposable {
     const existing = this.sessions.get(key);
     if (existing) {
       existing.panel.reveal(vscode.ViewColumn.Beside, true);
-      this.schedule(existing, 0);
       return;
     }
 
@@ -109,6 +111,8 @@ export class EditorController implements vscode.Disposable {
     const session: Session = {
       document,
       panel,
+      ready: false,
+      buildOnReady: false,
       serial: 0,
       requestRunning: false,
       refreshPending: false,
@@ -120,6 +124,7 @@ export class EditorController implements vscode.Disposable {
     panel.onDidDispose(() => {
       session.disposed = true;
       if (session.timer) clearTimeout(session.timer);
+      session.requestCancellation?.cancel();
       this.sessions.delete(key);
       this.clientProvider()?.sendNotification("ss/editorClose", {
         textDocument: { uri: document.uri.toString() },
@@ -134,12 +139,46 @@ export class EditorController implements vscode.Disposable {
     this.refreshAll(delayMs);
   }
 
+  build(document: vscode.TextDocument | undefined): boolean {
+    let session = [...this.sessions.values()].find((candidate) =>
+      candidate.panel.active
+    );
+    if (!session && document) {
+      session = this.sessions.get(document.uri.toString());
+    }
+    if (!session && !document) {
+      session ??= this.sessions.size === 1
+        ? this.sessions.values().next().value
+        : undefined;
+    }
+    if (session) {
+      if (!session.ready) {
+        session.buildOnReady = true;
+        return true;
+      }
+      this.requestBuild(session);
+      return true;
+    }
+    this.open(document);
+    if (!document) return false;
+    session = this.sessions.get(document.uri.toString());
+    if (!session) return false;
+    session.buildOnReady = true;
+    return true;
+  }
+
   private async handleMessage(
     session: Session,
     message: WebviewMessage,
   ): Promise<void> {
     if (message.type === "ready") {
-      this.schedule(session, 0);
+      session.ready = true;
+      if (session.buildOnReady) {
+        session.buildOnReady = false;
+        this.schedule(session, 0);
+      } else {
+        this.scheduleAutomatic(session, 0);
+      }
       return;
     }
     if (message.type === "refreshFull") {
@@ -207,7 +246,7 @@ export class EditorController implements vscode.Disposable {
           status: "stale",
           message: "The document changed before the edit was applied.",
         });
-        this.schedule(session, 0);
+        this.scheduleAutomatic(session, 0);
         return;
       }
       if (result.status !== "ok") {
@@ -218,7 +257,7 @@ export class EditorController implements vscode.Disposable {
           status: result.status,
           message: result.message ?? "The shape edit could not be applied.",
         });
-        if (result.status === "stale") this.schedule(session, 0);
+        if (result.status === "stale") this.scheduleAutomatic(session, 0);
         return;
       }
       if (!result.workspaceEdit) {
@@ -252,7 +291,7 @@ export class EditorController implements vscode.Disposable {
         documentVersion: session.document.version,
         selection: result.selection,
       });
-      this.schedule(session, 0);
+      this.scheduleAutomatic(session, 0);
     } catch (error) {
       this.output.appendLine(`[editor] shape edit failed: ${String(error)}`);
       await this.post(session, {
@@ -303,7 +342,7 @@ export class EditorController implements vscode.Disposable {
           status: "stale",
           message: "The document changed before the edit was applied.",
         });
-        this.schedule(session, 0);
+        this.scheduleAutomatic(session, 0);
         return;
       }
       if (result.status !== "ok") {
@@ -313,7 +352,7 @@ export class EditorController implements vscode.Disposable {
           status: result.status,
           message: result.message ?? "The edit could not be applied.",
         });
-        if (result.status === "stale") this.schedule(session, 0);
+        if (result.status === "stale") this.scheduleAutomatic(session, 0);
         return;
       }
       if (!result.workspaceEdit) {
@@ -362,7 +401,7 @@ export class EditorController implements vscode.Disposable {
       const dependency = session.dependencyPaths.has(changedPath) &&
         settings.refreshOnDependencyChange;
       if (direct || dependency) {
-        this.schedule(
+        this.scheduleAutomatic(
           session,
           delayMs ?? settings.debounceMs,
           delayMs ?? settings.maxWaitMs,
@@ -373,8 +412,50 @@ export class EditorController implements vscode.Disposable {
 
   private refreshAll(delayMs: number): void {
     for (const session of this.sessions.values()) {
-      this.schedule(session, delayMs);
+      this.scheduleAutomatic(session, delayMs);
     }
+  }
+
+  private scheduleAutomatic(
+    session: Session,
+    delayMs: number,
+    maxWaitMs = delayMs,
+  ): void {
+    if (
+      projectSettings(session.document.uri).wysiwyg.refreshAutomatically
+    ) {
+      this.schedule(session, delayMs, maxWaitMs);
+      return;
+    }
+    this.markBuildRequired(session);
+  }
+
+  private markBuildRequired(session: Session): void {
+    if (session.disposed) return;
+    if (session.timer) clearTimeout(session.timer);
+    session.timer = undefined;
+    session.pendingRefreshSinceMs = undefined;
+    session.refreshPending = false;
+    session.serial += 1;
+    session.requestCancellation?.cancel();
+    void this.post(session, {
+      type: "buildStatus",
+      revision: session.serial,
+      status: "manual",
+    });
+  }
+
+  private requestBuild(session: Session): void {
+    if (session.requestRunning) {
+      if (session.requestCancellation?.token.isCancellationRequested) {
+        if (session.timer) clearTimeout(session.timer);
+        session.timer = undefined;
+        session.pendingRefreshSinceMs = undefined;
+        session.refreshPending = true;
+      }
+      return;
+    }
+    this.schedule(session, 0);
   }
 
   private schedule(
@@ -383,7 +464,10 @@ export class EditorController implements vscode.Disposable {
     maxWaitMs = delayMs,
   ): void {
     if (session.disposed) return;
-    if (session.requestRunning) session.refreshPending = true;
+    if (session.requestRunning) {
+      session.refreshPending = true;
+      session.requestCancellation?.cancel();
+    }
     // Invalidate an in-flight response as soon as an edit is observed, not
     // after the debounce timer expires.
     session.serial += 1;
@@ -426,6 +510,8 @@ export class EditorController implements vscode.Disposable {
       return;
     }
     session.requestRunning = true;
+    const requestCancellation = new vscode.CancellationTokenSource();
+    session.requestCancellation = requestCancellation;
     const documentVersion = session.document.version;
     const buildStartedAt = performance.now();
     try {
@@ -435,6 +521,7 @@ export class EditorController implements vscode.Disposable {
           textDocument: { uri: session.document.uri.toString() },
           baseSnapshotId: session.snapshotId ?? "",
         },
+        requestCancellation.token,
       );
       if (
         session.disposed || serial !== session.serial ||
@@ -470,9 +557,17 @@ export class EditorController implements vscode.Disposable {
         message: snapshotFailureMessage(error),
       });
     } finally {
+      requestCancellation.dispose();
+      if (session.requestCancellation === requestCancellation) {
+        session.requestCancellation = undefined;
+      }
       session.requestRunning = false;
-      if (session.refreshPending && !session.disposed) {
-        session.refreshPending = false;
+      const refreshImmediately = shouldStartPendingRefresh(
+        session.refreshPending,
+        session.timer !== undefined,
+      );
+      session.refreshPending = false;
+      if (refreshImmediately && !session.disposed) {
         this.schedule(session, 0);
       }
     }

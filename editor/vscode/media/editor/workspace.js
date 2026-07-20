@@ -8,10 +8,11 @@ const rulerSize = 26;
 const rulerInterval = 100;
 const minimumRulerTickSpacing = 50;
 const viewportMarginRatio = 0.04;
-const buildStatusPresentation = {
+export const buildStatusPresentation = {
   starting: { label: "Starting…", icon: "" },
   building: { label: "Building…", icon: "" },
   complete: { label: "Build complete", icon: "✓" },
+  manual: { label: "Build required", icon: "↻" },
   failed: { label: "Build failed", icon: "!" },
   unavailable: { label: "Language server unavailable", icon: "×" },
 };
@@ -379,10 +380,12 @@ export function formatBuildDuration(durationMs) {
   return `${Number((durationMs / 1000).toFixed(1))} s`;
 }
 
-function emptyPreviewMessage(status) {
+export function emptyPreviewMessage(status) {
   switch (status) {
   case "starting": return "Starting WYSIWYG preview…";
   case "building": return "Building WYSIWYG preview…";
+  case "manual":
+    return "Run “ss: Build WYSIWYG Preview” to build the preview.";
   case "unavailable": return "Language server unavailable.";
   case "failed": return "No preview is available.";
   default: return "No preview is available.";

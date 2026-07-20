@@ -28,6 +28,7 @@
   "activationEvents": [
     "onLanguage:ss-slide",
     "onCommand:ss.editor.open",
+    "onCommand:ss.editor.build",
     "onCommand:ss.checkCurrentFile"
   ],
   "categories": [
@@ -72,6 +73,10 @@
         "title": "ss: Open WYSIWYG Editor"
       },
       {
+        "command": "ss.editor.build",
+        "title": "ss: Build WYSIWYG Preview"
+      },
+      {
         "command": "ss.checkCurrentFile",
         "title": "ss: Check Current File"
       }
@@ -89,10 +94,27 @@
           "command": "ss.editor.open"
         },
         {
+          "command": "ss.editor.build"
+        },
+        {
           "command": "ss.checkCurrentFile"
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "ss.editor.build",
+        "key": "ctrl+shift+b",
+        "mac": "cmd+shift+b",
+        "when": "editorFocus && editorLangId == ss-slide"
+      },
+      {
+        "command": "ss.editor.build",
+        "key": "ctrl+shift+b",
+        "mac": "cmd+shift+b",
+        "when": "activeWebviewPanelId == ss.wysiwyg"
+      }
+    ],
     "configurationDefaults": {
       "[ss-slide]": {
         "editor.quickSuggestions": {

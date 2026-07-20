@@ -15,6 +15,7 @@ const geometry = await import(
 testHorizontalConstraintGeometry();
 testVerticalConstraintGeometry();
 await testCompletionDefaults();
+await testManualBuildCommand();
 
 function testHorizontalConstraintGeometry() {
   const source = geometry.anchorSegment(
@@ -64,6 +65,36 @@ async function testCompletionDefaults() {
   assert(
     defaults?.["editor.wordBasedSuggestions"] === "off",
     "VS Code word suggestions would be mixed into ss field completion",
+  );
+}
+
+async function testManualBuildCommand() {
+  const manifest = JSON.parse(
+    await readFile(path.join(root, "editor", "vscode", "package.json"), "utf8"),
+  );
+  const command = manifest.contributes?.commands?.find(
+    (item) => item.command === "ss.editor.build",
+  );
+  assert(command?.title === "ss: Build WYSIWYG Preview", "manual build command is missing");
+  assert(
+    manifest.activationEvents?.includes("onCommand:ss.editor.build"),
+    "manual build command does not activate the extension",
+  );
+  const keybindings = manifest.contributes?.keybindings?.filter(
+    (item) => item.command === "ss.editor.build",
+  ) || [];
+  assert(keybindings.length === 2, "manual build shortcuts are missing");
+  for (const keybinding of keybindings) {
+    assert(keybinding.key === "ctrl+shift+b", "manual build shortcut differs by context");
+    assert(keybinding.mac === "cmd+shift+b", "macOS manual build shortcut is missing");
+  }
+  assert(
+    keybindings.some((item) => item.when === "editorFocus && editorLangId == ss-slide"),
+    "manual build shortcut is unavailable in ss source editors",
+  );
+  assert(
+    keybindings.some((item) => item.when === "activeWebviewPanelId == ss.wysiwyg"),
+    "manual build shortcut is unavailable in the WYSIWYG editor",
   );
 }
 

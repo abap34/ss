@@ -747,6 +747,12 @@ button {
   border-color: var(--accent-border);
   background: var(--accent-background);
 }
+.build-status--manual {
+  color: var(--accent-text);
+}
+.build-status--manual .build-status-icon {
+  border-color: var(--accent-border);
+}
 .build-status--failed {
   color: var(--error);
 }

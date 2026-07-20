@@ -181,7 +181,11 @@ function materializeSnapshotDisplay(snapshot) {
 
 function acceptBuildStatus(message) {
   if (!setBuildStatus(message.status, message.revision)) return;
-  const clearedError = (message.status === "starting" || message.status === "building") &&
+  const clearedError = (
+    message.status === "starting" ||
+    message.status === "building" ||
+    message.status === "manual"
+  ) &&
     state.toast?.kind === "error";
   if (clearedError) clearToast();
   if (clearedError || !workspace.updateBuildStatus()) render();
@@ -200,10 +204,10 @@ function setBuildStatus(status, revision, durationMs = null) {
   state.buildDurationMs = validBuildDuration(durationMs) ? durationMs : null;
   return true;
 }
+
 function validBuildDuration(value) {
   return Number.isFinite(value) && value >= 0;
 }
-
 
 function showSuccess(message) {
   state.toast = { kind: "success", message };
@@ -314,10 +318,16 @@ const buildStatuses = new Set([
   "starting",
   "building",
   "complete",
+  "manual",
   "failed",
   "unavailable",
 ]);
-const terminalBuildStatuses = new Set(["complete", "failed", "unavailable"]);
+const terminalBuildStatuses = new Set([
+  "complete",
+  "manual",
+  "failed",
+  "unavailable",
+]);
 
 render();
 vscode.postMessage({ type: "ready" });
