@@ -127,8 +127,12 @@ const Server = struct {
         self.analysis = snapshot;
         self.analysis_revision = self.active_revision;
         snapshot_owned = false;
+        try self.publishAnalysisDiagnostics(&diagnostics);
+    }
+
+    fn publishAnalysisDiagnostics(self: *Server, diagnostics: *DiagnosticSet) !void {
         if (self.analysis.?.project.lsp.enabled and self.analysis.?.project.lsp.diagnostics) {
-            try self.publishDiagnostics(&diagnostics);
+            try self.publishDiagnostics(diagnostics);
         } else {
             var empty = DiagnosticSet.init(self.allocator);
             defer empty.deinit();
@@ -151,7 +155,61 @@ const Server = struct {
 
     fn rebuildEditorImmediately(self: *Server, changed_path: []const u8) !void {
         self.clearPendingRebuild();
+        if (try self.completeRetainedEditor(changed_path)) return;
         try self.rebuild(changed_path, .required, false);
+    }
+
+    fn completeRetainedEditor(self: *Server, changed_path: []const u8) !bool {
+        const snapshot = if (self.analysis) |*value| value else return false;
+        if (snapshot.generation != self.documents.generation or
+            self.analysis_revision != self.active_revision or
+            !snapshot.coversPath(changed_path) or
+            snapshot.layout_output != null or
+            snapshot.retained_layout_inputs == null)
+        {
+            return false;
+        }
+
+        var diagnostics = DiagnosticSet.init(self.allocator);
+        defer diagnostics.deinit();
+        var layout_context = AnalysisLayoutContext{
+            .server = self,
+            .diagnostics = &diagnostics,
+            .include_editor_snapshot = true,
+            .prefer_translation_patch = false,
+        };
+        const completed = try snapshot.completeRetainedLayout(.{
+            .context = &layout_context,
+            .run = runAnalysisLayout,
+            .on_error = addAnalysisLayoutError,
+        }, .{
+            .context = self,
+            .is_canceled = analysisCanceled,
+        });
+        if (!completed) return false;
+        try self.checkCanceled();
+        try diagnostics.addAnalysisBag(&snapshot.diagnostics);
+        try self.publishAnalysisDiagnostics(&diagnostics);
+        return true;
+    }
+
+    fn acceptCurrentRevision(self: *Server) void {
+        if (self.pending_rebuild_path != null) {
+            self.pending_rebuild_revision = self.active_revision;
+            return;
+        }
+        if (self.analysis) |*snapshot| {
+            if (snapshot.generation == self.documents.generation) self.analysis_revision = self.active_revision;
+        }
+    }
+
+    fn republishCurrentDiagnostics(self: *Server) !void {
+        const snapshot = if (self.analysis) |*value| value else return;
+        if (snapshot.generation != self.documents.generation or self.analysis_revision != self.active_revision) return;
+        var diagnostics = DiagnosticSet.init(self.allocator);
+        defer diagnostics.deinit();
+        try diagnostics.addAnalysisBag(&snapshot.diagnostics);
+        try self.publishAnalysisDiagnostics(&diagnostics);
     }
 
     fn scheduleRebuild(self: *Server, changed_path: []const u8) !void {
@@ -370,6 +428,7 @@ const Server = struct {
                 .is_canceled = analysisCanceled,
             },
             .embedded_cache = &self.embedded_cache,
+            .retain_layout_inputs = !include_layout and self.wysiwyg_paths.count() != 0,
         });
         errdefer analysis_snapshot.deinit();
         try diagnostics.addAnalysisBag(&analysis_snapshot.diagnostics);
