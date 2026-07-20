@@ -20,9 +20,35 @@
 #include FT_FREETYPE_H
 
 #define SS_PI 3.14159265358979323846
+#define SS_FONT_SOURCE_CACHE_MAX_ENTRIES 1024
 
 static GMutex ss_font_registration_mutex;
 static GRWLock ss_font_config_lock;
+static uint64_t ss_font_config_generation;
+static GMutex ss_font_source_cache_mutex;
+static GHashTable *ss_font_source_cache;
+
+typedef struct SsFontSource {
+    char *path;
+    unsigned int index;
+    char *postscript_name;
+    int synthetic_bold;
+    int synthetic_italic;
+} SsFontSource;
+
+static void ss_font_source_destroy(void *opaque) {
+    SsFontSource *source = (SsFontSource *)opaque;
+    if (source == NULL) return;
+    g_free(source->path);
+    g_free(source->postscript_name);
+    g_free(source);
+}
+
+static void ss_font_source_cache_clear(void) {
+    g_mutex_lock(&ss_font_source_cache_mutex);
+    if (ss_font_source_cache != NULL) g_hash_table_remove_all(ss_font_source_cache);
+    g_mutex_unlock(&ss_font_source_cache_mutex);
+}
 
 typedef struct SsPdfFontFace {
     char *path;
@@ -167,10 +193,19 @@ int ss_font_register(const char *path) {
     if (added == FcTrue) {
         PangoFontMap *font_map = pango_cairo_font_map_get_default();
         if (font_map != NULL && PANGO_IS_FC_FONT_MAP(font_map)) pango_fc_font_map_config_changed(PANGO_FC_FONT_MAP(font_map));
+        ss_font_config_generation++;
+        ss_font_source_cache_clear();
     }
     g_rw_lock_writer_unlock(&ss_font_config_lock);
     g_mutex_unlock(&ss_font_registration_mutex);
     return added == FcTrue ? 0 : 1;
+}
+
+uint64_t ss_font_generation(void) {
+    g_rw_lock_reader_lock(&ss_font_config_lock);
+    const uint64_t generation = ss_font_config_generation;
+    g_rw_lock_reader_unlock(&ss_font_config_lock);
+    return generation;
 }
 
 static void ss_pdf_rounded_rect_path(cairo_t *cr, double x, double y, double width, double height, double radius) {
@@ -851,6 +886,128 @@ static char *ss_font_family_copy(PangoFont *font) {
     return result;
 }
 
+static void ss_font_source_set_outputs(
+    const SsFontSource *source,
+    char **path_out,
+    unsigned int *index_out,
+    char **postscript_name_out,
+    int *synthetic_bold_out,
+    int *synthetic_italic_out
+) {
+    *path_out = g_strdup(source != NULL && source->path != NULL ? source->path : "");
+    *index_out = source != NULL ? source->index : 0;
+    *postscript_name_out = g_strdup(source != NULL && source->postscript_name != NULL ? source->postscript_name : "");
+    *synthetic_bold_out = source != NULL ? source->synthetic_bold : 0;
+    *synthetic_italic_out = source != NULL ? source->synthetic_italic : 0;
+}
+
+static void ss_font_source_read_pattern(SsFontSource *source, FcPattern *pattern) {
+    if (source == NULL || pattern == NULL) return;
+    FcChar8 *path = NULL;
+    int index = 0;
+    FcChar8 *postscript_name = NULL;
+    if (FcPatternGetString(pattern, FC_FILE, 0, &path) == FcResultMatch && path != NULL) {
+        g_free(source->path);
+        source->path = g_strdup((const char *)path);
+    }
+    if (FcPatternGetInteger(pattern, FC_INDEX, 0, &index) == FcResultMatch && index >= 0) {
+        source->index = (unsigned int)index;
+    }
+    if (FcPatternGetString(pattern, FC_POSTSCRIPT_NAME, 0, &postscript_name) == FcResultMatch && postscript_name != NULL) {
+        g_free(source->postscript_name);
+        source->postscript_name = g_strdup((const char *)postscript_name);
+    }
+    FcBool embolden = FcFalse;
+    if (FcPatternGetBool(pattern, FC_EMBOLDEN, 0, &embolden) == FcResultMatch) {
+        source->synthetic_bold = embolden == FcTrue;
+    }
+    FcMatrix *matrix = NULL;
+    if (FcPatternGetMatrix(pattern, FC_MATRIX, 0, &matrix) == FcResultMatch && matrix != NULL) {
+        source->synthetic_italic = matrix->xy != 0 || matrix->yx != 0;
+    }
+}
+
+static char *ss_font_source_cache_key(const PangoFontDescription *description) {
+    if (description == NULL) return NULL;
+    const char *family = pango_font_description_get_family(description);
+    PangoFontDescription *key = pango_font_description_new();
+    if (key == NULL) return NULL;
+    pango_font_description_set_family(key, family != NULL ? family : "");
+    pango_font_description_set_weight(key, pango_font_description_get_weight(description));
+    pango_font_description_set_style(key, pango_font_description_get_style(description));
+    pango_font_description_set_stretch(key, pango_font_description_get_stretch(description));
+    char *text = pango_font_description_to_string(key);
+    pango_font_description_free(key);
+    return text;
+}
+
+static int ss_font_source_fc_width(PangoStretch stretch) {
+    switch (stretch) {
+        case PANGO_STRETCH_ULTRA_CONDENSED: return FC_WIDTH_ULTRACONDENSED;
+        case PANGO_STRETCH_EXTRA_CONDENSED: return FC_WIDTH_EXTRACONDENSED;
+        case PANGO_STRETCH_CONDENSED: return FC_WIDTH_CONDENSED;
+        case PANGO_STRETCH_SEMI_CONDENSED: return FC_WIDTH_SEMICONDENSED;
+        case PANGO_STRETCH_SEMI_EXPANDED: return FC_WIDTH_SEMIEXPANDED;
+        case PANGO_STRETCH_EXPANDED: return FC_WIDTH_EXPANDED;
+        case PANGO_STRETCH_EXTRA_EXPANDED: return FC_WIDTH_EXTRAEXPANDED;
+        case PANGO_STRETCH_ULTRA_EXPANDED: return FC_WIDTH_ULTRAEXPANDED;
+        default: return FC_WIDTH_NORMAL;
+    }
+}
+
+static void ss_font_source_copy_fallback(
+    const PangoFontDescription *description,
+    char **path_out,
+    unsigned int *index_out,
+    char **postscript_name_out,
+    int *synthetic_bold_out,
+    int *synthetic_italic_out
+) {
+    char *cache_key = ss_font_source_cache_key(description);
+    if (cache_key == NULL) {
+        ss_font_source_set_outputs(NULL, path_out, index_out, postscript_name_out, synthetic_bold_out, synthetic_italic_out);
+        return;
+    }
+
+    g_mutex_lock(&ss_font_source_cache_mutex);
+    if (ss_font_source_cache == NULL) {
+        ss_font_source_cache = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, ss_font_source_destroy);
+    }
+    SsFontSource *source = ss_font_source_cache != NULL
+        ? (SsFontSource *)g_hash_table_lookup(ss_font_source_cache, cache_key)
+        : NULL;
+    if (source == NULL) {
+        source = g_new0(SsFontSource, 1);
+        source->path = g_strdup("");
+        source->postscript_name = g_strdup("");
+        const char *family = pango_font_description_get_family(description);
+        FcPattern *query = FcPatternCreate();
+        if (query != NULL) {
+            if (family != NULL) FcPatternAddString(query, FC_FAMILY, (const FcChar8 *)family);
+            FcPatternAddInteger(query, FC_WEIGHT, FcWeightFromOpenTypeDouble((double)pango_font_description_get_weight(description)));
+            FcPatternAddInteger(query, FC_WIDTH, ss_font_source_fc_width(pango_font_description_get_stretch(description)));
+            const PangoStyle style = pango_font_description_get_style(description);
+            FcPatternAddInteger(query, FC_SLANT, style == PANGO_STYLE_NORMAL ? FC_SLANT_ROMAN : (style == PANGO_STYLE_ITALIC ? FC_SLANT_ITALIC : FC_SLANT_OBLIQUE));
+            FcConfigSubstitute(NULL, query, FcMatchPattern);
+            FcDefaultSubstitute(query);
+            FcResult result = FcResultNoMatch;
+            FcPattern *match = FcFontMatch(NULL, query, &result);
+            FcPatternDestroy(query);
+            ss_font_source_read_pattern(source, match);
+            if (match != NULL) FcPatternDestroy(match);
+        }
+        if (ss_font_source_cache != NULL) {
+            if (g_hash_table_size(ss_font_source_cache) >= SS_FONT_SOURCE_CACHE_MAX_ENTRIES) {
+                g_hash_table_remove_all(ss_font_source_cache);
+            }
+            g_hash_table_insert(ss_font_source_cache, g_strdup(cache_key), source);
+        }
+    }
+    ss_font_source_set_outputs(source, path_out, index_out, postscript_name_out, synthetic_bold_out, synthetic_italic_out);
+    g_mutex_unlock(&ss_font_source_cache_mutex);
+    g_free(cache_key);
+}
+
 static void ss_font_source_copy(
     PangoFont *font,
     char **path_out,
@@ -859,62 +1016,23 @@ static void ss_font_source_copy(
     int *synthetic_bold_out,
     int *synthetic_italic_out
 ) {
-    *path_out = g_strdup("");
-    *index_out = 0;
-    *postscript_name_out = g_strdup("");
-    *synthetic_bold_out = 0;
-    *synthetic_italic_out = 0;
-    if (font == NULL) return;
-    FcPattern *owned_match = NULL;
-    FcPattern *pattern = NULL;
+    if (font == NULL) {
+        ss_font_source_set_outputs(NULL, path_out, index_out, postscript_name_out, synthetic_bold_out, synthetic_italic_out);
+        return;
+    }
     if (PANGO_IS_FC_FONT(font)) {
-        pattern = pango_fc_font_get_pattern(PANGO_FC_FONT(font));
+        SsFontSource source = {0};
+        source.path = g_strdup("");
+        source.postscript_name = g_strdup("");
+        ss_font_source_read_pattern(&source, pango_fc_font_get_pattern(PANGO_FC_FONT(font)));
+        ss_font_source_set_outputs(&source, path_out, index_out, postscript_name_out, synthetic_bold_out, synthetic_italic_out);
+        g_free(source.path);
+        g_free(source.postscript_name);
+        return;
     }
-    if (pattern == NULL) {
-        PangoFontDescription *description = pango_font_describe(font);
-        const char *family = description != NULL ? pango_font_description_get_family(description) : NULL;
-        FcPattern *query = FcPatternCreate();
-        if (query != NULL) {
-            if (family != NULL) FcPatternAddString(query, FC_FAMILY, (const FcChar8 *)family);
-            if (description != NULL) {
-                FcPatternAddInteger(query, FC_WEIGHT, FcWeightFromOpenTypeDouble((double)pango_font_description_get_weight(description)));
-                const PangoStyle style = pango_font_description_get_style(description);
-                FcPatternAddInteger(query, FC_SLANT, style == PANGO_STYLE_NORMAL ? FC_SLANT_ROMAN : (style == PANGO_STYLE_ITALIC ? FC_SLANT_ITALIC : FC_SLANT_OBLIQUE));
-            }
-            FcConfigSubstitute(NULL, query, FcMatchPattern);
-            FcDefaultSubstitute(query);
-            FcResult result = FcResultNoMatch;
-            owned_match = FcFontMatch(NULL, query, &result);
-            FcPatternDestroy(query);
-            pattern = owned_match;
-        }
-        if (description != NULL) pango_font_description_free(description);
-    }
-    if (pattern != NULL) {
-        FcChar8 *path = NULL;
-        int index = 0;
-        FcChar8 *postscript_name = NULL;
-        if (FcPatternGetString(pattern, FC_FILE, 0, &path) == FcResultMatch && path != NULL) {
-            g_free(*path_out);
-            *path_out = g_strdup((const char *)path);
-        }
-        if (FcPatternGetInteger(pattern, FC_INDEX, 0, &index) == FcResultMatch && index >= 0) {
-            *index_out = (unsigned int)index;
-        }
-        if (FcPatternGetString(pattern, FC_POSTSCRIPT_NAME, 0, &postscript_name) == FcResultMatch && postscript_name != NULL) {
-            g_free(*postscript_name_out);
-            *postscript_name_out = g_strdup((const char *)postscript_name);
-        }
-        FcBool embolden = FcFalse;
-        if (FcPatternGetBool(pattern, FC_EMBOLDEN, 0, &embolden) == FcResultMatch) {
-            *synthetic_bold_out = embolden == FcTrue;
-        }
-        FcMatrix *matrix = NULL;
-        if (FcPatternGetMatrix(pattern, FC_MATRIX, 0, &matrix) == FcResultMatch && matrix != NULL) {
-            *synthetic_italic_out = matrix->xy != 0 || matrix->yx != 0;
-        }
-    }
-    if (owned_match != NULL) FcPatternDestroy(owned_match);
+    PangoFontDescription *description = pango_font_describe(font);
+    ss_font_source_copy_fallback(description, path_out, index_out, postscript_name_out, synthetic_bold_out, synthetic_italic_out);
+    if (description != NULL) pango_font_description_free(description);
 }
 
 static double ss_math_constant_ratio(hb_font_t *font, hb_ot_math_constant_t constant, double font_size) {

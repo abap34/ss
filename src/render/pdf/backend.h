@@ -2,6 +2,7 @@
 #define SS_RENDER_PDF_BACKEND_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -205,6 +206,7 @@ const char *ss_pdf_gdk_pixbuf_version_string(void);
 int ss_pdf_fontconfig_version(void);
 const char *ss_pdf_harfbuzz_version_string(void);
 int ss_font_register(const char *path);
+uint64_t ss_font_generation(void);
 
 SsPdf *ss_pdf_create(const char *path, double width, double height);
 void ss_pdf_destroy(SsPdf *pdf);
