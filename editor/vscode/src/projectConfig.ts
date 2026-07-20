@@ -26,6 +26,7 @@ export interface LspSettings {
 export interface WysiwygSettings {
   enabled: boolean;
   debounceMs: number;
+  maxWaitMs: number;
   refreshOnDependencyChange: boolean;
 }
 
@@ -56,6 +57,7 @@ const defaultSettings: ProjectSettings = {
   wysiwyg: {
     enabled: true,
     debounceMs: 140,
+    maxWaitMs: 700,
     refreshOnDependencyChange: true,
   },
   pageGuide: {
@@ -97,6 +99,7 @@ export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
     wysiwyg: {
       enabled: boolValue(table, "editor.wysiwyg", "enabled", defaultSettings.wysiwyg.enabled),
       debounceMs: numberValue(table, "editor.wysiwyg", "debounce", defaultSettings.wysiwyg.debounceMs, 0),
+      maxWaitMs: numberValue(table, "editor.wysiwyg", "max_wait", defaultSettings.wysiwyg.maxWaitMs, 0),
       refreshOnDependencyChange: boolValue(table, "editor.wysiwyg.refresh", "dependency", defaultSettings.wysiwyg.refreshOnDependencyChange),
     },
     pageGuide: {
