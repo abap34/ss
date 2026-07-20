@@ -16,6 +16,7 @@ const render_math = @import("render_math");
 const render_text = @import("render_text");
 const render_compile = @import("../compile.zig");
 const fingerprint = @import("fingerprint.zig");
+const page_cache = @import("page_cache.zig");
 const text_measure = core.render_text_measure;
 
 const TSLanguage = opaque {};
@@ -117,6 +118,7 @@ const NativePdfError = error{
 };
 
 pub const native_artifact_cache_version = "ss-native-artifacts-v6";
+const render_page_cache_version = "ss-render-page-v1";
 const layout_measurement_cache_version = "ss-native-layout-measure-v13";
 const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
@@ -913,6 +915,7 @@ pub const Compiler = struct {
             .cache_dir = self.options.cache_dir,
             .highlight_languages = self.options.highlight_languages,
         }, null);
+        if (preparedPagesNeedStructuredMath(pages)) try render_math.prepareFont(allocator, self.io);
         try std.Io.checkCancel(self.io);
     }
 
@@ -934,12 +937,91 @@ pub const Compiler = struct {
             .asset_base_dir = if (state.asset_base_dir.len == 0) "." else state.asset_base_dir,
             .cache_dir = asset_cache_dir,
             .highlight_languages = self.options.highlight_languages,
+            .text_cache = self.options.text_cache,
+            .resource_cache = self.options.resource_cache,
         };
 
         const commands = try buildObjectCommands(allocator, state, prepared_page);
         defer {
             for (commands) |*command| command.deinit(allocator);
             allocator.free(commands);
+        }
+        if (self.options.page_cache) |cache| {
+            const page_cache_start = utils.measure_profile.start();
+            const key = try fingerprint.renderPageKey(
+                .{
+                    .allocator = allocator,
+                    .io = self.io,
+                    .asset_base_dir = draw_context.asset_base_dir,
+                    .resource_cache = self.options.resource_cache,
+                },
+                render_page_cache_version,
+                prepared_page.page_id,
+                prepared_page.index,
+                prepared_page.background,
+                self.options.highlight_languages,
+                commands,
+            );
+            if (try cache.materialize(key, allocator, self.io, resources, fonts, math)) |page| {
+                utils.measure_profile.recordRenderPage(true, page_cache_start);
+                return page;
+            }
+
+            var local_resources = render_resources.Builder{ .cache = self.options.resource_cache };
+            defer local_resources.deinit(allocator);
+            var local_fonts = render_ir.FontBuilder{};
+            defer local_fonts.deinit(allocator);
+            var local_math = render_ir.MathBuilder{};
+            defer local_math.deinit(allocator);
+            var page = try buildRenderPage(
+                &draw_context,
+                prepared_page.page_id,
+                prepared_page.index,
+                prepared_page.background,
+                commands,
+                &local_resources,
+                &local_fonts,
+                &local_math,
+            );
+            var page_live = true;
+            errdefer if (page_live) page.deinit(allocator);
+            const source_dependencies = try local_resources.sourceDependencies(allocator, self.io);
+            defer render_resources.deinitSourceDependencies(allocator, source_dependencies);
+            var resource_graph = try local_resources.take(allocator);
+            defer resource_graph.deinit(allocator);
+            var font_catalog = try local_fonts.take(allocator);
+            defer font_catalog.deinit(allocator);
+            var math_catalog = try local_math.take(allocator);
+            defer math_catalog.deinit(allocator);
+            const cached = try cache.put(
+                key,
+                allocator,
+                &page,
+                &resource_graph,
+                source_dependencies,
+                &font_catalog,
+                &math_catalog,
+            );
+            if (!cached) {
+                try mergeUncachedPage(
+                    allocator,
+                    self.io,
+                    &page,
+                    &resource_graph,
+                    &font_catalog,
+                    &math_catalog,
+                    resources,
+                    fonts,
+                    math,
+                );
+                utils.measure_profile.recordRenderPage(false, page_cache_start);
+                return page;
+            }
+            page.deinit(allocator);
+            page_live = false;
+            const materialized = (try cache.materialize(key, allocator, self.io, resources, fonts, math)) orelse return error.InvalidRenderPageCache;
+            utils.measure_profile.recordRenderPage(false, page_cache_start);
+            return materialized;
         }
         return try buildRenderPage(
             &draw_context,
@@ -953,6 +1035,64 @@ pub const Compiler = struct {
         );
     }
 };
+
+pub const PageCache = page_cache.Cache;
+
+const MathTreeMapping = struct {
+    old: render_ir.MathTreeId,
+    new: render_ir.MathTreeId,
+};
+
+fn mergeUncachedPage(
+    allocator: Allocator,
+    io: std.Io,
+    page: *render_ir.Page,
+    resource_graph: *const render_ir.ResourceGraph,
+    font_catalog: *const render_ir.FontCatalog,
+    math_catalog: *const render_ir.MathCatalog,
+    resources: *render_resources.Builder,
+    fonts: *render_ir.FontBuilder,
+    math: *render_ir.MathBuilder,
+) !void {
+    for (resource_graph.entries) |*resource| {
+        const added = try resources.addResource(allocator, io, resource);
+        if (!std.mem.eql(u8, &added, &resource.id)) return error.InvalidRenderPageCache;
+    }
+    for (font_catalog.instances) |*font| {
+        const added = try fonts.add(allocator, io, font.spec());
+        if (!std.mem.eql(u8, &added, &font.id)) return error.InvalidRenderPageCache;
+    }
+    const mappings = try allocator.alloc(MathTreeMapping, math_catalog.trees.len);
+    defer allocator.free(mappings);
+    for (math_catalog.trees, 0..) |tree, index| mappings[index] = .{
+        .old = tree.id,
+        .new = try math.add(allocator, tree.source, tree.input_kind),
+    };
+    for (page.items.items) |*item| switch (item.*) {
+        .math => |*value| {
+            value.tree = for (mappings) |mapping| {
+                if (mapping.old == value.tree) break mapping.new;
+            } else return error.InvalidRenderPageCache;
+        },
+        else => {},
+    };
+}
+
+fn preparedPagesNeedStructuredMath(pages: *const core.prepared.PreparedPages) bool {
+    for (pages.pages) |page| {
+        for (page.objects) |object| {
+            if (object.render.kind == .vector_math) {
+                if (object.payload_kind != .math_tex) return true;
+                continue;
+            }
+            for (object.asset_deps) |dependency| switch (dependency.kind) {
+                .inline_math, .display_math, .block_math => return true,
+                .icon, .vector_pdf, .raster_asset => {},
+            };
+        }
+    }
+    return false;
+}
 
 fn buildObjectCommands(
     allocator: Allocator,
@@ -1804,8 +1944,17 @@ fn buildRenderPage(
         .asset_base_dir = parent_ctx.asset_base_dir,
         .cache_dir = parent_ctx.cache_dir,
         .highlight_languages = parent_ctx.highlight_languages,
+        .text_cache = parent_ctx.text_cache,
+        .resource_cache = parent_ctx.resource_cache,
         .command_failure = parent_ctx.command_failure,
-        .emitter = .{ .page = &page, .resources = resources, .fonts = fonts, .math = math, .io = parent_ctx.io },
+        .emitter = .{
+            .page = &page,
+            .resources = resources,
+            .fonts = fonts,
+            .math = math,
+            .io = parent_ctx.io,
+            .text_cache = parent_ctx.text_cache,
+        },
         .commands = commands,
     };
 
@@ -1989,6 +2138,7 @@ const MeasurementScope = struct {
             .fonts = fonts,
             .math = math,
             .io = self.ctx.io,
+            .text_cache = if (self.previous_emitter) |emitter| emitter.text_cache else self.ctx.text_cache,
             .node_id = if (self.previous_emitter) |emitter| emitter.node_id else null,
         };
         self.ctx.link_annotations = &self.links;
@@ -4334,7 +4484,11 @@ fn compileStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind) 
         emitter.math,
         source,
         mathInputKind(kind),
-        .{ .font_size = structured_math_design_size, .display = kind != .inline_math },
+        .{
+            .font_size = structured_math_design_size,
+            .display = kind != .inline_math,
+            .text_cache = emitter.text_cache,
+        },
     );
 }
 

@@ -46,7 +46,7 @@ pub fn layout(
     options: Options,
 ) !render.MathLayout {
     if (options.font_size <= 0 or !std.math.isFinite(options.font_size)) return error.InvalidMathSize;
-    try ensureBundledMathFont(allocator, io);
+    try prepareFont(allocator, io);
     const math_font = core.font.Face{
         .family = "STIX Two Math",
         .weight = 400,
@@ -96,7 +96,7 @@ pub fn layout(
 const bundled_font_directory = ".ss-cache/render/fonts";
 const bundled_font_path = bundled_font_directory ++ "/3a5f3f26f40d5698b3c62dd085d48d6663696a3f80825aab8b553d5097518e8c.otf";
 
-fn ensureBundledMathFont(allocator: Allocator, io: std.Io) !void {
+pub fn prepareFont(allocator: Allocator, io: std.Io) !void {
     bundled_math_font_mutex.lockUncancelable(io);
     defer bundled_math_font_mutex.unlock(io);
     if (bundled_math_font_ready) return;
