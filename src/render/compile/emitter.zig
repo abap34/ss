@@ -35,6 +35,7 @@ pub const Emitter = struct {
     fonts: *render.FontBuilder,
     math: *render.MathBuilder,
     io: std.Io,
+    text_cache: ?*text.Cache = null,
     node_id: ?core.NodeId = null,
 
     pub fn replaceNodeId(self: *Emitter, node_id: ?core.NodeId) ?core.NodeId {
@@ -95,7 +96,18 @@ pub const Emitter = struct {
         wrap: bool,
         decoration: TextDecoration,
     ) !void {
-        var layout = try text.shape(allocator, self.io, self.resources, self.fonts, content, font, font_size, width, wrap);
+        var layout = try text.shape(
+            allocator,
+            self.io,
+            self.resources,
+            self.fonts,
+            content,
+            font,
+            font_size,
+            width,
+            wrap,
+            self.text_cache,
+        );
         var owns_layout = true;
         errdefer if (owns_layout) layout.deinit(allocator);
         var segments = std.ArrayList(DecorationSegment).empty;

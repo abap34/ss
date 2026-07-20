@@ -342,6 +342,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         import("pdf_ffi", pdf_ffi_mod),
         import("render", render_mod),
         import("render_resources", render_resources_mod),
+        import("utils", utils_mod),
     }, true);
     const render_math_mod = createModule(ctx, "src/render/compile/math.zig", &.{
         import("core", core_mod),
