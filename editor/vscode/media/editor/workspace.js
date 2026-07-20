@@ -1,5 +1,5 @@
 import { element } from "./dom.js";
-import { renderObjectSheet } from "./details.js";
+import { renderObjectSheet, sourceButton } from "./details.js";
 import { InteractionController } from "./interaction.js";
 import { renderPage } from "./document.js";
 
@@ -116,6 +116,13 @@ export class WorkspaceView {
     surface.append(preview);
     surface.append(this.interaction.renderLayer(page));
     shell.append(surface);
+    if (page.location?.path) {
+      const open = sourceButton(page, this.actions.revealSource);
+      open.classList.add("page-source-button");
+      open.title = `Open ${page.name || `Page ${page.index}`} in Editor`;
+      open.setAttribute("aria-label", open.title);
+      shell.append(open);
+    }
     if (this.state.mode === "continuous") {
       const caption = element("div", "page-caption");
       caption.textContent = page.name;

@@ -9,8 +9,22 @@ export function editorSnapshot() {
     coordinate_space: { unit: "pt", origin: "page-top-left", x_axis: "right", y_axis: "down" },
     layout: {
       pages: [
-        { id: 11, index: 1, name: "Overview", width: 1280, height: 720 },
-        { id: 22, index: 2, name: "Details", width: 1280, height: 720 },
+        {
+          id: 11,
+          index: 1,
+          name: "Overview",
+          width: 1280,
+          height: 720,
+          location: { path: "/workspace/slide.ss", line: 1, column: 1, start: 0, end: 30 },
+        },
+        {
+          id: 22,
+          index: 2,
+          name: "Details",
+          width: 1280,
+          height: 720,
+          location: { path: "/workspace/slide.ss", line: 5, column: 1, start: 31, end: 90 },
+        },
       ],
       objects: [
         { id: 101, page_id: 11, name: "summary", role: "body", x: 100, y: 500, width: 360, height: 100, group: false },

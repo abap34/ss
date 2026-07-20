@@ -96,6 +96,15 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(await page.locator(".page-entry").count(), 2, "page sidebar omitted a page");
     assert.equal(await page.locator(".page-thumbnail .ss-page").count(), 2, "page thumbnails did not reuse shared HTML pages");
     assert.equal(await page.locator(".page-shell").count(), 1, "single-page mode displayed more than one page");
+    const firstPageSource = page.locator('.page-shell[data-page-id="11"] .page-source-button');
+    assert.equal(await firstPageSource.textContent(), "Open in Editor");
+    await firstPageSource.click();
+    assert.deepEqual(await lastMessage(page, "revealSource"), {
+      type: "revealSource",
+      path: "/workspace/slide.ss",
+      start: 0,
+      end: 30,
+    });
     assert.equal(await page.locator('.page-shell[data-page-id="11"] .ss-item[data-ss-node-id="101"]').count(), 1,
       "central preview did not reuse the shared HTML item");
     assert.equal(pdfRequests, 1, "central preview and thumbnail loaded the same PDF more than once");
@@ -147,6 +156,13 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.locator("select.page-mode").selectOption("continuous");
     await page.waitForFunction(() => document.querySelectorAll(".page-shell").length === 2);
     assert.deepEqual(await page.locator(".page-caption").allTextContents(), ["Overview", "Details"]);
+    await page.locator('.page-shell[data-page-id="22"] .page-source-button').click();
+    assert.deepEqual(await lastMessage(page, "revealSource"), {
+      type: "revealSource",
+      path: "/workspace/slide.ss",
+      start: 31,
+      end: 90,
+    });
     assert(Math.abs(await horizontalPageMarginRatio(page) - 0.04) < 0.005,
       "continuous editor margin was not proportional to its viewport");
     await page.waitForFunction(() => {
@@ -220,7 +236,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(await page.locator('.page-shell[data-page-id="22"] .constraint').count(), 3,
       "selected-page constraints were not drawn");
 
-    await page.locator(".source-button").click();
+    await page.locator(".object-sheet .source-button").click();
     const reveal = await lastMessage(page, "revealSource");
     assert.deepEqual(reveal, {
       type: "revealSource",
