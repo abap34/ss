@@ -60,11 +60,12 @@ pub const ExecutionGraph = struct {
         allocator: std.mem.Allocator,
         state: *const core.DocumentState,
         diagnostic_state: *core.DocumentState,
+        declaration_index: *declarations.DeclarationIndex,
         options: BuildOptions,
     ) !ExecutionGraph {
         var graph = ExecutionGraph{
             .allocator = allocator,
-            .declarations = try declarations.build(allocator, state),
+            .declarations = declarations.DeclarationIndex.init(allocator),
             .units = .empty,
             .edges = .empty,
             .order = &.{},
@@ -81,7 +82,7 @@ pub const ExecutionGraph = struct {
             .state = state,
             .diagnostic_state = diagnostic_state,
             .functions = &state.functions,
-            .declarations = &graph.declarations,
+            .declarations = declaration_index,
             .units = &graph.units,
             .collected_modules = &collected_modules,
             .run_cache = &run_cache,
@@ -98,6 +99,9 @@ pub const ExecutionGraph = struct {
             }
             return err;
         };
+        graph.declarations.deinit();
+        graph.declarations = declaration_index.*;
+        declaration_index.* = declarations.DeclarationIndex.init(allocator);
         return graph;
     }
 
@@ -110,8 +114,12 @@ pub const ExecutionGraph = struct {
     }
 };
 
-pub fn validateDependencies(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
-    var graph = try ExecutionGraph.build(allocator, state, state, .{ .page_id_mode = .synthetic });
+pub fn validateDependencies(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    declaration_index: *declarations.DeclarationIndex,
+) !void {
+    var graph = try ExecutionGraph.build(allocator, state, state, declaration_index, .{ .page_id_mode = .synthetic });
     defer graph.deinit();
 }
 

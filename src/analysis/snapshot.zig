@@ -262,6 +262,7 @@ pub const AnalysisSnapshot = struct {
     pub fn fromDocumentState(
         allocator: std.mem.Allocator,
         state: *core.DocumentState,
+        declaration_index: *const declarations.DeclarationIndex,
         diagnostic_bag: diagnostics.DiagnosticBag,
         holes: ?*const syntax_hole.Result,
         project_facts: ProjectFacts,
@@ -274,21 +275,19 @@ pub const AnalysisSnapshot = struct {
         errdefer snapshot.deinit();
 
         snapshot.diagnostics.sortByPath();
-        var decls = try declarations.build(allocator, state);
-        defer decls.deinit();
         snapshot.modules = try cloneModules(allocator, state.modules.items);
         snapshot.module_order = try allocator.dupe(core.SourceModuleId, state.module_order.items);
         snapshot.holes = if (holes) |hole_table| try cloneHoles(allocator, hole_table.holes) else &.{};
         snapshot.definitions = try cloneDefinitions(allocator, state.definitions.items);
         snapshot.type_definitions = try collectTypeDefinitions(allocator, state);
         snapshot.value_bindings = try collectValueBindings(allocator, state);
-        snapshot.variable_bindings = try collectVariableBindings(allocator, state);
-        snapshot.role_bindings = try collectRoleBindings(allocator, decls.roles.items);
-        snapshot.classes = try collectClasses(allocator, decls.classes.items);
-        snapshot.fields = try collectFields(allocator, decls.fields.items);
-        snapshot.records = try collectRecords(allocator, decls.records.items);
-        snapshot.record_fields = try collectRecordFields(allocator, decls.record_fields.items);
-        snapshot.enum_cases = try collectEnumCases(allocator, decls.types.items);
+        snapshot.variable_bindings = try collectVariableBindings(allocator, state, declaration_index);
+        snapshot.role_bindings = try collectRoleBindings(allocator, declaration_index.roles.items);
+        snapshot.classes = try collectClasses(allocator, declaration_index.classes.items);
+        snapshot.fields = try collectFields(allocator, declaration_index.fields.items);
+        snapshot.records = try collectRecords(allocator, declaration_index.records.items);
+        snapshot.record_fields = try collectRecordFields(allocator, declaration_index.record_fields.items);
+        snapshot.enum_cases = try collectEnumCases(allocator, declaration_index.types.items);
         return snapshot;
     }
 
@@ -486,7 +485,15 @@ pub fn build(
     };
     defer if (execution_graph) |*graph| graph.deinit();
     try options.checkCanceled();
-    try hole_facts.populateExpectedTypes(allocator, &state, &parse_holes);
+    var fallback_declarations: ?declarations.DeclarationIndex = null;
+    defer if (fallback_declarations) |*index_value| index_value.deinit();
+    const declaration_index: *const declarations.DeclarationIndex = if (execution_graph) |*graph|
+        &graph.declarations
+    else blk: {
+        fallback_declarations = try declarations.build(allocator, &state);
+        break :blk &fallback_declarations.?;
+    };
+    try hole_facts.populateExpectedTypes(allocator, &state, declaration_index, &parse_holes);
     try options.checkCanceled();
     try diagnostic_bag.addDocumentState(&state);
     try options.checkCanceled();
@@ -527,7 +534,9 @@ pub fn build(
     try options.checkCanceled();
     const project_facts = try initProjectFacts(allocator, entry_path, asset_base_dir, module_paths, options.project);
     diagnostics_moved = true;
-    var snapshot = try AnalysisSnapshot.fromDocumentState(allocator, &state, diagnostic_bag, &parse_holes, project_facts);
+    const snapshot_facts_start = utils.measure_profile.start();
+    var snapshot = try AnalysisSnapshot.fromDocumentState(allocator, &state, declaration_index, diagnostic_bag, &parse_holes, project_facts);
+    utils.measure_profile.recordAnalysis(.snapshot_facts, snapshot_facts_start);
     snapshot.generation = options.generation;
     snapshot.layout_output = layout_output;
     layout_output = null;
@@ -948,7 +957,11 @@ fn valueNameExists(state: *const core.DocumentState, name: []const u8) bool {
     return false;
 }
 
-fn collectVariableBindings(allocator: std.mem.Allocator, state: *core.DocumentState) ![]VariableBinding {
+fn collectVariableBindings(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    declaration_index: *const declarations.DeclarationIndex,
+) ![]VariableBinding {
     var out = std.ArrayList(VariableBinding).empty;
     errdefer {
         deinitVariableBindingItems(allocator, out.items);
@@ -956,7 +969,7 @@ fn collectVariableBindings(allocator: std.mem.Allocator, state: *core.DocumentSt
     }
     for (state.modules.items) |module| {
         if (module.path == null) continue;
-        var infos = try analysis_pipeline.collectScopedVariableInfoFromModule(allocator, &state.functions, module.syntax, module.id, module.source.len, state);
+        var infos = try analysis_pipeline.collectScopedVariableInfoFromModule(allocator, state, declaration_index, module.syntax, module.id, module.source.len);
         defer infos.deinit(allocator);
         for (infos.items) |entry| {
             const type_label: []u8 = @constCast(try semantic_types.typeInfoLabelAlloc(allocator, entry.info));
