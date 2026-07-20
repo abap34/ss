@@ -611,6 +611,7 @@ fn addRenderTests(ctx: BuildContext, modules: ProjectModules, test_step: *Step) 
         import("core", modules.core),
         import("render", modules.render),
         import("render_resources", modules.render_resources),
+        import("render_text", modules.render_text),
         import("utils", modules.utils),
     }, null);
     const render_compile_spec_mod = createModule(ctx, "tests/render/compile/spec_tests.zig", &.{

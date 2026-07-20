@@ -455,3 +455,410 @@ test "resource compiler shares one in-flight load across workers" {
     try testing.expectEqual(@as(usize, 1), builder.entries.items.len);
     try testing.expectEqual(@as(usize, 1), builder.sources.items.len);
 }
+
+test "font source cache reloads changed files across builders" {
+    const root = ".ss-cache/test-render-font-source-cache";
+    const font_path = root ++ "/font.otf";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    const source = try std.Io.Dir.cwd().readFileAlloc(
+        testing.io,
+        "third_party/stix-two-math/STIXTwoMath.otf",
+        testing.allocator,
+        .unlimited,
+    );
+    defer testing.allocator.free(source);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = font_path, .data = source, .flags = .{ .truncate = true } });
+
+    var cache = render_resources.SourceCache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    const first = blk: {
+        var builder = render_resources.Builder{ .cache = &cache };
+        defer builder.deinit(testing.allocator);
+        break :blk try builder.addPath(testing.allocator, testing.io, .font, font_path);
+    };
+    const second = blk: {
+        var builder = render_resources.Builder{ .cache = &cache };
+        defer builder.deinit(testing.allocator);
+        break :blk try builder.addPath(testing.allocator, testing.io, .font, font_path);
+    };
+    try testing.expectEqual(first, second);
+
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = font_path, .data = source[0 .. source.len - 1], .flags = .{ .truncate = true } });
+    const changed = blk: {
+        var builder = render_resources.Builder{ .cache = &cache };
+        defer builder.deinit(testing.allocator);
+        break :blk try builder.addPath(testing.allocator, testing.io, .font, font_path);
+    };
+    try testing.expect(!std.mem.eql(u8, &first, &changed));
+}
+
+test "source cache teardown keeps builder resources alive" {
+    const root = ".ss-cache/test-render-source-cache-lifetime";
+    const svg_path = root ++ "/shape.svg";
+    const svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><rect width=\"80\" height=\"40\"/></svg>";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = svg_path, .data = svg, .flags = .{ .truncate = true } });
+
+    var cache = render_resources.SourceCache.init(testing.allocator, testing.io);
+    var cache_live = true;
+    defer if (cache_live) cache.deinit();
+    var builder = render_resources.Builder{ .cache = &cache };
+    defer builder.deinit(testing.allocator);
+    const resource_id = try builder.addPath(testing.allocator, testing.io, .svg, svg_path);
+    cache.deinit();
+    cache_live = false;
+
+    const resource = builder.get(testing.io, resource_id) orelse return error.MissingRenderResource;
+    try testing.expectEqualStrings(svg, resource.bytes);
+    try testing.expectEqualStrings("shape.svg", resource.name);
+}
+
+test "source cache invalidates an atomic replacement with preserved size and mtime" {
+    const root = ".ss-cache/test-render-source-cache-atomic-replacement";
+    const font_path = root ++ "/font.ttf";
+    const replacement_path = root ++ "/replacement.ttf";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = font_path, .data = "font-a", .flags = .{ .truncate = true } });
+
+    var original_file = try std.Io.Dir.cwd().openFile(testing.io, font_path, .{});
+    const original_stat = try original_file.stat(testing.io);
+    original_file.close(testing.io);
+    var cache = render_resources.SourceCache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    const first_fingerprint = try cache.fileFingerprint(font_path);
+    const first_id = blk: {
+        var builder = render_resources.Builder{ .cache = &cache };
+        defer builder.deinit(testing.allocator);
+        break :blk try builder.addPath(testing.allocator, testing.io, .font, font_path);
+    };
+
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = replacement_path, .data = "font-b", .flags = .{ .truncate = true } });
+    try std.Io.Dir.cwd().setTimestamps(testing.io, replacement_path, .{
+        .modify_timestamp = .{ .new = original_stat.mtime },
+    });
+    try std.Io.Dir.cwd().rename(replacement_path, std.Io.Dir.cwd(), font_path, testing.io);
+    var replaced_file = try std.Io.Dir.cwd().openFile(testing.io, font_path, .{});
+    const replaced_stat = try replaced_file.stat(testing.io);
+    replaced_file.close(testing.io);
+    try testing.expectEqual(original_stat.size, replaced_stat.size);
+    try testing.expectEqual(original_stat.mtime.nanoseconds, replaced_stat.mtime.nanoseconds);
+    try testing.expect(original_stat.inode != replaced_stat.inode);
+
+    const changed_fingerprint = try cache.fileFingerprint(font_path);
+    try testing.expect(first_fingerprint.digest != changed_fingerprint.digest);
+    const changed_id = blk: {
+        var builder = render_resources.Builder{ .cache = &cache };
+        defer builder.deinit(testing.allocator);
+        break :blk try builder.addPath(testing.allocator, testing.io, .font, font_path);
+    };
+    try testing.expect(!std.mem.eql(u8, &first_id, &changed_id));
+}
+
+test "page cache misses when a dependent resource changes under the same page key" {
+    const root = ".ss-cache/test-render-page-cache-resource-change";
+    const svg_path = root ++ "/shape.svg";
+    const replacement_path = root ++ "/replacement.svg";
+    const first_svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"4\"><rect fill=\"red\"/></svg>";
+    const second_svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"4\"><rect fill=\"tan\"/></svg>";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = svg_path, .data = first_svg, .flags = .{ .truncate = true } });
+    var original_file = try std.Io.Dir.cwd().openFile(testing.io, svg_path, .{});
+    const original_stat = try original_file.stat(testing.io);
+    original_file.close(testing.io);
+
+    var source_cache = render_resources.SourceCache.init(testing.allocator, testing.io);
+    defer source_cache.deinit();
+    var source_builder = render_resources.Builder{ .cache = &source_cache };
+    defer source_builder.deinit(testing.allocator);
+    const resource_id = try source_builder.addPath(testing.allocator, testing.io, .svg, svg_path);
+    const source_dependencies = try source_builder.sourceDependencies(testing.allocator, testing.io);
+    defer render_resources.deinitSourceDependencies(testing.allocator, source_dependencies);
+    var source_graph = try source_builder.take(testing.allocator);
+    defer source_graph.deinit(testing.allocator);
+    const font_catalog = render.FontCatalog{};
+    const math_catalog = render.MathCatalog{};
+    var page = render.Page{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    defer page.deinit(testing.allocator);
+    try page.appendSvg(
+        testing.allocator,
+        7,
+        .{ .x = 10, .y = 20, .width = 30, .height = 40 },
+        resource_id,
+        null,
+    );
+    var page_cache = render_compile.PageCache.init(testing.allocator, testing.io);
+    defer page_cache.deinit();
+    try testing.expect(try page_cache.put(42, testing.allocator, &page, &source_graph, source_dependencies, &font_catalog, &math_catalog));
+
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = replacement_path, .data = second_svg, .flags = .{ .truncate = true } });
+    try std.Io.Dir.cwd().setTimestamps(testing.io, replacement_path, .{
+        .modify_timestamp = .{ .new = original_stat.mtime },
+    });
+    try std.Io.Dir.cwd().rename(replacement_path, std.Io.Dir.cwd(), svg_path, testing.io);
+
+    var resources = render_resources.Builder{ .cache = &source_cache };
+    defer resources.deinit(testing.allocator);
+    var fonts = render.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    var math = render.MathBuilder{};
+    defer math.deinit(testing.allocator);
+    try testing.expect((try page_cache.materialize(42, testing.allocator, testing.io, &resources, &fonts, &math)) == null);
+    try testing.expect((try page_cache.materialize(42, testing.allocator, testing.io, &resources, &fonts, &math)) == null);
+}
+
+test "source cache bounds paths without invalidating builder resources" {
+    const root = ".ss-cache/test-render-source-cache-bound";
+    const font = "synthetic font bytes";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+
+    var cache = render_resources.SourceCache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    var builder = render_resources.Builder{ .cache = &cache };
+    defer builder.deinit(testing.allocator);
+    var first_id: ?render.ResourceId = null;
+    for (0..257) |index| {
+        const path = try std.fmt.allocPrint(testing.allocator, "{s}/font-{d}.ttf", .{ root, index });
+        defer testing.allocator.free(path);
+        try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = font, .flags = .{ .truncate = true } });
+        const resource_id = try builder.addPath(testing.allocator, testing.io, .font, path);
+        if (first_id == null) first_id = resource_id;
+    }
+
+    try testing.expect(cache.sources.items.len < 257);
+    const resource = builder.get(testing.io, first_id orelse return error.MissingRenderResource) orelse
+        return error.MissingRenderResource;
+    try testing.expectEqualStrings(font, resource.bytes);
+}
+
+test "page cache keeps materialized content alive across eviction" {
+    var cache = render_compile.PageCache.init(testing.allocator, testing.io);
+    var cache_live = true;
+    defer if (cache_live) cache.deinit();
+    const resource_graph = render.ResourceGraph{};
+    const font_catalog = render.FontCatalog{};
+    const math_catalog = render.MathCatalog{};
+
+    var source = render.Page{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    defer source.deinit(testing.allocator);
+    try source.appendFillRect(
+        testing.allocator,
+        7,
+        .{ .x = 10, .y = 20, .width = 30, .height = 40 },
+        .{ .r = 1, .g = 0, .b = 0 },
+    );
+    try source.appendLink(testing.allocator, .destination, "target", .{ .x = 10, .y = 20, .width = 30, .height = 40 });
+    try source.appendDestination(testing.allocator, "target", .{ .x = 10, .y = 20 });
+    try testing.expect(try cache.put(1, testing.allocator, &source, &resource_graph, &.{}, &font_catalog, &math_catalog));
+
+    var resources = render_resources.Builder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    var math = render.MathBuilder{};
+    defer math.deinit(testing.allocator);
+    var first = (try cache.materialize(1, testing.allocator, testing.io, &resources, &fonts, &math)) orelse
+        return error.MissingCachedPage;
+    defer first.deinit(testing.allocator);
+    var second = (try cache.materialize(1, testing.allocator, testing.io, &resources, &fonts, &math)) orelse
+        return error.MissingCachedPage;
+    defer second.deinit(testing.allocator);
+    first.items.items[0].fill_rect.header.opacity = 0.25;
+    try testing.expectEqual(@as(f64, 1), second.items.items[0].fill_rect.header.opacity);
+
+    for (2..258) |key| {
+        var page = render.Page{ .page_id = @intCast(key), .index = key - 1, .width = 320, .height = 180 };
+        defer page.deinit(testing.allocator);
+        try page.appendFillRect(
+            testing.allocator,
+            @intCast(key),
+            .{ .x = 0, .y = 0, .width = 1, .height = 1 },
+            .{ .r = 0, .g = 0, .b = 0 },
+        );
+        try testing.expect(try cache.put(@intCast(key), testing.allocator, &page, &resource_graph, &.{}, &font_catalog, &math_catalog));
+    }
+    cache.deinit();
+    cache_live = false;
+
+    try testing.expectEqualStrings("target", first.links.items[0].target);
+    try testing.expectEqualStrings("target", second.destinations.items[0].name);
+    try testing.expectEqual(@as(f64, 0.25), first.items.items[0].fill_rect.header.opacity);
+    try testing.expectEqual(@as(f64, 1), second.items.items[0].fill_rect.header.opacity);
+}
+
+test "page cache evicts the least recently used page" {
+    var cache = render_compile.PageCache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    const resource_graph = render.ResourceGraph{};
+    const font_catalog = render.FontCatalog{};
+    const math_catalog = render.MathCatalog{};
+
+    for (1..257) |key| {
+        var page = render.Page{ .page_id = @intCast(key), .index = key - 1, .width = 320, .height = 180 };
+        defer page.deinit(testing.allocator);
+        try testing.expect(try cache.put(@intCast(key), testing.allocator, &page, &resource_graph, &.{}, &font_catalog, &math_catalog));
+    }
+
+    var resources = render_resources.Builder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    var math = render.MathBuilder{};
+    defer math.deinit(testing.allocator);
+    var refreshed = (try cache.materialize(1, testing.allocator, testing.io, &resources, &fonts, &math)) orelse
+        return error.MissingCachedPage;
+    defer refreshed.deinit(testing.allocator);
+
+    var newest = render.Page{ .page_id = 257, .index = 256, .width = 320, .height = 180 };
+    defer newest.deinit(testing.allocator);
+    try testing.expect(try cache.put(257, testing.allocator, &newest, &resource_graph, &.{}, &font_catalog, &math_catalog));
+
+    try testing.expect((try cache.materialize(2, testing.allocator, testing.io, &resources, &fonts, &math)) == null);
+    var retained = (try cache.materialize(1, testing.allocator, testing.io, &resources, &fonts, &math)) orelse
+        return error.MissingCachedPage;
+    defer retained.deinit(testing.allocator);
+}
+
+test "page cache retains a complete document beyond its baseline entry count" {
+    var cache = render_compile.PageCache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    cache.beginDocument(257);
+    const resource_graph = render.ResourceGraph{};
+    const font_catalog = render.FontCatalog{};
+    const math_catalog = render.MathCatalog{};
+
+    for (1..258) |key| {
+        var page = render.Page{ .page_id = @intCast(key), .index = key - 1, .width = 320, .height = 180 };
+        defer page.deinit(testing.allocator);
+        try testing.expect(try cache.put(@intCast(key), testing.allocator, &page, &resource_graph, &.{}, &font_catalog, &math_catalog));
+    }
+
+    var resources = render_resources.Builder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    var math = render.MathBuilder{};
+    defer math.deinit(testing.allocator);
+    var first = (try cache.materialize(1, testing.allocator, testing.io, &resources, &fonts, &math)) orelse
+        return error.MissingCachedPage;
+    defer first.deinit(testing.allocator);
+    var last = (try cache.materialize(257, testing.allocator, testing.io, &resources, &fonts, &math)) orelse
+        return error.MissingCachedPage;
+    defer last.deinit(testing.allocator);
+}
+
+test "page cache resource survives source graph and cache teardown" {
+    var source_graph = blk: {
+        const bytes = try testing.allocator.dupe(u8, "cached raster bytes");
+        errdefer testing.allocator.free(bytes);
+        const entries = try testing.allocator.alloc(render.Resource, 1);
+        errdefer testing.allocator.free(entries);
+        const name = try testing.allocator.dupe(u8, "cached.bin");
+        errdefer testing.allocator.free(name);
+        entries[0] = .{
+            .id = render.identifyResource(.raster, bytes),
+            .kind = .raster,
+            .name = name,
+            .bytes = bytes,
+            .metadata = .{ .raster = .{
+                .pixel_width = 1,
+                .pixel_height = 1,
+                .oriented_width = 1,
+                .oriented_height = 1,
+                .orientation = .normal,
+                .color_space = .unknown,
+                .has_alpha = false,
+            } },
+            .identity_verified = true,
+        };
+        try entries[0].share(testing.allocator);
+        break :blk render.ResourceGraph{ .entries = entries };
+    };
+    const resource_id = source_graph.entries[0].id;
+    var source_graph_live = true;
+    defer if (source_graph_live) source_graph.deinit(testing.allocator);
+
+    var cache = render_compile.PageCache.init(testing.allocator, testing.io);
+    var cache_live = true;
+    defer if (cache_live) cache.deinit();
+    var input_fonts = render.FontBuilder{};
+    defer input_fonts.deinit(testing.allocator);
+    _ = try input_fonts.add(testing.allocator, testing.io, .{
+        .resource = resource_id,
+        .face_index = 0,
+        .family = "Cached font",
+        .postscript_name = "CachedFont",
+        .weight = 400,
+        .style = .normal,
+        .stretch = .normal,
+        .ascent_ratio = 0.8,
+        .descent_ratio = 0.2,
+        .line_gap_ratio = 0,
+        .underline_position_ratio = -0.1,
+        .underline_thickness_ratio = 0.05,
+        .strikethrough_position_ratio = 0.3,
+        .strikethrough_thickness_ratio = 0.05,
+    });
+    var font_catalog = try input_fonts.take(testing.allocator);
+    defer font_catalog.deinit(testing.allocator);
+    const math_catalog = render.MathCatalog{};
+    var first_source_page = render.Page{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    defer first_source_page.deinit(testing.allocator);
+    try first_source_page.appendRaster(
+        testing.allocator,
+        7,
+        .{ .x = 10, .y = 20, .width = 30, .height = 40 },
+        resource_id,
+    );
+    try testing.expect(try cache.put(1, testing.allocator, &first_source_page, &source_graph, &.{}, &font_catalog, &math_catalog));
+    var second_source_page = render.Page{ .page_id = 2, .index = 1, .width = 320, .height = 180 };
+    defer second_source_page.deinit(testing.allocator);
+    try second_source_page.appendRaster(
+        testing.allocator,
+        8,
+        .{ .x = 50, .y = 60, .width = 70, .height = 80 },
+        resource_id,
+    );
+    try testing.expect(try cache.put(2, testing.allocator, &second_source_page, &source_graph, &.{}, &font_catalog, &math_catalog));
+    const empty_graph = render.ResourceGraph{};
+    const empty_fonts = render.FontCatalog{};
+    for (3..258) |key| {
+        var page = render.Page{ .page_id = @intCast(key), .index = key - 1, .width = 320, .height = 180 };
+        defer page.deinit(testing.allocator);
+        try testing.expect(try cache.put(@intCast(key), testing.allocator, &page, &empty_graph, &.{}, &empty_fonts, &math_catalog));
+    }
+    source_graph.deinit(testing.allocator);
+    source_graph_live = false;
+
+    var resources = render_resources.Builder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    var math = render.MathBuilder{};
+    defer math.deinit(testing.allocator);
+    try testing.expect((try cache.materialize(1, testing.allocator, testing.io, &resources, &fonts, &math)) == null);
+    var materialized = (try cache.materialize(2, testing.allocator, testing.io, &resources, &fonts, &math)) orelse
+        return error.MissingCachedPage;
+    defer materialized.deinit(testing.allocator);
+    cache.deinit();
+    cache_live = false;
+
+    var retained_graph = try resources.take(testing.allocator);
+    defer retained_graph.deinit(testing.allocator);
+    const retained_resource = retained_graph.find(resource_id) orelse return error.MissingRenderResource;
+    try testing.expectEqualStrings("cached raster bytes", retained_resource.bytes);
+    try testing.expectEqual(resource_id, materialized.items.items[0].raster.resource);
+    var retained_fonts = try fonts.take(testing.allocator);
+    defer retained_fonts.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), retained_fonts.instances.len);
+    try testing.expectEqualStrings("Cached font", retained_fonts.instances[0].family);
+}
