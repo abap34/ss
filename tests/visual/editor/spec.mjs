@@ -129,12 +129,124 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert(verticalRulerPositions[100] > verticalRulerPositions[700],
       "vertical ruler values did not increase upward from the page bottom");
 
+    const insertionStrokeStyle = page.locator(
+      ".toolbar > .shape-style-controls .stroke-style-picker",
+    );
+    await insertionStrokeStyle.locator("summary").click();
+    await insertionStrokeStyle.getByRole("button", { name: "Dotted" }).click();
+
+    const shapePicker = page.locator(".shape-picker");
+    await shapePicker.locator("summary").click();
+    assert.equal(await page.locator(".shape-picker-panel").isVisible(), true,
+      "shape gallery did not open from the toolbar");
+    const rectangleTool = shapePicker.getByRole("button", { name: "Rectangle" });
+    assert.equal(await rectangleTool.isEnabled(), true,
+      "an editable page disabled its rectangle tool");
+    const rectangleTile = await rectangleTool.boundingBox();
+    assert(rectangleTile?.width >= 70 && rectangleTile?.height >= 70,
+      `shape gallery tile was too small: ${JSON.stringify(rectangleTile)}`);
+    await rectangleTool.click();
+    const placement = page.locator('.page-shell[data-page-id="11"] .shape-placement-hit');
+    const placementBox = await placement.boundingBox();
+    assert(placementBox, "shape placement layer was not rendered");
+    const startX = placementBox.x + placementBox.width * 0.2;
+    const startY = placementBox.y + placementBox.height * 0.25;
+    const endX = placementBox.x + placementBox.width * 0.42;
+    const endY = placementBox.y + placementBox.height * 0.48;
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(endX, endY, { steps: 3 });
+    assert.equal(await page.locator(".shape-placement-ghost").count(), 1,
+      "shape drag did not display its provisional bounds");
+    await page.mouse.up();
+    const inserted = await lastMessage(page, "insertShape");
+    assert(inserted, "shape placement did not send an insertion request");
+    assert.equal(inserted.pageId, 11);
+    assert.equal(inserted.kind, "rectangle");
+    assert(inserted.bounds.width > 4 && inserted.bounds.height > 4,
+      `shape placement sent invalid bounds: ${JSON.stringify(inserted.bounds)}`);
+    assert.deepEqual(inserted.fill, {
+      enabled: true,
+      color: "#e8f1ff",
+      opacity: 1,
+    });
+    assert.deepEqual(inserted.stroke, {
+      enabled: true,
+      color: "#2563eb",
+      width: 1.6,
+      style: "dotted",
+    });
+    const provisional = page.locator(".shape-placement-preview");
+    assert.equal(await provisional.count(), 1,
+      "the provisional shape disappeared before the source edit was reflected");
+    assert.equal(await provisional.evaluate((node) => getComputedStyle(node).fill), "rgb(232, 241, 255)",
+      "the provisional shape did not use the requested fill color");
+    assert.match(await provisional.evaluate((node) => getComputedStyle(node).strokeDasharray), /1\.6px.*4px/,
+      "the provisional shape did not use the requested dotted stroke");
+    await shapePicker.locator("summary").click();
+    assert.equal(await shapePicker.getByRole("button", { name: "Circle" }).isEnabled(), false,
+      "drawing tools remained enabled while an insertion was pending");
+    await postShapeEditResult(page, {
+      requestId: inserted.requestId,
+      operation: "insert",
+      status: "stale",
+    });
+    await page.waitForFunction(() =>
+      document.querySelector('.shape-tool[aria-label="Select"]')
+        ?.getAttribute("aria-pressed") === "true"
+    );
+    assert.equal(await page.locator(".shape-placement-preview").count(), 0,
+      "a rejected provisional shape remained on the page");
+
+    await shapePicker.locator("summary").click();
+    await shapePicker.getByRole("button", { name: "Circle" }).click();
+    assert.equal(await shapePicker.locator("summary").getAttribute("aria-pressed"), "true");
+    assert.match(await shapePicker.locator("summary").textContent(), /Circle/,
+      "shape picker did not reflect the active drawing tool");
+    await page.keyboard.press("Escape");
+    assert.equal(
+      await page.getByRole("button", { name: "Select" }).getAttribute("aria-pressed"),
+      "true",
+      "Escape did not return the drawing tool to selection mode",
+    );
+
+    await page.locator('.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]').click();
+    await page.waitForSelector(".shape-style-editor");
+    const shapeStrokeStyle = page.locator(
+      ".shape-style-editor .shape-stroke-style-select select",
+    );
+    await shapeStrokeStyle.selectOption("dashed");
+    const styleEdit = await lastMessage(page, "editShapeStyle");
+    assert(styleEdit, "shape details did not send a style edit");
+    assert.equal(styleEdit.nodeId, 101);
+    assert.equal(styleEdit.stroke.style, "dashed");
+    await postShapeEditResult(page, {
+      requestId: styleEdit.requestId,
+      operation: "style",
+      status: "stale",
+    });
+    await page.getByRole("button", { name: "Lock object" }).click();
+    assert.equal(
+      await page.locator(".shape-style-editor input, .shape-style-editor select")
+        .evaluateAll((controls) => controls.every((control) => control.disabled)),
+      true,
+      "locking a shape left its style controls enabled",
+    );
+    await page.getByRole("button", { name: "Unlock object" }).click();
+    await page.locator(".close-button").click();
+
     await page.setViewportSize({ width: 480, height: 560 });
     await page.waitForFunction(() =>
       document.querySelector(".viewport")?.classList.contains("viewport--rulers-hidden")
     );
     assert.equal(await page.locator(".ruler--vertical").isVisible(), false,
       "rulers remained visible at a scale where their fixed labels obscure the page");
+    const stylePopover = page.locator(".shape-style-popover");
+    assert.equal(await stylePopover.isVisible(), true,
+      "narrow drawing toolbar omitted its style popover");
+    await stylePopover.locator(":scope > summary").click();
+    assert.equal(await page.locator(".shape-style-popover-panel").isVisible(), true,
+      "narrow drawing toolbar did not open its style controls");
     const narrowMarginRatio = await horizontalPageMarginRatio(page);
     assert(Math.abs(narrowMarginRatio - 0.04) < 0.005,
       `narrow editor margin was not proportional to its viewport: ${narrowMarginRatio}`);
@@ -244,6 +356,42 @@ await withBrowser(output, async (browser, baseUrl) => {
       start: 40,
       end: 75,
     });
+
+    const detailTarget = page.locator(
+      '.page-shell[data-page-id="22"] .object-hit[data-object-id="202"]',
+    );
+    const detailPreview = page.locator(
+      '.page-shell[data-page-id="22"] .ss-item[data-ss-node-id="202"]',
+    );
+    const detailBeforeLock = await detailPreview.boundingBox();
+    const translationsBeforeLock = await page.evaluate(() =>
+      globalThis.__messages.filter((message) => message.type === "translate").length
+    );
+    await page.getByRole("button", { name: "Lock object" }).click();
+    assert.equal(await detailTarget.getAttribute("data-object-locked"), "true",
+      "locking an object did not mark its canvas target");
+    assert.equal(
+      await page.evaluate(() => globalThis.__persisted.objectLocks?.keys.length),
+      1,
+      "object locks were not persisted in the webview state",
+    );
+    const lockedBox = await detailTarget.boundingBox();
+    await page.mouse.move(lockedBox.x + lockedBox.width / 2, lockedBox.y + lockedBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(lockedBox.x + lockedBox.width / 2 + 18, lockedBox.y + lockedBox.height / 2 + 12);
+    await page.mouse.up();
+    assert.equal(
+      await page.evaluate(() =>
+        globalThis.__messages.filter((message) => message.type === "translate").length
+      ),
+      translationsBeforeLock,
+      "dragging a locked object sent a source translation",
+    );
+    assert.deepEqual(await detailPreview.boundingBox(), detailBeforeLock,
+      "dragging a locked object moved its preview");
+    await page.getByRole("button", { name: "Unlock object" }).click();
+    assert.equal(await detailTarget.getAttribute("data-object-locked"), null,
+      "unlocking an object left its canvas target locked");
 
     const outOfOrder = structuredClone(current);
     outOfOrder.generation = current.generation + 1;
@@ -373,6 +521,15 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.getByRole("button", { name: "Outline" }).click();
     assert.equal(await page.locator(".sidebar-title").textContent(), "Outline");
     assert(await page.locator(".outline-row").count() >= 4, "outline sidebar omitted document structure");
+    const outlineLock = page.getByRole("button", { name: "Lock Detail" });
+    await outlineLock.click();
+    assert.equal(
+      await page.locator('.object-hit[data-object-id="202"]').first()
+        .getAttribute("data-object-locked"),
+      "true",
+      "the outline lock did not affect the canvas object",
+    );
+    await page.getByRole("button", { name: "Unlock Detail" }).click();
 
     const restarted = structuredClone(finalSnapshot);
     restarted.generation = 1;
@@ -436,6 +593,13 @@ async function postBuildStatus(page, revision, status) {
     revision,
     status,
   });
+}
+
+async function postShapeEditResult(page, result) {
+  await page.evaluate((message) => window.postMessage({
+    type: "shapeEditResult",
+    ...message,
+  }, "*"), result);
 }
 
 async function expectBuildStatus(page, status, label) {

@@ -2,6 +2,7 @@ import { element } from "./dom.js";
 import { renderObjectSheet, sourceButton } from "./details.js";
 import { InteractionController } from "./interaction.js";
 import { renderPage } from "./document.js";
+import { strokeStylePicker } from "./shape-style.js";
 
 const rulerSize = 26;
 const rulerInterval = 100;
@@ -54,6 +55,8 @@ export class WorkspaceView {
           this.actions.render();
         },
         revealSource: this.actions.revealSource,
+        shape: this.actions.shape,
+        objectLocks: this.actions.objectLocks,
       }));
     }
     if (this.state.toast) {
@@ -90,8 +93,148 @@ export class WorkspaceView {
     status.setAttribute("aria-live", "polite");
     status.setAttribute("aria-atomic", "true");
     applyBuildStatus(status, this.state.buildStatus);
-    bar.append(mode, status);
+    const tools = element("div", "shape-tools");
+    tools.setAttribute("role", "group");
+    tools.setAttribute("aria-label", "Drawing tools");
+    tools.append(
+      this.toolButton("select", "Select", "↖"),
+      this.shapePicker(),
+    );
+    const style = this.shapeStyleControls();
+    const stylePopover = this.shapeStylePopover();
+    bar.append(mode, tools, style, stylePopover, status);
     return bar;
+  }
+
+  toolButton(tool, label, glyph) {
+    const button = element("button", "shape-tool");
+    button.type = "button";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-pressed", String(this.state.shapeTool === tool));
+    button.classList.toggle("is-active", this.state.shapeTool === tool);
+    button.textContent = glyph;
+    if (tool !== "select") {
+      button.disabled = !this.actions.shape.canInsert(this.state.currentPageId);
+    }
+    button.addEventListener("click", () => this.actions.shape.selectTool(tool));
+    return button;
+  }
+
+  shapePicker() {
+    const choices = [
+      ["rectangle", "Rectangle"],
+      ["circle", "Circle"],
+      ["arrow", "Arrow"],
+    ];
+    const active = choices.find(([tool]) => this.state.shapeTool === tool);
+    const picker = element("details", "shape-picker");
+    const summary = element("summary");
+    summary.setAttribute("aria-label", active?.[1] || "Shapes");
+    summary.setAttribute("aria-pressed", String(Boolean(active)));
+    summary.title = active?.[1] || "Shapes";
+    const icon = element("span", "shape-picker-summary-icon");
+    icon.append(shapePreview(active?.[0] || "rectangle"));
+    const label = element("span");
+    label.textContent = active?.[1] || "Shapes";
+    const chevron = element("span", "shape-picker-chevron");
+    chevron.textContent = "⌄";
+    summary.append(icon, label, chevron);
+
+    const panel = element("div", "shape-picker-panel");
+    const heading = element("strong");
+    heading.textContent = "Basic shapes";
+    const gallery = element("div", "shape-picker-gallery");
+    for (const [tool, name] of choices) {
+      const button = element(
+        "button",
+        `shape-choice${this.state.shapeTool === tool ? " is-active" : ""}`,
+      );
+      button.type = "button";
+      button.disabled = !this.actions.shape.canInsert(this.state.currentPageId);
+      button.setAttribute("aria-label", name);
+      button.setAttribute("aria-pressed", String(this.state.shapeTool === tool));
+      button.append(shapePreview(tool));
+      const caption = element("span");
+      caption.textContent = name;
+      button.append(caption);
+      button.addEventListener("click", () => {
+        picker.open = false;
+        this.actions.shape.selectTool(tool);
+      });
+      gallery.append(button);
+    }
+    panel.append(heading, gallery);
+    picker.append(summary, panel);
+    return picker;
+  }
+
+  shapeStyleControls() {
+    const group = element("div", "shape-style-controls");
+    const draft = this.state.shapeStyle;
+    group.append(
+      styleToggle("Fill", draft.fill.enabled, (enabled) => {
+        this.actions.shape.setDraft({
+          ...draft,
+          fill: { ...draft.fill, enabled },
+        });
+      }),
+      colorControl("Fill color", draft.fill.color, (color) => {
+        this.actions.shape.setDraft({
+          ...draft,
+          fill: { ...draft.fill, color },
+        });
+      }),
+      numberControl("Fill opacity", draft.fill.opacity, 0, 1, 0.05, (opacity) => {
+        this.actions.shape.setDraft({
+          ...draft,
+          fill: { ...draft.fill, opacity },
+        });
+      }),
+      styleToggle("Stroke", draft.stroke.enabled, (enabled) => {
+        this.actions.shape.setDraft({
+          ...draft,
+          stroke: { ...draft.stroke, enabled },
+        });
+      }),
+      colorControl("Stroke color", draft.stroke.color, (color) => {
+        this.actions.shape.setDraft({
+          ...draft,
+          stroke: { ...draft.stroke, color },
+        });
+      }),
+      strokeStylePicker(draft.stroke.style, {
+        ariaLabel: "Stroke style",
+        disabled: this.actions.shape.isBusy(),
+        change: (style) => {
+          this.actions.shape.setDraft({
+            ...draft,
+            stroke: { ...draft.stroke, style },
+          });
+        },
+      }),
+      numberControl("Stroke width", draft.stroke.width, 0.1, 24, 0.1, (width) => {
+        this.actions.shape.setDraft({
+          ...draft,
+          stroke: { ...draft.stroke, width },
+        });
+      }),
+    );
+    for (const input of group.querySelectorAll("input")) {
+      input.disabled = this.actions.shape.isBusy();
+    }
+    return group;
+  }
+
+  shapeStylePopover() {
+    const popover = element("details", "shape-style-popover");
+    const summary = element("summary");
+    summary.textContent = "Style";
+    summary.setAttribute("aria-label", "Shape style");
+    const panel = element("div", "shape-style-popover-panel");
+    panel.append(this.shapeStyleControls());
+    popover.append(summary, panel);
+    return popover;
   }
 
   updateBuildStatus() {
@@ -229,4 +372,51 @@ function modeOption(value, label, current) {
   option.textContent = label;
   option.selected = value === current;
   return option;
+}
+
+function styleToggle(label, checked, change) {
+  const control = element("label", "style-toggle");
+  const input = element("input");
+  input.type = "checkbox";
+  input.checked = checked;
+  input.addEventListener("change", () => change(input.checked));
+  control.append(input, document.createTextNode(label));
+  return control;
+}
+
+function colorControl(label, value, change) {
+  const control = element("label", "style-color");
+  control.title = label;
+  const input = element("input");
+  input.type = "color";
+  input.value = value;
+  input.setAttribute("aria-label", label);
+  input.addEventListener("change", () => change(input.value));
+  control.append(input);
+  return control;
+}
+
+function numberControl(label, value, min, max, step, change) {
+  const control = element("label", "style-number");
+  const caption = element("span");
+  caption.textContent = label === "Fill opacity" ? "α" : "pt";
+  const input = element("input");
+  input.type = "number";
+  input.value = String(value);
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.setAttribute("aria-label", label);
+  input.addEventListener("change", () => {
+    const next = Number(input.value);
+    if (Number.isFinite(next)) change(Math.min(max, Math.max(min, next)));
+  });
+  control.append(input, caption);
+  return control;
+}
+
+function shapePreview(tool) {
+  const preview = element("span", `shape-choice-preview shape-choice-preview--${tool}`);
+  preview.setAttribute("aria-hidden", "true");
+  return preview;
 }

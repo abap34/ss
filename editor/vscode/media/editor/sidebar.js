@@ -105,12 +105,13 @@ function outlineRow(state, actions, item, children, depth, seen) {
   seen.add(item.id);
   const active = item.id === state.selectedObjectId ||
     item.id === state.currentPageId;
-  const button = element(
-    "button",
+  const row = element(
+    "div",
     `outline-row outline-row--${item.kind}${active ? " is-active" : ""}`,
   );
+  row.style.setProperty("--depth", String(depth));
+  const button = element("button", "outline-row-select");
   button.type = "button";
-  button.style.setProperty("--depth", String(depth));
   button.append(element("span", `outline-glyph outline-glyph--${item.kind}`));
   const label = element("span", "outline-label");
   label.textContent = item.label || item.kind;
@@ -119,11 +120,30 @@ function outlineRow(state, actions, item, children, depth, seen) {
     if (item.kind === "page") actions.selectPage(item.page_id);
     else actions.selectObject(item.id, item.page_id);
   });
-  fragment.append(button);
+  row.append(button);
+  if (item.kind !== "page" && actions.objectLocks?.canLock(item.id)) {
+    row.append(outlineLockButton(item, actions.objectLocks));
+  }
+  fragment.append(row);
   for (const child of children.get(item.id) || []) {
     fragment.append(
       outlineRow(state, actions, child, children, depth + 1, seen),
     );
   }
   return fragment;
+}
+
+function outlineLockButton(item, objectLocks) {
+  const locked = objectLocks.isLocked(item.id);
+  const button = element(
+    "button",
+    `outline-lock${locked ? " is-locked" : ""}`,
+  );
+  button.type = "button";
+  button.title = locked ? `Unlock ${item.label}` : `Lock ${item.label}`;
+  button.setAttribute("aria-label", button.title);
+  button.setAttribute("aria-pressed", String(locked));
+  button.append(element("span", "object-lock-icon"));
+  button.addEventListener("click", () => objectLocks.toggle(item.id));
+  return button;
 }

@@ -12,9 +12,15 @@ export class InteractionController {
     this.state = state;
     this.actions = actions;
     this.drag = null;
+    this.placement = null;
     this.updateDrag = this.updateDrag.bind(this);
     this.finishDrag = this.finishDrag.bind(this);
     this.cancelDrag = this.cancelDrag.bind(this);
+    this.updatePlacement = this.updatePlacement.bind(this);
+    this.finishPlacement = this.finishPlacement.bind(this);
+    this.cancelPlacement = this.cancelPlacement.bind(this);
+    this.handleKeydown = this.handleKeydown.bind(this);
+    window.addEventListener("keydown", this.handleKeydown);
   }
 
   renderLayer(page) {
@@ -42,16 +48,142 @@ export class InteractionController {
       );
     }
     for (const object of objects) svg.append(this.hitTarget(page, object));
+    const pending = this.actions.shape.pendingInsertion(page.id);
+    if (pending) svg.append(this.pendingShape(pending));
+    if (this.state.shapeTool !== "select" &&
+        this.actions.shape.canInsert(page.id)) {
+      svg.append(this.placementTarget(page));
+    }
     return svg;
   }
 
   reset() {
     this.cleanup();
+    this.cleanupPlacement();
+  }
+
+  placementTarget(page) {
+    const target = svgElement("rect", "shape-placement-hit");
+    setRect(target, { x: 0, y: 0, width: page.width, height: page.height });
+    target.addEventListener("pointerdown", (event) => {
+      if (event.button === 0) this.beginPlacement(event, page, target);
+    });
+    target.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      this.cleanupPlacement();
+      this.actions.shape.cancel();
+    });
+    return target;
+  }
+
+  beginPlacement(event, page, target) {
+    if (!this.actions.shape.canInsert(page.id)) return;
+    event.preventDefault();
+    const svg = target.ownerSVGElement;
+    const start = clampPoint(svgPoint(svg, event), page);
+    const ghost = this.placementGhost(this.state.shapeTool);
+    svg.insertBefore(ghost, target);
+    this.placement = {
+      pointerId: event.pointerId,
+      page,
+      target,
+      svg,
+      start,
+      current: start,
+      ghost,
+      kind: this.state.shapeTool,
+    };
+    target.setPointerCapture(event.pointerId);
+    target.addEventListener("pointermove", this.updatePlacement);
+    target.addEventListener("pointerup", this.finishPlacement);
+    target.addEventListener("pointercancel", this.cancelPlacement);
+    this.updatePlacementGhost();
+  }
+
+  updatePlacement(event) {
+    const placement = this.placement;
+    if (!placement || event.pointerId !== placement.pointerId) return;
+    placement.current = clampPoint(svgPoint(placement.svg, event), placement.page);
+    this.updatePlacementGhost();
+  }
+
+  finishPlacement(event) {
+    const placement = this.placement;
+    if (!placement || event.pointerId !== placement.pointerId) return;
+    placement.current = clampPoint(svgPoint(placement.svg, event), placement.page);
+    let bounds = placementBounds(
+      placement.start,
+      placement.current,
+      placement.kind,
+    );
+    if (bounds.width < 4 || bounds.height < 4) {
+      bounds = defaultBounds(placement.start, placement.page, placement.kind);
+    }
+    const pageId = placement.page.id;
+    this.cleanupPlacement();
+    this.actions.shape.insert(pageId, bounds);
+  }
+
+  cancelPlacement() {
+    if (!this.placement) return;
+    this.cleanupPlacement();
+    this.actions.render();
+  }
+
+  cleanupPlacement() {
+    const placement = this.placement;
+    if (!placement) return;
+    placement.target.removeEventListener("pointermove", this.updatePlacement);
+    placement.target.removeEventListener("pointerup", this.finishPlacement);
+    placement.target.removeEventListener("pointercancel", this.cancelPlacement);
+    placement.ghost.remove();
+    this.placement = null;
+  }
+
+  handleKeydown(event) {
+    if (event.key !== "Escape") return;
+    if (this.placement) {
+      event.preventDefault();
+      this.cleanupPlacement();
+      this.actions.shape.cancel();
+      return;
+    }
+    if (this.actions.shape.cancel()) event.preventDefault();
+  }
+
+  placementGhost(kind) {
+    if (kind === "circle") return svgElement("ellipse", "shape-placement-ghost");
+    if (kind === "arrow") return svgElement("polygon", "shape-placement-ghost");
+    return svgElement("rect", "shape-placement-ghost");
+  }
+
+  pendingShape(preview) {
+    const shape = this.placementGhost(preview.kind);
+    shape.classList.add("shape-placement-preview");
+    setShapeGeometry(shape, preview.kind, preview.bounds);
+    shape.style.fill = preview.fill.enabled ? preview.fill.color : "none";
+    shape.style.fillOpacity = String(preview.fill.opacity);
+    shape.style.stroke = preview.stroke.enabled ? preview.stroke.color : "none";
+    shape.style.strokeWidth = String(preview.stroke.width);
+    applyStrokeStyle(shape, preview.stroke);
+    return shape;
+  }
+
+  updatePlacementGhost() {
+    const placement = this.placement;
+    if (!placement) return;
+    const bounds = placementBounds(
+      placement.start,
+      placement.current,
+      placement.kind,
+    );
+    setShapeGeometry(placement.ghost, placement.kind, bounds);
   }
 
   isMovable(nodeId) {
     return Boolean(
       !this.state.snapshot?.stale &&
+        !this.actions.objectLocks.isLocked(nodeId) &&
         this.actions.translation.canDrag(nodeId) &&
         this.state.snapshot?.editing.some((target) =>
           target.node_id === nodeId
@@ -72,14 +204,17 @@ export class InteractionController {
         candidate.id === editableNodeId
       );
     const target = editableObject || object;
+    const userLocked = editableObject != null &&
+      this.actions.objectLocks.isLocked(editableObject.id);
     const movable = editableObject != null && this.isMovable(editableObject.id);
     const group = svgElement(
       "g",
       `object-hit${selected ? " is-selected" : ""}${
         movable ? " is-movable" : " is-locked"
-      }`,
+      }${userLocked ? " is-user-locked" : ""}`,
     );
     group.dataset.objectId = String(object.id);
+    if (userLocked) group.dataset.objectLocked = "true";
     const rect = svgElement("rect", "object-hit-rect");
     setRect(rect, frame);
     group.append(rect);
@@ -194,6 +329,91 @@ export class InteractionController {
       candidate.id === nodeId
     );
     return object ? this.actions.translation.frame(page, object) : null;
+  }
+}
+
+function clampPoint(point, page) {
+  return {
+    x: Math.min(page.width, Math.max(0, point.x)),
+    y: Math.min(page.height, Math.max(0, point.y)),
+  };
+}
+
+function placementBounds(start, current, kind) {
+  const dx = current.x - start.x;
+  const dy = current.y - start.y;
+  if (kind === "circle") {
+    const size = Math.min(Math.abs(dx), Math.abs(dy));
+    return {
+      x: dx < 0 ? start.x - size : start.x,
+      y: dy < 0 ? start.y - size : start.y,
+      width: size,
+      height: size,
+    };
+  }
+  return {
+    x: Math.min(start.x, current.x),
+    y: Math.min(start.y, current.y),
+    width: Math.abs(dx),
+    height: Math.abs(dy),
+  };
+}
+
+function defaultBounds(point, page, kind) {
+  const size = kind === "circle"
+    ? { width: 120, height: 120 }
+    : kind === "arrow"
+    ? { width: 170, height: 90 }
+    : { width: 160, height: 100 };
+  return {
+    x: Math.min(page.width - size.width, Math.max(0, point.x - size.width / 2)),
+    y: Math.min(page.height - size.height, Math.max(0, point.y - size.height / 2)),
+    ...size,
+  };
+}
+
+function arrowPoints(bounds) {
+  const x = bounds.x;
+  const y = bounds.y;
+  const width = bounds.width;
+  const height = bounds.height;
+  return [
+    [x, y + height * 0.25],
+    [x + width * 0.66, y + height * 0.25],
+    [x + width * 0.66, y],
+    [x + width, y + height * 0.5],
+    [x + width * 0.66, y + height],
+    [x + width * 0.66, y + height * 0.75],
+    [x, y + height * 0.75],
+  ].map((point) => point.join(",")).join(" ");
+}
+
+function setShapeGeometry(shape, kind, bounds) {
+  if (kind === "circle") {
+    shape.setAttribute("cx", String(bounds.x + bounds.width / 2));
+    shape.setAttribute("cy", String(bounds.y + bounds.height / 2));
+    shape.setAttribute("rx", String(bounds.width / 2));
+    shape.setAttribute("ry", String(bounds.height / 2));
+  } else if (kind === "arrow") {
+    shape.setAttribute("points", arrowPoints(bounds));
+  } else {
+    setRect(shape, bounds);
+  }
+}
+
+function applyStrokeStyle(shape, stroke) {
+  shape.style.strokeLinecap = stroke.style === "dotted" ||
+      stroke.style === "dash_dot"
+    ? "round"
+    : "butt";
+  if (stroke.style === "dashed") {
+    shape.style.strokeDasharray = "8 5";
+  } else if (stroke.style === "dotted") {
+    shape.style.strokeDasharray = `${stroke.width} 4`;
+  } else if (stroke.style === "dash_dot") {
+    shape.style.strokeDasharray = `8 4 ${stroke.width} 4`;
+  } else {
+    shape.style.strokeDasharray = "none";
   }
 }
 

@@ -68,6 +68,20 @@ export function editorSnapshot() {
       { node_id: 101, page_id: 11, page_index: 1, page_name: "Overview", binding: "summary", binding_required: false, statement_start: 0, statement_end: 20, path: "/workspace/slide.ss", page_start: 0, page_end: 30 },
       { node_id: 202, page_id: 22, page_index: 2, page_name: "Details", binding: "detail", binding_required: false, statement_start: 40, statement_end: 75, path: "/workspace/slide.ss", page_start: 31, page_end: 90 },
     ],
+    page_editing: [
+      { page_id: 11, insert_shapes: true },
+      { page_id: 22, insert_shapes: true },
+    ],
+    shape_editing: [
+      {
+        node_id: 101,
+        page_id: 11,
+        binding: "summary",
+        kind: "rectangle",
+        fill: { enabled: true, color: "#e8f1ff", opacity: 1 },
+        stroke: { enabled: true, color: "#2563eb", width: 1.6, style: "solid" },
+      },
+    ],
   };
 }
 
