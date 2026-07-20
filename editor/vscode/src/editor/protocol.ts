@@ -10,6 +10,8 @@ export interface EditorSnapshot {
   display: DisplaySnapshot;
   outline: OutlineItem[];
   editing: EditingTarget[];
+  page_editing: PageEditingCapability[];
+  shape_editing: ShapeEditingCapability[];
   stale?: boolean;
   build_diagnostics?: BuildDiagnostic[];
 }
@@ -160,18 +162,58 @@ export interface EditingTarget {
   page_end: number;
 }
 
+export interface PageEditingCapability {
+  page_id: number;
+  insert_shapes: boolean;
+}
+
+export interface ShapeStyle {
+  fill: {
+    enabled: boolean;
+    color: string;
+    opacity: number;
+  };
+  stroke: {
+    enabled: boolean;
+    color: string;
+    width: number;
+    style: "solid" | "dashed" | "dotted" | "dash_dot";
+  };
+}
+
+export interface ShapeEditingCapability extends ShapeStyle {
+  node_id: number;
+  page_id: number;
+  binding: string;
+  kind: "rectangle" | "circle" | "arrow";
+}
+
+export interface WorkspaceEditValue {
+  changes?: Record<string, Array<{
+    range: {
+      start: { line: number; character: number };
+      end: { line: number; character: number };
+    };
+    newText: string;
+  }>>;
+}
+
 export interface LayoutEditResult {
   schema: 1;
   status: "ok" | "stale" | "unsupported" | "rejected";
   message?: string;
-  workspaceEdit?: {
-    changes?: Record<string, Array<{
-      range: {
-        start: { line: number; character: number };
-        end: { line: number; character: number };
-      };
-      newText: string;
-    }>>;
+  workspaceEdit?: WorkspaceEditValue;
+}
+
+export interface ShapeEditResult {
+  schema: 1;
+  status: LayoutEditResult["status"];
+  message?: string;
+  workspaceEdit?: WorkspaceEditValue;
+  selection?: {
+    path: string;
+    pageId: number;
+    binding: string;
   };
 }
 
@@ -206,6 +248,21 @@ export type HostMessage =
     requestId: number;
     status: Exclude<LayoutEditResult["status"], "ok">;
     message?: string;
+  }
+  | {
+    type: "shapeEditResult";
+    requestId: number;
+    operation: "insert" | "style";
+    status: "applied";
+    documentVersion: number;
+    selection?: ShapeEditResult["selection"];
+  }
+  | {
+    type: "shapeEditResult";
+    requestId: number;
+    operation: "insert" | "style";
+    status: Exclude<ShapeEditResult["status"], "ok">;
+    message?: string;
   };
 
 export type WebviewMessage =
@@ -221,4 +278,23 @@ export type WebviewMessage =
     mode: "absolute" | "relative";
     fromBounds: Rect;
     toBounds: Rect;
+  }
+  | {
+    type: "insertShape";
+    requestId: number;
+    snapshotId: string;
+    pageId: number;
+    kind: "rectangle" | "circle" | "arrow";
+    bounds: Rect;
+    fill: ShapeStyle["fill"];
+    stroke: ShapeStyle["stroke"];
+  }
+  | {
+    type: "editShapeStyle";
+    requestId: number;
+    snapshotId: string;
+    nodeId: number;
+    pageId: number;
+    fill: ShapeStyle["fill"];
+    stroke: ShapeStyle["stroke"];
   };

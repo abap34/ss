@@ -76,6 +76,10 @@ pub fn numericOffset(allocator: std.mem.Allocator, offset: f64, include_leading_
     return try allocator.dupe(u8, result);
 }
 
+pub fn numericLiteral(allocator: std.mem.Allocator, value: f64) ![]u8 {
+    return formatNumber(allocator, if (@abs(value) <= number_zero_threshold) 0 else value);
+}
+
 pub fn appendNumeric(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),

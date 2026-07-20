@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { LayoutEditResult } from "./protocol";
+import { WorkspaceEditValue } from "./protocol";
 
 export function documentVersions(): ReadonlyMap<string, number> {
   return new Map(
@@ -11,7 +11,7 @@ export function documentVersions(): ReadonlyMap<string, number> {
 }
 
 export function workspaceEditTargetsAreCurrent(
-  value: LayoutEditResult["workspaceEdit"],
+  value: WorkspaceEditValue | undefined,
   versions: ReadonlyMap<string, number>,
 ): boolean {
   for (const uri of Object.keys(value?.changes ?? {})) {
@@ -26,7 +26,7 @@ export function workspaceEditTargetsAreCurrent(
 }
 
 export function toWorkspaceEdit(
-  value: NonNullable<LayoutEditResult["workspaceEdit"]>,
+  value: WorkspaceEditValue,
 ): vscode.WorkspaceEdit {
   const result = new vscode.WorkspaceEdit();
   for (const [uri, edits] of Object.entries(value.changes ?? {})) {

@@ -6,6 +6,7 @@ import {
   EditorSnapshot,
   HostMessage,
   LayoutEditResult,
+  ShapeEditResult,
   WebviewMessage,
 } from "./protocol";
 import { isRetryableSnapshotError } from "./request";
@@ -152,6 +153,115 @@ export class EditorController implements vscode.Disposable {
     }
     if (message.type === "translate") {
       await this.applyTranslation(session, message);
+      return;
+    }
+    if (message.type === "insertShape" || message.type === "editShapeStyle") {
+      await this.applyShapeEdit(session, message);
+    }
+  }
+
+  private async applyShapeEdit(
+    session: Session,
+    message: Extract<WebviewMessage, { type: "insertShape" | "editShapeStyle" }>,
+  ): Promise<void> {
+    const client = this.clientProvider();
+    const operation = message.type === "insertShape" ? "insert" : "style";
+    if (!client) {
+      await this.post(session, {
+        type: "shapeEditResult",
+        requestId: message.requestId,
+        operation,
+        status: "unsupported",
+        message: "Language server is not running.",
+      });
+      return;
+    }
+    const versions = documentVersions();
+    try {
+      const method = message.type === "insertShape"
+        ? "ss/insertShape"
+        : "ss/shapeStyleEdit";
+      const result = await client.sendRequest<ShapeEditResult>(method, {
+        textDocument: { uri: session.document.uri.toString() },
+        snapshotId: message.snapshotId,
+        pageId: message.pageId,
+        ...(message.type === "insertShape"
+          ? {
+            kind: message.kind,
+            bounds: message.bounds,
+            fill: message.fill,
+            stroke: message.stroke,
+          }
+          : {
+            nodeId: message.nodeId,
+            fill: message.fill,
+            stroke: message.stroke,
+          }),
+      });
+      if (session.disposed) return;
+      if (!workspaceEditTargetsAreCurrent(result.workspaceEdit, versions)) {
+        await this.post(session, {
+          type: "shapeEditResult",
+          requestId: message.requestId,
+          operation,
+          status: "stale",
+          message: "The document changed before the edit was applied.",
+        });
+        this.schedule(session, 0);
+        return;
+      }
+      if (result.status !== "ok") {
+        await this.post(session, {
+          type: "shapeEditResult",
+          requestId: message.requestId,
+          operation,
+          status: result.status,
+          message: result.message ?? "The shape edit could not be applied.",
+        });
+        if (result.status === "stale") this.schedule(session, 0);
+        return;
+      }
+      if (!result.workspaceEdit) {
+        await this.post(session, {
+          type: "shapeEditResult",
+          requestId: message.requestId,
+          operation,
+          status: "rejected",
+          message: result.message ?? "The language server returned no source edit.",
+        });
+        return;
+      }
+      const applied = await vscode.workspace.applyEdit(
+        toWorkspaceEdit(result.workspaceEdit),
+      );
+      if (!applied) {
+        await this.post(session, {
+          type: "shapeEditResult",
+          requestId: message.requestId,
+          operation,
+          status: "rejected",
+          message: "VS Code rejected the source edit.",
+        });
+        return;
+      }
+      await this.post(session, {
+        type: "shapeEditResult",
+        requestId: message.requestId,
+        operation,
+        status: "applied",
+        documentVersion: session.document.version,
+        selection: result.selection,
+      });
+      this.schedule(session, 0);
+    } catch (error) {
+      this.output.appendLine(`[editor] shape edit failed: ${String(error)}`);
+      await this.post(session, {
+        type: "shapeEditResult",
+        requestId: message.requestId,
+        operation,
+        status: "rejected",
+        message: String(error),
+      });
     }
   }
 

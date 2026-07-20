@@ -198,7 +198,7 @@ const GraphBuilder = struct {
         module: *const core.SourceModule,
         page: ast.PageDecl,
     ) !void {
-        const page_id = try self.nextPageId(page.name);
+        const page_id = try self.nextPageId(module, page);
         const sema = SemanticEnv.init(self.diagnostic_state, self.declarations, self.functions).forModule(module.id);
         var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .page = page_id }, self.run_cache);
         defer analyzer.deinit();
@@ -225,9 +225,18 @@ const GraphBuilder = struct {
         }
     }
 
-    fn nextPageId(self: *GraphBuilder, name: []const u8) !core.NodeId {
+    fn nextPageId(self: *GraphBuilder, module: *const core.SourceModule, page: ast.PageDecl) !core.NodeId {
         return switch (self.page_id_mode) {
-            .create => try self.diagnostic_state.addPage(name),
+            .create => blk: {
+                const page_id = try self.diagnostic_state.addPage(page.name);
+                try self.diagnostic_state.addPageSource(
+                    page_id,
+                    module.id,
+                    module.path orelse module.spec,
+                    page.span,
+                );
+                break :blk page_id;
+            },
             .synthetic => blk: {
                 const id = std.math.maxInt(core.NodeId) - self.synthetic_page_count;
                 self.synthetic_page_count += 1;
