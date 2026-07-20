@@ -224,7 +224,11 @@ const Server = struct {
         const delay_ms = self.lspDebounceMs();
         if (delay_ms == 0) {
             self.clearPendingRebuild();
-            try self.rebuild(changed_path, .configured, prefer_translation_patch);
+            try self.rebuild(
+                changed_path,
+                if (prefer_translation_patch) .required else .configured,
+                prefer_translation_patch,
+            );
             return;
         }
         const owned_path = try self.allocator.dupe(u8, changed_path);
@@ -272,7 +276,11 @@ const Server = struct {
     fn flushPendingRebuildIfDue(self: *Server) !void {
         if (self.pending_rebuild_path == null) return;
         if (monotonicMillis() < self.pending_rebuild_due_ms) return;
-        try self.flushPendingRebuild(.configured);
+        try self.flushPendingRebuild(self.pendingLayoutBuildMode());
+    }
+
+    fn pendingLayoutBuildMode(self: *const Server) LayoutBuildMode {
+        return if (self.pending_rebuild_translation_patch) .required else .configured;
     }
 
     fn pendingRebuildPollTimeout(self: *const Server) ?u64 {
@@ -887,7 +895,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                 defer server.allocator.free(path);
                 if (server.pending_rebuild_path != null) {
                     server.pending_rebuild_revision = server.active_revision;
-                    try server.flushPendingRebuild(.configured);
+                    try server.flushPendingRebuild(server.pendingLayoutBuildMode());
                 } else if (server.analysis != null and
                     server.analysis.?.generation == server.documents.generation and
                     server.analysis.?.coversPath(path))
@@ -1084,7 +1092,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                 try server.rebuildEditorImmediately(path);
             }
         } else if (server.pending_rebuild_path != null) {
-            try server.flushPendingRebuild(.configured);
+            try server.flushPendingRebuild(server.pendingLayoutBuildMode());
         }
         var provider = analysisProvider(server);
         var ctx = feature_editor.Context{
