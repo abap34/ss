@@ -60,6 +60,7 @@ fn appendSettings(allocator: std.mem.Allocator, out: *std.ArrayList(u8), facts: 
     try appendBoolField(allocator, out, "enabled", facts.wysiwyg.enabled, true);
     try appendIntField(allocator, out, "debounce", facts.wysiwyg.debounce_ms, false);
     try appendIntField(allocator, out, "maxWait", facts.wysiwyg.max_wait_ms, false);
+    try appendBoolField(allocator, out, "refreshAutomatically", facts.wysiwyg.refresh_automatically, false);
     try appendBoolField(allocator, out, "refreshOnDependencyChange", facts.wysiwyg.refresh_on_dependency_change, false);
     try out.append(allocator, '}');
 

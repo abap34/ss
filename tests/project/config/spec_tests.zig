@@ -56,6 +56,7 @@ test "project spec: editor settings parse from ss.toml" {
         \\max_wait = 325
         \\
         \\[editor.wysiwyg.refresh]
+        \\automatic = false
         \\dependency = false
         \\
         \\[editor.page_guide]
@@ -69,6 +70,7 @@ test "project spec: editor settings parse from ss.toml" {
     try testing.expectEqual(@as(u64, 25), cfg.lsp.debounce_ms);
     try testing.expectEqual(@as(u64, 50), cfg.wysiwyg.debounce_ms);
     try testing.expectEqual(@as(u64, 325), cfg.wysiwyg.max_wait_ms);
+    try testing.expect(!cfg.wysiwyg.refresh_automatically);
     try testing.expect(!cfg.wysiwyg.refresh_on_dependency_change);
     try testing.expect(!cfg.page_guide.enabled);
     try testing.expect(!cfg.page_guide.gutter_icon);

@@ -20,4 +20,6 @@ assert.strictEqual(wysiwyg.debounce.type, "integer");
 assert.strictEqual(wysiwyg.debounce.default, 140);
 assert.strictEqual(wysiwyg.max_wait.type, "integer");
 assert.strictEqual(wysiwyg.max_wait.default, 700);
+assert.strictEqual(wysiwyg.refresh.properties.automatic.type, "boolean");
+assert.strictEqual(wysiwyg.refresh.properties.automatic.default, true);
 assert.strictEqual(wysiwyg.refresh.properties.dependency.type, "boolean");

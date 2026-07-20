@@ -515,6 +515,7 @@ async function testLspFeatureSurface() {
       assert(projectInfo.entryPath === slide, `feature surface projectInfo entry mismatch: ${JSON.stringify(projectInfo)}`);
       assert(projectInfo.lsp?.completion === true, `feature surface projectInfo missing LSP settings: ${JSON.stringify(projectInfo)}`);
       assert(projectInfo.wysiwyg?.maxWait === 700, `feature surface projectInfo missing WYSIWYG max wait: ${JSON.stringify(projectInfo)}`);
+      assert(projectInfo.wysiwyg?.refreshAutomatically === true, `feature surface projectInfo missing WYSIWYG automatic refresh: ${JSON.stringify(projectInfo)}`);
 
       const conflicts = await client.request("ss/layoutConflicts", { textDocument: { uri } });
       assert(conflicts.kind === "ss-layout-conflicts", `feature surface layout conflict response kind mismatch: ${JSON.stringify(conflicts)}`);

@@ -113,6 +113,11 @@
               "description": "WYSIWYG refresh triggers.",
               "additionalProperties": false,
               "properties": {
+                "automatic": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Refresh the WYSIWYG preview automatically after source changes."
+                },
                 "dependency": {
                   "type": "boolean",
                   "default": true,

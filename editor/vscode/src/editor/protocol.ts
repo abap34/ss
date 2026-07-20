@@ -221,6 +221,7 @@ export type BuildStatus =
   "starting" |
   "building" |
   "complete" |
+  "manual" |
   "failed" |
   "unavailable";
 
