@@ -114,8 +114,9 @@ pub const DiagnosticBag = struct {
         }
     }
 
-    pub fn addDocumentState(self: *DiagnosticBag, state: *core.DocumentState) !void {
-        for (state.diagnostics.items) |diagnostic| {
+    pub fn addDocumentStateFrom(self: *DiagnosticBag, state: *core.DocumentState, start_index: usize) !void {
+        std.debug.assert(start_index <= state.diagnostics.items.len);
+        for (state.diagnostics.items[start_index..]) |diagnostic| {
             const message = try utils.err.formatContextDiagnostic(self.allocator, diagnostic);
             defer self.allocator.free(message);
             const location = diagnosticLocation(state, diagnostic);
