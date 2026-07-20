@@ -58,27 +58,28 @@ const print_css =
 pub fn styleSheet(allocator: std.mem.Allocator, ir: *const render.Ir, assets: resources.References, standalone: bool) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
+    var fragment_out = FragmentOutput{ .list = &out };
     if (standalone) try out.appendSlice(allocator, document_css);
     try out.appendSlice(allocator, fragment_css);
     if (standalone) try out.appendSlice(allocator, print_css);
     for (ir.fonts.instances) |font| {
         const source = assets.fontSource(font.resource, font.face_index) orelse return error.MissingHtmlResource;
         try out.appendSlice(allocator, "@font-face { font-family: '");
-        try appendFontFamily(allocator, &out, font.id);
+        try appendFontFamily(allocator, &fragment_out, font.id);
         try out.appendSlice(allocator, "'; src: ");
         switch (source) {
             .resource => |path| {
                 try out.appendSlice(allocator, "url('");
-                try appendCssUrl(allocator, &out, path);
+                try appendCssUrl(allocator, &fragment_out, path);
                 try out.appendSlice(allocator, "')");
             },
             .local => {
                 try out.appendSlice(allocator, "local(");
-                try appendCssString(allocator, &out, font.family);
+                try appendCssString(allocator, &fragment_out, font.family);
                 try out.append(allocator, ')');
             },
         }
-        try appendFormat(allocator, &out, "; font-weight:{d}; font-style:{s}; font-stretch:{s}; font-display:block; }}\n", .{
+        try appendFormat(allocator, &fragment_out, "; font-weight:{d}; font-style:{s}; font-stretch:{s}; font-display:block; }}\n", .{
             font.weight,
             fontStyle(font.style),
             fontStretch(font.stretch),
@@ -109,87 +110,141 @@ pub fn generate(
     style_sheet_url: []const u8,
     runtime: Runtime,
 ) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    try out.appendSlice(allocator, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">" ++
+    var allocating = std.Io.Writer.Allocating.init(allocator);
+    defer allocating.deinit();
+    try write(allocator, &allocating.writer, ir, assets, style_sheet_url, runtime);
+    var out = allocating.toArrayList();
+    defer out.deinit(allocator);
+    return try out.toOwnedSlice(allocator);
+}
+
+pub fn write(
+    allocator: std.mem.Allocator,
+    out: *std.Io.Writer,
+    ir: *const render.Ir,
+    assets: resources.References,
+    style_sheet_url: []const u8,
+    runtime: Runtime,
+) !void {
+    try out.writeAll("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">" ++
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" ++
         "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: blob:; style-src 'unsafe-inline' data: blob:; script-src 'unsafe-inline' data:; worker-src data: blob:; connect-src data: blob:; font-src data: blob:\">" ++
         "<title>ss document</title><style>html:not([data-ss-ready]):not([data-ss-error]) body{visibility:hidden}</style>" ++
         "<script type=\"text/plain\" data-ss-stylesheet>");
-    try appendText(allocator, &out, style_sheet_url);
-    try out.appendSlice(allocator, "</script></head><body>");
-    const content = try fragment(allocator, ir, assets);
-    defer allocator.free(content);
-    try out.appendSlice(allocator, content);
-    try appendEmbeddedResources(allocator, &out, assets);
+    try writeText(out, style_sheet_url);
+    try out.writeAll("</script></head><body>");
+    var fragment_out = FragmentOutput{ .writer = out };
+    try writeFragment(allocator, &fragment_out, ir, assets);
+    try writeEmbeddedResources(out, assets);
     if (runtime.pdf) |pdf| {
-        try out.appendSlice(allocator, "<script type=\"text/plain\" data-ss-third-party-license=\"pdf.js\">");
-        try appendText(allocator, &out, pdf.license);
-        try out.appendSlice(allocator, "</script>");
-        try appendPdfImportMap(allocator, &out, pdf);
+        try out.writeAll("<script type=\"text/plain\" data-ss-third-party-license=\"pdf.js\">");
+        try writeText(out, pdf.license);
+        try out.writeAll("</script><script type=\"importmap\">");
+        try out.writeAll(pdf.import_map);
+        try out.writeAll("</script>");
     }
-    try out.appendSlice(allocator, "<script type=\"module\">let resourceStore=null,pdfRuntime=null,pdfController=null;const reportError=error=>{const message=error instanceof Error?error.message:String(error);document.documentElement.dataset.ssError=message;let alert=document.querySelector('.ss-runtime-error');if(!alert){alert=document.createElement('div');alert.className='ss-runtime-error';alert.setAttribute('role','alert');document.body.append(alert)}alert.textContent=message;console.error(error)};try{const navigation=await import(\"");
-    try out.appendSlice(allocator, runtime.navigation_module);
-    try out.appendSlice(allocator, "\");const pager=navigation.start(document);const resources=await import(\"");
-    try out.appendSlice(allocator, runtime.resource_module);
-    try out.appendSlice(allocator, "\");resourceStore=await resources.prepareDocumentResources(document);const text=await import(\"");
-    try out.appendSlice(allocator, runtime.text_module);
-    try out.appendSlice(allocator, "\");await text.alignTextBaselines(document);addEventListener(\"beforeunload\",()=>{void pdfRuntime?.disposePdfRuntime();resourceStore?.dispose()},{once:true});");
+    try out.writeAll("<script type=\"module\">let resourceStore=null,pdfRuntime=null,pdfController=null;const reportError=error=>{const message=error instanceof Error?error.message:String(error);document.documentElement.dataset.ssError=message;let alert=document.querySelector('.ss-runtime-error');if(!alert){alert=document.createElement('div');alert.className='ss-runtime-error';alert.setAttribute('role','alert');document.body.append(alert)}alert.textContent=message;console.error(error)};try{const navigation=await import(\"");
+    try out.writeAll(runtime.navigation_module);
+    try out.writeAll("\");const pager=navigation.start(document);const resources=await import(\"");
+    try out.writeAll(runtime.resource_module);
+    try out.writeAll("\");resourceStore=await resources.prepareDocumentResources(document);const text=await import(\"");
+    try out.writeAll(runtime.text_module);
+    try out.writeAll("\");await text.alignTextBaselines(document);addEventListener(\"beforeunload\",()=>{void pdfRuntime?.disposePdfRuntime();resourceStore?.dispose()},{once:true});");
     if (runtime.pdf) |pdf| {
-        try out.appendSlice(allocator, "const renderer=await import(\"");
-        try out.appendSlice(allocator, pdf.renderer_module);
-        try out.appendSlice(allocator, "\");pdfRuntime=renderer;pdfController=await renderer.renderPdfPages(document,()=>import(\"");
-        try out.appendSlice(allocator, pdf.pdfjs_module);
-        try out.appendSlice(allocator, "\"),\"");
-        try out.appendSlice(allocator, pdf.worker_module);
-        try out.appendSlice(allocator, "\",{resolveSource:resourceStore.resolve,onError:reportError});");
+        try out.writeAll("const renderer=await import(\"");
+        try out.writeAll(pdf.renderer_module);
+        try out.writeAll("\");pdfRuntime=renderer;pdfController=await renderer.renderPdfPages(document,()=>import(\"");
+        try out.writeAll(pdf.pdfjs_module);
+        try out.writeAll("\"),\"");
+        try out.writeAll(pdf.worker_module);
+        try out.writeAll("\",{resolveSource:resourceStore.resolve,onError:reportError});");
     }
-    try out.appendSlice(allocator, "const prepareForPrint=()=>pager.prepareForPrint(()=>pdfController?.renderAll());const finishPrint=()=>{pager.finishPrint();pdfController?.restoreAfterPrint()};const nativePrint=window.print.bind(window);const printDocument=async()=>{await prepareForPrint();try{nativePrint()}finally{finishPrint()}};const requestPrint=()=>{void printDocument().catch(reportError)};pager.setPrintHandler(requestPrint);window.print=requestPrint;globalThis.ssDocument=Object.freeze({prepareForPrint,finishPrint,print:printDocument});pager.refresh();document.documentElement.dataset.ssReady=\"true\"}catch(error){void pdfRuntime?.disposePdfRuntime();resourceStore?.dispose();if(!document.documentElement.dataset.ssError)reportError(error);throw error}</script>");
-    try out.appendSlice(allocator, "</body></html>\n");
-    return try out.toOwnedSlice(allocator);
+    try out.writeAll("const prepareForPrint=()=>pager.prepareForPrint(()=>pdfController?.renderAll());const finishPrint=()=>{pager.finishPrint();pdfController?.restoreAfterPrint()};const nativePrint=window.print.bind(window);const printDocument=async()=>{await prepareForPrint();try{nativePrint()}finally{finishPrint()}};const requestPrint=()=>{void printDocument().catch(reportError)};pager.setPrintHandler(requestPrint);window.print=requestPrint;globalThis.ssDocument=Object.freeze({prepareForPrint,finishPrint,print:printDocument});pager.refresh();document.documentElement.dataset.ssReady=\"true\"}catch(error){void pdfRuntime?.disposePdfRuntime();resourceStore?.dispose();if(!document.documentElement.dataset.ssError)reportError(error);throw error}</script></body></html>\n");
 }
 
-fn appendPdfImportMap(
-    allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
-    pdf: PdfRuntime,
-) !void {
-    try out.appendSlice(allocator, "<script type=\"importmap\">");
-    try out.appendSlice(allocator, pdf.import_map);
-    try out.appendSlice(allocator, "</script>");
-}
-
-fn appendEmbeddedResources(
-    allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
-    references: resources.References,
-) !void {
+fn writeEmbeddedResources(out: *std.Io.Writer, references: resources.References) !void {
     if (!references.isEmbedded()) return;
     for (references.set.assets) |asset| {
-        const data = asset.embedded_data orelse continue;
+        if (!asset.emit_embedded_data) continue;
         const reference = asset.embedded_reference orelse return error.MissingHtmlResource;
-        try out.appendSlice(allocator, "<script type=\"application/octet-stream\" data-ss-resource=\"");
-        try appendAttribute(allocator, out, reference);
-        try out.appendSlice(allocator, "\" data-media-type=\"");
-        try appendAttribute(allocator, out, asset.media_type);
-        try out.appendSlice(allocator, "\">");
-        try out.appendSlice(allocator, data);
-        try out.appendSlice(allocator, "</script>");
+        try out.writeAll("<script type=\"application/octet-stream\" data-ss-resource=\"");
+        try writeAttribute(out, reference);
+        try out.writeAll("\" data-media-type=\"");
+        try writeAttribute(out, asset.media_type);
+        try out.writeAll("\">");
+        try writeBase64(out, asset.bytes);
+        try out.writeAll("</script>");
     }
+}
+
+fn writeBase64(out: *std.Io.Writer, bytes: []const u8) !void {
+    const input_chunk_size = 48 * 1024;
+    var encoded: [std.base64.standard.Encoder.calcSize(input_chunk_size)]u8 = undefined;
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const end = @min(offset + input_chunk_size, bytes.len);
+        const result = std.base64.standard.Encoder.encode(&encoded, bytes[offset..end]);
+        try out.writeAll(result);
+        offset = end;
+    }
+}
+
+fn writeText(out: *std.Io.Writer, value: []const u8) !void {
+    for (value) |byte| switch (byte) {
+        '&' => try out.writeAll("&amp;"),
+        '<' => try out.writeAll("&lt;"),
+        '>' => try out.writeAll("&gt;"),
+        else => try out.writeByte(byte),
+    };
+}
+
+fn writeAttribute(out: *std.Io.Writer, value: []const u8) !void {
+    for (value) |byte| switch (byte) {
+        '&' => try out.writeAll("&amp;"),
+        '<' => try out.writeAll("&lt;"),
+        '>' => try out.writeAll("&gt;"),
+        '"' => try out.writeAll("&quot;"),
+        '\'' => try out.writeAll("&#39;"),
+        else => try out.writeByte(byte),
+    };
 }
 
 pub fn fragment(allocator: std.mem.Allocator, ir: *const render.Ir, assets: resources.References) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
-    try out.appendSlice(allocator, "<main class=\"ss-document\">");
-    for (ir.pages) |*page| try appendPage(allocator, &out, ir, page, assets);
-    try out.appendSlice(allocator, "</main>");
+    var fragment_out = FragmentOutput{ .list = &out };
+    try writeFragment(allocator, &fragment_out, ir, assets);
     return try out.toOwnedSlice(allocator);
+}
+
+const FragmentOutput = union(enum) {
+    list: *std.ArrayList(u8),
+    writer: *std.Io.Writer,
+
+    fn appendSlice(self: FragmentOutput, allocator: std.mem.Allocator, bytes: []const u8) !void {
+        switch (self) {
+            .list => |out| try out.appendSlice(allocator, bytes),
+            .writer => |out| try out.writeAll(bytes),
+        }
+    }
+
+    fn append(self: FragmentOutput, allocator: std.mem.Allocator, byte: u8) !void {
+        switch (self) {
+            .list => |out| try out.append(allocator, byte),
+            .writer => |out| try out.writeByte(byte),
+        }
+    }
+};
+
+fn writeFragment(allocator: std.mem.Allocator, out: *FragmentOutput, ir: *const render.Ir, assets: resources.References) !void {
+    try out.appendSlice(allocator, "<main class=\"ss-document\">");
+    for (ir.pages) |*page| try appendPage(allocator, out, ir, page, assets);
+    try out.appendSlice(allocator, "</main>");
 }
 
 fn appendPage(
     allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
+    out: *FragmentOutput,
     ir: *const render.Ir,
     page: *const render.Page,
     assets: resources.References,
@@ -223,7 +278,7 @@ fn appendPage(
 
 fn appendSemanticNode(
     allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
+    out: *FragmentOutput,
     ir: *const render.Ir,
     semantic_id: render.SemanticId,
     depth: usize,
@@ -311,7 +366,7 @@ fn semanticTag(semantic: render.SemanticNode) []const u8 {
 
 fn appendItem(
     allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
+    out: *FragmentOutput,
     ir: *const render.Ir,
     item: render.Item,
     assets: resources.References,
@@ -469,7 +524,7 @@ fn appendItem(
 
 fn appendVectorPathItem(
     allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
+    out: *FragmentOutput,
     header: render.ItemHeader,
     value: render.VectorPath,
 ) !void {
@@ -530,7 +585,7 @@ fn appendVectorPathItem(
     try out.appendSlice(allocator, "</svg>");
 }
 
-fn appendLinearGradient(allocator: std.mem.Allocator, out: *std.ArrayList(u8), item_id: render.ItemId, gradient: render.LinearGradientPaint) !void {
+fn appendLinearGradient(allocator: std.mem.Allocator, out: *FragmentOutput, item_id: render.ItemId, gradient: render.LinearGradientPaint) !void {
     try appendFormat(allocator, out, "<linearGradient id=\"ss-gradient-{d}\" gradientUnits=\"userSpaceOnUse\" x1=\"{d:.9}\" y1=\"{d:.9}\" x2=\"{d:.9}\" y2=\"{d:.9}\" spreadMethod=\"{s}\">", .{
         item_id, normalized(gradient.start.x), normalized(gradient.start.y), normalized(gradient.end.x), normalized(gradient.end.y), svgSpread(gradient.spread),
     });
@@ -538,7 +593,7 @@ fn appendLinearGradient(allocator: std.mem.Allocator, out: *std.ArrayList(u8), i
     try out.appendSlice(allocator, "</linearGradient>");
 }
 
-fn appendRadialGradient(allocator: std.mem.Allocator, out: *std.ArrayList(u8), item_id: render.ItemId, gradient: render.RadialGradientPaint) !void {
+fn appendRadialGradient(allocator: std.mem.Allocator, out: *FragmentOutput, item_id: render.ItemId, gradient: render.RadialGradientPaint) !void {
     try appendFormat(allocator, out, "<radialGradient id=\"ss-gradient-{d}\" gradientUnits=\"userSpaceOnUse\" fx=\"{d:.9}\" fy=\"{d:.9}\" fr=\"{d:.9}\" cx=\"{d:.9}\" cy=\"{d:.9}\" r=\"{d:.9}\" spreadMethod=\"{s}\">", .{
         item_id,
         normalized(gradient.start_center.x),
@@ -553,7 +608,7 @@ fn appendRadialGradient(allocator: std.mem.Allocator, out: *std.ArrayList(u8), i
     try out.appendSlice(allocator, "</radialGradient>");
 }
 
-fn appendGradientStops(allocator: std.mem.Allocator, out: *std.ArrayList(u8), stops: []const render.GradientStop) !void {
+fn appendGradientStops(allocator: std.mem.Allocator, out: *FragmentOutput, stops: []const render.GradientStop) !void {
     for (stops) |stop| {
         try appendFormat(allocator, out, "<stop offset=\"{d:.9}\" stop-color=\"", .{normalized(stop.offset)});
         try appendColor(allocator, out, stop.color);
@@ -561,7 +616,7 @@ fn appendGradientStops(allocator: std.mem.Allocator, out: *std.ArrayList(u8), st
     }
 }
 
-fn appendTilePattern(allocator: std.mem.Allocator, out: *std.ArrayList(u8), item_id: render.ItemId, pattern: render.TilePatternPaint) !void {
+fn appendTilePattern(allocator: std.mem.Allocator, out: *FragmentOutput, item_id: render.ItemId, pattern: render.TilePatternPaint) !void {
     try appendFormat(allocator, out, "<pattern id=\"ss-pattern-{d}\" patternUnits=\"userSpaceOnUse\" width=\"{d:.9}\" height=\"{d:.9}\" patternTransform=\"matrix({d:.12} {d:.12} {d:.12} {d:.12} {d:.9} {d:.9})\"><path d=\"", .{
         item_id,                          normalized(pattern.cell_width),   normalized(pattern.cell_height),
         normalized(pattern.transform.xx), normalized(pattern.transform.yx), normalized(pattern.transform.xy),
@@ -592,7 +647,7 @@ fn appendTilePattern(allocator: std.mem.Allocator, out: *std.ArrayList(u8), item
     try out.appendSlice(allocator, "/></pattern>");
 }
 
-fn appendSvgPathData(allocator: std.mem.Allocator, out: *std.ArrayList(u8), commands: []const render.PathCommand) !void {
+fn appendSvgPathData(allocator: std.mem.Allocator, out: *FragmentOutput, commands: []const render.PathCommand) !void {
     for (commands) |command| switch (command) {
         .move_to => |point| try appendFormat(allocator, out, "M {d:.9} {d:.9} ", .{ normalized(point.x), normalized(point.y) }),
         .line_to => |point| try appendFormat(allocator, out, "L {d:.9} {d:.9} ", .{ normalized(point.x), normalized(point.y) }),
@@ -617,7 +672,7 @@ fn svgSpread(value: render.GradientSpread) []const u8 {
 
 fn appendPdfViewer(
     allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
+    out: *FragmentOutput,
     header: render.ItemHeader,
     rect: render.Rect,
     class: []const u8,
@@ -650,7 +705,7 @@ fn appendPdfViewer(
 
 fn appendTextRuns(
     allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
+    out: *FragmentOutput,
     ir: *const render.Ir,
     layout: *const render.TextLayout,
     font_size: f64,
@@ -718,7 +773,7 @@ fn appendTextRuns(
 
 fn appendMathNode(
     allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
+    out: *FragmentOutput,
     tree: *const render.MathTree,
     node_id: render.MathNodeId,
     depth: usize,
@@ -753,7 +808,7 @@ const ItemStartOptions = struct {
 
 fn appendItemStart(
     allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
+    out: *FragmentOutput,
     tag: []const u8,
     class: []const u8,
     header: render.ItemHeader,
@@ -792,7 +847,7 @@ const LocalTransform = struct {
 
 fn appendItemTransform(
     allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
+    out: *FragmentOutput,
     transform: render.Transform,
     origin: render.Point,
     local_transform: ?LocalTransform,
@@ -818,13 +873,13 @@ fn appendItemTransform(
     try out.append(allocator, ';');
 }
 
-fn appendRectStyle(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rect: render.Rect) !void {
+fn appendRectStyle(allocator: std.mem.Allocator, out: *FragmentOutput, rect: render.Rect) !void {
     try appendFormat(allocator, out, "left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt;", .{
         normalized(rect.x), normalized(rect.y), normalized(rect.width), normalized(rect.height),
     });
 }
 
-fn appendText(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
+fn appendText(allocator: std.mem.Allocator, out: *FragmentOutput, value: []const u8) !void {
     for (value) |byte| switch (byte) {
         '&' => try out.appendSlice(allocator, "&amp;"),
         '<' => try out.appendSlice(allocator, "&lt;"),
@@ -833,7 +888,7 @@ fn appendText(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []co
     };
 }
 
-fn appendAttribute(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
+fn appendAttribute(allocator: std.mem.Allocator, out: *FragmentOutput, value: []const u8) !void {
     for (value) |byte| switch (byte) {
         '&' => try out.appendSlice(allocator, "&amp;"),
         '<' => try out.appendSlice(allocator, "&lt;"),
@@ -844,7 +899,7 @@ fn appendAttribute(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value:
     };
 }
 
-fn appendCssString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
+fn appendCssString(allocator: std.mem.Allocator, out: *FragmentOutput, value: []const u8) !void {
     try out.append(allocator, '\'');
     for (value) |byte| switch (byte) {
         '\'', '\\' => {
@@ -857,20 +912,20 @@ fn appendCssString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value:
     try out.append(allocator, '\'');
 }
 
-fn appendCssUrl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
+fn appendCssUrl(allocator: std.mem.Allocator, out: *FragmentOutput, value: []const u8) !void {
     for (value) |byte| switch (byte) {
         '\'', '"', '(', ')', '\\' => return error.InvalidHtmlResourceName,
         else => try out.append(allocator, byte),
     };
 }
 
-fn appendFontFamily(allocator: std.mem.Allocator, out: *std.ArrayList(u8), id: render.FontInstanceId) !void {
+fn appendFontFamily(allocator: std.mem.Allocator, out: *FragmentOutput, id: render.FontInstanceId) !void {
     try out.appendSlice(allocator, "ss-font-");
     const hex = std.fmt.bytesToHex(id, .lower);
     try out.appendSlice(allocator, &hex);
 }
 
-fn appendFontSettings(allocator: std.mem.Allocator, out: *std.ArrayList(u8), font: *const render.FontInstance) !void {
+fn appendFontSettings(allocator: std.mem.Allocator, out: *FragmentOutput, font: *const render.FontInstance) !void {
     if (font.variations.len != 0) {
         try out.appendSlice(allocator, "font-variation-settings:");
         for (font.variations, 0..) |variation, index| {
@@ -896,17 +951,22 @@ fn lineForRun(layout: *const render.TextLayout, run_index: usize) ?render.TextLi
     return null;
 }
 
-fn appendFormat(allocator: std.mem.Allocator, out: *std.ArrayList(u8), comptime format: []const u8, args: anytype) !void {
-    const text = try std.fmt.allocPrint(allocator, format, args);
-    defer allocator.free(text);
-    try out.appendSlice(allocator, text);
+fn appendFormat(allocator: std.mem.Allocator, out: *FragmentOutput, comptime format: []const u8, args: anytype) !void {
+    switch (out.*) {
+        .list => |list| {
+            const text = try std.fmt.allocPrint(allocator, format, args);
+            defer allocator.free(text);
+            try list.appendSlice(allocator, text);
+        },
+        .writer => |writer| try writer.print(format, args),
+    }
 }
 
 fn normalized(value: f64) f64 {
     return if (value == 0) 0 else value;
 }
 
-fn appendColor(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: anytype) !void {
+fn appendColor(allocator: std.mem.Allocator, out: *FragmentOutput, value: anytype) !void {
     try appendFormat(allocator, out, "rgb({d:.6}% {d:.6}% {d:.6}%)", .{
         @as(f64, value.r) * 100, @as(f64, value.g) * 100, @as(f64, value.b) * 100,
     });
