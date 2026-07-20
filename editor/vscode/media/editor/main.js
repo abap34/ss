@@ -79,17 +79,22 @@ function acceptSnapshot(message) {
   if (!Number.isSafeInteger(message.revision) ||
       message.revision <= state.revision ||
       message.revision < state.buildRevision || !message.snapshot) return;
+  const snapshot = materializeSnapshotDisplay(message.snapshot);
+  if (!snapshot) {
+    vscode.postMessage({ type: "refreshFull" });
+    return;
+  }
   if (state.toast?.kind === "error") clearToast();
   textAlignmentFailed = false;
   if (state.snapshot) disposePages(state.snapshot);
   disposePdfItems(app);
   state.revision = message.revision;
-  state.snapshot = message.snapshot;
+  state.snapshot = snapshot;
   const editOutcome = translation.reconcile(
-    message.snapshot,
+    snapshot,
     message.documentVersion,
   );
-  const buildFailure = buildFailureMessage(message.snapshot);
+  const buildFailure = buildFailureMessage(snapshot);
   setBuildStatus(buildFailure ? "failed" : "complete", message.revision);
   let toastDuration = null;
   if (buildFailure) {
@@ -108,6 +113,36 @@ function acceptSnapshot(message) {
   navigation.reconcile(state.snapshot);
   render();
   if (toastDuration != null) scheduleToastClear(toastDuration);
+}
+
+function materializeSnapshotDisplay(snapshot) {
+  if (snapshot.display?.kind !== "translation_patch") return snapshot;
+  if (
+    !state.snapshot ||
+    state.snapshot.snapshot_id !== snapshot.display.base_snapshot_id ||
+    state.snapshot.display?.schema !== 2
+  ) return null;
+
+  const materialized = structuredClone(snapshot);
+  const display = structuredClone(state.snapshot.display);
+  const translations = new Map(
+    (display.translations || []).map((item) => [item.node_id, { ...item }]),
+  );
+  for (const patch of snapshot.display.translations) {
+    const current = translations.get(patch.node_id) || {
+      node_id: patch.node_id,
+      x: 0,
+      y: 0,
+    };
+    current.x += patch.x;
+    current.y += patch.y;
+    translations.set(patch.node_id, current);
+  }
+  display.translations = [...translations.values()].filter((item) =>
+    Math.abs(item.x) >= 0.0001 || Math.abs(item.y) >= 0.0001
+  );
+  materialized.display = display;
+  return materialized;
 }
 
 function acceptBuildStatus(message) {

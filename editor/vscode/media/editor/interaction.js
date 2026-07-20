@@ -135,15 +135,18 @@ export class InteractionController {
     const dy = point.y - drag.start.y;
     drag.relative = event.shiftKey;
     drag.to = { ...drag.from, x: drag.from.x + dx, y: drag.from.y + dy };
-    drag.group.setAttribute("transform", `translate(${dx} ${dy})`);
     const preview = drag.svg.previousElementSibling;
     const totalX = drag.to.x - drag.base.x;
     const totalY = drag.to.y - drag.base.y;
+    drag.group.setAttribute("transform", `translate(${totalX} ${totalY})`);
     for (const nodeId of drag.nodeIds) {
       for (
         const item of preview.querySelectorAll(`[data-ss-node-id="${nodeId}"]`)
       ) {
-        item.style.translate = `${totalX}pt ${totalY}pt`;
+        const baseX = Number(item.dataset.ssBaseTranslationX || 0);
+        const baseY = Number(item.dataset.ssBaseTranslationY || 0);
+        item.style.translate = `${baseX + totalX}pt ${baseY + totalY}pt`;
+        item.dataset.ssPendingTranslation = "true";
       }
     }
   }

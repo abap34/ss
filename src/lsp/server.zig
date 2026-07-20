@@ -55,6 +55,9 @@ const Server = struct {
     pending_rebuild_path: ?[]u8 = null,
     pending_rebuild_due_ms: u64 = 0,
     pending_rebuild_revision: u64 = 0,
+    pending_rebuild_translation_patch: bool = false,
+    generated_edit_path: ?[]u8 = null,
+    generated_edit_source: ?[]u8 = null,
     active_revision: u64 = 0,
     active_request: ?*const transport.RequestState = null,
     exiting: bool = false,
@@ -82,14 +85,15 @@ const Server = struct {
         lsp_state.deinitStringSet(self.allocator, &self.published_diagnostic_uris);
         lsp_state.deinitStringSet(self.allocator, &self.wysiwyg_paths);
         self.clearPendingRebuild();
+        self.clearGeneratedEdit();
     }
 
-    fn rebuild(self: *Server, changed_path: []const u8) !void {
+    fn rebuild(self: *Server, changed_path: []const u8, prefer_translation_patch: bool) !void {
         try self.checkCanceled();
         var diagnostics = DiagnosticSet.init(self.allocator);
         defer diagnostics.deinit();
         const rebuild_generation = self.documents.generation;
-        var snapshot = try self.buildAnalysis(changed_path, &diagnostics);
+        var snapshot = try self.buildAnalysis(changed_path, &diagnostics, prefer_translation_patch);
         var snapshot_owned = true;
         errdefer if (snapshot_owned) snapshot.deinit();
         try self.checkCanceled();
@@ -116,13 +120,22 @@ const Server = struct {
 
     fn rebuildImmediately(self: *Server, changed_path: []const u8) !void {
         self.clearPendingRebuild();
-        try self.rebuild(changed_path);
+        try self.rebuild(changed_path, false);
     }
 
     fn scheduleRebuild(self: *Server, changed_path: []const u8) !void {
+        try self.scheduleRebuildWithDisplayMode(changed_path, false);
+    }
+
+    fn scheduleTranslationPatchRebuild(self: *Server, changed_path: []const u8) !void {
+        try self.scheduleRebuildWithDisplayMode(changed_path, true);
+    }
+
+    fn scheduleRebuildWithDisplayMode(self: *Server, changed_path: []const u8, prefer_translation_patch: bool) !void {
         const delay_ms = self.lspDebounceMs();
         if (delay_ms == 0) {
-            try self.rebuildImmediately(changed_path);
+            self.clearPendingRebuild();
+            try self.rebuild(changed_path, prefer_translation_patch);
             return;
         }
         const owned_path = try self.allocator.dupe(u8, changed_path);
@@ -131,14 +144,17 @@ const Server = struct {
         self.pending_rebuild_path = owned_path;
         self.pending_rebuild_due_ms = saturatedAddMillis(monotonicMillis(), delay_ms);
         self.pending_rebuild_revision = self.active_revision;
+        self.pending_rebuild_translation_patch = prefer_translation_patch;
     }
 
     fn flushPendingRebuild(self: *Server) !void {
         const path = self.pending_rebuild_path orelse return;
         const revision = self.pending_rebuild_revision;
+        const prefer_translation_patch = self.pending_rebuild_translation_patch;
         self.pending_rebuild_path = null;
         self.pending_rebuild_due_ms = 0;
         self.pending_rebuild_revision = 0;
+        self.pending_rebuild_translation_patch = false;
         defer self.allocator.free(path);
         const previous_revision = self.active_revision;
         const previous_request = self.active_request;
@@ -148,7 +164,7 @@ const Server = struct {
             self.active_revision = previous_revision;
             self.active_request = previous_request;
         }
-        try self.rebuild(path);
+        try self.rebuild(path, prefer_translation_patch);
     }
 
     fn flushPendingRebuildIfDue(self: *Server) !void {
@@ -173,6 +189,29 @@ const Server = struct {
         self.pending_rebuild_path = null;
         self.pending_rebuild_due_ms = 0;
         self.pending_rebuild_revision = 0;
+        self.pending_rebuild_translation_patch = false;
+    }
+
+    fn rememberGeneratedEdit(self: *Server, path: []const u8, source: []const u8) !void {
+        self.clearGeneratedEdit();
+        self.generated_edit_path = try self.allocator.dupe(u8, path);
+        errdefer self.clearGeneratedEdit();
+        self.generated_edit_source = try self.allocator.dupe(u8, source);
+    }
+
+    fn consumeGeneratedEdit(self: *Server, path: []const u8) bool {
+        defer self.clearGeneratedEdit();
+        const expected_path = self.generated_edit_path orelse return false;
+        const expected_source = self.generated_edit_source orelse return false;
+        const current_source = self.documents.sourceForPath(path) orelse return false;
+        return std.mem.eql(u8, expected_path, path) and std.mem.eql(u8, expected_source, current_source);
+    }
+
+    fn clearGeneratedEdit(self: *Server) void {
+        if (self.generated_edit_path) |path| self.allocator.free(path);
+        if (self.generated_edit_source) |source| self.allocator.free(source);
+        self.generated_edit_path = null;
+        self.generated_edit_source = null;
     }
 
     const WorkStatus = enum {
@@ -208,8 +247,8 @@ const Server = struct {
         }
     }
 
-    fn buildAnalysis(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet) !AnalysisSnapshot {
-        return try self.buildAnalysisWithOverride(changed_path, diagnostics, null, true);
+    fn buildAnalysis(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet, prefer_translation_patch: bool) !AnalysisSnapshot {
+        return try self.buildAnalysisWithOverride(changed_path, diagnostics, null, true, prefer_translation_patch);
     }
 
     const SourceOverride = struct {
@@ -223,6 +262,7 @@ const Server = struct {
         diagnostics: *DiagnosticSet,
         source_override: ?SourceOverride,
         include_editor_snapshot: bool,
+        prefer_translation_patch: bool,
     ) !AnalysisSnapshot {
         try self.checkCanceled();
         const changed_abs = try project.absolutePath(self.allocator, changed_path);
@@ -257,6 +297,7 @@ const Server = struct {
             .server = self,
             .diagnostics = diagnostics,
             .include_editor_snapshot = include_editor_snapshot,
+            .prefer_translation_patch = prefer_translation_patch,
         };
         var analysis_snapshot = try analysis.snapshot.build(self.allocator, &sources, entry_path, asset_base_dir, .{
             .generation = self.documents.generation,
@@ -422,47 +463,23 @@ fn buildAnalysisForFeature(context: *anyopaque, path: []const u8) !AnalysisSnaps
     const server: *Server = @ptrCast(@alignCast(context));
     var diagnostics = DiagnosticSet.init(server.allocator);
     defer diagnostics.deinit();
-    var snapshot = try server.buildAnalysis(path, &diagnostics);
+    var snapshot = try server.buildAnalysis(path, &diagnostics, false);
     if (snapshot.coversPath(path)) return snapshot;
     snapshot.deinit();
     return try server.buildSingleDocumentAnalysis(path, &diagnostics);
-}
-
-fn validateLayoutEdit(
-    context: *anyopaque,
-    path: []const u8,
-    source: []const u8,
-    node_id: u32,
-    expected_x: f64,
-    expected_y: f64,
-) !feature_edit.ValidationResult {
-    const server: *Server = @ptrCast(@alignCast(context));
-    try server.checkCanceled();
-    var diagnostics = DiagnosticSet.init(server.allocator);
-    defer diagnostics.deinit();
-    var snapshot = server.buildAnalysisWithOverride(path, &diagnostics, .{
-        .path = path,
-        .source = source,
-    }, false) catch |err| switch (err) {
-        error.Canceled => return err,
-        else => return .analysis_failed,
-    };
-    defer snapshot.deinit();
-    const layout = if (snapshot.layout_output) |*value| value else return .analysis_failed;
-    if (layout.report.failure_count != 0) return .layout_conflict;
-    const object = layout.report.objectById(node_id) orelse return .target_missing;
-    const page = layout.report.pageById(object.page_id) orelse return .analysis_failed;
-    const preview_y = page.height - object.y - object.height;
-    const tolerance: f64 = core.layout.graph.ConstraintTolerance;
-    if (@abs(object.x - expected_x) > tolerance or @abs(preview_y - expected_y) > tolerance) return .position_mismatch;
-    return .matched;
 }
 
 const AnalysisLayoutContext = struct {
     server: *Server,
     diagnostics: *DiagnosticSet,
     include_editor_snapshot: bool,
+    prefer_translation_patch: bool,
 };
+
+fn rememberGeneratedEdit(context: *anyopaque, path: []const u8, source: []const u8) !void {
+    const server: *Server = @ptrCast(@alignCast(context));
+    try server.rememberGeneratedEdit(path, source);
+}
 
 fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph) !analysis.snapshot.LayoutHookOutput {
     const hook: *AnalysisLayoutContext = @ptrCast(@alignCast(context));
@@ -472,10 +489,75 @@ fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *co
     try hook.server.checkCanceled();
     if (!hook.include_editor_snapshot or hook.server.wysiwyg_paths.count() == 0) return .{};
 
+    if (hook.prefer_translation_patch) {
+        if (hook.server.analysis) |*previous| {
+            if (previous.layout_output) |*previous_layout| {
+                if (previous_layout.editor) |*previous_editor| {
+                    if (try collectTranslations(state.allocator, state, &previous_layout.report)) |translations| {
+                        defer state.allocator.free(translations);
+                        return .{ .editor = try editor_snapshot.buildTranslationPatch(
+                            state.allocator,
+                            state,
+                            hook.server.documents.generation,
+                            previous_editor.model.snapshot_id,
+                            translations,
+                        ) };
+                    }
+                }
+            }
+        }
+    }
+
     var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &pages, .{});
     defer render_ir.deinit(state.allocator);
     try hook.server.checkCanceled();
     return .{ .editor = try editor_snapshot.build(state.allocator, hook.server.io, state, &render_ir, hook.server.documents.generation) };
+}
+
+fn collectTranslations(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    previous: *const core.layout.conflicts.Report,
+) !?[]editor_snapshot.Translation {
+    var current = try core.layout.conflicts.Report.init(allocator, state);
+    defer current.deinit();
+    if (current.failure_count != 0 or
+        current.pages.len != previous.pages.len or
+        current.objects.len != previous.objects.len)
+    {
+        return null;
+    }
+
+    const tolerance: f32 = core.layout.graph.ConstraintTolerance;
+    for (current.pages) |page| {
+        const old = previous.pageById(page.id) orelse return null;
+        if (@abs(page.width - old.width) > tolerance or
+            @abs(page.height - old.height) > tolerance)
+        {
+            return null;
+        }
+    }
+
+    var translations = std.ArrayList(editor_snapshot.Translation).empty;
+    errdefer translations.deinit(allocator);
+    for (current.objects) |object| {
+        const old = previous.objectById(object.id) orelse return null;
+        if (object.page_id != old.page_id or
+            @abs(object.width - old.width) > tolerance or
+            @abs(object.height - old.height) > tolerance)
+        {
+            return null;
+        }
+        const x = object.x - old.x;
+        const y = old.y - object.y;
+        if (@abs(x) <= tolerance and @abs(y) <= tolerance) continue;
+        try translations.append(allocator, .{
+            .node_id = object.id,
+            .x = x,
+            .y = y,
+        });
+    }
+    return try translations.toOwnedSlice(allocator);
 }
 
 fn addAnalysisLayoutError(context: *anyopaque, state: *core.DocumentState, err: anyerror) !void {
@@ -602,7 +684,10 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                     }
                     if (intField(doc, "version")) |version| try server.documents.setVersionAtPath(path, version);
                     try server.clearChangedDocumentDiagnostics(uri);
-                    try server.scheduleRebuild(path);
+                    if (server.consumeGeneratedEdit(path))
+                        try server.scheduleTranslationPatchRebuild(path)
+                    else
+                        try server.scheduleRebuild(path);
                 };
             }
         };
@@ -769,6 +854,10 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
     }
     if (std.mem.eql(u8, method, "ss/editorSnapshot")) {
         if (server.pending_rebuild_path != null) try server.flushPendingRebuild();
+        const base_snapshot_id = if (params) |p| switch (p) {
+            .object => |*object| stringField(object, "baseSnapshotId") orelse "",
+            else => "",
+        } else "";
         const doc_path = try protocol.docPathFromParams(server.allocator, params);
         defer if (doc_path) |path| server.allocator.free(path);
         if (doc_path) |path| {
@@ -778,7 +867,8 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                 server.analysis == null or
                 !server.analysis.?.coversPath(path) or
                 server.analysis.?.layout_output == null or
-                server.analysis.?.layout_output.?.editor == null)
+                server.analysis.?.layout_output.?.editor == null or
+                !editorDisplayMatches(server.analysis.?.layout_output.?.editor.?.model, base_snapshot_id))
             {
                 try server.rebuildImmediately(path);
             }
@@ -812,8 +902,8 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
             .documents = &server.documents,
             .active_editor_paths = &server.wysiwyg_paths,
             .provider = &provider,
-            .validation_context = server,
-            .validate = validateLayoutEdit,
+            .generated_context = server,
+            .on_generated = rememberGeneratedEdit,
         };
         const result = try feature_edit.result(&ctx, params);
         defer server.allocator.free(result);
@@ -825,6 +915,11 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         .canceled => try respondError(server.allocator, id, -32800, "request cancelled"),
         .content_modified => try respondError(server.allocator, id, -32801, "content modified"),
     };
+}
+
+fn editorDisplayMatches(model: editor_snapshot.Model, base_snapshot_id: []const u8) bool {
+    const required = model.display_base_snapshot_id orelse return true;
+    return std.mem.eql(u8, required, base_snapshot_id);
 }
 
 const initializeResultPrefix =

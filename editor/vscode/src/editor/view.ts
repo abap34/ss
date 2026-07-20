@@ -21,6 +21,7 @@ export class ViewResources {
     snapshot: EditorSnapshot,
   ): void {
     const roots = this.roots(document);
+    if (snapshot.display.schema !== 2) return;
     for (const asset of snapshot.display.assets) {
       roots.push(vscode.Uri.file(path.dirname(asset.path)));
     }
@@ -36,6 +37,7 @@ export class ViewResources {
     snapshot: EditorSnapshot,
   ): EditorSnapshot {
     const copy = structuredClone(snapshot);
+    if (copy.display.schema !== 2) return copy;
     for (const asset of copy.display.assets) {
       const uri = webview.asWebviewUri(vscode.Uri.file(asset.path)).toString();
       copy.display.html = replaceHtmlAsset(copy.display.html, asset.relative_path, uri);
