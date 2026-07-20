@@ -131,7 +131,7 @@ pub const Translation = struct {
 
 pub fn emptyJson(allocator: std.mem.Allocator) ![]u8 {
     return try allocator.dupe(u8,
-        \\{"schema":1,"kind":"ss-editor-snapshot","snapshot_id":"","generation":0,"entry_path":"","source_paths":[],"coordinate_space":{"unit":"pt","origin":"page-top-left","x_axis":"right","y_axis":"down"},"layout":{"schema":1,"kind":"ss-layout-conflicts","entry_path":"","pages":[],"objects":[],"anchors":[],"relations":[],"failures":[]},"display":{"schema":2,"html":"","css":"","has_pdf":false,"assets":[]},"outline":[],"editing":[],"page_editing":[],"shape_editing":[]}
+        \\{"schema":1,"kind":"ss-editor-snapshot","snapshot_id":"","generation":0,"entry_path":"","source_paths":[],"coordinate_space":{"unit":"pt","origin":"page-top-left","x_axis":"right","y_axis":"down"},"layout":{"schema":1,"kind":"ss-layout-conflicts","entry_path":"","pages":[],"objects":[],"relations":[],"failures":[]},"display":{"schema":2,"html":"","css":"","has_pdf":false,"assets":[]},"outline":[],"editing":[],"page_editing":[],"shape_editing":[]}
         \\
     );
 }

@@ -36,7 +36,6 @@ export interface CoordinateSpace {
 export interface LayoutData {
   pages: LayoutPage[];
   objects: LayoutObject[];
-  anchors: LayoutAnchor[];
   relations: LayoutRelation[];
   failures: unknown[];
 }
@@ -55,20 +54,12 @@ export interface LayoutObject {
   page_id: number;
   name: string;
   role?: string | null;
-  object_kind?: string | null;
   x: number;
   y: number;
   width: number;
   height: number;
   group: boolean;
   location?: SourceLocation | null;
-}
-
-export interface LayoutAnchor {
-  page_id: number;
-  node_id: number;
-  anchor: Anchor;
-  value: number;
 }
 
 export interface LayoutRelation {
