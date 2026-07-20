@@ -55,6 +55,7 @@ pub const SourceModuleKind = @import("core/document_state.zig").SourceModuleKind
 pub const SourceModuleId = @import("core/document_state.zig").SourceModuleId;
 pub const SourceModule = @import("core/document_state.zig").SourceModule;
 pub const ObjectSource = @import("core/document_state.zig").ObjectSource;
+pub const PageSource = @import("core/document_state.zig").PageSource;
 pub const FunctionKey = @import("core/document_state.zig").FunctionKey;
 pub const FunctionKeyContext = @import("core/document_state.zig").FunctionKeyContext;
 pub const FunctionMap = @import("core/document_state.zig").FunctionMap;

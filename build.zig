@@ -779,6 +779,7 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         "tests/runtime/editor/empty/spec.mjs",
         "tests/runtime/editor/names/spec.mjs",
         "tests/runtime/editor/relations/spec.mjs",
+        "tests/runtime/editor/shapes/spec.mjs",
         "tests/runtime/editor/spec.mjs",
         "tests/runtime/layout/frame_too_small_spec.mjs",
         "tests/runtime/layout/measurement_spec.mjs",

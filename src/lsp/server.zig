@@ -21,6 +21,7 @@ const feature_hover = @import("features/hover.zig");
 const feature_inlay = @import("features/inlay.zig");
 const feature_layout = @import("features/layout.zig");
 const feature_project = @import("features/project.zig");
+const feature_shape_edit = @import("features/shape_edit.zig");
 const feature_symbols = @import("features/symbols.zig");
 const feature_tokens = @import("features/tokens.zig");
 const transport = @import("transport.zig");
@@ -906,6 +907,34 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
             .on_generated = rememberGeneratedEdit,
         };
         const result = try feature_edit.result(&ctx, params);
+        defer server.allocator.free(result);
+        try server.respondResult(id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "ss/insertShape")) {
+        var provider = analysisProvider(server);
+        var ctx = feature_shape_edit.Context{
+            .io = server.io,
+            .allocator = server.allocator,
+            .documents = &server.documents,
+            .active_editor_paths = &server.wysiwyg_paths,
+            .provider = &provider,
+        };
+        const result = try feature_shape_edit.insertResult(&ctx, params);
+        defer server.allocator.free(result);
+        try server.respondResult(id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "ss/shapeStyleEdit")) {
+        var provider = analysisProvider(server);
+        var ctx = feature_shape_edit.Context{
+            .io = server.io,
+            .allocator = server.allocator,
+            .documents = &server.documents,
+            .active_editor_paths = &server.wysiwyg_paths,
+            .provider = &provider,
+        };
+        const result = try feature_shape_edit.styleResult(&ctx, params);
         defer server.allocator.free(result);
         try server.respondResult(id, result);
         return;

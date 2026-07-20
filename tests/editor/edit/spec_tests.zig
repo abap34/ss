@@ -1,5 +1,6 @@
 const std = @import("std");
 const edit = @import("editor_edit");
+const shape = edit.shape;
 
 fn relationSource(source: []const u8, target: []const u8, source_endpoint: []const u8, offset: ?[]const u8) edit.RelationSource {
     const target_start = std.mem.indexOf(u8, source, target).?;
@@ -30,6 +31,122 @@ fn expectFixtureOutput(allocator: std.mem.Allocator, path: []const u8, actual: [
     const expected = try readFixture(allocator, expected_path);
     defer allocator.free(expected);
     try std.testing.expectEqualStrings(expected, actual);
+}
+
+test "shape insertion emits a canonical rectangle source block" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\page Example
+        \\end
+        \\
+    ;
+    var result = (try shape.insert(
+        allocator,
+        source,
+        .{ .start = 0, .end = source.len },
+        null,
+        "rectangle_item",
+        .rectangle,
+        .{ .x = 24, .y = 36, .width = 160, .height = 100 },
+        .{ .enabled = true, .color = "#e8f1ff", .opacity = 0.8 },
+        .{ .enabled = true, .color = "#2563eb", .width = 1.6, .style = .solid },
+    )).?;
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expectEqualStrings(
+        \\page Example
+        \\  let rectangle_item = rectangle!(160, 100, VectorStyle { fill = solid_fill(c"#e8f1ff", 0.8) stroke = solid_stroke(c"#2563eb", 1.6) })
+        \\  ~!~ rectangle_item.left == page.left + 24
+        \\  ~!~ rectangle_item.top == page.top - 36
+        \\end
+        \\
+    , updated);
+}
+
+test "shape insertion preserves circle dimensions and disabled paint" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\page Empty
+        \\end
+        \\
+    ;
+    var result = (try shape.insert(
+        allocator,
+        source,
+        .{ .start = 0, .end = source.len },
+        null,
+        "circle_item",
+        .circle,
+        .{ .x = 0, .y = 0, .width = 80, .height = 80 },
+        .{ .enabled = false, .color = "#ffffff", .opacity = 1 },
+        .{ .enabled = false, .color = "#000000", .width = 2, .style = .dotted },
+    )).?;
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expect(std.mem.indexOf(u8, updated, "circle!(80, VectorStyle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, updated, "fill = no_fill()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, updated, "stroke = no_stroke()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, updated, "page.left + 0") == null);
+}
+
+test "shape insertion precedes the first existing constraint" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\page Ordered
+        \\  let existing_item = rectangle!(20, 20)
+        \\  ~ existing_item.left == page.left + 10
+        \\end
+        \\
+    ;
+    const constraint_start = std.mem.indexOf(u8, source, "~ existing_item").?;
+    var result = (try shape.insert(
+        allocator,
+        source,
+        .{ .start = 0, .end = source.len },
+        constraint_start,
+        "arrow_shape_item",
+        .arrow,
+        .{ .x = 30, .y = 40, .width = 170, .height = 90 },
+        .{ .enabled = true, .color = "#fef3c7", .opacity = 1 },
+        .{ .enabled = true, .color = "#92400e", .width = 1.5, .style = .dashed },
+    )).?;
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    const inserted_start = std.mem.indexOf(u8, updated, "let arrow_shape_item").?;
+    const existing_constraint = std.mem.indexOf(u8, updated, "~ existing_item").?;
+    try std.testing.expect(inserted_start < existing_constraint);
+    try std.testing.expect(std.mem.indexOf(u8, updated, "dashed_stroke(c\"#92400e\", 1.5)") != null);
+}
+
+test "shape style expressions replace only canonical paint values" {
+    const allocator = std.testing.allocator;
+    const fill = try shape.fillExpression(allocator, .{
+        .enabled = true,
+        .color = "#123456",
+        .opacity = 0.45,
+    });
+    defer allocator.free(fill);
+    const stroke = try shape.strokeExpression(allocator, .{
+        .enabled = false,
+        .color = "#abcdef",
+        .width = 3,
+        .style = .solid,
+    });
+    defer allocator.free(stroke);
+    try std.testing.expectEqualStrings("solid_fill(c\"#123456\", 0.45)", fill);
+    try std.testing.expectEqualStrings("no_stroke()", stroke);
+
+    const dotted = try shape.strokeExpression(allocator, .{
+        .enabled = true,
+        .color = "#abcdef",
+        .width = 3,
+        .style = .dotted,
+    });
+    defer allocator.free(dotted);
+    try std.testing.expectEqualStrings("dotted_stroke(c\"#abcdef\", 3)", dotted);
 }
 
 test "absolute position preserves regular constraints and appends updates" {

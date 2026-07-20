@@ -151,6 +151,14 @@ pub const ObjectSource = struct {
     span_end: usize,
 };
 
+pub const PageSource = struct {
+    page_id: NodeId,
+    module_id: SourceModuleId,
+    path: []const u8,
+    span_start: usize,
+    span_end: usize,
+};
+
 pub const DefinitionKind = enum {
     function,
     constant,
@@ -208,6 +216,7 @@ pub const DocumentState = struct {
     constraint_updates: std.ArrayList(ConstraintUpdate),
     overridden_constraints: std.ArrayList(Constraint),
     object_sources: std.ArrayList(ObjectSource),
+    page_sources: std.ArrayList(PageSource),
     diagnostics: std.ArrayList(Diagnostic),
     last_constraint_failure: ?ConstraintFailure,
     constraint_failures: std.ArrayList(ConstraintFailure),
@@ -245,6 +254,7 @@ pub const DocumentState = struct {
             .constraint_updates = .empty,
             .overridden_constraints = .empty,
             .object_sources = .empty,
+            .page_sources = .empty,
             .diagnostics = .empty,
             .last_constraint_failure = null,
             .constraint_failures = .empty,
@@ -304,6 +314,7 @@ pub const DocumentState = struct {
         self.constraint_updates.deinit(self.allocator);
         self.overridden_constraints.deinit(self.allocator);
         self.object_sources.deinit(self.allocator);
+        self.page_sources.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
         self.clearConstraintFailures();
         self.constraint_failures.deinit(self.allocator);
@@ -348,6 +359,7 @@ pub const DocumentState = struct {
         self.constraint_updates.deinit(self.allocator);
         self.overridden_constraints.deinit(self.allocator);
         self.object_sources.deinit(self.allocator);
+        self.page_sources.deinit(self.allocator);
         self.clearDiagnostics();
         self.diagnostics.deinit(self.allocator);
         self.clearConstraintFailures();
@@ -947,6 +959,22 @@ pub const DocumentState = struct {
             .module_id = module_id,
             .path = try self.copyString(path),
             .binding_base = if (binding_base) |base| try self.copyString(base) else null,
+            .span_start = span.start,
+            .span_end = span.end,
+        });
+    }
+
+    pub fn addPageSource(
+        self: *DocumentState,
+        page_id: NodeId,
+        module_id: SourceModuleId,
+        path: []const u8,
+        span: ast.Span,
+    ) !void {
+        try self.page_sources.append(self.allocator, .{
+            .page_id = page_id,
+            .module_id = module_id,
+            .path = try self.copyString(path),
             .span_start = span.start,
             .span_end = span.end,
         });

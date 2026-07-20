@@ -16,10 +16,19 @@ pub const Generator = struct {
         state: *const core.DocumentState,
         page: *const ast.PageDecl,
     ) !Generator {
+        return initForModule(allocator, state, state.project_module_id, page);
+    }
+
+    pub fn initForModule(
+        allocator: std.mem.Allocator,
+        state: *const core.DocumentState,
+        module_id: core.SourceModuleId,
+        page: *const ast.PageDecl,
+    ) !Generator {
         const root_sema = SemanticEnv.init(state, null, &state.functions);
         var generator = Generator{
             .allocator = allocator,
-            .sema = root_sema.forModule(state.project_module_id),
+            .sema = root_sema.forModule(module_id),
             .reserved = std.StringHashMap(void).init(allocator),
             .statements = std.AutoHashMap(usize, []u8).init(allocator),
         };
