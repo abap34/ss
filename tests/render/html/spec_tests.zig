@@ -44,6 +44,20 @@ fn embeddedStyleSheet(document: []const u8) ![]u8 {
     return decoded;
 }
 
+fn firstEmbeddedResource(document: []const u8) ![]u8 {
+    const prefix = "<script type=\"application/octet-stream\" data-ss-resource=\"";
+    const tag_start = std.mem.indexOf(u8, document, prefix) orelse return error.MissingEmbeddedResource;
+    const body_offset = std.mem.indexOfScalar(u8, document[tag_start..], '>') orelse return error.InvalidEmbeddedResource;
+    const start = tag_start + body_offset + 1;
+    const end_offset = std.mem.indexOf(u8, document[start..], "</script>") orelse return error.InvalidEmbeddedResource;
+    const encoded = document[start .. start + end_offset];
+    const size = try std.base64.standard.Decoder.calcSizeForSlice(encoded);
+    const decoded = try testing.allocator.alloc(u8, size);
+    errdefer testing.allocator.free(decoded);
+    try std.base64.standard.Decoder.decode(decoded, encoded);
+    return decoded;
+}
+
 fn pdfItemOpeningTag(document: []const u8, copy_annotations: bool) ![]const u8 {
     const policy = if (copy_annotations) "data-copy-annotations=\"true\"" else "data-copy-annotations=\"false\"";
     const policy_index = std.mem.indexOf(u8, document, policy) orelse return error.MissingPdfItem;
@@ -116,11 +130,30 @@ test "HTML renderer writes deterministic normal elements with escaped text" {
     try testing.expect(std.mem.indexOf(u8, first_css, "descent-override") == null);
     try testing.expect(std.mem.indexOf(u8, first_css, "line-gap-override") == null);
     try testing.expect(std.mem.indexOf(u8, first, "data-ss-resource=\"ss-resource:font:") != null);
+    const first_resource = try firstEmbeddedResource(first);
+    defer testing.allocator.free(first_resource);
+    try testing.expect(first_resource.len > 48 * 1024);
 
     try html.write(testing.allocator, testing.io, &ir, output);
     const second = try std.Io.Dir.cwd().readFileAlloc(testing.io, output, testing.allocator, .unlimited);
     defer testing.allocator.free(second);
     try testing.expectEqualStrings(first, second);
+}
+
+test "HTML renderer leaves a directory destination intact" {
+    const output = ".ss-cache/test-render-html/directory-output";
+    try prepareOutput(output);
+    try std.Io.Dir.cwd().createDirPath(testing.io, output);
+    defer deleteOutput(output);
+
+    const pages = try testing.allocator.alloc(render.Page, 0);
+    var ir = render.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+
+    try testing.expectError(error.OutputPathNotFile, html.write(testing.allocator, testing.io, &ir, output));
+    var directory = try std.Io.Dir.cwd().openDir(testing.io, output, .{});
+    directory.close(testing.io);
 }
 
 test "HTML renderer keeps emoji selectable when the resolved font forbids embedding" {

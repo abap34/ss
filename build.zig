@@ -22,6 +22,7 @@ const ProjectModules = struct {
     stdlib_assets: *Module,
     fontawesome_assets: *Module,
     pdfjs_assets: *Module,
+    html_embeds: *Module,
     math_assets: *Module,
     project: *Module,
     core: *Module,
@@ -306,6 +307,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     const stdlib_assets_mod = createModule(ctx, "stdlib/embed.zig", &.{}, null);
     const fontawesome_assets_mod = createModule(ctx, "third_party/fontawesome-free/embed.zig", &.{}, null);
     const pdfjs_assets_mod = createModule(ctx, "third_party/pdfjs/embed.zig", &.{}, null);
+    const html_embeds_mod = createHtmlEmbedsModule(ctx);
     const math_assets_mod = createModule(ctx, "third_party/stix-two-math/embed.zig", &.{}, null);
     const project_mod = createModule(ctx, "src/project.zig", &.{
         import("utils", utils_mod),
@@ -369,6 +371,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .stdlib_assets = stdlib_assets_mod,
         .fontawesome_assets = fontawesome_assets_mod,
         .pdfjs_assets = pdfjs_assets_mod,
+        .html_embeds = html_embeds_mod,
         .math_assets = math_assets_mod,
         .project = project_mod,
         .core = core_mod,
@@ -568,6 +571,7 @@ fn addRenderTests(ctx: BuildContext, modules: ProjectModules, test_step: *Step) 
     addFocusedTestStep(b, "test-render-ir", "Run focused render IR tests", &run_render_spec_tests.step);
     const render_html_mod = createModule(ctx, "src/render/html.zig", &.{
         import("core", modules.core),
+        import("html_embeds", modules.html_embeds),
         import("render", modules.render),
         import("pdfjs_assets", modules.pdfjs_assets),
         import("math_assets", modules.math_assets),
@@ -609,6 +613,58 @@ fn addFocusedTestStep(b: *std.Build, name: []const u8, description: []const u8, 
     b.step(name, description).dependOn(dependency);
 }
 
+fn createHtmlEmbedsModule(ctx: BuildContext) *Module {
+    const b = ctx.b;
+    const files = b.addWriteFiles();
+    const resource_module = javascriptDataUrl(b, "src/render/html/resources.js", 256 * 1024);
+    const navigation_module = javascriptDataUrl(b, "src/render/html/navigation.js", 256 * 1024);
+    const text_module = javascriptDataUrl(b, "src/render/html/text.js", 256 * 1024);
+    const pdf_controller_module = javascriptDataUrl(b, "src/render/html/pdf/controller.js", 256 * 1024);
+    const pdf_geometry_module = javascriptDataUrl(b, "src/render/html/pdf/geometry.js", 256 * 1024);
+    const pdf_placement_module = javascriptDataUrl(b, "src/render/html/pdf/placement.js", 256 * 1024);
+    const pdf_queue_module = javascriptDataUrl(b, "src/render/html/pdf/queue.js", 256 * 1024);
+    const pdf_renderer_module = javascriptDataUrl(b, "src/render/html/pdf/index.js", 256 * 1024);
+    const pdf_service_module = javascriptDataUrl(b, "src/render/html/pdf/service.js", 256 * 1024);
+    const pdfjs_module = javascriptDataUrl(b, "third_party/pdfjs/pdf.mjs", 2 * 1024 * 1024);
+    const pdf_worker_module = javascriptDataUrl(b, "third_party/pdfjs/pdf.worker.mjs", 4 * 1024 * 1024);
+    const pdf_import_map = b.fmt(
+        "{{\"imports\":{{\"@ss/pdf/controller\":\"{s}\",\"@ss/pdf/geometry\":\"{s}\",\"@ss/pdf/placement\":\"{s}\",\"@ss/pdf/queue\":\"{s}\",\"@ss/pdf/service\":\"{s}\"}}}}",
+        .{ pdf_controller_module, pdf_geometry_module, pdf_placement_module, pdf_queue_module, pdf_service_module },
+    );
+
+    _ = files.add("resource-module.txt", resource_module);
+    _ = files.add("navigation-module.txt", navigation_module);
+    _ = files.add("text-module.txt", text_module);
+    _ = files.add("pdf-import-map.json", pdf_import_map);
+    _ = files.add("pdf-renderer-module.txt", pdf_renderer_module);
+    _ = files.add("pdfjs-module.txt", pdfjs_module);
+    _ = files.add("pdf-worker-module.txt", pdf_worker_module);
+    const root = files.add("root.zig",
+        \\pub const resource_module = @embedFile("resource-module.txt");
+        \\pub const navigation_module = @embedFile("navigation-module.txt");
+        \\pub const text_module = @embedFile("text-module.txt");
+        \\pub const pdf_import_map = @embedFile("pdf-import-map.json");
+        \\pub const pdf_renderer_module = @embedFile("pdf-renderer-module.txt");
+        \\pub const pdfjs_module = @embedFile("pdfjs-module.txt");
+        \\pub const pdf_worker_module = @embedFile("pdf-worker-module.txt");
+    );
+    return b.createModule(.{
+        .root_source_file = root,
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+    });
+}
+
+fn javascriptDataUrl(b: *std.Build, path: []const u8, max_bytes: usize) []const u8 {
+    const source = b.build_root.handle.readFileAlloc(b.graph.io, path, b.allocator, .limited(max_bytes)) catch
+        std.debug.panic("HTML runtime source is missing: {s}", .{path});
+    const prefix = "data:text/javascript;charset=utf-8;base64,";
+    const result = b.allocator.alloc(u8, prefix.len + std.base64.standard.Encoder.calcSize(source.len)) catch @panic("OOM");
+    @memcpy(result[0..prefix.len], prefix);
+    _ = std.base64.standard.Encoder.encode(result[prefix.len..], source);
+    return result;
+}
+
 fn createModule(
     ctx: BuildContext,
     root_source_file: []const u8,
@@ -634,6 +690,7 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
         import("stdlib_assets", modules.stdlib_assets),
         import("fontawesome_assets", modules.fontawesome_assets),
         import("pdfjs_assets", modules.pdfjs_assets),
+        import("html_embeds", modules.html_embeds),
         import("render", modules.render),
         import("render_resources", modules.render_resources),
         import("pdf_ffi", modules.pdf_ffi),
