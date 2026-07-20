@@ -19,7 +19,7 @@ pub fn appendText(
     font_size: f64,
     color: core.render_policy.Color,
 ) !void {
-    const layout = try text.shape(allocator, io, resources, fonts, source, face, font_size, width, false);
+    const layout = try text.shape(allocator, io, resources, fonts, source, face, font_size, width, false, null);
     try page.appendTextLayout(allocator, node_id, x, baseline_y, width, layout, font_size, color);
 }
 

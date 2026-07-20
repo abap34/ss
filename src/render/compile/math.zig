@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 pub const Options = struct {
     font_size: f64,
     display: bool,
+    text_cache: ?*text_compile.Cache = null,
 };
 
 pub const Compiled = struct {
@@ -62,6 +63,7 @@ pub fn layout(
         options.font_size,
         std.math.floatMax(f64),
         false,
+        options.text_cache,
     );
     defer probe.deinit(allocator);
     if (probe.runs.len == 0) return error.MissingMathFont;
@@ -77,6 +79,7 @@ pub fn layout(
         .font = math_font,
         .constants = constants,
         .display = options.display,
+        .text_cache = options.text_cache,
     };
     var root = try builder.node(tree.root, options.font_size, 0);
     errdefer root.deinit(allocator);
@@ -146,6 +149,7 @@ const Builder = struct {
     font: core.font.Face,
     constants: render.MathConstants,
     display: bool,
+    text_cache: ?*text_compile.Cache,
 
     fn node(self: *Builder, id: render.MathNodeId, font_size: f64, script_level: u8) anyerror!Box {
         const value = self.tree.find(id) orelse return error.InvalidMathTree;
@@ -178,6 +182,7 @@ const Builder = struct {
             font_size,
             std.math.floatMax(f64),
             false,
+            self.text_cache,
         );
         errdefer shaped.deinit(self.allocator);
         const baseline = shaped.firstBaseline();
