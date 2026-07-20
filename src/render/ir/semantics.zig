@@ -67,7 +67,8 @@ pub const Tree = struct {
     }
 
     pub fn find(self: *const Tree, id: Id) ?*const Node {
-        for (self.nodes) |*node| if (node.id == id) return node;
-        return null;
+        if (id == 0 or id > self.nodes.len) return null;
+        const node = &self.nodes[@intCast(id - 1)];
+        return if (node.id == id) node else null;
     }
 };

@@ -136,6 +136,38 @@ test "render IR validation accepts deterministic page and item order" {
     try testing.expectEqual(@as(render_ir.ItemId, 1 << 32), pages[0].items.items[0].header().item_id);
 }
 
+test "semantic tree lookup uses canonical node ids" {
+    const nodes = [_]render_ir.SemanticNode{
+        .{ .id = 1, .role = .document },
+        .{ .id = 2, .role = .page },
+        .{ .id = 3, .role = .text },
+    };
+    const tree = render_ir.SemanticTree{ .root = 1, .nodes = @constCast(&nodes) };
+
+    try testing.expectEqual(@as(render_ir.SemanticId, 1), tree.find(1).?.id);
+    try testing.expectEqual(@as(render_ir.SemanticId, 3), tree.find(3).?.id);
+    try testing.expect(tree.find(0) == null);
+    try testing.expect(tree.find(4) == null);
+}
+
+test "resource graph lookup covers sorted boundaries and misses" {
+    const first_id: render_ir.ResourceId = @splat(0x10);
+    const middle_id: render_ir.ResourceId = @splat(0x20);
+    const last_id: render_ir.ResourceId = @splat(0x30);
+    const missing_id: render_ir.ResourceId = @splat(0x28);
+    var entries = [_]render_ir.Resource{
+        .{ .id = first_id, .kind = .raster, .name = undefined, .bytes = undefined, .metadata = undefined },
+        .{ .id = middle_id, .kind = .raster, .name = undefined, .bytes = undefined, .metadata = undefined },
+        .{ .id = last_id, .kind = .raster, .name = undefined, .bytes = undefined, .metadata = undefined },
+    };
+    const graph = render_ir.ResourceGraph{ .entries = &entries };
+
+    try testing.expectEqualSlices(u8, &first_id, &graph.find(first_id).?.id);
+    try testing.expectEqualSlices(u8, &middle_id, &graph.find(middle_id).?.id);
+    try testing.expectEqualSlices(u8, &last_id, &graph.find(last_id).?.id);
+    try testing.expect(graph.find(missing_id) == null);
+}
+
 test "render IR validation rejects non-finite geometry and unstable ordering" {
     var pages = try testing.allocator.alloc(render_ir.Page, 1);
     pages[0] = .{ .page_id = 1, .index = 0, .width = 1280, .height = 720 };

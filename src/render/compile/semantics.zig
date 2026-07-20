@@ -20,6 +20,18 @@ pub fn build(
 
     for (pages) |*page| {
         const prepared_page = core.prepared.pageById(prepared_pages, page.page_id) orelse return error.MissingPreparedPage;
+        var item_indices_by_node = std.AutoHashMap(core.NodeId, std.ArrayList(usize)).init(allocator);
+        defer {
+            var values = item_indices_by_node.valueIterator();
+            while (values.next()) |indices| indices.deinit(allocator);
+            item_indices_by_node.deinit();
+        }
+        for (page.items.items, 0..) |item, item_index| {
+            const node_id = item.nodeId() orelse continue;
+            const entry = try item_indices_by_node.getOrPut(node_id);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(allocator, item_index);
+        }
         const page_id = try builder.append(.page);
         const page_node_index = builder.index(page_id);
         const page_name = if (state.getNode(page.page_id)) |node| node.name else "Page";
@@ -29,7 +41,7 @@ pub fn build(
         var object_ids = std.ArrayList(render.SemanticId).empty;
         defer object_ids.deinit(allocator);
         for (prepared_page.objects) |*prepared_object| {
-            if (!hasItemsForNode(page, prepared_object.node_id)) continue;
+            const item_indices = item_indices_by_node.get(prepared_object.node_id) orelse continue;
             const semantic_id = try builder.object(state, prepared_object);
             const semantic_index = builder.index(semantic_id);
             var parent_items = std.ArrayList(render.ItemId).empty;
@@ -38,8 +50,8 @@ pub fn build(
             defer math_semantics.deinit(allocator);
             try builder.collectMathNodes(semantic_id, &math_semantics, 0);
             var next_math: usize = 0;
-            for (page.items.items) |*item| {
-                if (item.nodeId() != prepared_object.node_id) continue;
+            for (item_indices.items) |item_index| {
+                const item = &page.items.items[item_index];
                 var item_semantic_id = semantic_id;
                 if (item.* == .math) {
                     if (next_math >= math_semantics.items.len) return error.MissingMathSemantics;
@@ -267,13 +279,6 @@ const Builder = struct {
         return id;
     }
 };
-
-fn hasItemsForNode(page: *const render.Page, node_id: core.NodeId) bool {
-    for (page.items.items) |item| if (item.nodeId() == node_id) {
-        return true;
-    };
-    return false;
-}
 
 fn plainBlocks(allocator: Allocator, blocks: []const *MarkdownBlock) !?[]u8 {
     var text = std.ArrayList(u8).empty;
