@@ -849,7 +849,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                 const text = stringField(doc, "text") orelse "";
                 const path = try server.documents.replaceUri(uri, text, intField(doc, "version"));
                 defer server.allocator.free(path);
-                try server.rebuildImmediately(path);
+                try server.scheduleRebuild(path);
             }
         };
         return;
@@ -860,10 +860,16 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                 if (arrayField(p, "contentChanges")) |changes| if (changes.items.len != 0) {
                     const path = try server.documents.absolutePathFromUri(uri);
                     defer server.allocator.free(path);
+                    const previous_generation = server.documents.generation;
                     for (changes.items) |*change| {
                         if (change.* == .object) try server.documents.applyChangeAtPath(path, &change.object);
                     }
                     if (intField(doc, "version")) |version| try server.documents.setVersionAtPath(path, version);
+                    if (server.documents.generation == previous_generation) {
+                        server.acceptCurrentRevision();
+                        try server.republishCurrentDiagnostics();
+                        return;
+                    }
                     try server.clearChangedDocumentDiagnostics(uri);
                     if (server.consumeGeneratedEdit(path))
                         try server.scheduleTranslationPatchRebuild(path)
@@ -879,16 +885,48 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
             if (stringField(doc, "uri")) |uri| {
                 const path = try server.documents.absolutePathFromUri(uri);
                 defer server.allocator.free(path);
-                try server.rebuildImmediately(path);
+                if (server.pending_rebuild_path != null) {
+                    server.pending_rebuild_revision = server.active_revision;
+                    try server.flushPendingRebuild(.configured);
+                } else if (server.analysis != null and
+                    server.analysis.?.generation == server.documents.generation and
+                    server.analysis.?.coversPath(path))
+                {
+                    server.acceptCurrentRevision();
+                } else {
+                    try server.rebuildImmediately(path);
+                }
             }
         };
         return;
     }
     if (std.mem.eql(u8, method, "workspace/didChangeWatchedFiles")) {
-        if (server.analysis) |*snapshot| {
-            const entry_path = try server.allocator.dupe(u8, snapshot.project.entry_path);
-            defer server.allocator.free(entry_path);
-            try server.scheduleRebuild(entry_path);
+        var relevant = params == null;
+        if (params) |p| if (arrayField(p, "changes")) |changes| {
+            for (changes.items) |*change| {
+                if (change.* != .object) continue;
+                const uri = stringField(&change.object, "uri") orelse continue;
+                const path = try server.documents.absolutePathFromUri(uri);
+                defer server.allocator.free(path);
+                if (server.documents.sourceForPath(path) != null) continue;
+                if (std.mem.eql(u8, std.fs.path.basename(path), "ss.toml") or
+                    std.ascii.eqlIgnoreCase(std.fs.path.extension(path), ".ss"))
+                {
+                    relevant = true;
+                    break;
+                }
+            }
+        };
+        if (relevant) {
+            if (server.analysis) |*snapshot| {
+                const entry_path = try server.allocator.dupe(u8, snapshot.project.entry_path);
+                defer server.allocator.free(entry_path);
+                try server.scheduleRebuild(entry_path);
+            } else {
+                server.acceptCurrentRevision();
+            }
+        } else {
+            server.acceptCurrentRevision();
         }
         return;
     }
