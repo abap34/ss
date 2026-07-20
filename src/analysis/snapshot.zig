@@ -77,6 +77,7 @@ pub const Options = struct {
     project: ProjectOptions = .{},
     layout_hook: ?LayoutHook = null,
     cancellation: ?Cancellation = null,
+    embedded_cache: ?*module_loader.EmbeddedSyntaxCache = null,
 
     fn checkCanceled(self: Options) !void {
         if (self.cancellation) |cancellation| try cancellation.check();
@@ -444,6 +445,7 @@ pub fn build(
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
         .recovering = true,
+        .embedded_cache = options.embedded_cache,
     }) catch |err| {
         try diagnostic_bag.addSyntaxHoles(entry_path, entry_source, parse_holes);
         try addLoadDiagnostics(&diagnostic_bag, &load_diagnostics);

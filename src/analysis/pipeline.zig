@@ -129,8 +129,16 @@ pub fn analyzeDocumentState(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
 ) !void {
-    try analyzeDocumentStateSemantics(allocator, state);
-    try execution.validateDependencies(allocator, state);
+    {
+        const measure_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordAnalysis(.static_semantics, measure_start);
+        try analyzeDocumentStateSemantics(allocator, state);
+    }
+    {
+        const measure_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordAnalysis(.execution_graph, measure_start);
+        try execution.validateDependencies(allocator, state);
+    }
 }
 
 pub fn analyzeDocumentStateWithMode(
@@ -138,7 +146,13 @@ pub fn analyzeDocumentStateWithMode(
     state: *core.DocumentState,
     mode: AnalysisMode,
 ) !?execution.ExecutionGraph {
-    try analyzeDocumentStateSemantics(allocator, state);
+    {
+        const measure_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordAnalysis(.static_semantics, measure_start);
+        try analyzeDocumentStateSemantics(allocator, state);
+    }
+    const measure_start = utils.measure_profile.start();
+    defer utils.measure_profile.recordAnalysis(.execution_graph, measure_start);
     return switch (mode) {
         .diagnostics_only => blk: {
             try execution.validateDependencies(allocator, state);
@@ -489,6 +503,8 @@ pub fn buildDocumentStateWithOptions(
     index: *module_index.Index,
     options: BuildDocumentStateOptions,
 ) !core.DocumentState {
+    const measure_start = utils.measure_profile.start();
+    defer utils.measure_profile.recordAnalysis(.document_state, measure_start);
     const asset_base_dir = try allocator.dupe(u8, asset_base_path);
     var owns_asset_base_dir = true;
     errdefer if (owns_asset_base_dir) allocator.free(asset_base_dir);

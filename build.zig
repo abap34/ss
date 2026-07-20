@@ -497,6 +497,13 @@ fn addTestStep(
         import("utils", modules.utils),
     }, null);
     const compiler_mod = createCommonModule(ctx, "src/compiler.zig", modules, true);
+    const stdlib_cache_spec_mod = createModule(ctx, "tests/modules/stdlib_cache/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    const stdlib_cache_spec_tests = addTestArtifact(ctx, stdlib_cache_spec_mod);
+    const run_stdlib_cache_spec_tests = b.addRunArtifact(stdlib_cache_spec_tests);
+    test_step.dependOn(&run_stdlib_cache_spec_tests.step);
+    addFocusedTestStep(b, "test-stdlib-cache", "Run focused standard-library cache tests", &run_stdlib_cache_spec_tests.step);
     addModuleTest(ctx, test_step, "tests/lsp/completion/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);
