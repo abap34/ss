@@ -3,6 +3,13 @@ export interface RefreshTiming {
   delayMs: number;
 }
 
+export function shouldStartPendingRefresh(
+  refreshPending: boolean,
+  timerPending: boolean,
+): boolean {
+  return refreshPending && !timerPending;
+}
+
 export function refreshTiming(
   nowMs: number,
   pendingSinceMs: number | undefined,

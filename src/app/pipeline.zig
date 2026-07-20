@@ -133,7 +133,7 @@ pub fn analyzeFile(
 pub fn evaluateDocument(state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph, progress: ?*Progress) !void {
     if (progress) |p| p.begin("Evaluate document");
     errdefer if (progress) |p| p.abort();
-    lowering.evaluateDocument(state, graph) catch |err| {
+    lowering.evaluateDocument(state, graph, .{}) catch |err| {
         if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         return err;
@@ -173,7 +173,10 @@ pub fn solveLayouts(
     if (progress) |p| p.begin("Solve layouts");
     errdefer if (progress) |p| p.abort();
     try preloadLayoutArtifacts(io, state, pages, progress, jobs);
-    var layouts = render_layout.solvePreparedPages(io, state, pages, layout_progress, jobs) catch |err| {
+    var layouts = render_layout.solvePreparedPages(io, state, pages, .{
+        .progress = layout_progress,
+        .jobs = jobs,
+    }) catch |err| {
         if (progress) |p| p.abort();
         try reportLayoutFailure(state, err);
         return err;
@@ -197,7 +200,11 @@ pub fn solveLayoutsWithTracePath(
     if (progress) |p| p.begin("Solve layouts");
     errdefer if (progress) |p| p.abort();
     try preloadLayoutArtifacts(io, state, pages, progress, jobs);
-    var layouts = render_layout.solvePreparedPagesWithTrace(io, state, pages, trace_path, layout_progress, jobs) catch |err| {
+    var layouts = render_layout.solvePreparedPages(io, state, pages, .{
+        .trace_path = trace_path,
+        .progress = layout_progress,
+        .jobs = jobs,
+    }) catch |err| {
         if (progress) |p| p.abort();
         try reportLayoutFailure(state, err);
         return err;

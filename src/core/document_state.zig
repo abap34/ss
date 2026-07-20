@@ -1556,9 +1556,14 @@ pub const DocumentState = struct {
     }
 
     pub fn finalizeDocument(self: *DocumentState, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !layout.Document {
+        try layout.graph.checkCancellation(options);
         self.clearDiagnosticsForPhase(.layout);
         self.clearConstraintFailures();
         var results = try layout.solveDocument(self, trace_path, options);
+        layout.graph.checkCancellation(options) catch |err| {
+            results.deinit(self.allocator);
+            return err;
+        };
         if (self.constraint_failures.items.len > 0) {
             const first_kind = self.constraint_failures.items[0].kind;
             results.deinit(self.allocator);
@@ -1567,6 +1572,10 @@ pub const DocumentState = struct {
             var propagation_options = options;
             propagation_options.record_propagation = true;
             results = try layout.solveDocument(self, trace_path, propagation_options);
+            layout.graph.checkCancellation(options) catch |err| {
+                results.deinit(self.allocator);
+                return err;
+            };
             if (self.constraint_failures.items.len == 0) {
                 results.deinit(self.allocator);
                 switch (first_kind) {
@@ -1581,6 +1590,10 @@ pub const DocumentState = struct {
                 .negative_frame_size => return error.NegativeFrameSize,
             }
         }
+        layout.graph.checkCancellation(options) catch |err| {
+            results.deinit(self.allocator);
+            return err;
+        };
         try layout.applyDocument(self, &results);
         return results;
     }

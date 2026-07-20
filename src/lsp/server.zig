@@ -41,6 +41,11 @@ const objectField = protocol.objectField;
 const arrayField = protocol.arrayField;
 const uriFromPath = protocol.uriFromPath;
 
+const LayoutBuildMode = enum {
+    configured,
+    required,
+};
+
 const Server = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -48,6 +53,7 @@ const Server = struct {
     documents: DocumentStore,
     embedded_cache: module_loader.EmbeddedSyntaxCache,
     analysis: ?AnalysisSnapshot = null,
+    analysis_revision: u64 = 0,
     layout_responses: ResponseStore = .{},
     editor_responses: ResponseStore = .{},
     editor_diagnostics: ResponseStore = .{},
@@ -88,18 +94,24 @@ const Server = struct {
         self.clearGeneratedEdit();
     }
 
-    fn rebuild(self: *Server, changed_path: []const u8, prefer_translation_patch: bool) !void {
+    fn rebuild(
+        self: *Server,
+        changed_path: []const u8,
+        layout_build: LayoutBuildMode,
+        prefer_translation_patch: bool,
+    ) !void {
         try self.checkCanceled();
         var diagnostics = DiagnosticSet.init(self.allocator);
         defer diagnostics.deinit();
         const rebuild_generation = self.documents.generation;
-        var snapshot = try self.buildAnalysis(changed_path, &diagnostics, prefer_translation_patch);
+        var snapshot = try self.buildAnalysis(changed_path, &diagnostics, layout_build, prefer_translation_patch);
         var snapshot_owned = true;
         errdefer if (snapshot_owned) snapshot.deinit();
         try self.checkCanceled();
         if (snapshot.generation != self.documents.generation or rebuild_generation != self.documents.generation) return error.Canceled;
         if (self.analysis) |*old| old.deinit();
         self.analysis = snapshot;
+        self.analysis_revision = self.active_revision;
         snapshot_owned = false;
         if (self.analysis.?.project.lsp.enabled and self.analysis.?.project.lsp.diagnostics) {
             try self.publishDiagnostics(&diagnostics);
@@ -120,7 +132,12 @@ const Server = struct {
 
     fn rebuildImmediately(self: *Server, changed_path: []const u8) !void {
         self.clearPendingRebuild();
-        try self.rebuild(changed_path, false);
+        try self.rebuild(changed_path, .configured, false);
+    }
+
+    fn rebuildEditorImmediately(self: *Server, changed_path: []const u8) !void {
+        self.clearPendingRebuild();
+        try self.rebuild(changed_path, .required, false);
     }
 
     fn scheduleRebuild(self: *Server, changed_path: []const u8) !void {
@@ -135,7 +152,7 @@ const Server = struct {
         const delay_ms = self.lspDebounceMs();
         if (delay_ms == 0) {
             self.clearPendingRebuild();
-            try self.rebuild(changed_path, prefer_translation_patch);
+            try self.rebuild(changed_path, .configured, prefer_translation_patch);
             return;
         }
         const owned_path = try self.allocator.dupe(u8, changed_path);
@@ -147,15 +164,16 @@ const Server = struct {
         self.pending_rebuild_translation_patch = prefer_translation_patch;
     }
 
-    fn flushPendingRebuild(self: *Server) !void {
+    fn flushPendingRebuild(self: *Server, layout_build: LayoutBuildMode) !void {
         const path = self.pending_rebuild_path orelse return;
+        var path_owned = true;
+        defer if (path_owned) self.allocator.free(path);
         const revision = self.pending_rebuild_revision;
         const prefer_translation_patch = self.pending_rebuild_translation_patch;
         self.pending_rebuild_path = null;
         self.pending_rebuild_due_ms = 0;
         self.pending_rebuild_revision = 0;
         self.pending_rebuild_translation_patch = false;
-        defer self.allocator.free(path);
         const previous_revision = self.active_revision;
         const previous_request = self.active_request;
         self.active_revision = revision;
@@ -164,13 +182,25 @@ const Server = struct {
             self.active_revision = previous_revision;
             self.active_request = previous_request;
         }
-        try self.rebuild(path, prefer_translation_patch);
+        self.rebuild(path, layout_build, prefer_translation_patch) catch |err| {
+            if (err == error.Canceled and
+                layout_build == .required and
+                revision == self.ingress.revision.load(.acquire))
+            {
+                self.pending_rebuild_path = path;
+                self.pending_rebuild_due_ms = saturatedAddMillis(monotonicMillis(), self.lspDebounceMs());
+                self.pending_rebuild_revision = revision;
+                self.pending_rebuild_translation_patch = prefer_translation_patch;
+                path_owned = false;
+            }
+            return err;
+        };
     }
 
     fn flushPendingRebuildIfDue(self: *Server) !void {
         if (self.pending_rebuild_path == null) return;
         if (monotonicMillis() < self.pending_rebuild_due_ms) return;
-        try self.flushPendingRebuild();
+        try self.flushPendingRebuild(.configured);
     }
 
     fn pendingRebuildPollTimeout(self: *const Server) ?u64 {
@@ -247,8 +277,14 @@ const Server = struct {
         }
     }
 
-    fn buildAnalysis(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet, prefer_translation_patch: bool) !AnalysisSnapshot {
-        return try self.buildAnalysisWithOverride(changed_path, diagnostics, null, true, prefer_translation_patch);
+    fn buildAnalysis(
+        self: *Server,
+        changed_path: []const u8,
+        diagnostics: *DiagnosticSet,
+        layout_build: LayoutBuildMode,
+        prefer_translation_patch: bool,
+    ) !AnalysisSnapshot {
+        return try self.buildAnalysisWithOverride(changed_path, diagnostics, null, layout_build, prefer_translation_patch);
     }
 
     const SourceOverride = struct {
@@ -261,7 +297,7 @@ const Server = struct {
         changed_path: []const u8,
         diagnostics: *DiagnosticSet,
         source_override: ?SourceOverride,
-        include_editor_snapshot: bool,
+        layout_build: LayoutBuildMode,
         prefer_translation_patch: bool,
     ) !AnalysisSnapshot {
         try self.checkCanceled();
@@ -281,6 +317,10 @@ const Server = struct {
             };
         }
         defer if (config) |*cfg| cfg.deinit(self.allocator);
+        const include_layout = switch (layout_build) {
+            .configured => if (config) |cfg| cfg.wysiwyg.refresh_automatically else true,
+            .required => true,
+        };
         try self.checkCanceled();
         const entry_path = if (config) |cfg| try self.allocator.dupe(u8, cfg.entry) else try self.allocator.dupe(u8, changed_abs);
         defer self.allocator.free(entry_path);
@@ -296,7 +336,7 @@ const Server = struct {
         var layout_context = AnalysisLayoutContext{
             .server = self,
             .diagnostics = diagnostics,
-            .include_editor_snapshot = include_editor_snapshot,
+            .include_editor_snapshot = include_layout,
             .prefer_translation_patch = prefer_translation_patch,
         };
         var analysis_snapshot = try analysis.snapshot.build(self.allocator, &sources, entry_path, asset_base_dir, .{
@@ -306,11 +346,11 @@ const Server = struct {
                 .wysiwyg = if (config) |cfg| cfg.wysiwyg else .{},
                 .page_guide = if (config) |cfg| cfg.page_guide else .{},
             },
-            .layout_hook = .{
+            .layout_hook = if (include_layout) .{
                 .context = &layout_context,
                 .run = runAnalysisLayout,
                 .on_error = addAnalysisLayoutError,
-            },
+            } else null,
             .cancellation = .{
                 .context = self,
                 .is_canceled = analysisCanceled,
@@ -463,7 +503,7 @@ fn buildAnalysisForFeature(context: *anyopaque, path: []const u8) !AnalysisSnaps
     const server: *Server = @ptrCast(@alignCast(context));
     var diagnostics = DiagnosticSet.init(server.allocator);
     defer diagnostics.deinit();
-    var snapshot = try server.buildAnalysis(path, &diagnostics, false);
+    var snapshot = try server.buildAnalysis(path, &diagnostics, .configured, false);
     if (snapshot.coversPath(path)) return snapshot;
     snapshot.deinit();
     return try server.buildSingleDocumentAnalysis(path, &diagnostics);
@@ -481,10 +521,37 @@ fn rememberGeneratedEdit(context: *anyopaque, path: []const u8, source: []const 
     try server.rememberGeneratedEdit(path, source);
 }
 
+const AnalysisLayoutTaskResult = union(enum) {
+    layout: anyerror!analysis.snapshot.LayoutHookOutput,
+    canceled: void,
+};
+
 fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph) !analysis.snapshot.LayoutHookOutput {
     const hook: *AnalysisLayoutContext = @ptrCast(@alignCast(context));
     try hook.server.checkCanceled();
-    var pages = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph);
+
+    var result_buffer: [2]AnalysisLayoutTaskResult = undefined;
+    var tasks = std.Io.Select(AnalysisLayoutTaskResult).init(hook.server.io, &result_buffer);
+    try tasks.concurrent(.layout, runAnalysisLayoutWork, .{ context, state, graph });
+    defer cancelAnalysisLayoutTasks(&tasks);
+    try tasks.concurrent(.canceled, waitForAnalysisCancellation, .{hook.server});
+
+    return switch (try tasks.await()) {
+        .layout => |result| try result,
+        .canceled => error.Canceled,
+    };
+}
+
+fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph) !analysis.snapshot.LayoutHookOutput {
+    const hook: *AnalysisLayoutContext = @ptrCast(@alignCast(context));
+    try hook.server.checkCanceled();
+    var pages = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph, .{
+        .jobs = 1,
+        .cancellation = .{
+            .context = hook.server,
+            .is_canceled = analysisCanceled,
+        },
+    });
     defer pages.deinit(state.allocator);
     try hook.server.checkCanceled();
     if (!hook.include_editor_snapshot or hook.server.wysiwyg_paths.count() == 0) return .{};
@@ -508,10 +575,26 @@ fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *co
         }
     }
 
-    var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &pages, .{});
+    var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &pages, .{ .jobs = 1 });
     defer render_ir.deinit(state.allocator);
     try hook.server.checkCanceled();
     return .{ .editor = try editor_snapshot.build(state.allocator, hook.server.io, state, &render_ir, hook.server.documents.generation) };
+}
+
+fn waitForAnalysisCancellation(server: *Server) void {
+    while (server.workStatus() == .current) {
+        std.Io.sleep(server.io, std.Io.Duration.fromMilliseconds(10), .awake) catch return;
+    }
+}
+
+fn cancelAnalysisLayoutTasks(tasks: *std.Io.Select(AnalysisLayoutTaskResult)) void {
+    while (tasks.cancel()) |result| switch (result) {
+        .layout => |layout_result| {
+            var output = layout_result catch continue;
+            if (output.editor) |*editor| editor.deinit();
+        },
+        .canceled => {},
+    };
 }
 
 fn collectTranslations(
@@ -842,7 +925,6 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         return;
     }
     if (std.mem.eql(u8, method, "ss/editorSnapshot")) {
-        if (server.pending_rebuild_path != null) try server.flushPendingRebuild();
         const base_snapshot_id = if (params) |p| switch (p) {
             .object => |*object| stringField(object, "baseSnapshotId") orelse "",
             else => "",
@@ -852,15 +934,21 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         if (doc_path) |path| {
             const first_for_path = !server.wysiwyg_paths.contains(path);
             if (first_for_path) try putStringSet(server.allocator, &server.wysiwyg_paths, path);
-            if (first_for_path or
-                server.analysis == null or
+            const flushed_pending = server.pending_rebuild_path != null;
+            if (flushed_pending) try server.flushPendingRebuild(.required);
+            if (server.analysis == null or
                 !server.analysis.?.coversPath(path) or
-                server.analysis.?.layout_output == null or
-                server.analysis.?.layout_output.?.editor == null or
-                !editorDisplayMatches(server.analysis.?.layout_output.?.editor.?.model, base_snapshot_id))
+                server.analysis_revision != server.active_revision or
+                (!flushed_pending and (server.analysis.?.layout_output == null or
+                    server.analysis.?.layout_output.?.editor == null)) or
+                (server.analysis.?.layout_output != null and
+                    server.analysis.?.layout_output.?.editor != null and
+                    !editorDisplayMatches(server.analysis.?.layout_output.?.editor.?.model, base_snapshot_id)))
             {
-                try server.rebuildImmediately(path);
+                try server.rebuildEditorImmediately(path);
             }
+        } else if (server.pending_rebuild_path != null) {
+            try server.flushPendingRebuild(.configured);
         }
         var provider = analysisProvider(server);
         var ctx = feature_editor.Context{

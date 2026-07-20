@@ -15,6 +15,7 @@ end
 `;
   const filler = Array.from({ length: 100_000 }, (_, index) => `# cancellation filler ${index}`).join("\n");
   const largeSource = `${validSource}${filler}\n`;
+  const invalidLargeSource = `${largeSource}page broken\n  let value =\nend\n`;
   await writeFile(slide, validSource, "utf8");
 
   await withLspClient({ cwd: project }, async (client) => {
@@ -82,6 +83,83 @@ end
       position: { line: 0, character: 0 },
     });
     assert(Array.isArray(completion.items), `latest completion was unavailable: ${JSON.stringify(completion)}`);
+
+    const baselineSnapshot = await client.request("ss/editorSnapshot", {
+      textDocument: { uri },
+      baseSnapshotId: "",
+    });
+    client.changeDocument({ uri, version: 6, text: largeSource });
+    const canceledSnapshot = client.startRequest("ss/editorSnapshot", {
+      textDocument: { uri },
+      baseSnapshotId: "",
+    });
+    const canceledSnapshotOutcome = canceledSnapshot.promise.then(
+      () => null,
+      (error) => error,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    client.cancelRequest(canceledSnapshot.id);
+    const snapshotCancellationError = await canceledSnapshotOutcome;
+    assert(
+      snapshotCancellationError instanceof Error,
+      "cancelled editor snapshot unexpectedly returned a result",
+    );
+    assert(
+      snapshotCancellationError.message.includes("-32800"),
+      `cancelled editor snapshot returned the wrong error: ${snapshotCancellationError.message}`,
+    );
+
+    const recoveredSnapshot = await client.request("ss/editorSnapshot", {
+      textDocument: { uri },
+      baseSnapshotId: baselineSnapshot.snapshot_id,
+    });
+    assert(
+      recoveredSnapshot.kind === "ss-editor-snapshot" &&
+        recoveredSnapshot.stale !== true &&
+        recoveredSnapshot.generation > baselineSnapshot.generation &&
+        recoveredSnapshot.snapshot_id !== baselineSnapshot.snapshot_id,
+      `editor snapshot stayed stale after cancellation: ${JSON.stringify(recoveredSnapshot)}`,
+    );
+
+    const canceledBuildDiagnostics = client.waitForDiagnostics(
+      uri,
+      (diagnostics, message) => diagnostics.length > 0 && message.params.version === 7,
+      "version 7 diagnostics after editor snapshot cancellation",
+    );
+    client.changeDocument({ uri, version: 7, text: invalidLargeSource });
+    const canceledInvalidSnapshot = client.startRequest("ss/editorSnapshot", {
+      textDocument: { uri },
+      baseSnapshotId: recoveredSnapshot.snapshot_id,
+    });
+    const canceledInvalidOutcome = canceledInvalidSnapshot.promise.then(
+      () => null,
+      (error) => error,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    client.cancelRequest(canceledInvalidSnapshot.id);
+    const invalidCancellationError = await canceledInvalidOutcome;
+    assert(
+      invalidCancellationError instanceof Error &&
+        invalidCancellationError.message.includes("-32800"),
+      `invalid editor snapshot was not cancelled: ${invalidCancellationError}`,
+    );
+    await canceledBuildDiagnostics;
+
+    const finalDiagnostics = client.waitForDiagnostics(
+      uri,
+      (diagnostics, message) => diagnostics.length === 0 && message.params.version === 8,
+      "version 8 diagnostics after editor snapshot cancellation",
+    );
+    client.changeDocument({ uri, version: 8, text: validSource });
+    await finalDiagnostics;
+    const snapshot = await client.request("ss/editorSnapshot", {
+      textDocument: { uri },
+      baseSnapshotId: recoveredSnapshot.snapshot_id,
+    });
+    assert(
+      snapshot.kind === "ss-editor-snapshot" && snapshot.layout?.pages?.length === 1,
+      `editor snapshot did not recover after cancellation: ${JSON.stringify(snapshot)}`,
+    );
   });
 } finally {
   await rm(project, { recursive: true, force: true });

@@ -1,5 +1,5 @@
 const std = @import("std");
-const cancellation_module = @import("../cancellation.zig");
+const utils = @import("utils");
 
 pub const SourceRequest = struct {
     path: []const u8,
@@ -12,13 +12,13 @@ pub const QueryOptions = struct {
     budget_ms: u32,
     allow_stale: bool = true,
     require_layout: bool = false,
-    cancellation: ?cancellation_module.Cancellation = null,
+    cancellation: ?utils.Cancellation = null,
 };
 
 pub const QueryBudget = struct {
     start_ns: i128,
     budget_ns: i128,
-    cancellation: ?cancellation_module.Cancellation = null,
+    cancellation: ?utils.Cancellation = null,
 
     pub fn start(opts: QueryOptions) QueryBudget {
         return .{

@@ -463,13 +463,17 @@ fn addTestStep(
         import("ast", modules.ast),
         import("language_type", modules.language_type),
     }, true);
-    addModuleTest(ctx, test_step, "tests/layout/graph/spec_tests.zig", &.{
+    const layout_graph_spec_mod = createModule(ctx, "tests/layout/graph/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
         import("ast", modules.ast),
         import("model", modules.model),
         import("language_type", modules.language_type),
     }, true);
+    const layout_graph_spec_tests = addTestArtifact(ctx, layout_graph_spec_mod);
+    const run_layout_graph_spec_tests = b.addRunArtifact(layout_graph_spec_tests);
+    test_step.dependOn(&run_layout_graph_spec_tests.step);
+    addFocusedTestStep(b, "test-layout", "Run focused layout graph and solver tests", &run_layout_graph_spec_tests.step);
     addModuleTest(ctx, test_step, "tests/utils/fs/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);
@@ -497,6 +501,13 @@ fn addTestStep(
         import("utils", modules.utils),
     }, null);
     const compiler_mod = createCommonModule(ctx, "src/compiler.zig", modules, true);
+    const eval_cancellation_spec_mod = createModule(ctx, "tests/eval/cancellation/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    const eval_cancellation_spec_tests = addTestArtifact(ctx, eval_cancellation_spec_mod);
+    const run_eval_cancellation_spec_tests = b.addRunArtifact(eval_cancellation_spec_tests);
+    test_step.dependOn(&run_eval_cancellation_spec_tests.step);
+    addFocusedTestStep(b, "test-eval-cancellation", "Run focused document evaluation cancellation tests", &run_eval_cancellation_spec_tests.step);
     const stdlib_cache_spec_mod = createModule(ctx, "tests/modules/stdlib_cache/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);
@@ -788,6 +799,8 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         "tests/runtime/layout/vflow/policy_spec.mjs",
         "tests/runtime/lsp/cancellation/spec.mjs",
         "tests/runtime/lsp/diagnostics/spec.mjs",
+        "tests/runtime/lsp/manual_wysiwyg/spec.mjs",
+        "tests/runtime/lsp/render_cancellation/spec.mjs",
         "tests/runtime/lsp_completion_runtime_spec.mjs",
         "tests/runtime/lsp_editor_runtime_spec.mjs",
         "tests/runtime/markdown_table_alignment_runtime_spec.mjs",

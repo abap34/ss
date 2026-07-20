@@ -106,6 +106,15 @@ var diagnostic_path: []const u8 = "";
 threadlocal var active_module_id: core.SourceModuleId = 0;
 threadlocal var active_call_depth: u32 = 0;
 threadlocal var active_declarations: ?*const declarations.DeclarationIndex = null;
+threadlocal var active_cancellation: ?utils.Cancellation = null;
+
+pub const ExecuteOptions = struct {
+    cancellation: ?utils.Cancellation = null,
+};
+
+fn checkCancellation() !void {
+    if (active_cancellation) |cancellation| try cancellation.check();
+}
 
 const LowerDiagnostic = struct {
     err: anyerror,
@@ -287,10 +296,20 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
     };
 }
 
-pub fn executeGraph(allocator: std.mem.Allocator, state: *core.DocumentState, graph: *const execution.ExecutionGraph) !void {
+pub fn executeGraph(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    graph: *const execution.ExecutionGraph,
+    options: ExecuteOptions,
+) !void {
     const previous_declarations = active_declarations;
+    const previous_cancellation = active_cancellation;
     active_declarations = &graph.declarations;
+    active_cancellation = options.cancellation;
     defer active_declarations = previous_declarations;
+    defer active_cancellation = previous_cancellation;
+
+    try checkCancellation();
 
     var closures = ClosureStore.init(allocator);
     defer closures.deinit();
@@ -316,6 +335,7 @@ fn materializeDisplayContent(state: *core.DocumentState, functions: *const core.
 
     var index: usize = 0;
     while (index < state.nodes.items.len) : (index += 1) {
+        try checkCancellation();
         const node_id = state.nodes.items[index].id;
         const node = state.getNode(node_id) orelse continue;
         if (node.kind != .object) continue;
@@ -330,6 +350,7 @@ fn materializeDisplayContent(state: *core.DocumentState, functions: *const core.
         const context: EvalContext = if (page_id == state.document_id) .document else .page;
         const origin = node.origin orelse "";
         const text = evalNodeReprWithFunction(state, page_id, context, .attached, &env, functions, closures, origin, node_id, function) catch |err| {
+            if (err == error.Canceled) return err;
             try reportLowerError(state, err, origin);
             return err;
         };
@@ -360,6 +381,7 @@ fn executeUnit(
     page_states: *std.AutoHashMap(core.NodeId, PageExecutionState),
     unit: execution.ExecutionUnit,
 ) !void {
+    try checkCancellation();
     const previous_module_id = active_module_id;
     const previous_call_depth = active_call_depth;
     active_module_id = unit.module_id;
@@ -390,6 +412,7 @@ fn executeDocumentStatement(
 ) !void {
     const error_count = diagnosticErrorCount(state);
     const flow = executeStatement(state, state.document_id, .document, .attached, &execution_state.env, functions, closures, &execution_state.last_code_like, stmt, null) catch |err| {
+        if (err == error.Canceled) return err;
         const origin = statementOrigin(state, stmt.span) catch null;
         defer if (origin) |text| state.allocator.free(text);
         if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
@@ -415,6 +438,7 @@ fn executePageStatement(
 ) !void {
     const error_count = diagnosticErrorCount(state);
     const flow = executeStatement(state, page_id, .page, .attached, &execution_state.env, functions, closures, &execution_state.last_code_like, stmt, null) catch |err| {
+        if (err == error.Canceled) return err;
         const origin = statementOrigin(state, stmt.span) catch null;
         defer if (origin) |text| state.allocator.free(text);
         if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
@@ -454,6 +478,7 @@ fn evalExpr(
     current_origin: []const u8,
     expr: Expr,
 ) anyerror!core.Value {
+    try checkCancellation();
     return switch (expr) {
         .hole => error.HoleExpression,
         .ident => |ident| blk: {
@@ -1899,6 +1924,7 @@ fn executeStatement(
     stmt: Statement,
     origin_override: ?[]const u8,
 ) anyerror!ExecFlow {
+    try checkCancellation();
     const origin = if (origin_override) |override| override else try statementOrigin(state, stmt.span);
     switch (stmt.kind) {
         .hole => return error.HoleStatement,

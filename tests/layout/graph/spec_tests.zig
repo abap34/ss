@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 const model = @import("model");
+const utils = @import("utils");
 
 const graph = core.layout.graph;
 const metrics = core.layout.metrics;
@@ -1356,6 +1357,41 @@ test "layout solver runs page jobs with configured job count" {
     try testing.expectEqual(@as(usize, 2), counter.completed_total);
     try testing.expect(results.frameOf(first_page, first) != null);
     try testing.expect(results.frameOf(second_page, second) != null);
+}
+
+const LayoutCancellationCounter = struct {
+    checks: std.atomic.Value(usize) = .init(0),
+    cancel_after: usize,
+};
+
+fn cancelLayoutAfterCheck(context: *const anyopaque) bool {
+    const counter: *LayoutCancellationCounter = @ptrCast(@alignCast(@constCast(context)));
+    return counter.checks.fetchAdd(1, .seq_cst) + 1 >= counter.cancel_after;
+}
+
+test "layout solver cooperatively cancels parallel page jobs" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    const first_page = try state.addPage("First");
+    const first = try state.makeObject(first_page, "first", null, .text, .text, "First");
+    try state.addAnchorConstraint(first, .left, .{ .page = .left }, 40, "first-left");
+    try state.addAnchorConstraint(first, .top, .{ .page = .top }, -80, "first-top");
+
+    const second_page = try state.addPage("Second");
+    const second = try state.makeObject(second_page, "second", null, .text, .text, "Second");
+    try state.addAnchorConstraint(second, .left, .{ .page = .left }, 80, "second-left");
+    try state.addAnchorConstraint(second, .top, .{ .page = .top }, -120, "second-top");
+
+    var counter = LayoutCancellationCounter{ .cancel_after = 30 };
+    try testing.expectError(error.Canceled, solver.solveDocument(&state, null, .{
+        .jobs = 2,
+        .cancellation = .{
+            .context = &counter,
+            .is_canceled = cancelLayoutAfterCheck,
+        },
+    }));
+    try testing.expect(counter.checks.load(.seq_cst) >= counter.cancel_after);
 }
 
 test "layout metrics keep asset intrinsic size ahead of render measurement provider" {

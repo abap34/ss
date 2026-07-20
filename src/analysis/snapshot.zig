@@ -5,7 +5,6 @@ const editor_snapshot = @import("../editor/snapshot.zig");
 const project = @import("../project.zig");
 
 const diagnostics = @import("diagnostics.zig");
-const cancellation_module = @import("cancellation.zig");
 const hole_facts = @import("hole_facts.zig");
 const declarations = @import("../language/declarations.zig");
 const registry = @import("../language/registry.zig");
@@ -32,8 +31,6 @@ pub const DefinitionTarget = query_types.DefinitionTarget;
 pub const CompletionCandidate = query_types.CompletionCandidate;
 pub const CompletionKind = query_types.CompletionKind;
 pub const CompletionResult = query_types.CompletionResult;
-pub const Cancellation = cancellation_module.Cancellation;
-
 pub const SourceSet = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -75,7 +72,7 @@ pub const Options = struct {
     generation: u64 = 0,
     project: ProjectOptions = .{},
     layout_hook: ?LayoutHook = null,
-    cancellation: ?Cancellation = null,
+    cancellation: ?utils.Cancellation = null,
     embedded_cache: ?*module_loader.EmbeddedSyntaxCache = null,
 
     fn checkCanceled(self: Options) !void {
