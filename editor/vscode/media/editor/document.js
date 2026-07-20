@@ -5,10 +5,11 @@ const templates = new WeakMap();
 const previews = new WeakMap();
 
 export function renderPage(snapshot, pageId, thumbnail = false) {
-  let cached = previews.get(snapshot);
+  const display = snapshot.display;
+  let cached = previews.get(display);
   if (!cached) {
     cached = new Map();
-    previews.set(snapshot, cached);
+    previews.set(display, cached);
   }
   const key = String(pageId) + ":" + String(thumbnail);
   const existing = cached.get(key);
@@ -58,21 +59,23 @@ function applyDisplayTranslations(root, translations) {
 }
 
 export function disposePages(snapshot) {
-  const cached = previews.get(snapshot);
+  const display = snapshot.display;
+  const cached = previews.get(display);
   if (cached) {
     for (const preview of cached.values()) disposePdfItems(preview);
-    previews.delete(snapshot);
+    previews.delete(display);
   }
-  templates.delete(snapshot);
+  templates.delete(display);
 }
 
 function pageTemplate(snapshot, pageId) {
   if (!snapshot?.display?.html) return null;
-  let template = templates.get(snapshot);
+  const display = snapshot.display;
+  let template = templates.get(display);
   if (!template) {
     template = document.createElement("template");
     template.innerHTML = snapshot.display.html;
-    templates.set(snapshot, template);
+    templates.set(display, template);
   }
   return [...template.content.querySelectorAll(".ss-page")].find((page) =>
     Number(page.dataset.ssPageId) === pageId
