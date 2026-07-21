@@ -37,18 +37,28 @@ export class ShapeController {
     this.actions.render();
   }
 
-  insert(pageId, bounds) {
+  insert(pageId, geometry) {
     if (this.state.shapeTool === "select" || !this.canInsert(pageId)) return false;
     const requestId = this.nextRequestId++;
-    const message = {
+    const common = {
       type: "insertShape",
       requestId,
       snapshotId: this.state.snapshot.snapshot_id,
       pageId,
       kind: this.state.shapeTool,
-      bounds: { ...bounds },
-      ...cloneStyle(this.state.shapeStyle),
     };
+    const message = this.state.shapeTool === "line"
+      ? {
+        ...common,
+        start: { ...geometry.start },
+        end: { ...geometry.end },
+        stroke: { ...this.state.shapeStyle.stroke, enabled: true },
+      }
+      : {
+        ...common,
+        bounds: { ...geometry.bounds },
+        ...cloneStyle(this.state.shapeStyle),
+      };
     this.pending = {
       requestId,
       operation: "insert",
@@ -58,9 +68,16 @@ export class ShapeController {
       preview: {
         pageId,
         kind: message.kind,
-        bounds: { ...message.bounds },
-        fill: { ...message.fill },
         stroke: { ...message.stroke },
+        ...(message.kind === "line"
+          ? {
+            start: { ...message.start },
+            end: { ...message.end },
+          }
+          : {
+            bounds: { ...message.bounds },
+            fill: { ...message.fill },
+          }),
       },
     };
     this.actions.post(message);
@@ -79,7 +96,9 @@ export class ShapeController {
       snapshotId: this.state.snapshot.snapshot_id,
       nodeId: target.node_id,
       pageId: target.page_id,
-      ...cloneStyle(style),
+      kind: target.kind,
+      stroke: { ...style.stroke },
+      ...(target.kind === "line" ? {} : { fill: { ...style.fill } }),
     };
     this.pending = {
       requestId,
@@ -87,6 +106,37 @@ export class ShapeController {
       snapshotId: message.snapshotId,
       selection: { pageId: target.page_id, binding: target.binding },
       phase: "requested",
+    };
+    this.actions.post(message);
+    this.actions.render();
+    return true;
+  }
+
+  editLineGeometry(target, start, end) {
+    if (!this.state.snapshot || this.state.snapshot.stale || this.isBusy() ||
+        target.kind !== "line") return false;
+    const requestId = this.nextRequestId++;
+    const message = {
+      type: "editLineGeometry",
+      requestId,
+      snapshotId: this.state.snapshot.snapshot_id,
+      nodeId: target.node_id,
+      pageId: target.page_id,
+      start: { ...start },
+      end: { ...end },
+    };
+    this.pending = {
+      requestId,
+      operation: "geometry",
+      snapshotId: message.snapshotId,
+      selection: { pageId: target.page_id, binding: target.binding },
+      phase: "requested",
+      geometry: {
+        nodeId: target.node_id,
+        pageId: target.page_id,
+        start: { ...start },
+        end: { ...end },
+      },
     };
     this.actions.post(message);
     this.actions.render();
@@ -156,6 +206,13 @@ export class ShapeController {
       ? this.pending.preview
       : null;
     return preview?.pageId === pageId ? preview : null;
+  }
+
+  pendingLineGeometry(nodeId) {
+    const geometry = this.pending?.operation === "geometry"
+      ? this.pending.geometry
+      : null;
+    return geometry?.nodeId === nodeId ? geometry : null;
   }
 }
 

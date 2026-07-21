@@ -127,11 +127,21 @@ export class WorkspaceView {
   }
 
   shapePicker() {
-    const choices = [
-      ["rectangle", "Rectangle"],
-      ["circle", "Circle"],
-      ["arrow", "Arrow"],
+    const groups = [
+      {
+        label: "Lines",
+        choices: [["line", "Line"]],
+      },
+      {
+        label: "Basic shapes",
+        choices: [
+          ["rectangle", "Rectangle"],
+          ["circle", "Circle"],
+          ["arrow", "Block arrow"],
+        ],
+      },
     ];
+    const choices = groups.flatMap((group) => group.choices);
     const active = choices.find(([tool]) => this.state.shapeTool === tool);
     const picker = element("details", "shape-picker");
     const summary = element("summary");
@@ -147,69 +157,91 @@ export class WorkspaceView {
     summary.append(icon, label, chevron);
 
     const panel = element("div", "shape-picker-panel");
-    const heading = element("strong");
-    heading.textContent = "Basic shapes";
-    const gallery = element("div", "shape-picker-gallery");
-    for (const [tool, name] of choices) {
-      const button = element(
-        "button",
-        `shape-choice${this.state.shapeTool === tool ? " is-active" : ""}`,
-      );
-      button.type = "button";
-      button.disabled = !this.actions.shape.canInsert(this.state.currentPageId);
-      button.setAttribute("aria-label", name);
-      button.setAttribute("aria-pressed", String(this.state.shapeTool === tool));
-      button.append(shapePreview(tool));
-      const caption = element("span");
-      caption.textContent = name;
-      button.append(caption);
-      button.addEventListener("click", () => {
-        picker.open = false;
-        this.actions.shape.selectTool(tool);
-      });
-      gallery.append(button);
+    for (const group of groups) {
+      const section = element("section", "shape-picker-section");
+      const heading = element("strong");
+      heading.textContent = group.label;
+      const gallery = element("div", "shape-picker-gallery");
+      for (const [tool, name] of group.choices) {
+        const button = element(
+          "button",
+          `shape-choice shape-choice--${tool}${
+            this.state.shapeTool === tool ? " is-active" : ""
+          }`,
+        );
+        button.type = "button";
+        button.disabled = !this.actions.shape.canInsert(this.state.currentPageId);
+        button.setAttribute("aria-label", name);
+        button.setAttribute("aria-pressed", String(this.state.shapeTool === tool));
+        if (tool === "line") button.title = "Line (L)";
+        button.append(shapePreview(tool));
+        const caption = element("span");
+        caption.textContent = name;
+        button.append(caption);
+        if (tool === "line") {
+          const shortcut = element("kbd", "shape-choice-shortcut");
+          shortcut.textContent = "L";
+          shortcut.setAttribute("aria-hidden", "true");
+          button.append(shortcut);
+        }
+        button.addEventListener("click", () => {
+          picker.open = false;
+          this.actions.shape.selectTool(tool);
+        });
+        gallery.append(button);
+      }
+      section.append(heading, gallery);
+      panel.append(section);
     }
-    panel.append(heading, gallery);
     picker.append(summary, panel);
     return picker;
   }
 
   shapeStyleControls() {
-    const group = element("div", "shape-style-controls");
+    const line = this.state.shapeTool === "line";
+    const group = element(
+      "div",
+      `shape-style-controls${line ? " shape-style-controls--line" : ""}`,
+    );
     const draft = this.state.shapeStyle;
-    group.append(
-      styleToggle("Fill", draft.fill.enabled, (enabled) => {
-        this.actions.shape.setDraft({
-          ...draft,
-          fill: { ...draft.fill, enabled },
-        });
-      }),
-      colorControl("Fill color", draft.fill.color, (color) => {
-        this.actions.shape.setDraft({
-          ...draft,
-          fill: { ...draft.fill, color },
-        });
-      }),
-      numberControl("Fill opacity", draft.fill.opacity, 0, 1, 0.05, (opacity) => {
-        this.actions.shape.setDraft({
-          ...draft,
-          fill: { ...draft.fill, opacity },
-        });
-      }),
-      styleToggle("Stroke", draft.stroke.enabled, (enabled) => {
-        this.actions.shape.setDraft({
-          ...draft,
-          stroke: { ...draft.stroke, enabled },
-        });
-      }),
-      colorControl("Stroke color", draft.stroke.color, (color) => {
+    const controls = [];
+    if (!line) {
+      controls.push(
+        styleToggle("Fill", draft.fill.enabled, (enabled) => {
+          this.actions.shape.setDraft({
+            ...draft,
+            fill: { ...draft.fill, enabled },
+          });
+        }),
+        colorControl("Fill color", draft.fill.color, (color) => {
+          this.actions.shape.setDraft({
+            ...draft,
+            fill: { ...draft.fill, color },
+          });
+        }),
+        numberControl("Fill opacity", draft.fill.opacity, 0, 1, 0.05, (opacity) => {
+          this.actions.shape.setDraft({
+            ...draft,
+            fill: { ...draft.fill, opacity },
+          });
+        }),
+        styleToggle("Stroke", draft.stroke.enabled, (enabled) => {
+          this.actions.shape.setDraft({
+            ...draft,
+            stroke: { ...draft.stroke, enabled },
+          });
+        }),
+      );
+    }
+    controls.push(
+      colorControl(line ? "Line color" : "Stroke color", draft.stroke.color, (color) => {
         this.actions.shape.setDraft({
           ...draft,
           stroke: { ...draft.stroke, color },
         });
       }),
       strokeStylePicker(draft.stroke.style, {
-        ariaLabel: "Stroke style",
+        ariaLabel: line ? "Line style" : "Stroke style",
         disabled: this.actions.shape.isBusy(),
         change: (style) => {
           this.actions.shape.setDraft({
@@ -218,13 +250,14 @@ export class WorkspaceView {
           });
         },
       }),
-      numberControl("Stroke width", draft.stroke.width, 0.1, 24, 0.1, (width) => {
+      numberControl(line ? "Line weight" : "Stroke width", draft.stroke.width, 0.1, 24, 0.1, (width) => {
         this.actions.shape.setDraft({
           ...draft,
           stroke: { ...draft.stroke, width },
         });
       }),
     );
+    group.append(...controls);
     for (const input of group.querySelectorAll("input")) {
       input.disabled = this.actions.shape.isBusy();
     }
@@ -235,7 +268,10 @@ export class WorkspaceView {
     const popover = element("details", "shape-style-popover");
     const summary = element("summary");
     summary.textContent = "Style";
-    summary.setAttribute("aria-label", "Shape style");
+    summary.setAttribute(
+      "aria-label",
+      this.state.shapeTool === "line" ? "Line style" : "Shape style",
+    );
     const panel = element("div", "shape-style-popover-panel");
     panel.append(this.shapeStyleControls());
     popover.append(summary, panel);

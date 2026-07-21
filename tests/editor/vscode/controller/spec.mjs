@@ -60,6 +60,7 @@ const { EditorController } = await import(
 
 await testManualPositionEditRequestsReconciliation();
 await testNewSourceEditReschedulesReconciliation();
+await testLineGeometryEditForwardsOrderedPagePoints();
 
 async function testManualPositionEditRequestsReconciliation() {
   await withManualSession(async ({ controller, session, requests, messages }) => {
@@ -132,6 +133,36 @@ async function testNewSourceEditReschedulesReconciliation() {
   });
 }
 
+async function testLineGeometryEditForwardsOrderedPagePoints() {
+  await withManualSession(async ({ controller, session, requests, messages }) => {
+    await controller.applyShapeEdit(session, {
+      type: "editLineGeometry",
+      requestId: 9,
+      snapshotId: "initial",
+      nodeId: 7,
+      pageId: 1,
+      start: { x: 410, y: 120 },
+      end: { x: 90, y: 360 },
+    });
+    const request = requests.find((candidate) =>
+      candidate.method === "ss/editLineGeometry"
+    );
+    assert.deepEqual(request?.params, {
+      textDocument: { uri: session.document.uri.toString() },
+      snapshotId: "initial",
+      pageId: 1,
+      nodeId: 7,
+      start: { x: 410, y: 120 },
+      end: { x: 90, y: 360 },
+    });
+    assert(messages.some((message) =>
+      message.type === "shapeEditResult" &&
+      message.operation === "geometry" &&
+      message.status === "applied"
+    ), "an applied line geometry edit did not reach the webview");
+  });
+}
+
 async function withManualSession(run) {
   const fixture = await mkdtemp(path.join(os.tmpdir(), "ss-editor-controller-"));
   try {
@@ -182,7 +213,7 @@ automatic = false
     const client = {
       async sendRequest(method, params, token) {
         requests.push({ method, params, token });
-        if (method === "ss/layoutEdit") {
+        if (method === "ss/layoutEdit" || method === "ss/editLineGeometry") {
           return {
             schema: 1,
             status: "ok",

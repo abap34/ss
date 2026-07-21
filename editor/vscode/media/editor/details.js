@@ -28,62 +28,69 @@ export function renderObjectSheet(state, object, actions) {
 
 function shapeStyleEditor(target, shape, locked) {
   const disabled = shape.isBusy() || locked;
+  const line = target.kind === "line";
   const container = element("div", "shape-style-editor");
   const title = element("h2");
-  title.textContent = "Shape style";
+  title.textContent = line ? "Line style" : "Shape style";
   container.append(title);
   const controls = element("div", "shape-style-fields");
-  controls.append(
-    styleCheckbox("Fill", target.fill.enabled, (enabled) => {
-      if (!enabled && !target.stroke.enabled) return;
+  const fields = [];
+  if (!line) {
+    fields.push(
+      styleCheckbox("Fill", target.fill.enabled, (enabled) => {
+        if (!enabled && !target.stroke.enabled) return;
+        shape.editStyle(target, {
+          fill: { ...target.fill, enabled },
+          stroke: { ...target.stroke },
+        });
+      }),
+      styleColor("Fill color", target.fill.color, (color) => {
+        shape.editStyle(target, {
+          fill: { ...target.fill, color },
+          stroke: { ...target.stroke },
+        });
+      }),
+      styleNumber("Opacity", target.fill.opacity, 0, 1, 0.05, (opacity) => {
+        shape.editStyle(target, {
+          fill: { ...target.fill, opacity },
+          stroke: { ...target.stroke },
+        });
+      }),
+      styleCheckbox("Stroke", target.stroke.enabled, (enabled) => {
+        if (!enabled && !target.fill.enabled) return;
+        shape.editStyle(target, {
+          fill: { ...target.fill },
+          stroke: { ...target.stroke, enabled },
+        });
+      }),
+    );
+  }
+  fields.push(
+    styleColor(line ? "Line color" : "Stroke color", target.stroke.color, (color) => {
       shape.editStyle(target, {
-        fill: { ...target.fill, enabled },
-        stroke: { ...target.stroke },
-      });
-    }),
-    styleColor("Fill color", target.fill.color, (color) => {
-      shape.editStyle(target, {
-        fill: { ...target.fill, color },
-        stroke: { ...target.stroke },
-      });
-    }),
-    styleNumber("Opacity", target.fill.opacity, 0, 1, 0.05, (opacity) => {
-      shape.editStyle(target, {
-        fill: { ...target.fill, opacity },
-        stroke: { ...target.stroke },
-      });
-    }),
-    styleCheckbox("Stroke", target.stroke.enabled, (enabled) => {
-      if (!enabled && !target.fill.enabled) return;
-      shape.editStyle(target, {
-        fill: { ...target.fill },
-        stroke: { ...target.stroke, enabled },
-      });
-    }),
-    styleColor("Stroke color", target.stroke.color, (color) => {
-      shape.editStyle(target, {
-        fill: { ...target.fill },
+        ...(line ? {} : { fill: { ...target.fill } }),
         stroke: { ...target.stroke, color },
       });
     }),
     strokeStyleSelect(target.stroke.style, {
-      label: "Line",
-      ariaLabel: "Shape stroke style",
+      label: line ? "Style" : "Line",
+      ariaLabel: line ? "Line style" : "Shape stroke style",
       disabled,
       change: (style) => {
         shape.editStyle(target, {
-          fill: { ...target.fill },
+          ...(line ? {} : { fill: { ...target.fill } }),
           stroke: { ...target.stroke, style },
         });
       },
     }),
-    styleNumber("Width", target.stroke.width, 0.1, 24, 0.1, (width) => {
+    styleNumber(line ? "Weight" : "Width", target.stroke.width, 0.1, 24, 0.1, (width) => {
       shape.editStyle(target, {
-        fill: { ...target.fill },
+        ...(line ? {} : { fill: { ...target.fill } }),
         stroke: { ...target.stroke, width },
       });
     }),
   );
+  controls.append(...fields);
   for (const input of controls.querySelectorAll("input")) {
     input.disabled = disabled;
   }
@@ -101,6 +108,7 @@ function styleCheckbox(label, checked, change) {
   const input = element("input");
   input.type = "checkbox";
   input.checked = checked;
+  input.setAttribute("aria-label", label);
   input.addEventListener("change", () => change(input.checked));
   control.append(input, document.createTextNode(label));
   return control;
@@ -113,6 +121,7 @@ function styleColor(label, value, change) {
   const input = element("input");
   input.type = "color";
   input.value = value;
+  input.setAttribute("aria-label", label);
   input.addEventListener("change", () => change(input.value));
   control.append(caption, input);
   return control;
@@ -128,6 +137,7 @@ function styleNumber(label, value, min, max, step, change) {
   input.min = String(min);
   input.max = String(max);
   input.step = String(step);
+  input.setAttribute("aria-label", label);
   input.addEventListener("change", () => {
     const next = Number(input.value);
     if (Number.isFinite(next)) change(Math.min(max, Math.max(min, next)));

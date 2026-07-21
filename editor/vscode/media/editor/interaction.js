@@ -7,18 +7,27 @@ import {
 } from "./geometry.js";
 import { renderConstraints } from "./constraints.js";
 
+const minimumPlacementLength = 4;
+const minimumEditedLineLength = 0.25;
+const defaultLineLength = 160;
+const lineSnapAngle = Math.PI / 12;
+
 export class InteractionController {
   constructor(state, actions) {
     this.state = state;
     this.actions = actions;
     this.drag = null;
     this.placement = null;
+    this.lineEndpointDrag = null;
     this.updateDrag = this.updateDrag.bind(this);
     this.finishDrag = this.finishDrag.bind(this);
     this.cancelDrag = this.cancelDrag.bind(this);
     this.updatePlacement = this.updatePlacement.bind(this);
     this.finishPlacement = this.finishPlacement.bind(this);
     this.cancelPlacement = this.cancelPlacement.bind(this);
+    this.updateLineEndpoint = this.updateLineEndpoint.bind(this);
+    this.finishLineEndpoint = this.finishLineEndpoint.bind(this);
+    this.cancelLineEndpoint = this.cancelLineEndpoint.bind(this);
     this.handleKeydown = this.handleKeydown.bind(this);
     window.addEventListener("keydown", this.handleKeydown);
   }
@@ -60,6 +69,7 @@ export class InteractionController {
   reset() {
     this.cleanup();
     this.cleanupPlacement();
+    this.cleanupLineEndpoint();
   }
 
   placementTarget(page) {
@@ -82,6 +92,7 @@ export class InteractionController {
     const svg = target.ownerSVGElement;
     const start = clampPoint(svgPoint(svg, event), page);
     const ghost = this.placementGhost(this.state.shapeTool);
+    applyShapeStyle(ghost, this.state.shapeTool, this.state.shapeStyle);
     svg.insertBefore(ghost, target);
     this.placement = {
       pointerId: event.pointerId,
@@ -103,25 +114,27 @@ export class InteractionController {
   updatePlacement(event) {
     const placement = this.placement;
     if (!placement || event.pointerId !== placement.pointerId) return;
-    placement.current = clampPoint(svgPoint(placement.svg, event), placement.page);
+    placement.current = placementPoint(placement, event);
     this.updatePlacementGhost();
   }
 
   finishPlacement(event) {
     const placement = this.placement;
     if (!placement || event.pointerId !== placement.pointerId) return;
-    placement.current = clampPoint(svgPoint(placement.svg, event), placement.page);
-    let bounds = placementBounds(
-      placement.start,
-      placement.current,
-      placement.kind,
-    );
-    if (bounds.width < 4 || bounds.height < 4) {
-      bounds = defaultBounds(placement.start, placement.page, placement.kind);
-    }
+    placement.current = placementPoint(placement, event);
+    const geometry = placement.kind === "line"
+      ? lineGeometry(placement.start, placement.current, placement.page)
+      : {
+        bounds: shapeBounds(
+          placement.start,
+          placement.current,
+          placement.kind,
+          placement.page,
+        ),
+      };
     const pageId = placement.page.id;
     this.cleanupPlacement();
-    this.actions.shape.insert(pageId, bounds);
+    this.actions.shape.insert(pageId, geometry);
   }
 
   cancelPlacement() {
@@ -141,17 +154,31 @@ export class InteractionController {
   }
 
   handleKeydown(event) {
-    if (event.key !== "Escape") return;
-    if (this.placement) {
-      event.preventDefault();
-      this.cleanupPlacement();
-      this.actions.shape.cancel();
+    if (event.key === "Escape") {
+      if (this.lineEndpointDrag) {
+        event.preventDefault();
+        this.cancelLineEndpoint();
+        return;
+      }
+      if (this.placement) {
+        event.preventDefault();
+        this.cleanupPlacement();
+        this.actions.shape.cancel();
+        return;
+      }
+      if (this.actions.shape.cancel()) event.preventDefault();
       return;
     }
-    if (this.actions.shape.cancel()) event.preventDefault();
+    if (event.key.toLowerCase() !== "l" || event.metaKey || event.ctrlKey ||
+        event.altKey || this.placement || this.lineEndpointDrag ||
+        isTypingTarget(event.target) ||
+        !this.actions.shape.canInsert(this.state.currentPageId)) return;
+    event.preventDefault();
+    this.actions.shape.selectTool("line");
   }
 
   placementGhost(kind) {
+    if (kind === "line") return svgElement("line", "shape-placement-ghost");
     if (kind === "circle") return svgElement("ellipse", "shape-placement-ghost");
     if (kind === "arrow") return svgElement("polygon", "shape-placement-ghost");
     return svgElement("rect", "shape-placement-ghost");
@@ -160,24 +187,24 @@ export class InteractionController {
   pendingShape(preview) {
     const shape = this.placementGhost(preview.kind);
     shape.classList.add("shape-placement-preview");
-    setShapeGeometry(shape, preview.kind, preview.bounds);
-    shape.style.fill = preview.fill.enabled ? preview.fill.color : "none";
-    shape.style.fillOpacity = String(preview.fill.opacity);
-    shape.style.stroke = preview.stroke.enabled ? preview.stroke.color : "none";
-    shape.style.strokeWidth = String(preview.stroke.width);
-    applyStrokeStyle(shape, preview.stroke);
+    setShapeGeometry(shape, preview.kind, preview);
+    applyShapeStyle(shape, preview.kind, preview);
     return shape;
   }
 
   updatePlacementGhost() {
     const placement = this.placement;
     if (!placement) return;
-    const bounds = placementBounds(
-      placement.start,
-      placement.current,
-      placement.kind,
-    );
-    setShapeGeometry(placement.ghost, placement.kind, bounds);
+    const geometry = placement.kind === "line"
+      ? { start: placement.start, end: placement.current }
+      : {
+        bounds: placementBounds(
+          placement.start,
+          placement.current,
+          placement.kind,
+        ),
+      };
+    setShapeGeometry(placement.ghost, placement.kind, geometry);
   }
 
   isMovable(nodeId) {
@@ -193,7 +220,6 @@ export class InteractionController {
 
   hitTarget(page, object) {
     const frame = this.actions.translation.frame(page, object);
-    const selected = object.id === this.state.selectedObjectId;
     const editableNodeId = editableAncestorNodeId(
       this.state.snapshot,
       object.id,
@@ -204,9 +230,14 @@ export class InteractionController {
         candidate.id === editableNodeId
       );
     const target = editableObject || object;
+    const selected = target.id === this.state.selectedObjectId;
     const userLocked = editableObject != null &&
       this.actions.objectLocks.isLocked(editableObject.id);
     const movable = editableObject != null && this.isMovable(editableObject.id);
+    const shapeTarget = this.actions.shape.styleTarget(target.id);
+    const pendingLineGeometry = shapeTarget?.kind === "line"
+      ? this.actions.shape.pendingLineGeometry(target.id)
+      : null;
     const group = svgElement(
       "g",
       `object-hit${selected ? " is-selected" : ""}${
@@ -215,9 +246,50 @@ export class InteractionController {
     );
     group.dataset.objectId = String(object.id);
     if (userLocked) group.dataset.objectLocked = "true";
-    const rect = svgElement("rect", "object-hit-rect");
-    setRect(rect, frame);
-    group.append(rect);
+    if (shapeTarget?.kind === "line") {
+      const targetFrame = this.actions.translation.frame(page, target);
+      const segment = pendingLineGeometry ||
+        lineTargetSegment(targetFrame, shapeTarget);
+      const hit = svgElement("line", "object-hit-line");
+      const outline = svgElement("line", "object-hit-line-outline");
+      setLine(hit, segment.start, segment.end);
+      setLine(outline, segment.start, segment.end);
+      group.append(hit, outline);
+      if (selected) {
+        const geometryEditable = !userLocked &&
+          !this.state.snapshot?.stale && !this.actions.shape.isBusy();
+        group.classList.toggle(
+          "is-line-geometry-pending",
+          pendingLineGeometry != null,
+        );
+        group.append(
+          this.lineEndpointHandle(
+            "start",
+            segment.start,
+            geometryEditable,
+            page,
+            shapeTarget,
+            segment,
+            hit,
+            outline,
+          ),
+          this.lineEndpointHandle(
+            "end",
+            segment.end,
+            geometryEditable,
+            page,
+            shapeTarget,
+            segment,
+            hit,
+            outline,
+          ),
+        );
+      }
+    } else {
+      const rect = svgElement("rect", "object-hit-rect");
+      setRect(rect, frame);
+      group.append(rect);
+    }
     group.addEventListener("click", (event) => {
       event.stopPropagation();
       this.actions.selectObject(target.id, target.page_id);
@@ -236,8 +308,144 @@ export class InteractionController {
     return group;
   }
 
+  lineEndpointHandle(
+    endpoint,
+    point,
+    editable,
+    page,
+    target,
+    segment,
+    hit,
+    outline,
+  ) {
+    const handle = svgElement(
+      "g",
+      `line-endpoint-handle${editable ? "" : " is-disabled"}`,
+    );
+    handle.dataset.endpoint = endpoint;
+    handle.setAttribute("aria-label", `Move line ${endpoint} point`);
+    handle.setAttribute("aria-disabled", String(!editable));
+    const targetCircle = svgElement("circle", "line-endpoint-hit");
+    targetCircle.setAttribute("r", "18");
+    const marker = svgElement("circle", "line-endpoint-marker");
+    marker.setAttribute("r", "8");
+    setCirclePoint(targetCircle, point);
+    setCirclePoint(marker, point);
+    handle.append(targetCircle, marker);
+    if (editable) {
+      handle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+        this.beginLineEndpoint(
+          event,
+          endpoint,
+          page,
+          target,
+          segment,
+          hit,
+          outline,
+          handle,
+        );
+      });
+    }
+    return handle;
+  }
+
+  beginLineEndpoint(
+    event,
+    endpoint,
+    page,
+    target,
+    segment,
+    hit,
+    outline,
+    handle,
+  ) {
+    event.preventDefault();
+    const svg = handle.ownerSVGElement;
+    const group = handle.parentElement;
+    this.lineEndpointDrag = {
+      pointerId: event.pointerId,
+      endpoint,
+      page,
+      target,
+      svg,
+      group,
+      handle,
+      hit,
+      outline,
+      original: endpoint === "start" ? { ...segment.start } : { ...segment.end },
+      start: { ...segment.start },
+      end: { ...segment.end },
+    };
+    group.classList.add("is-editing-line-geometry");
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      // Window listeners below keep the drag active when SVG capture is absent.
+    }
+    window.addEventListener("pointermove", this.updateLineEndpoint);
+    window.addEventListener("pointerup", this.finishLineEndpoint);
+    window.addEventListener("pointercancel", this.cancelLineEndpoint);
+  }
+
+  updateLineEndpoint(event) {
+    const drag = this.lineEndpointDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const fixed = drag.endpoint === "start" ? drag.end : drag.start;
+    let current = clampPoint(svgPoint(drag.svg, event), drag.page);
+    if (event.shiftKey) current = snapLineEnd(fixed, current, drag.page);
+    if (drag.endpoint === "start") drag.start = current;
+    else drag.end = current;
+    setLine(drag.hit, drag.start, drag.end);
+    setLine(drag.outline, drag.start, drag.end);
+    for (const circle of drag.handle.querySelectorAll("circle")) {
+      setCirclePoint(circle, current);
+    }
+  }
+
+  finishLineEndpoint(event) {
+    const drag = this.lineEndpointDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    this.updateLineEndpoint(event);
+    const current = drag.endpoint === "start" ? drag.start : drag.end;
+    const moved = Math.hypot(
+      current.x - drag.original.x,
+      current.y - drag.original.y,
+    );
+    const length = Math.hypot(
+      drag.end.x - drag.start.x,
+      drag.end.y - drag.start.y,
+    );
+    this.cleanupLineEndpoint();
+    if (moved < 0.25 || length < minimumEditedLineLength ||
+        !this.actions.shape.editLineGeometry(
+          drag.target,
+          drag.start,
+          drag.end,
+        )) {
+      this.actions.render();
+    }
+  }
+
+  cancelLineEndpoint() {
+    if (!this.lineEndpointDrag) return;
+    this.cleanupLineEndpoint();
+    this.actions.render();
+  }
+
+  cleanupLineEndpoint() {
+    const drag = this.lineEndpointDrag;
+    if (!drag) return;
+    drag.group.classList.remove("is-editing-line-geometry");
+    window.removeEventListener("pointermove", this.updateLineEndpoint);
+    window.removeEventListener("pointerup", this.finishLineEndpoint);
+    window.removeEventListener("pointercancel", this.cancelLineEndpoint);
+    this.lineEndpointDrag = null;
+  }
+
   beginDrag(event, page, object, group, frame) {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || this.lineEndpointDrag) return;
     event.preventDefault();
     this.actions.selectObject(object.id, object.page_id, false);
     if (!this.isMovable(object.id)) return;
@@ -339,6 +547,60 @@ function clampPoint(point, page) {
   };
 }
 
+function placementPoint(placement, event) {
+  const point = clampPoint(svgPoint(placement.svg, event), placement.page);
+  if (placement.kind !== "line" || !event.shiftKey) return point;
+  return snapLineEnd(placement.start, point, placement.page);
+}
+
+function snapLineEnd(start, current, page) {
+  const dx = current.x - start.x;
+  const dy = current.y - start.y;
+  const length = Math.hypot(dx, dy);
+  if (length === 0) return current;
+  const angle = Math.round(Math.atan2(dy, dx) / lineSnapAngle) * lineSnapAngle;
+  const vector = { x: Math.cos(angle) * length, y: Math.sin(angle) * length };
+  const scale = Math.min(1, vectorBoundaryScale(start, vector, page));
+  return {
+    x: start.x + vector.x * scale,
+    y: start.y + vector.y * scale,
+  };
+}
+
+function vectorBoundaryScale(start, vector, page) {
+  let scale = Infinity;
+  if (vector.x > 0) scale = Math.min(scale, (page.width - start.x) / vector.x);
+  else if (vector.x < 0) scale = Math.min(scale, -start.x / vector.x);
+  if (vector.y > 0) scale = Math.min(scale, (page.height - start.y) / vector.y);
+  else if (vector.y < 0) scale = Math.min(scale, -start.y / vector.y);
+  return Number.isFinite(scale) ? Math.max(0, scale) : 1;
+}
+
+function lineGeometry(start, end, page) {
+  if (Math.hypot(end.x - start.x, end.y - start.y) >= minimumPlacementLength) {
+    return { start: { ...start }, end: { ...end } };
+  }
+  const availableRight = page.width - start.x;
+  const availableLeft = start.x;
+  const direction = availableRight >= defaultLineLength ||
+      availableRight >= availableLeft
+    ? 1
+    : -1;
+  const available = direction > 0 ? availableRight : availableLeft;
+  const offset = direction * Math.min(defaultLineLength, available);
+  return {
+    start: { ...start },
+    end: { x: start.x + offset, y: start.y },
+  };
+}
+
+function shapeBounds(start, current, kind, page) {
+  const bounds = placementBounds(start, current, kind);
+  if (bounds.width >= minimumPlacementLength &&
+      bounds.height >= minimumPlacementLength) return bounds;
+  return defaultBounds(start, page, kind);
+}
+
 function placementBounds(start, current, kind) {
   const dx = current.x - start.x;
   const dy = current.y - start.y;
@@ -388,7 +650,12 @@ function arrowPoints(bounds) {
   ].map((point) => point.join(",")).join(" ");
 }
 
-function setShapeGeometry(shape, kind, bounds) {
+function setShapeGeometry(shape, kind, geometry) {
+  if (kind === "line") {
+    setLine(shape, geometry.start, geometry.end);
+    return;
+  }
+  const bounds = geometry.bounds;
   if (kind === "circle") {
     shape.setAttribute("cx", String(bounds.x + bounds.width / 2));
     shape.setAttribute("cy", String(bounds.y + bounds.height / 2));
@@ -399,6 +666,45 @@ function setShapeGeometry(shape, kind, bounds) {
   } else {
     setRect(shape, bounds);
   }
+}
+
+function setLine(line, start, end) {
+  line.setAttribute("x1", String(start.x));
+  line.setAttribute("y1", String(start.y));
+  line.setAttribute("x2", String(end.x));
+  line.setAttribute("y2", String(end.y));
+}
+
+function setCirclePoint(circle, point) {
+  circle.setAttribute("cx", String(point.x));
+  circle.setAttribute("cy", String(point.y));
+}
+
+function applyShapeStyle(shape, kind, style) {
+  if (kind === "line") {
+    shape.style.fill = "none";
+  } else {
+    shape.style.fill = style.fill.enabled ? style.fill.color : "none";
+    shape.style.fillOpacity = String(style.fill.opacity);
+  }
+  shape.style.stroke = kind === "line" || style.stroke.enabled
+    ? style.stroke.color
+    : "none";
+  shape.style.strokeWidth = String(style.stroke.width);
+  applyStrokeStyle(shape, style.stroke);
+}
+
+function lineTargetSegment(frame, target) {
+  return {
+    start: {
+      x: frame.x + target.start.x * frame.width,
+      y: frame.y + target.start.y * frame.height,
+    },
+    end: {
+      x: frame.x + target.end.x * frame.width,
+      y: frame.y + target.end.y * frame.height,
+    },
+  };
 }
 
 function applyStrokeStyle(shape, stroke) {
@@ -415,6 +721,12 @@ function applyStrokeStyle(shape, stroke) {
   } else {
     shape.style.strokeDasharray = "none";
   }
+}
+
+function isTypingTarget(target) {
+  return Boolean(target?.closest?.(
+    "input, textarea, select, [contenteditable]:not([contenteditable='false'])",
+  ));
 }
 
 export function selectedObjectBelongsToPage(snapshot, objectId, pageId) {
