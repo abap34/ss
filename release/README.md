@@ -50,9 +50,9 @@ release/tools/changelog-section.py vX.Y.Z
 ```
 
 `pre-release-check.sh` runs the metadata checks, Zig tests, project and LSP
-smoke tests, editor package checks, Homebrew formula rendering, and the render
-Docker image build with one direct CLI render check. Do not tag a release until
-this script passes locally.
+smoke tests, editor package checks, Homebrew formula rendering, and direct
+release-binary render and dump checks. Do not tag a release until this script
+passes locally.
 
 When the release preparation commit changes only release metadata and generated
 version metadata, use the faster guarded path:
@@ -64,8 +64,8 @@ release/tools/pre-release-check.sh --release-metadata-only vX.Y.Z
 This mode verifies that `HEAD` only touches the release metadata files, then
 skips the Zig tests and smoke checks. It still checks release metadata, builds
 the release binary, checks `ss --version`, validates tree-sitter and VS Code
-packaging, renders the Homebrew formula, and runs Docker checks unless
-`--skip-docker` is also passed.
+packaging, renders the Homebrew formula, and runs the direct release-binary
+render and dump checks.
 
 After local and CI validation pass, create and push the tag:
 
@@ -107,8 +107,8 @@ gh run list --repo abap34/ss --limit 10
 gh release view vX.Y.Z --repo abap34/ss
 ```
 
-Verify the GitHub Release assets, VS Code Marketplace publish, render image,
-and Homebrew tap update before considering the release complete.
+Verify the GitHub Release assets, VS Code Marketplace publish, and Homebrew tap
+update before considering the release complete.
 
 ## Releasing a Patch From an Older Tag
 
@@ -142,14 +142,6 @@ brew install abap34/ss/ss@0.7.1-patch.1
 ss --version
 ```
 
-The render image workflow publishes the exact image tag for patch releases, for
-example:
-
-```text
-ghcr.io/abap34/ss-render:v0.7.1-patch.1
-```
-
-It does not update broad image tags such as `v0` or `v0.7` for patch releases.
 The VS Code Marketplace workflow is limited to normal releases, so patch
 releases do not publish a Marketplace extension version automatically.
 
@@ -183,9 +175,8 @@ resource. This keeps VS Code binary distribution simple: the extension can
 continue to launch the configured `ss.cli.path` without bundling
 platform-specific executables.
 
-The render image and VS Code workflows wait for the GitHub Release created by
-the Homebrew workflow, then update notes or upload artifacts. They do not create
-the release themselves.
+The VS Code workflow waits for the GitHub Release created by the Homebrew
+workflow, then uploads its artifact. It does not create the release itself.
 
 ## Editor Release
 

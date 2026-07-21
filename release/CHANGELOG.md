@@ -4,6 +4,11 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+### Removed
+
+- Stopped publishing new Docker render images and removed the Docker-backed
+  render GitHub Action.
+
 ## [0.7.3] - 2026-07-01
 
 ### Fixed

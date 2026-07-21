@@ -14,13 +14,7 @@ Options:
                   metadata commit directly on COMMIT.
   --release-metadata-only
                   Verify HEAD only changes release metadata, then skip Zig tests and smoke checks.
-  --skip-docker   Skip the render Docker image build and container run.
   -h, --help      Show this help.
-
-Environment:
-  PRE_RELEASE_DOCKER_PLATFORM  Docker platform to build and run. Defaults to linux/amd64.
-  PRE_RELEASE_IMAGE            Local Docker image tag. Defaults to ss-render:<tag>-local.
-  PRE_RELEASE_DOCKER_TIMEOUT   Seconds to wait for Docker daemon readiness. Defaults to 180.
 
 Patch releases skip VS Code extension packaging because the Marketplace
 publication workflow is limited to normal releases.
@@ -56,30 +50,6 @@ sha256_file() {
   else
     fail "required command not found: sha256sum or shasum"
   fi
-}
-
-run_with_timeout() {
-  local seconds="$1"
-  shift
-  "$@" &
-  local pid="$!"
-  (
-    sleep "$seconds"
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -TERM "$pid" 2>/dev/null || true
-      sleep 5
-      kill -KILL "$pid" 2>/dev/null || true
-    fi
-  ) &
-  local timer="$!"
-  local status=0
-  wait "$pid" || status="$?"
-  kill "$timer" 2>/dev/null || true
-  wait "$timer" 2>/dev/null || true
-  if [[ "$status" -eq 143 || "$status" -eq 137 ]]; then
-    return 124
-  fi
-  return "$status"
 }
 
 is_release_metadata_path() {
@@ -140,7 +110,6 @@ assert_release_base() {
 tag=""
 allow_dirty=false
 release_metadata_only=false
-skip_docker=false
 release_base=""
 
 while [[ "$#" -gt 0 ]]; do
@@ -158,10 +127,6 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --release-metadata-only)
       release_metadata_only=true
-      shift
-      ;;
-    --skip-docker)
-      skip_docker=true
       shift
       ;;
     -h|--help)
@@ -206,9 +171,6 @@ notes_path="$cache_dir/release-notes.md"
 archive_path="$cache_dir/ss-$version.tar.gz"
 formula_path="$cache_dir/${formula_name}.rb"
 vsix_path="$cache_dir/ss-language-support-$tag.vsix"
-docker_platform="${PRE_RELEASE_DOCKER_PLATFORM:-linux/amd64}"
-docker_image="${PRE_RELEASE_IMAGE:-ss-render:${tag}-local}"
-docker_timeout="${PRE_RELEASE_DOCKER_TIMEOUT:-180}"
 
 mkdir -p "$cache_dir"
 
@@ -247,9 +209,6 @@ require_command npm
 require_command pkg-config
 require_command qpdf
 require_command ruby
-if [[ "$skip_docker" != true ]]; then
-  require_command docker
-fi
 
 run pkg-config --exists cairo pangocairo librsvg-2.0
 
@@ -318,72 +277,31 @@ release/tools/render-homebrew-formula.py \
   --output "$formula_path"
 ruby -c "$formula_path"
 
-if [[ "$skip_docker" == true ]]; then
-  echo
-  echo "pre-release-check: skipped Docker render image checks"
-else
-  step "Docker availability"
-  run_with_timeout "$docker_timeout" docker info >/dev/null || fail "docker daemon did not respond within ${docker_timeout} seconds"
-
-  step "render Docker image build"
-  if docker buildx version >/dev/null 2>&1; then
-    docker buildx build \
-      --load \
-      --platform "$docker_platform" \
-      --build-arg "SS_VERSION=$version" \
-      --build-arg "SS_COMMIT=$commit" \
-      -f release/docker/render/Dockerfile \
-      -t "$docker_image" \
-      .
-  else
-    docker build \
-      --platform "$docker_platform" \
-      --build-arg "SS_VERSION=$version" \
-      --build-arg "SS_COMMIT=$commit" \
-      -f release/docker/render/Dockerfile \
-      -t "$docker_image" \
-      .
-  fi
-
-  step "render Docker image version"
-  docker run --rm --platform "$docker_platform" "$docker_image" --version
-
-  step "render Docker image CLI"
-  container_workspace="$cache_dir/render-workspace"
-  rm -rf "$container_workspace"
-  mkdir -p "$container_workspace/slides" "$container_workspace/.ss-cache"
-  cat > "$container_workspace/slides/release-check.ss" <<'SS'
+step "release binary CLI"
+render_workspace="$cache_dir/render-workspace"
+rm -rf "$render_workspace"
+mkdir -p "$render_workspace/slides" "$render_workspace/.ss-cache"
+cat > "$render_workspace/slides/release-check.ss" <<'SS'
 import std:themes/default
 
 page release_check
-cover("Release check", "render image CLI", "local")
+cover("Release check", "release binary CLI", "local")
 pageno()
 end
 SS
 
-  docker run --rm \
-    --platform "$docker_platform" \
-    --user "$(id -u):$(id -g)" \
-    -e HOME=/tmp \
-    -v "$container_workspace:/workspace" \
-    -w /workspace \
-    "$docker_image" \
-    render slides/release-check.ss .ss-cache/direct-render.pdf
+zig-out/bin/ss render \
+  "$render_workspace/slides/release-check.ss" \
+  "$render_workspace/.ss-cache/direct-render.pdf"
 
-  test -s "$container_workspace/.ss-cache/direct-render.pdf"
-  qpdf --check "$container_workspace/.ss-cache/direct-render.pdf" >/dev/null
+test -s "$render_workspace/.ss-cache/direct-render.pdf"
+qpdf --check "$render_workspace/.ss-cache/direct-render.pdf" >/dev/null
 
-  docker run --rm \
-    --platform "$docker_platform" \
-    --user "$(id -u):$(id -g)" \
-    -e HOME=/tmp \
-    -v "$container_workspace:/workspace" \
-    -w /workspace \
-    "$docker_image" \
-    dump slides/release-check.ss .ss-cache/direct-render.json
+zig-out/bin/ss dump \
+  "$render_workspace/slides/release-check.ss" \
+  "$render_workspace/.ss-cache/direct-render.json"
 
-  test -s "$container_workspace/.ss-cache/direct-render.json"
-fi
+test -s "$render_workspace/.ss-cache/direct-render.json"
 
 if [[ "$allow_dirty" != true ]]; then
   git diff --quiet -- . ':(exclude).ss-cache' || fail "tracked files changed while running pre-release check"
