@@ -130,6 +130,11 @@ export interface Rect {
   height: number;
 }
 
+export interface Point {
+  x: number;
+  y: number;
+}
+
 export interface OutlineItem {
   id: number;
   parent_id: number | null;
@@ -158,26 +163,40 @@ export interface PageEditingCapability {
   insert_shapes: boolean;
 }
 
-export interface ShapeStyle {
-  fill: {
-    enabled: boolean;
-    color: string;
-    opacity: number;
-  };
-  stroke: {
-    enabled: boolean;
-    color: string;
-    width: number;
-    style: "solid" | "dashed" | "dotted" | "dash_dot";
-  };
+export interface ShapeFill {
+  enabled: boolean;
+  color: string;
+  opacity: number;
 }
 
-export interface ShapeEditingCapability extends ShapeStyle {
+export interface ShapeStroke {
+  enabled: boolean;
+  color: string;
+  width: number;
+  style: "solid" | "dashed" | "dotted" | "dash_dot";
+}
+
+export interface ShapeStyle {
+  fill: ShapeFill;
+  stroke: ShapeStroke;
+}
+
+interface ShapeEditingBase {
   node_id: number;
   page_id: number;
   binding: string;
-  kind: "rectangle" | "circle" | "arrow";
 }
+
+export type ShapeEditingCapability =
+  | ShapeEditingBase & ShapeStyle & {
+    kind: "rectangle" | "circle" | "arrow";
+  }
+  | ShapeEditingBase & {
+    kind: "line";
+    start: Point;
+    end: Point;
+    stroke: ShapeStroke;
+  };
 
 export interface WorkspaceEditValue {
   changes?: Record<string, Array<{
@@ -250,7 +269,7 @@ export type HostMessage =
   | {
     type: "shapeEditResult";
     requestId: number;
-    operation: "insert" | "style";
+    operation: "insert" | "style" | "geometry";
     status: "applied";
     documentVersion: number;
     selection?: ShapeEditResult["selection"];
@@ -258,10 +277,52 @@ export type HostMessage =
   | {
     type: "shapeEditResult";
     requestId: number;
-    operation: "insert" | "style";
+    operation: "insert" | "style" | "geometry";
     status: Exclude<ShapeEditResult["status"], "ok">;
     message?: string;
   };
+
+type ShapeInsertionMessage = {
+  type: "insertShape";
+  requestId: number;
+  snapshotId: string;
+  pageId: number;
+} & (
+  | {
+    kind: "rectangle" | "circle" | "arrow";
+    bounds: Rect;
+    fill: ShapeFill;
+    stroke: ShapeStroke;
+  }
+  | {
+    kind: "line";
+    start: Point;
+    end: Point;
+    stroke: ShapeStroke;
+  }
+);
+
+type ShapeStyleEditMessage = {
+  type: "editShapeStyle";
+  requestId: number;
+  snapshotId: string;
+  nodeId: number;
+  pageId: number;
+  stroke: ShapeStroke;
+} & (
+  | { kind: "rectangle" | "circle" | "arrow"; fill: ShapeFill }
+  | { kind: "line" }
+);
+
+type LineGeometryEditMessage = {
+  type: "editLineGeometry";
+  requestId: number;
+  snapshotId: string;
+  nodeId: number;
+  pageId: number;
+  start: Point;
+  end: Point;
+};
 
 export type WebviewMessage =
   | { type: "ready" }
@@ -277,22 +338,6 @@ export type WebviewMessage =
     fromBounds: Rect;
     toBounds: Rect;
   }
-  | {
-    type: "insertShape";
-    requestId: number;
-    snapshotId: string;
-    pageId: number;
-    kind: "rectangle" | "circle" | "arrow";
-    bounds: Rect;
-    fill: ShapeStyle["fill"];
-    stroke: ShapeStyle["stroke"];
-  }
-  | {
-    type: "editShapeStyle";
-    requestId: number;
-    snapshotId: string;
-    nodeId: number;
-    pageId: number;
-    fill: ShapeStyle["fill"];
-    stroke: ShapeStyle["stroke"];
-  };
+  | ShapeInsertionMessage
+  | ShapeStyleEditMessage
+  | LineGeometryEditMessage;

@@ -200,17 +200,24 @@ export class EditorController implements vscode.Disposable {
       await this.applyTranslation(session, message);
       return;
     }
-    if (message.type === "insertShape" || message.type === "editShapeStyle") {
+    if (message.type === "insertShape" || message.type === "editShapeStyle" ||
+        message.type === "editLineGeometry") {
       await this.applyShapeEdit(session, message);
     }
   }
 
   private async applyShapeEdit(
     session: Session,
-    message: Extract<WebviewMessage, { type: "insertShape" | "editShapeStyle" }>,
+    message: Extract<WebviewMessage, {
+      type: "insertShape" | "editShapeStyle" | "editLineGeometry";
+    }>,
   ): Promise<void> {
     const client = this.clientProvider();
-    const operation = message.type === "insertShape" ? "insert" : "style";
+    const operation = message.type === "insertShape"
+      ? "insert"
+      : message.type === "editShapeStyle"
+      ? "style"
+      : "geometry";
     if (!client) {
       await this.post(session, {
         type: "shapeEditResult",
@@ -225,16 +232,36 @@ export class EditorController implements vscode.Disposable {
     try {
       const method = message.type === "insertShape"
         ? "ss/insertShape"
-        : "ss/shapeStyleEdit";
+        : message.type === "editShapeStyle"
+        ? "ss/shapeStyleEdit"
+        : "ss/editLineGeometry";
       const result = await client.sendRequest<ShapeEditResult>(method, {
         textDocument: { uri: session.document.uri.toString() },
         snapshotId: message.snapshotId,
         pageId: message.pageId,
         ...(message.type === "insertShape"
+          ? message.kind === "line"
+            ? {
+              kind: message.kind,
+              start: message.start,
+              end: message.end,
+              stroke: message.stroke,
+            }
+            : {
+              kind: message.kind,
+              bounds: message.bounds,
+              fill: message.fill,
+              stroke: message.stroke,
+            }
+          : message.type === "editLineGeometry"
           ? {
-            kind: message.kind,
-            bounds: message.bounds,
-            fill: message.fill,
+            nodeId: message.nodeId,
+            start: message.start,
+            end: message.end,
+          }
+          : message.kind === "line"
+          ? {
+            nodeId: message.nodeId,
             stroke: message.stroke,
           }
           : {

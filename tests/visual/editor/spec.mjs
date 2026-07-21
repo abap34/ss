@@ -134,6 +134,15 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert(verticalRulerPositions[100] > verticalRulerPositions[700],
       "vertical ruler values did not increase upward from the page bottom");
 
+    const selectTool = page.getByRole("button", { name: "Select" });
+    const insertionStrokeWidth = page.locator(
+      '.toolbar > .shape-style-controls input[aria-label="Stroke width"]',
+    );
+    await insertionStrokeWidth.focus();
+    await page.keyboard.press("l");
+    assert.equal(await selectTool.getAttribute("aria-pressed"), "true",
+      "the line shortcut activated while a form control had focus");
+
     const insertionStrokeStyle = page.locator(
       ".toolbar > .shape-style-controls .stroke-style-picker",
     );
@@ -144,6 +153,22 @@ await withBrowser(output, async (browser, baseUrl) => {
     await shapePicker.locator("summary").click();
     assert.equal(await page.locator(".shape-picker-panel").isVisible(), true,
       "shape gallery did not open from the toolbar");
+    assert.deepEqual(
+      await shapePicker.locator(".shape-picker-section > strong").allTextContents(),
+      ["Lines", "Basic shapes"],
+      "shape gallery did not separate line and basic shape tools",
+    );
+    assert.equal(
+      await shapePicker.getByRole("button", { name: "Block arrow" }).count(),
+      1,
+      "the block arrow tool was not distinguished from a line arrow",
+    );
+    assert.equal(
+      await shapePicker.getByRole("button", { name: "Line" })
+        .locator(".shape-choice-shortcut").textContent(),
+      "L",
+      "the line shortcut was not discoverable from the gallery",
+    );
     const rectangleTool = shapePicker.getByRole("button", { name: "Rectangle" });
     assert.equal(await rectangleTool.isEnabled(), true,
       "an editable page disabled its rectangle tool");
@@ -203,11 +228,146 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(await page.locator(".shape-placement-preview").count(), 0,
       "a rejected provisional shape remained on the page");
 
+    const closedShapeStroke = page.locator(
+      '.toolbar > .shape-style-controls label.style-toggle',
+    ).filter({ hasText: "Stroke" }).locator(
+      'input[type="checkbox"]',
+    );
+    await closedShapeStroke.uncheck();
+    await page.keyboard.press("l");
+    assert.equal(await shapePicker.locator("summary").getAttribute("aria-pressed"), "true");
+    assert.match(await shapePicker.locator("summary").textContent(), /Line/,
+      "the L shortcut did not activate the line tool");
+    const lineControls = page.locator(
+      ".toolbar > .shape-style-controls--line",
+    );
+    assert.equal(await lineControls.locator('input[aria-label="Fill color"]').count(), 0,
+      "the line tool displayed fill controls");
+    assert.equal(await lineControls.locator('input[aria-label="Line color"]').count(), 1,
+      "the line tool omitted its color control");
+    assert.equal(await lineControls.locator('input[aria-label="Line weight"]').count(), 1,
+      "the line tool omitted its weight control");
+
+    const linePlacement = page.locator(
+      '.page-shell[data-page-id="11"] .shape-placement-hit',
+    );
+    const linePlacementBox = await linePlacement.boundingBox();
+    assert(linePlacementBox, "line placement layer was not rendered");
+    const lineStartX = linePlacementBox.x + linePlacementBox.width * 0.72;
+    const lineStartY = linePlacementBox.y + linePlacementBox.height * 0.2;
+    const lineEndX = linePlacementBox.x + linePlacementBox.width * 0.37;
+    const lineEndY = linePlacementBox.y + linePlacementBox.height * 0.61;
+    await page.mouse.move(lineStartX, lineStartY);
+    await page.mouse.down();
+    await page.keyboard.down("Shift");
+    await page.mouse.move(lineEndX, lineEndY, { steps: 3 });
+    const lineGhost = page.locator("line.shape-placement-ghost");
+    assert.equal(await lineGhost.count(), 1,
+      "line drag did not render an SVG line ghost");
+    assert.equal(
+      await lineGhost.evaluate((node) => getComputedStyle(node).stroke),
+      "rgb(37, 99, 235)",
+      "line ghost did not use the selected line color",
+    );
+    assert.match(
+      await lineGhost.evaluate((node) => getComputedStyle(node).strokeDasharray),
+      /1\.6px.*4px/,
+      "line ghost did not use the selected dotted style",
+    );
+    await page.mouse.up();
+    await page.keyboard.up("Shift");
+    const insertedLine = await lastMessage(page, "insertShape");
+    assert.equal(insertedLine.kind, "line");
+    assert.equal(Object.hasOwn(insertedLine, "bounds"), false,
+      "line insertion was collapsed into unordered bounds");
+    assert.equal(Object.hasOwn(insertedLine, "fill"), false,
+      "line insertion sent an inapplicable fill style");
+    assert.equal(insertedLine.stroke.enabled, true,
+      "line insertion inherited the hidden closed-shape stroke toggle");
+    assert(insertedLine.start.x > insertedLine.end.x &&
+      insertedLine.start.y < insertedLine.end.y,
+    `line insertion lost endpoint order: ${JSON.stringify(insertedLine)}`);
+    const snappedAngle = Math.atan2(
+      insertedLine.end.y - insertedLine.start.y,
+      insertedLine.end.x - insertedLine.start.x,
+    ) / (Math.PI / 12);
+    assert(Math.abs(snappedAngle - Math.round(snappedAngle)) < 0.001,
+      `Shift did not snap the line to 15 degree increments: ${snappedAngle}`);
+    assert.equal(await page.locator("line.shape-placement-preview").count(), 1,
+      "pending line did not retain its SVG preview");
+    await postShapeEditResult(page, {
+      requestId: insertedLine.requestId,
+      operation: "insert",
+      status: "stale",
+    });
+    await page.waitForFunction(() =>
+      document.querySelector('.shape-tool[aria-label="Select"]')
+        ?.getAttribute("aria-pressed") === "true"
+    );
+
+    await page.keyboard.press("l");
+    const clickPlacementBox = await page.locator(
+      '.page-shell[data-page-id="11"] .shape-placement-hit',
+    ).boundingBox();
+    assert(clickPlacementBox, "line click placement layer was not rendered");
+    await page.mouse.click(
+      clickPlacementBox.x + clickPlacementBox.width * 0.25,
+      clickPlacementBox.y + clickPlacementBox.height * 0.72,
+    );
+    const defaultLine = await lastMessage(page, "insertShape");
+    assert.equal(defaultLine.kind, "line");
+    assert(Math.abs(defaultLine.end.y - defaultLine.start.y) < 0.001,
+      `a short gesture did not create a horizontal line: ${JSON.stringify(defaultLine)}`);
+    assert(Math.abs(Math.abs(defaultLine.end.x - defaultLine.start.x) - 160) < 0.1,
+      `a short gesture used the wrong default line length: ${JSON.stringify(defaultLine)}`);
+    await postShapeEditResult(page, {
+      requestId: defaultLine.requestId,
+      operation: "insert",
+      status: "stale",
+    });
+    await page.waitForFunction(() =>
+      document.querySelector('.shape-tool[aria-label="Select"]')
+        ?.getAttribute("aria-pressed") === "true"
+    );
+
+    await page.keyboard.press("l");
+    const edgePlacementBox = await page.locator(
+      '.page-shell[data-page-id="11"] .shape-placement-hit',
+    ).boundingBox();
+    assert(edgePlacementBox, "right-edge line placement layer was not rendered");
+    await page.mouse.click(
+      edgePlacementBox.x + edgePlacementBox.width * (1270 / 1280),
+      edgePlacementBox.y + edgePlacementBox.height * 0.4,
+    );
+    const edgeLine = await lastMessage(page, "insertShape");
+    assert(edgeLine.start.x > edgeLine.end.x,
+      `a right-edge click did not choose the side with room: ${JSON.stringify(edgeLine)}`);
+    assert(Math.abs(edgeLine.start.x - edgeLine.end.x - 160) < 0.1,
+      `a right-edge click produced a truncated line: ${JSON.stringify(edgeLine)}`);
+    await postShapeEditResult(page, {
+      requestId: edgeLine.requestId,
+      operation: "insert",
+      status: "stale",
+    });
+    await page.waitForFunction(() =>
+      document.querySelector('.shape-tool[aria-label="Select"]')
+        ?.getAttribute("aria-pressed") === "true"
+    );
+
     await shapePicker.locator("summary").click();
     await shapePicker.getByRole("button", { name: "Circle" }).click();
     assert.equal(await shapePicker.locator("summary").getAttribute("aria-pressed"), "true");
     assert.match(await shapePicker.locator("summary").textContent(), /Circle/,
       "shape picker did not reflect the active drawing tool");
+    assert.equal(
+      await page.locator(
+        '.toolbar > .shape-style-controls label.style-toggle',
+      ).filter({ hasText: "Stroke" }).locator(
+        'input[type="checkbox"]',
+      ).isChecked(),
+      false,
+      "using the line tool changed the closed-shape stroke preference",
+    );
     await page.keyboard.press("Escape");
     assert.equal(
       await page.getByRole("button", { name: "Select" }).getAttribute("aria-pressed"),
@@ -237,6 +397,144 @@ await withBrowser(output, async (browser, baseUrl) => {
       true,
       "locking a shape left its style controls enabled",
     );
+    await page.getByRole("button", { name: "Unlock object" }).click();
+    await page.locator(".close-button").click();
+
+    const existingLineHit = page.locator(
+      '.page-shell[data-page-id="11"] .object-hit[data-object-id="102"] .object-hit-line',
+    );
+    assert.equal(await existingLineHit.getAttribute("x1"), "760");
+    assert.equal(await existingLineHit.getAttribute("y1"), "170");
+    assert.equal(await existingLineHit.getAttribute("x2"), "520");
+    assert.equal(await existingLineHit.getAttribute("y2"), "290");
+    assert.equal(
+      await existingLineHit.evaluate((node) => getComputedStyle(node).strokeWidth),
+      "12px",
+      "line hit target was not widened independently of its visible stroke",
+    );
+    await existingLineHit.click();
+    await page.waitForSelector(".shape-style-editor");
+    const lineHandles = page.locator(
+      '.page-shell[data-page-id="11"] .object-hit[data-object-id="102"] .line-endpoint-handle',
+    );
+    assert.equal(await lineHandles.count(), 2,
+      "selecting a line did not expose both ordered endpoint handles");
+    assert.equal(await existingLineHit.count(), 1,
+      "endpoint handles replaced the widened line hit target");
+    const startHandleNode = page.locator(
+      '.line-endpoint-handle[data-endpoint="start"]',
+    );
+    const startHandleBox = await startHandleNode.locator(
+      ".line-endpoint-hit",
+    ).boundingBox();
+    assert(startHandleBox, "the line start handle had no interactive bounds");
+    const endpointHitClass = await page.evaluate(({ x, y }) =>
+      document.elementFromPoint(x, y)?.getAttribute("class"), {
+      x: startHandleBox.x + startHandleBox.width / 2,
+      y: startHandleBox.y + startHandleBox.height / 2,
+    });
+    await page.mouse.move(
+      startHandleBox.x + startHandleBox.width / 2,
+      startHandleBox.y + startHandleBox.height / 2,
+    );
+    await page.mouse.down();
+    await page.keyboard.down("Shift");
+    await page.mouse.move(
+      startHandleBox.x + startHandleBox.width / 2 + 55,
+      startHandleBox.y + startHandleBox.height / 2 - 23,
+      { steps: 3 },
+    );
+    assert.equal(
+      await page.locator('.object-hit[data-object-id="102"]')
+        .evaluate((node) => node.classList.contains("is-editing-line-geometry")),
+      true,
+      `endpoint dragging did not show provisional line geometry; hit ${endpointHitClass}`,
+    );
+    await page.mouse.up();
+    await page.keyboard.up("Shift");
+    const geometryEdit = await lastMessage(page, "editLineGeometry");
+    assert.equal(geometryEdit.nodeId, 102);
+    assert.deepEqual(geometryEdit.end, { x: 520, y: 290 },
+      "dragging the start handle changed or reordered the end point");
+    assert.notDeepEqual(geometryEdit.start, { x: 760, y: 170 },
+      "dragging the start handle retained the old start point");
+    const geometryAngle = Math.atan2(
+      geometryEdit.start.y - geometryEdit.end.y,
+      geometryEdit.start.x - geometryEdit.end.x,
+    ) / (Math.PI / 12);
+    assert(Math.abs(geometryAngle - Math.round(geometryAngle)) < 0.001,
+      `Shift did not snap endpoint editing to 15 degree increments: ${geometryAngle}`);
+    const provisionalLine = page.locator(
+      '.object-hit[data-object-id="102"] .object-hit-line-outline',
+    );
+    assert.equal(Number(await provisionalLine.getAttribute("x1")), geometryEdit.start.x);
+    assert.equal(Number(await provisionalLine.getAttribute("y1")), geometryEdit.start.y);
+    assert.equal(Number(await provisionalLine.getAttribute("x2")), geometryEdit.end.x);
+    assert.equal(Number(await provisionalLine.getAttribute("y2")), geometryEdit.end.y);
+    assert.equal(
+      await page.locator('.line-endpoint-handle[data-endpoint="start"]')
+        .getAttribute("aria-disabled"),
+      "true",
+      "pending line geometry left its endpoint handles interactive",
+    );
+    await postShapeEditResult(page, {
+      requestId: geometryEdit.requestId,
+      operation: "geometry",
+      status: "stale",
+    });
+    await page.waitForFunction(() =>
+      document.querySelector('.line-endpoint-handle[data-endpoint="start"]')
+        ?.getAttribute("aria-disabled") === "false"
+    );
+    assert.equal(await page.locator(".shape-style-editor h2").textContent(), "Line style");
+    assert.equal(
+      await page.locator('.shape-style-editor input[aria-label="Fill color"]').count(),
+      0,
+      "selected line displayed fill controls",
+    );
+    const selectedLineStyle = page.locator(
+      '.shape-style-editor select[aria-label="Line style"]',
+    );
+    await selectedLineStyle.selectOption("dotted");
+    const lineStyleEdit = await lastMessage(page, "editShapeStyle");
+    assert.equal(lineStyleEdit.nodeId, 102);
+    assert.equal(lineStyleEdit.kind, "line");
+    assert.equal(lineStyleEdit.stroke.style, "dotted");
+    assert.equal(Object.hasOwn(lineStyleEdit, "fill"), false,
+      "line style edit sent an inapplicable fill style");
+    await postShapeEditResult(page, {
+      requestId: lineStyleEdit.requestId,
+      operation: "style",
+      status: "stale",
+    });
+    await page.getByRole("button", { name: "Lock object" }).click();
+    assert.equal(
+      await page.locator(".shape-style-editor input, .shape-style-editor select")
+        .evaluateAll((controls) => controls.every((control) => control.disabled)),
+      true,
+      "locking a line left its style controls enabled",
+    );
+    assert.equal(
+      await page.locator('.line-endpoint-handle[data-endpoint="start"]')
+        .getAttribute("aria-disabled"),
+      "true",
+      "locking a line left its endpoint handles enabled",
+    );
+    const geometryMessageCount = await messageCount(page, "editLineGeometry");
+    const lockedHandleBox = await page.locator(
+      '.line-endpoint-handle[data-endpoint="start"] .line-endpoint-hit',
+    ).boundingBox();
+    assert(lockedHandleBox, "the locked line handle disappeared");
+    await page.mouse.move(
+      lockedHandleBox.x + lockedHandleBox.width / 2,
+      lockedHandleBox.y + lockedHandleBox.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(lockedHandleBox.x + lockedHandleBox.width / 2 + 30,
+      lockedHandleBox.y + lockedHandleBox.height / 2 + 20);
+    await page.mouse.up();
+    assert.equal(await messageCount(page, "editLineGeometry"), geometryMessageCount,
+      "a locked line accepted an endpoint edit");
     await page.getByRole("button", { name: "Unlock object" }).click();
     await page.locator(".close-button").click();
 
@@ -646,4 +944,13 @@ async function lastMessage(page, type) {
     const values = globalThis.__messages.filter((message) => message.type === messageType);
     return values.at(-1) ?? null;
   }, type);
+}
+
+async function messageCount(page, type) {
+  return await page.evaluate(
+    (messageType) => globalThis.__messages.filter((message) =>
+      message.type === messageType
+    ).length,
+    type,
+  );
 }

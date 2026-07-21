@@ -470,11 +470,16 @@ button {
   background: var(--toolbar-background);
   box-shadow: 0 12px 30px #0006;
 }
-.shape-picker-panel > strong {
+.shape-picker-section > strong {
   display: block;
   margin-bottom: 9px;
   color: var(--text-soft);
   font-size: 10px;
+}
+.shape-picker-section + .shape-picker-section {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
 }
 .shape-picker-gallery {
   display: grid;
@@ -482,6 +487,7 @@ button {
   gap: 8px;
 }
 .shape-choice {
+  position: relative;
   display: grid;
   min-width: 0;
   height: 82px;
@@ -493,6 +499,23 @@ button {
   color: var(--text-muted);
   cursor: pointer;
   font-size: 9px;
+}
+.shape-choice--line {
+  grid-column: 1 / -1;
+  height: 66px;
+}
+.shape-choice-shortcut {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  min-width: 17px;
+  padding: 2px 4px;
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+  background: var(--control-background);
+  color: var(--text-faint);
+  font: 8px/1 var(--vscode-editor-font-family, ui-monospace, monospace);
+  text-align: center;
 }
 .shape-choice:hover:not(:disabled),
 .shape-choice:focus-visible,
@@ -517,6 +540,24 @@ button {
   width: 38px;
   height: 38px;
   border-radius: 50%;
+}
+.shape-choice-preview--line {
+  position: relative;
+  width: 62px;
+  height: 38px;
+  border: 0;
+  background: transparent;
+}
+.shape-choice-preview--line::before {
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  left: 2px;
+  height: 2px;
+  background: currentColor;
+  content: "";
+  transform: rotate(-18deg);
+  transform-origin: center;
 }
 .shape-choice-preview--arrow {
   width: 60px;
@@ -961,18 +1002,72 @@ button {
   stroke: transparent;
   vector-effect: non-scaling-stroke;
 }
+.object-hit-line {
+  stroke: transparent;
+  stroke-width: 12;
+  pointer-events: stroke;
+  vector-effect: non-scaling-stroke;
+}
+.object-hit-line-outline {
+  stroke: transparent;
+  stroke-width: 1.4;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
 .object-hit:hover .object-hit-rect {
   fill: #69aa9808;
   stroke: #6fae9e70;
   stroke-width: 1;
+}
+.object-hit:hover .object-hit-line-outline {
+  stroke: #6fae9e70;
 }
 .object-hit.is-selected .object-hit-rect {
   fill: #62ae990a;
   stroke: #62ae99;
   stroke-width: 1.4;
 }
+.object-hit.is-selected .object-hit-line-outline {
+  stroke: #62ae99;
+}
+.object-hit.is-editing-line-geometry .object-hit-line-outline,
+.object-hit.is-line-geometry-pending .object-hit-line-outline {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.line-endpoint-handle {
+  cursor: crosshair;
+}
+.line-endpoint-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+.line-endpoint-marker {
+  fill: var(--control-background);
+  stroke: #62ae99;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.line-endpoint-handle:hover .line-endpoint-marker,
+.object-hit.is-editing-line-geometry .line-endpoint-marker {
+  fill: var(--accent);
+  stroke: var(--accent-border);
+}
+.line-endpoint-handle.is-disabled {
+  cursor: default;
+}
+.line-endpoint-handle.is-disabled .line-endpoint-marker {
+  fill: var(--toolbar-background);
+  stroke: var(--text-faint);
+  stroke-dasharray: 3 2;
+}
 .object-hit.is-locked.is-selected .object-hit-rect,
 .object-hit.is-user-locked:hover .object-hit-rect {
+  stroke-dasharray: 4 3;
+}
+.object-hit.is-locked.is-selected .object-hit-line-outline,
+.object-hit.is-user-locked:hover .object-hit-line-outline {
   stroke-dasharray: 4 3;
 }
 .shape-placement-hit {

@@ -142,6 +142,8 @@ function acceptSnapshot(message) {
       kind: "success",
       message: shapeOutcome.operation === "insert"
         ? "Shape inserted into source."
+        : shapeOutcome.operation === "geometry"
+        ? "Line geometry applied to source."
         : "Shape style applied to source.",
     };
     toastDuration = successToastDuration;

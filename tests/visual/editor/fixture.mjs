@@ -28,6 +28,7 @@ export function editorSnapshot() {
       ],
       objects: [
         { id: 101, page_id: 11, name: "summary", role: "body", x: 100, y: 500, width: 360, height: 100, group: false },
+        { id: 102, page_id: 11, name: "line_item", role: "line", x: 520, y: 430, width: 240, height: 120, group: false },
         { id: 201, page_id: 22, name: "anchor", role: "label", x: 60, y: 530, width: 120, height: 60, group: false },
         {
           id: 202,
@@ -60,12 +61,14 @@ export function editorSnapshot() {
     outline: [
       { id: 11, parent_id: null, page_id: 11, kind: "page", label: "Overview" },
       { id: 101, parent_id: 11, page_id: 11, kind: "object", label: "Summary" },
+      { id: 102, parent_id: 11, page_id: 11, kind: "object", label: "Diagonal line" },
       { id: 22, parent_id: null, page_id: 22, kind: "page", label: "Details" },
       { id: 201, parent_id: 22, page_id: 22, kind: "object", label: "Anchor" },
       { id: 202, parent_id: 22, page_id: 22, kind: "object", label: "Detail" },
     ],
     editing: [
       { node_id: 101, page_id: 11, page_index: 1, page_name: "Overview", binding: "summary", binding_required: false, statement_start: 0, statement_end: 20, path: "/workspace/slide.ss", page_start: 0, page_end: 30 },
+      { node_id: 102, page_id: 11, page_index: 1, page_name: "Overview", binding: "line_item", binding_required: false, statement_start: 21, statement_end: 29, path: "/workspace/slide.ss", page_start: 0, page_end: 30 },
       { node_id: 202, page_id: 22, page_index: 2, page_name: "Details", binding: "detail", binding_required: false, statement_start: 40, statement_end: 75, path: "/workspace/slide.ss", page_start: 31, page_end: 90 },
     ],
     page_editing: [
@@ -80,6 +83,15 @@ export function editorSnapshot() {
         kind: "rectangle",
         fill: { enabled: true, color: "#e8f1ff", opacity: 1 },
         stroke: { enabled: true, color: "#2563eb", width: 1.6, style: "solid" },
+      },
+      {
+        node_id: 102,
+        page_id: 11,
+        binding: "line_item",
+        kind: "line",
+        start: { x: 1, y: 0 },
+        end: { x: 0, y: 1 },
+        stroke: { enabled: true, color: "#dc2626", width: 2.4, style: "dashed" },
       },
     ],
   };
@@ -113,5 +125,5 @@ function relation(index, kind, axis, offset, expression, sourceType, sourceNode,
 }
 
 function sharedHtml() {
-  return `<section class="ss-page" data-ss-page-id="11" style="width:1280pt;height:720pt"><div class="ss-item ss-box" data-ss-item-id="4294967297" data-ss-node-id="101" style="left:100pt;top:120pt;width:360pt;height:100pt"></div><span class="ss-item ss-text" style="left:100pt;top:260pt;width:200pt;height:30pt"><span class="ss-text-run" data-ss-baseline-y="24" style="left:0;top:0;font:20pt/30pt sans-serif"><span class="ss-text-cluster" style="left:0">Preview text</span></span></span><div class="ss-item ss-pdf" data-pdf-src="asset.pdf" data-page="1" data-view-box="0,0,240,120" data-rotation="0" data-canvas-background="transparent" data-copy-annotations="false" style="left:600pt;top:120pt;width:200pt;height:100pt"><div class="ss-pdf-layer ss-pdf-text"></div><div class="ss-pdf-layer ss-pdf-annotations"></div></div></section><section class="ss-page" data-ss-page-id="22" style="width:1280pt;height:720pt"><div class="ss-item ss-box" data-ss-item-id="8589934593" data-ss-node-id="201" style="left:60pt;top:130pt;width:120pt;height:60pt"></div><div class="ss-item ss-box" data-ss-item-id="8589934594" data-ss-node-id="202" style="left:240pt;top:130pt;width:380pt;height:120pt;transform:scale(1)"></div></section>`;
+  return `<section class="ss-page" data-ss-page-id="11" style="width:1280pt;height:720pt"><div class="ss-item ss-box" data-ss-item-id="4294967297" data-ss-node-id="101" style="left:100pt;top:120pt;width:360pt;height:100pt"></div><svg class="ss-item" data-ss-item-id="4294967298" data-ss-node-id="102" viewBox="0 0 240 120" style="left:520pt;top:170pt;width:240pt;height:120pt;overflow:visible"><line x1="240" y1="0" x2="0" y2="120" stroke="#dc2626" stroke-width="2.4" stroke-dasharray="8 5"></line></svg><span class="ss-item ss-text" style="left:100pt;top:260pt;width:200pt;height:30pt"><span class="ss-text-run" data-ss-baseline-y="24" style="left:0;top:0;font:20pt/30pt sans-serif"><span class="ss-text-cluster" style="left:0">Preview text</span></span></span><div class="ss-item ss-pdf" data-pdf-src="asset.pdf" data-page="1" data-view-box="0,0,240,120" data-rotation="0" data-canvas-background="transparent" data-copy-annotations="false" style="left:600pt;top:120pt;width:200pt;height:100pt"><div class="ss-pdf-layer ss-pdf-text"></div><div class="ss-pdf-layer ss-pdf-annotations"></div></div></section><section class="ss-page" data-ss-page-id="22" style="width:1280pt;height:720pt"><div class="ss-item ss-box" data-ss-item-id="8589934593" data-ss-node-id="201" style="left:60pt;top:130pt;width:120pt;height:60pt"></div><div class="ss-item ss-box" data-ss-item-id="8589934594" data-ss-node-id="202" style="left:240pt;top:130pt;width:380pt;height:120pt;transform:scale(1)"></div></section>`;
 }

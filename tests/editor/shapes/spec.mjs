@@ -27,7 +27,9 @@ assert.equal(shape.canInsert(11), true);
 shape.selectTool("rectangle");
 assert.equal(state.shapeTool, "rectangle");
 assert.equal(
-  shape.insert(11, { x: 120, y: 140, width: 180, height: 110 }),
+  shape.insert(11, {
+    bounds: { x: 120, y: 140, width: 180, height: 110 },
+  }),
   true,
 );
 assert.equal(messages.length, 1);
@@ -87,6 +89,92 @@ assert.deepEqual(shape.acceptResult({
   message: "rejected for test",
 }), { status: "failed", message: "rejected for test" });
 assert.equal(shape.isBusy(), false);
+
+shape.setDraft({
+  fill: { ...defaultShapeStyle.fill },
+  stroke: { ...defaultShapeStyle.stroke, enabled: false, style: "dash_dot" },
+});
+shape.selectTool("line");
+assert.equal(state.shapeTool, "line");
+assert.equal(state.shapeStyle.stroke.enabled, false,
+  "selecting the line tool changed the closed-shape stroke preference");
+assert.equal(shape.insert(11, {
+  start: { x: 440, y: 120 },
+  end: { x: 210, y: 350 },
+}), true);
+assert.equal(messages.length, 3);
+assert.deepEqual(messages[2].start, { x: 440, y: 120 });
+assert.deepEqual(messages[2].end, { x: 210, y: 350 });
+assert.equal(messages[2].stroke.style, "dash_dot");
+assert.equal(messages[2].stroke.enabled, true);
+assert.equal(Object.hasOwn(messages[2], "bounds"), false);
+assert.equal(Object.hasOwn(messages[2], "fill"), false);
+assert.deepEqual(shape.pendingInsertion(11), {
+  pageId: 11,
+  kind: "line",
+  start: { x: 440, y: 120 },
+  end: { x: 210, y: 350 },
+  stroke: { ...state.shapeStyle.stroke, enabled: true },
+});
+shape.acceptResult({
+  type: "shapeEditResult",
+  requestId: messages[2].requestId,
+  operation: "insert",
+  status: "stale",
+});
+assert.equal(state.shapeTool, "select");
+
+const lineTarget = {
+  node_id: 102,
+  page_id: 11,
+  binding: "line_item",
+  kind: "line",
+  start: { x: 1, y: 0 },
+  end: { x: 0, y: 1 },
+  stroke: { ...defaultShapeStyle.stroke },
+};
+assert.equal(shape.editStyle(lineTarget, {
+  stroke: { ...lineTarget.stroke, width: 3, style: "dashed" },
+}), true);
+assert.equal(messages.length, 4);
+assert.equal(messages[3].kind, "line");
+assert.equal(messages[3].stroke.width, 3);
+assert.equal(Object.hasOwn(messages[3], "fill"), false);
+shape.acceptResult({
+  type: "shapeEditResult",
+  requestId: messages[3].requestId,
+  operation: "style",
+  status: "stale",
+});
+
+assert.equal(shape.editLineGeometry(
+  lineTarget,
+  { x: 760, y: 170 },
+  { x: 480, y: 310 },
+), true);
+assert.equal(messages.length, 5);
+assert.deepEqual(messages[4], {
+  type: "editLineGeometry",
+  requestId: messages[4].requestId,
+  snapshotId: state.snapshot.snapshot_id,
+  nodeId: 102,
+  pageId: 11,
+  start: { x: 760, y: 170 },
+  end: { x: 480, y: 310 },
+});
+assert.deepEqual(shape.pendingLineGeometry(102), {
+  nodeId: 102,
+  pageId: 11,
+  start: { x: 760, y: 170 },
+  end: { x: 480, y: 310 },
+});
+shape.acceptResult({
+  type: "shapeEditResult",
+  requestId: messages[4].requestId,
+  operation: "geometry",
+  status: "stale",
+});
+assert.equal(shape.pendingLineGeometry(102), null);
 
 state.snapshot.stale = true;
 assert.equal(shape.canInsert(11), false);
