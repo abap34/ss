@@ -435,19 +435,21 @@ test "HTML renderer emits structured MathML without SVG or PDF fallback" {
 
     var math_builder = render.MathBuilder{};
     defer math_builder.deinit(testing.allocator);
-    const tree = try math_builder.add(testing.allocator, "x_1^2 + \\frac{\\alpha}{\\sqrt{y}}", .display);
-    const tree_value = math_builder.find(tree) orelse return error.MissingMathTree;
-    const math_layout = try render_math.layout(
+    const compiled_math = try render_math.compile(
         testing.allocator,
         testing.io,
         &resource_builder,
         &font_builder,
-        tree_value,
+        &math_builder,
+        "x_1^2 + \\frac{\\alpha}{\\sqrt{y}}",
+        .display,
         .{
             .font_size = 48,
             .display = true,
         },
     );
+    const tree = compiled_math.tree;
+    const math_layout = compiled_math.layout;
     const rect = render.Rect{ .x = 80, .y = 100, .width = math_layout.width, .height = math_layout.height };
     const catalogs = try render_support.takeCatalogs(testing.allocator, &resource_builder, &font_builder);
     var resources = catalogs.resources;

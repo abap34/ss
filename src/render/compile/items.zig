@@ -117,9 +117,9 @@ const NativePdfError = error{
     UnsupportedAssetType,
 };
 
-pub const native_artifact_cache_version = "ss-native-artifacts-v6";
+pub const native_artifact_cache_version = "ss-native-artifacts-v7";
 const render_page_cache_version = "ss-render-page-v1";
-const layout_measurement_cache_version = "ss-native-layout-measure-v13";
+const layout_measurement_cache_version = "ss-native-layout-measure-v14";
 const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
 const external_command_timeout = std.Io.Clock.Duration{
@@ -306,6 +306,7 @@ const Atom = struct {
 };
 
 const AtomPaint = struct {
+    font: FontFace,
     font_size: f32,
     line_height: f32,
     emoji_spacing: f32,
@@ -321,6 +322,8 @@ const AtomVisualLine = struct {
     start: usize,
     end: usize,
     width: f32,
+    ascent: f32 = 0,
+    descent: f32 = 0,
 };
 
 const SvgAsset = struct {
@@ -335,6 +338,12 @@ const MathAsset = struct {
     width: f32,
     height: f32,
     baseline_from_bottom: f32,
+    reference_height: f32,
+};
+
+const MathAssetGeometry = struct {
+    baseline_from_bottom: f32,
+    reference_height: f32,
 };
 
 const IconSpec = struct {
@@ -1743,15 +1752,24 @@ fn publishMathBatch(
     defer ctx.allocator.free(widths);
     const heights = try ctx.allocator.alloc(f64, entries.len);
     defer ctx.allocator.free(heights);
-    const baseline_ratios = try readMathBaselineRatios(ctx, metrics_path, entries.len);
-    defer ctx.allocator.free(baseline_ratios);
+    const metrics = try readMathTexMetrics(ctx, metrics_path, entries.len);
+    defer ctx.allocator.free(metrics);
     if (c.ss_qpdf_page_sizes(batch_path_z.ptr, @intFromEnum(core.render_policy.PdfPageBox.crop), widths.ptr, heights.ptr, entries.len) != 0) {
         try recordQpdfFailure(ctx, "read TeX PDF page geometry");
         return NativePdfError.AssetConversionFailed;
     }
 
     for (entries, 0..) |entry, index| {
-        try writeMathReference(ctx, entry.out, batch_path, index, widths[index], heights[index], heights[index] * baseline_ratios[index]);
+        try writeMathReference(
+            ctx,
+            entry.out,
+            batch_path,
+            index,
+            widths[index],
+            heights[index],
+            heights[index] * metrics[index].baseline_ratio,
+            heights[index] * metrics[index].reference_height_ratio,
+        );
         completed.* += 1;
         if (progress) |p| p.artifactCompleted(p.context, completed.*, total);
     }
@@ -1776,8 +1794,24 @@ fn publishGeneratedPdf(ctx: *DrawContext, generated_path: []const u8, output: []
     try publishCacheFile(ctx, tmp, output);
 }
 
-fn writeMathReference(ctx: *DrawContext, output: []const u8, pdf_path: []const u8, page_index: usize, width: f64, height: f64, baseline_from_bottom: f64) !void {
-    const contents = try std.fmt.allocPrint(ctx.allocator, "{d}\t{d}\t{d}\t{d}\t{s}\n", .{ page_index, width, height, baseline_from_bottom, std.fs.path.basename(pdf_path) });
+fn writeMathReference(
+    ctx: *DrawContext,
+    output: []const u8,
+    pdf_path: []const u8,
+    page_index: usize,
+    width: f64,
+    height: f64,
+    baseline_from_bottom: f64,
+    reference_height: f64,
+) !void {
+    const contents = try std.fmt.allocPrint(ctx.allocator, "{d}\t{d}\t{d}\t{d}\t{d}\t{s}\n", .{
+        page_index,
+        width,
+        height,
+        baseline_from_bottom,
+        reference_height,
+        std.fs.path.basename(pdf_path),
+    });
     defer ctx.allocator.free(contents);
     const tmp = try tempCachePath(ctx, output, "ref");
     defer ctx.allocator.free(tmp);
@@ -3712,7 +3746,7 @@ fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const
     if (try compileMarkdownMath(ctx, value, kind)) |result| {
         var compiled = result;
         errdefer compiled.layout.deinit(ctx.allocator);
-        const scale = @as(f64, target_height) / @max(compiled.layout.height, 1);
+        const scale = @as(f64, target_height) / @max(compiled.reference_height, 1);
         try render_math.scale(&compiled.layout, scale);
         try atoms.append(ctx.allocator, .{
             .content = .{ .structured_math = .{ .tree = compiled.tree, .layout = compiled.layout } },
@@ -3729,14 +3763,14 @@ fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const
 
     const asset = try renderMathToPdf(ctx, value, ctx.tex_preamble, ctx.tex_engine, kind);
     errdefer ctx.allocator.free(asset.path);
-    const scale = if (asset.height > 0) target_height / asset.height else 1;
+    const scale = if (asset.reference_height > 0) target_height / asset.reference_height else 1;
     try atoms.append(ctx.allocator, .{
         .content = .{ .raw_math = .{ .path = asset.path, .page_index = asset.page_index } },
         .text = value,
         .font = text.font,
         .color = text.color,
         .width = @max(asset.width * scale, 1),
-        .height = target_height,
+        .height = @max(asset.height * scale, 1),
         .baseline_from_bottom = asset.baseline_from_bottom * scale,
         .is_space = false,
     });
@@ -3763,6 +3797,7 @@ fn appendIconAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), source: []cons
 
 fn atomPaint(text: TextPaint) AtomPaint {
     return .{
+        .font = text.font,
         .font_size = text.font_size,
         .line_height = text.line_height,
         .emoji_spacing = text.emoji_spacing,
@@ -3816,14 +3851,31 @@ fn drawAtomsWithOptions(
     try appendAtomVisualLine(ctx.allocator, &lines, line_start, positions.items.len, line_width);
 
     if (lines.items.len == 0) return baseline_bl - paint.line_height;
+    const default_ascent = try lineBaselineFromTop(ctx, paint.font, paint.font_size, paint.line_height);
+    const default_descent = @max(paint.line_height - default_ascent, 0);
+    for (lines.items) |*line| {
+        line.ascent = default_ascent;
+        line.descent = default_descent;
+        for (positions.items[line.start..line.end]) |position| {
+            const extents = atomVerticalExtents(&atoms[position.index], default_ascent, default_descent);
+            line.ascent = @max(line.ascent, extents.ascent);
+            line.descent = @max(line.descent, extents.descent);
+        }
+    }
+
+    var line_bl = baseline_bl - @max(lines.items[0].ascent - default_ascent, 0);
     for (lines.items, 0..) |line, line_index| {
+        if (line_index > 0) {
+            const previous = lines.items[line_index - 1];
+            line_bl -= @max(paint.line_height, previous.descent + line.ascent);
+        }
         const line_x = alignedX(x, width, line.width, horizontal_align);
-        const line_bl = baseline_bl - @as(f32, @floatFromInt(line_index)) * paint.line_height;
         for (positions.items[line.start..line.end]) |position| {
             try drawPositionedAtom(ctx, &atoms[position.index], line_x + position.offset, line_bl, paint);
         }
     }
-    return baseline_bl - @as(f32, @floatFromInt(lines.items.len)) * paint.line_height;
+    const last = lines.items[lines.items.len - 1];
+    return line_bl - @max(paint.line_height, last.descent + default_ascent);
 }
 
 fn appendAtomVisualLine(allocator: Allocator, lines: *std.ArrayList(AtomVisualLine), start: usize, end: usize, width: f32) !void {
@@ -3833,6 +3885,25 @@ fn appendAtomVisualLine(allocator: Allocator, lines: *std.ArrayList(AtomVisualLi
         .end = end,
         .width = width,
     });
+}
+
+const AtomVerticalExtents = struct {
+    ascent: f32,
+    descent: f32,
+};
+
+fn atomVerticalExtents(atom: *const Atom, default_ascent: f32, default_descent: f32) AtomVerticalExtents {
+    return switch (atom.content) {
+        .text => .{ .ascent = default_ascent, .descent = default_descent },
+        .structured_math => |math| .{
+            .ascent = @floatCast(math.layout.baseline),
+            .descent = @floatCast(@max(math.layout.height - math.layout.baseline, 0)),
+        },
+        .raw_math, .icon => .{
+            .ascent = @max(atom.height - atom.baseline_from_bottom, 0),
+            .descent = @max(atom.baseline_from_bottom, 0),
+        },
+    };
 }
 
 fn drawPositionedAtom(ctx: *DrawContext, atom: *Atom, x: f32, baseline_bl: f32, paint: AtomPaint) !void {
@@ -3930,6 +4001,7 @@ fn drawPlainTextAtTopWithOptions(
     defer freeAtoms(ctx.allocator, atoms.items);
     try appendTextAtoms(ctx, &atoms, content, font, color, font_size, null, false, false, .{});
     const paint = AtomPaint{
+        .font = font,
         .font_size = font_size,
         .line_height = line_height,
         .emoji_spacing = emoji_spacing,
@@ -4924,6 +4996,7 @@ fn readMathReference(ctx: *DrawContext, reference_path: []const u8) !MathAsset {
     const width_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
     const height_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
     const baseline_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
+    const reference_height_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
     const pdf_name = fields.next() orelse return NativePdfError.InvalidPdfCache;
     if (fields.next() != null or pdf_name.len == 0 or !std.mem.eql(u8, std.fs.path.basename(pdf_name), pdf_name)) {
         return NativePdfError.InvalidPdfCache;
@@ -4932,8 +5005,9 @@ fn readMathReference(ctx: *DrawContext, reference_path: []const u8) !MathAsset {
     const width = std.fmt.parseFloat(f32, width_text) catch return NativePdfError.InvalidPdfCache;
     const height = std.fmt.parseFloat(f32, height_text) catch return NativePdfError.InvalidPdfCache;
     const baseline_from_bottom = std.fmt.parseFloat(f32, baseline_text) catch return NativePdfError.InvalidPdfCache;
-    if (!std.math.isFinite(width) or !std.math.isFinite(height) or !std.math.isFinite(baseline_from_bottom) or
-        width <= 0 or height <= 0)
+    const reference_height = std.fmt.parseFloat(f32, reference_height_text) catch return NativePdfError.InvalidPdfCache;
+    if (!std.math.isFinite(width) or !std.math.isFinite(height) or !std.math.isFinite(baseline_from_bottom) or !std.math.isFinite(reference_height) or
+        width <= 0 or height <= 0 or reference_height <= 0)
     {
         return NativePdfError.InvalidPdfCache;
     }
@@ -4947,6 +5021,7 @@ fn readMathReference(ctx: *DrawContext, reference_path: []const u8) !MathAsset {
         .width = width,
         .height = height,
         .baseline_from_bottom = baseline_from_bottom,
+        .reference_height = reference_height,
     };
 }
 
@@ -5050,14 +5125,26 @@ fn renderMathToPdf(
     try runChecked(ctx, &.{ engine.executable(), "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
     try publishGeneratedPdf(ctx, pdf_path, output_pdf_path);
     const size = try pdfAssetSize(ctx, output_pdf_path, null, .math_pdf);
-    const baseline_from_bottom = if (kind == .raw_block)
-        0
+    const geometry: MathAssetGeometry = if (kind == .raw_block)
+        .{ .baseline_from_bottom = @as(f32, 0), .reference_height = size.height }
     else blk: {
-        const ratios = try readMathBaselineRatios(ctx, metrics_path, 1);
-        defer ctx.allocator.free(ratios);
-        break :blk size.height * ratios[0];
+        const metrics = try readMathTexMetrics(ctx, metrics_path, 1);
+        defer ctx.allocator.free(metrics);
+        break :blk .{
+            .baseline_from_bottom = size.height * @as(f32, @floatCast(metrics[0].baseline_ratio)),
+            .reference_height = size.height * @as(f32, @floatCast(metrics[0].reference_height_ratio)),
+        };
     };
-    try writeMathReference(ctx, reference_path, output_pdf_path, 0, size.width, size.height, baseline_from_bottom);
+    try writeMathReference(
+        ctx,
+        reference_path,
+        output_pdf_path,
+        0,
+        size.width,
+        size.height,
+        geometry.baseline_from_bottom,
+        geometry.reference_height,
+    );
     return (try cachedMathReference(ctx, reference_path)) orelse NativePdfError.InvalidPdfCache;
 }
 
@@ -5131,13 +5218,18 @@ fn isValidIconName(name: []const u8) bool {
     return true;
 }
 
-fn readMathBaselineRatios(ctx: *DrawContext, path: []const u8, expected_count: usize) ![]f64 {
+const MathTexMetrics = struct {
+    baseline_ratio: f64,
+    reference_height_ratio: f64,
+};
+
+fn readMathTexMetrics(ctx: *DrawContext, path: []const u8, expected_count: usize) ![]MathTexMetrics {
     const contents = std.Io.Dir.cwd().readFileAlloc(ctx.io, path, ctx.allocator, .limited(1024 * 1024)) catch {
         return NativePdfError.AssetConversionFailed;
     };
     defer ctx.allocator.free(contents);
-    const ratios = try ctx.allocator.alloc(f64, expected_count);
-    errdefer ctx.allocator.free(ratios);
+    const metrics = try ctx.allocator.alloc(MathTexMetrics, expected_count);
+    errdefer ctx.allocator.free(metrics);
     var count: usize = 0;
     var lines = std.mem.splitScalar(u8, contents, '\n');
     while (lines.next()) |line| {
@@ -5154,15 +5246,25 @@ fn readMathBaselineRatios(ctx: *DrawContext, path: []const u8, expected_count: u
         const depth_sp = std.fmt.parseInt(i64, fields.next() orelse return NativePdfError.AssetConversionFailed, 10) catch {
             return NativePdfError.AssetConversionFailed;
         };
+        const reference_height_sp = std.fmt.parseInt(i64, fields.next() orelse return NativePdfError.AssetConversionFailed, 10) catch {
+            return NativePdfError.AssetConversionFailed;
+        };
+        const reference_depth_sp = std.fmt.parseInt(i64, fields.next() orelse return NativePdfError.AssetConversionFailed, 10) catch {
+            return NativePdfError.AssetConversionFailed;
+        };
         const total_height_sp = std.math.add(i64, height_sp, depth_sp) catch return NativePdfError.AssetConversionFailed;
-        if (fields.next() != null or width_sp <= 0 or total_height_sp <= 0) {
+        const reference_total_height_sp = std.math.add(i64, reference_height_sp, reference_depth_sp) catch return NativePdfError.AssetConversionFailed;
+        if (fields.next() != null or width_sp <= 0 or total_height_sp <= 0 or reference_total_height_sp <= 0) {
             return NativePdfError.AssetConversionFailed;
         }
-        ratios[count] = @as(f64, @floatFromInt(depth_sp)) / @as(f64, @floatFromInt(total_height_sp));
+        metrics[count] = .{
+            .baseline_ratio = @as(f64, @floatFromInt(depth_sp)) / @as(f64, @floatFromInt(total_height_sp)),
+            .reference_height_ratio = @as(f64, @floatFromInt(reference_total_height_sp)) / @as(f64, @floatFromInt(total_height_sp)),
+        };
         count += 1;
     }
     if (count != expected_count) return NativePdfError.AssetConversionFailed;
-    return ratios;
+    return metrics;
 }
 
 fn mathDocumentSource(ctx: *DrawContext, source: []const u8, preamble: []const TexPreambleEntry, kind: MathKind) ![]const u8 {
@@ -5191,12 +5293,13 @@ fn mathDocumentSource(ctx: *DrawContext, source: []const u8, preamble: []const T
         \\ \begin{{document}}
         \\ \immediate\openout\ssmetrics=main.ssm
         \\ \setbox0=\hbox{{{s}}}
-        \\ \immediate\write\ssmetrics{{\number\wd0,\number\ht0,\number\dp0}}
+        \\ \setbox1=\hbox{{{s}}}
+        \\ \immediate\write\ssmetrics{{\number\wd0,\number\ht0,\number\dp0,\number\ht1,\number\dp1}}
         \\ \copy0
         \\ \immediate\closeout\ssmetrics
         \\ \end{{document}}
         \\
-    , .{ preamble_lines, fragment });
+    , .{ preamble_lines, fragment, mathTexReferenceFragment(kind) });
 }
 
 fn mathBatchDocumentSource(ctx: *DrawContext, entries: []const MathBatchEntry) ![]const u8 {
@@ -5227,9 +5330,11 @@ fn mathBatchDocumentSource(ctx: *DrawContext, entries: []const MathBatchEntry) !
         defer ctx.allocator.free(fragment);
         try out.appendSlice(ctx.allocator, "\\setbox0=\\hbox{");
         try out.appendSlice(ctx.allocator, fragment);
+        try out.appendSlice(ctx.allocator, "}\n\\setbox1=\\hbox{");
+        try out.appendSlice(ctx.allocator, mathTexReferenceFragment(entry.kind));
         try out.appendSlice(ctx.allocator,
             \\ }
-            \\ \immediate\write\ssmetrics{\number\wd0,\number\ht0,\number\dp0}
+            \\ \immediate\write\ssmetrics{\number\wd0,\number\ht0,\number\dp0,\number\ht1,\number\dp1}
             \\ \begin{preview}
             \\ \copy0
             \\ \end{preview}
@@ -5269,6 +5374,14 @@ fn mathTexFragment(allocator: Allocator, source: []const u8, kind: MathKind) ![]
             , .{normalized.items});
         },
     }
+}
+
+fn mathTexReferenceFragment(kind: MathKind) []const u8 {
+    return switch (kind) {
+        .inline_math => "$\\mathstrut$",
+        .display, .block => "$\\displaystyle\\mathstrut$",
+        .raw_block => "",
+    };
 }
 
 fn mathKindForNode(node: *const core.Node) MathKind {

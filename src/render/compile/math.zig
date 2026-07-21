@@ -17,6 +17,12 @@ pub const Options = struct {
 pub const Compiled = struct {
     tree: render.MathTreeId,
     layout: render.MathLayout,
+    reference_height: f64,
+};
+
+const LayoutResult = struct {
+    layout: render.MathLayout,
+    reference_height: f64,
 };
 
 pub fn compile(
@@ -31,20 +37,22 @@ pub fn compile(
 ) !Compiled {
     const tree_id = try math.add(allocator, source, input_kind);
     const tree = math.find(tree_id) orelse return error.InvalidMathTree;
+    const result = try layout(allocator, io, resources, fonts, tree, options);
     return .{
         .tree = tree_id,
-        .layout = try layout(allocator, io, resources, fonts, tree, options),
+        .layout = result.layout,
+        .reference_height = result.reference_height,
     };
 }
 
-pub fn layout(
+fn layout(
     allocator: Allocator,
     io: std.Io,
     resources: *resources_compile.Builder,
     fonts: *render.FontBuilder,
     tree: *const render.MathTree,
     options: Options,
-) !render.MathLayout {
+) !LayoutResult {
     if (options.font_size <= 0 or !std.math.isFinite(options.font_size)) return error.InvalidMathSize;
     try prepareFont(allocator, io);
     const math_font = core.font.Face{
@@ -69,6 +77,8 @@ pub fn layout(
     if (probe.runs.len == 0) return error.MissingMathFont;
     const font = fonts.get(io, probe.runs[0].font_instance) orelse return error.MissingMathFont;
     const constants = font.math orelse return error.MissingMathTable;
+    const reference_height = shapedHeight(probe);
+    if (!(reference_height > 0) or !std.math.isFinite(reference_height)) return error.InvalidMathSize;
 
     var builder = Builder{
         .allocator = allocator,
@@ -86,10 +96,13 @@ pub fn layout(
     const elements = try root.elements.toOwnedSlice(allocator);
     root.elements = .empty;
     return .{
-        .width = @max(root.width, 0),
-        .height = @max(root.ascent + root.descent, 0),
-        .baseline = @max(root.ascent, 0),
-        .elements = elements,
+        .layout = .{
+            .width = @max(root.width, 0),
+            .height = @max(root.ascent + root.descent, 0),
+            .baseline = @max(root.ascent, 0),
+            .elements = elements,
+        },
+        .reference_height = reference_height,
     };
 }
 
