@@ -169,7 +169,7 @@ record TextStyle {
   markdown_bold_color: Color? = none
   markdown_underline: MarkdownUnderlineStyle = MarkdownUnderlineStyle {}
   markdown_quote: MarkdownQuoteStyle = MarkdownQuoteStyle {}
-  inline_math_height_factor: Number = 1.02
+  inline_math_height_factor: Number = 1.05
   inline_math_spacing: Number = 0.08
   display_math_height_factor: Number = 2
   math_align: Align = Align.center
