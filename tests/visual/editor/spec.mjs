@@ -564,9 +564,43 @@ await withBrowser(output, async (browser, baseUrl) => {
       ];
     });
 
+    await page.setViewportSize({ width: 560, height: 110 });
+    const pageListScrollTop = await page.locator(".sidebar").evaluate((sidebar) => {
+      sidebar.scrollTop = sidebar.scrollHeight;
+      return sidebar.scrollTop;
+    });
+    assert(pageListScrollTop > 0,
+      "page sidebar fixture did not produce a scrollable page list");
     await page.locator(".page-entry").nth(1).click();
+    await page.evaluate(() => new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
+    assert.equal(
+      await page.locator(".sidebar").evaluate((sidebar) => sidebar.scrollTop),
+      pageListScrollTop,
+      "selecting a page changed its position in the page list",
+    );
+    await page.setViewportSize({ width: 560, height: 920 });
     await page.waitForSelector('.page-shell[data-page-id="22"]');
     assert.equal(await page.locator('.page-entry.is-active small').textContent(), "Details");
+
+    const pageNavigationStrokeWidth = page.locator(
+      '.toolbar > .shape-style-controls input[aria-label="Stroke width"]',
+    );
+    await pageNavigationStrokeWidth.focus();
+    await page.keyboard.press("ArrowUp");
+    assert.equal(await page.locator('.page-entry.is-active small').textContent(), "Details",
+      "an arrow key changed pages while a form control had focus");
+    await pageNavigationStrokeWidth.fill("1.6");
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.keyboard.press("ArrowUp");
+    await page.waitForSelector('.page-shell[data-page-id="11"]');
+    assert.equal(await page.locator('.page-entry.is-active small').textContent(), "Overview",
+      "ArrowUp did not select the previous page");
+    await page.keyboard.press("ArrowDown");
+    await page.waitForSelector('.page-shell[data-page-id="22"]');
+    assert.equal(await page.locator('.page-entry.is-active small').textContent(), "Details",
+      "ArrowDown did not select the next page");
 
     await page.locator("select.page-mode").selectOption("continuous");
     await page.waitForFunction(() => document.querySelectorAll(".page-shell").length === 2);
@@ -580,6 +614,31 @@ await withBrowser(output, async (browser, baseUrl) => {
     });
     assert(Math.abs(await horizontalPageMarginRatio(page) - 0.04) < 0.005,
       "continuous editor margin was not proportional to its viewport");
+    await page.setViewportSize({ width: 560, height: 420 });
+    await page.evaluate(() => new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
+    await page.keyboard.press("ArrowUp");
+    await page.waitForFunction(() =>
+      document.querySelector(".page-entry.is-active small")?.textContent === "Overview"
+    );
+    const previousPageScrollTop = await page.locator(".viewport").evaluate((viewport) =>
+      viewport.scrollTop
+    );
+    await page.keyboard.press("ArrowDown");
+    await page.waitForFunction(() =>
+      document.querySelector(".page-entry.is-active small")?.textContent === "Details"
+    );
+    await page.evaluate(() => new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
+    const nextPageScrollTop = await page.locator(".viewport").evaluate((viewport) =>
+      viewport.scrollTop
+    );
+    assert(
+      nextPageScrollTop > previousPageScrollTop,
+      `ArrowDown did not reveal the next page in continuous display: ${previousPageScrollTop} -> ${nextPageScrollTop}`,
+    );
     await page.waitForFunction(() => {
       const shells = [...document.querySelectorAll(".page-shell")];
       if (shells.length !== 2) return false;
@@ -587,7 +646,6 @@ await withBrowser(output, async (browser, baseUrl) => {
       const second = shells[1].getBoundingClientRect();
       return second.top - first.bottom >= 45;
     });
-    await page.setViewportSize({ width: 560, height: 420 });
     const pageSelectionScrollTop = await page.locator(".viewport").evaluate((viewport) => {
       viewport.scrollTop = Math.min(37, viewport.scrollHeight - viewport.clientHeight);
       return viewport.scrollTop;

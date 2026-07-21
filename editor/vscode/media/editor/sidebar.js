@@ -23,6 +23,7 @@ export function renderActivityRail(state, actions) {
 
 export function renderSidebar(state, actions) {
   const aside = element("aside", "sidebar");
+  aside.dataset.sidebarView = state.sidebar;
   const header = element("header", "sidebar-title");
   header.textContent = state.sidebar === "outline" ? "Outline" : "Pages";
   aside.append(header);
