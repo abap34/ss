@@ -20,6 +20,13 @@ fn shape_size(obj: Object, width: Number, height: Number) -> Object
   return obj
 end
 
+fn/! line(width: Number = 160, height: Number = 1, style: LineStyle = LineStyle {}) -> Object
+  return shape_size(path_shape_unit(path(
+    paths::move_to(style.start_x, style.start_y),
+    paths::line_to(style.end_x, style.end_y)
+  ), fills::no_fill(), style.stroke), width, height)
+end
+
 fn/! rectangle(width: Number = 160, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
   return shape_size(path_shape_unit(path(
     paths::move_to(0, 0),
