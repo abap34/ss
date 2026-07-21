@@ -169,12 +169,36 @@ export class InteractionController {
       if (this.actions.shape.cancel()) event.preventDefault();
       return;
     }
+    if (this.navigatePageFromKey(event)) return;
     if (event.key.toLowerCase() !== "l" || event.metaKey || event.ctrlKey ||
         event.altKey || this.placement || this.lineEndpointDrag ||
         isTypingTarget(event.target) ||
         !this.actions.shape.canInsert(this.state.currentPageId)) return;
     event.preventDefault();
     this.actions.shape.selectTool("line");
+  }
+
+  navigatePageFromKey(event) {
+    const offset = event.key === "ArrowUp"
+      ? -1
+      : event.key === "ArrowDown"
+      ? 1
+      : 0;
+    if (offset === 0 || event.defaultPrevented || event.metaKey ||
+        event.ctrlKey || event.altKey || event.shiftKey || this.drag ||
+        this.placement || this.lineEndpointDrag ||
+        this.actions.shape.isBusy() || isTypingTarget(event.target)) {
+      return false;
+    }
+    const pages = this.state.snapshot?.layout.pages || [];
+    const current = pages.findIndex((page) =>
+      page.id === this.state.currentPageId
+    );
+    if (current < 0) return false;
+    event.preventDefault();
+    const next = pages[current + offset];
+    if (next) this.actions.navigatePage(next.id);
+    return true;
   }
 
   placementGhost(kind) {

@@ -34,6 +34,7 @@ document.documentElement.dataset.theme = state.theme;
 let toastTimer = null;
 let renderGeneration = 0;
 let textAlignmentFailed = false;
+const sidebarScrollPositions = new Map();
 const successToastDuration = 2500;
 const errorToastDuration = 5000;
 
@@ -55,6 +56,7 @@ const actions = {
   revealSource,
   selectObject,
   selectPage,
+  navigatePage,
   translation,
   shape,
   objectLocks,
@@ -246,6 +248,7 @@ function scheduleToastClear(duration) {
 function render() {
   const generation = ++renderGeneration;
   navigation.rememberViewport(workspace.viewport);
+  rememberSidebarScroll();
   resizeObserver.disconnect();
   app.replaceChildren();
   delete app.dataset.ssTextAligned;
@@ -263,11 +266,27 @@ function render() {
     showError(error instanceof Error ? error.message : String(error));
   });
   navigation.restoreViewport(workspace.viewport);
+  restoreSidebarScroll();
   if (workspace.viewport) resizeObserver.observe(workspace.viewport);
   requestAnimationFrame(() => {
     workspace.updateScale();
     navigation.restoreViewport(workspace.viewport);
+    restoreSidebarScroll();
   });
+}
+
+function rememberSidebarScroll() {
+  const sidebar = app.querySelector(".sidebar[data-sidebar-view]");
+  const view = sidebar?.dataset.sidebarView;
+  if (!view) return;
+  sidebarScrollPositions.set(view, sidebar.scrollTop);
+}
+
+function restoreSidebarScroll() {
+  const sidebar = app.querySelector(".sidebar[data-sidebar-view]");
+  const view = sidebar?.dataset.sidebarView;
+  const scrollTop = view ? sidebarScrollPositions.get(view) : null;
+  if (scrollTop != null) sidebar.scrollTop = scrollTop;
 }
 
 function toggleSidebar(view) {
@@ -290,6 +309,18 @@ function persistWebviewState(update) {
 function selectPage(pageId) {
   if (!navigation.selectPage(pageId)) return;
   render();
+}
+
+function navigatePage(pageId) {
+  if (!navigation.selectPage(pageId)) return;
+  state.selectedObjectId = null;
+  const revealPage = state.mode === "continuous";
+  render();
+  if (!revealPage) return;
+  requestAnimationFrame(() => {
+    app.querySelector(`.page-shell[data-page-id="${pageId}"]`)
+      ?.scrollIntoView({ block: "center", inline: "nearest" });
+  });
 }
 
 function selectObject(objectId, pageId, rerender = true) {
