@@ -215,6 +215,10 @@ fn shape_size(obj: Object, width: Number, height: Number) -> Object
   return shapes::shape_size(obj, width, height)
 end
 
+fn/! line(width: Number = 160, height: Number = 1, style: LineStyle = LineStyle {}) -> Object
+  return shapes::line(width, height, style)
+end
+
 fn/! rectangle(width: Number = 160, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
   return shapes::rectangle(width, height, style)
 end

@@ -43,6 +43,14 @@ record VectorStrokeStyle {
   dash_offset: Number = 0
 }
 
+record LineStyle {
+  start_x: Number = 0
+  start_y: Number = 0.5
+  end_x: Number = 1
+  end_y: Number = 0.5
+  stroke: VectorStrokeStyle = VectorStrokeStyle {}
+}
+
 record GradientDirection {
   start_x: Number = 0
   start_y: Number = 0.5
