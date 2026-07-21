@@ -424,6 +424,11 @@ await withBrowser(output, async (browser, baseUrl) => {
     const startHandleNode = page.locator(
       '.line-endpoint-handle[data-endpoint="start"]',
     );
+    assert.equal(await startHandleNode.getAttribute("aria-disabled"), "false",
+      "the selected line exposed a disabled start handle");
+    await page.evaluate(() => new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
     const startHandleBox = await startHandleNode.locator(
       ".line-endpoint-hit",
     ).boundingBox();
