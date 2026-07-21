@@ -19,6 +19,13 @@ fn existingUpdate(source: []const u8, target: []const u8, source_endpoint: []con
     return .{ .source = relationSource(source, target, source_endpoint, offset), .horizontal = horizontal };
 }
 
+fn numericTokenAfter(source: []const u8, marker: []const u8) edit.ByteSpan {
+    const start = std.mem.indexOf(u8, source, marker).? + marker.len;
+    var end = start;
+    while (end < source.len and (std.ascii.isDigit(source[end]) or source[end] == '.' or source[end] == '-')) end += 1;
+    return .{ .start = start, .end = end };
+}
+
 fn readFixture(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     const full_path = try std.fs.path.join(allocator, &.{ "tests/fixtures/editor/edit", path });
     defer allocator.free(full_path);
@@ -46,10 +53,11 @@ test "shape insertion emits a canonical rectangle source block" {
         .{ .start = 0, .end = source.len },
         null,
         "rectangle_item",
-        .rectangle,
-        .{ .x = 24, .y = 36, .width = 160, .height = 100 },
-        .{ .enabled = true, .color = "#e8f1ff", .opacity = 0.8 },
-        .{ .enabled = true, .color = "#2563eb", .width = 1.6, .style = .solid },
+        .{ .rectangle = .{
+            .bounds = .{ .x = 24, .y = 36, .width = 160, .height = 100 },
+            .fill = .{ .enabled = true, .color = "#e8f1ff", .opacity = 0.8 },
+            .stroke = .{ .enabled = true, .color = "#2563eb", .width = 1.6, .style = .solid },
+        } },
     )).?;
     defer result.deinit(allocator);
     const updated = try edit.applyEdits(allocator, source, result.edits);
@@ -77,10 +85,11 @@ test "shape insertion preserves circle dimensions and disabled paint" {
         .{ .start = 0, .end = source.len },
         null,
         "circle_item",
-        .circle,
-        .{ .x = 0, .y = 0, .width = 80, .height = 80 },
-        .{ .enabled = false, .color = "#ffffff", .opacity = 1 },
-        .{ .enabled = false, .color = "#000000", .width = 2, .style = .dotted },
+        .{ .circle = .{
+            .bounds = .{ .x = 0, .y = 0, .width = 80, .height = 80 },
+            .fill = .{ .enabled = false, .color = "#ffffff", .opacity = 1 },
+            .stroke = .{ .enabled = false, .color = "#000000", .width = 2, .style = .dotted },
+        } },
     )).?;
     defer result.deinit(allocator);
     const updated = try edit.applyEdits(allocator, source, result.edits);
@@ -107,10 +116,11 @@ test "shape insertion precedes the first existing constraint" {
         .{ .start = 0, .end = source.len },
         constraint_start,
         "arrow_shape_item",
-        .arrow,
-        .{ .x = 30, .y = 40, .width = 170, .height = 90 },
-        .{ .enabled = true, .color = "#fef3c7", .opacity = 1 },
-        .{ .enabled = true, .color = "#92400e", .width = 1.5, .style = .dashed },
+        .{ .arrow = .{
+            .bounds = .{ .x = 30, .y = 40, .width = 170, .height = 90 },
+            .fill = .{ .enabled = true, .color = "#fef3c7", .opacity = 1 },
+            .stroke = .{ .enabled = true, .color = "#92400e", .width = 1.5, .style = .dashed },
+        } },
     )).?;
     defer result.deinit(allocator);
     const updated = try edit.applyEdits(allocator, source, result.edits);
@@ -119,6 +129,79 @@ test "shape insertion precedes the first existing constraint" {
     const existing_constraint = std.mem.indexOf(u8, updated, "~ existing_item").?;
     try std.testing.expect(inserted_start < existing_constraint);
     try std.testing.expect(std.mem.indexOf(u8, updated, "dashed_stroke(c\"#92400e\", 1.5)") != null);
+}
+
+test "line insertion emits local endpoints without a fill" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\page Lines
+        \\end
+        \\
+    ;
+    var result = (try shape.insert(
+        allocator,
+        source,
+        .{ .start = 0, .end = source.len },
+        null,
+        "line_item",
+        .{ .line = .{
+            .bounds = .{ .x = 24, .y = 36, .width = 160, .height = 80 },
+            .start = .{ .x = 0, .y = 1 },
+            .end = .{ .x = 1, .y = 0 },
+            .stroke = .{ .enabled = true, .color = "#2563eb", .width = 2, .style = .dash_dot },
+        } },
+    )).?;
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expectEqualStrings(
+        \\page Lines
+        \\  let line_item = line!(160, 80, LineStyle { start_x = 0 start_y = 1 end_x = 1 end_y = 0 stroke = dash_dot_stroke(c"#2563eb", 2) })
+        \\  ~!~ line_item.left == page.left + 24
+        \\  ~!~ line_item.top == page.top - 36
+        \\end
+        \\
+    , updated);
+    try std.testing.expect(std.mem.indexOf(u8, updated, "fill") == null);
+}
+
+test "line geometry edits preserve endpoint order in canonical source" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\page Lines
+        \\  let line_item = line!(160, 1, LineStyle { start_x = 0 start_y = 0.5 end_x = 1 end_y = 0.5 stroke = solid_stroke(c"#2563eb", 2) })
+        \\  ~!~ line_item.left == page.left + 40
+        \\  ~!~ line_item.top == page.top - 49.5
+        \\end
+        \\
+    ;
+    const geometry = shape.normalizeLine(
+        .{ .x = 250, .y = 80 },
+        .{ .x = 70, .y = 80 },
+        1280,
+        720,
+    ).?;
+    try std.testing.expectEqual(@as(f64, 70), geometry.bounds.x);
+    try std.testing.expectEqual(@as(f64, 79.5), geometry.bounds.y);
+    try std.testing.expectEqual(@as(f64, 1), geometry.start.x);
+    try std.testing.expectEqual(@as(f64, 0), geometry.end.x);
+
+    var result = try shape.lineGeometryEdits(allocator, .{
+        .width = numericTokenAfter(source, "line!("),
+        .height = numericTokenAfter(source, "line!(160, "),
+        .start_x = numericTokenAfter(source, "start_x = "),
+        .start_y = numericTokenAfter(source, "start_y = "),
+        .end_x = numericTokenAfter(source, "end_x = "),
+        .end_y = numericTokenAfter(source, "end_y = "),
+    }, geometry);
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        updated,
+        "line!(180, 1, LineStyle { start_x = 1 start_y = 0.5 end_x = 0 end_y = 0.5",
+    ) != null);
 }
 
 test "shape style expressions replace only canonical paint values" {

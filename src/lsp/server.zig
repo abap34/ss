@@ -1146,6 +1146,20 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         try server.respondResult(id, result);
         return;
     }
+    if (std.mem.eql(u8, method, "ss/editLineGeometry")) {
+        var provider = analysisProvider(server);
+        var ctx = feature_shape_edit.Context{
+            .io = server.io,
+            .allocator = server.allocator,
+            .documents = &server.documents,
+            .active_editor_paths = &server.wysiwyg_paths,
+            .provider = &provider,
+        };
+        const result = try feature_shape_edit.lineGeometryResult(&ctx, params);
+        defer server.allocator.free(result);
+        try server.respondResult(id, result);
+        return;
+    }
     if (std.mem.eql(u8, method, "ss/shapeStyleEdit")) {
         var provider = analysisProvider(server);
         var ctx = feature_shape_edit.Context{
