@@ -122,6 +122,33 @@ test "core markdown spec: task list markers are consumed" {
     try testing.expectEqualStrings("open", second.text);
 }
 
+test "core markdown spec: block quotes preserve nested block structure" {
+    const allocator = testing.allocator;
+    var doc = try markdown.parseMarkdownContent(allocator,
+        \\before
+        \\
+        \\> outer paragraph
+        \\>
+        \\> > nested paragraph
+        \\>
+        \\> - quoted item
+        \\
+        \\after
+    );
+    defer doc.deinit();
+
+    try testing.expectEqual(@as(usize, 3), doc.blocks.items.len);
+    const quote = doc.blocks.items[1];
+    try testing.expectEqual(markdown.BlockKind.block_quote, quote.kind);
+    try testing.expectEqual(@as(usize, 3), quote.quote.?.blocks.items.len);
+    try testing.expectEqual(markdown.BlockKind.paragraph, quote.quote.?.blocks.items[0].kind);
+    try testing.expectEqual(markdown.BlockKind.block_quote, quote.quote.?.blocks.items[1].kind);
+    try testing.expectEqual(markdown.BlockKind.bullet_list, quote.quote.?.blocks.items[2].kind);
+    try testing.expectEqualStrings("outer paragraph", quote.quote.?.blocks.items[0].paragraph.?.lines.items[0].runs.items[0].text);
+    try testing.expectEqualStrings("nested paragraph", quote.quote.?.blocks.items[1].quote.?.blocks.items[0].paragraph.?.lines.items[0].runs.items[0].text);
+    try testing.expectEqualStrings("quoted item", quote.quote.?.blocks.items[2].list.?.items.items[0].blocks.items[0].paragraph.?.lines.items[0].runs.items[0].text);
+}
+
 test "core markdown spec: fenced code blocks count embedded physical lines" {
     const allocator = testing.allocator;
     var doc = try markdown.parseMarkdownContent(allocator,

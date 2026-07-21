@@ -18,6 +18,16 @@ fn default_theme() -> Theme
         line_height = 31
         color = c"0.07,0.08,0.10"
         markdown_bold_color = c"0.05,0.30,0.58"
+        markdown_quote = MarkdownQuoteStyle {
+          color = c"#374151"
+          inset = 14
+          pad_x = 18
+          pad_y = 10
+          fill = c"#f3f6fa"
+          radius = 7
+          bar_color = c"#4f7cac"
+          bar_width = 4
+        }
         markdown_code_font_size = 19
         markdown_code_line_height = 25
         markdown_code_pad_x = 12

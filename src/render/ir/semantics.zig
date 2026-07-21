@@ -8,6 +8,7 @@ pub const Role = enum {
     page,
     heading,
     paragraph,
+    block_quote,
     list,
     list_item,
     table,

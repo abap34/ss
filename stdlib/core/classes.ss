@@ -144,6 +144,18 @@ record MarkdownUnderlineStyle {
   dash: String = ""
 }
 
+record MarkdownQuoteStyle {
+  color: Color? = none
+  inset: Number = 14
+  pad_x: Number = 16
+  pad_y: Number = 8
+  fill: Color? = none
+  radius: Number = 4
+  bar_color: Color? = c"0.55,0.60,0.68"
+  bar_width: Number = 3
+  bar_dash: String = ""
+}
+
 record TextStyle {
   parse: TextParseMode = TextParseMode.inline
   font: FontFace = FontFace { family = "Helvetica" }
@@ -156,6 +168,7 @@ record TextStyle {
   link_color: Color = c"0.1,0.25,0.75"
   markdown_bold_color: Color? = none
   markdown_underline: MarkdownUnderlineStyle = MarkdownUnderlineStyle {}
+  markdown_quote: MarkdownQuoteStyle = MarkdownQuoteStyle {}
   inline_math_height_factor: Number = 1.02
   inline_math_spacing: Number = 0.08
   display_math_height_factor: Number = 2

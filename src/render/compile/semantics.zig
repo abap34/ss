@@ -179,6 +179,7 @@ const Builder = struct {
                 self.nodes.items[self.index(id)].code_language = try duplicateOptional(self.allocator, block_value.language orelse "");
                 break :blk id;
             },
+            .block_quote => try self.quote(block_value),
             .bullet_list, .ordered_list => try self.list(block_value),
             .table => try self.table(block_value),
         };
@@ -260,6 +261,17 @@ const Builder = struct {
         return id;
     }
 
+    fn quote(self: *Builder, block_value: *const MarkdownBlock) anyerror!render.SemanticId {
+        const id = try self.append(.block_quote);
+        var children = std.ArrayList(render.SemanticId).empty;
+        defer children.deinit(self.allocator);
+        for (block_value.quote.?.blocks.items) |child| {
+            try children.append(self.allocator, try self.block(child));
+        }
+        self.nodes.items[self.index(id)].children = try children.toOwnedSlice(self.allocator);
+        return id;
+    }
+
     fn table(self: *Builder, block_value: *const MarkdownBlock) !render.SemanticId {
         const id = try self.append(.table);
         var rows = std.ArrayList(render.SemanticId).empty;
@@ -287,6 +299,10 @@ fn plainBlocks(allocator: Allocator, blocks: []const *MarkdownBlock) !?[]u8 {
         if (index != 0) try text.append(allocator, '\n');
         switch (block_value.kind) {
             .paragraph, .heading, .code_block => try appendLines(allocator, &text, block_value.paragraph.?.lines.items),
+            .block_quote => if (try plainBlocks(allocator, block_value.quote.?.blocks.items)) |value| {
+                defer allocator.free(value);
+                try text.appendSlice(allocator, value);
+            },
             .bullet_list, .ordered_list => for (block_value.list.?.items.items) |item| {
                 if (try plainBlocks(allocator, item.blocks.items)) |value| {
                     defer allocator.free(value);

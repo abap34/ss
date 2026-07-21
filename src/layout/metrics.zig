@@ -413,6 +413,13 @@ fn markdownBlocksHeight(state: anytype, node: *const Node, cache: ?*MeasurementC
 fn markdownBlockHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
     return switch (block.kind) {
         .paragraph, .heading => markdownLinesHeight(state, cache, markdownBlockTextStyle(style, block), block.paragraph.?.lines.items, max_width),
+        .block_quote => blk: {
+            const quote = block.quote.?;
+            const quote_width = @max(@as(f32, 1.0), max_width - style.markdown_quote.inset);
+            const content_width = @max(@as(f32, 1.0), quote_width - style.markdown_quote.pad_x * 2.0);
+            const quote_style = markdownQuoteTextStyle(style);
+            break :blk markdownBlocksHeight(state, node, cache, quote_style, quote.blocks.items, content_width, list_depth) + style.markdown_quote.pad_y * 2.0;
+        },
         .code_block => blk: {
             const lines = markdown.codeBlockPhysicalLineCount(block);
             break :blk @as(f32, @floatFromInt(lines)) * style.markdown_code_line_height + 2.0 * style.markdown_code_pad_y;
@@ -549,6 +556,8 @@ fn markdownBlocksNaturalWidth(state: anytype, cache: ?*MeasurementCache, style: 
     const block = blocks[0];
     return switch (block.kind) {
         .paragraph, .heading => markdownParagraphNaturalWidth(state, cache, markdownBlockTextStyle(style, block), block.paragraph.?.lines.items),
+        .block_quote => style.markdown_quote.inset + style.markdown_quote.pad_x * 2.0 +
+            (markdownBlocksNaturalWidth(state, cache, markdownQuoteTextStyle(style), block.quote.?.blocks.items) orelse return null),
         else => null,
     };
 }
@@ -582,6 +591,9 @@ fn markdownBlocksContainMeasuredRenderArtifact(blocks: []const *markdown.Block) 
                 for (list.items.items) |item| {
                     if (markdownBlocksContainMeasuredRenderArtifact(item.blocks.items)) return true;
                 }
+            },
+            .block_quote => if (block.quote) |quote| {
+                if (markdownBlocksContainMeasuredRenderArtifact(quote.blocks.items)) return true;
             },
             .table => if (block.table) |table| {
                 for (table.rows.items) |row| {
@@ -661,7 +673,7 @@ fn shouldUseFullWrapWidth(state: anytype, node: *const Node, content: []const u8
     if (markdownBlocksContainMeasuredRenderArtifact(doc.blocks.items)) return true;
     for (doc.blocks.items) |block| {
         switch (block.kind) {
-            .bullet_list, .ordered_list, .code_block, .table => return true,
+            .block_quote, .bullet_list, .ordered_list, .code_block, .table => return true,
             else => {},
         }
     }
@@ -703,6 +715,12 @@ fn nonNegativeRecordFloatProperty(state: anytype, node: *const Node, record_key:
 fn markdownBlockTextStyle(base: TextPaint, block: *const markdown.Block) TextPaint {
     if (block.kind != .heading) return base;
     return base.forMarkdownHeading(block.heading_level orelse 2);
+}
+
+fn markdownQuoteTextStyle(base: TextPaint) TextPaint {
+    var result = base;
+    if (base.markdown_quote.color) |color| result.color = color;
+    return result;
 }
 
 fn wrappedLineCount(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextPaint, text: []const u8, max_width: f32) usize {
