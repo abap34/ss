@@ -142,6 +142,7 @@ fn writeMarkdownBlock(blocks: *json.Array, block: *const core.markdown.Block) an
             try item.optionalStringField("language", block.language);
             try writeInlineLines(&item, "lines", block.paragraph.?.lines.items);
         },
+        .block_quote => try writeMarkdownBlocks(&item, "blocks", block.quote.?.blocks.items),
         .bullet_list, .ordered_list => {
             try item.intField("start", block.list.?.start);
             var items = try item.arrayField("items");
@@ -194,6 +195,7 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
 
     var text = try object.objectField("text");
     try writeInlineTextPaint(&text, text_spec);
+    try writeMarkdownQuotePaint(&text, text_spec.markdown_quote);
     var headings = try text.objectField("markdown_headings");
     const names = [_][]const u8{ "h1", "h2", "h3", "h4", "h5", "h6" };
     for (names, text_spec.markdown_headings) |name, heading| {
@@ -229,6 +231,26 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     try writeOptionalColor(&text, "markdown_table_alt_row_fill", text_spec.markdown_table_alt_row_fill);
     try text.boolField("wrap", text_spec.wrap);
     try text.end();
+}
+
+fn writeMarkdownQuotePaint(object: *json.Object, quote: core.render_policy.MarkdownQuotePaint) !void {
+    var value = try object.objectField("markdown_quote");
+    try writeOptionalColor(&value, "color", quote.color);
+    try value.floatField("inset", quote.inset, "{d:.1}");
+    try value.floatField("pad_x", quote.pad_x, "{d:.1}");
+    try value.floatField("pad_y", quote.pad_y, "{d:.1}");
+    try writeOptionalColor(&value, "fill", quote.fill);
+    try value.floatField("radius", quote.radius, "{d:.1}");
+    try writeOptionalColor(&value, "bar_color", quote.bar_color);
+    try value.floatField("bar_width", quote.bar_width, "{d:.1}");
+    if (quote.bar_dash) |dash| {
+        try value.floatField("bar_dash_on", dash.on, "{d:.1}");
+        try value.floatField("bar_dash_off", dash.off, "{d:.1}");
+    } else {
+        try value.nullField("bar_dash_on");
+        try value.nullField("bar_dash_off");
+    }
+    try value.end();
 }
 
 fn writeInlineTextPaint(object: *json.Object, spec: anytype) !void {

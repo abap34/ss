@@ -330,6 +330,9 @@ fn collectMarkdownBlockAssetDeps(
             .paragraph, .heading, .code_block => if (block.paragraph) |paragraph| {
                 try collectLineAssetDeps(allocator, paragraph.lines.items, deps);
             },
+            .block_quote => if (block.quote) |quote| {
+                try collectMarkdownBlockAssetDeps(allocator, quote.blocks.items, deps);
+            },
             .bullet_list, .ordered_list => if (block.list) |list| {
                 for (list.items.items) |item| {
                     try collectMarkdownBlockAssetDeps(allocator, item.blocks.items, deps);

@@ -651,6 +651,10 @@ fn md_underline(obj: Object, style: MarkdownUnderlineStyle = MarkdownUnderlineSt
   return render::md_underline(obj, style)
 end
 
+fn md_quote(obj: Object, style: MarkdownQuoteStyle = MarkdownQuoteStyle {}) -> Object
+  return render::md_quote(obj, style)
+end
+
 fn md_table(obj: Object, pad_x_name: Number, pad_y_name: Number, border_name: Color, line_width_name: Number, header_fill_name: Color, alt_row_fill_name: Color? = none) -> Object
   return render::md_table(obj, pad_x_name, pad_y_name, border_name, line_width_name, header_fill_name, alt_row_fill_name)
 end

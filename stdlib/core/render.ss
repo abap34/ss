@@ -235,6 +235,11 @@ fn md_underline(obj: Object, style: MarkdownUnderlineStyle = MarkdownUnderlineSt
   return obj
 end
 
+fn md_quote(obj: Object, style: MarkdownQuoteStyle = MarkdownQuoteStyle {}) -> Object
+  obj.text.markdown_quote = style
+  return obj
+end
+
 fn md_table(obj: Object, pad_x_name: Number, pad_y_name: Number, border_name: Color, line_width_name: Number, header_fill_name: Color, alt_row_fill_name: Color? = none) -> Object
   obj.text.markdown_table_cell_pad_x = pad_x_name
   obj.text.markdown_table_cell_pad_y = pad_y_name

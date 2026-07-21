@@ -1808,6 +1808,60 @@ test "render policy: markdown underline style resolves as text paint" {
     try expectFloat(4, underline.dash.?.off);
 }
 
+test "render policy: markdown quote style resolves as text paint" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    const page = try state.addPage("Page");
+    const object = try state.makeObject(page, "body", null, .text, .text, "> Hello");
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "color" }, .{ .string = "0.2,0.3,0.4" });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "inset" }, .{ .number = 12 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "pad_x" }, .{ .number = 18 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "pad_y" }, .{ .number = 9 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "fill" }, .{ .string = "0.9,0.8,0.7" });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "radius" }, .{ .number = 7 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "bar_color" }, .{ .string = "0.6,0.2,0.1" });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "bar_width" }, .{ .number = 4 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "bar_dash" }, .{ .string = "8,3" });
+
+    const quote = core.render_policy.resolve(&state, state.getNode(object).?).text.?.markdown_quote;
+    try expectColor(0.2, 0.3, 0.4, quote.color.?);
+    try expectFloat(12, quote.inset);
+    try expectFloat(18, quote.pad_x);
+    try expectFloat(9, quote.pad_y);
+    try expectColor(0.9, 0.8, 0.7, quote.fill.?);
+    try expectFloat(7, quote.radius);
+    try expectColor(0.6, 0.2, 0.1, quote.bar_color.?);
+    try expectFloat(4, quote.bar_width);
+    try expectFloat(8, quote.bar_dash.?.on);
+    try expectFloat(3, quote.bar_dash.?.off);
+}
+
+test "layout metrics include markdown quote padding" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    const page = try state.addPage("Page");
+    const compact = try state.makeObject(page, "compact", null, .text, .text, "> Quoted paragraph");
+    const padded = try state.makeObject(page, "padded", null, .text, .text, "> Quoted paragraph");
+    for ([_]model.NodeId{ compact, padded }) |object| {
+        try setLayoutWrap(&state, object, "on");
+        try setTextParse(&state, object, "block");
+        try setTextFontFamily(&state, object, "Helvetica");
+        try setTextSize(&state, object, "20");
+        try setTextLineHeight(&state, object, "29");
+        try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "inset" }, .{ .number = 0 });
+        try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "pad_x" }, .{ .number = 0 });
+        state.getNode(object).?.frame.width = 1000;
+    }
+    try setRecordPathValue(&state, compact, "text", &.{ "markdown_quote", "pad_y" }, .{ .number = 0 });
+    try setRecordPathValue(&state, padded, "text", &.{ "markdown_quote", "pad_y" }, .{ .number = 12 });
+
+    const compact_height = metrics.intrinsicHeight(&state, state.getNode(compact).?);
+    const padded_height = metrics.intrinsicHeight(&state, state.getNode(padded).?);
+    try expectFloat(24, padded_height - compact_height);
+}
+
 test "render policy: markdown headings resolve their own text paint" {
     var state = try initEmptyDocumentState();
     defer state.deinit();

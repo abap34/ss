@@ -22,6 +22,11 @@ fn default_theme() -> Theme
     body.text.markdown_code_stroke = c"0.78,0.78,0.78"
     body.text.markdown_code_line_width = 1
     body.text.markdown_code_radius = 0
+    body.text.markdown_quote.color = c"0.18,0.18,0.18"
+    body.text.markdown_quote.fill = none
+    body.text.markdown_quote.radius = 0
+    body.text.markdown_quote.bar_color = c"0.35,0.35,0.35"
+    body.text.markdown_quote.bar_width = 2
     h1.text.size = 32
     h1.text.line_height = 36
     h1.text.color = c"0,0,0.0353"

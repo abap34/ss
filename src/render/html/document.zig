@@ -348,6 +348,7 @@ fn semanticTag(semantic: render.SemanticNode) []const u8 {
             else => "h6",
         },
         .paragraph => "p",
+        .block_quote => "blockquote",
         .list => if (semantic.list_ordered orelse false) "ol" else "ul",
         .list_item => "li",
         .table => "table",

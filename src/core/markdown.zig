@@ -72,6 +72,7 @@ pub const TextLayout = struct {
 pub const BlockKind = enum {
     paragraph,
     heading,
+    block_quote,
     code_block,
     bullet_list,
     ordered_list,
@@ -89,6 +90,10 @@ pub const ListItem = struct {
 pub const ListData = struct {
     start: usize = 1,
     items: std.ArrayList(*ListItem) = .empty,
+};
+
+pub const QuoteData = struct {
+    blocks: std.ArrayList(*Block) = .empty,
 };
 
 pub const Align = enum {
@@ -124,6 +129,7 @@ pub fn tableColumnCount(table: TableData) usize {
 pub const Block = struct {
     kind: BlockKind,
     paragraph: ?Paragraph = null,
+    quote: ?QuoteData = null,
     list: ?ListData = null,
     table: ?TableData = null,
     language: ?[]const u8 = null,
@@ -192,6 +198,7 @@ const ParserState = struct {
         block.* = .{ .kind = kind };
         switch (kind) {
             .paragraph, .heading => block.paragraph = .{},
+            .block_quote => block.quote = .{},
             .code_block => block.paragraph = .{},
             .bullet_list => block.list = .{ .start = 1 },
             .ordered_list => block.list = .{ .start = 1 },
@@ -503,6 +510,12 @@ fn enterBlock(
             state.current_paragraph = &block.paragraph.?;
             state.current_line = .{};
         },
+        c.MD_BLOCK_QUOTE => {
+            state.endParagraph() catch return 1;
+            const block = state.newBlock(.block_quote) catch return 1;
+            state.appendBlock(block) catch return 1;
+            state.containers.append(state.temp_allocator, &block.quote.?.blocks) catch return 1;
+        },
         c.MD_BLOCK_UL => {
             state.endParagraph() catch return 1;
             const block = state.newBlock(.bullet_list) catch return 1;
@@ -575,6 +588,10 @@ fn leaveBlock(
     }
     switch (block_type) {
         c.MD_BLOCK_P, c.MD_BLOCK_H, c.MD_BLOCK_CODE => state.endParagraph() catch return 1,
+        c.MD_BLOCK_QUOTE => {
+            state.endParagraph() catch return 1;
+            if (state.containers.items.len > 1) _ = state.containers.pop();
+        },
         c.MD_BLOCK_UL, c.MD_BLOCK_OL => {
             if (state.lists.items.len > 0) _ = state.lists.pop();
         },

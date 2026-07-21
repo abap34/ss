@@ -169,7 +169,7 @@ fn validSemanticChild(parent: anytype, child: anytype) bool {
         .table_row => child == .table_header or child == .table_cell,
         .heading, .paragraph, .table_header, .table_cell, .code => child == .text or child == .link or child == .math,
         .text, .link, .math, .decoration => false,
-        .list_item, .figure, .caption, .group => child != .document and child != .page,
+        .block_quote, .list_item, .figure, .caption, .group => child != .document and child != .page,
     };
 }
 

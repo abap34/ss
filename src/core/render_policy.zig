@@ -135,6 +135,18 @@ pub const MarkdownUnderlinePaint = struct {
     dash: ?Dash = null,
 };
 
+pub const MarkdownQuotePaint = struct {
+    color: ?Color = null,
+    inset: f32 = 0,
+    pad_x: f32 = 0,
+    pad_y: f32 = 0,
+    fill: ?Color = null,
+    radius: f32 = 0,
+    bar_color: ?Color = null,
+    bar_width: f32 = 0,
+    bar_dash: ?Dash = null,
+};
+
 pub const MarkdownHeadingPaint = struct {
     font: FontFace,
     bold_font: FontFace,
@@ -164,6 +176,7 @@ pub const TextPaint = struct {
     link_color: Color,
     markdown_bold_color: ?Color,
     markdown_underline: MarkdownUnderlinePaint,
+    markdown_quote: MarkdownQuotePaint,
     markdown_headings: [6]?MarkdownHeadingPaint,
     inline_math_height_factor: f32,
     inline_math_spacing: f32,
@@ -364,6 +377,7 @@ fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .link_color = parseRecordColorProperty(state, node, "text", "link_color") orelse FALLBACK_LINK_COLOR,
         .markdown_bold_color = parseRecordColorProperty(state, node, "text", "markdown_bold_color"),
         .markdown_underline = resolveMarkdownUnderline(state, node),
+        .markdown_quote = resolveMarkdownQuote(state, node),
         .markdown_headings = .{
             resolveMarkdownHeading(node, "h1"),
             resolveMarkdownHeading(node, "h2"),
@@ -438,6 +452,20 @@ fn resolveMarkdownUnderline(state: anytype, node: *const Node) MarkdownUnderline
         .width = nonNegativeMarkdownUnderlineFloatProperty(state, node, "width"),
         .offset = markdownUnderlineFloatProperty(state, node, "offset") orelse 0,
         .dash = parseMarkdownUnderlineDash(state, node),
+    };
+}
+
+fn resolveMarkdownQuote(state: anytype, node: *const Node) MarkdownQuotePaint {
+    return .{
+        .color = parseMarkdownQuoteColor(state, node, "color"),
+        .inset = nonNegativeMarkdownQuoteFloatProperty(state, node, "inset") orelse 0,
+        .pad_x = nonNegativeMarkdownQuoteFloatProperty(state, node, "pad_x") orelse 0,
+        .pad_y = nonNegativeMarkdownQuoteFloatProperty(state, node, "pad_y") orelse 0,
+        .fill = parseMarkdownQuoteColor(state, node, "fill"),
+        .radius = nonNegativeMarkdownQuoteFloatProperty(state, node, "radius") orelse 0,
+        .bar_color = parseMarkdownQuoteColor(state, node, "bar_color"),
+        .bar_width = nonNegativeMarkdownQuoteFloatProperty(state, node, "bar_width") orelse 0,
+        .bar_dash = parseMarkdownQuoteDash(state, node),
     };
 }
 
@@ -730,6 +758,25 @@ fn nonNegativeMarkdownHeadingTextFloatProperty(node: *const Node, heading_field:
 
 fn markdownUnderlineFloatProperty(state: anytype, node: *const Node, field_name: []const u8) ?f32 {
     return fields.read(state.allocator, state, node, "text", &.{ "markdown_underline", field_name }, .number);
+}
+
+fn markdownQuoteFloatProperty(state: anytype, node: *const Node, field_name: []const u8) ?f32 {
+    return fields.read(state.allocator, state, node, "text", &.{ "markdown_quote", field_name }, .number);
+}
+
+fn nonNegativeMarkdownQuoteFloatProperty(state: anytype, node: *const Node, field_name: []const u8) ?f32 {
+    const value = markdownQuoteFloatProperty(state, node, field_name) orelse return null;
+    return if (value >= 0) value else null;
+}
+
+fn parseMarkdownQuoteColor(state: anytype, node: *const Node, field_name: []const u8) ?Color {
+    const value = fields.read(state.allocator, state, node, "text", &.{ "markdown_quote", field_name }, .text) orelse return null;
+    return parseColor(value);
+}
+
+fn parseMarkdownQuoteDash(state: anytype, node: *const Node) ?Dash {
+    const value = fields.read(state.allocator, state, node, "text", &.{ "markdown_quote", "bar_dash" }, .text) orelse return null;
+    return parseDash(value);
 }
 
 fn nonNegativeMarkdownUnderlineFloatProperty(state: anytype, node: *const Node, field_name: []const u8) ?f32 {

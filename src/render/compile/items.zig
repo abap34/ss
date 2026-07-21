@@ -2955,6 +2955,7 @@ fn drawMarkdownBlocksAt(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block
                     cursor_bl = try drawInlineLines(ctx, frame.x, cursor_bl, frame.width, paragraph.lines.items, block_text, block_text.wrap);
                 }
             },
+            .block_quote => cursor_bl = try drawMarkdownQuote(ctx, frame, cursor_bl, block, text, list_depth),
             .code_block => cursor_bl = try drawMarkdownCodeBlock(ctx, frame.x, cursor_bl, frame.width, block, text),
             .bullet_list, .ordered_list => cursor_bl = try drawList(ctx, frame, cursor_bl, block, text, list_depth),
             .table => cursor_bl = try drawTable(ctx, frame.x, cursor_bl, frame.width, block, text),
@@ -2972,6 +2973,56 @@ fn markdownFirstBlockText(text: TextPaint, blocks: []const *Block) TextPaint {
 fn markdownBlockText(text: TextPaint, block: *const Block) TextPaint {
     if (block.kind != .heading) return text;
     return text.forMarkdownHeading(block.heading_level orelse 2);
+}
+
+fn markdownQuoteText(text: TextPaint) TextPaint {
+    var result = text;
+    if (text.markdown_quote.color) |color| result.color = color;
+    return result;
+}
+
+fn drawMarkdownQuote(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Block, text: TextPaint, list_depth: usize) !f32 {
+    const quote = block.quote orelse return baseline_bl;
+    const paint = text.markdown_quote;
+    const quote_x = frame.x + paint.inset;
+    const quote_width = @max(frame.width - paint.inset, 1);
+    const content_x = quote_x + paint.pad_x;
+    const content_width = @max(quote_width - paint.pad_x * 2, 1);
+    const quote_text = markdownQuoteText(text);
+    const content_height = try measureMarkdownBlocksLogicalHeight(ctx, quote.blocks.items, quote_text, content_width, list_depth);
+    const outer_baseline_from_top = try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height);
+    const box_top = baseline_bl + outer_baseline_from_top;
+    const box_height = paint.pad_y * 2 + content_height;
+    const box_bottom = box_top - box_height;
+    const quote_frame = Frame{ .x = quote_x, .y = box_bottom, .width = quote_width, .height = box_height };
+
+    if (paint.fill != null) try drawRoundedRect(ctx, quote_frame, paint.radius, paint.fill, null, 0);
+    if (paint.bar_color) |bar_color| {
+        if (paint.bar_width > 0) {
+            const top = topOf(quote_frame) + paint.bar_width / 2;
+            const bottom = topOf(quote_frame) + quote_frame.height - paint.bar_width / 2;
+            const dash = paint.bar_dash;
+            try strokeLine(ctx, quote_x + paint.bar_width / 2, top, quote_x + paint.bar_width / 2, @max(bottom, top), paint.bar_width, bar_color, if (dash) |value| value.on else 0, if (dash) |value| value.off else 0);
+        }
+    }
+
+    const first_text = markdownFirstBlockText(quote_text, quote.blocks.items);
+    const first_baseline_from_top = try lineBaselineFromTop(ctx, first_text.font, first_text.font_size, first_text.line_height);
+    const first_baseline_bl = box_top - paint.pad_y - first_baseline_from_top;
+    const content_frame = Frame{ .x = content_x, .y = frame.y, .width = content_width, .height = frame.height };
+    _ = try drawMarkdownBlocksAt(ctx, content_frame, first_baseline_bl, quote.blocks.items, quote_text, list_depth);
+    return box_bottom - outer_baseline_from_top;
+}
+
+fn measureMarkdownBlocksLogicalHeight(ctx: *DrawContext, blocks: []const *Block, text: TextPaint, width: f32, list_depth: usize) !f32 {
+    if (blocks.len == 0) return text.line_height;
+    const baseline_bl = Defaults.height * 0.5;
+    var measurement = MeasurementScope.init(ctx);
+    try measurement.begin();
+    defer measurement.deinit();
+    const frame = Frame{ .x = 0, .y = 0, .width = width, .height = Defaults.height };
+    const next_bl = try drawMarkdownBlocksAt(ctx, frame, baseline_bl, blocks, text, list_depth);
+    return @max(baseline_bl - next_bl, text.line_height);
 }
 
 fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Block, text: TextPaint, list_depth: usize) anyerror!f32 {
@@ -3256,6 +3307,14 @@ fn markdownBlocksNaturalInlineAdvance(ctx: *DrawContext, blocks: []const *Block,
                     found = true;
                 }
             },
+            .block_quote => {
+                const quote = block.quote orelse continue;
+                const quote_text = markdownQuoteText(text);
+                if (try markdownBlocksNaturalInlineAdvance(ctx, quote.blocks.items, quote_text, list_depth)) |width| {
+                    max_width = @max(max_width, text.markdown_quote.inset + text.markdown_quote.pad_x * 2 + width);
+                    found = true;
+                }
+            },
             .code_block, .table => {},
         }
     }
@@ -3289,12 +3348,22 @@ fn markdownBlocksConstrainedLogicalWidth(ctx: *DrawContext, blocks: []const *Blo
                 break :blk try inlineLinesConstrainedLogicalWidth(ctx, paragraph.lines.items, block_text, width, block_text.wrap);
             },
             .code_block => try markdownCodeBlockConstrainedLogicalWidth(ctx, block, text, width),
+            .block_quote => try markdownQuoteConstrainedLogicalWidth(ctx, block, text, list_depth, width),
             .bullet_list, .ordered_list => try markdownListConstrainedLogicalWidth(ctx, block, text, list_depth, width),
             .table => try markdownTableConstrainedLogicalWidth(ctx, block, text, width),
         };
         max_width = @max(max_width, block_width);
     }
     return max_width;
+}
+
+fn markdownQuoteConstrainedLogicalWidth(ctx: *DrawContext, block: *const Block, text: TextPaint, list_depth: usize, width: f32) !f32 {
+    const quote = block.quote orelse return 0;
+    const paint = text.markdown_quote;
+    const quote_width = @max(width - paint.inset, 1);
+    const content_width = @max(quote_width - paint.pad_x * 2, 1);
+    const child_width = try markdownBlocksConstrainedLogicalWidth(ctx, quote.blocks.items, markdownQuoteText(text), list_depth, content_width);
+    return paint.inset + paint.pad_x * 2 + child_width;
 }
 
 fn markdownListConstrainedLogicalWidth(ctx: *DrawContext, block: *const Block, text: TextPaint, list_depth: usize, width: f32) anyerror!f32 {
