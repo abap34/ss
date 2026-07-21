@@ -91,12 +91,19 @@ pub const PageEditingTarget = struct {
     rectangle_binding: []u8,
     circle_binding: []u8,
     arrow_binding: []u8,
+    line_binding: []u8,
 };
 
 pub const ShapeKind = enum {
     rectangle,
     circle,
     arrow,
+    line,
+};
+
+pub const ShapePoint = struct {
+    x: f64,
+    y: f64,
 };
 
 pub const ShapeFill = struct {
@@ -119,15 +126,27 @@ pub const ShapeStroke = struct {
     style: ShapeStrokeStyle,
 };
 
+pub const ShapeLineSource = struct {
+    width_expression: utils.source.ByteSpan,
+    height_expression: utils.source.ByteSpan,
+    start_x_expression: utils.source.ByteSpan,
+    start_y_expression: utils.source.ByteSpan,
+    end_x_expression: utils.source.ByteSpan,
+    end_y_expression: utils.source.ByteSpan,
+};
+
 pub const ShapeEditingTarget = struct {
     node_id: core.NodeId,
     page_id: core.NodeId,
     binding: []u8,
     kind: ShapeKind,
     path: []u8,
-    fill_expression: utils.source.ByteSpan,
+    fill_expression: ?utils.source.ByteSpan,
     stroke_expression: utils.source.ByteSpan,
-    fill: ShapeFill,
+    fill: ?ShapeFill,
+    start: ?ShapePoint,
+    end: ?ShapePoint,
+    line_source: ?ShapeLineSource,
     stroke: ShapeStroke,
 };
 
@@ -524,11 +543,25 @@ fn shapeEditingJson(allocator: std.mem.Allocator, targets: []const ShapeEditingT
         try item.intField("page_id", target.page_id);
         try item.stringField("binding", target.binding);
         try item.stringField("kind", @tagName(target.kind));
-        var fill = try item.objectField("fill");
-        try fill.boolField("enabled", target.fill.enabled);
-        try fill.stringField("color", target.fill.color);
-        try fill.floatField("opacity", target.fill.opacity, "{d:.4}");
-        try fill.end();
+        if (target.fill) |fill_value| {
+            var fill = try item.objectField("fill");
+            try fill.boolField("enabled", fill_value.enabled);
+            try fill.stringField("color", fill_value.color);
+            try fill.floatField("opacity", fill_value.opacity, "{d:.4}");
+            try fill.end();
+        }
+        if (target.start) |start_value| {
+            var start = try item.objectField("start");
+            try start.floatField("x", start_value.x, "{d:.6}");
+            try start.floatField("y", start_value.y, "{d:.6}");
+            try start.end();
+        }
+        if (target.end) |end_value| {
+            var end = try item.objectField("end");
+            try end.floatField("x", end_value.x, "{d:.6}");
+            try end.floatField("y", end_value.y, "{d:.6}");
+            try end.end();
+        }
         var stroke = try item.objectField("stroke");
         try stroke.boolField("enabled", target.stroke.enabled);
         try stroke.stringField("color", target.stroke.color);
@@ -557,12 +590,44 @@ fn collectShapeEditingTargets(
         const page = pageForSpan(module, editing_target.page) orelse continue;
         const binding_statement = statementForSpan(page, editing_target.statement) orelse continue;
         const constructor = shapeConstructor(binding_statement, editing_target.binding) orelse continue;
-        const fill_field = shapeRecordField(module.source, constructor.style, constructor.style_span, "fill") orelse continue;
-        const stroke_field = shapeRecordField(module.source, constructor.style, constructor.style_span, "stroke") orelse continue;
-        const fill = (try shapeFill(allocator, fill_field.value)) orelse continue;
-        errdefer allocator.free(fill.color);
+        var fill_expression: ?utils.source.ByteSpan = null;
+        var fill: ?ShapeFill = null;
+        var start: ?ShapePoint = null;
+        var end: ?ShapePoint = null;
+        var line_source: ?ShapeLineSource = null;
+        if (constructor.kind == .line) {
+            const start_x = shapeRecordField(module.source, constructor.style, constructor.style_span, "start_x") orelse continue;
+            const start_y = shapeRecordField(module.source, constructor.style, constructor.style_span, "start_y") orelse continue;
+            const end_x = shapeRecordField(module.source, constructor.style, constructor.style_span, "end_x") orelse continue;
+            const end_y = shapeRecordField(module.source, constructor.style, constructor.style_span, "end_y") orelse continue;
+            start = .{
+                .x = shapeNumber(start_x.value) orelse continue,
+                .y = shapeNumber(start_y.value) orelse continue,
+            };
+            end = .{
+                .x = shapeNumber(end_x.value) orelse continue,
+                .y = shapeNumber(end_y.value) orelse continue,
+            };
+            line_source = .{
+                .width_expression = constructor.width_expression orelse continue,
+                .height_expression = constructor.height_expression orelse continue,
+                .start_x_expression = start_x.expression,
+                .start_y_expression = start_y.expression,
+                .end_x_expression = end_x.expression,
+                .end_y_expression = end_y.expression,
+            };
+        } else {
+            const fill_field = shapeRecordField(module.source, constructor.style, constructor.style_span, "fill") orelse continue;
+            fill = (try shapeFill(allocator, fill_field.value)) orelse continue;
+            fill_expression = fill_field.expression;
+        }
+        errdefer if (fill) |value| allocator.free(value.color);
+        const stroke_field = shapeRecordField(module.source, constructor.style, constructor.style_span, "stroke") orelse {
+            if (fill) |value| allocator.free(value.color);
+            continue;
+        };
         const stroke = (try shapeStroke(allocator, stroke_field.value)) orelse {
-            allocator.free(fill.color);
+            if (fill) |value| allocator.free(value.color);
             continue;
         };
         errdefer allocator.free(stroke.color);
@@ -576,9 +641,12 @@ fn collectShapeEditingTargets(
             .binding = binding,
             .kind = constructor.kind,
             .path = path,
-            .fill_expression = fill_field.expression,
+            .fill_expression = fill_expression,
             .stroke_expression = stroke_field.expression,
             .fill = fill,
+            .start = start,
+            .end = end,
+            .line_source = line_source,
             .stroke = stroke,
         });
     }
@@ -589,6 +657,8 @@ const ShapeConstructor = struct {
     kind: ShapeKind,
     style: *const ast.RecordExpr,
     style_span: ast.Span,
+    width_expression: ?utils.source.ByteSpan,
+    height_expression: ?utils.source.ByteSpan,
 };
 
 const ShapeRecordField = struct {
@@ -613,6 +683,8 @@ fn shapeConstructor(statement: *const ast.Statement, binding: []const u8) ?Shape
         .circle
     else if (std.mem.eql(u8, call.callee.name, "arrow_shape!"))
         .arrow
+    else if (std.mem.eql(u8, call.callee.name, "line!"))
+        .line
     else
         return null;
     const style_index: usize = if (kind == .circle) 1 else 2;
@@ -621,8 +693,29 @@ fn shapeConstructor(statement: *const ast.Statement, binding: []const u8) ?Shape
         .record => |*value| value,
         else => return null,
     };
-    if (!std.mem.eql(u8, style.type_name, "VectorStyle")) return null;
-    return .{ .kind = kind, .style = style, .style_span = call.arg_spans.items[style_index] };
+    const style_name = if (kind == .line) "LineStyle" else "VectorStyle";
+    if (!std.mem.eql(u8, style.type_name, style_name)) return null;
+    return .{
+        .kind = kind,
+        .style = style,
+        .style_span = call.arg_spans.items[style_index],
+        .width_expression = if (kind == .line) .{
+            .start = call.arg_spans.items[0].start,
+            .end = call.arg_spans.items[0].end,
+        } else null,
+        .height_expression = if (kind == .line) .{
+            .start = call.arg_spans.items[1].start,
+            .end = call.arg_spans.items[1].end,
+        } else null,
+    };
+}
+
+fn shapeNumber(expr: ast.Expr) ?f64 {
+    const value = switch (expr) {
+        .number => |number| number,
+        else => return null,
+    };
+    return if (std.math.isFinite(value)) value else null;
 }
 
 fn shapeRecordField(
@@ -775,6 +868,7 @@ fn collectPageEditingTargets(allocator: std.mem.Allocator, state: *const core.Do
             .rectangle_binding = try names.forStatement(0, "rectangle"),
             .circle_binding = try names.forStatement(1, "circle"),
             .arrow_binding = try names.forStatement(2, "arrow_shape"),
+            .line_binding = try names.forStatement(3, "line"),
         });
     }
     return try targets.toOwnedSlice(allocator);
@@ -836,6 +930,7 @@ const PageEditingTargetView = struct {
     rectangle_binding: []const u8,
     circle_binding: []const u8,
     arrow_binding: []const u8,
+    line_binding: []const u8,
 };
 
 fn appendPageEditingTarget(allocator: std.mem.Allocator, targets: *std.ArrayList(PageEditingTarget), view: PageEditingTargetView) !void {
@@ -847,6 +942,8 @@ fn appendPageEditingTarget(allocator: std.mem.Allocator, targets: *std.ArrayList
     errdefer allocator.free(circle_binding);
     const arrow_binding = try allocator.dupe(u8, view.arrow_binding);
     errdefer allocator.free(arrow_binding);
+    const line_binding = try allocator.dupe(u8, view.line_binding);
+    errdefer allocator.free(line_binding);
     try targets.append(allocator, .{
         .page_id = view.page_id,
         .module_id = view.module_id,
@@ -856,6 +953,7 @@ fn appendPageEditingTarget(allocator: std.mem.Allocator, targets: *std.ArrayList
         .rectangle_binding = rectangle_binding,
         .circle_binding = circle_binding,
         .arrow_binding = arrow_binding,
+        .line_binding = line_binding,
     });
 }
 
@@ -905,6 +1003,7 @@ fn deinitPageEditingTargets(allocator: std.mem.Allocator, targets: []const PageE
         allocator.free(target.rectangle_binding);
         allocator.free(target.circle_binding);
         allocator.free(target.arrow_binding);
+        allocator.free(target.line_binding);
     }
 }
 
@@ -912,7 +1011,7 @@ fn deinitShapeEditingTargets(allocator: std.mem.Allocator, targets: []const Shap
     for (targets) |target| {
         allocator.free(target.binding);
         allocator.free(target.path);
-        allocator.free(target.fill.color);
+        if (target.fill) |fill| allocator.free(fill.color);
         allocator.free(target.stroke.color);
     }
 }
