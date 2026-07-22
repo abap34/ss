@@ -48,6 +48,8 @@ document.documentElement.dataset.theme = state.theme;
 let toastTimer = null;
 let renderGeneration = 0;
 let textAlignmentFailed = false;
+let renderDeferred = false;
+let deferredSnapshots = [];
 const sidebarScrollPositions = new Map();
 const successToastDuration = 2500;
 const errorToastDuration = 5000;
@@ -81,6 +83,7 @@ const actions = {
   shape,
   icon,
   objectLocks,
+  pointerOperationFinished: flushDeferredSnapshots,
 };
 const navigation = new EditorNavigation(state);
 const workspace = new WorkspaceView(state, actions);
@@ -93,7 +96,8 @@ app.addEventListener("ss-pdf-error", (event) => {
 window.addEventListener("message", (event) => {
   const message = event.data || {};
   if (message.type === "snapshot") {
-    acceptSnapshot(message);
+    if (workspace.isPointerOperationActive()) deferSnapshot(message);
+    else acceptSnapshot(message);
   } else if (message.type === "buildStatus") {
     acceptBuildStatus(message);
   } else if (message.type === "error") {
@@ -188,6 +192,22 @@ function acceptSnapshot(message) {
   }
   render();
   if (toastDuration != null) scheduleToastClear(toastDuration);
+}
+
+function deferSnapshot(message) {
+  if (!Number.isSafeInteger(message.revision) || !message.snapshot ||
+      message.revision <= state.revision ||
+      message.revision < state.buildRevision) return;
+  deferredSnapshots.push(message);
+}
+
+function flushDeferredSnapshots() {
+  const snapshots = deferredSnapshots;
+  deferredSnapshots = [];
+  for (const message of snapshots) {
+    acceptSnapshot(message);
+  }
+  if (renderDeferred) render();
 }
 
 function editFailureMessage(fallback) {
@@ -287,6 +307,11 @@ function scheduleToastClear(duration) {
 }
 
 function render() {
+  if (workspace.isPointerOperationActive()) {
+    renderDeferred = true;
+    return;
+  }
+  renderDeferred = false;
   const generation = ++renderGeneration;
   navigation.rememberViewport(workspace.viewport);
   rememberSidebarScroll();

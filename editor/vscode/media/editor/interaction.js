@@ -96,6 +96,11 @@ export class InteractionController {
     this.cleanupShapeResize();
   }
 
+  isPointerOperationActive() {
+    return this.drag != null || this.placement != null ||
+      this.lineEndpointDrag != null || this.shapeResizeDrag != null;
+  }
+
   placementTarget(page) {
     const target = svgElement("rect", "shape-placement-hit");
     setRect(target, { x: 0, y: 0, width: page.width, height: page.height });
@@ -106,6 +111,7 @@ export class InteractionController {
       event.preventDefault();
       this.cleanupPlacement();
       this.activeInsertionController().cancel();
+      this.notifyPointerOperationFinished();
     });
     return target;
   }
@@ -163,12 +169,14 @@ export class InteractionController {
     const pageId = placement.page.id;
     this.cleanupPlacement();
     this.activeInsertionController().insert(pageId, geometry);
+    this.notifyPointerOperationFinished();
   }
 
   cancelPlacement() {
     if (!this.placement) return;
     this.cleanupPlacement();
     this.actions.render();
+    this.notifyPointerOperationFinished();
   }
 
   cleanupPlacement() {
@@ -197,6 +205,7 @@ export class InteractionController {
         event.preventDefault();
         this.cleanupPlacement();
         this.activeInsertionController().cancel();
+        this.notifyPointerOperationFinished();
         return;
       }
       if (this.activeInsertionController().cancel()) event.preventDefault();
@@ -536,12 +545,14 @@ export class InteractionController {
     if (!changed || !this.actions.shape.editBounds(drag.target, drag.bounds)) {
       this.actions.render();
     }
+    this.notifyPointerOperationFinished();
   }
 
   cancelShapeResize() {
     if (!this.shapeResizeDrag) return;
     this.cleanupShapeResize();
     this.actions.render();
+    this.notifyPointerOperationFinished();
   }
 
   cleanupShapeResize() {
@@ -630,12 +641,14 @@ export class InteractionController {
         )) {
       this.actions.render();
     }
+    this.notifyPointerOperationFinished();
   }
 
   cancelLineEndpoint() {
     if (!this.lineEndpointDrag) return;
     this.cleanupLineEndpoint();
     this.actions.render();
+    this.notifyPointerOperationFinished();
   }
 
   cleanupLineEndpoint() {
@@ -706,6 +719,7 @@ export class InteractionController {
     const dy = drag.to.y - drag.from.y;
     if (Math.abs(dx) < 0.25 && Math.abs(dy) < 0.25) {
       this.actions.render();
+      this.notifyPointerOperationFinished();
       return;
     }
     this.actions.translation.submit({
@@ -716,11 +730,17 @@ export class InteractionController {
       fromBounds: drag.from,
       toBounds: drag.to,
     });
+    this.notifyPointerOperationFinished();
   }
 
   cancelDrag() {
     this.cleanup();
     this.actions.render();
+    this.notifyPointerOperationFinished();
+  }
+
+  notifyPointerOperationFinished() {
+    this.actions.pointerOperationFinished?.();
   }
 
   cleanup() {

@@ -119,6 +119,10 @@ export class WorkspaceView {
     return main;
   }
 
+  isPointerOperationActive() {
+    return this.pan != null || this.interaction.isPointerOperationActive();
+  }
+
   toolbar() {
     const bar = element("div", "toolbar");
     const mode = element("select", "page-mode");
@@ -298,6 +302,7 @@ export class WorkspaceView {
     if (!this.pan || event.pointerId !== this.pan.pointerId) return;
     event.preventDefault();
     this.cleanupPan();
+    this.actions.pointerOperationFinished?.();
   }
 
   cleanupPan() {
