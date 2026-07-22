@@ -149,7 +149,24 @@ assert.equal(icons.pendingInsertion(11), null);
 assert.deepEqual(selections, [{ nodeId: 101, pageId: 11 }]);
 
 state.snapshot.stale = true;
-assert.equal(icons.canInsert(11), false);
+assert.equal(icons.canInsert(11), true);
+assert.equal(icons.select(circle), true);
+const messageCountBeforeQueuedInsert = messages.length;
+assert.equal(icons.insert(11, {
+  bounds: { x: 240, y: 180, width: 64, height: 64 },
+}), true);
+assert.equal(messages.length, messageCountBeforeQueuedInsert,
+  "an icon based on a stale preview was sent before rebuilding");
+assert(icons.pendingInsertion(11),
+  "an icon based on a stale preview was not retained locally");
+assert.equal(icons.reconcile(state.snapshot), null);
+assert(icons.pendingInsertion(11),
+  "a repeated stale snapshot discarded the provisional icon");
+delete state.snapshot.stale;
+state.snapshot.snapshot_id = "queued-icon-rebased";
+assert.equal(icons.reconcile(state.snapshot), null);
+assert.equal(messages.length, messageCountBeforeQueuedInsert + 1);
+assert.equal(messages.at(-1).snapshotId, "queued-icon-rebased");
 
 function catalog(entries, {
   category = "all",

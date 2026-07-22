@@ -122,6 +122,21 @@ shape.acceptResult({
   operation: "insert",
   status: "stale",
 });
+assert.equal(state.shapeTool, "line");
+assert(shape.pendingInsertion(11),
+  "a stale insertion response discarded its provisional shape");
+state.snapshot = snapshot("line-rebased", []);
+assert.equal(shape.reconcile(state.snapshot), null);
+assert.equal(messages.length, 4);
+assert.equal(messages[3].snapshotId, "line-rebased");
+assert.equal(messages[3].kind, "line");
+shape.acceptResult({
+  type: "shapeEditResult",
+  requestId: messages[3].requestId,
+  operation: "insert",
+  status: "rejected",
+  message: "rejected rebased insertion for test",
+});
 assert.equal(state.shapeTool, "select");
 
 const lineTarget = {
@@ -136,15 +151,15 @@ const lineTarget = {
 assert.equal(shape.editStyle(lineTarget, {
   stroke: { ...lineTarget.stroke, width: 3, style: "dashed" },
 }), true);
-assert.equal(messages.length, 4);
-assert.equal(messages[3].kind, "line");
-assert.equal(messages[3].stroke.width, 3);
-assert.equal(Object.hasOwn(messages[3], "fill"), false);
+assert.equal(messages.length, 5);
+assert.equal(messages[4].kind, "line");
+assert.equal(messages[4].stroke.width, 3);
+assert.equal(Object.hasOwn(messages[4], "fill"), false);
 shape.acceptResult({
   type: "shapeEditResult",
-  requestId: messages[3].requestId,
+  requestId: messages[4].requestId,
   operation: "style",
-  status: "stale",
+  status: "rejected",
 });
 
 assert.equal(shape.editLineGeometry(
@@ -152,10 +167,10 @@ assert.equal(shape.editLineGeometry(
   { x: 760, y: 170 },
   { x: 480, y: 310 },
 ), true);
-assert.equal(messages.length, 5);
-assert.deepEqual(messages[4], {
+assert.equal(messages.length, 6);
+assert.deepEqual(messages[5], {
   type: "editLineGeometry",
-  requestId: messages[4].requestId,
+  requestId: messages[5].requestId,
   snapshotId: state.snapshot.snapshot_id,
   nodeId: 102,
   pageId: 11,
@@ -170,15 +185,31 @@ assert.deepEqual(shape.pendingLineGeometry(102), {
 });
 shape.acceptResult({
   type: "shapeEditResult",
-  requestId: messages[4].requestId,
+  requestId: messages[5].requestId,
   operation: "geometry",
-  status: "stale",
+  status: "rejected",
 });
 assert.equal(shape.pendingLineGeometry(102), null);
 
 state.snapshot.stale = true;
-assert.equal(shape.canInsert(11), false);
-assert.equal(shape.editStyle(target, target), false);
+assert.equal(shape.canInsert(11), true);
+shape.selectTool("rectangle");
+const messageCountBeforeQueuedInsert = messages.length;
+assert.equal(shape.insert(11, {
+  bounds: { x: 180, y: 210, width: 120, height: 80 },
+}), true);
+assert.equal(messages.length, messageCountBeforeQueuedInsert,
+  "an insertion based on a stale preview was sent before rebuilding");
+assert(shape.pendingInsertion(11),
+  "an insertion based on a stale preview was not retained locally");
+assert.equal(shape.reconcile(state.snapshot), null);
+assert(shape.pendingInsertion(11),
+  "a repeated stale snapshot discarded the provisional shape");
+delete state.snapshot.stale;
+state.snapshot.snapshot_id = "queued-insert-rebased";
+assert.equal(shape.reconcile(state.snapshot), null);
+assert.equal(messages.length, messageCountBeforeQueuedInsert + 1);
+assert.equal(messages.at(-1).snapshotId, "queued-insert-rebased");
 
 function snapshot(id, shapes) {
   return {

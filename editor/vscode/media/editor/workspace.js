@@ -481,7 +481,7 @@ export class WorkspaceView {
         `icon-choice${draft.source === entry.id ? " is-active" : ""}`,
       );
       button.type = "button";
-      button.disabled = !this.state.snapshot || this.state.snapshot.stale ||
+      button.disabled = !this.state.snapshot ||
         !this.state.snapshot.page_editing?.some((target) =>
           target.page_id === this.state.currentPageId && target.insert_icons
         );

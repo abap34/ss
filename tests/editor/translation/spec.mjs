@@ -72,6 +72,28 @@ assert.deepEqual(
   { x: 240, y: 180 },
 );
 
+state.snapshot = snapshot("failed-build", [movedFirst, secondObject]);
+state.snapshot.stale = true;
+translation.submit(edit(state.snapshot, movedFirst, 18, -12));
+assert.equal(messages.length, 2,
+  "a translation based on a stale preview was sent before rebuilding");
+assert.deepEqual(
+  position(translation.frame(firstPage, movedFirst)),
+  { x: 148, y: 128 },
+  "a queued translation was not reflected in the provisional preview",
+);
+assert.equal(translation.reconcile(state.snapshot, 3), null);
+assert.deepEqual(
+  position(translation.frame(firstPage, movedFirst)),
+  { x: 148, y: 128 },
+  "a repeated stale snapshot discarded the queued translation",
+);
+state.snapshot = snapshot("recovered-build", [movedFirst, secondObject]);
+assert.equal(translation.reconcile(state.snapshot, 3), null);
+assert.equal(messages.length, 3);
+assert.equal(messages[2].snapshotId, "recovered-build");
+assert.equal(messages[2].nodeId, movedFirst.id);
+
 function snapshot(id, objects) {
   return {
     snapshot_id: id,

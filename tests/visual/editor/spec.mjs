@@ -314,7 +314,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await postShapeEditResult(page, {
       requestId: inserted.requestId,
       operation: "insert",
-      status: "stale",
+      status: "rejected",
     });
     await page.waitForFunction(() =>
       document.querySelector('.shape-tool[aria-label="Select"]')
@@ -531,7 +531,7 @@ await withBrowser(output, async (browser, baseUrl) => {
       "the provisional icon did not use the selected color");
     await postIconEditResult(page, {
       requestId: insertedIcon.requestId,
-      status: "stale",
+      status: "rejected",
     });
     await page.waitForFunction(() =>
       document.querySelector('.shape-tool[aria-label="Select"]')
@@ -569,7 +569,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await postShapeEditResult(page, {
       requestId: insertedSpeechBubble.requestId,
       operation: "insert",
-      status: "stale",
+      status: "rejected",
     });
     await page.waitForFunction(() =>
       document.querySelector('.shape-tool[aria-label="Select"]')
@@ -639,7 +639,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await postShapeEditResult(page, {
       requestId: insertedLine.requestId,
       operation: "insert",
-      status: "stale",
+      status: "rejected",
     });
     await page.waitForFunction(() =>
       document.querySelector('.shape-tool[aria-label="Select"]')
@@ -664,7 +664,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await postShapeEditResult(page, {
       requestId: defaultLine.requestId,
       operation: "insert",
-      status: "stale",
+      status: "rejected",
     });
     await page.waitForFunction(() =>
       document.querySelector('.shape-tool[aria-label="Select"]')
@@ -688,7 +688,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await postShapeEditResult(page, {
       requestId: edgeLine.requestId,
       operation: "insert",
-      status: "stale",
+      status: "rejected",
     });
     await page.waitForFunction(() =>
       document.querySelector('.shape-tool[aria-label="Select"]')
@@ -729,7 +729,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await postShapeEditResult(page, {
       requestId: styleEdit.requestId,
       operation: "style",
-      status: "stale",
+      status: "rejected",
     });
     await page.getByRole("button", { name: "Lock object" }).click();
     assert.equal(
@@ -826,7 +826,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await postShapeEditResult(page, {
       requestId: geometryEdit.requestId,
       operation: "geometry",
-      status: "stale",
+      status: "rejected",
     });
     await page.waitForFunction(() =>
       document.querySelector('.line-endpoint-handle[data-endpoint="start"]')
@@ -851,7 +851,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await postShapeEditResult(page, {
       requestId: lineStyleEdit.requestId,
       operation: "style",
-      status: "stale",
+      status: "rejected",
     });
     await page.getByRole("button", { name: "Lock object" }).click();
     assert.equal(
@@ -1187,6 +1187,35 @@ await withBrowser(output, async (browser, baseUrl) => {
       1,
       "a repeated failed build cleared its diagnostic message",
     );
+    const insertionCountBeforeStalePreview = await messageCount(page, "insertShape");
+    await shapePicker.locator("summary").click();
+    const staleRectangleTool = shapePicker.getByRole("button", { name: "Rectangle" });
+    assert.equal(await staleRectangleTool.isEnabled(), true,
+      "a failed build disabled shape insertion from the retained preview");
+    await staleRectangleTool.click();
+    const stalePlacement = page.locator(
+      '.page-shell[data-page-id="11"] .shape-placement-hit',
+    );
+    const stalePlacementBox = await stalePlacement.boundingBox();
+    assert(stalePlacementBox, "the retained preview omitted its shape placement layer");
+    await page.mouse.move(
+      stalePlacementBox.x + stalePlacementBox.width * 0.3,
+      stalePlacementBox.y + stalePlacementBox.height * 0.3,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      stalePlacementBox.x + stalePlacementBox.width * 0.45,
+      stalePlacementBox.y + stalePlacementBox.height * 0.46,
+      { steps: 3 },
+    );
+    await page.mouse.up();
+    assert.equal(await messageCount(page, "insertShape"), insertionCountBeforeStalePreview,
+      "a stale preview sent shape insertion before a successful rebuild");
+    assert.equal(await page.locator(".shape-placement-preview").count(), 1,
+      "a stale preview did not retain the provisional shape");
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator(".shape-placement-preview").count(), 0,
+      "Escape did not cancel the provisional shape queued during a failed build");
     await postBuildStatus(page, 110, "building");
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "building", "Building…");
