@@ -146,6 +146,40 @@ export class ShapeController {
     return true;
   }
 
+  editBounds(target, bounds) {
+    if (!this.state.snapshot || this.isBusy() ||
+        target.kind === "line" || !target.resize) return false;
+    const requestId = this.nextRequestId++;
+    const message = {
+      type: "editShapeBounds",
+      requestId,
+      snapshotId: this.state.snapshot.snapshot_id,
+      nodeId: target.node_id,
+      pageId: target.page_id,
+      kind: target.kind,
+      bounds: { ...bounds },
+    };
+    this.pending = {
+      requestId,
+      operation: "resize",
+      snapshotId: message.snapshotId,
+      message,
+      selection: { pageId: target.page_id, binding: target.binding },
+      phase: this.state.snapshot.stale ? "queued" : "requested",
+      bounds: {
+        nodeId: target.node_id,
+        pageId: target.page_id,
+        kind: target.kind,
+        bounds: { ...bounds },
+        fill: { ...target.fill },
+        stroke: { ...target.stroke },
+      },
+    };
+    if (this.pending.phase === "requested") this.actions.post(message);
+    this.actions.render();
+    return true;
+  }
+
   acceptResult(message) {
     if (!this.pending || message.requestId !== this.pending.requestId) return null;
     if (message.status === "applied") {
@@ -243,6 +277,13 @@ export class ShapeController {
     return geometry?.nodeId === nodeId ? geometry : null;
   }
 
+  pendingBounds(nodeId) {
+    const bounds = this.pending?.operation === "resize"
+      ? this.pending.bounds
+      : null;
+    return bounds?.nodeId === nodeId ? bounds : null;
+  }
+
   rebaseQueued(snapshot, pending) {
     if (pending.operation === "insert") {
       const editable = snapshot.page_editing?.some((target) =>
@@ -258,15 +299,24 @@ export class ShapeController {
     );
     const expectedKind = pending.operation === "geometry"
       ? "line"
-      : pending.message.kind;
+      : pending.message.kind ?? target?.kind;
     if (!target || target.kind !== expectedKind) {
       return queuedFailure("The target shape changed before the edit could be applied.");
+    }
+    if (pending.operation === "resize" && !target.resize) {
+      return queuedFailure("The target shape no longer supports resizing.");
     }
     pending.message.nodeId = target.node_id;
     pending.message.pageId = target.page_id;
     if (pending.geometry) {
       pending.geometry.nodeId = target.node_id;
       pending.geometry.pageId = target.page_id;
+    }
+    if (pending.bounds) {
+      pending.bounds.nodeId = target.node_id;
+      pending.bounds.pageId = target.page_id;
+      pending.bounds.fill = { ...target.fill };
+      pending.bounds.stroke = { ...target.stroke };
     }
     return null;
   }

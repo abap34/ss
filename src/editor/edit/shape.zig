@@ -75,6 +75,11 @@ pub const LineGeometryExpressions = struct {
     end_y: base.ByteSpan,
 };
 
+pub const ClosedGeometryExpressions = struct {
+    width: base.ByteSpan,
+    height: base.ByteSpan,
+};
+
 pub const Shape = union(Kind) {
     rectangle: ClosedShape,
     circle: ClosedShape,
@@ -200,16 +205,40 @@ pub fn lineGeometryEdits(
     return .{ .edits = edits };
 }
 
+pub fn closedGeometryEdits(
+    allocator: std.mem.Allocator,
+    expressions: ClosedGeometryExpressions,
+    bounds: Bounds,
+) !base.Result {
+    const spans = [_]base.ByteSpan{ expressions.width, expressions.height };
+    const values = [_]f64{ bounds.width, bounds.height };
+    const edits = try allocator.alloc(base.TextEdit, spans.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (edits[0..initialized]) |*edit| edit.deinit(allocator);
+        allocator.free(edits);
+    }
+    for (spans, values, 0..) |span, value, index| {
+        edits[index] = .{
+            .start = span.start,
+            .end = span.end,
+            .text = try relation.numericLiteral(allocator, value),
+        };
+        initialized += 1;
+    }
+    return .{ .edits = edits };
+}
+
 fn appendConstructor(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     shape: Shape,
 ) !void {
     switch (shape) {
-        .rectangle => |value| try appendClosedConstructor(allocator, out, "rectangle!", value, true),
-        .circle => |value| try appendClosedConstructor(allocator, out, "circle!", value, false),
-        .arrow => |value| try appendClosedConstructor(allocator, out, "arrow_shape!", value, true),
-        .speech_bubble => |value| try appendClosedConstructor(allocator, out, "speech_bubble!", value, true),
+        .rectangle => |value| try appendClosedConstructor(allocator, out, "rectangle!", value),
+        .circle => |value| try appendClosedConstructor(allocator, out, "ellipse!", value),
+        .arrow => |value| try appendClosedConstructor(allocator, out, "arrow_shape!", value),
+        .speech_bubble => |value| try appendClosedConstructor(allocator, out, "speech_bubble!", value),
         .line => |value| try appendLineConstructor(allocator, out, value),
     }
 }
@@ -219,7 +248,6 @@ fn appendClosedConstructor(
     out: *std.ArrayList(u8),
     constructor: []const u8,
     shape: ClosedShape,
-    include_height: bool,
 ) !void {
     const bounds = shape.bounds;
     const width = try relation.numericLiteral(allocator, bounds.width);
@@ -229,10 +257,8 @@ fn appendClosedConstructor(
     try out.appendSlice(allocator, constructor);
     try out.append(allocator, '(');
     try out.appendSlice(allocator, width);
-    if (include_height) {
-        try out.appendSlice(allocator, ", ");
-        try out.appendSlice(allocator, height);
-    }
+    try out.appendSlice(allocator, ", ");
+    try out.appendSlice(allocator, height);
     const fill_text = try fillExpression(allocator, shape.fill);
     defer allocator.free(fill_text);
     const stroke_text = try strokeExpression(allocator, shape.stroke);

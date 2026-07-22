@@ -81,6 +81,7 @@ export function editorSnapshot() {
         page_id: 11,
         binding: "summary",
         kind: "rectangle",
+        resize: true,
         fill: { enabled: true, color: "#e8f1ff", opacity: 1 },
         stroke: { enabled: true, color: "#2563eb", width: 1.6, style: "solid" },
       },

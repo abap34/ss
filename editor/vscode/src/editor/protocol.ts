@@ -220,6 +220,7 @@ interface ShapeEditingBase {
 export type ShapeEditingCapability =
   | ShapeEditingBase & ShapeStyle & {
     kind: "rectangle" | "circle" | "arrow" | "speech_bubble";
+    resize: boolean;
   }
   | ShapeEditingBase & {
     kind: "line";
@@ -299,7 +300,7 @@ export type HostMessage =
   | {
     type: "shapeEditResult";
     requestId: number;
-    operation: "insert" | "style" | "geometry";
+    operation: "insert" | "style" | "geometry" | "resize";
     status: "applied";
     documentVersion: number;
     selection?: ShapeEditResult["selection"];
@@ -307,7 +308,7 @@ export type HostMessage =
   | {
     type: "shapeEditResult";
     requestId: number;
-    operation: "insert" | "style" | "geometry";
+    operation: "insert" | "style" | "geometry" | "resize";
     status: Exclude<ShapeEditResult["status"], "ok">;
     message?: string;
   }
@@ -377,6 +378,16 @@ type LineGeometryEditMessage = {
   end: Point;
 };
 
+type ShapeBoundsEditMessage = {
+  type: "editShapeBounds";
+  requestId: number;
+  snapshotId: string;
+  nodeId: number;
+  pageId: number;
+  kind: "rectangle" | "circle" | "arrow" | "speech_bubble";
+  bounds: Rect;
+};
+
 type IconCatalogMessage = {
   type: "queryIcons";
   requestId: number;
@@ -413,5 +424,6 @@ export type WebviewMessage =
   | ShapeInsertionMessage
   | ShapeStyleEditMessage
   | LineGeometryEditMessage
+  | ShapeBoundsEditMessage
   | IconCatalogMessage
   | IconInsertionMessage;

@@ -225,7 +225,7 @@ export class EditorController implements vscode.Disposable {
       return;
     }
     if (message.type === "insertShape" || message.type === "editShapeStyle" ||
-        message.type === "editLineGeometry") {
+        message.type === "editLineGeometry" || message.type === "editShapeBounds") {
       await this.applyShapeEdit(session, message);
     }
   }
@@ -360,7 +360,7 @@ export class EditorController implements vscode.Disposable {
   private async applyShapeEdit(
     session: Session,
     message: Extract<WebviewMessage, {
-      type: "insertShape" | "editShapeStyle" | "editLineGeometry";
+      type: "insertShape" | "editShapeStyle" | "editLineGeometry" | "editShapeBounds";
     }>,
   ): Promise<void> {
     const client = this.clientProvider();
@@ -368,7 +368,9 @@ export class EditorController implements vscode.Disposable {
       ? "insert"
       : message.type === "editShapeStyle"
       ? "style"
-      : "geometry";
+      : message.type === "editLineGeometry"
+      ? "geometry"
+      : "resize";
     if (!client) {
       await this.post(session, {
         type: "shapeEditResult",
@@ -385,7 +387,9 @@ export class EditorController implements vscode.Disposable {
         ? "ss/insertShape"
         : message.type === "editShapeStyle"
         ? "ss/shapeStyleEdit"
-        : "ss/editLineGeometry";
+        : message.type === "editLineGeometry"
+        ? "ss/editLineGeometry"
+        : "ss/editShapeBounds";
       const result = await client.sendRequest<ShapeEditResult>(method, {
         textDocument: { uri: session.document.uri.toString() },
         snapshotId: message.snapshotId,
@@ -409,6 +413,11 @@ export class EditorController implements vscode.Disposable {
             nodeId: message.nodeId,
             start: message.start,
             end: message.end,
+          }
+          : message.type === "editShapeBounds"
+          ? {
+            nodeId: message.nodeId,
+            bounds: message.bounds,
           }
           : message.kind === "line"
           ? {

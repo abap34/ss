@@ -718,6 +718,77 @@ await withBrowser(output, async (browser, baseUrl) => {
 
     await page.locator('.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]').click();
     await page.waitForSelector(".shape-style-editor");
+    const resizeHandles = page.locator(
+      '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"] .shape-resize-handle',
+    );
+    assert.equal(await resizeHandles.count(), 8,
+      "selecting a standard shape did not expose all axis and corner handles");
+    const bottomRightResize = page.locator(
+      '.object-hit[data-object-id="101"] .shape-resize-handle[data-direction="bottom-right"]',
+    );
+    const bottomRightHit = page.locator(
+      '.object-hit[data-object-id="101"] .shape-resize-handle[data-direction="bottom-right"] .shape-resize-hit',
+    );
+    assert.equal(await bottomRightResize.count(), 1,
+      "the standard shape omitted its bottom-right resize handle");
+    await page.evaluate(() => new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
+    await bottomRightHit.hover();
+    const resizeBox = await bottomRightHit.boundingBox();
+    assert(resizeBox, "the shape resize handle had no interactive bounds");
+    await page.mouse.move(
+      resizeBox.x + resizeBox.width / 2,
+      resizeBox.y + resizeBox.height / 2,
+    );
+    const resizeHitClass = await page.evaluate(({ x, y }) =>
+      document.elementFromPoint(x, y)?.getAttribute("class"), {
+      x: resizeBox.x + resizeBox.width / 2,
+      y: resizeBox.y + resizeBox.height / 2,
+    });
+    assert.equal(resizeHitClass, "shape-resize-hit",
+      `the resize handle was covered by ${resizeHitClass}`);
+    await page.mouse.down();
+    assert.equal(
+      await page.locator('.object-hit[data-object-id="101"]')
+        .evaluate((node) => node.classList.contains("is-editing-shape-bounds")),
+      true,
+      "pressing the shape handle did not start resizing",
+    );
+    await page.mouse.move(
+      resizeBox.x + resizeBox.width / 2 + 42,
+      resizeBox.y + resizeBox.height / 2 + 28,
+      { steps: 3 },
+    );
+    assert.equal(
+      await page.locator('.object-hit[data-object-id="101"]')
+        .evaluate((node) => node.classList.contains("is-editing-shape-bounds")),
+      true,
+      "shape resizing did not show provisional bounds",
+    );
+    await page.mouse.up();
+    const boundsEdit = await lastMessage(page, "editShapeBounds");
+    assert.equal(boundsEdit.nodeId, 101);
+    assert.equal(boundsEdit.kind, "rectangle");
+    assert(boundsEdit.bounds.width > 360 && boundsEdit.bounds.height > 100,
+      `corner resizing did not enlarge both axes: ${JSON.stringify(boundsEdit.bounds)}`);
+    assert.equal(await page.locator(".shape-resize-preview").count(), 1,
+      "the resized shape disappeared before the source edit was reflected");
+    assert.equal(
+      await page.locator('.shape-resize-handle[data-direction="bottom-right"]')
+        .getAttribute("aria-disabled"),
+      "true",
+      "pending shape resize left its handles interactive",
+    );
+    await postShapeEditResult(page, {
+      requestId: boundsEdit.requestId,
+      operation: "resize",
+      status: "rejected",
+    });
+    await page.waitForFunction(() =>
+      document.querySelector('.shape-resize-handle[data-direction="bottom-right"]')
+        ?.getAttribute("aria-disabled") === "false"
+    );
     const shapeStrokeStyle = page.locator(
       ".shape-style-editor .shape-stroke-style-select select",
     );

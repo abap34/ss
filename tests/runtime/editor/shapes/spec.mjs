@@ -38,7 +38,7 @@ end
       `empty page omitted shape insertion capability: ${JSON.stringify(initial.page_editing)}`,
     );
 
-    const invalidCircle = await client.request("ss/insertShape", {
+    const ellipse = await client.request("ss/insertShape", {
       textDocument: { uri },
       snapshotId: initial.snapshot_id,
       pageId: page.id,
@@ -47,9 +47,14 @@ end
       fill: { enabled: true, color: "#ffffff", opacity: 1 },
       stroke: { enabled: true, color: "#000000", width: 1, style: "solid" },
     });
+    assert(ellipse.status === "ok", `ellipse insertion failed: ${JSON.stringify(ellipse)}`);
+    const ellipseSource = applyProtocolEdits(
+      source,
+      ellipse.workspaceEdit?.changes?.[uri] ?? [],
+    );
     assert(
-      invalidCircle.status === "rejected",
-      `a non-square circle was accepted: ${JSON.stringify(invalidCircle)}`,
+      ellipseSource.includes("let circle_item = ellipse!(80, 70, VectorStyle"),
+      `circle tool did not emit editable ellipse dimensions: ${ellipseSource}`,
     );
 
     const invisible = await client.request("ss/insertShape", {
@@ -145,6 +150,7 @@ end
         source,
       })}`,
     );
+    assert(shape.resize === true, `inserted rectangle was not resizable: ${JSON.stringify(shape)}`);
     assert(
       shape.stroke.style === "dashed",
       `inserted stroke style was not reflected in the snapshot: ${JSON.stringify(shape.stroke)}`,
@@ -154,6 +160,43 @@ end
       Math.abs(bounds.x - 120) < 0.1 && Math.abs(bounds.y - 140) < 0.1 &&
         Math.abs(bounds.width - 180) < 0.1 && Math.abs(bounds.height - 110) < 0.1,
       `inserted rectangle had unexpected bounds: ${JSON.stringify(bounds)}`,
+    );
+
+    const staleResize = await client.request("ss/editShapeBounds", {
+      textDocument: { uri },
+      snapshotId: initial.snapshot_id,
+      pageId: shape.page_id,
+      nodeId: shape.node_id,
+      bounds: { x: 80, y: 70, width: 240, height: 64 },
+    });
+    assert(staleResize.status === "stale", `stale shape resize was accepted: ${JSON.stringify(staleResize)}`);
+
+    const outsideResize = await client.request("ss/editShapeBounds", {
+      textDocument: { uri },
+      snapshotId: afterInsertion.snapshot_id,
+      pageId: shape.page_id,
+      nodeId: shape.node_id,
+      bounds: { x: -1, y: 70, width: 240, height: 64 },
+    });
+    assert(outsideResize.status === "rejected", `out-of-page shape resize was accepted: ${JSON.stringify(outsideResize)}`);
+
+    const resize = await client.request("ss/editShapeBounds", {
+      textDocument: { uri },
+      snapshotId: afterInsertion.snapshot_id,
+      pageId: shape.page_id,
+      nodeId: shape.node_id,
+      bounds: { x: 80, y: 70, width: 240, height: 64 },
+    });
+    assert(resize.status === "ok", `shape resize failed: ${JSON.stringify(resize)}`);
+    const resizedSource = applyProtocolEdits(
+      source,
+      resize.workspaceEdit?.changes?.[uri] ?? [],
+    );
+    assert(
+      resizedSource.includes("rectangle!(240, 64, VectorStyle") &&
+        resizedSource.includes("~!~ rectangle_item.left == page.left + 80") &&
+        resizedSource.includes("~!~ rectangle_item.top == page.top - 70"),
+      `shape resize emitted unexpected source: ${resizedSource}`,
     );
 
     const style = await client.request("ss/shapeStyleEdit", {
@@ -207,6 +250,45 @@ end
       stroke: { enabled: true, color: "#000000", width: 1, style: "solid" },
     });
     assert(stale.status === "stale", `stale shape request was accepted: ${JSON.stringify(stale)}`);
+
+    const canonicalStyle =
+      'VectorStyle { fill = solid_fill(c"#e8f1ff", 1) stroke = solid_stroke(c"#2563eb", 1.6) }';
+    const standardShapesSource = source.replace("end\n", `  let ellipse_item = ellipse!(140, 80, ${canonicalStyle})
+  let arrow_item = arrow_shape!(170, 90, ${canonicalStyle})
+  let bubble_item = speech_bubble!(180, 120, ${canonicalStyle})
+  let fixed_circle_item = circle!(80, ${canonicalStyle})
+end
+`);
+    diagnosticsPromise = client.waitForDiagnostics(uri);
+    client.changeDocument({ uri, version: 4, text: standardShapesSource });
+    assert(
+      (await diagnosticsPromise).params.diagnostics.length === 0,
+      "standard shape resize fixture produced diagnostics",
+    );
+    const standardShapes = await client.request("ss/editorSnapshot", {
+      textDocument: { uri },
+    });
+    for (const [binding, kind] of [
+      ["rectangle_item", "rectangle"],
+      ["ellipse_item", "circle"],
+      ["arrow_item", "arrow"],
+      ["bubble_item", "speech_bubble"],
+    ]) {
+      const target = standardShapes.shape_editing?.find((candidate) =>
+        candidate.binding === binding
+      );
+      assert(
+        target?.kind === kind && target.resize === true,
+        `${binding} did not expose standard shape resizing: ${JSON.stringify(target)}`,
+      );
+    }
+    const fixedCircle = standardShapes.shape_editing?.find((candidate) =>
+      candidate.binding === "fixed_circle_item"
+    );
+    assert(
+      fixedCircle?.kind === "circle" && fixedCircle.resize === false,
+      `diameter-only circle unexpectedly exposed independent dimensions: ${JSON.stringify(fixedCircle)}`,
+    );
   });
 
   const lineSlide = path.join(project, "line-slide.ss");

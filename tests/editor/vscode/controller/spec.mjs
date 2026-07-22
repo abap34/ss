@@ -63,6 +63,7 @@ await testOpeningManualPreviewBuildsInitialSnapshot();
 await testManualPositionEditRequestsReconciliation();
 await testNewSourceEditReschedulesReconciliation();
 await testLineGeometryEditForwardsOrderedPagePoints();
+await testShapeBoundsEditForwardsPageBounds();
 await testIconCatalogAndInsertionReachTheWebview();
 
 async function testOpenResolvesConfiguredEntryWithoutSsDocument() {
@@ -231,6 +232,35 @@ async function testLineGeometryEditForwardsOrderedPagePoints() {
   });
 }
 
+async function testShapeBoundsEditForwardsPageBounds() {
+  await withManualSession(async ({ controller, session, requests, messages }) => {
+    await controller.applyShapeEdit(session, {
+      type: "editShapeBounds",
+      requestId: 10,
+      snapshotId: "initial",
+      nodeId: 8,
+      pageId: 1,
+      kind: "speech_bubble",
+      bounds: { x: 60, y: 80, width: 220, height: 140 },
+    });
+    const request = requests.find((candidate) =>
+      candidate.method === "ss/editShapeBounds"
+    );
+    assert.deepEqual(request?.params, {
+      textDocument: { uri: session.document.uri.toString() },
+      snapshotId: "initial",
+      pageId: 1,
+      nodeId: 8,
+      bounds: { x: 60, y: 80, width: 220, height: 140 },
+    });
+    assert(messages.some((message) =>
+      message.type === "shapeEditResult" &&
+      message.operation === "resize" &&
+      message.status === "applied"
+    ), "an applied shape resize did not reach the webview");
+  });
+}
+
 async function testIconCatalogAndInsertionReachTheWebview() {
   await withManualSession(async ({ controller, session, requests, messages }) => {
     await controller.queryIcons(session, {
@@ -330,7 +360,8 @@ automatic = false
     const client = {
       async sendRequest(method, params, token) {
         requests.push({ method, params, token });
-        if (method === "ss/layoutEdit" || method === "ss/editLineGeometry") {
+        if (method === "ss/layoutEdit" || method === "ss/editLineGeometry" ||
+            method === "ss/editShapeBounds") {
           return {
             schema: 1,
             status: "ok",
