@@ -90,9 +90,10 @@ unsaved source edits are reflected after the configured debounce interval. If
 editing continues, `max_wait` bounds how long the next preview update can be
 postponed.
 
-Set `[editor.wysiwyg.refresh].automatic = false` to keep the last preview until
-an explicit build. Run `ss: Build WYSIWYG Preview` or press `Ctrl+Shift+B`
-(`Cmd+Shift+B` on macOS) to build it.
+The editor always builds its initial preview when opened. Set
+`[editor.wysiwyg.refresh].automatic = false` to keep that preview after later
+source edits until an explicit build. Run `ss: Build WYSIWYG Preview` or press
+`Ctrl+Shift+B` (`Cmd+Shift+B` on macOS) to rebuild it.
 
 The editor displays the shared HTML document used by the PDF and HTML renderers together
 with the compiler's page structure and anchor relations. Pages and the document

@@ -58,9 +58,42 @@ const { EditorController } = await import(
   `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
 );
 
+await testOpeningManualPreviewBuildsInitialSnapshot();
 await testManualPositionEditRequestsReconciliation();
 await testNewSourceEditReschedulesReconciliation();
 await testLineGeometryEditForwardsOrderedPagePoints();
+
+async function testOpeningManualPreviewBuildsInitialSnapshot() {
+  await withManualSession(async ({ controller, session, requests, messages, change }) => {
+    session.ready = false;
+    session.snapshotId = undefined;
+    await controller.handleMessage(session, { type: "ready" });
+    await waitFor(() => requests.some((request) =>
+      request.method === "ss/editorSnapshot"
+    ));
+    await waitFor(() => messages.some((message) => message.type === "snapshot"));
+    assert.equal(
+      messages.some((message) =>
+        message.type === "buildStatus" && message.status === "manual"
+      ),
+      false,
+      "opening a manual-refresh preview waited for a separate build command",
+    );
+
+    const initialBuildCount = requests.filter((request) =>
+      request.method === "ss/editorSnapshot"
+    ).length;
+    change();
+    await waitFor(() => messages.some((message) =>
+      message.type === "buildStatus" && message.status === "manual"
+    ));
+    assert.equal(
+      requests.filter((request) => request.method === "ss/editorSnapshot").length,
+      initialBuildCount,
+      "a later source edit ignored the manual-refresh setting",
+    );
+  });
+}
 
 async function testManualPositionEditRequestsReconciliation() {
   await withManualSession(async ({ controller, session, requests, messages }) => {
@@ -200,7 +233,6 @@ automatic = false
         dispose() {},
       },
       ready: true,
-      buildOnReady: false,
       serial: 0,
       requestRunning: false,
       refreshPending: false,
