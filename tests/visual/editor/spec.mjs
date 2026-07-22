@@ -135,6 +135,8 @@ await withBrowser(output, async (browser, baseUrl) => {
       "vertical ruler values did not increase upward from the page bottom");
 
     const selectTool = page.getByRole("button", { name: "Select" });
+    assert.equal(await selectTool.locator("svg.pointer-mode-icon--select").count(), 1,
+      "selection mode did not use its toolbar SVG icon");
     const zoom = page.locator('.zoom-select[aria-label="Zoom"]');
     const shell = page.locator('.page-shell[data-page-id="11"]');
     assert.equal(await zoom.inputValue(), "fit",
@@ -159,6 +161,8 @@ await withBrowser(output, async (browser, baseUrl) => {
       "zooming in did not switch to a manual percentage");
     assert(enlargedScale > fitScale,
       "pinching out did not enlarge the page");
+    assert(enlargedScale / fitScale > 1.5,
+      "pinch zoom sensitivity remained too low for a deliberate gesture");
     await dispatchPinch(page, 120);
     await page.waitForFunction((previousScale) =>
       Number(document.querySelector('.page-shell[data-page-id="11"]')
@@ -180,6 +184,10 @@ await withBrowser(output, async (browser, baseUrl) => {
       "pinch zoom changed the horizontal point under its anchor");
 
     const panTool = page.getByRole("button", { name: "Pan view" });
+    assert.equal(await panTool.locator("svg.pointer-mode-icon--pan").count(), 1,
+      "view movement mode did not use its toolbar SVG icon");
+    assert.equal((await panTool.textContent()).trim(), "",
+      "view movement mode retained a text or emoji glyph");
     await panTool.click();
     assert.equal(await panTool.getAttribute("aria-pressed"), "true",
       "the view movement mode did not activate");
@@ -318,6 +326,13 @@ await withBrowser(output, async (browser, baseUrl) => {
     const iconPicker = page.locator(".icon-picker");
     assert.equal(await iconPicker.locator(".icon-picker-placeholder").count(), 1,
       "the icon picker header did not use its neutral collection marker");
+    const placeholderSize = await iconPicker.locator(".icon-picker-placeholder")
+      .evaluate((node) => {
+        const bounds = node.getBoundingClientRect();
+        return { width: bounds.width, height: bounds.height };
+      });
+    assert.deepEqual(placeholderSize, { width: 12, height: 12 },
+      "the icon picker marker did not reserve its full visible area");
     await iconPicker.locator("summary").click();
     assert.equal(await page.locator(".icon-picker-panel").isVisible(), true,
       "icon gallery did not open from the toolbar");
