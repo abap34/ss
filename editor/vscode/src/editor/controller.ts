@@ -29,7 +29,6 @@ interface Session {
   document: vscode.TextDocument;
   panel: vscode.WebviewPanel;
   ready: boolean;
-  buildOnReady: boolean;
   timer?: NodeJS.Timeout;
   serial: number;
   requestRunning: boolean;
@@ -117,7 +116,6 @@ export class EditorController implements vscode.Disposable {
       document,
       panel,
       ready: false,
-      buildOnReady: false,
       serial: 0,
       requestRunning: false,
       refreshPending: false,
@@ -158,10 +156,7 @@ export class EditorController implements vscode.Disposable {
         : undefined;
     }
     if (session) {
-      if (!session.ready) {
-        session.buildOnReady = true;
-        return true;
-      }
+      if (!session.ready) return true;
       this.requestBuild(session);
       return true;
     }
@@ -169,7 +164,6 @@ export class EditorController implements vscode.Disposable {
     if (!document) return false;
     session = this.sessions.get(document.uri.toString());
     if (!session) return false;
-    session.buildOnReady = true;
     return true;
   }
 
@@ -179,12 +173,7 @@ export class EditorController implements vscode.Disposable {
   ): Promise<void> {
     if (message.type === "ready") {
       session.ready = true;
-      if (session.buildOnReady) {
-        session.buildOnReady = false;
-        this.schedule(session, 0);
-      } else {
-        this.scheduleAutomatic(session, 0);
-      }
+      this.schedule(session, 0);
       return;
     }
     if (message.type === "refreshFull") {
