@@ -381,6 +381,37 @@ button {
   color: var(--accent-text);
   outline: none;
 }
+.zoom-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 24px;
+  padding: 1px;
+  border: 1px solid var(--control-border);
+  border-radius: 5px;
+  background: var(--control-background);
+}
+.zoom-select {
+  width: 62px;
+  height: 20px;
+  padding: 0 2px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 8px;
+  text-align: center;
+}
+.zoom-select:hover,
+.zoom-select:focus {
+  color: var(--accent-text);
+}
+.zoom-select:disabled {
+  color: var(--text-faint);
+  cursor: default;
+  opacity: 0.5;
+}
 .shape-tools {
   display: flex;
   flex: 0 0 auto;
@@ -1005,11 +1036,18 @@ button {
   background: var(--viewport-background);
   scrollbar-color: var(--text-faint) var(--shell-background);
 }
+.viewport--pan {
+  cursor: grab;
+}
+.viewport--pan.viewport--panning {
+  cursor: grabbing;
+}
 .viewport--single {
   padding: var(--viewport-margin-y, 4%) var(--viewport-margin-x, 4%);
 }
 .viewport--single .pages-stage {
   display: grid;
+  width: max-content;
   min-width: 100%;
   min-height: 100%;
   place-items: center;
@@ -1019,6 +1057,7 @@ button {
 }
 .viewport--continuous .pages-stage {
   display: flex;
+  width: max-content;
   flex-direction: column;
   align-items: center;
   gap: 52px;
@@ -1661,6 +1700,26 @@ button {
   }
 }
 @media (max-width: 520px) {
+  :root {
+    --toolbar: 64px;
+  }
+  .toolbar {
+    height: var(--toolbar);
+    padding-top: 5px;
+    padding-bottom: 32px;
+  }
+  .zoom-controls {
+    position: absolute;
+    right: 9px;
+    bottom: 5px;
+  }
+  .build-status {
+    position: absolute;
+    bottom: 10px;
+    left: 9px;
+    max-width: calc(100% - 110px);
+    margin-left: 0;
+  }
   .toolbar > .shape-style-controls {
     display: none;
   }

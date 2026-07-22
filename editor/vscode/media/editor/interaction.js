@@ -35,6 +35,7 @@ export class InteractionController {
   renderLayer(page) {
     const svg = svgElement("svg", "interaction-layer");
     svg.setAttribute("viewBox", `0 0 ${page.width} ${page.height}`);
+    if (this.state.pointerMode === "pan") return svg;
     const objects = this.state.snapshot.layout.objects
       .filter((object) => object.page_id === page.id)
       .sort((left, right) =>
