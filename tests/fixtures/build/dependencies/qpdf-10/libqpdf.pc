@@ -1,0 +1,9 @@
+prefix=/usr
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libqpdf
+Description: Deliberately old libqpdf metadata for build diagnostic tests
+Version: 10.6.3
+Libs: -L${libdir} -lqpdf
+Cflags: -I${includedir}

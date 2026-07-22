@@ -3,6 +3,13 @@ const std = @import("std");
 const Module = std.Build.Module;
 const Step = std.Build.Step;
 
+pub const minimum_version = "11.2.0";
+
+pub const Config = struct {
+    cpp: []const u8,
+    pkg_config: []const u8,
+};
+
 pub const Bridge = struct {
     file: std.Build.LazyPath,
     install: *Step.InstallFile,
@@ -12,6 +19,13 @@ pub const RuntimeLocation = enum {
     build,
     installed,
 };
+
+pub fn config(b: *std.Build) Config {
+    return .{
+        .cpp = b.option([]const u8, "qpdf-cxx", "C++20 compiler used for the system libqpdf bridge") orelse "c++",
+        .pkg_config = b.option([]const u8, "qpdf-pkg-config", "pkg-config command used to locate native PDF dependencies") orelse "pkg-config",
+    };
+}
 
 pub fn link(
     bridge: Bridge,
@@ -35,6 +49,8 @@ pub fn create(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    build_config: Config,
+    dependency_check: *Step,
 ) Bridge {
     const filename = b.fmt("{s}ss-qpdf{s}", .{
         target.result.libPrefix(),
@@ -42,13 +58,13 @@ pub fn create(
     });
     if (!usesHostSystemLibraries(b, target)) return unsupportedTarget(b, target, filename);
 
-    const cpp = b.option([]const u8, "qpdf-cxx", "C++ compiler used for the system libqpdf bridge") orelse "c++";
-    const pkg_config = b.option([]const u8, "qpdf-pkg-config", "pkg-config command used to locate system libqpdf") orelse "pkg-config";
+    const cpp = build_config.cpp;
+    const pkg_config = build_config.pkg_config;
 
-    const cflags = pkgConfigOutput(b, pkg_config, "--cflags", "qpdf-cflags.rsp");
-    const libraries = pkgConfigOutput(b, pkg_config, "--libs", "qpdf-libraries.rsp");
-    const qpdf_version = pkgConfigOutput(b, pkg_config, "--modversion", "qpdf-version.txt");
-    const compiler_version = commandOutput(b, cpp, &.{"--version"}, "qpdf-cxx-version.txt");
+    const cflags = pkgConfigOutput(b, pkg_config, "--cflags", "qpdf-cflags.rsp", dependency_check);
+    const libraries = pkgConfigOutput(b, pkg_config, "--libs", "qpdf-libraries.rsp", dependency_check);
+    const qpdf_version = pkgConfigOutput(b, pkg_config, "--modversion", "qpdf-version.txt", dependency_check);
+    const compiler_version = commandOutput(b, cpp, &.{"--version"}, "qpdf-cxx-version.txt", dependency_check);
 
     const compile = b.addSystemCommand(&.{
         cpp,
@@ -59,6 +75,7 @@ pub fn create(
         optimizationFlag(optimize),
     });
     compile.setName("build qpdf C ABI bridge");
+    compile.step.dependOn(dependency_check);
     switch (target.result.os.tag) {
         .linux => compile.addArgs(&.{
             "-shared",
@@ -92,8 +109,9 @@ fn pkgConfigOutput(
     command: []const u8,
     option: []const u8,
     basename: []const u8,
+    dependency_check: *Step,
 ) std.Build.LazyPath {
-    return commandOutput(b, command, &.{ option, "libqpdf" }, basename);
+    return commandOutput(b, command, &.{ option, "libqpdf" }, basename, dependency_check);
 }
 
 fn commandOutput(
@@ -101,10 +119,12 @@ fn commandOutput(
     command: []const u8,
     args: []const []const u8,
     basename: []const u8,
+    dependency_check: *Step,
 ) std.Build.LazyPath {
     const run = b.addSystemCommand(&.{command});
     run.addArgs(args);
     run.has_side_effects = true;
+    run.step.dependOn(dependency_check);
     return run.captureStdOut(.{ .basename = basename, .trim_whitespace = .trailing });
 }
 
@@ -123,7 +143,14 @@ fn unsupportedTarget(
 ) Bridge {
     const host = b.graph.host.result;
     const failure = b.addFail(b.fmt(
-        "the system libqpdf bridge requires the build host target; requested {s}-{s}-{s}, host is {s}-{s}-{s}",
+        \\ss cannot cross-compile its native PDF backend with host system libraries.
+        \\requested target: {s}-{s}-{s}
+        \\build host:       {s}-{s}-{s}
+        \\
+        \\Build ss on the target operating system and architecture. The PDF backend currently needs
+        \\target-native Cairo, Pango, librsvg, GdkPixbuf, and libqpdf libraries discovered by pkg-config.
+        \\
+    ,
         .{
             @tagName(target.result.cpu.arch),
             @tagName(target.result.os.tag),

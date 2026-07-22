@@ -234,9 +234,10 @@ ss has the following dependencies:
 | Pango headers and library | Text shaping and layout. |
 | librsvg headers and library | SVG rendering. |
 | GdkPixbuf headers and library | Raster image decoding and orientation. |
+| A C++20 compiler, such as GCC or Clang | Build the small libqpdf C ABI bridge. |
 | tree-sitter | Syntax Highlight. |
 | `git` | Fetch pinned tree-sitter runtime and parser sources during the first build. |
-| libqpdf headers and library | In-process PDF assembly and embedded PDF placement. |
+| libqpdf 11.2.0 or newer, including headers | In-process PDF assembly and embedded PDF placement. |
 | `pdflatex` or `lualatex` | Raw LaTeX math rendering, according to the document or page setting. |
 
 Run `ss doctor` to check project discovery, render tools, and tree-sitter syntax
@@ -265,9 +266,32 @@ Example apt command on Ubuntu/Debian:
 
 ```sh
 sudo apt-get install -y \
-  pkg-config libcairo2-dev libgdk-pixbuf-2.0-dev libpango1.0-dev \
+  pkg-config qpdf libcairo2-dev libgdk-pixbuf-2.0-dev libpango1.0-dev \
   libqpdf-dev librsvg2-dev
+pkg-config --atleast-version=11.2.0 libqpdf
 ```
+
+The qpdf bridge also needs a C++20 compiler. The build invokes `c++` by
+default. GCC and Clang are both supported. Select a different compiler command
+with `-Dqpdf-cxx`, for example:
+
+```sh
+zig build -Dqpdf-cxx=clang++
+```
+
+Ubuntu 22.04 provides libqpdf 10.6.3, which is too old for the native PDF
+backend. Install a current release from the [upstream qpdf
+PPA](https://launchpad.net/~qpdf/+archive/ubuntu/qpdf) before running the
+command above:
+
+```sh
+sudo add-apt-repository -y ppa:qpdf/qpdf
+sudo apt-get update
+```
+
+Older Debian releases may require a compatible libqpdf package from Debian
+backports or an upstream build. In every case, the `pkg-config` version check
+above must succeed before building ss.
 
 ## Usage
 
