@@ -334,7 +334,7 @@ fn/! pdf(path_value: String, factor: Number = 1, page_number: Number = 1, page_b
   return obj
 end
 
-fn/! icon(source: String, width: Number = 72, height: Number = 72, color: Color = c"#2563eb") -> Object
+fn/! icon(source: String, width: Number = 72, height: Number = 72, color: Color = c"#374151") -> Object
   let obj = objects::icon_obj(source)
   obj.asset.tint = color
   ~ obj.width == width

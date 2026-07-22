@@ -536,7 +536,7 @@ type Icon = object {
 
   render_kind: RenderKind = RenderKind.vector_asset
   asset: AssetStyle = AssetStyle {
-    tint = c"#2563eb"
+    tint = c"#374151"
   }
   text: TextStyle = TextStyle {
     parse = TextParseMode.none

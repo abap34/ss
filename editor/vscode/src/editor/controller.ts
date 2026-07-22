@@ -220,10 +220,15 @@ export class EditorController implements vscode.Disposable {
     try {
       const result = await client.sendRequest<IconCatalogResult>(
         "ss/iconCatalog",
-        { query: message.query, style: message.style },
+        {
+          query: message.query,
+          style: message.style,
+          category: message.category,
+          offset: message.offset,
+        },
       );
       if (session.disposed) return;
-      if (!Array.isArray(result.icons)) {
+      if (!Array.isArray(result.icons) || !Array.isArray(result.categories)) {
         throw new Error("The language server returned an invalid icon catalog.");
       }
       await this.post(session, {

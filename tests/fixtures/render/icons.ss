@@ -1,7 +1,7 @@
 import std:themes/default as *
 
 page icon_collection
-let star = icon!("fa-solid:star", 72, 72, c"#2563eb")
+let star = icon!("fa-solid:star", 72, 72)
 let circle = icon!("fa-regular:circle", 72, 72, c"#16a34a")
 let github = icon!("fa-brands:github", 72, 72, c"#111827")
 ~ star.left == page.left + 120

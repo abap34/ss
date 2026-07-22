@@ -1043,7 +1043,7 @@ fn/! pdf(path_value: String, factor: Number = 1, page_number: Number = 1, page_b
   return components::pdf(path_value, factor, page_number, page_box)
 end
 
-fn/! icon(source: String, width: Number = 72, height: Number = 72, color: Color = c"#2563eb") -> Object
+fn/! icon(source: String, width: Number = 72, height: Number = 72, color: Color = c"#374151") -> Object
   return components::icon(source, width, height, color)
 end
 

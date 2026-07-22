@@ -173,15 +173,23 @@ export interface IconCatalogEntry {
   svg: string;
 }
 
+export interface IconCategory {
+  id: string;
+  label: string;
+}
+
 export interface IconCatalogResult {
   schema: 1;
-  collection: "fontawesome-free";
+  collection: string;
   version: string;
   query: string;
   style: IconStyle;
+  category: string;
+  offset: number;
   total_available: number;
   total_matches: number;
   has_more: boolean;
+  categories: IconCategory[];
   icons: IconCatalogEntry[];
 }
 
@@ -374,6 +382,8 @@ type IconCatalogMessage = {
   requestId: number;
   query: string;
   style: IconStyle;
+  category: string;
+  offset: number;
 };
 
 type IconInsertionMessage = {

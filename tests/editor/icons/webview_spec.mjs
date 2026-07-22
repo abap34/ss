@@ -1,26 +1,37 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import {
+  defaultIconColor,
   defaultIconDraft,
   IconController,
+  shouldLoadMoreIcons,
 } from "../../../editor/vscode/media/editor/icon-insertion.js";
+
+assert.equal(defaultIconDraft.color, defaultIconColor);
+assert.equal(defaultIconColor, "#374151");
 
 const state = {
   snapshot: snapshot("initial", []),
   currentPageId: 11,
   selectedObjectId: null,
+  pointerMode: "select",
   shapeTool: "select",
   iconPickerOpen: false,
   iconQuery: "",
   iconStyle: "all",
+  iconCategory: "all",
+  iconCategories: [],
   iconCatalog: null,
   iconCatalogPending: false,
+  iconCatalogError: null,
   iconDraft: structuredClone(defaultIconDraft),
 };
 const messages = [];
 const selections = [];
+const reportedErrors = [];
 const icons = new IconController(state, {
   post: (message) => messages.push(structuredClone(message)),
+  reportError: (message) => reportedErrors.push(message),
   render: () => {},
   selectObject: (nodeId, pageId) => {
     state.selectedObjectId = nodeId;
@@ -31,6 +42,8 @@ const icons = new IconController(state, {
 icons.setPickerOpen(true);
 assert.equal(messages[0].type, "queryIcons");
 assert.equal(messages[0].style, "all");
+assert.equal(messages[0].category, "all");
+assert.equal(messages[0].offset, 0);
 assert.equal(state.iconCatalogPending, true);
 const firstRequestId = messages[0].requestId;
 icons.queryNow();
@@ -42,6 +55,16 @@ icons.acceptCatalog({
   result: catalog([]),
 });
 assert.equal(state.iconCatalog, null, "an obsolete icon response replaced the current search");
+assert.equal(icons.expireCatalogRequest(firstRequestId), false,
+  "an obsolete timeout replaced the current search");
+assert.equal(icons.expireCatalogRequest(secondRequestId), true);
+assert.equal(state.iconCatalogPending, false);
+assert.match(state.iconCatalogError, /timed out/);
+assert.equal(reportedErrors.length, 1);
+icons.retryCatalog();
+assert.equal(state.iconCatalogPending, true);
+assert.equal(state.iconCatalogError, null);
+const retryRequestId = messages.at(-1).requestId;
 
 const star = {
   id: "fa-solid:star",
@@ -51,10 +74,36 @@ const star = {
 };
 icons.acceptCatalog({
   type: "iconCatalog",
-  requestId: secondRequestId,
-  result: catalog([star]),
+  requestId: retryRequestId,
+  result: catalog([star], { totalMatches: 2, hasMore: true }),
 });
 assert.equal(state.iconCatalog.icons[0].id, star.id);
+assert.equal(icons.loadMore(), true);
+const loadMoreRequest = messages.at(-1);
+assert.equal(loadMoreRequest.offset, 1);
+const circle = {
+  id: "fa-regular:circle",
+  name: "circle",
+  style: "regular",
+  svg: "<svg viewBox=\"0 0 512 512\"><path fill=\"currentColor\"/></svg>",
+};
+icons.acceptCatalog({
+  type: "iconCatalog",
+  requestId: loadMoreRequest.requestId,
+  result: catalog([circle], { offset: 1, totalMatches: 2 }),
+});
+assert.deepEqual(state.iconCatalog.icons.map((entry) => entry.id), [star.id, circle.id]);
+assert.deepEqual(state.iconCategories, [{ id: "shapes", label: "Shapes" }]);
+assert.equal(shouldLoadMoreIcons({
+  scrollHeight: 600,
+  scrollTop: 370,
+  clientHeight: 120,
+}), true);
+assert.equal(shouldLoadMoreIcons({
+  scrollHeight: 600,
+  scrollTop: 200,
+  clientHeight: 120,
+}), false);
 assert.equal(icons.select(star), true);
 assert.equal(state.shapeTool, "icon");
 assert.equal(state.iconPickerOpen, false);
@@ -102,16 +151,24 @@ assert.deepEqual(selections, [{ nodeId: 101, pageId: 11 }]);
 state.snapshot.stale = true;
 assert.equal(icons.canInsert(11), false);
 
-function catalog(entries) {
+function catalog(entries, {
+  category = "all",
+  offset = 0,
+  totalMatches = entries.length,
+  hasMore = false,
+} = {}) {
   return {
     schema: 1,
     collection: "fontawesome-free",
     version: "7.2.0",
     query: "",
     style: "all",
+    category,
+    offset,
     total_available: 2141,
-    total_matches: entries.length,
-    has_more: false,
+    total_matches: totalMatches,
+    has_more: hasMore,
+    categories: [{ id: "shapes", label: "Shapes" }],
     icons: entries,
   };
 }
