@@ -4,6 +4,7 @@ import {
   buildFailureMessage,
   reconciliationFailureMessage,
 } from "./diagnostics.js";
+import { ComponentDeletionController } from "./component-deletion.js";
 import { disposePages } from "./document.js";
 import { defaultIconDraft, IconController } from "./icon-insertion.js";
 import { EditorNavigation } from "./navigation.js";
@@ -61,6 +62,14 @@ const translation = new TranslationController(state, {
   post: (message) => vscode.postMessage(message),
   render,
 });
+const componentDeletion = new ComponentDeletionController(state, {
+  post: (message) => vscode.postMessage(message),
+  render,
+  cancelEdits: (target) => {
+    translation.cancelNode(target.node_id);
+    shape.cancelTarget(target);
+  },
+});
 const shape = new ShapeController(state, {
   post: (message) => vscode.postMessage(message),
   render,
@@ -83,6 +92,7 @@ const actions = {
   selectPage,
   navigatePage,
   translation,
+  componentDeletion,
   shape,
   icon,
   objectLocks,
@@ -120,6 +130,11 @@ window.addEventListener("message", (event) => {
     }
   } else if (message.type === "shapeEditResult") {
     const editOutcome = shape.acceptResult(message);
+    if (editOutcome?.status === "failed") {
+      showError(editFailureMessage(editOutcome.message));
+    }
+  } else if (message.type === "componentDeleteResult") {
+    const editOutcome = componentDeletion.acceptResult(message);
     if (editOutcome?.status === "failed") {
       showError(editFailureMessage(editOutcome.message));
     }
@@ -174,10 +189,15 @@ function acceptSnapshot(message) {
   objectLocks.reconcile(state.snapshot);
   const shapeOutcome = shape.reconcile(state.snapshot);
   const iconOutcome = icon.reconcile(state.snapshot);
+  const deletionOutcome = componentDeletion.reconcile(
+    state.snapshot,
+    message.documentVersion,
+  );
   const reconciliationFailure = reconciliationFailureMessage([
     editOutcome,
     shapeOutcome,
     iconOutcome,
+    deletionOutcome,
   ]);
   if (!buildFailure && reconciliationFailure) {
     state.toast = { kind: "error", message: reconciliationFailure };
@@ -196,6 +216,9 @@ function acceptSnapshot(message) {
     toastDuration = successToastDuration;
   } else if (!buildFailure && iconOutcome?.status === "applied") {
     state.toast = { kind: "success", message: "Icon inserted into source." };
+    toastDuration = successToastDuration;
+  } else if (!buildFailure && deletionOutcome?.status === "applied") {
+    state.toast = { kind: "success", message: "Component deleted from source." };
     toastDuration = successToastDuration;
   }
   render();

@@ -254,6 +254,8 @@ state.snapshot = failedBuild;
 shape.reconcile(failedBuild);
 assert.equal(shape.isBusy(), true,
   "a failed build discarded the queued follow-up edit");
+assert.equal(shape.styleTarget(102)?.stroke.color, "#dc2626",
+  "a failed build discarded the applied provisional shape style");
 assert.equal(shape.canEdit(continuousTarget), true,
   "a failed build disabled editing of the retained shape");
 assert.deepEqual(shape.pendingLineGeometry(102), {
@@ -343,6 +345,19 @@ assert.equal(shape.followups.length, 0,
 assert.equal(shape.styleTarget(rectangleTarget.node_id)?.fill.color, "#0f172a");
 assert.equal(shape.styleTarget(rectangleTarget.node_id)?.stroke.color, "#334155");
 assert.equal(shape.styleTarget(rectangleTarget.node_id)?.stroke.style, "dash_dot");
+assert.equal(shape.hasPendingEdit(rectangleTarget.node_id), true,
+  "queued shape style was not exposed to the provisional preview");
+const pendingShapeItem = fakeClassItem();
+shape.applyPreview({
+  querySelectorAll(selector) {
+    if (selector === ".ss-pending-shape-source") return [];
+    return selector === `[data-ss-node-id="${rectangleTarget.node_id}"]`
+      ? [pendingShapeItem]
+      : [];
+  },
+}, rectangleTarget.page_id);
+assert.equal(pendingShapeItem.classes.has("ss-pending-shape-source"), true,
+  "queued shape style did not hide the old authoritative rendering");
 state.snapshot = snapshot("queued-style-rebased", [{
   ...rectangleTarget,
   node_id: 112,
@@ -521,6 +536,16 @@ shape.acceptResult({
 });
 assert.equal(shape.pendingInsertions(11).length, 0);
 
+state.snapshot = snapshot("cancel-shape-target", [rectangleTarget]);
+assert.equal(shape.editStyle(rectangleTarget, {
+  fill: { ...rectangleTarget.fill, color: "#22c55e" },
+  stroke: { ...rectangleTarget.stroke },
+}), true);
+assert.equal(shape.hasPendingEdit(rectangleTarget.node_id), true);
+assert.equal(shape.cancelTarget(rectangleTarget), true);
+assert.equal(shape.hasPendingEdit(rectangleTarget.node_id), false,
+  "deleting a component retained its provisional shape edit");
+
 function snapshot(id, shapes) {
   return {
     snapshot_id: id,
@@ -528,5 +553,16 @@ function snapshot(id, shapes) {
     editing: [],
     page_editing: [{ page_id: 11, insert_shapes: true }],
     shape_editing: shapes,
+  };
+}
+
+function fakeClassItem() {
+  const classes = new Set();
+  return {
+    classes,
+    classList: {
+      add: (name) => classes.add(name),
+      remove: (name) => classes.delete(name),
+    },
   };
 }

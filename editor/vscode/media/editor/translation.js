@@ -71,14 +71,7 @@ export class TranslationController {
 
   reconcile(snapshot, documentVersion) {
     if (this.pending.size === 0) return null;
-    if (snapshot.stale) {
-      for (const pending of [...this.pending.values()]) {
-        if (pending.phase === "queued" || pending.phase === "stale") continue;
-        this.pending.delete(pending.nodeId);
-      }
-      this.inFlight = null;
-      return null;
-    }
+    if (snapshot.stale) return null;
     let failure = null;
     for (const pending of [...this.pending.values()]) {
       if (pending.phase === "requested") continue;
@@ -141,6 +134,15 @@ export class TranslationController {
     this.pending.clear();
     this.inFlight = null;
     return changed;
+  }
+
+  cancelNode(nodeId) {
+    const pending = this.pending.get(nodeId);
+    if (!pending) return false;
+    this.pending.delete(nodeId);
+    if (this.inFlight === pending) this.inFlight = null;
+    this.dispatch();
+    return true;
   }
 
   applyPreview(root, pageId) {

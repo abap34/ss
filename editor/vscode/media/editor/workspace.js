@@ -656,6 +656,8 @@ export class WorkspaceView {
     const surface = element("div", "page-surface");
     const preview = renderPage(this.state.snapshot, page.id);
     this.actions.translation.applyPreview(preview, page.id);
+    this.actions.shape.applyPreview(preview, page.id);
+    this.actions.componentDeletion.applyPreview(preview, page.id);
     surface.append(preview);
     surface.append(this.interaction.renderLayer(page));
     shell.append(surface);

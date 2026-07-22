@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { LanguageClient } from "vscode-languageclient/node";
 import { projectEntryUri, projectSettings } from "../projectConfig";
 import {
+  ComponentDeleteResult,
   EditorSnapshot,
   HostMessage,
   IconCatalogResult,
@@ -216,6 +217,10 @@ export class EditorController implements vscode.Disposable {
       await this.applyTranslation(session, message);
       return;
     }
+    if (message.type === "deleteComponent") {
+      await this.applyComponentDelete(session, message);
+      return;
+    }
     if (message.type === "queryIcons") {
       await this.queryIcons(session, message);
       return;
@@ -267,6 +272,82 @@ export class EditorController implements vscode.Disposable {
       await this.post(session, {
         type: "iconCatalogError",
         requestId: message.requestId,
+        message: String(error),
+      });
+    }
+  }
+
+  private async applyComponentDelete(
+    session: Session,
+    message: Extract<WebviewMessage, { type: "deleteComponent" }>,
+  ): Promise<void> {
+    const client = this.clientProvider();
+    if (!client) {
+      await this.post(session, {
+        type: "componentDeleteResult",
+        requestId: message.requestId,
+        status: "unsupported",
+        message: "Language server is not running.",
+      });
+      return;
+    }
+    const versions = documentVersions();
+    try {
+      const result = await client.sendRequest<ComponentDeleteResult>(
+        "ss/deleteComponent",
+        {
+          textDocument: { uri: session.document.uri.toString() },
+          snapshotId: message.snapshotId,
+          nodeId: message.nodeId,
+          pageId: message.pageId,
+        },
+      );
+      if (session.disposed) return;
+      if (!workspaceEditTargetsAreCurrent(result.workspaceEdit, versions)) {
+        await this.post(session, {
+          type: "componentDeleteResult",
+          requestId: message.requestId,
+          status: "stale",
+          message: "The document changed before the edit was applied.",
+        });
+        this.scheduleAutomatic(session, 0);
+        return;
+      }
+      if (result.status !== "ok" || !result.workspaceEdit) {
+        await this.post(session, {
+          type: "componentDeleteResult",
+          requestId: message.requestId,
+          status: result.status === "ok" ? "rejected" : result.status,
+          message: result.message ?? "The component could not be deleted.",
+        });
+        if (result.status === "stale") this.scheduleAutomatic(session, 0);
+        return;
+      }
+      const applied = await vscode.workspace.applyEdit(
+        toWorkspaceEdit(result.workspaceEdit),
+      );
+      if (!applied) {
+        await this.post(session, {
+          type: "componentDeleteResult",
+          requestId: message.requestId,
+          status: "rejected",
+          message: "VS Code rejected the source edit.",
+        });
+        return;
+      }
+      await this.post(session, {
+        type: "componentDeleteResult",
+        requestId: message.requestId,
+        status: "applied",
+        documentVersion: session.document.version,
+      });
+      this.scheduleAutomatic(session, 0);
+    } catch (error) {
+      this.output.appendLine(`[editor] component deletion failed: ${String(error)}`);
+      await this.post(session, {
+        type: "componentDeleteResult",
+        requestId: message.requestId,
+        status: "rejected",
         message: String(error),
       });
     }

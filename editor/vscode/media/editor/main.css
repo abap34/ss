@@ -1367,8 +1367,17 @@ button {
 }
 .shape-resize-preview {
   pointer-events: none;
-  opacity: 0.84;
   filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent) 45%, transparent));
+}
+.shape-edit-preview {
+  pointer-events: none;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent) 45%, transparent));
+}
+.ss-pending-shape-source {
+  visibility: hidden !important;
+}
+.ss-pending-component-deletion {
+  visibility: hidden !important;
 }
 .icon-placement-ghost {
   opacity: 0.82;

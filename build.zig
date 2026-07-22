@@ -828,6 +828,7 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
     const b = ctx.b;
     const node_spec_files = [_][]const u8{
         "tests/editor/build-status/spec.mjs",
+        "tests/editor/deletion/spec.mjs",
         "tests/editor/locks/spec.mjs",
         "tests/editor/navigation/spec.mjs",
         "tests/editor/shapes/spec.mjs",

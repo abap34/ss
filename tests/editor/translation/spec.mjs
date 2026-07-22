@@ -93,6 +93,37 @@ assert.equal(translation.reconcile(state.snapshot, 3), null);
 assert.equal(messages.length, 3);
 assert.equal(messages[2].snapshotId, "recovered-build");
 assert.equal(messages[2].nodeId, movedFirst.id);
+translation.acceptResult({
+  requestId: messages[2].requestId,
+  status: "applied",
+  documentVersion: 4,
+});
+const failedAfterApply = snapshot("failed-after-apply", [movedFirst, secondObject]);
+failedAfterApply.stale = true;
+state.snapshot = failedAfterApply;
+assert.equal(translation.reconcile(state.snapshot, 4), null);
+assert.deepEqual(
+  position(translation.frame(firstPage, movedFirst)),
+  { x: 148, y: 128 },
+  "a failed build discarded an applied provisional translation",
+);
+const recoveredFirst = object(movedFirst.id, firstPage.id, 148, 128);
+state.snapshot = snapshot("recovered-after-apply", [recoveredFirst, secondObject]);
+assert.equal(translation.reconcile(state.snapshot, 4), null);
+assert.deepEqual(
+  position(translation.frame(firstPage, recoveredFirst)),
+  { x: 148, y: 128 },
+  "an authoritative translation retained the provisional offset twice",
+);
+
+state.snapshot = snapshot("cancel-target", [recoveredFirst, secondObject]);
+translation.submit(edit(state.snapshot, secondObject, 12, 14));
+assert.equal(translation.cancelNode(secondObject.id), true);
+assert.deepEqual(
+  position(translation.frame(secondPage, secondObject)),
+  { x: 240, y: 180 },
+  "cancelling a component edit retained its provisional translation",
+);
 
 function snapshot(id, objects) {
   return {
