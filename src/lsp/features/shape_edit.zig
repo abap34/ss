@@ -4,9 +4,13 @@ const core = @import("core");
 const editor_edit = @import("../../editor/edit.zig");
 const shape_edit = editor_edit.shape;
 const edit_relations = @import("edit/relations.zig");
+const edit_response = @import("edit/response.zig");
 const protocol = @import("../protocol.zig");
 const lsp_state = @import("../state.zig");
 const utils = @import("utils");
+
+const statusJson = edit_response.statusJson;
+const insertionStatusJson = edit_response.workspaceEditJson;
 
 pub const Context = struct {
     io: std.Io,
@@ -448,63 +452,4 @@ fn validColor(value: []const u8) bool {
 fn pageForId(pages: []const core.layout.conflicts.Page, page_id: u32) ?core.layout.conflicts.Page {
     for (pages) |page| if (page.id == page_id) return page;
     return null;
-}
-
-fn statusJson(allocator: std.mem.Allocator, status: []const u8, message: ?[]const u8) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    try out.appendSlice(allocator, "{\"schema\":1,\"status\":");
-    try protocol.appendJsonString(allocator, &out, status);
-    if (message) |text| {
-        try out.appendSlice(allocator, ",\"message\":");
-        try protocol.appendJsonString(allocator, &out, text);
-    }
-    try out.append(allocator, '}');
-    return try out.toOwnedSlice(allocator);
-}
-
-fn insertionStatusJson(
-    allocator: std.mem.Allocator,
-    uri: []const u8,
-    source: []const u8,
-    edits: anytype,
-    path: []const u8,
-    page_id: u32,
-    binding: []const u8,
-) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    try out.appendSlice(allocator, "{\"schema\":1,\"status\":\"ok\",\"workspaceEdit\":{\"changes\":{");
-    try protocol.appendJsonString(allocator, &out, uri);
-    try out.appendSlice(allocator, ":[");
-    for (edits, 0..) |edit, index| {
-        if (index != 0) try out.append(allocator, ',');
-        try out.appendSlice(allocator, "{\"range\":");
-        try appendEditRange(allocator, &out, source, edit);
-        try out.appendSlice(allocator, ",\"newText\":");
-        try protocol.appendJsonString(allocator, &out, edit.text);
-        try out.append(allocator, '}');
-    }
-    try out.appendSlice(allocator, "]}},\"selection\":{\"path\":");
-    try protocol.appendJsonString(allocator, &out, path);
-    try out.appendSlice(allocator, ",\"pageId\":");
-    try protocol.appendInt(allocator, &out, page_id);
-    try out.appendSlice(allocator, ",\"binding\":");
-    try protocol.appendJsonString(allocator, &out, binding);
-    try out.appendSlice(allocator, "}}");
-    return try out.toOwnedSlice(allocator);
-}
-
-fn appendEditRange(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source: []const u8, edit: anytype) !void {
-    const start = utils.source.utf16PositionAt(source, edit.start);
-    const end = utils.source.utf16PositionAt(source, edit.end);
-    try out.appendSlice(allocator, "{\"start\":{\"line\":");
-    try protocol.appendInt(allocator, out, start.line);
-    try out.appendSlice(allocator, ",\"character\":");
-    try protocol.appendInt(allocator, out, start.character);
-    try out.appendSlice(allocator, "},\"end\":{\"line\":");
-    try protocol.appendInt(allocator, out, end.line);
-    try out.appendSlice(allocator, ",\"character\":");
-    try protocol.appendInt(allocator, out, end.character);
-    try out.appendSlice(allocator, "}}");
 }

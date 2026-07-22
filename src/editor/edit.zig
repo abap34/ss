@@ -11,6 +11,7 @@ pub const applyEdits = base.applyEdits;
 pub const pageEndLineStart = base.pageEndLineStart;
 pub const pageBodyIndent = base.pageBodyIndent;
 pub const shape = @import("edit/shape.zig");
+pub const icon = @import("edit/icon.zig");
 
 pub const BindingIntroduction = struct {
     statement: ByteSpan,

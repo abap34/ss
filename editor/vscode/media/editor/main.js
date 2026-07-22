@@ -2,6 +2,7 @@ import { element } from "./dom.js";
 import { alignTextBaselines } from "../../out/render/text.js";
 import { buildFailureMessage } from "./diagnostics.js";
 import { disposePages } from "./document.js";
+import { defaultIconDraft, IconController } from "./icon-insertion.js";
 import { EditorNavigation } from "./navigation.js";
 import { ObjectLockController } from "./object-locks.js";
 import { disposePdfItems, disposePdfRuntime } from "./pdf.js";
@@ -24,6 +25,12 @@ const state = {
   selectedObjectId: null,
   shapeTool: "select",
   shapeStyle: structuredClone(defaultShapeStyle),
+  iconPickerOpen: false,
+  iconQuery: "",
+  iconStyle: "all",
+  iconCatalog: null,
+  iconCatalogPending: false,
+  iconDraft: structuredClone(defaultIconDraft),
   theme: persistedState.theme === "light" || persistedState.theme === "dark"
     ? persistedState.theme
     : initialTheme(),
@@ -47,6 +54,11 @@ const shape = new ShapeController(state, {
   render,
   selectObject,
 });
+const icon = new IconController(state, {
+  post: (message) => vscode.postMessage(message),
+  render,
+  selectObject,
+});
 const objectLocks = new ObjectLockController(state, {
   persist: (value) => persistWebviewState({ objectLocks: value }),
   render,
@@ -59,6 +71,7 @@ const actions = {
   navigatePage,
   translation,
   shape,
+  icon,
   objectLocks,
 };
 const navigation = new EditorNavigation(state);
@@ -93,6 +106,13 @@ window.addEventListener("message", (event) => {
   } else if (message.type === "shapeEditResult") {
     const editOutcome = shape.acceptResult(message);
     if (editOutcome?.status === "failed") showError(editOutcome.message);
+  } else if (message.type === "iconCatalog" ||
+      message.type === "iconCatalogError") {
+    const outcome = icon.acceptCatalog(message);
+    if (outcome?.status === "failed") showError(outcome.message);
+  } else if (message.type === "iconEditResult") {
+    const outcome = icon.acceptResult(message);
+    if (outcome?.status === "failed") showError(outcome.message);
   }
 });
 
@@ -139,6 +159,7 @@ function acceptSnapshot(message) {
   navigation.reconcile(state.snapshot);
   objectLocks.reconcile(state.snapshot);
   const shapeOutcome = shape.reconcile(state.snapshot);
+  const iconOutcome = icon.reconcile(state.snapshot);
   if (!buildFailure && shapeOutcome?.status === "applied") {
     state.toast = {
       kind: "success",
@@ -148,6 +169,9 @@ function acceptSnapshot(message) {
         ? "Line geometry applied to source."
         : "Shape style applied to source.",
     };
+    toastDuration = successToastDuration;
+  } else if (!buildFailure && iconOutcome?.status === "applied") {
+    state.toast = { kind: "success", message: "Icon inserted into source." };
     toastDuration = successToastDuration;
   }
   render();

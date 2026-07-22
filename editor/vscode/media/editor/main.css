@@ -415,10 +415,12 @@ button {
   cursor: default;
   opacity: 0.36;
 }
-.shape-picker {
+.shape-picker,
+.icon-picker {
   position: relative;
 }
-.shape-picker > summary {
+.shape-picker > summary,
+.icon-picker > summary {
   display: flex;
   height: 20px;
   padding: 0 5px;
@@ -432,12 +434,16 @@ button {
   cursor: pointer;
 }
 .shape-picker > summary::-webkit-details-marker,
+.icon-picker > summary::-webkit-details-marker,
 .stroke-style-picker > summary::-webkit-details-marker {
   display: none;
 }
 .shape-picker > summary:hover,
 .shape-picker > summary:focus-visible,
-.shape-picker[open] > summary {
+.shape-picker[open] > summary,
+.icon-picker > summary:hover,
+.icon-picker > summary:focus-visible,
+.icon-picker[open] > summary {
   background: var(--accent-background);
   color: var(--accent-text);
   outline: none;
@@ -453,12 +459,23 @@ button {
   height: 10px;
   border-width: 1px;
 }
+.icon-picker-summary-icon {
+  color: var(--accent-text);
+  font-size: 12px;
+}
+.icon-picker-summary-icon svg {
+  display: block;
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
 .shape-picker-chevron,
 .stroke-style-chevron {
   color: var(--text-faint);
   font-size: 9px;
 }
-.shape-picker-panel {
+.shape-picker-panel,
+.icon-picker-panel {
   position: absolute;
   z-index: 30;
   top: calc(100% + 7px);
@@ -469,6 +486,107 @@ button {
   border-radius: 8px;
   background: var(--toolbar-background);
   box-shadow: 0 12px 30px #0006;
+}
+.icon-picker-panel {
+  left: -100px;
+  width: 430px;
+  padding: 10px;
+}
+.icon-picker-search {
+  width: 100%;
+  height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--control-border);
+  border-radius: 5px;
+  outline: none;
+  background: var(--field-background);
+  color: var(--text);
+  font: 10px var(--vscode-font-family, system-ui, sans-serif);
+}
+.icon-picker-search:focus {
+  border-color: var(--accent-border);
+}
+.icon-style-tabs {
+  display: flex;
+  gap: 3px;
+  margin-top: 8px;
+}
+.icon-style-tab {
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 9px;
+}
+.icon-style-tab:hover,
+.icon-style-tab:focus-visible,
+.icon-style-tab.is-active {
+  background: var(--accent-background);
+  color: var(--accent-text);
+  outline: none;
+}
+.icon-catalog-status {
+  min-height: 24px;
+  padding: 7px 2px 5px;
+  color: var(--text-faint);
+  font-size: 8px;
+}
+.icon-picker-gallery {
+  display: grid;
+  max-height: min(390px, calc(100vh - 160px));
+  padding-right: 3px;
+  overflow: auto;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 5px;
+}
+.icon-choice {
+  display: grid;
+  min-width: 0;
+  height: 68px;
+  padding: 7px 4px 5px;
+  place-items: center;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--field-background);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.icon-choice:hover:not(:disabled),
+.icon-choice:focus-visible,
+.icon-choice.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-background);
+  color: var(--accent-text);
+  outline: none;
+}
+.icon-choice:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.icon-choice-preview {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+}
+.icon-choice-preview svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+.icon-choice-name {
+  width: 100%;
+  overflow: hidden;
+  font-size: 7px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.icon-style-controls {
+  flex: 0 0 auto;
 }
 .shape-picker-section > strong {
   display: block;
@@ -1086,6 +1204,11 @@ button {
 .shape-placement-preview {
   stroke-dasharray: none;
   filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent) 45%, transparent));
+}
+.icon-placement-ghost {
+  opacity: 0.82;
+  pointer-events: none;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent) 55%, transparent));
 }
 .constraint {
   color: var(--absolute);

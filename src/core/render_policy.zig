@@ -245,6 +245,7 @@ pub const MathPaint = struct {
 
 pub const AssetPaint = struct {
     scale: f32,
+    tint: ?Color,
     pdf_page: usize,
     pdf_box: PdfPageBox,
 };
@@ -495,6 +496,7 @@ fn resolveAsset(state: anytype, node: *const Node, kind: RenderKind) ?AssetPaint
     return switch (kind) {
         .vector_asset, .raster_asset => .{
             .scale = positiveRecordFloatProperty(state, node, "asset", "scale") orelse 1,
+            .tint = parseRecordColorProperty(state, node, "asset", "tint"),
             .pdf_page = resolvedPdfPage(state, node),
             .pdf_box = resolvedPdfPageBox(state, node),
         },

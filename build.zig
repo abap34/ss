@@ -558,6 +558,18 @@ fn addTestStep(
     const run_editor_edit_spec_tests = b.addRunArtifact(editor_edit_spec_tests);
     test_step.dependOn(&run_editor_edit_spec_tests.step);
     addFocusedTestStep(b, "test-editor-edit", "Run focused WYSIWYG source edit tests", &run_editor_edit_spec_tests.step);
+    const editor_icons_mod = createModule(ctx, "src/editor/icons.zig", &.{
+        import("core", modules.core),
+        import("utils", modules.utils),
+    }, true);
+    const editor_icons_spec_mod = createModule(ctx, "tests/editor/icons/catalog_spec_tests.zig", &.{
+        import("core", modules.core),
+        import("editor_icons", editor_icons_mod),
+    }, true);
+    const editor_icons_spec_tests = addTestArtifact(ctx, editor_icons_spec_mod);
+    const run_editor_icons_spec_tests = b.addRunArtifact(editor_icons_spec_tests);
+    test_step.dependOn(&run_editor_icons_spec_tests.step);
+    addFocusedTestStep(b, "test-icons", "Run focused bundled icon catalog tests", &run_editor_icons_spec_tests.step);
     const watch_mod = createCommonModule(ctx, "src/watch.zig", modules, true);
     addNativePdfHeadersAndLibraries(b, watch_mod);
     addModuleTest(ctx, test_step, "tests/watch/fingerprint/spec_tests.zig", &.{
@@ -819,6 +831,7 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         "tests/editor/locks/spec.mjs",
         "tests/editor/navigation/spec.mjs",
         "tests/editor/shapes/spec.mjs",
+        "tests/editor/icons/webview_spec.mjs",
         "tests/editor/translation/spec.mjs",
         "tests/editor/vscode/controller/spec.mjs",
         "tests/editor/vscode/spec.mjs",
@@ -827,6 +840,7 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         "tests/runtime/debug_runtime_spec.mjs",
         "tests/runtime/doctor_runtime_spec.mjs",
         "tests/runtime/editor/empty/spec.mjs",
+        "tests/runtime/editor/icons/spec.mjs",
         "tests/runtime/editor/names/spec.mjs",
         "tests/runtime/editor/relations/spec.mjs",
         "tests/runtime/editor/shapes/spec.mjs",

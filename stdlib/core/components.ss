@@ -334,6 +334,14 @@ fn/! pdf(path_value: String, factor: Number = 1, page_number: Number = 1, page_b
   return obj
 end
 
+fn/! icon(source: String, width: Number = 72, height: Number = 72, color: Color = c"#2563eb") -> Object
+  let obj = objects::icon_obj(source)
+  obj.asset.tint = color
+  ~ obj.width == width
+  ~ obj.height == height
+  return obj
+end
+
 fn/! code(text_value: String, language_name: String = "python") -> Object
   let code = code_l(text_value, language_name)
   code.layout.x = 102

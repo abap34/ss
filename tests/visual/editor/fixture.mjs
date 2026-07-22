@@ -72,8 +72,8 @@ export function editorSnapshot() {
       { node_id: 202, page_id: 22, page_index: 2, page_name: "Details", binding: "detail", binding_required: false, statement_start: 40, statement_end: 75, path: "/workspace/slide.ss", page_start: 31, page_end: 90 },
     ],
     page_editing: [
-      { page_id: 11, insert_shapes: true },
-      { page_id: 22, insert_shapes: true },
+      { page_id: 11, insert_shapes: true, insert_icons: true },
+      { page_id: 22, insert_shapes: true, insert_icons: true },
     ],
     shape_editing: [
       {

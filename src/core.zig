@@ -70,6 +70,7 @@ pub const Definition = @import("core/document_state.zig").Definition;
 pub const layout = @import("layout/root.zig");
 pub const fields = @import("core/fields.zig");
 pub const font = @import("core/font.zig");
+pub const fontawesome = @import("core/fontawesome.zig");
 pub const render_policy = @import("core/render_policy.zig");
 pub const render_env = @import("core/render_env.zig");
 pub const markdown = @import("core/markdown.zig");
