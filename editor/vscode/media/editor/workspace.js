@@ -256,13 +256,11 @@ export class WorkspaceView {
     button.setAttribute("aria-pressed", String(active));
     button.classList.toggle("is-active", active);
     button.append(toolIcon(mode));
-    button.disabled = this.actions.shape.isBusy() || this.actions.icon.isBusy();
     button.addEventListener("click", () => this.setPointerMode(mode));
     return button;
   }
 
   setPointerMode(mode) {
-    if (this.actions.shape.isBusy() || this.actions.icon.isBusy()) return;
     this.state.pointerMode = mode === "pan" ? "pan" : "select";
     this.state.shapeTool = "select";
     this.actions.render();
@@ -367,7 +365,9 @@ export class WorkspaceView {
           }`,
         );
         button.type = "button";
-        button.disabled = !this.actions.shape.canInsert(this.state.currentPageId);
+        button.disabled = !this.actions.shape.supportsInsertion(
+          this.state.currentPageId,
+        );
         button.setAttribute("aria-label", name);
         button.setAttribute("aria-pressed", String(this.state.shapeTool === tool));
         if (tool === "line") button.title = "Line (L)";
@@ -589,7 +589,6 @@ export class WorkspaceView {
       }),
       strokeStylePicker(draft.stroke.style, {
         ariaLabel: line ? "Line style" : "Stroke style",
-        disabled: this.actions.shape.isBusy(),
         change: (style) => {
           this.actions.shape.setDraft({
             ...draft,
@@ -615,9 +614,6 @@ export class WorkspaceView {
       );
     }
     group.append(...controls);
-    for (const input of group.querySelectorAll("input")) {
-      input.disabled = this.actions.shape.isBusy();
-    }
     return group;
   }
 

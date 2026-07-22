@@ -55,7 +55,16 @@ export class InteractionController {
   renderLayer(page) {
     const svg = svgElement("svg", "interaction-layer");
     svg.setAttribute("viewBox", `0 0 ${page.width} ${page.height}`);
-    if (this.state.pointerMode === "pan") return svg;
+    const pendingShapes = [
+      ...this.actions.shape.pendingInsertions(page.id),
+      ...this.actions.icon.pendingInsertions(page.id),
+    ];
+    if (this.state.pointerMode === "pan") {
+      for (const pending of pendingShapes) {
+        svg.append(this.pendingShape(pending));
+      }
+      return svg;
+    }
     const objects = this.state.snapshot.layout.objects
       .filter((object) => object.page_id === page.id)
       .sort((left, right) =>
@@ -78,10 +87,9 @@ export class InteractionController {
       );
     }
     for (const object of objects) svg.append(this.hitTarget(page, object));
-    const pending = this.state.shapeTool === "icon"
-      ? this.actions.icon.pendingInsertion(page.id)
-      : this.actions.shape.pendingInsertion(page.id);
-    if (pending) svg.append(this.pendingShape(pending));
+    for (const pending of pendingShapes) {
+      svg.append(this.pendingShape(pending));
+    }
     if (this.state.shapeTool !== "select" &&
         this.canInsert(page.id)) {
       svg.append(this.placementTarget(page));
@@ -208,7 +216,7 @@ export class InteractionController {
         this.notifyPointerOperationFinished();
         return;
       }
-      if (this.activeInsertionController().cancel()) event.preventDefault();
+      if (this.cancelInsertion()) event.preventDefault();
       return;
     }
     if (this.navigatePageFromKey(event)) return;
@@ -216,7 +224,7 @@ export class InteractionController {
         event.altKey || this.placement || this.lineEndpointDrag ||
         isTypingTarget(event.target) ||
         this.state.shapeTool === "icon" ||
-        !this.actions.shape.canInsert(this.state.currentPageId)) return;
+        !this.actions.shape.supportsInsertion(this.state.currentPageId)) return;
     event.preventDefault();
     this.actions.shape.selectTool("line");
   }
@@ -230,7 +238,6 @@ export class InteractionController {
     if (offset === 0 || event.defaultPrevented || event.metaKey ||
         event.ctrlKey || event.altKey || event.shiftKey || this.drag ||
         this.placement || this.lineEndpointDrag || this.shapeResizeDrag ||
-        (this.actions.shape.isBusy() || this.actions.icon.isBusy()) ||
         isTypingTarget(event.target)) {
       return false;
     }
@@ -765,6 +772,13 @@ export class InteractionController {
 
   activeInsertionController() {
     return this.state.shapeTool === "icon" ? this.actions.icon : this.actions.shape;
+  }
+
+  cancelInsertion() {
+    for (const controller of [this.actions.shape, this.actions.icon]) {
+      if (controller.isBusy() && controller.cancel()) return true;
+    }
+    return this.activeInsertionController().cancel();
   }
 
   canInsert(pageId) {

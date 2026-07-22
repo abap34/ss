@@ -1,3 +1,5 @@
+import { combineFailureMessages } from "./diagnostics.js";
+
 export const defaultShapeStyle = {
   fill: { enabled: true, color: "#e8f1ff", opacity: 1 },
   stroke: { enabled: true, color: "#2563eb", width: 1.6, style: "solid" },
@@ -19,24 +21,29 @@ export class ShapeController {
   }
 
   canEdit(target) {
-    if (!this.pending) return true;
-    if (this.pending.operation === "insert" || !this.pending.selection) return false;
-    return this.pending.selection.pageId === target.page_id &&
-      this.pending.selection.binding === target.binding;
+    return Boolean(this.state.snapshot?.shape_editing?.some((candidate) =>
+      candidate.page_id === target.page_id &&
+      candidate.binding === target.binding &&
+      candidate.kind === target.kind
+    ));
   }
 
-  canInsert(pageId) {
+  supportsInsertion(pageId) {
     return Boolean(
-      this.state.snapshot &&
-        !this.isBusy() &&
-        this.state.snapshot.page_editing?.some((target) =>
-          target.page_id === pageId && target.insert_shapes
-        ),
+      this.state.snapshot?.page_editing?.some((target) =>
+        target.page_id === pageId && target.insert_shapes
+      ),
     );
   }
 
+  canInsert(pageId) {
+    return this.supportsInsertion(pageId);
+  }
+
   selectTool(tool) {
-    if (tool !== "select" && !this.canInsert(this.state.currentPageId)) return;
+    if (tool !== "select" && !this.supportsInsertion(this.state.currentPageId)) {
+      return;
+    }
     this.state.pointerMode = "select";
     this.state.shapeTool = tool;
     this.actions.render();
@@ -74,13 +81,12 @@ export class ShapeController {
         fill: { ...this.state.shapeStyle.fill },
         stroke: { ...this.state.shapeStyle.stroke },
       };
-    this.pending = {
+    return this.startOrQueue({
       requestId,
       operation: "insert",
       snapshotId: message.snapshotId,
       message,
       selection: null,
-      phase: this.state.snapshot.stale ? "queued" : "requested",
       preview: {
         pageId,
         kind: message.kind,
@@ -97,10 +103,7 @@ export class ShapeController {
             fill: { ...message.fill },
           }),
       },
-    };
-    if (this.pending.phase === "requested") this.actions.post(message);
-    this.actions.render();
-    return true;
+    });
   }
 
   editStyle(target, style) {
@@ -226,15 +229,18 @@ export class ShapeController {
       this.pending.phase = "queued";
       return null;
     }
-    const operation = this.pending.operation;
+    const pending = this.pending;
+    const operation = pending.operation;
     this.pending = null;
-    if (operation === "insert") this.state.shapeTool = "select";
+    if (operation === "insert") this.finishInsertionTool(pending);
     const queuedFailureResult = this.promoteFollowup(this.state.snapshot);
     this.actions.render();
-    if (queuedFailureResult) return queuedFailureResult;
     return {
       status: "failed",
-      message: message.message || "The shape edit could not be applied.",
+      message: combineFailureMessages(
+        message.message || "The shape edit could not be applied.",
+        queuedFailureResult?.message,
+      ),
     };
   }
 
@@ -246,9 +252,15 @@ export class ShapeController {
       const failure = this.rebaseQueued(snapshot, pending);
       if (failure) {
         this.pending = null;
-        this.followups = [];
-        if (pending.operation === "insert") this.state.shapeTool = "select";
-        return failure;
+        if (pending.operation === "insert") this.finishInsertionTool(pending);
+        const queuedFailureResult = this.promoteFollowup(snapshot);
+        return {
+          status: "failed",
+          message: combineFailureMessages(
+            failure.message,
+            queuedFailureResult?.message,
+          ),
+        };
       }
       pending.snapshotId = snapshot.snapshot_id;
       pending.message.snapshotId = snapshot.snapshot_id;
@@ -269,9 +281,12 @@ export class ShapeController {
     if (pending.operation === "insert" && selection && !target) {
       return null;
     }
+    const selectAppliedTarget = pending.operation !== "insert" ||
+      (!this.hasQueuedInsertion() &&
+        this.state.shapeTool === pending.preview.kind);
     this.pending = null;
-    if (pending.operation === "insert") this.state.shapeTool = "select";
-    if (target) {
+    if (pending.operation === "insert") this.finishInsertionTool(pending);
+    if (target && selectAppliedTarget) {
       this.actions.selectObject(target.node_id, target.page_id, false);
     }
     const queuedFailureResult = this.promoteFollowup(snapshot);
@@ -283,16 +298,26 @@ export class ShapeController {
   }
 
   cancel() {
-    if (this.pending?.phase === "queued") {
-      const insertion = this.pending.operation === "insert";
-      this.pending = null;
-      this.followups = [];
-      if (insertion) this.state.shapeTool = "select";
+    const queuedInsertion = this.followups.findLastIndex((intent) =>
+      intent.operation === "insert" && intent.phase === "queued"
+    );
+    if (queuedInsertion >= 0) {
+      this.followups.splice(queuedInsertion, 1);
       this.actions.render();
       return true;
     }
-    if (this.pending) return false;
-    if (this.state.shapeTool === "select") return false;
+    if (this.pending?.operation === "insert" &&
+        this.pending.phase === "queued") {
+      const pending = this.pending;
+      this.pending = null;
+      this.finishInsertionTool(pending);
+      this.promoteFollowup(this.state.snapshot);
+      this.actions.render();
+      return true;
+    }
+    if (this.state.shapeTool === "select" || this.state.shapeTool === "icon") {
+      return false;
+    }
     this.state.shapeTool = "select";
     this.actions.render();
     return true;
@@ -328,10 +353,15 @@ export class ShapeController {
   }
 
   pendingInsertion(pageId) {
-    const preview = this.pending?.operation === "insert"
-      ? this.pending.preview
-      : null;
-    return preview?.pageId === pageId ? preview : null;
+    return this.pendingInsertions(pageId)[0] || null;
+  }
+
+  pendingInsertions(pageId) {
+    return [this.pending, ...this.followups]
+      .filter((intent) =>
+        intent?.operation === "insert" && intent.preview.pageId === pageId
+      )
+      .map((intent) => intent.preview);
   }
 
   pendingLineGeometry(nodeId) {
@@ -367,23 +397,26 @@ export class ShapeController {
 
   promoteFollowup(snapshot) {
     if (this.pending || this.followups.length === 0) return null;
-    const next = this.followups.shift();
-    this.pending = next;
-    if (snapshot?.stale) {
-      next.phase = "queued";
-      return null;
+    let firstFailure = null;
+    while (!this.pending && this.followups.length > 0) {
+      const next = this.followups.shift();
+      this.pending = next;
+      if (snapshot?.stale) {
+        next.phase = "queued";
+        return firstFailure;
+      }
+      const failure = this.rebaseQueued(snapshot, next);
+      if (failure) {
+        this.pending = null;
+        firstFailure ??= failure;
+        continue;
+      }
+      next.snapshotId = snapshot.snapshot_id;
+      next.message.snapshotId = snapshot.snapshot_id;
+      next.phase = "requested";
+      this.actions.post(next.message);
     }
-    const failure = this.rebaseQueued(snapshot, next);
-    if (failure) {
-      this.pending = null;
-      this.followups = [];
-      return failure;
-    }
-    next.snapshotId = snapshot.snapshot_id;
-    next.message.snapshotId = snapshot.snapshot_id;
-    next.phase = "requested";
-    this.actions.post(next.message);
-    return null;
+    return firstFailure;
   }
 
   rebaseQueued(snapshot, pending) {
@@ -422,6 +455,17 @@ export class ShapeController {
     }
     return null;
   }
+
+  finishInsertionTool(pending) {
+    if (!this.hasQueuedInsertion() &&
+        this.state.shapeTool === pending.preview.kind) {
+      this.state.shapeTool = "select";
+    }
+  }
+
+  hasQueuedInsertion() {
+    return this.followups.some((intent) => intent.operation === "insert");
+  }
 }
 
 function insertionStyleAfterEdit(previous, target, style) {
@@ -458,7 +502,8 @@ function sameSelection(left, right) {
 }
 
 function sameQueueSlot(left, right) {
-  return left.operation === right.operation &&
+  return left.operation !== "insert" && right.operation !== "insert" &&
+    left.operation === right.operation &&
     sameSelection(left.selection, right.selection);
 }
 

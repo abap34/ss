@@ -315,8 +315,8 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.match(await provisional.evaluate((node) => getComputedStyle(node).strokeDasharray), /1\.6px.*4px/,
       "the provisional shape did not use the requested dotted stroke");
     await shapePicker.locator("summary").click();
-    assert.equal(await shapePicker.getByRole("button", { name: "Circle" }).isEnabled(), false,
-      "drawing tools remained enabled while an insertion was pending");
+    assert.equal(await shapePicker.getByRole("button", { name: "Circle" }).isEnabled(), true,
+      "a pending insertion disabled choosing the next drawing tool");
     await postShapeEditResult(page, {
       requestId: inserted.requestId,
       operation: "insert",
@@ -535,13 +535,17 @@ await withBrowser(output, async (browser, baseUrl) => {
       "the provisional icon did not embed its SVG preview");
     assert.match(await provisionalIcon.getAttribute("href"), /%23f59e0b/,
       "the provisional icon did not use the selected color");
+    assert.equal(await selectTool.isEnabled(), true,
+      "a pending icon disabled selection mode");
+    await selectTool.click();
+    assert.equal(await provisionalIcon.count(), 1,
+      "selection mode discarded the pending icon preview");
     await postIconEditResult(page, {
       requestId: insertedIcon.requestId,
       status: "rejected",
     });
     await page.waitForFunction(() =>
-      document.querySelector('.shape-tool[aria-label="Select"]')
-        ?.getAttribute("aria-pressed") === "true"
+      !document.querySelector("image.icon-placement-ghost.shape-placement-preview")
     );
     assert.equal(await provisionalIcon.count(), 0,
       "a rejected provisional icon remained on the page");
@@ -820,7 +824,14 @@ await withBrowser(output, async (browser, baseUrl) => {
       requestId: styleEdit.requestId,
       operation: "style",
       status: "rejected",
+      message: "This shape does not have an editable standard style.",
     });
+    await page.waitForSelector(".toast--error");
+    assert.equal(
+      await page.locator(".toast--error").textContent(),
+      "This shape does not have an editable standard style.",
+      "a shape capability error was replaced by an unrelated message",
+    );
     await page.getByRole("button", { name: "Lock object" }).click();
     assert.equal(
       await page.locator(".shape-style-editor input, .shape-style-editor select")
@@ -1377,6 +1388,121 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(await page.locator(".shape-placement-preview").count(), 0,
       "Escape did not cancel the provisional shape queued during a failed build");
 
+    await shapePicker.locator("summary").click();
+    await shapePicker.getByRole("button", { name: "Elbow line" }).click();
+    assert.equal(await shapePicker.locator("summary").getAttribute("aria-label"), "Elbow line",
+      "the elbow-line tool did not activate during a failed build");
+    const queuedArrowEnd = page.locator(
+      '.toolbar > .shape-style-controls--line input[aria-label="End arrow"]',
+    );
+    if (!await queuedArrowEnd.isChecked()) {
+      await queuedArrowEnd.evaluate((input) => {
+        input.checked = true;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    }
+    const insertionCountBeforeQueuedArrow = await messageCount(page, "insertShape");
+    const queuedArrowPlacement = page.locator(
+      '.page-shell[data-page-id="11"] .shape-placement-hit',
+    );
+    await queuedArrowPlacement.scrollIntoViewIfNeeded();
+    const queuedArrowBox = await queuedArrowPlacement.boundingBox();
+    assert(queuedArrowBox, "the failed build omitted the elbow-line placement layer");
+    await page.mouse.move(
+      queuedArrowBox.x + queuedArrowBox.width * 0.62,
+      queuedArrowBox.y + queuedArrowBox.height * 0.24,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      queuedArrowBox.x + queuedArrowBox.width * 0.38,
+      queuedArrowBox.y + queuedArrowBox.height * 0.58,
+      { steps: 3 },
+    );
+    assert.equal(await page.locator("path.shape-placement-ghost").count(), 1,
+      "dragging did not start an elbow-line preview");
+    await page.mouse.up();
+    assert.equal(await messageCount(page, "insertShape"), insertionCountBeforeQueuedArrow,
+      "a queued elbow arrow was sent before a successful rebuild");
+    assert.equal(await page.locator(".shape-placement-preview").count(), 1,
+      "the queued elbow arrow did not remain visible");
+    assert.equal(await selectTool.isEnabled(), true,
+      "a queued elbow arrow disabled selection mode");
+    assert.equal(await panTool.isEnabled(), true,
+      "a queued elbow arrow disabled view movement mode");
+    assert.equal(await queuedArrowEnd.isEnabled(), true,
+      "a queued elbow arrow disabled insertion style controls");
+    await shapePicker.locator("summary").click();
+    assert.equal(
+      await shapePicker.getByRole("button", { name: "Rectangle" }).isEnabled(),
+      true,
+      "a queued elbow arrow disabled choosing the next shape tool",
+    );
+    await shapePicker.getByRole("button", { name: "Rectangle" }).click();
+    const queuedRectanglePlacement = page.locator(
+      '.page-shell[data-page-id="11"] .shape-placement-hit',
+    );
+    await queuedRectanglePlacement.scrollIntoViewIfNeeded();
+    const queuedRectangleBox = await queuedRectanglePlacement.boundingBox();
+    assert(queuedRectangleBox,
+      "the queued elbow arrow prevented placing the next shape");
+    await page.mouse.move(
+      queuedRectangleBox.x + queuedRectangleBox.width * 0.2,
+      queuedRectangleBox.y + queuedRectangleBox.height * 0.62,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      queuedRectangleBox.x + queuedRectangleBox.width * 0.34,
+      queuedRectangleBox.y + queuedRectangleBox.height * 0.78,
+      { steps: 3 },
+    );
+    await page.mouse.up();
+    assert.equal(await messageCount(page, "insertShape"), insertionCountBeforeQueuedArrow,
+      "a second queued shape was sent before a successful rebuild");
+    assert.equal(await page.locator(".shape-placement-preview").count(), 2,
+      "the editor did not retain both queued shape previews");
+    assert.equal(await page.locator('.page-entry.is-active small').textContent(), "Overview");
+    await page.keyboard.press("ArrowDown");
+    await page.waitForFunction(() =>
+      document.querySelector(".page-entry.is-active small")?.textContent === "Details"
+    );
+    await page.keyboard.press("ArrowUp");
+    await page.waitForFunction(() =>
+      document.querySelector(".page-entry.is-active small")?.textContent === "Overview"
+    );
+    assert.equal(await page.locator(".shape-placement-preview").count(), 2,
+      "page navigation discarded queued shape previews");
+    await panTool.click();
+    assert.equal(await panTool.getAttribute("aria-pressed"), "true",
+      "view movement mode did not activate while an elbow arrow was queued");
+    assert.equal(await page.locator(".shape-placement-preview").count(), 2,
+      "view movement mode hid queued shape previews");
+    await selectTool.click();
+    assert.equal(await selectTool.getAttribute("aria-pressed"), "true",
+      "selection mode did not activate while an elbow arrow was queued");
+    assert.equal(await page.locator(".shape-placement-preview").count(), 2,
+      "selection mode discarded queued shape previews");
+    await page.locator(
+      '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
+    ).click();
+    assert.equal(
+      await page.locator('.object-hit[data-object-id="101"]')
+        .evaluate((node) => node.classList.contains("is-selected")),
+      true,
+      "a queued elbow arrow prevented selecting an existing shape",
+    );
+    assert.equal(
+      await page.locator(".shape-style-editor input, .shape-style-editor select")
+        .evaluateAll((controls) => controls.every((control) => !control.disabled)),
+      true,
+      "a queued elbow arrow disabled editing an existing shape",
+    );
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator(".shape-placement-preview").count(), 1,
+      "Escape did not cancel the newest queued shape first");
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator(".shape-placement-preview").count(), 0,
+      "Escape did not cancel the queued elbow arrow from selection mode");
+
     await page.locator(
       '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
     ).click();
@@ -1471,15 +1597,49 @@ await withBrowser(output, async (browser, baseUrl) => {
       "an obsolete preview error replaced a newer snapshot",
     );
 
-    await postBuildStatus(page, 113, "building");
+    const staleReconciliation = structuredClone(finalSnapshot);
+    staleReconciliation.stale = true;
+    staleReconciliation.build_diagnostics = failed.build_diagnostics;
+    await postSnapshot(page, 113, staleReconciliation, 8);
+    await page.locator(
+      '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
+    ).click();
+    const editCountBeforeMissingTarget = await messageCount(page, "editShapeStyle");
+    await page.locator('.shape-style-editor input[aria-label="Fill color"]')
+      .evaluate((input) => {
+        input.value = "#0f766e";
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    assert.equal(await messageCount(page, "editShapeStyle"), editCountBeforeMissingTarget,
+      "a stale style edit was sent before target reconciliation");
+    const missingShapeTarget = structuredClone(finalSnapshot);
+    missingShapeTarget.shape_editing = missingShapeTarget.shape_editing.filter((target) =>
+      target.binding !== "summary"
+    );
+    await postSnapshot(page, 114, missingShapeTarget, 9);
+    await page.waitForSelector(".toast--error");
+    assert.equal(
+      await page.locator(".toast--error").textContent(),
+      "The target shape changed before the edit could be applied.",
+      "a queued shape reconciliation failure was hidden or mislabeled",
+    );
+    await page.locator(".close-button").click();
+    await postSnapshot(page, 115, finalSnapshot, 9);
+    await page.waitForFunction(() => !document.querySelector(".toast--error"));
+    await page.locator('.page-shell[data-page-id="11"] .ss-pdf > canvas')
+      .evaluate((canvas) => {
+        canvas.dataset.identity = "retained-through-status";
+      });
+
+    await postBuildStatus(page, 116, "building");
     await expectBuildStatus(page, "building", "Building…");
-    await postBuildStatus(page, 113, "unavailable");
+    await postBuildStatus(page, 116, "unavailable");
     await expectBuildStatus(
       page,
       "unavailable",
       "Language server unavailable",
     );
-    await postBuildStatus(page, 112, "building");
+    await postBuildStatus(page, 115, "building");
     await expectBuildStatus(
       page,
       "unavailable",
@@ -1511,9 +1671,9 @@ await withBrowser(output, async (browser, baseUrl) => {
     restarted.generation = 1;
     restarted.snapshot_id = "1-restarted";
     restarted.layout.pages[1].name = "Restarted";
-    await postBuildStatus(page, 114, "building");
+    await postBuildStatus(page, 117, "building");
     await expectBuildStatus(page, "building", "Building…");
-    await postSnapshot(page, 114, restarted, 7);
+    await postSnapshot(page, 117, restarted, 9);
     await expectBuildStatus(page, "complete", "Build complete");
     await page.waitForFunction(() => [...document.querySelectorAll(".page-caption")]
       .some((caption) => caption.textContent === "Restarted"));

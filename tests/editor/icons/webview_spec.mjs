@@ -167,6 +167,41 @@ state.snapshot.snapshot_id = "queued-icon-rebased";
 assert.equal(icons.reconcile(state.snapshot), null);
 assert.equal(messages.length, messageCountBeforeQueuedInsert + 1);
 assert.equal(messages.at(-1).snapshotId, "queued-icon-rebased");
+const queuedIconInsertion = messages.at(-1);
+const messageCountBeforeFollowupIcon = messages.length;
+assert.equal(icons.insert(11, {
+  bounds: { x: 320, y: 240, width: 48, height: 48 },
+}), true);
+assert.equal(messages.length, messageCountBeforeFollowupIcon,
+  "a follow-up icon was sent before the first insertion rebuilt");
+assert.equal(icons.pendingInsertions(11).length, 2);
+state.shapeTool = "select";
+state.selectedObjectId = 101;
+const selectionCountBeforeQueuedIconBuild = selections.length;
+icons.acceptResult({
+  type: "iconEditResult",
+  requestId: queuedIconInsertion.requestId,
+  status: "applied",
+  selection: { path: "/tmp/slide.ss", pageId: 11, binding: "circle_icon" },
+});
+state.snapshot = snapshot("queued-icon-inserted-after-selection", [{
+  node_id: 102,
+  page_id: 11,
+  binding: "circle_icon",
+}]);
+assert.deepEqual(icons.reconcile(state.snapshot), { status: "applied" });
+assert.equal(selections.length, selectionCountBeforeQueuedIconBuild,
+  "a completed icon took selection back after leaving its tool");
+assert.equal(state.selectedObjectId, 101);
+assert.equal(messages.length, messageCountBeforeFollowupIcon + 1);
+assert.equal(messages.at(-1).snapshotId, "queued-icon-inserted-after-selection");
+assert.equal(icons.pendingInsertions(11).length, 1);
+icons.acceptResult({
+  type: "iconEditResult",
+  requestId: messages.at(-1).requestId,
+  status: "rejected",
+});
+assert.equal(icons.pendingInsertions(11).length, 0);
 
 function catalog(entries, {
   category = "all",

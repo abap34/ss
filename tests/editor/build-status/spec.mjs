@@ -5,6 +5,9 @@ import {
   emptyPreviewMessage,
   formatBuildDuration,
 } from "../../../editor/vscode/media/editor/workspace.js";
+import {
+  reconciliationFailureMessage,
+} from "../../../editor/vscode/media/editor/diagnostics.js";
 
 assert.equal(formatBuildDuration(0.4), "<1 ms");
 assert.equal(formatBuildDuration(42.4), "42 ms");
@@ -21,3 +24,18 @@ assert.deepEqual(
   buildStatusPresentation.manual,
   { label: "Build required", icon: "↻" },
 );
+assert.equal(reconciliationFailureMessage([
+  { status: "applied" },
+  {
+    status: "failed",
+    message: "The target shape changed before the edit could be applied.",
+  },
+]), "The target shape changed before the edit could be applied.");
+assert.equal(reconciliationFailureMessage([
+  { status: "failed", message: "The moved object is no longer present." },
+  { status: "failed", message: "The target shape changed." },
+]), "The moved object is no longer present.\nThe target shape changed.");
+assert.equal(reconciliationFailureMessage([
+  { status: "applied" },
+  { status: "applied" },
+]), null);
