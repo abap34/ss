@@ -3,7 +3,9 @@ const core = @import("core");
 const utils = @import("utils");
 
 const json = utils.json;
-const result_limit = 60;
+const query_length_limit = 128;
+const category_length_limit = 64;
+const catalog_page_size = 60;
 
 pub const Filter = enum {
     all,
@@ -17,61 +19,6 @@ const Match = struct {
     rank: u8,
 };
 
-pub const featured_sources = [_][]const u8{
-    "fa-solid:house",
-    "fa-solid:user",
-    "fa-solid:users",
-    "fa-solid:star",
-    "fa-solid:heart",
-    "fa-solid:check",
-    "fa-solid:xmark",
-    "fa-solid:plus",
-    "fa-solid:minus",
-    "fa-solid:arrow-right",
-    "fa-solid:arrow-left",
-    "fa-solid:circle-info",
-    "fa-solid:triangle-exclamation",
-    "fa-solid:gear",
-    "fa-solid:magnifying-glass",
-    "fa-solid:envelope",
-    "fa-solid:calendar",
-    "fa-solid:clock",
-    "fa-solid:location-dot",
-    "fa-solid:phone",
-    "fa-solid:download",
-    "fa-solid:upload",
-    "fa-solid:play",
-    "fa-solid:pause",
-    "fa-solid:trash",
-    "fa-solid:pen",
-    "fa-solid:image",
-    "fa-solid:chart-bar",
-    "fa-solid:table",
-    "fa-solid:lightbulb",
-    "fa-regular:star",
-    "fa-regular:heart",
-    "fa-regular:user",
-    "fa-regular:clock",
-    "fa-regular:calendar",
-    "fa-regular:envelope",
-    "fa-brands:github",
-    "fa-brands:gitlab",
-    "fa-brands:apple",
-    "fa-brands:windows",
-    "fa-brands:linux",
-    "fa-brands:chrome",
-    "fa-brands:firefox-browser",
-    "fa-brands:python",
-    "fa-brands:js",
-    "fa-brands:react",
-    "fa-brands:npm",
-    "fa-brands:node-js",
-    "fa-brands:linkedin",
-    "fa-brands:x-twitter",
-    "fa-brands:youtube",
-    "fa-brands:instagram",
-};
-
 pub fn parseFilter(text: []const u8) ?Filter {
     return std.meta.stringToEnum(Filter, text);
 }
@@ -80,29 +27,35 @@ pub fn catalogJson(
     allocator: std.mem.Allocator,
     query_text: []const u8,
     filter: Filter,
+    category_text: []const u8,
+    offset: usize,
 ) ![]u8 {
-    if (query_text.len > 128) return error.QueryTooLong;
+    if (query_text.len > query_length_limit) return error.QueryTooLong;
+    if (category_text.len > category_length_limit) return error.InvalidCategory;
     const query = try lowercase(allocator, std.mem.trim(u8, query_text, " \t\r\n"));
     defer allocator.free(query);
+    const selected_category = if (std.mem.eql(u8, category_text, "all"))
+        null
+    else
+        categoryById(category_text) orelse return error.InvalidCategory;
 
     var matches = std.ArrayList(Match).empty;
     defer matches.deinit(allocator);
-    if (query.len == 0) {
-        try appendFeatured(allocator, &matches, filter);
-    } else {
-        const styles = [_]core.fontawesome.Style{ .solid, .regular, .brands };
-        for (styles) |style| {
-            if (!includes(filter, style)) continue;
-            var iterator = core.fontawesome.Iterator.init(style);
-            while (iterator.next()) |symbol| {
-                const rank = matchRank(symbol.name, query) orelse continue;
-                try matches.append(allocator, .{ .symbol = symbol, .rank = rank });
+    for (std.meta.tags(core.fontawesome.Style)) |style| {
+        if (!includes(filter, style)) continue;
+        var iterator = core.fontawesome.Iterator.init(style);
+        while (iterator.next()) |symbol| {
+            if (selected_category) |category| {
+                if (!categoryContains(category, symbol.name)) continue;
             }
+            const rank = if (query.len == 0) 0 else matchRank(symbol.name, query) orelse continue;
+            try matches.append(allocator, .{ .symbol = symbol, .rank = rank });
         }
-        std.sort.heap(Match, matches.items, {}, lessThan);
     }
+    std.sort.heap(Match, matches.items, {}, lessThan);
 
-    const returned = @min(matches.items.len, result_limit);
+    const start = @min(offset, matches.items.len);
+    const end = @min(matches.items.len, start + catalog_page_size);
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
     var root = try json.Object.beginBuffer(allocator, &buffer);
@@ -111,11 +64,21 @@ pub fn catalogJson(
     try root.stringField("version", core.fontawesome.version);
     try root.stringField("query", query_text);
     try root.stringField("style", @tagName(filter));
-    try root.intField("total_available", core.fontawesome.total_count);
+    try root.stringField("category", category_text);
+    try root.intField("offset", start);
+    try root.intField("total_available", core.fontawesome.totalCount());
     try root.intField("total_matches", matches.items.len);
-    try root.boolField("has_more", matches.items.len > returned);
+    try root.boolField("has_more", end < matches.items.len);
+    var category_items = try root.arrayField("categories");
+    for (core.fontawesome.categories) |category| {
+        var item = try category_items.objectItem();
+        try item.stringField("id", category.id);
+        try item.stringField("label", category.label);
+        try item.end();
+    }
+    try category_items.end();
     var icons = try root.arrayField("icons");
-    for (matches.items[0..returned]) |match| {
+    for (matches.items[start..end]) |match| {
         const source = try core.fontawesome.canonicalSource(allocator, .{
             .style = match.symbol.style,
             .name = match.symbol.name,
@@ -135,17 +98,18 @@ pub fn catalogJson(
     return try buffer.toOwnedSlice(allocator);
 }
 
-fn appendFeatured(
-    allocator: std.mem.Allocator,
-    matches: *std.ArrayList(Match),
-    filter: Filter,
-) !void {
-    for (featured_sources) |source| {
-        const spec = core.fontawesome.parseSource(source) orelse continue;
-        if (!includes(filter, spec.style)) continue;
-        const symbol = core.fontawesome.find(spec) orelse continue;
-        try matches.append(allocator, .{ .symbol = symbol, .rank = 0 });
+fn categoryById(id: []const u8) ?*const core.fontawesome.Category {
+    for (core.fontawesome.categories) |*category| {
+        if (std.mem.eql(u8, category.id, id)) return category;
     }
+    return null;
+}
+
+fn categoryContains(category: *const core.fontawesome.Category, name: []const u8) bool {
+    for (category.icons) |icon_name| {
+        if (std.mem.eql(u8, icon_name, name)) return true;
+    }
+    return false;
 }
 
 fn includes(filter: Filter, style: core.fontawesome.Style) bool {

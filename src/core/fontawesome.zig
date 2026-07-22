@@ -4,10 +4,8 @@ const assets = @import("fontawesome_assets");
 pub const collection = assets.collection;
 pub const version = assets.version;
 pub const cache_namespace = collection ++ "-" ++ version;
-pub const solid_count = assets.solid_count;
-pub const regular_count = assets.regular_count;
-pub const brands_count = assets.brands_count;
-pub const total_count = solid_count + regular_count + brands_count;
+pub const Category = assets.Category;
+pub const categories: []const Category = assets.categories;
 
 pub const Style = enum {
     solid,
@@ -115,6 +113,10 @@ pub fn count(style: Style) usize {
     var iterator = Iterator.init(style);
     while (iterator.next() != null) total += 1;
     return total;
+}
+
+pub fn totalCount() usize {
+    return count(.solid) + count(.regular) + count(.brands);
 }
 
 fn sprite(style: Style) []const u8 {

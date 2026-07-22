@@ -17,13 +17,17 @@ pub const Context = struct {
 };
 
 pub fn catalogResult(allocator: std.mem.Allocator, params: ?protocol.JsonValue) ![]const u8 {
-    const request = params orelse return try icon_catalog.catalogJson(allocator, "", .all);
-    if (request != .object) return try icon_catalog.catalogJson(allocator, "", .all);
+    const request = params orelse return try icon_catalog.catalogJson(allocator, "", .all, "all", 0);
+    if (request != .object) return try icon_catalog.catalogJson(allocator, "", .all, "all", 0);
     const query = protocol.stringField(&request.object, "query") orelse "";
     const style_text = protocol.stringField(&request.object, "style") orelse "all";
+    const category = protocol.stringField(&request.object, "category") orelse "all";
     const filter = icon_catalog.parseFilter(style_text) orelse .all;
-    return icon_catalog.catalogJson(allocator, query, filter) catch |err| switch (err) {
+    const raw_offset = protocol.intField(&request.object, "offset") orelse 0;
+    const offset = std.math.cast(usize, raw_offset) orelse 0;
+    return icon_catalog.catalogJson(allocator, query, filter, category, offset) catch |err| switch (err) {
         error.QueryTooLong => edit_response.statusJson(allocator, "rejected", "The icon query is too long."),
+        error.InvalidCategory => edit_response.statusJson(allocator, "rejected", "The icon category is invalid."),
         else => return err,
     };
 }
