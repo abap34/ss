@@ -7,6 +7,7 @@ import {
 import { InteractionController } from "./interaction.js";
 import { renderPage } from "./document.js";
 import { strokeStylePicker } from "./shape-style.js";
+import { toolIcon } from "./tool-icons.js";
 
 const rulerSize = 26;
 const rulerInterval = 100;
@@ -17,7 +18,7 @@ const wheelDeltaModePage = 2;
 export const zoomPolicy = Object.freeze({
   minimumScale: 0.1,
   maximumScale: 4,
-  pinchSensitivity: 0.002,
+  pinchSensitivity: 0.004,
   wheelLinePixels: 16,
 });
 export const buildStatusPresentation = {
@@ -144,8 +145,8 @@ export class WorkspaceView {
     tools.setAttribute("role", "group");
     tools.setAttribute("aria-label", "Drawing tools");
     tools.append(
-      this.pointerModeButton("select", "Select", "↖"),
-      this.pointerModeButton("pan", "Pan view", "✋"),
+      this.pointerModeButton("select", "Select"),
+      this.pointerModeButton("pan", "Pan view"),
       this.shapePicker(),
       this.iconPicker(),
     );
@@ -241,7 +242,7 @@ export class WorkspaceView {
     }
   }
 
-  pointerModeButton(mode, label, glyph) {
+  pointerModeButton(mode, label) {
     const button = element("button", "shape-tool");
     button.type = "button";
     button.title = label;
@@ -250,7 +251,7 @@ export class WorkspaceView {
       (mode === "pan" || this.state.shapeTool === "select");
     button.setAttribute("aria-pressed", String(active));
     button.classList.toggle("is-active", active);
-    button.textContent = glyph;
+    button.append(toolIcon(mode));
     button.disabled = this.actions.shape.isBusy() || this.actions.icon.isBusy();
     button.addEventListener("click", () => this.setPointerMode(mode));
     return button;
