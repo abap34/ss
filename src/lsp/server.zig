@@ -15,6 +15,7 @@ const protocol = @import("protocol.zig");
 const lsp_state = @import("state.zig");
 const feature_colors = @import("features/colors.zig");
 const feature_completion = @import("features/completion.zig");
+const feature_component_edit = @import("features/component_edit.zig");
 const feature_definition = @import("features/definition.zig");
 const feature_editor = @import("features/editor.zig");
 const feature_edit = @import("features/edit.zig");
@@ -1143,6 +1144,20 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
             .on_generated = rememberGeneratedEdit,
         };
         const result = try feature_edit.result(&ctx, params);
+        defer server.allocator.free(result);
+        try server.respondResult(id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "ss/deleteComponent")) {
+        var provider = analysisProvider(server);
+        var ctx = feature_component_edit.Context{
+            .io = server.io,
+            .allocator = server.allocator,
+            .documents = &server.documents,
+            .active_editor_paths = &server.wysiwyg_paths,
+            .provider = &provider,
+        };
+        const result = try feature_component_edit.result(&ctx, params);
         defer server.allocator.free(result);
         try server.respondResult(id, result);
         return;

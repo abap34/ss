@@ -840,6 +840,7 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         "tests/runtime/debug_runtime_spec.mjs",
         "tests/runtime/doctor_runtime_spec.mjs",
         "tests/runtime/editor/diagnostics/spec.mjs",
+        "tests/runtime/editor/deletion/spec.mjs",
         "tests/runtime/editor/empty/spec.mjs",
         "tests/runtime/editor/icons/spec.mjs",
         "tests/runtime/editor/names/spec.mjs",
