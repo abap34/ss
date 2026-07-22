@@ -552,9 +552,10 @@ pub fn build(
     defer if (state_owned) state.deinit();
     try options.checkCanceled();
 
-    var execution_graph = analysis_pipeline.analyzeDocumentStateWithMode(allocator, &state, .evaluation) catch |err| switch (err) {
-        error.DiagnosticsFailed => null,
-        else => return err,
+    const diagnostic_count_before_analysis = state.diagnostics.items.len;
+    var execution_graph = analysis_pipeline.analyzeDocumentStateWithMode(allocator, &state, .evaluation) catch |err| blk: {
+        if (err != error.DiagnosticsFailed and state.diagnostics.items.len == diagnostic_count_before_analysis) return err;
+        break :blk null;
     };
     defer if (execution_graph) |*graph| graph.deinit();
     try options.checkCanceled();
