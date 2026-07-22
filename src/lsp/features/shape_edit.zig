@@ -75,7 +75,7 @@ pub fn insertResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
                 .stroke = stroke,
             } };
         },
-        .rectangle, .circle, .arrow => blk: {
+        .rectangle, .circle, .arrow, .speech_bubble => blk: {
             const bounds_object = protocol.objectFieldObject(request_object, "bounds") orelse
                 return try statusJson(ctx.allocator, "rejected", "Missing shape bounds.");
             const bounds = parseBounds(bounds_object) orelse
@@ -93,6 +93,7 @@ pub fn insertResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
                 .rectangle => .{ .rectangle = closed },
                 .circle => .{ .circle = closed },
                 .arrow => .{ .arrow = closed },
+                .speech_bubble => .{ .speech_bubble = closed },
                 .line => unreachable,
             };
         },
@@ -114,6 +115,7 @@ pub fn insertResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         .rectangle => target.rectangle_binding,
         .circle => target.circle_binding,
         .arrow => target.arrow_binding,
+        .speech_bubble => target.speech_bubble_binding,
         .line => target.line_binding,
     };
     var result = (try shape_edit.insert(
@@ -344,6 +346,7 @@ fn parseKind(text: []const u8) ?shape_edit.Kind {
     if (std.mem.eql(u8, text, "rectangle")) return .rectangle;
     if (std.mem.eql(u8, text, "circle")) return .circle;
     if (std.mem.eql(u8, text, "arrow")) return .arrow;
+    if (std.mem.eql(u8, text, "speech_bubble")) return .speech_bubble;
     if (std.mem.eql(u8, text, "line")) return .line;
     return null;
 }

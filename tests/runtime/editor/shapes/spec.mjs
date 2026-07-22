@@ -66,6 +66,34 @@ end
       `a shape without fill or stroke was accepted: ${JSON.stringify(invisible)}`,
     );
 
+    const speechBubble = await client.request("ss/insertShape", {
+      textDocument: { uri },
+      snapshotId: initial.snapshot_id,
+      pageId: page.id,
+      kind: "speech_bubble",
+      bounds: { x: 80, y: 90, width: 180, height: 120 },
+      fill: { enabled: true, color: "#e8f1ff", opacity: 1 },
+      stroke: { enabled: true, color: "#2563eb", width: 1.6, style: "solid" },
+    });
+    assert(
+      speechBubble.status === "ok" &&
+        speechBubble.selection?.binding === "speech_bubble_item",
+      `speech bubble insertion failed: ${JSON.stringify(speechBubble)}`,
+    );
+    const speechBubbleSource = applyProtocolEdits(
+      source,
+      speechBubble.workspaceEdit?.changes?.[uri] ?? [],
+    );
+    assert(
+      speechBubbleSource.includes(
+        "let speech_bubble_item = speech_bubble!(180, 120, VectorStyle",
+      ) &&
+        speechBubbleSource.includes(
+          "~!~ speech_bubble_item.top == page.top - 90",
+        ),
+      `speech bubble insertion emitted unexpected source: ${speechBubbleSource}`,
+    );
+
     const insertion = await client.request("ss/insertShape", {
       textDocument: { uri },
       snapshotId: initial.snapshot_id,

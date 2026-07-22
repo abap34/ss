@@ -325,6 +325,7 @@ export class WorkspaceView {
           ["rectangle", "Rectangle"],
           ["circle", "Circle"],
           ["arrow", "Block arrow"],
+          ["speech_bubble", "Speech bubble"],
         ],
       },
     ];
