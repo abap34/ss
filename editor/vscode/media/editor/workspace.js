@@ -1,5 +1,9 @@
 import { element } from "./dom.js";
 import { renderObjectSheet, sourceButton } from "./details.js";
+import {
+  iconCatalogPolicy,
+  shouldLoadMoreIcons,
+} from "./icon-insertion.js";
 import { InteractionController } from "./interaction.js";
 import { renderPage } from "./document.js";
 import { strokeStylePicker } from "./shape-style.js";
@@ -77,9 +81,14 @@ export class WorkspaceView {
     if (this.state.iconPickerOpen) {
       requestAnimationFrame(() => {
         const search = this.root?.querySelector(".icon-picker-search");
-        if (!search) return;
-        search.focus();
-        search.setSelectionRange(search.value.length, search.value.length);
+        if (search) {
+          search.focus();
+          search.setSelectionRange(search.value.length, search.value.length);
+        }
+        const gallery = this.root?.querySelector(".icon-picker-gallery");
+        if (!gallery) return;
+        gallery.scrollTop = this.iconGalleryScrollTop;
+        this.maybeLoadMoreIcons(gallery);
       });
     }
     return main;
@@ -220,8 +229,9 @@ export class WorkspaceView {
     summary.setAttribute("aria-pressed", String(this.state.shapeTool === "icon"));
     summary.title = draft.name ? `Icon: ${draft.name}` : "Icons";
     const icon = element("span", "shape-picker-summary-icon icon-picker-summary-icon");
+    icon.style.color = draft.color;
     if (draft.svg) appendTrustedSvg(icon, draft.svg);
-    else icon.textContent = "★";
+    else icon.append(element("span", "icon-picker-placeholder"));
     const label = element("span");
     label.textContent = "Icons";
     const chevron = element("span", "shape-picker-chevron");
@@ -232,7 +242,7 @@ export class WorkspaceView {
     const search = element("input", "icon-picker-search");
     search.type = "search";
     search.value = this.state.iconQuery;
-    search.maxLength = 128;
+    search.maxLength = iconCatalogPolicy.queryMaxLength;
     search.placeholder = "Search icon names";
     search.setAttribute("aria-label", "Search icon names");
     search.addEventListener("input", () => this.actions.icon.setQuery(search.value));
@@ -255,20 +265,50 @@ export class WorkspaceView {
       button.addEventListener("click", () => this.actions.icon.setStyle(style));
       tabs.append(button);
     }
+    const category = element("select", "icon-category-select");
+    category.setAttribute("aria-label", "Icon category");
+    category.append(modeOption("all", "All categories", this.state.iconCategory));
+    for (const item of this.state.iconCategories || []) {
+      category.append(modeOption(item.id, item.label, this.state.iconCategory));
+    }
+    category.addEventListener("change", () => {
+      this.actions.icon.setCategory(category.value);
+    });
     const status = element("div", "icon-catalog-status");
     const catalog = this.state.iconCatalog;
-    if (this.state.iconCatalogPending && !catalog) {
+    if (this.state.iconCatalogError) {
+      const message = element("span", "icon-catalog-error");
+      message.textContent = this.state.iconCatalogError;
+      const retry = element("button", "icon-catalog-retry");
+      retry.type = "button";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", () => this.actions.icon.retryCatalog());
+      status.append(message, retry);
+    } else if (this.state.iconCatalogPending && !catalog) {
       status.textContent = "Loading icons…";
     } else if (catalog) {
-      status.textContent = catalog.total_matches === 0
+      const message = element("span");
+      message.textContent = catalog.total_matches === 0
         ? "No matching icons"
-        : `${catalog.total_matches} match${catalog.total_matches === 1 ? "" : "es"}${
-          catalog.has_more ? " — refine the search to see more" : ""
+        : `${catalog.icons.length} of ${catalog.total_matches} icons${
+          this.state.iconCatalogPending ? " · Loading…" : ""
         }`;
+      status.append(message);
     } else {
       status.textContent = "Open the picker to load icons";
     }
     const gallery = element("div", "icon-picker-gallery");
+    const galleryKey = `${this.state.iconQuery}\u0000${this.state.iconStyle}\u0000${
+      this.state.iconCategory
+    }`;
+    if (this.iconGalleryKey !== galleryKey) {
+      this.iconGalleryKey = galleryKey;
+      this.iconGalleryScrollTop = 0;
+    }
+    gallery.addEventListener("scroll", () => {
+      this.iconGalleryScrollTop = gallery.scrollTop;
+      this.maybeLoadMoreIcons(gallery);
+    });
     for (const entry of catalog?.icons || []) {
       const button = element(
         "button",
@@ -290,7 +330,7 @@ export class WorkspaceView {
       button.addEventListener("click", () => this.actions.icon.select(entry));
       gallery.append(button);
     }
-    panel.append(search, tabs, status, gallery);
+    panel.append(search, tabs, category, status, gallery);
     picker.append(summary, panel);
     picker.addEventListener("toggle", () => {
       if (picker.open !== this.state.iconPickerOpen) {
@@ -298,6 +338,14 @@ export class WorkspaceView {
       }
     });
     return picker;
+  }
+
+  maybeLoadMoreIcons(gallery) {
+    if (!this.state.iconPickerOpen || this.state.iconCatalogPending ||
+        !this.state.iconCatalog?.has_more || !shouldLoadMoreIcons(gallery)) {
+      return false;
+    }
+    return this.actions.icon.loadMore();
   }
 
   iconStyleControls() {

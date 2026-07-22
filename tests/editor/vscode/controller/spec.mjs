@@ -204,11 +204,18 @@ async function testIconCatalogAndInsertionReachTheWebview() {
       requestId: 20,
       query: "star",
       style: "solid",
+      category: "all",
+      offset: 0,
     });
     const catalogRequest = requests.find((candidate) =>
       candidate.method === "ss/iconCatalog"
     );
-    assert.deepEqual(catalogRequest?.params, { query: "star", style: "solid" });
+    assert.deepEqual(catalogRequest?.params, {
+      query: "star",
+      style: "solid",
+      category: "all",
+      offset: 0,
+    });
     assert(messages.some((message) =>
       message.type === "iconCatalog" && message.requestId === 20
     ), "the icon catalog did not reach the webview");
@@ -313,9 +320,12 @@ automatic = false
             version: "7.2.0",
             query: params.query,
             style: params.style,
+            category: params.category,
+            offset: params.offset,
             total_available: 2141,
             total_matches: 1,
             has_more: false,
+            categories: [{ id: "shapes", label: "Shapes" }],
             icons: [{
               id: "fa-solid:star",
               name: "star",

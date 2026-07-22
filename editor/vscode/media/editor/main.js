@@ -28,8 +28,11 @@ const state = {
   iconPickerOpen: false,
   iconQuery: "",
   iconStyle: "all",
+  iconCategory: "all",
+  iconCategories: [],
   iconCatalog: null,
   iconCatalogPending: false,
+  iconCatalogError: null,
   iconDraft: structuredClone(defaultIconDraft),
   theme: persistedState.theme === "light" || persistedState.theme === "dark"
     ? persistedState.theme
@@ -56,6 +59,7 @@ const shape = new ShapeController(state, {
 });
 const icon = new IconController(state, {
   post: (message) => vscode.postMessage(message),
+  reportError: showError,
   render,
   selectObject,
 });
