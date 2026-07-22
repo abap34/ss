@@ -28,18 +28,8 @@ pub fn workspaceEditJson(
 ) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
-    try out.appendSlice(allocator, "{\"schema\":1,\"status\":\"ok\",\"workspaceEdit\":{\"changes\":{");
-    try protocol.appendJsonString(allocator, &out, uri);
-    try out.appendSlice(allocator, ":[");
-    for (edits, 0..) |edit, index| {
-        if (index != 0) try out.append(allocator, ',');
-        try out.appendSlice(allocator, "{\"range\":");
-        try appendEditRange(allocator, &out, source, edit);
-        try out.appendSlice(allocator, ",\"newText\":");
-        try protocol.appendJsonString(allocator, &out, edit.text);
-        try out.append(allocator, '}');
-    }
-    try out.appendSlice(allocator, "]}},\"selection\":{\"path\":");
+    try appendWorkspaceEdit(allocator, &out, uri, source, edits);
+    try out.appendSlice(allocator, ",\"selection\":{\"path\":");
     try protocol.appendJsonString(allocator, &out, path);
     try out.appendSlice(allocator, ",\"pageId\":");
     try protocol.appendInt(allocator, &out, page_id);
@@ -47,6 +37,40 @@ pub fn workspaceEditJson(
     try protocol.appendJsonString(allocator, &out, binding);
     try out.appendSlice(allocator, "}}");
     return try out.toOwnedSlice(allocator);
+}
+
+pub fn workspaceEditOnlyJson(
+    allocator: std.mem.Allocator,
+    uri: []const u8,
+    source: []const u8,
+    edits: anytype,
+) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try appendWorkspaceEdit(allocator, &out, uri, source, edits);
+    try out.append(allocator, '}');
+    return try out.toOwnedSlice(allocator);
+}
+
+fn appendWorkspaceEdit(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    uri: []const u8,
+    source: []const u8,
+    edits: anytype,
+) !void {
+    try out.appendSlice(allocator, "{\"schema\":1,\"status\":\"ok\",\"workspaceEdit\":{\"changes\":{");
+    try protocol.appendJsonString(allocator, out, uri);
+    try out.appendSlice(allocator, ":[");
+    for (edits, 0..) |edit, index| {
+        if (index != 0) try out.append(allocator, ',');
+        try out.appendSlice(allocator, "{\"range\":");
+        try appendEditRange(allocator, out, source, edit);
+        try out.appendSlice(allocator, ",\"newText\":");
+        try protocol.appendJsonString(allocator, out, edit.text);
+        try out.append(allocator, '}');
+    }
+    try out.appendSlice(allocator, "]}}");
 }
 
 fn appendEditRange(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source: []const u8, edit: anytype) !void {

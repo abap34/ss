@@ -2,6 +2,7 @@ const std = @import("std");
 const edit = @import("editor_edit");
 const shape = edit.shape;
 const icon = edit.icon;
+const component = edit.component;
 
 fn relationSource(source: []const u8, target: []const u8, source_endpoint: []const u8, offset: ?[]const u8) edit.RelationSource {
     const target_start = std.mem.indexOf(u8, source, target).?;
@@ -39,6 +40,63 @@ fn expectFixtureOutput(allocator: std.mem.Allocator, path: []const u8, actual: [
     const expected = try readFixture(allocator, expected_path);
     defer allocator.free(expected);
     try std.testing.expectEqualStrings(expected, actual);
+}
+
+test "component removal deletes complete multiline statements and adjacent constraints" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\page Example
+        \\  let keep = rectangle!(40, 40)
+        \\  let removed = rectangle!(
+        \\    160,
+        \\    100,
+        \\  )
+        \\  ~ removed.left == keep.right + 20
+        \\  ~!~ removed.top == page.top - 40
+        \\  ~ keep.top == page.top - 10
+        \\end
+        \\
+    ;
+    const statement_start = std.mem.indexOf(u8, source, "let removed").?;
+    const statement_end = std.mem.indexOf(u8, source, "\n  ~ removed.left").?;
+    const first_constraint = std.mem.indexOf(u8, source, "~ removed.left").?;
+    const first_constraint_end = std.mem.indexOfPos(u8, source, first_constraint, "\n").?;
+    const second_constraint = std.mem.indexOf(u8, source, "~!~ removed.top").?;
+    const second_constraint_end = std.mem.indexOfPos(u8, source, second_constraint, "\n").?;
+    var result = try component.removeStatements(allocator, source, .{
+        .start = 0,
+        .end = source.len,
+    }, &.{
+        .{ .start = statement_start, .end = statement_end },
+        .{ .start = first_constraint, .end = first_constraint_end },
+        .{ .start = second_constraint, .end = second_constraint_end },
+    });
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expectEqualStrings(
+        \\page Example
+        \\  let keep = rectangle!(40, 40)
+        \\  ~ keep.top == page.top - 10
+        \\end
+        \\
+    , updated);
+}
+
+test "component removal deduplicates the same statement span" {
+    const allocator = std.testing.allocator;
+    const source = "page Example\n  rectangle!(40, 40)\nend\n";
+    const start = std.mem.indexOf(u8, source, "rectangle!").?;
+    const end = start + "rectangle!(40, 40)".len;
+    var result = try component.removeStatements(allocator, source, .{
+        .start = 0,
+        .end = source.len,
+    }, &.{
+        .{ .start = start, .end = end },
+        .{ .start = start, .end = end },
+    });
+    defer result.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), result.edits.len);
 }
 
 test "shape insertion emits a canonical rectangle source block" {
