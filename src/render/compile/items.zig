@@ -512,6 +512,7 @@ const PreloadWork = struct {
     io: std.Io,
     asset_base_dir: []const u8,
     cache_dir: []const u8,
+    highlight_languages: []const utils.highlight.Language,
 };
 
 const MathBatchEntry = struct {
@@ -560,6 +561,7 @@ pub const LayoutMeasurementScope = struct {
         state: *core.DocumentState,
         pages: *const core.prepared.PreparedPages,
         resource_cache: ?*render_resources.SourceCache,
+        highlight_languages: []const utils.highlight.Language,
     ) !LayoutMeasurementScope {
         const default_options: Options = .{};
         const cache_dir = default_options.cache_dir;
@@ -591,7 +593,7 @@ pub const LayoutMeasurementScope = struct {
                 .io = io,
                 .asset_base_dir = if (state.asset_base_dir.len == 0) "." else state.asset_base_dir,
                 .cache_dir = asset_cache_dir,
-                .highlight_languages = &.{},
+                .highlight_languages = highlight_languages,
                 .resource_cache = resource_cache,
             },
             .prepared_objects = prepared_objects,
@@ -1846,6 +1848,7 @@ fn executePreloadTaskList(
         .io = ctx.io,
         .asset_base_dir = ctx.asset_base_dir,
         .cache_dir = ctx.cache_dir,
+        .highlight_languages = ctx.highlight_languages,
     };
 
     var threads = try ctx.allocator.alloc(std.Thread, worker_count);
@@ -1921,7 +1924,7 @@ fn preloadTaskWorker(work: *PreloadWork) void {
             .io = work.io,
             .asset_base_dir = work.asset_base_dir,
             .cache_dir = work.cache_dir,
-            .highlight_languages = &.{},
+            .highlight_languages = work.highlight_languages,
         };
         const profile_build = utils.measure_profile.start();
         preloadOne(&ctx, work.plan[index]) catch {

@@ -177,6 +177,7 @@ const Server = struct {
             .diagnostics = &diagnostics,
             .include_editor_snapshot = true,
             .prefer_translation_patch = false,
+            .highlight_languages = snapshot.project.highlight.languages,
         };
         const completed = try snapshot.completeRetainedLayout(.{
             .context = &layout_context,
@@ -401,6 +402,12 @@ const Server = struct {
             .configured => if (config) |cfg| cfg.wysiwyg.refresh_automatically else true,
             .required => true,
         };
+        var default_highlight: ?utils.highlight.Config = null;
+        defer if (default_highlight) |*cfg| cfg.deinit(self.allocator);
+        const highlight = if (config) |*cfg| cfg.highlight else blk: {
+            default_highlight = try utils.highlight.defaultConfig(self.allocator);
+            break :blk default_highlight.?;
+        };
         try self.checkCanceled();
         const entry_path = if (config) |cfg| try self.allocator.dupe(u8, cfg.entry) else try self.allocator.dupe(u8, changed_abs);
         defer self.allocator.free(entry_path);
@@ -418,10 +425,12 @@ const Server = struct {
             .diagnostics = diagnostics,
             .include_editor_snapshot = include_layout,
             .prefer_translation_patch = prefer_translation_patch,
+            .highlight_languages = highlight.languages,
         };
         var analysis_snapshot = try analysis.snapshot.build(self.allocator, &sources, entry_path, asset_base_dir, .{
             .generation = self.documents.generation,
             .project = .{
+                .highlight = highlight,
                 .lsp = if (config) |cfg| cfg.lsp else .{},
                 .wysiwyg = if (config) |cfg| cfg.wysiwyg else .{},
                 .page_guide = if (config) |cfg| cfg.page_guide else .{},
@@ -453,9 +462,12 @@ const Server = struct {
         var sources = analysis.snapshot.SourceSet.init(self.allocator, self.io);
         defer sources.deinit();
         try self.documents.fillOverlay(&sources.overlay);
+        var highlight = try utils.highlight.defaultConfig(self.allocator);
+        defer highlight.deinit(self.allocator);
 
         var analysis_snapshot = try analysis.snapshot.build(self.allocator, &sources, entry_path, asset_base_dir, .{
             .generation = self.documents.generation,
+            .project = .{ .highlight = highlight },
             .cancellation = .{
                 .context = self,
                 .is_canceled = analysisCanceled,
@@ -595,6 +607,7 @@ const AnalysisLayoutContext = struct {
     diagnostics: *DiagnosticSet,
     include_editor_snapshot: bool,
     prefer_translation_patch: bool,
+    highlight_languages: []const utils.highlight.Language,
 };
 
 fn rememberGeneratedEdit(context: *anyopaque, path: []const u8, source: []const u8) !void {
@@ -667,6 +680,7 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     const render_start = utils.measure_profile.start();
     var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &pages, .{
         .jobs = 1,
+        .highlight_languages = hook.highlight_languages,
         .resource_cache = &hook.server.render_resource_cache,
         .text_cache = &hook.server.text_shape_cache,
         .page_cache = &hook.server.render_page_cache,

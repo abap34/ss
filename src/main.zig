@@ -1053,6 +1053,7 @@ fn run(init: std.process.Init) !void {
             .input_path = resolved.entry_path,
             .asset_base_dir = resolved.asset_base_dir,
             .layout_jobs = options.jobs,
+            .highlight_languages = resolved.highlight.languages,
         }, &progress);
         return;
     }
@@ -1074,6 +1075,7 @@ fn run(init: std.process.Init) !void {
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
                 .layout_jobs = options.jobs,
+                .highlight_languages = resolved.highlight.languages,
             }, output_path, &progress);
         } else {
             var progress = commandProgress(7, options);
@@ -1081,6 +1083,7 @@ fn run(init: std.process.Init) !void {
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
                 .layout_jobs = options.jobs,
+                .highlight_languages = resolved.highlight.languages,
             }, &progress);
         }
         return;
@@ -1112,6 +1115,7 @@ fn run(init: std.process.Init) !void {
             .input_path = resolved.entry_path,
             .asset_base_dir = resolved.asset_base_dir,
             .layout_jobs = options.jobs,
+            .highlight_languages = resolved.highlight.languages,
         };
         switch (options.format) {
             .pdf => try app.writePdf(io, allocator, .{

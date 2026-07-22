@@ -15,6 +15,7 @@ import {
 
 await testSnapshotAndSourceEdits();
 await testPositionEditsAllowReflowAndMoveReturnedGroups();
+await testSnapshotHighlightsPythonCode();
 await testSnapshotAssetsUseContentAddressedFiles();
 await testSnapshotRecoversAfterInvalidEdit();
 await testStaleSnapshotAfterTranslationPatchUsesFullDisplay();
@@ -502,6 +503,46 @@ end
         groupTo.x,
         groupTo.y,
         "returned group edit",
+      );
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testSnapshotHighlightsPythonCode() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-wysiwyg-code-highlight-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = `import std:themes/default as *
+
+page code_sample
+let snippet = <<
+def f(x):
+  return x + 1
+>>
+code!(snippet, "python")
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source });
+      const diagnostics = (await diagnosticsPromise).params.diagnostics;
+      assert(
+        diagnostics.length === 0,
+        `Python code highlight fixture produced diagnostics: ${JSON.stringify(diagnostics)}`,
+      );
+
+      const snapshot = await editorSnapshot(client, uri);
+      const colors = [...snapshot.display.html.matchAll(/color:rgb\(([^)]+)\)/g)]
+        .map((match) => match[1]);
+      assert(
+        new Set(colors).size > 1,
+        `WYSIWYG code snapshot did not include highlighted text colors: ${snapshot.display.html}`,
       );
     });
   } finally {
