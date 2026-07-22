@@ -1,3 +1,5 @@
+import { combineFailureMessages } from "./diagnostics.js";
+
 export const iconCatalogPolicy = Object.freeze({
   queryMaxLength: 128,
   searchDebounceMs: 120,
@@ -25,21 +27,24 @@ export class IconController {
     this.catalogTimer = null;
     this.catalogRequestTimer = null;
     this.pending = null;
+    this.followups = [];
   }
 
   isBusy() {
-    return this.pending != null;
+    return this.pending != null || this.followups.length > 0;
   }
 
-  canInsert(pageId) {
+  supportsInsertion(pageId) {
     return Boolean(
-      this.state.snapshot &&
-        !this.isBusy() &&
-        this.state.iconDraft.source &&
+      this.state.snapshot && this.state.iconDraft.source &&
         this.state.snapshot.page_editing?.some((target) =>
           target.page_id === pageId && target.insert_icons
         ),
     );
+  }
+
+  canInsert(pageId) {
+    return this.supportsInsertion(pageId);
   }
 
   setPickerOpen(open) {
@@ -187,12 +192,11 @@ export class IconController {
       bounds: { ...geometry.bounds },
       color: this.state.iconDraft.color,
     };
-    this.pending = {
+    return this.startOrQueue({
       requestId,
       snapshotId: message.snapshotId,
       message,
       selection: null,
-      phase: this.state.snapshot.stale ? "queued" : "requested",
       preview: {
         pageId,
         kind: "icon",
@@ -200,8 +204,19 @@ export class IconController {
         svg: this.state.iconDraft.svg,
         color: message.color,
       },
-    };
-    if (this.pending.phase === "requested") this.actions.post(message);
+    });
+  }
+
+  startOrQueue(intent) {
+    if (this.pending) {
+      intent.phase = "queued";
+      this.followups.push(intent);
+      this.actions.render();
+      return true;
+    }
+    intent.phase = this.state.snapshot.stale ? "queued" : "requested";
+    this.pending = intent;
+    if (intent.phase === "requested") this.actions.post(intent.message);
     this.actions.render();
     return true;
   }
@@ -218,11 +233,15 @@ export class IconController {
       return null;
     }
     this.pending = null;
-    this.state.shapeTool = "select";
+    this.finishInsertionTool();
+    const queuedFailure = this.promoteFollowup(this.state.snapshot);
     this.actions.render();
     return {
       status: "failed",
-      message: message.message || "The icon could not be inserted.",
+      message: combineFailureMessages(
+        message.message || "The icon could not be inserted.",
+        queuedFailure?.message,
+      ),
     };
   }
 
@@ -236,10 +255,14 @@ export class IconController {
       );
       if (!editable) {
         this.pending = null;
-        this.state.shapeTool = "select";
+        this.finishInsertionTool();
+        const queuedFailure = this.promoteFollowup(snapshot);
         return {
           status: "failed",
-          message: "The target page no longer supports icon insertion.",
+          message: combineFailureMessages(
+            "The target page no longer supports icon insertion.",
+            queuedFailure?.message,
+          ),
         };
       }
       pending.snapshotId = snapshot.snapshot_id;
@@ -258,28 +281,82 @@ export class IconController {
       )
       : null;
     if (selection && !target) return null;
+    const selectInsertedTarget = this.followups.length === 0 &&
+      this.state.shapeTool === "icon";
     this.pending = null;
-    this.state.shapeTool = "select";
-    if (target) this.actions.selectObject(target.node_id, target.page_id, false);
+    this.finishInsertionTool();
+    if (target && selectInsertedTarget) {
+      this.actions.selectObject(target.node_id, target.page_id, false);
+    }
+    const queuedFailure = this.promoteFollowup(snapshot);
+    if (queuedFailure) return queuedFailure;
     return { status: "applied" };
   }
 
   cancel() {
-    if (this.pending?.phase === "queued") {
-      this.pending = null;
-      this.state.shapeTool = "select";
+    const queuedInsertion = this.followups.findLastIndex((intent) =>
+      intent.phase === "queued"
+    );
+    if (queuedInsertion >= 0) {
+      this.followups.splice(queuedInsertion, 1);
       this.actions.render();
       return true;
     }
-    if (this.pending || this.state.shapeTool !== "icon") return false;
+    if (this.pending?.phase === "queued") {
+      this.pending = null;
+      this.finishInsertionTool();
+      this.actions.render();
+      return true;
+    }
+    if (this.state.shapeTool !== "icon") return false;
     this.state.shapeTool = "select";
     this.actions.render();
     return true;
   }
 
   pendingInsertion(pageId) {
-    const preview = this.pending?.preview;
-    return preview?.pageId === pageId ? preview : null;
+    return this.pendingInsertions(pageId)[0] || null;
+  }
+
+  pendingInsertions(pageId) {
+    return [this.pending, ...this.followups]
+      .filter((intent) => intent?.preview.pageId === pageId)
+      .map((intent) => intent.preview);
+  }
+
+  finishInsertionTool() {
+    if (this.followups.length === 0 && this.state.shapeTool === "icon") {
+      this.state.shapeTool = "select";
+    }
+  }
+
+  promoteFollowup(snapshot) {
+    if (this.pending || this.followups.length === 0) return null;
+    let firstFailure = null;
+    while (!this.pending && this.followups.length > 0) {
+      const next = this.followups.shift();
+      this.pending = next;
+      if (snapshot?.stale) {
+        next.phase = "queued";
+        return firstFailure;
+      }
+      const editable = snapshot?.page_editing?.some((target) =>
+        target.page_id === next.preview.pageId && target.insert_icons
+      );
+      if (!editable) {
+        this.pending = null;
+        firstFailure ??= {
+          status: "failed",
+          message: "The target page no longer supports icon insertion.",
+        };
+        continue;
+      }
+      next.snapshotId = snapshot.snapshot_id;
+      next.message.snapshotId = snapshot.snapshot_id;
+      next.phase = "requested";
+      this.actions.post(next.message);
+    }
+    return firstFailure;
   }
 }
 

@@ -1,6 +1,9 @@
 import { element } from "./dom.js";
 import { alignTextBaselines } from "../../out/render/text.js";
-import { buildFailureMessage } from "./diagnostics.js";
+import {
+  buildFailureMessage,
+  reconciliationFailureMessage,
+} from "./diagnostics.js";
 import { disposePages } from "./document.js";
 import { defaultIconDraft, IconController } from "./icon-insertion.js";
 import { EditorNavigation } from "./navigation.js";
@@ -159,9 +162,6 @@ function acceptSnapshot(message) {
   let toastDuration = null;
   if (buildFailure) {
     state.toast = { kind: "error", message: buildFailure };
-  } else if (editOutcome?.status === "failed") {
-    state.toast = { kind: "error", message: editOutcome.message };
-    toastDuration = errorToastDuration;
   }
   let renderStyle = document.getElementById("ss-render-style");
   if (!renderStyle) {
@@ -174,7 +174,15 @@ function acceptSnapshot(message) {
   objectLocks.reconcile(state.snapshot);
   const shapeOutcome = shape.reconcile(state.snapshot);
   const iconOutcome = icon.reconcile(state.snapshot);
-  if (!buildFailure && shapeOutcome?.status === "applied") {
+  const reconciliationFailure = reconciliationFailureMessage([
+    editOutcome,
+    shapeOutcome,
+    iconOutcome,
+  ]);
+  if (!buildFailure && reconciliationFailure) {
+    state.toast = { kind: "error", message: reconciliationFailure };
+    toastDuration = errorToastDuration;
+  } else if (!buildFailure && shapeOutcome?.status === "applied") {
     state.toast = {
       kind: "success",
       message: shapeOutcome.operation === "insert"

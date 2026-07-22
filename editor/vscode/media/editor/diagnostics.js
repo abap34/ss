@@ -18,6 +18,19 @@ export function buildFailureMessage(snapshot) {
   return lines.join("\n");
 }
 
+export function reconciliationFailureMessage(outcomes) {
+  const messages = outcomes
+    .filter((outcome) => outcome?.status === "failed")
+    .map((outcome) => outcome.message ||
+      "The pending source edit could not be reconciled with the rebuilt preview.");
+  return combineFailureMessages(...messages);
+}
+
+export function combineFailureMessages(...messages) {
+  const unique = [...new Set(messages.filter(Boolean))];
+  return unique.length > 0 ? unique.join("\n") : null;
+}
+
 function formatDiagnostic(diagnostic) {
   const location = diagnosticLocation(diagnostic);
   const code = diagnostic.code ? ` [${diagnostic.code}]` : "";

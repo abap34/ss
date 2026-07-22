@@ -427,6 +427,23 @@ assert.equal(messages.length, messageCountBeforeQueuedInsert,
   "an insertion based on a stale preview was sent before rebuilding");
 assert(shape.pendingInsertion(11),
   "an insertion based on a stale preview was not retained locally");
+shape.selectTool("elbow_line");
+assert.equal(state.shapeTool, "elbow_line",
+  "a queued insertion disabled choosing the next shape tool");
+assert.equal(shape.canEdit(rectangleTarget), true,
+  "a queued insertion disabled editing an existing shape");
+assert.equal(shape.insert(11, {
+  start: { x: 340, y: 180 },
+  end: { x: 480, y: 320 },
+}), true);
+assert.equal(messages.length, messageCountBeforeQueuedInsert,
+  "a second stale insertion was sent before rebuilding");
+assert.equal(shape.pendingInsertions(11).length, 2,
+  "the second stale insertion replaced the first provisional shape");
+shape.selectTool("select");
+assert.equal(shape.cancel(), true);
+assert.equal(shape.pendingInsertions(11).length, 1,
+  "cancelling the newest provisional shape discarded the earlier one");
 assert.equal(shape.reconcile(state.snapshot), null);
 assert(shape.pendingInsertion(11),
   "a repeated stale snapshot discarded the provisional shape");
@@ -455,6 +472,54 @@ assert.equal(messages.at(-1).kind, "elbow_line");
 assert.equal(messages.at(-1).arrowStart, true);
 assert.equal(messages.at(-1).arrowEnd, true);
 assert.equal(Object.hasOwn(messages.at(-1), "bounds"), false);
+const elbowInsertion = messages.at(-1);
+const messageCountBeforeFollowupInsertion = messages.length;
+shape.selectTool("circle");
+assert.equal(shape.insert(11, {
+  bounds: { x: 420, y: 220, width: 96, height: 96 },
+}), true);
+assert.equal(messages.length, messageCountBeforeFollowupInsertion,
+  "a follow-up insertion was sent before the first insertion rebuilt");
+assert.equal(shape.pendingInsertions(11).length, 2);
+state.shapeTool = "select";
+state.selectedObjectId = 111;
+const selectionCountBeforeElbowBuild = selections.length;
+shape.acceptResult({
+  type: "shapeEditResult",
+  requestId: elbowInsertion.requestId,
+  operation: "insert",
+  status: "applied",
+  selection: { path: "/tmp/slide.ss", pageId: 11, binding: "elbow_item" },
+});
+state.snapshot = snapshot("elbow-inserted-after-selection", [{
+  node_id: 121,
+  page_id: 11,
+  binding: "elbow_item",
+  kind: "line",
+  route: "elbow",
+  start: { x: 120, y: 180 },
+  end: { x: 360, y: 320 },
+  arrow_start: true,
+  arrow_end: true,
+  stroke: { ...state.shapeStyle.stroke, enabled: true },
+}]);
+assert.deepEqual(shape.reconcile(state.snapshot), {
+  status: "applied",
+  operation: "insert",
+});
+assert.equal(selections.length, selectionCountBeforeElbowBuild,
+  "a completed elbow arrow took selection back after leaving its tool");
+assert.equal(state.selectedObjectId, 111);
+assert.equal(messages.length, messageCountBeforeFollowupInsertion + 1);
+assert.equal(messages.at(-1).kind, "circle");
+assert.equal(shape.pendingInsertions(11).length, 1);
+shape.acceptResult({
+  type: "shapeEditResult",
+  requestId: messages.at(-1).requestId,
+  operation: "insert",
+  status: "rejected",
+});
+assert.equal(shape.pendingInsertions(11).length, 0);
 
 function snapshot(id, shapes) {
   return {
