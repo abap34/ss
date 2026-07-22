@@ -73,6 +73,45 @@ test "shape insertion emits a canonical rectangle source block" {
     , updated);
 }
 
+test "shape insertion emits the stdlib speech bubble constructor" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\page Example
+        \\end
+        \\
+    ;
+    var result = (try shape.insert(
+        allocator,
+        source,
+        .{ .start = 0, .end = source.len },
+        null,
+        "speech_bubble_item",
+        .{ .speech_bubble = .{
+            .bounds = .{ .x = 48, .y = 64, .width = 180, .height = 120 },
+            .fill = .{ .enabled = true, .color = "#e8f1ff", .opacity = 1 },
+            .stroke = .{ .enabled = true, .color = "#2563eb", .width = 1.6, .style = .solid },
+        } },
+    )).?;
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        updated,
+        "let speech_bubble_item = speech_bubble!(180, 120, VectorStyle",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        updated,
+        "~!~ speech_bubble_item.left == page.left + 48",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        updated,
+        "~!~ speech_bubble_item.top == page.top - 64",
+    ) != null);
+}
+
 test "icon insertion emits a canonical object and absolute placement" {
     const allocator = std.testing.allocator;
     const source =

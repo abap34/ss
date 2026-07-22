@@ -11,6 +11,7 @@ pub const Kind = enum {
     rectangle,
     circle,
     arrow,
+    speech_bubble,
     line,
 };
 
@@ -78,6 +79,7 @@ pub const Shape = union(Kind) {
     rectangle: ClosedShape,
     circle: ClosedShape,
     arrow: ClosedShape,
+    speech_bubble: ClosedShape,
     line: LineShape,
 };
 
@@ -207,6 +209,7 @@ fn appendConstructor(
         .rectangle => |value| try appendClosedConstructor(allocator, out, "rectangle!", value, true),
         .circle => |value| try appendClosedConstructor(allocator, out, "circle!", value, false),
         .arrow => |value| try appendClosedConstructor(allocator, out, "arrow_shape!", value, true),
+        .speech_bubble => |value| try appendClosedConstructor(allocator, out, "speech_bubble!", value, true),
         .line => |value| try appendLineConstructor(allocator, out, value),
     }
 }

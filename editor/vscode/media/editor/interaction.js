@@ -215,6 +215,7 @@ export class InteractionController {
     if (kind === "line") return svgElement("line", "shape-placement-ghost");
     if (kind === "circle") return svgElement("ellipse", "shape-placement-ghost");
     if (kind === "arrow") return svgElement("polygon", "shape-placement-ghost");
+    if (kind === "speech_bubble") return svgElement("path", "shape-placement-ghost");
     return svgElement("rect", "shape-placement-ghost");
   }
 
@@ -674,6 +675,8 @@ function defaultBounds(point, page, kind) {
     ? { width: 120, height: 120 }
     : kind === "arrow"
     ? { width: 170, height: 90 }
+    : kind === "speech_bubble"
+    ? { width: 180, height: 120 }
     : { width: 160, height: 100 };
   return {
     x: Math.min(page.width - size.width, Math.max(0, point.x - size.width / 2)),
@@ -698,6 +701,28 @@ function arrowPoints(bounds) {
   ].map((point) => point.join(",")).join(" ");
 }
 
+function speechBubblePath(bounds) {
+  const x = bounds.x;
+  const y = bounds.y;
+  const width = bounds.width;
+  const height = bounds.height;
+  return [
+    `M ${x + width * 0.12} ${y + height * 0.05}`,
+    `L ${x + width * 0.88} ${y + height * 0.05}`,
+    `A ${width * 0.1} ${height * 0.1} 0 0 1 ${x + width * 0.98} ${y + height * 0.15}`,
+    `L ${x + width * 0.98} ${y + height * 0.68}`,
+    `A ${width * 0.1} ${height * 0.1} 0 0 1 ${x + width * 0.88} ${y + height * 0.78}`,
+    `L ${x + width * 0.48} ${y + height * 0.78}`,
+    `L ${x + width * 0.28} ${y + height * 0.98}`,
+    `L ${x + width * 0.31} ${y + height * 0.78}`,
+    `L ${x + width * 0.12} ${y + height * 0.78}`,
+    `A ${width * 0.1} ${height * 0.1} 0 0 1 ${x + width * 0.02} ${y + height * 0.68}`,
+    `L ${x + width * 0.02} ${y + height * 0.15}`,
+    `A ${width * 0.1} ${height * 0.1} 0 0 1 ${x + width * 0.12} ${y + height * 0.05}`,
+    "Z",
+  ].join(" ");
+}
+
 function setShapeGeometry(shape, kind, geometry) {
   if (kind === "line") {
     setLine(shape, geometry.start, geometry.end);
@@ -713,6 +738,8 @@ function setShapeGeometry(shape, kind, geometry) {
     shape.setAttribute("ry", String(bounds.height / 2));
   } else if (kind === "arrow") {
     shape.setAttribute("points", arrowPoints(bounds));
+  } else if (kind === "speech_bubble") {
+    shape.setAttribute("d", speechBubblePath(bounds));
   } else {
     setRect(shape, bounds);
   }

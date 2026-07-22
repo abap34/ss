@@ -761,6 +761,14 @@ button {
   clip-path: polygon(0 28%, 62% 28%, 62% 0, 100% 50%, 62% 100%, 62% 72%, 0 72%);
   opacity: 0.82;
 }
+.shape-choice-preview--speech_bubble {
+  width: 58px;
+  height: 39px;
+  border: 0;
+  background: currentColor;
+  clip-path: polygon(10% 4%, 90% 4%, 98% 14%, 98% 69%, 90% 79%, 48% 79%, 27% 100%, 30% 79%, 10% 79%, 2% 69%, 2% 14%);
+  opacity: 0.82;
+}
 .shape-style-controls {
   display: flex;
   flex: 1 1 auto;

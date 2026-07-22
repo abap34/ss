@@ -93,12 +93,14 @@ pub const PageEditingTarget = struct {
     arrow_binding: []u8,
     line_binding: []u8,
     icon_binding: []u8,
+    speech_bubble_binding: []u8,
 };
 
 pub const ShapeKind = enum {
     rectangle,
     circle,
     arrow,
+    speech_bubble,
     line,
 };
 
@@ -685,6 +687,8 @@ fn shapeConstructor(statement: *const ast.Statement, binding: []const u8) ?Shape
         .circle
     else if (std.mem.eql(u8, call.callee.name, "arrow_shape!"))
         .arrow
+    else if (std.mem.eql(u8, call.callee.name, "speech_bubble!"))
+        .speech_bubble
     else if (std.mem.eql(u8, call.callee.name, "line!"))
         .line
     else
@@ -872,6 +876,7 @@ fn collectPageEditingTargets(allocator: std.mem.Allocator, state: *const core.Do
             .arrow_binding = try names.forStatement(2, "arrow_shape"),
             .line_binding = try names.forStatement(3, "line"),
             .icon_binding = try names.forStatement(4, "icon"),
+            .speech_bubble_binding = try names.forStatement(5, "speech_bubble"),
         });
     }
     return try targets.toOwnedSlice(allocator);
@@ -935,6 +940,7 @@ const PageEditingTargetView = struct {
     arrow_binding: []const u8,
     line_binding: []const u8,
     icon_binding: []const u8,
+    speech_bubble_binding: []const u8,
 };
 
 fn appendPageEditingTarget(allocator: std.mem.Allocator, targets: *std.ArrayList(PageEditingTarget), view: PageEditingTargetView) !void {
@@ -950,6 +956,8 @@ fn appendPageEditingTarget(allocator: std.mem.Allocator, targets: *std.ArrayList
     errdefer allocator.free(line_binding);
     const icon_binding = try allocator.dupe(u8, view.icon_binding);
     errdefer allocator.free(icon_binding);
+    const speech_bubble_binding = try allocator.dupe(u8, view.speech_bubble_binding);
+    errdefer allocator.free(speech_bubble_binding);
     try targets.append(allocator, .{
         .page_id = view.page_id,
         .module_id = view.module_id,
@@ -961,6 +969,7 @@ fn appendPageEditingTarget(allocator: std.mem.Allocator, targets: *std.ArrayList
         .arrow_binding = arrow_binding,
         .line_binding = line_binding,
         .icon_binding = icon_binding,
+        .speech_bubble_binding = speech_bubble_binding,
     });
 }
 
@@ -1012,6 +1021,7 @@ fn deinitPageEditingTargets(allocator: std.mem.Allocator, targets: []const PageE
         allocator.free(target.arrow_binding);
         allocator.free(target.line_binding);
         allocator.free(target.icon_binding);
+        allocator.free(target.speech_bubble_binding);
     }
 }
 

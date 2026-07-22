@@ -241,6 +241,11 @@ await withBrowser(output, async (browser, baseUrl) => {
       "the block arrow tool was not distinguished from a line arrow",
     );
     assert.equal(
+      await shapePicker.getByRole("button", { name: "Speech bubble" }).count(),
+      1,
+      "the shape gallery omitted the speech bubble",
+    );
+    assert.equal(
       await shapePicker.getByRole("button", { name: "Line" })
         .locator(".shape-choice-shortcut").textContent(),
       "L",
@@ -520,12 +525,41 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(await provisionalIcon.count(), 0,
       "a rejected provisional icon remained on the page");
 
+    assert.equal(await page.locator(".toolbar > .shape-style-controls").count(), 0,
+      "selection mode retained icon color controls");
+    await shapePicker.locator("summary").click();
+    await shapePicker.getByRole("button", { name: "Speech bubble" }).click();
     const closedShapeStroke = page.locator(
       '.toolbar > .shape-style-controls label.style-toggle',
     ).filter({ hasText: "Stroke" }).locator(
       'input[type="checkbox"]',
     );
     await closedShapeStroke.uncheck();
+    const speechBubblePlacement = page.locator(
+      '.page-shell[data-page-id="11"] .shape-placement-hit',
+    );
+    const speechBubblePlacementBox = await speechBubblePlacement.boundingBox();
+    assert(speechBubblePlacementBox, "speech bubble placement layer was not rendered");
+    await page.mouse.click(
+      speechBubblePlacementBox.x + speechBubblePlacementBox.width * 0.54,
+      speechBubblePlacementBox.y + speechBubblePlacementBox.height * 0.42,
+    );
+    const insertedSpeechBubble = await lastMessage(page, "insertShape");
+    assert.equal(insertedSpeechBubble.kind, "speech_bubble");
+    assert.equal(insertedSpeechBubble.bounds.width, 180);
+    assert.equal(insertedSpeechBubble.bounds.height, 120);
+    assert.equal(insertedSpeechBubble.stroke.enabled, false);
+    assert.equal(await page.locator("path.shape-placement-preview").count(), 1,
+      "pending speech bubble did not retain its path preview");
+    await postShapeEditResult(page, {
+      requestId: insertedSpeechBubble.requestId,
+      operation: "insert",
+      status: "stale",
+    });
+    await page.waitForFunction(() =>
+      document.querySelector('.shape-tool[aria-label="Select"]')
+        ?.getAttribute("aria-pressed") === "true"
+    );
     await page.keyboard.press("l");
     assert.equal(await shapePicker.locator("summary").getAttribute("aria-pressed"), "true");
     assert.match(await shapePicker.locator("summary").textContent(), /Line/,

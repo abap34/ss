@@ -219,7 +219,7 @@ interface ShapeEditingBase {
 
 export type ShapeEditingCapability =
   | ShapeEditingBase & ShapeStyle & {
-    kind: "rectangle" | "circle" | "arrow";
+    kind: "rectangle" | "circle" | "arrow" | "speech_bubble";
   }
   | ShapeEditingBase & {
     kind: "line";
@@ -342,7 +342,7 @@ type ShapeInsertionMessage = {
   pageId: number;
 } & (
   | {
-    kind: "rectangle" | "circle" | "arrow";
+    kind: "rectangle" | "circle" | "arrow" | "speech_bubble";
     bounds: Rect;
     fill: ShapeFill;
     stroke: ShapeStroke;
@@ -363,7 +363,7 @@ type ShapeStyleEditMessage = {
   pageId: number;
   stroke: ShapeStroke;
 } & (
-  | { kind: "rectangle" | "circle" | "arrow"; fill: ShapeFill }
+  | { kind: "rectangle" | "circle" | "arrow" | "speech_bubble"; fill: ShapeFill }
   | { kind: "line" }
 );
 
