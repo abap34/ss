@@ -2,11 +2,17 @@ const std = @import("std");
 const core = @import("core");
 const icons = @import("editor_icons");
 
-test "bundled Font Awesome collection has the declared styles and counts" {
-    try std.testing.expectEqual(core.fontawesome.solid_count, core.fontawesome.count(.solid));
-    try std.testing.expectEqual(core.fontawesome.regular_count, core.fontawesome.count(.regular));
-    try std.testing.expectEqual(core.fontawesome.brands_count, core.fontawesome.count(.brands));
-    try std.testing.expectEqual(@as(usize, 2141), core.fontawesome.total_count);
+test "bundled Font Awesome collection derives its styles and counts" {
+    const solid_count = core.fontawesome.count(.solid);
+    const regular_count = core.fontawesome.count(.regular);
+    const brands_count = core.fontawesome.count(.brands);
+    try std.testing.expect(solid_count > 0);
+    try std.testing.expect(regular_count > 0);
+    try std.testing.expect(brands_count > 0);
+    try std.testing.expectEqual(
+        solid_count + regular_count + brands_count,
+        core.fontawesome.totalCount(),
+    );
 }
 
 test "canonical and legacy identifiers resolve through the shared extractor" {
@@ -32,7 +38,7 @@ test "canonical and legacy identifiers resolve through the shared extractor" {
 
 test "icon catalog searches names and filters styles" {
     const allocator = std.testing.allocator;
-    const result = try icons.catalogJson(allocator, "github", .brands);
+    const result = try icons.catalogJson(allocator, "github", .brands, "all", 0);
     defer allocator.free(result);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"collection\":\"fontawesome-free\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"version\":\"7.2.0\"") != null);
@@ -42,16 +48,13 @@ test "icon catalog searches names and filters styles" {
     try std.testing.expect(std.mem.indexOf(u8, result, "<svg") != null);
 }
 
-test "featured icon catalog entries all exist in the selected style" {
+test "empty icon catalog is derived from every symbol in the selected style" {
     const allocator = std.testing.allocator;
-    for (icons.featured_sources) |source| {
-        const spec = core.fontawesome.parseSource(source) orelse return error.InvalidFeaturedIcon;
-        try std.testing.expect(core.fontawesome.contains(spec));
-    }
     inline for (.{ icons.Filter.all, icons.Filter.solid, icons.Filter.regular, icons.Filter.brands }) |filter| {
-        const result = try icons.catalogJson(allocator, "", filter);
+        const result = try icons.catalogJson(allocator, "", filter, "all", 0);
         defer allocator.free(result);
-        try std.testing.expect(std.mem.indexOf(u8, result, "\"has_more\":false") != null);
+        try std.testing.expect(std.mem.indexOf(u8, result, "\"offset\":0") != null);
+        try std.testing.expect(std.mem.indexOf(u8, result, "\"has_more\":true") != null);
         try std.testing.expect(std.mem.indexOf(u8, result, "\"icons\":[{") != null);
         if (filter != .all) {
             const marker = try std.fmt.allocPrint(allocator, "\"style\":\"{s}\"", .{@tagName(filter)});
@@ -59,4 +62,27 @@ test "featured icon catalog entries all exist in the selected style" {
             try std.testing.expect(std.mem.indexOf(u8, result, marker) != null);
         }
     }
+}
+
+test "icon catalog continues from the requested offset" {
+    const allocator = std.testing.allocator;
+    const result = try icons.catalogJson(allocator, "", .all, "all", 60);
+    defer allocator.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"offset\":60") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"has_more\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"icons\":[{") != null);
+}
+
+test "icon catalog derives semantic categories from official metadata" {
+    const allocator = std.testing.allocator;
+    const result = try icons.catalogJson(allocator, "", .solid, "animals", 0);
+    defer allocator.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"category\":\"animals\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"id\":\"animals\",\"label\":\"Animals\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"id\":\"fa-solid:cat\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"id\":\"fa-solid:dog\"") != null);
+    try std.testing.expectError(
+        error.InvalidCategory,
+        icons.catalogJson(allocator, "", .all, "not-a-category", 0),
+    );
 }

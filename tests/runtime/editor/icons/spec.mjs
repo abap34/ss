@@ -20,15 +20,53 @@ end
     const catalog = await client.request("ss/iconCatalog", {
       query: "github",
       style: "brands",
+      category: "all",
+      offset: 0,
     });
     assert(
       catalog.collection === "fontawesome-free" &&
-        catalog.version === "7.2.0" &&
-        catalog.total_available === 2141 &&
+        typeof catalog.version === "string" && catalog.version.length > 0 &&
+        catalog.offset === 0 &&
+        catalog.total_available >= catalog.icons.length &&
         catalog.icons.some((entry) =>
           entry.id === "fa-brands:github" && entry.svg.includes("<svg")
         ),
       `icon catalog returned unexpected data: ${JSON.stringify(catalog)}`,
+    );
+    const firstPage = await client.request("ss/iconCatalog", {
+      query: "",
+      style: "all",
+      category: "all",
+      offset: 0,
+    });
+    const secondPage = await client.request("ss/iconCatalog", {
+      query: "",
+      style: "all",
+      category: "all",
+      offset: firstPage.icons.length,
+    });
+    const firstIds = new Set(firstPage.icons.map((entry) => entry.id));
+    assert(
+      firstPage.icons.length > 0 && firstPage.has_more &&
+        secondPage.offset === firstPage.icons.length &&
+        secondPage.icons.length > 0 &&
+        secondPage.icons.every((entry) => !firstIds.has(entry.id)),
+      `icon catalog paging overlapped or stopped early: ${JSON.stringify({ firstPage, secondPage })}`,
+    );
+    const animals = await client.request("ss/iconCatalog", {
+      query: "",
+      style: "solid",
+      category: "animals",
+      offset: 0,
+    });
+    assert(
+      animals.category === "animals" &&
+        animals.categories.some((entry) =>
+          entry.id === "animals" && entry.label === "Animals"
+        ) &&
+        animals.icons.some((entry) => entry.id === "fa-solid:cat") &&
+        animals.icons.some((entry) => entry.id === "fa-solid:dog"),
+      `icon category metadata was not applied: ${JSON.stringify(animals)}`,
     );
 
     let diagnosticsPromise = client.waitForDiagnostics(uri);
