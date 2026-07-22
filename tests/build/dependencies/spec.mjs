@@ -1,0 +1,97 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const oldQpdfPkgConfig = path.join(root, "tests/fixtures/build/dependencies/qpdf-10");
+const dependencyChecker = process.argv[2] ? path.resolve(root, process.argv[2]) : undefined;
+
+assert.ok(dependencyChecker, "dependency checker executable argument is missing");
+
+function runBuild(args, environment = {}) {
+  const result = spawnSync("zig", ["build", "--summary", "none", ...args], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, ...environment },
+    timeout: 60_000,
+  });
+  assert.equal(result.error?.code, undefined, result.error?.message);
+  assert.notEqual(result.status, 0, "diagnostic fixture unexpectedly built successfully");
+  return `${result.stdout}\n${result.stderr}`;
+}
+
+function runDependencyChecker(args, cwd) {
+  const result = spawnSync(dependencyChecker, args, {
+    cwd,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(result.error?.code, undefined, result.error?.message);
+  assert.notEqual(result.status, 0, "dependency checker unexpectedly succeeded");
+  return `${result.stdout}\n${result.stderr}`;
+}
+
+{
+  const output = runBuild(["-Dqpdf-cxx=ss-missing-cxx-compiler"]);
+  assert.match(output, /C\+\+ compiler 'ss-missing-cxx-compiler' was not found/);
+  assert.match(output, /GCC and Clang are both supported/);
+  assert.match(output, /-Dqpdf-cxx=clang\+\+/);
+  assert.match(output, /-Dqpdf-cxx=\/absolute\/path\/to\/c\+\+/);
+}
+
+{
+  const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "ss-pnpm-diagnostic-"));
+  try {
+    const workspace = path.join(temporaryRoot, "workspace");
+    mkdirSync(workspace);
+    writeFileSync(path.join(workspace, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    const output = runDependencyChecker(
+      ["node-modules", "workspace", "esbuild/package.json"],
+      temporaryRoot,
+    );
+    assert.match(output, /detected pnpm-lock\.yaml/);
+    assert.match(output, /pnpm install --frozen-lockfile/);
+    assert.doesNotMatch(output, /npm ci/);
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
+{
+  const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "ss-npm-diagnostic-"));
+  try {
+    const workspace = path.join(temporaryRoot, "workspace");
+    mkdirSync(workspace);
+    writeFileSync(path.join(workspace, "package-lock.json"), "{}\n");
+    const output = runDependencyChecker(
+      ["node-modules", "workspace", "typescript/package.json"],
+      temporaryRoot,
+    );
+    assert.match(output, /detected package-lock\.json/);
+    assert.match(output, /npm ci/);
+    assert.doesNotMatch(output, /pnpm install/);
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
+{
+  const output = runBuild(["-Dqpdf-pkg-config=ss-missing-pkg-config"]);
+  assert.match(output, /pkg-config command 'ss-missing-pkg-config' was not found/);
+  assert.match(output, /-Dqpdf-pkg-config=\/absolute\/path\/to\/pkg-config/);
+}
+
+{
+  const pkgConfigPath = process.env.PKG_CONFIG_PATH
+    ? `${oldQpdfPkgConfig}${path.delimiter}${process.env.PKG_CONFIG_PATH}`
+    : oldQpdfPkgConfig;
+  const output = runBuild([], { PKG_CONFIG_PATH: pkgConfigPath });
+  assert.match(output, /libqpdf 10\.6\.3 is too old/);
+  assert.match(output, /requires libqpdf 11\.2\.0 or newer/);
+  assert.match(output, /ppa:qpdf\/qpdf/);
+}
+
+console.log("build dependency diagnostic tests passed");

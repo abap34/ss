@@ -1,4 +1,5 @@
 const std = @import("std");
+const dependencies = @import("build/dependencies.zig");
 const qpdf = @import("build/qpdf.zig");
 
 const Module = std.Build.Module;
@@ -11,6 +12,7 @@ const BuildContext = struct {
     optimize: std.builtin.OptimizeMode,
     tree_sitter_ubsan: bool,
     tree_sitter_c_flags: []const []const u8,
+    dependency_checks: dependencies.Checks,
     qpdf_bridge: qpdf.Bridge,
 };
 
@@ -171,15 +173,26 @@ pub fn build(b: *std.Build) void {
 
     const md4c_src = "third_party/md4c/src";
     b.build_root.handle.access(b.graph.io, md4c_src ++ "/md4c.c", .{}) catch
-        @panic("MD4C sources are missing; run `scripts/setup-md4c.sh` before `zig build`.");
+        @panic(
+            \\MD4C sources are missing from third_party/md4c.
+            \\Run `scripts/setup-md4c.sh` from the repository root, then retry the build.
+            \\The setup requires Git and network access the first time it runs.
+        );
     addPdfPkgConfigPath(b);
+    const qpdf_config = qpdf.config(b);
+    const dependency_checks = dependencies.create(b, .{
+        .pkg_config = qpdf_config.pkg_config,
+        .cpp = qpdf_config.cpp,
+        .minimum_qpdf_version = qpdf.minimum_version,
+    });
     const ctx = BuildContext{
         .b = b,
         .target = target,
         .optimize = optimize,
         .tree_sitter_ubsan = tree_sitter_ubsan,
         .tree_sitter_c_flags = tree_sitter_c_flags,
-        .qpdf_bridge = qpdf.create(b, target, optimize),
+        .dependency_checks = dependency_checks,
+        .qpdf_bridge = qpdf.create(b, target, optimize, qpdf_config, &dependency_checks.native_pdf.step),
     };
     const tree_sitter = prepareTreeSitterBundle(b);
     build_options.addOption([]const u8, "tree_sitter_manifest_hash", tree_sitter.manifest_hash);
@@ -231,6 +244,7 @@ pub fn build(b: *std.Build) void {
 
     addTestStep(ctx, modules, build_options, exe, tree_sitter_abi_check);
     addVisualTestSteps(ctx, modules, build_options, exe);
+    addBuildDependencyDiagnosticTest(ctx);
 }
 
 fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options: *Step.Options, exe: *Step.Compile) void {
@@ -247,6 +261,8 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
     driver.step.dependOn(&ctx.qpdf_bridge.install.step);
 
     const parity = b.addSystemCommand(&.{ "node", "tests/visual/render/spec.mjs" });
+    parity.step.dependOn(&ctx.dependency_checks.node.step);
+    parity.step.dependOn(&ctx.dependency_checks.visual_test_packages.step);
     parity.addFileArg(driver.getEmittedBin());
     parity.setCwd(b.path("."));
     parity.stdio = .inherit;
@@ -254,6 +270,8 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
     parity_step.dependOn(&parity.step);
 
     const navigation = b.addSystemCommand(&.{ "node", "tests/visual/render/navigation/spec.mjs" });
+    navigation.step.dependOn(&ctx.dependency_checks.node.step);
+    navigation.step.dependOn(&ctx.dependency_checks.visual_test_packages.step);
     navigation.addFileArg(driver.getEmittedBin());
     navigation.setCwd(b.path("."));
     navigation.stdio = .inherit;
@@ -261,12 +279,16 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
     navigation_step.dependOn(&navigation.step);
 
     const pdf_runtime = b.addSystemCommand(&.{ "node", "tests/visual/render/pdf/runtime_spec.mjs" });
+    pdf_runtime.step.dependOn(&ctx.dependency_checks.node.step);
+    pdf_runtime.step.dependOn(&ctx.dependency_checks.visual_test_packages.step);
     pdf_runtime.setCwd(b.path("."));
     pdf_runtime.stdio = .inherit;
     const pdf_runtime_step = b.step("test-render-pdf-runtime", "Inspect PDF image loading and cancellation locally");
     pdf_runtime_step.dependOn(&pdf_runtime.step);
 
     const full = b.addSystemCommand(&.{ "node", "tests/visual/render/spec.mjs", "--full" });
+    full.step.dependOn(&ctx.dependency_checks.node.step);
+    full.step.dependOn(&ctx.dependency_checks.visual_test_packages.step);
     full.addFileArg(driver.getEmittedBin());
     full.setCwd(b.path("."));
     full.stdio = .inherit;
@@ -274,6 +296,8 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
     full_step.dependOn(&full.step);
 
     const behavior = b.addSystemCommand(&.{ "node", "tests/visual/render/behavior/spec.mjs" });
+    behavior.step.dependOn(&ctx.dependency_checks.node.step);
+    behavior.step.dependOn(&ctx.dependency_checks.visual_test_packages.step);
     behavior.addFileArg(exe.getEmittedBin());
     behavior.setCwd(b.path("."));
     behavior.stdio = .inherit;
@@ -281,12 +305,16 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
     behavior_step.dependOn(&behavior.step);
 
     const editor_ui = b.addSystemCommand(&.{ "node", "tests/visual/editor/spec.mjs" });
+    editor_ui.step.dependOn(&ctx.dependency_checks.node.step);
+    editor_ui.step.dependOn(&ctx.dependency_checks.visual_test_packages.step);
+    editor_ui.step.dependOn(&ctx.dependency_checks.vscode_packages.step);
     editor_ui.setCwd(b.path("."));
     editor_ui.stdio = .inherit;
     const editor_ui_step = b.step("test-editor-ui", "Exercise VS Code editor webview interactions locally with Chromium");
     editor_ui_step.dependOn(&editor_ui.step);
 
     const benchmark = b.addSystemCommand(&.{ "node", "tests/benchmark/render/spec.mjs", @tagName(ctx.optimize) });
+    benchmark.step.dependOn(&ctx.dependency_checks.node.step);
     benchmark.addFileArg(exe.getEmittedBin());
     benchmark.setCwd(b.path("."));
     benchmark.stdio = .inherit;
@@ -488,6 +516,7 @@ fn addTestStep(
     const run_progress_spec_tests = b.addRunArtifact(progress_spec_tests);
     test_step.dependOn(&run_progress_spec_tests.step);
     const progress_runtime_spec = b.addSystemCommand(&.{"node"});
+    progress_runtime_spec.step.dependOn(&ctx.dependency_checks.node.step);
     progress_runtime_spec.setName("node tests/runtime/progress/spec.mjs");
     progress_runtime_spec.addFileArg(b.path("tests/runtime/progress/spec.mjs"));
     progress_runtime_spec.addFileArg(exe.getEmittedBin());
@@ -548,7 +577,7 @@ fn addTestStep(
         import("compiler_semantics", compiler_semantics_support_mod),
     }, true);
 
-    addNodeSpecTests(b, test_step, exe);
+    addNodeSpecTests(ctx, test_step, exe);
     addSmokeChecks(b, test_step, exe);
 }
 
@@ -577,6 +606,7 @@ fn addRenderTests(ctx: BuildContext, modules: ProjectModules, test_step: *Step) 
     addNativePdfHeadersAndLibraries(b, render_pdf_spec_mod);
     const render_pdf_spec_tests = addQpdfTestArtifact(ctx, render_pdf_spec_mod);
     const run_render_pdf_spec_tests = b.addRunArtifact(render_pdf_spec_tests);
+    run_render_pdf_spec_tests.step.dependOn(&ctx.dependency_checks.qpdf_cli.step);
     test_step.dependOn(&run_render_pdf_spec_tests.step);
     addFocusedTestStep(b, "test-render-pdf", "Run focused native PDF renderer tests", &run_render_pdf_spec_tests.step);
     const render_spec_mod = createModule(ctx, "tests/render/ir/spec_tests.zig", &.{
@@ -765,7 +795,9 @@ fn addTestModule(ctx: BuildContext, test_step: *Step, module: *Module) void {
 }
 
 fn addTestArtifact(ctx: BuildContext, module: *Module) *Step.Compile {
-    return ctx.b.addTest(.{ .root_module = module });
+    const artifact = ctx.b.addTest(.{ .root_module = module });
+    artifact.step.dependOn(&ctx.dependency_checks.native_pdf.step);
+    return artifact;
 }
 
 fn addQpdfTestModule(ctx: BuildContext, test_step: *Step, module: *Module) void {
@@ -780,7 +812,8 @@ fn addQpdfTestArtifact(ctx: BuildContext, module: *Module) *Step.Compile {
     return artifact;
 }
 
-fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
+fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) void {
+    const b = ctx.b;
     const node_spec_files = [_][]const u8{
         "tests/editor/build-status/spec.mjs",
         "tests/editor/locks/spec.mjs",
@@ -822,6 +855,10 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
 
     for (node_spec_files) |path| {
         const node_spec = b.addSystemCommand(&.{"node"});
+        node_spec.step.dependOn(&ctx.dependency_checks.node.step);
+        if (std.mem.eql(u8, path, "tests/editor/vscode/controller/spec.mjs")) {
+            node_spec.step.dependOn(&ctx.dependency_checks.vscode_packages.step);
+        }
         node_spec.setName(b.fmt("node {s}", .{path}));
         node_spec.addFileArg(b.path(path));
         node_spec.addFileArg(exe.getEmittedBin());
@@ -829,6 +866,19 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         node_spec.stdio = .inherit;
         test_step.dependOn(&node_spec.step);
     }
+}
+
+fn addBuildDependencyDiagnosticTest(ctx: BuildContext) void {
+    const b = ctx.b;
+    const spec = b.addSystemCommand(&.{"node"});
+    spec.setName("node tests/build/dependencies/spec.mjs");
+    spec.addFileArg(b.path("tests/build/dependencies/spec.mjs"));
+    spec.addFileArg(ctx.dependency_checks.executable.getEmittedBin());
+    spec.setCwd(b.path("."));
+    spec.stdio = .inherit;
+    spec.step.dependOn(&ctx.dependency_checks.node.step);
+    const step = b.step("test-build-dependencies", "Check friendly build dependency diagnostics");
+    step.dependOn(&spec.step);
 }
 
 fn addSmokeChecks(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {

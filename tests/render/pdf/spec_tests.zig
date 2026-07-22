@@ -110,6 +110,7 @@ fn qpdfJson(allocator: std.mem.Allocator, io: std.Io, pdf_path: []const u8) ![]c
         .exited => |code| if (code == 0) return result.stdout,
         else => {},
     }
+    reportQpdfFailure("inspect", pdf_path, result.term, result.stderr);
     allocator.free(result.stdout);
     return error.QpdfJsonFailed;
 }
@@ -126,7 +127,14 @@ fn qpdfQdf(allocator: std.mem.Allocator, io: std.Io, pdf_path: []const u8, qdf_p
         .exited => |code| if (code == 0) return std.Io.Dir.cwd().readFileAlloc(io, qdf_path, allocator, .limited(2 * 1024 * 1024)),
         else => {},
     }
+    reportQpdfFailure("convert", pdf_path, result.term, result.stderr);
     return error.QpdfQdfFailed;
+}
+
+fn reportQpdfFailure(action: []const u8, pdf_path: []const u8, term: std.process.Child.Term, stderr: []const u8) void {
+    std.debug.print("qpdf could not {s} generated PDF '{s}' (termination: {}).\n", .{ action, pdf_path, term });
+    const detail = std.mem.trim(u8, stderr, " \t\r\n");
+    if (detail.len != 0) std.debug.print("qpdf reported:\n{s}\n", .{detail});
 }
 
 fn pdfTextIfAvailable(allocator: std.mem.Allocator, io: std.Io, pdf_path: []const u8) !?[]const u8 {
