@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { LanguageClient } from "vscode-languageclient/node";
-import { projectSettings } from "../projectConfig";
+import { projectEntryUri, projectSettings } from "../projectConfig";
 import {
   EditorSnapshot,
   HostMessage,
@@ -81,15 +81,41 @@ export class EditorController implements vscode.Disposable {
   }
 
   open(document: vscode.TextDocument | undefined): void {
-    if (
-      !document || document.languageId !== "ss-slide" ||
-      document.uri.scheme !== "file"
-    ) {
-      void vscode.window.showWarningMessage(
-        "Open an .ss file to start the WYSIWYG editor.",
+    if (!document || !isSsDocument(document)) {
+      void this.openProjectEntry(document?.uri);
+      return;
+    }
+    this.openDocument(document);
+  }
+
+  private async openProjectEntry(contextUri: vscode.Uri | undefined): Promise<void> {
+    const entryUri = projectEntryUri(contextUri);
+    if (!entryUri) {
+      await vscode.window.showWarningMessage(
+        "No ss.toml [project].entry was found for the current workspace.",
       );
       return;
     }
+    let document: vscode.TextDocument;
+    try {
+      document = await vscode.workspace.openTextDocument(entryUri);
+    } catch (error) {
+      this.output.appendLine(`WYSIWYG project entry open failed: ${String(error)}`);
+      await vscode.window.showWarningMessage(
+        `Could not open the ss.toml project entry: ${entryUri.fsPath}`,
+      );
+      return;
+    }
+    if (!isSsDocument(document)) {
+      await vscode.window.showWarningMessage(
+        `The ss.toml project entry is not an .ss file: ${entryUri.fsPath}`,
+      );
+      return;
+    }
+    this.openDocument(document);
+  }
+
+  private openDocument(document: vscode.TextDocument): void {
     if (!projectSettings(document.uri).wysiwyg.enabled) {
       void vscode.window.showWarningMessage(
         "The WYSIWYG editor is disabled by ss.toml [editor.wysiwyg].enabled.",
@@ -759,6 +785,10 @@ export class EditorController implements vscode.Disposable {
 
 function normalizePath(filePath: string): string {
   return path.resolve(filePath);
+}
+
+function isSsDocument(document: vscode.TextDocument): boolean {
+  return document.languageId === "ss-slide" && document.uri.scheme === "file";
 }
 
 function snapshotFailureMessage(error: unknown): string {

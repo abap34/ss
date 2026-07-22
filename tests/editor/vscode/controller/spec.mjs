@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -58,11 +58,45 @@ const { EditorController } = await import(
   `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
 );
 
+await testOpenResolvesConfiguredEntryWithoutSsDocument();
 await testOpeningManualPreviewBuildsInitialSnapshot();
 await testManualPositionEditRequestsReconciliation();
 await testNewSourceEditReschedulesReconciliation();
 await testLineGeometryEditForwardsOrderedPagePoints();
 await testIconCatalogAndInsertionReachTheWebview();
+
+async function testOpenResolvesConfiguredEntryWithoutSsDocument() {
+  const fixture = await mkdtemp(path.join(os.tmpdir(), "ss-editor-open-entry-"));
+  try {
+    const deck = path.join(fixture, "deck");
+    const slide = path.join(deck, "slides.ss");
+    await mkdir(deck);
+    await writeFile(path.join(fixture, "ss.toml"), `[project]
+entry = "deck/slides.ss"
+`, "utf8");
+    await writeFile(slide, "page demo\nend\n", "utf8");
+
+    mock.reset();
+    mock.workspace.workspaceFolders.push({ uri: mock.Uri.file(fixture) });
+    const controller = new EditorController(
+      { extensionUri: mock.Uri.file(fixture) },
+      { appendLine() {} },
+      () => undefined,
+    );
+
+    controller.open(undefined);
+    await waitFor(() => controller.sessions.size === 1);
+    const session = controller.sessions.values().next().value;
+    assert.equal(session.document.uri.fsPath, slide);
+    assert.deepEqual(mock.openedDocuments, [slide]);
+    assert.deepEqual(mock.warnings, []);
+    assert.equal(mock.panels.length, 1);
+    assert.match(mock.panels[0].title, /slides\.ss$/);
+    controller.dispose();
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+}
 
 async function testOpeningManualPreviewBuildsInitialSnapshot() {
   await withManualSession(async ({ controller, session, requests, messages, change }) => {
@@ -422,6 +456,9 @@ async function waitFor(predicate) {
 function vscodeMock() {
   const changeListeners = [];
   const disposables = [];
+  const openedDocuments = [];
+  const panels = [];
+  const warnings = [];
   class Uri {
     constructor(value) {
       this.scheme = "file";
@@ -477,6 +514,16 @@ function vscodeMock() {
     textDocuments: [],
     workspaceFolders: [],
     applyEdit: async () => true,
+    async openTextDocument(uri) {
+      openedDocuments.push(uri.fsPath);
+      const document = {
+        uri,
+        languageId: path.extname(uri.fsPath) === ".ss" ? "ss-slide" : "plaintext",
+        version: 1,
+      };
+      this.textDocuments.push(document);
+      return document;
+    },
     onDidChangeTextDocument(listener) {
       changeListeners.push(listener);
       return disposable();
@@ -484,9 +531,34 @@ function vscodeMock() {
     createFileSystemWatcher: watcher,
     getWorkspaceFolder: () => undefined,
   };
+  const window = {
+    async showWarningMessage(message) {
+      warnings.push(message);
+      return undefined;
+    },
+    createWebviewPanel(_viewType, title) {
+      const panel = {
+        title,
+        active: true,
+        webview: {
+          options: {},
+          cspSource: "test-webview",
+          html: "",
+          asWebviewUri: (value) => value,
+          postMessage: async () => true,
+          onDidReceiveMessage: () => disposable(),
+        },
+        onDidDispose: () => disposable(),
+        reveal() {},
+        dispose() {},
+      };
+      panels.push(panel);
+      return panel;
+    },
+  };
   return {
     workspace,
-    window: {},
+    window,
     Uri,
     WorkspaceEdit,
     TextEdit: { replace: (range, newText) => ({ range, newText }) },
@@ -497,13 +569,20 @@ function vscodeMock() {
     TextEditorRevealType: { InCenterIfOutsideViewport: 0 },
     TabInputText,
     TabInputTextDiff,
+    openedDocuments,
+    panels,
+    warnings,
     change(document) {
       for (const listener of changeListeners) listener({ document });
     },
     reset() {
       workspace.textDocuments.length = 0;
+      workspace.workspaceFolders.length = 0;
       changeListeners.length = 0;
       disposables.length = 0;
+      openedDocuments.length = 0;
+      panels.length = 0;
+      warnings.length = 0;
     },
   };
 }

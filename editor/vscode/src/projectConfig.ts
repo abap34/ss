@@ -109,6 +109,16 @@ export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
   };
 }
 
+export function projectEntryUri(uri: vscode.Uri | undefined): vscode.Uri | undefined {
+  const projectFile = findProjectFile(uri);
+  if (!projectFile) return undefined;
+  const source = readProjectFile(projectFile);
+  if (source === undefined) return undefined;
+  const entry = stringValue(parseTomlSubset(source), "project", "entry");
+  if (!entry) return undefined;
+  return vscode.Uri.file(path.resolve(path.dirname(projectFile), entry));
+}
+
 function readProjectFile(projectFile: string): string | undefined {
   try {
     return fs.readFileSync(projectFile, "utf8");
@@ -200,6 +210,14 @@ function rawValue(table: TomlSubset, section: string, key: string): string | und
 function boolValue(table: TomlSubset, section: string, key: string, fallback: boolean): boolean {
   const value = rawValue(table, section, key);
   return value === "true" ? true : value === "false" ? false : fallback;
+}
+
+function stringValue(table: TomlSubset, section: string, key: string): string | undefined {
+  const value = rawValue(table, section, key);
+  if (!value || value.length < 2 || value[0] !== '"' || value[value.length - 1] !== '"') {
+    return undefined;
+  }
+  return value.slice(1, -1);
 }
 
 function numberValue(table: TomlSubset, section: string, key: string, fallback: number, minimum: number): number {
