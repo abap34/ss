@@ -109,6 +109,11 @@ pub const ShapePoint = struct {
     y: f64,
 };
 
+pub const ShapeLineRoute = enum {
+    straight,
+    elbow,
+};
+
 pub const ShapeFill = struct {
     enabled: bool,
     color: []u8,
@@ -151,9 +156,13 @@ pub const ShapeEditingTarget = struct {
     path: []u8,
     fill_expression: ?utils.source.ByteSpan,
     stroke_expression: utils.source.ByteSpan,
+    style_expression: utils.source.ByteSpan,
     fill: ?ShapeFill,
     start: ?ShapePoint,
     end: ?ShapePoint,
+    line_route: ?ShapeLineRoute,
+    arrow_start: bool,
+    arrow_end: bool,
     closed_source: ?ShapeClosedSource,
     line_source: ?ShapeLineSource,
     stroke: ShapeStroke,
@@ -573,6 +582,11 @@ fn shapeEditingJson(allocator: std.mem.Allocator, targets: []const ShapeEditingT
             try end.floatField("y", end_value.y, "{d:.6}");
             try end.end();
         }
+        if (target.line_route) |route| {
+            try item.stringField("route", @tagName(route));
+            try item.boolField("arrow_start", target.arrow_start);
+            try item.boolField("arrow_end", target.arrow_end);
+        }
         var stroke = try item.objectField("stroke");
         try stroke.boolField("enabled", target.stroke.enabled);
         try stroke.stringField("color", target.stroke.color);
@@ -605,6 +619,9 @@ fn collectShapeEditingTargets(
         var fill: ?ShapeFill = null;
         var start: ?ShapePoint = null;
         var end: ?ShapePoint = null;
+        var line_route: ?ShapeLineRoute = null;
+        var arrow_start = false;
+        var arrow_end = false;
         var closed_source: ?ShapeClosedSource = null;
         var line_source: ?ShapeLineSource = null;
         if (constructor.kind == .line) {
@@ -620,6 +637,9 @@ fn collectShapeEditingTargets(
                 .x = shapeNumber(end_x.value) orelse continue,
                 .y = shapeNumber(end_y.value) orelse continue,
             };
+            line_route = constructor.line_route;
+            arrow_start = shapeArrowMarker(module.source, constructor.style, constructor.style_span, "marker_start") orelse continue;
+            arrow_end = shapeArrowMarker(module.source, constructor.style, constructor.style_span, "marker_end") orelse continue;
             line_source = .{
                 .width_expression = constructor.width_expression orelse continue,
                 .height_expression = constructor.height_expression orelse continue,
@@ -661,9 +681,13 @@ fn collectShapeEditingTargets(
             .path = path,
             .fill_expression = fill_expression,
             .stroke_expression = stroke_field.expression,
+            .style_expression = constructor.style_expression,
             .fill = fill,
             .start = start,
             .end = end,
+            .line_route = line_route,
+            .arrow_start = arrow_start,
+            .arrow_end = arrow_end,
             .closed_source = closed_source,
             .line_source = line_source,
             .stroke = stroke,
@@ -678,6 +702,8 @@ const ShapeConstructor = struct {
     style_span: ast.Span,
     width_expression: ?utils.source.ByteSpan,
     height_expression: ?utils.source.ByteSpan,
+    style_expression: utils.source.ByteSpan,
+    line_route: ?ShapeLineRoute,
 };
 
 const ShapeRecordField = struct {
@@ -706,6 +732,8 @@ fn shapeConstructor(statement: *const ast.Statement, binding: []const u8) ?Shape
         .speech_bubble
     else if (std.mem.eql(u8, call.callee.name, "line!"))
         .line
+    else if (std.mem.eql(u8, call.callee.name, "elbow_line!"))
+        .line
     else
         return null;
     const style_index: usize = if (std.mem.eql(u8, call.callee.name, "circle!")) 1 else 2;
@@ -720,6 +748,14 @@ fn shapeConstructor(statement: *const ast.Statement, binding: []const u8) ?Shape
         .kind = kind,
         .style = style,
         .style_span = call.arg_spans.items[style_index],
+        .style_expression = .{
+            .start = call.arg_spans.items[style_index].start,
+            .end = call.arg_spans.items[style_index].end,
+        },
+        .line_route = if (kind == .line)
+            if (std.mem.eql(u8, call.callee.name, "elbow_line!")) .elbow else .straight
+        else
+            null,
         .width_expression = if (style_index == 2) .{
             .start = call.arg_spans.items[0].start,
             .end = call.arg_spans.items[0].end,
@@ -728,6 +764,34 @@ fn shapeConstructor(statement: *const ast.Statement, binding: []const u8) ?Shape
             .start = call.arg_spans.items[1].start,
             .end = call.arg_spans.items[1].end,
         } else null,
+    };
+}
+
+fn shapeArrowMarker(
+    source: []const u8,
+    record: *const ast.RecordExpr,
+    record_span: ast.Span,
+    name: []const u8,
+) ?bool {
+    var present = false;
+    for (record.fields.items) |field| {
+        if (std.mem.eql(u8, field.name, name)) {
+            present = true;
+            break;
+        }
+    }
+    if (!present) return false;
+    const field = shapeRecordField(source, record, record_span, name) orelse return null;
+    return switch (field.value) {
+        .none => false,
+        .call => |call| if (call.callee.qualifier == null and
+            (std.mem.eql(u8, call.callee.name, "marker_arrow_open") or
+                std.mem.eql(u8, call.callee.name, "marker_arrow_filled") or
+                std.mem.eql(u8, call.callee.name, "marker_triangle")))
+            true
+        else
+            null,
+        else => null,
     };
 }
 

@@ -224,8 +224,11 @@ export type ShapeEditingCapability =
   }
   | ShapeEditingBase & {
     kind: "line";
+    route: "straight" | "elbow";
     start: Point;
     end: Point;
+    arrow_start: boolean;
+    arrow_end: boolean;
     stroke: ShapeStroke;
   };
 
@@ -349,9 +352,11 @@ type ShapeInsertionMessage = {
     stroke: ShapeStroke;
   }
   | {
-    kind: "line";
+    kind: "line" | "elbow_line";
     start: Point;
     end: Point;
+    arrowStart: boolean;
+    arrowEnd: boolean;
     stroke: ShapeStroke;
   }
 );
@@ -365,7 +370,7 @@ type ShapeStyleEditMessage = {
   stroke: ShapeStroke;
 } & (
   | { kind: "rectangle" | "circle" | "arrow" | "speech_bubble"; fill: ShapeFill }
-  | { kind: "line" }
+  | { kind: "line"; arrowStart: boolean; arrowEnd: boolean }
 );
 
 type LineGeometryEditMessage = {

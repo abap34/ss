@@ -109,18 +109,20 @@ window.addEventListener("message", (event) => {
     if (editOutcome?.status === "applied") {
       showSuccess("Constraint applied to source.");
     } else if (editOutcome?.status === "failed") {
-      showError(editOutcome.message);
+      showError(editFailureMessage(editOutcome.message));
     }
   } else if (message.type === "shapeEditResult") {
     const editOutcome = shape.acceptResult(message);
-    if (editOutcome?.status === "failed") showError(editOutcome.message);
+    if (editOutcome?.status === "failed") {
+      showError(editFailureMessage(editOutcome.message));
+    }
   } else if (message.type === "iconCatalog" ||
       message.type === "iconCatalogError") {
     const outcome = icon.acceptCatalog(message);
     if (outcome?.status === "failed") showError(outcome.message);
   } else if (message.type === "iconEditResult") {
     const outcome = icon.acceptResult(message);
-    if (outcome?.status === "failed") showError(outcome.message);
+    if (outcome?.status === "failed") showError(editFailureMessage(outcome.message));
   }
 });
 
@@ -175,6 +177,8 @@ function acceptSnapshot(message) {
         ? "Shape inserted into source."
         : shapeOutcome.operation === "geometry"
         ? "Line geometry applied to source."
+        : shapeOutcome.operation === "resize"
+        ? "Shape size applied to source."
         : "Shape style applied to source.",
     };
     toastDuration = successToastDuration;
@@ -184,6 +188,11 @@ function acceptSnapshot(message) {
   }
   render();
   if (toastDuration != null) scheduleToastClear(toastDuration);
+}
+
+function editFailureMessage(fallback) {
+  return buildFailureMessage(state.snapshot) || fallback ||
+    "The source edit could not be applied.";
 }
 
 function materializeSnapshotDisplay(snapshot) {

@@ -35,7 +35,7 @@ pub fn insertResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
     const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse
         return try statusJson(ctx.allocator, "unsupported", "No compiler snapshot is available.");
-    const layout = if (snapshot.layout_output) |*value| value else return try statusJson(ctx.allocator, "unsupported", "No solved layout is available.");
+    const layout = if (snapshot.layout_output) |*value| value else return try statusJson(ctx.allocator, "stale", edit_response.build_diagnostics_message);
     const editor = if (layout.editor) |*value| value else return try statusJson(ctx.allocator, "unsupported", "The WYSIWYG editor is not active.");
     const requested_id = protocol.stringField(request_object, "snapshotId") orelse "";
     if (requested_id.len == 0 or !std.mem.eql(u8, editor.model.snapshot_id, requested_id) or snapshot.generation != ctx.documents.generation) {
@@ -58,7 +58,7 @@ pub fn insertResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     const stroke = parseStroke(request_object) orelse
         return try statusJson(ctx.allocator, "rejected", "Invalid stroke style.");
     const shape: shape_edit.Shape = switch (kind) {
-        .line => blk: {
+        .line, .elbow_line => blk: {
             if (!stroke.enabled) {
                 return try statusJson(ctx.allocator, "rejected", "A line must have a visible stroke.");
             }
@@ -68,12 +68,19 @@ pub fn insertResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
                 return try statusJson(ctx.allocator, "rejected", "Invalid line end point.");
             const geometry = shape_edit.normalizeLine(start, end, page.width, page.height) orelse
                 return try statusJson(ctx.allocator, "rejected", "Line endpoints must be distinct and inside the page.");
-            break :blk .{ .line = .{
+            const line = shape_edit.LineShape{
                 .bounds = geometry.bounds,
                 .start = geometry.start,
                 .end = geometry.end,
                 .stroke = stroke,
-            } };
+                .arrow_start = protocol.boolField(request_object, "arrowStart") orelse false,
+                .arrow_end = protocol.boolField(request_object, "arrowEnd") orelse false,
+            };
+            break :blk switch (kind) {
+                .line => .{ .line = line },
+                .elbow_line => .{ .elbow_line = line },
+                else => unreachable,
+            };
         },
         .rectangle, .circle, .arrow, .speech_bubble => blk: {
             const bounds_object = protocol.objectFieldObject(request_object, "bounds") orelse
@@ -94,7 +101,7 @@ pub fn insertResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
                 .circle => .{ .circle = closed },
                 .arrow => .{ .arrow = closed },
                 .speech_bubble => .{ .speech_bubble = closed },
-                .line => unreachable,
+                .line, .elbow_line => unreachable,
             };
         },
     };
@@ -117,6 +124,7 @@ pub fn insertResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         .arrow => target.arrow_binding,
         .speech_bubble => target.speech_bubble_binding,
         .line => target.line_binding,
+        .elbow_line => target.line_binding,
     };
     var result = (try shape_edit.insert(
         ctx.allocator,
@@ -372,7 +380,7 @@ pub fn styleResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
     const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse
         return try statusJson(ctx.allocator, "unsupported", "No compiler snapshot is available.");
-    const layout = if (snapshot.layout_output) |*value| value else return try statusJson(ctx.allocator, "unsupported", "No solved layout is available.");
+    const layout = if (snapshot.layout_output) |*value| value else return try statusJson(ctx.allocator, "stale", edit_response.build_diagnostics_message);
     const editor = if (layout.editor) |*value| value else return try statusJson(ctx.allocator, "unsupported", "The WYSIWYG editor is not active.");
     const requested_id = protocol.stringField(request_object, "snapshotId") orelse "";
     if (requested_id.len == 0 or !std.mem.eql(u8, editor.model.snapshot_id, requested_id) or snapshot.generation != ctx.documents.generation) {
@@ -408,6 +416,14 @@ pub fn styleResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
             return try statusJson(ctx.allocator, "unsupported", "This shape fill is not editable.")
     else
         null;
+    const arrow_start = if (target.kind == .line)
+        protocol.boolField(request_object, "arrowStart") orelse target.arrow_start
+    else
+        false;
+    const arrow_end = if (target.kind == .line)
+        protocol.boolField(request_object, "arrowEnd") orelse target.arrow_end
+    else
+        false;
 
     var owned_source: ?[]u8 = null;
     defer if (owned_source) |source| ctx.allocator.free(source);
@@ -421,6 +437,32 @@ pub fn styleResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         }
         break :blk owned_source.?;
     };
+
+    if (target.kind == .line) {
+        const start = target.start orelse
+            return try statusJson(ctx.allocator, "unsupported", "This line start point is not editable.");
+        const end = target.end orelse
+            return try statusJson(ctx.allocator, "unsupported", "This line end point is not editable.");
+        const style_text = try shape_edit.lineStyleExpression(
+            ctx.allocator,
+            .{ .x = start.x, .y = start.y },
+            .{ .x = end.x, .y = end.y },
+            stroke,
+            arrow_start,
+            arrow_end,
+        );
+        const edits = try ctx.allocator.alloc(editor_edit.TextEdit, 1);
+        edits[0] = .{
+            .start = target.style_expression.start,
+            .end = target.style_expression.end,
+            .text = style_text,
+        };
+        var result = editor_edit.Result{ .edits = edits };
+        defer result.deinit(ctx.allocator);
+        const uri = try protocol.uriFromPath(ctx.allocator, target.path);
+        defer ctx.allocator.free(uri);
+        return try insertionStatusJson(ctx.allocator, uri, source, result.edits, target.path, target.page_id, target.binding);
+    }
 
     const fill_text: ?[]u8 = if (fill) |value| try shape_edit.fillExpression(ctx.allocator, value) else null;
     var fill_text_transferred = false;
@@ -458,6 +500,7 @@ fn parseKind(text: []const u8) ?shape_edit.Kind {
     if (std.mem.eql(u8, text, "arrow")) return .arrow;
     if (std.mem.eql(u8, text, "speech_bubble")) return .speech_bubble;
     if (std.mem.eql(u8, text, "line")) return .line;
+    if (std.mem.eql(u8, text, "elbow_line")) return .elbow_line;
     return null;
 }
 

@@ -318,7 +318,10 @@ export class WorkspaceView {
     const groups = [
       {
         label: "Lines",
-        choices: [["line", "Line"]],
+        choices: [
+          ["line", "Line"],
+          ["elbow_line", "Elbow line"],
+        ],
       },
       {
         label: "Basic shapes",
@@ -536,7 +539,8 @@ export class WorkspaceView {
   }
 
   shapeStyleControls() {
-    const line = this.state.shapeTool === "line";
+    const line = this.state.shapeTool === "line" ||
+      this.state.shapeTool === "elbow_line";
     const group = element(
       "div",
       `shape-style-controls${line ? " shape-style-controls--line" : ""}`,
@@ -595,6 +599,16 @@ export class WorkspaceView {
         });
       }),
     );
+    if (line) {
+      controls.push(
+        styleToggle("Start arrow", draft.arrowStart, (arrowStart) => {
+          this.actions.shape.setDraft({ ...draft, arrowStart });
+        }),
+        styleToggle("End arrow", draft.arrowEnd, (arrowEnd) => {
+          this.actions.shape.setDraft({ ...draft, arrowEnd });
+        }),
+      );
+    }
     group.append(...controls);
     for (const input of group.querySelectorAll("input")) {
       input.disabled = this.actions.shape.isBusy();
@@ -608,7 +622,9 @@ export class WorkspaceView {
     summary.textContent = "Style";
     summary.setAttribute(
       "aria-label",
-      this.state.shapeTool === "line" ? "Line style" : "Shape style",
+      this.state.shapeTool === "line" || this.state.shapeTool === "elbow_line"
+        ? "Line style"
+        : "Shape style",
     );
     const panel = element("div", "shape-style-popover-panel");
     panel.append(this.shapeStyleControls());
@@ -845,6 +861,7 @@ function styleToggle(label, checked, change) {
   const input = element("input");
   input.type = "checkbox";
   input.checked = checked;
+  input.setAttribute("aria-label", label);
   input.addEventListener("change", () => change(input.checked));
   control.append(input, document.createTextNode(label));
   return control;

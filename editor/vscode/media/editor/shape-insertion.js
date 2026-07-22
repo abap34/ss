@@ -1,6 +1,8 @@
 export const defaultShapeStyle = {
   fill: { enabled: true, color: "#e8f1ff", opacity: 1 },
   stroke: { enabled: true, color: "#2563eb", width: 1.6, style: "solid" },
+  arrowStart: false,
+  arrowEnd: false,
 };
 
 export class ShapeController {
@@ -8,11 +10,19 @@ export class ShapeController {
     this.state = state;
     this.actions = actions;
     this.pending = null;
+    this.followups = [];
     this.nextRequestId = 1;
   }
 
   isBusy() {
-    return this.pending != null;
+    return this.pending != null || this.followups.length > 0;
+  }
+
+  canEdit(target) {
+    if (!this.pending) return true;
+    if (this.pending.operation === "insert" || !this.pending.selection) return false;
+    return this.pending.selection.pageId === target.page_id &&
+      this.pending.selection.binding === target.binding;
   }
 
   canInsert(pageId) {
@@ -47,11 +57,15 @@ export class ShapeController {
       pageId,
       kind: this.state.shapeTool,
     };
-    const message = this.state.shapeTool === "line"
+    const line = this.state.shapeTool === "line" ||
+      this.state.shapeTool === "elbow_line";
+    const message = line
       ? {
         ...common,
         start: { ...geometry.start },
         end: { ...geometry.end },
+        arrowStart: this.state.shapeStyle.arrowStart,
+        arrowEnd: this.state.shapeStyle.arrowEnd,
         stroke: { ...this.state.shapeStyle.stroke, enabled: true },
       }
       : {
@@ -70,10 +84,12 @@ export class ShapeController {
         pageId,
         kind: message.kind,
         stroke: { ...message.stroke },
-        ...(message.kind === "line"
+        ...(line
           ? {
             start: { ...message.start },
             end: { ...message.end },
+            arrowStart: message.arrowStart,
+            arrowEnd: message.arrowEnd,
           }
           : {
             bounds: { ...message.bounds },
@@ -87,9 +103,7 @@ export class ShapeController {
   }
 
   editStyle(target, style) {
-    if (!this.state.snapshot || this.isBusy()) {
-      return false;
-    }
+    if (!this.state.snapshot || !this.canEdit(target)) return false;
     const requestId = this.nextRequestId++;
     const message = {
       type: "editShapeStyle",
@@ -99,23 +113,24 @@ export class ShapeController {
       pageId: target.page_id,
       kind: target.kind,
       stroke: { ...style.stroke },
-      ...(target.kind === "line" ? {} : { fill: { ...style.fill } }),
+      ...(target.kind === "line"
+        ? {
+          arrowStart: style.arrowStart,
+          arrowEnd: style.arrowEnd,
+        }
+        : { fill: { ...style.fill } }),
     };
-    this.pending = {
+    return this.startOrQueue({
       requestId,
       operation: "style",
       snapshotId: message.snapshotId,
       message,
       selection: { pageId: target.page_id, binding: target.binding },
-      phase: this.state.snapshot.stale ? "queued" : "requested",
-    };
-    if (this.pending.phase === "requested") this.actions.post(message);
-    this.actions.render();
-    return true;
+    });
   }
 
   editLineGeometry(target, start, end) {
-    if (!this.state.snapshot || this.isBusy() ||
+    if (!this.state.snapshot || !this.canEdit(target) ||
         target.kind !== "line") return false;
     const requestId = this.nextRequestId++;
     const message = {
@@ -127,27 +142,23 @@ export class ShapeController {
       start: { ...start },
       end: { ...end },
     };
-    this.pending = {
+    return this.startOrQueue({
       requestId,
       operation: "geometry",
       snapshotId: message.snapshotId,
       message,
       selection: { pageId: target.page_id, binding: target.binding },
-      phase: this.state.snapshot.stale ? "queued" : "requested",
       geometry: {
         nodeId: target.node_id,
         pageId: target.page_id,
         start: { ...start },
         end: { ...end },
       },
-    };
-    if (this.pending.phase === "requested") this.actions.post(message);
-    this.actions.render();
-    return true;
+    });
   }
 
   editBounds(target, bounds) {
-    if (!this.state.snapshot || this.isBusy() ||
+    if (!this.state.snapshot || !this.canEdit(target) ||
         target.kind === "line" || !target.resize) return false;
     const requestId = this.nextRequestId++;
     const message = {
@@ -159,13 +170,12 @@ export class ShapeController {
       kind: target.kind,
       bounds: { ...bounds },
     };
-    this.pending = {
+    return this.startOrQueue({
       requestId,
       operation: "resize",
       snapshotId: message.snapshotId,
       message,
       selection: { pageId: target.page_id, binding: target.binding },
-      phase: this.state.snapshot.stale ? "queued" : "requested",
       bounds: {
         nodeId: target.node_id,
         pageId: target.page_id,
@@ -174,8 +184,24 @@ export class ShapeController {
         fill: { ...target.fill },
         stroke: { ...target.stroke },
       },
-    };
-    if (this.pending.phase === "requested") this.actions.post(message);
+    });
+  }
+
+  startOrQueue(intent) {
+    if (this.pending) {
+      intent.phase = "queued";
+      const replace = this.followups.findIndex((candidate) =>
+        candidate.operation === intent.operation &&
+        sameSelection(candidate.selection, intent.selection)
+      );
+      if (replace >= 0) this.followups[replace] = intent;
+      else this.followups.push(intent);
+      this.actions.render();
+      return true;
+    }
+    intent.phase = this.state.snapshot.stale ? "queued" : "requested";
+    this.pending = intent;
+    if (intent.phase === "requested") this.actions.post(intent.message);
     this.actions.render();
     return true;
   }
@@ -194,7 +220,9 @@ export class ShapeController {
     const operation = this.pending.operation;
     this.pending = null;
     if (operation === "insert") this.state.shapeTool = "select";
+    const queuedFailureResult = this.promoteFollowup(this.state.snapshot);
     this.actions.render();
+    if (queuedFailureResult) return queuedFailureResult;
     return {
       status: "failed",
       message: message.message || "The shape edit could not be applied.",
@@ -209,6 +237,7 @@ export class ShapeController {
       const failure = this.rebaseQueued(snapshot, pending);
       if (failure) {
         this.pending = null;
+        this.followups = [];
         if (pending.operation === "insert") this.state.shapeTool = "select";
         return failure;
       }
@@ -236,6 +265,8 @@ export class ShapeController {
     if (target) {
       this.actions.selectObject(target.node_id, target.page_id, false);
     }
+    const queuedFailureResult = this.promoteFollowup(snapshot);
+    if (queuedFailureResult) return queuedFailureResult;
     return {
       status: "applied",
       operation: pending.operation,
@@ -246,6 +277,7 @@ export class ShapeController {
     if (this.pending?.phase === "queued") {
       const insertion = this.pending.operation === "insert";
       this.pending = null;
+      this.followups = [];
       if (insertion) this.state.shapeTool = "select";
       this.actions.render();
       return true;
@@ -258,9 +290,32 @@ export class ShapeController {
   }
 
   styleTarget(nodeId) {
-    return this.state.snapshot?.shape_editing?.find((target) =>
-      target.node_id === nodeId
-    ) || null;
+    const target = this.state.snapshot?.shape_editing?.find((candidate) =>
+      candidate.node_id === nodeId
+    );
+    if (!target) return null;
+    const result = {
+      ...target,
+      ...(target.fill ? { fill: { ...target.fill } } : {}),
+      stroke: { ...target.stroke },
+      ...(target.start ? { start: { ...target.start } } : {}),
+      ...(target.end ? { end: { ...target.end } } : {}),
+    };
+    for (const intent of this.intentsFor(target)) {
+      if (intent.operation === "style") {
+        result.stroke = { ...intent.message.stroke };
+        if (result.kind === "line") {
+          result.arrow_start = intent.message.arrowStart;
+          result.arrow_end = intent.message.arrowEnd;
+        } else {
+          result.fill = { ...intent.message.fill };
+        }
+      } else if (intent.operation === "geometry") {
+        result.start = { ...intent.message.start };
+        result.end = { ...intent.message.end };
+      }
+    }
+    return result;
   }
 
   pendingInsertion(pageId) {
@@ -271,17 +326,55 @@ export class ShapeController {
   }
 
   pendingLineGeometry(nodeId) {
-    const geometry = this.pending?.operation === "geometry"
-      ? this.pending.geometry
-      : null;
-    return geometry?.nodeId === nodeId ? geometry : null;
+    const target = this.baseTarget(nodeId);
+    if (!target) return null;
+    const geometry = this.intentsFor(target).findLast((intent) =>
+      intent.operation === "geometry"
+    )?.geometry;
+    return geometry ? { ...geometry, nodeId, pageId: target.page_id } : null;
   }
 
   pendingBounds(nodeId) {
-    const bounds = this.pending?.operation === "resize"
-      ? this.pending.bounds
-      : null;
-    return bounds?.nodeId === nodeId ? bounds : null;
+    const target = this.baseTarget(nodeId);
+    if (!target) return null;
+    const bounds = this.intentsFor(target).findLast((intent) =>
+      intent.operation === "resize"
+    )?.bounds;
+    return bounds ? { ...bounds, nodeId, pageId: target.page_id } : null;
+  }
+
+  baseTarget(nodeId) {
+    return this.state.snapshot?.shape_editing?.find((target) =>
+      target.node_id === nodeId
+    ) || null;
+  }
+
+  intentsFor(target) {
+    return [this.pending, ...this.followups].filter((intent) =>
+      intent?.selection?.pageId === target.page_id &&
+      intent.selection.binding === target.binding
+    );
+  }
+
+  promoteFollowup(snapshot) {
+    if (this.pending || this.followups.length === 0) return null;
+    const next = this.followups.shift();
+    this.pending = next;
+    if (snapshot?.stale) {
+      next.phase = "queued";
+      return null;
+    }
+    const failure = this.rebaseQueued(snapshot, next);
+    if (failure) {
+      this.pending = null;
+      this.followups = [];
+      return failure;
+    }
+    next.snapshotId = snapshot.snapshot_id;
+    next.message.snapshotId = snapshot.snapshot_id;
+    next.phase = "requested";
+    this.actions.post(next.message);
+    return null;
   }
 
   rebaseQueued(snapshot, pending) {
@@ -326,7 +419,13 @@ function cloneStyle(style) {
   return {
     fill: { ...style.fill },
     stroke: { ...style.stroke },
+    arrowStart: Boolean(style.arrowStart),
+    arrowEnd: Boolean(style.arrowEnd),
   };
+}
+
+function sameSelection(left, right) {
+  return left?.pageId === right?.pageId && left?.binding === right?.binding;
 }
 
 function queuedFailure(message) {

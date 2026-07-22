@@ -12,6 +12,11 @@ const minimumEditedLineLength = 0.25;
 const minimumResizedShapeExtent = 4;
 const defaultLineLength = 160;
 const lineSnapAngle = Math.PI / 12;
+const lineArrowMinimumSize = 8;
+const lineArrowStrokeScale = 4;
+const lineArrowInsetRatio = 0.72;
+const lineArrowHalfHeightRatio = 0.45;
+const defaultLineStrokeWidth = 1.6;
 const resizeDirections = [
   "top-left",
   "top",
@@ -145,7 +150,7 @@ export class InteractionController {
     const placement = this.placement;
     if (!placement || event.pointerId !== placement.pointerId) return;
     placement.current = placementPoint(placement, event);
-    const geometry = placement.kind === "line"
+    const geometry = isLineKind(placement.kind)
       ? lineGeometry(placement.start, placement.current, placement.page)
       : {
         bounds: shapeBounds(
@@ -233,7 +238,7 @@ export class InteractionController {
 
   placementGhost(kind) {
     if (kind === "icon") return svgElement("image", "icon-placement-ghost");
-    if (kind === "line") return svgElement("line", "shape-placement-ghost");
+    if (isLineKind(kind)) return svgElement("path", "shape-placement-ghost");
     if (kind === "circle") return svgElement("ellipse", "shape-placement-ghost");
     if (kind === "arrow") return svgElement("polygon", "shape-placement-ghost");
     if (kind === "speech_bubble") return svgElement("path", "shape-placement-ghost");
@@ -255,8 +260,14 @@ export class InteractionController {
   updatePlacementGhost() {
     const placement = this.placement;
     if (!placement) return;
-    const geometry = placement.kind === "line"
-      ? { start: placement.start, end: placement.current }
+    const geometry = isLineKind(placement.kind)
+      ? {
+        start: placement.start,
+        end: placement.current,
+        arrowStart: this.state.shapeStyle.arrowStart,
+        arrowEnd: this.state.shapeStyle.arrowEnd,
+        stroke: this.state.shapeStyle.stroke,
+      }
       : {
         bounds: placementBounds(
           placement.start,
@@ -313,14 +324,14 @@ export class InteractionController {
       const targetFrame = this.actions.translation.frame(page, target);
       const segment = pendingLineGeometry ||
         lineTargetSegment(targetFrame, shapeTarget);
-      const hit = svgElement("line", "object-hit-line");
-      const outline = svgElement("line", "object-hit-line-outline");
-      setLine(hit, segment.start, segment.end);
-      setLine(outline, segment.start, segment.end);
+      const hit = svgElement("path", "object-hit-line");
+      const outline = svgElement("path", "object-hit-line-outline");
+      setLineShape(hit, segment.start, segment.end, shapeTarget);
+      setLineShape(outline, segment.start, segment.end, shapeTarget);
       group.append(hit, outline);
       if (selected) {
         const geometryEditable = !userLocked &&
-          !this.actions.shape.isBusy();
+          this.actions.shape.canEdit(shapeTarget);
         group.classList.toggle(
           "is-line-geometry-pending",
           pendingLineGeometry != null,
@@ -358,7 +369,8 @@ export class InteractionController {
       setRect(rect, frame);
       group.append(rect);
       if (selected && shapeTarget?.resize) {
-        const resizeEditable = !userLocked && !this.actions.shape.isBusy();
+        const resizeEditable = !userLocked &&
+          this.actions.shape.canEdit(shapeTarget);
         group.classList.toggle("is-shape-resize-pending", pendingBounds != null);
         for (const direction of resizeDirections) {
           group.append(this.shapeResizeHandle(
@@ -589,8 +601,8 @@ export class InteractionController {
     if (event.shiftKey) current = snapLineEnd(fixed, current, drag.page);
     if (drag.endpoint === "start") drag.start = current;
     else drag.end = current;
-    setLine(drag.hit, drag.start, drag.end);
-    setLine(drag.outline, drag.start, drag.end);
+    setLineShape(drag.hit, drag.start, drag.end, drag.target);
+    setLineShape(drag.outline, drag.start, drag.end, drag.target);
     for (const circle of drag.handle.querySelectorAll("circle")) {
       setCirclePoint(circle, current);
     }
@@ -811,7 +823,7 @@ function boundsDistance(left, right) {
 
 function placementPoint(placement, event) {
   const point = clampPoint(svgPoint(placement.svg, event), placement.page);
-  if (placement.kind !== "line" || !event.shiftKey) return point;
+  if (!isLineKind(placement.kind) || !event.shiftKey) return point;
   return snapLineEnd(placement.start, point, placement.page);
 }
 
@@ -939,8 +951,13 @@ function speechBubblePath(bounds) {
 }
 
 function setShapeGeometry(shape, kind, geometry) {
-  if (kind === "line") {
-    setLine(shape, geometry.start, geometry.end);
+  if (isLineKind(kind)) {
+    setLineShape(shape, geometry.start, geometry.end, {
+      route: kind === "elbow_line" ? "elbow" : geometry.route,
+      arrow_start: geometry.arrow_start ?? geometry.arrowStart,
+      arrow_end: geometry.arrow_end ?? geometry.arrowEnd,
+      stroke: geometry.stroke,
+    });
     return;
   }
   const bounds = geometry.bounds;
@@ -960,11 +977,9 @@ function setShapeGeometry(shape, kind, geometry) {
   }
 }
 
-function setLine(line, start, end) {
-  line.setAttribute("x1", String(start.x));
-  line.setAttribute("y1", String(start.y));
-  line.setAttribute("x2", String(end.x));
-  line.setAttribute("y2", String(end.y));
+function setLineShape(path, start, end, style = {}) {
+  path.setAttribute("d", linePathData(start, end, style));
+  path.setAttribute("fill", "none");
 }
 
 function setCirclePoint(circle, point) {
@@ -973,13 +988,13 @@ function setCirclePoint(circle, point) {
 }
 
 function applyShapeStyle(shape, kind, style) {
-  if (kind === "line") {
+  if (isLineKind(kind)) {
     shape.style.fill = "none";
   } else {
     shape.style.fill = style.fill.enabled ? style.fill.color : "none";
     shape.style.fillOpacity = String(style.fill.opacity);
   }
-  shape.style.stroke = kind === "line" || style.stroke.enabled
+  shape.style.stroke = isLineKind(kind) || style.stroke.enabled
     ? style.stroke.color
     : "none";
   shape.style.strokeWidth = String(style.stroke.width);
@@ -1003,6 +1018,52 @@ function lineTargetSegment(frame, target) {
       y: frame.y + target.end.y * frame.height,
     },
   };
+}
+
+function linePathData(start, end, style) {
+  const elbow = style.route === "elbow";
+  const bend = elbow ? { x: end.x, y: start.y } : null;
+  const points = bend && pointsDiffer(start, bend) && pointsDiffer(bend, end)
+    ? [start, bend, end]
+    : [start, end];
+  const commands = [`M ${start.x} ${start.y}`];
+  for (const point of points.slice(1)) commands.push(`L ${point.x} ${point.y}`);
+  const arrowSize = Math.max(
+    lineArrowMinimumSize,
+    Number(style.stroke?.width || defaultLineStrokeWidth) * lineArrowStrokeScale,
+  );
+  if (style.arrow_start && points.length > 1) {
+    commands.push(arrowHeadPath(points[0], points[1], arrowSize));
+  }
+  if (style.arrow_end && points.length > 1) {
+    commands.push(arrowHeadPath(points.at(-1), points.at(-2), arrowSize));
+  }
+  return commands.join(" ");
+}
+
+function arrowHeadPath(tip, tangent, size) {
+  const dx = tip.x - tangent.x;
+  const dy = tip.y - tangent.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const ux = dx / length;
+  const uy = dy / length;
+  const px = -uy;
+  const py = ux;
+  const inset = size * lineArrowInsetRatio;
+  const halfHeight = size * lineArrowHalfHeightRatio;
+  const baseX = tip.x - ux * inset;
+  const baseY = tip.y - uy * inset;
+  return `M ${baseX + px * halfHeight} ${baseY + py * halfHeight} ` +
+    `L ${tip.x} ${tip.y} ` +
+    `L ${baseX - px * halfHeight} ${baseY - py * halfHeight}`;
+}
+
+function pointsDiffer(left, right) {
+  return left.x !== right.x || left.y !== right.y;
+}
+
+function isLineKind(kind) {
+  return kind === "line" || kind === "elbow_line";
 }
 
 function applyStrokeStyle(shape, stroke) {

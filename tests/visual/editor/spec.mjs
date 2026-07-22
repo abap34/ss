@@ -254,6 +254,11 @@ await withBrowser(output, async (browser, baseUrl) => {
       "the shape gallery omitted the speech bubble",
     );
     assert.equal(
+      await shapePicker.getByRole("button", { name: "Elbow line" }).count(),
+      1,
+      "the shape gallery omitted the elbow line",
+    );
+    assert.equal(
       await shapePicker.getByRole("button", { name: "Line" })
         .locator(".shape-choice-shortcut").textContent(),
       "L",
@@ -588,6 +593,13 @@ await withBrowser(output, async (browser, baseUrl) => {
       "the line tool omitted its color control");
     assert.equal(await lineControls.locator('input[aria-label="Line weight"]').count(), 1,
       "the line tool omitted its weight control");
+    const lineStartArrow = lineControls.locator('input[aria-label="Start arrow"]');
+    const lineEndArrow = lineControls.locator('input[aria-label="End arrow"]');
+    assert.equal(await lineStartArrow.count(), 1,
+      "the line tool omitted its start-arrow control");
+    assert.equal(await lineEndArrow.count(), 1,
+      "the line tool omitted its end-arrow control");
+    await lineEndArrow.check();
 
     const linePlacement = page.locator(
       '.page-shell[data-page-id="11"] .shape-placement-hit',
@@ -602,9 +614,9 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.mouse.down();
     await page.keyboard.down("Shift");
     await page.mouse.move(lineEndX, lineEndY, { steps: 3 });
-    const lineGhost = page.locator("line.shape-placement-ghost");
+    const lineGhost = page.locator("path.shape-placement-ghost");
     assert.equal(await lineGhost.count(), 1,
-      "line drag did not render an SVG line ghost");
+      "line drag did not render an SVG path ghost");
     assert.equal(
       await lineGhost.evaluate((node) => getComputedStyle(node).stroke),
       "rgb(37, 99, 235)",
@@ -625,6 +637,8 @@ await withBrowser(output, async (browser, baseUrl) => {
       "line insertion sent an inapplicable fill style");
     assert.equal(insertedLine.stroke.enabled, true,
       "line insertion inherited the hidden closed-shape stroke toggle");
+    assert.equal(insertedLine.arrowStart, false);
+    assert.equal(insertedLine.arrowEnd, true);
     assert(insertedLine.start.x > insertedLine.end.x &&
       insertedLine.start.y < insertedLine.end.y,
     `line insertion lost endpoint order: ${JSON.stringify(insertedLine)}`);
@@ -634,7 +648,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     ) / (Math.PI / 12);
     assert(Math.abs(snappedAngle - Math.round(snappedAngle)) < 0.001,
       `Shift did not snap the line to 15 degree increments: ${snappedAngle}`);
-    assert.equal(await page.locator("line.shape-placement-preview").count(), 1,
+    assert.equal(await page.locator("path.shape-placement-preview").count(), 1,
       "pending line did not retain its SVG preview");
     await postShapeEditResult(page, {
       requestId: insertedLine.requestId,
@@ -777,22 +791,26 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(
       await page.locator('.shape-resize-handle[data-direction="bottom-right"]')
         .getAttribute("aria-disabled"),
-      "true",
-      "pending shape resize left its handles interactive",
+      "false",
+      "pending shape resize disabled further edits to the same shape",
     );
+    const shapeStrokeStyle = page.locator(
+      ".shape-style-editor .shape-stroke-style-select select",
+    );
+    assert.equal(await shapeStrokeStyle.isEnabled(), true,
+      "pending shape resize disabled the style editor");
+    const styleMessageCount = await messageCount(page, "editShapeStyle");
+    await shapeStrokeStyle.selectOption("dashed");
+    assert.equal(await messageCount(page, "editShapeStyle"), styleMessageCount,
+      "a follow-up style edit was sent before the resize completed");
     await postShapeEditResult(page, {
       requestId: boundsEdit.requestId,
       operation: "resize",
       status: "rejected",
     });
-    await page.waitForFunction(() =>
-      document.querySelector('.shape-resize-handle[data-direction="bottom-right"]')
-        ?.getAttribute("aria-disabled") === "false"
-    );
-    const shapeStrokeStyle = page.locator(
-      ".shape-style-editor .shape-stroke-style-select select",
-    );
-    await shapeStrokeStyle.selectOption("dashed");
+    await page.waitForFunction((count) =>
+      globalThis.__messages.filter((message) => message.type === "editShapeStyle").length > count,
+    styleMessageCount);
     const styleEdit = await lastMessage(page, "editShapeStyle");
     assert(styleEdit, "shape details did not send a style edit");
     assert.equal(styleEdit.nodeId, 101);
@@ -815,10 +833,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     const existingLineHit = page.locator(
       '.page-shell[data-page-id="11"] .object-hit[data-object-id="102"] .object-hit-line',
     );
-    assert.equal(await existingLineHit.getAttribute("x1"), "760");
-    assert.equal(await existingLineHit.getAttribute("y1"), "170");
-    assert.equal(await existingLineHit.getAttribute("x2"), "520");
-    assert.equal(await existingLineHit.getAttribute("y2"), "290");
+    assert.equal(await existingLineHit.getAttribute("d"), "M 760 170 L 520 290");
     assert.equal(
       await existingLineHit.evaluate((node) => getComputedStyle(node).strokeWidth),
       "12px",
@@ -884,24 +899,16 @@ await withBrowser(output, async (browser, baseUrl) => {
     const provisionalLine = page.locator(
       '.object-hit[data-object-id="102"] .object-hit-line-outline',
     );
-    assert.equal(Number(await provisionalLine.getAttribute("x1")), geometryEdit.start.x);
-    assert.equal(Number(await provisionalLine.getAttribute("y1")), geometryEdit.start.y);
-    assert.equal(Number(await provisionalLine.getAttribute("x2")), geometryEdit.end.x);
-    assert.equal(Number(await provisionalLine.getAttribute("y2")), geometryEdit.end.y);
+    assert.equal(
+      await provisionalLine.getAttribute("d"),
+      `M ${geometryEdit.start.x} ${geometryEdit.start.y} ` +
+        `L ${geometryEdit.end.x} ${geometryEdit.end.y}`,
+    );
     assert.equal(
       await page.locator('.line-endpoint-handle[data-endpoint="start"]')
         .getAttribute("aria-disabled"),
-      "true",
-      "pending line geometry left its endpoint handles interactive",
-    );
-    await postShapeEditResult(page, {
-      requestId: geometryEdit.requestId,
-      operation: "geometry",
-      status: "rejected",
-    });
-    await page.waitForFunction(() =>
-      document.querySelector('.line-endpoint-handle[data-endpoint="start"]')
-        ?.getAttribute("aria-disabled") === "false"
+      "false",
+      "pending line geometry disabled further edits to the same line",
     );
     assert.equal(await page.locator(".shape-style-editor h2").textContent(), "Line style");
     assert.equal(
@@ -909,18 +916,52 @@ await withBrowser(output, async (browser, baseUrl) => {
       0,
       "selected line displayed fill controls",
     );
+    const lineStartArrowControl = page.locator(
+      '.shape-style-editor input[aria-label="Start arrow"]',
+    );
+    const lineEndArrowControl = page.locator(
+      '.shape-style-editor input[aria-label="End arrow"]',
+    );
+    assert.equal(await lineStartArrowControl.count(), 1,
+      "selected line omitted its start-arrow control");
+    assert.equal(await lineEndArrowControl.count(), 1,
+      "selected line omitted its end-arrow control");
     const selectedLineStyle = page.locator(
       '.shape-style-editor select[aria-label="Line style"]',
     );
+    assert.equal(await selectedLineStyle.isEnabled(), true,
+      "pending line geometry disabled the line style editor");
+    const lineStyleMessageCount = await messageCount(page, "editShapeStyle");
     await selectedLineStyle.selectOption("dotted");
+    assert.equal(await messageCount(page, "editShapeStyle"), lineStyleMessageCount,
+      "a follow-up line style edit was sent before geometry completed");
+    await postShapeEditResult(page, {
+      requestId: geometryEdit.requestId,
+      operation: "geometry",
+      status: "rejected",
+    });
+    await page.waitForFunction((count) =>
+      globalThis.__messages.filter((message) => message.type === "editShapeStyle").length > count,
+    lineStyleMessageCount);
     const lineStyleEdit = await lastMessage(page, "editShapeStyle");
     assert.equal(lineStyleEdit.nodeId, 102);
     assert.equal(lineStyleEdit.kind, "line");
     assert.equal(lineStyleEdit.stroke.style, "dotted");
+    assert.equal(lineStyleEdit.arrowStart, false);
+    assert.equal(lineStyleEdit.arrowEnd, false);
     assert.equal(Object.hasOwn(lineStyleEdit, "fill"), false,
       "line style edit sent an inapplicable fill style");
     await postShapeEditResult(page, {
       requestId: lineStyleEdit.requestId,
+      operation: "style",
+      status: "rejected",
+    });
+    await lineStartArrowControl.check();
+    const lineArrowEdit = await lastMessage(page, "editShapeStyle");
+    assert.equal(lineArrowEdit.arrowStart, true);
+    assert.equal(lineArrowEdit.arrowEnd, false);
+    await postShapeEditResult(page, {
+      requestId: lineArrowEdit.requestId,
       operation: "style",
       status: "rejected",
     });
@@ -1230,6 +1271,15 @@ await withBrowser(output, async (browser, baseUrl) => {
       "theme change recreated a rendered PDF canvas",
     );
 
+    await page.locator(
+      '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
+    ).click();
+    const failingStyleControl = page.locator(
+      ".shape-style-editor .shape-stroke-style-select select",
+    );
+    await failingStyleControl.selectOption("dashed");
+    const failingStyleEdit = await lastMessage(page, "editShapeStyle");
+
     const failed = structuredClone(finalSnapshot);
     failed.stale = true;
     failed.build_diagnostics = [
@@ -1252,6 +1302,19 @@ await withBrowser(output, async (browser, baseUrl) => {
         "slide.ss:12:4 [ExpectedExpression] expected an expression after '='",
       "stale preview did not explain its build failure",
     );
+    await postShapeEditResult(page, {
+      requestId: failingStyleEdit.requestId,
+      operation: "style",
+      status: "rejected",
+      message: "The edit request failed.",
+    });
+    assert.equal(
+      await page.locator(".toast--error").textContent(),
+      "Build failed. The preview is showing the last successful result.\n" +
+        "slide.ss:12:4 [ExpectedExpression] expected an expression after '='",
+      "a generic edit failure replaced the actual build diagnostic",
+    );
+    await page.locator(".close-button").click();
     await postSnapshot(page, 109, failed, 6);
     assert.equal(
       await page.locator(".toast--error").count(),
