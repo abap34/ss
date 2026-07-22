@@ -72,7 +72,10 @@ export class TranslationController {
   reconcile(snapshot, documentVersion) {
     if (this.pending.size === 0) return null;
     if (snapshot.stale) {
-      this.pending.clear();
+      for (const pending of [...this.pending.values()]) {
+        if (pending.phase === "queued" || pending.phase === "stale") continue;
+        this.pending.delete(pending.nodeId);
+      }
       this.inFlight = null;
       return null;
     }

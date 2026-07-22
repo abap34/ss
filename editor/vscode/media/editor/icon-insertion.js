@@ -34,7 +34,6 @@ export class IconController {
   canInsert(pageId) {
     return Boolean(
       this.state.snapshot &&
-        !this.state.snapshot.stale &&
         !this.isBusy() &&
         this.state.iconDraft.source &&
         this.state.snapshot.page_editing?.some((target) =>
@@ -156,7 +155,7 @@ export class IconController {
   }
 
   select(entry) {
-    if (!this.state.snapshot || this.state.snapshot.stale) return false;
+    if (!this.state.snapshot) return false;
     this.state.iconDraft = {
       ...this.state.iconDraft,
       source: entry.id,
@@ -191,8 +190,9 @@ export class IconController {
     this.pending = {
       requestId,
       snapshotId: message.snapshotId,
+      message,
       selection: null,
-      phase: "requested",
+      phase: this.state.snapshot.stale ? "queued" : "requested",
       preview: {
         pageId,
         kind: "icon",
@@ -201,7 +201,7 @@ export class IconController {
         color: message.color,
       },
     };
-    this.actions.post(message);
+    if (this.pending.phase === "requested") this.actions.post(message);
     this.actions.render();
     return true;
   }
@@ -213,10 +213,13 @@ export class IconController {
       if (message.selection) this.pending.selection = message.selection;
       return null;
     }
+    if (message.status === "stale") {
+      this.pending.phase = "queued";
+      return null;
+    }
     this.pending = null;
     this.state.shapeTool = "select";
     this.actions.render();
-    if (message.status === "stale") return null;
     return {
       status: "failed",
       message: message.message || "The icon could not be inserted.",
@@ -225,7 +228,27 @@ export class IconController {
 
   reconcile(snapshot) {
     const pending = this.pending;
-    if (!pending || pending.phase !== "applied" ||
+    if (!pending) return null;
+    if (pending.phase === "queued") {
+      if (snapshot.stale) return null;
+      const editable = snapshot.page_editing?.some((target) =>
+        target.page_id === pending.preview.pageId && target.insert_icons
+      );
+      if (!editable) {
+        this.pending = null;
+        this.state.shapeTool = "select";
+        return {
+          status: "failed",
+          message: "The target page no longer supports icon insertion.",
+        };
+      }
+      pending.snapshotId = snapshot.snapshot_id;
+      pending.message.snapshotId = snapshot.snapshot_id;
+      pending.phase = "requested";
+      this.actions.post(pending.message);
+      return null;
+    }
+    if (pending.phase !== "applied" ||
         snapshot.snapshot_id === pending.snapshotId) return null;
     const selection = pending.selection;
     const target = selection
@@ -242,6 +265,12 @@ export class IconController {
   }
 
   cancel() {
+    if (this.pending?.phase === "queued") {
+      this.pending = null;
+      this.state.shapeTool = "select";
+      this.actions.render();
+      return true;
+    }
     if (this.pending || this.state.shapeTool !== "icon") return false;
     this.state.shapeTool = "select";
     this.actions.render();

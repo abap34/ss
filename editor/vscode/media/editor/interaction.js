@@ -248,8 +248,7 @@ export class InteractionController {
 
   isMovable(nodeId) {
     return Boolean(
-      !this.state.snapshot?.stale &&
-        !this.actions.objectLocks.isLocked(nodeId) &&
+      !this.actions.objectLocks.isLocked(nodeId) &&
         this.actions.translation.canDrag(nodeId) &&
         this.state.snapshot?.editing.some((target) =>
           target.node_id === nodeId
@@ -296,7 +295,7 @@ export class InteractionController {
       group.append(hit, outline);
       if (selected) {
         const geometryEditable = !userLocked &&
-          !this.state.snapshot?.stale && !this.actions.shape.isBusy();
+          !this.actions.shape.isBusy();
         group.classList.toggle(
           "is-line-geometry-pending",
           pendingLineGeometry != null,
