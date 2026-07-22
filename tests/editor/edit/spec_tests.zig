@@ -164,10 +164,26 @@ test "shape insertion preserves circle dimensions and disabled paint" {
     defer result.deinit(allocator);
     const updated = try edit.applyEdits(allocator, source, result.edits);
     defer allocator.free(updated);
-    try std.testing.expect(std.mem.indexOf(u8, updated, "circle!(80, VectorStyle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, updated, "ellipse!(80, 80, VectorStyle") != null);
     try std.testing.expect(std.mem.indexOf(u8, updated, "fill = no_fill()") != null);
     try std.testing.expect(std.mem.indexOf(u8, updated, "stroke = no_stroke()") != null);
     try std.testing.expect(std.mem.indexOf(u8, updated, "page.left + 0") == null);
+}
+
+test "closed shape geometry edits width and height independently" {
+    const allocator = std.testing.allocator;
+    const source = "rectangle!(160, 100, VectorStyle {})";
+    var result = try shape.closedGeometryEdits(allocator, .{
+        .width = numericTokenAfter(source, "rectangle!("),
+        .height = numericTokenAfter(source, "rectangle!(160, "),
+    }, .{ .x = 0, .y = 0, .width = 210, .height = 64 });
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expectEqualStrings(
+        "rectangle!(210, 64, VectorStyle {})",
+        updated,
+    );
 }
 
 test "shape insertion precedes the first existing constraint" {

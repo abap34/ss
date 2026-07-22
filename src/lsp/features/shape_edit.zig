@@ -80,7 +80,7 @@ pub fn insertResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
                 return try statusJson(ctx.allocator, "rejected", "Missing shape bounds.");
             const bounds = parseBounds(bounds_object) orelse
                 return try statusJson(ctx.allocator, "rejected", "Invalid shape bounds.");
-            if (!validBounds(bounds, page.width, page.height, kind)) {
+            if (!validBounds(bounds, page.width, page.height)) {
                 return try statusJson(ctx.allocator, "rejected", "Shape bounds must be finite, positive, and inside the page.");
             }
             const fill = parseFill(request_object) orelse
@@ -139,6 +139,13 @@ const LineGeometryRequest = struct {
     node_id: core.NodeId,
     start: shape_edit.Point,
     end: shape_edit.Point,
+};
+
+const ClosedGeometryRequest = struct {
+    snapshot_id: []const u8,
+    page_id: core.NodeId,
+    node_id: core.NodeId,
+    bounds: shape_edit.Bounds,
 };
 
 pub fn lineGeometryResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
@@ -227,6 +234,109 @@ pub fn lineGeometryResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u
         target.binding,
         geometry.bounds.x,
         geometry.bounds.y,
+        updates,
+        null,
+    )) orelse return try statusJson(ctx.allocator, "unsupported", "The page insertion point could not be located.");
+    defer position_edits.deinit(ctx.allocator);
+    var result = try combineEditResults(ctx.allocator, geometry_edits.edits, position_edits.edits);
+    defer result.deinit(ctx.allocator);
+
+    const uri = try protocol.uriFromPath(ctx.allocator, target.path);
+    defer ctx.allocator.free(uri);
+    return try insertionStatusJson(
+        ctx.allocator,
+        uri,
+        source,
+        result.edits,
+        target.path,
+        target.page_id,
+        target.binding,
+    );
+}
+
+pub fn closedGeometryResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
+    const request = params orelse return try statusJson(ctx.allocator, "rejected", "Missing shape geometry request.");
+    if (request != .object) return try statusJson(ctx.allocator, "rejected", "Invalid shape geometry request.");
+    const request_object = &request.object;
+    const parsed = parseClosedGeometryRequest(request_object) orelse
+        return try statusJson(ctx.allocator, "rejected", "Invalid shape geometry request.");
+    const doc_path = try protocol.docPathFromParams(ctx.allocator, params) orelse
+        return try statusJson(ctx.allocator, "unsupported", "Missing source document.");
+    defer ctx.allocator.free(doc_path);
+    if (!ctx.active_editor_paths.contains(doc_path)) {
+        return try statusJson(ctx.allocator, "unsupported", "The WYSIWYG editor is not active for this document.");
+    }
+
+    var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
+    defer if (owned_snapshot) |*snapshot| snapshot.deinit();
+    const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse
+        return try statusJson(ctx.allocator, "unsupported", "No compiler snapshot is available.");
+    const layout = if (snapshot.layout_output) |*value| value else return try statusJson(ctx.allocator, "stale", "The document changed before the shape was resized.");
+    const editor = if (layout.editor) |*value| value else return try statusJson(ctx.allocator, "stale", "The document changed before the shape was resized.");
+    if (parsed.snapshot_id.len == 0 or
+        !std.mem.eql(u8, editor.model.snapshot_id, parsed.snapshot_id) or
+        snapshot.generation != ctx.documents.generation)
+    {
+        return try statusJson(ctx.allocator, "stale", "The document changed before the shape was resized.");
+    }
+
+    const target = editor.model.shapeEditingTarget(parsed.node_id) orelse
+        return try statusJson(ctx.allocator, "unsupported", "This object is not an editable canonical shape.");
+    if (parsed.page_id != target.page_id) {
+        return try statusJson(ctx.allocator, "stale", "The selected shape no longer belongs to this page.");
+    }
+    if (target.kind == .line) {
+        return try statusJson(ctx.allocator, "rejected", "The selected object is a line.");
+    }
+    const expressions = target.closed_source orelse
+        return try statusJson(ctx.allocator, "unsupported", "This shape does not have editable canonical dimensions.");
+    const editing = editor.model.editingTarget(parsed.node_id) orelse
+        return try statusJson(ctx.allocator, "unsupported", "This shape has no editable binding in the page.");
+    if (editing.page_id != target.page_id or
+        !std.mem.eql(u8, editing.path, target.path) or
+        !std.mem.eql(u8, editing.binding, target.binding))
+    {
+        return try statusJson(ctx.allocator, "stale", "The selected shape source changed.");
+    }
+    const page = pageForId(layout.report.pages, parsed.page_id) orelse
+        return try statusJson(ctx.allocator, "stale", "The target page no longer exists.");
+    if (!validBounds(parsed.bounds, page.width, page.height)) {
+        return try statusJson(ctx.allocator, "rejected", "Shape bounds must be finite, positive, and inside the page.");
+    }
+
+    var owned_source: ?[]u8 = null;
+    defer if (owned_source) |source| ctx.allocator.free(source);
+    const source = ctx.documents.sourceForPath(target.path) orelse blk: {
+        owned_source = utils.fs.readFileAlloc(ctx.io, ctx.allocator, target.path) catch
+            return try statusJson(ctx.allocator, "unsupported", "The target source document is unavailable.");
+        const module = snapshot.moduleForPath(target.path) orelse
+            return try statusJson(ctx.allocator, "stale", "The target source module changed.");
+        if (!std.mem.eql(u8, owned_source.?, module.source)) {
+            return try statusJson(ctx.allocator, "stale", "The target source document changed on disk.");
+        }
+        break :blk owned_source.?;
+    };
+
+    var geometry_edits = try shape_edit.closedGeometryEdits(ctx.allocator, .{
+        .width = expressions.width_expression,
+        .height = expressions.height_expression,
+    }, parsed.bounds);
+    defer geometry_edits.deinit(ctx.allocator);
+    const updates = try edit_relations.existingUpdates(
+        ctx.allocator,
+        &layout.report,
+        parsed.node_id,
+        target.path,
+        editing.page,
+    );
+    defer ctx.allocator.free(updates);
+    var position_edits = (try editor_edit.absolutePosition(
+        ctx.allocator,
+        source,
+        editing.page,
+        target.binding,
+        parsed.bounds.x,
+        parsed.bounds.y,
         updates,
         null,
     )) orelse return try statusJson(ctx.allocator, "unsupported", "The page insertion point could not be located.");
@@ -382,6 +492,20 @@ fn parseLineGeometryRequest(request: *const protocol.JsonObject) ?LineGeometryRe
     };
 }
 
+fn parseClosedGeometryRequest(request: *const protocol.JsonObject) ?ClosedGeometryRequest {
+    const page_id = protocol.intField(request, "pageId") orelse return null;
+    const node_id = protocol.intField(request, "nodeId") orelse return null;
+    if (page_id < 0 or page_id > std.math.maxInt(core.NodeId) or
+        node_id < 0 or node_id > std.math.maxInt(core.NodeId)) return null;
+    const bounds = protocol.objectFieldObject(request, "bounds") orelse return null;
+    return .{
+        .snapshot_id = protocol.stringField(request, "snapshotId") orelse return null,
+        .page_id = @intCast(page_id),
+        .node_id = @intCast(node_id),
+        .bounds = parseBounds(bounds) orelse return null,
+    };
+}
+
 fn parseFill(request: *const protocol.JsonObject) ?shape_edit.Fill {
     const object = protocol.objectFieldObject(request, "fill") orelse return null;
     const enabled = protocol.boolField(object, "enabled") orelse return null;
@@ -411,13 +535,12 @@ fn parseStroke(request: *const protocol.JsonObject) ?shape_edit.Stroke {
     return .{ .enabled = enabled, .color = color, .width = width, .style = style };
 }
 
-fn validBounds(bounds: shape_edit.Bounds, page_width: f64, page_height: f64, kind: shape_edit.Kind) bool {
+fn validBounds(bounds: shape_edit.Bounds, page_width: f64, page_height: f64) bool {
     const tolerance = 0.01;
     if (!std.math.isFinite(bounds.x) or !std.math.isFinite(bounds.y) or
         !std.math.isFinite(bounds.width) or !std.math.isFinite(bounds.height)) return false;
     if (bounds.x < 0 or bounds.y < 0 or bounds.width <= 0 or bounds.height <= 0) return false;
     if (bounds.x + bounds.width > page_width + tolerance or bounds.y + bounds.height > page_height + tolerance) return false;
-    if (kind == .circle and @abs(bounds.width - bounds.height) > tolerance) return false;
     return true;
 }
 

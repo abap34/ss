@@ -138,6 +138,11 @@ pub const ShapeLineSource = struct {
     end_y_expression: utils.source.ByteSpan,
 };
 
+pub const ShapeClosedSource = struct {
+    width_expression: utils.source.ByteSpan,
+    height_expression: utils.source.ByteSpan,
+};
+
 pub const ShapeEditingTarget = struct {
     node_id: core.NodeId,
     page_id: core.NodeId,
@@ -149,6 +154,7 @@ pub const ShapeEditingTarget = struct {
     fill: ?ShapeFill,
     start: ?ShapePoint,
     end: ?ShapePoint,
+    closed_source: ?ShapeClosedSource,
     line_source: ?ShapeLineSource,
     stroke: ShapeStroke,
 };
@@ -547,6 +553,7 @@ fn shapeEditingJson(allocator: std.mem.Allocator, targets: []const ShapeEditingT
         try item.intField("page_id", target.page_id);
         try item.stringField("binding", target.binding);
         try item.stringField("kind", @tagName(target.kind));
+        if (target.kind != .line) try item.boolField("resize", target.closed_source != null);
         if (target.fill) |fill_value| {
             var fill = try item.objectField("fill");
             try fill.boolField("enabled", fill_value.enabled);
@@ -598,6 +605,7 @@ fn collectShapeEditingTargets(
         var fill: ?ShapeFill = null;
         var start: ?ShapePoint = null;
         var end: ?ShapePoint = null;
+        var closed_source: ?ShapeClosedSource = null;
         var line_source: ?ShapeLineSource = null;
         if (constructor.kind == .line) {
             const start_x = shapeRecordField(module.source, constructor.style, constructor.style_span, "start_x") orelse continue;
@@ -621,6 +629,12 @@ fn collectShapeEditingTargets(
                 .end_y_expression = end_y.expression,
             };
         } else {
+            if (constructor.width_expression != null and constructor.height_expression != null) {
+                closed_source = .{
+                    .width_expression = constructor.width_expression.?,
+                    .height_expression = constructor.height_expression.?,
+                };
+            }
             const fill_field = shapeRecordField(module.source, constructor.style, constructor.style_span, "fill") orelse continue;
             fill = (try shapeFill(allocator, fill_field.value)) orelse continue;
             fill_expression = fill_field.expression;
@@ -650,6 +664,7 @@ fn collectShapeEditingTargets(
             .fill = fill,
             .start = start,
             .end = end,
+            .closed_source = closed_source,
             .line_source = line_source,
             .stroke = stroke,
         });
@@ -683,7 +698,7 @@ fn shapeConstructor(statement: *const ast.Statement, binding: []const u8) ?Shape
     if (call.callee.qualifier != null) return null;
     const kind: ShapeKind = if (std.mem.eql(u8, call.callee.name, "rectangle!"))
         .rectangle
-    else if (std.mem.eql(u8, call.callee.name, "circle!"))
+    else if (std.mem.eql(u8, call.callee.name, "circle!") or std.mem.eql(u8, call.callee.name, "ellipse!"))
         .circle
     else if (std.mem.eql(u8, call.callee.name, "arrow_shape!"))
         .arrow
@@ -693,7 +708,7 @@ fn shapeConstructor(statement: *const ast.Statement, binding: []const u8) ?Shape
         .line
     else
         return null;
-    const style_index: usize = if (kind == .circle) 1 else 2;
+    const style_index: usize = if (std.mem.eql(u8, call.callee.name, "circle!")) 1 else 2;
     if (call.args.items.len != style_index + 1 or call.arg_spans.items.len <= style_index) return null;
     const style = switch (call.args.items[style_index]) {
         .record => |*value| value,
@@ -705,11 +720,11 @@ fn shapeConstructor(statement: *const ast.Statement, binding: []const u8) ?Shape
         .kind = kind,
         .style = style,
         .style_span = call.arg_spans.items[style_index],
-        .width_expression = if (kind == .line) .{
+        .width_expression = if (style_index == 2) .{
             .start = call.arg_spans.items[0].start,
             .end = call.arg_spans.items[0].end,
         } else null,
-        .height_expression = if (kind == .line) .{
+        .height_expression = if (style_index == 2) .{
             .start = call.arg_spans.items[1].start,
             .end = call.arg_spans.items[1].end,
         } else null,

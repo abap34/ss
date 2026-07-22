@@ -4,6 +4,7 @@ import {
   defaultShapeStyle,
   ShapeController,
 } from "../../../editor/vscode/media/editor/shape-insertion.js";
+import { resizedBounds } from "../../../editor/vscode/media/editor/interaction.js";
 
 const state = {
   snapshot: snapshot("initial", []),
@@ -190,6 +191,104 @@ shape.acceptResult({
   status: "rejected",
 });
 assert.equal(shape.pendingLineGeometry(102), null);
+
+const rectangleTarget = {
+  node_id: 101,
+  page_id: 11,
+  binding: "rectangle_item",
+  kind: "rectangle",
+  resize: true,
+  fill: { ...defaultShapeStyle.fill },
+  stroke: { ...defaultShapeStyle.stroke },
+};
+assert.equal(shape.editBounds(
+  rectangleTarget,
+  { x: 80, y: 90, width: 240, height: 64 },
+), true);
+assert.deepEqual(messages.at(-1), {
+  type: "editShapeBounds",
+  requestId: messages.at(-1).requestId,
+  snapshotId: state.snapshot.snapshot_id,
+  nodeId: 101,
+  pageId: 11,
+  kind: "rectangle",
+  bounds: { x: 80, y: 90, width: 240, height: 64 },
+});
+assert.deepEqual(shape.pendingBounds(101)?.bounds, {
+  x: 80,
+  y: 90,
+  width: 240,
+  height: 64,
+});
+shape.acceptResult({
+  type: "shapeEditResult",
+  requestId: messages.at(-1).requestId,
+  operation: "resize",
+  status: "rejected",
+});
+assert.equal(shape.pendingBounds(101), null);
+assert.equal(shape.editBounds({ ...rectangleTarget, resize: false }, {
+  x: 80,
+  y: 90,
+  width: 240,
+  height: 64,
+}), false);
+
+assert.deepEqual(
+  resizedBounds(
+    { x: 100, y: 100, width: 160, height: 100 },
+    "top",
+    { x: 180, y: 60 },
+    { width: 1280, height: 720 },
+  ),
+  { x: 100, y: 60, width: 160, height: 140 },
+);
+assert.deepEqual(
+  resizedBounds(
+    { x: 100, y: 100, width: 160, height: 100 },
+    "bottom-right",
+    { x: 320, y: 260 },
+    { width: 1280, height: 720 },
+  ),
+  { x: 100, y: 100, width: 220, height: 160 },
+);
+assert.deepEqual(
+  resizedBounds(
+    { x: 100, y: 100, width: 160, height: 100 },
+    "left",
+    { x: 500, y: 150 },
+    { width: 1280, height: 720 },
+  ),
+  { x: 256, y: 100, width: 4, height: 100 },
+);
+
+state.snapshot.stale = true;
+const messageCountBeforeQueuedResize = messages.length;
+assert.equal(shape.editBounds(
+  rectangleTarget,
+  { x: 72, y: 84, width: 260, height: 72 },
+), true);
+assert.equal(messages.length, messageCountBeforeQueuedResize,
+  "a resize based on a stale preview was sent before rebuilding");
+state.snapshot = snapshot("queued-resize-rebased", [{
+  ...rectangleTarget,
+  node_id: 111,
+}]);
+assert.equal(shape.reconcile(state.snapshot), null);
+assert.equal(messages.length, messageCountBeforeQueuedResize + 1);
+assert.equal(messages.at(-1).nodeId, 111);
+assert.deepEqual(shape.pendingBounds(111)?.bounds, {
+  x: 72,
+  y: 84,
+  width: 260,
+  height: 72,
+});
+shape.acceptResult({
+  type: "shapeEditResult",
+  requestId: messages.at(-1).requestId,
+  operation: "resize",
+  status: "rejected",
+});
 
 state.snapshot.stale = true;
 assert.equal(shape.canInsert(11), true);

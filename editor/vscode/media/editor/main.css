@@ -1289,6 +1289,51 @@ button {
   stroke: var(--text-faint);
   stroke-dasharray: 3 2;
 }
+.shape-resize-handle {
+  cursor: nwse-resize;
+}
+.shape-resize-handle[data-direction="top"],
+.shape-resize-handle[data-direction="bottom"] {
+  cursor: ns-resize;
+}
+.shape-resize-handle[data-direction="left"],
+.shape-resize-handle[data-direction="right"] {
+  cursor: ew-resize;
+}
+.shape-resize-handle[data-direction="top-right"],
+.shape-resize-handle[data-direction="bottom-left"] {
+  cursor: nesw-resize;
+}
+.shape-resize-hit {
+  fill: var(--control-background);
+  fill-opacity: 0.001;
+  pointer-events: all;
+}
+.shape-resize-marker {
+  fill: var(--control-background);
+  stroke: #62ae99;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.shape-resize-handle:hover .shape-resize-marker,
+.object-hit.is-editing-shape-bounds .shape-resize-marker {
+  fill: var(--accent);
+  stroke: var(--accent-border);
+}
+.shape-resize-handle.is-disabled {
+  cursor: default;
+}
+.shape-resize-handle.is-disabled .shape-resize-marker {
+  fill: var(--toolbar-background);
+  stroke: var(--text-faint);
+  stroke-dasharray: 3 2;
+}
+.object-hit.is-editing-shape-bounds .object-hit-rect,
+.object-hit.is-shape-resize-pending .object-hit-rect {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
 .object-hit.is-locked.is-selected .object-hit-rect,
 .object-hit.is-user-locked:hover .object-hit-rect {
   stroke-dasharray: 4 3;
@@ -1312,6 +1357,11 @@ button {
 }
 .shape-placement-preview {
   stroke-dasharray: none;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent) 45%, transparent));
+}
+.shape-resize-preview {
+  pointer-events: none;
+  opacity: 0.84;
   filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent) 45%, transparent));
 }
 .icon-placement-ghost {
