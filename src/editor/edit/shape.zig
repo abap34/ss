@@ -3,6 +3,8 @@ const std = @import("std");
 const base = @import("base.zig");
 const relation = @import("../relation.zig");
 
+const default_line_marker_size: f64 = 10;
+
 pub const TextEdit = base.TextEdit;
 pub const Result = base.Result;
 pub const applyEdits = base.applyEdits;
@@ -13,6 +15,7 @@ pub const Kind = enum {
     arrow,
     speech_bubble,
     line,
+    elbow_line,
 };
 
 pub const Bounds = struct {
@@ -58,6 +61,8 @@ pub const LineShape = struct {
     start: Point,
     end: Point,
     stroke: Stroke,
+    arrow_start: bool = false,
+    arrow_end: bool = false,
 };
 
 pub const LineGeometry = struct {
@@ -86,6 +91,7 @@ pub const Shape = union(Kind) {
     arrow: ClosedShape,
     speech_bubble: ClosedShape,
     line: LineShape,
+    elbow_line: LineShape,
 };
 
 pub fn insert(
@@ -148,6 +154,20 @@ pub fn strokeExpression(allocator: std.mem.Allocator, stroke: Stroke) ![]u8 {
         .dash_dot => "dash_dot_stroke",
     };
     return std.fmt.allocPrint(allocator, "{s}(c\"{s}\", {s})", .{ constructor, stroke.color, width });
+}
+
+pub fn lineStyleExpression(
+    allocator: std.mem.Allocator,
+    start: Point,
+    end: Point,
+    stroke: Stroke,
+    arrow_start: bool,
+    arrow_end: bool,
+) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+    try appendLineStyle(allocator, &out, start, end, stroke, arrow_start, arrow_end);
+    return try out.toOwnedSlice(allocator);
 }
 
 pub fn normalizeLine(start: Point, end: Point, page_width: f64, page_height: f64) ?LineGeometry {
@@ -239,7 +259,8 @@ fn appendConstructor(
         .circle => |value| try appendClosedConstructor(allocator, out, "ellipse!", value),
         .arrow => |value| try appendClosedConstructor(allocator, out, "arrow_shape!", value),
         .speech_bubble => |value| try appendClosedConstructor(allocator, out, "speech_bubble!", value),
-        .line => |value| try appendLineConstructor(allocator, out, value),
+        .line => |value| try appendLineConstructor(allocator, out, "line!", value),
+        .elbow_line => |value| try appendLineConstructor(allocator, out, "elbow_line!", value),
     }
 }
 
@@ -271,27 +292,54 @@ fn appendClosedConstructor(
     try out.append(allocator, ')');
 }
 
-fn appendLineConstructor(allocator: std.mem.Allocator, out: *std.ArrayList(u8), shape: LineShape) !void {
+fn appendLineConstructor(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    constructor: []const u8,
+    shape: LineShape,
+) !void {
     const width = try relation.numericLiteral(allocator, shape.bounds.width);
     defer allocator.free(width);
     const height = try relation.numericLiteral(allocator, shape.bounds.height);
     defer allocator.free(height);
-    const start_x = try relation.numericLiteral(allocator, shape.start.x);
-    defer allocator.free(start_x);
-    const start_y = try relation.numericLiteral(allocator, shape.start.y);
-    defer allocator.free(start_y);
-    const end_x = try relation.numericLiteral(allocator, shape.end.x);
-    defer allocator.free(end_x);
-    const end_y = try relation.numericLiteral(allocator, shape.end.y);
-    defer allocator.free(end_y);
-    const stroke_text = try strokeExpression(allocator, shape.stroke);
-    defer allocator.free(stroke_text);
-
-    try out.appendSlice(allocator, "line!(");
+    try out.appendSlice(allocator, constructor);
+    try out.append(allocator, '(');
     try out.appendSlice(allocator, width);
     try out.appendSlice(allocator, ", ");
     try out.appendSlice(allocator, height);
-    try out.appendSlice(allocator, ", LineStyle { start_x = ");
+    try out.appendSlice(allocator, ", ");
+    try appendLineStyle(
+        allocator,
+        out,
+        shape.start,
+        shape.end,
+        shape.stroke,
+        shape.arrow_start,
+        shape.arrow_end,
+    );
+    try out.append(allocator, ')');
+}
+
+fn appendLineStyle(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    start: Point,
+    end: Point,
+    stroke: Stroke,
+    arrow_start: bool,
+    arrow_end: bool,
+) !void {
+    const start_x = try relation.numericLiteral(allocator, start.x);
+    defer allocator.free(start_x);
+    const start_y = try relation.numericLiteral(allocator, start.y);
+    defer allocator.free(start_y);
+    const end_x = try relation.numericLiteral(allocator, end.x);
+    defer allocator.free(end_x);
+    const end_y = try relation.numericLiteral(allocator, end.y);
+    defer allocator.free(end_y);
+    const stroke_text = try strokeExpression(allocator, stroke);
+    defer allocator.free(stroke_text);
+    try out.appendSlice(allocator, "LineStyle { start_x = ");
     try out.appendSlice(allocator, start_x);
     try out.appendSlice(allocator, " start_y = ");
     try out.appendSlice(allocator, start_y);
@@ -301,7 +349,30 @@ fn appendLineConstructor(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
     try out.appendSlice(allocator, end_y);
     try out.appendSlice(allocator, " stroke = ");
     try out.appendSlice(allocator, stroke_text);
-    try out.appendSlice(allocator, " })");
+    if (arrow_start) try appendArrowMarker(allocator, out, "marker_start", stroke);
+    if (arrow_end) try appendArrowMarker(allocator, out, "marker_end", stroke);
+    try out.appendSlice(allocator, " }");
+}
+
+fn appendArrowMarker(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    field: []const u8,
+    stroke: Stroke,
+) !void {
+    const size = try relation.numericLiteral(allocator, default_line_marker_size);
+    defer allocator.free(size);
+    const width = try relation.numericLiteral(allocator, stroke.width);
+    defer allocator.free(width);
+    try out.append(allocator, ' ');
+    try out.appendSlice(allocator, field);
+    try out.appendSlice(allocator, " = marker_arrow_open(");
+    try out.appendSlice(allocator, size);
+    try out.appendSlice(allocator, ", c\"");
+    try out.appendSlice(allocator, stroke.color);
+    try out.appendSlice(allocator, "\", ");
+    try out.appendSlice(allocator, width);
+    try out.append(allocator, ')');
 }
 
 fn shapeBounds(shape: Shape) Bounds {

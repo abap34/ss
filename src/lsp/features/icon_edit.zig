@@ -47,10 +47,8 @@ pub fn insertResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
     const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse
         return try edit_response.statusJson(ctx.allocator, "unsupported", "No compiler snapshot is available.");
-    const layout = if (snapshot.layout_output) |*value| value else
-        return try edit_response.statusJson(ctx.allocator, "unsupported", "No solved layout is available.");
-    const editor = if (layout.editor) |*value| value else
-        return try edit_response.statusJson(ctx.allocator, "unsupported", "The WYSIWYG editor is not active.");
+    const layout = if (snapshot.layout_output) |*value| value else return try edit_response.statusJson(ctx.allocator, "stale", edit_response.build_diagnostics_message);
+    const editor = if (layout.editor) |*value| value else return try edit_response.statusJson(ctx.allocator, "unsupported", "The WYSIWYG editor is not active.");
     const requested_id = protocol.stringField(request_object, "snapshotId") orelse "";
     if (requested_id.len == 0 or
         !std.mem.eql(u8, editor.model.snapshot_id, requested_id) or

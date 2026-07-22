@@ -27,7 +27,7 @@ export function renderObjectSheet(state, object, actions) {
 }
 
 function shapeStyleEditor(target, shape, locked) {
-  const disabled = shape.isBusy() || locked;
+  const disabled = !shape.canEdit(target) || locked;
   const line = target.kind === "line";
   const container = element("div", "shape-style-editor");
   const title = element("h2");
@@ -35,6 +35,8 @@ function shapeStyleEditor(target, shape, locked) {
   container.append(title);
   const controls = element("div", "shape-style-fields");
   const fields = [];
+  const editLine = (stroke, arrowStart = target.arrow_start, arrowEnd = target.arrow_end) =>
+    shape.editStyle(target, { stroke, arrowStart, arrowEnd });
   if (!line) {
     fields.push(
       styleCheckbox("Fill", target.fill.enabled, (enabled) => {
@@ -67,8 +69,9 @@ function shapeStyleEditor(target, shape, locked) {
   }
   fields.push(
     styleColor(line ? "Line color" : "Stroke color", target.stroke.color, (color) => {
-      shape.editStyle(target, {
-        ...(line ? {} : { fill: { ...target.fill } }),
+      if (line) editLine({ ...target.stroke, color });
+      else shape.editStyle(target, {
+        fill: { ...target.fill },
         stroke: { ...target.stroke, color },
       });
     }),
@@ -77,19 +80,31 @@ function shapeStyleEditor(target, shape, locked) {
       ariaLabel: line ? "Line style" : "Shape stroke style",
       disabled,
       change: (style) => {
-        shape.editStyle(target, {
-          ...(line ? {} : { fill: { ...target.fill } }),
+        if (line) editLine({ ...target.stroke, style });
+        else shape.editStyle(target, {
+          fill: { ...target.fill },
           stroke: { ...target.stroke, style },
         });
       },
     }),
     styleNumber(line ? "Weight" : "Width", target.stroke.width, 0.1, 24, 0.1, (width) => {
-      shape.editStyle(target, {
-        ...(line ? {} : { fill: { ...target.fill } }),
+      if (line) editLine({ ...target.stroke, width });
+      else shape.editStyle(target, {
+        fill: { ...target.fill },
         stroke: { ...target.stroke, width },
       });
     }),
   );
+  if (line) {
+    fields.push(
+      styleCheckbox("Start arrow", target.arrow_start, (enabled) => {
+        editLine({ ...target.stroke }, enabled, target.arrow_end);
+      }),
+      styleCheckbox("End arrow", target.arrow_end, (enabled) => {
+        editLine({ ...target.stroke }, target.arrow_start, enabled);
+      }),
+    );
+  }
   controls.append(...fields);
   for (const input of controls.querySelectorAll("input")) {
     input.disabled = disabled;

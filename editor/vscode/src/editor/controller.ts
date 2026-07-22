@@ -395,11 +395,13 @@ export class EditorController implements vscode.Disposable {
         snapshotId: message.snapshotId,
         pageId: message.pageId,
         ...(message.type === "insertShape"
-          ? message.kind === "line"
+          ? "start" in message
             ? {
               kind: message.kind,
               start: message.start,
               end: message.end,
+              arrowStart: message.arrowStart,
+              arrowEnd: message.arrowEnd,
               stroke: message.stroke,
             }
             : {
@@ -422,6 +424,8 @@ export class EditorController implements vscode.Disposable {
           : message.kind === "line"
           ? {
             nodeId: message.nodeId,
+            arrowStart: message.arrowStart,
+            arrowEnd: message.arrowEnd,
             stroke: message.stroke,
           }
           : {

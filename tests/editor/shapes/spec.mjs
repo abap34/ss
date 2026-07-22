@@ -13,6 +13,8 @@ const state = {
   shapeTool: "select",
   shapeStyle: structuredClone(defaultShapeStyle),
 };
+assert.equal(defaultShapeStyle.arrowStart, false);
+assert.equal(defaultShapeStyle.arrowEnd, false);
 const messages = [];
 const selections = [];
 const shape = new ShapeController(state, {
@@ -115,6 +117,8 @@ assert.deepEqual(shape.pendingInsertion(11), {
   kind: "line",
   start: { x: 440, y: 120 },
   end: { x: 210, y: 350 },
+  arrowStart: false,
+  arrowEnd: false,
   stroke: { ...state.shapeStyle.stroke, enabled: true },
 });
 shape.acceptResult({
@@ -145,16 +149,24 @@ const lineTarget = {
   page_id: 11,
   binding: "line_item",
   kind: "line",
+  route: "straight",
   start: { x: 1, y: 0 },
   end: { x: 0, y: 1 },
+  arrow_start: false,
+  arrow_end: false,
   stroke: { ...defaultShapeStyle.stroke },
 };
+state.snapshot = snapshot("line-target", [lineTarget]);
 assert.equal(shape.editStyle(lineTarget, {
   stroke: { ...lineTarget.stroke, width: 3, style: "dashed" },
+  arrowStart: true,
+  arrowEnd: false,
 }), true);
 assert.equal(messages.length, 5);
 assert.equal(messages[4].kind, "line");
 assert.equal(messages[4].stroke.width, 3);
+assert.equal(messages[4].arrowStart, true);
+assert.equal(messages[4].arrowEnd, false);
 assert.equal(Object.hasOwn(messages[4], "fill"), false);
 shape.acceptResult({
   type: "shapeEditResult",
@@ -192,6 +204,58 @@ shape.acceptResult({
 });
 assert.equal(shape.pendingLineGeometry(102), null);
 
+state.snapshot = snapshot("continuous-base", [lineTarget]);
+const continuousTarget = shape.styleTarget(102);
+const continuousMessageCount = messages.length;
+assert.equal(shape.editStyle(continuousTarget, {
+  stroke: { ...continuousTarget.stroke, color: "#dc2626" },
+  arrowStart: true,
+  arrowEnd: false,
+}), true);
+assert.equal(messages.length, continuousMessageCount + 1);
+const continuousStyleRequest = messages.at(-1);
+assert.equal(shape.editLineGeometry(
+  continuousTarget,
+  { x: 720, y: 140 },
+  { x: 500, y: 330 },
+), true);
+assert.equal(messages.length, continuousMessageCount + 1,
+  "a follow-up edit was sent before the first source edit rebuilt");
+assert.equal(shape.canEdit(continuousTarget), true,
+  "an in-flight edit disabled the same shape");
+shape.acceptResult({
+  type: "shapeEditResult",
+  requestId: continuousStyleRequest.requestId,
+  operation: "style",
+  status: "applied",
+});
+const failedBuild = snapshot("continuous-failed", [lineTarget]);
+failedBuild.stale = true;
+state.snapshot = failedBuild;
+shape.reconcile(failedBuild);
+assert.equal(shape.isBusy(), true,
+  "a failed build discarded the queued follow-up edit");
+assert.equal(shape.canEdit(continuousTarget), true,
+  "a failed build disabled editing of the retained shape");
+assert.deepEqual(shape.pendingLineGeometry(102), {
+  nodeId: 102,
+  pageId: 11,
+  start: { x: 720, y: 140 },
+  end: { x: 500, y: 330 },
+});
+const rebuiltLineTarget = { ...lineTarget, node_id: 202 };
+state.snapshot = snapshot("continuous-rebuilt", [rebuiltLineTarget]);
+shape.reconcile(state.snapshot);
+assert.equal(messages.length, continuousMessageCount + 2);
+assert.equal(messages.at(-1).snapshotId, "continuous-rebuilt");
+assert.equal(messages.at(-1).nodeId, 202);
+shape.acceptResult({
+  type: "shapeEditResult",
+  requestId: messages.at(-1).requestId,
+  operation: "geometry",
+  status: "rejected",
+});
+
 const rectangleTarget = {
   node_id: 101,
   page_id: 11,
@@ -201,6 +265,7 @@ const rectangleTarget = {
   fill: { ...defaultShapeStyle.fill },
   stroke: { ...defaultShapeStyle.stroke },
 };
+state.snapshot = snapshot("rectangle-target", [rectangleTarget]);
 assert.equal(shape.editBounds(
   rectangleTarget,
   { x: 80, y: 90, width: 240, height: 64 },
@@ -309,6 +374,26 @@ state.snapshot.snapshot_id = "queued-insert-rebased";
 assert.equal(shape.reconcile(state.snapshot), null);
 assert.equal(messages.length, messageCountBeforeQueuedInsert + 1);
 assert.equal(messages.at(-1).snapshotId, "queued-insert-rebased");
+shape.acceptResult({
+  type: "shapeEditResult",
+  requestId: messages.at(-1).requestId,
+  operation: "insert",
+  status: "rejected",
+});
+shape.selectTool("elbow_line");
+shape.setDraft({
+  ...state.shapeStyle,
+  arrowStart: true,
+  arrowEnd: true,
+});
+assert.equal(shape.insert(11, {
+  start: { x: 120, y: 180 },
+  end: { x: 360, y: 320 },
+}), true);
+assert.equal(messages.at(-1).kind, "elbow_line");
+assert.equal(messages.at(-1).arrowStart, true);
+assert.equal(messages.at(-1).arrowEnd, true);
+assert.equal(Object.hasOwn(messages.at(-1), "bounds"), false);
 
 function snapshot(id, shapes) {
   return {

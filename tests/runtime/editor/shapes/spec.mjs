@@ -387,6 +387,29 @@ end
       `vertical line coordinates were not preserved: ${verticalSource}`,
     );
 
+    const elbow = await client.request("ss/insertShape", {
+      textDocument: { uri: lineUri },
+      snapshotId: initial.snapshot_id,
+      pageId: page.id,
+      kind: "elbow_line",
+      start: { x: 40, y: 50 },
+      end: { x: 200, y: 150 },
+      arrowStart: true,
+      arrowEnd: true,
+      stroke: { enabled: true, color: "#4b5563", width: 2, style: "solid" },
+    });
+    assert(elbow.status === "ok", `elbow line insertion failed: ${JSON.stringify(elbow)}`);
+    const elbowSource = applyProtocolEdits(
+      lineSource,
+      elbow.workspaceEdit?.changes?.[lineUri] ?? [],
+    );
+    assert(
+      elbowSource.includes(
+        "elbow_line!(160, 100, LineStyle { start_x = 0 start_y = 0 end_x = 1 end_y = 1 stroke = solid_stroke(c\"#4b5563\", 2) marker_start = marker_arrow_open(10, c\"#4b5563\", 2) marker_end = marker_arrow_open(10, c\"#4b5563\", 2) })",
+      ),
+      `elbow line arrows were not preserved: ${elbowSource}`,
+    );
+
     const insertion = await client.request("ss/insertShape", {
       textDocument: { uri: lineUri },
       snapshotId: initial.snapshot_id,
@@ -434,6 +457,9 @@ end
       target.binding === "line_item"
     );
     assert(line?.kind === "line", `inserted line was not style-editable: ${JSON.stringify(line)}`);
+    assert(line.route === "straight", `inserted line had the wrong route: ${JSON.stringify(line)}`);
+    assert(line.arrow_start === false && line.arrow_end === false,
+      `inserted line exposed the wrong arrow state: ${JSON.stringify(line)}`);
     assert(!Object.hasOwn(line, "fill"), `line capability exposed a fill: ${JSON.stringify(line)}`);
     assert(
       line.start?.x === 0 && line.start?.y === 0.5,
@@ -594,14 +620,18 @@ end
       snapshotId: afterInsertion.snapshot_id,
       pageId: line.page_id,
       nodeId: line.node_id,
+      arrowStart: true,
+      arrowEnd: false,
       stroke: { enabled: true, color: "#dc2626", width: 3, style: "dotted" },
     });
     assert(style.status === "ok", `line style edit failed: ${JSON.stringify(style)}`);
     const styleEdits = style.workspaceEdit?.changes?.[lineUri] ?? [];
-    assert(styleEdits.length === 1, `line style edit changed more than its stroke: ${JSON.stringify(styleEdits)}`);
+    assert(styleEdits.length === 1, `line style edit changed more than its LineStyle value: ${JSON.stringify(styleEdits)}`);
     lineSource = applyProtocolEdits(lineSource, styleEdits);
     assert(
       lineSource.includes("stroke = dotted_stroke(c\"#dc2626\", 3)") &&
+        lineSource.includes("marker_start = marker_arrow_open(10, c\"#dc2626\", 3)") &&
+        !lineSource.includes("marker_end =") &&
         !lineSource.includes("fill ="),
       `line style edit changed unexpected source: ${lineSource}`,
     );

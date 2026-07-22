@@ -2,6 +2,8 @@ const std = @import("std");
 const protocol = @import("../../protocol.zig");
 const utils = @import("utils");
 
+pub const build_diagnostics_message = "The current source cannot be built. See the WYSIWYG build diagnostics.";
+
 pub fn statusJson(allocator: std.mem.Allocator, status: []const u8, message: ?[]const u8) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);

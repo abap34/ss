@@ -251,6 +251,41 @@ test "line insertion emits local endpoints without a fill" {
     try std.testing.expect(std.mem.indexOf(u8, updated, "fill") == null);
 }
 
+test "elbow line insertion emits independent endpoint arrows" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\page Lines
+        \\end
+        \\
+    ;
+    var result = (try shape.insert(
+        allocator,
+        source,
+        .{ .start = 0, .end = source.len },
+        null,
+        "elbow_line_item",
+        .{ .elbow_line = .{
+            .bounds = .{ .x = 24, .y = 36, .width = 160, .height = 80 },
+            .start = .{ .x = 0, .y = 0 },
+            .end = .{ .x = 1, .y = 1 },
+            .stroke = .{ .enabled = true, .color = "#4b5563", .width = 2, .style = .solid },
+            .arrow_start = true,
+            .arrow_end = true,
+        } },
+    )).?;
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expectEqualStrings(
+        \\page Lines
+        \\  let elbow_line_item = elbow_line!(160, 80, LineStyle { start_x = 0 start_y = 0 end_x = 1 end_y = 1 stroke = solid_stroke(c"#4b5563", 2) marker_start = marker_arrow_open(10, c"#4b5563", 2) marker_end = marker_arrow_open(10, c"#4b5563", 2) })
+        \\  ~!~ elbow_line_item.left == page.left + 24
+        \\  ~!~ elbow_line_item.top == page.top - 36
+        \\end
+        \\
+    , updated);
+}
+
 test "line geometry edits preserve endpoint order in canonical source" {
     const allocator = std.testing.allocator;
     const source =

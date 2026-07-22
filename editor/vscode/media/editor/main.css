@@ -770,6 +770,12 @@ button {
   transform: rotate(-18deg);
   transform-origin: center;
 }
+.shape-choice-preview--elbow_line {
+  width: 56px;
+  height: 34px;
+  border-width: 0 2px 2px 0;
+  background: transparent;
+}
 .shape-choice-preview--arrow {
   width: 60px;
   border: 0;

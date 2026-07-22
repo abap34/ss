@@ -2,6 +2,7 @@ const std = @import("std");
 
 const editor_edit = @import("../../editor/edit.zig");
 const edit_relations = @import("edit/relations.zig");
+const edit_response = @import("edit/response.zig");
 const protocol = @import("../protocol.zig");
 const lsp_state = @import("../state.zig");
 const utils = @import("utils");
@@ -35,7 +36,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     const layout = if (snapshot.layout_output) |*value| value else return try statusJson(
         ctx.allocator,
         if (requested_id.len == 0) "unsupported" else "stale",
-        if (requested_id.len == 0) "No solved layout is available." else "The document changed before the edit was applied.",
+        if (requested_id.len == 0) edit_response.build_diagnostics_message else "The document changed before the edit was applied.",
     );
     const editor = if (layout.editor) |*value| value else return try statusJson(
         ctx.allocator,
