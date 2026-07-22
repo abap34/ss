@@ -57,6 +57,18 @@ let custom = place!(path_shape(
 ~ custom.left == page.left + 280
 ~ custom.top == page.top - 390
 
+let elbow = elbow_line!(
+  180,
+  110,
+  LineStyle {
+    stroke = solid_stroke(c"#4b5563", 2)
+    marker_start = marker_arrow_open(10, c"#4b5563", 2)
+    marker_end = marker_arrow_open(10, c"#4b5563", 2)
+  }
+)
+~ elbow.left == page.left + 760
+~ elbow.top == page.top - 360
+
 arrow_connector!(
   patterned,
   gradient,
@@ -71,11 +83,12 @@ end
 
     expectSuccess(await runSs(["dump", "slide.ss", "dump.json"], project), "vector shape dump");
     expectSuccess(await runSs(["render", "--format", "html", "slide.ss", "deck.html"], project), "vector shape HTML render");
+    expectSuccess(await runSs(["render", "slide.ss", "deck.pdf"], project), "vector shape PDF render");
 
     const dump = JSON.parse(await readFile(path.join(project, "dump.json"), "utf8"));
     const vectorNodes = dump.nodes.filter((node) => node.role === "vector_path");
     const connectorNodes = dump.nodes.filter((node) => node.role === "connector");
-    assert(vectorNodes.length === 3, `expected three vector shape nodes，got ${vectorNodes.length}`);
+    assert(vectorNodes.length === 4, `expected four vector shape nodes，got ${vectorNodes.length}`);
     assert(connectorNodes.length === 1, `expected one connector node，got ${connectorNodes.length}`);
 
     for (const node of vectorNodes) {
@@ -89,6 +102,11 @@ end
     }
     const customPath = JSON.parse(vectorNodes[2].fields.path);
     assert(customPath.commands.filter((command) => command.verb === "cubic").length >= 2, "quadratic and arc commands were not lowered to cubic curves");
+    const elbowPath = JSON.parse(vectorNodes[3].fields.path);
+    assert(
+      elbowPath.commands.map((command) => command.verb).join(",") === "move,line,line",
+      `elbow line did not preserve its orthogonal route: ${vectorNodes[3].fields.path}`,
+    );
 
     const connector = JSON.parse(connectorNodes[0].fields.connector);
     const source = taggedRecordField(connector, "source");
@@ -98,7 +116,9 @@ end
     assert(taggedRecordField(markerEnd, "path")?.kind === "path", `connector marker did not preserve its arbitrary Path: ${connectorNodes[0].fields.connector}`);
 
     const html = await readFile(path.join(project, "deck.html"), "utf8");
-    assert(count(html, "ss-vector-path") === 5, "HTML did not contain the three shapes，derived connector path，and marker path");
+    const pdf = await readFile(path.join(project, "deck.pdf"));
+    assert(pdf.subarray(0, 5).toString() === "%PDF-", "PDF rendering did not produce a PDF document");
+    assert(count(html, "ss-vector-path") === 8, "HTML did not contain the four shapes，derived connector path，and three marker paths");
     assert(count(html, "<linearGradient") === 1, "HTML omitted the linear gradient definition");
     assert(count(html, "<radialGradient") === 1, "HTML omitted the radial gradient definition");
     assert(count(html, "<pattern") === 1, "HTML omitted the tile pattern definition");

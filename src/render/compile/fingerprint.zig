@@ -379,6 +379,8 @@ fn hashOptionalVectorPathPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_pol
         hashCorePath(hasher, path.path);
         hashVectorFill(hasher, path.fill);
         hashOptionalVectorStroke(hasher, path.stroke);
+        hashOptionalMarker(hasher, path.marker_start);
+        hashOptionalMarker(hasher, path.marker_end);
     }
 }
 

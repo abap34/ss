@@ -219,6 +219,10 @@ fn/! line(width: Number = 160, height: Number = 1, style: LineStyle = LineStyle 
   return shapes::line(width, height, style)
 end
 
+fn/! elbow_line(width: Number = 160, height: Number = 100, style: LineStyle = LineStyle {}) -> Object
+  return shapes::elbow_line(width, height, style)
+end
+
 fn/! rectangle(width: Number = 160, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
   return shapes::rectangle(width, height, style)
 end
