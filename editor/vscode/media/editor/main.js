@@ -110,7 +110,7 @@ window.addEventListener("message", (event) => {
     state.revision = message.revision;
     setBuildStatus("failed", message.revision, message.buildDurationMs);
     translation.cancel();
-    showError(message.message || "WYSIWYG preview update failed.");
+    showPersistentError(message.message || "WYSIWYG preview update failed.");
   } else if (message.type === "editResult") {
     const editOutcome = translation.acceptResult(message);
     if (editOutcome?.status === "applied") {
@@ -297,6 +297,13 @@ function showError(message) {
   state.toast = { kind: "error", message };
   render();
   scheduleToastClear(errorToastDuration);
+}
+
+function showPersistentError(message) {
+  if (toastTimer != null) clearTimeout(toastTimer);
+  toastTimer = null;
+  state.toast = { kind: "error", message };
+  render();
 }
 
 function clearToast() {

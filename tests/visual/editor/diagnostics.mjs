@@ -48,6 +48,24 @@ export async function exerciseBuildDiagnosticMessages(
 
     await postSnapshot(page, 4, successfulSnapshot, 4);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
+
+    await page.evaluate(() => {
+      window.postMessage({
+        type: "error",
+        revision: 5,
+        buildDurationMs: 120,
+        message: "Snapshot request failed with an internal compiler error.",
+      }, "*");
+    });
+    await page.waitForSelector(".toast--error");
+    await page.waitForTimeout(5_100);
+    assert.equal(
+      await page.locator(".toast--error").textContent(),
+      "Snapshot request failed with an internal compiler error.",
+      "an unrecovered build failure disappeared without a successful build",
+    );
+    await postSnapshot(page, 6, successfulSnapshot, 5);
+    await page.waitForFunction(() => !document.querySelector(".toast--error"));
   } finally {
     await page.close();
   }
