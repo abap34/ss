@@ -1536,6 +1536,23 @@ await withBrowser(output, async (browser, baseUrl) => {
       "dash_dot",
       "the retained preview did not show the queued stroke style",
     );
+    const queuedShapePreview = page.locator(
+      '.page-shell[data-page-id="11"] .shape-edit-preview',
+    );
+    assert.equal(await queuedShapePreview.count(), 1,
+      "the retained page did not render its queued shape style");
+    assert.equal(
+      await queuedShapePreview.evaluate((node) => getComputedStyle(node).fill),
+      "rgb(124, 58, 237)",
+      "the retained page did not render the queued fill color",
+    );
+    assert.equal(
+      await page.locator(
+        '.page-shell[data-page-id="11"] .ss-item[data-ss-node-id="101"]',
+      ).evaluate((node) => getComputedStyle(node).visibility),
+      "hidden",
+      "the previous shape rendering remained visible below its queued style",
+    );
     await postBuildStatus(page, 110, "building");
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "building", "Building…");
@@ -1557,6 +1574,41 @@ await withBrowser(output, async (browser, baseUrl) => {
       status: "rejected",
     });
     await page.locator(".close-button").click();
+
+    await page.locator(
+      '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
+    ).click();
+    await page.keyboard.press("Delete");
+    const deletion = await lastMessage(page, "deleteComponent");
+    assert.equal(deletion.nodeId, 101);
+    assert.equal(deletion.pageId, 11);
+    assert.equal(deletion.snapshotId, finalSnapshot.snapshot_id);
+    assert.equal(
+      await page.locator(
+        '.page-shell[data-page-id="11"] .ss-pending-component-deletion',
+      ).count(),
+      1,
+      "Delete did not hide the component while its source edit was pending",
+    );
+    assert.equal(
+      await page.locator(
+        '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
+      ).count(),
+      0,
+      "Delete retained the interaction target of a pending deletion",
+    );
+    await postComponentDeleteResult(page, {
+      requestId: deletion.requestId,
+      status: "rejected",
+      message: "Rejected component deletion for the UI test.",
+    });
+    assert.equal(
+      await page.locator(
+        '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
+      ).count(),
+      1,
+      "a rejected component deletion did not restore its interaction target",
+    );
 
     await page.evaluate(() => {
       window.postMessage({
@@ -1797,6 +1849,13 @@ async function postBuildStatus(page, revision, status) {
 async function postShapeEditResult(page, result) {
   await page.evaluate((message) => window.postMessage({
     type: "shapeEditResult",
+    ...message,
+  }, "*"), result);
+}
+
+async function postComponentDeleteResult(page, result) {
+  await page.evaluate((message) => window.postMessage({
+    type: "componentDeleteResult",
     ...message,
   }, "*"), result);
 }

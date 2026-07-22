@@ -60,13 +60,20 @@ export class InteractionController {
       ...this.actions.icon.pendingInsertions(page.id),
     ];
     if (this.state.pointerMode === "pan") {
+      for (const object of this.state.snapshot.layout.objects) {
+        if (object.page_id !== page.id ||
+            this.actions.componentDeletion.isDeleting(object.id)) continue;
+        const preview = this.pendingEditedShape(page, object);
+        if (preview) svg.append(preview);
+      }
       for (const pending of pendingShapes) {
         svg.append(this.pendingShape(pending));
       }
       return svg;
     }
     const objects = this.state.snapshot.layout.objects
-      .filter((object) => object.page_id === page.id)
+      .filter((object) => object.page_id === page.id &&
+        !this.actions.componentDeletion.isDeleting(object.id))
       .sort((left, right) =>
         right.width * right.height - left.width * left.height
       );
@@ -219,6 +226,16 @@ export class InteractionController {
       if (this.cancelInsertion()) event.preventDefault();
       return;
     }
+    if ((event.key === "Delete" || event.key === "Backspace") &&
+        !event.defaultPrevented && !event.metaKey && !event.ctrlKey &&
+        !event.altKey && !event.shiftKey && !this.drag && !this.placement &&
+        !this.lineEndpointDrag && !this.shapeResizeDrag &&
+        !isTypingTarget(event.target) &&
+        !this.actions.objectLocks.isLocked(this.state.selectedObjectId) &&
+        this.actions.componentDeletion.deleteSelected()) {
+      event.preventDefault();
+      return;
+    }
     if (this.navigatePageFromKey(event)) return;
     if (event.key.toLowerCase() !== "l" || event.metaKey || event.ctrlKey ||
         event.altKey || this.placement || this.lineEndpointDrag ||
@@ -321,6 +338,7 @@ export class InteractionController {
       this.actions.objectLocks.isLocked(editableObject.id);
     const movable = editableObject != null && this.isMovable(editableObject.id);
     const shapeTarget = this.actions.shape.styleTarget(target.id);
+    const pendingShapeEdit = this.actions.shape.hasPendingEdit(target.id);
     const pendingBounds = shapeTarget?.kind !== "line"
       ? this.actions.shape.pendingBounds(target.id)
       : null;
@@ -340,6 +358,14 @@ export class InteractionController {
       const targetFrame = this.actions.translation.frame(page, target);
       const segment = pendingLineGeometry ||
         lineTargetSegment(targetFrame, shapeTarget);
+      const preview = this.pendingEditedShape(
+        page,
+        target,
+        shapeTarget,
+        frame,
+        segment,
+      );
+      if (preview) group.append(preview);
       const hit = svgElement("path", "object-hit-line");
       const outline = svgElement("path", "object-hit-line-outline");
       setLineShape(hit, segment.start, segment.end, shapeTarget);
@@ -376,10 +402,17 @@ export class InteractionController {
         );
       }
     } else {
-      if (pendingBounds) {
-        const preview = this.pendingShape(pendingBounds);
-        preview.classList.add("shape-resize-preview");
-        group.append(preview);
+      if (pendingShapeEdit) {
+        const preview = this.pendingEditedShape(
+          page,
+          target,
+          shapeTarget,
+          frame,
+        );
+        if (preview) {
+          if (pendingBounds) preview.classList.add("shape-resize-preview");
+          group.append(preview);
+        }
       }
       const rect = svgElement("rect", "object-hit-rect");
       setRect(rect, frame);
@@ -416,6 +449,26 @@ export class InteractionController {
       ),
     );
     return group;
+  }
+
+  pendingEditedShape(page, target, knownShape = null, knownFrame = null,
+    knownSegment = null) {
+    const shape = knownShape || this.actions.shape.styleTarget(target.id);
+    if (!shape || !this.actions.shape.hasPendingEdit(target.id)) return null;
+    const frame = knownFrame || this.actions.translation.frame(page, target);
+    const geometry = shape.kind === "line"
+      ? {
+        ...shape,
+        kind: shape.route === "elbow" ? "elbow_line" : "line",
+        ...(knownSegment || lineTargetSegment(frame, shape)),
+      }
+      : {
+        ...shape,
+        bounds: this.actions.shape.pendingBounds(target.id)?.bounds || frame,
+      };
+    const preview = this.pendingShape(geometry);
+    preview.classList.add("shape-edit-preview");
+    return preview;
   }
 
   lineEndpointHandle(

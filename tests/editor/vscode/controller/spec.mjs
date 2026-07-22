@@ -64,6 +64,7 @@ await testManualPositionEditRequestsReconciliation();
 await testNewSourceEditReschedulesReconciliation();
 await testLineGeometryEditForwardsOrderedPagePoints();
 await testShapeBoundsEditForwardsPageBounds();
+await testComponentDeletionReachesTheWebview();
 await testIconCatalogAndInsertionReachTheWebview();
 
 async function testOpenResolvesConfiguredEntryWithoutSsDocument() {
@@ -261,6 +262,31 @@ async function testShapeBoundsEditForwardsPageBounds() {
   });
 }
 
+async function testComponentDeletionReachesTheWebview() {
+  await withManualSession(async ({ controller, session, requests, messages }) => {
+    await controller.applyComponentDelete(session, {
+      type: "deleteComponent",
+      requestId: 11,
+      snapshotId: "initial",
+      nodeId: 9,
+      pageId: 1,
+    });
+    const request = requests.find((candidate) =>
+      candidate.method === "ss/deleteComponent"
+    );
+    assert.deepEqual(request?.params, {
+      textDocument: { uri: session.document.uri.toString() },
+      snapshotId: "initial",
+      nodeId: 9,
+      pageId: 1,
+    });
+    assert(messages.some((message) =>
+      message.type === "componentDeleteResult" &&
+      message.requestId === 11 && message.status === "applied"
+    ), "an applied component deletion did not reach the webview");
+  });
+}
+
 async function testIconCatalogAndInsertionReachTheWebview() {
   await withManualSession(async ({ controller, session, requests, messages }) => {
     await controller.queryIcons(session, {
@@ -361,7 +387,7 @@ automatic = false
       async sendRequest(method, params, token) {
         requests.push({ method, params, token });
         if (method === "ss/layoutEdit" || method === "ss/editLineGeometry" ||
-            method === "ss/editShapeBounds") {
+            method === "ss/editShapeBounds" || method === "ss/deleteComponent") {
           return {
             schema: 1,
             status: "ok",

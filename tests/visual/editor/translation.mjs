@@ -201,8 +201,17 @@ export async function exerciseTranslationLifecycle(page, current) {
   await postSnapshot(page, 104, finalSnapshot, 3);
   await page.waitForFunction(() => !document.querySelector(".toast--error"));
 
-  await drag(page, await target.boundingBox(), 8, 5);
+  const failedBuildRequestCount = await messageCount(page, "translate");
+  await drag(page, await target.boundingBox(), 12, 8);
+  await page.waitForFunction(
+    (count) => globalThis.__messages.filter((message) =>
+      message.type === "translate"
+    ).length > count,
+    failedBuildRequestCount,
+  );
   const failedBuildRequest = await lastMessage(page, "translate");
+  await settleLayout(page);
+  const failedBuildDesiredBox = await previewTarget.boundingBox();
   await postEditResult(page, {
     type: "editResult",
     requestId: failedBuildRequest.requestId,
@@ -222,30 +231,41 @@ export async function exerciseTranslationLifecycle(page, current) {
   }];
   await postSnapshot(page, 105, failedBuild, 4);
   await page.waitForSelector(".toast--error");
+  const failedPendingCount = await page.locator(
+    "[data-ss-pending-translation]",
+  ).count();
   assert.equal(
-    await page.locator("[data-ss-pending-translation]").count(),
-    0,
-    "a failed rebuild retained an applied optimistic translation",
+    failedPendingCount,
+    1,
+    "a failed rebuild discarded an applied provisional translation",
   );
   await settleLayout(page);
   const failedBuildBox = await previewTarget.boundingBox();
   assert(
-    Math.abs(failedBuildBox.x - authoritativePreviewBox.x) < 1 &&
-      Math.abs(failedBuildBox.y - authoritativePreviewBox.y) < 1,
-    "a failed rebuild did not restore the last successful position",
+    Math.abs(failedBuildBox.x - failedBuildDesiredBox.x) < 1 &&
+      Math.abs(failedBuildBox.y - failedBuildDesiredBox.y) < 1,
+    "a failed rebuild changed the provisional position",
   );
-  await postSnapshot(page, 106, finalSnapshot, 5);
+  const recoveredAfterFailedBuild = translatedSnapshot(
+    finalSnapshot,
+    failedBuildRequest.toBounds,
+    "14-recovered-after-failed-build",
+  );
+  await postSnapshot(page, 106, recoveredAfterFailedBuild, 5);
   await page.waitForFunction(() => !document.querySelector(".toast--error"));
+  await page.waitForFunction(() =>
+    !document.querySelector("[data-ss-pending-translation]")
+  );
   await previewTarget.evaluate((item) => {
     item.dataset.ssCacheIdentity = "retained";
   });
-  const unchangedSnapshot = structuredClone(finalSnapshot);
+  const unchangedSnapshot = structuredClone(recoveredAfterFailedBuild);
   unchangedSnapshot.generation += 1;
   unchangedSnapshot.snapshot_id = "13-unchanged-display";
   unchangedSnapshot.display = {
     schema: 3,
     kind: "translation_patch",
-    base_snapshot_id: finalSnapshot.snapshot_id,
+    base_snapshot_id: recoveredAfterFailedBuild.snapshot_id,
     translations: [],
   };
   await postSnapshot(page, 107, unchangedSnapshot, 6);
@@ -257,7 +277,7 @@ export async function exerciseTranslationLifecycle(page, current) {
     1,
     "an empty display patch rebuilt the retained preview DOM",
   );
-  const materializedUnchanged = structuredClone(finalSnapshot);
+  const materializedUnchanged = structuredClone(recoveredAfterFailedBuild);
   materializedUnchanged.generation = unchangedSnapshot.generation;
   materializedUnchanged.snapshot_id = unchangedSnapshot.snapshot_id;
   return materializedUnchanged;

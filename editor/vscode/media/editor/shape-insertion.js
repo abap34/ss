@@ -247,8 +247,8 @@ export class ShapeController {
   reconcile(snapshot) {
     const pending = this.pending;
     if (!pending) return null;
+    if (snapshot.stale) return null;
     if (pending.phase === "queued") {
-      if (snapshot.stale) return null;
       const failure = this.rebaseQueued(snapshot, pending);
       if (failure) {
         this.pending = null;
@@ -323,6 +323,21 @@ export class ShapeController {
     return true;
   }
 
+  cancelTarget(target) {
+    const selection = { pageId: target.page_id, binding: target.binding };
+    const previousLength = this.followups.length;
+    this.followups = this.followups.filter((intent) =>
+      !sameSelection(intent.selection, selection)
+    );
+    let changed = this.followups.length !== previousLength;
+    if (sameSelection(this.pending?.selection, selection)) {
+      this.pending = null;
+      changed = true;
+      this.promoteFollowup(this.state.snapshot);
+    }
+    return changed;
+  }
+
   styleTarget(nodeId) {
     const target = this.state.snapshot?.shape_editing?.find((candidate) =>
       candidate.node_id === nodeId
@@ -350,6 +365,31 @@ export class ShapeController {
       }
     }
     return result;
+  }
+
+  hasPendingEdit(nodeId) {
+    const target = this.baseTarget(nodeId);
+    return target != null && this.intentsFor(target).some((intent) =>
+      intent.operation !== "insert"
+    );
+  }
+
+  applyPreview(root, pageId) {
+    for (const item of root.querySelectorAll(".ss-pending-shape-source")) {
+      item.classList.remove("ss-pending-shape-source");
+    }
+    for (const target of this.state.snapshot?.shape_editing || []) {
+      if (target.page_id !== pageId || !this.hasPendingEdit(target.node_id)) {
+        continue;
+      }
+      for (
+        const item of root.querySelectorAll(
+          `[data-ss-node-id="${target.node_id}"]`,
+        )
+      ) {
+        item.classList.add("ss-pending-shape-source");
+      }
+    }
   }
 
   pendingInsertion(pageId) {
