@@ -2602,6 +2602,79 @@ fn drawVectorPathOp(ctx: *DrawContext, frame: Frame, paint: VectorPathPaint) !vo
         .radius_scale = @min(frame.width, frame.height),
     };
     try drawStyledPath(ctx, paint.path, mapping, paint.fill, paint.stroke);
+    const tangents = vectorPathTangents(paint.path, mapping) orelse return;
+    if (paint.marker_start) |marker| try drawMarker(ctx, marker, tangents.start, tangents.start_tangent);
+    if (paint.marker_end) |marker| try drawMarker(ctx, marker, tangents.end, tangents.end_tangent);
+}
+
+const VectorPathTangents = struct {
+    start: render_ir.Point,
+    start_tangent: render_ir.Point,
+    end: render_ir.Point,
+    end_tangent: render_ir.Point,
+};
+
+fn vectorPathTangents(path: core.Path, mapping: PathMapping) ?VectorPathTangents {
+    var current: ?render_ir.Point = null;
+    var subpath_start: ?render_ir.Point = null;
+    var result: ?VectorPathTangents = null;
+    for (path.commands) |command| switch (command) {
+        .move_to => |point| {
+            current = mapping.point(point);
+            subpath_start = current;
+        },
+        .line_to => |point| {
+            const previous = current orelse continue;
+            const next = mapping.point(point);
+            if (pointsDiffer(previous, next)) {
+                if (result == null) result = .{
+                    .start = previous,
+                    .start_tangent = next,
+                    .end = next,
+                    .end_tangent = previous,
+                } else if (result) |*value| {
+                    value.end = next;
+                    value.end_tangent = previous;
+                }
+            }
+            current = next;
+        },
+        .cubic_to => |cubic| {
+            const previous = current orelse continue;
+            const control1 = mapping.point(cubic.control1);
+            const control2 = mapping.point(cubic.control2);
+            const next = mapping.point(cubic.end);
+            if (pointsDiffer(previous, next)) {
+                if (result == null) result = .{
+                    .start = previous,
+                    .start_tangent = if (pointsDiffer(previous, control1)) control1 else next,
+                    .end = next,
+                    .end_tangent = if (pointsDiffer(control2, next)) control2 else previous,
+                } else if (result) |*value| {
+                    value.end = next;
+                    value.end_tangent = if (pointsDiffer(control2, next)) control2 else previous;
+                }
+            }
+            current = next;
+        },
+        .close => {
+            const previous = current orelse continue;
+            const next = subpath_start orelse continue;
+            if (pointsDiffer(previous, next)) {
+                if (result == null) result = .{
+                    .start = previous,
+                    .start_tangent = next,
+                    .end = next,
+                    .end_tangent = previous,
+                } else if (result) |*value| {
+                    value.end = next;
+                    value.end_tangent = previous;
+                }
+            }
+            current = next;
+        },
+    };
+    return result;
 }
 
 const PathMapping = struct {

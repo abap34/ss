@@ -100,6 +100,8 @@ pub const VectorPathPaint = struct {
     path: model.Path,
     fill: VectorFillPaint,
     stroke: ?VectorStrokePaint,
+    marker_start: ?MarkerPaint,
+    marker_end: ?MarkerPaint,
 };
 
 pub const ConnectorPaint = struct {
@@ -544,7 +546,22 @@ fn resolveVectorPath(node: *const Node, kind: RenderKind) ?VectorPathPaint {
         else => defaultVectorFill(),
     } else defaultVectorFill();
     const stroke = resolveVectorStroke(node, "stroke");
-    return .{ .path = path, .fill = fill, .stroke = stroke };
+    return .{
+        .path = path,
+        .fill = fill,
+        .stroke = stroke,
+        .marker_start = markerFromNode(node, "marker_start"),
+        .marker_end = markerFromNode(node, "marker_end"),
+    };
+}
+
+fn markerFromNode(node: *const Node, field_name: []const u8) ?MarkerPaint {
+    const value = model.nodeField(node, field_name) orelse return null;
+    const marker = switch (value) {
+        .record => |record| record,
+        else => return null,
+    };
+    return markerFromValue(marker);
 }
 
 fn resolveConnector(node: *const Node, kind: RenderKind) ?ConnectorPaint {
@@ -627,6 +644,10 @@ fn markerFromRecord(record: model.RecordValue, field_name: []const u8) ?MarkerPa
         .record => |marker| marker,
         else => return null,
     };
+    return markerFromValue(marker);
+}
+
+fn markerFromValue(marker: model.RecordValue) ?MarkerPaint {
     const path_value = marker.field("path") orelse return null;
     const path = switch (path_value) {
         .path => |path| path,

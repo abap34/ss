@@ -49,6 +49,8 @@ record LineStyle {
   end_x: Number = 1
   end_y: Number = 0.5
   stroke: VectorStrokeStyle = VectorStrokeStyle {}
+  marker_start: MarkerStyle? = none
+  marker_end: MarkerStyle? = none
 }
 
 record GradientDirection {
@@ -588,6 +590,8 @@ type VectorShape = object {
   path: Path? = none
   fill: FillStyle = FillStyle {}
   stroke: VectorStrokeStyle = VectorStrokeStyle {}
+  marker_start: MarkerStyle? = none
+  marker_end: MarkerStyle? = none
   render_kind: RenderKind = RenderKind.vector_path
   layout: LayoutStyle = LayoutStyle {
     font_size = 1

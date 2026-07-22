@@ -3,10 +3,12 @@ import std:core/fills as fills
 import std:core/objects as objects
 import std:core/paths as paths
 
-fn/! path_shape_unit(path_value: Path, fill_value: FillStyle = FillStyle {}, stroke_value: VectorStrokeStyle = VectorStrokeStyle {}) -> Object
+fn/! path_shape_unit(path_value: Path, fill_value: FillStyle = FillStyle {}, stroke_value: VectorStrokeStyle = VectorStrokeStyle {}, marker_start_value: MarkerStyle? = none, marker_end_value: MarkerStyle? = none) -> Object
   let obj = objects::path_obj(path_value)
   obj.fill = fill_value
   obj.stroke = stroke_value
+  obj.marker_start = marker_start_value
+  obj.marker_end = marker_end_value
   return obj
 end
 
@@ -24,7 +26,15 @@ fn/! line(width: Number = 160, height: Number = 1, style: LineStyle = LineStyle 
   return shape_size(path_shape_unit(path(
     paths::move_to(style.start_x, style.start_y),
     paths::line_to(style.end_x, style.end_y)
-  ), fills::no_fill(), style.stroke), width, height)
+  ), fills::no_fill(), style.stroke, style.marker_start, style.marker_end), width, height)
+end
+
+fn/! elbow_line(width: Number = 160, height: Number = 100, style: LineStyle = LineStyle {}) -> Object
+  return shape_size(path_shape_unit(path(
+    paths::move_to(style.start_x, style.start_y),
+    paths::line_to(style.end_x, style.start_y),
+    paths::line_to(style.end_x, style.end_y)
+  ), fills::no_fill(), style.stroke, style.marker_start, style.marker_end), width, height)
 end
 
 fn/! rectangle(width: Number = 160, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
