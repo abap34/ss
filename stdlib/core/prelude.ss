@@ -559,6 +559,10 @@ fn/! pdf_obj(path_value: String) -> Object
   return objects::pdf_obj(path_value)
 end
 
+fn/! icon_obj(source: String) -> Object
+  return objects::icon_obj(source)
+end
+
 fn/! code_obj(text_value: String) -> Object
   return objects::code_obj(text_value)
 end
@@ -1037,6 +1041,10 @@ end
 
 fn/! pdf(path_value: String, factor: Number = 1, page_number: Number = 1, page_box: PdfPageBox = PdfPageBox.crop) -> Object
   return components::pdf(path_value, factor, page_number, page_box)
+end
+
+fn/! icon(source: String, width: Number = 72, height: Number = 72, color: Color = c"#2563eb") -> Object
+  return components::icon(source, width, height, color)
 end
 
 fn/! code(text_value: String, language_name: String = "python") -> Object

@@ -1,6 +1,7 @@
 const std = @import("std");
 const edit = @import("editor_edit");
 const shape = edit.shape;
+const icon = edit.icon;
 
 fn relationSource(source: []const u8, target: []const u8, source_endpoint: []const u8, offset: ?[]const u8) edit.RelationSource {
     const target_start = std.mem.indexOf(u8, source, target).?;
@@ -67,6 +68,36 @@ test "shape insertion emits a canonical rectangle source block" {
         \\  let rectangle_item = rectangle!(160, 100, VectorStyle { fill = solid_fill(c"#e8f1ff", 0.8) stroke = solid_stroke(c"#2563eb", 1.6) })
         \\  ~!~ rectangle_item.left == page.left + 24
         \\  ~!~ rectangle_item.top == page.top - 36
+        \\end
+        \\
+    , updated);
+}
+
+test "icon insertion emits a canonical object and absolute placement" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\page Example
+        \\end
+        \\
+    ;
+    var result = (try icon.insert(
+        allocator,
+        source,
+        .{ .start = 0, .end = source.len },
+        null,
+        "star_icon",
+        "fa-solid:star",
+        .{ .x = 24, .y = 36, .width = 72, .height = 80 },
+        "#2563eb",
+    )).?;
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expectEqualStrings(
+        \\page Example
+        \\  let star_icon = icon!("fa-solid:star", 72, 80, c"#2563eb")
+        \\  ~!~ star_icon.left == page.left + 24
+        \\  ~!~ star_icon.top == page.top - 36
         \\end
         \\
     , updated);

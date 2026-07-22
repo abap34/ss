@@ -266,6 +266,7 @@ record RuleStyle {
 
 record AssetStyle {
   scale: Number = 1
+  tint: Color? = none
   width: Number? = none
   pdf_page: Number = 1
   pdf_box: PdfPageBox = PdfPageBox.crop
@@ -526,6 +527,25 @@ type Pdf = object {
     font = FontFace { family = "Courier" }
     size = 16
     color = c"0.18,0.18,0.18"
+  }
+}
+
+type Icon = object {
+  base = Fig
+  roles = ["icon"]
+
+  render_kind: RenderKind = RenderKind.vector_asset
+  asset: AssetStyle = AssetStyle {
+    tint = c"#2563eb"
+  }
+  text: TextStyle = TextStyle {
+    parse = TextParseMode.none
+  }
+  layout: LayoutStyle = LayoutStyle {
+    spacing_after = 0
+    x = 0
+    right_inset = 0
+    wrap = WrapMode.off
   }
 }
 

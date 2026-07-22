@@ -5,6 +5,7 @@ import { projectSettings } from "../projectConfig";
 import {
   EditorSnapshot,
   HostMessage,
+  IconCatalogResult,
   LayoutEditResult,
   ShapeEditResult,
   WebviewMessage,
@@ -189,9 +190,139 @@ export class EditorController implements vscode.Disposable {
       await this.applyTranslation(session, message);
       return;
     }
+    if (message.type === "queryIcons") {
+      await this.queryIcons(session, message);
+      return;
+    }
+    if (message.type === "insertIcon") {
+      await this.applyIconInsert(session, message);
+      return;
+    }
     if (message.type === "insertShape" || message.type === "editShapeStyle" ||
         message.type === "editLineGeometry") {
       await this.applyShapeEdit(session, message);
+    }
+  }
+
+  private async queryIcons(
+    session: Session,
+    message: Extract<WebviewMessage, { type: "queryIcons" }>,
+  ): Promise<void> {
+    const client = this.clientProvider();
+    if (!client) {
+      await this.post(session, {
+        type: "iconCatalogError",
+        requestId: message.requestId,
+        message: "Language server is not running.",
+      });
+      return;
+    }
+    try {
+      const result = await client.sendRequest<IconCatalogResult>(
+        "ss/iconCatalog",
+        { query: message.query, style: message.style },
+      );
+      if (session.disposed) return;
+      if (!Array.isArray(result.icons)) {
+        throw new Error("The language server returned an invalid icon catalog.");
+      }
+      await this.post(session, {
+        type: "iconCatalog",
+        requestId: message.requestId,
+        result,
+      });
+    } catch (error) {
+      this.output.appendLine(`[editor] icon catalog failed: ${String(error)}`);
+      await this.post(session, {
+        type: "iconCatalogError",
+        requestId: message.requestId,
+        message: String(error),
+      });
+    }
+  }
+
+  private async applyIconInsert(
+    session: Session,
+    message: Extract<WebviewMessage, { type: "insertIcon" }>,
+  ): Promise<void> {
+    const client = this.clientProvider();
+    if (!client) {
+      await this.post(session, {
+        type: "iconEditResult",
+        requestId: message.requestId,
+        status: "unsupported",
+        message: "Language server is not running.",
+      });
+      return;
+    }
+    const versions = documentVersions();
+    try {
+      const result = await client.sendRequest<ShapeEditResult>("ss/insertIcon", {
+        textDocument: { uri: session.document.uri.toString() },
+        snapshotId: message.snapshotId,
+        pageId: message.pageId,
+        source: message.source,
+        bounds: message.bounds,
+        color: message.color,
+      });
+      if (session.disposed) return;
+      if (!workspaceEditTargetsAreCurrent(result.workspaceEdit, versions)) {
+        await this.post(session, {
+          type: "iconEditResult",
+          requestId: message.requestId,
+          status: "stale",
+          message: "The document changed before the edit was applied.",
+        });
+        this.scheduleAutomatic(session, 0);
+        return;
+      }
+      if (result.status !== "ok") {
+        await this.post(session, {
+          type: "iconEditResult",
+          requestId: message.requestId,
+          status: result.status,
+          message: result.message ?? "The icon could not be inserted.",
+        });
+        if (result.status === "stale") this.scheduleAutomatic(session, 0);
+        return;
+      }
+      if (!result.workspaceEdit) {
+        await this.post(session, {
+          type: "iconEditResult",
+          requestId: message.requestId,
+          status: "rejected",
+          message: result.message ?? "The language server returned no source edit.",
+        });
+        return;
+      }
+      const applied = await vscode.workspace.applyEdit(
+        toWorkspaceEdit(result.workspaceEdit),
+      );
+      if (!applied) {
+        await this.post(session, {
+          type: "iconEditResult",
+          requestId: message.requestId,
+          status: "rejected",
+          message: "VS Code rejected the source edit.",
+        });
+        return;
+      }
+      await this.post(session, {
+        type: "iconEditResult",
+        requestId: message.requestId,
+        status: "applied",
+        documentVersion: session.document.version,
+        selection: result.selection,
+      });
+      this.scheduleAutomatic(session, 0);
+    } catch (error) {
+      this.output.appendLine(`[editor] icon insertion failed: ${String(error)}`);
+      await this.post(session, {
+        type: "iconEditResult",
+        requestId: message.requestId,
+        status: "rejected",
+        message: String(error),
+      });
     }
   }
 

@@ -161,6 +161,28 @@ export interface EditingTarget {
 export interface PageEditingCapability {
   page_id: number;
   insert_shapes: boolean;
+  insert_icons: boolean;
+}
+
+export type IconStyle = "all" | "solid" | "regular" | "brands";
+
+export interface IconCatalogEntry {
+  id: string;
+  name: string;
+  style: Exclude<IconStyle, "all">;
+  svg: string;
+}
+
+export interface IconCatalogResult {
+  schema: 1;
+  collection: "fontawesome-free";
+  version: string;
+  query: string;
+  style: IconStyle;
+  total_available: number;
+  total_matches: number;
+  has_more: boolean;
+  icons: IconCatalogEntry[];
 }
 
 export interface ShapeFill {
@@ -280,6 +302,29 @@ export type HostMessage =
     operation: "insert" | "style" | "geometry";
     status: Exclude<ShapeEditResult["status"], "ok">;
     message?: string;
+  }
+  | {
+    type: "iconCatalog";
+    requestId: number;
+    result: IconCatalogResult;
+  }
+  | {
+    type: "iconCatalogError";
+    requestId: number;
+    message: string;
+  }
+  | {
+    type: "iconEditResult";
+    requestId: number;
+    status: "applied";
+    documentVersion: number;
+    selection?: ShapeEditResult["selection"];
+  }
+  | {
+    type: "iconEditResult";
+    requestId: number;
+    status: Exclude<ShapeEditResult["status"], "ok">;
+    message?: string;
   };
 
 type ShapeInsertionMessage = {
@@ -324,6 +369,23 @@ type LineGeometryEditMessage = {
   end: Point;
 };
 
+type IconCatalogMessage = {
+  type: "queryIcons";
+  requestId: number;
+  query: string;
+  style: IconStyle;
+};
+
+type IconInsertionMessage = {
+  type: "insertIcon";
+  requestId: number;
+  snapshotId: string;
+  pageId: number;
+  source: string;
+  bounds: Rect;
+  color: string;
+};
+
 export type WebviewMessage =
   | { type: "ready" }
   | { type: "refreshFull" }
@@ -340,4 +402,6 @@ export type WebviewMessage =
   }
   | ShapeInsertionMessage
   | ShapeStyleEditMessage
-  | LineGeometryEditMessage;
+  | LineGeometryEditMessage
+  | IconCatalogMessage
+  | IconInsertionMessage;

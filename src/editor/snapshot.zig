@@ -92,6 +92,7 @@ pub const PageEditingTarget = struct {
     circle_binding: []u8,
     arrow_binding: []u8,
     line_binding: []u8,
+    icon_binding: []u8,
 };
 
 pub const ShapeKind = enum {
@@ -527,6 +528,7 @@ fn pageEditingJson(allocator: std.mem.Allocator, targets: []const PageEditingTar
         var item = try items.objectItem();
         try item.intField("page_id", target.page_id);
         try item.boolField("insert_shapes", true);
+        try item.boolField("insert_icons", true);
         try item.end();
     }
     try items.end();
@@ -869,6 +871,7 @@ fn collectPageEditingTargets(allocator: std.mem.Allocator, state: *const core.Do
             .circle_binding = try names.forStatement(1, "circle"),
             .arrow_binding = try names.forStatement(2, "arrow_shape"),
             .line_binding = try names.forStatement(3, "line"),
+            .icon_binding = try names.forStatement(4, "icon"),
         });
     }
     return try targets.toOwnedSlice(allocator);
@@ -931,6 +934,7 @@ const PageEditingTargetView = struct {
     circle_binding: []const u8,
     arrow_binding: []const u8,
     line_binding: []const u8,
+    icon_binding: []const u8,
 };
 
 fn appendPageEditingTarget(allocator: std.mem.Allocator, targets: *std.ArrayList(PageEditingTarget), view: PageEditingTargetView) !void {
@@ -944,6 +948,8 @@ fn appendPageEditingTarget(allocator: std.mem.Allocator, targets: *std.ArrayList
     errdefer allocator.free(arrow_binding);
     const line_binding = try allocator.dupe(u8, view.line_binding);
     errdefer allocator.free(line_binding);
+    const icon_binding = try allocator.dupe(u8, view.icon_binding);
+    errdefer allocator.free(icon_binding);
     try targets.append(allocator, .{
         .page_id = view.page_id,
         .module_id = view.module_id,
@@ -954,6 +960,7 @@ fn appendPageEditingTarget(allocator: std.mem.Allocator, targets: *std.ArrayList
         .circle_binding = circle_binding,
         .arrow_binding = arrow_binding,
         .line_binding = line_binding,
+        .icon_binding = icon_binding,
     });
 }
 
@@ -1004,6 +1011,7 @@ fn deinitPageEditingTargets(allocator: std.mem.Allocator, targets: []const PageE
         allocator.free(target.circle_binding);
         allocator.free(target.arrow_binding);
         allocator.free(target.line_binding);
+        allocator.free(target.icon_binding);
     }
 }
 

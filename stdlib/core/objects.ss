@@ -95,6 +95,10 @@ fn/! pdf_obj(path_value: String) -> Object
   return raw_obj(path_value, "pdf", "pdf_ref")
 end
 
+fn/! icon_obj(source: String) -> Object
+  return txt_obj(source, "icon")
+end
+
 fn/! code_obj(text_value: String) -> Object
   let code = raw_obj(text_value, "code", "code")
   return code

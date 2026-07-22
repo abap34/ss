@@ -74,6 +74,14 @@ export class WorkspaceView {
     }
     this.root = main;
     this.viewport = viewport;
+    if (this.state.iconPickerOpen) {
+      requestAnimationFrame(() => {
+        const search = this.root?.querySelector(".icon-picker-search");
+        if (!search) return;
+        search.focus();
+        search.setSelectionRange(search.value.length, search.value.length);
+      });
+    }
     return main;
   }
 
@@ -104,9 +112,15 @@ export class WorkspaceView {
     tools.append(
       this.toolButton("select", "Select", "↖"),
       this.shapePicker(),
+      this.iconPicker(),
     );
-    const style = this.shapeStyleControls();
-    const stylePopover = this.shapeStylePopover();
+    const iconActive = this.state.shapeTool === "icon";
+    const style = iconActive
+      ? this.iconStyleControls()
+      : this.shapeStyleControls();
+    const stylePopover = iconActive
+      ? this.iconStylePopover()
+      : this.shapeStylePopover();
     bar.append(mode, tools, style, stylePopover, status);
     return bar;
   }
@@ -195,6 +209,116 @@ export class WorkspaceView {
     }
     picker.append(summary, panel);
     return picker;
+  }
+
+  iconPicker() {
+    const draft = this.state.iconDraft;
+    const picker = element("details", "icon-picker");
+    picker.open = this.state.iconPickerOpen;
+    const summary = element("summary");
+    summary.setAttribute("aria-label", draft.name ? `Icons: ${draft.name}` : "Icons");
+    summary.setAttribute("aria-pressed", String(this.state.shapeTool === "icon"));
+    summary.title = draft.name ? `Icon: ${draft.name}` : "Icons";
+    const icon = element("span", "shape-picker-summary-icon icon-picker-summary-icon");
+    if (draft.svg) appendTrustedSvg(icon, draft.svg);
+    else icon.textContent = "★";
+    const label = element("span");
+    label.textContent = "Icons";
+    const chevron = element("span", "shape-picker-chevron");
+    chevron.textContent = "⌄";
+    summary.append(icon, label, chevron);
+
+    const panel = element("div", "icon-picker-panel");
+    const search = element("input", "icon-picker-search");
+    search.type = "search";
+    search.value = this.state.iconQuery;
+    search.maxLength = 128;
+    search.placeholder = "Search icon names";
+    search.setAttribute("aria-label", "Search icon names");
+    search.addEventListener("input", () => this.actions.icon.setQuery(search.value));
+    const tabs = element("div", "icon-style-tabs");
+    tabs.setAttribute("role", "group");
+    tabs.setAttribute("aria-label", "Icon style");
+    for (const [style, name] of [
+      ["all", "All"],
+      ["solid", "Solid"],
+      ["regular", "Regular"],
+      ["brands", "Brands"],
+    ]) {
+      const button = element(
+        "button",
+        `icon-style-tab${this.state.iconStyle === style ? " is-active" : ""}`,
+      );
+      button.type = "button";
+      button.textContent = name;
+      button.setAttribute("aria-pressed", String(this.state.iconStyle === style));
+      button.addEventListener("click", () => this.actions.icon.setStyle(style));
+      tabs.append(button);
+    }
+    const status = element("div", "icon-catalog-status");
+    const catalog = this.state.iconCatalog;
+    if (this.state.iconCatalogPending && !catalog) {
+      status.textContent = "Loading icons…";
+    } else if (catalog) {
+      status.textContent = catalog.total_matches === 0
+        ? "No matching icons"
+        : `${catalog.total_matches} match${catalog.total_matches === 1 ? "" : "es"}${
+          catalog.has_more ? " — refine the search to see more" : ""
+        }`;
+    } else {
+      status.textContent = "Open the picker to load icons";
+    }
+    const gallery = element("div", "icon-picker-gallery");
+    for (const entry of catalog?.icons || []) {
+      const button = element(
+        "button",
+        `icon-choice${draft.source === entry.id ? " is-active" : ""}`,
+      );
+      button.type = "button";
+      button.disabled = !this.state.snapshot || this.state.snapshot.stale ||
+        !this.state.snapshot.page_editing?.some((target) =>
+          target.page_id === this.state.currentPageId && target.insert_icons
+        );
+      button.title = entry.id;
+      button.setAttribute("aria-label", `${entry.name}, ${entry.style}`);
+      const preview = element("span", "icon-choice-preview");
+      preview.style.color = draft.color;
+      appendTrustedSvg(preview, entry.svg);
+      const caption = element("span", "icon-choice-name");
+      caption.textContent = entry.name;
+      button.append(preview, caption);
+      button.addEventListener("click", () => this.actions.icon.select(entry));
+      gallery.append(button);
+    }
+    panel.append(search, tabs, status, gallery);
+    picker.append(summary, panel);
+    picker.addEventListener("toggle", () => {
+      if (picker.open !== this.state.iconPickerOpen) {
+        this.actions.icon.setPickerOpen(picker.open);
+      }
+    });
+    return picker;
+  }
+
+  iconStyleControls() {
+    const group = element("div", "shape-style-controls icon-style-controls");
+    group.append(colorControl(
+      "Icon color",
+      this.state.iconDraft.color,
+      (color) => this.actions.icon.setColor(color),
+    ));
+    return group;
+  }
+
+  iconStylePopover() {
+    const popover = element("details", "shape-style-popover");
+    const summary = element("summary");
+    summary.textContent = "Color";
+    summary.setAttribute("aria-label", "Icon color");
+    const panel = element("div", "shape-style-popover-panel");
+    panel.append(this.iconStyleControls());
+    popover.append(summary, panel);
+    return popover;
   }
 
   shapeStyleControls() {
@@ -481,4 +605,10 @@ function shapePreview(tool) {
   const preview = element("span", `shape-choice-preview shape-choice-preview--${tool}`);
   preview.setAttribute("aria-hidden", "true");
   return preview;
+}
+
+function appendTrustedSvg(target, source) {
+  const template = document.createElement("template");
+  template.innerHTML = source;
+  target.append(template.content.cloneNode(true));
 }

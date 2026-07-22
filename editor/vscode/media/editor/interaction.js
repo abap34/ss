@@ -57,10 +57,12 @@ export class InteractionController {
       );
     }
     for (const object of objects) svg.append(this.hitTarget(page, object));
-    const pending = this.actions.shape.pendingInsertion(page.id);
+    const pending = this.state.shapeTool === "icon"
+      ? this.actions.icon.pendingInsertion(page.id)
+      : this.actions.shape.pendingInsertion(page.id);
     if (pending) svg.append(this.pendingShape(pending));
     if (this.state.shapeTool !== "select" &&
-        this.actions.shape.canInsert(page.id)) {
+        this.canInsert(page.id)) {
       svg.append(this.placementTarget(page));
     }
     return svg;
@@ -81,18 +83,22 @@ export class InteractionController {
     target.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       this.cleanupPlacement();
-      this.actions.shape.cancel();
+      this.activeInsertionController().cancel();
     });
     return target;
   }
 
   beginPlacement(event, page, target) {
-    if (!this.actions.shape.canInsert(page.id)) return;
+    if (!this.canInsert(page.id)) return;
     event.preventDefault();
     const svg = target.ownerSVGElement;
     const start = clampPoint(svgPoint(svg, event), page);
     const ghost = this.placementGhost(this.state.shapeTool);
-    applyShapeStyle(ghost, this.state.shapeTool, this.state.shapeStyle);
+    if (this.state.shapeTool === "icon") {
+      applyIconPreview(ghost, this.state.iconDraft.svg, this.state.iconDraft.color);
+    } else {
+      applyShapeStyle(ghost, this.state.shapeTool, this.state.shapeStyle);
+    }
     svg.insertBefore(ghost, target);
     this.placement = {
       pointerId: event.pointerId,
@@ -134,7 +140,7 @@ export class InteractionController {
       };
     const pageId = placement.page.id;
     this.cleanupPlacement();
-    this.actions.shape.insert(pageId, geometry);
+    this.activeInsertionController().insert(pageId, geometry);
   }
 
   cancelPlacement() {
@@ -163,16 +169,17 @@ export class InteractionController {
       if (this.placement) {
         event.preventDefault();
         this.cleanupPlacement();
-        this.actions.shape.cancel();
+        this.activeInsertionController().cancel();
         return;
       }
-      if (this.actions.shape.cancel()) event.preventDefault();
+      if (this.activeInsertionController().cancel()) event.preventDefault();
       return;
     }
     if (this.navigatePageFromKey(event)) return;
     if (event.key.toLowerCase() !== "l" || event.metaKey || event.ctrlKey ||
         event.altKey || this.placement || this.lineEndpointDrag ||
         isTypingTarget(event.target) ||
+        this.state.shapeTool === "icon" ||
         !this.actions.shape.canInsert(this.state.currentPageId)) return;
     event.preventDefault();
     this.actions.shape.selectTool("line");
@@ -187,7 +194,8 @@ export class InteractionController {
     if (offset === 0 || event.defaultPrevented || event.metaKey ||
         event.ctrlKey || event.altKey || event.shiftKey || this.drag ||
         this.placement || this.lineEndpointDrag ||
-        this.actions.shape.isBusy() || isTypingTarget(event.target)) {
+        (this.actions.shape.isBusy() || this.actions.icon.isBusy()) ||
+        isTypingTarget(event.target)) {
       return false;
     }
     const pages = this.state.snapshot?.layout.pages || [];
@@ -202,6 +210,7 @@ export class InteractionController {
   }
 
   placementGhost(kind) {
+    if (kind === "icon") return svgElement("image", "icon-placement-ghost");
     if (kind === "line") return svgElement("line", "shape-placement-ghost");
     if (kind === "circle") return svgElement("ellipse", "shape-placement-ghost");
     if (kind === "arrow") return svgElement("polygon", "shape-placement-ghost");
@@ -212,7 +221,11 @@ export class InteractionController {
     const shape = this.placementGhost(preview.kind);
     shape.classList.add("shape-placement-preview");
     setShapeGeometry(shape, preview.kind, preview);
-    applyShapeStyle(shape, preview.kind, preview);
+    if (preview.kind === "icon") {
+      applyIconPreview(shape, preview.svg, preview.color);
+    } else {
+      applyShapeStyle(shape, preview.kind, preview);
+    }
     return shape;
   }
 
@@ -562,6 +575,14 @@ export class InteractionController {
     );
     return object ? this.actions.translation.frame(page, object) : null;
   }
+
+  activeInsertionController() {
+    return this.state.shapeTool === "icon" ? this.actions.icon : this.actions.shape;
+  }
+
+  canInsert(pageId) {
+    return this.activeInsertionController().canInsert(pageId);
+  }
 }
 
 function clampPoint(point, page) {
@@ -646,7 +667,9 @@ function placementBounds(start, current, kind) {
 }
 
 function defaultBounds(point, page, kind) {
-  const size = kind === "circle"
+  const size = kind === "icon"
+    ? { width: 72, height: 72 }
+    : kind === "circle"
     ? { width: 120, height: 120 }
     : kind === "arrow"
     ? { width: 170, height: 90 }
@@ -680,7 +703,9 @@ function setShapeGeometry(shape, kind, geometry) {
     return;
   }
   const bounds = geometry.bounds;
-  if (kind === "circle") {
+  if (kind === "icon") {
+    setRect(shape, bounds);
+  } else if (kind === "circle") {
     shape.setAttribute("cx", String(bounds.x + bounds.width / 2));
     shape.setAttribute("cy", String(bounds.y + bounds.height / 2));
     shape.setAttribute("rx", String(bounds.width / 2));
@@ -716,6 +741,12 @@ function applyShapeStyle(shape, kind, style) {
     : "none";
   shape.style.strokeWidth = String(style.stroke.width);
   applyStrokeStyle(shape, style.stroke);
+}
+
+function applyIconPreview(image, svg, color) {
+  if (!svg) return;
+  const source = svg.split("currentColor").join(color);
+  image.setAttribute("href", `data:image/svg+xml,${encodeURIComponent(source)}`);
 }
 
 function lineTargetSegment(frame, target) {

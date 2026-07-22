@@ -228,6 +228,99 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(await page.locator(".shape-placement-preview").count(), 0,
       "a rejected provisional shape remained on the page");
 
+    const iconPicker = page.locator(".icon-picker");
+    await iconPicker.locator("summary").click();
+    assert.equal(await page.locator(".icon-picker-panel").isVisible(), true,
+      "icon gallery did not open from the toolbar");
+    assert.deepEqual(
+      await iconPicker.locator(".icon-style-tab").allTextContents(),
+      ["All", "Solid", "Regular", "Brands"],
+      "icon gallery did not expose its style filters",
+    );
+    await page.waitForFunction(() =>
+      globalThis.__messages.some((message) => message.type === "queryIcons")
+    );
+    const initialIconQuery = await lastMessage(page, "queryIcons");
+    assert(initialIconQuery, "opening the icon gallery did not request the catalog");
+    assert.equal(initialIconQuery.query, "");
+    assert.equal(initialIconQuery.style, "all");
+    const iconSearch = iconPicker.getByRole("searchbox", { name: "Search icon names" });
+    await iconSearch.fill("star");
+    await page.waitForFunction((previousRequestId) =>
+      globalThis.__messages.some((message) =>
+        message.type === "queryIcons" &&
+        message.requestId > previousRequestId &&
+        message.query === "star" &&
+        message.style === "all"
+      ), initialIconQuery.requestId);
+    const searchedIconQuery = await lastMessage(page, "queryIcons");
+    const starIcon = {
+      id: "fa-solid:star",
+      name: "star",
+      style: "solid",
+      svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path fill="currentColor" d="M256 32L320 192L480 192L352 288L400 448L256 352L112 448L160 288L32 192L192 192Z"/></svg>',
+    };
+    await postIconCatalog(page, searchedIconQuery.requestId, {
+      schema: 1,
+      collection: "fontawesome-free",
+      version: "7.2.0",
+      query: "star",
+      style: "all",
+      total_available: 2141,
+      total_matches: 1,
+      has_more: false,
+      icons: [starIcon],
+    });
+    await page.waitForFunction(() =>
+      document.querySelector(".icon-catalog-status")?.textContent === "1 match"
+    );
+    const starTool = iconPicker.getByRole("button", { name: "star, solid" });
+    assert.equal(await starTool.isEnabled(), true,
+      "an editable page disabled its icon choice");
+    assert.equal(await starTool.locator("svg").count(), 1,
+      "icon catalog omitted the SVG preview");
+    await starTool.click();
+    assert.equal(await iconPicker.locator("summary").getAttribute("aria-pressed"), "true",
+      "selecting an icon did not activate icon placement");
+    const iconColor = page.locator(
+      '.toolbar > .icon-style-controls input[aria-label="Icon color"]',
+    );
+    await iconColor.fill("#f59e0b");
+    await iconColor.evaluate((input) => input.dispatchEvent(new Event("change", { bubbles: true })));
+    const iconPlacement = page.locator(
+      '.page-shell[data-page-id="11"] .shape-placement-hit',
+    );
+    const iconPlacementBox = await iconPlacement.boundingBox();
+    assert(iconPlacementBox, "icon placement layer was not rendered");
+    await page.mouse.click(
+      iconPlacementBox.x + iconPlacementBox.width * 0.62,
+      iconPlacementBox.y + iconPlacementBox.height * 0.34,
+    );
+    const insertedIcon = await lastMessage(page, "insertIcon");
+    assert(insertedIcon, "icon placement did not send an insertion request");
+    assert.equal(insertedIcon.pageId, 11);
+    assert.equal(insertedIcon.source, "fa-solid:star");
+    assert.equal(insertedIcon.color, "#f59e0b");
+    assert.equal(insertedIcon.bounds.width, 72);
+    assert.equal(insertedIcon.bounds.height, 72);
+    const provisionalIcon = page.locator("image.icon-placement-ghost.shape-placement-preview");
+    assert.equal(await provisionalIcon.count(), 1,
+      "the provisional icon disappeared before the source edit was reflected");
+    assert.match(await provisionalIcon.getAttribute("href"), /^data:image\/svg\+xml,/,
+      "the provisional icon did not embed its SVG preview");
+    assert.match(await provisionalIcon.getAttribute("href"), /%23f59e0b/,
+      "the provisional icon did not use the selected color");
+    await postIconEditResult(page, {
+      requestId: insertedIcon.requestId,
+      status: "stale",
+    });
+    await page.waitForFunction(() =>
+      document.querySelector('.shape-tool[aria-label="Select"]')
+        ?.getAttribute("aria-pressed") === "true"
+    );
+    assert.equal(await provisionalIcon.count(), 0,
+      "a rejected provisional icon remained on the page");
+
     const closedShapeStroke = page.locator(
       '.toolbar > .shape-style-controls label.style-toggle',
     ).filter({ hasText: "Stroke" }).locator(
@@ -970,6 +1063,21 @@ async function postBuildStatus(page, revision, status) {
 async function postShapeEditResult(page, result) {
   await page.evaluate((message) => window.postMessage({
     type: "shapeEditResult",
+    ...message,
+  }, "*"), result);
+}
+
+async function postIconCatalog(page, requestId, result) {
+  await page.evaluate(({ catalogRequestId, catalogResult }) => window.postMessage({
+    type: "iconCatalog",
+    requestId: catalogRequestId,
+    result: catalogResult,
+  }, "*"), { catalogRequestId: requestId, catalogResult: result });
+}
+
+async function postIconEditResult(page, result) {
+  await page.evaluate((message) => window.postMessage({
+    type: "iconEditResult",
     ...message,
   }, "*"), result);
 }

@@ -9,6 +9,7 @@ const pdflatexAvailable = await commandAvailable("pdflatex");
 
 await testNaturalTitleWidthDoesNotSelfWrap();
 await testCheckReportsRasterMeasurementFailure();
+await testCheckReportsUnknownStandaloneIcon();
 await testPanelHeightUsesRenderedIconMeasurement();
 await testCheckReportsUnsupportedInlineMath();
 await testPanelHeightUsesRenderedMathMeasurement();
@@ -140,7 +141,7 @@ end
     );
 
     const result = await spawnCollect(ssBin, ["check", "slide.ss"], project);
-    const output = `${result.stdout}\n${result.stderr}`;
+    const output = stripAnsi(`${result.stdout}\n${result.stderr}`);
     assert(result.code !== 0, "check should fail when structured math syntax is unsupported");
     assert(output.includes("RenderFailed:"), `unsupported math did not produce a render diagnostic:\n${output}`);
     assert(output.includes("UnsupportedMathSyntax"), `render diagnostic omitted the structured math error:\n${output}`);
@@ -168,11 +169,38 @@ end
     );
 
     const result = await spawnCollect(ssBin, ["check", "slide.ss"], project);
-    const output = `${result.stdout}\n${result.stderr}`;
+    const output = stripAnsi(`${result.stdout}\n${result.stderr}`);
     assert(result.code !== 0, "check should fail when virtual raster measurement fails");
     assert(output.includes("RenderFailed:"), `raster measurement failure did not produce a render diagnostic:\n${output}`);
     assert(output.includes("slide.ss:4:9"), `raster measurement diagnostic did not point at the asset source:\n${output}`);
     assert(output.includes('| image!("bad.jpg")'), `raster measurement diagnostic omitted source excerpt:\n${output}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testCheckReportsUnknownStandaloneIcon() {
+  const project = await mkdtempProject("ss-layout-measure-icon-failure-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    await writeFile(
+      slide,
+      `import std:themes/default as *
+
+page bad
+let icon_item = icon!("fa-solid:not-an-icon", 72, 72)
+~ icon_item.left == page.left + 120
+~ icon_item.top == page.top - 120
+end
+`,
+      "utf8",
+    );
+
+    const result = await spawnCollect(ssBin, ["check", "slide.ss"], project);
+    const output = stripAnsi(`${result.stdout}\n${result.stderr}`);
+    assert(result.code !== 0, `check should fail for an unknown standalone icon:\n${output}`);
+    assert(output.includes("InvalidFontAwesomeIcon"), `icon measurement diagnostic omitted the identifier error:\n${output}`);
+    assert(output.includes('icon!("fa-solid:not-an-icon"'), `icon measurement diagnostic omitted source excerpt:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -308,6 +336,10 @@ function frameSummary(node) {
 
 function close(left, right) {
   return Math.abs(left - right) <= 0.01;
+}
+
+function stripAnsi(source) {
+  return source.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 async function writeMinimalPdf(filePath, width, height) {

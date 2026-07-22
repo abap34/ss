@@ -156,9 +156,13 @@ fn hashCommand(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.
     switch (command.render.kind) {
         .vector_math => hashString(hasher, command.math_kind),
         .vector_asset, .raster_asset => {
-            const source = try resolveAssetPath(ctx, command.content);
-            defer ctx.allocator.free(source);
-            try hashAssetFile(ctx, files, hasher, source);
+            if (core.fontawesome.parseSource(command.content) != null) {
+                hashString(hasher, core.fontawesome.cache_namespace);
+            } else {
+                const source = try resolveAssetPath(ctx, command.content);
+                defer ctx.allocator.free(source);
+                try hashAssetFile(ctx, files, hasher, source);
+            }
         },
         else => {},
     }
@@ -346,6 +350,7 @@ fn hashOptionalAssetPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.A
     hashBool(hasher, maybe != null);
     if (maybe) |asset| {
         hashF32(hasher, asset.scale);
+        hashOptionalColor(hasher, asset.tint);
         hashU64(hasher, asset.pdf_page);
         hashString(hasher, @tagName(asset.pdf_box));
     }

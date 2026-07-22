@@ -62,6 +62,7 @@ await testOpeningManualPreviewBuildsInitialSnapshot();
 await testManualPositionEditRequestsReconciliation();
 await testNewSourceEditReschedulesReconciliation();
 await testLineGeometryEditForwardsOrderedPagePoints();
+await testIconCatalogAndInsertionReachTheWebview();
 
 async function testOpeningManualPreviewBuildsInitialSnapshot() {
   await withManualSession(async ({ controller, session, requests, messages, change }) => {
@@ -196,6 +197,49 @@ async function testLineGeometryEditForwardsOrderedPagePoints() {
   });
 }
 
+async function testIconCatalogAndInsertionReachTheWebview() {
+  await withManualSession(async ({ controller, session, requests, messages }) => {
+    await controller.queryIcons(session, {
+      type: "queryIcons",
+      requestId: 20,
+      query: "star",
+      style: "solid",
+    });
+    const catalogRequest = requests.find((candidate) =>
+      candidate.method === "ss/iconCatalog"
+    );
+    assert.deepEqual(catalogRequest?.params, { query: "star", style: "solid" });
+    assert(messages.some((message) =>
+      message.type === "iconCatalog" && message.requestId === 20
+    ), "the icon catalog did not reach the webview");
+
+    await controller.applyIconInsert(session, {
+      type: "insertIcon",
+      requestId: 21,
+      snapshotId: "initial",
+      pageId: 1,
+      source: "fa-solid:star",
+      bounds: { x: 120, y: 140, width: 72, height: 72 },
+      color: "#2563eb",
+    });
+    const insertion = requests.find((candidate) =>
+      candidate.method === "ss/insertIcon"
+    );
+    assert.deepEqual(insertion?.params, {
+      textDocument: { uri: session.document.uri.toString() },
+      snapshotId: "initial",
+      pageId: 1,
+      source: "fa-solid:star",
+      bounds: { x: 120, y: 140, width: 72, height: 72 },
+      color: "#2563eb",
+    });
+    assert(messages.some((message) =>
+      message.type === "iconEditResult" &&
+      message.requestId === 21 && message.status === "applied"
+    ), "the applied icon insertion did not reach the webview");
+  });
+}
+
 async function withManualSession(run) {
   const fixture = await mkdtemp(path.join(os.tmpdir(), "ss-editor-controller-"));
   try {
@@ -260,6 +304,42 @@ automatic = false
                 }],
               },
             },
+          };
+        }
+        if (method === "ss/iconCatalog") {
+          return {
+            schema: 1,
+            collection: "fontawesome-free",
+            version: "7.2.0",
+            query: params.query,
+            style: params.style,
+            total_available: 2141,
+            total_matches: 1,
+            has_more: false,
+            icons: [{
+              id: "fa-solid:star",
+              name: "star",
+              style: "solid",
+              svg: "<svg></svg>",
+            }],
+          };
+        }
+        if (method === "ss/insertIcon") {
+          return {
+            schema: 1,
+            status: "ok",
+            workspaceEdit: {
+              changes: {
+                [uri.toString()]: [{
+                  range: {
+                    start: { line: 0, character: 0 },
+                    end: { line: 0, character: 0 },
+                  },
+                  newText: "",
+                }],
+              },
+            },
+            selection: { path: slide, pageId: params.pageId, binding: "icon_item" },
           };
         }
         if (method === "ss/editorSnapshot") return session.snapshotResponse();

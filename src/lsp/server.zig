@@ -20,6 +20,7 @@ const feature_editor = @import("features/editor.zig");
 const feature_edit = @import("features/edit.zig");
 const feature_folding = @import("features/folding.zig");
 const feature_hover = @import("features/hover.zig");
+const feature_icon_edit = @import("features/icon_edit.zig");
 const feature_layout = @import("features/layout.zig");
 const feature_project = @import("features/project.zig");
 const feature_shape_edit = @import("features/shape_edit.zig");
@@ -1156,6 +1157,26 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
             .provider = &provider,
         };
         const result = try feature_shape_edit.insertResult(&ctx, params);
+        defer server.allocator.free(result);
+        try server.respondResult(id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "ss/iconCatalog")) {
+        const result = try feature_icon_edit.catalogResult(server.allocator, params);
+        defer server.allocator.free(result);
+        try server.respondResult(id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "ss/insertIcon")) {
+        var provider = analysisProvider(server);
+        var ctx = feature_icon_edit.Context{
+            .io = server.io,
+            .allocator = server.allocator,
+            .documents = &server.documents,
+            .active_editor_paths = &server.wysiwyg_paths,
+            .provider = &provider,
+        };
+        const result = try feature_icon_edit.insertResult(&ctx, params);
         defer server.allocator.free(result);
         try server.respondResult(id, result);
         return;

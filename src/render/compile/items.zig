@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const core = @import("core");
 const utils = @import("utils");
 const build_options = @import("build_options");
-const fontawesome_assets = @import("fontawesome_assets");
 
 const text_tokenize = core.text_tokenize;
 const wrap_layout = core.render_wrap;
@@ -119,7 +118,7 @@ const NativePdfError = error{
 
 pub const native_artifact_cache_version = "ss-native-artifacts-v7";
 const render_page_cache_version = "ss-render-page-v1";
-const layout_measurement_cache_version = "ss-native-layout-measure-v14";
+const layout_measurement_cache_version = "ss-native-layout-measure-v16";
 const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
 const external_command_timeout = std.Io.Clock.Duration{
@@ -344,11 +343,6 @@ const MathAsset = struct {
 const MathAssetGeometry = struct {
     baseline_from_bottom: f32,
     reference_height: f32,
-};
-
-const IconSpec = struct {
-    style: []const u8,
-    name: []const u8,
 };
 
 const PreloadTask = union(enum) {
@@ -2258,7 +2252,13 @@ fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectComman
             break :blk try measureCodeIntrinsic(ctx, command, content_frame.width, code_text);
         } else return null,
         .vector_math => try measureVectorMathIntrinsic(ctx, command, content_frame.width, content_frame.height),
-        .vector_asset, .raster_asset => try measureAssetIntrinsic(ctx, command, content_frame.width),
+        .vector_asset, .raster_asset => try measureAssetIntrinsic(
+            ctx,
+            command,
+            content_frame.width,
+            content_frame.height,
+            mode,
+        ),
         .vector_path, .connector, .chrome_only => unreachable,
     };
     return expandContentMeasurement(render, content_measure);
@@ -2402,7 +2402,18 @@ fn measureVectorMathIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, 
     return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
 }
 
-fn measureAssetIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32) !core.LayoutMeasurement {
+fn measureAssetIntrinsic(
+    ctx: *DrawContext,
+    command: *const ObjectCommand,
+    width: f32,
+    height: f32,
+    mode: core.LayoutMeasurementMode,
+) !core.LayoutMeasurement {
+    if (core.fontawesome.parseSource(command.content)) |spec| {
+        if (!core.fontawesome.contains(spec)) return NativePdfError.InvalidFontAwesomeIcon;
+        if (mode == .natural) return .{ .width = 72, .height = 72 };
+        return .{ .width = @max(width, 1), .height = @max(height, 1) };
+    }
     const source = try resolveAssetPath(ctx, command.content);
     defer ctx.allocator.free(source);
     const extension = std.fs.path.extension(source);
@@ -2413,7 +2424,6 @@ fn measureAssetIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width
         const svg = try svgAsset(ctx, source);
         natural = .{ .width = svg.width, .height = svg.height };
     } else {
-        _ = width;
         natural = try rasterAssetSize(ctx, source);
     }
     const scaled = scaledAssetSize(natural, command.render.asset);
@@ -4713,6 +4723,12 @@ fn drawStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind, fra
 }
 
 fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: ?core.render_policy.AssetPaint) !void {
+    if (core.fontawesome.parseSource(content) != null) {
+        const icon = try renderIconToSvg(ctx, content);
+        defer ctx.allocator.free(icon.path);
+        try drawSvgFrame(ctx, frame, icon.path, if (asset) |paint| paint.tint else null);
+        return;
+    }
     const source = try resolveAssetPath(ctx, content);
     defer ctx.allocator.free(source);
     const extension = std.fs.path.extension(source);
@@ -4725,6 +4741,7 @@ fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: 
         const fitted = naturalAssetFrame(frame, scaledAssetSize(size, asset));
         const paint = asset orelse core.render_policy.AssetPaint{
             .scale = 1,
+            .tint = null,
             .pdf_page = 1,
             .pdf_box = .crop,
         };
@@ -4894,16 +4911,20 @@ fn drawSvgNatural(ctx: *DrawContext, frame: Frame, svg_path: []const u8, asset: 
     if (ctx.measurement_bounds) |bounds| {
         bounds.include(rect);
     } else {
-        try activeEmitter(ctx).svg(ctx.allocator, rect, svg_path, null);
+        try activeEmitter(ctx).svg(ctx.allocator, rect, svg_path, if (asset) |paint| paint.tint else null);
     }
 }
 
 fn drawSvgFrameTinted(ctx: *DrawContext, frame: Frame, svg_path: []const u8, color: Color) !void {
+    try drawSvgFrame(ctx, frame, svg_path, color);
+}
+
+fn drawSvgFrame(ctx: *DrawContext, frame: Frame, svg_path: []const u8, tint: ?Color) !void {
     const rect = render_ir.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
     if (ctx.measurement_bounds) |bounds| {
         bounds.include(rect);
     } else {
-        try activeEmitter(ctx).svg(ctx.allocator, rect, svg_path, color);
+        try activeEmitter(ctx).svg(ctx.allocator, rect, svg_path, tint);
     }
 }
 
@@ -5155,70 +5176,18 @@ fn renderIconToSvg(ctx: *DrawContext, source: []const u8) !SvgAsset {
     const out = try cachedIconPath(ctx, source, "svg");
     errdefer ctx.allocator.free(out);
     if (try cachedSvgAsset(ctx, out)) |asset| return asset;
-    const spec = parseIconSource(source) orelse return NativePdfError.InvalidFontAwesomeIcon;
-    const sprite = fontAwesomeSprite(spec.style) orelse return NativePdfError.InvalidFontAwesomeIcon;
-    const icon_svg = try extractFontAwesomeIcon(ctx.allocator, sprite, spec.name);
+    const spec = core.fontawesome.parseSource(source) orelse return NativePdfError.InvalidFontAwesomeIcon;
+    const icon_svg = core.fontawesome.extractSvg(ctx.allocator, spec) catch return NativePdfError.InvalidFontAwesomeIcon;
     defer ctx.allocator.free(icon_svg);
     const tmp = try tempCachePath(ctx, out, "svg");
     defer ctx.allocator.free(tmp);
     errdefer deleteFileIfExists(ctx, tmp);
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tmp, .data = icon_svg, .flags = .{ .truncate = true } });
-    _ = try svgAsset(ctx, tmp);
+    var validation_ctx = ctx.*;
+    validation_ctx.emitter = null;
+    _ = try svgAsset(&validation_ctx, tmp);
     try publishCacheFile(ctx, tmp, out);
     return try svgAsset(ctx, out);
-}
-
-fn fontAwesomeSprite(style: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, style, "solid")) return fontawesome_assets.solid;
-    if (std.mem.eql(u8, style, "regular")) return fontawesome_assets.regular;
-    if (std.mem.eql(u8, style, "brands")) return fontawesome_assets.brands;
-    return null;
-}
-
-fn extractFontAwesomeIcon(allocator: Allocator, sprite: []const u8, name: []const u8) ![]u8 {
-    const marker = try std.fmt.allocPrint(allocator, "<symbol id=\"{s}\" ", .{name});
-    defer allocator.free(marker);
-    const symbol_start = std.mem.indexOf(u8, sprite, marker) orelse return NativePdfError.InvalidFontAwesomeIcon;
-    const opening_end = std.mem.indexOfScalarPos(u8, sprite, symbol_start, '>') orelse return NativePdfError.InvalidFontAwesomeIcon;
-    const symbol_end = std.mem.indexOfPos(u8, sprite, opening_end + 1, "</symbol>") orelse return NativePdfError.InvalidFontAwesomeIcon;
-    const opening = sprite[symbol_start .. opening_end + 1];
-    const view_box_marker = "viewBox=\"";
-    const view_box_start_rel = std.mem.indexOf(u8, opening, view_box_marker) orelse return NativePdfError.InvalidFontAwesomeIcon;
-    const view_box_start = view_box_start_rel + view_box_marker.len;
-    const view_box_end = std.mem.indexOfScalarPos(u8, opening, view_box_start, '"') orelse return NativePdfError.InvalidFontAwesomeIcon;
-    return std.fmt.allocPrint(
-        allocator,
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{s}\">{s}</svg>",
-        .{ opening[view_box_start..view_box_end], sprite[opening_end + 1 .. symbol_end] },
-    );
-}
-
-fn parseIconSource(source: []const u8) ?IconSpec {
-    const variants = [_]struct { prefix: []const u8, style: []const u8 }{
-        .{ .prefix = "fa:", .style = "solid" },
-        .{ .prefix = "fas:", .style = "solid" },
-        .{ .prefix = "far:", .style = "regular" },
-        .{ .prefix = "fab:", .style = "brands" },
-        .{ .prefix = "fa-solid:", .style = "solid" },
-        .{ .prefix = "fa-regular:", .style = "regular" },
-        .{ .prefix = "fa-brands:", .style = "brands" },
-    };
-    for (variants) |variant| {
-        if (std.mem.startsWith(u8, source, variant.prefix)) {
-            const name = source[variant.prefix.len..];
-            if (!isValidIconName(name)) return null;
-            return .{ .style = variant.style, .name = name };
-        }
-    }
-    return null;
-}
-
-fn isValidIconName(name: []const u8) bool {
-    if (name.len == 0) return false;
-    for (name) |byte| {
-        if (!(std.ascii.isAlphanumeric(byte) or byte == '-')) return false;
-    }
-    return true;
 }
 
 const MathTexMetrics = struct {
@@ -5453,7 +5422,7 @@ fn cachedMathPath(
 fn cachedIconPath(ctx: *DrawContext, source: []const u8, extension: []const u8) ![]u8 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, native_artifact_cache_version);
-    hashString(&hasher, "fontawesome-free-7.2.0");
+    hashString(&hasher, core.fontawesome.cache_namespace);
     hashString(&hasher, source);
     return std.fmt.allocPrint(ctx.allocator, "{s}/fontawesome-{x}.{s}", .{ ctx.cache_dir, hasher.final(), extension });
 }
