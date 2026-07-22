@@ -71,7 +71,8 @@ export class ShapeController {
       : {
         ...common,
         bounds: { ...geometry.bounds },
-        ...cloneStyle(this.state.shapeStyle),
+        fill: { ...this.state.shapeStyle.fill },
+        stroke: { ...this.state.shapeStyle.stroke },
       };
     this.pending = {
       requestId,
@@ -104,6 +105,11 @@ export class ShapeController {
 
   editStyle(target, style) {
     if (!this.state.snapshot || !this.canEdit(target)) return false;
+    this.state.shapeStyle = insertionStyleAfterEdit(
+      this.state.shapeStyle,
+      target,
+      style,
+    );
     const requestId = this.nextRequestId++;
     const message = {
       type: "editShapeStyle",
@@ -190,12 +196,15 @@ export class ShapeController {
   startOrQueue(intent) {
     if (this.pending) {
       intent.phase = "queued";
-      const replace = this.followups.findIndex((candidate) =>
-        candidate.operation === intent.operation &&
-        sameSelection(candidate.selection, intent.selection)
-      );
-      if (replace >= 0) this.followups[replace] = intent;
-      else this.followups.push(intent);
+      if (this.pending.phase === "queued" && sameQueueSlot(this.pending, intent)) {
+        this.pending = intent;
+      } else {
+        const replace = this.followups.findIndex((candidate) =>
+          sameQueueSlot(candidate, intent)
+        );
+        if (replace >= 0) this.followups[replace] = intent;
+        else this.followups.push(intent);
+      }
       this.actions.render();
       return true;
     }
@@ -415,6 +424,26 @@ export class ShapeController {
   }
 }
 
+function insertionStyleAfterEdit(previous, target, style) {
+  if (target.kind === "line") {
+    return cloneStyle({
+      fill: { ...previous.fill },
+      stroke: {
+        ...style.stroke,
+        enabled: previous.stroke.enabled,
+      },
+      arrowStart: Boolean(style.arrowStart),
+      arrowEnd: Boolean(style.arrowEnd),
+    });
+  }
+  return cloneStyle({
+    fill: { ...style.fill },
+    stroke: { ...style.stroke },
+    arrowStart: previous.arrowStart,
+    arrowEnd: previous.arrowEnd,
+  });
+}
+
 function cloneStyle(style) {
   return {
     fill: { ...style.fill },
@@ -426,6 +455,11 @@ function cloneStyle(style) {
 
 function sameSelection(left, right) {
   return left?.pageId === right?.pageId && left?.binding === right?.binding;
+}
+
+function sameQueueSlot(left, right) {
+  return left.operation === right.operation &&
+    sameSelection(left.selection, right.selection);
 }
 
 function queuedFailure(message) {

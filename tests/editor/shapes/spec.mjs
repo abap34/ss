@@ -39,6 +39,8 @@ assert.equal(messages.length, 1);
 assert.equal(messages[0].type, "insertShape");
 assert.equal(messages[0].kind, "rectangle");
 assert.deepEqual(messages[0].fill, defaultShapeStyle.fill);
+assert.equal(Object.hasOwn(messages[0], "arrowStart"), false);
+assert.equal(Object.hasOwn(messages[0], "arrowEnd"), false);
 assert.equal(shape.isBusy(), true);
 assert.deepEqual(shape.pendingInsertion(11), {
   pageId: 11,
@@ -83,6 +85,12 @@ assert.equal(messages.length, 2);
 assert.equal(messages[1].type, "editShapeStyle");
 assert.equal(messages[1].nodeId, 101);
 assert.equal(messages[1].fill.color, "#f59e0b");
+assert.deepEqual(state.shapeStyle, {
+  fill: { enabled: true, color: "#f59e0b", opacity: 0.5 },
+  stroke: { enabled: false, color: "#2563eb", width: 1.6, style: "dotted" },
+  arrowStart: false,
+  arrowEnd: false,
+});
 
 assert.deepEqual(shape.acceptResult({
   type: "shapeEditResult",
@@ -168,6 +176,17 @@ assert.equal(messages[4].stroke.width, 3);
 assert.equal(messages[4].arrowStart, true);
 assert.equal(messages[4].arrowEnd, false);
 assert.equal(Object.hasOwn(messages[4], "fill"), false);
+assert.deepEqual(state.shapeStyle, {
+  fill: { ...defaultShapeStyle.fill },
+  stroke: {
+    enabled: false,
+    color: lineTarget.stroke.color,
+    width: 3,
+    style: "dashed",
+  },
+  arrowStart: true,
+  arrowEnd: false,
+}, "a line style edit did not become the next insertion style");
 shape.acceptResult({
   type: "shapeEditResult",
   requestId: messages[4].requestId,
@@ -298,6 +317,48 @@ assert.equal(shape.editBounds({ ...rectangleTarget, resize: false }, {
   width: 240,
   height: 64,
 }), false);
+
+state.snapshot.stale = true;
+const messageCountBeforeQueuedStyle = messages.length;
+assert.equal(shape.editStyle(rectangleTarget, {
+  fill: { ...rectangleTarget.fill, color: "#0f172a" },
+  stroke: { ...rectangleTarget.stroke },
+}), true);
+assert.equal(shape.canEdit(rectangleTarget), true,
+  "a queued style edit disabled further changes to the same shape");
+const queuedStyleTarget = shape.styleTarget(rectangleTarget.node_id);
+assert(queuedStyleTarget);
+assert.equal(shape.editStyle(queuedStyleTarget, {
+  fill: { ...queuedStyleTarget.fill },
+  stroke: {
+    ...queuedStyleTarget.stroke,
+    color: "#334155",
+    style: "dash_dot",
+  },
+}), true);
+assert.equal(messages.length, messageCountBeforeQueuedStyle,
+  "style changes from a stale preview were sent before rebuilding");
+assert.equal(shape.followups.length, 0,
+  "unsent style changes were split into sequential source edits");
+assert.equal(shape.styleTarget(rectangleTarget.node_id)?.fill.color, "#0f172a");
+assert.equal(shape.styleTarget(rectangleTarget.node_id)?.stroke.color, "#334155");
+assert.equal(shape.styleTarget(rectangleTarget.node_id)?.stroke.style, "dash_dot");
+state.snapshot = snapshot("queued-style-rebased", [{
+  ...rectangleTarget,
+  node_id: 112,
+}]);
+assert.equal(shape.reconcile(state.snapshot), null);
+assert.equal(messages.length, messageCountBeforeQueuedStyle + 1);
+assert.equal(messages.at(-1).nodeId, 112);
+assert.equal(messages.at(-1).fill.color, "#0f172a");
+assert.equal(messages.at(-1).stroke.color, "#334155");
+assert.equal(messages.at(-1).stroke.style, "dash_dot");
+shape.acceptResult({
+  type: "shapeEditResult",
+  requestId: messages.at(-1).requestId,
+  operation: "style",
+  status: "rejected",
+});
 
 assert.deepEqual(
   resizedBounds(

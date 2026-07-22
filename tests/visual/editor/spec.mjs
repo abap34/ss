@@ -996,6 +996,31 @@ await withBrowser(output, async (browser, baseUrl) => {
       "a locked line accepted an endpoint edit");
     await page.getByRole("button", { name: "Unlock object" }).click();
     await page.locator(".close-button").click();
+    await page.keyboard.press("l");
+    const rememberedLineStyle = page.locator(
+      ".toolbar > .shape-style-controls--line",
+    );
+    assert.equal(
+      await rememberedLineStyle.locator('input[aria-label="Line color"]').inputValue(),
+      "#dc2626",
+      "the next line did not inherit the last edited line color",
+    );
+    assert.equal(
+      await rememberedLineStyle.locator('input[aria-label="Line weight"]').inputValue(),
+      "2.4",
+      "the next line did not inherit the last edited line width",
+    );
+    assert.equal(
+      await rememberedLineStyle.locator('.stroke-style-picker > summary').getAttribute("title"),
+      "Line style: Dashed",
+      "the next line did not inherit the last edited line style",
+    );
+    assert.equal(
+      await rememberedLineStyle.locator('input[aria-label="Start arrow"]').isChecked(),
+      true,
+      "the next line did not inherit the last edited endpoint arrows",
+    );
+    await page.keyboard.press("Escape");
 
     await page.setViewportSize({ width: 480, height: 560 });
     await page.waitForFunction(() =>
@@ -1351,6 +1376,40 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.keyboard.press("Escape");
     assert.equal(await page.locator(".shape-placement-preview").count(), 0,
       "Escape did not cancel the provisional shape queued during a failed build");
+
+    await page.locator(
+      '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
+    ).click();
+    const queuedStyleMessageCount = await messageCount(page, "editShapeStyle");
+    const queuedFillColor = page.locator(
+      '.shape-style-editor input[aria-label="Fill color"]',
+    );
+    assert.equal(await queuedFillColor.isEnabled(), true,
+      "a failed build disabled the retained shape fill control");
+    await queuedFillColor.evaluate((input) => {
+      input.value = "#7c3aed";
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const queuedStrokeStyle = page.locator(
+      '.shape-style-editor select[aria-label="Shape stroke style"]',
+    );
+    assert.equal(await queuedStrokeStyle.isEnabled(), true,
+      "a failed build disabled the retained shape stroke control");
+    await queuedStrokeStyle.selectOption("dash_dot");
+    assert.equal(await messageCount(page, "editShapeStyle"), queuedStyleMessageCount,
+      "a stale preview sent shape style edits before a successful rebuild");
+    assert.equal(
+      await page.locator('.shape-style-editor input[aria-label="Fill color"]').inputValue(),
+      "#7c3aed",
+      "a later stroke change discarded the queued fill color",
+    );
+    assert.equal(
+      await page.locator(
+        '.shape-style-editor select[aria-label="Shape stroke style"]',
+      ).inputValue(),
+      "dash_dot",
+      "the retained preview did not show the queued stroke style",
+    );
     await postBuildStatus(page, 110, "building");
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "building", "Building…");
@@ -1359,6 +1418,19 @@ await withBrowser(output, async (browser, baseUrl) => {
     await postSnapshot(page, 110, finalSnapshot, 7);
     await page.waitForFunction(() => !document.querySelector(".toast--error"));
     await expectBuildStatus(page, "complete", "Build complete");
+    await page.waitForFunction((count) =>
+      globalThis.__messages.filter((message) => message.type === "editShapeStyle").length ===
+        count + 1,
+    queuedStyleMessageCount);
+    const queuedStyleEdit = await lastMessage(page, "editShapeStyle");
+    assert.equal(queuedStyleEdit.fill.color, "#7c3aed");
+    assert.equal(queuedStyleEdit.stroke.style, "dash_dot");
+    await postShapeEditResult(page, {
+      requestId: queuedStyleEdit.requestId,
+      operation: "style",
+      status: "rejected",
+    });
+    await page.locator(".close-button").click();
 
     await page.evaluate(() => {
       window.postMessage({
