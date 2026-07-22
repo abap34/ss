@@ -48,6 +48,7 @@ await writeFile(path.join(output, "index.html"), testDocument(), "utf8");
 
 await withBrowser(output, async (browser, baseUrl) => {
   await exerciseBuildDiagnosticMessages(browser, baseUrl, editorSnapshot());
+  await exerciseDeferredSnapshotDuringDrag(browser, baseUrl, editorSnapshot());
   const page = await browser.newPage({ viewport: { width: 560, height: 920 } });
   let releasePdfRequest;
   try {
@@ -1478,6 +1479,68 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.close();
   }
 });
+
+async function exerciseDeferredSnapshotDuringDrag(browser, baseUrl, initial) {
+  const page = await browser.newPage({ viewport: { width: 760, height: 720 } });
+  try {
+    await page.goto(`${baseUrl}/index.html`, { waitUntil: "networkidle" });
+    await page.waitForFunction(() =>
+      globalThis.__messages?.some((message) => message.type === "ready")
+    );
+    await postSnapshot(page, 1, initial, 1);
+    const target = page.locator(
+      '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
+    );
+    const preview = page.locator(
+      '.page-shell[data-page-id="11"] .ss-item[data-ss-node-id="101"]',
+    );
+    const bounds = await target.boundingBox();
+    assert(bounds, "drag deferral fixture omitted its movable object");
+    const x = bounds.x + bounds.width / 2;
+    const y = bounds.y + bounds.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 32, y + 24, { steps: 3 });
+    const dragged = await preview.boundingBox();
+    assert(dragged, "drag deferral fixture lost its provisional object");
+    assert.equal(await target.evaluate((node) => node.classList.contains("is-dragging")), true);
+
+    const deferred = structuredClone(initial);
+    deferred.generation += 1;
+    deferred.snapshot_id = "deferred-during-drag";
+    deferred.display.html = deferred.display.html.replace(
+      'class="ss-page"',
+      'class="ss-page" data-deferred-snapshot="true"',
+    );
+    await postSnapshot(page, 2, deferred, 1);
+    await page.waitForTimeout(50);
+    assert.equal(await page.locator("[data-deferred-snapshot]").count(), 0,
+      "a compiled snapshot was rendered before the drag ended");
+    assert.equal(await target.evaluate((node) => node.classList.contains("is-dragging")), true,
+      "a compiled snapshot canceled the active drag");
+    const retainedDuringDrag = await preview.boundingBox();
+    assert(
+      Math.abs(retainedDuringDrag.x - dragged.x) < 1 &&
+        Math.abs(retainedDuringDrag.y - dragged.y) < 1,
+      "a compiled snapshot reset the provisional position during the drag",
+    );
+
+    await page.mouse.up();
+    const translation = await lastMessage(page, "translate");
+    assert.equal(translation.snapshotId, initial.snapshot_id,
+      "the drag was submitted against a snapshot that was not yet visible");
+    await page.waitForSelector("[data-deferred-snapshot]");
+    await page.waitForSelector("[data-ss-pending-translation='true']");
+    const retainedAfterDrag = await preview.boundingBox();
+    assert(
+      Math.abs(retainedAfterDrag.x - dragged.x) < 1 &&
+        Math.abs(retainedAfterDrag.y - dragged.y) < 1,
+      "applying the deferred snapshot reset the completed drag",
+    );
+  } finally {
+    await page.close();
+  }
+}
 
 async function postSnapshot(page, revision, value, documentVersion = 1) {
   await page.evaluate(({ deliveryRevision, snapshotValue, version }) => {
