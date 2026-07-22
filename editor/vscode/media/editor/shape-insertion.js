@@ -28,6 +28,7 @@ export class ShapeController {
 
   selectTool(tool) {
     if (tool !== "select" && !this.canInsert(this.state.currentPageId)) return;
+    this.state.pointerMode = "select";
     this.state.shapeTool = tool;
     this.actions.render();
   }

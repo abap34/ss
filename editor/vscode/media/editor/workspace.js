@@ -12,6 +12,14 @@ const rulerSize = 26;
 const rulerInterval = 100;
 const minimumRulerTickSpacing = 50;
 const viewportMarginRatio = 0.04;
+const wheelDeltaModeLine = 1;
+const wheelDeltaModePage = 2;
+export const zoomPolicy = Object.freeze({
+  minimumScale: 0.1,
+  maximumScale: 4,
+  pinchSensitivity: 0.002,
+  wheelLinePixels: 16,
+});
 export const buildStatusPresentation = {
   starting: { label: "Starting…", icon: "" },
   building: { label: "Building…", icon: "" },
@@ -27,6 +35,13 @@ export class WorkspaceView {
     this.actions = actions;
     this.root = null;
     this.viewport = null;
+    this.iconGalleryKey = null;
+    this.iconGalleryScrollTop = 0;
+    this.pan = null;
+    this.handlePinch = this.handlePinch.bind(this);
+    this.beginPan = this.beginPan.bind(this);
+    this.updatePan = this.updatePan.bind(this);
+    this.finishPan = this.finishPan.bind(this);
     this.interaction = new InteractionController(state, {
       ...actions,
     });
@@ -34,9 +49,18 @@ export class WorkspaceView {
 
   render() {
     this.interaction.reset();
+    this.cleanupPan();
     const main = element("main", "workspace");
     main.append(this.toolbar());
     const viewport = element("div", `viewport viewport--${this.state.mode}`);
+    viewport.classList.toggle("viewport--pan", this.state.pointerMode === "pan");
+    viewport.addEventListener("wheel", this.handlePinch, { passive: false });
+    viewport.addEventListener("pointerdown", this.beginPan, true);
+    viewport.addEventListener("click", (event) => {
+      if (this.state.pointerMode !== "pan") return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, true);
     const pages = element("div", "pages-stage");
     if (this.state.snapshot) {
       const visiblePages = this.state.mode === "single"
@@ -106,6 +130,7 @@ export class WorkspaceView {
       this.state.mode = mode.value;
       this.actions.render();
     });
+    const zoom = this.zoomControls();
     const status = element("div", "build-status");
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
@@ -119,34 +144,173 @@ export class WorkspaceView {
     tools.setAttribute("role", "group");
     tools.setAttribute("aria-label", "Drawing tools");
     tools.append(
-      this.toolButton("select", "Select", "↖"),
+      this.pointerModeButton("select", "Select", "↖"),
+      this.pointerModeButton("pan", "Pan view", "✋"),
       this.shapePicker(),
       this.iconPicker(),
     );
-    const iconActive = this.state.shapeTool === "icon";
-    const style = iconActive
-      ? this.iconStyleControls()
-      : this.shapeStyleControls();
-    const stylePopover = iconActive
-      ? this.iconStylePopover()
-      : this.shapeStylePopover();
-    bar.append(mode, tools, style, stylePopover, status);
+    bar.append(mode, zoom, tools);
+    if (this.state.shapeTool !== "select") {
+      const iconActive = this.state.shapeTool === "icon";
+      bar.append(
+        iconActive ? this.iconStyleControls() : this.shapeStyleControls(),
+        iconActive ? this.iconStylePopover() : this.shapeStylePopover(),
+      );
+    }
+    bar.append(status);
     return bar;
   }
 
-  toolButton(tool, label, glyph) {
+  zoomControls() {
+    const controls = element("div", "zoom-controls");
+    controls.setAttribute("role", "group");
+    controls.setAttribute("aria-label", "Zoom controls");
+    const selection = element("select", "zoom-select");
+    selection.setAttribute("aria-label", "Zoom");
+    const fit = element("option");
+    fit.value = "fit";
+    const actual = element("option");
+    actual.value = "actual";
+    actual.textContent = "100%";
+    selection.append(fit, actual);
+    selection.addEventListener("change", () => {
+      if (selection.value === "fit") this.setZoom("fit");
+      else if (selection.value === "actual") this.setZoom("manual", 1);
+    });
+    controls.append(selection);
+    this.updateZoomControls(this.state.previewScale, controls);
+    return controls;
+  }
+
+  handlePinch(event) {
+    if (!event.ctrlKey || !this.state.snapshot) return;
+    event.preventDefault();
+    const viewport = event.currentTarget;
+    const delta = normalizedWheelDelta(event, viewport.clientHeight);
+    const current = normalizedScale(this.state.previewScale, 1);
+    const next = clampScale(current * Math.exp(
+      -delta * zoomPolicy.pinchSensitivity,
+    ));
+    if (Math.abs(next - current) < 0.0005) return;
+    this.setZoom("manual", next, {
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+  }
+
+  setZoom(mode, scale = this.state.zoomScale, point = null) {
+    const viewport = this.viewport;
+    const anchor = viewport
+      ? viewportAnchor(viewport, point?.clientX, point?.clientY)
+      : null;
+    this.state.zoomMode = mode === "manual" ? "manual" : "fit";
+    if (this.state.zoomMode === "manual") {
+      this.state.zoomScale = clampScale(normalizedScale(scale, 1));
+    }
+    this.updateScale();
+    if (!viewport || !anchor) return;
+    restoreViewportAnchor(viewport, anchor);
+    requestAnimationFrame(() => {
+      if (this.viewport === viewport) restoreViewportAnchor(viewport, anchor);
+    });
+  }
+
+  updateZoomControls(scale, root = this.root) {
+    const controls = root?.classList?.contains("zoom-controls")
+      ? root
+      : root?.querySelector?.(".zoom-controls");
+    if (!controls) return;
+    const current = normalizedScale(scale, 1);
+    const selection = controls.querySelector(".zoom-select");
+    const fit = selection?.querySelector('option[value="fit"]');
+    const actual = selection?.querySelector('option[value="actual"]');
+    if (!selection || !fit || !actual) return;
+    const percentage = formatZoomPercentage(current);
+    fit.textContent = `Fit ${percentage}`;
+    const unavailable = !this.state.snapshot;
+    selection.disabled = unavailable;
+    selection.querySelector('option[value="manual"]')?.remove();
+    if (this.state.zoomMode === "manual" && Math.abs(current - 1) >= 0.0005) {
+      const manual = element("option");
+      manual.value = "manual";
+      manual.textContent = percentage;
+      selection.insertBefore(manual, actual);
+      selection.value = "manual";
+    } else {
+      selection.value = this.state.zoomMode === "manual" ? "actual" : "fit";
+    }
+  }
+
+  pointerModeButton(mode, label, glyph) {
     const button = element("button", "shape-tool");
     button.type = "button";
     button.title = label;
     button.setAttribute("aria-label", label);
-    button.setAttribute("aria-pressed", String(this.state.shapeTool === tool));
-    button.classList.toggle("is-active", this.state.shapeTool === tool);
+    const active = this.state.pointerMode === mode &&
+      (mode === "pan" || this.state.shapeTool === "select");
+    button.setAttribute("aria-pressed", String(active));
+    button.classList.toggle("is-active", active);
     button.textContent = glyph;
-    if (tool !== "select") {
-      button.disabled = !this.actions.shape.canInsert(this.state.currentPageId);
-    }
-    button.addEventListener("click", () => this.actions.shape.selectTool(tool));
+    button.disabled = this.actions.shape.isBusy() || this.actions.icon.isBusy();
+    button.addEventListener("click", () => this.setPointerMode(mode));
     return button;
+  }
+
+  setPointerMode(mode) {
+    if (this.actions.shape.isBusy() || this.actions.icon.isBusy()) return;
+    this.state.pointerMode = mode === "pan" ? "pan" : "select";
+    this.state.shapeTool = "select";
+    this.actions.render();
+  }
+
+  beginPan(event) {
+    if (this.state.pointerMode !== "pan" || event.button !== 0 || this.pan) {
+      return;
+    }
+    const viewport = event.currentTarget;
+    event.preventDefault();
+    event.stopPropagation();
+    this.pan = {
+      pointerId: event.pointerId,
+      viewport,
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: viewport.scrollLeft,
+      scrollTop: viewport.scrollTop,
+    };
+    viewport.classList.add("viewport--panning");
+    viewport.setPointerCapture(event.pointerId);
+    viewport.addEventListener("pointermove", this.updatePan);
+    viewport.addEventListener("pointerup", this.finishPan);
+    viewport.addEventListener("pointercancel", this.finishPan);
+  }
+
+  updatePan(event) {
+    const pan = this.pan;
+    if (!pan || event.pointerId !== pan.pointerId) return;
+    event.preventDefault();
+    pan.viewport.scrollLeft = pan.scrollLeft - (event.clientX - pan.startX);
+    pan.viewport.scrollTop = pan.scrollTop - (event.clientY - pan.startY);
+  }
+
+  finishPan(event) {
+    if (!this.pan || event.pointerId !== this.pan.pointerId) return;
+    event.preventDefault();
+    this.cleanupPan();
+  }
+
+  cleanupPan() {
+    const pan = this.pan;
+    if (!pan) return;
+    const viewport = pan.viewport;
+    viewport.removeEventListener("pointermove", this.updatePan);
+    viewport.removeEventListener("pointerup", this.finishPan);
+    viewport.removeEventListener("pointercancel", this.finishPan);
+    if (viewport.hasPointerCapture?.(pan.pointerId)) {
+      viewport.releasePointerCapture(pan.pointerId);
+    }
+    viewport.classList.remove("viewport--panning");
+    this.pan = null;
   }
 
   shapePicker() {
@@ -540,9 +704,17 @@ export class WorkspaceView {
         : Math.min(1, availableWidth / Math.max(...widths));
     };
     const scaleWithRulers = fitScale(rulerSize);
-    const showRulers = scaleWithRulers * rulerInterval >=
+    const automaticRulers = scaleWithRulers * rulerInterval >=
       minimumRulerTickSpacing;
-    const scale = showRulers ? scaleWithRulers : fitScale(0);
+    const automaticScale = automaticRulers ? scaleWithRulers : fitScale(0);
+    const manual = this.state.zoomMode === "manual";
+    const scale = manual
+      ? clampScale(normalizedScale(this.state.zoomScale, 1))
+      : automaticScale;
+    const showRulers = manual
+      ? scale * rulerInterval >= minimumRulerTickSpacing
+      : automaticRulers;
+    this.state.previewScale = scale;
     viewport.classList.toggle("viewport--rulers-hidden", !showRulers);
     for (const shell of shells) {
       const width = Number(shell.dataset.pageWidth);
@@ -551,6 +723,8 @@ export class WorkspaceView {
       shell.style.setProperty("--page-height", `${height * scale}px`);
       shell.style.setProperty("--preview-scale", String(scale));
     }
+    this.updateZoomControls(scale);
+    return scale;
   }
 
   selectedObject() {
@@ -558,6 +732,62 @@ export class WorkspaceView {
       (object) => object.id === this.state.selectedObjectId,
     ) || null;
   }
+}
+
+function normalizedScale(value, fallback) {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function clampScale(value) {
+  return Math.min(
+    zoomPolicy.maximumScale,
+    Math.max(zoomPolicy.minimumScale, value),
+  );
+}
+
+function formatZoomPercentage(scale) {
+  return `${Math.round(scale * 100)}%`;
+}
+
+function normalizedWheelDelta(event, viewportHeight) {
+  if (event.deltaMode === wheelDeltaModeLine) {
+    return event.deltaY * zoomPolicy.wheelLinePixels;
+  }
+  if (event.deltaMode === wheelDeltaModePage) {
+    return event.deltaY * viewportHeight;
+  }
+  return event.deltaY;
+}
+
+function viewportAnchor(viewport, clientX, clientY) {
+  const rect = viewport.getBoundingClientRect();
+  const viewportX = Number.isFinite(clientX)
+    ? Math.min(viewport.clientWidth, Math.max(0, clientX - rect.left))
+    : viewport.clientWidth / 2;
+  const viewportY = Number.isFinite(clientY)
+    ? Math.min(viewport.clientHeight, Math.max(0, clientY - rect.top))
+    : viewport.clientHeight / 2;
+  return {
+    x: (viewport.scrollLeft + viewportX) /
+      Math.max(viewport.scrollWidth, 1),
+    y: (viewport.scrollTop + viewportY) /
+      Math.max(viewport.scrollHeight, 1),
+    viewportX,
+    viewportY,
+  };
+}
+
+function restoreViewportAnchor(viewport, anchor) {
+  const maximumLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth);
+  const maximumTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+  viewport.scrollLeft = Math.min(
+    maximumLeft,
+    Math.max(0, anchor.x * viewport.scrollWidth - anchor.viewportX),
+  );
+  viewport.scrollTop = Math.min(
+    maximumTop,
+    Math.max(0, anchor.y * viewport.scrollHeight - anchor.viewportY),
+  );
 }
 
 function applyBuildStatus(node, status, durationMs) {

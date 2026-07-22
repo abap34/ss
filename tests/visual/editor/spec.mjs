@@ -135,19 +135,96 @@ await withBrowser(output, async (browser, baseUrl) => {
       "vertical ruler values did not increase upward from the page bottom");
 
     const selectTool = page.getByRole("button", { name: "Select" });
-    const insertionStrokeWidth = page.locator(
-      '.toolbar > .shape-style-controls input[aria-label="Stroke width"]',
+    const zoom = page.locator('.zoom-select[aria-label="Zoom"]');
+    const shell = page.locator('.page-shell[data-page-id="11"]');
+    assert.equal(await zoom.inputValue(), "fit",
+      "the editor did not start in fit zoom mode");
+    assert.match(await zoom.locator('option[value="fit"]').textContent(), /^Fit \d+%$/,
+      "fit zoom did not report its current percentage");
+    const fitScale = await shell.evaluate((node) =>
+      Number(node.style.getPropertyValue("--preview-scale"))
     );
-    await insertionStrokeWidth.focus();
+    const fitWidth = (await shell.boundingBox()).width;
+    assert.equal(await page.getByRole("button", { name: /Zoom (in|out)/ }).count(), 0,
+      "the toolbar retained button-based zoom controls");
+    await dispatchPinch(page, -120);
+    await page.waitForFunction((previousScale) =>
+      Number(document.querySelector('.page-shell[data-page-id="11"]')
+        ?.style.getPropertyValue("--preview-scale")) > previousScale,
+    fitScale);
+    const enlargedScale = await shell.evaluate((node) =>
+      Number(node.style.getPropertyValue("--preview-scale"))
+    );
+    assert.equal(await zoom.inputValue(), "manual",
+      "zooming in did not switch to a manual percentage");
+    assert(enlargedScale > fitScale,
+      "pinching out did not enlarge the page");
+    await dispatchPinch(page, 120);
+    await page.waitForFunction((previousScale) =>
+      Number(document.querySelector('.page-shell[data-page-id="11"]')
+        ?.style.getPropertyValue("--preview-scale")) < previousScale,
+    enlargedScale);
+    assert(Math.abs((await shell.boundingBox()).width - fitWidth) < 2,
+      "pinching in did not reverse the previous pinch");
+    await zoom.selectOption("actual");
+    await page.waitForFunction(() =>
+      document.querySelector('.page-shell[data-page-id="11"]')
+        ?.style.getPropertyValue("--preview-scale") === "1"
+    );
+    assert(Math.abs((await shell.boundingBox()).width - 1280) < 1,
+      "100% zoom did not map one page point to one CSS pixel");
+    const centerBeforeZoom = await horizontalViewportCenterRatio(page);
+    await dispatchPinch(page, -90);
+    const centerAfterZoom = await horizontalViewportCenterRatio(page);
+    assert(Math.abs(centerAfterZoom - centerBeforeZoom) < 0.01,
+      "pinch zoom changed the horizontal point under its anchor");
+
+    const panTool = page.getByRole("button", { name: "Pan view" });
+    await panTool.click();
+    assert.equal(await panTool.getAttribute("aria-pressed"), "true",
+      "the view movement mode did not activate");
+    assert.equal(await page.locator(".object-hit").count(), 0,
+      "view movement mode retained object editing hit targets");
+    const viewport = page.locator(".viewport");
+    const panStart = await viewport.evaluate((node) => {
+      node.scrollLeft = Math.max(0, node.scrollWidth - node.clientWidth) * 0.25;
+      node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight) * 0.25;
+      return { left: node.scrollLeft, top: node.scrollTop };
+    });
+    const viewportBox = await viewport.boundingBox();
+    assert(viewportBox, "the editor viewport had no interactive bounds");
+    await page.mouse.move(
+      viewportBox.x + viewportBox.width * 0.55,
+      viewportBox.y + viewportBox.height * 0.55,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      viewportBox.x + viewportBox.width * 0.55 - 70,
+      viewportBox.y + viewportBox.height * 0.55 - 55,
+      { steps: 3 },
+    );
+    await page.mouse.up();
+    const panEnd = await viewport.evaluate((node) => ({
+      left: node.scrollLeft,
+      top: node.scrollTop,
+    }));
+    assert(panEnd.left > panStart.left && panEnd.top > panStart.top,
+      `dragging in view movement mode did not move the viewpoint: ${JSON.stringify({ panStart, panEnd })}`);
+    await selectTool.click();
+    assert((await page.locator(".object-hit").count()) > 0,
+      "selection mode did not restore object editing hit targets");
+    await zoom.selectOption("fit");
+    await page.waitForFunction((expectedScale) =>
+      Math.abs(Number(document.querySelector('.page-shell[data-page-id="11"]')
+        ?.style.getPropertyValue("--preview-scale")) - expectedScale) < 0.001,
+    fitScale);
+
+    assert.equal(await page.locator(".toolbar > .shape-style-controls").count(), 0,
+      "selection mode displayed shape or icon color controls");
+    await zoom.focus();
     await page.keyboard.press("l");
     assert.equal(await selectTool.getAttribute("aria-pressed"), "true",
       "the line shortcut activated while a form control had focus");
-
-    const insertionStrokeStyle = page.locator(
-      ".toolbar > .shape-style-controls .stroke-style-picker",
-    );
-    await insertionStrokeStyle.locator("summary").click();
-    await insertionStrokeStyle.getByRole("button", { name: "Dotted" }).click();
 
     const shapePicker = page.locator(".shape-picker");
     await shapePicker.locator("summary").click();
@@ -176,6 +253,11 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert(rectangleTile?.width >= 70 && rectangleTile?.height >= 70,
       `shape gallery tile was too small: ${JSON.stringify(rectangleTile)}`);
     await rectangleTool.click();
+    const insertionStrokeStyle = page.locator(
+      ".toolbar > .shape-style-controls .stroke-style-picker",
+    );
+    await insertionStrokeStyle.locator("summary").click();
+    await insertionStrokeStyle.getByRole("button", { name: "Dotted" }).click();
     const placement = page.locator('.page-shell[data-page-id="11"] .shape-placement-hit');
     const placementBox = await placement.boundingBox();
     assert(placementBox, "shape placement layer was not rendered");
@@ -229,6 +311,8 @@ await withBrowser(output, async (browser, baseUrl) => {
       "a rejected provisional shape remained on the page");
 
     const iconPicker = page.locator(".icon-picker");
+    assert.equal(await iconPicker.locator(".icon-picker-placeholder").count(), 1,
+      "the icon picker header did not use its neutral collection marker");
     await iconPicker.locator("summary").click();
     assert.equal(await page.locator(".icon-picker-panel").isVisible(), true,
       "icon gallery did not open from the toolbar");
@@ -244,6 +328,22 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert(initialIconQuery, "opening the icon gallery did not request the catalog");
     assert.equal(initialIconQuery.query, "");
     assert.equal(initialIconQuery.style, "all");
+    assert.equal(initialIconQuery.category, "all");
+    assert.equal(initialIconQuery.offset, 0);
+    await postIconCatalogError(page, initialIconQuery.requestId,
+      "Icon catalog is temporarily unavailable.");
+    const retryIcons = iconPicker.getByRole("button", { name: "Retry" });
+    await retryIcons.waitFor();
+    assert.match(await iconPicker.locator(".icon-catalog-status").textContent(),
+      /temporarily unavailable/,
+      "icon catalog failure was not shown inside the picker");
+    await retryIcons.click();
+    await page.waitForFunction((previousRequestId) =>
+      globalThis.__messages.some((message) =>
+        message.type === "queryIcons" && message.requestId > previousRequestId
+      ), initialIconQuery.requestId);
+    const retriedIconQuery = await lastMessage(page, "queryIcons");
+    assert.equal(retriedIconQuery.offset, 0);
     const iconSearch = iconPicker.getByRole("searchbox", { name: "Search icon names" });
     await iconSearch.fill("star");
     await page.waitForFunction((previousRequestId) =>
@@ -252,8 +352,10 @@ await withBrowser(output, async (browser, baseUrl) => {
         message.requestId > previousRequestId &&
         message.query === "star" &&
         message.style === "all"
-      ), initialIconQuery.requestId);
+      ), retriedIconQuery.requestId);
     const searchedIconQuery = await lastMessage(page, "queryIcons");
+    assert.equal(searchedIconQuery.offset, 0);
+    assert.equal(searchedIconQuery.category, "all");
     const starIcon = {
       id: "fa-solid:star",
       name: "star",
@@ -266,13 +368,108 @@ await withBrowser(output, async (browser, baseUrl) => {
       version: "7.2.0",
       query: "star",
       style: "all",
+      category: "all",
+      offset: 0,
+      total_available: 2141,
+      total_matches: 61,
+      has_more: true,
+      categories: [
+        { id: "animals", label: "Animals" },
+        { id: "shapes", label: "Shapes" },
+      ],
+      icons: [
+        starIcon,
+        ...Array.from({ length: 59 }, (_, index) => ({
+          id: `fa-solid:test-icon-${index}`,
+          name: `test-icon-${index}`,
+          style: "solid",
+          svg: starIcon.svg,
+        })),
+      ],
+    });
+    await page.waitForFunction(() =>
+      document.querySelector(".icon-catalog-status")?.textContent === "60 of 61 icons"
+    );
+    const starPreview = iconPicker.getByRole("button", { name: "star, solid" })
+      .locator(".icon-choice-preview");
+    assert.equal(await starPreview.evaluate((node) => getComputedStyle(node).color),
+      "rgb(55, 65, 81)",
+      "icon previews did not start with the dark gray default color");
+    assert.equal(await iconPicker.getByRole("button", { name: "Load more" }).count(), 0,
+      "the icon gallery retained a manual pagination button");
+    await iconPicker.locator(".icon-picker-gallery").evaluate((gallery) => {
+      gallery.scrollTop = gallery.scrollHeight;
+      gallery.dispatchEvent(new Event("scroll"));
+    });
+    await page.waitForFunction((previousRequestId) =>
+      globalThis.__messages.some((message) =>
+        message.type === "queryIcons" &&
+        message.requestId > previousRequestId &&
+        message.query === "star" &&
+        message.style === "all" &&
+        message.category === "all" &&
+        message.offset === 60
+      ), searchedIconQuery.requestId);
+    const moreIconQuery = await lastMessage(page, "queryIcons");
+    const regularStar = {
+      id: "fa-regular:star",
+      name: "star",
+      style: "regular",
+      svg: starIcon.svg,
+    };
+    await postIconCatalog(page, moreIconQuery.requestId, {
+      schema: 1,
+      collection: "fontawesome-free",
+      version: "7.2.0",
+      query: "star",
+      style: "all",
+      category: "all",
+      offset: 60,
+      total_available: 2141,
+      total_matches: 61,
+      has_more: false,
+      categories: [
+        { id: "animals", label: "Animals" },
+        { id: "shapes", label: "Shapes" },
+      ],
+      icons: [regularStar],
+    });
+    await page.waitForFunction(() =>
+      document.querySelector(".icon-catalog-status")?.textContent === "61 of 61 icons"
+    );
+    assert.equal(await iconPicker.locator(".icon-choice").count(), 61,
+      "loading more icons replaced the first catalog page");
+    const iconCategory = iconPicker.getByRole("combobox", { name: "Icon category" });
+    await iconCategory.selectOption("shapes");
+    await page.waitForFunction((previousRequestId) =>
+      globalThis.__messages.some((message) =>
+        message.type === "queryIcons" &&
+        message.requestId > previousRequestId &&
+        message.query === "star" &&
+        message.style === "all" &&
+        message.category === "shapes" &&
+        message.offset === 0
+      ), moreIconQuery.requestId);
+    const categoryIconQuery = await lastMessage(page, "queryIcons");
+    await postIconCatalog(page, categoryIconQuery.requestId, {
+      schema: 1,
+      collection: "fontawesome-free",
+      version: "7.2.0",
+      query: "star",
+      style: "all",
+      category: "shapes",
+      offset: 0,
       total_available: 2141,
       total_matches: 1,
       has_more: false,
+      categories: [
+        { id: "animals", label: "Animals" },
+        { id: "shapes", label: "Shapes" },
+      ],
       icons: [starIcon],
     });
     await page.waitForFunction(() =>
-      document.querySelector(".icon-catalog-status")?.textContent === "1 match"
+      document.querySelector(".icon-catalog-status")?.textContent === "1 of 1 icons"
     );
     const starTool = iconPicker.getByRole("button", { name: "star, solid" });
     assert.equal(await starTool.isEnabled(), true,
@@ -285,6 +482,8 @@ await withBrowser(output, async (browser, baseUrl) => {
     const iconColor = page.locator(
       '.toolbar > .icon-style-controls input[aria-label="Icon color"]',
     );
+    assert.equal(await iconColor.inputValue(), "#374151",
+      "icon placement did not use the dark gray default color");
     await iconColor.fill("#f59e0b");
     await iconColor.evaluate((input) => input.dispatchEvent(new Event("change", { bubbles: true })));
     const iconPlacement = page.locator(
@@ -642,6 +841,18 @@ await withBrowser(output, async (browser, baseUrl) => {
     );
     assert.equal(await page.locator(".ruler--vertical").isVisible(), false,
       "rulers remained visible at a scale where their fixed labels obscure the page");
+    const narrowToolbarBox = await page.locator(".toolbar").boundingBox();
+    const narrowZoomBox = await page.locator(".zoom-controls").boundingBox();
+    assert(narrowToolbarBox && narrowZoomBox &&
+      narrowZoomBox.x >= narrowToolbarBox.x &&
+      narrowZoomBox.y >= narrowToolbarBox.y &&
+      narrowZoomBox.x + narrowZoomBox.width <= narrowToolbarBox.x + narrowToolbarBox.width &&
+      narrowZoomBox.y + narrowZoomBox.height <= narrowToolbarBox.y + narrowToolbarBox.height,
+    "narrow editor placed zoom controls outside the toolbar");
+    assert.equal(await page.locator(".shape-style-popover").count(), 0,
+      "selection mode displayed the compact shape style controls");
+    await shapePicker.locator("summary").click();
+    await shapePicker.getByRole("button", { name: "Rectangle" }).click();
     const stylePopover = page.locator(".shape-style-popover");
     assert.equal(await stylePopover.isVisible(), true,
       "narrow drawing toolbar omitted its style popover");
@@ -655,6 +866,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     const narrowerMarginRatio = await horizontalPageMarginRatio(page);
     assert(Math.abs(narrowerMarginRatio - narrowMarginRatio) < 0.005,
       "editor margin occupied a growing proportion of a narrower viewport");
+    await page.keyboard.press("Escape");
     await page.setViewportSize({ width: 560, height: 920 });
     await page.evaluate(() => {
       globalThis.__retiringPdfRoots = [
@@ -669,27 +881,27 @@ await withBrowser(output, async (browser, baseUrl) => {
     });
     assert(pageListScrollTop > 0,
       "page sidebar fixture did not produce a scrollable page list");
-    await page.locator(".page-entry").nth(1).click();
+    await page.locator(".page-entry").nth(1).evaluate((button) => button.click());
     await page.evaluate(() => new Promise((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(resolve))
     ));
+    const pageListAfterSelection = await page.locator(".sidebar").evaluate((sidebar) => ({
+      top: sidebar.scrollTop,
+      maximum: Math.max(0, sidebar.scrollHeight - sidebar.clientHeight),
+    }));
     assert.equal(
-      await page.locator(".sidebar").evaluate((sidebar) => sidebar.scrollTop),
-      pageListScrollTop,
+      pageListAfterSelection.top,
+      Math.min(pageListScrollTop, pageListAfterSelection.maximum),
       "selecting a page changed its position in the page list",
     );
     await page.setViewportSize({ width: 560, height: 920 });
     await page.waitForSelector('.page-shell[data-page-id="22"]');
     assert.equal(await page.locator('.page-entry.is-active small').textContent(), "Details");
 
-    const pageNavigationStrokeWidth = page.locator(
-      '.toolbar > .shape-style-controls input[aria-label="Stroke width"]',
-    );
-    await pageNavigationStrokeWidth.focus();
+    await zoom.focus();
     await page.keyboard.press("ArrowUp");
     assert.equal(await page.locator('.page-entry.is-active small').textContent(), "Details",
       "an arrow key changed pages while a form control had focus");
-    await pageNavigationStrokeWidth.fill("1.6");
     await page.evaluate(() => document.activeElement?.blur());
     await page.keyboard.press("ArrowUp");
     await page.waitForSelector('.page-shell[data-page-id="11"]');
@@ -712,6 +924,21 @@ await withBrowser(output, async (browser, baseUrl) => {
     });
     assert(Math.abs(await horizontalPageMarginRatio(page) - 0.04) < 0.005,
       "continuous editor margin was not proportional to its viewport");
+    await zoom.selectOption("actual");
+    await page.waitForFunction(() => [...document.querySelectorAll(".page-shell")].every((shell) =>
+      shell.style.getPropertyValue("--preview-scale") === "1"
+    ));
+    assert.equal(
+      await page.locator(".page-shell").evaluateAll((shells) =>
+        shells.every((shell) => Math.abs(shell.getBoundingClientRect().width - 1280) < 1)
+      ),
+      true,
+      "100% zoom was not applied to every page in continuous display",
+    );
+    await zoom.selectOption("fit");
+    await page.waitForFunction(() => [...document.querySelectorAll(".page-shell")].every((shell) =>
+      Number(shell.style.getPropertyValue("--preview-scale")) < 1
+    ));
     await page.setViewportSize({ width: 560, height: 420 });
     await page.evaluate(() => new Promise((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(resolve))
@@ -1075,11 +1302,38 @@ async function postIconCatalog(page, requestId, result) {
   }, "*"), { catalogRequestId: requestId, catalogResult: result });
 }
 
+async function postIconCatalogError(page, requestId, message) {
+  await page.evaluate((error) => window.postMessage({
+    type: "iconCatalogError",
+    requestId: error.requestId,
+    message: error.message,
+  }, "*"), { requestId, message });
+}
+
 async function postIconEditResult(page, result) {
   await page.evaluate((message) => window.postMessage({
     type: "iconEditResult",
     ...message,
   }, "*"), result);
+}
+
+async function horizontalViewportCenterRatio(page) {
+  return page.locator(".viewport").evaluate((viewport) =>
+    (viewport.scrollLeft + viewport.clientWidth / 2) / viewport.scrollWidth
+  );
+}
+
+async function dispatchPinch(page, deltaY) {
+  const viewport = page.locator(".viewport");
+  const box = await viewport.boundingBox();
+  assert(box, "the editor viewport had no bounds for pinch zoom");
+  await viewport.dispatchEvent("wheel", {
+    ctrlKey: true,
+    deltaMode: 0,
+    deltaY,
+    clientX: box.x + box.width / 2,
+    clientY: box.y + box.height / 2,
+  });
 }
 
 async function expectBuildStatus(page, status, label) {
