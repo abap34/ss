@@ -85,7 +85,7 @@ pub fn writeLayoutTraceJson(io: std.Io, allocator: std.mem.Allocator, request: t
     try pipeline.evaluateDocument(&analyzed.state, analyzed.executionGraph(), progress);
     var pages = try pipeline.preparePages(&analyzed.state, progress);
     defer pages.deinit(analyzed.state.allocator);
-    var layouts = try pipeline.solveLayoutsWithTracePath(io, &analyzed.state, &pages, output_path, progress, request.layout_jobs);
+    var layouts = try pipeline.solveLayoutsWithTracePath(io, &analyzed.state, &pages, output_path, progress, request.layout_jobs, request.highlight_languages);
     defer layouts.deinit(analyzed.state.allocator);
 }
 
@@ -104,7 +104,7 @@ pub fn layoutConflictReportJson(
     const artifact_progress = if (progress) |p| app_progress.render(p) else null;
     if (progress) |p| p.begin("Solve layouts");
     errdefer if (progress) |p| p.abort();
-    render_layout.preloadPreparedPageArtifacts(io, &analyzed.state, &pages, artifact_progress, request.layout_jobs) catch |err| {
+    render_layout.preloadPreparedPageArtifacts(io, &analyzed.state, &pages, artifact_progress, request.layout_jobs, request.highlight_languages) catch |err| {
         if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(analyzed.state.projectPath(), analyzed.state.projectSource(), &analyzed.state);
         if (error_report.hasDocumentStateErrors(&analyzed.state)) return error.DiagnosticsFailed;
@@ -113,6 +113,7 @@ pub fn layoutConflictReportJson(
     var maybe_layouts: ?core.layout.Document = render_layout.solvePreparedPages(io, &analyzed.state, &pages, .{
         .progress = layout_progress,
         .jobs = request.layout_jobs,
+        .highlight_languages = request.highlight_languages,
     }) catch |err| switch (err) {
         error.ConstraintConflict,
         error.NegativeFrameSize,
@@ -204,7 +205,7 @@ fn compileRendering(
     const prepared_allocator = analyzed.state.allocator;
     var pages_errdefer_active = true;
     errdefer if (pages_errdefer_active) pages.deinit(prepared_allocator);
-    var layouts = pipeline.solveLayouts(io, &analyzed.state, &pages, progress, source.layout_jobs) catch |err| {
+    var layouts = pipeline.solveLayouts(io, &analyzed.state, &pages, progress, source.layout_jobs, options.highlight_languages) catch |err| {
         try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, diagnostics_json_path);
         return err;
     };

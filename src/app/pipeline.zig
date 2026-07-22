@@ -42,7 +42,7 @@ pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.Source
     var pages = try preparePages(&analyzed.state, progress);
     const state_allocator = analyzed.state.allocator;
     defer pages.deinit(state_allocator);
-    var layouts = try solveLayouts(io, &analyzed.state, &pages, progress, request.layout_jobs);
+    var layouts = try solveLayouts(io, &analyzed.state, &pages, progress, request.layout_jobs, request.highlight_languages);
     defer layouts.deinit(state_allocator);
     return analyzed.takeState();
 }
@@ -168,14 +168,16 @@ pub fn solveLayouts(
     pages: *const core.prepared.PreparedPages,
     progress: ?*Progress,
     jobs: ?usize,
+    highlight_languages: []const utils.highlight.Language,
 ) !core.layout.Document {
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
     errdefer if (progress) |p| p.abort();
-    try preloadLayoutArtifacts(io, state, pages, progress, jobs);
+    try preloadLayoutArtifacts(io, state, pages, progress, jobs, highlight_languages);
     var layouts = render_layout.solvePreparedPages(io, state, pages, .{
         .progress = layout_progress,
         .jobs = jobs,
+        .highlight_languages = highlight_languages,
     }) catch |err| {
         if (progress) |p| p.abort();
         try reportLayoutFailure(state, err);
@@ -195,15 +197,17 @@ pub fn solveLayoutsWithTracePath(
     trace_path: []const u8,
     progress: ?*Progress,
     jobs: ?usize,
+    highlight_languages: []const utils.highlight.Language,
 ) !core.layout.Document {
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
     errdefer if (progress) |p| p.abort();
-    try preloadLayoutArtifacts(io, state, pages, progress, jobs);
+    try preloadLayoutArtifacts(io, state, pages, progress, jobs, highlight_languages);
     var layouts = render_layout.solvePreparedPages(io, state, pages, .{
         .trace_path = trace_path,
         .progress = layout_progress,
         .jobs = jobs,
+        .highlight_languages = highlight_languages,
     }) catch |err| {
         if (progress) |p| p.abort();
         try reportLayoutFailure(state, err);
@@ -222,9 +226,10 @@ fn preloadLayoutArtifacts(
     pages: *const core.prepared.PreparedPages,
     progress: ?*Progress,
     jobs: ?usize,
+    highlight_languages: []const utils.highlight.Language,
 ) !void {
     const artifact_progress = if (progress) |p| app_progress.render(p) else null;
-    render_layout.preloadPreparedPageArtifacts(io, state, pages, artifact_progress, jobs) catch |err| {
+    render_layout.preloadPreparedPageArtifacts(io, state, pages, artifact_progress, jobs, highlight_languages) catch |err| {
         if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;

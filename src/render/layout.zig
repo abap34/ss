@@ -10,6 +10,7 @@ pub const Options = struct {
     trace_path: ?[]const u8 = null,
     progress: ?core.layout.graph.LayoutProgress = null,
     jobs: ?usize = null,
+    highlight_languages: []const utils.highlight.Language = &.{},
     cancellation: ?utils.Cancellation = null,
     resource_cache: ?*render_resources.SourceCache = null,
 
@@ -48,9 +49,11 @@ pub fn preloadPreparedPageArtifacts(
     pages: *const core.prepared.PreparedPages,
     progress: ?compiler.Progress,
     jobs: ?usize,
+    highlight_languages: []const utils.highlight.Language,
 ) !void {
     try compiler.preload(state.allocator, io, state, pages, .{
         .jobs = jobs,
+        .highlight_languages = highlight_languages,
     }, progress);
 }
 
@@ -67,6 +70,7 @@ pub fn solvePreparedPages(
         state,
         pages,
         options.resource_cache,
+        options.highlight_languages,
     );
     defer measurement_scope.deinit();
     var results = try lowering.solveDocument(state, options.trace_path, .{

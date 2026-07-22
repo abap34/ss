@@ -104,6 +104,7 @@ pub const ProjectFacts = struct {
     entry_path: []u8 = &.{},
     asset_base_dir: []u8 = &.{},
     module_paths: [][]u8 = &.{},
+    highlight: utils.highlight.Config = .{},
     lsp: project.LspConfig = .{},
     wysiwyg: project.WysiwygConfig = .{},
     page_guide: project.PageGuideConfig = .{},
@@ -113,11 +114,13 @@ pub const ProjectFacts = struct {
         allocator.free(self.asset_base_dir);
         for (self.module_paths) |path| allocator.free(path);
         allocator.free(self.module_paths);
+        self.highlight.deinit(allocator);
         self.* = .{};
     }
 };
 
 pub const ProjectOptions = struct {
+    highlight: utils.highlight.Config = .{},
     lsp: project.LspConfig = .{},
     wysiwyg: project.WysiwygConfig = .{},
     page_guide: project.PageGuideConfig = .{},
@@ -649,6 +652,7 @@ fn initProjectFacts(
 ) !ProjectFacts {
     var facts = ProjectFacts{
         .module_paths = module_paths,
+        .highlight = try options.highlight.clone(allocator),
         .lsp = options.lsp,
         .wysiwyg = options.wysiwyg,
         .page_guide = options.page_guide,

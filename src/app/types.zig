@@ -21,6 +21,7 @@ pub const SourceRequest = struct {
     input_path: []const u8,
     asset_base_dir: []const u8,
     layout_jobs: ?usize = null,
+    highlight_languages: []const utils.highlight.Language = &.{},
     overlay: ?*const module_loader.SourceOverlay = null,
     embedded_cache: ?*module_loader.EmbeddedSyntaxCache = null,
 };
