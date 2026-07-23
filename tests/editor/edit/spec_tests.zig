@@ -99,6 +99,85 @@ test "component removal deduplicates the same statement span" {
     try std.testing.expectEqual(@as(usize, 1), result.edits.len);
 }
 
+test "component width appends a page-level dimension update" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\page Example
+        \\  let item = text!("Editable")
+        \\end
+        \\
+    ;
+    var result = (try edit.componentWidth(
+        allocator,
+        source,
+        .{ .start = 0, .end = source.len },
+        "item",
+        240,
+        null,
+        null,
+    )).?;
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expectEqualStrings(
+        \\page Example
+        \\  let item = text!("Editable")
+        \\  ~!~ item.width == 240
+        \\end
+        \\
+    , updated);
+}
+
+test "component width replaces direct and anchor update values" {
+    const allocator = std.testing.allocator;
+    const dimension_source =
+        \\page Example
+        \\  let item = text!("Editable")
+        \\  ~!~ item.width == 180
+        \\end
+        \\
+    ;
+    const dimension_value = numericTokenAfter(dimension_source, "item.width == ");
+    var dimension_result = (try edit.componentWidth(
+        allocator,
+        dimension_source,
+        .{ .start = 0, .end = dimension_source.len },
+        "item",
+        260,
+        .{ .value = dimension_value, .direct_dimension = true },
+        null,
+    )).?;
+    defer dimension_result.deinit(allocator);
+    const dimension_updated = try edit.applyEdits(allocator, dimension_source, dimension_result.edits);
+    defer allocator.free(dimension_updated);
+    try std.testing.expect(std.mem.indexOf(u8, dimension_updated, "~!~ item.width == 260") != null);
+
+    const anchor_source =
+        \\page Example
+        \\  let item = text!("Editable")
+        \\  ~!~ item.right == item.left + 180
+        \\end
+        \\
+    ;
+    const offset_start = std.mem.indexOf(u8, anchor_source, "+ 180").?;
+    var anchor_result = (try edit.componentWidth(
+        allocator,
+        anchor_source,
+        .{ .start = 0, .end = anchor_source.len },
+        "item",
+        260,
+        .{
+            .value = .{ .start = offset_start, .end = offset_start + "+ 180".len },
+            .direct_dimension = false,
+        },
+        null,
+    )).?;
+    defer anchor_result.deinit(allocator);
+    const anchor_updated = try edit.applyEdits(allocator, anchor_source, anchor_result.edits);
+    defer allocator.free(anchor_updated);
+    try std.testing.expect(std.mem.indexOf(u8, anchor_updated, "~!~ item.right == item.left + 260") != null);
+}
+
 test "shape insertion emits a canonical rectangle source block" {
     const allocator = std.testing.allocator;
     const source =

@@ -1597,17 +1597,68 @@ await withBrowser(output, async (browser, baseUrl) => {
       0,
       "Delete retained the interaction target of a pending deletion",
     );
+    const firstDeletionMessageCount = await messageCount(page, "deleteComponent");
+    await page.locator(
+      '.page-shell[data-page-id="11"] .object-hit[data-object-id="102"]',
+    ).click();
+    await page.keyboard.press("Delete");
+    assert.equal(
+      await messageCount(page, "deleteComponent"),
+      firstDeletionMessageCount,
+      "continuous deletion sent a second source edit before rebuilding",
+    );
+    assert.equal(
+      await page.locator(
+        '.page-shell[data-page-id="11"] .object-hit[data-object-id="102"]',
+      ).count(),
+      0,
+      "a queued continuous deletion retained its interaction target",
+    );
+    assert.equal(
+      await page.locator(
+        '.page-shell[data-page-id="11"] .ss-pending-component-deletion',
+      ).count(),
+      2,
+      "continuous deletion did not hide every queued component",
+    );
     await postComponentDeleteResult(page, {
       requestId: deletion.requestId,
       status: "rejected",
       message: "Rejected component deletion for the UI test.",
     });
+    await page.waitForFunction(
+      (count) => globalThis.__messages.filter((message) =>
+        message.type === "deleteComponent"
+      ).length > count,
+      firstDeletionMessageCount,
+    );
+    const secondDeletion = await lastMessage(page, "deleteComponent");
+    assert.equal(secondDeletion.nodeId, 102);
+    assert.equal(secondDeletion.pageId, 11);
+    await page.waitForSelector(
+      '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
+    );
     assert.equal(
       await page.locator(
         '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
       ).count(),
       1,
       "a rejected component deletion did not restore its interaction target",
+    );
+    assert.equal(
+      await page.locator(
+        '.page-shell[data-page-id="11"] .object-hit[data-object-id="102"]',
+      ).count(),
+      0,
+      "dispatching the next queued deletion restored its interaction target",
+    );
+    await postComponentDeleteResult(page, {
+      requestId: secondDeletion.requestId,
+      status: "rejected",
+      message: "Rejected queued component deletion for the UI test.",
+    });
+    await page.waitForSelector(
+      '.page-shell[data-page-id="11"] .object-hit[data-object-id="102"]',
     );
 
     await page.evaluate(() => {
@@ -1717,6 +1768,23 @@ await withBrowser(output, async (browser, baseUrl) => {
       "true",
       "the outline lock did not affect the canvas object",
     );
+    await page.locator('.object-hit[data-object-id="202"]').first().click();
+    assert.equal(
+      await page.locator('.object-hit[data-object-id="202"].is-selected').count(),
+      0,
+      "clicking a locked object selected it on the canvas",
+    );
+    assert.equal(
+      await page.locator(".object-sheet").count(),
+      0,
+      "clicking a locked object opened its editing controls",
+    );
+    await page.getByRole("button", { name: "Detail", exact: true }).click();
+    assert.equal(
+      await page.locator('.object-hit[data-object-id="202"].is-selected').count(),
+      0,
+      "choosing a locked object in the outline selected it",
+    );
     await page.getByRole("button", { name: "Unlock Detail" }).click();
 
     const restarted = structuredClone(finalSnapshot);
@@ -1762,6 +1830,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     releasePdfRequest?.();
     await page.close();
   }
+  await exerciseComponentWidth(browser, baseUrl, editorSnapshot());
 });
 
 async function exerciseDeferredSnapshotDuringDrag(browser, baseUrl, initial) {
@@ -1826,6 +1895,113 @@ async function exerciseDeferredSnapshotDuringDrag(browser, baseUrl, initial) {
   }
 }
 
+async function exerciseComponentWidth(browser, baseUrl, initial) {
+  const page = await browser.newPage({ viewport: { width: 560, height: 920 } });
+  try {
+    await page.goto(`${baseUrl}/index.html`, { waitUntil: "networkidle" });
+    await page.waitForFunction(() =>
+      globalThis.__messages?.some((message) => message.type === "ready")
+    );
+    const grouped = structuredClone(initial);
+    grouped.layout.objects.push({
+      id: 203,
+      page_id: 22,
+      name: "detail_child",
+      role: "decoration",
+      x: 580,
+      y: 500,
+      width: 30,
+      height: 30,
+      group: false,
+    });
+    grouped.outline.push({
+      id: 203,
+      parent_id: 202,
+      page_id: 22,
+      kind: "object",
+      label: "Detail child",
+    });
+    await postSnapshot(page, 1, grouped);
+    await page.locator("select.page-mode").selectOption("continuous");
+    const childRect = page.locator(
+      '.page-shell[data-page-id="22"] ' +
+      '.object-hit[data-object-id="203"] > .object-hit-rect',
+    );
+    assert.deepEqual(
+      await childRect.evaluate((node) => ({
+        x: Number(node.getAttribute("x")),
+        width: Number(node.getAttribute("width")),
+      })),
+      { x: 580, width: 30 },
+      "a rendered descendant expanded its editable ancestor across the page",
+    );
+    const target = page.locator(
+      '.page-shell[data-page-id="22"] .object-hit[data-object-id="202"]',
+    );
+    const preview = page.locator(
+      '.page-shell[data-page-id="22"] .ss-item[data-ss-node-id="202"]',
+    );
+    await target.click();
+    assert.equal(
+      await page.locator('input[aria-label="Component width"]').inputValue(),
+      "380",
+      "the component details omitted its editable width",
+    );
+    const handle = page.locator(
+      '.page-shell[data-page-id="22"] .component-width-handle',
+    );
+    assert.equal(await handle.count(), 1,
+      "the selected component omitted or duplicated its right-side width handle");
+    await handle.scrollIntoViewIfNeeded();
+    const box = await handle.boundingBox();
+    assert(box, "the component width handle had no bounds");
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    assert.equal(
+      await page.evaluate(({ x: clientX, y: clientY }) =>
+        document.elementFromPoint(clientX, clientY)?.getAttribute("class"), { x, y }),
+      "component-width-hit",
+      "the component width handle was covered by another editor control",
+    );
+    await page.mouse.down();
+    assert.equal(
+      await target.evaluate((node) =>
+        node.classList.contains("is-editing-component-width")
+      ),
+      true,
+      "pressing the component width handle did not start resizing",
+    );
+    await page.mouse.move(x + 50, y, { steps: 3 });
+    await page.mouse.up();
+    const edit = await lastMessage(page, "resizeComponentWidth");
+    assert.equal(edit.nodeId, 202);
+    assert.equal(edit.pageId, 22);
+    assert(edit.toBounds.width > 380,
+      `the right-side handle did not increase component width: ${JSON.stringify(edit)}`);
+    const provisionalWidth = await preview.evaluate((node) =>
+      Number.parseFloat(node.style.width)
+    );
+    assert(Math.abs(provisionalWidth - edit.toBounds.width) < 0.01,
+      "the provisional component rendering did not use the requested width");
+    await postComponentWidthEditResult(page, {
+      requestId: edit.requestId,
+      status: "rejected",
+      message: "width rejected for visual test",
+    });
+    await page.waitForFunction(() =>
+      !document.querySelector("[data-ss-pending-width]")
+    );
+    assert.equal(
+      await preview.evaluate((node) => Number.parseFloat(node.style.width)),
+      380,
+      "rejecting a component width edit did not restore the authoritative width",
+    );
+  } finally {
+    await page.close();
+  }
+}
+
 async function postSnapshot(page, revision, value, documentVersion = 1) {
   await page.evaluate(({ deliveryRevision, snapshotValue, version }) => {
     window.postMessage({
@@ -1856,6 +2032,13 @@ async function postShapeEditResult(page, result) {
 async function postComponentDeleteResult(page, result) {
   await page.evaluate((message) => window.postMessage({
     type: "componentDeleteResult",
+    ...message,
+  }, "*"), result);
+}
+
+async function postComponentWidthEditResult(page, result) {
+  await page.evaluate((message) => window.postMessage({
+    type: "componentWidthEditResult",
     ...message,
   }, "*"), result);
 }

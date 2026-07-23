@@ -14,6 +14,7 @@ import {
 } from "./support.mjs";
 
 await testSnapshotAndSourceEdits();
+await testComponentWidthEdits();
 await testPositionEditsAllowReflowAndMoveReturnedGroups();
 await testSnapshotHighlightsPythonCode();
 await testSnapshotAssetsUseContentAddressedFiles();
@@ -352,6 +353,166 @@ end
         260,
         210,
         "unbound component edit",
+      );
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testComponentWidthEdits() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-wysiwyg-width-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    let source = `import std:themes/default as *
+
+page demo
+let item = text!("A component whose width is editable")
+~!~ item.left == page.left + 80
+~!~ item.top == page.top - 90
+let anchored = text!("A component with an anchor-form width update")
+~!~ anchored.left == page.left + 500
+~!~ anchored.top == page.top - 90
+~!~ anchored.right == anchored.left + 180
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      let diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source, version: 1 });
+      assert(
+        (await diagnosticsPromise).params.diagnostics.length === 0,
+        "component width fixture produced diagnostics",
+      );
+
+      let snapshot = await editorSnapshot(client, uri);
+      let target = editingTarget(snapshot, "item");
+      let frame = previewBounds(snapshot, target.node_id);
+      const first = await requestEdit(
+        client,
+        uri,
+        snapshot,
+        target,
+        frame,
+        { ...frame, width: 260 },
+        "width",
+        target.page_id,
+      );
+      assert(first.status === "ok", `component width edit failed: ${JSON.stringify(first)}`);
+      source = applyProtocolEdits(
+        source,
+        first.workspaceEdit?.changes?.[uri] ?? [],
+      );
+      assert(
+        source.includes("~!~ item.width == 260"),
+        `component width edit omitted its dimension update: ${source}`,
+      );
+      diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.changeDocument({ uri, version: 2, text: source });
+      assert(
+        (await diagnosticsPromise).params.diagnostics.length === 0,
+        "component width source edit produced diagnostics",
+      );
+      snapshot = await editorSnapshot(client, uri);
+      target = editingTarget(snapshot, "item");
+      frame = previewBounds(snapshot, target.node_id);
+      assert(
+        Math.abs(frame.width - 260) < 0.1,
+        `component width was ${frame.width} instead of 260`,
+      );
+
+      target = editingTarget(snapshot, "anchored");
+      frame = previewBounds(snapshot, target.node_id);
+      assert(
+        Math.abs(frame.width - 180) < 0.1,
+        `anchor-form component width was ${frame.width} instead of 180`,
+      );
+      const anchoredEdit = await requestEdit(
+        client,
+        uri,
+        snapshot,
+        target,
+        frame,
+        { ...frame, width: 220 },
+        "width",
+        target.page_id,
+      );
+      assert(
+        anchoredEdit.status === "ok",
+        `anchor-form component width edit failed: ${JSON.stringify(anchoredEdit)}`,
+      );
+      source = applyProtocolEdits(
+        source,
+        anchoredEdit.workspaceEdit?.changes?.[uri] ?? [],
+      );
+      assert(
+        source.includes("~!~ anchored.right == anchored.left + 220") &&
+          !source.includes("anchored.width"),
+        `anchor-form width edit accumulated a second constraint: ${source}`,
+      );
+      diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.changeDocument({ uri, version: 3, text: source });
+      assert(
+        (await diagnosticsPromise).params.diagnostics.length === 0,
+        "anchor-form width source edit produced diagnostics",
+      );
+      snapshot = await editorSnapshot(client, uri);
+      target = editingTarget(snapshot, "item");
+      frame = previewBounds(snapshot, target.node_id);
+
+      const second = await requestEdit(
+        client,
+        uri,
+        snapshot,
+        target,
+        frame,
+        { ...frame, width: 300 },
+        "width",
+        target.page_id,
+      );
+      assert(second.status === "ok", `second component width edit failed: ${JSON.stringify(second)}`);
+      source = applyProtocolEdits(
+        source,
+        second.workspaceEdit?.changes?.[uri] ?? [],
+      );
+      assert(
+        source.includes("~!~ item.width == 300") &&
+          source.match(/item\.width/g)?.length === 1,
+        `repeated width edit accumulated dimension updates: ${source}`,
+      );
+
+      const outside = await requestEdit(
+        client,
+        uri,
+        snapshot,
+        target,
+        frame,
+        { ...frame, width: 1280 },
+        "width",
+        target.page_id,
+      );
+      assert(
+        outside.status === "rejected",
+        `out-of-page component width was accepted: ${JSON.stringify(outside)}`,
+      );
+      const tooNarrow = await requestEdit(
+        client,
+        uri,
+        snapshot,
+        target,
+        frame,
+        { ...frame, width: 1 },
+        "width",
+        target.page_id,
+      );
+      assert(
+        tooNarrow.status === "rejected",
+        `a component width below the editor minimum was accepted: ${
+          JSON.stringify(tooNarrow)
+        }`,
       );
     });
   } finally {

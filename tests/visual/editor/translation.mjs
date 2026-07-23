@@ -4,10 +4,11 @@ export async function exerciseTranslationLifecycle(page, current) {
   const target = page.locator(
     '.page-shell[data-page-id="22"] .object-hit[data-object-id="202"]',
   );
+  const targetRect = target.locator(":scope > .object-hit-rect");
   const previewTarget = page.locator(
     '.page-shell[data-page-id="22"] .ss-item[data-ss-node-id="202"]',
   );
-  const box = await target.boundingBox();
+  const box = await targetRect.boundingBox();
   const initialPreviewBox = await previewTarget.boundingBox();
   assert(box && box.width > 0 && box.height > 0,
     "movable object had no interactive bounds");
@@ -45,7 +46,7 @@ export async function exerciseTranslationLifecycle(page, current) {
   );
 
   const firstMessageCount = await messageCount(page, "translate");
-  const movedTargetBox = await target.boundingBox();
+  const movedTargetBox = await targetRect.boundingBox();
   await drag(page, movedTargetBox, 10, 7);
   await settleLayout(page);
   assert.equal(
@@ -142,7 +143,7 @@ export async function exerciseTranslationLifecycle(page, current) {
   );
 
   const staleRequestCount = await messageCount(page, "translate");
-  await drag(page, await target.boundingBox(), 9, 6);
+  await drag(page, await targetRect.boundingBox(), 9, 6);
   const staleRequest = await lastMessage(page, "translate");
   await settleLayout(page);
   const staleDesiredBox = await previewTarget.boundingBox();
@@ -200,9 +201,10 @@ export async function exerciseTranslationLifecycle(page, current) {
   );
   await postSnapshot(page, 104, finalSnapshot, 3);
   await page.waitForFunction(() => !document.querySelector(".toast--error"));
+  await settleLayout(page);
 
   const failedBuildRequestCount = await messageCount(page, "translate");
-  await drag(page, await target.boundingBox(), 12, 8);
+  await drag(page, await targetRect.boundingBox(), 12, 8);
   await page.waitForFunction(
     (count) => globalThis.__messages.filter((message) =>
       message.type === "translate"
