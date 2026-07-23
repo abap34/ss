@@ -151,6 +151,7 @@ export interface EditingTarget {
   page_name: string;
   binding: string;
   binding_required: boolean;
+  minimum_width: number;
   statement_start: number;
   statement_end: number;
   path: string;
@@ -249,11 +250,7 @@ export interface LayoutEditResult {
   workspaceEdit?: WorkspaceEditValue;
 }
 
-export interface ShapeEditResult {
-  schema: 1;
-  status: LayoutEditResult["status"];
-  message?: string;
-  workspaceEdit?: WorkspaceEditValue;
+export interface ShapeEditResult extends LayoutEditResult {
   selection?: {
     path: string;
     pageId: number;

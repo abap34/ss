@@ -1,6 +1,5 @@
 import { element, setAttributes, svgElement } from "./dom.js";
 import { formatNumber, previewFrame } from "./geometry.js";
-import { componentWidthPolicy } from "./component-width.js";
 import { strokeStyleSelect } from "./shape-style.js";
 
 export function renderObjectSheet(state, object, actions) {
@@ -12,6 +11,7 @@ export function renderObjectSheet(state, object, actions) {
   const frame = actions.componentWidth?.frame(page, object, baseFrame) || baseFrame;
   const shapeTarget = actions.shape?.styleTarget(object.id);
   const locked = actions.objectLocks?.isLocked(object.id) || false;
+  const minimumWidth = actions.componentWidth?.minimum(object.id);
   const sheet = element(
     "section",
     `object-sheet${shapeTarget ? " object-sheet--shape" : ""}`,
@@ -20,11 +20,12 @@ export function renderObjectSheet(state, object, actions) {
   sheet.append(
     closeButton(actions.close),
     heading(object, actions),
-    bounds(frame, !shapeTarget && actions.componentWidth?.canEdit(object.id)
+    bounds(frame, !shapeTarget && minimumWidth != null
       ? {
         disabled: locked,
+        minimum: minimumWidth,
         maximum: Math.max(
-          componentWidthPolicy.minimum,
+          minimumWidth,
           page.width - frame.x,
         ),
         change: (width) => actions.componentWidth.submit({
@@ -233,7 +234,7 @@ function bounds(frame, widthEdit) {
       ? editableBound(
         "W",
         frame.width,
-        componentWidthPolicy.minimum,
+        widthEdit.minimum,
         widthEdit.maximum,
         widthEdit,
       )

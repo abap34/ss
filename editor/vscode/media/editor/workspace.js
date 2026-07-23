@@ -662,7 +662,7 @@ export class WorkspaceView {
     this.actions.shape.applyPreview(preview, page.id);
     this.actions.componentDeletion.applyPreview(preview, page.id);
     surface.append(preview);
-    surface.append(this.interaction.renderLayer(page));
+    surface.append(this.interaction.renderLayer(page, preview));
     shell.append(surface);
     if (page.location?.path) {
       const open = sourceButton(page, this.actions.revealSource);

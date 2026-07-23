@@ -1,4 +1,5 @@
 import { combineFailureMessages } from "./diagnostics.js";
+import { editingTargetByBinding } from "./editing-target.js";
 
 export const iconCatalogPolicy = Object.freeze({
   queryMaxLength: 128,
@@ -275,9 +276,10 @@ export class IconController {
         snapshot.snapshot_id === pending.snapshotId) return null;
     const selection = pending.selection;
     const target = selection
-      ? snapshot.editing?.find((candidate) =>
-        candidate.page_id === selection.pageId &&
-        candidate.binding === selection.binding
+      ? editingTargetByBinding(
+        snapshot,
+        selection.pageId,
+        selection.binding,
       )
       : null;
     if (selection && !target) return null;

@@ -10,6 +10,7 @@ pub const Result = base.Result;
 pub const applyEdits = base.applyEdits;
 pub const pageEndLineStart = base.pageEndLineStart;
 pub const pageBodyIndent = base.pageBodyIndent;
+pub const minimum_component_width: f64 = 4;
 pub const shape = @import("edit/shape.zig");
 pub const icon = @import("edit/icon.zig");
 pub const component = @import("edit/component.zig");
