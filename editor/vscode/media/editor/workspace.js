@@ -86,6 +86,8 @@ export class WorkspaceView {
         },
         revealSource: this.actions.revealSource,
         shape: this.actions.shape,
+        translation: this.actions.translation,
+        componentWidth: this.actions.componentWidth,
         objectLocks: this.actions.objectLocks,
       }));
     }
@@ -656,6 +658,7 @@ export class WorkspaceView {
     const surface = element("div", "page-surface");
     const preview = renderPage(this.state.snapshot, page.id);
     this.actions.translation.applyPreview(preview, page.id);
+    this.actions.componentWidth.applyPreview(preview, page.id);
     this.actions.shape.applyPreview(preview, page.id);
     this.actions.componentDeletion.applyPreview(preview, page.id);
     surface.append(preview);

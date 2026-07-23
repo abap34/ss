@@ -1298,6 +1298,9 @@ button {
 .shape-resize-handle {
   cursor: nwse-resize;
 }
+.component-width-handle {
+  cursor: ew-resize;
+}
 .shape-resize-handle[data-direction="top"],
 .shape-resize-handle[data-direction="bottom"] {
   cursor: ns-resize;
@@ -1310,12 +1313,14 @@ button {
 .shape-resize-handle[data-direction="bottom-left"] {
   cursor: nesw-resize;
 }
-.shape-resize-hit {
+.shape-resize-hit,
+.component-width-hit {
   fill: var(--control-background);
   fill-opacity: 0.001;
   pointer-events: all;
 }
-.shape-resize-marker {
+.shape-resize-marker,
+.component-width-marker {
   fill: var(--control-background);
   stroke: #62ae99;
   stroke-width: 1.5;
@@ -1323,20 +1328,26 @@ button {
   pointer-events: none;
 }
 .shape-resize-handle:hover .shape-resize-marker,
-.object-hit.is-editing-shape-bounds .shape-resize-marker {
+.object-hit.is-editing-shape-bounds .shape-resize-marker,
+.component-width-handle:hover .component-width-marker,
+.object-hit.is-editing-component-width .component-width-marker {
   fill: var(--accent);
   stroke: var(--accent-border);
 }
-.shape-resize-handle.is-disabled {
+.shape-resize-handle.is-disabled,
+.component-width-handle.is-disabled {
   cursor: default;
 }
-.shape-resize-handle.is-disabled .shape-resize-marker {
+.shape-resize-handle.is-disabled .shape-resize-marker,
+.component-width-handle.is-disabled .component-width-marker {
   fill: var(--toolbar-background);
   stroke: var(--text-faint);
   stroke-dasharray: 3 2;
 }
 .object-hit.is-editing-shape-bounds .object-hit-rect,
-.object-hit.is-shape-resize-pending .object-hit-rect {
+.object-hit.is-shape-resize-pending .object-hit-rect,
+.object-hit.is-editing-component-width .object-hit-rect,
+.object-hit.is-component-width-pending .object-hit-rect {
   stroke: var(--accent);
   stroke-width: 2;
 }
@@ -1553,12 +1564,32 @@ button {
   gap: 5px;
   align-content: start;
 }
-.bounds span {
+.bounds span,
+.bounds > label {
   padding: 5px 7px;
   border: 1px solid var(--control-border);
   border-radius: 4px;
   color: var(--text-strong);
   font: 10px var(--vscode-editor-font-family, ui-monospace, monospace);
+}
+.bounds > label {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.bounds .bound-edit input {
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+.bounds .bound-edit:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px var(--accent-border);
 }
 .bounds small {
   margin-right: 5px;

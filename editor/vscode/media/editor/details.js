@@ -1,12 +1,15 @@
 import { element, setAttributes, svgElement } from "./dom.js";
 import { formatNumber, previewFrame } from "./geometry.js";
+import { componentWidthPolicy } from "./component-width.js";
 import { strokeStyleSelect } from "./shape-style.js";
 
 export function renderObjectSheet(state, object, actions) {
   const page = state.snapshot.layout.pages.find((candidate) =>
     candidate.id === object.page_id
   );
-  const frame = previewFrame(page, object);
+  const baseFrame = actions.translation?.frame(page, object) ||
+    previewFrame(page, object);
+  const frame = actions.componentWidth?.frame(page, object, baseFrame) || baseFrame;
   const shapeTarget = actions.shape?.styleTarget(object.id);
   const locked = actions.objectLocks?.isLocked(object.id) || false;
   const sheet = element(
@@ -17,7 +20,21 @@ export function renderObjectSheet(state, object, actions) {
   sheet.append(
     closeButton(actions.close),
     heading(object, actions),
-    bounds(frame),
+    bounds(frame, !shapeTarget && actions.componentWidth?.canEdit(object.id)
+      ? {
+        disabled: locked,
+        maximum: Math.max(
+          componentWidthPolicy.minimum,
+          page.width - frame.x,
+        ),
+        change: (width) => actions.componentWidth.submit({
+          nodeId: object.id,
+          pageId: object.page_id,
+          fromBounds: frame,
+          toBounds: { ...frame, width },
+        }),
+      }
+      : null),
     relations(state, object),
   );
   if (shapeTarget) {
@@ -207,15 +224,44 @@ function closeButton(closeDetails) {
   return close;
 }
 
-function bounds(frame) {
+function bounds(frame, widthEdit) {
   const container = element("div", "bounds");
   container.append(
     bound("X", frame.x),
     bound("Y", frame.y),
-    bound("W", frame.width),
+    widthEdit
+      ? editableBound(
+        "W",
+        frame.width,
+        componentWidthPolicy.minimum,
+        widthEdit.maximum,
+        widthEdit,
+      )
+      : bound("W", frame.width),
     bound("H", frame.height),
   );
   return container;
+}
+
+function editableBound(label, value, minimum, maximum, edit) {
+  const node = element("label", "bound-edit");
+  const key = element("small");
+  key.textContent = label;
+  const input = element("input");
+  input.type = "number";
+  input.value = formatNumber(value);
+  input.min = String(minimum);
+  input.max = String(maximum);
+  input.step = "1";
+  input.disabled = edit.disabled;
+  input.setAttribute("aria-label", "Component width");
+  input.addEventListener("change", () => {
+    const next = Number(input.value);
+    if (!Number.isFinite(next)) return;
+    edit.change(Math.min(maximum, Math.max(minimum, next)));
+  });
+  node.append(key, input);
+  return node;
 }
 
 function relations(state, object) {

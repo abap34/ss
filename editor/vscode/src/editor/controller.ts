@@ -8,6 +8,7 @@ import {
   HostMessage,
   IconCatalogResult,
   LayoutEditResult,
+  Rect,
   ShapeEditResult,
   WebviewMessage,
 } from "./protocol";
@@ -26,6 +27,31 @@ import {
 import { ViewResources } from "./view";
 
 type ClientProvider = () => LanguageClient | undefined;
+
+interface LayoutSourceEditMessage {
+  requestId: number;
+  snapshotId: string;
+  nodeId: number;
+  pageId: number;
+  fromBounds: Rect;
+  toBounds: Rect;
+}
+
+type LayoutApplyOutcome =
+  | { status: "applied"; documentVersion: number; reconcile: true }
+  | {
+    status: Exclude<LayoutEditResult["status"], "ok">;
+    message?: string;
+    reconcile?: true;
+  };
+
+interface LayoutApplyMessages {
+  unavailable: string;
+  stale: string;
+  failed: string;
+  missingEdit: string;
+  logLabel: string;
+}
 
 interface Session {
   document: vscode.TextDocument;
@@ -217,6 +243,10 @@ export class EditorController implements vscode.Disposable {
       await this.applyTranslation(session, message);
       return;
     }
+    if (message.type === "resizeComponentWidth") {
+      await this.applyComponentWidth(session, message);
+      return;
+    }
     if (message.type === "deleteComponent") {
       await this.applyComponentDelete(session, message);
       return;
@@ -310,7 +340,7 @@ export class EditorController implements vscode.Disposable {
           status: "stale",
           message: "The document changed before the edit was applied.",
         });
-        this.scheduleAutomatic(session, 0);
+        this.scheduleEditorReconciliation(session);
         return;
       }
       if (result.status !== "ok" || !result.workspaceEdit) {
@@ -320,7 +350,9 @@ export class EditorController implements vscode.Disposable {
           status: result.status === "ok" ? "rejected" : result.status,
           message: result.message ?? "The component could not be deleted.",
         });
-        if (result.status === "stale") this.scheduleAutomatic(session, 0);
+        if (result.status === "stale") {
+          this.scheduleEditorReconciliation(session);
+        }
         return;
       }
       const applied = await vscode.workspace.applyEdit(
@@ -341,7 +373,7 @@ export class EditorController implements vscode.Disposable {
         status: "applied",
         documentVersion: session.document.version,
       });
-      this.scheduleAutomatic(session, 0);
+      this.scheduleEditorReconciliation(session);
     } catch (error) {
       this.output.appendLine(`[editor] component deletion failed: ${String(error)}`);
       await this.post(session, {
@@ -586,15 +618,80 @@ export class EditorController implements vscode.Disposable {
     session: Session,
     message: Extract<WebviewMessage, { type: "translate" }>,
   ): Promise<void> {
-    const client = this.clientProvider();
-    if (!client) {
-      await this.post(session, {
+    const outcome = await this.applyLayoutSourceEdit(
+      session,
+      message,
+      message.mode,
+      {
+        unavailable: "Language server is not running.",
+        stale: "The document changed before the edit was applied.",
+        failed: "The edit could not be applied.",
+        missingEdit: "The language server returned no source edit.",
+        logLabel: "layout edit",
+      },
+    );
+    if (!outcome) return;
+    await this.post(session, outcome.status === "applied"
+      ? {
         type: "editResult",
         requestId: message.requestId,
-        status: "unsupported",
-        message: "Language server is not running.",
+        status: "applied",
+        documentVersion: outcome.documentVersion,
+      }
+      : {
+        type: "editResult",
+        requestId: message.requestId,
+        status: outcome.status,
+        message: outcome.message,
       });
-      return;
+    if (outcome.reconcile) this.scheduleEditorReconciliation(session);
+  }
+
+  private async applyComponentWidth(
+    session: Session,
+    message: Extract<WebviewMessage, { type: "resizeComponentWidth" }>,
+  ): Promise<void> {
+    const outcome = await this.applyLayoutSourceEdit(
+      session,
+      message,
+      "width",
+      {
+        unavailable: "Language server is not running.",
+        stale: "The document changed before the width edit was applied.",
+        failed: "The component width could not be applied.",
+        missingEdit: "The language server returned no component width edit.",
+        logLabel: "component width edit",
+      },
+    );
+    if (!outcome) return;
+    await this.post(session, outcome.status === "applied"
+      ? {
+        type: "componentWidthEditResult",
+        requestId: message.requestId,
+        status: "applied",
+        documentVersion: outcome.documentVersion,
+      }
+      : {
+        type: "componentWidthEditResult",
+        requestId: message.requestId,
+        status: outcome.status,
+        message: outcome.message,
+      });
+    if (outcome.reconcile) this.scheduleEditorReconciliation(session);
+  }
+
+  private async applyLayoutSourceEdit(
+    session: Session,
+    message: LayoutSourceEditMessage,
+    mode: "absolute" | "relative" | "width",
+    messages: LayoutApplyMessages,
+  ): Promise<LayoutApplyOutcome | undefined> {
+    const client = this.clientProvider();
+    if (!client) {
+      return {
+        status: "unsupported",
+        message: messages.unavailable,
+      };
     }
     const versions = documentVersions();
     try {
@@ -605,71 +702,58 @@ export class EditorController implements vscode.Disposable {
           snapshotId: message.snapshotId,
           nodeId: message.nodeId,
           pageId: message.pageId,
-          mode: message.mode,
+          mode,
           fromBounds: message.fromBounds,
           toBounds: message.toBounds,
         },
       );
-      if (session.disposed) return;
-      if (
-        !workspaceEditTargetsAreCurrent(result.workspaceEdit, versions)
-      ) {
-        await this.post(session, {
-          type: "editResult",
-          requestId: message.requestId,
+      if (session.disposed) return undefined;
+      if (!workspaceEditTargetsAreCurrent(result.workspaceEdit, versions)) {
+        return {
           status: "stale",
-          message: "The document changed before the edit was applied.",
-        });
-        this.scheduleEditorReconciliation(session);
-        return;
+          message: messages.stale,
+          reconcile: true,
+        };
       }
       if (result.status !== "ok") {
-        await this.post(session, {
-          type: "editResult",
-          requestId: message.requestId,
-          status: result.status,
-          message: result.message ?? "The edit could not be applied.",
-        });
         if (result.status === "stale") {
-          this.scheduleEditorReconciliation(session);
+          return {
+            status: "stale",
+            message: result.message ?? messages.failed,
+            reconcile: true,
+          };
         }
-        return;
+        return {
+          status: result.status,
+          message: result.message ?? messages.failed,
+        };
       }
       if (!result.workspaceEdit) {
-        await this.post(session, {
-          type: "editResult",
-          requestId: message.requestId,
+        return {
           status: "rejected",
-          message: result.message ?? "The language server returned no source edit.",
-        });
-        return;
+          message: result.message ?? messages.missingEdit,
+        };
       }
-      const edit = toWorkspaceEdit(result.workspaceEdit);
-      const applied = await vscode.workspace.applyEdit(edit);
+      const applied = await vscode.workspace.applyEdit(
+        toWorkspaceEdit(result.workspaceEdit),
+      );
       if (!applied) {
-        await this.post(session, {
-          type: "editResult",
-          requestId: message.requestId,
+        return {
           status: "rejected",
           message: "VS Code rejected the source edit.",
-        });
-        return;
+        };
       }
-      await this.post(session, {
-        type: "editResult",
-        requestId: message.requestId,
+      return {
         status: "applied",
         documentVersion: session.document.version,
-      });
-      this.scheduleEditorReconciliation(session);
+        reconcile: true,
+      };
     } catch (error) {
-      this.output.appendLine(`[editor] layout edit failed: ${String(error)}`);
-      await this.post(session, {
-        type: "editResult",
-        requestId: message.requestId,
+      this.output.appendLine(`[editor] ${messages.logLabel} failed: ${String(error)}`);
+      return {
         status: "rejected",
         message: String(error),
-      });
+      };
     }
   }
 

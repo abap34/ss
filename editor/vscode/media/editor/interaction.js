@@ -6,6 +6,7 @@ import {
   svgPoint,
 } from "./geometry.js";
 import { renderConstraints } from "./constraints.js";
+import { componentWidthPolicy } from "./component-width.js";
 
 const minimumPlacementLength = 4;
 const minimumEditedLineLength = 0.25;
@@ -36,6 +37,7 @@ export class InteractionController {
     this.placement = null;
     this.lineEndpointDrag = null;
     this.shapeResizeDrag = null;
+    this.componentWidthDrag = null;
     this.updateDrag = this.updateDrag.bind(this);
     this.finishDrag = this.finishDrag.bind(this);
     this.cancelDrag = this.cancelDrag.bind(this);
@@ -48,6 +50,9 @@ export class InteractionController {
     this.updateShapeResize = this.updateShapeResize.bind(this);
     this.finishShapeResize = this.finishShapeResize.bind(this);
     this.cancelShapeResize = this.cancelShapeResize.bind(this);
+    this.updateComponentWidth = this.updateComponentWidth.bind(this);
+    this.finishComponentWidth = this.finishComponentWidth.bind(this);
+    this.cancelComponentWidth = this.cancelComponentWidth.bind(this);
     this.handleKeydown = this.handleKeydown.bind(this);
     window.addEventListener("keydown", this.handleKeydown);
   }
@@ -109,11 +114,13 @@ export class InteractionController {
     this.cleanupPlacement();
     this.cleanupLineEndpoint();
     this.cleanupShapeResize();
+    this.cleanupComponentWidth();
   }
 
   isPointerOperationActive() {
     return this.drag != null || this.placement != null ||
-      this.lineEndpointDrag != null || this.shapeResizeDrag != null;
+      this.lineEndpointDrag != null || this.shapeResizeDrag != null ||
+      this.componentWidthDrag != null;
   }
 
   placementTarget(page) {
@@ -216,6 +223,11 @@ export class InteractionController {
         this.cancelShapeResize();
         return;
       }
+      if (this.componentWidthDrag) {
+        event.preventDefault();
+        this.cancelComponentWidth();
+        return;
+      }
       if (this.placement) {
         event.preventDefault();
         this.cleanupPlacement();
@@ -230,6 +242,7 @@ export class InteractionController {
         !event.defaultPrevented && !event.metaKey && !event.ctrlKey &&
         !event.altKey && !event.shiftKey && !this.drag && !this.placement &&
         !this.lineEndpointDrag && !this.shapeResizeDrag &&
+        !this.componentWidthDrag &&
         !isTypingTarget(event.target) &&
         !this.actions.objectLocks.isLocked(this.state.selectedObjectId) &&
         this.actions.componentDeletion.deleteSelected()) {
@@ -239,6 +252,7 @@ export class InteractionController {
     if (this.navigatePageFromKey(event)) return;
     if (event.key.toLowerCase() !== "l" || event.metaKey || event.ctrlKey ||
         event.altKey || this.placement || this.lineEndpointDrag ||
+        this.componentWidthDrag ||
         isTypingTarget(event.target) ||
         this.state.shapeTool === "icon" ||
         !this.actions.shape.supportsInsertion(this.state.currentPageId)) return;
@@ -255,6 +269,7 @@ export class InteractionController {
     if (offset === 0 || event.defaultPrevented || event.metaKey ||
         event.ctrlKey || event.altKey || event.shiftKey || this.drag ||
         this.placement || this.lineEndpointDrag || this.shapeResizeDrag ||
+        this.componentWidthDrag ||
         isTypingTarget(event.target)) {
       return false;
     }
@@ -322,7 +337,6 @@ export class InteractionController {
   }
 
   hitTarget(page, object) {
-    const translatedFrame = this.actions.translation.frame(page, object);
     const editableNodeId = editableAncestorNodeId(
       this.state.snapshot,
       object.id,
@@ -333,6 +347,11 @@ export class InteractionController {
         candidate.id === editableNodeId
       );
     const target = editableObject || object;
+    const translatedFrame = this.actions.translation.frame(page, object);
+    const directTarget = target.id === object.id;
+    const widthFrame = directTarget
+      ? this.actions.componentWidth.frame(page, target, translatedFrame)
+      : translatedFrame;
     const selected = target.id === this.state.selectedObjectId;
     const userLocked = editableObject != null &&
       this.actions.objectLocks.isLocked(editableObject.id);
@@ -342,7 +361,7 @@ export class InteractionController {
     const pendingBounds = shapeTarget?.kind !== "line"
       ? this.actions.shape.pendingBounds(target.id)
       : null;
-    const frame = pendingBounds?.bounds || translatedFrame;
+    const frame = pendingBounds?.bounds || widthFrame;
     const pendingLineGeometry = shapeTarget?.kind === "line"
       ? this.actions.shape.pendingLineGeometry(target.id)
       : null;
@@ -431,6 +450,20 @@ export class InteractionController {
             rect,
           ));
         }
+      } else if (selected && directTarget && !shapeTarget &&
+          this.actions.componentWidth.canEdit(target.id)) {
+        const widthEditable = !userLocked;
+        group.classList.toggle(
+          "is-component-width-pending",
+          this.actions.componentWidth.isPending(target.id),
+        );
+        group.append(this.componentWidthHandle(
+          frame,
+          widthEditable,
+          page,
+          target,
+          rect,
+        ));
       }
     }
     group.addEventListener("click", (event) => {
@@ -545,6 +578,111 @@ export class InteractionController {
       });
     }
     return handle;
+  }
+
+  componentWidthHandle(bounds, editable, page, target, outline) {
+    const handle = svgElement(
+      "g",
+      `component-width-handle${editable ? "" : " is-disabled"}`,
+    );
+    handle.setAttribute("aria-label", "Resize component width");
+    handle.setAttribute("aria-disabled", String(!editable));
+    const hit = svgElement("rect", "component-width-hit");
+    setCenteredSquare(hit, 20);
+    const marker = svgElement("rect", "component-width-marker");
+    setCenteredSquare(marker, 7);
+    setResizeHandlePosition(handle, "right", bounds);
+    handle.append(hit, marker);
+    handle.addEventListener("click", (event) => event.stopPropagation());
+    if (editable) {
+      handle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+        this.beginComponentWidth(event, page, target, bounds, outline, handle);
+      });
+    }
+    return handle;
+  }
+
+  beginComponentWidth(event, page, target, bounds, outline, handle) {
+    event.preventDefault();
+    const group = handle.parentElement;
+    this.componentWidthDrag = {
+      pointerId: event.pointerId,
+      page,
+      target,
+      svg: handle.ownerSVGElement,
+      group,
+      handle,
+      outline,
+      original: { ...bounds },
+      bounds: { ...bounds },
+    };
+    group.classList.add("is-editing-component-width");
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      // Window listeners keep the width drag active when SVG capture is absent.
+    }
+    window.addEventListener("pointermove", this.updateComponentWidth);
+    window.addEventListener("pointerup", this.finishComponentWidth);
+    window.addEventListener("pointercancel", this.cancelComponentWidth);
+  }
+
+  updateComponentWidth(event) {
+    const drag = this.componentWidthDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const point = clampPoint(svgPoint(drag.svg, event), drag.page);
+    drag.bounds = {
+      ...drag.original,
+      width: Math.max(
+        componentWidthPolicy.minimum,
+        point.x - drag.original.x,
+      ),
+    };
+    setRect(drag.outline, drag.bounds);
+    setResizeHandlePosition(drag.handle, "right", drag.bounds);
+    const preview = drag.svg.previousElementSibling;
+    this.actions.componentWidth.applyNodeWidth(
+      preview,
+      drag.target.id,
+      drag.bounds.width,
+    );
+  }
+
+  finishComponentWidth(event) {
+    const drag = this.componentWidthDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    this.updateComponentWidth(event);
+    const changed = Math.abs(drag.bounds.width - drag.original.width) >=
+      componentWidthPolicy.changeTolerance;
+    this.cleanupComponentWidth();
+    if (!changed || !this.actions.componentWidth.submit({
+      nodeId: drag.target.id,
+      pageId: drag.target.page_id,
+      fromBounds: drag.original,
+      toBounds: drag.bounds,
+    })) {
+      this.actions.render();
+    }
+    this.notifyPointerOperationFinished();
+  }
+
+  cancelComponentWidth() {
+    if (!this.componentWidthDrag) return;
+    this.cleanupComponentWidth();
+    this.actions.render();
+    this.notifyPointerOperationFinished();
+  }
+
+  cleanupComponentWidth() {
+    const drag = this.componentWidthDrag;
+    if (!drag) return;
+    drag.group.classList.remove("is-editing-component-width");
+    window.removeEventListener("pointermove", this.updateComponentWidth);
+    window.removeEventListener("pointerup", this.finishComponentWidth);
+    window.removeEventListener("pointercancel", this.cancelComponentWidth);
+    this.componentWidthDrag = null;
   }
 
   beginShapeResize(event, direction, page, target, bounds, outline, handle) {
@@ -722,8 +860,10 @@ export class InteractionController {
   }
 
   beginDrag(event, page, object, group, frame) {
-    if (event.button !== 0 || this.lineEndpointDrag || this.shapeResizeDrag) return;
+    if (event.button !== 0 || this.lineEndpointDrag || this.shapeResizeDrag ||
+        this.componentWidthDrag) return;
     event.preventDefault();
+    if (this.actions.objectLocks.isLocked(object.id)) return;
     this.actions.selectObject(object.id, object.page_id, false);
     if (!this.isMovable(object.id)) return;
     const svg = group.ownerSVGElement;
@@ -820,7 +960,9 @@ export class InteractionController {
     const object = this.state.snapshot.layout.objects.find((candidate) =>
       candidate.id === nodeId
     );
-    return object ? this.actions.translation.frame(page, object) : null;
+    if (!object) return null;
+    const translated = this.actions.translation.frame(page, object);
+    return this.actions.componentWidth.frame(page, object, translated);
   }
 
   activeInsertionController() {

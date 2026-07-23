@@ -23,6 +23,11 @@ pub const ExistingUpdate = struct {
     horizontal: bool,
 };
 
+pub const ExistingWidthUpdate = struct {
+    value: ByteSpan,
+    direct_dimension: bool,
+};
+
 pub fn absolutePosition(
     allocator: std.mem.Allocator,
     source: []const u8,
@@ -83,6 +88,54 @@ pub fn absolutePosition(
             .text = try text.toOwnedSlice(allocator),
         });
     }
+    return .{ .edits = try edits.toOwnedSlice(allocator) };
+}
+
+pub fn componentWidth(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    page_span: ByteSpan,
+    binding: []const u8,
+    width: f64,
+    existing_update: ?ExistingWidthUpdate,
+    binding_introduction: ?BindingIntroduction,
+) !?Result {
+    var edits = std.ArrayList(TextEdit).empty;
+    errdefer deinitEdits(allocator, &edits);
+
+    if (binding_introduction) |introduction| {
+        const binding_name = binding[0 .. std.mem.indexOfScalar(u8, binding, '.') orelse binding.len];
+        try appendBindingIntroduction(allocator, &edits, source, binding_name, introduction.statement);
+    }
+
+    if (existing_update) |update| {
+        if (update.value.start > update.value.end or update.value.end > source.len) {
+            return error.InvalidConstraintOrigin;
+        }
+        try edits.append(allocator, .{
+            .start = update.value.start,
+            .end = update.value.end,
+            .text = if (update.direct_dimension)
+                try relation.numericLiteral(allocator, width)
+            else
+                try relation.numericOffset(allocator, width, false),
+        });
+    } else {
+        const insertion = pageEndLineStart(source, page_span) orelse return null;
+        const indent = pageBodyIndent(source, page_span, insertion);
+        const literal = try relation.numericLiteral(allocator, width);
+        defer allocator.free(literal);
+        try edits.append(allocator, .{
+            .start = insertion,
+            .end = insertion,
+            .text = try std.fmt.allocPrint(
+                allocator,
+                "{s}~!~ {s}.width == {s}\n",
+                .{ indent, binding, literal },
+            ),
+        });
+    }
+
     return .{ .edits = try edits.toOwnedSlice(allocator) };
 }
 

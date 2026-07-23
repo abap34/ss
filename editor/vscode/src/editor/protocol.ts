@@ -351,6 +351,18 @@ export type HostMessage =
     requestId: number;
     status: Exclude<ComponentDeleteResult["status"], "ok">;
     message?: string;
+  }
+  | {
+    type: "componentWidthEditResult";
+    requestId: number;
+    status: "applied";
+    documentVersion: number;
+  }
+  | {
+    type: "componentWidthEditResult";
+    requestId: number;
+    status: Exclude<LayoutEditResult["status"], "ok">;
+    message?: string;
   };
 
 type ShapeInsertionMessage = {
@@ -434,6 +446,16 @@ type ComponentDeleteMessage = {
   pageId: number;
 };
 
+type ComponentWidthEditMessage = {
+  type: "resizeComponentWidth";
+  requestId: number;
+  snapshotId: string;
+  nodeId: number;
+  pageId: number;
+  fromBounds: Rect;
+  toBounds: Rect;
+};
+
 export type WebviewMessage =
   | { type: "ready" }
   | { type: "refreshFull" }
@@ -453,5 +475,6 @@ export type WebviewMessage =
   | LineGeometryEditMessage
   | ShapeBoundsEditMessage
   | ComponentDeleteMessage
+  | ComponentWidthEditMessage
   | IconCatalogMessage
   | IconInsertionMessage;
