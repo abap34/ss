@@ -64,6 +64,7 @@ await testManualPositionEditRequestsReconciliation();
 await testNewSourceEditReschedulesReconciliation();
 await testLineGeometryEditForwardsOrderedPagePoints();
 await testShapeBoundsEditForwardsPageBounds();
+await testComponentWidthEditReachesTheWebview();
 await testComponentDeletionReachesTheWebview();
 await testIconCatalogAndInsertionReachTheWebview();
 
@@ -284,6 +285,67 @@ async function testComponentDeletionReachesTheWebview() {
       message.type === "componentDeleteResult" &&
       message.requestId === 11 && message.status === "applied"
     ), "an applied component deletion did not reach the webview");
+    await waitFor(() => requests.some((candidate) =>
+      candidate.method === "ss/editorSnapshot"
+    ));
+    await waitFor(() => messages.some((message) =>
+      message.type === "snapshot"
+    ));
+    assert.equal(
+      requests.filter((candidate) =>
+        candidate.method === "ss/editorSnapshot"
+      ).length,
+      1,
+      "a component deletion did not request one authoritative snapshot",
+    );
+  });
+}
+
+async function testComponentWidthEditReachesTheWebview() {
+  await withManualSession(async ({ controller, session, requests, messages }) => {
+    await controller.applyComponentWidth(session, {
+      type: "resizeComponentWidth",
+      requestId: 12,
+      snapshotId: "initial",
+      nodeId: 9,
+      pageId: 1,
+      fromBounds: { x: 80, y: 90, width: 180, height: 60 },
+      toBounds: { x: 80, y: 90, width: 260, height: 60 },
+    });
+    const request = requests.find((candidate) =>
+      candidate.method === "ss/layoutEdit" && candidate.params.mode === "width"
+    );
+    assert.deepEqual(request?.params, {
+      textDocument: { uri: session.document.uri.toString() },
+      snapshotId: "initial",
+      nodeId: 9,
+      pageId: 1,
+      mode: "width",
+      fromBounds: { x: 80, y: 90, width: 180, height: 60 },
+      toBounds: { x: 80, y: 90, width: 260, height: 60 },
+    });
+    assert(messages.some((message) =>
+      message.type === "componentWidthEditResult" &&
+      message.requestId === 12 && message.status === "applied"
+    ), "an applied component width edit did not reach the webview");
+    await waitFor(() => requests.some((candidate) =>
+      candidate.method === "ss/editorSnapshot"
+    ));
+    await waitFor(() => messages.some((message) =>
+      message.type === "snapshot"
+    ));
+    assert.equal(
+      requests.filter((candidate) =>
+        candidate.method === "ss/editorSnapshot"
+      ).length,
+      1,
+      "a component width edit did not request one authoritative snapshot",
+    );
+    assert.equal(
+      session.editorReconciliationPending,
+      false,
+      "an accepted snapshot left component width reconciliation pending",
+    );
   });
 }
 
