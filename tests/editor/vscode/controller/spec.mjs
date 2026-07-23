@@ -62,6 +62,8 @@ await testOpenResolvesConfiguredEntryWithoutSsDocument();
 await testOpeningManualPreviewBuildsInitialSnapshot();
 await testManualPositionEditRequestsReconciliation();
 await testNewSourceEditReschedulesReconciliation();
+await testSourceEditFailuresPreserveServerMessages();
+await testShapeInsertionAndStyleRequests();
 await testLineGeometryEditForwardsOrderedPagePoints();
 await testShapeBoundsEditForwardsPageBounds();
 await testComponentWidthEditReachesTheWebview();
@@ -231,6 +233,159 @@ async function testLineGeometryEditForwardsOrderedPagePoints() {
       message.operation === "geometry" &&
       message.status === "applied"
     ), "an applied line geometry edit did not reach the webview");
+  });
+}
+
+async function testShapeInsertionAndStyleRequests() {
+  await withManualSession(async ({ controller, session, requests }) => {
+    await controller.applyShapeEdit(session, {
+      type: "insertShape",
+      requestId: 7,
+      snapshotId: "initial",
+      pageId: 1,
+      kind: "rectangle",
+      bounds: { x: 40, y: 50, width: 180, height: 90 },
+      fill: { enabled: true, color: "#334455", opacity: 0.8 },
+      stroke: { enabled: true, color: "#112233", width: 2, style: "solid" },
+    });
+    await controller.applyShapeEdit(session, {
+      type: "insertShape",
+      requestId: 8,
+      snapshotId: "initial",
+      pageId: 1,
+      kind: "elbow_line",
+      start: { x: 80, y: 90 },
+      end: { x: 260, y: 210 },
+      arrowStart: false,
+      arrowEnd: true,
+      stroke: { enabled: true, color: "#556677", width: 3, style: "dashed" },
+    });
+    await controller.applyShapeEdit(session, {
+      type: "editShapeStyle",
+      requestId: 9,
+      snapshotId: "initial",
+      pageId: 1,
+      nodeId: 5,
+      kind: "circle",
+      fill: { enabled: false, color: "#778899", opacity: 1 },
+      stroke: { enabled: true, color: "#223344", width: 1, style: "dotted" },
+    });
+    await controller.applyShapeEdit(session, {
+      type: "editShapeStyle",
+      requestId: 10,
+      snapshotId: "initial",
+      pageId: 1,
+      nodeId: 6,
+      kind: "line",
+      arrowStart: true,
+      arrowEnd: false,
+      stroke: { enabled: true, color: "#445566", width: 4, style: "solid" },
+    });
+
+    const shapeRequests = requests.filter((candidate) =>
+      candidate.method === "ss/insertShape"
+    );
+    assert.deepEqual(shapeRequests.map((candidate) => candidate.params), [
+      {
+        textDocument: { uri: session.document.uri.toString() },
+        snapshotId: "initial",
+        pageId: 1,
+        kind: "rectangle",
+        bounds: { x: 40, y: 50, width: 180, height: 90 },
+        fill: { enabled: true, color: "#334455", opacity: 0.8 },
+        stroke: { enabled: true, color: "#112233", width: 2, style: "solid" },
+      },
+      {
+        textDocument: { uri: session.document.uri.toString() },
+        snapshotId: "initial",
+        pageId: 1,
+        kind: "elbow_line",
+        start: { x: 80, y: 90 },
+        end: { x: 260, y: 210 },
+        arrowStart: false,
+        arrowEnd: true,
+        stroke: { enabled: true, color: "#556677", width: 3, style: "dashed" },
+      },
+    ]);
+    const styleRequests = requests.filter((candidate) =>
+      candidate.method === "ss/shapeStyleEdit"
+    );
+    assert.deepEqual(styleRequests.map((candidate) => candidate.params), [
+      {
+        textDocument: { uri: session.document.uri.toString() },
+        snapshotId: "initial",
+        pageId: 1,
+        nodeId: 5,
+        fill: { enabled: false, color: "#778899", opacity: 1 },
+        stroke: { enabled: true, color: "#223344", width: 1, style: "dotted" },
+      },
+      {
+        textDocument: { uri: session.document.uri.toString() },
+        snapshotId: "initial",
+        pageId: 1,
+        nodeId: 6,
+        arrowStart: true,
+        arrowEnd: false,
+        stroke: { enabled: true, color: "#445566", width: 4, style: "solid" },
+      },
+    ]);
+  });
+}
+
+async function testSourceEditFailuresPreserveServerMessages() {
+  await withManualSession(async ({ controller, session, messages }) => {
+    session.sourceEditResponse = (method) => ({
+      schema: 1,
+      status: "rejected",
+      message: `precise failure from ${method}`,
+    });
+    await controller.applyComponentDelete(session, {
+      type: "deleteComponent",
+      requestId: 31,
+      snapshotId: "initial",
+      nodeId: 5,
+      pageId: 1,
+    });
+    await controller.applyComponentWidth(session, {
+      type: "resizeComponentWidth",
+      requestId: 32,
+      snapshotId: "initial",
+      nodeId: 5,
+      pageId: 1,
+      fromBounds: { x: 20, y: 30, width: 100, height: 40 },
+      toBounds: { x: 20, y: 30, width: 120, height: 40 },
+    });
+    await controller.applyShapeEdit(session, {
+      type: "editShapeBounds",
+      requestId: 33,
+      snapshotId: "initial",
+      nodeId: 5,
+      pageId: 1,
+      kind: "rectangle",
+      bounds: { x: 20, y: 30, width: 120, height: 40 },
+    });
+    await controller.applyIconInsert(session, {
+      type: "insertIcon",
+      requestId: 34,
+      snapshotId: "initial",
+      pageId: 1,
+      source: "fa-solid:star",
+      bounds: { x: 20, y: 30, width: 40, height: 40 },
+      color: "#374151",
+    });
+
+    for (const [type, requestId, method] of [
+      ["componentDeleteResult", 31, "ss/deleteComponent"],
+      ["componentWidthEditResult", 32, "ss/layoutEdit"],
+      ["shapeEditResult", 33, "ss/editShapeBounds"],
+      ["iconEditResult", 34, "ss/insertIcon"],
+    ]) {
+      const result = messages.find((message) =>
+        message.type === type && message.requestId === requestId
+      );
+      assert.equal(result?.status, "rejected");
+      assert.equal(result?.message, `precise failure from ${method}`);
+    }
   });
 }
 
@@ -448,7 +603,11 @@ automatic = false
     const client = {
       async sendRequest(method, params, token) {
         requests.push({ method, params, token });
-        if (method === "ss/layoutEdit" || method === "ss/editLineGeometry" ||
+        const sourceEditResponse = session.sourceEditResponse?.(method, params);
+        if (sourceEditResponse) return sourceEditResponse;
+        if (method === "ss/layoutEdit" || method === "ss/insertShape" ||
+            method === "ss/shapeStyleEdit" ||
+            method === "ss/editLineGeometry" ||
             method === "ss/editShapeBounds" || method === "ss/deleteComponent") {
           return {
             schema: 1,

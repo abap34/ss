@@ -20,6 +20,11 @@ import {
   workspaceEditTargetsAreCurrent,
 } from "./source";
 import {
+  ShapeEditMessage,
+  shapeEditOperation,
+  shapeEditRequest,
+} from "./shape-edit-request";
+import {
   refreshTiming,
   shouldScheduleRefresh,
   shouldStartPendingRefresh,
@@ -27,6 +32,15 @@ import {
 import { ViewResources } from "./view";
 
 type ClientProvider = () => LanguageClient | undefined;
+
+const immediateRefreshDelayMs = 0;
+const languageServerUnavailableMessage = "Language server is not running.";
+const sourceDocumentChangedMessage =
+  "The document changed before the edit was applied.";
+const commonSourceEditMessages = Object.freeze({
+  unavailable: languageServerUnavailableMessage,
+  stale: sourceDocumentChangedMessage,
+});
 
 interface LayoutSourceEditMessage {
   requestId: number;
@@ -37,15 +51,20 @@ interface LayoutSourceEditMessage {
   toBounds: Rect;
 }
 
-type LayoutApplyOutcome =
-  | { status: "applied"; documentVersion: number; reconcile: true }
+type SourceEditOutcome<Result extends LayoutEditResult = LayoutEditResult> =
+  | {
+    status: "applied";
+    documentVersion: number;
+    result: Result;
+    refresh: true;
+  }
   | {
     status: Exclude<LayoutEditResult["status"], "ok">;
     message?: string;
-    reconcile?: true;
+    refresh?: true;
   };
 
-interface LayoutApplyMessages {
+interface SourceEditMessages {
   unavailable: string;
   stale: string;
   failed: string;
@@ -91,11 +110,17 @@ export class EditorController implements vscode.Disposable {
       sourceWatcher,
       projectWatcher,
       sourceWatcher.onDidChange((uri) => this.refreshAffected(uri, 0)),
-      sourceWatcher.onDidCreate(() => this.refreshAll(0)),
+      sourceWatcher.onDidCreate(() => this.refreshAll(immediateRefreshDelayMs)),
       sourceWatcher.onDidDelete((uri) => this.refreshAffected(uri, 0)),
-      projectWatcher.onDidChange(() => this.refreshAll(0)),
-      projectWatcher.onDidCreate(() => this.refreshAll(0)),
-      projectWatcher.onDidDelete(() => this.refreshAll(0)),
+      projectWatcher.onDidChange(() =>
+        this.refreshAll(immediateRefreshDelayMs)
+      ),
+      projectWatcher.onDidCreate(() =>
+        this.refreshAll(immediateRefreshDelayMs)
+      ),
+      projectWatcher.onDidDelete(() =>
+        this.refreshAll(immediateRefreshDelayMs)
+      ),
     );
   }
 
@@ -227,12 +252,12 @@ export class EditorController implements vscode.Disposable {
   ): Promise<void> {
     if (message.type === "ready") {
       session.ready = true;
-      this.schedule(session, 0);
+      this.schedule(session, immediateRefreshDelayMs);
       return;
     }
     if (message.type === "refreshFull") {
       session.snapshotId = undefined;
-      this.schedule(session, 0);
+      this.schedule(session, immediateRefreshDelayMs);
       return;
     }
     if (message.type === "revealSource") {
@@ -274,7 +299,7 @@ export class EditorController implements vscode.Disposable {
       await this.post(session, {
         type: "iconCatalogError",
         requestId: message.requestId,
-        message: "Language server is not running.",
+        message: languageServerUnavailableMessage,
       });
       return;
     }
@@ -311,19 +336,9 @@ export class EditorController implements vscode.Disposable {
     session: Session,
     message: Extract<WebviewMessage, { type: "deleteComponent" }>,
   ): Promise<void> {
-    const client = this.clientProvider();
-    if (!client) {
-      await this.post(session, {
-        type: "componentDeleteResult",
-        requestId: message.requestId,
-        status: "unsupported",
-        message: "Language server is not running.",
-      });
-      return;
-    }
-    const versions = documentVersions();
-    try {
-      const result = await client.sendRequest<ComponentDeleteResult>(
+    const outcome = await this.applySourceEdit<ComponentDeleteResult>(
+      session,
+      (client) => client.sendRequest<ComponentDeleteResult>(
         "ss/deleteComponent",
         {
           textDocument: { uri: session.document.uri.toString() },
@@ -331,286 +346,113 @@ export class EditorController implements vscode.Disposable {
           nodeId: message.nodeId,
           pageId: message.pageId,
         },
-      );
-      if (session.disposed) return;
-      if (!workspaceEditTargetsAreCurrent(result.workspaceEdit, versions)) {
-        await this.post(session, {
-          type: "componentDeleteResult",
-          requestId: message.requestId,
-          status: "stale",
-          message: "The document changed before the edit was applied.",
-        });
-        this.scheduleEditorReconciliation(session);
-        return;
-      }
-      if (result.status !== "ok" || !result.workspaceEdit) {
-        await this.post(session, {
-          type: "componentDeleteResult",
-          requestId: message.requestId,
-          status: result.status === "ok" ? "rejected" : result.status,
-          message: result.message ?? "The component could not be deleted.",
-        });
-        if (result.status === "stale") {
-          this.scheduleEditorReconciliation(session);
-        }
-        return;
-      }
-      const applied = await vscode.workspace.applyEdit(
-        toWorkspaceEdit(result.workspaceEdit),
-      );
-      if (!applied) {
-        await this.post(session, {
-          type: "componentDeleteResult",
-          requestId: message.requestId,
-          status: "rejected",
-          message: "VS Code rejected the source edit.",
-        });
-        return;
-      }
-      await this.post(session, {
+      ),
+      {
+        ...commonSourceEditMessages,
+        failed: "The component could not be deleted.",
+        missingEdit: "The language server returned no component deletion edit.",
+        logLabel: "component deletion",
+      },
+    );
+    if (!outcome) return;
+    await this.post(session, outcome.status === "applied"
+      ? {
         type: "componentDeleteResult",
         requestId: message.requestId,
         status: "applied",
-        documentVersion: session.document.version,
-      });
-      this.scheduleEditorReconciliation(session);
-    } catch (error) {
-      this.output.appendLine(`[editor] component deletion failed: ${String(error)}`);
-      await this.post(session, {
+        documentVersion: outcome.documentVersion,
+      }
+      : {
         type: "componentDeleteResult",
         requestId: message.requestId,
-        status: "rejected",
-        message: String(error),
+        status: outcome.status,
+        message: outcome.message,
       });
-    }
+    if (outcome.refresh) this.scheduleEditorReconciliation(session);
   }
 
   private async applyIconInsert(
     session: Session,
     message: Extract<WebviewMessage, { type: "insertIcon" }>,
   ): Promise<void> {
-    const client = this.clientProvider();
-    if (!client) {
-      await this.post(session, {
-        type: "iconEditResult",
-        requestId: message.requestId,
-        status: "unsupported",
-        message: "Language server is not running.",
-      });
-      return;
-    }
-    const versions = documentVersions();
-    try {
-      const result = await client.sendRequest<ShapeEditResult>("ss/insertIcon", {
+    const outcome = await this.applySourceEdit<ShapeEditResult>(
+      session,
+      (client) => client.sendRequest<ShapeEditResult>("ss/insertIcon", {
         textDocument: { uri: session.document.uri.toString() },
         snapshotId: message.snapshotId,
         pageId: message.pageId,
         source: message.source,
         bounds: message.bounds,
         color: message.color,
-      });
-      if (session.disposed) return;
-      if (!workspaceEditTargetsAreCurrent(result.workspaceEdit, versions)) {
-        await this.post(session, {
-          type: "iconEditResult",
-          requestId: message.requestId,
-          status: "stale",
-          message: "The document changed before the edit was applied.",
-        });
-        this.scheduleAutomatic(session, 0);
-        return;
-      }
-      if (result.status !== "ok") {
-        await this.post(session, {
-          type: "iconEditResult",
-          requestId: message.requestId,
-          status: result.status,
-          message: result.message ?? "The icon could not be inserted.",
-        });
-        if (result.status === "stale") this.scheduleAutomatic(session, 0);
-        return;
-      }
-      if (!result.workspaceEdit) {
-        await this.post(session, {
-          type: "iconEditResult",
-          requestId: message.requestId,
-          status: "rejected",
-          message: result.message ?? "The language server returned no source edit.",
-        });
-        return;
-      }
-      const applied = await vscode.workspace.applyEdit(
-        toWorkspaceEdit(result.workspaceEdit),
-      );
-      if (!applied) {
-        await this.post(session, {
-          type: "iconEditResult",
-          requestId: message.requestId,
-          status: "rejected",
-          message: "VS Code rejected the source edit.",
-        });
-        return;
-      }
-      await this.post(session, {
+      }),
+      {
+        ...commonSourceEditMessages,
+        failed: "The icon could not be inserted.",
+        missingEdit: "The language server returned no icon insertion edit.",
+        logLabel: "icon insertion",
+      },
+    );
+    if (!outcome) return;
+    await this.post(session, outcome.status === "applied"
+      ? {
         type: "iconEditResult",
         requestId: message.requestId,
         status: "applied",
-        documentVersion: session.document.version,
-        selection: result.selection,
-      });
-      this.scheduleAutomatic(session, 0);
-    } catch (error) {
-      this.output.appendLine(`[editor] icon insertion failed: ${String(error)}`);
-      await this.post(session, {
+        documentVersion: outcome.documentVersion,
+        selection: outcome.result.selection,
+      }
+      : {
         type: "iconEditResult",
         requestId: message.requestId,
-        status: "rejected",
-        message: String(error),
+        status: outcome.status,
+        message: outcome.message,
       });
+    if (outcome.refresh) {
+      this.scheduleAutomatic(session, immediateRefreshDelayMs);
     }
   }
 
   private async applyShapeEdit(
     session: Session,
-    message: Extract<WebviewMessage, {
-      type: "insertShape" | "editShapeStyle" | "editLineGeometry" | "editShapeBounds";
-    }>,
+    message: ShapeEditMessage,
   ): Promise<void> {
-    const client = this.clientProvider();
-    const operation = message.type === "insertShape"
-      ? "insert"
-      : message.type === "editShapeStyle"
-      ? "style"
-      : message.type === "editLineGeometry"
-      ? "geometry"
-      : "resize";
-    if (!client) {
-      await this.post(session, {
-        type: "shapeEditResult",
-        requestId: message.requestId,
-        operation,
-        status: "unsupported",
-        message: "Language server is not running.",
-      });
-      return;
-    }
-    const versions = documentVersions();
-    try {
-      const method = message.type === "insertShape"
-        ? "ss/insertShape"
-        : message.type === "editShapeStyle"
-        ? "ss/shapeStyleEdit"
-        : message.type === "editLineGeometry"
-        ? "ss/editLineGeometry"
-        : "ss/editShapeBounds";
-      const result = await client.sendRequest<ShapeEditResult>(method, {
-        textDocument: { uri: session.document.uri.toString() },
-        snapshotId: message.snapshotId,
-        pageId: message.pageId,
-        ...(message.type === "insertShape"
-          ? "start" in message
-            ? {
-              kind: message.kind,
-              start: message.start,
-              end: message.end,
-              arrowStart: message.arrowStart,
-              arrowEnd: message.arrowEnd,
-              stroke: message.stroke,
-            }
-            : {
-              kind: message.kind,
-              bounds: message.bounds,
-              fill: message.fill,
-              stroke: message.stroke,
-            }
-          : message.type === "editLineGeometry"
-          ? {
-            nodeId: message.nodeId,
-            start: message.start,
-            end: message.end,
-          }
-          : message.type === "editShapeBounds"
-          ? {
-            nodeId: message.nodeId,
-            bounds: message.bounds,
-          }
-          : message.kind === "line"
-          ? {
-            nodeId: message.nodeId,
-            arrowStart: message.arrowStart,
-            arrowEnd: message.arrowEnd,
-            stroke: message.stroke,
-          }
-          : {
-            nodeId: message.nodeId,
-            fill: message.fill,
-            stroke: message.stroke,
-          }),
-      });
-      if (session.disposed) return;
-      if (!workspaceEditTargetsAreCurrent(result.workspaceEdit, versions)) {
-        await this.post(session, {
-          type: "shapeEditResult",
-          requestId: message.requestId,
-          operation,
-          status: "stale",
-          message: "The document changed before the edit was applied.",
-        });
-        this.scheduleAutomatic(session, 0);
-        return;
-      }
-      if (result.status !== "ok") {
-        await this.post(session, {
-          type: "shapeEditResult",
-          requestId: message.requestId,
-          operation,
-          status: result.status,
-          message: result.message ?? "The shape edit could not be applied.",
-        });
-        if (result.status === "stale") this.scheduleAutomatic(session, 0);
-        return;
-      }
-      if (!result.workspaceEdit) {
-        await this.post(session, {
-          type: "shapeEditResult",
-          requestId: message.requestId,
-          operation,
-          status: "rejected",
-          message: result.message ?? "The language server returned no source edit.",
-        });
-        return;
-      }
-      const applied = await vscode.workspace.applyEdit(
-        toWorkspaceEdit(result.workspaceEdit),
-      );
-      if (!applied) {
-        await this.post(session, {
-          type: "shapeEditResult",
-          requestId: message.requestId,
-          operation,
-          status: "rejected",
-          message: "VS Code rejected the source edit.",
-        });
-        return;
-      }
-      await this.post(session, {
+    const operation = shapeEditOperation(message);
+    const request = shapeEditRequest(
+      session.document.uri.toString(),
+      message,
+    );
+    const outcome = await this.applySourceEdit<ShapeEditResult>(
+      session,
+      (client) => client.sendRequest<ShapeEditResult>(
+        request.method,
+        request.params,
+      ),
+      {
+        ...commonSourceEditMessages,
+        failed: "The shape edit could not be applied.",
+        missingEdit: "The language server returned no shape source edit.",
+        logLabel: "shape edit",
+      },
+    );
+    if (!outcome) return;
+    await this.post(session, outcome.status === "applied"
+      ? {
         type: "shapeEditResult",
         requestId: message.requestId,
         operation,
         status: "applied",
-        documentVersion: session.document.version,
-        selection: result.selection,
-      });
-      this.scheduleAutomatic(session, 0);
-    } catch (error) {
-      this.output.appendLine(`[editor] shape edit failed: ${String(error)}`);
-      await this.post(session, {
+        documentVersion: outcome.documentVersion,
+        selection: outcome.result.selection,
+      }
+      : {
         type: "shapeEditResult",
         requestId: message.requestId,
         operation,
-        status: "rejected",
-        message: String(error),
+        status: outcome.status,
+        message: outcome.message,
       });
+    if (outcome.refresh) {
+      this.scheduleAutomatic(session, immediateRefreshDelayMs);
     }
   }
 
@@ -623,8 +465,7 @@ export class EditorController implements vscode.Disposable {
       message,
       message.mode,
       {
-        unavailable: "Language server is not running.",
-        stale: "The document changed before the edit was applied.",
+        ...commonSourceEditMessages,
         failed: "The edit could not be applied.",
         missingEdit: "The language server returned no source edit.",
         logLabel: "layout edit",
@@ -644,7 +485,7 @@ export class EditorController implements vscode.Disposable {
         status: outcome.status,
         message: outcome.message,
       });
-    if (outcome.reconcile) this.scheduleEditorReconciliation(session);
+    if (outcome.refresh) this.scheduleEditorReconciliation(session);
   }
 
   private async applyComponentWidth(
@@ -656,7 +497,7 @@ export class EditorController implements vscode.Disposable {
       message,
       "width",
       {
-        unavailable: "Language server is not running.",
+        ...commonSourceEditMessages,
         stale: "The document changed before the width edit was applied.",
         failed: "The component width could not be applied.",
         missingEdit: "The language server returned no component width edit.",
@@ -677,25 +518,18 @@ export class EditorController implements vscode.Disposable {
         status: outcome.status,
         message: outcome.message,
       });
-    if (outcome.reconcile) this.scheduleEditorReconciliation(session);
+    if (outcome.refresh) this.scheduleEditorReconciliation(session);
   }
 
-  private async applyLayoutSourceEdit(
+  private applyLayoutSourceEdit(
     session: Session,
     message: LayoutSourceEditMessage,
     mode: "absolute" | "relative" | "width",
-    messages: LayoutApplyMessages,
-  ): Promise<LayoutApplyOutcome | undefined> {
-    const client = this.clientProvider();
-    if (!client) {
-      return {
-        status: "unsupported",
-        message: messages.unavailable,
-      };
-    }
-    const versions = documentVersions();
-    try {
-      const result = await client.sendRequest<LayoutEditResult>(
+    messages: SourceEditMessages,
+  ): Promise<SourceEditOutcome | undefined> {
+    return this.applySourceEdit(
+      session,
+      (client) => client.sendRequest<LayoutEditResult>(
         "ss/layoutEdit",
         {
           textDocument: { uri: session.document.uri.toString() },
@@ -706,13 +540,32 @@ export class EditorController implements vscode.Disposable {
           fromBounds: message.fromBounds,
           toBounds: message.toBounds,
         },
-      );
+      ),
+      messages,
+    );
+  }
+
+  private async applySourceEdit<Result extends LayoutEditResult>(
+    session: Session,
+    request: (client: LanguageClient) => Promise<Result>,
+    messages: SourceEditMessages,
+  ): Promise<SourceEditOutcome<Result> | undefined> {
+    const client = this.clientProvider();
+    if (!client) {
+      return {
+        status: "unsupported",
+        message: messages.unavailable,
+      };
+    }
+    const versions = documentVersions();
+    try {
+      const result = await request(client);
       if (session.disposed) return undefined;
       if (!workspaceEditTargetsAreCurrent(result.workspaceEdit, versions)) {
         return {
           status: "stale",
           message: messages.stale,
-          reconcile: true,
+          refresh: true,
         };
       }
       if (result.status !== "ok") {
@@ -720,7 +573,7 @@ export class EditorController implements vscode.Disposable {
           return {
             status: "stale",
             message: result.message ?? messages.failed,
-            reconcile: true,
+            refresh: true,
           };
         }
         return {
@@ -746,7 +599,8 @@ export class EditorController implements vscode.Disposable {
       return {
         status: "applied",
         documentVersion: session.document.version,
-        reconcile: true,
+        result,
+        refresh: true,
       };
     } catch (error) {
       this.output.appendLine(`[editor] ${messages.logLabel} failed: ${String(error)}`);
@@ -801,7 +655,7 @@ export class EditorController implements vscode.Disposable {
     // another source edit can be generated. The server reuses the current
     // display and returns a translation patch for position-only changes.
     session.editorReconciliationPending = true;
-    this.schedule(session, 0);
+    this.schedule(session, immediateRefreshDelayMs);
   }
 
   private markBuildRequired(session: Session): void {
@@ -829,7 +683,7 @@ export class EditorController implements vscode.Disposable {
       }
       return;
     }
-    this.schedule(session, 0);
+    this.schedule(session, immediateRefreshDelayMs);
   }
 
   private schedule(
@@ -950,7 +804,7 @@ export class EditorController implements vscode.Disposable {
       );
       session.refreshPending = false;
       if (refreshImmediately && !session.disposed) {
-        this.schedule(session, 0);
+        this.schedule(session, immediateRefreshDelayMs);
       }
     }
   }
