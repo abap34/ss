@@ -1,4 +1,9 @@
 import { subtreeNodeIds } from "./geometry.js";
+import {
+  editingTargetByBinding,
+  editingTargetByNode,
+  editingTargetKey,
+} from "./editing-target.js";
 
 export class ComponentDeletionController {
   constructor(state, actions) {
@@ -11,11 +16,12 @@ export class ComponentDeletionController {
 
   deleteSelected() {
     if (!this.state.snapshot || this.state.selectedObjectId == null) return false;
-    const target = this.state.snapshot.editing?.find((candidate) =>
-      candidate.node_id === this.state.selectedObjectId
+    const target = editingTargetByNode(
+      this.state.snapshot,
+      this.state.selectedObjectId,
     );
     if (!target) return false;
-    const key = deletionKey(target.page_id, target.binding);
+    const key = editingTargetKey(target);
     if (this.pending.has(key)) return false;
 
     this.actions.cancelEdits(target);
@@ -150,13 +156,10 @@ export class ComponentDeletionController {
   }
 
   findTarget(snapshot, pending) {
-    return snapshot.editing?.find((candidate) =>
-      candidate.page_id === pending.pageId &&
-      candidate.binding === pending.binding
-    ) || null;
+    return editingTargetByBinding(
+      snapshot,
+      pending.pageId,
+      pending.binding,
+    );
   }
-}
-
-function deletionKey(pageId, binding) {
-  return JSON.stringify([pageId, binding]);
 }

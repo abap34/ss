@@ -1,7 +1,11 @@
 import { previewFrame } from "./geometry.js";
+import {
+  editingTargetByBinding,
+  editingTargetByNode,
+  editingTargetKey,
+} from "./editing-target.js";
 
 export const componentWidthPolicy = Object.freeze({
-  minimum: 4,
   changeTolerance: 0.25,
 });
 
@@ -15,13 +19,16 @@ export class ComponentWidthController {
   }
 
   canEdit(nodeId) {
-    return this.target(nodeId) != null;
+    return this.minimum(nodeId) != null;
+  }
+
+  minimum(nodeId) {
+    const value = this.target(nodeId)?.minimum_width;
+    return Number.isFinite(value) && value > 0 ? value : null;
   }
 
   target(nodeId) {
-    return this.state.snapshot?.editing?.find((candidate) =>
-      candidate.node_id === nodeId
-    ) || null;
+    return editingTargetByNode(this.state.snapshot, nodeId);
   }
 
   frame(page, object, base = previewFrame(page, object)) {
@@ -32,7 +39,7 @@ export class ComponentWidthController {
   submit(edit) {
     const target = this.target(edit.nodeId);
     if (!target || target.page_id !== edit.pageId) return false;
-    const key = selectionKey(target.page_id, target.binding);
+    const key = editingTargetKey(target);
     const existing = this.pending.get(key);
     if (existing) {
       existing.desired = { ...edit.toBounds };
@@ -89,9 +96,10 @@ export class ComponentWidthController {
           (!Number.isSafeInteger(documentVersion) ||
             documentVersion < pending.appliedDocumentVersion)) continue;
 
-      const target = snapshot.editing?.find((candidate) =>
-        candidate.page_id === pending.pageId &&
-        candidate.binding === pending.binding
+      const target = editingTargetByBinding(
+        snapshot,
+        pending.pageId,
+        pending.binding,
       );
       const page = snapshot.layout.pages.find((candidate) =>
         candidate.id === pending.pageId
@@ -145,7 +153,7 @@ export class ComponentWidthController {
   }
 
   cancelTarget(target) {
-    const key = selectionKey(target.page_id, target.binding);
+    const key = editingTargetKey(target);
     const pending = this.pending.get(key);
     if (!pending) return false;
     this.pending.delete(key);
@@ -189,9 +197,10 @@ export class ComponentWidthController {
       candidate.phase === "queued"
     );
     if (!pending) return;
-    const target = this.state.snapshot.editing?.find((candidate) =>
-      candidate.page_id === pending.pageId &&
-      candidate.binding === pending.binding
+    const target = editingTargetByBinding(
+      this.state.snapshot,
+      pending.pageId,
+      pending.binding,
     );
     if (!target) return;
     pending.nodeId = target.node_id;
@@ -209,10 +218,6 @@ export class ComponentWidthController {
     this.inFlight = pending;
     this.actions.post(pending.sent);
   }
-}
-
-function selectionKey(pageId, binding) {
-  return `${pageId}:${binding}`;
 }
 
 function sameWidth(left, right) {

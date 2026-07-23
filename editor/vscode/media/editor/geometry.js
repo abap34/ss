@@ -7,6 +7,13 @@ export function previewFrame(page, object) {
   };
 }
 
+export function clampPoint(point, page) {
+  return {
+    x: Math.min(page.width, Math.max(0, point.x)),
+    y: Math.min(page.height, Math.max(0, point.y)),
+  };
+}
+
 export function frameByNode(snapshot, page, nodeId) {
   if (nodeId === page.id) {
     return { x: 0, y: 0, width: page.width, height: page.height };

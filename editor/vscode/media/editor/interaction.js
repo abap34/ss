@@ -1,16 +1,22 @@
 import { setRect, svgElement } from "./dom.js";
+import { ComponentWidthInteraction } from "./component-width-interaction.js";
 import {
+  clampPoint,
   editableAncestorNodeId,
   previewFrame,
   subtreeNodeIds,
   svgPoint,
 } from "./geometry.js";
 import { renderConstraints } from "./constraints.js";
-import { componentWidthPolicy } from "./component-width.js";
+import {
+  createResizeHandle,
+  setResizeHandlePosition,
+} from "./resize-handle.js";
 
 const minimumPlacementLength = 4;
 const minimumEditedLineLength = 0.25;
 const minimumResizedShapeExtent = 4;
+const pointerMovementTolerance = 0.25;
 const defaultLineLength = 160;
 const lineSnapAngle = Math.PI / 12;
 const lineArrowMinimumSize = 8;
@@ -37,7 +43,13 @@ export class InteractionController {
     this.placement = null;
     this.lineEndpointDrag = null;
     this.shapeResizeDrag = null;
-    this.componentWidthDrag = null;
+    this.componentWidthInteraction = new ComponentWidthInteraction(
+      actions.componentWidth,
+      {
+        render: actions.render,
+        finish: () => this.notifyPointerOperationFinished(),
+      },
+    );
     this.updateDrag = this.updateDrag.bind(this);
     this.finishDrag = this.finishDrag.bind(this);
     this.cancelDrag = this.cancelDrag.bind(this);
@@ -50,14 +62,11 @@ export class InteractionController {
     this.updateShapeResize = this.updateShapeResize.bind(this);
     this.finishShapeResize = this.finishShapeResize.bind(this);
     this.cancelShapeResize = this.cancelShapeResize.bind(this);
-    this.updateComponentWidth = this.updateComponentWidth.bind(this);
-    this.finishComponentWidth = this.finishComponentWidth.bind(this);
-    this.cancelComponentWidth = this.cancelComponentWidth.bind(this);
     this.handleKeydown = this.handleKeydown.bind(this);
     window.addEventListener("keydown", this.handleKeydown);
   }
 
-  renderLayer(page) {
+  renderLayer(page, previewRoot) {
     const svg = svgElement("svg", "interaction-layer");
     svg.setAttribute("viewBox", `0 0 ${page.width} ${page.height}`);
     const pendingShapes = [
@@ -98,7 +107,9 @@ export class InteractionController {
         ),
       );
     }
-    for (const object of objects) svg.append(this.hitTarget(page, object));
+    for (const object of objects) {
+      svg.append(this.hitTarget(page, object, previewRoot));
+    }
     for (const pending of pendingShapes) {
       svg.append(this.pendingShape(pending));
     }
@@ -114,13 +125,13 @@ export class InteractionController {
     this.cleanupPlacement();
     this.cleanupLineEndpoint();
     this.cleanupShapeResize();
-    this.cleanupComponentWidth();
+    this.componentWidthInteraction.cleanup();
   }
 
   isPointerOperationActive() {
     return this.drag != null || this.placement != null ||
       this.lineEndpointDrag != null || this.shapeResizeDrag != null ||
-      this.componentWidthDrag != null;
+      this.componentWidthInteraction.isActive();
   }
 
   placementTarget(page) {
@@ -223,9 +234,9 @@ export class InteractionController {
         this.cancelShapeResize();
         return;
       }
-      if (this.componentWidthDrag) {
+      if (this.componentWidthInteraction.isActive()) {
         event.preventDefault();
-        this.cancelComponentWidth();
+        this.componentWidthInteraction.cancel();
         return;
       }
       if (this.placement) {
@@ -242,7 +253,7 @@ export class InteractionController {
         !event.defaultPrevented && !event.metaKey && !event.ctrlKey &&
         !event.altKey && !event.shiftKey && !this.drag && !this.placement &&
         !this.lineEndpointDrag && !this.shapeResizeDrag &&
-        !this.componentWidthDrag &&
+        !this.componentWidthInteraction.isActive() &&
         !isTypingTarget(event.target) &&
         !this.actions.objectLocks.isLocked(this.state.selectedObjectId) &&
         this.actions.componentDeletion.deleteSelected()) {
@@ -252,7 +263,7 @@ export class InteractionController {
     if (this.navigatePageFromKey(event)) return;
     if (event.key.toLowerCase() !== "l" || event.metaKey || event.ctrlKey ||
         event.altKey || this.placement || this.lineEndpointDrag ||
-        this.componentWidthDrag ||
+        this.componentWidthInteraction.isActive() ||
         isTypingTarget(event.target) ||
         this.state.shapeTool === "icon" ||
         !this.actions.shape.supportsInsertion(this.state.currentPageId)) return;
@@ -269,7 +280,7 @@ export class InteractionController {
     if (offset === 0 || event.defaultPrevented || event.metaKey ||
         event.ctrlKey || event.altKey || event.shiftKey || this.drag ||
         this.placement || this.lineEndpointDrag || this.shapeResizeDrag ||
-        this.componentWidthDrag ||
+        this.componentWidthInteraction.isActive() ||
         isTypingTarget(event.target)) {
       return false;
     }
@@ -336,7 +347,7 @@ export class InteractionController {
     );
   }
 
-  hitTarget(page, object) {
+  hitTarget(page, object, previewRoot) {
     const editableNodeId = editableAncestorNodeId(
       this.state.snapshot,
       object.id,
@@ -457,12 +468,13 @@ export class InteractionController {
           "is-component-width-pending",
           this.actions.componentWidth.isPending(target.id),
         );
-        group.append(this.componentWidthHandle(
+        group.append(this.componentWidthInteraction.handle(
           frame,
           widthEditable,
           page,
           target,
           rect,
+          previewRoot,
         ));
       }
     }
@@ -479,6 +491,7 @@ export class InteractionController {
         target,
         group,
         this.actions.translation.frame(page, target),
+        previewRoot,
       ),
     );
     return group;
@@ -548,20 +561,14 @@ export class InteractionController {
   }
 
   shapeResizeHandle(direction, bounds, editable, page, target, outline) {
-    const handle = svgElement(
-      "g",
-      `shape-resize-handle${editable ? "" : " is-disabled"}`,
+    const handle = createResizeHandle(
+      "shape-resize",
+      `Resize shape ${direction}`,
+      direction,
+      bounds,
+      editable,
     );
     handle.dataset.direction = direction;
-    handle.setAttribute("aria-label", `Resize shape ${direction}`);
-    handle.setAttribute("aria-disabled", String(!editable));
-    const hit = svgElement("rect", "shape-resize-hit");
-    setCenteredSquare(hit, 20);
-    const marker = svgElement("rect", "shape-resize-marker");
-    setCenteredSquare(marker, 7);
-    setResizeHandlePosition(handle, direction, bounds);
-    handle.append(hit, marker);
-    handle.addEventListener("click", (event) => event.stopPropagation());
     if (editable) {
       handle.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
@@ -578,111 +585,6 @@ export class InteractionController {
       });
     }
     return handle;
-  }
-
-  componentWidthHandle(bounds, editable, page, target, outline) {
-    const handle = svgElement(
-      "g",
-      `component-width-handle${editable ? "" : " is-disabled"}`,
-    );
-    handle.setAttribute("aria-label", "Resize component width");
-    handle.setAttribute("aria-disabled", String(!editable));
-    const hit = svgElement("rect", "component-width-hit");
-    setCenteredSquare(hit, 20);
-    const marker = svgElement("rect", "component-width-marker");
-    setCenteredSquare(marker, 7);
-    setResizeHandlePosition(handle, "right", bounds);
-    handle.append(hit, marker);
-    handle.addEventListener("click", (event) => event.stopPropagation());
-    if (editable) {
-      handle.addEventListener("pointerdown", (event) => {
-        if (event.button !== 0) return;
-        event.stopPropagation();
-        this.beginComponentWidth(event, page, target, bounds, outline, handle);
-      });
-    }
-    return handle;
-  }
-
-  beginComponentWidth(event, page, target, bounds, outline, handle) {
-    event.preventDefault();
-    const group = handle.parentElement;
-    this.componentWidthDrag = {
-      pointerId: event.pointerId,
-      page,
-      target,
-      svg: handle.ownerSVGElement,
-      group,
-      handle,
-      outline,
-      original: { ...bounds },
-      bounds: { ...bounds },
-    };
-    group.classList.add("is-editing-component-width");
-    try {
-      handle.setPointerCapture(event.pointerId);
-    } catch {
-      // Window listeners keep the width drag active when SVG capture is absent.
-    }
-    window.addEventListener("pointermove", this.updateComponentWidth);
-    window.addEventListener("pointerup", this.finishComponentWidth);
-    window.addEventListener("pointercancel", this.cancelComponentWidth);
-  }
-
-  updateComponentWidth(event) {
-    const drag = this.componentWidthDrag;
-    if (!drag || event.pointerId !== drag.pointerId) return;
-    const point = clampPoint(svgPoint(drag.svg, event), drag.page);
-    drag.bounds = {
-      ...drag.original,
-      width: Math.max(
-        componentWidthPolicy.minimum,
-        point.x - drag.original.x,
-      ),
-    };
-    setRect(drag.outline, drag.bounds);
-    setResizeHandlePosition(drag.handle, "right", drag.bounds);
-    const preview = drag.svg.previousElementSibling;
-    this.actions.componentWidth.applyNodeWidth(
-      preview,
-      drag.target.id,
-      drag.bounds.width,
-    );
-  }
-
-  finishComponentWidth(event) {
-    const drag = this.componentWidthDrag;
-    if (!drag || event.pointerId !== drag.pointerId) return;
-    this.updateComponentWidth(event);
-    const changed = Math.abs(drag.bounds.width - drag.original.width) >=
-      componentWidthPolicy.changeTolerance;
-    this.cleanupComponentWidth();
-    if (!changed || !this.actions.componentWidth.submit({
-      nodeId: drag.target.id,
-      pageId: drag.target.page_id,
-      fromBounds: drag.original,
-      toBounds: drag.bounds,
-    })) {
-      this.actions.render();
-    }
-    this.notifyPointerOperationFinished();
-  }
-
-  cancelComponentWidth() {
-    if (!this.componentWidthDrag) return;
-    this.cleanupComponentWidth();
-    this.actions.render();
-    this.notifyPointerOperationFinished();
-  }
-
-  cleanupComponentWidth() {
-    const drag = this.componentWidthDrag;
-    if (!drag) return;
-    drag.group.classList.remove("is-editing-component-width");
-    window.removeEventListener("pointermove", this.updateComponentWidth);
-    window.removeEventListener("pointerup", this.finishComponentWidth);
-    window.removeEventListener("pointercancel", this.cancelComponentWidth);
-    this.componentWidthDrag = null;
   }
 
   beginShapeResize(event, direction, page, target, bounds, outline, handle) {
@@ -738,7 +640,8 @@ export class InteractionController {
     const drag = this.shapeResizeDrag;
     if (!drag || event.pointerId !== drag.pointerId) return;
     this.updateShapeResize(event);
-    const changed = boundsDistance(drag.original, drag.bounds) >= 0.25;
+    const changed = boundsDistance(drag.original, drag.bounds) >=
+      pointerMovementTolerance;
     this.cleanupShapeResize();
     if (!changed || !this.actions.shape.editBounds(drag.target, drag.bounds)) {
       this.actions.render();
@@ -831,7 +734,7 @@ export class InteractionController {
       drag.end.y - drag.start.y,
     );
     this.cleanupLineEndpoint();
-    if (moved < 0.25 || length < minimumEditedLineLength ||
+    if (moved < pointerMovementTolerance || length < minimumEditedLineLength ||
         !this.actions.shape.editLineGeometry(
           drag.target,
           drag.start,
@@ -859,9 +762,9 @@ export class InteractionController {
     this.lineEndpointDrag = null;
   }
 
-  beginDrag(event, page, object, group, frame) {
+  beginDrag(event, page, object, group, frame, previewRoot) {
     if (event.button !== 0 || this.lineEndpointDrag || this.shapeResizeDrag ||
-        this.componentWidthDrag) return;
+        this.componentWidthInteraction.isActive()) return;
     event.preventDefault();
     if (this.actions.objectLocks.isLocked(object.id)) return;
     this.actions.selectObject(object.id, object.page_id, false);
@@ -873,6 +776,7 @@ export class InteractionController {
       object,
       group,
       svg,
+      previewRoot,
       start: svgPoint(svg, event),
       from: frame,
       base: previewFrame(page, object),
@@ -895,13 +799,14 @@ export class InteractionController {
     const dy = point.y - drag.start.y;
     drag.relative = event.shiftKey;
     drag.to = { ...drag.from, x: drag.from.x + dx, y: drag.from.y + dy };
-    const preview = drag.svg.previousElementSibling;
     const totalX = drag.to.x - drag.base.x;
     const totalY = drag.to.y - drag.base.y;
     drag.group.setAttribute("transform", `translate(${totalX} ${totalY})`);
     for (const nodeId of drag.nodeIds) {
       for (
-        const item of preview.querySelectorAll(`[data-ss-node-id="${nodeId}"]`)
+        const item of drag.previewRoot.querySelectorAll(
+          `[data-ss-node-id="${nodeId}"]`,
+        )
       ) {
         const baseX = Number(item.dataset.ssBaseTranslationX || 0);
         const baseY = Number(item.dataset.ssBaseTranslationY || 0);
@@ -917,7 +822,8 @@ export class InteractionController {
     this.cleanup();
     const dx = drag.to.x - drag.from.x;
     const dy = drag.to.y - drag.from.y;
-    if (Math.abs(dx) < 0.25 && Math.abs(dy) < 0.25) {
+    if (Math.abs(dx) < pointerMovementTolerance &&
+        Math.abs(dy) < pointerMovementTolerance) {
       this.actions.render();
       this.notifyPointerOperationFinished();
       return;
@@ -981,13 +887,6 @@ export class InteractionController {
   }
 }
 
-function clampPoint(point, page) {
-  return {
-    x: Math.min(page.width, Math.max(0, point.x)),
-    y: Math.min(page.height, Math.max(0, point.y)),
-  };
-}
-
 export function resizedBounds(original, direction, point, page) {
   let left = original.x;
   let right = original.x + original.width;
@@ -1015,30 +914,6 @@ export function resizedBounds(original, direction, point, page) {
     width: right - left,
     height: bottom - top,
   };
-}
-
-function resizeHandlePoint(direction, bounds) {
-  const horizontal = direction.includes("left")
-    ? bounds.x
-    : direction.includes("right")
-    ? bounds.x + bounds.width
-    : bounds.x + bounds.width / 2;
-  const vertical = direction.includes("top")
-    ? bounds.y
-    : direction.includes("bottom")
-    ? bounds.y + bounds.height
-    : bounds.y + bounds.height / 2;
-  return { x: horizontal, y: vertical };
-}
-
-function setResizeHandlePosition(handle, direction, bounds) {
-  const point = resizeHandlePoint(direction, bounds);
-  handle.setAttribute("transform", `translate(${point.x} ${point.y})`);
-}
-
-function setCenteredSquare(rect, size) {
-  const offset = -size / 2;
-  setRect(rect, { x: offset, y: offset, width: size, height: size });
 }
 
 function boundsDistance(left, right) {

@@ -29,6 +29,10 @@ export function editingTarget(snapshot, binding) {
       JSON.stringify(snapshot.editing)
     }`,
   );
+  assert(
+    Number.isFinite(target.minimum_width) && target.minimum_width > 0,
+    `editing target omitted its minimum width: ${JSON.stringify(target)}`,
+  );
   return target;
 }
 

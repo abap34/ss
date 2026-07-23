@@ -1,4 +1,5 @@
 import { editableAncestorNodeId } from "./geometry.js";
+import { editingTargetByNode } from "./editing-target.js";
 
 const schema = 1;
 
@@ -55,9 +56,7 @@ export class ObjectLockController {
     if (!snapshot) return null;
     const targetNodeId = editableAncestorNodeId(snapshot, nodeId);
     if (targetNodeId == null) return null;
-    return snapshot.editing.find((candidate) =>
-      candidate.node_id === targetNodeId
-    ) || null;
+    return editingTargetByNode(snapshot, targetNodeId);
   }
 }
 

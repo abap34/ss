@@ -8,6 +8,7 @@ const utils = @import("utils");
 const json = utils.json;
 const assets = @import("assets.zig");
 const binding_names = @import("names.zig");
+const editor_edit = @import("edit.zig");
 
 pub const Cache = struct {
     allocator: std.mem.Allocator,
@@ -77,6 +78,7 @@ pub const EditingTarget = struct {
     page_name: []u8,
     binding: []u8,
     binding_required: bool,
+    minimum_width: f64,
     statement: utils.source.ByteSpan,
     path: []u8,
     page: utils.source.ByteSpan,
@@ -526,6 +528,7 @@ fn editingJson(allocator: std.mem.Allocator, editing: []const EditingTarget) ![]
         try item.stringField("page_name", target.page_name);
         try item.stringField("binding", target.binding);
         try item.boolField("binding_required", target.binding_required);
+        try item.floatField("minimum_width", target.minimum_width, "{d:.4}");
         try item.intField("statement_start", target.statement.start);
         try item.intField("statement_end", target.statement.end);
         try item.stringField("path", target.path);
@@ -999,6 +1002,7 @@ fn collectEditingTargets(allocator: std.mem.Allocator, state: *core.DocumentStat
                 .page_name = page_decl.name,
                 .binding = binding,
                 .binding_required = binding_required,
+                .minimum_width = editor_edit.minimum_component_width,
                 .statement = .{ .start = statement.span.start, .end = statement.span.end },
                 .path = page_source.path,
                 .page = .{ .start = page_decl.span.start, .end = page_decl.span.end },
@@ -1059,6 +1063,7 @@ const EditingTargetView = struct {
     page_name: []const u8,
     binding: []const u8,
     binding_required: bool,
+    minimum_width: f64,
     statement: utils.source.ByteSpan,
     path: []const u8,
     page: utils.source.ByteSpan,
@@ -1078,6 +1083,7 @@ fn appendEditingTarget(allocator: std.mem.Allocator, targets: *std.ArrayList(Edi
         .page_name = page_name,
         .binding = binding,
         .binding_required = view.binding_required,
+        .minimum_width = view.minimum_width,
         .statement = view.statement,
         .path = path,
         .page = view.page,

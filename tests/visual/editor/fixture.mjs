@@ -67,9 +67,9 @@ export function editorSnapshot() {
       { id: 202, parent_id: 22, page_id: 22, kind: "object", label: "Detail" },
     ],
     editing: [
-      { node_id: 101, page_id: 11, page_index: 1, page_name: "Overview", binding: "summary", binding_required: false, statement_start: 0, statement_end: 20, path: "/workspace/slide.ss", page_start: 0, page_end: 30 },
-      { node_id: 102, page_id: 11, page_index: 1, page_name: "Overview", binding: "line_item", binding_required: false, statement_start: 21, statement_end: 29, path: "/workspace/slide.ss", page_start: 0, page_end: 30 },
-      { node_id: 202, page_id: 22, page_index: 2, page_name: "Details", binding: "detail", binding_required: false, statement_start: 40, statement_end: 75, path: "/workspace/slide.ss", page_start: 31, page_end: 90 },
+      { node_id: 101, page_id: 11, page_index: 1, page_name: "Overview", binding: "summary", binding_required: false, minimum_width: 4, statement_start: 0, statement_end: 20, path: "/workspace/slide.ss", page_start: 0, page_end: 30 },
+      { node_id: 102, page_id: 11, page_index: 1, page_name: "Overview", binding: "line_item", binding_required: false, minimum_width: 4, statement_start: 21, statement_end: 29, path: "/workspace/slide.ss", page_start: 0, page_end: 30 },
+      { node_id: 202, page_id: 22, page_index: 2, page_name: "Details", binding: "detail", binding_required: false, minimum_width: 4, statement_start: 40, statement_end: 75, path: "/workspace/slide.ss", page_start: 31, page_end: 90 },
     ],
     page_editing: [
       { page_id: 11, insert_shapes: true, insert_icons: true },

@@ -12,6 +12,7 @@ const controller = new ComponentWidthController(state, {
 });
 
 assert.equal(controller.canEdit(initialObject.id), true);
+assert.equal(controller.minimum(initialObject.id), 6);
 const initialFrame = frame(initialObject);
 assert.equal(controller.submit({
   nodeId: initialObject.id,
@@ -86,6 +87,7 @@ function snapshot(id, item) {
       page_id: page.id,
       binding: "item",
       binding_required: false,
+      minimum_width: 6,
     }],
   };
 }
