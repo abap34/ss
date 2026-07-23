@@ -1,11 +1,15 @@
 const std = @import("std");
+const ast = @import("ast");
 
 const editor_edit = @import("../../editor/edit.zig");
+const syntax = @import("../../syntax.zig");
 const edit_relations = @import("edit/relations.zig");
 const edit_response = @import("edit/response.zig");
 const protocol = @import("../protocol.zig");
 const lsp_state = @import("../state.zig");
 const utils = @import("utils");
+
+const minimum_component_width: f64 = 4;
 
 pub const Context = struct {
     io: std.Io,
@@ -83,16 +87,53 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         return try statusJson(ctx.allocator, "unsupported", "Invalid target bounds.");
     const to_y = protocol.numberField(to_bounds, "y") orelse
         return try statusJson(ctx.allocator, "unsupported", "Invalid target bounds.");
-    _ = protocol.numberField(to_bounds, "width") orelse
+    const to_width = protocol.numberField(to_bounds, "width") orelse
         return try statusJson(ctx.allocator, "unsupported", "Invalid target bounds.");
     _ = protocol.numberField(to_bounds, "height") orelse
         return try statusJson(ctx.allocator, "unsupported", "Invalid target bounds.");
     const mode = protocol.stringField(request_object, "mode") orelse "absolute";
-    if (!std.mem.eql(u8, mode, "absolute") and !std.mem.eql(u8, mode, "relative")) {
+    if (!std.mem.eql(u8, mode, "absolute") and
+        !std.mem.eql(u8, mode, "relative") and
+        !std.mem.eql(u8, mode, "width"))
+    {
         return try statusJson(ctx.allocator, "unsupported", "Unknown layout edit mode.");
     }
 
-    var edit_result = if (std.mem.eql(u8, mode, "relative")) blk: {
+    var edit_result = if (std.mem.eql(u8, mode, "width")) blk: {
+        const page = layout.report.pageById(editing.page_id) orelse
+            return try statusJson(ctx.allocator, "stale", "The target page no longer exists.");
+        const object = layout.report.objectById(node_id) orelse
+            return try statusJson(ctx.allocator, "stale", "The target component no longer exists.");
+        if (object.page_id != page.id) {
+            return try statusJson(ctx.allocator, "stale", "The target component no longer belongs to this page.");
+        }
+        if (!std.math.isFinite(to_width) or to_width < minimum_component_width or
+            object.x < 0 or @as(f64, object.x) + to_width > page.width)
+        {
+            return try statusJson(ctx.allocator, "rejected", "Component width must be at least 4 points and remain inside the page.");
+        }
+        const existing_update = try sourceWidthUpdate(
+            ctx.allocator,
+            source,
+            path,
+            page_span,
+            binding,
+        );
+        const introduction: ?editor_edit.BindingIntroduction = if (binding_required)
+            .{ .statement = editing.statement }
+        else
+            null;
+        break :blk (try editor_edit.componentWidth(
+            ctx.allocator,
+            source,
+            page_span,
+            binding,
+            to_width,
+            existing_update,
+            introduction,
+        )) orelse
+            return try statusJson(ctx.allocator, "unsupported", "The page insertion point could not be located.");
+    } else if (std.mem.eql(u8, mode, "relative")) blk: {
         if (binding_required) {
             return try statusJson(ctx.allocator, "unsupported", "Set an absolute position before keeping this object's relations.");
         }
@@ -184,4 +225,60 @@ fn appendEditRange(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source
     try out.appendSlice(allocator, ",\"character\":");
     try protocol.appendInt(allocator, out, end.character);
     try out.appendSlice(allocator, "}}");
+}
+
+fn sourceWidthUpdate(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    path: []const u8,
+    page_span: editor_edit.ByteSpan,
+    binding: []const u8,
+) !?editor_edit.ExistingWidthUpdate {
+    var module = syntax.parseWithSourceName(allocator, source, path) catch return null;
+    defer module.deinit(allocator);
+    const page = sourcePage(&module, page_span) orelse return null;
+    var latest: ?editor_edit.ExistingWidthUpdate = null;
+    for (page.statements.items) |statement| {
+        const constraint = switch (statement.kind) {
+            .constrain => |value| value,
+            else => continue,
+        };
+        if (constraint.action != .update or
+            !anchorMatchesBinding(constraint.target, binding, .right)) continue;
+        const constraint_syntax = constraint.syntax orelse continue;
+        if (constraint.target_kind == .dimension) {
+            const source_anchor = constraint.source orelse continue;
+            if (!anchorMatchesBinding(source_anchor, binding, .left)) continue;
+            const offset = constraint_syntax.offset orelse continue;
+            latest = .{
+                .value = .{ .start = offset.start, .end = offset.end },
+                .direct_dimension = true,
+            };
+            continue;
+        }
+        const source_anchor = constraint.source orelse continue;
+        if (!anchorMatchesBinding(source_anchor, binding, .left)) continue;
+        const source_span = constraint_syntax.source orelse continue;
+        const offset: ast.Span = constraint_syntax.offset orelse .{
+            .start = source_span.end,
+            .end = source_span.end,
+        };
+        latest = .{
+            .value = .{ .start = offset.start, .end = offset.end },
+            .direct_dimension = false,
+        };
+    }
+    return latest;
+}
+
+fn sourcePage(module: *const ast.Module, span: editor_edit.ByteSpan) ?*const ast.PageDecl {
+    for (module.pages.items) |*page| {
+        if (page.span.start == span.start and page.span.end == span.end) return page;
+    }
+    return null;
+}
+
+fn anchorMatchesBinding(anchor: ast.AnchorRef, binding: []const u8, expected: @TypeOf(anchor.anchor)) bool {
+    if (anchor.kind != .node or anchor.anchor != expected) return false;
+    return std.mem.eql(u8, anchor.node_path orelse anchor.node_name orelse return false, binding);
 }

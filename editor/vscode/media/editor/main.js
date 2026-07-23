@@ -5,6 +5,7 @@ import {
   reconciliationFailureMessage,
 } from "./diagnostics.js";
 import { ComponentDeletionController } from "./component-deletion.js";
+import { ComponentWidthController } from "./component-width.js";
 import { disposePages } from "./document.js";
 import { defaultIconDraft, IconController } from "./icon-insertion.js";
 import { EditorNavigation } from "./navigation.js";
@@ -62,11 +63,16 @@ const translation = new TranslationController(state, {
   post: (message) => vscode.postMessage(message),
   render,
 });
+const componentWidth = new ComponentWidthController(state, {
+  post: (message) => vscode.postMessage(message),
+  render,
+});
 const componentDeletion = new ComponentDeletionController(state, {
   post: (message) => vscode.postMessage(message),
   render,
   cancelEdits: (target) => {
     translation.cancelNode(target.node_id);
+    componentWidth.cancelTarget(target);
     shape.cancelTarget(target);
   },
 });
@@ -92,6 +98,7 @@ const actions = {
   selectPage,
   navigatePage,
   translation,
+  componentWidth,
   componentDeletion,
   shape,
   icon,
@@ -138,6 +145,11 @@ window.addEventListener("message", (event) => {
     if (editOutcome?.status === "failed") {
       showError(editFailureMessage(editOutcome.message));
     }
+  } else if (message.type === "componentWidthEditResult") {
+    const editOutcome = componentWidth.acceptResult(message);
+    if (editOutcome?.status === "failed") {
+      showError(editFailureMessage(editOutcome.message));
+    }
   } else if (message.type === "iconCatalog" ||
       message.type === "iconCatalogError") {
     const outcome = icon.acceptCatalog(message);
@@ -168,6 +180,10 @@ function acceptSnapshot(message) {
     snapshot,
     message.documentVersion,
   );
+  const widthOutcome = componentWidth.reconcile(
+    snapshot,
+    message.documentVersion,
+  );
   const buildFailure = buildFailureMessage(snapshot);
   setBuildStatus(
     buildFailure ? "failed" : "complete",
@@ -195,6 +211,7 @@ function acceptSnapshot(message) {
   );
   const reconciliationFailure = reconciliationFailureMessage([
     editOutcome,
+    widthOutcome,
     shapeOutcome,
     iconOutcome,
     deletionOutcome,
@@ -213,6 +230,9 @@ function acceptSnapshot(message) {
         ? "Shape size applied to source."
         : "Shape style applied to source.",
     };
+    toastDuration = successToastDuration;
+  } else if (!buildFailure && widthOutcome?.status === "applied") {
+    state.toast = { kind: "success", message: "Component width applied to source." };
     toastDuration = successToastDuration;
   } else if (!buildFailure && iconOutcome?.status === "applied") {
     state.toast = { kind: "success", message: "Icon inserted into source." };
@@ -428,6 +448,7 @@ function navigatePage(pageId) {
 }
 
 function selectObject(objectId, pageId, rerender = true) {
+  if (objectLocks.isLocked(objectId)) return;
   const result = navigation.selectObject(objectId, pageId);
   if (!result.selected) return;
   if (rerender) render();
