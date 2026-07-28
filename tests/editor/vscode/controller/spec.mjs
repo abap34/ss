@@ -59,9 +59,12 @@ const { EditorController } = await import(
 );
 
 await testOpenResolvesConfiguredEntryWithoutSsDocument();
+await testDisposingSessionCancelsSourceEditRequest();
 await testOpeningManualPreviewBuildsInitialSnapshot();
 await testManualPositionEditRequestsReconciliation();
 await testNewSourceEditReschedulesReconciliation();
+await testSourceEditsAreSerializedAcrossOperations();
+await testSourceEditQueueContinuesAfterRejection();
 await testSourceEditFailuresPreserveServerMessages();
 await testShapeInsertionAndStyleRequests();
 await testLineGeometryEditForwardsOrderedPagePoints();
@@ -97,6 +100,63 @@ entry = "deck/slides.ss"
     assert.deepEqual(mock.warnings, []);
     assert.equal(mock.panels.length, 1);
     assert.match(mock.panels[0].title, /slides\.ss$/);
+    controller.dispose();
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+}
+
+async function testDisposingSessionCancelsSourceEditRequest() {
+  const fixture = await mkdtemp(path.join(os.tmpdir(), "ss-editor-dispose-"));
+  try {
+    const slide = path.join(fixture, "slide.ss");
+    await writeFile(path.join(fixture, "ss.toml"), `[project]
+entry = "slide.ss"
+`, "utf8");
+    await writeFile(slide, "page demo\nend\n", "utf8");
+
+    mock.reset();
+    const uri = mock.Uri.file(slide);
+    const document = { uri, languageId: "ss-slide", version: 1 };
+    mock.workspace.textDocuments.push(document);
+    let releaseRequest;
+    let editToken;
+    let applied = false;
+    const response = new Promise((resolve) => {
+      releaseRequest = resolve;
+    });
+    const client = {
+      sendRequest(method, _params, token) {
+        assert.equal(method, "ss/layoutEdit");
+        editToken = token;
+        return response;
+      },
+      sendNotification() {},
+    };
+    mock.workspace.applyEdit = async () => {
+      applied = true;
+      return true;
+    };
+    const controller = new EditorController(
+      { extensionUri: mock.Uri.file(fixture) },
+      { appendLine() {} },
+      () => client,
+    );
+    controller.open(document);
+    const session = controller.sessions.get(uri.toString());
+    assert(session, "opening the editor did not create a disposable session");
+
+    const edit = controller.handleMessage(session, translationMessage(50));
+    await waitFor(() => editToken != null);
+    session.panel.dispose();
+    assert.equal(
+      editToken.isCancellationRequested,
+      true,
+      "disposing the editor did not cancel its in-flight source edit",
+    );
+    releaseRequest(sourceEditResult(uri, "ignored after dispose"));
+    await edit;
+    assert.equal(applied, false, "a canceled source edit reached workspace.applyEdit");
     controller.dispose();
   } finally {
     await rm(fixture, { recursive: true, force: true });
@@ -203,6 +263,146 @@ async function testNewSourceEditReschedulesReconciliation() {
       "a canceled position reconciliation was not retried for the latest source",
     );
     assert.equal(session.editorReconciliationPending, false);
+  });
+}
+
+async function testSourceEditsAreSerializedAcrossOperations() {
+  await withManualSession(async ({
+    controller,
+    session,
+    requests,
+    messages,
+  }) => {
+    let releaseTranslation;
+    const translationResponse = new Promise((resolve) => {
+      releaseTranslation = resolve;
+    });
+    session.sourceEditResponse = (method) => {
+      if (method === "ss/layoutEdit") return translationResponse;
+      if (method === "ss/editShapeBounds") {
+        return sourceEditResult(
+          session.document.uri,
+          "shape edit",
+        );
+      }
+      return undefined;
+    };
+    const applied = [];
+    mock.workspace.applyEdit = async (edit) => {
+      applied.push(edit.edits[0].newText);
+      session.document.version += 1;
+      mock.change(session.document);
+      return true;
+    };
+
+    const translation = controller.handleMessage(
+      session,
+      translationMessage(41),
+    );
+    await waitFor(() => requests.some((request) =>
+      request.method === "ss/layoutEdit"
+    ));
+    const shape = controller.handleMessage(session, {
+      type: "editShapeBounds",
+      requestId: 42,
+      snapshotId: "initial",
+      nodeId: 8,
+      pageId: 1,
+      kind: "rectangle",
+      bounds: { x: 60, y: 80, width: 220, height: 140 },
+    });
+    await Promise.resolve();
+    assert.equal(
+      requests.some((request) => request.method === "ss/editShapeBounds"),
+      false,
+      "a shape edit overtook an in-flight translation",
+    );
+
+    releaseTranslation(sourceEditResult(
+      session.document.uri,
+      "translation edit",
+    ));
+    await Promise.all([translation, shape]);
+
+    assert.deepEqual(
+      requests.filter((request) =>
+        request.method === "ss/layoutEdit" ||
+        request.method === "ss/editShapeBounds"
+      ).map((request) => request.method),
+      ["ss/layoutEdit", "ss/editShapeBounds"],
+      "different source edit operations were requested out of order",
+    );
+    assert.deepEqual(
+      applied,
+      ["translation edit", "shape edit"],
+      "different source edits were applied out of order",
+    );
+    assert.deepEqual(
+      messages.filter((message) =>
+        message.type === "editResult" ||
+        message.type === "shapeEditResult"
+      ).map((message) => message.requestId),
+      [41, 42],
+      "source edit results reached the webview out of order",
+    );
+    await waitFor(() => requests.some((request) =>
+      request.method === "ss/editorSnapshot"
+    ));
+    await waitFor(() => messages.some((message) =>
+      message.type === "snapshot"
+    ));
+  });
+}
+
+async function testSourceEditQueueContinuesAfterRejection() {
+  await withManualSession(async ({
+    controller,
+    session,
+    requests,
+    messages,
+  }) => {
+    session.sourceEditResponse = (method) => {
+      if (method === "ss/layoutEdit") {
+        return {
+          schema: 1,
+          status: "rejected",
+          message: "The first edit was rejected.",
+        };
+      }
+      if (method === "ss/editShapeBounds") {
+        return sourceEditResult(session.document.uri, "shape after rejection");
+      }
+      return undefined;
+    };
+
+    const first = controller.handleMessage(session, translationMessage(51));
+    const second = controller.handleMessage(session, {
+      type: "editShapeBounds",
+      requestId: 52,
+      snapshotId: "initial",
+      nodeId: 8,
+      pageId: 1,
+      kind: "rectangle",
+      bounds: { x: 80, y: 90, width: 240, height: 160 },
+    });
+    await Promise.all([first, second]);
+
+    assert.deepEqual(
+      requests.filter((request) =>
+        request.method === "ss/layoutEdit" ||
+        request.method === "ss/editShapeBounds"
+      ).map((request) => request.method),
+      ["ss/layoutEdit", "ss/editShapeBounds"],
+      "a rejected edit stopped or reordered the source edit queue",
+    );
+    assert.deepEqual(
+      messages.filter((message) =>
+        message.type === "editResult" ||
+        message.type === "shapeEditResult"
+      ).map((message) => [message.requestId, message.status]),
+      [[51, "rejected"], [52, "applied"]],
+      "the edit after a rejection did not reach the webview",
+    );
   });
 }
 
@@ -591,6 +791,7 @@ automatic = false
         dispose() {},
       },
       ready: true,
+      sourceEditQueue: Promise.resolve(),
       serial: 0,
       requestRunning: false,
       refreshPending: false,
@@ -710,6 +911,24 @@ function translationMessage(requestId) {
   };
 }
 
+function sourceEditResult(uri, newText) {
+  return {
+    schema: 1,
+    status: "ok",
+    workspaceEdit: {
+      changes: {
+        [uri.toString()]: [{
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 0 },
+          },
+          newText,
+        }],
+      },
+    },
+  };
+}
+
 function editorSnapshot(snapshotId) {
   return {
     snapshot_id: snapshotId,
@@ -815,6 +1034,7 @@ function vscodeMock() {
       return undefined;
     },
     createWebviewPanel(_viewType, title) {
+      let disposeListener = null;
       const panel = {
         title,
         active: true,
@@ -826,9 +1046,16 @@ function vscodeMock() {
           postMessage: async () => true,
           onDidReceiveMessage: () => disposable(),
         },
-        onDidDispose: () => disposable(),
+        onDidDispose: (listener) => {
+          disposeListener = listener;
+          return disposable();
+        },
         reveal() {},
-        dispose() {},
+        dispose() {
+          const listener = disposeListener;
+          disposeListener = null;
+          listener?.();
+        },
       };
       panels.push(panel);
       return panel;

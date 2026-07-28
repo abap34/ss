@@ -32,6 +32,10 @@ import {
 import { ViewResources } from "./view";
 
 type ClientProvider = () => LanguageClient | undefined;
+type SourceEditMessage = Exclude<
+  WebviewMessage,
+  { type: "ready" | "refreshFull" | "revealSource" | "queryIcons" }
+>;
 
 const immediateRefreshDelayMs = 0;
 const languageServerUnavailableMessage = "Language server is not running.";
@@ -76,6 +80,8 @@ interface Session {
   document: vscode.TextDocument;
   panel: vscode.WebviewPanel;
   ready: boolean;
+  sourceEditQueue: Promise<void>;
+  sourceEditCancellation?: vscode.CancellationTokenSource;
   timer?: NodeJS.Timeout;
   serial: number;
   requestRunning: boolean;
@@ -126,6 +132,10 @@ export class EditorController implements vscode.Disposable {
 
   dispose(): void {
     for (const session of [...this.sessions.values()]) {
+      session.disposed = true;
+      if (session.timer) clearTimeout(session.timer);
+      session.requestCancellation?.cancel();
+      session.sourceEditCancellation?.cancel();
       session.panel.dispose();
     }
     this.sessions.clear();
@@ -195,6 +205,7 @@ export class EditorController implements vscode.Disposable {
       document,
       panel,
       ready: false,
+      sourceEditQueue: Promise.resolve(),
       serial: 0,
       requestRunning: false,
       refreshPending: false,
@@ -208,6 +219,7 @@ export class EditorController implements vscode.Disposable {
       session.disposed = true;
       if (session.timer) clearTimeout(session.timer);
       session.requestCancellation?.cancel();
+      session.sourceEditCancellation?.cancel();
       this.sessions.delete(key);
       this.clientProvider()?.sendNotification("ss/editorClose", {
         textDocument: { uri: document.uri.toString() },
@@ -264,6 +276,19 @@ export class EditorController implements vscode.Disposable {
       await revealSource(message.path, message.start, message.end);
       return;
     }
+    if (message.type === "queryIcons") {
+      await this.queryIcons(session, message);
+      return;
+    }
+    await this.enqueueSourceEdit(session, () =>
+      this.handleSourceEditMessage(session, message)
+    );
+  }
+
+  private async handleSourceEditMessage(
+    session: Session,
+    message: SourceEditMessage,
+  ): Promise<void> {
     if (message.type === "translate") {
       await this.applyTranslation(session, message);
       return;
@@ -276,10 +301,6 @@ export class EditorController implements vscode.Disposable {
       await this.applyComponentDelete(session, message);
       return;
     }
-    if (message.type === "queryIcons") {
-      await this.queryIcons(session, message);
-      return;
-    }
     if (message.type === "insertIcon") {
       await this.applyIconInsert(session, message);
       return;
@@ -288,6 +309,30 @@ export class EditorController implements vscode.Disposable {
         message.type === "editLineGeometry" || message.type === "editShapeBounds") {
       await this.applyShapeEdit(session, message);
     }
+  }
+
+  private enqueueSourceEdit(
+    session: Session,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    const run = session.sourceEditQueue.then(async () => {
+      if (session.disposed) return;
+      const cancellation = new vscode.CancellationTokenSource();
+      session.sourceEditCancellation = cancellation;
+      try {
+        await operation();
+      } finally {
+        if (session.sourceEditCancellation === cancellation) {
+          session.sourceEditCancellation = undefined;
+        }
+        cancellation.dispose();
+      }
+    });
+    session.sourceEditQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   private async queryIcons(
@@ -338,7 +383,7 @@ export class EditorController implements vscode.Disposable {
   ): Promise<void> {
     const outcome = await this.applySourceEdit<ComponentDeleteResult>(
       session,
-      (client) => client.sendRequest<ComponentDeleteResult>(
+      (client, token) => client.sendRequest<ComponentDeleteResult>(
         "ss/deleteComponent",
         {
           textDocument: { uri: session.document.uri.toString() },
@@ -346,6 +391,7 @@ export class EditorController implements vscode.Disposable {
           nodeId: message.nodeId,
           pageId: message.pageId,
         },
+        token,
       ),
       {
         ...commonSourceEditMessages,
@@ -377,14 +423,18 @@ export class EditorController implements vscode.Disposable {
   ): Promise<void> {
     const outcome = await this.applySourceEdit<ShapeEditResult>(
       session,
-      (client) => client.sendRequest<ShapeEditResult>("ss/insertIcon", {
-        textDocument: { uri: session.document.uri.toString() },
-        snapshotId: message.snapshotId,
-        pageId: message.pageId,
-        source: message.source,
-        bounds: message.bounds,
-        color: message.color,
-      }),
+      (client, token) => client.sendRequest<ShapeEditResult>(
+        "ss/insertIcon",
+        {
+          textDocument: { uri: session.document.uri.toString() },
+          snapshotId: message.snapshotId,
+          pageId: message.pageId,
+          source: message.source,
+          bounds: message.bounds,
+          color: message.color,
+        },
+        token,
+      ),
       {
         ...commonSourceEditMessages,
         failed: "The icon could not be inserted.",
@@ -423,9 +473,10 @@ export class EditorController implements vscode.Disposable {
     );
     const outcome = await this.applySourceEdit<ShapeEditResult>(
       session,
-      (client) => client.sendRequest<ShapeEditResult>(
+      (client, token) => client.sendRequest<ShapeEditResult>(
         request.method,
         request.params,
+        token,
       ),
       {
         ...commonSourceEditMessages,
@@ -529,7 +580,7 @@ export class EditorController implements vscode.Disposable {
   ): Promise<SourceEditOutcome | undefined> {
     return this.applySourceEdit(
       session,
-      (client) => client.sendRequest<LayoutEditResult>(
+      (client, token) => client.sendRequest<LayoutEditResult>(
         "ss/layoutEdit",
         {
           textDocument: { uri: session.document.uri.toString() },
@@ -540,6 +591,7 @@ export class EditorController implements vscode.Disposable {
           fromBounds: message.fromBounds,
           toBounds: message.toBounds,
         },
+        token,
       ),
       messages,
     );
@@ -547,7 +599,10 @@ export class EditorController implements vscode.Disposable {
 
   private async applySourceEdit<Result extends LayoutEditResult>(
     session: Session,
-    request: (client: LanguageClient) => Promise<Result>,
+    request: (
+      client: LanguageClient,
+      token?: vscode.CancellationToken,
+    ) => Promise<Result>,
     messages: SourceEditMessages,
   ): Promise<SourceEditOutcome<Result> | undefined> {
     const client = this.clientProvider();
@@ -558,9 +613,10 @@ export class EditorController implements vscode.Disposable {
       };
     }
     const versions = documentVersions();
+    const token = session.sourceEditCancellation?.token;
     try {
-      const result = await request(client);
-      if (session.disposed) return undefined;
+      const result = await request(client, token);
+      if (session.disposed || token?.isCancellationRequested) return undefined;
       if (!workspaceEditTargetsAreCurrent(result.workspaceEdit, versions)) {
         return {
           status: "stale",
@@ -603,6 +659,7 @@ export class EditorController implements vscode.Disposable {
         refresh: true,
       };
     } catch (error) {
+      if (session.disposed || token?.isCancellationRequested) return undefined;
       this.output.appendLine(`[editor] ${messages.logLabel} failed: ${String(error)}`);
       return {
         status: "rejected",
