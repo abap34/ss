@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 
 export async function exerciseTranslationLifecycle(page, current) {
+  await page.locator(".object-sheet .close-button").click();
+  assert.equal(
+    await page.locator(".object-sheet").count(),
+    0,
+    "translation selection fixture did not start without a selected object",
+  );
+  await settleLayout(page);
   const target = page.locator(
     '.page-shell[data-page-id="22"] .object-hit[data-object-id="202"]',
   );
@@ -12,6 +19,11 @@ export async function exerciseTranslationLifecycle(page, current) {
   const initialPreviewBox = await previewTarget.boundingBox();
   assert(box && box.width > 0 && box.height > 0,
     "movable object had no interactive bounds");
+  assert.match(
+    await target.getAttribute("class"),
+    /\bis-movable\b/,
+    "translation target was not marked movable before its drag",
+  );
   assert(initialPreviewBox, "movable object had no rendered preview bounds");
 
   await page.keyboard.down("Shift");
@@ -32,6 +44,14 @@ export async function exerciseTranslationLifecycle(page, current) {
     '.page-shell[data-page-id="22"] .ss-item[data-ss-node-id="202"]' +
       '[data-ss-pending-translation="true"]',
   );
+  await page.waitForSelector(
+    '.page-shell[data-page-id="22"] .object-hit[data-object-id="202"].is-selected',
+  );
+  assert.equal(
+    await page.locator(".object-sheet").count(),
+    1,
+    "dragging an unselected object did not render its selection controls",
+  );
   assert.equal(
     await previewTarget.evaluate((item) => item.style.transform),
     "scale(1)",
@@ -47,7 +67,30 @@ export async function exerciseTranslationLifecycle(page, current) {
 
   const firstMessageCount = await messageCount(page, "translate");
   const movedTargetBox = await targetRect.boundingBox();
-  await drag(page, movedTargetBox, 10, 7);
+  assert(movedTargetBox, "rapid follow-up drag target disappeared");
+  const pointerToastIdentity = "retained-through-pointer-toast";
+  const pointerToastShell = page.locator(".editor-shell");
+  await pointerToastShell.evaluate((node, identity) => {
+    node.dataset.ssPointerToastIdentity = identity;
+  }, pointerToastIdentity);
+  const followUpX = movedTargetBox.x + movedTargetBox.width / 2;
+  const followUpY = movedTargetBox.y + movedTargetBox.height / 2;
+  await page.mouse.move(followUpX, followUpY);
+  await page.mouse.down();
+  await page.mouse.move(followUpX + 10, followUpY + 7, { steps: 3 });
+  await postEditResult(page, {
+    type: "editResult",
+    requestId: translate.requestId,
+    status: "applied",
+    documentVersion: 2,
+  });
+  await page.waitForSelector(".toast--success");
+  assert.equal(
+    await target.evaluate((node) => node.classList.contains("is-dragging")),
+    true,
+    "showing an edit acknowledgement canceled the active follow-up drag",
+  );
+  await page.mouse.up();
   await settleLayout(page);
   assert.equal(
     await messageCount(page, "translate"),
@@ -62,19 +105,59 @@ export async function exerciseTranslationLifecycle(page, current) {
       JSON.stringify({ firstPreviewBox, secondOptimisticBox, movedTargetBox })
     }`,
   );
-
-  await postEditResult(page, {
-    type: "editResult",
-    requestId: translate.requestId,
-    status: "applied",
-    documentVersion: 2,
-  });
-  await page.waitForSelector(".toast--success");
+  assert.equal(
+    await pointerToastShell.getAttribute("data-ss-pointer-toast-identity"),
+    pointerToastIdentity,
+    "a toast received during a pointer operation forced a full editor render",
+  );
   assert.equal(
     await page.locator(".toast--success").textContent(),
     "Constraint applied to source.",
     "the applied source edit did not report its constraint update immediately",
   );
+  await page.waitForFunction(() =>
+    document.getElementById("app")?.dataset.ssTextAligned === "true"
+  );
+  const retainedIdentity = "retained-through-translation-patches";
+  const retainedPreview = page.locator(
+    '.page-shell[data-page-id="22"] .preview',
+  );
+  const retainedPage = retainedPreview.locator(":scope > .ss-page");
+  const retainedPageShell = page.locator(
+    '.page-shell[data-page-id="22"]',
+  );
+  const retainedPdfCanvas = page.locator(
+    '.page-shell[data-page-id="11"] .ss-pdf > canvas',
+  );
+  const retainedUnaffectedInteraction = page.locator(
+    '.page-shell[data-page-id="11"] .interaction-layer',
+  );
+  const replacedAffectedInteraction = page.locator(
+    '.page-shell[data-page-id="22"] .interaction-layer',
+  );
+  const retainedNodes = [
+    [page.locator(".editor-shell"), "editor shell"],
+    [page.locator(".activity-rail"), "activity rail"],
+    [page.locator(".sidebar"), "sidebar"],
+    [page.locator(".workspace"), "workspace"],
+    [retainedPageShell, "page shell"],
+    [retainedPreview, "preview root"],
+    [retainedPage, "page DOM"],
+    [retainedPdfCanvas, "PDF canvas"],
+    [retainedUnaffectedInteraction, "unaffected interaction layer"],
+  ];
+  for (const [node] of retainedNodes) {
+    await node.evaluate((item, identity) => {
+      item.dataset.ssTranslationPatchIdentity = identity;
+    }, retainedIdentity);
+  }
+  const retainedAlignment = "retained-baseline-alignment";
+  await page.locator("#app").evaluate((node, identity) => {
+    node.dataset.ssTextAligned = identity;
+  }, retainedAlignment);
+  await replacedAffectedInteraction.evaluate((node) => {
+    node.dataset.ssAffectedInteractionIdentity = "before-translation-patch";
+  });
   const firstApplied = translatedPatch(
     current,
     translate.toBounds,
@@ -99,6 +182,19 @@ export async function exerciseTranslationLifecycle(page, current) {
     translate.toBounds.x - translate.fromBounds.x,
     "the translation patch was not composed onto the retained HTML",
   );
+  await assertTranslationPatchIdentity(
+    retainedNodes,
+    retainedIdentity,
+    retainedAlignment,
+    "the first translation patch",
+  );
+  assert.equal(
+    await replacedAffectedInteraction.getAttribute(
+      "data-ss-affected-interaction-identity",
+    ),
+    null,
+    "the interaction layer for the translated page was not reconciled",
+  );
   await settleLayout(page);
   const rebasedPreviewBox = await previewTarget.boundingBox();
   assert(
@@ -119,7 +215,12 @@ export async function exerciseTranslationLifecycle(page, current) {
     followUp.toBounds,
     "12-second-applied",
   );
-  await postSnapshot(page, 102, finalSnapshot, 3);
+  const finalPatch = translatedPatch(
+    firstApplied,
+    followUp.toBounds,
+    finalSnapshot.snapshot_id,
+  );
+  await postSnapshot(page, 102, finalPatch, 3);
   await page.waitForFunction(() =>
     !document.querySelector("[data-ss-pending-translation]")
   );
@@ -133,6 +234,26 @@ export async function exerciseTranslationLifecycle(page, current) {
     await page.locator(".toast--success").getAttribute("role"),
     "status",
     "a successful update used an error announcement role",
+  );
+  assert(
+    Math.abs(
+      Number(await previewTarget.getAttribute("data-ss-base-translation-x")) -
+        (followUp.toBounds.x - translate.fromBounds.x),
+    ) < 1e-9,
+    "a translation patch chain did not accumulate its horizontal base offset",
+  );
+  assert(
+    Math.abs(
+      Number(await previewTarget.getAttribute("data-ss-base-translation-y")) -
+        (followUp.toBounds.y - translate.fromBounds.y),
+    ) < 1e-9,
+    "a translation patch chain did not accumulate its vertical base offset",
+  );
+  await assertTranslationPatchIdentity(
+    retainedNodes,
+    retainedIdentity,
+    retainedAlignment,
+    "the translation patch chain",
   );
   await settleLayout(page);
   const authoritativePreviewBox = await previewTarget.boundingBox();
@@ -283,6 +404,28 @@ export async function exerciseTranslationLifecycle(page, current) {
   materializedUnchanged.generation = unchangedSnapshot.generation;
   materializedUnchanged.snapshot_id = unchangedSnapshot.snapshot_id;
   return materializedUnchanged;
+}
+
+async function assertTranslationPatchIdentity(
+  nodes,
+  identity,
+  alignment,
+  context,
+) {
+  for (const [node, label] of nodes) {
+    assert.equal(
+      await node.getAttribute("data-ss-translation-patch-identity"),
+      identity,
+      `${context} recreated the ${label}`,
+    );
+  }
+  assert.equal(
+    await nodes[0][0].evaluate((node) =>
+      node.parentElement?.dataset.ssTextAligned
+    ),
+    alignment,
+    `${context} reran baseline alignment for retained text`,
+  );
 }
 
 async function drag(page, box, dx, dy) {

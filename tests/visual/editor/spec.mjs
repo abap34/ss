@@ -1858,17 +1858,50 @@ async function exerciseDeferredSnapshotDuringDrag(browser, baseUrl, initial) {
     assert(dragged, "drag deferral fixture lost its provisional object");
     assert.equal(await target.evaluate((node) => node.classList.contains("is-dragging")), true);
 
-    const deferred = structuredClone(initial);
-    deferred.generation += 1;
-    deferred.snapshot_id = "deferred-during-drag";
-    deferred.display.html = deferred.display.html.replace(
-      'class="ss-page"',
-      'class="ss-page" data-deferred-snapshot="true"',
+    const refreshCount = await messageCount(page, "refreshFull");
+    await page.evaluate(() => {
+      const surface = document.querySelector(
+        '.page-shell[data-page-id="11"] .page-surface',
+      );
+      globalThis.__deferredInteractionUpdates = 0;
+      globalThis.__deferredInteractionObserver = new MutationObserver(
+        (records) => {
+          for (const record of records) {
+            for (const node of record.addedNodes) {
+              if (node instanceof Element &&
+                  node.classList.contains("interaction-layer")) {
+                globalThis.__deferredInteractionUpdates += 1;
+              }
+            }
+          }
+        },
+      );
+      globalThis.__deferredInteractionObserver.observe(surface, {
+        childList: true,
+      });
+    });
+    const firstPatch = deferredTranslationPatch(
+      initial,
+      101,
+      { x: 7, y: 4 },
+      "first-deferred-patch",
     );
-    await postSnapshot(page, 2, deferred, 1);
+    await postSnapshot(page, 2, firstPatch, 1);
+    const latestPatch = deferredTranslationPatch(
+      firstPatch,
+      101,
+      { x: 5, y: -1 },
+      "latest-deferred-patch",
+    );
+    await postSnapshot(page, 3, latestPatch, 1);
     await page.waitForTimeout(50);
-    assert.equal(await page.locator("[data-deferred-snapshot]").count(), 0,
-      "a compiled snapshot was rendered before the drag ended");
+    assert.equal(
+      await page.locator(
+        '[data-ss-node-id="101"][data-ss-base-translation-x]',
+      ).count(),
+      0,
+      "a deferred translation patch was rendered before the drag ended",
+    );
     assert.equal(await target.evaluate((node) => node.classList.contains("is-dragging")), true,
       "a compiled snapshot canceled the active drag");
     const retainedDuringDrag = await preview.boundingBox();
@@ -1882,14 +1915,86 @@ async function exerciseDeferredSnapshotDuringDrag(browser, baseUrl, initial) {
     const translation = await lastMessage(page, "translate");
     assert.equal(translation.snapshotId, initial.snapshot_id,
       "the drag was submitted against a snapshot that was not yet visible");
-    await page.waitForSelector("[data-deferred-snapshot]");
     await page.waitForSelector("[data-ss-pending-translation='true']");
+    await page.waitForFunction(() => {
+      const item = document.querySelector(
+        '.page-shell[data-page-id="11"] [data-ss-node-id="101"]',
+      );
+      return Number(item?.dataset.ssBaseTranslationX) === 12 &&
+        Number(item?.dataset.ssBaseTranslationY) === 3;
+    });
+    assert.equal(
+      await page.evaluate(() => {
+        globalThis.__deferredInteractionObserver.disconnect();
+        return globalThis.__deferredInteractionUpdates;
+      }),
+      1,
+      "a deferred patch chain triggered more than one interaction update",
+    );
+    assert.equal(await messageCount(page, "refreshFull"), refreshCount,
+      "a chained deferred patch requested an unnecessary full snapshot");
     const retainedAfterDrag = await preview.boundingBox();
     assert(
       Math.abs(retainedAfterDrag.x - dragged.x) < 1 &&
         Math.abs(retainedAfterDrag.y - dragged.y) < 1,
       "applying the deferred snapshot reset the completed drag",
     );
+
+    await page.getByRole("button", { name: "Pan view" }).click();
+    const viewport = page.locator(".viewport");
+    const viewportBounds = await viewport.boundingBox();
+    assert(viewportBounds, "deferred full-display fixture lost its viewport");
+    await page.mouse.move(
+      viewportBounds.x + viewportBounds.width / 2,
+      viewportBounds.y + viewportBounds.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      viewportBounds.x + viewportBounds.width / 2 + 18,
+      viewportBounds.y + viewportBounds.height / 2 + 12,
+      { steps: 2 },
+    );
+    assert.equal(await viewport.evaluate((node) =>
+      node.classList.contains("viewport--panning")
+    ), true, "the full-display deferral fixture did not start panning");
+
+    const beforeFull = deferredTranslationPatch(
+      latestPatch,
+      102,
+      { x: 4, y: 2 },
+      "deferred-before-full-display",
+    );
+    await postSnapshot(page, 4, beforeFull, 1);
+    const full = structuredClone(initial);
+    full.generation += 4;
+    full.snapshot_id = "deferred-full-display";
+    full.display.html = full.display.html.replace(
+      'class="ss-page"',
+      'class="ss-page" data-deferred-snapshot="true"',
+    );
+    await postSnapshot(page, 5, full, 1);
+    const afterFull = deferredTranslationPatch(
+      full,
+      102,
+      { x: 9, y: 6 },
+      "deferred-after-full-display",
+    );
+    await postSnapshot(page, 6, afterFull, 1);
+    await page.waitForTimeout(50);
+    assert.equal(await page.locator("[data-deferred-snapshot]").count(), 0,
+      "a full display was rendered before panning ended");
+
+    await page.mouse.up();
+    await page.waitForSelector("[data-deferred-snapshot]");
+    await page.waitForFunction(() => {
+      const item = document.querySelector(
+        '.page-shell[data-page-id="11"] [data-ss-node-id="102"]',
+      );
+      return Number(item?.dataset.ssBaseTranslationX) === 9 &&
+        Number(item?.dataset.ssBaseTranslationY) === 6;
+    });
+    assert.equal(await messageCount(page, "refreshFull"), refreshCount,
+      "a patch after a deferred full display lost its new display base");
   } finally {
     await page.close();
   }
@@ -2012,6 +2117,29 @@ async function postSnapshot(page, revision, value, documentVersion = 1) {
       snapshot: snapshotValue,
     }, "*");
   }, { deliveryRevision: revision, snapshotValue: value, version: documentVersion });
+}
+
+function deferredTranslationPatch(source, nodeId, translation, snapshotId) {
+  const result = structuredClone(source);
+  result.generation += 1;
+  result.snapshot_id = snapshotId;
+  const object = result.layout.objects.find((candidate) =>
+    candidate.id === nodeId
+  );
+  assert(object, `deferred translation fixture omitted object ${nodeId}`);
+  object.x += translation.x;
+  object.y -= translation.y;
+  result.display = {
+    schema: 3,
+    kind: "translation_patch",
+    base_snapshot_id: source.snapshot_id,
+    translations: [{
+      node_id: nodeId,
+      x: translation.x,
+      y: translation.y,
+    }],
+  };
+  return result;
 }
 
 async function postBuildStatus(page, revision, status) {
