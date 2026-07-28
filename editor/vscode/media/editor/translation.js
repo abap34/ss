@@ -74,7 +74,6 @@ export class TranslationController {
     if (snapshot.stale) return null;
     let failure = null;
     for (const pending of [...this.pending.values()]) {
-      if (pending.phase === "requested") continue;
       if (
         pending.phase === "applied" &&
         (!Number.isSafeInteger(documentVersion) ||
@@ -97,6 +96,13 @@ export class TranslationController {
       }
 
       const authoritative = previewFrame(page, object);
+      if (pending.phase === "requested") {
+        if (snapshot.snapshot_id !== pending.sent?.snapshotId) {
+          pending.base = authoritative;
+          pending.nodeIds = new Set(subtreeNodeIds(snapshot, pending.nodeId));
+        }
+        continue;
+      }
       if (samePosition(authoritative, pending.desired)) {
         this.pending.delete(pending.nodeId);
         continue;

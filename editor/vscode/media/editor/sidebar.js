@@ -41,6 +41,34 @@ export function renderSidebar(state, actions) {
   return aside;
 }
 
+export function reconcileSidebarSnapshot(root, state, previousSnapshot) {
+  const sidebar = root.querySelector(".sidebar[data-sidebar-view]");
+  if (!state.sidebar) return sidebar == null;
+  if (!sidebar || sidebar.dataset.sidebarView !== state.sidebar ||
+      !sameSidebarModel(state.sidebar, previousSnapshot, state.snapshot)) {
+    return false;
+  }
+  if (state.sidebar === "pages") {
+    const entries = [...sidebar.querySelectorAll(".page-entry[data-page-id]")];
+    if (entries.length !== state.snapshot.layout.pages.length) return false;
+    for (let index = 0; index < entries.length; index += 1) {
+      const page = state.snapshot.layout.pages[index];
+      const entry = entries[index];
+      if (Number(entry.dataset.pageId) !== page.id) return false;
+      entry.classList.toggle("is-active", page.id === state.currentPageId);
+    }
+    return true;
+  }
+  for (const row of sidebar.querySelectorAll(".outline-row[data-outline-id]")) {
+    const id = Number(row.dataset.outlineId);
+    row.classList.toggle(
+      "is-active",
+      id === state.selectedObjectId || id === state.currentPageId,
+    );
+  }
+  return true;
+}
+
 function activityButton(state, view, label, toggleSidebar) {
   const button = element("button", state.sidebar === view ? "is-active" : "");
   button.type = "button";
@@ -60,6 +88,7 @@ function pagesPanel(state, actions) {
       `page-entry${page.id === state.currentPageId ? " is-active" : ""}`,
     );
     button.type = "button";
+    button.dataset.pageId = String(page.id);
     const thumb = element("span", "page-thumbnail");
     thumb.append(renderPage(state.snapshot, page.id, true));
     const label = element("span", "page-entry-label");
@@ -110,6 +139,7 @@ function outlineRow(state, actions, item, children, depth, seen) {
     "div",
     `outline-row outline-row--${item.kind}${active ? " is-active" : ""}`,
   );
+  row.dataset.outlineId = String(item.id);
   row.style.setProperty("--depth", String(depth));
   const button = element("button", "outline-row-select");
   button.type = "button";
@@ -147,4 +177,49 @@ function outlineLockButton(item, objectLocks) {
   button.append(element("span", "object-lock-icon"));
   button.addEventListener("click", () => objectLocks.toggle(item.id));
   return button;
+}
+
+function sameSidebarModel(view, previous, current) {
+  if (!previous || !current) return false;
+  if (view === "pages") {
+    return sameItems(
+      previous.layout?.pages,
+      current.layout?.pages,
+      (page) => [page.id, page.index, page.name],
+    );
+  }
+  return sameItems(
+    previous.outline,
+    current.outline,
+    (item) => [
+      item.id,
+      item.parent_id,
+      item.page_id,
+      item.kind,
+      item.label,
+      item.role,
+    ],
+  ) && sameItems(
+    previous.editing,
+    current.editing,
+    (target) => [
+      target.node_id,
+      target.page_id,
+      target.page_index,
+      target.page_name,
+      target.binding,
+      target.binding_required,
+      target.path,
+    ],
+  );
+}
+
+function sameItems(before = [], after = [], project) {
+  if (before.length !== after.length) return false;
+  return before.every((item, index) => {
+    const left = project(item);
+    const right = project(after[index]);
+    return left.length === right.length &&
+      left.every((value, field) => value === right[field]);
+  });
 }

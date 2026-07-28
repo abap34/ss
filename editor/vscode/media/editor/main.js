@@ -6,12 +6,20 @@ import {
 } from "./diagnostics.js";
 import { ComponentDeletionController } from "./component-deletion.js";
 import { ComponentWidthController } from "./component-width.js";
-import { disposePages } from "./document.js";
+import {
+  applyDisplayTranslationPatch,
+  composeDisplayTranslations,
+  disposePages,
+} from "./document.js";
 import { defaultIconDraft, IconController } from "./icon-insertion.js";
 import { EditorNavigation } from "./navigation.js";
 import { ObjectLockController } from "./object-locks.js";
 import { disposePdfItems, disposePdfRuntime } from "./pdf.js";
-import { renderActivityRail, renderSidebar } from "./sidebar.js";
+import {
+  reconcileSidebarSnapshot,
+  renderActivityRail,
+  renderSidebar,
+} from "./sidebar.js";
 import { defaultShapeStyle, ShapeController } from "./shape-insertion.js";
 import { TranslationController } from "./translation.js";
 import { WorkspaceView } from "./workspace.js";
@@ -54,7 +62,7 @@ let toastTimer = null;
 let renderGeneration = 0;
 let textAlignmentFailed = false;
 let renderDeferred = false;
-let deferredSnapshots = [];
+let deferredSnapshot = null;
 const sidebarScrollPositions = new Map();
 const successToastDuration = 2500;
 const errorToastDuration = 5000;
@@ -164,15 +172,17 @@ function acceptSnapshot(message) {
   if (!Number.isSafeInteger(message.revision) ||
       message.revision <= state.revision ||
       message.revision < state.buildRevision || !message.snapshot) return;
-  const snapshot = materializeSnapshotDisplay(message.snapshot);
-  if (!snapshot) {
+  const materialized = materializeSnapshotDisplay(message.snapshot);
+  if (!materialized) {
     vscode.postMessage({ type: "refreshFull" });
     return;
   }
+  const { snapshot, translatedNodeIds } = materialized;
+  const previousSnapshot = state.snapshot;
   if (state.toast?.kind === "error") clearToast();
-  textAlignmentFailed = false;
-  const preservesDisplay = state.snapshot?.display === snapshot.display;
-  if (state.snapshot && !preservesDisplay) disposePages(state.snapshot);
+  const preservesDisplay = previousSnapshot?.display === snapshot.display;
+  if (!preservesDisplay) textAlignmentFailed = false;
+  if (previousSnapshot && !preservesDisplay) disposePages(previousSnapshot);
   if (!preservesDisplay) disposePdfItems(app);
   state.revision = message.revision;
   state.snapshot = snapshot;
@@ -200,7 +210,9 @@ function acceptSnapshot(message) {
     renderStyle.id = "ss-render-style";
     document.head.append(renderStyle);
   }
-  renderStyle.textContent = state.snapshot.display.css;
+  if (renderStyle.textContent !== state.snapshot.display.css) {
+    renderStyle.textContent = state.snapshot.display.css;
+  }
   navigation.reconcile(state.snapshot);
   objectLocks.reconcile(state.snapshot);
   const shapeOutcome = shape.reconcile(state.snapshot);
@@ -241,23 +253,25 @@ function acceptSnapshot(message) {
     state.toast = { kind: "success", message: "Component deleted from source." };
     toastDuration = successToastDuration;
   }
-  render();
+  const retained = preservesDisplay &&
+    reconcileSidebarSnapshot(app, state, previousSnapshot) &&
+    workspace.reconcileRetainedSnapshot(previousSnapshot, translatedNodeIds);
+  if (!retained) render();
   if (toastDuration != null) scheduleToastClear(toastDuration);
 }
 
 function deferSnapshot(message) {
   if (!Number.isSafeInteger(message.revision) || !message.snapshot ||
       message.revision <= state.revision ||
-      message.revision < state.buildRevision) return;
-  deferredSnapshots.push(message);
+      message.revision < state.buildRevision ||
+      message.revision <= (deferredSnapshot?.revision ?? -1)) return;
+  deferredSnapshot = composeDeferredSnapshot(deferredSnapshot, message);
 }
 
 function flushDeferredSnapshots() {
-  const snapshots = deferredSnapshots;
-  deferredSnapshots = [];
-  for (const message of snapshots) {
-    acceptSnapshot(message);
-  }
+  const snapshot = deferredSnapshot;
+  deferredSnapshot = null;
+  if (snapshot) acceptSnapshot(snapshot);
   if (renderDeferred) render();
 }
 
@@ -267,37 +281,62 @@ function editFailureMessage(fallback) {
 }
 
 function materializeSnapshotDisplay(snapshot) {
-  if (snapshot.display?.kind !== "translation_patch") return snapshot;
+  if (snapshot.display?.kind !== "translation_patch") {
+    return { snapshot, translatedNodeIds: null };
+  }
   if (
     !state.snapshot ||
     state.snapshot.snapshot_id !== snapshot.display.base_snapshot_id ||
     state.snapshot.display?.schema !== 2
   ) return null;
 
-  const materialized = structuredClone(snapshot);
-  if ((snapshot.display.translations || []).length === 0) {
-    materialized.display = state.snapshot.display;
-    return materialized;
-  }
-  const display = structuredClone(state.snapshot.display);
-  const translations = new Map(
-    (display.translations || []).map((item) => [item.node_id, { ...item }]),
+  const translatedNodeIds = applyDisplayTranslationPatch(
+    state.snapshot.display,
+    snapshot.display.translations || [],
   );
-  for (const patch of snapshot.display.translations) {
-    const current = translations.get(patch.node_id) || {
-      node_id: patch.node_id,
-      x: 0,
-      y: 0,
+  return {
+    snapshot: {
+      ...snapshot,
+      display: state.snapshot.display,
+    },
+    translatedNodeIds,
+  };
+}
+
+function composeDeferredSnapshot(previous, message) {
+  const patch = message.snapshot.display;
+  if (patch?.kind !== "translation_patch") return message;
+  const base = previous?.snapshot;
+  if (!base || patch.base_snapshot_id !== base.snapshot_id) return message;
+
+  let display;
+  if (base.display?.kind === "translation_patch") {
+    display = {
+      ...patch,
+      base_snapshot_id: base.display.base_snapshot_id,
+      translations: composeDisplayTranslations(
+        base.display.translations,
+        patch.translations,
+      ),
     };
-    current.x += patch.x;
-    current.y += patch.y;
-    translations.set(patch.node_id, current);
+  } else if (base.display?.schema === 2) {
+    display = {
+      ...base.display,
+      translations: composeDisplayTranslations(
+        base.display.translations,
+        patch.translations,
+      ),
+    };
+  } else {
+    return message;
   }
-  display.translations = [...translations.values()].filter((item) =>
-    Math.abs(item.x) >= 0.0001 || Math.abs(item.y) >= 0.0001
-  );
-  materialized.display = display;
-  return materialized;
+  return {
+    ...message,
+    snapshot: {
+      ...message.snapshot,
+      display,
+    },
+  };
 }
 
 function acceptBuildStatus(message) {
@@ -332,7 +371,7 @@ function validBuildDuration(value) {
 
 function showSuccess(message) {
   state.toast = { kind: "success", message };
-  render();
+  syncToast();
   scheduleToastClear(successToastDuration);
 }
 
@@ -360,8 +399,12 @@ function scheduleToastClear(duration) {
   toastTimer = setTimeout(() => {
     toastTimer = null;
     state.toast = null;
-    render();
+    syncToast();
   }, duration);
+}
+
+function syncToast() {
+  if (!workspace.syncToast()) render();
 }
 
 function render() {
@@ -449,10 +492,25 @@ function navigatePage(pageId) {
 
 function selectObject(objectId, pageId, rerender = true) {
   if (objectLocks.isLocked(objectId)) return;
+  const selectionChanged =
+    state.selectedObjectId !== objectId || state.currentPageId !== pageId;
   const result = navigation.selectObject(objectId, pageId);
   if (!result.selected) return;
-  if (rerender) render();
-  if (rerender && result.pageChanged && state.mode === "continuous") {
+  if (rerender && selectionChanged) render();
+  if (
+    rerender &&
+    !selectionChanged &&
+    (!reconcileSidebarSnapshot(app, state, state.snapshot) ||
+      !workspace.syncSelection(pageId))
+  ) {
+    render();
+  }
+  if (
+    rerender &&
+    selectionChanged &&
+    result.pageChanged &&
+    state.mode === "continuous"
+  ) {
     requestAnimationFrame(() => {
       app.querySelector(`.page-shell[data-page-id="${pageId}"]`)
         ?.scrollIntoView({ behavior: "smooth", block: "center" });

@@ -77,32 +77,10 @@ export class WorkspaceView {
     }
     viewport.append(pages);
     main.append(viewport);
-    const selected = this.selectedObject();
-    if (selected) {
-      main.append(renderObjectSheet(this.state, selected, {
-        close: () => {
-          this.state.selectedObjectId = null;
-          this.actions.render();
-        },
-        revealSource: this.actions.revealSource,
-        shape: this.actions.shape,
-        translation: this.actions.translation,
-        componentWidth: this.actions.componentWidth,
-        objectLocks: this.actions.objectLocks,
-      }));
-    }
-    if (this.state.toast) {
-      const toast = element(
-        "div",
-        `toast toast--${this.state.toast.kind}`,
-      );
-      toast.setAttribute(
-        "role",
-        this.state.toast.kind === "error" ? "alert" : "status",
-      );
-      toast.textContent = this.state.toast.message;
-      main.append(toast);
-    }
+    const sheet = this.objectSheet();
+    if (sheet) main.append(sheet);
+    const toast = this.toast();
+    if (toast) main.append(toast);
     this.root = main;
     this.viewport = viewport;
     if (this.state.iconPickerOpen) {
@@ -121,8 +99,177 @@ export class WorkspaceView {
     return main;
   }
 
+  reconcileRetainedSnapshot(previousSnapshot, translatedNodeIds = null) {
+    const snapshot = this.state.snapshot;
+    if (!this.root?.isConnected || !this.viewport?.isConnected ||
+        previousSnapshot?.entry_path !== snapshot?.entry_path ||
+        !samePageGeometry(previousSnapshot, snapshot) ||
+        !samePageEditingCapabilities(previousSnapshot, snapshot)) {
+      return false;
+    }
+    const visiblePages = this.state.mode === "single"
+      ? snapshot.layout.pages.filter((page) =>
+        page.id === this.state.currentPageId
+      )
+      : snapshot.layout.pages;
+    const shells = [...this.viewport.querySelectorAll(".page-shell")];
+    if (shells.length !== visiblePages.length) return false;
+    const retainedPages = [];
+    for (let index = 0; index < visiblePages.length; index += 1) {
+      const page = visiblePages[index];
+      const shell = shells[index];
+      const surface = shell.querySelector(":scope > .page-surface");
+      const preview = surface?.querySelector(":scope > .preview");
+      const interaction = surface?.querySelector(":scope > .interaction-layer");
+      if (Number(shell.dataset.pageId) !== page.id ||
+          !surface || !preview || !interaction) return false;
+      retainedPages.push({ page, shell, preview, interaction });
+    }
+
+    const interactionPageIds = translatedInteractionPages(
+      previousSnapshot,
+      snapshot,
+      translatedNodeIds,
+    );
+    this.interaction.reset();
+    this.cleanupPan();
+    for (const retained of retainedPages) {
+      const { page, shell, preview, interaction } = retained;
+      shell.dataset.pageWidth = String(page.width);
+      shell.dataset.pageHeight = String(page.height);
+      if (interactionPageIds == null || interactionPageIds.has(page.id)) {
+        this.actions.translation.applyPreview(preview, page.id);
+        this.actions.componentWidth.applyPreview(preview, page.id);
+        this.actions.shape.applyPreview(preview, page.id);
+        this.actions.componentDeletion.applyPreview(preview, page.id);
+        interaction.replaceWith(this.interaction.renderLayer(page, preview));
+      }
+      this.syncPageChrome(shell, page);
+    }
+    this.updateBuildStatus();
+    this.syncObjectSheet();
+    this.syncToast();
+    return true;
+  }
+
   isPointerOperationActive() {
     return this.pan != null || this.interaction.isPointerOperationActive();
+  }
+
+  objectSheet() {
+    const selected = this.selectedObject();
+    if (!selected) return null;
+    return renderObjectSheet(this.state, selected, {
+      close: () => {
+        this.state.selectedObjectId = null;
+        this.actions.render();
+      },
+      revealSource: this.actions.revealSource,
+      shape: this.actions.shape,
+      translation: this.actions.translation,
+      componentWidth: this.actions.componentWidth,
+      objectLocks: this.actions.objectLocks,
+    });
+  }
+
+  toast() {
+    if (!this.state.toast) return null;
+    const toast = element(
+      "div",
+      `toast toast--${this.state.toast.kind}`,
+    );
+    toast.setAttribute(
+      "role",
+      this.state.toast.kind === "error" ? "alert" : "status",
+    );
+    toast.textContent = this.state.toast.message;
+    return toast;
+  }
+
+  syncObjectSheet() {
+    const current = this.root.querySelector(":scope > .object-sheet");
+    const next = this.objectSheet();
+    if (current && next) {
+      current.replaceWith(next);
+    } else if (current) {
+      current.remove();
+    } else if (next) {
+      const toast = this.root.querySelector(":scope > .toast");
+      this.root.insertBefore(next, toast);
+    }
+  }
+
+  syncSelection(pageId) {
+    if (!this.root?.isConnected || !this.viewport?.isConnected) return false;
+    const renderedSelection = [
+      ...this.viewport.querySelectorAll(
+        ".interaction-layer .object-hit.is-selected",
+      ),
+    ];
+    if (renderedSelection.length !== 0 && renderedSelection.every((selected) =>
+      Number(selected.dataset.objectId) === this.state.selectedObjectId &&
+      Number(selected.closest(".page-shell")?.dataset.pageId) === pageId
+    )) {
+      this.syncObjectSheet();
+      return true;
+    }
+    const pageIds = new Set([pageId]);
+    for (const selected of renderedSelection) {
+      const selectedPageId = Number(selected.closest(".page-shell")?.dataset.pageId);
+      if (Number.isSafeInteger(selectedPageId)) pageIds.add(selectedPageId);
+    }
+    for (const selectedPageId of pageIds) {
+      const page = this.state.snapshot?.layout.pages.find((candidate) =>
+        candidate.id === selectedPageId
+      );
+      const shell = this.viewport.querySelector(
+        `.page-shell[data-page-id="${selectedPageId}"]`,
+      );
+      const surface = shell?.querySelector(":scope > .page-surface");
+      const preview = surface?.querySelector(":scope > .preview");
+      const interaction = surface?.querySelector(":scope > .interaction-layer");
+      if (!page || !preview || !interaction) return false;
+      interaction.replaceWith(this.interaction.renderLayer(page, preview));
+    }
+    this.syncObjectSheet();
+    return true;
+  }
+
+  syncToast() {
+    if (!this.root?.isConnected) return false;
+    const current = this.root.querySelector(":scope > .toast");
+    const next = this.state.toast;
+    if (!next) {
+      current?.remove();
+      return true;
+    }
+    if (!current) {
+      this.root.append(this.toast());
+      return true;
+    }
+    current.className = `toast toast--${next.kind}`;
+    current.setAttribute("role", next.kind === "error" ? "alert" : "status");
+    current.textContent = next.message;
+    return true;
+  }
+
+  syncPageChrome(shell, page) {
+    const currentSource = shell.querySelector(":scope > .page-source-button");
+    if (page.location?.path) {
+      const nextSource = sourceButton(page, this.actions.revealSource);
+      nextSource.classList.add("page-source-button");
+      nextSource.title = `Open ${page.name || `Page ${page.index}`} in Editor`;
+      nextSource.setAttribute("aria-label", nextSource.title);
+      if (currentSource) currentSource.replaceWith(nextSource);
+      else {
+        const caption = shell.querySelector(":scope > .page-caption");
+        shell.insertBefore(nextSource, caption);
+      }
+    } else {
+      currentSource?.remove();
+    }
+    const caption = shell.querySelector(":scope > .page-caption");
+    if (caption) caption.textContent = page.name;
   }
 
   toolbar() {
@@ -756,6 +903,52 @@ export class WorkspaceView {
       (object) => object.id === this.state.selectedObjectId,
     ) || null;
   }
+}
+
+function samePageGeometry(previous, current) {
+  const before = previous?.layout?.pages;
+  const after = current?.layout?.pages;
+  if (!Array.isArray(before) || !Array.isArray(after) ||
+      before.length !== after.length) return false;
+  return before.every((page, index) => {
+    const next = after[index];
+    return page.id === next.id &&
+      page.width === next.width &&
+      page.height === next.height;
+  });
+}
+
+function samePageEditingCapabilities(previous, current) {
+  const before = previous?.page_editing || [];
+  const after = current?.page_editing || [];
+  if (before.length !== after.length) return false;
+  return before.every((capability, index) => {
+    const next = after[index];
+    return capability.page_id === next.page_id &&
+      capability.insert_shapes === next.insert_shapes &&
+      capability.insert_icons === next.insert_icons;
+  });
+}
+
+function translatedInteractionPages(previous, current, translatedNodeIds) {
+  if (!(translatedNodeIds instanceof Set) || translatedNodeIds.size === 0) {
+    return null;
+  }
+  const beforePages = new Map(
+    (previous?.layout?.objects || []).map((object) => [object.id, object.page_id]),
+  );
+  const afterPages = new Map(
+    (current?.layout?.objects || []).map((object) => [object.id, object.page_id]),
+  );
+  const pages = new Set();
+  for (const nodeId of translatedNodeIds) {
+    const before = beforePages.get(nodeId);
+    const after = afterPages.get(nodeId);
+    if (before == null && after == null) return null;
+    if (before != null) pages.add(before);
+    if (after != null) pages.add(after);
+  }
+  return pages;
 }
 
 function normalizedScale(value, fallback) {

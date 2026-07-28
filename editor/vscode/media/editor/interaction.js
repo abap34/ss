@@ -482,7 +482,12 @@ export class InteractionController {
       event.stopPropagation();
       this.actions.selectObject(target.id, target.page_id);
     });
-    group.addEventListener("dblclick", () => this.actions.revealSource(target));
+    group.addEventListener("dblclick", () => {
+      const current = this.state.snapshot?.layout.objects.find((candidate) =>
+        candidate.id === target.id
+      );
+      this.actions.revealSource(current || target);
+    });
     group.addEventListener(
       "pointerdown",
       (event) => this.beginDrag(
