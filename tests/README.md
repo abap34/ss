@@ -13,45 +13,86 @@ They intentionally assert:
   `tests/core/document_state/`;
 - page-local layout graph semantics, constraint classification, and axis state
   reconciliation under `tests/layout/graph/`;
-- rendering-IR ownership，document compilation，PDF backend behavior，and static
-  HTML generation under `tests/render/ir/`，`tests/render/compile/`，
-  `tests/render/pdf/`，and `tests/render/html/`;
+- rendering-IR ownership, document compilation, PDF backend behavior, and static
+  HTML generation under `tests/render/ir/`, `tests/render/compile/`,
+  `tests/render/pdf/`, and `tests/render/html/`;
 - compiler, project, render, LSP, watch, and utility contracts under their
   matching subsystem and topic directories;
 - smoke-check acceptance for stdlib, themes, and demo decks through
   `zig build test`.
-- focused CLI，render，and LSP regressions through spec files under
-  `tests/runtime/` subsystem directories，also wired into `zig build test`.
+- focused CLI, render, and LSP regressions through spec files under
+  `tests/runtime/` subsystem directories, also wired into `zig build test`.
 
-PDF and HTML visual parity is a local test boundary under `tests/visual/`．It
-uses the same in-memory `render.Ir` for both outputs，then renders both with the
-pinned Chromium and PDF.js versions．Run `zig build test-render-parity` for the
+PDF and HTML visual parity is a local test boundary under `tests/visual/`. It
+uses the same in-memory `render.Ir` for both outputs, then renders both with the
+pinned Chromium and PDF.js versions. Run `zig build test-render-parity` for the
 normal set and `zig build test-render-parity-full` to include structured
-mathematics and，when available，an `algorithm2e` raw-TeX case．PDF.js-backed
+mathematics and, when available, an `algorithm2e` raw-TeX case. PDF.js-backed
 pages allow a one-device-pixel spatial rasterization tolerance while retaining
-the same numeric difference limits and separate exact DOM-coordinate checks．
+the same numeric difference limits and separate exact DOM-coordinate checks.
 These steps are intentionally outside normal CI and do not use Poppler or
-ImageMagick．
+ImageMagick.
 
 PDF-only pixel behavior is checked by `zig build test-render-behavior` with the
-same Chromium and PDF.js capture path．This local-only step covers off-page
-clipping，embedded PDF sizing，and math scaling．Raw TeX cases run only when
-their configured TeX engine is available．No visual test uses Poppler or
-ImageMagick．
+same Chromium and PDF.js capture path. This local-only step covers off-page
+clipping, embedded PDF sizing, and math scaling. Raw TeX cases run only when
+their configured TeX engine is available. No visual test uses Poppler or
+ImageMagick.
 
 Fixed-document rendering performance is measured with five runs per mode by
-`zig build -Doptimize=ReleaseSafe benchmark-render`．The first measured run is
-discarded before computing the median，while maximum RSS uses the largest
-remaining sample．Set `SS_RENDER_BENCHMARK_WRITE_BASELINE` to create a local
-JSON baseline，then set `SS_RENDER_BENCHMARK_BASELINE` to enforce the `1.05`
-time and `1.10` memory limits．Benchmark files remain under
-`.ss-cache/render-benchmark/`．
+`zig build -Doptimize=ReleaseSafe benchmark-render`. The first measured run is
+discarded before computing the median, while maximum RSS uses the largest
+remaining sample. Set `SS_RENDER_BENCHMARK_WRITE_BASELINE` to create a local
+JSON baseline, then set `SS_RENDER_BENCHMARK_BASELINE` to enforce the `1.05`
+time and `1.10` memory limits. Benchmark files remain under
+`.ss-cache/render-benchmark/`.
+
+WYSIWYG initial snapshots, full snapshots after body-text changes, and delta
+snapshots after generated position-constraint rewrites are measured with the
+existing large-text fixture by running
+`SS_DEV_TIMEOUT=10m ./dev.sh build -Doptimize=ReleaseSafe benchmark-wysiwyg`
+on the development server. The timing boundary starts when a document or
+change is sent to an initialized language server and ends when the
+`ss/editorSnapshot` response arrives. It excludes language-server startup and
+initialization, webview delivery, DOM updates, and painting. Body-text changes
+and position edits send full-document `didChange` notifications. Position-edit
+samples rewrite constraints generated during the warmup phase.
+
+Each initial-snapshot sample initializes a fresh language server. Body-text and
+position-edit samples each run as a continuous series against one language
+server. Every metric retains 30 samples after five warmup samples and records
+the median, 95th percentile, minimum, and maximum in
+`.ss-cache/wysiwyg-benchmark/result.json`.
+
+Record the baseline from the unchanged source on the same development server,
+with the same ReleaseSafe configuration and fixture, before modifying the
+working tree:
+
+```sh
+SS_DEV_TIMEOUT=10m ./dev.sh exec env SS_WYSIWYG_BENCHMARK_WRITE_BASELINE=.ss-cache/wysiwyg-baseline.json zig build -Doptimize=ReleaseSafe benchmark-wysiwyg
+```
+
+Compare the current source against that baseline on the same development
+server:
+
+```sh
+SS_DEV_TIMEOUT=10m ./dev.sh exec env SS_WYSIWYG_BENCHMARK_BASELINE=.ss-cache/wysiwyg-baseline.json zig build -Doptimize=ReleaseSafe benchmark-wysiwyg
+```
+
+Generated position edits must keep both the median and 95th percentile at or
+below one third of the baseline. Initial snapshots and body-text changes are
+regression monitors rather than optimization targets and must remain within
+1.10 times the baseline. The minimum and maximum describe the distribution but
+do not affect the gate. Baseline validation recomputes summaries from all raw
+samples and also checks the optimization mode, operating system, CPU
+configuration, Node.js version, fixture SHA-256, and measurement-definition
+revision.
 
 The VS Code editor webview interaction boundary is exercised locally with
-Chromium by `zig build test-editor-ui`．It drives page and outline sidebars，
-single and continuous display，shared-HTML thumbnails，selection，constraints，
-drag editing，source reveal，theme state，and stale snapshot rejection．It is
-kept outside normal CI with the other browser tests．
+Chromium by `zig build test-editor-ui`. It drives page and outline sidebars,
+single and continuous display, shared-HTML thumbnails, selection, constraints,
+drag editing, source reveal, theme state, and stale snapshot rejection. It is
+kept outside normal CI with the other browser tests.
 
 CLI and editor smoke tests live under `tests/smoke/`. They should stay thin:
 each script verifies a user-visible workflow end to end, not every bug fix that

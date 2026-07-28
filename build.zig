@@ -320,6 +320,20 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
     benchmark.stdio = .inherit;
     const benchmark_step = b.step("benchmark-render", "Measure fixed-document PDF and HTML rendering with ReleaseSafe");
     benchmark_step.dependOn(&benchmark.step);
+
+    const wysiwyg_benchmark = b.addSystemCommand(&.{ "node", "tests/benchmark/wysiwyg/spec.mjs" });
+    wysiwyg_benchmark.step.dependOn(&ctx.dependency_checks.node.step);
+    // tests/runtime/harness.mjs resolves argv[2] as SS_BIN, so pass the
+    // executable before the optimization mode.
+    wysiwyg_benchmark.addFileArg(exe.getEmittedBin());
+    wysiwyg_benchmark.addArg(@tagName(ctx.optimize));
+    wysiwyg_benchmark.setCwd(b.path("."));
+    wysiwyg_benchmark.stdio = .inherit;
+    const wysiwyg_benchmark_step = b.step(
+        "benchmark-wysiwyg",
+        "Measure WYSIWYG initial and editing latency with ReleaseSafe",
+    );
+    wysiwyg_benchmark_step.dependOn(&wysiwyg_benchmark.step);
 }
 
 fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: std.Build.LazyPath, build_options: *Step.Options, tree_sitter: TreeSitterBundle) ProjectModules {
