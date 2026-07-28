@@ -61,10 +61,12 @@ pub const SourceSet = struct {
 pub const LayoutHookOutput = struct {
     editor: ?editor_snapshot.Output = null,
     conflicts_json: ?[]u8 = null,
+    report: ?core.layout.conflicts.Report = null,
 
     pub fn deinit(self: *LayoutHookOutput, allocator: std.mem.Allocator) void {
         if (self.editor) |*value| value.deinit();
         if (self.conflicts_json) |value| allocator.free(value);
+        if (self.report) |*value| value.deinit();
         self.* = .{};
     }
 };
@@ -82,6 +84,7 @@ pub const Options = struct {
     cancellation: ?utils.Cancellation = null,
     embedded_cache: ?*module_loader.EmbeddedSyntaxCache = null,
     retain_layout_inputs: bool = false,
+    retain_evaluated_layout_state: bool = false,
 
     fn checkCanceled(self: Options) !void {
         if (self.cancellation) |cancellation| try cancellation.check();
@@ -95,6 +98,15 @@ pub const RetainedLayoutInputs = struct {
 
     pub fn deinit(self: *RetainedLayoutInputs) void {
         self.graph.deinit();
+        self.state.deinit();
+        self.* = undefined;
+    }
+};
+
+pub const RetainedLayoutState = struct {
+    state: core.DocumentState,
+
+    pub fn deinit(self: *RetainedLayoutState) void {
         self.state.deinit();
         self.* = undefined;
     }
@@ -249,13 +261,34 @@ pub const LayoutOutput = struct {
         owned_editor: ?editor_snapshot.Output,
         owned_conflicts_json: ?[]u8,
     ) !LayoutOutput {
+        return try fromDocumentStateWithOwnedReport(
+            allocator,
+            state,
+            null,
+            owned_editor,
+            owned_conflicts_json,
+        );
+    }
+
+    pub fn fromDocumentStateWithOwnedReport(
+        allocator: std.mem.Allocator,
+        state: *core.DocumentState,
+        owned_report: ?core.layout.conflicts.Report,
+        owned_editor: ?editor_snapshot.Output,
+        owned_conflicts_json: ?[]u8,
+    ) !LayoutOutput {
+        var report = owned_report;
+        errdefer if (report) |*value| value.deinit();
         var editor = owned_editor;
         errdefer if (editor) |*value| value.deinit();
         const conflicts_json = owned_conflicts_json orelse try core.layout.conflicts.toJson(allocator, state);
         errdefer allocator.free(conflicts_json);
+        if (report == null) report = try core.layout.conflicts.Report.init(allocator, state);
+        const transferred_report = report.?;
+        report = null;
         return .{
             .conflicts_json = conflicts_json,
-            .report = try core.layout.conflicts.Report.init(allocator, state),
+            .report = transferred_report,
             .editor = editor,
         };
     }
@@ -286,6 +319,7 @@ pub const AnalysisSnapshot = struct {
     enum_cases: []EnumCaseFact = &.{},
     layout_output: ?LayoutOutput = null,
     retained_layout_inputs: ?RetainedLayoutInputs = null,
+    retained_layout_state: ?RetainedLayoutState = null,
     diagnostics: diagnostics.DiagnosticBag,
 
     pub fn fromDocumentState(
@@ -369,6 +403,7 @@ pub const AnalysisSnapshot = struct {
         deinitEnumCases(self.allocator, self.enum_cases);
         if (self.layout_output) |*layout| layout.deinit(self.allocator);
         if (self.retained_layout_inputs) |*inputs| inputs.deinit();
+        if (self.retained_layout_state) |*retained| retained.deinit();
         self.diagnostics.deinit();
         self.* = .{
             .allocator = self.allocator,
@@ -414,19 +449,30 @@ pub const AnalysisSnapshot = struct {
         hook: LayoutHook,
         cancellation: ?utils.Cancellation,
     ) !bool {
-        var inputs = self.retained_layout_inputs orelse return false;
-        self.retained_layout_inputs = null;
-        defer inputs.deinit();
-
+        if (self.retained_layout_inputs == null) return false;
         if (cancellation) |value| try value.check();
+        var inputs = self.retained_layout_inputs.?;
+        self.retained_layout_inputs = null;
+        var state_retained = false;
+        defer {
+            inputs.graph.deinit();
+            if (!state_retained) inputs.state.deinit();
+        }
+
         if (hook.run(hook.context, &inputs.state, &inputs.graph)) |result| {
-            self.layout_output = try LayoutOutput.fromDocumentState(
+            const retain_state = result.editor != null;
+            self.layout_output = try LayoutOutput.fromDocumentStateWithOwnedReport(
                 self.allocator,
                 &inputs.state,
+                result.report,
                 result.editor,
                 result.conflicts_json,
             );
             try self.diagnostics.addDocumentStateFrom(&inputs.state, inputs.diagnostic_count);
+            if (retain_state) {
+                self.retained_layout_state = .{ .state = inputs.state };
+                state_retained = true;
+            }
         } else |err| switch (err) {
             error.Canceled => return error.Canceled,
             error.ConstraintConflict,
@@ -577,7 +623,13 @@ pub fn build(
             if (execution_graph) |*graph| {
                 try options.checkCanceled();
                 if (hook.run(hook.context, &state, graph)) |result| {
-                    layout_output = try LayoutOutput.fromDocumentState(allocator, &state, result.editor, result.conflicts_json);
+                    layout_output = try LayoutOutput.fromDocumentStateWithOwnedReport(
+                        allocator,
+                        &state,
+                        result.report,
+                        result.editor,
+                        result.conflicts_json,
+                    );
                     try diagnostic_bag.addDocumentStateFrom(&state, analyzed_diagnostic_count);
                 } else |err| switch (err) {
                     error.Canceled => return error.Canceled,
@@ -622,6 +674,13 @@ pub fn build(
             .diagnostic_count = analyzed_diagnostic_count,
         };
         execution_graph = null;
+        state_owned = false;
+    } else if (options.retain_evaluated_layout_state and
+        snapshot.layout_output != null and
+        snapshot.layout_output.?.editor != null and
+        !snapshot.diagnostics.hasErrors())
+    {
+        snapshot.retained_layout_state = .{ .state = state };
         state_owned = false;
     }
     return snapshot;

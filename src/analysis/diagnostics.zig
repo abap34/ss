@@ -85,7 +85,7 @@ pub const DiagnosticBag = struct {
         errdefer self.allocator.free(code_copy);
         const message_copy = try self.allocator.dupe(u8, message);
         errdefer self.allocator.free(message_copy);
-        var diagnostic = Diagnostic{
+        const diagnostic = Diagnostic{
             .path = path_copy,
             .source = source_copy,
             .severity = severity,
@@ -94,7 +94,6 @@ pub const DiagnosticBag = struct {
             .span = span,
             .caused_by = caused_by,
         };
-        errdefer diagnostic.deinit(self.allocator);
         try self.items.append(self.allocator, diagnostic);
     }
 

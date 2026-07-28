@@ -11,6 +11,7 @@ const Constraint = model.Constraint;
 const ConstraintSource = model.ConstraintSource;
 const Node = model.Node;
 const NodeId = model.NodeId;
+const NodeIndex = std.AutoHashMap(NodeId, usize);
 
 pub const RelationKind = enum {
     explicit,
@@ -47,13 +48,16 @@ pub const Object = struct {
 
 pub const Relation = struct {
     kind: RelationKind,
+    constraint_index: ?usize,
     target_node: NodeId,
     target_anchor: Anchor,
     source: ConstraintSource,
     offset: f32,
     axis: model.Axis,
     role: model.ConstraintRole,
+    scope_depth: u32,
     from_update: bool,
+    origin: ?[]u8,
     location: ?Location,
     syntax: ?ConstraintSyntax,
 };
@@ -64,6 +68,8 @@ pub const Report = struct {
     objects: []Object,
     relations: []Relation,
     failure_count: usize,
+    page_index_by_id: NodeIndex,
+    object_index_by_id: NodeIndex,
 
     pub fn init(allocator: std.mem.Allocator, state: anytype) !Report {
         var pages = std.ArrayList(Page).empty;
@@ -93,13 +99,13 @@ pub const Report = struct {
         }
 
         var relations = std.ArrayList(Relation).empty;
-        errdefer deinitRelationItems(allocator, relations.items);
         errdefer relations.deinit(allocator);
-        for (state.constraints.items) |constraint| {
-            try appendRelationModel(allocator, &relations, state, .explicit, constraint);
+        errdefer deinitRelationItems(allocator, relations.items);
+        for (state.constraints.items, 0..) |constraint, constraint_index| {
+            try appendRelationModel(allocator, &relations, state, .explicit, constraint_index, constraint);
         }
         for (state.fallback_constraints.items) |constraint| {
-            try appendRelationModel(allocator, &relations, state, .fallback, constraint);
+            try appendRelationModel(allocator, &relations, state, .fallback, null, constraint);
         }
 
         const owned_pages = try pages.toOwnedSlice(allocator);
@@ -111,16 +117,37 @@ pub const Report = struct {
             deinitRelationItems(allocator, owned_relations);
             allocator.free(owned_relations);
         }
+
+        var page_index_by_id = NodeIndex.init(allocator);
+        errdefer page_index_by_id.deinit();
+        try page_index_by_id.ensureTotalCapacity(@intCast(owned_pages.len));
+        for (owned_pages, 0..) |page, index| {
+            const entry = page_index_by_id.getOrPutAssumeCapacity(page.id);
+            if (!entry.found_existing) entry.value_ptr.* = index;
+        }
+
+        var object_index_by_id = NodeIndex.init(allocator);
+        errdefer object_index_by_id.deinit();
+        try object_index_by_id.ensureTotalCapacity(@intCast(owned_objects.len));
+        for (owned_objects, 0..) |object, index| {
+            const entry = object_index_by_id.getOrPutAssumeCapacity(object.id);
+            if (!entry.found_existing) entry.value_ptr.* = index;
+        }
+
         return .{
             .allocator = allocator,
             .pages = owned_pages,
             .objects = owned_objects,
             .relations = owned_relations,
             .failure_count = state.constraint_failures.items.len,
+            .page_index_by_id = page_index_by_id,
+            .object_index_by_id = object_index_by_id,
         };
     }
 
     pub fn deinit(self: *Report) void {
+        self.page_index_by_id.deinit();
+        self.object_index_by_id.deinit();
         self.allocator.free(self.pages);
         self.allocator.free(self.objects);
         deinitRelationItems(self.allocator, self.relations);
@@ -131,17 +158,19 @@ pub const Report = struct {
             .objects = &.{},
             .relations = &.{},
             .failure_count = 0,
+            .page_index_by_id = NodeIndex.init(self.allocator),
+            .object_index_by_id = NodeIndex.init(self.allocator),
         };
     }
 
     pub fn objectById(self: *const Report, node_id: NodeId) ?Object {
-        for (self.objects) |object| if (object.id == node_id) return object;
-        return null;
+        const index = self.object_index_by_id.get(node_id) orelse return null;
+        return self.objects[index];
     }
 
     pub fn pageById(self: *const Report, page_id: NodeId) ?Page {
-        for (self.pages) |page| if (page.id == page_id) return page;
-        return null;
+        const index = self.page_index_by_id.get(page_id) orelse return null;
+        return self.pages[index];
     }
 };
 
@@ -150,32 +179,49 @@ fn appendRelationModel(
     relations: *std.ArrayList(Relation),
     state: anytype,
     kind: RelationKind,
+    constraint_index: ?usize,
     constraint: Constraint,
 ) !void {
-    const relation = try initRelation(allocator, state, kind, constraint);
-    errdefer if (relation.location) |location| allocator.free(location.path);
+    const relation = try initRelation(allocator, state, kind, constraint_index, constraint);
+    errdefer deinitRelation(allocator, relation);
     try relations.append(allocator, relation);
 }
 
-fn initRelation(allocator: std.mem.Allocator, state: anytype, kind: RelationKind, constraint: Constraint) !Relation {
+fn initRelation(
+    allocator: std.mem.Allocator,
+    state: anytype,
+    kind: RelationKind,
+    constraint_index: ?usize,
+    constraint: Constraint,
+) !Relation {
+    const origin = if (constraint.origin) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (origin) |value| allocator.free(value);
     const located = try cloneLocation(allocator, state, constraint.origin);
     errdefer if (located) |location| allocator.free(location.path);
     return .{
         .kind = kind,
+        .constraint_index = constraint_index,
         .target_node = constraint.target_node,
         .target_anchor = constraint.target_anchor,
         .source = constraint.source,
         .offset = constraint.offset,
         .axis = graph.anchorAxis(constraint.target_anchor),
         .role = constraint.role,
+        .scope_depth = constraint.scope_depth,
         .from_update = constraint.from_update,
+        .origin = origin,
         .location = located,
         .syntax = constraintSourceSyntax(state, constraint.origin),
     };
 }
 
 fn deinitRelationItems(allocator: std.mem.Allocator, relations: []Relation) void {
-    for (relations) |relation| if (relation.location) |location| allocator.free(location.path);
+    for (relations) |relation| deinitRelation(allocator, relation);
+}
+
+fn deinitRelation(allocator: std.mem.Allocator, relation: Relation) void {
+    if (relation.origin) |origin| allocator.free(origin);
+    if (relation.location) |location| allocator.free(location.path);
 }
 
 fn cloneLocation(allocator: std.mem.Allocator, state: anytype, origin: ?[]const u8) !?Location {
