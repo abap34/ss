@@ -50,6 +50,74 @@ const LayoutBuildMode = enum {
     required,
 };
 
+const PendingGeneratedEdit = struct {
+    path: []u8,
+    base_source: []u8,
+    source: []u8,
+    base_generation: u64,
+    base_snapshot_id: []u8,
+    node_id: core.NodeId,
+    page_id: core.NodeId,
+    mode: feature_edit.GeneratedEditMode,
+    replacements: []feature_edit.GeneratedConstraintReplacement,
+    watched_files_revision: u64,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        edit: *const feature_edit.GeneratedEdit,
+        watched_files_revision: u64,
+    ) !PendingGeneratedEdit {
+        const path = try allocator.dupe(u8, edit.path);
+        errdefer allocator.free(path);
+        const base_source = try allocator.dupe(u8, edit.base_source);
+        errdefer allocator.free(base_source);
+        const source = try allocator.dupe(u8, edit.source);
+        errdefer allocator.free(source);
+        const base_snapshot_id = try allocator.dupe(u8, edit.base_snapshot_id);
+        errdefer allocator.free(base_snapshot_id);
+        var replacements = std.ArrayList(feature_edit.GeneratedConstraintReplacement).empty;
+        errdefer {
+            for (replacements.items) |replacement| {
+                if (replacement.expected.origin) |origin| allocator.free(origin);
+            }
+            replacements.deinit(allocator);
+        }
+        for (edit.replacements) |replacement| {
+            var owned = replacement;
+            owned.expected.origin = if (replacement.expected.origin) |origin|
+                try allocator.dupe(u8, origin)
+            else
+                null;
+            errdefer if (owned.expected.origin) |origin| allocator.free(origin);
+            try replacements.append(allocator, owned);
+        }
+        return .{
+            .path = path,
+            .base_source = base_source,
+            .source = source,
+            .base_generation = edit.base_generation,
+            .base_snapshot_id = base_snapshot_id,
+            .node_id = edit.node_id,
+            .page_id = edit.page_id,
+            .mode = edit.mode,
+            .replacements = try replacements.toOwnedSlice(allocator),
+            .watched_files_revision = watched_files_revision,
+        };
+    }
+
+    fn deinit(self: *PendingGeneratedEdit, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+        allocator.free(self.base_source);
+        allocator.free(self.source);
+        allocator.free(self.base_snapshot_id);
+        for (self.replacements) |replacement| {
+            if (replacement.expected.origin) |origin| allocator.free(origin);
+        }
+        allocator.free(self.replacements);
+        self.* = undefined;
+    }
+};
+
 const Server = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -70,8 +138,8 @@ const Server = struct {
     pending_rebuild_due_ms: u64 = 0,
     pending_rebuild_revision: u64 = 0,
     pending_rebuild_translation_patch: bool = false,
-    generated_edit_path: ?[]u8 = null,
-    generated_edit_source: ?[]u8 = null,
+    generated_edit: ?PendingGeneratedEdit = null,
+    watched_files_revision: u64 = 0,
     active_revision: u64 = 0,
     active_request: ?*const transport.RequestState = null,
     exiting: bool = false,
@@ -305,26 +373,169 @@ const Server = struct {
         self.pending_rebuild_translation_patch = false;
     }
 
-    fn rememberGeneratedEdit(self: *Server, path: []const u8, source: []const u8) !void {
+    fn rememberGeneratedEdit(self: *Server, edit: *const feature_edit.GeneratedEdit) !void {
         self.clearGeneratedEdit();
-        self.generated_edit_path = try self.allocator.dupe(u8, path);
-        errdefer self.clearGeneratedEdit();
-        self.generated_edit_source = try self.allocator.dupe(u8, source);
+        self.generated_edit = try PendingGeneratedEdit.init(
+            self.allocator,
+            edit,
+            self.watched_files_revision,
+        );
     }
 
-    fn consumeGeneratedEdit(self: *Server, path: []const u8) bool {
-        defer self.clearGeneratedEdit();
-        const expected_path = self.generated_edit_path orelse return false;
-        const expected_source = self.generated_edit_source orelse return false;
+    fn generatedEditMatches(self: *Server, path: []const u8) bool {
+        const generated = if (self.generated_edit) |*value| value else return false;
         const current_source = self.documents.sourceForPath(path) orelse return false;
-        return std.mem.eql(u8, expected_path, path) and std.mem.eql(u8, expected_source, current_source);
+        if (generated.base_generation == std.math.maxInt(u64)) return false;
+        return std.mem.eql(u8, generated.path, path) and
+            std.mem.eql(u8, generated.source, current_source) and
+            self.documents.generation == generated.base_generation + 1;
+    }
+
+    fn generatedEditRequiresFullRebuild(self: *const Server) bool {
+        const generated = if (self.generated_edit) |*value| value else return true;
+        return generated.watched_files_revision != self.watched_files_revision or
+            self.pending_rebuild_path != null;
     }
 
     fn clearGeneratedEdit(self: *Server) void {
-        if (self.generated_edit_path) |path| self.allocator.free(path);
-        if (self.generated_edit_source) |source| self.allocator.free(source);
-        self.generated_edit_path = null;
-        self.generated_edit_source = null;
+        if (self.generated_edit) |*generated| generated.deinit(self.allocator);
+        self.generated_edit = null;
+    }
+
+    fn tryApplyGeneratedEdit(self: *Server, path: []const u8) !bool {
+        const generated = if (self.generated_edit) |*value| value else return false;
+        if (generated.replacements.len == 0 or
+            generated.mode == .width or
+            generated.watched_files_revision != self.watched_files_revision or
+            self.pending_rebuild_path != null)
+        {
+            return false;
+        }
+        const snapshot = if (self.analysis) |*value| value else return false;
+        if (snapshot.generation != generated.base_generation or
+            !snapshot.coversPath(path) or
+            snapshot.layout_output == null or
+            snapshot.layout_output.?.editor == null or
+            snapshot.retained_layout_state == null or
+            snapshot.diagnostics.items.items.len != 0 or
+            snapshot.layout_output.?.report.failure_count != 0 or
+            !std.mem.eql(u8, snapshot.layout_output.?.editor.?.model.snapshot_id, generated.base_snapshot_id))
+        {
+            return false;
+        }
+        const retained = &snapshot.retained_layout_state.?;
+        const state = &retained.state;
+        const node = state.getNode(generated.node_id) orelse return false;
+        if (node.kind != .object) return false;
+        if ((state.parentPageOf(node.id) orelse return false) != generated.page_id) return false;
+        if (!canRebaseGeneratedSource(snapshot, state, path, generated)) return false;
+        if (hasLayoutDiagnostics(state)) return false;
+        for (generated.replacements, 0..) |replacement, replacement_position| {
+            if (replacement.index >= state.constraints.items.len or
+                !std.math.isFinite(replacement.new_offset))
+            {
+                return false;
+            }
+            for (generated.replacements[0..replacement_position]) |previous| {
+                if (previous.index == replacement.index) return false;
+            }
+            const constraint = state.constraints.items[replacement.index];
+            if (!constraintEql(constraint, replacement.expected) or
+                constraint.target_node != generated.node_id or
+                constraint.role != .position or
+                !canSyncConstraintUpdate(state, replacement))
+            {
+                return false;
+            }
+            if (replacement.literal_scale != 1 and replacement.literal_scale != -1) return false;
+            const previous_text = generated.base_source[replacement.offset_span.start..replacement.offset_span.end];
+            const replacement_text = generated.source[replacement.offset_span.start..replacement.offset_span.end];
+            const parsed_previous = parseGeneratedNumericOffset(previous_text) orelse return false;
+            const parsed_offset = parseGeneratedNumericOffset(replacement_text) orelse return false;
+            const scale = @as(f64, replacement.literal_scale);
+            const tolerance = @as(f64, core.layout.graph.ConstraintTolerance);
+            if (!std.math.isFinite(parsed_previous) or
+                !std.math.isFinite(parsed_offset) or
+                @abs(parsed_previous * scale - @as(f64, replacement.expected.offset)) > tolerance or
+                @abs(parsed_offset * scale - @as(f64, replacement.new_offset)) > tolerance)
+            {
+                return false;
+            }
+        }
+
+        var discard_retained_state = false;
+        defer if (discard_retained_state) {
+            if (snapshot.retained_layout_state) |*value| value.deinit();
+            snapshot.retained_layout_state = null;
+        };
+
+        if (state.has_external_evaluation_inputs) return false;
+        var pages = try core.prepared.prepare(state.allocator, state);
+        defer pages.deinit(state.allocator);
+        if (hasExternalRenderDependency(&pages, snapshot.project.highlight.languages)) return false;
+
+        for (generated.replacements) |replacement| {
+            state.constraints.items[replacement.index].offset = replacement.new_offset;
+            syncConstraintUpdate(state, replacement);
+        }
+        discard_retained_state = true;
+        var results = render_layout.solvePreparedPages(self.io, state, &pages, .{
+            .resource_cache = &self.render_resource_cache,
+            .highlight_languages = snapshot.project.highlight.languages,
+            .cancellation = .{
+                .context = self,
+                .is_canceled = analysisCanceled,
+            },
+        }) catch return false;
+        defer results.deinit(state.allocator);
+        if (hasLayoutDiagnostics(state)) return false;
+
+        const previous_layout = &snapshot.layout_output.?;
+        const previous_editor = &previous_layout.editor.?;
+        var collected = try collectTranslations(self.allocator, state, &previous_layout.report) orelse
+            return false;
+        defer collected.deinit(self.allocator);
+        if (!translationPatchPreservesRenderedOutput(
+            state,
+            &pages,
+            collected.translations,
+            snapshot.project.highlight.languages,
+        )) return false;
+
+        const state_module = stateModuleForPathMutable(state, path) orelse return false;
+        @memcpy(state_module.source, generated.source);
+        const conflicts_json = try core.layout.conflicts.toJson(self.allocator, state);
+        const editor = editor_snapshot.buildTranslationPatch(
+            self.allocator,
+            state,
+            self.documents.generation,
+            previous_editor.model.snapshot_id,
+            collected.translations,
+            conflicts_json,
+        ) catch |err| {
+            self.allocator.free(conflicts_json);
+            return err;
+        };
+        const next_layout = try analysis.snapshot.LayoutOutput.fromDocumentStateWithOwnedReport(
+            self.allocator,
+            state,
+            collected.takeReport(),
+            editor,
+            conflicts_json,
+        );
+
+        previous_layout.deinit(self.allocator);
+        snapshot.layout_output = next_layout;
+        rebaseSnapshotSource(snapshot, path, generated.source);
+        snapshot.generation = self.documents.generation;
+        self.analysis_revision = self.active_revision;
+        discard_retained_state = false;
+
+        var diagnostics = DiagnosticSet.init(self.allocator);
+        defer diagnostics.deinit();
+        try diagnostics.addAnalysisBag(&snapshot.diagnostics);
+        try self.publishAnalysisDiagnostics(&diagnostics);
+        return true;
     }
 
     const WorkStatus = enum {
@@ -448,6 +659,7 @@ const Server = struct {
             },
             .embedded_cache = &self.embedded_cache,
             .retain_layout_inputs = !include_layout and self.wysiwyg_paths.count() != 0,
+            .retain_evaluated_layout_state = include_layout and self.wysiwyg_paths.count() != 0,
         });
         errdefer analysis_snapshot.deinit();
         try diagnostics.addAnalysisBag(&analysis_snapshot.diagnostics);
@@ -612,9 +824,9 @@ const AnalysisLayoutContext = struct {
     highlight_languages: []const utils.highlight.Language,
 };
 
-fn rememberGeneratedEdit(context: *anyopaque, path: []const u8, source: []const u8) !void {
+fn rememberGeneratedEdit(context: *anyopaque, edit: *const feature_edit.GeneratedEdit) !void {
     const server: *Server = @ptrCast(@alignCast(context));
-    try server.rememberGeneratedEdit(path, source);
+    try server.rememberGeneratedEdit(edit);
 }
 
 const AnalysisLayoutTaskResult = union(enum) {
@@ -643,7 +855,6 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     try hook.server.checkCanceled();
     const layout_start = utils.measure_profile.start();
     var pages = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph, .{
-        .jobs = 1,
         .resource_cache = &hook.server.render_resource_cache,
         .cancellation = .{
             .context = hook.server,
@@ -663,16 +874,29 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
         if (hook.server.analysis) |*previous| {
             if (previous.layout_output) |*previous_layout| {
                 if (previous_layout.editor) |*previous_editor| {
-                    if (try collectTranslations(state.allocator, state, &previous_layout.report)) |translations| {
-                        defer state.allocator.free(translations);
-                        return .{ .editor = try editor_snapshot.buildTranslationPatch(
-                            state.allocator,
+                    if (try collectTranslations(state.allocator, state, &previous_layout.report)) |collected_value| {
+                        var collected = collected_value;
+                        defer collected.deinit(state.allocator);
+                        if (translationPatchPreservesRenderedOutput(
                             state,
-                            hook.server.documents.generation,
-                            previous_editor.model.snapshot_id,
-                            translations,
-                            conflicts_json,
-                        ), .conflicts_json = conflicts_json };
+                            &pages,
+                            collected.translations,
+                            hook.highlight_languages,
+                        )) {
+                            const editor = try editor_snapshot.buildTranslationPatch(
+                                state.allocator,
+                                state,
+                                hook.server.documents.generation,
+                                previous_editor.model.snapshot_id,
+                                collected.translations,
+                                conflicts_json,
+                            );
+                            return .{
+                                .editor = editor,
+                                .conflicts_json = conflicts_json,
+                                .report = collected.takeReport(),
+                            };
+                        }
                     }
                 }
             }
@@ -719,13 +943,32 @@ fn cancelAnalysisLayoutTasks(tasks: *std.Io.Select(AnalysisLayoutTaskResult), al
     };
 }
 
+const CollectedTranslations = struct {
+    report: ?core.layout.conflicts.Report,
+    translations: []editor_snapshot.Translation,
+
+    fn deinit(self: *CollectedTranslations, allocator: std.mem.Allocator) void {
+        if (self.report) |*report| report.deinit();
+        allocator.free(self.translations);
+        self.report = null;
+        self.translations = &.{};
+    }
+
+    fn takeReport(self: *CollectedTranslations) core.layout.conflicts.Report {
+        const report = self.report orelse unreachable;
+        self.report = null;
+        return report;
+    }
+};
+
 fn collectTranslations(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     previous: *const core.layout.conflicts.Report,
-) !?[]editor_snapshot.Translation {
+) !?CollectedTranslations {
     var current = try core.layout.conflicts.Report.init(allocator, state);
-    defer current.deinit();
+    var current_owned = true;
+    defer if (current_owned) current.deinit();
     if (current.failure_count != 0 or
         current.pages.len != previous.pages.len or
         current.objects.len != previous.objects.len)
@@ -744,7 +987,7 @@ fn collectTranslations(
     }
 
     var translations = std.ArrayList(editor_snapshot.Translation).empty;
-    errdefer translations.deinit(allocator);
+    defer translations.deinit(allocator);
     for (current.objects) |object| {
         const old = previous.objectById(object.id) orelse return null;
         if (object.page_id != old.page_id or
@@ -762,7 +1005,317 @@ fn collectTranslations(
             .y = y,
         });
     }
-    return try translations.toOwnedSlice(allocator);
+    const owned_translations = try translations.toOwnedSlice(allocator);
+    current_owned = false;
+    return .{
+        .report = current,
+        .translations = owned_translations,
+    };
+}
+
+fn canRebaseGeneratedSource(
+    snapshot: *const AnalysisSnapshot,
+    state: *const core.DocumentState,
+    path: []const u8,
+    generated: *const PendingGeneratedEdit,
+) bool {
+    if (generated.base_source.len != generated.source.len) return false;
+    const state_module = state.moduleByPathOrSpec(path) orelse return false;
+    if (!std.mem.eql(u8, state_module.source, generated.base_source)) return false;
+
+    var found_snapshot_module = false;
+    for (snapshot.modules) |module| {
+        const module_path = module.path orelse continue;
+        if (!std.mem.eql(u8, module_path, path)) continue;
+        if (!std.mem.eql(u8, module.source, generated.base_source)) return false;
+        found_snapshot_module = true;
+        break;
+    }
+    if (!found_snapshot_module) return false;
+    for (snapshot.diagnostics.items.items) |diagnostic| {
+        if (!std.mem.eql(u8, diagnostic.path, path)) continue;
+        if (!std.mem.eql(u8, diagnostic.source, generated.base_source)) return false;
+    }
+
+    for (generated.replacements, 0..) |replacement, index| {
+        const span = replacement.offset_span;
+        if (span.end <= span.start or span.end > generated.base_source.len) return false;
+        if (std.mem.eql(
+            u8,
+            generated.base_source[span.start..span.end],
+            generated.source[span.start..span.end],
+        )) {
+            return false;
+        }
+        for (generated.replacements[0..index]) |previous| {
+            if (spansOverlap(span, previous.offset_span)) return false;
+        }
+    }
+    for (generated.base_source, generated.source, 0..) |before, after, offset| {
+        if (before == after) continue;
+        var covered = false;
+        for (generated.replacements) |replacement| {
+            if (offset >= replacement.offset_span.start and offset < replacement.offset_span.end) {
+                covered = true;
+                break;
+            }
+        }
+        if (!covered) return false;
+    }
+    return true;
+}
+
+fn spansOverlap(left: utils.source.ByteSpan, right: utils.source.ByteSpan) bool {
+    return left.start < right.end and right.start < left.end;
+}
+
+fn stateModuleForPathMutable(state: *core.DocumentState, path: []const u8) ?*core.SourceModule {
+    for (state.modules.items) |*module| {
+        if (module.path) |module_path| {
+            if (std.mem.eql(u8, module_path, path)) return module;
+        }
+        if (std.mem.eql(u8, module.spec, path)) return module;
+    }
+    return null;
+}
+
+fn rebaseSnapshotSource(snapshot: *AnalysisSnapshot, path: []const u8, source: []const u8) void {
+    for (snapshot.modules) |*module| {
+        const module_path = module.path orelse continue;
+        if (!std.mem.eql(u8, module_path, path)) continue;
+        @memcpy(module.source, source);
+        break;
+    }
+    for (snapshot.diagnostics.items.items) |*diagnostic| {
+        if (!std.mem.eql(u8, diagnostic.path, path)) continue;
+        @memcpy(diagnostic.source, source);
+    }
+}
+
+fn constraintEql(left: core.Constraint, right: core.Constraint) bool {
+    return left.target_node == right.target_node and
+        left.target_anchor == right.target_anchor and
+        constraintSourceEql(left.source, right.source) and
+        left.offset == right.offset and
+        optionalStringEql(left.origin, right.origin) and
+        left.role == right.role and
+        left.scope_depth == right.scope_depth and
+        left.from_update == right.from_update;
+}
+
+fn canSyncConstraintUpdate(
+    state: *const core.DocumentState,
+    replacement: feature_edit.GeneratedConstraintReplacement,
+) bool {
+    if (!replacement.expected.from_update) return true;
+    var match_count: usize = 0;
+    for (state.constraint_updates.items) |update| {
+        if (!update.active) continue;
+        const active_replacement = update.replacement orelse continue;
+        if (!constraintEql(active_replacement, replacement.expected)) continue;
+        match_count += 1;
+    }
+    return match_count == 1;
+}
+
+fn syncConstraintUpdate(
+    state: *core.DocumentState,
+    replacement: feature_edit.GeneratedConstraintReplacement,
+) void {
+    if (!replacement.expected.from_update) return;
+    for (state.constraint_updates.items) |*update| {
+        if (!update.active) continue;
+        const active_replacement = if (update.replacement) |*value| value else continue;
+        if (!constraintEql(active_replacement.*, replacement.expected)) continue;
+        active_replacement.offset = replacement.new_offset;
+        return;
+    }
+}
+
+fn constraintSourceEql(left: core.ConstraintSource, right: core.ConstraintSource) bool {
+    return switch (left) {
+        .page => |left_anchor| switch (right) {
+            .page => |right_anchor| left_anchor == right_anchor,
+            else => false,
+        },
+        .node => |left_node| switch (right) {
+            .node => |right_node| left_node.node_id == right_node.node_id and left_node.anchor == right_node.anchor,
+            else => false,
+        },
+    };
+}
+
+fn optionalStringEql(left: ?[]const u8, right: ?[]const u8) bool {
+    if (left) |left_value| {
+        const right_value = right orelse return false;
+        return std.mem.eql(u8, left_value, right_value);
+    }
+    return right == null;
+}
+
+fn parseGeneratedNumericOffset(text: []const u8) ?f64 {
+    var remaining = std.mem.trim(u8, text, " \t\r\n");
+    if (remaining.len == 0) return null;
+    var sign: f64 = 1;
+    if (remaining[0] == '+' or remaining[0] == '-') {
+        if (remaining[0] == '-') sign = -1;
+        remaining = std.mem.trim(u8, remaining[1..], " \t\r\n");
+    }
+    if (remaining.len == 0) return null;
+    const value = std.fmt.parseFloat(f64, remaining) catch return null;
+    return sign * value;
+}
+
+fn hasLayoutDiagnostics(state: *const core.DocumentState) bool {
+    for (state.diagnostics.items) |diagnostic| {
+        if (diagnostic.phase == .layout) return true;
+    }
+    return false;
+}
+
+fn hasExternalRenderDependency(
+    pages: *const core.prepared.PreparedPages,
+    highlight_languages: []const utils.highlight.Language,
+) bool {
+    for (highlight_languages) |language| {
+        if (!isBuiltinHighlightQuery(language.query)) return true;
+    }
+    for (pages.pages) |page| {
+        for (page.objects) |object| {
+            for (object.tex_preamble) |entry| {
+                if (entry.source == .file) return true;
+            }
+            switch (object.render.kind) {
+                .raster_asset => return true,
+                .vector_asset => {
+                    if (core.fontawesome.parseSource(object.content) == null) return true;
+                },
+                else => {},
+            }
+            for (object.asset_deps) |dependency| switch (dependency.kind) {
+                .vector_pdf, .raster_asset => return true,
+                else => {},
+            };
+        }
+    }
+    return false;
+}
+
+fn isBuiltinHighlightQuery(query: []const u8) bool {
+    for (utils.highlight.builtin_languages) |language| {
+        if (std.mem.eql(u8, language.query, query)) return true;
+    }
+    return false;
+}
+
+fn translationPatchPreservesRenderedOutput(
+    state: *core.DocumentState,
+    pages: *const core.prepared.PreparedPages,
+    translations: []const editor_snapshot.Translation,
+    highlight_languages: []const utils.highlight.Language,
+) bool {
+    if (state.has_external_evaluation_inputs or
+        hasExternalRenderDependency(pages, highlight_languages))
+    {
+        return false;
+    }
+
+    for (state.nodes.items) |*node| {
+        if (node.kind != .object or !node.attached or node.discarded) continue;
+        const render = core.render_policy.resolve(state, node);
+        if (render.kind != .connector and render.connector == null) continue;
+        if (hasTranslationForNode(translations, node.id)) return false;
+        if (render.connector) |connector| {
+            if (hasTranslationForNode(translations, connector.source) or
+                hasTranslationForNode(translations, connector.target))
+            {
+                return false;
+            }
+        }
+    }
+
+    for (pages.pages) |page| {
+        for (page.objects) |object| {
+            if (!hasTranslationForNode(translations, object.node_id)) continue;
+            if (object.render.vector_path) |path| {
+                if (vectorFillUsesPageSpace(path.fill)) return false;
+                if (path.marker_start) |marker| {
+                    if (vectorFillUsesPageSpace(marker.fill)) return false;
+                }
+                if (path.marker_end) |marker| {
+                    if (vectorFillUsesPageSpace(marker.fill)) return false;
+                }
+            }
+            // Link and destination annotations have no node id, so they
+            // cannot follow their owning object through a node translation.
+            if (object.link_id) |link_id| {
+                if (link_id.len != 0) return false;
+            }
+            if (preparedObjectHasLink(object)) return false;
+        }
+    }
+    return true;
+}
+
+fn vectorFillUsesPageSpace(fill: core.render_policy.VectorFillPaint) bool {
+    if (fill.space == .page) return true;
+    if (fill.pattern) |pattern| return pattern.space == .page;
+    return false;
+}
+
+fn hasTranslationForNode(
+    translations: []const editor_snapshot.Translation,
+    node_id: core.NodeId,
+) bool {
+    for (translations) |translation| {
+        if (translation.node_id == node_id) return true;
+    }
+    return false;
+}
+
+fn preparedObjectHasLink(object: core.prepared.PreparedObject) bool {
+    if (object.text_layout) |layout| {
+        if (markdownLinesHaveLink(layout.lines.items)) return true;
+    }
+    if (object.markdown_doc) |document| {
+        if (markdownBlocksHaveLink(document.blocks.items)) return true;
+    }
+    return false;
+}
+
+fn markdownBlocksHaveLink(blocks: []const *core.markdown.Block) bool {
+    for (blocks) |block| {
+        switch (block.kind) {
+            .paragraph, .heading, .code_block => if (block.paragraph) |paragraph| {
+                if (markdownLinesHaveLink(paragraph.lines.items)) return true;
+            },
+            .block_quote => if (block.quote) |quote| {
+                if (markdownBlocksHaveLink(quote.blocks.items)) return true;
+            },
+            .bullet_list, .ordered_list => if (block.list) |list| {
+                for (list.items.items) |item| {
+                    if (markdownBlocksHaveLink(item.blocks.items)) return true;
+                }
+            },
+            .table => if (block.table) |table| {
+                for (table.rows.items) |row| {
+                    for (row.cells.items) |cell| {
+                        if (markdownLinesHaveLink(cell.lines.items)) return true;
+                    }
+                }
+            },
+        }
+    }
+    return false;
+}
+
+fn markdownLinesHaveLink(lines: []const core.markdown.Line) bool {
+    for (lines) |line| {
+        for (line.runs.items) |inline_run| {
+            if (inline_run.kind == .link or inline_run.url != null) return true;
+        }
+    }
+    return false;
 }
 
 fn addAnalysisLayoutError(context: *anyopaque, state: *core.DocumentState, err: anyerror) !void {
@@ -895,10 +1448,18 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                         return;
                     }
                     try server.clearChangedDocumentDiagnostics(uri);
-                    if (server.consumeGeneratedEdit(path))
-                        try server.scheduleTranslationPatchRebuild(path)
-                    else
+                    if (server.generatedEditMatches(path)) {
+                        defer server.clearGeneratedEdit();
+                        if (server.generatedEditRequiresFullRebuild()) {
+                            try server.scheduleRebuild(path);
+                        } else {
+                            if (try server.tryApplyGeneratedEdit(path)) return;
+                            try server.scheduleTranslationPatchRebuild(path);
+                        }
+                    } else {
+                        server.clearGeneratedEdit();
                         try server.scheduleRebuild(path);
+                    }
                 };
             }
         };
@@ -925,6 +1486,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         return;
     }
     if (std.mem.eql(u8, method, "workspace/didChangeWatchedFiles")) {
+        server.watched_files_revision +%= 1;
         var relevant = params == null;
         if (params) |p| if (arrayField(p, "changes")) |changes| {
             for (changes.items) |*change| {
@@ -1133,6 +1695,8 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         return;
     }
     if (std.mem.eql(u8, method, "ss/layoutEdit")) {
+        server.clearGeneratedEdit();
+        errdefer server.clearGeneratedEdit();
         var provider = analysisProvider(server);
         var ctx = feature_edit.Context{
             .io = server.io,
@@ -1146,6 +1710,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         const result = try feature_edit.result(&ctx, params);
         defer server.allocator.free(result);
         try server.respondResult(id, result);
+        if (server.workStatus() != .current) server.clearGeneratedEdit();
         return;
     }
     if (std.mem.eql(u8, method, "ss/deleteComponent")) {

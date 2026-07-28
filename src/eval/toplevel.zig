@@ -325,8 +325,16 @@ pub fn executeGraph(
         while (iter.next()) |execution_state| execution_state.deinit(allocator);
         page_states.deinit();
     }
-    for (graph.order) |unit_index| try executeUnit(state, &state.functions, &closures, &document_states, &page_states, graph.units.items[unit_index]);
-    try materializeDisplayContent(state, &state.functions, &closures);
+    {
+        const measure_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordWysiwyg(.execute_units, measure_start);
+        for (graph.order) |unit_index| try executeUnit(state, &state.functions, &closures, &document_states, &page_states, graph.units.items[unit_index]);
+    }
+    {
+        const measure_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordWysiwyg(.materialize_display, measure_start);
+        try materializeDisplayContent(state, &state.functions, &closures);
+    }
 }
 
 fn materializeDisplayContent(state: *core.DocumentState, functions: *const core.FunctionMap, closures: *ClosureStore) !void {
@@ -1100,6 +1108,7 @@ const BuiltinContext = struct {
     }
 
     pub fn readlines(self: *BuiltinContext, requested: []const u8) ![]const u8 {
+        self.state.has_external_evaluation_inputs = true;
         const resolved = try resolveAssetPath(self.state.allocator, self.state.asset_base_dir, requested);
         defer self.state.allocator.free(resolved);
 
@@ -1313,6 +1322,7 @@ fn emitUserReport(
 }
 
 fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_id: core.NodeId, origin: []const u8) !void {
+    state.has_external_evaluation_inputs = true;
     const node = state.getNode(object_id) orelse return error.UnknownNode;
     var diagnostic_origin = try assetContentDiagnosticOrigin(state, node, origin);
     defer diagnostic_origin.deinit(state.allocator);

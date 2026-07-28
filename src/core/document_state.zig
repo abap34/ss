@@ -214,6 +214,7 @@ pub const DocumentState = struct {
     runtime_strings: std.ArrayList([]u8),
     string_provenance: std.AutoHashMap(usize, std.ArrayList(ContentProvenance)),
     default_values: *DefaultValueCache,
+    has_external_evaluation_inputs: bool,
     next_id: NodeId,
     document_id: NodeId,
 
@@ -251,6 +252,7 @@ pub const DocumentState = struct {
             .runtime_strings = .empty,
             .string_provenance = std.AutoHashMap(usize, std.ArrayList(ContentProvenance)).init(allocator),
             .default_values = default_values,
+            .has_external_evaluation_inputs = false,
             .next_id = 1,
             .document_id = 0,
         };

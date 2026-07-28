@@ -90,8 +90,14 @@ fn checkFunctionDefinitionsWithEnv(
     state: *core.DocumentState,
     sema: *const SemanticEnv,
 ) !void {
-    try calls.checkFunctionCallGraph(allocator, state, sema);
+    {
+        const measure_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordAnalysis(.semantics_call_graph, measure_start);
+        try calls.checkFunctionCallGraph(allocator, state, sema);
+    }
 
+    const bodies_start = utils.measure_profile.start();
+    defer utils.measure_profile.recordAnalysis(.semantics_function_bodies, bodies_start);
     var had_diagnostics = false;
     var const_it = state.constants.iterator();
     while (const_it.next()) |entry| {
@@ -192,9 +198,17 @@ fn analyzeDocumentStateSemantics(
         defer utils.measure_profile.recordAnalysis(.semantics_fields, measure_start);
         try semantics.checkDuplicateValueDeclarations(allocator, state);
         try semantics.checkTypeAnnotations(allocator, state, &sema);
-        try fields.checkObjectDeclarations(allocator, state, &sema);
+        {
+            const object_declarations_start = utils.measure_profile.start();
+            defer utils.measure_profile.recordAnalysis(.semantics_object_declarations, object_declarations_start);
+            try fields.checkObjectDeclarations(allocator, state, &sema);
+        }
         try checker.checkPageNamesUnique(allocator, state);
-        try checkPlacementEffectDeclarations(allocator, state, &sema);
+        {
+            const placement_effects_start = utils.measure_profile.start();
+            defer utils.measure_profile.recordAnalysis(.semantics_placement_effects, placement_effects_start);
+            try checkPlacementEffectDeclarations(allocator, state, &sema);
+        }
     }
     {
         const measure_start = utils.measure_profile.start();
