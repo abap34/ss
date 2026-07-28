@@ -462,6 +462,32 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/analysis/query/spec_tests.zig", &.{
         import("analysis", analysis_mod),
     }, true);
+    const analysis_snapshot_spec_mod = createModule(ctx, "tests/analysis/snapshot/spec_tests.zig", &.{
+        import("analysis", analysis_mod),
+        import("ast", modules.ast),
+        import("core", modules.core),
+    }, true);
+    const analysis_snapshot_spec_tests = addTestArtifact(ctx, analysis_snapshot_spec_mod);
+    const run_analysis_snapshot_spec_tests = b.addRunArtifact(analysis_snapshot_spec_tests);
+    test_step.dependOn(&run_analysis_snapshot_spec_tests.step);
+    addFocusedTestStep(
+        b,
+        "test-analysis-snapshot",
+        "Run focused analysis snapshot tests",
+        &run_analysis_snapshot_spec_tests.step,
+    );
+    const analysis_diagnostics_spec_mod = createModule(ctx, "tests/analysis/diagnostics/spec_tests.zig", &.{
+        import("analysis", analysis_mod),
+    }, true);
+    const analysis_diagnostics_spec_tests = addTestArtifact(ctx, analysis_diagnostics_spec_mod);
+    const run_analysis_diagnostics_spec_tests = b.addRunArtifact(analysis_diagnostics_spec_tests);
+    test_step.dependOn(&run_analysis_diagnostics_spec_tests.step);
+    addFocusedTestStep(
+        b,
+        "test-analysis-diagnostics",
+        "Run focused analysis diagnostic ownership tests",
+        &run_analysis_diagnostics_spec_tests.step,
+    );
     const type_defs_mod = createModule(ctx, "src/language/type_defs.zig", &.{}, null);
     addModuleTest(ctx, test_step, "tests/language/type/defs_spec_tests.zig", &.{
         import("type_defs", type_defs_mod),
@@ -503,6 +529,19 @@ fn addTestStep(
     const run_layout_graph_spec_tests = b.addRunArtifact(layout_graph_spec_tests);
     test_step.dependOn(&run_layout_graph_spec_tests.step);
     addFocusedTestStep(b, "test-layout", "Run focused layout graph and solver tests", &run_layout_graph_spec_tests.step);
+    const layout_conflicts_spec_mod = createModule(ctx, "tests/layout/conflicts/spec_tests.zig", &.{
+        import("core", modules.core),
+        import("ast", modules.ast),
+    }, true);
+    const layout_conflicts_spec_tests = addTestArtifact(ctx, layout_conflicts_spec_mod);
+    const run_layout_conflicts_spec_tests = b.addRunArtifact(layout_conflicts_spec_tests);
+    test_step.dependOn(&run_layout_conflicts_spec_tests.step);
+    addFocusedTestStep(
+        b,
+        "test-layout-conflicts",
+        "Run focused layout conflict report tests",
+        &run_layout_conflicts_spec_tests.step,
+    );
     addModuleTest(ctx, test_step, "tests/utils/fs/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);
