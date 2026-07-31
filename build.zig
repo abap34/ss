@@ -628,7 +628,7 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/watch/fingerprint/spec_tests.zig", &.{
         import("watch", watch_mod),
     }, true);
-    addRenderTests(ctx, modules, test_step);
+    addRenderTests(ctx, modules, build_options, test_step);
     const render_wrap_mod = createModule(ctx, "src/render/text/wrap.zig", &.{}, null);
     addModuleTest(ctx, test_step, "tests/render/wrap/spec_tests.zig", &.{
         import("render_wrap", render_wrap_mod),
@@ -646,7 +646,12 @@ fn addTestStep(
     addSmokeChecks(b, test_step, exe);
 }
 
-fn addRenderTests(ctx: BuildContext, modules: ProjectModules, test_step: *Step) void {
+fn addRenderTests(
+    ctx: BuildContext,
+    modules: ProjectModules,
+    build_options: *Step.Options,
+    test_step: *Step,
+) void {
     const b = ctx.b;
     const render_pdf_document_mod = createModule(ctx, "src/render/pdf.zig", &.{
         import("pdf_backend", modules.pdf_backend),
@@ -704,11 +709,15 @@ fn addRenderTests(ctx: BuildContext, modules: ProjectModules, test_step: *Step) 
     addFocusedTestStep(b, "test-render-html", "Run focused HTML renderer tests", &run_render_html_spec_tests.step);
     const render_compile_mod = createModule(ctx, "src/render/compile.zig", &.{
         import("core", modules.core),
+        import("pdf_ffi", modules.pdf_ffi),
         import("render", modules.render),
+        import("render_emitter", modules.render_emitter),
+        import("render_math", modules.render_math),
         import("render_resources", modules.render_resources),
         import("render_text", modules.render_text),
         import("utils", modules.utils),
     }, null);
+    render_compile_mod.addOptions("build_options", build_options);
     const render_compile_spec_mod = createModule(ctx, "tests/render/compile/spec_tests.zig", &.{
         import("ast", modules.ast),
         import("core", modules.core),
@@ -717,6 +726,7 @@ fn addRenderTests(ctx: BuildContext, modules: ProjectModules, test_step: *Step) 
         import("render_compile", render_compile_mod),
         import("render_emitter", modules.render_emitter),
         import("render_resources", modules.render_resources),
+        import("render_text", modules.render_text),
     }, null);
     const render_compile_spec_tests = addQpdfTestArtifact(ctx, render_compile_spec_mod);
     const run_render_compile_spec_tests = b.addRunArtifact(render_compile_spec_tests);

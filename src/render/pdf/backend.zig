@@ -694,6 +694,7 @@ pub const ResourceFiles = struct {
     io: std.Io,
     directory: []u8,
     entries: []Entry,
+    cleanup_directory: bool,
 
     const Entry = struct {
         id: render_ir.ResourceId,
@@ -728,11 +729,50 @@ pub const ResourceFiles = struct {
             entries[index] = .{ .id = resource.id, .kind = resource.kind, .path = path };
             initialized += 1;
         }
-        return .{ .allocator = allocator, .io = io, .directory = directory, .entries = entries };
+        return .{
+            .allocator = allocator,
+            .io = io,
+            .directory = directory,
+            .entries = entries,
+            .cleanup_directory = true,
+        };
+    }
+
+    pub fn initCached(
+        allocator: Allocator,
+        io: std.Io,
+        graph: *const render_ir.ResourceGraph,
+        cache_root: []const u8,
+    ) !ResourceFiles {
+        const directory = try std.fs.path.join(allocator, &.{ cache_root, "resources" });
+        errdefer allocator.free(directory);
+        try std.Io.Dir.cwd().createDirPath(io, directory);
+
+        const entries = try allocator.alloc(Entry, graph.entries.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (entries[0..initialized]) |entry| allocator.free(entry.path);
+            allocator.free(entries);
+        }
+        for (graph.entries, 0..) |*resource, index| {
+            const hex = std.fmt.bytesToHex(resource.id, .lower);
+            const path = try std.fmt.allocPrintSentinel(allocator, "{s}/{s}.{s}", .{ directory, hex, resource.extension() }, 0);
+            errdefer allocator.free(path);
+            try materializeCachedResource(allocator, io, path, resource.bytes);
+            entries[index] = .{ .id = resource.id, .kind = resource.kind, .path = path };
+            initialized += 1;
+        }
+        return .{
+            .allocator = allocator,
+            .io = io,
+            .directory = directory,
+            .entries = entries,
+            .cleanup_directory = false,
+        };
     }
 
     pub fn deinit(self: *ResourceFiles) void {
-        std.Io.Dir.cwd().deleteTree(self.io, self.directory) catch {};
+        if (self.cleanup_directory) std.Io.Dir.cwd().deleteTree(self.io, self.directory) catch {};
         for (self.entries) |entry| self.allocator.free(entry.path);
         self.allocator.free(self.entries);
         self.allocator.free(self.directory);
@@ -745,3 +785,43 @@ pub const ResourceFiles = struct {
         return error.MissingRenderResource;
     }
 };
+
+fn materializeCachedResource(
+    allocator: Allocator,
+    io: std.Io,
+    path: []const u8,
+    bytes: []const u8,
+) !void {
+    if (cachedResourceFileAvailable(io, path, bytes)) return;
+    const serial = @atomicRmw(usize, &materialization_counter, .Add, 1, .monotonic);
+    const temporary = try std.fmt.allocPrint(allocator, "{s}.tmp-{d}-{d}", .{ path, std.c.getpid(), serial });
+    defer allocator.free(temporary);
+    errdefer deleteFileIfExists(io, temporary);
+    const cwd = std.Io.Dir.cwd();
+    try cwd.writeFile(io, .{ .sub_path = temporary, .data = bytes, .flags = .{ .truncate = true } });
+    cwd.rename(temporary, cwd, path, io) catch |err| {
+        if (cachedResourceFileAvailable(io, path, bytes)) {
+            deleteFileIfExists(io, temporary);
+            return;
+        }
+        return err;
+    };
+}
+
+fn cachedResourceFileAvailable(io: std.Io, path: []const u8, expected: []const u8) bool {
+    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+    defer file.close(io);
+    const stat = file.stat(io) catch return false;
+    if (stat.kind != .file or stat.size != @as(u64, @intCast(expected.len))) return false;
+
+    var buffer: [64 * 1024]u8 = undefined;
+    var offset: usize = 0;
+    while (offset < expected.len) {
+        const length = @min(buffer.len, expected.len - offset);
+        var vectors = [_][]u8{buffer[0..length]};
+        const read = file.readPositional(io, &vectors, offset) catch return false;
+        if (read != length or !std.mem.eql(u8, buffer[0..length], expected[offset .. offset + length])) return false;
+        offset += length;
+    }
+    return true;
+}

@@ -96,7 +96,7 @@ pub const Emitter = struct {
         wrap: bool,
         decoration: TextDecoration,
     ) !void {
-        var layout = try text.shape(
+        const layout = try text.shape(
             allocator,
             self.io,
             self.resources,
@@ -108,13 +108,37 @@ pub const Emitter = struct {
             wrap,
             self.text_cache,
         );
+        try self.textLayoutBaseline(
+            allocator,
+            x,
+            baseline_y,
+            width,
+            layout,
+            font_size,
+            color,
+            decoration,
+        );
+    }
+
+    pub fn textLayoutBaseline(
+        self: *Emitter,
+        allocator: Allocator,
+        x: f64,
+        baseline_y: f64,
+        width: f64,
+        layout: render.TextLayout,
+        font_size: f64,
+        color: Color,
+        decoration: TextDecoration,
+    ) !void {
+        var owned_layout = layout;
         var owns_layout = true;
-        errdefer if (owns_layout) layout.deinit(allocator);
+        errdefer if (owns_layout) owned_layout.deinit(allocator);
         var segments = std.ArrayList(DecorationSegment).empty;
         defer segments.deinit(allocator);
-        const layout_y = baseline_y - layout.firstBaseline();
+        const layout_y = baseline_y - owned_layout.firstBaseline();
         if (decoration.strikethrough or decoration.underline) {
-            for (layout.runs) |run| {
+            for (owned_layout.runs) |run| {
                 const instance = self.fonts.get(self.io, run.font_instance) orelse return error.MissingRenderFont;
                 const run_baseline = layout_y + run.baseline_y;
                 if (decoration.strikethrough) try appendDecorationSegment(
@@ -165,17 +189,17 @@ pub const Emitter = struct {
                 segment.opacity,
             );
         }
+        owns_layout = false;
         try self.page.appendTextLayout(
             allocator,
             self.node_id,
             x,
             baseline_y,
             width,
-            layout,
+            owned_layout,
             font_size,
             color,
         );
-        owns_layout = false;
         for (segments.items) |segment| {
             if (segment.behind_text) continue;
             try self.page.appendStrokeLineWithOpacity(

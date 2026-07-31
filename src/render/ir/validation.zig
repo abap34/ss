@@ -3,6 +3,7 @@ const math_validation = @import("validation/math.zig");
 const text_validation = @import("validation/text.zig");
 
 pub const Error = error{
+    OutOfMemory,
     UnsupportedSchema,
     InvalidPageIndex,
     InvalidPageSize,
@@ -63,13 +64,7 @@ pub fn document(ir: anytype) Error!void {
             };
             try itemGeometry(ir, item);
             if (header.semantic_id) |semantic_id| {
-                const semantic = ir.semantics.find(semantic_id) orelse return error.InvalidSemantics;
-                var found = false;
-                for (semantic.items) |item_id| if (item_id == header.item_id) {
-                    found = true;
-                    break;
-                };
-                if (!found) return error.InvalidSemantics;
+                if (ir.semantics.find(semantic_id) == null) return error.InvalidSemantics;
             }
         }
         for (page.links.items) |link| {
@@ -127,6 +122,24 @@ fn semanticTree(ir: anytype) Error!void {
     const root_node = ir.semantics.find(root) orelse return error.InvalidSemantics;
     if (root_node.role != .document) return error.InvalidSemantics;
     if (root_node.children.len != ir.pages.len) return error.InvalidSemantics;
+    const allocator = std.heap.smp_allocator;
+    const page_offset_count = std.math.add(usize, ir.pages.len, 1) catch return error.InvalidSemantics;
+    const page_item_offsets = try allocator.alloc(usize, page_offset_count);
+    defer allocator.free(page_item_offsets);
+    page_item_offsets[0] = 0;
+    for (ir.pages, 0..) |page, index| {
+        page_item_offsets[index + 1] = std.math.add(
+            usize,
+            page_item_offsets[index],
+            page.items.items.len,
+        ) catch return error.InvalidSemantics;
+    }
+    const claimed_items = try allocator.alloc(bool, page_item_offsets[ir.pages.len]);
+    defer allocator.free(claimed_items);
+    @memset(claimed_items, false);
+    const has_parent = try allocator.alloc(bool, ir.semantics.nodes.len);
+    defer allocator.free(has_parent);
+    @memset(has_parent, false);
     for (ir.semantics.nodes, 0..) |node, index| {
         if (node.id != index + 1) return error.InvalidSemantics;
         try semanticNode(node);
@@ -134,28 +147,71 @@ fn semanticTree(ir: anytype) Error!void {
             const tree_id = node.math_tree orelse return error.InvalidSemantics;
             if (ir.math.find(tree_id) == null) return error.InvalidSemantics;
         } else if (node.math_tree != null) return error.InvalidSemantics;
-        for (node.children, 0..) |child, child_index| {
+        for (node.children) |child| {
             const child_node = ir.semantics.find(child) orelse return error.InvalidSemantics;
             if (!validSemanticChild(node.role, child_node.role)) return error.InvalidSemantics;
-            for (node.children[0..child_index]) |previous| if (previous == child) return error.InvalidSemantics;
+            const child_index_value: usize = @intCast(child - 1);
+            if (has_parent[child_index_value]) return error.InvalidSemantics;
+            has_parent[child_index_value] = true;
         }
-        const parent_count = semanticParentCount(ir, node.id);
-        if (node.id == root) {
-            if (parent_count != 0) return error.InvalidSemantics;
-        } else if (parent_count != 1) return error.InvalidSemantics;
-        for (node.items, 0..) |item_id, item_index| {
+    }
+    const root_index: usize = @intCast(root - 1);
+    if (has_parent[root_index]) return error.InvalidSemantics;
+    for (has_parent, 0..) |present, index| {
+        if (index != root_index and !present) return error.InvalidSemantics;
+    }
+    const reachable = try allocator.alloc(bool, ir.semantics.nodes.len);
+    defer allocator.free(reachable);
+    @memset(reachable, false);
+    const semantic_pages = try allocator.alloc(usize, ir.semantics.nodes.len);
+    defer allocator.free(semantic_pages);
+    @memset(semantic_pages, std.math.maxInt(usize));
+    const pending = try allocator.alloc(@TypeOf(root), ir.semantics.nodes.len);
+    defer allocator.free(pending);
+    var pending_count: usize = 1;
+    pending[0] = root;
+    reachable[root_index] = true;
+    while (pending_count != 0) {
+        pending_count -= 1;
+        const current = ir.semantics.find(pending[pending_count]) orelse return error.InvalidSemantics;
+        const current_index: usize = @intCast(current.id - 1);
+        for (current.children, 0..) |child, child_offset| {
+            const child_index: usize = @intCast(child - 1);
+            if (reachable[child_index]) return error.SemanticCycle;
+            reachable[child_index] = true;
+            semantic_pages[child_index] = if (current.id == root)
+                child_offset
+            else
+                semantic_pages[current_index];
+            pending[pending_count] = child;
+            pending_count += 1;
+        }
+    }
+    for (reachable) |present| if (!present) return error.SemanticCycle;
+    for (ir.semantics.nodes, 0..) |node, node_index| {
+        for (node.items) |item_id| {
             if (item_id == 0) return error.InvalidSemantics;
-            for (node.items[0..item_index]) |previous| if (previous == item_id) return error.InvalidSemantics;
-            if (!semanticItemMatches(ir, item_id, node.id)) return error.InvalidSemantics;
+            const item_index = semanticItemIndex(ir, item_id, page_item_offsets) orelse return error.InvalidSemantics;
+            if (claimed_items[item_index]) return error.InvalidSemantics;
+            claimed_items[item_index] = true;
+            const encoded_page: usize = @intCast((item_id >> 32) - 1);
+            if (semantic_pages[node_index] != encoded_page) return error.InvalidSemantics;
+            const paint_index: usize = @intCast(item_id & std.math.maxInt(u32));
+            const semantic_id = ir.pages[encoded_page].items.items[paint_index].header().semantic_id orelse
+                return error.InvalidSemantics;
+            if (semantic_id != node.id) return error.InvalidSemantics;
         }
-        try rejectSemanticCycle(ir, node.id, node.id, 0);
     }
     for (ir.pages, 0..) |page, page_index| {
+        for (page.items.items, 0..) |item, paint_index| {
+            if ((item.header().semantic_id != null) != claimed_items[page_item_offsets[page_index] + paint_index]) {
+                return error.InvalidSemantics;
+            }
+        }
         const page_node = ir.semantics.find(root_node.children[page_index]) orelse return error.InvalidSemantics;
         if (page_node.role != .page or page_node.children.len != page.reading_order.len) return error.InvalidSemantics;
         for (page.reading_order, 0..) |semantic_id, reading_index| {
             if (semantic_id != page_node.children[reading_index]) return error.InvalidSemantics;
-            for (page.reading_order[0..reading_index]) |previous| if (previous == semantic_id) return error.InvalidSemantics;
         }
     }
 }
@@ -202,20 +258,16 @@ fn semanticNode(node: anytype) Error!void {
     if ((node.role == .text or node.role == .link or node.role == .math) and node.children.len != 0) return error.InvalidSemantics;
 }
 
-fn semanticParentCount(ir: anytype, id: anytype) usize {
-    var count: usize = 0;
-    for (ir.semantics.nodes) |node| for (node.children) |child| if (child == id) {
-        count += 1;
-    };
-    return count;
-}
-
-fn semanticItemMatches(ir: anytype, item_id: anytype, semantic_id: anytype) bool {
-    for (ir.pages) |page| for (page.items.items) |item| {
-        const header = item.header();
-        if (header.item_id == item_id) return header.semantic_id != null and header.semantic_id.? == semantic_id;
-    };
-    return false;
+fn semanticItemIndex(ir: anytype, item_id: anytype, page_item_offsets: []const usize) ?usize {
+    const encoded_page = item_id >> 32;
+    if (encoded_page == 0 or encoded_page > ir.pages.len) return null;
+    const page_index: usize = @intCast(encoded_page - 1);
+    const page = ir.pages[page_index];
+    const paint_index: usize = @intCast(item_id & std.math.maxInt(u32));
+    if (paint_index >= page.items.items.len) return null;
+    const header = page.items.items[paint_index].header();
+    if (header.item_id != item_id) return null;
+    return page_item_offsets[page_index] + paint_index;
 }
 
 fn validLinkTarget(kind: anytype, target: []const u8) bool {
@@ -240,15 +292,6 @@ fn destinationCount(ir: anytype, name: []const u8) usize {
         if (std.mem.eql(u8, destination.name, name)) count += 1;
     };
     return count;
-}
-
-fn rejectSemanticCycle(ir: anytype, origin: anytype, current: anytype, depth: usize) Error!void {
-    if (depth > ir.semantics.nodes.len) return error.SemanticCycle;
-    const node = ir.semantics.find(current) orelse return error.InvalidSemantics;
-    for (node.children) |child| {
-        if (child == origin) return error.SemanticCycle;
-        try rejectSemanticCycle(ir, origin, child, depth + 1);
-    }
 }
 
 fn itemGeometry(ir: anytype, item: anytype) Error!void {

@@ -188,6 +188,11 @@ pub const Definition = struct {
     scope_name: ?[]const u8 = null,
 };
 
+const PageOwnershipInfo = struct {
+    first: ?NodeId = null,
+    count: usize = 0,
+};
+
 pub const DocumentState = struct {
     allocator: Allocator,
     asset_base_dir: []u8,
@@ -202,6 +207,7 @@ pub const DocumentState = struct {
     nodes: std.ArrayList(Node),
     page_order: std.ArrayList(NodeId),
     contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
+    direct_page_ownership: std.ArrayList(PageOwnershipInfo),
     constraints: std.ArrayList(Constraint),
     fallback_constraints: std.ArrayList(Constraint),
     constraint_updates: std.ArrayList(ConstraintUpdate),
@@ -240,6 +246,7 @@ pub const DocumentState = struct {
             .nodes = .empty,
             .page_order = .empty,
             .contains = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
+            .direct_page_ownership = .empty,
             .constraints = .empty,
             .fallback_constraints = .empty,
             .constraint_updates = .empty,
@@ -297,6 +304,7 @@ pub const DocumentState = struct {
         self.functions.deinit();
         self.definitions.deinit(self.allocator);
         self.contains.deinit();
+        self.direct_page_ownership.deinit(self.allocator);
         for (self.nodes.items) |*node| node.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
         self.page_order.deinit(self.allocator);
@@ -338,6 +346,7 @@ pub const DocumentState = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.contains.deinit();
+        self.direct_page_ownership.deinit(self.allocator);
         for (self.nodes.items) |*node| {
             node.deinit(self.allocator);
         }
@@ -450,6 +459,10 @@ pub const DocumentState = struct {
     }
 
     pub fn moduleById(self: *const DocumentState, id: SourceModuleId) ?*const SourceModule {
+        const index: usize = @intCast(id);
+        if (index < self.modules.items.len and self.modules.items[index].id == id) {
+            return &self.modules.items[index];
+        }
         for (self.modules.items) |*module| {
             if (module.id == id) return module;
         }
@@ -471,6 +484,10 @@ pub const DocumentState = struct {
     }
 
     pub fn moduleByIdMutable(self: *DocumentState, id: SourceModuleId) ?*SourceModule {
+        const index: usize = @intCast(id);
+        if (index < self.modules.items.len and self.modules.items[index].id == id) {
+            return &self.modules.items[index];
+        }
         for (self.modules.items) |*module| {
             if (module.id == id) return module;
         }
@@ -484,6 +501,7 @@ pub const DocumentState = struct {
 
     fn freshId(self: *DocumentState) !NodeId {
         const id = self.next_id;
+        try self.direct_page_ownership.append(self.allocator, .{});
         self.next_id += 1;
         return id;
     }
@@ -493,6 +511,7 @@ pub const DocumentState = struct {
     }
 
     pub fn addContainment(self: *DocumentState, parent: NodeId, child: NodeId) !void {
+        const parent_is_page = if (self.getNode(parent)) |node| node.kind == .page else false;
         const gop = try self.contains.getOrPut(parent);
         if (!gop.found_existing) {
             gop.value_ptr.* = .empty;
@@ -501,6 +520,12 @@ pub const DocumentState = struct {
             if (existing == child) return;
         }
         try gop.value_ptr.append(self.allocator, child);
+        if (!parent_is_page or child == 0) return;
+        const child_index: usize = @intCast(child - 1);
+        if (child_index >= self.direct_page_ownership.items.len) return;
+        const ownership = &self.direct_page_ownership.items[child_index];
+        if (ownership.first == null) ownership.first = parent;
+        ownership.count += 1;
     }
 
     pub fn addPage(self: *DocumentState, name: []const u8) !NodeId {
@@ -1196,25 +1221,11 @@ pub const DocumentState = struct {
         }
     }
 
-    const PageOwnershipInfo = struct {
-        first: ?NodeId = null,
-        count: usize = 0,
-    };
-
     fn directPageOwnershipInfo(self: *DocumentState, child_id: NodeId) PageOwnershipInfo {
-        var result = PageOwnershipInfo{};
-        var it = self.contains.iterator();
-        while (it.next()) |entry| {
-            const parent_id = entry.key_ptr.*;
-            const parent = self.getNode(parent_id) orelse continue;
-            if (parent.kind != .page) continue;
-            for (entry.value_ptr.items) |candidate| {
-                if (candidate != child_id) continue;
-                if (result.first == null) result.first = parent_id;
-                result.count += 1;
-            }
-        }
-        return result;
+        if (child_id == 0) return .{};
+        const child_index: usize = @intCast(child_id - 1);
+        if (child_index >= self.direct_page_ownership.items.len) return .{};
+        return self.direct_page_ownership.items[child_index];
     }
 
     pub fn layoutPageOf(self: *DocumentState, node_id: NodeId) ?NodeId {
@@ -1395,16 +1406,7 @@ pub const DocumentState = struct {
     }
 
     pub fn parentPageOf(self: *DocumentState, child_id: NodeId) ?NodeId {
-        var it = self.contains.iterator();
-        while (it.next()) |entry| {
-            const parent_id = entry.key_ptr.*;
-            const parent = self.getNode(parent_id) orelse continue;
-            if (parent.kind != .page) continue;
-            for (entry.value_ptr.items) |candidate| {
-                if (candidate == child_id) return parent_id;
-            }
-        }
-        return null;
+        return self.directPageOwnershipInfo(child_id).first;
     }
 
     fn previousPageOf(self: *DocumentState, page_id: NodeId) ?NodeId {

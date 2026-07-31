@@ -64,6 +64,50 @@ test "render IR page owns placed text and references stable resources" {
     try testing.expectEqual(@as(?u32, 42), page.items.items[0].nodeId());
 }
 
+test "shared text layouts detach before mutation" {
+    var page = render_ir.Page{
+        .page_id = 1,
+        .index = 0,
+        .width = 320,
+        .height = 180,
+    };
+    defer page.deinit(testing.allocator);
+    var resources = render_resources.Builder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render_ir.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    try render_support.appendText(
+        testing.allocator,
+        testing.io,
+        &page,
+        &resources,
+        &fonts,
+        1,
+        10,
+        40,
+        200,
+        "shared",
+        .{ .family = "Sans", .weight = 400, .style = .normal, .stretch = .normal },
+        20,
+        .{ .r = 0, .g = 0, .b = 0 },
+    );
+
+    var first = try page.items.items[0].text.layout.clone(testing.allocator);
+    var first_live = true;
+    defer if (first_live) first.deinit(testing.allocator);
+    var second = try first.clone(testing.allocator);
+    defer second.deinit(testing.allocator);
+    const original_glyph = first.glyphs[0].id;
+    try second.makeUnique();
+    second.glyphs[0].id +%= 1;
+    try testing.expectEqual(original_glyph, first.glyphs[0].id);
+    try testing.expect(second.glyphs[0].id != first.glyphs[0].id);
+
+    first.deinit(testing.allocator);
+    first_live = false;
+    try testing.expectEqualStrings("shared", second.source_text);
+}
+
 test "render IR page preserves PDF placement and annotations" {
     var page = render_ir.Page{
         .page_id = 7,
@@ -345,6 +389,37 @@ test "render IR fingerprints page source and visual effect metadata" {
     try testing.expect(!std.mem.eql(u8, &original_page, &render_ir.pageFingerprint(&pages[0])));
 }
 
+test "render IR buffered page fingerprints match the unbuffered reference" {
+    var page = render_ir.Page{
+        .page_id = 1,
+        .index = 0,
+        .width = 1280,
+        .height = 720,
+    };
+    defer page.deinit(testing.allocator);
+
+    for (0..512) |index| {
+        const offset: f64 = @floatFromInt(index);
+        try page.appendFillRect(
+            testing.allocator,
+            @intCast(index + 1),
+            .{ .x = offset, .y = offset / 2, .width = 20, .height = 10 },
+            .{ .r = 0.25, .g = 0.5, .b = 0.75 },
+        );
+    }
+    try page.appendDestination(testing.allocator, "section", .{ .x = 100, .y = 80 });
+    try page.appendLink(
+        testing.allocator,
+        .destination,
+        "section",
+        .{ .x = 10, .y = 20, .width = 30, .height = 40 },
+    );
+
+    const buffered = render_ir.pageFingerprint(&page);
+    const reference = render_ir.pageFingerprintUnbufferedForTesting(&page);
+    try testing.expectEqualSlices(u8, &reference, &buffered);
+}
+
 test "render IR validation rejects invalid source and clip ranges" {
     var pages = try testing.allocator.alloc(render_ir.Page, 1);
     pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
@@ -521,6 +596,115 @@ test "semantic validation rejects unsafe link targets" {
     };
     ir.semantics = .{ .root = 1, .nodes = nodes };
     try testing.expectError(error.InvalidSemantics, ir.validate());
+}
+
+test "semantic validation rejects multiple parents and disconnected cycles" {
+    {
+        var pages = try testing.allocator.alloc(render_ir.Page, 1);
+        pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+        pages[0].reading_order = try testing.allocator.dupe(render_ir.SemanticId, &.{ 3, 4 });
+        var ir = render_ir.Ir{ .pages = pages };
+        defer ir.deinit(testing.allocator);
+        const nodes = try testing.allocator.alloc(render_ir.SemanticNode, 4);
+        nodes[0] = .{ .id = 1, .role = .document, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{2}) };
+        nodes[1] = .{ .id = 2, .role = .page, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{ 3, 4 }) };
+        nodes[2] = .{ .id = 3, .role = .group, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{4}) };
+        nodes[3] = .{ .id = 4, .role = .group };
+        ir.semantics = .{ .root = 1, .nodes = nodes };
+        try testing.expectError(error.InvalidSemantics, ir.validate());
+    }
+    {
+        var pages = try testing.allocator.alloc(render_ir.Page, 1);
+        pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+        var ir = render_ir.Ir{ .pages = pages };
+        defer ir.deinit(testing.allocator);
+        const nodes = try testing.allocator.alloc(render_ir.SemanticNode, 4);
+        nodes[0] = .{ .id = 1, .role = .document, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{2}) };
+        nodes[1] = .{ .id = 2, .role = .page };
+        nodes[2] = .{ .id = 3, .role = .group, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{4}) };
+        nodes[3] = .{ .id = 4, .role = .group, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{3}) };
+        ir.semantics = .{ .root = 1, .nodes = nodes };
+        try testing.expectError(error.SemanticCycle, ir.validate());
+    }
+}
+
+test "semantic validation requires a one-to-one item claim" {
+    var pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    try pages[0].appendFillRect(
+        testing.allocator,
+        1,
+        .{ .x = 10, .y = 10, .width = 20, .height = 20 },
+        .{ .r = 0, .g = 0, .b = 0 },
+    );
+    pages[0].items.items[0].setSemanticId(3);
+    pages[0].reading_order = try testing.allocator.dupe(render_ir.SemanticId, &.{3});
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    const nodes = try testing.allocator.alloc(render_ir.SemanticNode, 3);
+    nodes[0] = .{ .id = 1, .role = .document, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{2}) };
+    nodes[1] = .{ .id = 2, .role = .page, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{3}) };
+    nodes[2] = .{ .id = 3, .role = .paragraph };
+    ir.semantics = .{ .root = 1, .nodes = nodes };
+    try testing.expectError(error.InvalidSemantics, ir.validate());
+
+    const item_id = pages[0].items.items[0].header().item_id;
+    nodes[2].items = try testing.allocator.dupe(render_ir.ItemId, &.{item_id});
+    try ir.validate();
+    const duplicate_items = try testing.allocator.dupe(render_ir.ItemId, &.{ item_id, item_id });
+    testing.allocator.free(nodes[2].items);
+    nodes[2].items = duplicate_items;
+    try testing.expectError(error.InvalidSemantics, ir.validate());
+}
+
+test "semantic validation rejects item claims from another page" {
+    var pages = try testing.allocator.alloc(render_ir.Page, 2);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    pages[1] = .{ .page_id = 2, .index = 1, .width = 320, .height = 180 };
+    try pages[0].appendFillRect(
+        testing.allocator,
+        1,
+        .{ .x = 10, .y = 10, .width = 20, .height = 20 },
+        .{ .r = 0, .g = 0, .b = 0 },
+    );
+    pages[0].items.items[0].setSemanticId(5);
+    pages[0].reading_order = try testing.allocator.dupe(render_ir.SemanticId, &.{4});
+    pages[1].reading_order = try testing.allocator.dupe(render_ir.SemanticId, &.{5});
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    const item_id = pages[0].items.items[0].header().item_id;
+    const nodes = try testing.allocator.alloc(render_ir.SemanticNode, 5);
+    nodes[0] = .{ .id = 1, .role = .document, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{ 2, 3 }) };
+    nodes[1] = .{ .id = 2, .role = .page, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{4}) };
+    nodes[2] = .{ .id = 3, .role = .page, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{5}) };
+    nodes[3] = .{ .id = 4, .role = .paragraph };
+    nodes[4] = .{
+        .id = 5,
+        .role = .paragraph,
+        .items = try testing.allocator.dupe(render_ir.ItemId, &.{item_id}),
+    };
+    ir.semantics = .{ .root = 1, .nodes = nodes };
+    try testing.expectError(error.InvalidSemantics, ir.validate());
+}
+
+test "semantic validation accepts a deep iterative tree" {
+    const node_count = 4096;
+    var pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    pages[0].reading_order = try testing.allocator.dupe(render_ir.SemanticId, &.{3});
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    const nodes = try testing.allocator.alloc(render_ir.SemanticNode, node_count);
+    for (nodes, 0..) |*node, index| node.* = .{ .id = @intCast(index + 1), .role = .group };
+    nodes[0].role = .document;
+    nodes[0].children = try testing.allocator.dupe(render_ir.SemanticId, &.{2});
+    nodes[1].role = .page;
+    nodes[1].children = try testing.allocator.dupe(render_ir.SemanticId, &.{3});
+    for (nodes[2 .. node_count - 1], 3..) |*node, child_id| {
+        node.children = try testing.allocator.dupe(render_ir.SemanticId, &.{child_id + 1});
+    }
+    ir.semantics = .{ .root = 1, .nodes = nodes };
+    try ir.validate();
 }
 
 test "annotation validation rejects unsafe URI targets" {

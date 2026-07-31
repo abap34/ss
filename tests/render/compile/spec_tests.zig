@@ -6,6 +6,7 @@ const render = @import("render");
 const render_compile = @import("render_compile");
 const render_emitter = @import("render_emitter");
 const render_resources = @import("render_resources");
+const render_text = @import("render_text");
 
 const testing = std.testing;
 
@@ -152,6 +153,47 @@ test "render compiler produces deterministic document fingerprints" {
     }
 }
 
+test "captured measurement items keep page order and annotations" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("capture");
+    const object_id = try state.makeObject(
+        page_id,
+        "linked text",
+        null,
+        .text,
+        .text,
+        "[linked text](https://example.com)",
+    );
+    const object = state.getNode(object_id) orelse return error.MissingTestObject;
+    object.frame = .{ .x = 80, .y = 500, .width = 420, .height = 80 };
+
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    prepared.pages[0].objects[0].render.chrome.fill = .{ .r = 0.9, .g = 0.9, .b = 0.9 };
+
+    var result = try render_compile.compile(
+        testing.allocator,
+        testing.io,
+        &state,
+        &prepared,
+        .{ .jobs = 1 },
+    );
+    defer result.deinit(testing.allocator);
+
+    const page = &result.pages[0];
+    try testing.expect(page.items.items.len >= 3);
+    for (page.items.items, 0..) |item, index| {
+        const header = item.header();
+        try testing.expectEqual(@as(u32, @intCast(index)), header.paint_index);
+        try testing.expectEqual((@as(u64, 1) << 32) | @as(u64, @intCast(index)), header.item_id);
+    }
+    try testing.expectEqual(@as(usize, 3), page.links.items.len);
+    for (page.links.items) |link| {
+        try testing.expectEqualStrings("https://example.com", link.target);
+    }
+}
+
 test "text decorations and measurements use resolved font run metrics" {
     var page = render.Page{
         .page_id = 1,
@@ -281,6 +323,183 @@ test "generic monospace text keeps narrow and wide glyph advances equal" {
     const narrow = page.items.items[0].text.layout.runs[0].advance;
     const wide = page.items.items[1].text.layout.runs[0].advance;
     try testing.expectApproxEqAbs(narrow, wide, 0.0001);
+}
+
+test "unwrapped text shapes ignore the available width in cache keys" {
+    var page = render.Page{
+        .page_id = 1,
+        .index = 0,
+        .width = 1280,
+        .height = 720,
+    };
+    defer page.deinit(testing.allocator);
+    var resources = render_resources.Builder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    var math = render.MathBuilder{};
+    defer math.deinit(testing.allocator);
+    var cache = render_text.Cache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    var emitter = render_emitter.Emitter{
+        .page = &page,
+        .resources = &resources,
+        .fonts = &fonts,
+        .math = &math,
+        .io = testing.io,
+        .text_cache = &cache,
+    };
+
+    const face = core.font.Face{ .family = "sans-serif", .weight = 400, .style = .normal, .stretch = .normal };
+    try emitter.textBaseline(testing.allocator, 40, 100, 120, "same shape", face, 24, .{ .r = 0, .g = 0, .b = 0 }, false, .{});
+    try emitter.textBaseline(testing.allocator, 40, 140, 800, "same shape", face, 24, .{ .r = 0, .g = 0, .b = 0 }, false, .{});
+
+    try testing.expectEqual(@as(usize, 1), cache.entryCount());
+    try testing.expectEqualSlices(
+        render.Glyph,
+        page.items.items[0].text.layout.glyphs,
+        page.items.items[1].text.layout.glyphs,
+    );
+}
+
+test "text layout append failure consumes one shared reference" {
+    var source_page = render.Page{
+        .page_id = 1,
+        .index = 0,
+        .width = 320,
+        .height = 180,
+    };
+    defer source_page.deinit(testing.allocator);
+    var resources = render_resources.Builder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    var math = render.MathBuilder{};
+    defer math.deinit(testing.allocator);
+    var source_emitter = render_emitter.Emitter{
+        .page = &source_page,
+        .resources = &resources,
+        .fonts = &fonts,
+        .math = &math,
+        .io = testing.io,
+    };
+    const face = core.font.Face{ .family = "sans-serif", .weight = 400, .style = .normal, .stretch = .normal };
+    try source_emitter.textBaseline(
+        testing.allocator,
+        10,
+        40,
+        200,
+        "retained",
+        face,
+        20,
+        .{ .r = 0, .g = 0, .b = 0 },
+        false,
+        .{},
+    );
+    var canonical = try source_page.items.items[0].text.layout.clone(testing.allocator);
+    defer canonical.deinit(testing.allocator);
+    const handed_off = try canonical.clone(testing.allocator);
+
+    var target_page = render.Page{
+        .page_id = 2,
+        .index = 1,
+        .width = 320,
+        .height = 180,
+    };
+    defer target_page.deinit(testing.allocator);
+    var target_emitter = render_emitter.Emitter{
+        .page = &target_page,
+        .resources = &resources,
+        .fonts = &fonts,
+        .math = &math,
+        .io = testing.io,
+    };
+    var failing_state = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    try testing.expectError(error.OutOfMemory, target_emitter.textLayoutBaseline(
+        failing_state.allocator(),
+        10,
+        40,
+        200,
+        handed_off,
+        20,
+        .{ .r = 0, .g = 0, .b = 0 },
+        .{},
+    ));
+    try testing.expectEqualStrings("retained", canonical.source_text);
+    try testing.expect(canonical.glyphs.len != 0);
+}
+
+test "text shape cache persists across compiler processes and rejects corrupt data" {
+    const root = ".ss-cache/test-render-persistent-text-shapes";
+    const cache_path = root ++ "/text-shapes-v2/shapes.bin";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+
+    const face = core.font.Face{
+        .family = "sans-serif",
+        .weight = 400,
+        .style = .normal,
+        .stretch = .normal,
+    };
+    var first_resources = render_resources.Builder{};
+    defer first_resources.deinit(testing.allocator);
+    var first_fonts = render.FontBuilder{};
+    defer first_fonts.deinit(testing.allocator);
+    var first_cache = render_text.Cache.init(testing.allocator, testing.io);
+    defer first_cache.deinit();
+    var first_layout = try render_text.shape(
+        testing.allocator,
+        testing.io,
+        &first_resources,
+        &first_fonts,
+        "persistent shape",
+        face,
+        24,
+        420,
+        true,
+        &first_cache,
+    );
+    defer first_layout.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), first_cache.entryCount());
+    first_cache.persist(root);
+
+    var second_cache = render_text.Cache.init(testing.allocator, testing.io);
+    defer second_cache.deinit();
+    second_cache.restore(root);
+    try testing.expectEqual(@as(usize, 1), second_cache.entryCount());
+    var second_resources = render_resources.Builder{};
+    defer second_resources.deinit(testing.allocator);
+    var second_fonts = render.FontBuilder{};
+    defer second_fonts.deinit(testing.allocator);
+    var second_layout = try render_text.shape(
+        testing.allocator,
+        testing.io,
+        &second_resources,
+        &second_fonts,
+        "persistent shape",
+        face,
+        24,
+        420,
+        true,
+        &second_cache,
+    );
+    defer second_layout.deinit(testing.allocator);
+    try testing.expectEqualSlices(render.Glyph, first_layout.glyphs, second_layout.glyphs);
+    try testing.expectEqualSlices(render.TextCluster, first_layout.clusters, second_layout.clusters);
+
+    const persisted = try std.Io.Dir.cwd().readFileAlloc(
+        testing.io,
+        cache_path,
+        testing.allocator,
+        .unlimited,
+    );
+    defer testing.allocator.free(persisted);
+    persisted[persisted.len / 2] ^= 0x01;
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = cache_path, .data = persisted, .flags = .{ .truncate = true } });
+    var corrupt_cache = render_text.Cache.init(testing.allocator, testing.io);
+    defer corrupt_cache.deinit();
+    corrupt_cache.restore(root);
+    try testing.expectEqual(@as(usize, 0), corrupt_cache.entryCount());
 }
 
 test "markdown underline paint controls color opacity width offset and dash" {
@@ -861,4 +1080,82 @@ test "page cache resource survives source graph and cache teardown" {
     defer retained_fonts.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 1), retained_fonts.instances.len);
     try testing.expectEqualStrings("Cached font", retained_fonts.instances[0].family);
+}
+
+test "document font environment rejects changes between layout and compilation" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const prepared_pages = core.prepared.PreparedPages{ .pages = &.{} };
+
+    const font_environment = try render_compile.acquireFontEnvironment(
+        testing.allocator,
+        testing.io,
+        &prepared_pages,
+    );
+    try render_compile.validateFontEnvironment(font_environment);
+    try render_compile.refreshAndValidateFontEnvironment(font_environment);
+
+    var seed_shape = std.mem.zeroes(c.SsTextShape);
+    try testing.expectEqual(@as(c_int, 0), c.ss_text_shape(
+        "font environment seed",
+        "sans-serif",
+        400,
+        0,
+        4,
+        16,
+        320,
+        0,
+        &seed_shape,
+    ));
+    defer c.ss_text_shape_free(&seed_shape);
+    try testing.expect(seed_shape.run_count != 0);
+    try testing.expect(seed_shape.runs[0].font_path != null);
+    const font_path_ptr: [*:0]const u8 = @ptrCast(seed_shape.runs[0].font_path);
+    const font_path = try testing.allocator.dupeZ(u8, std.mem.span(font_path_ptr));
+    defer testing.allocator.free(font_path);
+
+    const generation_before_registration = c.ss_font_generation();
+    try testing.expectEqual(@as(c_int, 0), c.ss_font_register(font_path.ptr));
+    try testing.expect(c.ss_font_generation() > generation_before_registration);
+
+    try testing.expectError(
+        error.FontEnvironmentChanged,
+        render_compile.validateFontEnvironment(font_environment),
+    );
+    try testing.expectError(
+        error.FontEnvironmentChanged,
+        render_compile.refreshAndValidateFontEnvironment(font_environment),
+    );
+    try testing.expectError(
+        error.FontEnvironmentChanged,
+        render_compile.LayoutMeasurementScope.init(
+            testing.allocator,
+            testing.io,
+            &state,
+            &prepared_pages,
+            null,
+            &.{},
+            font_environment,
+        ),
+    );
+    try testing.expectError(
+        error.FontEnvironmentChanged,
+        render_compile.compilePrepared(
+            testing.allocator,
+            testing.io,
+            &state,
+            &prepared_pages,
+            .{ .font_environment = font_environment },
+        ),
+    );
+    try testing.expectError(
+        error.FontEnvironmentChanged,
+        render_compile.compile(
+            testing.allocator,
+            testing.io,
+            &state,
+            &prepared_pages,
+            .{ .font_environment = font_environment },
+        ),
+    );
 }

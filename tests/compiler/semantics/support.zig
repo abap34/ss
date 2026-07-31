@@ -392,6 +392,33 @@ pub fn expectVariableObjectClasses(
     }
 }
 
+pub fn expectRecordStringDefaultNotEvaluated(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    source: []const u8,
+    record_name: []const u8,
+    field_name: []const u8,
+) !void {
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
+
+    for (state.projectSyntax().records.items) |record| {
+        if (!std.mem.eql(u8, record.name, record_name)) continue;
+        for (record.fields.items) |field| {
+            if (!std.mem.eql(u8, field.name, field_name)) continue;
+            const default_value = field.default_value orelse return error.ExpectedRecordStringDefaultMissing;
+            const literal = switch (default_value.*) {
+                .string => |value| value,
+                else => return error.ExpectedRecordStringDefaultMissing,
+            };
+            if (state.stringProvenance(literal.text).len != 0) return error.RecordStringDefaultWasEvaluated;
+            return;
+        }
+    }
+    return error.ExpectedRecordStringDefaultMissing;
+}
+
 fn dumpVariableObjectClassMatches(variables: *const utils.json.ValueArray, expected: VariableObjectClassExpectation) bool {
     for (variables.items) |value| {
         if (value != .object) continue;

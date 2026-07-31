@@ -142,7 +142,7 @@ pub fn scale(value: *render.MathLayout, factor: f64) !void {
             text.x *= factor;
             text.y *= factor;
             text.font_size *= factor;
-            scaleTextLayout(&text.layout, factor);
+            try scaleTextLayout(&text.layout, factor);
         },
         .rule => |*rule| {
             rule.rect.x *= factor;
@@ -436,7 +436,8 @@ fn translate(element: *render.MathElement, x: f64, y: f64) void {
     }
 }
 
-fn scaleTextLayout(value: *render.TextLayout, factor: f64) void {
+fn scaleTextLayout(value: *render.TextLayout, factor: f64) !void {
+    try value.makeUnique();
     scaleRect(&value.logical_bounds, factor);
     scaleRect(&value.ink_bounds, factor);
     for (value.lines) |*line| {

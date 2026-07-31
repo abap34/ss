@@ -235,8 +235,9 @@ fn unlockProgress(lock: *std.atomic.Value(bool)) void {
 }
 
 fn layoutWorkerCount(job_count: usize, options: SolveOptions, parallel_allowed: bool) usize {
+    const automatic_job_cap = 8;
     if (!parallel_allowed or job_count <= 1) return 1;
-    const requested = options.jobs orelse (std.Thread.getCpuCount() catch 1);
+    const requested = options.jobs orelse @min(std.Thread.getCpuCount() catch 1, automatic_job_cap);
     if (requested <= 1) return 1;
     return @min(requested, job_count);
 }

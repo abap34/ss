@@ -97,7 +97,7 @@ fn documentDigest(ir: anytype, comptime include_source_ranges: bool, domain: []c
     return hash.final();
 }
 
-fn hashResourceMetadata(hash: *Hash, metadata: anytype) void {
+fn hashResourceMetadata(hash: anytype, metadata: anytype) void {
     hash.tag(metadata);
     switch (metadata) {
         .font => |value| hash.boolean(value.collection),
@@ -143,7 +143,7 @@ fn hashResourceMetadata(hash: *Hash, metadata: anytype) void {
     }
 }
 
-fn hashPdfBox(hash: *Hash, box: anytype) void {
+fn hashPdfBox(hash: anytype, box: anytype) void {
     hash.float(box.left);
     hash.float(box.bottom);
     hash.float(box.right);
@@ -154,8 +154,21 @@ pub fn page(page_value: anytype) Digest {
     return pageDigest(page_value, false, false);
 }
 
+pub fn pageUnbufferedForTesting(page_value: anytype) Digest {
+    return pageDigestWithHash(page_value, false, false, ReferenceHash);
+}
+
 fn pageDigest(page_value: anytype, comptime include_metadata: bool, comptime include_source_ranges: bool) Digest {
-    var hash = Hash.init("ss-render-ir-page-v1");
+    return pageDigestWithHash(page_value, include_metadata, include_source_ranges, Hash);
+}
+
+fn pageDigestWithHash(
+    page_value: anytype,
+    comptime include_metadata: bool,
+    comptime include_source_ranges: bool,
+    comptime HashType: type,
+) Digest {
+    var hash = HashType.init("ss-render-ir-page-v1");
     if (include_metadata) {
         hash.integer(page_value.page_id);
         hash.integer(page_value.index);
@@ -266,7 +279,7 @@ fn pageDigest(page_value: anytype, comptime include_metadata: bool, comptime inc
     return hash.final();
 }
 
-fn hashPathCommands(hash: *Hash, commands: anytype) void {
+fn hashPathCommands(hash: anytype, commands: anytype) void {
     hash.integer(commands.len);
     for (commands) |command| {
         hash.tag(command);
@@ -282,7 +295,7 @@ fn hashPathCommands(hash: *Hash, commands: anytype) void {
     }
 }
 
-fn hashFill(hash: *Hash, fill: anytype) void {
+fn hashFill(hash: anytype, fill: anytype) void {
     hash.tag(fill.base);
     switch (fill.base) {
         .none => {},
@@ -316,7 +329,7 @@ fn hashFill(hash: *Hash, fill: anytype) void {
     hash.float(fill.opacity);
 }
 
-fn hashStops(hash: *Hash, stops: anytype) void {
+fn hashStops(hash: anytype, stops: anytype) void {
     hash.integer(stops.len);
     for (stops) |stop| {
         hash.float(stop.offset);
@@ -324,7 +337,7 @@ fn hashStops(hash: *Hash, stops: anytype) void {
     }
 }
 
-fn hashStroke(hash: *Hash, stroke: anytype) void {
+fn hashStroke(hash: anytype, stroke: anytype) void {
     hashColor(hash, stroke.color);
     hash.float(stroke.width);
     hash.tag(stroke.cap);
@@ -335,7 +348,7 @@ fn hashStroke(hash: *Hash, stroke: anytype) void {
     hash.float(stroke.dash_offset);
 }
 
-fn hashHeader(hash: *Hash, header: anytype, comptime include_metadata: bool, comptime include_source_ranges: bool) void {
+fn hashHeader(hash: anytype, header: anytype, comptime include_metadata: bool, comptime include_source_ranges: bool) void {
     if (include_metadata) {
         hash.integer(header.item_id);
         hash.optionalInteger(header.node_id);
@@ -364,7 +377,7 @@ fn hashHeader(hash: *Hash, header: anytype, comptime include_metadata: bool, com
     hash.tag(header.blend_mode);
 }
 
-fn hashTransform(hash: *Hash, transform: anytype) void {
+fn hashTransform(hash: anytype, transform: anytype) void {
     hash.float(transform.xx);
     hash.float(transform.yx);
     hash.float(transform.xy);
@@ -373,7 +386,7 @@ fn hashTransform(hash: *Hash, transform: anytype) void {
     hash.float(transform.y0);
 }
 
-fn hashText(hash: *Hash, value: anytype) void {
+fn hashText(hash: anytype, value: anytype) void {
     hash.float(value.x);
     hash.float(value.y);
     hash.float(value.width);
@@ -382,7 +395,7 @@ fn hashText(hash: *Hash, value: anytype) void {
     hashTextLayout(hash, value.layout);
 }
 
-fn hashTextLayout(hash: *Hash, layout: anytype) void {
+fn hashTextLayout(hash: anytype, layout: anytype) void {
     hash.bytes(layout.source_text);
     hashRect(hash, layout.logical_bounds);
     hashRect(hash, layout.ink_bounds);
@@ -428,30 +441,30 @@ fn hashTextLayout(hash: *Hash, layout: anytype) void {
     }
 }
 
-fn hashRange(hash: *Hash, range: anytype) void {
+fn hashRange(hash: anytype, range: anytype) void {
     hash.integer(range.start);
     hash.integer(range.end);
 }
 
-fn hashRect(hash: *Hash, rect: anytype) void {
+fn hashRect(hash: anytype, rect: anytype) void {
     hash.float(rect.x);
     hash.float(rect.y);
     hash.float(rect.width);
     hash.float(rect.height);
 }
 
-fn hashPoint(hash: *Hash, point: anytype) void {
+fn hashPoint(hash: anytype, point: anytype) void {
     hash.float(point.x);
     hash.float(point.y);
 }
 
-fn hashColor(hash: *Hash, color: anytype) void {
+fn hashColor(hash: anytype, color: anytype) void {
     hash.float(color.r);
     hash.float(color.g);
     hash.float(color.b);
 }
 
-fn hashOptionalColor(hash: *Hash, value: anytype) void {
+fn hashOptionalColor(hash: anytype, value: anytype) void {
     if (value) |color| {
         hash.boolean(true);
         hashColor(hash, color);
@@ -459,7 +472,11 @@ fn hashOptionalColor(hash: *Hash, value: anytype) void {
 }
 
 const Hash = struct {
+    const buffer_capacity = 4096;
+
     state: std.crypto.hash.sha2.Sha256,
+    buffer: [buffer_capacity]u8 = undefined,
+    buffer_len: usize = 0,
 
     fn init(domain: []const u8) Hash {
         var result = Hash{ .state = std.crypto.hash.sha2.Sha256.init(.{}) };
@@ -468,6 +485,7 @@ const Hash = struct {
     }
 
     fn final(self: *Hash) Digest {
+        self.flush();
         var digest: Digest = undefined;
         self.state.final(&digest);
         return digest;
@@ -475,7 +493,7 @@ const Hash = struct {
 
     fn bytes(self: *Hash, value: []const u8) void {
         self.integer(value.len);
-        self.state.update(value);
+        self.write(value);
     }
 
     fn optionalBytes(self: *Hash, value: ?[]const u8) void {
@@ -486,13 +504,13 @@ const Hash = struct {
     }
 
     fn boolean(self: *Hash, value: bool) void {
-        self.state.update(if (value) &.{1} else &.{0});
+        self.write(if (value) &.{1} else &.{0});
     }
 
     fn integer(self: *Hash, value: anytype) void {
         var buffer: [8]u8 = undefined;
         std.mem.writeInt(u64, &buffer, @intCast(value), .little);
-        self.state.update(&buffer);
+        self.write(&buffer);
     }
 
     fn optionalInteger(self: *Hash, value: anytype) void {
@@ -522,6 +540,95 @@ const Hash = struct {
     }
 
     fn tag(self: *Hash, value: anytype) void {
+        self.bytes(@tagName(value));
+    }
+
+    fn write(self: *Hash, value: []const u8) void {
+        var remaining = value;
+        while (remaining.len != 0) {
+            if (self.buffer_len == 0 and remaining.len >= self.buffer.len) {
+                self.state.update(remaining);
+                return;
+            }
+            const copied = @min(self.buffer.len - self.buffer_len, remaining.len);
+            @memcpy(self.buffer[self.buffer_len..][0..copied], remaining[0..copied]);
+            self.buffer_len += copied;
+            remaining = remaining[copied..];
+            if (self.buffer_len == self.buffer.len) self.flush();
+        }
+    }
+
+    fn flush(self: *Hash) void {
+        if (self.buffer_len == 0) return;
+        self.state.update(self.buffer[0..self.buffer_len]);
+        self.buffer_len = 0;
+    }
+};
+
+const ReferenceHash = struct {
+    state: std.crypto.hash.sha2.Sha256,
+
+    fn init(domain: []const u8) ReferenceHash {
+        var result = ReferenceHash{ .state = std.crypto.hash.sha2.Sha256.init(.{}) };
+        result.bytes(domain);
+        return result;
+    }
+
+    fn final(self: *ReferenceHash) Digest {
+        var digest: Digest = undefined;
+        self.state.final(&digest);
+        return digest;
+    }
+
+    fn bytes(self: *ReferenceHash, value: []const u8) void {
+        self.integer(value.len);
+        self.state.update(value);
+    }
+
+    fn optionalBytes(self: *ReferenceHash, value: ?[]const u8) void {
+        if (value) |bytes_value| {
+            self.boolean(true);
+            self.bytes(bytes_value);
+        } else self.boolean(false);
+    }
+
+    fn boolean(self: *ReferenceHash, value: bool) void {
+        self.state.update(if (value) &.{1} else &.{0});
+    }
+
+    fn integer(self: *ReferenceHash, value: anytype) void {
+        var buffer: [8]u8 = undefined;
+        std.mem.writeInt(u64, &buffer, @intCast(value), .little);
+        self.state.update(&buffer);
+    }
+
+    fn optionalInteger(self: *ReferenceHash, value: anytype) void {
+        if (value) |integer_value| {
+            self.boolean(true);
+            self.integer(integer_value);
+        } else self.boolean(false);
+    }
+
+    fn optionalBoolean(self: *ReferenceHash, value: ?bool) void {
+        if (value) |boolean_value| {
+            self.boolean(true);
+            self.boolean(boolean_value);
+        } else self.boolean(false);
+    }
+
+    fn optionalTag(self: *ReferenceHash, value: anytype) void {
+        if (value) |tag_value| {
+            self.boolean(true);
+            self.tag(tag_value);
+        } else self.boolean(false);
+    }
+
+    fn float(self: *ReferenceHash, value: anytype) void {
+        const wide: f64 = @floatCast(value);
+        self.integer(@as(u64, @bitCast(wide)));
+    }
+
+    fn tag(self: *ReferenceHash, value: anytype) void {
         self.bytes(@tagName(value));
     }
 };

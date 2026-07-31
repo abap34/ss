@@ -1108,7 +1108,7 @@ pub const Analyzer = struct {
         if (self.visiting.contains(key)) return summary;
 
         const cache_key = if (self.run_cache != null)
-            try buildFunctionCallSummaryKey(self.allocator, key, self.variable_scope, arg_facts)
+            try buildFunctionCallSummaryKey(self.allocator, key, arg_facts)
         else
             null;
         defer if (cache_key) |owned| self.allocator.free(owned);
@@ -1146,7 +1146,7 @@ pub const Analyzer = struct {
         if (self.visiting.contains(resolved.key)) return summary;
 
         const cache_key = if (self.run_cache != null)
-            try buildConstSummaryKey(self.allocator, resolved.key, self.variable_scope)
+            try buildConstSummaryKey(self.allocator, resolved.key)
         else
             null;
         defer if (cache_key) |owned| self.allocator.free(owned);
@@ -1742,7 +1742,7 @@ pub const Analyzer = struct {
         if (self.visiting.contains(key)) return summary;
 
         const cache_key = if (self.run_cache != null)
-            try buildFunctionCallbackSummaryKey(self.allocator, key, self.variable_scope, bindings)
+            try buildFunctionCallbackSummaryKey(self.allocator, key, bindings)
         else
             null;
         defer if (cache_key) |owned| self.allocator.free(owned);
@@ -2112,27 +2112,23 @@ pub const Analyzer = struct {
 fn buildConstSummaryKey(
     allocator: std.mem.Allocator,
     key: core.FunctionKey,
-    variable_scope: ResourceScope,
 ) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     try appendKeyBytes(allocator, &out, "const");
     try appendFunctionKey(allocator, &out, key);
-    try appendResourceScopeKey(allocator, &out, variable_scope);
     return try out.toOwnedSlice(allocator);
 }
 
 fn buildFunctionCallSummaryKey(
     allocator: std.mem.Allocator,
     key: core.FunctionKey,
-    variable_scope: ResourceScope,
     facts: []const Analyzer.CallArgFacts,
 ) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     try appendKeyBytes(allocator, &out, "call");
     try appendFunctionKey(allocator, &out, key);
-    try appendResourceScopeKey(allocator, &out, variable_scope);
     try appendKeyInt(allocator, &out, facts.len);
     for (facts) |fact| {
         try appendOptionalBytesKey(allocator, &out, fact.string_literal);
@@ -2146,14 +2142,12 @@ fn buildFunctionCallSummaryKey(
 fn buildFunctionCallbackSummaryKey(
     allocator: std.mem.Allocator,
     key: core.FunctionKey,
-    variable_scope: ResourceScope,
     bindings: []const CallbackArgBinding,
 ) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     try appendKeyBytes(allocator, &out, "callback");
     try appendFunctionKey(allocator, &out, key);
-    try appendResourceScopeKey(allocator, &out, variable_scope);
     try appendKeyInt(allocator, &out, bindings.len);
     for (bindings) |binding| {
         try appendOptionalBytesKey(allocator, &out, binding.string_literal);

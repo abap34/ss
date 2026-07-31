@@ -19,7 +19,11 @@ static void ss_pdf_set_gerror(SsPdf *pdf, const char *operation, const GError *e
 
 const char *ss_pdf_librsvg_version_string(void) {
     static char version[32];
-    g_snprintf(version, sizeof(version), "%u.%u.%u", rsvg_major_version, rsvg_minor_version, rsvg_micro_version);
+    static gsize initialized;
+    if (g_once_init_enter(&initialized)) {
+        g_snprintf(version, sizeof(version), "%u.%u.%u", rsvg_major_version, rsvg_minor_version, rsvg_micro_version);
+        g_once_init_leave(&initialized, 1);
+    }
     return version;
 }
 

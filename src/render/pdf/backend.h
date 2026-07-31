@@ -141,6 +141,13 @@ typedef struct SsTextLine {
     SsPdfInkExtents ink_bounds;
 } SsTextLine;
 
+#define SS_FONT_ENVIRONMENT_ID_SIZE 32
+
+typedef struct SsFontEnvironment {
+    unsigned char id[SS_FONT_ENVIRONMENT_ID_SIZE];
+    uint64_t generation;
+} SsFontEnvironment;
+
 typedef struct SsTextShape {
     SsTextLine *lines;
     size_t line_count;
@@ -152,6 +159,7 @@ typedef struct SsTextShape {
     size_t glyph_count;
     SsPdfInkExtents logical_bounds;
     SsPdfInkExtents ink_bounds;
+    SsFontEnvironment environment;
 } SsTextShape;
 
 typedef struct SsTextMeasurement {
@@ -207,6 +215,8 @@ int ss_pdf_fontconfig_version(void);
 const char *ss_pdf_harfbuzz_version_string(void);
 int ss_font_register(const char *path);
 uint64_t ss_font_generation(void);
+int ss_font_environment_snapshot(SsFontEnvironment *output);
+int ss_font_environment_refresh(SsFontEnvironment *output);
 
 SsPdf *ss_pdf_create(const char *path, double width, double height);
 void ss_pdf_destroy(SsPdf *pdf);
@@ -358,7 +368,15 @@ int ss_pdf_draw_svg_tinted(SsPdf *pdf, const char *path, double x, double y, dou
 #endif
 
 SS_QPDF_BRIDGE_API const char *ss_qpdf_version_string(void);
+SS_QPDF_BRIDGE_API int ss_qpdf_validate(const char *path, size_t expected_page_count, int strict);
 SS_QPDF_BRIDGE_API int ss_qpdf_merge(const char *output, const char *const *inputs, size_t input_count, int single_page_inputs);
+SS_QPDF_BRIDGE_API int ss_qpdf_replace_pages(
+    const char *output,
+    const char *base,
+    const char *const *replacements,
+    const size_t *page_indices,
+    size_t replacement_count
+);
 SS_QPDF_BRIDGE_API int ss_qpdf_empty(const char *output);
 SS_QPDF_BRIDGE_API int ss_qpdf_page_size(const char *path, size_t page_index, int box, double *width, double *height);
 SS_QPDF_BRIDGE_API int ss_qpdf_page_sizes(const char *path, int box, double *widths, double *heights, size_t page_count);

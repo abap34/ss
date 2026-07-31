@@ -7,6 +7,8 @@ const resource_compile = @import("render_resources");
 const text_compile = @import("render_text");
 const semantics = @import("compile/semantics.zig");
 
+pub const FontEnvironmentToken = text_compile.FontEnvironment;
+
 pub const Options = struct {
     jobs: ?usize = null,
     cache_dir: []const u8 = ".ss-cache/render",
@@ -14,6 +16,8 @@ pub const Options = struct {
     resource_cache: ?*resource_compile.SourceCache = null,
     text_cache: ?*text_compile.Cache = null,
     page_cache: ?*items.PageCache = null,
+    font_environment: ?FontEnvironmentToken = null,
+    thread_safe_allocator: bool = false,
 };
 
 pub const Progress = items.Progress;
@@ -28,6 +32,25 @@ pub const tree_sitter_min_compatible_language_version = items.tree_sitter_min_co
 pub const native_artifact_cache_version = items.native_artifact_cache_version;
 pub const nativeRuntimeVersions = items.nativeRuntimeVersions;
 pub const treeSitterHealthReport = items.treeSitterHealthReport;
+pub const validateFontEnvironment = text_compile.validateFontEnvironment;
+pub const refreshAndValidateFontEnvironment = text_compile.refreshAndValidateFontEnvironment;
+
+pub fn acquireFontEnvironment(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    pages: *const core.prepared.PreparedPages,
+) !FontEnvironmentToken {
+    const refresh_fonts_start = utils.measure_profile.start();
+    _ = try text_compile.fontEnvironmentRefresh();
+    utils.measure_profile.recordRenderCompile(.font_environment, refresh_fonts_start);
+    const prepare_fonts_start = utils.measure_profile.start();
+    try items.prepareFonts(allocator, io, pages);
+    utils.measure_profile.recordRenderCompile(.prepare_fonts, prepare_fonts_start);
+    const font_environment_start = utils.measure_profile.start();
+    const font_environment = try text_compile.fontEnvironmentSnapshot();
+    utils.measure_profile.recordRenderCompile(.font_environment, font_environment_start);
+    return font_environment;
+}
 
 pub fn compile(
     allocator: std.mem.Allocator,
@@ -43,9 +66,17 @@ pub fn compile(
         .resource_cache = options.resource_cache,
         .text_cache = options.text_cache,
         .page_cache = options.page_cache,
+        .font_environment = options.font_environment,
+        .thread_safe_allocator = options.thread_safe_allocator,
     } };
     try item_compiler.prepare(allocator, state, pages);
-    return try preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache);
+    const font_environment = item_compiler.font_environment orelse return error.FontEnvironmentRefreshFailed;
+    var ir = try preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache);
+    text_compile.refreshAndValidateFontEnvironment(font_environment) catch |err| {
+        ir.deinit(allocator);
+        return err;
+    };
+    return ir;
 }
 
 pub fn compilePrepared(
@@ -55,6 +86,12 @@ pub fn compilePrepared(
     pages: *const core.prepared.PreparedPages,
     options: Options,
 ) !render.Ir {
+    const font_environment = if (options.font_environment) |expected| blk: {
+        const font_environment_start = utils.measure_profile.start();
+        try text_compile.refreshAndValidateFontEnvironment(expected);
+        utils.measure_profile.recordRenderCompile(.font_environment, font_environment_start);
+        break :blk expected;
+    } else try acquireFontEnvironment(allocator, io, pages);
     var item_compiler = items.Compiler{ .io = io, .options = .{
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
@@ -62,8 +99,14 @@ pub fn compilePrepared(
         .resource_cache = options.resource_cache,
         .text_cache = options.text_cache,
         .page_cache = options.page_cache,
-    } };
-    return try preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache);
+        .thread_safe_allocator = options.thread_safe_allocator,
+    }, .font_environment = font_environment };
+    var ir = try preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache);
+    text_compile.refreshAndValidateFontEnvironment(font_environment) catch |err| {
+        ir.deinit(allocator);
+        return err;
+    };
+    return ir;
 }
 
 pub fn preload(
@@ -98,6 +141,12 @@ fn preparedDocument(
     compiler: *items.Compiler,
     resource_cache: ?*resource_compile.SourceCache,
 ) !render.Ir {
+    if (compiler.options.text_cache) |text_cache| {
+        const text_cache_start = utils.measure_profile.start();
+        try text_cache.beginDocument();
+        defer text_cache.endDocument();
+        utils.measure_profile.recordRenderCompile(.text_cache_begin, text_cache_start);
+    }
     if (compiler.options.page_cache) |page_cache| {
         page_cache.beginDocument(prepared_pages.pages.len);
         return try sequentialDocument(allocator, state, prepared_pages, compiler, resource_cache);
@@ -122,6 +171,7 @@ fn sequentialDocument(
     defer math.deinit(allocator);
     var pages = std.ArrayList(render.Page).empty;
     errdefer deinitPages(allocator, &pages);
+    try pages.ensureTotalCapacity(allocator, prepared_pages.pages.len);
     for (prepared_pages.pages) |*prepared_page| {
         var page = try compiler.compilePage(
             allocator,
@@ -132,7 +182,7 @@ fn sequentialDocument(
             &math,
         );
         errdefer page.deinit(allocator);
-        try pages.append(allocator, page);
+        pages.appendAssumeCapacity(page);
     }
     return try finishDocument(allocator, state, prepared_pages, &resources, &fonts, &math, &pages);
 }
@@ -170,7 +220,10 @@ fn parallelPreparedDocument(
     worker_count: usize,
 ) !render.Ir {
     var locked_allocator = LockedAllocator{ .child = allocator, .io = compiler.io };
-    const worker_allocator = locked_allocator.allocator();
+    const worker_allocator = if (compiler.options.thread_safe_allocator)
+        allocator
+    else
+        locked_allocator.allocator();
     const outputs = try allocator.alloc(PageCompilation, prepared_pages.pages.len);
     defer allocator.free(outputs);
     for (outputs) |*output| output.* = .{};
@@ -198,16 +251,19 @@ fn parallelPreparedDocument(
         work.failed.store(true, .seq_cst);
         for (threads[0..started]) |thread| thread.join();
     };
+    const workers_start = utils.measure_profile.start();
     while (started < worker_count) : (started += 1) {
         threads[started] = try std.Thread.spawn(.{}, pageCompilationWorker, .{&work});
     }
     for (threads[0..started]) |thread| thread.join();
+    utils.measure_profile.recordRenderCompile(.workers, workers_start);
     joined = true;
     if (work.failed.load(.seq_cst)) {
         for (outputs) |output| if (output.err) |err| return err;
         return error.RenderPageCompilationFailed;
     }
 
+    const merge_start = utils.measure_profile.start();
     var math = render.MathBuilder{};
     defer math.deinit(allocator);
     var pages = std.ArrayList(render.Page).empty;
@@ -221,6 +277,7 @@ fn parallelPreparedDocument(
         pages.appendAssumeCapacity(page.*);
         output.page = null;
     }
+    utils.measure_profile.recordRenderCompile(.merge_pages, merge_start);
     return try finishDocument(allocator, state, prepared_pages, &resources, &fonts, &math, &pages);
 }
 
@@ -264,6 +321,9 @@ fn finishDocument(
     math: *render.MathBuilder,
     pages: *std.ArrayList(render.Page),
 ) !render.Ir {
+    const profile_start = utils.measure_profile.start();
+    defer utils.measure_profile.recordRenderCompile(.finish_document, profile_start);
+    const sources_start = utils.measure_profile.start();
     var source_ranges = std.AutoHashMap(core.NodeId, render.SourceRange).init(allocator);
     defer source_ranges.deinit();
     for (state.object_sources.items) |source| {
@@ -281,15 +341,22 @@ fn finishDocument(
             try std.fmt.allocPrint(allocator, "Page {d}", .{prepared_page.index + 1});
         for (page.items.items) |*item| item.setSource(if (item.nodeId()) |node_id| source_ranges.get(node_id) else null);
     }
+    utils.measure_profile.recordRenderCompile(.finish_sources, sources_start);
     var ir = render.Ir{ .pages = &.{} };
     errdefer ir.deinit(allocator);
+    const semantics_start = utils.measure_profile.start();
     ir.semantics = try semantics.build(allocator, state, prepared_pages, pages.items);
+    utils.measure_profile.recordRenderCompile(.finish_semantics, semantics_start);
+    const catalogs_start = utils.measure_profile.start();
     ir.resources = try resources.take(allocator);
     ir.fonts = try fonts.take(allocator);
     ir.math = try math.take(allocator);
     ir.pages = try pages.toOwnedSlice(allocator);
     pages.* = .empty;
+    utils.measure_profile.recordRenderCompile(.finish_catalogs, catalogs_start);
+    const validation_start = utils.measure_profile.start();
     try ir.validate();
+    utils.measure_profile.recordRenderCompile(.finish_validation, validation_start);
     return ir;
 }
 
@@ -299,6 +366,7 @@ fn deinitPages(allocator: std.mem.Allocator, pages: *std.ArrayList(render.Page))
 }
 
 fn renderWorkerCount(page_count: usize, requested_jobs: ?usize) usize {
+    const automatic_job_cap = 8;
     if (page_count == 0) return 0;
     if (requested_jobs) |jobs| return @min(@max(@as(usize, 1), jobs), page_count);
     if (std.c.getenv("SS_RENDER_JOBS")) |raw| {
@@ -308,7 +376,7 @@ fn renderWorkerCount(page_count: usize, requested_jobs: ?usize) usize {
             return @min(@max(@as(usize, 1), jobs), page_count);
         } else |_| {}
     }
-    return @min(@max(@as(usize, 1), std.Thread.getCpuCount() catch 1), page_count);
+    return @min(@max(@as(usize, 1), std.Thread.getCpuCount() catch 1), @min(page_count, automatic_job_cap));
 }
 
 const LockedAllocator = struct {

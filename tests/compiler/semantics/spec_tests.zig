@@ -186,6 +186,24 @@ fn expectObjectContent(source: []const u8, expected: []const u8) !void {
     try compiler_semantics.expectObjectContent(testing.io, allocator, path, source, expected);
 }
 
+fn expectRecordStringDefaultNotEvaluated(source: []const u8, record_name: []const u8, field_name: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectRecordStringDefaultNotEvaluated(
+        testing.io,
+        allocator,
+        path,
+        source,
+        record_name,
+        field_name,
+    );
+}
+
 fn expectFixtureObjectContent(fixture: []const u8, expected: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -489,6 +507,58 @@ test "compiler semantics: editor variable info keeps object classes through user
     , &.{
         .{ .name = "t", .scope_kind = "page", .scope_name = "ok", .object_class = "Thing" },
     });
+}
+
+test "compiler semantics: return inference preserves facts for imprecise object and selection types" {
+    try expectVariableObjectClasses(
+        \\import std:themes/default as *
+        \\
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\  size: Number = 1
+        \\}
+        \\
+        \\fn card_role() -> String
+        \\  return "card"
+        \\end
+        \\
+        \\fn make_card() -> Object
+        \\  let role_name = card_role()
+        \\  return new("direct", role_name, "text")
+        \\end
+        \\
+        \\fn cards() -> Selection<Object>
+        \\  return objs_here("card")
+        \\end
+        \\
+        \\page ok
+        \\  let direct = make_card()
+        \\  let source = make_card()
+        \\  place!(source)
+        \\  let selected = first(cards())
+        \\end
+        \\
+    , &.{
+        .{ .name = "direct", .scope_kind = "page", .scope_name = "ok", .object_class = "Card" },
+        .{ .name = "selected", .scope_kind = "page", .scope_name = "ok", .object_class = "Card" },
+    });
+}
+
+test "compiler semantics: fact-complete return annotations still validate function bodies" {
+    try expectDiagnostic(
+        \\record Settings {
+        \\  size: Number
+        \\}
+        \\
+        \\fn invalid_settings() -> Settings
+        \\  return Settings { size = "large" }
+        \\end
+        \\
+        \\page bad
+        \\  let _ = invalid_settings()
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
 }
 
 test "compiler semantics: editor variable info keeps object classes through paired placement calls" {
@@ -892,6 +962,37 @@ test "compiler semantics: qualified calls bypass local shadowing" {
     ;
     try expectObjectContent(source, "local");
     try expectObjectContent(source, "qualified");
+}
+
+test "compiler semantics: repeated name resolution keeps module scope" {
+    try expectObjectContentWithTwoOverlays(
+        \\import std:themes/default as *
+        \\import "lib/a" as a
+        \\import "lib/b" as b
+        \\
+        \\page ok
+        \\  text(a::get() ++ b::get() ++ a::get())
+        \\end
+        \\
+    ,
+        \\fn label() -> String
+        \\  return "a"
+        \\end
+        \\
+        \\fn get() -> String
+        \\  return label()
+        \\end
+        \\
+    ,
+        \\fn label() -> String
+        \\  return "b"
+        \\end
+        \\
+        \\fn get() -> String
+        \\  return label()
+        \\end
+        \\
+    , "aba");
 }
 
 test "compiler semantics: implicit prelude does not propagate through bare-name imports" {
@@ -1905,6 +2006,82 @@ test "compiler semantics: record update copies nested fields" {
     , "text", &.{"size"}, "20");
 }
 
+test "compiler semantics: explicit record fields override their defaults" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\record Label {
+        \\  text: String = "default"
+        \\}
+        \\
+        \\page ok
+        \\  let label = Label {
+        \\    text = "explicit"
+        \\  }
+        \\  text(label.text)
+        \\end
+        \\
+    ;
+    try expectObjectContent(source, "explicit");
+    try expectRecordStringDefaultNotEvaluated(source, "Label", "text");
+}
+
+test "compiler semantics: function defaults and closures use callee bindings" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\record Inner {
+        \\  size: Number = 20
+        \\}
+        \\
+        \\record LocalTheme {
+        \\  body: Inner = Inner {}
+        \\}
+        \\
+        \\fn choose_theme(first: LocalTheme, second: LocalTheme = first) -> LocalTheme
+        \\  return second
+        \\end
+        \\
+        \\fn make_reader(theme: LocalTheme) -> Number -> Number
+        \\  return (ignored: Number) |-> theme.body.size
+        \\end
+        \\
+        \\page ok
+        \\  let selected = choose_theme(LocalTheme {
+        \\    body = Inner {
+        \\      size = 31
+        \\    }
+        \\  })
+        \\  let read_size = make_reader(selected)
+        \\  text(str(read_size(0)))
+        \\end
+        \\
+    , "31");
+}
+
+test "compiler semantics: nested record member reads preserve their source value" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\record Inner {
+        \\  size: Number = 20
+        \\}
+        \\
+        \\record LocalTheme {
+        \\  body: Inner = Inner {}
+        \\}
+        \\
+        \\page ok
+        \\  let base = LocalTheme {}
+        \\  let changed = base with {
+        \\    body.size = 33
+        \\  }
+        \\  text(str(base.body.size) ++ ":" ++ str(changed.body.size) ++ ":" ++ str(base.body.size))
+        \\end
+        \\
+    , "20:33:20");
+}
+
 test "compiler semantics: record update makes updated style leaves explicit" {
     try expectObjectFieldPath(
         \\import std:themes/default as *
@@ -2834,6 +3011,33 @@ test "compiler semantics: object field defaults are statically typed" {
     try expectClassDefaultProperty(defaults_source, "card", "mode", "beta");
     try expectClassDefaultProperty(defaults_source, "card", "enabled", "true");
     try expectClassDefaultProperty(defaults_source, "card", "label", "default label");
+
+    const nested_defaults_source =
+        \\import std:themes/default as *
+        \\
+        \\type Mode = alpha | beta
+        \\record Outer {
+        \\  inner: Inner = Inner {}
+        \\}
+        \\record Inner {
+        \\  mode: Mode = Mode.beta
+        \\}
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\  config: Outer = Outer {}
+        \\}
+        \\
+        \\page ok
+        \\  let card = obj("card", "card", "text")
+        \\end
+        \\
+    ;
+    try expectClassDefaultProperty(
+        nested_defaults_source,
+        "card",
+        "config",
+        "{\"kind\":\"record\",\"type\":\"Outer\",\"fields\":[{\"name\":\"inner\",\"explicit\":false,\"value\":{\"kind\":\"record\",\"type\":\"Inner\",\"fields\":[{\"name\":\"mode\",\"explicit\":false,\"value\":{\"kind\":\"enum\",\"type\":\"Mode\",\"case\":\"beta\"}}]}}]}",
+    );
 
     try expectBodyTextDefaults(
         \\import std:themes/default as *
@@ -4792,6 +4996,40 @@ test "compiler semantics: placement effect is detected through primitive calls a
         \\
         \\fn bad() -> Page -> Object
         \\  return (page_value: Page) |-> place_on!(page_value, new("bad", "body", "text"))
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+}
+
+test "compiler semantics: placement effect follows constant function values" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\const delayed_place: Page -> Object = (page_value: Page) |-> place_on!(page_value, new("bad", "body", "text"))
+        \\
+        \\fn bad() -> Page -> Object
+        \\  return delayed_place
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+}
+
+test "compiler semantics: placement effect follows named primitive callbacks" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\fn place_each(page_value: Page) -> Object
+        \\  return place_on!(page_value, new("bad", "body", "text"))
+        \\end
+        \\
+        \\fn bad() -> Void
+        \\  let _ = foreach(pages(docctx()), place_each)
         \\end
         \\
         \\page ok

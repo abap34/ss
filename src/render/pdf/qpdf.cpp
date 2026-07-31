@@ -9,9 +9,10 @@
 #include <qpdf/QPDFPageObjectHelper.hh>
 #include <qpdf/QPDFWriter.hh>
 
-#include <exception>
+#include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <exception>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -21,8 +22,13 @@
 static thread_local std::string ss_qpdf_error;
 
 struct SsQpdfDocument {
-    explicit SsQpdfDocument(char const* path, bool suppress_warnings = false) {
+    explicit SsQpdfDocument(
+        char const* path,
+        bool suppress_warnings = false,
+        bool attempt_recovery = true
+    ) {
         if (suppress_warnings) pdf.setSuppressWarnings(true);
+        pdf.setAttemptRecovery(attempt_recovery);
         pdf.processFile(path);
         QPDFPageDocumentHelper page_document(pdf);
         pages = page_document.getAllPages();
@@ -31,10 +37,12 @@ struct SsQpdfDocument {
     explicit SsQpdfDocument(
         unsigned char const* bytes,
         size_t length,
-        bool suppress_warnings = false
+        bool suppress_warnings = false,
+        bool attempt_recovery = true
     ) {
         if (bytes == nullptr || length == 0) throw std::runtime_error("empty PDF input");
         if (suppress_warnings) pdf.setSuppressWarnings(true);
+        pdf.setAttemptRecovery(attempt_recovery);
         pdf.processMemoryFile(
             "embedded PDF resource",
             reinterpret_cast<char const*>(bytes),
@@ -94,6 +102,26 @@ extern "C" char const* ss_qpdf_version_string(void) {
     return QPDF::QPDFVersion().c_str();
 }
 
+extern "C" int ss_qpdf_validate(char const* path, size_t expected_page_count, int strict) {
+    ss_qpdf_error.clear();
+    try {
+        if (path == nullptr) throw std::runtime_error("null PDF input path");
+        SsQpdfDocument source(path, true, strict == 0);
+        if (source.pages.size() != expected_page_count) {
+            throw std::runtime_error("PDF page count does not match the expected value");
+        }
+        if (strict != 0 && source.pdf.anyWarnings()) {
+            throw std::runtime_error("PDF validation produced warnings");
+        }
+        return 0;
+    } catch (std::exception const& error) {
+        ss_qpdf_error = error.what();
+    } catch (...) {
+        ss_qpdf_error = "libqpdf failed with an unknown exception";
+    }
+    return 1;
+}
+
 static QPDFObjectHandle ss_qpdf_page_box(QPDFPageObjectHelper& page, int box) {
     switch (box) {
     case 0:
@@ -131,6 +159,85 @@ static QPDFObjectHandle::Rectangle ss_qpdf_visible_form_box(QPDFPageObjectHelper
     return rectangle;
 }
 
+struct SsNamedDestination {
+    std::string name;
+    QPDFObjectHandle value;
+};
+
+static QPDFObjectHandle ss_qpdf_copy_destination_component(QPDFObjectHandle const& value) {
+    if (value.isNull()) return QPDFObjectHandle::newNull();
+    if (value.isName()) return QPDFObjectHandle::newName(value.getName());
+    if (value.isInteger()) return QPDFObjectHandle::newInteger(value.getIntValue());
+    if (value.isNumber()) return QPDFObjectHandle::newReal(value.getNumericValue(), 12);
+    throw std::runtime_error("named destination contains an unsupported value");
+}
+
+static void ss_qpdf_collect_named_destinations(
+    QPDF& source,
+    QPDFObjectHandle destination_page,
+    std::vector<SsNamedDestination>& result
+) {
+    auto names = source.getRoot().getKey("/Names");
+    if (!names.isDictionary()) return;
+    auto destinations = names.getKey("/Dests");
+    if (!destinations.isDictionary()) return;
+    auto entries = destinations.getKey("/Names");
+    if (!entries.isArray()) {
+        if (!destinations.getKey("/Kids").isNull()) {
+            throw std::runtime_error("named destination trees with child nodes are unsupported");
+        }
+        return;
+    }
+    const int count = entries.getArrayNItems();
+    if (count % 2 != 0) throw std::runtime_error("named destination array has odd length");
+    for (int index = 0; index < count; index += 2) {
+        auto name = entries.getArrayItem(index);
+        auto source_value = entries.getArrayItem(index + 1);
+        if (!name.isString() || !source_value.isArray() || source_value.getArrayNItems() < 2) {
+            throw std::runtime_error("named destination entry is malformed");
+        }
+        auto destination_value = QPDFObjectHandle::newArray();
+        destination_value.appendItem(destination_page);
+        for (int component_index = 1; component_index < source_value.getArrayNItems(); ++component_index) {
+            destination_value.appendItem(
+                ss_qpdf_copy_destination_component(source_value.getArrayItem(component_index))
+            );
+        }
+        result.push_back({name.getStringValue(), destination_value});
+    }
+}
+
+static void ss_qpdf_install_named_destinations(
+    QPDF& destination,
+    std::vector<SsNamedDestination>& entries
+) {
+    if (entries.empty()) return;
+    std::sort(
+        entries.begin(),
+        entries.end(),
+        [](SsNamedDestination const& left, SsNamedDestination const& right) {
+            return left.name < right.name;
+        }
+    );
+    auto values = QPDFObjectHandle::newArray();
+    std::string previous;
+    bool has_previous = false;
+    for (auto const& entry: entries) {
+        if (has_previous && entry.name == previous) {
+            throw std::runtime_error("duplicate named destination");
+        }
+        values.appendItem(QPDFObjectHandle::newString(entry.name));
+        values.appendItem(entry.value);
+        previous = entry.name;
+        has_previous = true;
+    }
+    auto destinations = QPDFObjectHandle::newDictionary();
+    destinations.replaceKey("/Names", values);
+    auto names = QPDFObjectHandle::newDictionary();
+    names.replaceKey("/Dests", destinations);
+    destination.getRoot().replaceKey("/Names", names);
+}
+
 extern "C" int ss_qpdf_merge(
     char const* output,
     char const* const* inputs,
@@ -148,6 +255,7 @@ extern "C" int ss_qpdf_merge(
         destination.emptyPDF();
         QPDFPageDocumentHelper destination_pages(destination);
         std::vector<std::unique_ptr<SsQpdfDocument>> sources;
+        std::vector<SsNamedDestination> named_destinations;
         sources.reserve(input_count);
         for (size_t index = 0; index < input_count; ++index) {
             if (inputs[index] == nullptr) throw std::runtime_error("null PDF input path");
@@ -156,16 +264,83 @@ extern "C" int ss_qpdf_merge(
             auto& source = *sources.back();
             stage = "copy PDF merge pages";
             if (single_page_inputs) {
-                if (source.pages.empty()) {
-                    throw std::runtime_error("single-page PDF merge input has no pages");
+                if (source.pages.size() != 1) {
+                    throw std::runtime_error("single-page PDF merge input does not have exactly one page");
                 }
                 destination_pages.addPage(source.pages.at(0), false);
+                auto copied_pages = destination_pages.getAllPages();
+                ss_qpdf_collect_named_destinations(
+                    source.pdf,
+                    copied_pages.back().getObjectHandle(),
+                    named_destinations
+                );
             } else {
                 for (auto& page: source.pages) destination_pages.addPage(page, false);
             }
         }
+        ss_qpdf_install_named_destinations(destination, named_destinations);
         stage = "write merged PDF";
         QPDFWriter writer(destination, output);
+        writer.setDeterministicID(true);
+        writer.write();
+        return 0;
+    } catch (std::exception const& error) {
+        ss_qpdf_error = std::string(stage) + ": " + error.what();
+    } catch (...) {
+        ss_qpdf_error = std::string(stage) + ": libqpdf failed with an unknown exception";
+    }
+    return 1;
+}
+
+extern "C" int ss_qpdf_replace_pages(
+    char const* output,
+    char const* base,
+    char const* const* replacements,
+    size_t const* page_indices,
+    size_t replacement_count
+) {
+    ss_qpdf_error.clear();
+    if (
+        output == nullptr ||
+        base == nullptr ||
+        (replacement_count != 0 && (replacements == nullptr || page_indices == nullptr))
+    ) {
+        ss_qpdf_error = "invalid PDF page replacement arguments";
+        return 1;
+    }
+    char const* stage = "read PDF page replacement base";
+    try {
+        SsQpdfDocument destination(base, true);
+        QPDFPageDocumentHelper destination_pages(destination.pdf);
+        std::vector<std::unique_ptr<SsQpdfDocument>> sources;
+        sources.reserve(replacement_count);
+        size_t previous_index = 0;
+        for (size_t replacement_index = 0; replacement_index < replacement_count; ++replacement_index) {
+            const size_t page_index = page_indices[replacement_index];
+            if (replacement_index != 0 && page_index <= previous_index) {
+                throw std::runtime_error("PDF replacement page indices are not strictly increasing");
+            }
+            previous_index = page_index;
+            auto pages = destination_pages.getAllPages();
+            if (page_index >= pages.size()) {
+                throw std::runtime_error("PDF replacement page index is out of range");
+            }
+            if (replacements[replacement_index] == nullptr) {
+                throw std::runtime_error("null PDF replacement input path");
+            }
+            stage = "read PDF page replacement input";
+            sources.push_back(std::make_unique<SsQpdfDocument>(replacements[replacement_index], true));
+            auto& source = *sources.back();
+            if (source.pages.size() != 1) {
+                throw std::runtime_error("PDF replacement input is not a single-page document");
+            }
+            stage = "replace PDF page";
+            auto old_page = pages.at(page_index);
+            destination_pages.addPageAt(source.pages.at(0), true, old_page);
+            destination_pages.removePage(old_page);
+        }
+        stage = "write PDF page replacement result";
+        QPDFWriter writer(destination.pdf, output);
         writer.setDeterministicID(true);
         writer.write();
         return 0;
