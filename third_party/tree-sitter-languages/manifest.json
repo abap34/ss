@@ -10,12 +10,28 @@
       "display_name": "Bash",
       "repo": "https://github.com/tree-sitter/tree-sitter-bash",
       "commit": "a06c2e4415e9bc0346c6b86d401879ffb44058f7",
-      "aliases": ["bash", "sh", "shell"],
+      "aliases": [
+        "bash",
+        "sh",
+        "shell"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" },
-        { "from": "src/scanner.c", "to": "src/scanner.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        },
+        {
+          "from": "src/scanner.c",
+          "to": "src/scanner.c"
+        }
       ]
     },
     {
@@ -23,11 +39,22 @@
       "display_name": "C",
       "repo": "https://github.com/tree-sitter/tree-sitter-c",
       "commit": "b780e47fc780ddc8da13afa35a3f4ed5c157823d",
-      "aliases": ["c"],
+      "aliases": [
+        "c"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        }
       ]
     },
     {
@@ -35,12 +62,28 @@
       "display_name": "C++",
       "repo": "https://github.com/tree-sitter/tree-sitter-cpp",
       "commit": "8b5b49eb196bec7040441bee33b2c9a4838d6967",
-      "aliases": ["cpp", "c++", "cc"],
+      "aliases": [
+        "cpp",
+        "c++",
+        "cc"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" },
-        { "from": "src/scanner.c", "to": "src/scanner.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        },
+        {
+          "from": "src/scanner.c",
+          "to": "src/scanner.c"
+        }
       ]
     },
     {
@@ -48,12 +91,26 @@
       "display_name": "CSS",
       "repo": "https://github.com/tree-sitter/tree-sitter-css",
       "commit": "dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f",
-      "aliases": ["css"],
+      "aliases": [
+        "css"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" },
-        { "from": "src/scanner.c", "to": "src/scanner.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        },
+        {
+          "from": "src/scanner.c",
+          "to": "src/scanner.c"
+        }
       ]
     },
     {
@@ -61,11 +118,23 @@
       "display_name": "Go",
       "repo": "https://github.com/tree-sitter/tree-sitter-go",
       "commit": "2346a3ab1bb3857b48b29d779a1ef9799a248cd7",
-      "aliases": ["go", "golang"],
+      "aliases": [
+        "go",
+        "golang"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        }
       ]
     },
     {
@@ -73,13 +142,30 @@
       "display_name": "HTML",
       "repo": "https://github.com/tree-sitter/tree-sitter-html",
       "commit": "73a3947324f6efddf9e17c0ea58d454843590cc0",
-      "aliases": ["html"],
+      "aliases": [
+        "html"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" },
-        { "from": "src/scanner.c", "to": "src/scanner.c" },
-        { "from": "src/tag.h", "to": "src/tag.h" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        },
+        {
+          "from": "src/scanner.c",
+          "to": "src/scanner.c"
+        },
+        {
+          "from": "src/tag.h",
+          "to": "src/tag.h"
+        }
       ]
     },
     {
@@ -87,11 +173,22 @@
       "display_name": "Java",
       "repo": "https://github.com/tree-sitter/tree-sitter-java",
       "commit": "e10607b45ff745f5f876bfa3e94fbcc6b44bdc11",
-      "aliases": ["java"],
+      "aliases": [
+        "java"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        }
       ]
     },
     {
@@ -99,12 +196,27 @@
       "display_name": "JavaScript",
       "repo": "https://github.com/tree-sitter/tree-sitter-javascript",
       "commit": "58404d8cf191d69f2674a8fd507bd5776f46cb11",
-      "aliases": ["javascript", "js"],
+      "aliases": [
+        "javascript",
+        "js"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" },
-        { "from": "src/scanner.c", "to": "src/scanner.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        },
+        {
+          "from": "src/scanner.c",
+          "to": "src/scanner.c"
+        }
       ]
     },
     {
@@ -112,11 +224,22 @@
       "display_name": "JSON",
       "repo": "https://github.com/tree-sitter/tree-sitter-json",
       "commit": "001c28d7a29832b06b0e831ec77845553c89b56d",
-      "aliases": ["json"],
+      "aliases": [
+        "json"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        }
       ]
     },
     {
@@ -124,12 +247,27 @@
       "display_name": "Julia",
       "repo": "https://github.com/tree-sitter/tree-sitter-julia",
       "commit": "e0f9dcd180fdcfcfa8d79a3531e11d99e79321d3",
-      "aliases": ["julia", "jl"],
+      "aliases": [
+        "julia",
+        "jl"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" },
-        { "from": "src/scanner.c", "to": "src/scanner.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        },
+        {
+          "from": "src/scanner.c",
+          "to": "src/scanner.c"
+        }
       ]
     },
     {
@@ -137,12 +275,27 @@
       "display_name": "Python",
       "repo": "https://github.com/tree-sitter/tree-sitter-python",
       "commit": "26855eabccb19c6abf499fbc5b8dc7cc9ab8bc64",
-      "aliases": ["python", "py"],
+      "aliases": [
+        "python",
+        "py"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" },
-        { "from": "src/scanner.c", "to": "src/scanner.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        },
+        {
+          "from": "src/scanner.c",
+          "to": "src/scanner.c"
+        }
       ]
     },
     {
@@ -150,12 +303,27 @@
       "display_name": "Rust",
       "repo": "https://github.com/tree-sitter/tree-sitter-rust",
       "commit": "77a3747266f4d621d0757825e6b11edcbf991ca5",
-      "aliases": ["rust", "rs"],
+      "aliases": [
+        "rust",
+        "rs"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" },
-        { "from": "src/scanner.c", "to": "src/scanner.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        },
+        {
+          "from": "src/scanner.c",
+          "to": "src/scanner.c"
+        }
       ]
     },
     {
@@ -163,12 +331,26 @@
       "display_name": "TOML",
       "repo": "https://github.com/tree-sitter-grammars/tree-sitter-toml",
       "commit": "64b56832c2cffe41758f28e05c756a3a98d16f41",
-      "aliases": ["toml"],
+      "aliases": [
+        "toml"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" },
-        { "from": "src/scanner.c", "to": "src/scanner.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        },
+        {
+          "from": "src/scanner.c",
+          "to": "src/scanner.c"
+        }
       ]
     },
     {
@@ -176,15 +358,40 @@
       "display_name": "TypeScript",
       "repo": "https://github.com/tree-sitter/tree-sitter-typescript",
       "commit": "75b3874edb2dc714fb1fd77a32013d0f8699989f",
-      "aliases": ["typescript", "ts", "tsx"],
+      "aliases": [
+        "typescript",
+        "ts",
+        "tsx"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "common/scanner.h", "to": "common/scanner.h" },
-        { "from": "typescript/src/parser.c", "to": "typescript/src/parser.c" },
-        { "from": "typescript/src/scanner.c", "to": "typescript/src/scanner.c" },
-        { "from": "tsx/src/parser.c", "to": "tsx/src/parser.c" },
-        { "from": "tsx/src/scanner.c", "to": "tsx/src/scanner.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "common/scanner.h",
+          "to": "common/scanner.h"
+        },
+        {
+          "from": "typescript/src/parser.c",
+          "to": "typescript/src/parser.c"
+        },
+        {
+          "from": "typescript/src/scanner.c",
+          "to": "typescript/src/scanner.c"
+        },
+        {
+          "from": "tsx/src/parser.c",
+          "to": "tsx/src/parser.c"
+        },
+        {
+          "from": "tsx/src/scanner.c",
+          "to": "tsx/src/scanner.c"
+        }
       ]
     },
     {
@@ -192,13 +399,31 @@
       "display_name": "YAML",
       "repo": "https://github.com/tree-sitter-grammars/tree-sitter-yaml",
       "commit": "a1c4812a73ec5e089de8e441fdea3a921e8d5079",
-      "aliases": ["yaml", "yml"],
+      "aliases": [
+        "yaml",
+        "yml"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" },
-        { "from": "src/scanner.c", "to": "src/scanner.c" },
-        { "from": "src/schema.core.c", "to": "src/schema.core.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        },
+        {
+          "from": "src/scanner.c",
+          "to": "src/scanner.c"
+        },
+        {
+          "from": "src/schema.core.c",
+          "to": "src/schema.core.c"
+        }
       ]
     },
     {
@@ -206,11 +431,22 @@
       "display_name": "Zig",
       "repo": "https://github.com/tree-sitter-grammars/tree-sitter-zig",
       "commit": "6479aa13f32f701c383083d8b28360ebd682fb7d",
-      "aliases": ["zig"],
+      "aliases": [
+        "zig"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        }
       ]
     }
   ]
