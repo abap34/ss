@@ -374,24 +374,27 @@ pub fn resolveEnumCaseExpressionsAndDefaults(
     sema: *const SemanticEnv,
 ) !void {
     for (state.modules.items) |*module| {
-        try resolveModuleEnumCasesAndDefaults(allocator, module.id, sema, &module.syntax);
+        try resolveModuleEnumCaseExpressions(allocator, module.id, sema, &module.syntax);
+    }
+    for (state.modules.items) |*module| {
+        try resolveModuleFieldDefaults(allocator, module.id, sema, &module.syntax);
     }
 }
 
-fn resolveModuleEnumCasesAndDefaults(
+fn resolveModuleEnumCaseExpressions(
     allocator: std.mem.Allocator,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
     program: *ast.Module,
 ) !void {
     for (program.objects.items) |*object_decl| {
-        try resolveObjectFieldEnumCasesAndDefaults(allocator, module_id, sema, object_decl.fields.items);
+        try resolveFieldEnumCaseExpressions(allocator, module_id, sema, object_decl.fields.items);
     }
     for (program.records.items) |*record_decl| {
-        try resolveObjectFieldEnumCasesAndDefaults(allocator, module_id, sema, record_decl.fields.items);
+        try resolveFieldEnumCaseExpressions(allocator, module_id, sema, record_decl.fields.items);
     }
     for (program.object_extensions.items) |*extension| {
-        try resolveObjectFieldEnumCasesAndDefaults(allocator, module_id, sema, extension.fields.items);
+        try resolveFieldEnumCaseExpressions(allocator, module_id, sema, extension.fields.items);
     }
     for (program.functions.items) |*func| {
         try resolveFunctionEnumCases(allocator, module_id, sema, func);
@@ -417,21 +420,49 @@ fn resolveModuleEnumCasesAndDefaults(
     }
 }
 
-fn resolveObjectFieldEnumCasesAndDefaults(
+fn resolveFieldEnumCaseExpressions(
     allocator: std.mem.Allocator,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
     fields_list: []ast.ObjectFieldDecl,
 ) !void {
     for (fields_list) |*field| {
-        const default_value = field.default_value orelse {
-            try setDefaultPropertyValue(allocator, field, null);
-            continue;
-        };
+        const default_value = field.default_value orelse continue;
         var env = TypeEnv.init(allocator);
         defer env.deinit();
         try resolveExprEnumCases(allocator, module_id, sema, &env, default_value);
-        try setDefaultPropertyValue(allocator, field, try staticDefaultPropertyValue(allocator, sema, module_id, default_value.*));
+    }
+}
+
+fn resolveModuleFieldDefaults(
+    allocator: std.mem.Allocator,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+    program: *ast.Module,
+) !void {
+    for (program.objects.items) |*object_decl| {
+        try materializeFieldDefaults(allocator, module_id, sema, object_decl.fields.items);
+    }
+    for (program.records.items) |*record_decl| {
+        try materializeFieldDefaults(allocator, module_id, sema, record_decl.fields.items);
+    }
+    for (program.object_extensions.items) |*extension| {
+        try materializeFieldDefaults(allocator, module_id, sema, extension.fields.items);
+    }
+}
+
+fn materializeFieldDefaults(
+    allocator: std.mem.Allocator,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+    fields_list: []ast.ObjectFieldDecl,
+) !void {
+    for (fields_list) |*field| {
+        const property_value = if (field.default_value) |default_value|
+            try staticDefaultPropertyValue(allocator, sema, module_id, default_value.*)
+        else
+            null;
+        try setDefaultPropertyValue(allocator, field, property_value);
     }
 }
 

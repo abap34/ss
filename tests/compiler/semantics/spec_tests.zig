@@ -491,6 +491,58 @@ test "compiler semantics: editor variable info keeps object classes through user
     });
 }
 
+test "compiler semantics: return inference preserves facts for imprecise object and selection types" {
+    try expectVariableObjectClasses(
+        \\import std:themes/default as *
+        \\
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\  size: Number = 1
+        \\}
+        \\
+        \\fn card_role() -> String
+        \\  return "card"
+        \\end
+        \\
+        \\fn make_card() -> Object
+        \\  let role_name = card_role()
+        \\  return new("direct", role_name, "text")
+        \\end
+        \\
+        \\fn cards() -> Selection<Object>
+        \\  return objs_here("card")
+        \\end
+        \\
+        \\page ok
+        \\  let direct = make_card()
+        \\  let source = make_card()
+        \\  place!(source)
+        \\  let selected = first(cards())
+        \\end
+        \\
+    , &.{
+        .{ .name = "direct", .scope_kind = "page", .scope_name = "ok", .object_class = "Card" },
+        .{ .name = "selected", .scope_kind = "page", .scope_name = "ok", .object_class = "Card" },
+    });
+}
+
+test "compiler semantics: fact-complete return annotations still validate function bodies" {
+    try expectDiagnostic(
+        \\record Settings {
+        \\  size: Number
+        \\}
+        \\
+        \\fn invalid_settings() -> Settings
+        \\  return Settings { size = "large" }
+        \\end
+        \\
+        \\page bad
+        \\  let _ = invalid_settings()
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
+}
+
 test "compiler semantics: editor variable info keeps object classes through paired placement calls" {
     try expectVariableObjectClasses(
         \\type Thing = object {
@@ -2834,6 +2886,33 @@ test "compiler semantics: object field defaults are statically typed" {
     try expectClassDefaultProperty(defaults_source, "card", "mode", "beta");
     try expectClassDefaultProperty(defaults_source, "card", "enabled", "true");
     try expectClassDefaultProperty(defaults_source, "card", "label", "default label");
+
+    const nested_defaults_source =
+        \\import std:themes/default as *
+        \\
+        \\type Mode = alpha | beta
+        \\record Outer {
+        \\  inner: Inner = Inner {}
+        \\}
+        \\record Inner {
+        \\  mode: Mode = Mode.beta
+        \\}
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\  config: Outer = Outer {}
+        \\}
+        \\
+        \\page ok
+        \\  let card = obj("card", "card", "text")
+        \\end
+        \\
+    ;
+    try expectClassDefaultProperty(
+        nested_defaults_source,
+        "card",
+        "config",
+        "{\"kind\":\"record\",\"type\":\"Outer\",\"fields\":[{\"name\":\"inner\",\"explicit\":false,\"value\":{\"kind\":\"record\",\"type\":\"Inner\",\"fields\":[{\"name\":\"mode\",\"explicit\":false,\"value\":{\"kind\":\"enum\",\"type\":\"Mode\",\"case\":\"beta\"}}]}}]}",
+    );
 
     try expectBodyTextDefaults(
         \\import std:themes/default as *

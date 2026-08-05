@@ -703,6 +703,9 @@ fn inferUserFunctionReturnInfo(
     origin: []const u8,
     options: InferenceOptions,
 ) !TypeInfo {
+    if (!returnTypeNeedsInferredFacts(func.result_type)) {
+        return infoFromType(func.result_type);
+    }
     if (active_return_visiting) |visiting| {
         return inferUserFunctionReturnInfoInner(allocator, state, sema, caller_env, func, call, caller_sema, origin, options, visiting);
     }
@@ -711,6 +714,32 @@ fn inferUserFunctionReturnInfo(
     active_return_visiting = &visiting;
     defer active_return_visiting = null;
     return inferUserFunctionReturnInfoInner(allocator, state, sema, caller_env, func, call, caller_sema, origin, options, &visiting);
+}
+
+fn returnTypeNeedsInferredFacts(ty: Type) bool {
+    return switch (ty.kind) {
+        .any,
+        .function,
+        .string,
+        .enum_type,
+        .hole,
+        => true,
+        .object => ty.class_name == null,
+        .selection => (ty.param == .object or ty.param == .any) and ty.param_class_name == null,
+        .optional => if (ty.optional_child) |child| returnTypeNeedsInferredFacts(child.*) else true,
+        .none,
+        .document,
+        .page,
+        .anchor,
+        .color,
+        .number,
+        .boolean,
+        .constraints,
+        .record,
+        .path,
+        .void,
+        => false,
+    };
 }
 
 fn inferUserFunctionReturnInfoInner(
