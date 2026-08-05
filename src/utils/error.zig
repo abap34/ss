@@ -420,6 +420,130 @@ pub fn hasDocumentStateErrors(state: anytype) bool {
     return false;
 }
 
+pub fn formatErrorReason(buf: []u8, err: anyerror) []const u8 {
+    return switch (err) {
+        error.AccessDenied, error.PermissionDenied => "permission denied; check the file and parent-directory permissions",
+        error.FileNotFound => "the path was not found",
+        error.NotDir => "a path component is not a directory",
+        error.IsDir => "a file was expected, but the path is a directory",
+        error.PathAlreadyExists => "a file or directory already exists at the destination",
+        error.DirNotEmpty => "the destination directory is not empty",
+        error.FileBusy, error.DeviceBusy => "the path is busy; close programs using it and retry",
+        error.PipeBusy => "the named pipe is busy; wait for the other process and retry",
+        error.WouldBlock => "the file operation could not complete immediately; release any file lock and retry",
+        error.LockViolation => "another process holds an incompatible file lock; close it and retry",
+        error.FileLocksUnsupported => "the file system does not support the required file locks",
+        error.SymLinkLoop => "the path contains a symbolic-link cycle",
+        error.BadPathName => "the path contains a name that the operating system cannot represent",
+        error.NameTooLong => "the path is longer than the operating system supports",
+        error.LinkQuotaExceeded => "the file system cannot create another link at this path",
+        error.CrossDevice => "the operation cannot move a file across file systems",
+        error.FileTooBig, error.FileTooLarge, error.StreamTooLong => "the file exceeds the supported size limit",
+        error.ReadOnlyFileSystem => "the destination is on a read-only file system",
+        error.NoSpaceLeft => "the destination file system has no free space",
+        error.DiskQuota => "the destination file system quota is exhausted",
+        error.ProcessFdQuotaExceeded => "the process has too many open files; close unused files and retry",
+        error.SystemFdQuotaExceeded => "the system has too many open files; close unused files and retry",
+        error.InputOutput => "the operating system reported an input/output failure",
+        error.FileSystem => "the file system rejected the operation",
+        error.SystemResources => "the operating system does not have enough resources to complete the operation",
+        error.OperationUnsupported => "the file system does not support this operation",
+        error.NoDevice => "the requested device is unavailable",
+        error.NetworkNotFound => "the network path was not found",
+        error.NetworkDown => "the network required for this path is unavailable",
+        error.UnrecognizedVolume => "the operating system does not recognize the destination file system",
+        error.AntivirusInterference => "antivirus software blocked the file operation; retry or exclude this path from scanning",
+        error.NotOpenForReading => "the file handle is not open for reading",
+        error.NotOpenForWriting => "the file handle is not open for writing",
+        error.Streaming => "the stream does not support the requested file operation",
+        error.HardwareFailure => "the storage device reported a hardware failure",
+        error.BrokenPipe => "the output stream was closed before the command finished",
+        error.WriteFailed => "the output writer could not write to the destination",
+        error.Canceled => "the operation was canceled",
+        error.OutOfMemory => "the process ran out of memory",
+        error.CurrentWorkingDirectoryUnavailable, error.CurrentDirUnlinked => "the current working directory is no longer accessible",
+        else => std.fmt.bufPrint(
+            buf,
+            "an unexpected failure occurred (diagnostic code: {s}); please report this as an ss bug",
+            .{@errorName(err)},
+        ) catch "an unexpected failure occurred; please report this as an ss bug",
+    };
+}
+
+pub fn isFileSystemError(err: anyerror) bool {
+    return switch (err) {
+        error.AccessDenied,
+        error.PermissionDenied,
+        error.FileNotFound,
+        error.NotDir,
+        error.IsDir,
+        error.PathAlreadyExists,
+        error.DirNotEmpty,
+        error.FileBusy,
+        error.DeviceBusy,
+        error.PipeBusy,
+        error.WouldBlock,
+        error.LockViolation,
+        error.FileLocksUnsupported,
+        error.SymLinkLoop,
+        error.BadPathName,
+        error.NameTooLong,
+        error.LinkQuotaExceeded,
+        error.CrossDevice,
+        error.FileTooBig,
+        error.FileTooLarge,
+        error.StreamTooLong,
+        error.ReadOnlyFileSystem,
+        error.NoSpaceLeft,
+        error.DiskQuota,
+        error.ProcessFdQuotaExceeded,
+        error.SystemFdQuotaExceeded,
+        error.InputOutput,
+        error.FileSystem,
+        error.SystemResources,
+        error.OperationUnsupported,
+        error.NoDevice,
+        error.NetworkNotFound,
+        error.NetworkDown,
+        error.UnrecognizedVolume,
+        error.AntivirusInterference,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.Streaming,
+        error.HardwareFailure,
+        error.BrokenPipe,
+        error.WriteFailed,
+        => true,
+        else => false,
+    };
+}
+
+pub fn formatPathFailure(
+    buf: []u8,
+    code: []const u8,
+    operation: []const u8,
+    path: []const u8,
+    err: anyerror,
+) []const u8 {
+    var reason_buf: [256]u8 = undefined;
+    return std.fmt.bufPrint(
+        buf,
+        "{s}: could not {s} '{s}': {s}",
+        .{ code, operation, path, formatErrorReason(&reason_buf, err) },
+    ) catch "FileAccessFailed: the file operation failed and its diagnostic message was too long";
+}
+
+pub fn formatBuildFailure(buf: []u8, err: anyerror) []const u8 {
+    var reason_buf: [256]u8 = undefined;
+    return std.fmt.bufPrint(buf, "BuildFailed: {s}", .{formatErrorReason(&reason_buf, err)}) catch
+        "BuildFailed: an unexpected failure occurred; please report this as an ss bug";
+}
+
+pub fn printUnexpectedCliError(err: anyerror) void {
+    var reason_buf: [256]u8 = undefined;
+    std.debug.print("CommandFailed: {s}\n", .{formatErrorReason(&reason_buf, err)});
+}
+
 pub fn printConstraintFailure(
     path: []const u8,
     text: []const u8,
@@ -428,7 +552,13 @@ pub fn printConstraintFailure(
 ) void {
     if (!shouldPrint(.@"error")) return;
     if (state.constraint_failures.items.len == 0 and state.last_constraint_failure == null) {
-        var message_buf: [128]u8 = undefined;
+        var message_buf: [320]u8 = undefined;
+        var reason_buf: [256]u8 = undefined;
+        const reason = switch (err) {
+            error.ConstraintConflict => "the layout constraints are inconsistent",
+            error.NegativeFrameSize => "the layout constraints produce a negative frame size",
+            else => formatErrorReason(&reason_buf, err),
+        };
         print(.{
             .path = path,
             .source = text,
@@ -436,7 +566,7 @@ pub fn printConstraintFailure(
             .message = std.fmt.bufPrint(
                 &message_buf,
                 "LayoutFailed: {s}; no source constraint failure was recorded",
-                .{@errorName(err)},
+                .{reason},
             ) catch "LayoutFailed: no source constraint failure was recorded",
             .span = null,
         });
@@ -913,6 +1043,7 @@ pub fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
         error.AssignmentRequiresLet => "AssignmentRequiresLet: plain assignment statements are not supported; use 'let name = expr'",
         error.BindRemoved => "BindRemoved: 'bind' has been removed; use lexical 'let' bindings and ordinary expression statements",
         error.ZeroArgCallRequiresParens => "ZeroArgCallRequiresParens: a bare name is not a statement; use parentheses for a zero-argument call, or pass the value to a placing function such as 'text!(name)'",
+        error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page dimensions cannot be constraint targets; constrain an object dimension to a page anchor instead",
         else => blk: {
             const expected = diagnostic.expected orelse @errorName(diagnostic.err);
             const found = diagnostic.found orelse "unknown token";
@@ -922,10 +1053,11 @@ pub fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
 }
 
 pub fn formatParseFailureWithoutDiagnostic(buf: []u8, err: anyerror) []const u8 {
+    var reason_buf: [256]u8 = undefined;
     return std.fmt.bufPrint(
         buf,
-        "ParseFailed: parser returned {s} without a source diagnostic",
-        .{@errorName(err)},
+        "ParseFailed: the parser stopped without a source diagnostic: {s}",
+        .{formatErrorReason(&reason_buf, err)},
     ) catch "ParseFailed: parser failed without a source diagnostic";
 }
 
