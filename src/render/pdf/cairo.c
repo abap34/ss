@@ -181,6 +181,19 @@ static int ss_checksum_path_list(GChecksum *checksum, FcConfig *config, FcStrLis
  * the current thread's Pango font-map caches. */
 static FcConfig *ss_sync_thread_pango_font_config_writer_locked(PangoFcFontMap **font_map_output) {
     PangoFontMap *font_map = pango_cairo_font_map_get_default();
+    if (font_map == NULL || !PANGO_IS_FC_FONT_MAP(font_map)) {
+        /* Pango can default to CoreText on macOS, while ss requires the
+         * Fontconfig file identity and FreeType glyph mapping. Defaults are
+         * per-thread, so install an FT-backed map for the current thread. */
+        PangoFontMap *fontconfig_map = pango_cairo_font_map_new_for_font_type(CAIRO_FONT_TYPE_FT);
+        if (fontconfig_map == NULL || !PANGO_IS_FC_FONT_MAP(fontconfig_map)) {
+            if (fontconfig_map != NULL) g_object_unref(fontconfig_map);
+            return NULL;
+        }
+        pango_cairo_font_map_set_default(PANGO_CAIRO_FONT_MAP(fontconfig_map));
+        g_object_unref(fontconfig_map);
+        font_map = pango_cairo_font_map_get_default();
+    }
     if (font_map == NULL || !PANGO_IS_FC_FONT_MAP(font_map)) return NULL;
     PangoFcFontMap *fc_font_map = PANGO_FC_FONT_MAP(font_map);
     if (font_map_output != NULL) *font_map_output = fc_font_map;
