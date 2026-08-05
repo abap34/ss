@@ -911,3 +911,7 @@ fn includePoint(point: Point, min_x: *f64, min_y: *f64, max_x: *f64, max_y: *f64
 pub fn pageFingerprint(page: *const Page) Fingerprint {
     return ir_fingerprint.page(page);
 }
+
+pub fn pageFingerprintUnbufferedForTesting(page: *const Page) Fingerprint {
+    return ir_fingerprint.pageUnbufferedForTesting(page);
+}

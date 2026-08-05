@@ -345,6 +345,37 @@ test "render IR fingerprints page source and visual effect metadata" {
     try testing.expect(!std.mem.eql(u8, &original_page, &render_ir.pageFingerprint(&pages[0])));
 }
 
+test "render IR buffered page fingerprints match the unbuffered reference" {
+    var page = render_ir.Page{
+        .page_id = 1,
+        .index = 0,
+        .width = 1280,
+        .height = 720,
+    };
+    defer page.deinit(testing.allocator);
+
+    for (0..512) |index| {
+        const offset: f64 = @floatFromInt(index);
+        try page.appendFillRect(
+            testing.allocator,
+            @intCast(index + 1),
+            .{ .x = offset, .y = offset / 2, .width = 20, .height = 10 },
+            .{ .r = 0.25, .g = 0.5, .b = 0.75 },
+        );
+    }
+    try page.appendDestination(testing.allocator, "section", .{ .x = 100, .y = 80 });
+    try page.appendLink(
+        testing.allocator,
+        .destination,
+        "section",
+        .{ .x = 10, .y = 20, .width = 30, .height = 40 },
+    );
+
+    const buffered = render_ir.pageFingerprint(&page);
+    const reference = render_ir.pageFingerprintUnbufferedForTesting(&page);
+    try testing.expectEqualSlices(u8, &reference, &buffered);
+}
+
 test "render IR validation rejects invalid source and clip ranges" {
     var pages = try testing.allocator.alloc(render_ir.Page, 1);
     pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
