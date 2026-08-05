@@ -62,32 +62,43 @@ pub fn printContextJson(io: std.Io, allocator: std.mem.Allocator, request: types
 pub fn writeContextJson(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, output_path: []const u8, progress: *Progress) !void {
     var state = try buildFile(io, allocator, request, progress);
     defer state.deinit();
+    try app_output.validateOutputPathAgainstSources(io, allocator, &state, output_path, .dump_json);
     const json = try dump.toOwnedString(allocator, &state);
     defer allocator.free(json);
-    try utils.fs.writeFile(io, output_path, json);
+    try app_output.writeFileOrPrintDiagnostic(io, output_path, json, .dump_json);
     progress.step("Write JSON");
 }
 
 pub fn writeScheduleTraceJson(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, output_path: []const u8, progress: *Progress) !void {
     var analyzed = try pipeline.analyzeFile(io, allocator, request, progress, .evaluation);
     defer analyzed.deinit();
+    try app_output.validateOutputPathAgainstSources(io, allocator, &analyzed.state, output_path, .schedule_trace);
     const json = lowering.scheduleTraceJsonFromGraph(allocator, &analyzed.state, analyzed.executionGraph()) catch |err| {
         error_report.printDocumentStateDiagnostics(analyzed.state.projectPath(), analyzed.state.projectSource(), &analyzed.state);
         return err;
     };
     defer allocator.free(json);
     progress.step("Serialize JSON");
-    try utils.fs.writeFile(io, output_path, json);
+    try app_output.writeFileOrPrintDiagnostic(io, output_path, json, .schedule_trace);
     progress.step("Write JSON");
 }
 
 pub fn writeLayoutTraceJson(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, output_path: []const u8, progress: *Progress) !void {
     var analyzed = try pipeline.analyzeFile(io, allocator, request, progress, .evaluation);
     defer analyzed.deinit();
+    try app_output.validateOutputPathAgainstSources(io, allocator, &analyzed.state, output_path, .layout_trace);
     try pipeline.evaluateDocument(&analyzed.state, analyzed.executionGraph(), progress);
     var pages = try pipeline.preparePages(&analyzed.state, progress);
     defer pages.deinit(analyzed.state.allocator);
-    var layouts = try pipeline.solveLayoutsWithTracePath(io, &analyzed.state, &pages, output_path, progress, request.layout_jobs, request.highlight_languages);
+    var trace_failure = core.layout.graph.TraceFailure{};
+    var layouts = pipeline.solveLayoutsWithTracePath(io, &analyzed.state, &pages, output_path, &trace_failure, progress, request.layout_jobs, request.highlight_languages) catch |err| {
+        if (err != error.LayoutTraceFailed or trace_failure.cause == null) return err;
+        const cause = trace_failure.cause.?;
+        return switch (trace_failure.kind) {
+            .output => app_output.outputWriteFailed(.layout_trace, output_path, cause),
+            .materialization => app_output.layoutTraceMaterializationFailed(output_path, trace_failure.operation, cause),
+        };
+    };
     defer layouts.deinit(analyzed.state.allocator);
 }
 
@@ -97,8 +108,21 @@ pub fn layoutConflictReportJson(
     request: types.SourceRequest,
     progress: ?*Progress,
 ) ![]u8 {
+    return layoutConflictReportJsonWithProtectedOutput(io, allocator, request, progress, null);
+}
+
+fn layoutConflictReportJsonWithProtectedOutput(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    request: types.SourceRequest,
+    progress: ?*Progress,
+    protected_output_path: ?[]const u8,
+) ![]u8 {
     var analyzed = try pipeline.analyzeFile(io, allocator, request, progress, .evaluation);
     defer analyzed.deinit();
+    if (protected_output_path) |path| {
+        try app_output.validateOutputPathAgainstSources(io, allocator, &analyzed.state, path, .layout_conflict_report);
+    }
     try pipeline.evaluateDocument(&analyzed.state, analyzed.executionGraph(), progress);
     var pages = try pipeline.preparePages(&analyzed.state, progress);
     defer pages.deinit(analyzed.state.allocator);
@@ -123,6 +147,7 @@ pub fn layoutConflictReportJson(
         else => {
             if (progress) |p| p.abort();
             error_report.printDocumentStateDiagnostics(analyzed.state.projectPath(), analyzed.state.projectSource(), &analyzed.state);
+            if (error_report.hasDocumentStateErrors(&analyzed.state)) return error.DiagnosticsFailed;
             return err;
         },
     };
@@ -140,37 +165,69 @@ pub fn writeLayoutConflictReportFile(
     output_path: []const u8,
     progress: *Progress,
 ) !void {
-    const data = try layoutConflictReportJson(io, allocator, request, progress);
+    const data = try layoutConflictReportJsonWithProtectedOutput(io, allocator, request, progress, output_path);
     defer allocator.free(data);
-    try utils.fs.writeFile(io, output_path, data);
+    try app_output.writeFileOrPrintDiagnostic(io, output_path, data, .layout_conflict_report);
     progress.step("Write report");
 }
 
 pub fn writePdf(io: std.Io, allocator: std.mem.Allocator, request: types.PdfWriteRequest, progress: *Progress) !void {
+    var output_targets = [_]app_output.OutputTarget{
+        .{ .path = request.output_path, .kind = .pdf },
+        .{ .path = request.options.diagnostics_json_path orelse request.output_path, .kind = .diagnostics_json },
+    };
+    const output_target_count: usize = if (request.options.diagnostics_json_path == null) 1 else 2;
+    try app_output.validateDistinctOutputPaths(io, allocator, output_targets[0..output_target_count]);
     var compiled = try compileRendering(io, allocator, request.source, request.options.render, request.options.diagnostics_json_path, progress);
     defer compiled.deinit();
+    try app_output.validateOutputPathAgainstSources(io, allocator, &compiled.state, request.output_path, .pdf);
     progress.begin("Render PDF");
     errdefer progress.abort();
     try app_output.writePdfOrPrintDiagnostics(allocator, io, &compiled.state, &compiled.ir, request.output_path, request.options.render, progress, request.options.diagnostics_json_path);
     try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &compiled.state, request.options.diagnostics_json_path);
-    try utils.render_cache.pruneFromEnv(io, allocator);
+    app_output.pruneRenderCacheOrPrintWarning(io, allocator);
     progress.complete();
 }
 
 pub fn writeHtml(io: std.Io, allocator: std.mem.Allocator, request: types.HtmlWriteRequest, progress: *Progress) !void {
+    var output_targets = [_]app_output.OutputTarget{
+        .{ .path = request.output_path, .kind = .html },
+        .{ .path = request.options.diagnostics_json_path orelse request.output_path, .kind = .diagnostics_json },
+    };
+    const output_target_count: usize = if (request.options.diagnostics_json_path == null) 1 else 2;
+    try app_output.validateDistinctOutputPaths(io, allocator, output_targets[0..output_target_count]);
     var compiled = try compileRendering(io, allocator, request.source, request.options.render, request.options.diagnostics_json_path, progress);
     defer compiled.deinit();
+    try app_output.validateOutputPathAgainstSources(io, allocator, &compiled.state, request.output_path, .html);
     progress.begin("Write HTML");
     errdefer progress.abort();
-    try render_html.write(allocator, io, &compiled.ir, request.output_path);
+    var html_failure = render_html.WriteFailure{};
+    render_html.writeWithFailure(allocator, io, &compiled.ir, request.output_path, &html_failure) catch |err| {
+        const cause = html_failure.cause orelse err;
+        const failure = switch (html_failure.kind) {
+            .output => app_output.outputWriteFailed(.html, request.output_path, cause),
+            .materialization => app_output.htmlMaterializationFailed(request.output_path, html_failure.operation, cause),
+        };
+        app_output.writeDiagnosticsJsonIfRequested(io, allocator, &compiled.state, request.options.diagnostics_json_path) catch {};
+        return failure;
+    };
     try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &compiled.state, request.options.diagnostics_json_path);
-    try utils.render_cache.pruneFromEnv(io, allocator);
+    app_output.pruneRenderCacheOrPrintWarning(io, allocator);
     progress.complete();
 }
 
 pub fn writePdfAndHtml(io: std.Io, allocator: std.mem.Allocator, request: types.PdfAndHtmlWriteRequest, progress: *Progress) !void {
+    var output_targets = [_]app_output.OutputTarget{
+        .{ .path = request.pdf_output_path, .kind = .pdf },
+        .{ .path = request.html_output_path, .kind = .html },
+        .{ .path = request.options.diagnostics_json_path orelse request.pdf_output_path, .kind = .diagnostics_json },
+    };
+    const output_target_count: usize = if (request.options.diagnostics_json_path == null) 2 else 3;
+    try app_output.validateDistinctOutputPaths(io, allocator, output_targets[0..output_target_count]);
     var compiled = try compileRendering(io, allocator, request.source, request.options.render, request.options.diagnostics_json_path, progress);
     defer compiled.deinit();
+    try app_output.validateOutputPathAgainstSources(io, allocator, &compiled.state, request.pdf_output_path, .pdf);
+    try app_output.validateOutputPathAgainstSources(io, allocator, &compiled.state, request.html_output_path, .html);
     progress.begin("Render PDF");
     errdefer progress.abort();
     try app_output.writePdfOrPrintDiagnostics(
@@ -185,9 +242,18 @@ pub fn writePdfAndHtml(io: std.Io, allocator: std.mem.Allocator, request: types.
     );
     progress.complete();
     progress.begin("Write HTML");
-    try render_html.write(allocator, io, &compiled.ir, request.html_output_path);
+    var html_failure = render_html.WriteFailure{};
+    render_html.writeWithFailure(allocator, io, &compiled.ir, request.html_output_path, &html_failure) catch |err| {
+        const cause = html_failure.cause orelse err;
+        const failure = switch (html_failure.kind) {
+            .output => app_output.outputWriteFailed(.html, request.html_output_path, cause),
+            .materialization => app_output.htmlMaterializationFailed(request.html_output_path, html_failure.operation, cause),
+        };
+        app_output.writeDiagnosticsJsonIfRequested(io, allocator, &compiled.state, request.options.diagnostics_json_path) catch {};
+        return failure;
+    };
     try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &compiled.state, request.options.diagnostics_json_path);
-    try utils.render_cache.pruneFromEnv(io, allocator);
+    app_output.pruneRenderCacheOrPrintWarning(io, allocator);
     progress.complete();
 }
 
@@ -202,14 +268,25 @@ fn compileRendering(
     var analyzed = try pipeline.analyzeFile(io, allocator, source, progress, .evaluation);
     var analyzed_active = true;
     errdefer if (analyzed_active) analyzed.deinit();
+    if (diagnostics_json_path) |path| {
+        try app_output.validateOutputPathAgainstSources(io, allocator, &analyzed.state, path, .diagnostics_json);
+    }
     try pipeline.evaluateDocument(&analyzed.state, analyzed.executionGraph(), progress);
     var pages = try pipeline.preparePages(&analyzed.state, progress);
     const prepared_allocator = analyzed.state.allocator;
     var pages_errdefer_active = true;
     errdefer if (pages_errdefer_active) pages.deinit(prepared_allocator);
-    const font_environment = try render_compile.acquireFontEnvironment(prepared_allocator, io, &pages);
+    const font_environment = render_compile.acquireFontEnvironment(prepared_allocator, io, &analyzed.state, &pages) catch |err| {
+        _ = try render_compile.addFontEnvironmentDiagnostic(&analyzed.state, err);
+        if (error_report.hasDocumentStateErrors(&analyzed.state)) {
+            error_report.printDocumentStateDiagnostics(analyzed.state.projectPath(), analyzed.state.projectSource(), &analyzed.state);
+            app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, diagnostics_json_path) catch {};
+            return error.DiagnosticsFailed;
+        }
+        return err;
+    };
     var layouts = pipeline.solveLayouts(io, &analyzed.state, &pages, progress, source.layout_jobs, options.highlight_languages, font_environment) catch |err| {
-        try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, diagnostics_json_path);
+        app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, diagnostics_json_path) catch {};
         return err;
     };
     var layouts_errdefer_active = true;
@@ -238,7 +315,7 @@ fn compileRendering(
     }) catch |err| {
         progress.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), &state);
-        try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &state, diagnostics_json_path);
+        app_output.writeDiagnosticsJsonIfRequested(io, allocator, &state, diagnostics_json_path) catch {};
         if (error_report.hasDocumentStateErrors(&state)) return error.DiagnosticsFailed;
         return err;
     };
