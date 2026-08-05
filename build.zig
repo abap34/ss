@@ -726,6 +726,7 @@ fn addRenderTests(
         import("render_compile", render_compile_mod),
         import("render_emitter", modules.render_emitter),
         import("render_resources", modules.render_resources),
+        import("render_text", modules.render_text),
     }, null);
     const render_compile_spec_tests = addQpdfTestArtifact(ctx, render_compile_spec_mod);
     const run_render_compile_spec_tests = b.addRunArtifact(render_compile_spec_tests);

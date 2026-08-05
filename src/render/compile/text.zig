@@ -79,7 +79,8 @@ const FontDependency = struct {
 const CachedShape = struct {
     layout: render.TextLayout,
     fonts: []FontDependency,
-    last_used: u64,
+    last_used: std.atomic.Value(u64),
+    materialized_epoch: u64,
     byte_size: usize,
 
     fn deinit(self: *CachedShape, allocator: Allocator) void {
@@ -94,10 +95,14 @@ const ShapeMap = std.HashMap(CacheKey, CachedShape, CacheKeyContext, std.hash_ma
 pub const Cache = struct {
     allocator: Allocator,
     io: std.Io,
-    mutex: std.Io.Mutex = .init,
+    lock: std.Io.RwLock = .init,
+    document_lock: std.Io.Mutex = .init,
     shapes: ShapeMap,
-    access_clock: u64 = 0,
+    access_clock: std.atomic.Value(u64) = .init(0),
     shape_bytes: usize = 0,
+    dirty: bool = false,
+    document_epoch: u64 = 1,
+    font_environment: ?FontEnvironment = null,
 
     const max_entries = 8192;
     const max_cached_bytes = 128 * 1024 * 1024;
@@ -114,6 +119,39 @@ pub const Cache = struct {
         self.clear();
         self.shapes.deinit();
         self.* = undefined;
+    }
+
+    pub fn entryCount(self: *const Cache) usize {
+        return self.shapes.count();
+    }
+
+    pub fn beginDocument(self: *Cache) !void {
+        const profile_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordTextCacheBeginDocument(profile_start);
+        self.document_lock.lockUncancelable(self.io);
+        errdefer self.document_lock.unlock(self.io);
+        const environment = try fontEnvironmentSnapshot();
+        self.lock.lockUncancelable(self.io);
+        defer self.lock.unlock(self.io);
+        self.font_environment = environment;
+        self.document_epoch +%= 1;
+        if (self.document_epoch != 0) return;
+        self.document_epoch = 1;
+        var iterator = self.shapes.valueIterator();
+        while (iterator.next()) |cached_shape| cached_shape.materialized_epoch = 0;
+    }
+
+    pub fn endDocument(self: *Cache) void {
+        self.lock.lockUncancelable(self.io);
+        self.font_environment = null;
+        self.lock.unlock(self.io);
+        self.document_lock.unlock(self.io);
+    }
+
+    fn currentEnvironment(self: *Cache) ?FontEnvironment {
+        self.lock.lockSharedUncancelable(self.io);
+        defer self.lock.unlockShared(self.io);
+        return self.font_environment;
     }
 
     fn clear(self: *Cache) void {
@@ -135,28 +173,54 @@ pub const Cache = struct {
         fonts: *render.FontBuilder,
         key: CacheKey,
     ) !?render.TextLayout {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
-        const cached = self.shapes.getPtr(key) orelse return null;
-        cached.last_used = self.nextAccess();
-        for (cached.fonts) |font| {
-            const resource = resources.addPath(allocator, io, .font, font.path) catch |err| switch (err) {
-                error.OutOfMemory, error.Canceled => return err,
-                else => {
-                    self.removeEntry(key);
-                    return null;
-                },
-            };
-            if (!std.mem.eql(u8, &resource, &font.resource)) {
-                self.removeEntry(key);
-                return null;
-            }
-            const instance = try fonts.add(allocator, io, fontSpec(font, resource));
-            if (!std.mem.eql(u8, &instance, &font.instance)) {
-                self.removeEntry(key);
-                return null;
+        self.lock.lockSharedUncancelable(self.io);
+        if (self.shapes.getPtr(key)) |cached| {
+            self.touch(cached);
+            if (self.font_environment != null and cached.materialized_epoch == self.document_epoch) {
+                const profile_clone = utils.measure_profile.start();
+                const layout = cached.layout.clone(allocator) catch |err| {
+                    self.lock.unlockShared(self.io);
+                    return err;
+                };
+                utils.measure_profile.recordTextCacheClone(profile_clone);
+                self.lock.unlockShared(self.io);
+                return layout;
             }
         }
+        self.lock.unlockShared(self.io);
+
+        self.lock.lockUncancelable(self.io);
+        defer self.lock.unlock(self.io);
+        const cached = self.shapes.getPtr(key) orelse return null;
+        self.touch(cached);
+        if (self.font_environment == null or cached.materialized_epoch != self.document_epoch) {
+            const profile_materialize = utils.measure_profile.start();
+            defer utils.measure_profile.recordTextCacheMaterialize(profile_materialize);
+            for (cached.fonts) |font| {
+                const resource = resources.addPath(allocator, io, .font, font.path) catch |err| switch (err) {
+                    error.OutOfMemory, error.Canceled => return err,
+                    else => {
+                        self.removeEntry(key);
+                        return null;
+                    },
+                };
+                if (!std.mem.eql(u8, &resource, &font.resource)) {
+                    self.removeEntry(key);
+                    return null;
+                }
+                const instance = try fonts.add(allocator, io, fontSpec(font, resource));
+                if (!std.mem.eql(u8, &instance, &font.instance)) {
+                    self.removeEntry(key);
+                    return null;
+                }
+            }
+            cached.materialized_epoch = if (self.font_environment != null) self.document_epoch else 0;
+        }
+        const profile_share = utils.measure_profile.start();
+        try cached.layout.share(self.allocator);
+        utils.measure_profile.recordTextCacheShare(profile_share);
+        const profile_clone = utils.measure_profile.start();
+        defer utils.measure_profile.recordTextCacheClone(profile_clone);
         return try cached.layout.clone(allocator);
     }
 
@@ -173,8 +237,8 @@ pub const Cache = struct {
         resources: *resources_compile.Builder,
         fonts: *render.FontBuilder,
     ) !void {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
+        self.lock.lockUncancelable(self.io);
+        defer self.lock.unlock(self.io);
 
         const owned_source = try self.allocator.dupe(u8, source);
         errdefer self.allocator.free(owned_source);
@@ -226,16 +290,31 @@ pub const Cache = struct {
         self.shapes.putAssumeCapacityNoClobber(key, .{
             .layout = cached_layout,
             .fonts = dependencies,
-            .last_used = self.nextAccess(),
+            .last_used = .init(self.nextAccess()),
+            .materialized_epoch = if (self.font_environment != null) self.document_epoch else 0,
             .byte_size = byte_size,
         });
         self.shape_bytes += byte_size;
+        self.dirty = true;
     }
 
     fn nextAccess(self: *Cache) u64 {
-        self.access_clock +%= 1;
-        if (self.access_clock == 0) self.access_clock = 1;
-        return self.access_clock;
+        const next = self.access_clock.fetchAdd(1, .monotonic) +% 1;
+        if (next != 0) return next;
+        return self.access_clock.fetchAdd(1, .monotonic) +% 1;
+    }
+
+    fn touch(self: *Cache, cached: *CachedShape) void {
+        const access = self.nextAccess();
+        var previous = cached.last_used.load(.monotonic);
+        while (previous < access) {
+            previous = cached.last_used.cmpxchgWeak(
+                previous,
+                access,
+                .monotonic,
+                .monotonic,
+            ) orelse return;
+        }
     }
 
     fn evictLeastRecentlyUsed(self: *Cache) void {
@@ -243,9 +322,10 @@ pub const Cache = struct {
         var oldest_access: u64 = std.math.maxInt(u64);
         var iterator = self.shapes.iterator();
         while (iterator.next()) |entry| {
-            if (entry.value_ptr.last_used >= oldest_access) continue;
+            const last_used = entry.value_ptr.last_used.load(.monotonic);
+            if (last_used >= oldest_access) continue;
             oldest_key = entry.key_ptr.*;
-            oldest_access = entry.value_ptr.last_used;
+            oldest_access = last_used;
         }
         self.removeEntry(oldest_key orelse return);
     }
@@ -332,7 +412,10 @@ pub fn shape(
     const profile_start = utils.measure_profile.start();
     var profile_hit = false;
     defer utils.measure_profile.recordTextShape(profile_hit, profile_start);
-    const environment = try fontEnvironmentSnapshot();
+    const environment = if (cache) |shape_cache|
+        shape_cache.currentEnvironment() orelse try fontEnvironmentSnapshot()
+    else
+        try fontEnvironmentSnapshot();
     if (cache) |shape_cache| {
         if (try shape_cache.get(
             allocator,
@@ -340,11 +423,12 @@ pub fn shape(
             resources,
             fonts,
             cacheKey(source, requested_font, font_size, width, wrap, environment.id),
-        )) |layout| {
+        )) |cached_layout| {
             profile_hit = true;
-            return layout;
+            return cached_layout;
         }
     }
+
     const family_z = try allocator.dupeZ(u8, requested_font.family);
     defer allocator.free(family_z);
     const source_z = try allocator.dupeZ(u8, source);
