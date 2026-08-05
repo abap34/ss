@@ -29,8 +29,10 @@ const pdf_packages = [_]PdfPackage{
 
 pub fn main(init: std.process.Init) void {
     const allocator = init.arena.allocator();
-    const args = init.minimal.args.toSlice(allocator) catch |err|
-        fatal("unable to read dependency-check arguments: {s}", .{@errorName(err)});
+    const args = init.minimal.args.toSlice(allocator) catch |err| {
+        var reason_buf: [256]u8 = undefined;
+        fatal("unable to read dependency-check arguments: {s}", .{formatErrorReason(&reason_buf, err)});
+    };
     if (args.len < 2) fatal("internal build error: dependency-check mode is missing", .{});
 
     if (std.mem.eql(u8, args[1], "native-pdf")) {
@@ -236,7 +238,10 @@ fn run(allocator: std.mem.Allocator, io: std.Io, argv: []const []const u8) Comma
         .stderr_limit = .limited(64 * 1024),
     }) catch |err| switch (err) {
         error.FileNotFound => return .{ .status = .missing },
-        else => fatal("unable to start '{s}' while checking build dependencies: {s}", .{ argv[0], @errorName(err) }),
+        else => {
+            var reason_buf: [256]u8 = undefined;
+            fatal("unable to start '{s}' while checking build dependencies: {s}", .{ argv[0], formatErrorReason(&reason_buf, err) });
+        },
     };
     return switch (result.term) {
         .exited => |code| .{
@@ -245,6 +250,23 @@ fn run(allocator: std.mem.Allocator, io: std.Io, argv: []const []const u8) Comma
             .stderr = result.stderr,
         },
         else => fatal("'{s}' terminated unexpectedly while checking build dependencies: {}", .{ argv[0], result.term }),
+    };
+}
+
+fn formatErrorReason(buf: []u8, err: anyerror) []const u8 {
+    return switch (err) {
+        error.AccessDenied, error.PermissionDenied => "permission denied; check that the executable and its parent directories are accessible",
+        error.InvalidExe => "the selected file is not a valid executable for this system",
+        error.SystemResources => "the operating system does not have enough resources to start the command",
+        error.ProcessFdQuotaExceeded => "the build process has too many open files; close unused files and retry",
+        error.SystemFdQuotaExceeded => "the system has too many open files; close unused files and retry",
+        error.CurrentWorkingDirectoryUnavailable => "the current working directory is no longer accessible",
+        error.OutOfMemory => "the build process ran out of memory",
+        else => std.fmt.bufPrint(
+            buf,
+            "an unexpected operating-system failure occurred (diagnostic code: {s})",
+            .{@errorName(err)},
+        ) catch "an unexpected operating-system failure occurred",
     };
 }
 
