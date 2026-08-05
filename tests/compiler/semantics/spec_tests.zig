@@ -5004,6 +5004,40 @@ test "compiler semantics: placement effect is detected through primitive calls a
     , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
 }
 
+test "compiler semantics: placement effect follows constant function values" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\const delayed_place: Page -> Object = (page_value: Page) |-> place_on!(page_value, new("bad", "body", "text"))
+        \\
+        \\fn bad() -> Page -> Object
+        \\  return delayed_place
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+}
+
+test "compiler semantics: placement effect follows named primitive callbacks" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\fn place_each(page_value: Page) -> Object
+        \\  return place_on!(page_value, new("bad", "body", "text"))
+        \\end
+        \\
+        \\fn bad() -> Void
+        \\  let _ = foreach(pages(docctx()), place_each)
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+}
+
 test "compiler semantics: non-placement effects do not require bang-marked functions" {
     try buildSource(
         \\import std:themes/default as *
