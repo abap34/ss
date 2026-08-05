@@ -7,7 +7,7 @@ ss is a slide description language and system.
 If you are a programmer who puts a lot of code on slides, a mathematics
 enthusiast who uses plenty of unusual symbols, or a pitiful AI Agent forced to make slides, you will probably like it.
 
-<p><sub>⚠️ WIP: ss is highly experimental software and still at a very early stage, so expect bugs and missing features. Breaking changes are also likely to continue arriving, especially in the user interface, including the syntax.</sub></p>
+<p><sub>⚠️ WIP: ss is highly experimental software and still at a very early stage, so expect bugs and missing features. Breaking changes are also likely to continue arriving, especially in the user interface, including the syntax. Please check the <a href="https://gist.github.com/abap34/46167c714522ece12a14fd50ff252f7a">roadmap</a>. </sub></p>
 
 <figure>
     <br>
