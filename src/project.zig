@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const utils = @import("utils");
 const highlight = utils.highlight;
 const source = utils.source;
@@ -165,6 +166,20 @@ pub fn isConfigError(err: anyerror) bool {
         error.InvalidDiagnosticLevel,
         => true,
         else => false,
+    };
+}
+
+pub fn configErrorMessage(err: anyerror) ?[]const u8 {
+    return switch (err) {
+        error.MissingProjectEntry => "MissingProjectEntry: add or set 'entry = \"path/to/slides.ss\"' under [project] using a quoted path",
+        error.UnknownHighlightLanguageField => "UnknownHighlightLanguageField: remove the unsupported key from the highlight language section",
+        error.BuiltinHighlightLanguageReserved => "BuiltinHighlightLanguageReserved: rename the custom language because its name is reserved by a built-in language",
+        error.MissingHighlightParser => "MissingHighlightParser: add or set the parser key in the highlight language section using a quoted built-in parser name",
+        error.MissingHighlightQuery => "MissingHighlightQuery: add or set the query key in the highlight language section using a quoted path or builtin:name value",
+        error.UnknownHighlightParser => "UnknownHighlightParser: use a supported built-in tree-sitter parser name",
+        error.DuplicateHighlightLanguage => "DuplicateHighlightLanguage: each highlight language name may be declared only once",
+        error.InvalidDiagnosticLevel => "InvalidDiagnosticLevel: use note, warning, error, or off for cli.diagnostic_level",
+        else => null,
     };
 }
 
@@ -569,6 +584,60 @@ pub fn absolutePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     const cwd = try cwdAlloc(allocator);
     defer allocator.free(cwd);
     return std.fs.path.resolve(allocator, &.{ cwd, path });
+}
+
+pub fn pathsReferToSameFile(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    left_path: []const u8,
+    right_path: []const u8,
+) !bool {
+    const left_absolute = try absolutePath(allocator, left_path);
+    defer allocator.free(left_absolute);
+    const right_absolute = try absolutePath(allocator, right_path);
+    defer allocator.free(right_absolute);
+    if (std.mem.eql(u8, left_absolute, right_absolute)) return true;
+
+    const cwd = std.Io.Dir.cwd();
+    var left_file = cwd.openFile(io, left_absolute, .{}) catch return false;
+    defer left_file.close(io);
+    var right_file = cwd.openFile(io, right_absolute, .{}) catch return false;
+    defer right_file.close(io);
+
+    const left_identity = fileIdentity(left_file) orelse return false;
+    const right_identity = fileIdentity(right_file) orelse return false;
+    return left_identity.device_major == right_identity.device_major and
+        left_identity.device_minor == right_identity.device_minor and
+        left_identity.inode == right_identity.inode;
+}
+
+const FileIdentity = struct {
+    device_major: u64,
+    device_minor: u64,
+    inode: u64,
+};
+
+fn fileIdentity(file: std.Io.File) ?FileIdentity {
+    if (comptime builtin.os.tag == .linux) {
+        const linux = std.os.linux;
+        var statx = std.mem.zeroes(linux.Statx);
+        const request: linux.STATX = .{ .INO = true };
+        if (linux.errno(linux.statx(file.handle, "", linux.AT.EMPTY_PATH, request, &statx)) != .SUCCESS) return null;
+        if (!statx.mask.INO) return null;
+        return .{
+            .device_major = statx.dev_major,
+            .device_minor = statx.dev_minor,
+            .inode = statx.ino,
+        };
+    }
+    if (comptime std.c.Stat == void or !@hasDecl(std.c, "fstat")) return null;
+    var stat = std.mem.zeroes(std.c.Stat);
+    if (std.c.errno(std.c.fstat(file.handle, &stat)) != .SUCCESS) return null;
+    return .{
+        .device_major = @intCast(stat.dev),
+        .device_minor = 0,
+        .inode = @intCast(stat.ino),
+    };
 }
 
 fn cwdAlloc(allocator: std.mem.Allocator) ![]u8 {

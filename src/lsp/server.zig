@@ -703,8 +703,8 @@ const Server = struct {
             };
             break :blk owned_source orelse "";
         };
-        const message = try std.fmt.allocPrint(self.allocator, "ProjectConfigFailed: {s}", .{@errorName(err)});
-        defer self.allocator.free(message);
+        var message_buf: [320]u8 = undefined;
+        const message = project.configErrorMessage(err) orelse utils.err.formatBuildFailure(&message_buf, err);
         try diagnostics.add(path, text, .@"error", @errorName(err), message, project.configErrorSpan(text, err));
     }
 

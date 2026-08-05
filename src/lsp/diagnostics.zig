@@ -105,6 +105,7 @@ pub const DiagnosticSet = struct {
     }
 
     pub fn addConstraintFailure(self: *DiagnosticSet, state: *core.DocumentState, err: anyerror) !void {
+        if (err == error.Canceled) return err;
         if (state.constraint_failures.items.len > 0) {
             try self.addConstraintFailureItem(state, state.constraint_failures.items[0]);
             return;
@@ -114,9 +115,15 @@ pub const DiagnosticSet = struct {
             return;
         }
 
-        const message = try std.fmt.allocPrint(self.allocator, "BuildFailed: {s}", .{@errorName(err)});
-        defer self.allocator.free(message);
-        try self.add(state.projectPath(), state.projectSource(), .@"error", @errorName(err), message, null);
+        var message_buf: [512]u8 = undefined;
+        try self.add(
+            state.projectPath(),
+            state.projectSource(),
+            .@"error",
+            "BuildFailed",
+            utils.err.formatBuildFailure(&message_buf, err),
+            null,
+        );
     }
 
     fn addConstraintFailureItem(self: *DiagnosticSet, state: *core.DocumentState, failure: core.ConstraintFailure) !void {

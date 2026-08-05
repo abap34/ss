@@ -482,13 +482,13 @@ pub const AnalysisSnapshot = struct {
                     try on_error(hook.context, &inputs.state, err);
                     self.layout_output = try LayoutOutput.fromDocumentState(self.allocator, &inputs.state, null, null);
                 } else {
-                    try addBuildDiagnostic(&self.diagnostics, self.project.entry_path, inputs.state.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
+                    try addBuildFailureDiagnostic(&self.diagnostics, self.project.entry_path, inputs.state.projectSource(), err, null);
                 }
             },
             else => {
                 try self.diagnostics.addDocumentStateFrom(&inputs.state, inputs.diagnostic_count);
                 if (!self.diagnostics.hasErrors()) {
-                    try addBuildDiagnostic(&self.diagnostics, self.project.entry_path, inputs.state.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
+                    try addBuildFailureDiagnostic(&self.diagnostics, self.project.entry_path, inputs.state.projectSource(), err, null);
                 }
             },
         }
@@ -513,7 +513,17 @@ pub fn build(
     defer if (layout_output) |*facts| facts.deinit(allocator);
 
     var entry_source = sources.readFileAlloc(entry_path) catch |err| {
-        try addBuildDiagnostic(&diagnostic_bag, entry_path, "", .@"error", "ProjectReadFailed", "ProjectReadFailed: could not read {s}: {s}", .{ entry_path, @errorName(err) }, null);
+        if (err == error.Canceled) return err;
+        var message_buf: [512]u8 = undefined;
+        try diagnostic_bag.add(
+            entry_path,
+            "",
+            .@"error",
+            "ProjectReadFailed",
+            utils.err.formatPathFailure(&message_buf, "ProjectReadFailed", "read project entry", entry_path, err),
+            null,
+            null,
+        );
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     };
     options.checkCanceled() catch |err| {
@@ -546,20 +556,27 @@ pub fn build(
 
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
-    var index = module_index.load(allocator, sources.io, asset_base_dir, program, .{
+    const import_base_dir = std.fs.path.dirname(entry_path) orelse ".";
+    var index = module_index.load(allocator, sources.io, import_base_dir, program, .{
         .overlay = &sources.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
         .recovering = true,
         .embedded_cache = options.embedded_cache,
     }) catch |err| {
+        if (err == error.Canceled) {
+            program.deinit(allocator);
+            parse_holes.deinit(allocator);
+            allocator.free(entry_source);
+            return err;
+        }
         try diagnostic_bag.addSyntaxHoles(entry_path, entry_source, parse_holes);
         try addLoadDiagnostics(&diagnostic_bag, &load_diagnostics);
         if (load_diagnostics.items.items.len != 0) {
-            const span = module_loader.importFailureSpan(allocator, sources.io, asset_base_dir, &program, &sources.overlay, &load_diagnostics);
+            const span = module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics);
             try diagnostic_bag.add(entry_path, entry_source, .@"error", "ImportFailed", "ImportFailed: imported module failed to load", span, null);
         } else if (err == error.UnknownImport) {
-            if (try module_loader.findUnknownImportReport(allocator, sources.io, asset_base_dir, program, &sources.overlay)) |found| {
+            if (try module_loader.findUnknownImportReport(allocator, sources.io, import_base_dir, program, &sources.overlay)) |found| {
                 var report = found;
                 defer report.deinit(allocator);
                 try diagnostic_bag.add(entry_path, entry_source, .@"error", "UnknownImport", report.message, .{
@@ -567,8 +584,19 @@ pub fn build(
                     .end = report.span.end,
                 }, null);
             }
+        } else if (module_loader.isImportReadFailure(err)) {
+            if (try module_loader.findImportReadFailureReport(allocator, sources.io, import_base_dir, program, &sources.overlay, err)) |found| {
+                var report = found;
+                defer report.deinit(allocator);
+                try diagnostic_bag.add(entry_path, entry_source, .@"error", "ImportReadFailed", report.message, .{
+                    .start = report.span.start,
+                    .end = report.span.end,
+                }, null);
+            } else {
+                try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, entry_source, err, null);
+            }
         } else {
-            try addBuildDiagnostic(&diagnostic_bag, entry_path, entry_source, .@"error", @errorName(err), "ProjectLoadFailed: {s}", .{@errorName(err)}, null);
+            try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, entry_source, err, null);
         }
         program.deinit(allocator);
         parse_holes.deinit(allocator);
@@ -587,7 +615,13 @@ pub fn build(
         .allow_diagnostics = true,
         .parse_holes = parse_holes,
     }) catch |err| {
-        try addBuildDiagnostic(&diagnostic_bag, entry_path, entry_source, .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
+        if (err == error.Canceled) {
+            program.deinit(allocator);
+            parse_holes.deinit(allocator);
+            if (entry_source.len != 0) allocator.free(entry_source);
+            return err;
+        }
+        try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, entry_source, err, null);
         program.deinit(allocator);
         parse_holes.deinit(allocator);
         if (entry_source.len != 0) allocator.free(entry_source);
@@ -599,12 +633,21 @@ pub fn build(
     try options.checkCanceled();
 
     const diagnostic_count_before_analysis = state.diagnostics.items.len;
+    var analysis_failed = false;
     var execution_graph = analysis_pipeline.analyzeDocumentStateWithMode(allocator, &state, .evaluation) catch |err| blk: {
-        if (err != error.DiagnosticsFailed and state.diagnostics.items.len == diagnostic_count_before_analysis) return err;
+        if (err == error.Canceled) return err;
+        if (err != error.DiagnosticsFailed and state.diagnostics.items.len == diagnostic_count_before_analysis) {
+            try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), err, null);
+            analysis_failed = true;
+        }
         break :blk null;
     };
     defer if (execution_graph) |*graph| graph.deinit();
     try options.checkCanceled();
+    if (analysis_failed) {
+        try diagnostic_bag.addDocumentStateFrom(&state, 0);
+        return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
+    }
     var fallback_declarations: ?declarations.DeclarationIndex = null;
     defer if (fallback_declarations) |*index_value| index_value.deinit();
     const declaration_index: *const declarations.DeclarationIndex = if (execution_graph) |*graph|
@@ -640,13 +683,13 @@ pub fn build(
                             try on_error(hook.context, &state, err);
                             layout_output = try LayoutOutput.fromDocumentState(allocator, &state, null, null);
                         } else {
-                            try addBuildDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
+                            try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), err, null);
                         }
                     },
                     else => {
                         try diagnostic_bag.addDocumentStateFrom(&state, analyzed_diagnostic_count);
                         if (!diagnostic_bag.hasErrors()) {
-                            try addBuildDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
+                            try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), err, null);
                         }
                     },
                 }
@@ -742,6 +785,26 @@ fn addBuildDiagnostic(
     const message = try std.fmt.allocPrint(bag.allocator, fmt, args);
     defer bag.allocator.free(message);
     try bag.add(path, text, severity, code, message, span, null);
+}
+
+fn addBuildFailureDiagnostic(
+    bag: *diagnostics.DiagnosticBag,
+    path: []const u8,
+    text: []const u8,
+    err: anyerror,
+    span: ?utils.source.ByteSpan,
+) !void {
+    if (err == error.Canceled) return err;
+    var message_buf: [512]u8 = undefined;
+    try bag.add(
+        path,
+        text,
+        .@"error",
+        "BuildFailed",
+        utils.err.formatBuildFailure(&message_buf, err),
+        span,
+        null,
+    );
 }
 
 fn collectModulePaths(allocator: std.mem.Allocator, state: *const core.DocumentState) ![][]u8 {
