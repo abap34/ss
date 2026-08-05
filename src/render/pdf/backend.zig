@@ -14,6 +14,7 @@ pub fn render(
     output: []const u8,
     resources: *const ResourceFiles,
 ) !void {
+    c.ss_pdf_clear_last_error();
     if (page_index >= ir.pages.len) return error.InvalidPageIndex;
     const page = &ir.pages[page_index];
     errdefer deleteFileIfExists(io, output);
@@ -33,7 +34,7 @@ fn renderCairo(
 ) !void {
     const output_z = try allocator.dupeZ(u8, output);
     defer allocator.free(output_z);
-    const pdf = c.ss_pdf_create(output_z.ptr, page.width, page.height) orelse return error.CairoCreateFailed;
+    const pdf = c.ss_pdf_create(output_z.ptr, page.width, page.height) orelse return cairoCreateFailure();
     defer c.ss_pdf_destroy(pdf);
     c.ss_pdf_set_creator(pdf, "ss page Cairo/Pango backend");
     c.ss_pdf_begin_page(pdf, page.width, page.height);
@@ -246,7 +247,7 @@ fn renderNativeLayer(
 ) !void {
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
-    const pdf = c.ss_pdf_create(path_z.ptr, page.width, page.height) orelse return error.CairoCreateFailed;
+    const pdf = c.ss_pdf_create(path_z.ptr, page.width, page.height) orelse return cairoCreateFailure();
     defer c.ss_pdf_destroy(pdf);
     c.ss_pdf_set_creator(pdf, "ss page Cairo/Pango/libqpdf backend");
     c.ss_pdf_begin_page(pdf, page.width, page.height);
@@ -328,7 +329,7 @@ fn replayItem(
         .raster => |value| {
             const path = try resources.resolve(value.resource, .raster);
             if (c.ss_pdf_draw_raster(pdf, path.ptr, value.rect.x, value.rect.y, value.rect.width, value.rect.height) != 0) {
-                return error.ImageDecodeFailed;
+                return imageFailure(pdf);
             }
         },
         .svg => |value| {
@@ -337,7 +338,7 @@ fn replayItem(
                 c.ss_pdf_draw_svg_tinted(pdf, path.ptr, value.rect.x, value.rect.y, value.rect.width, value.rect.height, color.r, color.g, color.b)
             else
                 c.ss_pdf_draw_svg(pdf, path.ptr, value.rect.x, value.rect.y, value.rect.width, value.rect.height);
-            if (result != 0) return error.ImageDecodeFailed;
+            if (result != 0) return imageFailure(pdf);
         },
         .math => |value| try replayMath(allocator, pdf, ir, value, resources),
         .pdf_page => return error.UnsupportedAssetType,
@@ -676,9 +677,23 @@ fn emitAnnotations(pdf: *c.SsPdf, page: *const render_ir.Page) !void {
     }
 }
 
-fn cairoFailure(pdf: *c.SsPdf) error{CairoFailed} {
-    std.log.err("Cairo PDF backend failed: {s}", .{std.mem.span(c.ss_pdf_status_string(pdf))});
-    return error.CairoFailed;
+pub fn lastFailureDetail() ?[]const u8 {
+    const detail = std.mem.span(c.ss_pdf_last_error());
+    return if (detail.len == 0) null else detail;
+}
+
+fn cairoCreateFailure() error{ CairoCreateFailed, CairoWriteFailed } {
+    return if (c.ss_pdf_failure_is_write(null) != 0) error.CairoWriteFailed else error.CairoCreateFailed;
+}
+
+fn cairoFailure(pdf: *c.SsPdf) error{ CairoFailed, CairoWriteFailed } {
+    _ = c.ss_pdf_status_string(pdf);
+    return if (c.ss_pdf_failure_is_write(pdf) != 0) error.CairoWriteFailed else error.CairoFailed;
+}
+
+fn imageFailure(pdf: *c.SsPdf) error{ ImageDecodeFailed, CairoWriteFailed } {
+    _ = c.ss_pdf_status_string(pdf);
+    return if (c.ss_pdf_failure_is_write(pdf) != 0) error.CairoWriteFailed else error.ImageDecodeFailed;
 }
 
 fn layerPath(allocator: Allocator, output: []const u8, index: usize) ![]u8 {
