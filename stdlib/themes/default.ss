@@ -441,7 +441,7 @@ fn theme!(theme_value: Theme) -> Void
 end
 
 fn current_theme() -> Theme
-  return base::current_theme_or(default_theme())
+  return docctx().theme ?? default_theme()
 end
 
 fn annotate!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object

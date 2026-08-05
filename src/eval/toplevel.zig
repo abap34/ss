@@ -598,9 +598,27 @@ fn evalMember(
     current_origin: []const u8,
     member: ast.MemberExpr,
 ) !core.Value {
+    if (borrowLocalValue(env, member.target.*)) |target| {
+        if (target == .record) {
+            const value = target.record.field(member.name) orelse return .{ .none = {} };
+            return try value.clone(state.allocator);
+        }
+    }
     var target = try evalExpr(state, page_id, context, mode, env, functions, closures, current_origin, member.target.*);
     defer target.deinit(state.allocator);
     return evalMemberValue(state, mode, functions, target, member.name);
+}
+
+fn borrowLocalValue(env: *const std.StringHashMap(core.Value), expr: Expr) ?core.Value {
+    return switch (expr) {
+        .ident => |ident| if (env.get(ident.name)) |value| value else null,
+        .member => |member| blk: {
+            const target = borrowLocalValue(env, member.target.*) orelse break :blk null;
+            if (target != .record) break :blk null;
+            break :blk target.record.field(member.name);
+        },
+        else => null,
+    };
 }
 
 fn evalMemberValue(
@@ -677,6 +695,7 @@ fn evalRecord(
     defer deinitValueEnv(state.allocator, &default_env);
     active_module_id = resolved.module_id;
     for (resolved.decl.fields.items) |field| {
+        if (recordDefinesField(record, field.name)) continue;
         const default_expr = field.default_value orelse continue;
         const field_value = try evalExpr(state, page_id, context, mode, &default_env, functions, closures, current_origin, default_expr.*);
         try putRecordFieldValue(state.allocator, &value, field.name, field_value, false);
@@ -688,6 +707,13 @@ fn evalRecord(
         try putRecordFieldValue(state.allocator, &value, field.name, field_value, true);
     }
     return .{ .record = value };
+}
+
+fn recordDefinesField(record: ast.RecordExpr, name: []const u8) bool {
+    for (record.fields.items) |field| {
+        if (std.mem.eql(u8, field.name, name)) return true;
+    }
+    return false;
 }
 
 fn evalRecordDefaults(
@@ -2126,7 +2152,7 @@ fn executeCallStatement(
     active_call_depth += 1;
     defer active_call_depth = previous_call_depth;
 
-    var local_env = try cloneValueEnv(state.allocator, env);
+    var local_env = std.StringHashMap(core.Value).init(state.allocator);
     defer deinitValueEnv(state.allocator, &local_env);
     try bindUserFunctionArgs(state, page_id, context, mode, env, &local_env, functions, closures, resolved.module_id, func, current_origin, call);
     const start_node_count = state.nodeCount();
@@ -2268,7 +2294,7 @@ fn invokeUserFunctionValueInModule(
     active_call_depth += 1;
     defer active_call_depth = previous_call_depth;
 
-    var local_env = try cloneValueEnv(state.allocator, env);
+    var local_env = std.StringHashMap(core.Value).init(state.allocator);
     defer deinitValueEnv(state.allocator, &local_env);
     try bindUserFunctionArgs(state, page_id, context, mode, env, &local_env, functions, closures, module_id, func, current_origin, call);
 
@@ -2309,7 +2335,7 @@ fn invokeUserFunctionValues(
     active_call_depth += 1;
     defer active_call_depth = previous_call_depth;
 
-    var local_env = try cloneValueEnv(state.allocator, env);
+    var local_env = std.StringHashMap(core.Value).init(state.allocator);
     defer deinitValueEnv(state.allocator, &local_env);
     try bindUserFunctionValueArgs(state, page_id, context, mode, env, &local_env, functions, closures, module_id, func, current_origin, args);
 

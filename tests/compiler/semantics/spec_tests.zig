@@ -186,6 +186,24 @@ fn expectObjectContent(source: []const u8, expected: []const u8) !void {
     try compiler_semantics.expectObjectContent(testing.io, allocator, path, source, expected);
 }
 
+fn expectRecordStringDefaultNotEvaluated(source: []const u8, record_name: []const u8, field_name: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectRecordStringDefaultNotEvaluated(
+        testing.io,
+        allocator,
+        path,
+        source,
+        record_name,
+        field_name,
+    );
+}
+
 fn expectFixtureObjectContent(fixture: []const u8, expected: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -1955,6 +1973,82 @@ test "compiler semantics: record update copies nested fields" {
         \\end
         \\
     , "text", &.{"size"}, "20");
+}
+
+test "compiler semantics: explicit record fields override their defaults" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\record Label {
+        \\  text: String = "default"
+        \\}
+        \\
+        \\page ok
+        \\  let label = Label {
+        \\    text = "explicit"
+        \\  }
+        \\  text(label.text)
+        \\end
+        \\
+    ;
+    try expectObjectContent(source, "explicit");
+    try expectRecordStringDefaultNotEvaluated(source, "Label", "text");
+}
+
+test "compiler semantics: function defaults and closures use callee bindings" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\record Inner {
+        \\  size: Number = 20
+        \\}
+        \\
+        \\record LocalTheme {
+        \\  body: Inner = Inner {}
+        \\}
+        \\
+        \\fn choose_theme(first: LocalTheme, second: LocalTheme = first) -> LocalTheme
+        \\  return second
+        \\end
+        \\
+        \\fn make_reader(theme: LocalTheme) -> Number -> Number
+        \\  return (ignored: Number) |-> theme.body.size
+        \\end
+        \\
+        \\page ok
+        \\  let selected = choose_theme(LocalTheme {
+        \\    body = Inner {
+        \\      size = 31
+        \\    }
+        \\  })
+        \\  let read_size = make_reader(selected)
+        \\  text(str(read_size(0)))
+        \\end
+        \\
+    , "31");
+}
+
+test "compiler semantics: nested record member reads preserve their source value" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\record Inner {
+        \\  size: Number = 20
+        \\}
+        \\
+        \\record LocalTheme {
+        \\  body: Inner = Inner {}
+        \\}
+        \\
+        \\page ok
+        \\  let base = LocalTheme {}
+        \\  let changed = base with {
+        \\    body.size = 33
+        \\  }
+        \\  text(str(base.body.size) ++ ":" ++ str(changed.body.size) ++ ":" ++ str(base.body.size))
+        \\end
+        \\
+    , "20:33:20");
 }
 
 test "compiler semantics: record update makes updated style leaves explicit" {
