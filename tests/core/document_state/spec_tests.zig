@@ -457,6 +457,26 @@ test "document state spec: layout results own page diagnostics" {
     try testing.expectEqual(core.DiagnosticPhase.layout, results.pages[0].diagnostics[0].phase);
 }
 
+test "document state spec: identical validation user reports are deduplicated" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    try addValidationUserReport(&state, "path:theme.ss:bytes:10-20", "UnknownRecordField: missing field");
+    try addValidationUserReport(&state, "path:theme.ss:bytes:10-20", "UnknownRecordField: missing field");
+    try addValidationUserReport(&state, "path:theme.ss:bytes:30-40", "UnknownRecordField: missing field");
+    try addValidationUserReport(&state, "path:theme.ss:bytes:10-20", "UnknownRecordField: different field");
+
+    try testing.expectEqual(@as(usize, 4), state.diagnostics.items.len);
+    state.deduplicateValidationUserReports();
+    try testing.expectEqual(@as(usize, 3), state.diagnostics.items.len);
+    try testing.expectEqualStrings("path:theme.ss:bytes:10-20", state.diagnostics.items[0].origin.?);
+    try testing.expectEqualStrings("path:theme.ss:bytes:30-40", state.diagnostics.items[1].origin.?);
+    try testing.expectEqualStrings("path:theme.ss:bytes:10-20", state.diagnostics.items[2].origin.?);
+    try testing.expectEqualStrings("UnknownRecordField: missing field", state.diagnostics.items[0].data.user_report.message);
+    try testing.expectEqualStrings("UnknownRecordField: missing field", state.diagnostics.items[1].data.user_report.message);
+    try testing.expectEqualStrings("UnknownRecordField: different field", state.diagnostics.items[2].data.user_report.message);
+}
+
 test "document state spec: node fields reject duplicate keys" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
@@ -472,6 +492,13 @@ test "document state spec: node fields reject duplicate keys" {
     try testing.expectEqual(@as(usize, 2), node.fields.items.len);
     try testing.expectEqualStrings("red", state.getNodeField(object, "fill").?.string);
     try testing.expectEqualStrings("black", state.getNodeField(object, "stroke").?.string);
+}
+
+fn addValidationUserReport(state: *core.DocumentState, origin: []const u8, message: []const u8) !void {
+    const owned_message = try testing.allocator.dupe(u8, message);
+    try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{ .message = owned_message },
+    });
 }
 
 fn expectDiagnosticCode(state: *core.DocumentState, code: []const u8) !void {

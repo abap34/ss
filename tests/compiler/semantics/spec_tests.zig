@@ -4495,6 +4495,27 @@ test "compiler semantics: page-only primitives are rejected in document context"
     , "case.ss:bytes:", "NoCurrentPage");
 }
 
+test "compiler semantics: missing page relationships have specific diagnostics" {
+    try expectLoweringErrorDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page first
+        \\  prev_page()
+        \\end
+        \\
+    , "NoPreviousPage: the current page is the first page and has no previous page");
+
+    try expectLoweringErrorDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page detached
+        \\  let item = new("detached", "body", "text")
+        \\  page_of(item)
+        \\end
+        \\
+    , "MissingParentPage: the object is not attached to a page; place it before requesting its page");
+}
+
 test "compiler semantics: document callbacks may use explicit pages without current page" {
     try expectObjectContent(
         \\import std:themes/default as *

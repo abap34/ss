@@ -1435,6 +1435,8 @@ test "syntax spec: bare assignment must say let and page dimensions are not targ
         \\end
         \\
     );
+    const diagnostic = syntax.lastParseDiagnostic() orelse return error.MissingParseDiagnostic;
+    try testing.expectEqualStrings("an object anchor as the constraint target", diagnostic.expected.?);
 }
 
 test "syntax spec: grammar keywords are rejected as identifiers" {
