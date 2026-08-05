@@ -178,20 +178,12 @@ fn analyzeDocumentStateSemantics(
 ) !declarations.DeclarationIndex {
     var declaration_index = try declarations.build(allocator, state);
     errdefer declaration_index.deinit();
-    var sema = SemanticEnv.init(state, &declaration_index, &state.functions);
+    const sema = SemanticEnv.init(state, &declaration_index, &state.functions);
 
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.semantics_types, measure_start);
         try semantics.checkTypeDeclarations(allocator, state);
-        try semantics.resolveTypeReferences(allocator, state, &sema);
-        try semantics.resolveEnumCaseExpressionsAndDefaults(allocator, state, &sema);
-        const next_declaration_index = try declarations.build(allocator, state);
-        declaration_index.deinit();
-        declaration_index = next_declaration_index;
-        sema = SemanticEnv.init(state, &declaration_index, &state.functions);
-        try semantics.rebuildConstDeclarations(allocator, state);
-        try semantics.rebuildFunctionDeclarations(allocator, state);
     }
     {
         const measure_start = utils.measure_profile.start();
@@ -578,15 +570,6 @@ pub fn buildDocumentStateWithOptions(
         try semantics.rebuildConstDeclarations(allocator, &state);
         try semantics.rebuildFunctionDeclarations(allocator, &state);
     }
-    const variable_diagnostic_state: ?*core.DocumentState = if (options.allow_diagnostics) null else &state;
-    var variable_infos: ?std.StringHashMap(VariableInfo) = collectVariableInfoFromModule(allocator, &state.functions, state.projectSyntax(), variable_diagnostic_state) catch |err| blk: {
-        if (!options.allow_diagnostics) {
-            printDocumentStateDiagnosticsOrFallback(&state, err);
-            return error.DiagnosticsFailed;
-        }
-        break :blk null;
-    };
-    if (variable_infos) |*infos| infos.deinit();
     try analysis_index.populateDocumentStateAnalysis(allocator, &state);
     return state;
 }
@@ -600,21 +583,6 @@ fn addParseHoleDiagnostics(state: *core.DocumentState, holes: syntax_hole.Result
         const message_text = utils.err.formatParseDiagnostic(&message_buf, diagnostic);
         try state.addValidationDiagnostic(.@"error", null, null, origin, .{
             .user_report = .{ .message = try state.allocator.dupe(u8, message_text) },
-        });
-    }
-}
-
-fn printDocumentStateDiagnosticsOrFallback(state: *core.DocumentState, err: anyerror) void {
-    if (utils.err.hasDocumentStateErrors(state)) {
-        utils.err.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
-    } else {
-        var message_buf: [128]u8 = undefined;
-        utils.err.print(.{
-            .path = state.projectPath(),
-            .source = state.projectSource(),
-            .severity = .@"error",
-            .message = std.fmt.bufPrint(&message_buf, "BuildFailed: {s}", .{@errorName(err)}) catch "BuildFailed: internal analysis failure",
-            .span = null,
         });
     }
 }
