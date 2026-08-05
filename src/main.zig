@@ -531,27 +531,44 @@ fn doctorProject(
 ) !usize {
     std.debug.print("project:\n", .{});
     if (options.input_path == null and options.project_path == null and options.asset_base_dir == null) {
-        var discovered = project.discover(allocator, io, ".") catch |err| {
-            std.debug.print("  fail ss.toml: {s}\n", .{@errorName(err)});
+        const discovered_path = try project.discoverPath(allocator, ".");
+        if (discovered_path == null) {
+            std.debug.print("  warn project configuration: not found from current directory\n", .{});
+            return 1;
+        }
+        defer allocator.free(discovered_path.?);
+        var config = project.loadFile(allocator, io, discovered_path.?) catch |err| {
+            var reason_buf: [256]u8 = undefined;
+            std.debug.print("  fail project configuration {s}: {s}\n", .{
+                discovered_path.?,
+                project.configErrorMessage(err) orelse error_report.formatErrorReason(&reason_buf, err),
+            });
             return 1;
         };
-        if (discovered) |*cfg| {
-            defer cfg.deinit(allocator);
-            highlight_config.* = try cfg.highlight.clone(allocator);
-            return doctorResolvedProject(allocator, cfg.path, cfg.entry, cfg.asset_base_dir);
-        }
-        std.debug.print("  warn ss.toml: not found from current directory\n", .{});
-        return 1;
+        defer config.deinit(allocator);
+        highlight_config.* = try config.highlight.clone(allocator);
+        return doctorResolvedProject(io, config.path, config.entry, config.asset_base_dir);
     }
 
+    const project_config_path = try projectConfigPathForOptions(allocator, .{
+        .input_path = options.input_path,
+        .project_path = options.project_path,
+    });
+    defer if (project_config_path) |path| allocator.free(path);
     var resolved = project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir) catch |err| {
-        std.debug.print("  fail resolve: {s}\n", .{@errorName(err)});
+        var reason_buf: [256]u8 = undefined;
+        const reason = project.configErrorMessage(err) orelse error_report.formatErrorReason(&reason_buf, err);
+        if (project_config_path) |path| {
+            std.debug.print("  fail resolve {s}: {s}\n", .{ path, reason });
+        } else {
+            std.debug.print("  fail resolve: {s}\n", .{reason});
+        }
         return 1;
     };
     defer resolved.deinit(allocator);
     highlight_config.* = try resolved.highlight.clone(allocator);
     return doctorResolvedProject(
-        allocator,
+        io,
         resolved.project_file orelse "(explicit input)",
         resolved.entry_path,
         resolved.asset_base_dir,
@@ -559,7 +576,7 @@ fn doctorProject(
 }
 
 fn doctorResolvedProject(
-    allocator: std.mem.Allocator,
+    io: std.Io,
     project_file: []const u8,
     entry_path: []const u8,
     asset_base_dir: []const u8,
@@ -570,17 +587,34 @@ fn doctorResolvedProject(
     } else {
         std.debug.print("  ok ss.toml: {s}\n", .{project_file});
     }
-    if (utils.fs.fileExists(allocator, entry_path)) {
-        std.debug.print("  ok entry: {s}\n", .{entry_path});
-    } else {
-        std.debug.print("  fail entry: {s} not found\n", .{entry_path});
+    const cwd = std.Io.Dir.cwd();
+    const entry_stat = cwd.statFile(io, entry_path, .{}) catch |err| blk: {
+        var reason_buf: [256]u8 = undefined;
+        std.debug.print("  fail entry: {s}: {s}\n", .{ entry_path, error_report.formatErrorReason(&reason_buf, err) });
         issues += 1;
+        break :blk null;
+    };
+    if (entry_stat) |stat| {
+        if (stat.kind == .directory) {
+            std.debug.print("  fail entry: {s}: expected a file, but found a directory\n", .{entry_path});
+            issues += 1;
+        } else {
+            std.debug.print("  ok entry: {s}\n", .{entry_path});
+        }
     }
-    if (utils.fs.fileExists(allocator, asset_base_dir)) {
-        std.debug.print("  ok asset base: {s}\n", .{asset_base_dir});
-    } else {
-        std.debug.print("  fail asset base: {s} not found\n", .{asset_base_dir});
+    const asset_base_stat = cwd.statFile(io, asset_base_dir, .{}) catch |err| blk: {
+        var reason_buf: [256]u8 = undefined;
+        std.debug.print("  fail asset base: {s}: {s}\n", .{ asset_base_dir, error_report.formatErrorReason(&reason_buf, err) });
         issues += 1;
+        break :blk null;
+    };
+    if (asset_base_stat) |stat| {
+        if (stat.kind != .directory) {
+            std.debug.print("  fail asset base: {s}: expected a directory\n", .{asset_base_dir});
+            issues += 1;
+        } else {
+            std.debug.print("  ok asset base: {s}\n", .{asset_base_dir});
+        }
     }
     return issues;
 }
@@ -692,7 +726,7 @@ fn resolveProjectOrUsage(
     io: std.Io,
     options: CommandOptions,
 ) !project.Resolved {
-    return project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir) catch |err| {
+    var resolved = project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir) catch |err| {
         if (err == error.MissingInputPath) {
             return failUsage("missing input path or --project", .{});
         }
@@ -701,8 +735,153 @@ fn resolveProjectOrUsage(
                 return error.DiagnosticsFailed;
             }
         }
+        if (error_report.isFileSystemError(err)) {
+            if (try printProjectConfigAccessErrorForOptions(allocator, options, err)) {
+                return error.DiagnosticsFailed;
+            }
+        }
         return err;
     };
+    errdefer resolved.deinit(allocator);
+    try validateResolvedEntryPath(allocator, io, options, &resolved);
+    return resolved;
+}
+
+fn printProjectConfigAccessErrorForOptions(
+    allocator: std.mem.Allocator,
+    options: CommandOptions,
+    err: anyerror,
+) !bool {
+    const maybe_config_path = try projectConfigPathForOptions(allocator, options);
+    const config_path = maybe_config_path orelse return false;
+    defer allocator.free(config_path);
+    const message = switch (err) {
+        error.IsDir => try std.fmt.allocPrint(
+            allocator,
+            "ProjectConfigIsDirectory: expected an ss.toml file, but found a directory: {s}",
+            .{config_path},
+        ),
+        error.FileNotFound => try std.fmt.allocPrint(
+            allocator,
+            "ProjectConfigNotFound: project configuration file was not found: {s}",
+            .{config_path},
+        ),
+        else => blk: {
+            if (!error_report.isFileSystemError(err)) return false;
+            var reason_buf: [256]u8 = undefined;
+            break :blk try std.fmt.allocPrint(
+                allocator,
+                "ProjectConfigReadFailed: could not read project configuration '{s}': {s}",
+                .{ config_path, error_report.formatErrorReason(&reason_buf, err) },
+            );
+        },
+    };
+    defer allocator.free(message);
+    error_report.print(.{
+        .path = config_path,
+        .source = "",
+        .severity = .@"error",
+        .message = message,
+        .span = null,
+    });
+    return true;
+}
+
+const EntryPathProblem = enum {
+    not_found,
+    is_directory,
+};
+
+fn validateResolvedEntryPath(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    options: CommandOptions,
+    resolved: *const project.Resolved,
+) !void {
+    const stat = std.Io.Dir.cwd().statFile(io, resolved.entry_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            try printEntryPathDiagnostic(allocator, io, options, resolved, .not_found);
+            return error.DiagnosticsFailed;
+        },
+        else => {
+            if (!error_report.isFileSystemError(err)) return err;
+            var message_buf: [8192]u8 = undefined;
+            const code = if (options.input_path != null) "InputAccessFailed" else "ProjectEntryAccessFailed";
+            const operation = if (options.input_path != null) "inspect input file" else "inspect project entry file";
+            error_report.print(.{
+                .path = resolved.entry_path,
+                .source = "",
+                .severity = .@"error",
+                .message = error_report.formatPathFailure(&message_buf, code, operation, resolved.entry_path, err),
+                .span = null,
+            });
+            return error.DiagnosticsFailed;
+        },
+    };
+    if (stat.kind != .directory) return;
+    try printEntryPathDiagnostic(allocator, io, options, resolved, .is_directory);
+    return error.DiagnosticsFailed;
+}
+
+fn printEntryPathDiagnostic(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    options: CommandOptions,
+    resolved: *const project.Resolved,
+    problem: EntryPathProblem,
+) !void {
+    const explicit_input = options.input_path != null;
+    const message = if (explicit_input)
+        switch (problem) {
+            .not_found => try std.fmt.allocPrint(
+                allocator,
+                "InputNotFound: input file was not found: {s}",
+                .{resolved.entry_path},
+            ),
+            .is_directory => try std.fmt.allocPrint(
+                allocator,
+                "InputIsDirectory: input path is a directory: {s}; use `--project {s}` to load its ss.toml",
+                .{ resolved.entry_path, resolved.entry_path },
+            ),
+        }
+    else switch (problem) {
+        .not_found => try std.fmt.allocPrint(
+            allocator,
+            "ProjectEntryNotFound: project entry file was not found: {s}",
+            .{resolved.entry_path},
+        ),
+        .is_directory => try std.fmt.allocPrint(
+            allocator,
+            "ProjectEntryIsDirectory: project entry must be a file, but found a directory: {s}",
+            .{resolved.entry_path},
+        ),
+    };
+    defer allocator.free(message);
+
+    if (!explicit_input) {
+        if (resolved.project_file) |config_path| {
+            const config_source = utils.fs.readFileAlloc(io, allocator, config_path) catch null;
+            if (config_source) |source_text| {
+                defer allocator.free(source_text);
+                error_report.print(.{
+                    .path = config_path,
+                    .source = source_text,
+                    .severity = .@"error",
+                    .message = message,
+                    .span = project.tomlKeySpan(source_text, "project", "entry"),
+                });
+                return;
+            }
+        }
+    }
+
+    error_report.print(.{
+        .path = resolved.entry_path,
+        .source = "",
+        .severity = .@"error",
+        .message = message,
+        .span = null,
+    });
 }
 
 fn printProjectConfigErrorForOptions(
@@ -716,8 +895,7 @@ fn printProjectConfigErrorForOptions(
     defer allocator.free(config_path);
     const source = utils.fs.readFileAlloc(io, allocator, config_path) catch return false;
     defer allocator.free(source);
-    const message = try std.fmt.allocPrint(allocator, "ProjectConfigFailed: {s}", .{@errorName(err)});
-    defer allocator.free(message);
+    const message = project.configErrorMessage(err) orelse return false;
     error_report.print(.{
         .path = config_path,
         .source = source,
@@ -751,11 +929,16 @@ fn runWatchCommand(
     options: CommandOptions,
 ) !void {
     var resolved = project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir) catch |err| {
-        if (project.isConfigError(err)) {
+        if (watchRecoverableProjectError(options, err)) {
+            try printWatchProjectError(io, allocator, options, err);
             try waitForWatchProject(io, allocator, mode, options, err);
             return;
         }
         if (err == error.MissingInputPath) return failUsage("missing input path or --project", .{});
+        if (error_report.isFileSystemError(err)) {
+            try printWatchProjectError(io, allocator, options, err);
+            return error.DiagnosticsFailed;
+        }
         return err;
     };
     defer resolved.deinit(allocator);
@@ -771,7 +954,7 @@ fn waitForWatchProject(
     first_error: anyerror,
 ) !void {
     const interval_ms = @max(options.interval_ms, 50);
-    std.debug.print("watch: ss.toml is invalid: {s}; waiting every {d}ms\n", .{ @errorName(first_error), interval_ms });
+    std.debug.print("watch: project configuration is unavailable: {s}; waiting every {d}ms\n", .{ project.configErrorMessage(first_error) orelse "project configuration could not be loaded", interval_ms });
     var last_error = first_error;
     while (true) {
         const sleep_ms: i64 = @intCast(@min(interval_ms, @as(u64, std.math.maxInt(i64))));
@@ -780,26 +963,70 @@ fn waitForWatchProject(
         var resolved = project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir) catch |err| {
             if (watchRecoverableProjectError(options, err)) {
                 if (err != last_error) {
-                    std.debug.print("watch: still waiting for ss.toml: {s}\n", .{@errorName(err)});
+                    try printWatchProjectError(io, allocator, options, err);
+                    std.debug.print("watch: project configuration is still unavailable: {s}\n", .{project.configErrorMessage(err) orelse "project configuration could not be loaded"});
                     last_error = err;
                 }
                 continue;
             }
             if (err == error.MissingInputPath) return failUsage("missing input path or --project", .{});
+            if (error_report.isFileSystemError(err)) {
+                try printWatchProjectError(io, allocator, options, err);
+                return error.DiagnosticsFailed;
+            }
             return err;
         };
         defer resolved.deinit(allocator);
-        std.debug.print("watch: ss.toml is valid\n", .{});
+        std.debug.print("watch: project configuration is valid\n", .{});
         applyDiagnosticOptions(options, &resolved);
         try runResolvedWatch(io, allocator, mode, options, &resolved);
         return;
     }
 }
 
+fn printWatchProjectError(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    options: CommandOptions,
+    err: anyerror,
+) !void {
+    if (project.isConfigError(err)) {
+        if (try printProjectConfigErrorForOptions(allocator, io, options, err)) return;
+        const maybe_config_path = try projectConfigPathForOptions(allocator, options);
+        if (maybe_config_path) |config_path| {
+            defer allocator.free(config_path);
+            error_report.print(.{
+                .path = config_path,
+                .source = "",
+                .severity = .@"error",
+                .message = project.configErrorMessage(err) orelse "ProjectConfigInvalid: ss.toml is invalid; fix the reported configuration and save the file to resume watching",
+                .span = null,
+            });
+        }
+        return;
+    }
+    if (error_report.isFileSystemError(err)) {
+        if (try printProjectConfigAccessErrorForOptions(allocator, options, err)) return;
+    }
+    if (err == error.MissingInputPath) {
+        const current_dir = try project.absolutePath(allocator, ".");
+        defer allocator.free(current_dir);
+        const expected_config = try std.fs.path.join(allocator, &.{ current_dir, "ss.toml" });
+        defer allocator.free(expected_config);
+        error_report.print(.{
+            .path = expected_config,
+            .source = "",
+            .severity = .@"error",
+            .message = "WatchInputUnavailable: no input file was given and no ss.toml was found; pass an input file or --project, or create ss.toml to resume watching",
+            .span = null,
+        });
+    }
+}
+
 fn watchRecoverableProjectError(options: CommandOptions, err: anyerror) bool {
     return project.isConfigError(err) or
         (options.input_path == null and err == error.MissingInputPath) or
-        (options.project_path != null and err == error.FileNotFound);
+        (options.project_path != null and error_report.isFileSystemError(err));
 }
 
 fn runResolvedWatch(
@@ -818,6 +1045,9 @@ fn runResolvedWatch(
     else
         options.output_path;
     if (output_path) |path| try validateOutputParentOrCliError(io, path);
+    if (mode == .render) {
+        if (output_path) |path| try validateOutputPathConflicts(io, allocator, resolved, &.{.{ .path = path, .option = "--output" }});
+    }
     try watcher.run(io, allocator, mode, .{
         .input_path = resolved.entry_path,
         .output_path = output_path,
@@ -859,6 +1089,7 @@ fn runDebugCommand(
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         applyDiagnosticOptions(options, &resolved);
+        try validateOutputPathConflicts(io, allocator, &resolved, &.{.{ .path = output_path, .option = "--output" }});
         var progress = commandProgress(5, options);
         try app.writeScheduleTraceJson(io, allocator, .{
             .input_path = resolved.entry_path,
@@ -878,6 +1109,7 @@ fn runDebugCommand(
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         applyDiagnosticOptions(options, &resolved);
+        try validateOutputPathConflicts(io, allocator, &resolved, &.{.{ .path = output_path, .option = "--output" }});
 
         if (std.mem.eql(u8, layout_topic, "trace")) {
             var progress = commandProgress(6, options);
@@ -913,8 +1145,69 @@ fn validateOutputParentOrCliError(io: std.Io, output_path: []const u8) !void {
             const parent = std.fs.path.dirname(output_path) orelse ".";
             return failCli("output parent path is not a directory: {s}", .{parent});
         },
-        else => return err,
+        else => {
+            if (!error_report.isFileSystemError(err)) return err;
+            var message_buf: [8192]u8 = undefined;
+            const parent = std.fs.path.dirname(output_path) orelse ".";
+            return failCli("{s}", .{error_report.formatPathFailure(&message_buf, "OutputPathAccessFailed", "inspect output parent", parent, err)});
+        },
     };
+    const output_stat = std.Io.Dir.cwd().statFile(io, output_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => {
+            if (!error_report.isFileSystemError(err)) return err;
+            var message_buf: [8192]u8 = undefined;
+            return failCli("{s}", .{error_report.formatPathFailure(&message_buf, "OutputPathAccessFailed", "inspect output path", output_path, err)});
+        },
+    };
+    if (output_stat.kind == .directory) {
+        return failCli("output path is a directory: {s}", .{output_path});
+    }
+}
+
+const OutputTarget = struct {
+    path: []const u8,
+    option: []const u8,
+};
+
+fn validateOutputPathConflicts(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    resolved: *const project.Resolved,
+    outputs: []const OutputTarget,
+) !void {
+    for (outputs) |output| {
+        if (try project.pathsReferToSameFile(allocator, io, output.path, resolved.entry_path)) {
+            const absolute = try project.absolutePath(allocator, output.path);
+            defer allocator.free(absolute);
+            return failCli(
+                "OutputPathConflictsWithInput: {s} resolves to the input file '{s}'; choose a different output path",
+                .{ output.option, absolute },
+            );
+        }
+        if (resolved.project_file) |project_file| {
+            if (try project.pathsReferToSameFile(allocator, io, output.path, project_file)) {
+                const absolute = try project.absolutePath(allocator, output.path);
+                defer allocator.free(absolute);
+                return failCli(
+                    "OutputPathConflictsWithProject: {s} resolves to project configuration '{s}'; choose a different output path",
+                    .{ output.option, absolute },
+                );
+            }
+        }
+    }
+
+    for (outputs, 0..) |left, left_index| {
+        for (outputs[left_index + 1 ..]) |right| {
+            if (!try project.pathsReferToSameFile(allocator, io, left.path, right.path)) continue;
+            const absolute = try project.absolutePath(allocator, left.path);
+            defer allocator.free(absolute);
+            return failCli(
+                "OutputPathsConflict: {s} and {s} resolve to the same file '{s}'; choose different output paths",
+                .{ left.option, right.option, absolute },
+            );
+        }
+    }
 }
 
 fn runCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
@@ -1070,6 +1363,7 @@ fn run(init: std.process.Init) !void {
         applyDiagnosticOptions(options, &resolved);
         if (options.output_path) |output_path| {
             try validateOutputParentOrCliError(io, output_path);
+            try validateOutputPathConflicts(io, allocator, &resolved, &.{.{ .path = output_path, .option = "--output" }});
             var progress = commandProgress(7, options);
             try app.writeContextJson(io, allocator, .{
                 .input_path = resolved.entry_path,
@@ -1106,6 +1400,12 @@ fn run(init: std.process.Init) !void {
         );
         try validateOutputParentOrCliError(io, output_path);
         if (options.diagnostics_json_path) |diagnostics_json_path| try validateOutputParentOrCliError(io, diagnostics_json_path);
+        var output_targets = [_]OutputTarget{
+            .{ .path = output_path, .option = "--output" },
+            .{ .path = options.diagnostics_json_path orelse output_path, .option = "--diagnostics-json" },
+        };
+        const output_target_count: usize = if (options.diagnostics_json_path == null) 1 else 2;
+        try validateOutputPathConflicts(io, allocator, &resolved, output_targets[0..output_target_count]);
         var progress = commandProgress(app.render_progress_steps, options);
         const render_options = app.RenderOptions{
             .jobs = options.jobs,
@@ -1213,7 +1513,7 @@ fn run(init: std.process.Init) !void {
 
 pub fn main(init: std.process.Init) void {
     run(init) catch |err| {
-        if (!error_report.isExpectedCliError(err)) std.debug.print("error: {s}\n", .{@errorName(err)});
+        if (!error_report.isExpectedCliError(err)) error_report.printUnexpectedCliError(err);
         utils.measure_profile.printIfEnabled();
         std.process.exit(1);
     };
