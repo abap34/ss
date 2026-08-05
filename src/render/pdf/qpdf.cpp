@@ -22,8 +22,13 @@
 static thread_local std::string ss_qpdf_error;
 
 struct SsQpdfDocument {
-    explicit SsQpdfDocument(char const* path, bool suppress_warnings = false) {
+    explicit SsQpdfDocument(
+        char const* path,
+        bool suppress_warnings = false,
+        bool attempt_recovery = true
+    ) {
         if (suppress_warnings) pdf.setSuppressWarnings(true);
+        pdf.setAttemptRecovery(attempt_recovery);
         pdf.processFile(path);
         QPDFPageDocumentHelper page_document(pdf);
         pages = page_document.getAllPages();
@@ -32,10 +37,12 @@ struct SsQpdfDocument {
     explicit SsQpdfDocument(
         unsigned char const* bytes,
         size_t length,
-        bool suppress_warnings = false
+        bool suppress_warnings = false,
+        bool attempt_recovery = true
     ) {
         if (bytes == nullptr || length == 0) throw std::runtime_error("empty PDF input");
         if (suppress_warnings) pdf.setSuppressWarnings(true);
+        pdf.setAttemptRecovery(attempt_recovery);
         pdf.processMemoryFile(
             "embedded PDF resource",
             reinterpret_cast<char const*>(bytes),
@@ -93,6 +100,26 @@ static std::string ss_qpdf_real(double value) {
 
 extern "C" char const* ss_qpdf_version_string(void) {
     return QPDF::QPDFVersion().c_str();
+}
+
+extern "C" int ss_qpdf_validate(char const* path, size_t expected_page_count, int strict) {
+    ss_qpdf_error.clear();
+    try {
+        if (path == nullptr) throw std::runtime_error("null PDF input path");
+        SsQpdfDocument source(path, true, strict == 0);
+        if (source.pages.size() != expected_page_count) {
+            throw std::runtime_error("PDF page count does not match the expected value");
+        }
+        if (strict != 0 && source.pdf.anyWarnings()) {
+            throw std::runtime_error("PDF validation produced warnings");
+        }
+        return 0;
+    } catch (std::exception const& error) {
+        ss_qpdf_error = error.what();
+    } catch (...) {
+        ss_qpdf_error = "libqpdf failed with an unknown exception";
+    }
+    return 1;
 }
 
 static QPDFObjectHandle ss_qpdf_page_box(QPDFPageObjectHelper& page, int box) {

@@ -368,6 +368,7 @@ int ss_pdf_draw_svg_tinted(SsPdf *pdf, const char *path, double x, double y, dou
 #endif
 
 SS_QPDF_BRIDGE_API const char *ss_qpdf_version_string(void);
+SS_QPDF_BRIDGE_API int ss_qpdf_validate(const char *path, size_t expected_page_count, int strict);
 SS_QPDF_BRIDGE_API int ss_qpdf_merge(const char *output, const char *const *inputs, size_t input_count, int single_page_inputs);
 SS_QPDF_BRIDGE_API int ss_qpdf_empty(const char *output);
 SS_QPDF_BRIDGE_API int ss_qpdf_page_size(const char *path, size_t page_index, int box, double *width, double *height);

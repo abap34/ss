@@ -83,6 +83,38 @@ fn expectDeterministicDocumentId(io: std.Io, pdf_path: []const u8) !void {
     try testing.expect(std.mem.indexOf(u8, bytes, "31415926535897932384626433832795") == null);
 }
 
+fn firstPdfPath(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    directory: []const u8,
+) ![]u8 {
+    var dir = try std.Io.Dir.cwd().openDir(io, directory, .{ .iterate = true });
+    defer dir.close(io);
+    var iterator = dir.iterate();
+    while (try iterator.next(io)) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".pdf")) {
+            return try std.fs.path.join(allocator, &.{ directory, entry.name });
+        }
+    }
+    return error.ExpectedCachedPdfMissing;
+}
+
+fn corruptFileWithoutChangingSize(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    path: []const u8,
+) !void {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
+    defer allocator.free(bytes);
+    if (bytes.len < 16) return error.ExpectedCachedPdfMissing;
+    bytes[bytes.len / 2] ^= 0xff;
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = path,
+        .data = bytes,
+        .flags = .{ .truncate = true },
+    });
+}
+
 fn expectUriLinkRect(json: []const u8, uri: []const u8, expected: [4]f64) !void {
     var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
     defer parsed.deinit();
@@ -505,7 +537,7 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
     try expectFileMissing(testing.io, second_layer_path);
 }
 
-test "render PDF spec: document renderer publishes and reuses content-addressed output" {
+test "render PDF spec: document renderer publishes, verifies, and reuses content-addressed output" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const allocator = testing.allocator;
@@ -562,10 +594,28 @@ test "render PDF spec: document renderer publishes and reuses content-addressed 
     ir.resources = text_catalogs.resources;
     ir.fonts = text_catalogs.fonts;
 
-    try pdf_document.write(allocator, testing.io, &ir, first_path, .{ .cache_dir = cache }, null);
-    try pdf_document.write(allocator, testing.io, &ir, second_path, .{ .cache_dir = cache }, null);
+    try pdf_document.write(allocator, testing.io, &ir, first_path, .{ .jobs = 1, .cache_dir = cache }, null);
     const first = try std.Io.Dir.cwd().readFileAlloc(testing.io, first_path, allocator, .unlimited);
     defer allocator.free(first);
+    const first_path_z = try allocator.dupeZ(u8, first_path);
+    defer allocator.free(first_path_z);
+    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_validate(first_path_z.ptr, 2, 1));
+    try testing.expect(c.ss_qpdf_validate(first_path_z.ptr, 1, 1) != 0);
+
+    const cache_root = try std.fs.path.join(allocator, &.{ cache, pdf_document.cache_version });
+    defer allocator.free(cache_root);
+    const document_directory = try std.fs.path.join(allocator, &.{ cache_root, "documents" });
+    defer allocator.free(document_directory);
+    const page_directory = try std.fs.path.join(allocator, &.{ cache_root, "pages" });
+    defer allocator.free(page_directory);
+    const cached_document = try firstPdfPath(allocator, testing.io, document_directory);
+    defer allocator.free(cached_document);
+    const cached_page = try firstPdfPath(allocator, testing.io, page_directory);
+    defer allocator.free(cached_page);
+    try corruptFileWithoutChangingSize(allocator, testing.io, cached_document);
+    try corruptFileWithoutChangingSize(allocator, testing.io, cached_page);
+
+    try pdf_document.write(allocator, testing.io, &ir, second_path, .{ .jobs = 8, .cache_dir = cache }, null);
     const second = try std.Io.Dir.cwd().readFileAlloc(testing.io, second_path, allocator, .unlimited);
     defer allocator.free(second);
     try testing.expectEqualSlices(u8, first, second);
@@ -574,6 +624,45 @@ test "render PDF spec: document renderer publishes and reuses content-addressed 
         try expectContains(text, "first cached page");
         try expectContains(text, "second cached page");
     }
+}
+
+test "render PDF spec: manifest fingerprint workers handle empty and single-page documents" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    defer allocator.free(root);
+    const cache = try std.fs.path.join(allocator, &.{ root, "render-cache" });
+    defer allocator.free(cache);
+    const empty_path = try std.fs.path.join(allocator, &.{ root, "empty.pdf" });
+    defer allocator.free(empty_path);
+    const single_path = try std.fs.path.join(allocator, &.{ root, "single.pdf" });
+    defer allocator.free(single_path);
+
+    var empty_semantics = try documentSemantics(allocator, 0);
+    defer empty_semantics.deinit(allocator);
+    const empty_ir = render.Ir{ .semantics = empty_semantics, .pages = &.{} };
+    try pdf_document.write(allocator, testing.io, &empty_ir, empty_path, .{ .jobs = 32, .cache_dir = cache }, null);
+
+    var pages = [_]render.Page{.{
+        .page_id = 1,
+        .index = 0,
+        .width = 320,
+        .height = 180,
+    }};
+    defer pages[0].deinit(allocator);
+    var single_semantics = try documentSemantics(allocator, pages.len);
+    defer single_semantics.deinit(allocator);
+    const single_ir = render.Ir{ .semantics = single_semantics, .pages = &pages };
+    try pdf_document.write(allocator, testing.io, &single_ir, single_path, .{ .jobs = 32, .cache_dir = cache }, null);
+
+    const single_path_z = try allocator.dupeZ(u8, single_path);
+    defer allocator.free(single_path_z);
+    var width: f64 = 0;
+    var height: f64 = 0;
+    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_page_size(single_path_z.ptr, 0, 1, &width, &height));
+    try testing.expectApproxEqAbs(@as(f64, 320), width, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 180), height, 0.001);
 }
 
 test "render PDF spec: raster shim decodes and draws without a converted PNG" {
