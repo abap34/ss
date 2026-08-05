@@ -1,5 +1,6 @@
 const std = @import("std");
 const render = @import("render");
+const utils = @import("utils");
 
 const document = @import("html/document.zig");
 const embedded_runtime = @import("html/embedded_runtime.zig");
@@ -116,20 +117,63 @@ pub fn prepareFragment(
     return .{ .html = shared.html, .css = shared.css, .assets = assets, .shared_text = shared };
 }
 
+pub const WriteFailureKind = enum {
+    materialization,
+    output,
+};
+
+pub const WriteFailure = struct {
+    kind: WriteFailureKind = .materialization,
+    operation: []const u8 = "prepare HTML document",
+    cause: ?anyerror = null,
+
+    fn record(self: *WriteFailure, kind: WriteFailureKind, operation: []const u8, cause: anyerror) void {
+        if (self.cause != null) return;
+        self.kind = kind;
+        self.operation = operation;
+        self.cause = cause;
+    }
+};
+
 pub fn write(
     allocator: std.mem.Allocator,
     io: std.Io,
     ir: *const render.Ir,
     output_path: []const u8,
 ) !void {
-    try ir.validate();
-    var assets = try resources.collect(allocator, ir, null);
+    return writeWithFailure(allocator, io, ir, output_path, null);
+}
+
+pub fn writeWithFailure(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    ir: *const render.Ir,
+    output_path: []const u8,
+    failure: ?*WriteFailure,
+) !void {
+    ir.validate() catch |err| {
+        recordWriteFailure(failure, .materialization, "validate HTML render input", err);
+        return err;
+    };
+    var assets = resources.collect(allocator, ir, null) catch |err| {
+        recordWriteFailure(failure, .materialization, "collect HTML resources", err);
+        return err;
+    };
     defer assets.deinit(allocator);
-    try assets.prepareEmbeddedResources(allocator);
+    assets.prepareEmbeddedResources(allocator) catch |err| {
+        recordWriteFailure(failure, .materialization, "embed HTML resources", err);
+        return err;
+    };
     const references = resources.References{ .set = &assets, .mode = .embedded };
-    const style_sheet = try document.styleSheet(allocator, ir, references, true);
+    const style_sheet = document.styleSheet(allocator, ir, references, true) catch |err| {
+        recordWriteFailure(failure, .materialization, "generate HTML style sheet", err);
+        return err;
+    };
     defer allocator.free(style_sheet);
-    const style_sheet_url = try resources.dataUrl(allocator, "text/css;charset=utf-8", style_sheet);
+    const style_sheet_url = resources.dataUrl(allocator, "text/css;charset=utf-8", style_sheet) catch |err| {
+        recordWriteFailure(failure, .materialization, "embed HTML style sheet", err);
+        return err;
+    };
     defer allocator.free(style_sheet_url);
 
     const pdf: ?document.PdfRuntime = if (references.hasPdf()) pdf_runtime.documentRuntime() else null;
@@ -142,16 +186,39 @@ pub fn write(
 
     const cwd = std.Io.Dir.cwd();
     var atomic = cwd.createFileAtomic(io, output_path, .{ .replace = true }) catch |err| switch (err) {
-        error.NotDir => return error.OutputPathNotFile,
-        else => return err,
+        else => {
+            recordWriteFailure(failure, if (utils.err.isFileSystemError(err)) .output else .materialization, "create HTML output file", err);
+            return err;
+        },
     };
     defer atomic.deinit(io);
     var buffer: [64 * 1024]u8 = undefined;
     var writer = atomic.file.writerStreaming(io, &buffer);
-    try document.write(allocator, &writer.interface, ir, references, style_sheet_url, runtime);
-    try writer.interface.flush();
-    atomic.replace(io) catch |err| switch (err) {
-        error.IsDir, error.NotDir, error.DirNotEmpty => return error.OutputPathNotFile,
-        else => return err,
+    document.write(allocator, &writer.interface, ir, references, style_sheet_url, runtime) catch |err| {
+        recordWriteFailure(
+            failure,
+            if (utils.err.isFileSystemError(err)) .output else .materialization,
+            if (utils.err.isFileSystemError(err)) "write HTML output" else "generate HTML document",
+            err,
+        );
+        return err;
     };
+    writer.interface.flush() catch |err| {
+        recordWriteFailure(failure, .output, "flush HTML output", err);
+        return err;
+    };
+    atomic.replace(io) catch |err| switch (err) {
+        error.IsDir, error.DirNotEmpty => {
+            recordWriteFailure(failure, .output, "publish HTML output", error.OutputPathNotFile);
+            return error.OutputPathNotFile;
+        },
+        else => {
+            recordWriteFailure(failure, if (utils.err.isFileSystemError(err)) .output else .materialization, "publish HTML output", err);
+            return err;
+        },
+    };
+}
+
+fn recordWriteFailure(failure: ?*WriteFailure, kind: WriteFailureKind, operation: []const u8, cause: anyerror) void {
+    if (failure) |value| value.record(kind, operation, cause);
 }
