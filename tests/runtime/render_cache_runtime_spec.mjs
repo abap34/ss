@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
 
 await testRenderCacheGenerations();
+await testRenderManifestFallbacks();
+await testDeltaRejectsInternalLinkChanges();
 await testMeasurementCacheIsReused();
 await testRenderCompilationReusesTextShapes();
 await testRenderCachePruneIntervalSkipsFreshStamp();
@@ -32,25 +34,113 @@ async function testRenderCacheGenerations() {
     const firstDocuments = await pdfFiles(path.join(contentCache, "documents"));
     assert(firstDocuments.length === 1, `expected one cached document PDF, got ${firstDocuments.length}`);
     await assertPdfFile(path.join(contentCache, "documents", firstDocuments[0]), "first render should cache the assembled PDF");
+    const firstDocumentStats = await fileStats(path.join(contentCache, "documents"), firstDocuments);
+    const manifests = (await readdir(path.join(contentCache, "output-manifests"))).filter((name) => name.endsWith(".manifest"));
+    assert(manifests.length === 1, `expected one output manifest, got ${manifests.length}`);
+    const manifestPath = path.join(contentCache, "output-manifests", manifests[0]);
+    const firstManifest = await readFile(manifestPath, "utf8");
+    assert(firstManifest.startsWith("ss-pdf-output-manifest-v2\n"), "output manifest omitted its cache version");
+    assert(firstManifest.includes("\nassembly\tfull\n"), `initial render did not record full assembly:\n${firstManifest}`);
+    assert(firstManifest.includes("\npages\t18\n"), "output manifest omitted the page count");
 
     const secondPagesSource = [...firstPagesSource];
     secondPagesSource[7] = "Changed page 8";
     const secondSource = deckSource(secondPagesSource);
     await writeFile(slide, secondSource, "utf8");
-    const secondRun = await runSs(["render", "slide.ss", "out-2.pdf"], project);
+    await writeFile(path.join(project, "out-1.pdf"), "untrusted output must not be used as the replacement base", "utf8");
+    const secondRun = await runSs(["render", "slide.ss", "out-1.pdf"], project);
     assert(secondRun.stderr.includes("pages 17/18"), `rerender did not report mixed page cache hits and misses:\n${secondRun.stderr}`);
+    await assertPdfFile(path.join(project, "out-1.pdf"), "replacement render should overwrite an untrusted output from the immutable cache");
 
     const secondPages = await pdfFiles(path.join(contentCache, "pages"));
     assertAddedFiles(firstPages, secondPages, 1, "changing one page should add exactly one page cache entry");
     const secondDocuments = await pdfFiles(path.join(contentCache, "documents"));
     assertAddedFiles(firstDocuments, secondDocuments, 1, "changing one page should add exactly one document cache entry");
+    assertFileSetUnchanged(firstDocumentStats, await fileStats(path.join(contentCache, "documents"), firstDocuments), "page replacement modified the immutable base document");
+    const secondManifest = await readFile(manifestPath, "utf8");
+    assert(secondManifest !== firstManifest, "one-page change did not update the output manifest");
+    assert(secondManifest.includes("\nassembly\tdelta\n"), `one-page change did not use delta assembly:\n${secondManifest}`);
 
     const pageStats = await fileStats(path.join(contentCache, "pages"), secondPages);
     const documentStats = await fileStats(path.join(contentCache, "documents"), secondDocuments);
-    const thirdRun = await runSs(["render", "slide.ss", "out-3.pdf"], project);
+    const thirdRun = await runSs(["render", "slide.ss", "out-1.pdf"], project);
     assert(thirdRun.stderr.includes("pages 18/18"), `identical rerender did not report a full document cache hit:\n${thirdRun.stderr}`);
+    const thirdManifest = await readFile(manifestPath, "utf8");
+    assert(thirdManifest.includes("\nassembly\tdocument-cache\n"), `identical rerender did not record a document cache hit:\n${thirdManifest}`);
     assertFileSetUnchanged(pageStats, await fileStats(path.join(contentCache, "pages"), await pdfFiles(path.join(contentCache, "pages"))), "identical rerender changed page cache entries");
     assertFileSetUnchanged(documentStats, await fileStats(path.join(contentCache, "documents"), await pdfFiles(path.join(contentCache, "documents"))), "identical rerender changed document cache entries");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testRenderManifestFallbacks() {
+  const project = await mkdtempProject("ss-render-manifest-fallback-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    const output = path.join(project, "out.pdf");
+    const cacheRoot = path.join(project, ".ss-cache", "render", "ss-pdf-render-ir-v1");
+    await writeFile(slide, deckSource(["First", "Second", "Third", "Fourth"]), "utf8");
+    await runSs(["render", "slide.ss", output], project);
+    const manifestDir = path.join(cacheRoot, "output-manifests");
+    const manifestNames = (await readdir(manifestDir)).filter((name) => name.endsWith(".manifest"));
+    assert(manifestNames.length === 1, `expected one fallback-test manifest, got ${manifestNames.length}`);
+    const manifest = path.join(manifestDir, manifestNames[0]);
+
+    await rm(manifest);
+    await writeFile(slide, deckSource(["First missing", "Second", "Third", "Fourth"]), "utf8");
+    await runSs(["render", "slide.ss", output], project);
+    await assertPdfFile(output, "render should fall back when the output manifest is missing");
+
+    await writeFile(manifest, "corrupt manifest\n", "utf8");
+    await writeFile(slide, deckSource(["First corrupt", "Second", "Third", "Fourth"]), "utf8");
+    await runSs(["render", "slide.ss", output], project);
+    await assertPdfFile(output, "render should fall back when the output manifest is corrupt");
+
+    const currentManifest = await readFile(manifest, "utf8");
+    const documentDigest = currentManifest.match(/\ndocument\t([0-9a-f]{64})\n/)?.[1];
+    assert(documentDigest, `output manifest omitted the document digest:\n${currentManifest}`);
+    await rm(path.join(cacheRoot, "documents", `${documentDigest}.pdf`));
+    await writeFile(slide, deckSource(["First base missing", "Second", "Third", "Fourth"]), "utf8");
+    await runSs(["render", "slide.ss", output], project);
+    await assertPdfFile(output, "render should fall back when the immutable base document is missing");
+
+    await writeFile(slide, deckSource(["First base missing", "Second", "Third", "Fourth", "Fifth"]), "utf8");
+    await runSs(["render", "slide.ss", output], project);
+    await assertPdfFile(output, "render should fall back when the page count changes");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testDeltaRejectsInternalLinkChanges() {
+  const project = await mkdtempProject("ss-render-internal-link-delta-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    const output = path.join(project, "out.pdf");
+    await writeFile(slide, internalLinkDeckSource("Target", "Jump"), "utf8");
+    await runSs(["render", "slide.ss", output], project);
+
+    const manifestDir = path.join(project, ".ss-cache", "render", "ss-pdf-render-ir-v1", "output-manifests");
+    const manifestNames = (await readdir(manifestDir)).filter((name) => name.endsWith(".manifest"));
+    assert(manifestNames.length === 1, `expected one internal-link manifest, got ${manifestNames.length}`);
+    const manifest = path.join(manifestDir, manifestNames[0]);
+
+    await writeFile(slide, internalLinkDeckSource("Target", "Changed jump"), "utf8");
+    await runSs(["render", "slide.ss", output], project);
+    const changedLinkManifest = await readFile(manifest, "utf8");
+    assert(
+      changedLinkManifest.includes("\nassembly\tfull\n"),
+      `changing a destination link unexpectedly used delta assembly:\n${changedLinkManifest}`,
+    );
+
+    await writeFile(slide, internalLinkDeckSource("Changed target", "Changed jump"), "utf8");
+    await runSs(["render", "slide.ss", output], project);
+    const changedDestinationManifest = await readFile(manifest, "utf8");
+    assert(
+      changedDestinationManifest.includes("\nassembly\tfull\n"),
+      `changing a destination definition unexpectedly used delta assembly:\n${changedDestinationManifest}`,
+    );
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -174,6 +264,23 @@ text!("${text}")
 end`,
   )
   .join("\n\n")}
+`;
+}
+
+function internalLinkDeckSource(targetText, linkText) {
+  return `import std:themes/default as *
+
+page target
+let target = txt_obj("${targetText}", "body")
+target.link_id = "target"
+place!(target)
+end
+
+page link
+text! <<
+[${linkText}](#target)
+>>
+end
 `;
 }
 

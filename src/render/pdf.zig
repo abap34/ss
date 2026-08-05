@@ -10,6 +10,8 @@ pub const cache_version = "ss-pdf-render-ir-v1";
 const output_manifest_version = "ss-pdf-output-manifest-v2";
 const document_digest_version = "ss-pdf-document-pages-v2";
 const cache_seal_version = "ss-pdf-cache-seal-v1";
+const output_manifest_read_limit = 2 * 1024 * 1024;
+const max_replacement_pages = 8;
 const cache_checksum_size = std.crypto.hash.sha2.Sha256.digest_length;
 
 const AssemblyKind = enum {
@@ -43,6 +45,24 @@ const OutputManifest = struct {
     fn deinit(self: *OutputManifest, allocator: Allocator) void {
         allocator.free(self.pages);
         self.* = undefined;
+    }
+};
+
+const ReplacementPlan = struct {
+    previous: OutputManifest,
+    changed: []usize,
+    base_path: []u8,
+
+    fn deinit(self: *ReplacementPlan, allocator: Allocator) void {
+        self.previous.deinit(allocator);
+        allocator.free(self.changed);
+        allocator.free(self.base_path);
+        self.* = undefined;
+    }
+
+    fn requiresPage(self: *const ReplacementPlan, index: usize) bool {
+        for (self.changed) |changed_index| if (changed_index == index) return true;
+        return false;
     }
 };
 
@@ -113,6 +133,15 @@ pub fn writeValidated(
         return;
     }
 
+    var replacement_plan = try prepareReplacementPlan(
+        allocator,
+        io,
+        manifest_path,
+        document_cache,
+        &current_manifest,
+    );
+    defer if (replacement_plan) |*plan| plan.deinit(allocator);
+
     const page_paths = try allocator.alloc([]u8, ir.pages.len);
     var initialized_paths: usize = 0;
     defer {
@@ -125,6 +154,12 @@ pub fn writeValidated(
     for (current_manifest.pages, 0..) |page, index| {
         page_paths[index] = try digestPath(allocator, page_cache, page.digest);
         initialized_paths += 1;
+        if (replacement_plan) |*plan| {
+            if (!plan.requiresPage(index)) {
+                missing[index] = false;
+                continue;
+            }
+        }
         missing[index] = !(try cachedPdfAvailable(
             allocator,
             io,
@@ -154,8 +189,51 @@ pub fn writeValidated(
     defer allocator.free(temporary_document);
     errdefer deleteFile(io, temporary_document);
     if (progress) |value| value.assemblyCompleted(value.context, 0, 1);
-    try mergePages(allocator, ir.pages.len, page_paths, temporary_document);
-    current_manifest.assembly = .full;
+    const replaced = if (replacement_plan) |*plan|
+        try replaceCachedDocument(
+            allocator,
+            io,
+            plan,
+            page_paths,
+            temporary_document,
+        )
+    else
+        false;
+    if (replaced) {
+        current_manifest.assembly = .delta;
+    } else {
+        if (replacement_plan != null) {
+            @memset(missing, false);
+            missing_count = 0;
+            for (current_manifest.pages, 0..) |page, index| {
+                if (replacement_plan.?.requiresPage(index)) continue;
+                missing[index] = !(try cachedPdfAvailable(
+                    allocator,
+                    io,
+                    page_paths[index],
+                    pageCacheIdentity(page),
+                ));
+                if (missing[index]) missing_count += 1;
+            }
+            if (missing_count != 0) {
+                var resources = try page_backend.ResourceFiles.initCached(allocator, io, &ir.resources, cache_root);
+                defer resources.deinit();
+                try renderMissingPages(
+                    allocator,
+                    io,
+                    ir,
+                    current_manifest.pages,
+                    page_paths,
+                    missing,
+                    options.jobs,
+                    progress,
+                    &resources,
+                );
+            }
+        }
+        try mergePages(allocator, ir.pages.len, page_paths, temporary_document);
+        current_manifest.assembly = .full;
+    }
     try publishCache(allocator, io, temporary_document, document_path, document_identity);
     if (progress) |value| value.assemblyCompleted(value.context, 1, 1);
     try publishOutput(allocator, io, document_path, output);
@@ -311,6 +389,91 @@ fn mergePages(allocator: Allocator, page_count: usize, inputs: []const []u8, out
     if (c.ss_qpdf_merge(output_z.ptr, pointers.ptr, pointers.len, 1) != 0) return error.PdfAssemblyFailed;
 }
 
+fn prepareReplacementPlan(
+    allocator: Allocator,
+    io: std.Io,
+    manifest_path: []const u8,
+    document_cache: []const u8,
+    current: *const OutputManifest,
+) !?ReplacementPlan {
+    var previous = (readOutputManifest(allocator, io, manifest_path) catch return null) orelse return null;
+    var previous_active = true;
+    defer if (previous_active) previous.deinit(allocator);
+    if (previous.pages.len != current.pages.len) return null;
+
+    var changed = std.ArrayList(usize).empty;
+    var changed_active = true;
+    defer if (changed_active) changed.deinit(allocator);
+    for (previous.pages, current.pages, 0..) |old_page, new_page, index| {
+        if (std.mem.eql(u8, &old_page.digest, &new_page.digest)) continue;
+        if (old_page.has_destinations or new_page.has_destinations or
+            old_page.has_destination_links or new_page.has_destination_links)
+        {
+            return null;
+        }
+        try changed.append(allocator, index);
+    }
+    if (changed.items.len == 0 or changed.items.len >= current.pages.len) return null;
+    const replacement_limit = @min(max_replacement_pages, @max(@as(usize, 1), current.pages.len / 4));
+    if (changed.items.len > replacement_limit) return null;
+
+    const base_path = try digestPath(allocator, document_cache, previous.document_digest);
+    errdefer allocator.free(base_path);
+    if (!(try cachedPdfAvailable(allocator, io, base_path, .{
+        .kind = .document,
+        .key = previous.document_digest,
+        .page_count = previous.pages.len,
+    }))) {
+        allocator.free(base_path);
+        return null;
+    }
+    const changed_pages = try changed.toOwnedSlice(allocator);
+    changed_active = false;
+    previous_active = false;
+    return .{
+        .previous = previous,
+        .changed = changed_pages,
+        .base_path = base_path,
+    };
+}
+
+fn replaceCachedDocument(
+    allocator: Allocator,
+    io: std.Io,
+    plan: *const ReplacementPlan,
+    page_paths: []const []u8,
+    output: []const u8,
+) !bool {
+    const output_z = try allocator.dupeZ(u8, output);
+    defer allocator.free(output_z);
+    const base_z = try allocator.dupeZ(u8, plan.base_path);
+    defer allocator.free(base_z);
+    const replacements = try allocator.alloc([:0]u8, plan.changed.len);
+    var initialized: usize = 0;
+    defer {
+        for (replacements[0..initialized]) |path| allocator.free(path);
+        allocator.free(replacements);
+    }
+    const replacement_pointers = try allocator.alloc([*c]const u8, plan.changed.len);
+    defer allocator.free(replacement_pointers);
+    for (plan.changed, 0..) |page_index, replacement_index| {
+        replacements[replacement_index] = try allocator.dupeZ(u8, page_paths[page_index]);
+        initialized += 1;
+        replacement_pointers[replacement_index] = replacements[replacement_index].ptr;
+    }
+    if (c.ss_qpdf_replace_pages(
+        output_z.ptr,
+        base_z.ptr,
+        replacement_pointers.ptr,
+        plan.changed.ptr,
+        plan.changed.len,
+    ) != 0) {
+        deleteFile(io, output);
+        return false;
+    }
+    return true;
+}
+
 fn buildOutputManifest(
     allocator: Allocator,
     ir: *const render.Ir,
@@ -454,12 +617,87 @@ fn persistOutputManifest(
     writeOutputManifest(allocator, io, path, manifest) catch {};
 }
 
+fn readOutputManifest(allocator: Allocator, io: std.Io, path: []const u8) !?OutputManifest {
+    const text = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(output_manifest_read_limit)) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer allocator.free(text);
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    if (!std.mem.eql(u8, lines.next() orelse return error.InvalidOutputManifest, output_manifest_version)) {
+        return error.InvalidOutputManifest;
+    }
+    const document_line = lines.next() orelse return error.InvalidOutputManifest;
+    if (!std.mem.startsWith(u8, document_line, "document\t")) return error.InvalidOutputManifest;
+    const document_digest = try parseDigest(document_line["document\t".len..]);
+    const assembly_line = lines.next() orelse return error.InvalidOutputManifest;
+    if (!std.mem.startsWith(u8, assembly_line, "assembly\t")) return error.InvalidOutputManifest;
+    const assembly = try parseAssembly(assembly_line["assembly\t".len..]);
+    const pages_line = lines.next() orelse return error.InvalidOutputManifest;
+    if (!std.mem.startsWith(u8, pages_line, "pages\t")) return error.InvalidOutputManifest;
+    const page_count = try std.fmt.parseUnsigned(usize, pages_line["pages\t".len..], 10);
+    if (page_count > output_manifest_read_limit / 16) return error.InvalidOutputManifest;
+    const pages = try allocator.alloc(ManifestPage, page_count);
+    errdefer allocator.free(pages);
+    for (pages) |*page| {
+        const line = lines.next() orelse return error.InvalidOutputManifest;
+        var fields = std.mem.splitScalar(u8, line, '\t');
+        if (!std.mem.eql(u8, fields.next() orelse return error.InvalidOutputManifest, "page")) {
+            return error.InvalidOutputManifest;
+        }
+        const digest = try parseDigest(fields.next() orelse return error.InvalidOutputManifest);
+        const destinations = fields.next() orelse return error.InvalidOutputManifest;
+        const destination_links = fields.next() orelse return error.InvalidOutputManifest;
+        if (fields.next() != null or
+            !validManifestBoolean(destinations) or
+            !validManifestBoolean(destination_links))
+        {
+            return error.InvalidOutputManifest;
+        }
+        page.* = .{
+            .digest = digest,
+            .has_destinations = destinations[0] == '1',
+            .has_destination_links = destination_links[0] == '1',
+        };
+    }
+    while (lines.next()) |line| if (line.len != 0) return error.InvalidOutputManifest;
+    const actual_document_digest = documentDigest(pages);
+    if (!std.mem.eql(u8, &actual_document_digest, &document_digest)) return error.InvalidOutputManifest;
+    return .{
+        .document_digest = document_digest,
+        .assembly = assembly,
+        .pages = pages,
+    };
+}
+
 fn assemblyName(assembly: AssemblyKind) []const u8 {
     return switch (assembly) {
         .full => "full",
         .delta => "delta",
         .document_cache => "document-cache",
     };
+}
+
+fn parseAssembly(text: []const u8) !AssemblyKind {
+    if (std.mem.eql(u8, text, "full")) return .full;
+    if (std.mem.eql(u8, text, "delta")) return .delta;
+    if (std.mem.eql(u8, text, "document-cache")) return .document_cache;
+    return error.InvalidOutputManifest;
+}
+
+fn validManifestBoolean(text: []const u8) bool {
+    return text.len == 1 and (text[0] == '0' or text[0] == '1');
+}
+
+fn parseDigest(text: []const u8) !render.Fingerprint {
+    var digest: render.Fingerprint = undefined;
+    if (text.len != digest.len * 2) return error.InvalidOutputManifest;
+    for (&digest, 0..) |*byte, index| {
+        const high = std.fmt.charToDigit(text[index * 2], 16) catch return error.InvalidOutputManifest;
+        const low = std.fmt.charToDigit(text[index * 2 + 1], 16) catch return error.InvalidOutputManifest;
+        byte.* = @intCast(high * 16 + low);
+    }
+    return digest;
 }
 
 fn digestPath(allocator: Allocator, directory: []const u8, digest: render.Fingerprint) ![]u8 {
