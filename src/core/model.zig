@@ -536,8 +536,9 @@ pub const RecordValue = struct {
     pub fn clone(self: RecordValue, allocator: Allocator) anyerror!RecordValue {
         var copied = RecordValue.init(self.type_name);
         errdefer copied.deinit(allocator);
+        try copied.fields.ensureTotalCapacity(allocator, self.fields.items.len);
         for (self.fields.items) |item| {
-            try copied.fields.append(allocator, try item.clone(allocator));
+            copied.fields.appendAssumeCapacity(try item.clone(allocator));
         }
         return copied;
     }
