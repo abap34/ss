@@ -996,6 +996,15 @@ pub fn fontEnvironmentRefresh() !FontEnvironment {
     return environment;
 }
 
+pub fn diagnosticMessageForError(err: anyerror) ?[]const u8 {
+    return switch (err) {
+        error.FontEnvironmentRefreshFailed => "FontSetupFailed: ss could not initialize or refresh Pango's Fontconfig backend. Run 'fc-list'. If it fails, repair Fontconfig or unset invalid FONTCONFIG_FILE and FONTCONFIG_PATH values. If it succeeds, verify that Pango includes its Fontconfig/FreeType backend and that ss, Pango, and Fontconfig come from the same package source. On Homebrew systems, run 'brew reinstall pango fontconfig', then rebuild or reinstall ss against those libraries",
+        error.PangoCreateFailed => "TextLayoutUnavailable: Pango could not initialize or produce usable text layout data; verify that Pango and Fontconfig are installed, confirm that 'fc-list' succeeds, and check FONTCONFIG_FILE and FONTCONFIG_PATH",
+        error.FontEnvironmentChanged => "FontEnvironmentChanged: the system font catalog changed while the document was being processed; retry after font installation or font-cache updates finish",
+        else => null,
+    };
+}
+
 fn sameFontEnvironment(left: FontEnvironment, right: FontEnvironment) bool {
     return left.generation == right.generation and std.mem.eql(u8, &left.id, &right.id);
 }

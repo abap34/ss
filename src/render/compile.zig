@@ -35,16 +35,66 @@ pub const treeSitterHealthReport = items.treeSitterHealthReport;
 pub const validateFontEnvironment = text_compile.validateFontEnvironment;
 pub const refreshAndValidateFontEnvironment = text_compile.refreshAndValidateFontEnvironment;
 
+pub fn addFontEnvironmentDiagnostic(state: *core.DocumentState, err: anyerror) !bool {
+    const message = text_compile.diagnosticMessageForError(err) orelse return false;
+    for (state.diagnostics.items) |diagnostic| {
+        const existing_message = switch (diagnostic.data) {
+            .user_report => |data| data.message,
+            .render_failed => |data| data.reason,
+            else => continue,
+        };
+        if (std.mem.indexOf(u8, existing_message, message) != null) return true;
+    }
+    const owned_message = try state.allocator.dupe(u8, message);
+    try state.addRenderDiagnostic(.@"error", null, null, null, .{
+        .user_report = .{ .message = owned_message },
+    });
+    return true;
+}
+
+fn addFontPreparationDiagnostic(state: *core.DocumentState, err: anyerror) !bool {
+    var reason_buf: [256]u8 = undefined;
+    var message_buf: [768]u8 = undefined;
+    const message = switch (err) {
+        error.MathFontRegistrationFailed => "MathFontRegistrationFailed: could not register the bundled STIX Two Math font; check Fontconfig and retry after 'fc-cache' completes",
+        else => if (utils.err.isFileSystemError(err))
+            std.fmt.bufPrint(
+                &message_buf,
+                "RenderCacheAccessFailed: could not prepare the bundled math font in '.ss-cache/render/fonts': {s}; remove a conflicting file or fix the cache permissions",
+                .{utils.err.formatErrorReason(&reason_buf, err)},
+            ) catch "RenderCacheAccessFailed: could not prepare the bundled math font cache"
+        else
+            return false,
+    };
+    for (state.diagnostics.items) |diagnostic| {
+        const existing_message = switch (diagnostic.data) {
+            .user_report => |data| data.message,
+            .render_failed => |data| data.reason,
+            else => continue,
+        };
+        if (std.mem.indexOf(u8, existing_message, message) != null) return true;
+    }
+    const owned_message = try state.allocator.dupe(u8, message);
+    try state.addRenderDiagnostic(.@"error", null, null, null, .{
+        .user_report = .{ .message = owned_message },
+    });
+    return true;
+}
+
 pub fn acquireFontEnvironment(
     allocator: std.mem.Allocator,
     io: std.Io,
+    state: *core.DocumentState,
     pages: *const core.prepared.PreparedPages,
 ) !FontEnvironmentToken {
     const refresh_fonts_start = utils.measure_profile.start();
     _ = try text_compile.fontEnvironmentRefresh();
     utils.measure_profile.recordRenderCompile(.font_environment, refresh_fonts_start);
     const prepare_fonts_start = utils.measure_profile.start();
-    try items.prepareFonts(allocator, io, pages);
+    items.prepareFonts(allocator, io, pages) catch |err| {
+        _ = try addFontPreparationDiagnostic(state, err);
+        return err;
+    };
     utils.measure_profile.recordRenderCompile(.prepare_fonts, prepare_fonts_start);
     const font_environment_start = utils.measure_profile.start();
     const font_environment = try text_compile.fontEnvironmentSnapshot();
@@ -69,11 +119,22 @@ pub fn compile(
         .font_environment = options.font_environment,
         .thread_safe_allocator = options.thread_safe_allocator,
     } };
-    try item_compiler.prepare(allocator, state, pages);
-    const font_environment = item_compiler.font_environment orelse return error.FontEnvironmentRefreshFailed;
-    var ir = try preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache);
+    item_compiler.prepare(allocator, state, pages) catch |err| {
+        _ = try addFontEnvironmentDiagnostic(state, err);
+        return err;
+    };
+    const font_environment = item_compiler.font_environment orelse {
+        const err = error.FontEnvironmentRefreshFailed;
+        _ = try addFontEnvironmentDiagnostic(state, err);
+        return err;
+    };
+    var ir = preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache) catch |err| {
+        _ = try addFontEnvironmentDiagnostic(state, err);
+        return err;
+    };
     text_compile.refreshAndValidateFontEnvironment(font_environment) catch |err| {
         ir.deinit(allocator);
+        _ = try addFontEnvironmentDiagnostic(state, err);
         return err;
     };
     return ir;
@@ -88,10 +149,16 @@ pub fn compilePrepared(
 ) !render.Ir {
     const font_environment = if (options.font_environment) |expected| blk: {
         const font_environment_start = utils.measure_profile.start();
-        try text_compile.refreshAndValidateFontEnvironment(expected);
+        text_compile.refreshAndValidateFontEnvironment(expected) catch |err| {
+            _ = try addFontEnvironmentDiagnostic(state, err);
+            return err;
+        };
         utils.measure_profile.recordRenderCompile(.font_environment, font_environment_start);
         break :blk expected;
-    } else try acquireFontEnvironment(allocator, io, pages);
+    } else acquireFontEnvironment(allocator, io, state, pages) catch |err| {
+        _ = try addFontEnvironmentDiagnostic(state, err);
+        return err;
+    };
     var item_compiler = items.Compiler{ .io = io, .options = .{
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
@@ -101,9 +168,13 @@ pub fn compilePrepared(
         .page_cache = options.page_cache,
         .thread_safe_allocator = options.thread_safe_allocator,
     }, .font_environment = font_environment };
-    var ir = try preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache);
+    var ir = preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache) catch |err| {
+        _ = try addFontEnvironmentDiagnostic(state, err);
+        return err;
+    };
     text_compile.refreshAndValidateFontEnvironment(font_environment) catch |err| {
         ir.deinit(allocator);
+        _ = try addFontEnvironmentDiagnostic(state, err);
         return err;
     };
     return ir;

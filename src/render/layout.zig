@@ -16,6 +16,7 @@ pub const Options = struct {
     cancellation: ?utils.Cancellation = null,
     resource_cache: ?*render_resources.SourceCache = null,
     font_environment: ?compiler.FontEnvironmentToken = null,
+    trace_failure: ?*core.layout.graph.TraceFailure = null,
 
     fn checkCanceled(self: Options) !void {
         if (self.cancellation) |cancellation| try cancellation.check();
@@ -44,7 +45,10 @@ pub fn evaluateAndSolvePreparedPages(
     errdefer pages.deinit(state.allocator);
     try options.checkCanceled();
     const font_environment = options.font_environment orelse
-        try compiler.acquireFontEnvironment(state.allocator, io, &pages);
+        compiler.acquireFontEnvironment(state.allocator, io, state, &pages) catch |err| {
+        _ = try compiler.addFontEnvironmentDiagnostic(state, err);
+        return err;
+    };
     var solve_options = options;
     solve_options.font_environment = font_environment;
     const solve_start = utils.measure_profile.start();
@@ -80,8 +84,11 @@ pub fn solvePreparedPages(
 ) !core.layout.Document {
     try options.checkCanceled();
     const font_environment = options.font_environment orelse
-        try compiler.acquireFontEnvironment(state.allocator, io, pages);
-    var measurement_scope = try compiler.LayoutMeasurementScope.init(
+        compiler.acquireFontEnvironment(state.allocator, io, state, pages) catch |err| {
+        _ = try compiler.addFontEnvironmentDiagnostic(state, err);
+        return err;
+    };
+    var measurement_scope = compiler.LayoutMeasurementScope.init(
         state.allocator,
         io,
         state,
@@ -89,17 +96,27 @@ pub fn solvePreparedPages(
         options.resource_cache,
         options.highlight_languages,
         font_environment,
-    );
+    ) catch |err| {
+        _ = try compiler.addFontEnvironmentDiagnostic(state, err);
+        return err;
+    };
     defer measurement_scope.deinit();
-    var results = try lowering.solveDocument(state, options.trace_path, .{
+    var results = lowering.solveDocument(state, options.trace_path, .{
         .measurement_provider = measurement_scope.provider(),
         .progress = options.progress,
         .jobs = options.jobs,
         .cancellation = options.cancellation,
-    });
+        .trace_failure = options.trace_failure,
+    }) catch |err| {
+        _ = try compiler.addFontEnvironmentDiagnostic(state, err);
+        return err;
+    };
     errdefer results.deinit(state.allocator);
     try options.checkCanceled();
-    try compiler.refreshAndValidateFontEnvironment(font_environment);
+    compiler.refreshAndValidateFontEnvironment(font_environment) catch |err| {
+        _ = try compiler.addFontEnvironmentDiagnostic(state, err);
+        return err;
+    };
     try core.prepared.attachAssetKeys(state.allocator, &results, pages);
     try options.checkCanceled();
     return results;
