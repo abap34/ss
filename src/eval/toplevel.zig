@@ -10,6 +10,7 @@ const names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
 const declarations = @import("../language/declarations.zig");
 const registry = @import("../language/registry.zig");
+const analysis_cache = @import("../analysis/cache.zig");
 const execution = @import("../analysis/execution.zig");
 const value_contracts = @import("value_contracts.zig");
 
@@ -106,6 +107,7 @@ var diagnostic_path: []const u8 = "";
 threadlocal var active_module_id: core.SourceModuleId = 0;
 threadlocal var active_call_depth: u32 = 0;
 threadlocal var active_declarations: ?*const declarations.DeclarationIndex = null;
+threadlocal var active_name_resolution_cache: ?*analysis_cache.NameResolutionCache = null;
 threadlocal var active_cancellation: ?utils.Cancellation = null;
 
 pub const ExecuteOptions = struct {
@@ -114,6 +116,24 @@ pub const ExecuteOptions = struct {
 
 fn checkCancellation() !void {
     if (active_cancellation) |cancellation| try cancellation.check();
+}
+
+fn resolvedFunction(sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedFunction {
+    if (active_name_resolution_cache) |cache| return try cache.resolvedFunction(sema, callee);
+    return sema.resolvedFunction(callee);
+}
+
+fn resolvedConst(sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedConst {
+    if (active_name_resolution_cache) |cache| return try cache.resolvedConst(sema, callee);
+    return sema.resolvedConst(callee);
+}
+
+fn callDescriptor(sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.CallDescriptor {
+    if (try resolvedFunction(sema, callee)) |function| return .{ .function = function };
+    if (!callee.isQualified()) {
+        if (sema.primitive(callee.name)) |primitive| return .{ .primitive = primitive };
+    }
+    return null;
 }
 
 const LowerDiagnostic = struct {
@@ -303,13 +323,20 @@ pub fn executeGraph(
     options: ExecuteOptions,
 ) !void {
     const previous_declarations = active_declarations;
+    const previous_name_resolution_cache = active_name_resolution_cache;
     const previous_cancellation = active_cancellation;
     active_declarations = &graph.declarations;
     active_cancellation = options.cancellation;
     defer active_declarations = previous_declarations;
+    defer active_name_resolution_cache = previous_name_resolution_cache;
     defer active_cancellation = previous_cancellation;
 
     try checkCancellation();
+
+    var name_resolution_cache = analysis_cache.NameResolutionCache.init(allocator);
+    defer name_resolution_cache.deinit();
+    try name_resolution_cache.reserve(state);
+    active_name_resolution_cache = &name_resolution_cache;
 
     var closures = ClosureStore.init(allocator);
     defer closures.deinit();
@@ -493,10 +520,10 @@ fn evalExpr(
             const name = ident.name;
             if (env.get(name)) |value| break :blk try value.clone(state.allocator);
             const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
-            if (sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
+            if (try resolvedConst(&sema, ast.CallableName.bare(name))) |resolved| {
                 break :blk try evalConstValue(state, page_id, context, mode, functions, closures, current_origin, resolved);
             }
-            if (sema.resolvedFunction(ast.CallableName.bare(name))) |resolved| {
+            if (try resolvedFunction(&sema, ast.CallableName.bare(name))) |resolved| {
                 const func = resolved.decl;
                 break :blk .{ .function = try eval_functions.functionRefForInModule(state.allocator, resolved.module_id, func) };
             }
@@ -940,7 +967,7 @@ fn evalCall(
         }
     }
     const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
-    if (sema.resolvedConst(call.callee)) |resolved| {
+    if (try resolvedConst(&sema, call.callee)) |resolved| {
         var const_value = try evalConstValue(state, page_id, context, mode, functions, closures, current_origin, resolved);
         defer const_value.deinit(state.allocator);
         const function = switch (const_value) {
@@ -955,7 +982,7 @@ fn evalCall(
         defer deinitValues(state.allocator, args.items);
         return try invokeFunctionRef(state, page_id, context, mode, env, functions, closures, function, current_origin, args.items);
     }
-    const descriptor = sema.callCallee(call.callee) orelse {
+    const descriptor = (try callDescriptor(&sema, call.callee)) orelse {
         try reportUnknownCallable(state, &sema, call.callee, current_origin);
         return error.UnknownFunction;
     };
@@ -2046,7 +2073,7 @@ fn executeStatement(
             var value = switch (expr) {
                 .call => |call| blk: {
                     const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
-                    if (sema.resolvedFunction(call.callee) != null) {
+                    if ((try resolvedFunction(&sema, call.callee)) != null) {
                         break :blk try executeCallStatement(state, page_id, context, mode, env, functions, closures, last_code_like, origin, call);
                     }
                     break :blk try evalExpr(state, page_id, context, mode, env, functions, closures, origin, expr);
@@ -2142,7 +2169,7 @@ fn executeCallStatement(
     call: CallExpr,
 ) anyerror!core.Value {
     const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
-    const resolved = sema.resolvedFunction(call.callee) orelse {
+    const resolved = (try resolvedFunction(&sema, call.callee)) orelse {
         return try evalCall(state, page_id, context, mode, env, functions, closures, current_origin, call);
     };
     const func = resolved.decl;
@@ -2206,7 +2233,7 @@ fn invokeFunctionRef(
         return try invokeClosureValues(state, page_id, context, mode, env, functions, closures, function.module_id, closure_id, current_origin, args);
     }
     const sema = SemanticEnv.init(state, active_declarations, functions).forModule(function.module_id);
-    const resolved = sema.resolvedFunction(ast.CallableName.bare(function.name)) orelse {
+    const resolved = (try resolvedFunction(&sema, ast.CallableName.bare(function.name))) orelse {
         try reportUnknownFunction(state, function.name, current_origin);
         return error.UnknownFunction;
     };
