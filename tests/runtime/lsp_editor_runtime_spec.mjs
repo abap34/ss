@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -33,6 +33,9 @@ await testDependencyQueryDiagnostic();
 await testUserReportDiagnosticCode();
 await testDirectUnknownImportDiagnosticLocation();
 await testImportedUnknownImportReportsBothFiles();
+await testProjectImportUsesEntryDirectory();
+await testImportSymlinkLoopDiagnostic();
+await testImportedModuleReadFailureReportsBothFiles();
 await testImportCycleDiagnosticLocation();
 await testBrokenProjectConfigKeepsCompletionAlive();
 await testMultipleHoleParseDiagnostics();
@@ -249,20 +252,43 @@ async function testBrokenProjectConfigKeepsCompletionAlive() {
   const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-broken-config-"));
   try {
     const slide = path.join(project, "slide.ss");
+    const config = path.join(project, "ss.toml");
+    const slideUri = pathToFileURL(slide).toString();
+    const configUri = pathToFileURL(config).toString();
     const source = `page alive
 end
 `;
-    await writeFile(path.join(project, "ss.toml"), `[project]
+    await writeFile(config, `[project]
 asset_base_dir = "."
 `, "utf8");
     await writeFile(slide, source, "utf8");
-    const broken = await configuredResponses({
-      cwd: project,
-      fixture: slide,
-      source,
-      completionPosition: { line: 0, character: 0 },
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const configDiagnosticsPromise = client.waitForDiagnostics(
+        configUri,
+        (diagnostics) => diagnostics.some((diagnostic) => diagnostic.code === "MissingProjectEntry"),
+        "MissingProjectEntry diagnostic for broken ss.toml",
+      );
+      const slideDiagnosticsPromise = client.waitForDiagnostics(slideUri);
+      client.openDocument({ uri: slideUri, text: source });
+
+      const configDiagnostics = (await configDiagnosticsPromise).params.diagnostics;
+      const missingEntry = configDiagnostics.find((diagnostic) => diagnostic.code === "MissingProjectEntry");
+      assert(missingEntry, `MissingProjectEntry diagnostic missing: ${JSON.stringify(configDiagnostics)}`);
+      assert(missingEntry.message.startsWith("MissingProjectEntry:"), `project diagnostic omitted its code prefix: ${JSON.stringify(missingEntry)}`);
+      assert(missingEntry.message.includes("entry ="), `project diagnostic omitted corrective guidance: ${JSON.stringify(missingEntry)}`);
+      assert(missingEntry.range.start.line === 0, `project diagnostic pointed at the wrong line: ${JSON.stringify(missingEntry)}`);
+      assert(missingEntry.range.start.character === 0, `project diagnostic pointed at the wrong character: ${JSON.stringify(missingEntry)}`);
+
+      const slideDiagnostics = (await slideDiagnosticsPromise).params.diagnostics;
+      assert(slideDiagnostics.length === 0, `broken ss.toml produced a spurious slide diagnostic: ${JSON.stringify(slideDiagnostics)}`);
+      const completion = await client.request("textDocument/completion", {
+        textDocument: { uri: slideUri },
+        position: { line: 0, character: 0 },
+      });
+      assertCompletionHas(completion, "page", "broken ss.toml completion");
     });
-    assertCompletionHas(broken.completion, "page", "broken ss.toml completion");
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -892,6 +918,166 @@ end
       assert(failed, `ImportFailed diagnostic missing: ${JSON.stringify(sourceDiagnostics)}`);
       assert(failed.range.start.line === 0, `ImportFailed diagnostic pointed at wrong line: ${JSON.stringify(failed)}`);
       assert(failed.range.start.character === 0, `ImportFailed diagnostic pointed at wrong character: ${JSON.stringify(failed)}`);
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testProjectImportUsesEntryDirectory() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-project-entry-import-"));
+  try {
+    const slides = path.join(project, "slides");
+    const assets = path.join(project, "assets");
+    await mkdir(slides);
+    await mkdir(assets);
+    await writeFile(
+      path.join(project, "ss.toml"),
+      `[project]
+entry = "slides/slide.ss"
+asset_base_dir = "assets"
+`,
+      "utf8",
+    );
+    await writeFile(path.join(slides, "parts.ss"), "fn helper() -> String\n  return \"loaded\"\nend\n", "utf8");
+    const slide = path.join(slides, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = `import "./parts" as *
+
+page main
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source });
+      const diagnostics = (await diagnosticsPromise).params.diagnostics;
+      assert(diagnostics.length === 0, `project import resolved from asset_base_dir instead of the entry directory: ${JSON.stringify(diagnostics)}`);
+      const completion = await client.request("textDocument/completion", {
+        textDocument: { uri },
+        position: positionAt(source, "page main", 0),
+      });
+      assertCompletionHas(completion, "helper", "entry-relative import completion");
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testImportSymlinkLoopDiagnostic() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-import-symlink-loop-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const loop = path.join(project, "loop.ss");
+    const uri = pathToFileURL(slide).toString();
+    const loopUri = pathToFileURL(loop).toString();
+    const source = `import "./loop" as *
+
+page main
+end
+`;
+    await symlink(loop, loop);
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(
+        uri,
+        (diagnostics) => diagnostics.some((diagnostic) => diagnostic.code === "ImportReadFailed"),
+        "ImportReadFailed diagnostic for a symbolic-link cycle",
+      );
+      client.openDocument({ uri, text: source });
+      const diagnostics = (await diagnosticsPromise).params.diagnostics;
+      const failure = diagnostics.find((diagnostic) => diagnostic.code === "ImportReadFailed");
+      assert(failure, `ImportReadFailed diagnostic missing: ${JSON.stringify(diagnostics)}`);
+      assert(failure.range.start.line === 0, `ImportReadFailed diagnostic pointed at the wrong line: ${JSON.stringify(failure)}`);
+      assert(failure.range.start.character === 0, `ImportReadFailed diagnostic pointed at the wrong character: ${JSON.stringify(failure)}`);
+      assert(failure.message.includes(loop), `ImportReadFailed diagnostic omitted the resolved path: ${JSON.stringify(failure)}`);
+      assert(failure.message.includes("symbolic-link cycle"), `ImportReadFailed diagnostic omitted the cause: ${JSON.stringify(failure)}`);
+      assert(!diagnostics.some((diagnostic) => diagnostic.code === "ProjectLoadFailed"), `internal project-load diagnostic leaked: ${JSON.stringify(diagnostics)}`);
+
+      const failedCompletion = await client.request("textDocument/completion", {
+        textDocument: { uri },
+        position: positionAt(source, "page main", 0),
+      });
+      assertCompletionHas(failedCompletion, "page", "completion after import read failure");
+
+      await rm(loop, { force: true });
+      await writeFile(loop, "fn helper() -> String\n  return \"loaded\"\nend\n", "utf8");
+      const recoveredDiagnosticsPromise = client.waitForDiagnostics(
+        uri,
+        (items) => items.length === 0,
+        "cleared diagnostics after repairing an imported module",
+      );
+      client.notify("workspace/didChangeWatchedFiles", {
+        changes: [{ uri: loopUri, type: 2 }],
+      });
+      const recoveredDiagnostics = (await recoveredDiagnosticsPromise).params.diagnostics;
+      assert(recoveredDiagnostics.length === 0, `import diagnostics remained after repair: ${JSON.stringify(recoveredDiagnostics)}`);
+
+      const recoveredCompletion = await client.request("textDocument/completion", {
+        textDocument: { uri },
+        position: positionAt(source, "page main", 0),
+      });
+      assertCompletionHas(recoveredCompletion, "helper", "completion after repairing an imported module");
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testImportedModuleReadFailureReportsBothFiles() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-imported-read-failure-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const imported = path.join(project, "a.ss");
+    const loop = path.join(project, "loop.ss");
+    const slideUri = pathToFileURL(slide).toString();
+    const importedUri = pathToFileURL(imported).toString();
+    const slideSource = `import "./a" as *
+
+page main
+end
+`;
+    await writeFile(slide, slideSource, "utf8");
+    await writeFile(imported, `import "./loop" as *\n`, "utf8");
+    await symlink(loop, loop);
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const importedDiagnosticsPromise = client.waitForDiagnostics(
+        importedUri,
+        (diagnostics) => diagnostics.some((diagnostic) => diagnostic.code === "ImportReadFailed"),
+        "ImportReadFailed diagnostic for an indirectly imported module",
+      );
+      const sourceDiagnosticsPromise = client.waitForDiagnostics(
+        slideUri,
+        (diagnostics) => diagnostics.some((diagnostic) => diagnostic.code === "ImportFailed"),
+        "ImportFailed diagnostic for the entry module",
+      );
+      client.openDocument({ uri: slideUri, text: slideSource });
+
+      const importedDiagnostics = (await importedDiagnosticsPromise).params.diagnostics;
+      const readFailure = importedDiagnostics.find((diagnostic) => diagnostic.code === "ImportReadFailed");
+      assert(readFailure, `indirect ImportReadFailed diagnostic missing: ${JSON.stringify(importedDiagnostics)}`);
+      assert(readFailure.range.start.line === 0, `indirect ImportReadFailed diagnostic pointed at the wrong line: ${JSON.stringify(readFailure)}`);
+      assert(readFailure.range.start.character === 0, `indirect ImportReadFailed diagnostic pointed at the wrong character: ${JSON.stringify(readFailure)}`);
+      assert(readFailure.message.includes(loop), `indirect ImportReadFailed diagnostic omitted the resolved path: ${JSON.stringify(readFailure)}`);
+      assert(readFailure.message.includes("symbolic-link cycle"), `indirect ImportReadFailed diagnostic omitted the cause: ${JSON.stringify(readFailure)}`);
+
+      const sourceDiagnostics = (await sourceDiagnosticsPromise).params.diagnostics;
+      const importFailure = sourceDiagnostics.find((diagnostic) => diagnostic.code === "ImportFailed");
+      assert(importFailure, `entry ImportFailed diagnostic missing: ${JSON.stringify(sourceDiagnostics)}`);
+      assert(importFailure.range.start.line === 0, `entry ImportFailed diagnostic pointed at the wrong line: ${JSON.stringify(importFailure)}`);
+      assert(importFailure.range.start.character === 0, `entry ImportFailed diagnostic pointed at the wrong character: ${JSON.stringify(importFailure)}`);
+
+      const completion = await client.request("textDocument/completion", {
+        textDocument: { uri: slideUri },
+        position: positionAt(slideSource, "page main", 0),
+      });
+      assertCompletionHas(completion, "page", "completion after indirect import read failure");
     });
   } finally {
     await rm(project, { recursive: true, force: true });

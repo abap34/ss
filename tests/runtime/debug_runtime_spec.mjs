@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
 
 await testDebugScheduleJson();
 await testDebugLayoutTraceJson();
+await testDebugLayoutTraceJsonAfterLayoutFailure();
+await testDebugLayoutTracePreservesPreambleReadFailure();
+await testDebugOutputWriteFailures();
 await testDebugLayoutConflictsJson();
 await testDebugLayoutConflictsDerivedCurrentPath();
 
@@ -48,6 +51,98 @@ async function testDebugLayoutTraceJson() {
     assert(payload.kind === "ss-layout-trace", `unexpected layout trace kind: ${JSON.stringify(payload)}`);
     assert(Array.isArray(payload.events), "layout trace should include events");
     assert(payload.events.length > 0, "layout trace should include at least one event");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testDebugLayoutTraceJsonAfterLayoutFailure() {
+  const project = await mkdtempProject("ss-debug-layout-trace-failure-");
+  try {
+    await writeConflictDeck(project);
+    const output = path.join(project, "layout-trace.json");
+    const result = await spawnCollect(ssBin, ["debug", "layout", "trace", "slide.ss", "--output", output], project);
+    const diagnostic = `${result.stdout}\n${result.stderr}`;
+    assert(result.code !== 0, "layout trace should preserve the layout failure");
+    assert(diagnostic.includes("ConstraintConflict:"), `layout failure omitted its primary diagnostic:\n${diagnostic}`);
+
+    const payload = JSON.parse(await readFile(output, "utf8"));
+    assert(payload.schema === 1, `unexpected failed layout trace schema: ${JSON.stringify(payload)}`);
+    assert(payload.kind === "ss-layout-trace", `unexpected failed layout trace kind: ${JSON.stringify(payload)}`);
+    assert(Array.isArray(payload.events), "failed layout trace should include an events array");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testDebugLayoutTracePreservesPreambleReadFailure() {
+  const project = await mkdtempProject("ss-debug-layout-trace-preamble-failure-");
+  try {
+    const preamblePath = path.join(project, "preamble.tex");
+    const outputPath = path.join(project, "layout-trace.json");
+    await mkdir(preamblePath);
+    await writeFile(
+      path.join(project, "slide.ss"),
+      `import std:themes/default as *
+
+page formula
+text!("Inline $\\ArchiveMacro$ fallback")
+end
+
+document
+  tex_preamble_file("preamble.tex")
+end
+`,
+      "utf8",
+    );
+
+    const result = await spawnCollect(
+      ssBin,
+      ["debug", "layout", "trace", "slide.ss", "--output", outputPath],
+      project,
+    );
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert(result.code !== 0, "layout trace should fail when its TeX preamble path is a directory");
+    assert(output.includes("RenderFailed:"), `preamble failure did not produce a source diagnostic:\n${output}`);
+    assert(output.includes("TeX preamble 'preamble.tex' could not be read"), `preamble failure omitted its operation:\n${output}`);
+    assert(output.includes(preamblePath), `preamble failure omitted the resolved path:\n${output}`);
+    assert(output.includes("file was expected"), `preamble failure omitted the actual cause:\n${output}`);
+    assert(!output.includes("LayoutTraceWriteFailed:"), `preamble input failure was mislabeled as trace output failure:\n${output}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testDebugOutputWriteFailures() {
+  try {
+    await access("/dev/full");
+  } catch {
+    return;
+  }
+
+  const project = await mkdtempProject("ss-debug-output-failure-");
+  try {
+    await writeDeck(project);
+    for (const testCase of [
+      {
+        label: "schedule trace",
+        args: ["debug", "schedule", "slide.ss", "--output", "/dev/full"],
+        code: "ScheduleTraceWriteFailed:",
+      },
+      {
+        label: "layout trace",
+        args: ["debug", "layout", "trace", "slide.ss", "--output", "/dev/full"],
+        code: "LayoutTraceWriteFailed:",
+      },
+    ]) {
+      const result = await spawnCollect(ssBin, testCase.args, project);
+      const output = `${result.stdout}\n${result.stderr}`;
+      assert(result.code !== 0, `${testCase.label} should fail when the destination cannot accept data`);
+      assert(output.includes(testCase.code), `${testCase.label} failure omitted its operation:\n${output}`);
+      assert(output.includes("/dev/full"), `${testCase.label} failure omitted the output path:\n${output}`);
+      assert(output.includes("no free space"), `${testCase.label} failure omitted the operating-system reason:\n${output}`);
+      assert(!/\bTraceWriteFailed\b/.test(output), `${testCase.label} leaked the old internal error name:\n${output}`);
+    }
   } finally {
     await rm(project, { recursive: true, force: true });
   }
