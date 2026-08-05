@@ -38,6 +38,33 @@ static GHashTable *ss_font_source_cache;
 static GPtrArray *ss_registered_font_paths;
 static _Thread_local uint64_t ss_thread_font_config_generation;
 static _Thread_local int ss_thread_font_config_valid;
+static _Thread_local char ss_pdf_last_error_message[512];
+static _Thread_local int ss_pdf_last_error_write;
+
+static int ss_pdf_status_is_write_failure(cairo_status_t status) {
+    return status == CAIRO_STATUS_WRITE_ERROR ||
+        status == CAIRO_STATUS_FILE_NOT_FOUND ||
+        status == CAIRO_STATUS_TEMP_FILE_ERROR;
+}
+
+static void ss_pdf_record_last_error(const char *message, int is_write) {
+    snprintf(
+        ss_pdf_last_error_message,
+        sizeof(ss_pdf_last_error_message),
+        "%s",
+        message == NULL ? "unknown Cairo PDF failure" : message
+    );
+    ss_pdf_last_error_write = is_write;
+}
+
+void ss_pdf_clear_last_error(void) {
+    ss_pdf_last_error_message[0] = '\0';
+    ss_pdf_last_error_write = 0;
+}
+
+const char *ss_pdf_last_error(void) {
+    return ss_pdf_last_error_message;
+}
 
 static void ss_font_source_cache_clear(void);
 
@@ -464,7 +491,11 @@ static void ss_pdf_destroy_font_faces(SsPdf *pdf) {
 }
 
 static cairo_font_face_t *ss_pdf_font_face(SsPdf *pdf, const char *path, long index) {
-    if (pdf == NULL || path == NULL) return NULL;
+    if (pdf == NULL) return NULL;
+    if (path == NULL || path[0] == '\0') {
+        ss_pdf_set_error(pdf, "missing PDF font path");
+        return NULL;
+    }
     for (SsPdfFontFace *entry = pdf->font_faces; entry != NULL; entry = entry->next) {
         if (entry->index == index && strcmp(entry->path, path) == 0) return entry->face;
     }
@@ -474,15 +505,49 @@ static cairo_font_face_t *ss_pdf_font_face(SsPdf *pdf, const char *path, long in
     cairo_font_face_t *cairo_face = NULL;
     SsFtFaceData *face_data = NULL;
     SsPdfFontFace *entry = NULL;
-    if (FT_Init_FreeType(&library) != 0) goto fail;
-    if (FT_New_Face(library, path, index, &face) != 0) goto fail;
+    if (FT_Init_FreeType(&library) != 0) {
+        ss_pdf_set_error(pdf, "could not initialize FreeType for PDF text");
+        goto fail;
+    }
+    if (FT_New_Face(library, path, index, &face) != 0) {
+        snprintf(pdf->error_message, sizeof(pdf->error_message), "could not load PDF font face: %s", path);
+        goto fail;
+    }
     cairo_face = cairo_ft_font_face_create_for_ft_face(face, 0);
-    if (cairo_face == NULL || cairo_font_face_status(cairo_face) != CAIRO_STATUS_SUCCESS) goto fail;
+    if (cairo_face == NULL) {
+        ss_pdf_set_error(pdf, "could not allocate the Cairo PDF font face");
+        goto fail;
+    }
+    const cairo_status_t face_status = cairo_font_face_status(cairo_face);
+    if (face_status != CAIRO_STATUS_SUCCESS) {
+        snprintf(
+            pdf->error_message,
+            sizeof(pdf->error_message),
+            "could not create the Cairo PDF font face: %s",
+            cairo_status_to_string(face_status)
+        );
+        goto fail;
+    }
     face_data = (SsFtFaceData *)calloc(1, sizeof(SsFtFaceData));
-    if (face_data == NULL) goto fail;
+    if (face_data == NULL) {
+        ss_pdf_set_error(pdf, "could not allocate PDF font-face state");
+        goto fail;
+    }
     face_data->library = library;
     face_data->face = face;
-    if (cairo_font_face_set_user_data(cairo_face, &ss_ft_face_data_key, face_data, ss_ft_face_data_destroy) != CAIRO_STATUS_SUCCESS) {
+    const cairo_status_t user_data_status = cairo_font_face_set_user_data(
+        cairo_face,
+        &ss_ft_face_data_key,
+        face_data,
+        ss_ft_face_data_destroy
+    );
+    if (user_data_status != CAIRO_STATUS_SUCCESS) {
+        snprintf(
+            pdf->error_message,
+            sizeof(pdf->error_message),
+            "could not retain the PDF font face: %s",
+            cairo_status_to_string(user_data_status)
+        );
         goto fail;
     }
     face_data = NULL;
@@ -490,10 +555,16 @@ static cairo_font_face_t *ss_pdf_font_face(SsPdf *pdf, const char *path, long in
     face = NULL;
 
     entry = (SsPdfFontFace *)calloc(1, sizeof(SsPdfFontFace));
-    if (entry == NULL) goto fail;
+    if (entry == NULL) {
+        ss_pdf_set_error(pdf, "could not allocate the PDF font-face cache entry");
+        goto fail;
+    }
     const size_t path_length = strlen(path);
     entry->path = (char *)malloc(path_length + 1);
-    if (entry->path == NULL) goto fail;
+    if (entry->path == NULL) {
+        ss_pdf_set_error(pdf, "could not copy the PDF font path");
+        goto fail;
+    }
     memcpy(entry->path, path, path_length + 1);
     entry->index = index;
     entry->face = cairo_face;
@@ -786,20 +857,33 @@ static char *ss_pdf_link_attributes(
 }
 
 static int ss_pdf_begin_link(SsPdf *pdf, double x, double y, double width, double height, const char *key, const char *value, const char *suffix) {
-    if (pdf == NULL || pdf->cr == NULL || value == NULL) return 1;
+    if (pdf == NULL) return 1;
+    if (pdf->cr == NULL || key == NULL || value == NULL) {
+        ss_pdf_set_error(pdf, "invalid PDF link");
+        return 1;
+    }
     char *attributes = ss_pdf_link_attributes(x, y, width, height, key, value, suffix);
-    if (attributes == NULL) return 1;
+    if (attributes == NULL) {
+        ss_pdf_set_error(pdf, "could not prepare PDF link attributes");
+        return 1;
+    }
     cairo_tag_begin(pdf->cr, CAIRO_TAG_LINK, attributes);
     free(attributes);
     return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
 SsPdf *ss_pdf_create(const char *path, double width, double height) {
+    ss_pdf_clear_last_error();
     SsPdf *pdf = (SsPdf *)calloc(1, sizeof(SsPdf));
-    if (pdf == NULL) return NULL;
+    if (pdf == NULL) {
+        ss_pdf_record_last_error("could not allocate the Cairo PDF renderer", 0);
+        return NULL;
+    }
 
     pdf->surface = cairo_pdf_surface_create(path, width, height);
     if (pdf->surface == NULL || cairo_surface_status(pdf->surface) != CAIRO_STATUS_SUCCESS) {
+        const cairo_status_t status = pdf->surface == NULL ? CAIRO_STATUS_NO_MEMORY : cairo_surface_status(pdf->surface);
+        ss_pdf_record_last_error(cairo_status_to_string(status), ss_pdf_status_is_write_failure(status));
         ss_pdf_destroy(pdf);
         return NULL;
     }
@@ -807,6 +891,8 @@ SsPdf *ss_pdf_create(const char *path, double width, double height) {
     pdf->pdf_cr = cairo_create(pdf->surface);
     pdf->cr = pdf->pdf_cr;
     if (pdf->pdf_cr == NULL || cairo_status(pdf->pdf_cr) != CAIRO_STATUS_SUCCESS) {
+        const cairo_status_t status = pdf->pdf_cr == NULL ? CAIRO_STATUS_NO_MEMORY : cairo_status(pdf->pdf_cr);
+        ss_pdf_record_last_error(cairo_status_to_string(status), ss_pdf_status_is_write_failure(status));
         ss_pdf_destroy(pdf);
         return NULL;
     }
@@ -823,15 +909,39 @@ void ss_pdf_destroy(SsPdf *pdf) {
 }
 
 const char *ss_pdf_status_string(const SsPdf *pdf) {
-    if (pdf == NULL) return "invalid PDF renderer";
-    if (pdf->error_message[0] != '\0') return pdf->error_message;
+    const char *message = NULL;
+    int is_write = 0;
+    if (pdf == NULL) {
+        ss_pdf_record_last_error("invalid PDF renderer", ss_pdf_last_error_write);
+        return ss_pdf_last_error_message;
+    }
+    if (pdf->error_message[0] != '\0') {
+        message = pdf->error_message;
+    }
+    if (message == NULL && pdf->cr != NULL && cairo_status(pdf->cr) != CAIRO_STATUS_SUCCESS) {
+        const cairo_status_t status = cairo_status(pdf->cr);
+        message = cairo_status_to_string(status);
+        is_write = ss_pdf_status_is_write_failure(status);
+    }
+    if (message == NULL && pdf->surface != NULL && cairo_surface_status(pdf->surface) != CAIRO_STATUS_SUCCESS) {
+        const cairo_status_t status = cairo_surface_status(pdf->surface);
+        message = cairo_status_to_string(status);
+        is_write = ss_pdf_status_is_write_failure(status);
+    }
+    if (message == NULL) message = cairo_status_to_string(CAIRO_STATUS_SUCCESS);
+    ss_pdf_record_last_error(message, is_write);
+    return ss_pdf_last_error_message;
+}
+
+int ss_pdf_failure_is_write(const SsPdf *pdf) {
+    if (pdf == NULL) return ss_pdf_last_error_write;
     if (pdf->cr != NULL && cairo_status(pdf->cr) != CAIRO_STATUS_SUCCESS) {
-        return cairo_status_to_string(cairo_status(pdf->cr));
+        return ss_pdf_status_is_write_failure(cairo_status(pdf->cr));
     }
     if (pdf->surface != NULL && cairo_surface_status(pdf->surface) != CAIRO_STATUS_SUCCESS) {
-        return cairo_status_to_string(cairo_surface_status(pdf->surface));
+        return ss_pdf_status_is_write_failure(cairo_surface_status(pdf->surface));
     }
-    return cairo_status_to_string(CAIRO_STATUS_SUCCESS);
+    return 0;
 }
 
 void ss_pdf_set_creator(SsPdf *pdf, const char *creator) {
@@ -850,7 +960,11 @@ void ss_pdf_end_page(SsPdf *pdf) {
 }
 
 int ss_pdf_finish(SsPdf *pdf) {
-    if (pdf == NULL || pdf->surface == NULL || pdf->pdf_cr == NULL) return 1;
+    if (pdf == NULL) return 1;
+    if (pdf->surface == NULL || pdf->pdf_cr == NULL) {
+        ss_pdf_set_error(pdf, "invalid PDF renderer state while finishing output");
+        return 1;
+    }
     cairo_surface_finish(pdf->surface);
     if (cairo_status(pdf->pdf_cr) != CAIRO_STATUS_SUCCESS) return 1;
     if (cairo_surface_status(pdf->surface) != CAIRO_STATUS_SUCCESS) return 1;
@@ -1152,16 +1266,25 @@ void ss_pdf_end_link(SsPdf *pdf) {
 }
 
 int ss_pdf_add_destination(SsPdf *pdf, const char *name, double x, double y) {
-    if (pdf == NULL || pdf->cr == NULL || name == NULL) return 1;
+    if (pdf == NULL) return 1;
+    if (pdf->cr == NULL || name == NULL) {
+        ss_pdf_set_error(pdf, "invalid PDF destination");
+        return 1;
+    }
     char *escaped = ss_pdf_escape_tag_string(name);
-    if (escaped == NULL) return 1;
+    if (escaped == NULL) {
+        ss_pdf_set_error(pdf, "could not escape the PDF destination name");
+        return 1;
+    }
     const int len = snprintf(NULL, 0, "name='%s' x=%.17g y=%.17g", escaped, x, y);
     if (len < 0) {
+        ss_pdf_set_error(pdf, "could not format PDF destination attributes");
         free(escaped);
         return 1;
     }
     char *attributes = (char *)malloc((size_t)len + 1);
     if (attributes == NULL) {
+        ss_pdf_set_error(pdf, "could not allocate PDF destination attributes");
         free(escaped);
         return 1;
     }
@@ -1226,8 +1349,13 @@ int ss_pdf_draw_glyph_run(
     int cluster_count,
     int backward
 ) {
-    if (pdf == NULL || pdf->cr == NULL || font_path == NULL || utf8 == NULL || utf8_length < 0 ||
-        glyph_count < 0 || cluster_count < 0 || font_size <= 0) return 1;
+    if (pdf == NULL) return 1;
+    if (pdf->cr == NULL || font_path == NULL || utf8 == NULL || utf8_length < 0 ||
+        glyph_count < 0 || cluster_count < 0 || font_size <= 0 ||
+        (glyph_count > 0 && glyphs == NULL) || (cluster_count > 0 && clusters == NULL)) {
+        ss_pdf_set_error(pdf, "invalid PDF glyph run");
+        return 1;
+    }
 
     cairo_font_face_t *cairo_face = NULL;
     cairo_glyph_t *cairo_glyphs = NULL;
@@ -1235,11 +1363,17 @@ int ss_pdf_draw_glyph_run(
     int result = 1;
 
     cairo_face = ss_pdf_font_face(pdf, font_path, font_index);
-    if (cairo_face == NULL) goto cleanup;
+    if (cairo_face == NULL) {
+        if (pdf->error_message[0] == '\0') ss_pdf_set_error(pdf, "could not load the PDF font face");
+        goto cleanup;
+    }
 
     if (glyph_count > 0) {
         cairo_glyphs = cairo_glyph_allocate(glyph_count);
-        if (cairo_glyphs == NULL) goto cleanup;
+        if (cairo_glyphs == NULL) {
+            ss_pdf_set_error(pdf, "could not allocate Cairo glyphs for PDF text");
+            goto cleanup;
+        }
         for (int index = 0; index < glyph_count; index++) {
             cairo_glyphs[index].index = glyphs[index].id;
             cairo_glyphs[index].x = glyphs[index].x;
@@ -1248,7 +1382,10 @@ int ss_pdf_draw_glyph_run(
     }
     if (cluster_count > 0) {
         cairo_clusters = cairo_text_cluster_allocate(cluster_count);
-        if (cairo_clusters == NULL) goto cleanup;
+        if (cairo_clusters == NULL) {
+            ss_pdf_set_error(pdf, "could not allocate Cairo text clusters for PDF text");
+            goto cleanup;
+        }
         for (int index = 0; index < cluster_count; index++) {
             cairo_clusters[index].num_bytes = clusters[index].bytes;
             cairo_clusters[index].num_glyphs = clusters[index].glyphs;
