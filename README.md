@@ -112,17 +112,26 @@ That means document-wide behavior such as adding a table of contents or page num
 bolted on from outside the language. Yes, this is directed at you (and me), the
 person who hand-wrote a ToC and forgot to update it.
 
-### 3. Layout Should Be Precise When You Need It
+### 3. WYSIWYG-integrated Layout Descriptions
 
-Layout relationships between components can be expressed precisely as
-constraints:
+Basically, you can describe layout by adding constraints between objects:
 
 ```text
 ~ program.bottom == caption.top + 10
 ```
 
-Precise layout constraints let you push slide quality as far as you want. ss
-also has LSP and editor support: when something overflows, it will always warn
+This method is enough to describe most layouts, but when you need to specify more 
+precisely, you can use WYSIWYG editor that is integrated with the language.
+
+<figure>
+    <img src="assets/wysiwyg.png" alt="wysiwyg editor" width="1080" />
+</figure>
+
+
+You can adjust the position of objects by dragging them in the editor, and ss will generate the corresponding constraints
+in the source code. This allows you to use the editor for layout while still keeping the source code as the single source of truth (SSoT).
+
+ss also has LSP and editor support: when something overflows, it will always warn
 you, and the default layout still gives you a reasonable starting point when
 you do not want to specify every constraint.
 
