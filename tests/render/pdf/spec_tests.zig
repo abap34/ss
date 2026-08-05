@@ -292,6 +292,42 @@ test "render PDF spec: persistent worker font maps follow registered font genera
     }
 }
 
+test "render PDF spec: cached resources replace equal-sized corrupt files" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/resource-cache", .{tmp.sub_path[0..]});
+    defer allocator.free(root);
+
+    const source = "<svg>ok</svg>";
+    const id = render.identifyResource(.svg, source);
+    var entries = [_]render.Resource{.{
+        .id = id,
+        .kind = .svg,
+        .name = @constCast("asset.svg"),
+        .bytes = @constCast(source),
+        .metadata = .{ .svg = .{ .width = 1, .height = 1, .view_box = null } },
+    }};
+    const graph = render.ResourceGraph{ .entries = &entries };
+
+    var first = try pdf_backend.ResourceFiles.initCached(allocator, testing.io, &graph, root);
+    first.deinit();
+
+    const hex = std.fmt.bytesToHex(id, .lower);
+    const path = try std.fmt.allocPrint(allocator, "{s}/resources/{s}.svg", .{ root, &hex });
+    defer allocator.free(path);
+    const corrupt = try allocator.alloc(u8, source.len);
+    defer allocator.free(corrupt);
+    @memset(corrupt, 'x');
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = corrupt, .flags = .{ .truncate = true } });
+
+    var second = try pdf_backend.ResourceFiles.initCached(allocator, testing.io, &graph, root);
+    second.deinit();
+    const restored = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, allocator, .unlimited);
+    defer allocator.free(restored);
+    try testing.expectEqualStrings(source, restored);
+}
+
 test "render PDF spec: Cairo shim and page merge preserve link annotations and destinations" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
