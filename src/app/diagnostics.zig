@@ -37,12 +37,12 @@ pub fn printImportFailureDiagnostic(
     io: std.Io,
     path: []const u8,
     source: []const u8,
-    asset_base_dir: []const u8,
+    import_base_dir: []const u8,
     module: *const ast.Module,
     overlay: ?*const module_loader.SourceOverlay,
     diagnostics: *const module_loader.LoadDiagnostics,
 ) void {
-    const span = module_loader.importFailureSpan(allocator, io, asset_base_dir, module, overlay, diagnostics) orelse return;
+    const span = module_loader.importFailureSpan(allocator, io, import_base_dir, module, overlay, diagnostics) orelse return;
     error_report.print(.{
         .path = path,
         .source = source,

@@ -283,6 +283,51 @@ pub fn formatUnknownImportMessage(
     );
 }
 
+pub fn isImportReadFailure(err: anyerror) bool {
+    return err != error.FileNotFound and error_report.isFileSystemError(err);
+}
+
+pub fn formatImportReadFailureMessage(
+    allocator: std.mem.Allocator,
+    base_dir: []const u8,
+    import_spec: []const u8,
+    err: anyerror,
+) ![]u8 {
+    const resolved = try resolveExplicitPathForMessage(allocator, base_dir, import_spec);
+    defer allocator.free(resolved);
+    return switch (err) {
+        error.AccessDenied, error.PermissionDenied => std.fmt.allocPrint(
+            allocator,
+            "ImportReadFailed: module file is not readable: {s}",
+            .{resolved},
+        ),
+        error.FileTooBig, error.FileTooLarge, error.StreamTooLong => std.fmt.allocPrint(
+            allocator,
+            "ImportReadFailed: module file exceeds the {d}-byte limit: {s}",
+            .{ max_module_bytes, resolved },
+        ),
+        error.IsDir => std.fmt.allocPrint(
+            allocator,
+            "ImportReadFailed: module path is a directory: {s}",
+            .{resolved},
+        ),
+        error.NotDir => std.fmt.allocPrint(
+            allocator,
+            "ImportReadFailed: a module path component is not a directory: {s}",
+            .{resolved},
+        ),
+        else => blk: {
+            if (!isImportReadFailure(err)) return error.UnexpectedImportReadFailure;
+            var reason_buf: [256]u8 = undefined;
+            break :blk std.fmt.allocPrint(
+                allocator,
+                "ImportReadFailed: could not read module file {s}: {s}",
+                .{ resolved, error_report.formatErrorReason(&reason_buf, err) },
+            );
+        },
+    };
+}
+
 pub const UnknownImportReport = struct {
     message: []u8,
     span: ast.Span,
@@ -308,6 +353,27 @@ pub fn findUnknownImportReport(
                 };
             },
             else => return err,
+        };
+        freeResolvedModule(allocator, resolved);
+    }
+    return null;
+}
+
+pub fn findImportReadFailureReport(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    base_dir: []const u8,
+    program: ast.Module,
+    overlay: ?*const SourceOverlay,
+    expected_error: anyerror,
+) !?UnknownImportReport {
+    for (program.imports.items) |import_decl| {
+        const resolved = resolveImport(allocator, io, base_dir, import_decl.spec, overlay) catch |err| {
+            if (err != expected_error) return err;
+            return .{
+                .message = try formatImportReadFailureMessage(allocator, base_dir, import_decl.spec, err),
+                .span = import_decl.span,
+            };
         };
         freeResolvedModule(allocator, resolved);
     }
@@ -521,6 +587,21 @@ const Builder = struct {
                     const message = try formatUnknownImportMessage(self.allocator, importer_base_dir, import_decl.spec);
                     defer self.allocator.free(message);
                     try self.addDiagnostic(path orelse spec, text, .@"error", "UnknownImport", message, .{ .start = import_decl.span.start, .end = import_decl.span.end });
+                    if (self.print_diagnostics) {
+                        error_report.print(.{
+                            .path = path orelse spec,
+                            .source = text,
+                            .severity = .@"error",
+                            .message = message,
+                            .span = .{ .start = import_decl.span.start, .end = import_decl.span.end },
+                        });
+                    }
+                    return error.DiagnosticsFailed;
+                }
+                if (isImportReadFailure(err)) {
+                    const message = try formatImportReadFailureMessage(self.allocator, importer_base_dir, import_decl.spec, err);
+                    defer self.allocator.free(message);
+                    try self.addDiagnostic(path orelse spec, text, .@"error", "ImportReadFailed", message, .{ .start = import_decl.span.start, .end = import_decl.span.end });
                     if (self.print_diagnostics) {
                         error_report.print(.{
                             .path = path orelse spec,

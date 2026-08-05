@@ -62,7 +62,18 @@ pub fn analyzeFile(
 ) !AnalyzedProject {
     if (progress) |p| p.begin("Read inputs");
     errdefer if (progress) |p| p.abort();
-    var source = try readSource(io, allocator, request);
+    var source = readSource(io, allocator, request) catch |err| {
+        if (!error_report.isFileSystemError(err)) return err;
+        var message_buf: [8192]u8 = undefined;
+        error_report.print(.{
+            .path = request.input_path,
+            .source = "",
+            .severity = .@"error",
+            .message = error_report.formatPathFailure(&message_buf, "InputReadFailed", "read input file", request.input_path, err),
+            .span = null,
+        });
+        return error.DiagnosticsFailed;
+    };
     errdefer allocator.free(source);
     if (progress) |p| p.complete();
 
@@ -72,9 +83,10 @@ pub fn analyzeFile(
     if (progress) |p| p.complete();
 
     if (progress) |p| p.begin("Analyze");
+    const import_base_dir = std.fs.path.dirname(request.input_path) orelse ".";
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
-    var index = analysis.loadModuleIndex(allocator, io, request.asset_base_dir, parsed.module, .{
+    var index = analysis.loadModuleIndex(allocator, io, import_base_dir, parsed.module, .{
         .overlay = request.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
@@ -83,10 +95,13 @@ pub fn analyzeFile(
         if (progress) |p| p.abort();
         if (load_diagnostics.items.items.len != 0) {
             app_diagnostics.printLoadDiagnostics(&load_diagnostics);
-            app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, request.asset_base_dir, &parsed.module, request.overlay, &load_diagnostics);
+            app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, import_base_dir, &parsed.module, request.overlay, &load_diagnostics);
             return error.DiagnosticsFailed;
         } else if (err == error.UnknownImport) {
             try printUnknownImportDiagnostic(allocator, io, request, source, parsed.module);
+            return error.DiagnosticsFailed;
+        } else if (module_loader.isImportReadFailure(err)) {
+            try printImportReadFailureDiagnostic(allocator, io, request, source, parsed.module, err);
             return error.DiagnosticsFailed;
         }
         return err;
@@ -98,18 +113,18 @@ pub fn analyzeFile(
         if (progress) |p| p.abort();
         if (err == error.UnknownImport) {
             try printUnknownImportDiagnostic(allocator, io, request, source, parsed.module);
-        } else if (err != error.DiagnosticsFailed) {
-            const message = try std.fmt.allocPrint(allocator, "BuildFailed: {s}", .{@errorName(err)});
-            defer allocator.free(message);
-            error_report.print(.{
-                .path = request.input_path,
-                .source = source,
-                .severity = .@"error",
-                .message = message,
-                .span = null,
-            });
+            return error.DiagnosticsFailed;
         }
-        return err;
+        if (err == error.DiagnosticsFailed or err == error.Canceled) return err;
+        var message_buf: [320]u8 = undefined;
+        error_report.print(.{
+            .path = request.input_path,
+            .source = source,
+            .severity = .@"error",
+            .message = error_report.formatBuildFailure(&message_buf, err),
+            .span = null,
+        });
+        return error.DiagnosticsFailed;
     };
     app_diagnostics.clearParseHoles(&parsed, allocator);
     errdefer state.deinit();
@@ -117,7 +132,17 @@ pub fn analyzeFile(
     var execution_graph = analysis.analyzeDocumentStateWithMode(allocator, &state, mode) catch |err| {
         if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), &state);
-        return err;
+        if (error_report.hasDocumentStateErrors(&state)) return error.DiagnosticsFailed;
+        if (err == error.Canceled) return err;
+        var message_buf: [320]u8 = undefined;
+        error_report.print(.{
+            .path = state.projectPath(),
+            .source = state.projectSource(),
+            .severity = .@"error",
+            .message = error_report.formatBuildFailure(&message_buf, err),
+            .span = null,
+        });
+        return error.DiagnosticsFailed;
     };
     errdefer if (execution_graph) |*graph| graph.deinit();
     if (progress) |p| p.complete();
@@ -136,7 +161,17 @@ pub fn evaluateDocument(state: *core.DocumentState, graph: *const analysis.execu
     lowering.evaluateDocument(state, graph, .{}) catch |err| {
         if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
-        return err;
+        if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
+        if (err == error.Canceled) return err;
+        var message_buf: [320]u8 = undefined;
+        error_report.print(.{
+            .path = state.projectPath(),
+            .source = state.projectSource(),
+            .severity = .@"error",
+            .message = error_report.formatBuildFailure(&message_buf, err),
+            .span = null,
+        });
+        return error.DiagnosticsFailed;
     };
     if (progress) |p| p.complete();
     if (error_report.hasDocumentStateErrors(state)) {
@@ -152,7 +187,17 @@ pub fn preparePages(state: *core.DocumentState, progress: ?*Progress) !core.prep
     var pages = core.prepared.prepare(state.allocator, state) catch |err| {
         if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
-        return err;
+        if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
+        if (err == error.Canceled) return err;
+        var message_buf: [320]u8 = undefined;
+        error_report.print(.{
+            .path = state.projectPath(),
+            .source = state.projectSource(),
+            .severity = .@"error",
+            .message = error_report.formatBuildFailure(&message_buf, err),
+            .span = null,
+        });
+        return error.DiagnosticsFailed;
     };
     errdefer pages.deinit(state.allocator);
     if (progress) |p| {
@@ -197,6 +242,7 @@ pub fn solveLayoutsWithTracePath(
     state: *core.DocumentState,
     pages: *const core.prepared.PreparedPages,
     trace_path: []const u8,
+    trace_failure: *core.layout.graph.TraceFailure,
     progress: ?*Progress,
     jobs: ?usize,
     highlight_languages: []const utils.highlight.Language,
@@ -207,6 +253,7 @@ pub fn solveLayoutsWithTracePath(
     try preloadLayoutArtifacts(io, state, pages, progress, jobs, highlight_languages);
     var layouts = render_layout.solvePreparedPages(io, state, pages, .{
         .trace_path = trace_path,
+        .trace_failure = trace_failure,
         .progress = layout_progress,
         .jobs = jobs,
         .highlight_languages = highlight_languages,
@@ -253,7 +300,31 @@ fn printUnknownImportDiagnostic(
     source: []const u8,
     program: ast.Module,
 ) !void {
-    var report = try module_loader.findUnknownImportReport(allocator, io, request.asset_base_dir, program, request.overlay) orelse return error.UnknownImport;
+    const import_base_dir = std.fs.path.dirname(request.input_path) orelse ".";
+    var report = try module_loader.findUnknownImportReport(allocator, io, import_base_dir, program, request.overlay) orelse return error.UnknownImport;
+    defer report.deinit(allocator);
+    error_report.print(.{
+        .path = request.input_path,
+        .source = source,
+        .severity = .@"error",
+        .message = report.message,
+        .span = .{
+            .start = report.span.start,
+            .end = report.span.end,
+        },
+    });
+}
+
+fn printImportReadFailureDiagnostic(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    request: types.SourceRequest,
+    source: []const u8,
+    program: ast.Module,
+    err: anyerror,
+) !void {
+    const import_base_dir = std.fs.path.dirname(request.input_path) orelse ".";
+    var report = try module_loader.findImportReadFailureReport(allocator, io, import_base_dir, program, request.overlay, err) orelse return err;
     defer report.deinit(allocator);
     error_report.print(.{
         .path = request.input_path,
