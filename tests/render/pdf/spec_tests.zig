@@ -360,6 +360,76 @@ test "render PDF spec: cached resources replace equal-sized corrupt files" {
     try testing.expectEqualStrings(source, restored);
 }
 
+test "render PDF spec: qpdf replaces selected pages in an immutable base document" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const first_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/replace-first.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(first_path);
+    const old_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/replace-old.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(old_path);
+    const last_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/replace-last.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(last_path);
+    const replacement_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/replacement.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(replacement_path);
+    const base_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/replace-base.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(base_path);
+    const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/replace-output.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(output_path);
+
+    try writeQpdfTestLayer(allocator, first_path, "first", "https://example.com/first");
+    try writeQpdfTestLayer(allocator, old_path, "old", "https://example.com/old");
+    try writeQpdfTestLayer(allocator, last_path, "last", "https://example.com/last");
+    try writeQpdfTestLayerSized(allocator, replacement_path, "replacement", "https://example.com/replacement", 400, 240);
+
+    const first_z = try allocator.dupeZ(u8, first_path);
+    defer allocator.free(first_z);
+    const old_z = try allocator.dupeZ(u8, old_path);
+    defer allocator.free(old_z);
+    const last_z = try allocator.dupeZ(u8, last_path);
+    defer allocator.free(last_z);
+    const replacement_z = try allocator.dupeZ(u8, replacement_path);
+    defer allocator.free(replacement_z);
+    const base_z = try allocator.dupeZ(u8, base_path);
+    defer allocator.free(base_z);
+    const output_z = try allocator.dupeZ(u8, output_path);
+    defer allocator.free(output_z);
+    const inputs = [_][*c]const u8{ first_z.ptr, old_z.ptr, last_z.ptr };
+    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_merge(base_z.ptr, inputs[0..].ptr, inputs.len, 1));
+    const replacements = [_][*c]const u8{replacement_z.ptr};
+    const page_indices = [_]usize{1};
+    try testing.expectEqual(
+        @as(c_int, 0),
+        c.ss_qpdf_replace_pages(
+            output_z.ptr,
+            base_z.ptr,
+            replacements[0..].ptr,
+            page_indices[0..].ptr,
+            replacements.len,
+        ),
+    );
+
+    var widths: [3]f64 = undefined;
+    var heights: [3]f64 = undefined;
+    try testing.expectEqual(
+        @as(c_int, 0),
+        c.ss_qpdf_page_sizes(output_z.ptr, 1, widths[0..].ptr, heights[0..].ptr, widths.len),
+    );
+    try testing.expectApproxEqAbs(@as(f64, 320), widths[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 400), widths[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 320), widths[2], 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 180), heights[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 240), heights[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 180), heights[2], 0.001);
+
+    const json = try qpdfJson(allocator, testing.io, output_path);
+    defer allocator.free(json);
+    try expectContains(json, "https://example.com/first");
+    try expectContains(json, "https://example.com/replacement");
+    try expectContains(json, "https://example.com/last");
+    try testing.expect(!contains(json, "https://example.com/old"));
+}
+
 test "render PDF spec: Cairo shim and page merge preserve link annotations and destinations" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -888,8 +958,19 @@ fn qpdfLayer(
 }
 
 fn writeQpdfTestLayer(allocator: std.mem.Allocator, path: []const u8, text: []const u8, uri: ?[]const u8) !void {
+    return writeQpdfTestLayerSized(allocator, path, text, uri, 320, 180);
+}
+
+fn writeQpdfTestLayerSized(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    text: []const u8,
+    uri: ?[]const u8,
+    width: f64,
+    height: f64,
+) !void {
     var pages = try allocator.alloc(render.Page, 1);
-    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    pages[0] = .{ .page_id = 1, .index = 0, .width = width, .height = height };
     var ir = render.Ir{ .pages = pages };
     defer ir.deinit(allocator);
     ir.semantics = try documentSemantics(allocator, pages.len);

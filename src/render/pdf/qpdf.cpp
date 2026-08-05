@@ -292,6 +292,66 @@ extern "C" int ss_qpdf_merge(
     return 1;
 }
 
+extern "C" int ss_qpdf_replace_pages(
+    char const* output,
+    char const* base,
+    char const* const* replacements,
+    size_t const* page_indices,
+    size_t replacement_count
+) {
+    ss_qpdf_error.clear();
+    if (
+        output == nullptr ||
+        base == nullptr ||
+        (replacement_count != 0 && (replacements == nullptr || page_indices == nullptr))
+    ) {
+        ss_qpdf_error = "invalid PDF page replacement arguments";
+        return 1;
+    }
+    char const* stage = "read PDF page replacement base";
+    try {
+        SsQpdfDocument destination(base, true);
+        QPDFPageDocumentHelper destination_pages(destination.pdf);
+        std::vector<std::unique_ptr<SsQpdfDocument>> sources;
+        sources.reserve(replacement_count);
+        size_t previous_index = 0;
+        for (size_t replacement_index = 0; replacement_index < replacement_count; ++replacement_index) {
+            const size_t page_index = page_indices[replacement_index];
+            if (replacement_index != 0 && page_index <= previous_index) {
+                throw std::runtime_error("PDF replacement page indices are not strictly increasing");
+            }
+            previous_index = page_index;
+            auto pages = destination_pages.getAllPages();
+            if (page_index >= pages.size()) {
+                throw std::runtime_error("PDF replacement page index is out of range");
+            }
+            if (replacements[replacement_index] == nullptr) {
+                throw std::runtime_error("null PDF replacement input path");
+            }
+            stage = "read PDF page replacement input";
+            sources.push_back(std::make_unique<SsQpdfDocument>(replacements[replacement_index], true));
+            auto& source = *sources.back();
+            if (source.pages.size() != 1) {
+                throw std::runtime_error("PDF replacement input is not a single-page document");
+            }
+            stage = "replace PDF page";
+            auto old_page = pages.at(page_index);
+            destination_pages.addPageAt(source.pages.at(0), true, old_page);
+            destination_pages.removePage(old_page);
+        }
+        stage = "write PDF page replacement result";
+        QPDFWriter writer(destination.pdf, output);
+        writer.setDeterministicID(true);
+        writer.write();
+        return 0;
+    } catch (std::exception const& error) {
+        ss_qpdf_error = std::string(stage) + ": " + error.what();
+    } catch (...) {
+        ss_qpdf_error = std::string(stage) + ": libqpdf failed with an unknown exception";
+    }
+    return 1;
+}
+
 extern "C" int ss_qpdf_empty(char const* output) {
     ss_qpdf_error.clear();
     if (output == nullptr) {
