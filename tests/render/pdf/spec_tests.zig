@@ -292,7 +292,7 @@ test "render PDF spec: persistent worker font maps follow registered font genera
     }
 }
 
-test "render PDF spec: Cairo shim writes URI and destination link annotations" {
+test "render PDF spec: Cairo shim and page merge preserve link annotations and destinations" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const allocator = testing.allocator;
@@ -300,23 +300,32 @@ test "render PDF spec: Cairo shim writes URI and destination link annotations" {
     defer allocator.free(pdf_path);
     const pdf_path_z = try allocator.dupeZ(u8, pdf_path);
     defer allocator.free(pdf_path_z);
+    const merged_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/merged-links.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(merged_path);
+    const merged_path_z = try allocator.dupeZ(u8, merged_path);
+    defer allocator.free(merged_path_z);
 
-    const pdf = c.ss_pdf_create(pdf_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
-    defer c.ss_pdf_destroy(pdf);
-    try expectCString(c.ss_pdf_status_string(pdf));
-    c.ss_pdf_begin_page(pdf, 320, 180);
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_add_destination(pdf, "target", 20, 20));
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_uri_link(pdf, 20, 20, 120, 24, "https://example.com"));
-    c.ss_pdf_fill_rect(pdf, 20, 20, 120, 24, 0, 0, 0);
-    c.ss_pdf_end_link(pdf);
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_dest_link(pdf, 20, 60, 120, 24, "target"));
-    c.ss_pdf_fill_rect(pdf, 20, 60, 120, 24, 0, 0, 0);
-    c.ss_pdf_end_link(pdf);
-    c.ss_pdf_end_page(pdf);
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
+    {
+        const pdf = c.ss_pdf_create(pdf_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
+        defer c.ss_pdf_destroy(pdf);
+        try expectCString(c.ss_pdf_status_string(pdf));
+        c.ss_pdf_begin_page(pdf, 320, 180);
+        try testing.expectEqual(@as(c_int, 0), c.ss_pdf_add_destination(pdf, "target", 20, 20));
+        try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_uri_link(pdf, 20, 20, 120, 24, "https://example.com"));
+        c.ss_pdf_fill_rect(pdf, 20, 20, 120, 24, 0, 0, 0);
+        c.ss_pdf_end_link(pdf);
+        try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_dest_link(pdf, 20, 60, 120, 24, "target"));
+        c.ss_pdf_fill_rect(pdf, 20, 60, 120, 24, 0, 0, 0);
+        c.ss_pdf_end_link(pdf);
+        c.ss_pdf_end_page(pdf);
+        try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
+    }
 
-    const json = try qpdfJson(allocator, testing.io, pdf_path);
+    const inputs = [_][*c]const u8{pdf_path_z.ptr};
+    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_merge(merged_path_z.ptr, inputs[0..].ptr, inputs.len, 1));
+    const json = try qpdfJson(allocator, testing.io, merged_path);
     defer allocator.free(json);
+    try expectContains(json, "\"/Names\"");
     try expectContains(json, "\"/Annots\"");
     try expectContains(json, "\"/Subtype\": \"/Link\"");
     try expectContains(json, "\"/S\": \"/URI\"");
