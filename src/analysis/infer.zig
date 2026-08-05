@@ -7,6 +7,7 @@ const semantic_env = @import("../language/env.zig");
 const registry = @import("../language/registry.zig");
 const contracts = @import("contracts.zig");
 const semantic_types = @import("types.zig");
+const utils = @import("utils");
 
 const Type = ast.Type;
 const SemanticEnv = semantic_env.SemanticEnv;
@@ -37,6 +38,29 @@ fn addUserReport(state: ?*core.DocumentState, origin: []const u8, comptime fmt: 
     try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = message },
     });
+}
+
+fn diagnosticOriginForSpan(allocator: std.mem.Allocator, origin: []const u8, span: ast.Span) ![]const u8 {
+    const located = utils.err.parseLocatedOrigin(origin) orelse return allocator.dupe(u8, origin);
+    return statementOrigin(allocator, located.path orelse "", span);
+}
+
+fn preferredDiagnosticSpan(primary: ?ast.Span, fallback: ?ast.Span) ?ast.Span {
+    return if (primary) |span| span else fallback;
+}
+
+fn addUserReportAtSpan(
+    allocator: std.mem.Allocator,
+    state: ?*core.DocumentState,
+    origin: []const u8,
+    span: ?ast.Span,
+    comptime fmt: []const u8,
+    args: anytype,
+) !void {
+    if (state == null or span == null) return addUserReport(state, origin, fmt, args);
+    const precise_origin = try diagnosticOriginForSpan(allocator, origin, span.?);
+    defer allocator.free(precise_origin);
+    return addUserReport(state, precise_origin, fmt, args);
 }
 
 fn rejectDuplicateBinding(state: ?*core.DocumentState, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
@@ -155,7 +179,7 @@ fn exprInfoWithOptions(
                 info.function_labels = try singleFunctionLabel(allocator, func.name);
                 break :blk info;
             }
-            try addUserReport(state, origin, "UnknownIdentifier: unknown identifier: {s}", .{name});
+            try addUserReportAtSpan(allocator, state, origin, ident.name_span, "UnknownIdentifier: unknown identifier: {s}", .{name});
             return error.UnknownIdentifier;
         },
         .call => |call| try inferCallInfo(allocator, state, sema, env, call, origin, options),
@@ -180,22 +204,22 @@ fn inferRecordInfo(
 ) !TypeInfo {
     const record_decl = sema.record(record.type_name) orelse {
         if (sema.enumExistsAny(record.type_name)) {
-            try addUserReport(state, origin, "InvalidRecordLiteral: {s} is an enum type, not a record; use {s}.<case>", .{ record.type_name, record.type_name });
+            try addUserReportAtSpan(allocator, state, origin, record.type_name_span, "InvalidRecordLiteral: {s} is an enum type, not a record; use {s}.<case>", .{ record.type_name, record.type_name });
             return error.InvalidType;
         }
-        try addUserReport(state, origin, "UnknownRecordType: unknown record type: {s}", .{record.type_name});
+        try addUserReportAtSpan(allocator, state, origin, record.type_name_span, "UnknownRecordType: unknown record type: {s}", .{record.type_name});
         return error.InvalidType;
     };
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     for (record.fields.items) |field_expr| {
         if (seen.contains(field_expr.name)) {
-            try addUserReport(state, origin, "DuplicateRecordField: field '{s}' is already set in {s}", .{ field_expr.name, record.type_name });
+            try addUserReportAtSpan(allocator, state, origin, field_expr.name_span, "DuplicateRecordField: field '{s}' is already set in {s}", .{ field_expr.name, record.type_name });
             return error.InvalidType;
         }
         try seen.put(field_expr.name, {});
         const field = sema.recordField(record.type_name, field_expr.name) orelse {
-            try addUserReport(state, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record.type_name, field_expr.name });
+            try addUserReportAtSpan(allocator, state, origin, field_expr.name_span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record.type_name, field_expr.name });
             return error.InvalidType;
         };
         const expected = field.value_type;
@@ -223,7 +247,7 @@ fn inferRecordUpdateInfo(
         return error.InvalidType;
     }
     const record_name = target_info.ty.class_name orelse {
-        try addUserReport(state, origin, "InvalidRecordUpdate: record type has no name", .{});
+        try addUserReport(state, origin, "InvalidRecordUpdate: ss produced a record type without a name while checking this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
 
@@ -247,7 +271,7 @@ fn rejectOverlappingRecordUpdateFields(
             defer allocator.free(left_text);
             const right_text = try ast.formatRecordPath(allocator, right.path.items);
             defer allocator.free(right_text);
-            try addUserReport(state, origin, "OverlappingRecordUpdate: update path '{s}' overlaps '{s}'", .{ left_text, right_text });
+            try addUserReportAtSpan(allocator, state, origin, right.path_span, "OverlappingRecordUpdate: update path '{s}' overlaps '{s}'", .{ left_text, right_text });
             return error.InvalidType;
         }
     }
@@ -267,7 +291,7 @@ fn inferRecordUpdateField(
     for (update_field.path.items, 0..) |segment, index| {
         if (segment.name_hole != null) return;
         const field = sema.recordField(current_record_name, segment.name) orelse {
-            try addUserReport(state, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment.name });
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment.name });
             return error.InvalidType;
         };
         const field_type = field.value_type;
@@ -282,11 +306,11 @@ fn inferRecordUpdateField(
             defer allocator.free(path);
             const label = try typeLabelAlloc(allocator, field_type);
             defer allocator.free(label);
-            try addUserReport(state, origin, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path, label });
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path, label });
             return error.InvalidType;
         }
         current_record_name = field_type.class_name orelse {
-            try addUserReport(state, origin, "InvalidRecordUpdatePath: record type has no name", .{});
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: ss produced a record type without a name while checking this update; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
     }
@@ -306,7 +330,7 @@ fn inferMemberInfo(
         const enum_name = member.target.ident.name;
         if (env.get(enum_name) == null and sema.function(enum_name) == null) {
             if (sema.enumExistsAny(enum_name)) {
-                try addUserReport(state, origin, "UnknownEnumCase: enum '{s}' has no case '{s}'", .{ enum_name, member.name });
+                try addUserReportAtSpan(allocator, state, origin, member.name_span, "UnknownEnumCase: enum '{s}' has no case '{s}'", .{ enum_name, member.name });
                 return error.InvalidType;
             }
         }
@@ -314,7 +338,7 @@ fn inferMemberInfo(
 
     const target_info = try exprInfoWithOptions(allocator, state, sema, env, member.target.*, origin, options);
     if (target_info.hole != null) return target_info;
-    return inferMemberInfoFromTargetInfo(allocator, state, sema, target_info, member.name, origin);
+    return inferMemberInfoFromTargetInfo(allocator, state, sema, target_info, member.name, member.name_span, origin);
 }
 
 fn inferMemberInfoFromTargetInfo(
@@ -323,22 +347,23 @@ fn inferMemberInfoFromTargetInfo(
     sema: *const SemanticEnv,
     target_info: TypeInfo,
     member_name: []const u8,
+    member_span: ?ast.Span,
     origin: []const u8,
 ) !TypeInfo {
     if (target_info.ty.kind == .optional) {
         const child = target_info.ty.optional_child orelse {
-            try addUserReport(state, origin, "InvalidOptionalType: optional type has no child", .{});
+            try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidOptionalType: ss produced an optional type without its child; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
-        if (child.kind == .record) return inferOptionalRecordMemberInfo(allocator, state, sema, child.*, member_name, origin);
+        if (child.kind == .record) return inferOptionalRecordMemberInfo(allocator, state, sema, child.*, member_name, member_span, origin);
     }
     if (target_info.ty.kind == .record) {
         const record_name = target_info.ty.class_name orelse {
-            try addUserReport(state, origin, "InvalidRecordType: record type has no name", .{});
+            try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidRecordType: ss produced a record type without a name; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
         const field = sema.recordField(record_name, member_name) orelse {
-            try addUserReport(state, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member_name });
+            try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member_name });
             return error.InvalidType;
         };
         const field_type = field.value_type;
@@ -347,12 +372,12 @@ fn inferMemberInfoFromTargetInfo(
         return infoFromType(result_type);
     }
     if (!isPropertyTarget(target_info)) {
-        try addUserReport(state, origin, "InvalidProperty: member target must be Document, Page, Object, or Selection<Object>", .{});
+        try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidProperty: member target must be Document, Page, Object, or Selection<Object>", .{});
         return error.InvalidType;
     }
     if (std.mem.eql(u8, member_name, "content")) return infoFromType(Type.string);
     const field = lookupFieldForTarget(sema, target_info, member_name) orelse {
-        try addUserReport(state, origin, "UnknownField: unknown field: {s}", .{member_name});
+        try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownField: unknown field: {s}", .{member_name});
         return error.InvalidType;
     };
     const field_type = field.value_type;
@@ -367,14 +392,15 @@ fn inferOptionalRecordMemberInfo(
     sema: *const SemanticEnv,
     record_type: Type,
     member_name: []const u8,
+    member_span: ?ast.Span,
     origin: []const u8,
 ) !TypeInfo {
     const record_name = record_type.class_name orelse {
-        try addUserReport(state, origin, "InvalidRecordType: record type has no name", .{});
+        try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidRecordType: ss produced a record type without a name; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
     const field = sema.recordField(record_name, member_name) orelse {
-        try addUserReport(state, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member_name });
+        try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member_name });
         return error.InvalidType;
     };
     const field_type = field.value_type;
@@ -488,7 +514,7 @@ fn inferCallInfo(
         if (const_info.ty.kind == .function and const_info.ty.fn_result != null) {
             return try inferFunctionValueCallInfo(allocator, state, sema, env, const_info, call.args.items, origin, options);
         }
-        try addUserReport(state, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.callee.name});
+        try addUserReportAtSpan(allocator, state, origin, preferredDiagnosticSpan(call.callee.name_span, call.callee.span), "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.callee.name});
         return error.UnknownFunction;
     }
     const descriptor = sema.callCallee(call.callee) orelse {
@@ -512,11 +538,11 @@ fn reportCallResolutionFailure(
     origin: []const u8,
 ) !void {
     switch (sema.resolveFunction(callee)) {
-        .unknown_alias => |alias| try addUserReport(state, origin, "UnknownModuleAlias: unknown import alias: {s}", .{alias}),
+        .unknown_alias => |alias| try addUserReportAtSpan(allocator, state, origin, preferredDiagnosticSpan(callee.qualifier_span, callee.span), "UnknownModuleAlias: unknown import alias: {s}", .{alias}),
         else => {
             const name = try callee.displayAlloc(allocator);
             defer allocator.free(name);
-            try addUserReport(state, origin, "UnknownFunction: unknown function: {s}", .{name});
+            try addUserReportAtSpan(allocator, state, origin, preferredDiagnosticSpan(callee.name_span, callee.span), "UnknownFunction: unknown function: {s}", .{name});
         },
     }
 }
@@ -1223,6 +1249,18 @@ fn validateExpectedFieldValue(
     value_info: TypeInfo,
     origin: []const u8,
 ) !void {
+    return validateExpectedFieldValueAtSpan(state.allocator, state, expected, key, value_info, origin, null);
+}
+
+fn validateExpectedFieldValueAtSpan(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    expected: Type,
+    key: []const u8,
+    value_info: TypeInfo,
+    origin: []const u8,
+    span: ?ast.Span,
+) !void {
     switch (semantic_types.assignability(value_info, expected)) {
         .assignable => return,
         .blocked_by_hole => return,
@@ -1233,9 +1271,11 @@ fn validateExpectedFieldValue(
         defer state.allocator.free(expected_label);
         const actual_label = try typeInfoLabelAlloc(state.allocator, value_info);
         defer state.allocator.free(actual_label);
-        try addUserReport(
+        try addUserReportAtSpan(
+            allocator,
             state,
             origin,
+            span,
             "InvalidFieldValue: field '{s}' expects {s}, got {s}",
             .{ key, expected_label, actual_label },
         );
@@ -1297,13 +1337,13 @@ fn validatePropertySetPath(
         }
         if (lookupFieldForTarget(sema, target_info, first.name)) |field| {
             if (path.len == 1) {
-                try validateFieldValue(sink, field, first.name, value_info, origin);
+                try validateExpectedFieldValueAtSpan(allocator, sink, field.value_type, first.name, value_info, origin, first.span);
                 return;
             }
             try validateNestedPropertySetPath(allocator, sink, sema, path, field.value_type, value_info, origin);
             return;
         }
-        try addUserReport(state, origin, "UnknownField: unknown field: {s}", .{first.name});
+        try addUserReportAtSpan(allocator, state, origin, first.span, "UnknownField: unknown field: {s}", .{first.name});
         return error.InvalidType;
     }
 }
@@ -1320,7 +1360,7 @@ fn memberPathPrefixInfo(
     for (path_prefix) |segment| {
         if (segment.name_hole != null) return infoFromHole(segment.name_hole.?);
         if (current_info.hole != null) return current_info;
-        current_info = try inferMemberInfoFromTargetInfo(allocator, state, sema, current_info, segment.name, origin);
+        current_info = try inferMemberInfoFromTargetInfo(allocator, state, sema, current_info, segment.name, segment.span, origin);
     }
     return current_info;
 }
@@ -1342,12 +1382,12 @@ fn validateMemberTargetPropertySetPath(
             return;
         }
         if (segment.name_hole != null) return;
-        current_info = try inferMemberInfoFromTargetInfo(allocator, state, sema, current_info, segment.name, origin);
+        current_info = try inferMemberInfoFromTargetInfo(allocator, state, sema, current_info, segment.name, segment.span, origin);
     }
     if (current_info.hole != null) return;
     const actual_label = try typeInfoLabelAlloc(allocator, current_info);
     defer allocator.free(actual_label);
-    try addUserReport(state, origin, "InvalidProperty: property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
+    try addUserReportAtSpan(allocator, state, origin, path[path.len - 1].span, "InvalidProperty: property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
     return error.InvalidType;
 }
 
@@ -1365,23 +1405,23 @@ fn validateNestedPropertySetPath(
         defer allocator.free(path_text);
         const label = try typeLabelAlloc(allocator, root_type);
         defer allocator.free(label);
-        try addUserReport(state, origin, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
+        try addUserReportAtSpan(allocator, state, origin, path[0].span, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
         return error.InvalidType;
     }
     var current_record_name = root_type.class_name orelse {
-        try addUserReport(state, origin, "InvalidRecordUpdatePath: record type has no name", .{});
+        try addUserReportAtSpan(allocator, state, origin, path[0].span, "InvalidRecordUpdatePath: ss produced a record type without a name while checking this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
     for (path[1..], 1..) |segment, index| {
         if (segment.name_hole != null) return;
         const field = sema.recordField(current_record_name, segment.name) orelse {
-            try addUserReport(state, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment.name });
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment.name });
             return error.InvalidType;
         };
         if (index + 1 == path.len) {
             const path_text = try ast.formatRecordPath(allocator, path[0 .. index + 1]);
             defer allocator.free(path_text);
-            try validateExpectedFieldValue(state, field.value_type, path_text, value_info, origin);
+            try validateExpectedFieldValueAtSpan(allocator, state, field.value_type, path_text, value_info, origin, segment.span);
             return;
         }
         if (field.value_type.kind != .record) {
@@ -1389,11 +1429,11 @@ fn validateNestedPropertySetPath(
             defer allocator.free(path_text);
             const label = try typeLabelAlloc(allocator, field.value_type);
             defer allocator.free(label);
-            try addUserReport(state, origin, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
             return error.InvalidType;
         }
         current_record_name = field.value_type.class_name orelse {
-            try addUserReport(state, origin, "InvalidRecordUpdatePath: record type has no name", .{});
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: ss produced a record type without a name while checking this update; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
     }

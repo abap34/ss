@@ -541,7 +541,7 @@ fn resolveAnchorPathInfo(
             return error.InvalidType;
         }
         const record_name = info.ty.class_name orelse {
-            try addUserReport(state, origin, "InvalidRecordType: record type has no name", .{});
+            try addUserReport(state, origin, "InvalidRecordType: ss produced a record type without a name; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
         const field = sema.recordField(record_name, field_name) orelse {
