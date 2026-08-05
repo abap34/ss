@@ -15,6 +15,23 @@ fn initEmptyDocumentState() !core.DocumentState {
     return try core.DocumentState.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
 }
 
+fn appendSparseSourceModule(state: *core.DocumentState, id: core.SourceModuleId) !void {
+    const spec = try testing.allocator.dupe(u8, "sparse-module");
+    errdefer testing.allocator.free(spec);
+    const source = try testing.allocator.dupe(u8, "");
+    errdefer testing.allocator.free(source);
+    try state.modules.append(testing.allocator, .{
+        .id = id,
+        .kind = .library,
+        .spec = spec,
+        .path = null,
+        .source = source,
+        .syntax = ast.Module.init(),
+        .implicit_import_ids = .empty,
+        .resolved_import_ids = .empty,
+    });
+}
+
 fn expectConstraint(
     state: *const core.DocumentState,
     target_node: core.NodeId,
@@ -28,6 +45,21 @@ fn expectConstraint(
         return;
     }
     return error.TestExpectedConstraint;
+}
+
+test "document state spec: module lookup supports indexed and sparse identifiers" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    try testing.expectEqual(state.project_module_id, state.moduleById(state.project_module_id).?.id);
+
+    const sparse_id: core.SourceModuleId = 7;
+    try appendSparseSourceModule(&state, sparse_id);
+
+    try testing.expectEqual(sparse_id, state.moduleById(sparse_id).?.id);
+    try testing.expectEqual(sparse_id, state.moduleByIdMutable(sparse_id).?.id);
+    try testing.expectEqual(@as(?*const core.SourceModule, null), state.moduleById(1));
+    try testing.expectEqual(@as(?*core.SourceModule, null), state.moduleByIdMutable(1));
 }
 
 test "document state spec: pages are ordered document children with one-based page indexes" {
@@ -61,6 +93,8 @@ test "document state spec: containment is idempotent for the same parent-child p
     const children = state.childrenOf(page).?;
     try testing.expectEqual(@as(usize, 1), children.len);
     try testing.expectEqual(object, children[0]);
+    try testing.expectEqual(page, state.parentPageOf(object).?);
+    try testing.expectEqual(page, state.layoutPageOf(object).?);
 }
 
 test "document state spec: page-local validation reports duplicate page ownership" {
@@ -74,7 +108,28 @@ test "document state spec: page-local validation reports duplicate page ownershi
 
     try state.validatePageLocalLayout();
 
+    try testing.expectEqual(first, state.parentPageOf(object).?);
+    try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(object));
     try expectDiagnosticCode(&state, "PageOwnershipConflict:");
+}
+
+test "document state spec: indirect group containment does not assign a page until placement" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    const page = try state.addPage("Page");
+    const child = try state.createObjectWithOrigin("child", null, .text, .text, "Child", null);
+    const group = try state.createGroupWithOrigin(&.{child}, null);
+
+    try testing.expectEqual(@as(?core.NodeId, null), state.parentPageOf(child));
+    try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(child));
+
+    try state.placeObjectOnPage(page, group);
+
+    try testing.expectEqual(page, state.parentPageOf(group).?);
+    try testing.expectEqual(page, state.layoutPageOf(group).?);
+    try testing.expectEqual(page, state.parentPageOf(child).?);
+    try testing.expectEqual(page, state.layoutPageOf(child).?);
 }
 
 test "document state spec: page-local validation reports cross-page constraints" {
