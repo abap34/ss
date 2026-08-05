@@ -583,6 +583,17 @@ fn addTestStep(
         import("project", modules.project),
         import("utils", modules.utils),
     }, null);
+    const app_output_app_mod = createCommonModule(ctx, "src/app.zig", modules, true);
+    app_output_app_mod.addOptions("build_options", build_options);
+    const app_output_spec_mod = createModule(ctx, "tests/app/output/spec_tests.zig", &.{
+        import("app", app_output_app_mod),
+        import("utils", modules.utils),
+    }, true);
+    addNativePdfHeadersAndLibraries(b, app_output_spec_mod);
+    const app_output_spec_tests = addQpdfTestArtifact(ctx, app_output_spec_mod);
+    const run_app_output_spec_tests = b.addRunArtifact(app_output_spec_tests);
+    test_step.dependOn(&run_app_output_spec_tests.step);
+    addFocusedTestStep(b, "test-app-output", "Run focused application output safety tests", &run_app_output_spec_tests.step);
     const compiler_mod = createCommonModule(ctx, "src/compiler.zig", modules, true);
     const eval_cancellation_spec_mod = createModule(ctx, "tests/eval/cancellation/spec_tests.zig", &.{
         import("compiler", compiler_mod),
@@ -658,6 +669,7 @@ fn addRenderTests(
         import("pdf_ffi", modules.pdf_ffi),
         import("render", modules.render),
         import("render_resources", modules.render_resources),
+        import("utils", modules.utils),
     }, true);
     const render_test_support_mod = createModule(ctx, "tests/render/support.zig", &.{
         import("core", modules.core),
@@ -694,6 +706,7 @@ fn addRenderTests(
         import("render", modules.render),
         import("pdfjs_assets", modules.pdfjs_assets),
         import("math_assets", modules.math_assets),
+        import("utils", modules.utils),
     }, null);
     const render_html_spec_mod = createModule(ctx, "tests/render/html/spec_tests.zig", &.{
         import("pdf_ffi", modules.pdf_ffi),
