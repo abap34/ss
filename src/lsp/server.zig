@@ -854,7 +854,7 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     const hook: *AnalysisLayoutContext = @ptrCast(@alignCast(context));
     try hook.server.checkCanceled();
     const layout_start = utils.measure_profile.start();
-    var pages = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph, .{
+    var prepared = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph, .{
         .resource_cache = &hook.server.render_resource_cache,
         .cancellation = .{
             .context = hook.server,
@@ -862,7 +862,7 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
         },
     });
     utils.measure_profile.recordWysiwyg(.evaluate_solve, layout_start);
-    defer pages.deinit(state.allocator);
+    defer prepared.pages.deinit(state.allocator);
     try hook.server.checkCanceled();
     const conflicts_json = try core.layout.conflicts.toJson(state.allocator, state);
     errdefer state.allocator.free(conflicts_json);
@@ -879,7 +879,7 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
                         defer collected.deinit(state.allocator);
                         if (translationPatchPreservesRenderedOutput(
                             state,
-                            &pages,
+                            &prepared.pages,
                             collected.translations,
                             hook.highlight_languages,
                         )) {
@@ -904,12 +904,13 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     }
 
     const render_start = utils.measure_profile.start();
-    var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &pages, .{
+    var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &prepared.pages, .{
         .jobs = 1,
         .highlight_languages = hook.highlight_languages,
         .resource_cache = &hook.server.render_resource_cache,
         .text_cache = &hook.server.text_shape_cache,
         .page_cache = &hook.server.render_page_cache,
+        .font_environment = prepared.font_environment,
     });
     utils.measure_profile.recordWysiwyg(.render_compile, render_start);
     defer render_ir.deinit(state.allocator);

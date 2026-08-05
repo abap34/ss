@@ -96,6 +96,19 @@ pub const WysiwygKind = enum {
     snapshot,
 };
 
+pub const RenderCompileKind = enum {
+    prepare_fonts,
+    font_environment,
+    text_cache_begin,
+    workers,
+    merge_pages,
+    finish_document,
+    finish_sources,
+    finish_semantics,
+    finish_catalogs,
+    finish_validation,
+};
+
 var enabled_state: std.atomic.Value(u8) = .init(0);
 
 var text_advance_hits = CountTime{};
@@ -104,8 +117,24 @@ var text_visual_hits = CountTime{};
 var text_visual_misses = CountTime{};
 var text_shape_hits = CountTime{};
 var text_shape_misses = CountTime{};
+var text_cache_restore = CountTime{};
+var text_cache_begin_document = CountTime{};
+var text_cache_materialize = CountTime{};
+var text_cache_share = CountTime{};
+var text_cache_clone = CountTime{};
+var text_cache_persist = CountTime{};
 var render_page_hits = CountTime{};
 var render_page_misses = CountTime{};
+var render_compile_prepare_fonts = CountTime{};
+var render_compile_font_environment = CountTime{};
+var render_compile_text_cache_begin = CountTime{};
+var render_compile_workers = CountTime{};
+var render_compile_merge_pages = CountTime{};
+var render_compile_finish_document = CountTime{};
+var render_compile_finish_sources = CountTime{};
+var render_compile_finish_semantics = CountTime{};
+var render_compile_finish_catalogs = CountTime{};
+var render_compile_finish_validation = CountTime{};
 
 var layout_measure_total = CountTime{};
 var layout_measure_lock_wait = CountTime{};
@@ -210,12 +239,53 @@ pub fn recordTextShape(hit: bool, start_ns: i128) void {
         text_shape_misses.add(elapsed(start_ns));
 }
 
+pub fn recordTextCacheRestore(start_ns: i128) void {
+    if (start_ns != 0) text_cache_restore.add(elapsed(start_ns));
+}
+
+pub fn recordTextCacheBeginDocument(start_ns: i128) void {
+    if (start_ns != 0) text_cache_begin_document.add(elapsed(start_ns));
+}
+
+pub fn recordTextCacheMaterialize(start_ns: i128) void {
+    if (start_ns != 0) text_cache_materialize.add(elapsed(start_ns));
+}
+
+pub fn recordTextCacheShare(start_ns: i128) void {
+    if (start_ns != 0) text_cache_share.add(elapsed(start_ns));
+}
+
+pub fn recordTextCacheClone(start_ns: i128) void {
+    if (start_ns != 0) text_cache_clone.add(elapsed(start_ns));
+}
+
+pub fn recordTextCachePersist(start_ns: i128) void {
+    if (start_ns != 0) text_cache_persist.add(elapsed(start_ns));
+}
+
 pub fn recordRenderPage(hit: bool, start_ns: i128) void {
     if (start_ns == 0) return;
     if (hit)
         render_page_hits.add(elapsed(start_ns))
     else
         render_page_misses.add(elapsed(start_ns));
+}
+
+pub fn recordRenderCompile(kind: RenderCompileKind, start_ns: i128) void {
+    if (start_ns == 0) return;
+    const counter = switch (kind) {
+        .prepare_fonts => &render_compile_prepare_fonts,
+        .font_environment => &render_compile_font_environment,
+        .text_cache_begin => &render_compile_text_cache_begin,
+        .workers => &render_compile_workers,
+        .merge_pages => &render_compile_merge_pages,
+        .finish_document => &render_compile_finish_document,
+        .finish_sources => &render_compile_finish_sources,
+        .finish_semantics => &render_compile_finish_semantics,
+        .finish_catalogs => &render_compile_finish_catalogs,
+        .finish_validation => &render_compile_finish_validation,
+    };
+    counter.add(elapsed(start_ns));
 }
 
 pub fn recordLayoutMeasurementTotal(start_ns: i128) void {
@@ -304,7 +374,23 @@ pub fn printIfEnabled() void {
     printCachePair("text advance", &text_advance_hits, &text_advance_misses);
     printCachePair("text visual", &text_visual_hits, &text_visual_misses);
     printCachePair("text shape", &text_shape_hits, &text_shape_misses);
+    printCounter("text cache restore", &text_cache_restore);
+    printCounter("text cache begin document", &text_cache_begin_document);
+    printCounter("text cache materialize", &text_cache_materialize);
+    printCounter("text cache share", &text_cache_share);
+    printCounter("text cache clone", &text_cache_clone);
+    printCounter("text cache persist", &text_cache_persist);
     printCachePair("render page", &render_page_hits, &render_page_misses);
+    printCounter("render compile prepare fonts", &render_compile_prepare_fonts);
+    printCounter("render compile font environment", &render_compile_font_environment);
+    printCounter("render compile text cache begin", &render_compile_text_cache_begin);
+    printCounter("render compile workers", &render_compile_workers);
+    printCounter("render compile merge pages", &render_compile_merge_pages);
+    printCounter("render compile finish document", &render_compile_finish_document);
+    printCounter("render compile finish sources", &render_compile_finish_sources);
+    printCounter("render compile finish semantics", &render_compile_finish_semantics);
+    printCounter("render compile finish catalogs", &render_compile_finish_catalogs);
+    printCounter("render compile finish validation", &render_compile_finish_validation);
 
     printCounter("layout provider total", &layout_measure_total);
     printCounter("layout provider lock wait", &layout_measure_lock_wait);

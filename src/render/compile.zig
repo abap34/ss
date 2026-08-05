@@ -7,6 +7,8 @@ const resource_compile = @import("render_resources");
 const text_compile = @import("render_text");
 const semantics = @import("compile/semantics.zig");
 
+pub const FontEnvironmentToken = text_compile.FontEnvironment;
+
 pub const Options = struct {
     jobs: ?usize = null,
     cache_dir: []const u8 = ".ss-cache/render",
@@ -14,6 +16,8 @@ pub const Options = struct {
     resource_cache: ?*resource_compile.SourceCache = null,
     text_cache: ?*text_compile.Cache = null,
     page_cache: ?*items.PageCache = null,
+    font_environment: ?FontEnvironmentToken = null,
+    thread_safe_allocator: bool = false,
 };
 
 pub const Progress = items.Progress;
@@ -28,6 +32,25 @@ pub const tree_sitter_min_compatible_language_version = items.tree_sitter_min_co
 pub const native_artifact_cache_version = items.native_artifact_cache_version;
 pub const nativeRuntimeVersions = items.nativeRuntimeVersions;
 pub const treeSitterHealthReport = items.treeSitterHealthReport;
+pub const validateFontEnvironment = text_compile.validateFontEnvironment;
+pub const refreshAndValidateFontEnvironment = text_compile.refreshAndValidateFontEnvironment;
+
+pub fn acquireFontEnvironment(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    pages: *const core.prepared.PreparedPages,
+) !FontEnvironmentToken {
+    const refresh_fonts_start = utils.measure_profile.start();
+    _ = try text_compile.fontEnvironmentRefresh();
+    utils.measure_profile.recordRenderCompile(.font_environment, refresh_fonts_start);
+    const prepare_fonts_start = utils.measure_profile.start();
+    try items.prepareFonts(allocator, io, pages);
+    utils.measure_profile.recordRenderCompile(.prepare_fonts, prepare_fonts_start);
+    const font_environment_start = utils.measure_profile.start();
+    const font_environment = try text_compile.fontEnvironmentSnapshot();
+    utils.measure_profile.recordRenderCompile(.font_environment, font_environment_start);
+    return font_environment;
+}
 
 pub fn compile(
     allocator: std.mem.Allocator,
@@ -43,9 +66,17 @@ pub fn compile(
         .resource_cache = options.resource_cache,
         .text_cache = options.text_cache,
         .page_cache = options.page_cache,
+        .font_environment = options.font_environment,
+        .thread_safe_allocator = options.thread_safe_allocator,
     } };
     try item_compiler.prepare(allocator, state, pages);
-    return try preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache);
+    const font_environment = item_compiler.font_environment orelse return error.FontEnvironmentRefreshFailed;
+    var ir = try preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache);
+    text_compile.refreshAndValidateFontEnvironment(font_environment) catch |err| {
+        ir.deinit(allocator);
+        return err;
+    };
+    return ir;
 }
 
 pub fn compilePrepared(
@@ -55,6 +86,12 @@ pub fn compilePrepared(
     pages: *const core.prepared.PreparedPages,
     options: Options,
 ) !render.Ir {
+    const font_environment = if (options.font_environment) |expected| blk: {
+        const font_environment_start = utils.measure_profile.start();
+        try text_compile.refreshAndValidateFontEnvironment(expected);
+        utils.measure_profile.recordRenderCompile(.font_environment, font_environment_start);
+        break :blk expected;
+    } else try acquireFontEnvironment(allocator, io, pages);
     var item_compiler = items.Compiler{ .io = io, .options = .{
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
@@ -62,8 +99,14 @@ pub fn compilePrepared(
         .resource_cache = options.resource_cache,
         .text_cache = options.text_cache,
         .page_cache = options.page_cache,
-    } };
-    return try preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache);
+        .thread_safe_allocator = options.thread_safe_allocator,
+    }, .font_environment = font_environment };
+    var ir = try preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache);
+    text_compile.refreshAndValidateFontEnvironment(font_environment) catch |err| {
+        ir.deinit(allocator);
+        return err;
+    };
+    return ir;
 }
 
 pub fn preload(

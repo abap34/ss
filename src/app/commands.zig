@@ -205,7 +205,8 @@ fn compileRendering(
     const prepared_allocator = analyzed.state.allocator;
     var pages_errdefer_active = true;
     errdefer if (pages_errdefer_active) pages.deinit(prepared_allocator);
-    var layouts = pipeline.solveLayouts(io, &analyzed.state, &pages, progress, source.layout_jobs, options.highlight_languages) catch |err| {
+    const font_environment = try render_compile.acquireFontEnvironment(prepared_allocator, io, &pages);
+    var layouts = pipeline.solveLayouts(io, &analyzed.state, &pages, progress, source.layout_jobs, options.highlight_languages, font_environment) catch |err| {
         try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, diagnostics_json_path);
         return err;
     };
@@ -225,6 +226,7 @@ fn compileRendering(
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
         .highlight_languages = options.highlight_languages,
+        .font_environment = font_environment,
     }) catch |err| {
         progress.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), &state);
