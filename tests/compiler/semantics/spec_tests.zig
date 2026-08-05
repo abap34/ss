@@ -964,6 +964,37 @@ test "compiler semantics: qualified calls bypass local shadowing" {
     try expectObjectContent(source, "qualified");
 }
 
+test "compiler semantics: repeated name resolution keeps module scope" {
+    try expectObjectContentWithTwoOverlays(
+        \\import std:themes/default as *
+        \\import "lib/a" as a
+        \\import "lib/b" as b
+        \\
+        \\page ok
+        \\  text(a::get() ++ b::get() ++ a::get())
+        \\end
+        \\
+    ,
+        \\fn label() -> String
+        \\  return "a"
+        \\end
+        \\
+        \\fn get() -> String
+        \\  return label()
+        \\end
+        \\
+    ,
+        \\fn label() -> String
+        \\  return "b"
+        \\end
+        \\
+        \\fn get() -> String
+        \\  return label()
+        \\end
+        \\
+    , "aba");
+}
+
 test "compiler semantics: implicit prelude does not propagate through bare-name imports" {
     try buildSourceWithTwoOverlays(
         \\import "lib/a" as *
