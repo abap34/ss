@@ -10,6 +10,7 @@ const testing = std.testing;
 
 fn addDocumentSemantics(ir: *render.Ir) !void {
     const nodes = try testing.allocator.alloc(render.SemanticNode, ir.pages.len + 1);
+    errdefer testing.allocator.free(nodes);
     const page_ids = try testing.allocator.alloc(render.SemanticId, ir.pages.len);
     for (ir.pages, 0..) |_, index| {
         const id: render.SemanticId = @intCast(index + 2);
@@ -151,9 +152,49 @@ test "HTML renderer leaves a directory destination intact" {
     defer ir.deinit(testing.allocator);
     try addDocumentSemantics(&ir);
 
-    try testing.expectError(error.OutputPathNotFile, html.write(testing.allocator, testing.io, &ir, output));
+    var failure = html.WriteFailure{};
+    try testing.expectError(error.OutputPathNotFile, html.writeWithFailure(testing.allocator, testing.io, &ir, output, &failure));
+    try testing.expectEqual(html.WriteFailureKind.output, failure.kind);
+    try testing.expectEqual(error.OutputPathNotFile, failure.cause.?);
     var directory = try std.Io.Dir.cwd().openDir(testing.io, output, .{});
     directory.close(testing.io);
+}
+
+test "HTML renderer reports a non-directory output path component" {
+    const blocker = ".ss-cache/test-render-html/output-blocker";
+    const output = ".ss-cache/test-render-html/output-blocker/document.html";
+    try prepareOutput(blocker);
+    defer deleteOutput(blocker);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = blocker, .data = "blocker" });
+
+    const pages = try testing.allocator.alloc(render.Page, 0);
+    var ir = render.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+
+    var failure = html.WriteFailure{};
+    try testing.expectError(error.NotDir, html.writeWithFailure(testing.allocator, testing.io, &ir, output, &failure));
+    try testing.expectEqual(html.WriteFailureKind.output, failure.kind);
+    try testing.expectEqualStrings("create HTML output file", failure.operation);
+    try testing.expectEqual(error.NotDir, failure.cause.?);
+}
+
+test "HTML renderer distinguishes input materialization from output writes" {
+    const output = ".ss-cache/test-render-html/invalid-input.html";
+    try prepareOutput(output);
+    defer deleteOutput(output);
+
+    const pages = try testing.allocator.alloc(render.Page, 0);
+    var ir = render.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    var failure = html.WriteFailure{};
+    html.writeWithFailure(testing.allocator, testing.io, &ir, output, &failure) catch |err| {
+        try testing.expectEqual(html.WriteFailureKind.materialization, failure.kind);
+        try testing.expectEqualStrings("validate HTML render input", failure.operation);
+        try testing.expectEqual(err, failure.cause.?);
+        return;
+    };
+    return error.ExpectedHtmlValidationFailure;
 }
 
 test "HTML fragment cache reuses display text and invalidates visual changes" {

@@ -1090,6 +1090,7 @@ test "document font environment rejects changes between layout and compilation" 
     const font_environment = try render_compile.acquireFontEnvironment(
         testing.allocator,
         testing.io,
+        &state,
         &prepared_pages,
     );
     try render_compile.validateFontEnvironment(font_environment);
@@ -1158,4 +1159,107 @@ test "document font environment rejects changes between layout and compilation" 
             .{ .font_environment = font_environment },
         ),
     );
+    try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
+    for (state.diagnostics.items) |diagnostic| {
+        const message = switch (diagnostic.data) {
+            .user_report => |data| data.message,
+            else => return error.ExpectedFontEnvironmentDiagnostic,
+        };
+        try testing.expect(std.mem.startsWith(u8, message, "FontEnvironmentChanged:"));
+        try testing.expect(std.mem.indexOf(u8, message, "retry after font installation or font-cache updates finish") != null);
+    }
+}
+
+test "font environment refresh failures produce actionable diagnostics" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    try testing.expect(try render_compile.addFontEnvironmentDiagnostic(&state, error.FontEnvironmentRefreshFailed));
+    try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
+    const message = switch (state.diagnostics.items[0].data) {
+        .user_report => |data| data.message,
+        else => return error.ExpectedFontEnvironmentDiagnostic,
+    };
+    try testing.expect(std.mem.startsWith(u8, message, "FontSetupFailed:"));
+    try testing.expect(std.mem.indexOf(u8, message, "fc-list") != null);
+    try testing.expect(std.mem.indexOf(u8, message, "FONTCONFIG_FILE") != null);
+    try testing.expect(std.mem.indexOf(u8, message, "FontEnvironmentRefreshFailed") == null);
+
+    try testing.expect(try render_compile.addFontEnvironmentDiagnostic(&state, error.FontEnvironmentRefreshFailed));
+    try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
+
+    try testing.expect(try render_compile.addFontEnvironmentDiagnostic(&state, error.PangoCreateFailed));
+    try testing.expectEqual(@as(usize, 2), state.diagnostics.items.len);
+    const pango_message = switch (state.diagnostics.items[1].data) {
+        .user_report => |data| data.message,
+        else => return error.ExpectedFontEnvironmentDiagnostic,
+    };
+    try testing.expect(std.mem.startsWith(u8, pango_message, "TextLayoutUnavailable:"));
+    try testing.expect(std.mem.indexOf(u8, pango_message, "text layout data") != null);
+    try testing.expect(std.mem.indexOf(u8, pango_message, "PangoCreateFailed") == null);
+
+    try testing.expect(!(try render_compile.addFontEnvironmentDiagnostic(&state, error.IntentionalCompileFailure)));
+    try testing.expectEqual(@as(usize, 2), state.diagnostics.items.len);
+}
+
+test "preload cache scan reports the TeX preamble path" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    defer testing.allocator.free(root);
+    const preamble_path = try std.fs.path.join(testing.allocator, &.{ root, "preamble.tex" });
+    defer testing.allocator.free(preamble_path);
+    const cache_dir = try std.fs.path.join(testing.allocator, &.{ root, "render-cache" });
+    defer testing.allocator.free(cache_dir);
+    try std.Io.Dir.cwd().createDirPath(testing.io, preamble_path);
+
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const preamble = [_]core.render_env.TexPreambleEntry{
+        .{ .source = .file, .value = preamble_path },
+    };
+    var dependencies = [_]core.prepared.AssetDependency{
+        .{ .kind = .block_math, .source = "x", .content_start = 0, .content_end = 1 },
+    };
+    var objects = [_]core.prepared.PreparedObject{
+        .{
+            .node_id = 2,
+            .content = "x",
+            .content_provenance = &.{},
+            .link_id = null,
+            .render = undefined,
+            .parse_mode = .none,
+            .asset_deps = &dependencies,
+            .tex_preamble = &preamble,
+            .tex_engine = .pdflatex,
+            .origin = null,
+            .payload_kind = .math_tex,
+            .attached = true,
+        },
+    };
+    var page_storage = [_]core.prepared.PreparedPage{
+        .{
+            .page_id = 1,
+            .index = 0,
+            .background = null,
+            .object_ids = &.{},
+            .constraints = &.{},
+            .objects = &objects,
+        },
+    };
+    const pages = core.prepared.PreparedPages{ .pages = &page_storage };
+
+    var failed = false;
+    render_compile.preload(testing.allocator, testing.io, &state, &pages, .{ .cache_dir = cache_dir }, null) catch {
+        failed = true;
+    };
+    try testing.expect(failed);
+    try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
+    const message = switch (state.diagnostics.items[0].data) {
+        .render_failed => |data| data.reason,
+        else => return error.ExpectedRenderFailureDiagnostic,
+    };
+    try testing.expect(std.mem.indexOf(u8, message, "TeX preamble") != null);
+    try testing.expect(std.mem.indexOf(u8, message, preamble_path) != null);
+    try testing.expect(std.mem.indexOf(u8, message, "could not be read") != null);
 }

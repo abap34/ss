@@ -228,6 +228,7 @@ fn expectFileMissing(io: std.Io, file_path: []const u8) !void {
 
 fn documentSemantics(allocator: std.mem.Allocator, page_count: usize) !render.SemanticTree {
     const nodes = try allocator.alloc(render.SemanticNode, page_count + 1);
+    errdefer allocator.free(nodes);
     const page_ids = try allocator.alloc(render.SemanticId, page_count);
     for (0..page_count) |index| {
         const id: render.SemanticId = @intCast(index + 2);
@@ -252,6 +253,58 @@ test "render PDF spec: Cairo shim exposes rendering dependency versions" {
     try testing.expect(c.ss_pdf_fontconfig_version() > 0);
     try expectCString(c.ss_pdf_harfbuzz_version_string());
     try expectCString(c.ss_qpdf_version_string());
+}
+
+test "render PDF spec: Cairo output failures preserve their detail" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    defer allocator.free(root);
+    const output_directory = try std.fs.path.join(allocator, &.{ root, "output-directory" });
+    defer allocator.free(output_directory);
+    try std.Io.Dir.cwd().createDirPath(testing.io, output_directory);
+    const resource_root = try std.fs.path.join(allocator, &.{ root, "resource-root" });
+    defer allocator.free(resource_root);
+
+    var pages = [_]render.Page{.{ .page_id = 1, .index = 0, .width = 32, .height = 18 }};
+    defer pages[0].deinit(allocator);
+    var semantics = try documentSemantics(allocator, pages.len);
+    defer semantics.deinit(allocator);
+    const ir = render.Ir{ .semantics = semantics, .pages = &pages };
+    var resources = try pdf_backend.ResourceFiles.init(allocator, testing.io, &ir.resources, resource_root);
+    defer resources.deinit();
+
+    try testing.expectError(
+        error.CairoWriteFailed,
+        pdf_backend.render(allocator, testing.io, &ir, 0, output_directory, &resources),
+    );
+    const detail = pdf_backend.lastFailureDetail() orelse return error.ExpectedCairoFailureDetail;
+    try testing.expect(std.mem.indexOf(u8, detail, "writ") != null or std.mem.indexOf(u8, detail, "file") != null);
+}
+
+test "render PDF spec: writer classifies invalid input as preparation failure" {
+    const allocator = testing.allocator;
+    const output = ".ss-cache/test-render-pdf/invalid-input.pdf";
+    var pages = [_]render.Page{.{ .page_id = 1, .index = 1, .width = 32, .height = 18 }};
+    defer pages[0].deinit(allocator);
+    var semantics = try documentSemantics(allocator, pages.len);
+    defer semantics.deinit(allocator);
+    const ir = render.Ir{ .semantics = semantics, .pages = &pages };
+
+    var failure = pdf_document.WriteFailure{};
+    defer failure.deinit(allocator);
+    try testing.expectError(
+        error.InvalidPageIndex,
+        pdf_document.write(allocator, testing.io, &ir, output, .{ .failure = &failure }, null),
+    );
+    try testing.expectEqual(pdf_document.WriteFailureKind.preparation, failure.kind);
+    try testing.expectEqualStrings("validate PDF render input", failure.operation);
+    try testing.expectEqual(error.InvalidPageIndex, failure.cause.?);
+    try testing.expectEqualStrings(output, failure.path.?);
+}
+
+test "render PDF spec: font environment selects a usable Fontconfig map" {
     var first_environment = std.mem.zeroes(c.SsFontEnvironment);
     var second_environment = std.mem.zeroes(c.SsFontEnvironment);
     try testing.expectEqual(@as(c_int, 0), c.ss_font_environment_snapshot(&first_environment));
@@ -696,6 +749,70 @@ test "render PDF spec: document renderer publishes, verifies, and reuses content
     }
 }
 
+test "render PDF spec: parallel page failures preserve qpdf detail and cache path" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    defer allocator.free(root);
+    const cache = try std.fs.path.join(allocator, &.{ root, "render-cache" });
+    defer allocator.free(cache);
+    const output = try std.fs.path.join(allocator, &.{ root, "output.pdf" });
+    defer allocator.free(output);
+    const source_pdf = try std.fs.path.join(allocator, &.{ root, "source.pdf" });
+    defer allocator.free(source_pdf);
+
+    var source_pages = [_]render.Page{.{ .page_id = 1, .index = 0, .width = 32, .height = 18 }};
+    defer source_pages[0].deinit(allocator);
+    var source_semantics = try documentSemantics(allocator, source_pages.len);
+    defer source_semantics.deinit(allocator);
+    const source_ir = render.Ir{ .semantics = source_semantics, .pages = &source_pages };
+    try renderPage(&source_ir, 0, source_pdf);
+
+    var resource_builder = render_resources.Builder{};
+    defer resource_builder.deinit(allocator);
+    const resource_id = try resource_builder.addPath(allocator, testing.io, .pdf, source_pdf);
+    var resources = try resource_builder.take(allocator);
+    defer resources.deinit(allocator);
+    try testing.expectEqual(@as(usize, 1), resources.entries.len);
+    @memset(resources.entries[0].bytes, 0);
+
+    var pages = [_]render.Page{
+        .{ .page_id = 1, .index = 0, .width = 320, .height = 180 },
+        .{ .page_id = 2, .index = 1, .width = 320, .height = 180 },
+    };
+    defer for (&pages) |*page| page.deinit(allocator);
+    for (&pages) |*page| {
+        try page.appendPdfPage(
+            allocator,
+            page.page_id + 10,
+            .{ .x = 20, .y = 20, .width = 280, .height = 140 },
+            resource_id,
+            0,
+            .crop,
+            true,
+        );
+    }
+    var semantics = try documentSemantics(allocator, pages.len);
+    defer semantics.deinit(allocator);
+    const ir = render.Ir{ .resources = resources, .semantics = semantics, .pages = &pages };
+
+    var failure = pdf_document.WriteFailure{};
+    defer failure.deinit(allocator);
+    try testing.expectError(
+        error.AssetConversionFailed,
+        pdf_document.write(allocator, testing.io, &ir, output, .{
+            .jobs = 2,
+            .cache_dir = cache,
+            .failure = &failure,
+        }, null),
+    );
+    try testing.expectEqual(pdf_document.WriteFailureKind.page_render, failure.kind);
+    try testing.expectEqual(error.AssetConversionFailed, failure.cause.?);
+    try testing.expect(std.mem.indexOf(u8, failure.path.?, "/pages/") != null);
+    try testing.expect(std.mem.indexOf(u8, failure.detail.?, "PDF") != null);
+}
+
 test "render PDF spec: manifest fingerprint workers handle empty and single-page documents" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -787,6 +904,82 @@ test "render PDF spec: image loaders preserve native error details" {
     const svg_error = cStringSlice(c.ss_pdf_status_string(svg_pdf));
     try testing.expect(contains(svg_error, "could not load SVG image"));
     try testing.expect(contains(svg_error, "missing-vector.svg"));
+}
+
+test "render PDF spec: raster replay preserves image failure detail" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const output = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/invalid-raster.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(output);
+
+    var resource_builder = render_resources.Builder{};
+    defer resource_builder.deinit(allocator);
+    const resource_id = try resource_builder.addPath(allocator, testing.io, .raster, "assets/logo.png");
+    var resource_graph = try resource_builder.take(allocator);
+    defer resource_graph.deinit(allocator);
+    @memset(resource_graph.entries[0].bytes, 0);
+
+    var pages = [_]render.Page{.{ .page_id = 1, .index = 0, .width = 320, .height = 180 }};
+    defer pages[0].deinit(allocator);
+    try pages[0].appendRaster(
+        allocator,
+        1,
+        .{ .x = 20, .y = 20, .width = 120, .height = 120 },
+        resource_id,
+    );
+    var semantics = try documentSemantics(allocator, pages.len);
+    defer semantics.deinit(allocator);
+    const ir = render.Ir{ .resources = resource_graph, .semantics = semantics, .pages = &pages };
+    var resources = try pdf_backend.ResourceFiles.init(allocator, testing.io, &ir.resources, output);
+    defer resources.deinit();
+
+    try testing.expectError(
+        error.ImageDecodeFailed,
+        pdf_backend.render(allocator, testing.io, &ir, 0, output, &resources),
+    );
+    const detail = pdf_backend.lastFailureDetail() orelse return error.ExpectedCairoFailureDetail;
+    try testing.expect(contains(detail, "could not load raster image"));
+}
+
+test "render PDF spec: glyph and annotation failures preserve native error details" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const pdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/operation-errors.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(pdf_path);
+    const pdf_path_z = try allocator.dupeZ(u8, pdf_path);
+    defer allocator.free(pdf_path_z);
+
+    const pdf = c.ss_pdf_create(pdf_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
+    defer c.ss_pdf_destroy(pdf);
+    c.ss_pdf_begin_page(pdf, 320, 180);
+
+    try testing.expectEqual(@as(c_int, 1), c.ss_pdf_draw_glyph_run(
+        pdf,
+        "missing-font-face.ttf",
+        0,
+        16,
+        0,
+        0,
+        0,
+        "",
+        0,
+        null,
+        0,
+        null,
+        0,
+        0,
+    ));
+    const glyph_error = cStringSlice(c.ss_pdf_status_string(pdf));
+    try testing.expect(contains(glyph_error, "could not load PDF font face"));
+    try testing.expect(contains(glyph_error, "missing-font-face.ttf"));
+
+    try testing.expectEqual(@as(c_int, 1), c.ss_pdf_begin_uri_link(pdf, 20, 20, 120, 30, null));
+    try testing.expectEqualStrings("invalid PDF link", cStringSlice(c.ss_pdf_status_string(pdf)));
+
+    try testing.expectEqual(@as(c_int, 1), c.ss_pdf_add_destination(pdf, null, 20, 20));
+    try testing.expectEqualStrings("invalid PDF destination", cStringSlice(c.ss_pdf_status_string(pdf)));
 }
 
 test "render PDF spec: libqpdf composes a selectable page form and copies links" {
