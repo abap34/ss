@@ -44,6 +44,18 @@ pub const SolveOptions = struct {
     progress: ?LayoutProgress = null,
     jobs: ?usize = null,
     cancellation: ?utils.Cancellation = null,
+    trace_failure: ?*TraceFailure = null,
+};
+
+pub const TraceFailureKind = enum {
+    materialization,
+    output,
+};
+
+pub const TraceFailure = struct {
+    kind: TraceFailureKind = .materialization,
+    operation: []const u8 = "generate layout trace",
+    cause: ?anyerror = null,
 };
 
 pub fn checkCancellation(options: SolveOptions) !void {
