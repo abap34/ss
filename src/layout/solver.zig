@@ -20,8 +20,9 @@ pub const SolveOptions = graph.SolveOptions;
 
 pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOptions) !document.Document {
     try graph.checkCancellation(options);
-    layout_trace.beginSolve(state.allocator, trace_path);
-    defer layout_trace.endSolve(state.allocator);
+    try layout_trace.beginSolve(state.allocator, trace_path, options.trace_failure);
+    var trace_active = true;
+    defer if (trace_active) layout_trace.abortSolve(state.allocator);
 
     for (state.page_order.items) |page_id| {
         try graph.checkCancellation(options);
@@ -58,7 +59,14 @@ pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOpti
     }
     try runPageJobs(state, page_jobs, options, trace_path == null and !options.record_propagation, &page_results);
     try graph.checkCancellation(options);
-    return .{ .pages = try page_results.toOwnedSlice(state.allocator) };
+    const pages = try page_results.toOwnedSlice(state.allocator);
+    errdefer {
+        for (pages) |*page| page.deinit(state.allocator);
+        state.allocator.free(pages);
+    }
+    trace_active = false;
+    try layout_trace.endSolve(state.allocator);
+    return .{ .pages = pages };
 }
 
 const PageJob = struct {

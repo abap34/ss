@@ -13,37 +13,74 @@ const TraceState = struct {
     json_events: usize = 0,
     run_id: usize = 0,
     pending_messages: std.ArrayList(TraceMessage) = .empty,
+    failure: ?graph.TraceFailure = null,
+    failure_target: ?*graph.TraceFailure = null,
 };
 
 var trace_state = TraceState{};
 
-pub fn beginSolve(allocator: std.mem.Allocator, json_path: ?[]const u8) void {
+pub fn beginSolve(
+    allocator: std.mem.Allocator,
+    json_path: ?[]const u8,
+    failure_target: ?*graph.TraceFailure,
+) !void {
+    if (failure_target) |target| target.* = .{};
     trace_state = .{
         .json_path = json_path,
+        .failure_target = failure_target,
     };
+    errdefer reset(allocator);
 
     if (trace_state.json_path) |path| {
         writePath(allocator, path, JsonPrefix, .truncate) catch |err| {
-            std.debug.print("layout trace: failed to initialize JSON trace {s}: {s}\n", .{ path, @errorName(err) });
-            trace_state.json_path = null;
+            recordFailure(.output, "initialize layout trace output", err);
+            return error.LayoutTraceFailed;
         };
     }
 }
 
-pub fn endSolve(allocator: std.mem.Allocator) void {
+pub fn endSolve(allocator: std.mem.Allocator) !void {
+    defer reset(allocator);
+    var finish_failure: ?anyerror = null;
     if (trace_state.json_path) |path| {
         writePath(allocator, path, JsonSuffix, .append) catch |err| {
-            std.debug.print("layout trace: failed to finish JSON trace {s}: {s}\n", .{ path, @errorName(err) });
+            finish_failure = err;
         };
     }
+    if (trace_state.failure != null) return error.LayoutTraceFailed;
+    if (finish_failure) |err| {
+        recordFailure(.output, "finish layout trace output", err);
+        return error.LayoutTraceFailed;
+    }
+}
+
+pub fn abortSolve(allocator: std.mem.Allocator) void {
+    defer reset(allocator);
+    if (trace_state.json_path) |path| {
+        writePath(allocator, path, JsonSuffix, .append) catch {};
+    }
+}
+
+fn reset(allocator: std.mem.Allocator) void {
     clearPendingMessages(allocator);
     trace_state.pending_messages.deinit(allocator);
     trace_state = .{};
 }
 
+fn recordFailure(kind: graph.TraceFailureKind, operation: []const u8, cause: anyerror) void {
+    if (trace_state.failure != null) return;
+    const failure = graph.TraceFailure{
+        .kind = kind,
+        .operation = operation,
+        .cause = cause,
+    };
+    trace_state.failure = failure;
+    if (trace_state.failure_target) |target| target.* = failure;
+}
+
 pub fn shouldTraceAxisPass(workspace: *const graph.AxisWorkspace) bool {
     if (!workspace.owns_states) return false;
-    return trace_state.json_path != null;
+    return trace_state.json_path != null and trace_state.failure == null;
 }
 
 pub fn nextRunId() usize {
@@ -56,11 +93,11 @@ pub fn recordDefaultConstraints(
     workspace: *const graph.AxisWorkspace,
     constraints: []const Constraint,
 ) void {
-    if (trace_state.json_path == null) return;
+    if (trace_state.json_path == null or trace_state.failure != null) return;
     for (constraints) |constraint| {
         if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) continue;
         var snapshot = captureSnapshot(allocator, workspace) catch |err| {
-            std.debug.print("layout trace: failed to capture default constraint state: {s}\n", .{@errorName(err)});
+            recordFailure(.materialization, "capture layout trace constraint state", err);
             return;
         };
         trace_state.pending_messages.append(allocator, .{
@@ -71,7 +108,7 @@ pub fn recordDefaultConstraints(
             .affected_node = constraint.target_node,
             .snapshot = snapshot,
         }) catch |err| {
-            std.debug.print("layout trace: failed to record default constraint: {s}\n", .{@errorName(err)});
+            recordFailure(.materialization, "record layout trace constraint state", err);
             snapshot.deinit(allocator);
             return;
         };
@@ -85,7 +122,7 @@ pub fn recordConstraintPropagation(
     is_soft: bool,
     reverse: bool,
 ) void {
-    if (trace_state.json_path == null) return;
+    if (trace_state.json_path == null or trace_state.failure != null) return;
     if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) return;
     const affected_node: ?model.NodeId = if (reverse) switch (constraint.source) {
         .page => null,
@@ -96,7 +133,7 @@ pub fn recordConstraintPropagation(
         break :blk workspace.states[index];
     } else null;
     var snapshot = captureSnapshot(allocator, workspace) catch |err| {
-        std.debug.print("layout trace: failed to capture constraint propagation state: {s}\n", .{@errorName(err)});
+        recordFailure(.materialization, "capture layout trace propagation state", err);
         return;
     };
     trace_state.pending_messages.append(allocator, .{
@@ -109,7 +146,7 @@ pub fn recordConstraintPropagation(
         .affected_state = affected_state,
         .snapshot = snapshot,
     }) catch |err| {
-        std.debug.print("layout trace: failed to record constraint propagation: {s}\n", .{@errorName(err)});
+        recordFailure(.materialization, "record layout trace propagation state", err);
         snapshot.deinit(allocator);
     };
 }
@@ -190,19 +227,18 @@ const Event = struct {
 };
 
 fn emitEvent(allocator: std.mem.Allocator, state: anytype, workspace: *const graph.AxisWorkspace, event: Event) void {
-    if (trace_state.json_path == null) return;
+    if (trace_state.json_path == null or trace_state.failure != null) return;
 
     var buffer = std.ArrayList(u8).empty;
     defer buffer.deinit(allocator);
     appendEventJson(allocator, &buffer, state, workspace, event) catch |err| {
-        std.debug.print("layout trace: failed to encode trace event: {s}\n", .{@errorName(err)});
+        recordFailure(.materialization, "encode layout trace event", err);
         return;
     };
 
     if (trace_state.json_path) |path| {
         appendEventToPath(allocator, path, buffer.items, &trace_state.json_events) catch |err| {
-            std.debug.print("layout trace: failed to write JSON trace {s}: {s}\n", .{ path, @errorName(err) });
-            trace_state.json_path = null;
+            recordFailure(.output, "write layout trace event", err);
         };
     }
     clearPendingMessages(allocator);
@@ -488,16 +524,47 @@ fn writePath(allocator: std.mem.Allocator, path: []const u8, bytes: []const u8, 
         .truncate => .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true },
         .append => .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true },
     };
-    const fd = std.c.open(zpath.ptr, flags, @as(std.c.mode_t, 0o644));
-    if (fd < 0) return error.TraceOpenFailed;
+    const fd = openPath(zpath.ptr, flags) catch |err| return err;
     defer _ = std.c.close(fd);
 
     var offset: usize = 0;
     while (offset < bytes.len) {
         const written = std.c.write(fd, bytes[offset..].ptr, bytes.len - offset);
-        if (written < 0) return error.TraceWriteFailed;
-        if (written == 0) return error.TraceWriteFailed;
+        switch (std.posix.errno(written)) {
+            .SUCCESS => {},
+            .INTR => continue,
+            .NOSPC => return error.NoSpaceLeft,
+            .DQUOT => return error.DiskQuota,
+            .FBIG => return error.FileTooBig,
+            .IO => return error.InputOutput,
+            .PIPE => return error.BrokenPipe,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+        if (written == 0) return error.InputOutput;
         offset += @intCast(written);
+    }
+}
+
+fn openPath(path: [*:0]const u8, flags: std.c.O) !std.c.fd_t {
+    while (true) {
+        const fd = std.c.open(path, flags, @as(std.c.mode_t, 0o644));
+        switch (std.posix.errno(fd)) {
+            .SUCCESS => return fd,
+            .INTR => continue,
+            .ACCES, .PERM => return error.AccessDenied,
+            .NOENT => return error.FileNotFound,
+            .NOTDIR => return error.NotDir,
+            .ISDIR => return error.IsDir,
+            .LOOP => return error.SymLinkLoop,
+            .NAMETOOLONG => return error.NameTooLong,
+            .MFILE => return error.ProcessFdQuotaExceeded,
+            .NFILE => return error.SystemFdQuotaExceeded,
+            .NOSPC => return error.NoSpaceLeft,
+            .DQUOT => return error.DiskQuota,
+            .ROFS => return error.ReadOnlyFileSystem,
+            .IO => return error.InputOutput,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
     }
 }
 
