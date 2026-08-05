@@ -226,6 +226,7 @@ fn compileRendering(
     errdefer progress.abort();
     var text_cache = render_text.Cache.init(std.heap.smp_allocator, io);
     defer text_cache.deinit();
+    text_cache.restore(options.cache_dir);
     const ir_allocator = std.heap.smp_allocator;
     var ir = render_compile.compilePrepared(ir_allocator, io, &state, &pages, .{
         .jobs = options.jobs,
@@ -242,6 +243,7 @@ fn compileRendering(
         return err;
     };
     errdefer ir.deinit(ir_allocator);
+    text_cache.persist(options.cache_dir);
     progress.complete();
     return .{
         .state = state,
