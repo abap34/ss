@@ -121,8 +121,11 @@ const render_page_cache_version = "ss-render-page-v2";
 const layout_measurement_cache_version = "ss-native-layout-measure-v17";
 const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
+const external_command_timeout_seconds: u64 = 120;
+const external_command_stdout_limit: usize = 64 * 1024;
+const external_command_stderr_limit: usize = 128 * 1024;
 const external_command_timeout = std.Io.Clock.Duration{
-    .raw = std.Io.Duration.fromSeconds(120),
+    .raw = std.Io.Duration.fromSeconds(external_command_timeout_seconds),
     .clock = .awake,
 };
 const command_failure_output_limit: usize = 1600;
@@ -561,13 +564,13 @@ pub const LayoutMeasurementScope = struct {
         const default_options: Options = .{};
         const cache_dir = default_options.cache_dir;
         try render_text.validateFontEnvironment(font_environment);
-        try std.Io.Dir.cwd().createDirPath(io, cache_dir);
+        try createRenderCacheDirectory(io, state, cache_dir);
         const asset_cache_dir = try std.fs.path.join(allocator, &.{ cache_dir, "artifacts", "native" });
         errdefer allocator.free(asset_cache_dir);
-        try std.Io.Dir.cwd().createDirPath(io, asset_cache_dir);
+        try createRenderCacheDirectory(io, state, asset_cache_dir);
         const measurement_cache_dir = try std.fs.path.join(allocator, &.{ asset_cache_dir, "measurements" });
         errdefer allocator.free(measurement_cache_dir);
-        try std.Io.Dir.cwd().createDirPath(io, measurement_cache_dir);
+        try createRenderCacheDirectory(io, state, measurement_cache_dir);
         const measurement_cache_path = try std.fs.path.join(allocator, &.{ measurement_cache_dir, "measurements.tsv" });
         errdefer allocator.free(measurement_cache_path);
 
@@ -643,7 +646,12 @@ pub const LayoutMeasurementScope = struct {
         const profile_cache_key = utils.measure_profile.start();
         var key_ctx = self.ctx;
         key_ctx.allocator = state.allocator;
-        const cache_key = try fingerprint.layoutMeasurementKey(
+        var target = CommandFailure{ .allocator = state.allocator };
+        defer target.deinit();
+        var measurement_ctx = self.ctx;
+        measurement_ctx.allocator = state.allocator;
+        measurement_ctx.command_failure = &target;
+        const cache_key = fingerprint.layoutMeasurementKey(
             .{
                 .allocator = key_ctx.allocator,
                 .io = key_ctx.io,
@@ -668,18 +676,18 @@ pub const LayoutMeasurementScope = struct {
                 .math_kind = @tagName(command.math_kind),
                 .raw_tex = command.math_kind == .raw_block,
             },
-        );
+        ) catch |err| {
+            if (err == error.Canceled) return error.Canceled;
+            recordTexPreambleFingerprintFailure(&measurement_ctx, command.tex_preamble);
+            try addMeasurementRenderDiagnostic(&measurement_ctx, state, &command, err, target.message);
+            return err;
+        };
         utils.measure_profile.recordLayoutMeasurementCacheKey(profile_cache_key);
 
         if (try self.cachedMeasurement(cache_key, true)) |cached| return cached;
 
         if (try self.cachedMeasurement(cache_key, false)) |cached| return cached;
 
-        var target = CommandFailure{ .allocator = state.allocator };
-        defer target.deinit();
-        var measurement_ctx = self.ctx;
-        measurement_ctx.allocator = state.allocator;
-        measurement_ctx.command_failure = &target;
         try render_text.validateFontEnvironment(self.font_environment);
         const profile_intrinsic = utils.measure_profile.start();
         defer utils.measure_profile.recordRenderIntrinsic(profileRenderMeasureKind(command.render.kind), profile_intrinsic);
@@ -868,10 +876,10 @@ pub fn preloadPreparedPageArtifacts(
     options: Options,
     progress: ?Progress,
 ) !void {
-    try std.Io.Dir.cwd().createDirPath(io, options.cache_dir);
+    try createRenderCacheDirectory(io, state, options.cache_dir);
     const asset_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "artifacts", "native" });
     defer allocator.free(asset_cache_dir);
-    try std.Io.Dir.cwd().createDirPath(io, asset_cache_dir);
+    try createRenderCacheDirectory(io, state, asset_cache_dir);
 
     var ctx = DrawContext{
         .allocator = allocator,
@@ -892,7 +900,15 @@ pub fn preloadPreparedPageArtifacts(
     var miss_count: usize = 0;
     for (tasks, 0..) |task, index| {
         const profile_scan = utils.measure_profile.start();
-        cached[index] = try preloadTaskPresent(&ctx, task);
+        var failure = CommandFailure{ .allocator = state.allocator };
+        defer failure.deinit();
+        var diagnostic_ctx = ctx;
+        diagnostic_ctx.command_failure = &failure;
+        cached[index] = preloadTaskPresent(&diagnostic_ctx, task) catch |err| {
+            utils.measure_profile.recordArtifactScan(profilePreloadKind(task), false, profile_scan);
+            if (err != error.Canceled) try addPreloadRenderDiagnostic(state, task, err, failure.message);
+            return err;
+        };
         utils.measure_profile.recordArtifactScan(profilePreloadKind(task), cached[index], profile_scan);
         if (!cached[index]) miss_count += 1;
     }
@@ -910,10 +926,26 @@ pub fn preloadPreparedPageArtifacts(
     };
 }
 
+fn createRenderCacheDirectory(io: std.Io, state: *core.DocumentState, path: []const u8) !void {
+    std.Io.Dir.cwd().createDirPath(io, path) catch |err| {
+        var reason_buf: [256]u8 = undefined;
+        const message = try std.fmt.allocPrint(
+            state.allocator,
+            "RenderCacheAccessFailed: could not create render cache directory '{s}': {s}; remove a conflicting file or fix its permissions",
+            .{ path, utils.err.formatErrorReason(&reason_buf, err) },
+        );
+        try state.addRenderDiagnostic(.@"error", null, null, null, .{
+            .user_report = .{ .message = message },
+        });
+        return err;
+    };
+}
+
 pub const Compiler = struct {
     io: std.Io,
     options: render_compile.Options,
     font_environment: ?render_text.FontEnvironment = null,
+    diagnostic_mutex: std.Io.Mutex = .init,
 
     pub fn prepare(
         self: *Compiler,
@@ -1001,7 +1033,9 @@ pub const Compiler = struct {
             var local_math = render_ir.MathBuilder{};
             defer local_math.deinit(allocator);
             var page = try buildRenderPage(
+                self,
                 &draw_context,
+                state,
                 prepared_page.page_id,
                 prepared_page.index,
                 prepared_page.background,
@@ -1052,7 +1086,9 @@ pub const Compiler = struct {
             return materialized;
         }
         return try buildRenderPage(
+            self,
             &draw_context,
+            state,
             prepared_page.page_id,
             prepared_page.index,
             prepared_page.background,
@@ -1461,7 +1497,10 @@ fn addTargetedRenderDiagnostic(
 ) !void {
     var origin = try preloadTaskDiagnosticOrigin(state, target);
     defer origin.deinit(state.allocator);
-    const detail = maybe_message orelse @errorName(err);
+    var detail_buffer: [512]u8 = undefined;
+    const detail = maybe_message orelse
+        render_text.diagnosticMessageForError(err) orelse
+        renderFailureDiagnosticMessage(&detail_buffer, err);
     const reason = try std.fmt.allocPrint(state.allocator, "{s}: {s}", .{ label, detail });
     try state.addRenderDiagnostic(.@"error", target.page_id, target.node_id, origin.text, .{
         .render_failed = .{
@@ -1469,6 +1508,35 @@ fn addTargetedRenderDiagnostic(
             .payload_kind = target.payload_kind,
         },
     });
+}
+
+fn renderFailureDiagnosticMessage(buffer: []u8, err: anyerror) []const u8 {
+    return switch (err) {
+        error.ImageDecodeFailed => "ImageDecodeFailed: could not decode the image; verify that its contents match a supported image format",
+        error.AssetConversionFailed => "AssetConversionFailed: could not convert the asset; verify the input and the required external tool",
+        error.InvalidPdfCache => "InvalidPdfCache: a generated or cached PDF artifact is invalid; verify the TeX or PDF input, then run 'ss cache project clear' if the failure persists",
+        error.InvalidFontAwesomeIcon => "InvalidFontAwesomeIcon: the icon name is not in the bundled catalog; choose a valid fa-solid, fa-regular, or fa-brands icon",
+        error.UnsupportedAssetType => "UnsupportedAssetType: this object cannot render the asset type; use image! for images and pdf! for PDF files",
+        error.InvalidRasterResource => "InvalidRasterResource: the file is not a valid raster image; verify its contents and use pdf! for PDF files",
+        error.InvalidSvgResource => "InvalidSvgResource: the file is not a valid SVG with usable intrinsic dimensions; repair or replace the SVG",
+        error.InvalidPdfResource => "InvalidPdfResource: the file is not a readable PDF or the requested page is unavailable; verify the PDF and page number",
+        error.ResourceChangedDuringRead => "ResourceChangedDuringRead: the asset changed repeatedly while it was being read; wait for the writer to finish and retry",
+        error.MathFontRegistrationFailed => "MathFontRegistrationFailed: could not register the bundled STIX Two Math font; check render-cache permissions and Fontconfig",
+        error.MissingMathFont => "MissingMathFont: STIX Two Math could not be selected; verify that Fontconfig can discover the bundled font",
+        error.MissingMathTable => "MissingMathTable: the selected math font has no OpenType MATH table; ensure that STIX Two Math is available",
+        error.InvalidMathSize => "InvalidMathSize: the math font size must be finite and greater than zero",
+        error.InvalidMathScale => "InvalidMathScale: the math scale must be finite and greater than zero",
+        error.InvalidMathTable => "InvalidMathTable: the bundled STIX Two Math metrics are unusable; reinstall ss, and report the failure if it persists",
+        error.InvalidMathTree => "InvalidMathTree: ss produced an inconsistent structured-math tree; report this as an ss bug with the source expression",
+        error.UnsupportedMathSyntax => "UnsupportedMathSyntax: the expression uses syntax unsupported by structured math; simplify it or use tex! for raw TeX",
+        error.UnknownTreeSitterLanguage => "UnknownTreeSitterLanguage: the configured parser is unavailable; select a supported built-in parser in ss.toml",
+        error.TreeSitterParserCreateFailed => "TreeSitterParserCreateFailed: could not initialize syntax highlighting; retry or disable highlighting for this language",
+        error.TreeSitterLanguageRejected => "TreeSitterLanguageRejected: the bundled parser is incompatible with the tree-sitter runtime; reinstall or update ss, and report the failure if it persists",
+        error.TreeSitterParseFailed => "TreeSitterParseFailed: tree-sitter could not create a syntax tree; retry, and report this as an ss bug if the failure persists",
+        error.TreeSitterQueryFailed => "TreeSitterQueryFailed: the highlight query is invalid; fix the query file or select a built-in query",
+        error.TreeSitterQueryCursorCreateFailed => "TreeSitterQueryCursorCreateFailed: could not initialize the syntax highlighter; retry or disable highlighting for this language",
+        else => utils.err.formatErrorReason(buffer, err),
+    };
 }
 
 const DiagnosticOrigin = struct {
@@ -1983,7 +2051,9 @@ fn collectPreloadTaskDiagnostics(
 }
 
 fn buildRenderPage(
+    compiler: *Compiler,
     parent_ctx: *DrawContext,
+    state: *core.DocumentState,
     page_id: core.NodeId,
     page_index: usize,
     background: ?Color,
@@ -2036,10 +2106,10 @@ fn buildRenderPage(
     ctx.destinations = &destinations;
 
     for (commands) |*command| {
-        if (command.render.kind == .chrome_only) try drawObjectCommandIntoIr(&ctx, command);
+        if (command.render.kind == .chrome_only) try drawObjectCommandIntoIrWithDiagnostic(compiler, &ctx, state, command);
     }
     for (commands) |*command| {
-        if (command.render.kind != .chrome_only) try drawObjectCommandIntoIr(&ctx, command);
+        if (command.render.kind != .chrome_only) try drawObjectCommandIntoIrWithDiagnostic(compiler, &ctx, state, command);
     }
 
     for (destinations.items) |destination| {
@@ -2055,6 +2125,27 @@ fn buildRenderPage(
     }
 
     return page;
+}
+
+fn drawObjectCommandIntoIrWithDiagnostic(
+    compiler: *Compiler,
+    ctx: *DrawContext,
+    state: *core.DocumentState,
+    command: *const ObjectCommand,
+) !void {
+    var failure = CommandFailure{ .allocator = ctx.allocator };
+    defer failure.deinit();
+    const previous_failure = ctx.command_failure;
+    ctx.command_failure = &failure;
+    defer ctx.command_failure = previous_failure;
+
+    drawObjectCommandIntoIr(ctx, command) catch |err| {
+        if (err == error.Canceled or render_text.diagnosticMessageForError(err) != null) return err;
+        compiler.diagnostic_mutex.lockUncancelable(compiler.io);
+        defer compiler.diagnostic_mutex.unlock(compiler.io);
+        try addObjectCommandDiagnostic(state, command, err, failure.message);
+        return err;
+    };
 }
 
 fn drawObjectCommandIntoIr(ctx: *DrawContext, command: *const ObjectCommand) !void {
@@ -2592,11 +2683,26 @@ fn freePreloadTask(allocator: Allocator, task: PreloadTask) void {
 
 fn preloadTaskKey(ctx: *DrawContext, task: PreloadTask) ![]u8 {
     return switch (task) {
-        .math => |math| cachedMathPath(ctx, math.source, math.preamble, math.engine, math.kind, "ref"),
+        .math => |math| mathPreloadTaskKey(ctx, math),
         .icon => |icon| cachedIconPath(ctx, icon.source, "svg"),
         .vector_pdf => |asset| ctx.allocator.dupe(u8, asset.source),
         .raster => |raster| ctx.allocator.dupe(u8, raster.source),
     };
+}
+
+fn mathPreloadTaskKey(ctx: *DrawContext, math: MathPreload) ![]u8 {
+    var hasher = std.hash.Wyhash.init(0);
+    hashString(&hasher, native_artifact_cache_version);
+    hashString(&hasher, "math-preload");
+    hashString(&hasher, math.source);
+    hashString(&hasher, @tagName(math.engine));
+    hashString(&hasher, @tagName(math.kind));
+    hashUsize(&hasher, math.preamble.len);
+    for (math.preamble) |entry| {
+        hashString(&hasher, @tagName(entry.source));
+        hashString(&hasher, entry.value);
+    }
+    return std.fmt.allocPrint(ctx.allocator, "math-{x}", .{hasher.final()});
 }
 
 fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
@@ -4349,7 +4455,19 @@ fn collectTreeSitterHighlightSpans(ctx: *DrawContext, language_name: []const u8,
     var handle = try loadTreeSitterLanguage(configured);
     defer handle.deinit();
 
-    var query_source = try loadHighlightQuerySource(ctx, configured);
+    var query_source = loadHighlightQuerySource(ctx, configured) catch |err| {
+        if (ctx.command_failure) |failure| {
+            var reason_buf: [256]u8 = undefined;
+            const message = try std.fmt.allocPrint(
+                ctx.allocator,
+                "highlight query '{s}' could not be read: {s}",
+                .{ configured.query, utils.err.formatErrorReason(&reason_buf, err) },
+            );
+            defer ctx.allocator.free(message);
+            try failure.record(message);
+        }
+        return err;
+    };
     defer query_source.deinit(ctx.allocator);
 
     const parser = runtime.parser_new() orelse return error.TreeSitterParserCreateFailed;
@@ -4360,7 +4478,18 @@ fn collectTreeSitterHighlightSpans(ctx: *DrawContext, language_name: []const u8,
 
     var query_error_offset: u32 = 0;
     var query_error_type: TSQueryError = .none;
-    const query = runtime.query_new(handle.language, @ptrCast(query_source.text.ptr), @intCast(query_source.text.len), &query_error_offset, &query_error_type) orelse return error.TreeSitterQueryFailed;
+    const query = runtime.query_new(handle.language, @ptrCast(query_source.text.ptr), @intCast(query_source.text.len), &query_error_offset, &query_error_type) orelse {
+        if (ctx.command_failure) |failure| {
+            const message = try std.fmt.allocPrint(
+                ctx.allocator,
+                "highlight query '{s}' is invalid at byte {d} ({s})",
+                .{ configured.query, query_error_offset, @tagName(query_error_type) },
+            );
+            defer ctx.allocator.free(message);
+            try failure.record(message);
+        }
+        return error.TreeSitterQueryFailed;
+    };
     defer runtime.query_delete(query);
 
     const cursor = runtime.query_cursor_new() orelse return error.TreeSitterQueryCursorCreateFailed;
@@ -4427,17 +4556,20 @@ fn checkTreeSitterLanguageHealth(
     language: utils.highlight.Language,
 ) !TreeSitterHealthItem {
     var runtime = loadTreeSitterRuntime() catch |err| {
-        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "runtime unavailable: {s}", .{@errorName(err)});
+        var reason_buf: [256]u8 = undefined;
+        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "runtime unavailable: {s}", .{utils.err.formatErrorReason(&reason_buf, err)});
     };
     defer runtime.deinit();
 
     var handle = loadTreeSitterLanguage(&language) catch |err| {
-        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "language load failed: {s}", .{@errorName(err)});
+        var reason_buf: [256]u8 = undefined;
+        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "language load failed: {s}", .{utils.err.formatErrorReason(&reason_buf, err)});
     };
     defer handle.deinit();
 
     var query_source = loadHighlightQuerySourceForHealth(allocator, io, &language) catch |err| {
-        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "query load failed: {s}", .{@errorName(err)});
+        var reason_buf: [256]u8 = undefined;
+        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "query load failed: {s}", .{utils.err.formatErrorReason(&reason_buf, err)});
     };
     defer query_source.deinit(allocator);
     if (query_source.text.len == 0) {
@@ -5650,7 +5782,12 @@ fn readTexPreambleFile(ctx: *DrawContext, path: []const u8) ![]const u8 {
     defer ctx.allocator.free(resolved);
     return std.Io.Dir.cwd().readFileAlloc(ctx.io, resolved, ctx.allocator, .unlimited) catch |err| {
         if (ctx.command_failure) |target| {
-            const message = try std.fmt.allocPrint(ctx.allocator, "TeX preamble file not found: {s} (resolved: {s})", .{ path, resolved });
+            var reason_buf: [256]u8 = undefined;
+            const message = try std.fmt.allocPrint(
+                ctx.allocator,
+                "TeX preamble '{s}' could not be read (resolved to '{s}'): {s}",
+                .{ path, resolved, utils.err.formatErrorReason(&reason_buf, err) },
+            );
             defer ctx.allocator.free(message);
             try target.record(message);
         }
@@ -5666,7 +5803,7 @@ fn cachedMathPath(
     kind: MathKind,
     extension: []const u8,
 ) ![]u8 {
-    const key = try fingerprint.mathArtifactKey(
+    const key = fingerprint.mathArtifactKey(
         .{
             .allocator = ctx.allocator,
             .io = ctx.io,
@@ -5678,8 +5815,20 @@ fn cachedMathPath(
         preamble,
         engine,
         @tagName(kind),
-    );
+    ) catch |err| {
+        recordTexPreambleFingerprintFailure(ctx, preamble);
+        return err;
+    };
     return std.fmt.allocPrint(ctx.allocator, "{s}/math-{x}.{s}", .{ ctx.cache_dir, key, extension });
+}
+
+fn recordTexPreambleFingerprintFailure(ctx: *DrawContext, preamble: []const TexPreambleEntry) void {
+    if (ctx.command_failure == null) return;
+    for (preamble) |entry| {
+        if (entry.source != .file) continue;
+        const text = readTexPreambleFile(ctx, entry.value) catch return;
+        ctx.allocator.free(text);
+    }
 }
 
 fn cachedIconPath(ctx: *DrawContext, source: []const u8, extension: []const u8) ![]u8 {
@@ -5820,6 +5969,11 @@ const CommandTaskResult = union(enum) {
     timeout: void,
 };
 
+const CommandOutputStream = enum {
+    stdout,
+    stderr,
+};
+
 fn runCommand(
     allocator: Allocator,
     io: std.Io,
@@ -5878,8 +6032,8 @@ fn runCommand(
         }
     }
 
-    try tasks.concurrent(.stdout, readCommandOutput, .{ allocator, io, child.stdout.?, @as(std.Io.Limit, .limited(64 * 1024)) });
-    try tasks.concurrent(.stderr, readCommandOutput, .{ allocator, io, child.stderr.?, @as(std.Io.Limit, .limited(128 * 1024)) });
+    try tasks.concurrent(.stdout, readCommandOutput, .{ allocator, io, child.stdout.?, @as(std.Io.Limit, .limited(external_command_stdout_limit)), CommandOutputStream.stdout });
+    try tasks.concurrent(.stderr, readCommandOutput, .{ allocator, io, child.stderr.?, @as(std.Io.Limit, .limited(external_command_stderr_limit)), CommandOutputStream.stderr });
     try tasks.concurrent(.timeout, waitForCommandTimeout, .{io});
 
     while (stdout == null or stderr == null) switch (try tasks.await()) {
@@ -5990,10 +6144,22 @@ fn terminateCommandChild(child: *std.process.Child, io: std.Io, windows_job: ?st
     child.kill(io);
 }
 
-fn readCommandOutput(allocator: Allocator, io: std.Io, file: std.Io.File, limit: std.Io.Limit) ![]u8 {
+fn readCommandOutput(
+    allocator: Allocator,
+    io: std.Io,
+    file: std.Io.File,
+    limit: std.Io.Limit,
+    stream: CommandOutputStream,
+) ![]u8 {
     var buffer: [4096]u8 = undefined;
     var reader = file.reader(io, &buffer);
-    return try reader.interface.allocRemaining(allocator, limit);
+    return reader.interface.allocRemaining(allocator, limit) catch |err| switch (err) {
+        error.StreamTooLong => switch (stream) {
+            .stdout => error.CommandStdoutTooLong,
+            .stderr => error.CommandStderrTooLong,
+        },
+        else => err,
+    };
 }
 
 fn waitForCommandTimeout(io: std.Io) void {
@@ -6010,9 +6176,44 @@ fn cancelCommandTasks(tasks: *std.Io.Select(CommandTaskResult), allocator: Alloc
 fn commandSpawnFailureMessage(allocator: Allocator, argv: []const []const u8, err: anyerror) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
-    try out.appendSlice(allocator, "failed to run command (");
-    try out.appendSlice(allocator, @errorName(err));
-    try out.appendSlice(allocator, "):");
+    if (err == error.FileNotFound and argv.len != 0) {
+        try out.appendSlice(allocator, "executable '");
+        try out.appendSlice(allocator, argv[0]);
+        try out.appendSlice(allocator, "' was not found in PATH; install it or select an available tex_engine; command:");
+    } else if (err == error.InvalidExe and argv.len != 0) {
+        try out.appendSlice(allocator, "executable '");
+        try out.appendSlice(allocator, argv[0]);
+        try out.appendSlice(allocator, "' is not runnable on this platform; install a compatible executable or select another tex_engine; command:");
+    } else if (err == error.Timeout) {
+        const prefix = try std.fmt.allocPrint(
+            allocator,
+            "command exceeded the {d}-second limit; fix TeX source or configured preamble content that stalls the engine; command:",
+            .{external_command_timeout_seconds},
+        );
+        defer allocator.free(prefix);
+        try out.appendSlice(allocator, prefix);
+    } else if (err == error.CommandStdoutTooLong) {
+        const prefix = try std.fmt.allocPrint(
+            allocator,
+            "command wrote more than {d} KiB to stdout; fix repeated diagnostics in the TeX source or configured preamble; command:",
+            .{external_command_stdout_limit / 1024},
+        );
+        defer allocator.free(prefix);
+        try out.appendSlice(allocator, prefix);
+    } else if (err == error.CommandStderrTooLong) {
+        const prefix = try std.fmt.allocPrint(
+            allocator,
+            "command wrote more than {d} KiB to stderr; fix repeated diagnostics in the TeX source or configured preamble; command:",
+            .{external_command_stderr_limit / 1024},
+        );
+        defer allocator.free(prefix);
+        try out.appendSlice(allocator, prefix);
+    } else {
+        var reason_buf: [256]u8 = undefined;
+        try out.appendSlice(allocator, "failed to run command: ");
+        try out.appendSlice(allocator, utils.err.formatErrorReason(&reason_buf, err));
+        try out.appendSlice(allocator, "; command:");
+    }
     try appendCommandLine(allocator, &out, argv);
     return try out.toOwnedSlice(allocator);
 }

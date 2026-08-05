@@ -215,7 +215,9 @@ fn readFileFingerprint(ctx: Context, source: []const u8) !File {
     var chunk: [16 * 1024]u8 = undefined;
     var hasher = std.hash.Wyhash.init(0);
     while (true) {
-        const read_len = reader.interface.readSliceShort(chunk[0..]) catch return error.AssetConversionFailed;
+        const read_len = reader.interface.readSliceShort(chunk[0..]) catch |err| switch (err) {
+            error.ReadFailed => return reader.err.?,
+        };
         if (read_len == 0) break;
         hasher.update(chunk[0..read_len]);
     }
