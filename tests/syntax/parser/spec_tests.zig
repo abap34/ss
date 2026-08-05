@@ -1141,6 +1141,31 @@ test "syntax spec: call sugar is explicit about text-bearing and zero-argument c
     try expectParseErrorSpan(error.ZeroArgCallRequiresParens, bad_source, title_start, title_start + "title".len);
 }
 
+test "syntax spec: chevron blocks scan complete lines for terminators" {
+    const source =
+        \\page Text
+        \\  code <<
+        \\first
+        \\  >> remains content
+        \\second
+        \\  >> // terminator comment
+        \\end
+        \\
+    ;
+    var parsed = try parse(source);
+    defer parsed.deinit();
+
+    const call = try expectCall(parsed.module.pages.items[0].statements.items[0].kind.expr_stmt, "code", 1);
+    switch (call.args.items[0]) {
+        .string => |literal| {
+            try testing.expectEqualStrings("first\n  >> remains content\nsecond", literal.text);
+            const span = literal.source_span orelse return error.ExpectedStringSourceSpan;
+            try testing.expectEqualStrings(literal.text, source[span.start..span.end]);
+        },
+        else => return error.ExpectedStringExpr,
+    }
+}
+
 test "syntax spec: explicit call arguments preserve source spans" {
     const source =
         \\page Args

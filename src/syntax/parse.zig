@@ -2054,10 +2054,11 @@ const Parser = struct {
 
         const content_start = self.pos;
         while (!self.eof()) {
-            if (self.isChevronTerminatorAtCurrentLine()) {
+            const raw_line_end = std.mem.indexOfScalarPos(u8, self.source, self.pos, '\n') orelse self.source.len;
+            if (self.isChevronTerminatorLine(self.pos, raw_line_end)) {
                 const raw = self.source[content_start..self.pos];
                 const bounds = normalizedBlockStringBounds(raw);
-                self.consumeChevronTerminatorLine();
+                self.pos = if (raw_line_end < self.source.len) raw_line_end + 1 else raw_line_end;
                 return .{
                     .text = try self.allocator.dupe(u8, raw[bounds.start..bounds.end]),
                     .source_span = .{
@@ -2066,34 +2067,28 @@ const Parser = struct {
                     },
                 };
             }
-            self.pos += 1;
+            self.pos = if (raw_line_end < self.source.len) raw_line_end + 1 else raw_line_end;
         }
         return self.fail(error.UnterminatedString);
     }
 
-    fn isChevronTerminatorAtCurrentLine(self: *Parser) bool {
-        const line_span = source.lineAt(self.source, self.pos).span;
-        var probe = line_span.start;
-        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
-        if (probe + 2 > self.source.len) return false;
+    fn isChevronTerminatorLine(self: *Parser, line_start: usize, raw_line_end: usize) bool {
+        var probe = line_start;
+        while (probe < raw_line_end and source.isInlineSpace(self.source[probe])) probe += 1;
+        if (probe + 2 > raw_line_end) return false;
         if (!std.mem.eql(u8, self.source[probe .. probe + 2], ">>")) return false;
         probe += 2;
-        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
-        if (probe + 1 < self.source.len and std.mem.eql(u8, self.source[probe .. probe + 2], ";;")) {
+        while (probe < raw_line_end and source.isInlineSpace(self.source[probe])) probe += 1;
+        if (probe + 2 <= raw_line_end and std.mem.eql(u8, self.source[probe .. probe + 2], ";;")) {
             return true;
         }
-        if (probe + 1 < self.source.len and std.mem.eql(u8, self.source[probe .. probe + 2], "//")) {
+        if (probe + 2 <= raw_line_end and std.mem.eql(u8, self.source[probe .. probe + 2], "//")) {
             return true;
         }
-        if (probe < self.source.len and self.source[probe] == '#') {
+        if (probe < raw_line_end and self.source[probe] == '#') {
             return true;
         }
-        return probe == self.source.len or self.source[probe] == '\n';
-    }
-
-    fn consumeChevronTerminatorLine(self: *Parser) void {
-        const line = source.lineAt(self.source, self.pos);
-        self.pos = if (line.raw_end < self.source.len) line.raw_end + 1 else line.raw_end;
+        return probe == raw_line_end;
     }
 
     fn parseNumber(self: *Parser) !f32 {
