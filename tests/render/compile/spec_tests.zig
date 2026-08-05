@@ -428,6 +428,80 @@ test "text layout append failure consumes one shared reference" {
     try testing.expectEqualStrings("retained", canonical.source_text);
     try testing.expect(canonical.glyphs.len != 0);
 }
+
+test "text shape cache persists across compiler processes and rejects corrupt data" {
+    const root = ".ss-cache/test-render-persistent-text-shapes";
+    const cache_path = root ++ "/text-shapes-v2/shapes.bin";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+
+    const face = core.font.Face{
+        .family = "sans-serif",
+        .weight = 400,
+        .style = .normal,
+        .stretch = .normal,
+    };
+    var first_resources = render_resources.Builder{};
+    defer first_resources.deinit(testing.allocator);
+    var first_fonts = render.FontBuilder{};
+    defer first_fonts.deinit(testing.allocator);
+    var first_cache = render_text.Cache.init(testing.allocator, testing.io);
+    defer first_cache.deinit();
+    var first_layout = try render_text.shape(
+        testing.allocator,
+        testing.io,
+        &first_resources,
+        &first_fonts,
+        "persistent shape",
+        face,
+        24,
+        420,
+        true,
+        &first_cache,
+    );
+    defer first_layout.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), first_cache.entryCount());
+    first_cache.persist(root);
+
+    var second_cache = render_text.Cache.init(testing.allocator, testing.io);
+    defer second_cache.deinit();
+    second_cache.restore(root);
+    try testing.expectEqual(@as(usize, 1), second_cache.entryCount());
+    var second_resources = render_resources.Builder{};
+    defer second_resources.deinit(testing.allocator);
+    var second_fonts = render.FontBuilder{};
+    defer second_fonts.deinit(testing.allocator);
+    var second_layout = try render_text.shape(
+        testing.allocator,
+        testing.io,
+        &second_resources,
+        &second_fonts,
+        "persistent shape",
+        face,
+        24,
+        420,
+        true,
+        &second_cache,
+    );
+    defer second_layout.deinit(testing.allocator);
+    try testing.expectEqualSlices(render.Glyph, first_layout.glyphs, second_layout.glyphs);
+    try testing.expectEqualSlices(render.TextCluster, first_layout.clusters, second_layout.clusters);
+
+    const persisted = try std.Io.Dir.cwd().readFileAlloc(
+        testing.io,
+        cache_path,
+        testing.allocator,
+        .unlimited,
+    );
+    defer testing.allocator.free(persisted);
+    persisted[persisted.len / 2] ^= 0x01;
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = cache_path, .data = persisted, .flags = .{ .truncate = true } });
+    var corrupt_cache = render_text.Cache.init(testing.allocator, testing.io);
+    defer corrupt_cache.deinit();
+    corrupt_cache.restore(root);
+    try testing.expectEqual(@as(usize, 0), corrupt_cache.entryCount());
+}
+
 test "markdown underline paint controls color opacity width offset and dash" {
     var page = render.Page{
         .page_id = 1,
