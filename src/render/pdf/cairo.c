@@ -5,16 +5,20 @@
 #include <cairo.h>
 #include <fontconfig/fontconfig.h>
 #include <glib.h>
+#include <glib/gstdio.h>
 #include <hb.h>
 #include <hb-ot.h>
 #include <pango/pangocairo.h>
 #include <pango/pangofc-font.h>
 #include <pango/pangofc-fontmap.h>
+#include <errno.h>
+#include <locale.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -25,8 +29,336 @@
 static GMutex ss_font_registration_mutex;
 static GRWLock ss_font_config_lock;
 static uint64_t ss_font_config_generation;
+static unsigned char ss_font_environment_id[SS_FONT_ENVIRONMENT_ID_SIZE];
+static uint64_t ss_font_environment_generation;
+static int ss_font_environment_valid;
+static FcConfig *ss_font_config;
 static GMutex ss_font_source_cache_mutex;
 static GHashTable *ss_font_source_cache;
+static GPtrArray *ss_registered_font_paths;
+static _Thread_local uint64_t ss_thread_font_config_generation;
+static _Thread_local int ss_thread_font_config_valid;
+
+static void ss_font_source_cache_clear(void);
+
+static void ss_checksum_bytes(GChecksum *checksum, const void *bytes, size_t length) {
+    unsigned char encoded_length[8];
+    const uint64_t value = (uint64_t)length;
+    for (size_t index = 0; index < sizeof(encoded_length); index++) {
+        encoded_length[index] = (unsigned char)(value >> (index * 8));
+    }
+    g_checksum_update(checksum, encoded_length, sizeof(encoded_length));
+    if (length != 0) g_checksum_update(checksum, (const guchar *)bytes, length);
+}
+
+static void ss_checksum_string(GChecksum *checksum, const char *value) {
+    if (value == NULL) {
+        ss_checksum_bytes(checksum, "", 0);
+        return;
+    }
+    ss_checksum_bytes(checksum, value, strlen(value));
+}
+
+static void ss_checksum_environment_variable(GChecksum *checksum, const char *name) {
+    ss_checksum_string(checksum, name);
+    const char *value = g_getenv(name);
+    const unsigned char present = value != NULL;
+    ss_checksum_bytes(checksum, &present, sizeof(present));
+    if (present) ss_checksum_string(checksum, value);
+}
+
+static void ss_checksum_stat(GChecksum *checksum, const GStatBuf *metadata) {
+    ss_checksum_bytes(checksum, &metadata->st_mode, sizeof(metadata->st_mode));
+    ss_checksum_bytes(checksum, &metadata->st_dev, sizeof(metadata->st_dev));
+    ss_checksum_bytes(checksum, &metadata->st_ino, sizeof(metadata->st_ino));
+    ss_checksum_bytes(checksum, &metadata->st_size, sizeof(metadata->st_size));
+    ss_checksum_bytes(checksum, &metadata->st_mtime, sizeof(metadata->st_mtime));
+    ss_checksum_bytes(checksum, &metadata->st_ctime, sizeof(metadata->st_ctime));
+#if defined(__APPLE__)
+    ss_checksum_bytes(checksum, &metadata->st_mtimespec.tv_nsec, sizeof(metadata->st_mtimespec.tv_nsec));
+    ss_checksum_bytes(checksum, &metadata->st_ctimespec.tv_nsec, sizeof(metadata->st_ctimespec.tv_nsec));
+#elif defined(__linux__)
+    ss_checksum_bytes(checksum, &metadata->st_mtim.tv_nsec, sizeof(metadata->st_mtim.tv_nsec));
+    ss_checksum_bytes(checksum, &metadata->st_ctim.tv_nsec, sizeof(metadata->st_ctim.tv_nsec));
+#endif
+}
+
+static int ss_stat_matches(const GStatBuf *left, const GStatBuf *right) {
+    if (
+        left->st_mode != right->st_mode ||
+        left->st_dev != right->st_dev ||
+        left->st_ino != right->st_ino ||
+        left->st_size != right->st_size ||
+        left->st_mtime != right->st_mtime ||
+        left->st_ctime != right->st_ctime
+    ) {
+        return 0;
+    }
+#if defined(__APPLE__)
+    return left->st_mtimespec.tv_nsec == right->st_mtimespec.tv_nsec &&
+        left->st_ctimespec.tv_nsec == right->st_ctimespec.tv_nsec;
+#elif defined(__linux__)
+    return left->st_mtim.tv_nsec == right->st_mtim.tv_nsec &&
+        left->st_ctim.tv_nsec == right->st_ctim.tv_nsec;
+#else
+    return 1;
+#endif
+}
+
+static gchar *ss_font_config_path(FcConfig *config, const char *path) {
+    if (path == NULL) return NULL;
+    const FcChar8 *sysroot = FcConfigGetSysRoot(config);
+    if (sysroot == NULL || sysroot[0] == '\0') return g_strdup(path);
+    if (g_path_is_absolute(path)) return g_strconcat((const char *)sysroot, path, NULL);
+    return g_build_filename((const char *)sysroot, path, NULL);
+}
+
+static int ss_checksum_font_set(GChecksum *checksum, FcConfig *config, FcFontSet *font_set, const char *name) {
+    ss_checksum_string(checksum, name);
+    const int count = font_set != NULL ? font_set->nfont : 0;
+    ss_checksum_bytes(checksum, &count, sizeof(count));
+    for (int index = 0; index < count; index++) {
+        FcPattern *pattern = font_set->fonts[index];
+        FcChar8 *path = NULL;
+        if (FcPatternGetString(pattern, FC_FILE, 0, &path) != FcResultMatch) path = NULL;
+        ss_checksum_string(checksum, (const char *)path);
+        int face_index = 0;
+        if (FcPatternGetInteger(pattern, FC_INDEX, 0, &face_index) != FcResultMatch) face_index = 0;
+        ss_checksum_bytes(checksum, &face_index, sizeof(face_index));
+        if (path != NULL) {
+            gchar *resolved_path = ss_font_config_path(config, (const char *)path);
+            if (resolved_path == NULL) return 1;
+            GStatBuf metadata;
+            if (g_stat(resolved_path, &metadata) != 0) {
+                g_free(resolved_path);
+                return 1;
+            }
+            ss_checksum_stat(checksum, &metadata);
+            g_free(resolved_path);
+        }
+    }
+    return 0;
+}
+
+static int ss_checksum_path_list(GChecksum *checksum, FcConfig *config, FcStrList *paths, const char *name) {
+    ss_checksum_string(checksum, name);
+    if (paths == NULL) {
+        const int count = 0;
+        ss_checksum_bytes(checksum, &count, sizeof(count));
+        return 0;
+    }
+    int count = 0;
+    FcChar8 *path = NULL;
+    while ((path = FcStrListNext(paths)) != NULL) {
+        count++;
+        ss_checksum_string(checksum, (const char *)path);
+        gchar *resolved_path = ss_font_config_path(config, (const char *)path);
+        if (resolved_path == NULL) {
+            FcStrListDone(paths);
+            return 1;
+        }
+        GStatBuf metadata;
+        if (g_stat(resolved_path, &metadata) != 0) {
+            const unsigned char present = 0;
+            ss_checksum_bytes(checksum, &present, sizeof(present));
+            const int missing = errno == ENOENT || errno == ENOTDIR;
+            g_free(resolved_path);
+            if (missing) continue;
+            FcStrListDone(paths);
+            return 1;
+        }
+        g_free(resolved_path);
+        const unsigned char present = 1;
+        ss_checksum_bytes(checksum, &present, sizeof(present));
+        ss_checksum_stat(checksum, &metadata);
+    }
+    FcStrListDone(paths);
+    ss_checksum_bytes(checksum, &count, sizeof(count));
+    return 0;
+}
+
+/* The writer lock must be held because this function can replace or invalidate
+ * the current thread's Pango font-map caches. */
+static FcConfig *ss_sync_thread_pango_font_config_writer_locked(PangoFcFontMap **font_map_output) {
+    PangoFontMap *font_map = pango_cairo_font_map_get_default();
+    if (font_map == NULL || !PANGO_IS_FC_FONT_MAP(font_map)) return NULL;
+    PangoFcFontMap *fc_font_map = PANGO_FC_FONT_MAP(font_map);
+    if (font_map_output != NULL) *font_map_output = fc_font_map;
+    if (ss_font_config == NULL) {
+        ss_font_config = FcConfigReference(NULL);
+        if (ss_font_config == NULL) return NULL;
+    }
+    FcConfig *attached = pango_fc_font_map_get_config(fc_font_map);
+    if (attached != ss_font_config) {
+        pango_fc_font_map_set_config(fc_font_map, ss_font_config);
+        pango_fc_font_map_cache_clear(fc_font_map);
+    } else if (!ss_thread_font_config_valid || ss_thread_font_config_generation != ss_font_config_generation) {
+        pango_fc_font_map_config_changed(fc_font_map);
+    }
+    ss_thread_font_config_generation = ss_font_config_generation;
+    ss_thread_font_config_valid = 1;
+    return ss_font_config;
+}
+
+static int ss_compute_font_environment_for_config_locked(
+    unsigned char output[SS_FONT_ENVIRONMENT_ID_SIZE],
+    PangoFcFontMap *font_map,
+    FcConfig *borrowed_config
+) {
+    GChecksum *checksum = g_checksum_new(G_CHECKSUM_SHA256);
+    if (checksum == NULL) return 1;
+    int failed = 0;
+
+    ss_checksum_string(checksum, "ss-font-environment-v3");
+    ss_checksum_string(checksum, cairo_version_string());
+    ss_checksum_string(checksum, pango_version_string());
+    ss_checksum_string(checksum, hb_version_string());
+    const int fontconfig_version = FcGetVersion();
+    ss_checksum_bytes(checksum, &fontconfig_version, sizeof(fontconfig_version));
+    const int freetype_version[] = {FREETYPE_MAJOR, FREETYPE_MINOR, FREETYPE_PATCH};
+    ss_checksum_bytes(checksum, freetype_version, sizeof(freetype_version));
+
+    if (borrowed_config == NULL || font_map == NULL) {
+        g_checksum_free(checksum);
+        return 1;
+    }
+    FcConfig *config = FcConfigReference(borrowed_config);
+    if (config == NULL) {
+        g_checksum_free(checksum);
+        return 1;
+    }
+    ss_checksum_string(checksum, G_OBJECT_TYPE_NAME(font_map));
+    PangoLanguage *language = pango_language_get_default();
+    ss_checksum_string(checksum, language != NULL ? pango_language_to_string(language) : NULL);
+    ss_checksum_string(checksum, setlocale(LC_CTYPE, NULL));
+    ss_checksum_string(checksum, g_get_prgname());
+
+    const char *environment_names[] = {
+        "FONTCONFIG_FILE",
+        "FONTCONFIG_PATH",
+        "FONTCONFIG_SYSROOT",
+        "FC_LANG",
+        "PANGO_LANGUAGE",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LANG",
+        "LANGUAGE",
+        "PANGOCAIRO_BACKEND",
+        "FREETYPE_PROPERTIES",
+        "HB_OPTIONS",
+        "HB_SHAPER_LIST",
+        "XDG_CURRENT_DESKTOP",
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_DATA_DIRS",
+        "XDG_CACHE_HOME",
+    };
+    for (size_t index = 0; index < sizeof(environment_names) / sizeof(environment_names[0]); index++) {
+        ss_checksum_environment_variable(checksum, environment_names[index]);
+    }
+
+    ss_checksum_string(checksum, (const char *)FcConfigGetSysRoot(config));
+    FcStrList *files = FcConfigGetConfigFiles(config);
+    if (files != NULL) {
+        FcChar8 *path = NULL;
+        while ((path = FcStrListNext(files)) != NULL) {
+            ss_checksum_string(checksum, (const char *)path);
+            gchar *resolved_path = ss_font_config_path(config, (const char *)path);
+            GStatBuf before;
+            if (resolved_path == NULL || g_stat(resolved_path, &before) != 0) {
+                g_free(resolved_path);
+                failed = 1;
+                break;
+            }
+            ss_checksum_stat(checksum, &before);
+            if (S_ISREG(before.st_mode)) {
+                gchar *contents = NULL;
+                gsize length = 0;
+                GStatBuf after;
+                if (
+                    !g_file_get_contents(resolved_path, &contents, &length, NULL) ||
+                    g_stat(resolved_path, &after) != 0 ||
+                    !ss_stat_matches(&before, &after)
+                ) {
+                    g_free(contents);
+                    g_free(resolved_path);
+                    failed = 1;
+                    break;
+                }
+                ss_checksum_bytes(checksum, contents, length);
+                g_free(contents);
+            } else if (!S_ISDIR(before.st_mode)) {
+                g_free(resolved_path);
+                failed = 1;
+                break;
+            }
+            g_free(resolved_path);
+        }
+        FcStrListDone(files);
+    }
+    if (!failed && ss_checksum_path_list(checksum, config, FcConfigGetFontDirs(config), "font-directories") != 0) failed = 1;
+    if (!failed && ss_checksum_font_set(checksum, config, FcConfigGetFonts(config, FcSetSystem), "system-fonts") != 0) failed = 1;
+    if (!failed && ss_checksum_font_set(checksum, config, FcConfigGetFonts(config, FcSetApplication), "application-fonts") != 0) failed = 1;
+    if (!failed && FcConfigUptoDate(config) != FcTrue) failed = 1;
+    if (failed) {
+        FcConfigDestroy(config);
+        g_checksum_free(checksum);
+        return 1;
+    }
+
+    gsize digest_length = SS_FONT_ENVIRONMENT_ID_SIZE;
+    g_checksum_get_digest(checksum, output, &digest_length);
+    FcConfigDestroy(config);
+    g_checksum_free(checksum);
+    if (digest_length != SS_FONT_ENVIRONMENT_ID_SIZE) return 1;
+    return 0;
+}
+
+static int ss_compute_font_environment_writer_locked(unsigned char output[SS_FONT_ENVIRONMENT_ID_SIZE]) {
+    PangoFcFontMap *font_map = NULL;
+    FcConfig *config = ss_sync_thread_pango_font_config_writer_locked(&font_map);
+    return ss_compute_font_environment_for_config_locked(output, font_map, config);
+}
+
+static int ss_reload_font_config_writer_locked(
+    PangoFcFontMap *font_map,
+    unsigned char environment_id[SS_FONT_ENVIRONMENT_ID_SIZE]
+) {
+    if (font_map == NULL) return 1;
+    FcConfig *config = FcInitLoadConfigAndFonts();
+    if (config == NULL) return 1;
+    int failed = 0;
+    if (ss_registered_font_paths != NULL) {
+        for (guint index = 0; index < ss_registered_font_paths->len; index++) {
+            const char *path = g_ptr_array_index(ss_registered_font_paths, index);
+            if (FcConfigAppFontAddFile(config, (const FcChar8 *)path) != FcTrue) {
+                failed = 1;
+                break;
+            }
+        }
+    }
+    if (!failed && ss_compute_font_environment_for_config_locked(environment_id, font_map, config) != 0) failed = 1;
+    if (!failed && FcConfigSetCurrent(config) != FcTrue) failed = 1;
+    if (failed) {
+        FcConfigDestroy(config);
+        return 1;
+    }
+    FcConfig *retained_config = FcConfigReference(config);
+    pango_fc_font_map_set_config(font_map, config);
+    pango_fc_font_map_cache_clear(font_map);
+    if (ss_font_config != NULL) FcConfigDestroy(ss_font_config);
+    ss_font_config = retained_config;
+    FcConfigDestroy(config);
+    ss_font_config_generation++;
+    ss_thread_font_config_generation = ss_font_config_generation;
+    ss_thread_font_config_valid = 1;
+    memcpy(ss_font_environment_id, environment_id, sizeof(ss_font_environment_id));
+    ss_font_environment_generation = ss_font_config_generation;
+    ss_font_environment_valid = 1;
+    ss_font_source_cache_clear();
+    return 0;
+}
 
 typedef struct SsFontSource {
     char *path;
@@ -186,18 +518,46 @@ const char *ss_pdf_harfbuzz_version_string(void) {
 
 int ss_font_register(const char *path) {
     if (path == NULL || path[0] == '\0') return 1;
+    gchar *canonical_path = g_canonicalize_filename(path, NULL);
+    if (canonical_path == NULL) return 1;
     g_mutex_lock(&ss_font_registration_mutex);
     g_rw_lock_writer_lock(&ss_font_config_lock);
-    FcConfig *config = FcConfigGetCurrent();
-    const FcBool added = config != NULL ? FcConfigAppFontAddFile(config, (const FcChar8 *)path) : FcFalse;
+    int known = 0;
+    if (ss_registered_font_paths != NULL) {
+        for (guint index = 0; index < ss_registered_font_paths->len; index++) {
+            if (strcmp(canonical_path, g_ptr_array_index(ss_registered_font_paths, index)) == 0) {
+                known = 1;
+                break;
+            }
+        }
+    }
+    if (known) {
+        g_rw_lock_writer_unlock(&ss_font_config_lock);
+        g_mutex_unlock(&ss_font_registration_mutex);
+        g_free(canonical_path);
+        return 0;
+    }
+    PangoFcFontMap *font_map = NULL;
+    FcConfig *config = ss_sync_thread_pango_font_config_writer_locked(&font_map);
+    const FcBool added = config != NULL && font_map != NULL
+        ? FcConfigAppFontAddFile(config, (const FcChar8 *)canonical_path)
+        : FcFalse;
     if (added == FcTrue) {
-        PangoFontMap *font_map = pango_cairo_font_map_get_default();
-        if (font_map != NULL && PANGO_IS_FC_FONT_MAP(font_map)) pango_fc_font_map_config_changed(PANGO_FC_FONT_MAP(font_map));
+        if (ss_registered_font_paths == NULL) {
+            ss_registered_font_paths = g_ptr_array_new_with_free_func(g_free);
+        }
+        g_ptr_array_add(ss_registered_font_paths, canonical_path);
+        canonical_path = NULL;
+        pango_fc_font_map_config_changed(font_map);
         ss_font_config_generation++;
+        ss_thread_font_config_generation = ss_font_config_generation;
+        ss_thread_font_config_valid = 1;
+        ss_font_environment_valid = 0;
         ss_font_source_cache_clear();
     }
     g_rw_lock_writer_unlock(&ss_font_config_lock);
     g_mutex_unlock(&ss_font_registration_mutex);
+    g_free(canonical_path);
     return added == FcTrue ? 0 : 1;
 }
 
@@ -206,6 +566,122 @@ uint64_t ss_font_generation(void) {
     const uint64_t generation = ss_font_config_generation;
     g_rw_lock_reader_unlock(&ss_font_config_lock);
     return generation;
+}
+
+int ss_font_environment_snapshot(SsFontEnvironment *output) {
+    if (output == NULL) return 1;
+    g_rw_lock_reader_lock(&ss_font_config_lock);
+    if (ss_font_environment_valid && ss_font_environment_generation == ss_font_config_generation) {
+        memcpy(output->id, ss_font_environment_id, sizeof(output->id));
+        output->generation = ss_font_config_generation;
+        g_rw_lock_reader_unlock(&ss_font_config_lock);
+        return 0;
+    }
+    g_rw_lock_reader_unlock(&ss_font_config_lock);
+
+    g_rw_lock_writer_lock(&ss_font_config_lock);
+    if (!ss_font_environment_valid || ss_font_environment_generation != ss_font_config_generation) {
+        unsigned char candidate[SS_FONT_ENVIRONMENT_ID_SIZE];
+        if (ss_compute_font_environment_writer_locked(candidate) != 0) {
+            g_rw_lock_writer_unlock(&ss_font_config_lock);
+            return 1;
+        }
+        memcpy(ss_font_environment_id, candidate, sizeof(ss_font_environment_id));
+        ss_font_environment_generation = ss_font_config_generation;
+        ss_font_environment_valid = 1;
+    }
+    memcpy(output->id, ss_font_environment_id, sizeof(output->id));
+    output->generation = ss_font_config_generation;
+    g_rw_lock_writer_unlock(&ss_font_config_lock);
+    return 0;
+}
+
+int ss_font_environment_refresh(SsFontEnvironment *output) {
+    if (output == NULL) return 1;
+    g_mutex_lock(&ss_font_registration_mutex);
+    g_rw_lock_writer_lock(&ss_font_config_lock);
+
+    int failed = 0;
+    PangoFcFontMap *font_map = NULL;
+    FcConfig *config = ss_sync_thread_pango_font_config_writer_locked(&font_map);
+    unsigned char candidate[SS_FONT_ENVIRONMENT_ID_SIZE];
+    int have_candidate = 0;
+    int reload = config == NULL || font_map == NULL;
+    FcConfig *current = FcConfigReference(NULL);
+    if (current == NULL || current != config) reload = 1;
+    if (current != NULL) FcConfigDestroy(current);
+    if (!reload && FcConfigUptoDate(config) != FcTrue) reload = 1;
+    if (!reload) {
+        have_candidate = ss_compute_font_environment_writer_locked(candidate) == 0;
+        if (!have_candidate) {
+            reload = 1;
+        } else if (
+            ss_font_environment_valid &&
+            ss_font_environment_generation == ss_font_config_generation &&
+            memcmp(candidate, ss_font_environment_id, sizeof(candidate)) != 0
+        ) {
+            reload = 1;
+        }
+    }
+    if (reload) {
+        if (font_map == NULL || ss_reload_font_config_writer_locked(font_map, candidate) != 0) {
+            failed = 1;
+        } else {
+            have_candidate = 1;
+        }
+    }
+    if (!failed && !have_candidate) {
+        have_candidate = ss_compute_font_environment_writer_locked(candidate) == 0;
+        if (!have_candidate) failed = 1;
+    }
+    if (!failed) {
+        memcpy(ss_font_environment_id, candidate, sizeof(ss_font_environment_id));
+        ss_font_environment_generation = ss_font_config_generation;
+        ss_font_environment_valid = 1;
+        memcpy(output->id, ss_font_environment_id, sizeof(output->id));
+        output->generation = ss_font_config_generation;
+    }
+
+    g_rw_lock_writer_unlock(&ss_font_config_lock);
+    g_mutex_unlock(&ss_font_registration_mutex);
+    return failed;
+}
+
+/* Returns with the reader lock held. The caller must release it after the
+ * Pango operation has finished. A stale thread-local font map is synchronized
+ * only while holding the writer lock, then both generations are rechecked. */
+static int ss_lock_stable_pango_font_environment_reader(SsFontEnvironment *output) {
+    for (;;) {
+        g_rw_lock_reader_lock(&ss_font_config_lock);
+        if (
+            ss_font_environment_valid &&
+            ss_font_environment_generation == ss_font_config_generation &&
+            ss_thread_font_config_valid &&
+            ss_thread_font_config_generation == ss_font_config_generation
+        ) {
+            if (output != NULL) {
+                memcpy(output->id, ss_font_environment_id, sizeof(output->id));
+                output->generation = ss_font_config_generation;
+            }
+            return 0;
+        }
+        g_rw_lock_reader_unlock(&ss_font_config_lock);
+
+        g_rw_lock_writer_lock(&ss_font_config_lock);
+        int failed = ss_sync_thread_pango_font_config_writer_locked(NULL) == NULL;
+        if (!failed && (!ss_font_environment_valid || ss_font_environment_generation != ss_font_config_generation)) {
+            unsigned char candidate[SS_FONT_ENVIRONMENT_ID_SIZE];
+            if (ss_compute_font_environment_writer_locked(candidate) != 0) {
+                failed = 1;
+            } else {
+                memcpy(ss_font_environment_id, candidate, sizeof(ss_font_environment_id));
+                ss_font_environment_generation = ss_font_config_generation;
+                ss_font_environment_valid = 1;
+            }
+        }
+        g_rw_lock_writer_unlock(&ss_font_config_lock);
+        if (failed) return 1;
+    }
 }
 
 static void ss_pdf_rounded_rect_path(cairo_t *cr, double x, double y, double width, double height, double radius) {
@@ -907,8 +1383,9 @@ static void ss_font_source_read_pattern(SsFontSource *source, FcPattern *pattern
     int index = 0;
     FcChar8 *postscript_name = NULL;
     if (FcPatternGetString(pattern, FC_FILE, 0, &path) == FcResultMatch && path != NULL) {
+        gchar *resolved_path = ss_font_config_path(ss_font_config, (const char *)path);
         g_free(source->path);
-        source->path = g_strdup((const char *)path);
+        source->path = resolved_path != NULL ? resolved_path : g_strdup("");
     }
     if (FcPatternGetInteger(pattern, FC_INDEX, 0, &index) == FcResultMatch && index >= 0) {
         source->index = (unsigned int)index;
@@ -988,10 +1465,10 @@ static void ss_font_source_copy_fallback(
             FcPatternAddInteger(query, FC_WIDTH, ss_font_source_fc_width(pango_font_description_get_stretch(description)));
             const PangoStyle style = pango_font_description_get_style(description);
             FcPatternAddInteger(query, FC_SLANT, style == PANGO_STYLE_NORMAL ? FC_SLANT_ROMAN : (style == PANGO_STYLE_ITALIC ? FC_SLANT_ITALIC : FC_SLANT_OBLIQUE));
-            FcConfigSubstitute(NULL, query, FcMatchPattern);
+            FcConfigSubstitute(ss_font_config, query, FcMatchPattern);
             FcDefaultSubstitute(query);
             FcResult result = FcResultNoMatch;
-            FcPattern *match = FcFontMatch(NULL, query, &result);
+            FcPattern *match = FcFontMatch(ss_font_config, query, &result);
             FcPatternDestroy(query);
             ss_font_source_read_pattern(source, match);
             if (match != NULL) FcPatternDestroy(match);
@@ -1102,7 +1579,7 @@ int ss_text_measure_layout(
 ) {
     if (text == NULL || measurement == NULL || font_size <= 0) return 1;
     memset(measurement, 0, sizeof(*measurement));
-    g_rw_lock_reader_lock(&ss_font_config_lock);
+    if (ss_lock_stable_pango_font_environment_reader(NULL) != 0) return 1;
     cairo_t *cr = ss_thread_text_measure_context();
     if (cr == NULL) {
         g_rw_lock_reader_unlock(&ss_font_config_lock);
@@ -1160,7 +1637,7 @@ int ss_text_shape(
 ) {
     if (text == NULL || shape == NULL || font_size <= 0) return 1;
     memset(shape, 0, sizeof(*shape));
-    g_rw_lock_reader_lock(&ss_font_config_lock);
+    if (ss_lock_stable_pango_font_environment_reader(&shape->environment) != 0) return 1;
     cairo_t *cr = ss_thread_text_measure_context();
     if (cr == NULL) {
         g_rw_lock_reader_unlock(&ss_font_config_lock);
@@ -1380,14 +1857,14 @@ int ss_text_shape(
 }
 
 double ss_text_measure_text(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
-    g_rw_lock_reader_lock(&ss_font_config_lock);
+    if (ss_lock_stable_pango_font_environment_reader(NULL) != 0) return 0;
     const double width = ss_measure_text_on_cairo(ss_thread_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size, 0);
     g_rw_lock_reader_unlock(&ss_font_config_lock);
     return width;
 }
 
 double ss_text_measure_text_visual_width(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
-    g_rw_lock_reader_lock(&ss_font_config_lock);
+    if (ss_lock_stable_pango_font_environment_reader(NULL) != 0) return 0;
     const double width = ss_measure_text_on_cairo(ss_thread_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size, 1);
     g_rw_lock_reader_unlock(&ss_font_config_lock);
     return width;

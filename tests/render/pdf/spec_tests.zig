@@ -46,6 +46,37 @@ fn cStringSlice(ptr: [*c]const u8) []const u8 {
     return std.mem.span(sentinel);
 }
 
+const FontMapWorker = struct {
+    phase: *std.atomic.Value(usize),
+    completed: *std.atomic.Value(usize),
+    failed: *std.atomic.Value(bool),
+    generations: [2]u64 = .{ 0, 0 },
+
+    fn run(self: *FontMapWorker) void {
+        for (0..2) |round| {
+            while (self.phase.load(.seq_cst) < round + 1) std.atomic.spinLoopHint();
+            var shape = std.mem.zeroes(c.SsTextShape);
+            if (c.ss_text_shape(
+                "persistent worker",
+                "sans-serif",
+                400,
+                0,
+                4,
+                16,
+                320,
+                0,
+                &shape,
+            ) != 0) {
+                self.failed.store(true, .seq_cst);
+            } else {
+                self.generations[round] = shape.environment.generation;
+                c.ss_text_shape_free(&shape);
+            }
+            _ = self.completed.fetchAdd(1, .seq_cst);
+        }
+    }
+};
+
 fn expectDeterministicDocumentId(io: std.Io, pdf_path: []const u8) !void {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, pdf_path, testing.allocator, .limited(2 * 1024 * 1024));
     defer testing.allocator.free(bytes);
@@ -189,6 +220,76 @@ test "render PDF spec: Cairo shim exposes rendering dependency versions" {
     try testing.expect(c.ss_pdf_fontconfig_version() > 0);
     try expectCString(c.ss_pdf_harfbuzz_version_string());
     try expectCString(c.ss_qpdf_version_string());
+    var first_environment = std.mem.zeroes(c.SsFontEnvironment);
+    var second_environment = std.mem.zeroes(c.SsFontEnvironment);
+    try testing.expectEqual(@as(c_int, 0), c.ss_font_environment_snapshot(&first_environment));
+    try testing.expectEqual(@as(c_int, 0), c.ss_font_environment_snapshot(&second_environment));
+    try testing.expectEqual(first_environment.generation, second_environment.generation);
+    try testing.expectEqualSlices(u8, &first_environment.id, &second_environment.id);
+    var refreshed_environment = std.mem.zeroes(c.SsFontEnvironment);
+    try testing.expectEqual(@as(c_int, 0), c.ss_font_environment_refresh(&refreshed_environment));
+    try testing.expectEqual(first_environment.generation, refreshed_environment.generation);
+    try testing.expectEqualSlices(u8, &first_environment.id, &refreshed_environment.id);
+    const zero_environment = std.mem.zeroes(@TypeOf(first_environment.id));
+    try testing.expect(!std.mem.eql(u8, &first_environment.id, &zero_environment));
+}
+
+test "render PDF spec: persistent worker font maps follow registered font generations" {
+    var seed_shape = std.mem.zeroes(c.SsTextShape);
+    try testing.expectEqual(@as(c_int, 0), c.ss_text_shape(
+        "font registration seed",
+        "sans-serif",
+        400,
+        0,
+        4,
+        16,
+        320,
+        0,
+        &seed_shape,
+    ));
+    defer c.ss_text_shape_free(&seed_shape);
+    try testing.expect(seed_shape.run_count != 0);
+    const font_path = try testing.allocator.dupeZ(u8, cStringSlice(seed_shape.runs[0].font_path));
+    defer testing.allocator.free(font_path);
+
+    var phase = std.atomic.Value(usize).init(0);
+    var completed = std.atomic.Value(usize).init(0);
+    var failed = std.atomic.Value(bool).init(false);
+    var workers: [4]FontMapWorker = undefined;
+    var threads: [workers.len]std.Thread = undefined;
+    var started: usize = 0;
+    errdefer {
+        phase.store(2, .seq_cst);
+        for (threads[0..started]) |thread| thread.join();
+    }
+    for (&workers, 0..) |*worker, index| {
+        worker.* = .{ .phase = &phase, .completed = &completed, .failed = &failed };
+        threads[index] = try std.Thread.spawn(.{}, FontMapWorker.run, .{worker});
+        started += 1;
+    }
+
+    phase.store(1, .seq_cst);
+    while (completed.load(.seq_cst) != workers.len) std.atomic.spinLoopHint();
+    try testing.expect(!failed.load(.seq_cst));
+    const initial_generation = workers[0].generations[0];
+    for (workers) |worker| try testing.expectEqual(initial_generation, worker.generations[0]);
+
+    const generation_before_registration = c.ss_font_generation();
+    try testing.expectEqual(@as(c_int, 0), c.ss_font_register(font_path.ptr));
+    const registered_generation = c.ss_font_generation();
+    try testing.expect(registered_generation > generation_before_registration);
+    try testing.expectEqual(@as(c_int, 0), c.ss_font_register(font_path.ptr));
+    try testing.expectEqual(registered_generation, c.ss_font_generation());
+
+    phase.store(2, .seq_cst);
+    while (completed.load(.seq_cst) != workers.len * 2) std.atomic.spinLoopHint();
+    for (threads[0..started]) |thread| thread.join();
+    started = 0;
+    try testing.expect(!failed.load(.seq_cst));
+    for (workers) |worker| {
+        try testing.expectEqual(registered_generation, worker.generations[1]);
+        try testing.expect(worker.generations[1] > worker.generations[0]);
+    }
 }
 
 test "render PDF spec: Cairo shim writes URI and destination link annotations" {
