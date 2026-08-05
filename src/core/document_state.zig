@@ -43,6 +43,29 @@ const DefaultValueKey = struct {
     length: usize,
 };
 
+fn validationUserReportsMatch(left: Diagnostic, right: Diagnostic) bool {
+    if (left.phase != .validation or
+        right.phase != .validation or
+        left.severity != right.severity or
+        left.page_id != right.page_id or
+        left.node_id != right.node_id or
+        left.origin == null or
+        right.origin == null)
+    {
+        return false;
+    }
+    if (!std.mem.eql(u8, left.origin.?, right.origin.?)) return false;
+    const left_message = switch (left.data) {
+        .user_report => |data| data.message,
+        else => return false,
+    };
+    const right_message = switch (right.data) {
+        .user_report => |data| data.message,
+        else => return false,
+    };
+    return std.mem.eql(u8, left_message, right_message);
+}
+
 const DefaultValueCache = struct {
     allocator: Allocator,
     values: std.AutoHashMap(DefaultValueKey, Value),
@@ -1148,11 +1171,32 @@ pub const DocumentState = struct {
             .severity = severity,
             .page_id = page_id,
             .node_id = node_id,
-            .origin = if (origin) |value| try self.allocator.dupe(u8, value) else null,
+            .origin = null,
             .data = data,
         };
         errdefer diagnostic.deinit(self.allocator);
+        if (origin) |value| diagnostic.origin = try self.allocator.dupe(u8, value);
         try self.addDiagnostic(diagnostic);
+    }
+
+    pub fn deduplicateValidationUserReports(self: *DocumentState) void {
+        var write_index: usize = 0;
+        for (self.diagnostics.items) |*diagnostic| {
+            var duplicate = false;
+            for (self.diagnostics.items[0..write_index]) |existing| {
+                if (validationUserReportsMatch(existing, diagnostic.*)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) {
+                diagnostic.deinit(self.allocator);
+                continue;
+            }
+            self.diagnostics.items[write_index] = diagnostic.*;
+            write_index += 1;
+        }
+        self.diagnostics.items.len = write_index;
     }
 
     pub fn addRenderDiagnostic(

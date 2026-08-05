@@ -137,6 +137,7 @@ pub fn analyzeDocumentState(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
 ) !void {
+    defer state.deduplicateValidationUserReports();
     var declaration_index: declarations.DeclarationIndex = undefined;
     {
         const measure_start = utils.measure_profile.start();
@@ -156,6 +157,7 @@ pub fn analyzeDocumentStateWithMode(
     state: *core.DocumentState,
     mode: AnalysisMode,
 ) !?execution.ExecutionGraph {
+    defer state.deduplicateValidationUserReports();
     var declaration_index: declarations.DeclarationIndex = undefined;
     {
         const measure_start = utils.measure_profile.start();

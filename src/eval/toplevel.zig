@@ -269,8 +269,13 @@ fn unknownNameCode(kind: []const u8) []const u8 {
 }
 
 fn formatGenericLowerDiagnostic(buf: []u8, err: anyerror) []const u8 {
-    return lowerErrorMessage(err) orelse
-        std.fmt.bufPrint(buf, "LoweringFailed: {s}", .{@errorName(err)}) catch "LoweringFailed: internal lowering error";
+    if (lowerErrorMessage(err)) |message| return message;
+    var reason_buf: [256]u8 = undefined;
+    return std.fmt.bufPrint(
+        buf,
+        "LoweringFailed: document evaluation could not finish: {s}",
+        .{utils.err.formatErrorReason(&reason_buf, err)},
+    ) catch "LoweringFailed: document evaluation could not finish; please report this as an ss bug";
 }
 
 fn lowerErrorMessage(err: anyerror) ?[]const u8 {
@@ -306,6 +311,8 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.ExpectedAnchor => "ExpectedAnchor: expected an anchor argument",
         error.ExpectedObject => "ExpectedObject: expected an object argument",
         error.NoCurrentPage => "NoCurrentPage: this operation is only valid inside a page block",
+        error.NoPreviousPage => "NoPreviousPage: the current page is the first page and has no previous page",
+        error.MissingParentPage => "MissingParentPage: the object is not attached to a page; place it before requesting its page",
         error.UnknownAnchor => "UnknownAnchor: unknown anchor",
         error.UnknownRole => "UnknownRole: unknown role",
         error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
@@ -906,7 +913,7 @@ fn materializePropertyRecord(
         return try slot.value.record.clone(state.allocator);
     }
     const record_name = ty.class_name orelse {
-        try reportRecordUpdateError(state, origin, "InvalidRecordUpdatePath: record type has no name", .{});
+        try reportRecordUpdateError(state, origin, "InvalidRecordUpdatePath: ss produced a record type without a name while evaluating this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
     return evalRecordDefaults(state, page_id, context, mode, functions, closures, origin, record_name);
@@ -1166,10 +1173,19 @@ const BuiltinContext = struct {
         defer self.state.allocator.free(resolved);
 
         const bytes = readTextFileAlloc(self.state.allocator, resolved) catch |err| {
+            var reason_buf: [320]u8 = undefined;
+            const reason = switch (err) {
+                error.FileTooLarge => std.fmt.bufPrint(
+                    &reason_buf,
+                    "the file exceeds the {d}-byte readlines limit",
+                    .{MAX_READLINES_BYTES},
+                ) catch "the file exceeds the readlines size limit",
+                else => utils.err.formatErrorReason(&reason_buf, err),
+            };
             const message = try std.fmt.allocPrint(
                 self.state.allocator,
                 "ReadlinesFailed: could not read {s} (resolved to {s}): {s}",
-                .{ requested, resolved, @errorName(err) },
+                .{ requested, resolved, reason },
             );
             defer self.state.allocator.free(message);
             try self.emitDiagnosticReport(.@"error", message);
@@ -1472,8 +1488,7 @@ fn readTextFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     const zpath = try allocator.dupeZ(u8, path);
     defer allocator.free(zpath);
 
-    const fd = std.c.open(zpath.ptr, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
-    if (fd < 0) return error.FileNotFound;
+    const fd = try openTextFile(zpath.ptr);
     defer _ = std.c.close(fd);
 
     var out = std.ArrayList(u8).empty;
@@ -1482,7 +1497,13 @@ fn readTextFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     var buf: [8192]u8 = undefined;
     while (true) {
         const read_len = std.c.read(fd, &buf, buf.len);
-        if (read_len < 0) return error.FileReadFailed;
+        switch (std.posix.errno(read_len)) {
+            .SUCCESS => {},
+            .INTR => continue,
+            .ISDIR => return error.IsDir,
+            .IO => return error.InputOutput,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
         if (read_len == 0) break;
         const count: usize = @intCast(read_len);
         if (out.items.len + count > MAX_READLINES_BYTES) return error.FileTooLarge;
@@ -1490,6 +1511,26 @@ fn readTextFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     }
 
     return try out.toOwnedSlice(allocator);
+}
+
+fn openTextFile(path: [*:0]const u8) !std.c.fd_t {
+    while (true) {
+        const fd = std.c.open(path, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
+        switch (std.posix.errno(fd)) {
+            .SUCCESS => return fd,
+            .INTR => continue,
+            .ACCES, .PERM => return error.AccessDenied,
+            .NOENT => return error.FileNotFound,
+            .NOTDIR => return error.NotDir,
+            .ISDIR => return error.IsDir,
+            .LOOP => return error.SymLinkLoop,
+            .NAMETOOLONG => return error.NameTooLong,
+            .MFILE => return error.ProcessFdQuotaExceeded,
+            .NFILE => return error.SystemFdQuotaExceeded,
+            .IO => return error.InputOutput,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+    }
 }
 
 fn evalSelectCall(
