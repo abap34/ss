@@ -6,6 +6,8 @@ const resources_compile = @import("render_resources");
 const utils = @import("utils");
 
 const Allocator = std.mem.Allocator;
+const FontEnvironmentId = [c.SS_FONT_ENVIRONMENT_ID_SIZE]u8;
+pub const FontEnvironment = c.SsFontEnvironment;
 
 const CacheKey = struct {
     source: []const u8,
@@ -16,7 +18,7 @@ const CacheKey = struct {
     font_size_bits: u64,
     width_bits: u64,
     wrap: bool,
-    font_generation: u64,
+    font_environment: FontEnvironmentId,
 };
 
 const CacheKeyContext = struct {
@@ -30,7 +32,7 @@ const CacheKeyContext = struct {
         std.hash.autoHash(&hasher, key.font_size_bits);
         std.hash.autoHash(&hasher, key.width_bits);
         std.hash.autoHash(&hasher, key.wrap);
-        std.hash.autoHash(&hasher, key.font_generation);
+        hasher.update(&key.font_environment);
         return hasher.final();
     }
 
@@ -41,7 +43,7 @@ const CacheKeyContext = struct {
             left.font_size_bits == right.font_size_bits and
             left.width_bits == right.width_bits and
             left.wrap == right.wrap and
-            left.font_generation == right.font_generation and
+            std.mem.eql(u8, &left.font_environment, &right.font_environment) and
             std.mem.eql(u8, left.source, right.source) and
             std.mem.eql(u8, left.family, right.family);
     }
@@ -165,7 +167,7 @@ pub const Cache = struct {
         font_size: f64,
         width: f64,
         wrap: bool,
-        font_generation: u64,
+        font_environment: FontEnvironmentId,
         layout: *const render.TextLayout,
         native: c.SsTextShape,
         resources: *resources_compile.Builder,
@@ -183,7 +185,7 @@ pub const Cache = struct {
             .weight = requested_font.weight,
             .style = requested_font.style,
             .stretch = requested_font.stretch,
-        }, font_size, width, wrap, font_generation);
+        }, font_size, width, wrap, font_environment);
         var cached_layout = try layout.clone(self.allocator);
         errdefer cached_layout.deinit(self.allocator);
         const dependencies = try cacheFontDependencies(
@@ -274,7 +276,7 @@ fn cacheKey(
     font_size: f64,
     width: f64,
     wrap: bool,
-    font_generation: u64,
+    font_environment: FontEnvironmentId,
 ) CacheKey {
     return .{
         .source = source,
@@ -283,10 +285,36 @@ fn cacheKey(
         .style = font.style,
         .stretch = font.stretch,
         .font_size_bits = @bitCast(font_size),
-        .width_bits = @bitCast(width),
+        .width_bits = @bitCast(if (wrap) width else @as(f64, 0)),
         .wrap = wrap,
-        .font_generation = font_generation,
+        .font_environment = font_environment,
     };
+}
+
+pub fn fontEnvironmentSnapshot() !FontEnvironment {
+    var environment = std.mem.zeroes(FontEnvironment);
+    if (c.ss_font_environment_snapshot(&environment) != 0) return error.PangoCreateFailed;
+    return environment;
+}
+
+pub fn fontEnvironmentRefresh() !FontEnvironment {
+    var environment = std.mem.zeroes(FontEnvironment);
+    if (c.ss_font_environment_refresh(&environment) != 0) return error.FontEnvironmentRefreshFailed;
+    return environment;
+}
+
+fn sameFontEnvironment(left: FontEnvironment, right: FontEnvironment) bool {
+    return left.generation == right.generation and std.mem.eql(u8, &left.id, &right.id);
+}
+
+pub fn validateFontEnvironment(expected: FontEnvironment) !void {
+    const current = try fontEnvironmentSnapshot();
+    if (!sameFontEnvironment(expected, current)) return error.FontEnvironmentChanged;
+}
+
+pub fn refreshAndValidateFontEnvironment(expected: FontEnvironment) !void {
+    const current = try fontEnvironmentRefresh();
+    if (!sameFontEnvironment(expected, current)) return error.FontEnvironmentChanged;
 }
 
 pub fn shape(
@@ -304,14 +332,14 @@ pub fn shape(
     const profile_start = utils.measure_profile.start();
     var profile_hit = false;
     defer utils.measure_profile.recordTextShape(profile_hit, profile_start);
-    const font_generation = c.ss_font_generation();
+    const environment = try fontEnvironmentSnapshot();
     if (cache) |shape_cache| {
         if (try shape_cache.get(
             allocator,
             io,
             resources,
             fonts,
-            cacheKey(source, requested_font, font_size, width, wrap, font_generation),
+            cacheKey(source, requested_font, font_size, width, wrap, environment.id),
         )) |layout| {
             profile_hit = true;
             return layout;
@@ -334,6 +362,7 @@ pub fn shape(
         &native,
     ) != 0) return error.PangoCreateFailed;
     defer c.ss_text_shape_free(&native);
+    if (!sameFontEnvironment(environment, native.environment)) return error.FontEnvironmentChanged;
     const layout = try copy(allocator, io, resources, fonts, source, requested_font, font_size, native);
     if (cache) |shape_cache| shape_cache.put(
         source,
@@ -341,7 +370,7 @@ pub fn shape(
         font_size,
         width,
         wrap,
-        font_generation,
+        native.environment.id,
         &layout,
         native,
         resources,

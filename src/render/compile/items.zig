@@ -117,8 +117,8 @@ const NativePdfError = error{
 };
 
 pub const native_artifact_cache_version = "ss-native-artifacts-v7";
-const render_page_cache_version = "ss-render-page-v1";
-const layout_measurement_cache_version = "ss-native-layout-measure-v16";
+const render_page_cache_version = "ss-render-page-v2";
+const layout_measurement_cache_version = "ss-native-layout-measure-v17";
 const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
 const external_command_timeout = std.Io.Clock.Duration{
@@ -547,6 +547,7 @@ pub const LayoutMeasurementScope = struct {
     cache_mutex: std.Io.Mutex = std.Io.Mutex.init,
     persistent_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
     run_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
+    font_environment: render_text.FontEnvironment,
     measurement_cache_dirty: bool = false,
 
     pub fn init(
@@ -556,9 +557,11 @@ pub const LayoutMeasurementScope = struct {
         pages: *const core.prepared.PreparedPages,
         resource_cache: ?*render_resources.SourceCache,
         highlight_languages: []const utils.highlight.Language,
+        font_environment: render_text.FontEnvironment,
     ) !LayoutMeasurementScope {
         const default_options: Options = .{};
         const cache_dir = default_options.cache_dir;
+        try render_text.validateFontEnvironment(font_environment);
         try std.Io.Dir.cwd().createDirPath(io, cache_dir);
         const asset_cache_dir = try std.fs.path.join(allocator, &.{ cache_dir, "artifacts", "native" });
         errdefer allocator.free(asset_cache_dir);
@@ -593,6 +596,7 @@ pub const LayoutMeasurementScope = struct {
             .prepared_objects = prepared_objects,
             .persistent_measurements = persistent_measurements,
             .run_measurements = std.AutoHashMap(u64, core.LayoutMeasurement).init(allocator),
+            .font_environment = font_environment,
         };
     }
 
@@ -646,6 +650,7 @@ pub const LayoutMeasurementScope = struct {
                 .io = key_ctx.io,
                 .asset_base_dir = key_ctx.asset_base_dir,
                 .resource_cache = key_ctx.resource_cache,
+                .font_environment = self.font_environment.id,
             },
             layout_measurement_cache_version,
             native_artifact_cache_version,
@@ -676,6 +681,7 @@ pub const LayoutMeasurementScope = struct {
         var measurement_ctx = self.ctx;
         measurement_ctx.allocator = state.allocator;
         measurement_ctx.command_failure = &target;
+        try render_text.validateFontEnvironment(self.font_environment);
         const profile_intrinsic = utils.measure_profile.start();
         defer utils.measure_profile.recordRenderIntrinsic(profileRenderMeasureKind(command.render.kind), profile_intrinsic);
         var measured = measureObjectCommandIntrinsic(&measurement_ctx, &command, width, mode) catch |err| {
@@ -684,6 +690,7 @@ pub const LayoutMeasurementScope = struct {
             return err;
         };
         if (measured) |*value| {
+            try render_text.validateFontEnvironment(self.font_environment);
             value.cache_key = cache_key;
             try self.storeMeasurement(cache_key, value.*);
         }
@@ -908,6 +915,7 @@ pub fn preloadPreparedPageArtifacts(
 pub const Compiler = struct {
     io: std.Io,
     options: render_compile.Options,
+    font_environment: ?render_text.FontEnvironment = null,
 
     pub fn prepare(
         self: *Compiler,
@@ -915,12 +923,24 @@ pub const Compiler = struct {
         state: *core.DocumentState,
         pages: *const core.prepared.PreparedPages,
     ) !void {
+        const expected_environment = self.options.font_environment;
+        if (expected_environment) |expected| {
+            try render_text.refreshAndValidateFontEnvironment(expected);
+        } else {
+            _ = try render_text.fontEnvironmentRefresh();
+        }
         try preloadPreparedPageArtifacts(allocator, self.io, state, pages, .{
             .jobs = self.options.jobs,
             .cache_dir = self.options.cache_dir,
             .highlight_languages = self.options.highlight_languages,
         }, null);
-        if (preparedPagesNeedStructuredMath(pages)) try render_math.prepareFont(allocator, self.io);
+        try prepareFonts(allocator, self.io, pages);
+        if (expected_environment) |expected| {
+            try render_text.validateFontEnvironment(expected);
+            self.font_environment = expected;
+        } else {
+            self.font_environment = try render_text.fontEnvironmentSnapshot();
+        }
         try std.Io.checkCancel(self.io);
     }
 
@@ -934,6 +954,9 @@ pub const Compiler = struct {
         math: *render_ir.MathBuilder,
     ) !render_ir.Page {
         try std.Io.checkCancel(self.io);
+        const font_environment = self.font_environment orelse
+            try render_text.fontEnvironmentSnapshot();
+        try render_text.validateFontEnvironment(font_environment);
         const asset_cache_dir = try std.fs.path.join(allocator, &.{ self.options.cache_dir, "artifacts", "native" });
         defer allocator.free(asset_cache_dir);
         var draw_context = DrawContext{
@@ -959,6 +982,7 @@ pub const Compiler = struct {
                     .io = self.io,
                     .asset_base_dir = draw_context.asset_base_dir,
                     .resource_cache = self.options.resource_cache,
+                    .font_environment = font_environment.id,
                 },
                 render_page_cache_version,
                 prepared_page.page_id,
@@ -998,6 +1022,7 @@ pub const Compiler = struct {
             defer font_catalog.deinit(allocator);
             var math_catalog = try local_math.take(allocator);
             defer math_catalog.deinit(allocator);
+            try render_text.validateFontEnvironment(font_environment);
             const cached = try cache.put(
                 key,
                 allocator,
@@ -1040,6 +1065,14 @@ pub const Compiler = struct {
         );
     }
 };
+
+pub fn prepareFonts(
+    allocator: Allocator,
+    io: std.Io,
+    pages: *const core.prepared.PreparedPages,
+) !void {
+    if (preparedPagesNeedStructuredMath(pages)) try render_math.prepareFont(allocator, io);
+}
 
 pub const PageCache = page_cache.Cache;
 

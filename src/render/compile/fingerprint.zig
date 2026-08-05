@@ -14,6 +14,7 @@ pub const Context = struct {
     io: std.Io,
     asset_base_dir: []const u8,
     resource_cache: ?*render_resources.SourceCache = null,
+    font_environment: [c.SS_FONT_ENVIRONMENT_ID_SIZE]u8 = @splat(0),
 };
 
 pub const Command = struct {
@@ -54,7 +55,7 @@ pub fn layoutMeasurementKey(
     hashString(&hasher, cache_version);
     hashString(&hasher, native_cache_version);
     hashNativeRuntime(&hasher);
-    hashU64(&hasher, c.ss_font_generation());
+    hasher.update(&ctx.font_environment);
     hashF32(&hasher, page_width);
     hashF32(&hasher, page_height);
     hashString(&hasher, @tagName(mode));
@@ -82,7 +83,7 @@ pub fn renderPageKey(
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, cache_version);
     hashNativeRuntime(&hasher);
-    hashU64(&hasher, c.ss_font_generation());
+    hasher.update(&ctx.font_environment);
     hashU64(&hasher, page_id);
     hashUsize(&hasher, page_index);
     hashOptionalColor(&hasher, background);

@@ -862,3 +862,81 @@ test "page cache resource survives source graph and cache teardown" {
     try testing.expectEqual(@as(usize, 1), retained_fonts.instances.len);
     try testing.expectEqualStrings("Cached font", retained_fonts.instances[0].family);
 }
+
+test "document font environment rejects changes between layout and compilation" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const prepared_pages = core.prepared.PreparedPages{ .pages = &.{} };
+
+    const font_environment = try render_compile.acquireFontEnvironment(
+        testing.allocator,
+        testing.io,
+        &prepared_pages,
+    );
+    try render_compile.validateFontEnvironment(font_environment);
+    try render_compile.refreshAndValidateFontEnvironment(font_environment);
+
+    var seed_shape = std.mem.zeroes(c.SsTextShape);
+    try testing.expectEqual(@as(c_int, 0), c.ss_text_shape(
+        "font environment seed",
+        "sans-serif",
+        400,
+        0,
+        4,
+        16,
+        320,
+        0,
+        &seed_shape,
+    ));
+    defer c.ss_text_shape_free(&seed_shape);
+    try testing.expect(seed_shape.run_count != 0);
+    try testing.expect(seed_shape.runs[0].font_path != null);
+    const font_path_ptr: [*:0]const u8 = @ptrCast(seed_shape.runs[0].font_path);
+    const font_path = try testing.allocator.dupeZ(u8, std.mem.span(font_path_ptr));
+    defer testing.allocator.free(font_path);
+
+    const generation_before_registration = c.ss_font_generation();
+    try testing.expectEqual(@as(c_int, 0), c.ss_font_register(font_path.ptr));
+    try testing.expect(c.ss_font_generation() > generation_before_registration);
+
+    try testing.expectError(
+        error.FontEnvironmentChanged,
+        render_compile.validateFontEnvironment(font_environment),
+    );
+    try testing.expectError(
+        error.FontEnvironmentChanged,
+        render_compile.refreshAndValidateFontEnvironment(font_environment),
+    );
+    try testing.expectError(
+        error.FontEnvironmentChanged,
+        render_compile.LayoutMeasurementScope.init(
+            testing.allocator,
+            testing.io,
+            &state,
+            &prepared_pages,
+            null,
+            &.{},
+            font_environment,
+        ),
+    );
+    try testing.expectError(
+        error.FontEnvironmentChanged,
+        render_compile.compilePrepared(
+            testing.allocator,
+            testing.io,
+            &state,
+            &prepared_pages,
+            .{ .font_environment = font_environment },
+        ),
+    );
+    try testing.expectError(
+        error.FontEnvironmentChanged,
+        render_compile.compile(
+            testing.allocator,
+            testing.io,
+            &state,
+            &prepared_pages,
+            .{ .font_environment = font_environment },
+        ),
+    );
+}
