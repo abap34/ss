@@ -64,6 +64,50 @@ test "render IR page owns placed text and references stable resources" {
     try testing.expectEqual(@as(?u32, 42), page.items.items[0].nodeId());
 }
 
+test "shared text layouts detach before mutation" {
+    var page = render_ir.Page{
+        .page_id = 1,
+        .index = 0,
+        .width = 320,
+        .height = 180,
+    };
+    defer page.deinit(testing.allocator);
+    var resources = render_resources.Builder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render_ir.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    try render_support.appendText(
+        testing.allocator,
+        testing.io,
+        &page,
+        &resources,
+        &fonts,
+        1,
+        10,
+        40,
+        200,
+        "shared",
+        .{ .family = "Sans", .weight = 400, .style = .normal, .stretch = .normal },
+        20,
+        .{ .r = 0, .g = 0, .b = 0 },
+    );
+
+    var first = try page.items.items[0].text.layout.clone(testing.allocator);
+    var first_live = true;
+    defer if (first_live) first.deinit(testing.allocator);
+    var second = try first.clone(testing.allocator);
+    defer second.deinit(testing.allocator);
+    const original_glyph = first.glyphs[0].id;
+    try second.makeUnique();
+    second.glyphs[0].id +%= 1;
+    try testing.expectEqual(original_glyph, first.glyphs[0].id);
+    try testing.expect(second.glyphs[0].id != first.glyphs[0].id);
+
+    first.deinit(testing.allocator);
+    first_live = false;
+    try testing.expectEqualStrings("shared", second.source_text);
+}
+
 test "render IR page preserves PDF placement and annotations" {
     var page = render_ir.Page{
         .page_id = 7,

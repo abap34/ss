@@ -221,6 +221,7 @@ const DrawContext = struct {
     destinations: ?*std.ArrayList(DestinationAnnotation) = null,
     emitter: ?render_emitter.Emitter = null,
     measurement_bounds: ?*MeasurementBounds = null,
+    capture_measurement_content: bool = false,
     tex_preamble: []const TexPreambleEntry = &.{},
     tex_engine: TexEngine = .pdflatex,
     commands: ?[]const ObjectCommand = null,
@@ -267,7 +268,7 @@ const DestinationAnnotation = struct {
 const MathKind = enum { inline_math, display, block, raw_block };
 
 const AtomContent = union(enum) {
-    text,
+    text: ?render_ir.TextLayout,
     structured_math: struct {
         tree: render_ir.MathTreeId,
         layout: render_ir.MathLayout,
@@ -280,7 +281,7 @@ const AtomContent = union(enum) {
 
     fn deinit(self: *AtomContent, allocator: Allocator) void {
         switch (self.*) {
-            .text => {},
+            .text => |*maybe_layout| if (maybe_layout.*) |*layout| layout.deinit(allocator),
             .structured_math => |*math| math.layout.deinit(allocator),
             .raw_math => |math| allocator.free(math.path),
             .icon => |icon| allocator.free(icon.path),
@@ -289,7 +290,7 @@ const AtomContent = union(enum) {
 };
 
 const Atom = struct {
-    content: AtomContent = .text,
+    content: AtomContent = .{ .text = null },
     text: []const u8,
     font: FontFace,
     color: Color,
@@ -492,9 +493,7 @@ const ObjectCommand = struct {
     origin: ?[]const u8 = null,
     payload_kind: ?core.PayloadKind = null,
 
-    fn deinit(self: *ObjectCommand, allocator: Allocator) void {
-        allocator.free(self.tex_preamble);
-    }
+    fn deinit(_: *ObjectCommand, _: Allocator) void {}
 };
 
 const PreloadWork = struct {
@@ -754,18 +753,17 @@ pub const LayoutMeasurementScope = struct {
         self.measurement_cache_dirty = false;
     }
 
-    fn objectCommandForNode(self: *LayoutMeasurementScope, allocator: Allocator, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !ObjectCommand {
+    fn objectCommandForNode(self: *LayoutMeasurementScope, _: Allocator, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !ObjectCommand {
         const object = self.preparedObject(node.id) orelse return error.MissingPreparedObject;
-        return try objectCommandForObject(allocator, node, object, width, mode);
+        return objectCommandForObject(node, object, width, mode);
     }
 
     fn objectCommandForObject(
-        allocator: Allocator,
         node: *const core.Node,
         object: *const core.prepared.PreparedObject,
         width: f32,
         mode: core.LayoutMeasurementMode,
-    ) !ObjectCommand {
+    ) ObjectCommand {
         var render = object.render;
         if (mode == .natural) {
             if (render.text) |*text| text.wrap = false;
@@ -787,7 +785,7 @@ pub const LayoutMeasurementScope = struct {
             .markdown_doc = object.markdownDocument(),
             .text_layout = object.textLayout(),
             .asset_deps = object.asset_deps,
-            .tex_preamble = try cloneTexPreambleEntries(allocator, object.tex_preamble),
+            .tex_preamble = object.tex_preamble,
             .tex_engine = object.tex_engine,
             .math_kind = mathKindForNode(node),
             .origin = object.origin,
@@ -1142,22 +1140,22 @@ fn buildObjectCommands(
         for (commands.items) |*command| command.deinit(allocator);
         commands.deinit(allocator);
     }
+    try commands.ensureTotalCapacity(allocator, page_unit.objects.len);
     for (page_unit.objects) |*object| {
         const node = state.getNode(object.node_id) orelse continue;
         if (node.kind != .object or !object.attached) continue;
         if ((state.parentPageOf(node.id) orelse continue) != page_unit.page_id) continue;
-        try commands.append(allocator, try initObjectCommand(allocator, page_unit.page_id, node, object, node.frame));
+        commands.appendAssumeCapacity(initObjectCommand(page_unit.page_id, node, object, node.frame));
     }
     return try commands.toOwnedSlice(allocator);
 }
 
 fn initObjectCommand(
-    allocator: Allocator,
     page_id: core.NodeId,
     node: *const core.Node,
     object: *const core.prepared.PreparedObject,
     frame: Frame,
-) !ObjectCommand {
+) ObjectCommand {
     return .{
         .page_id = page_id,
         .node_id = node.id,
@@ -1170,7 +1168,7 @@ fn initObjectCommand(
         .markdown_doc = object.markdownDocument(),
         .text_layout = object.textLayout(),
         .asset_deps = object.asset_deps,
-        .tex_preamble = try cloneTexPreambleEntries(allocator, object.tex_preamble),
+        .tex_preamble = object.tex_preamble,
         .tex_engine = object.tex_engine,
         .math_kind = mathKindForNode(node),
         .origin = object.origin,
@@ -2001,6 +1999,7 @@ fn buildRenderPage(
         .height = Defaults.height,
     };
     errdefer page.deinit(parent_ctx.allocator);
+    try page.items.ensureTotalCapacity(parent_ctx.allocator, commands.len + 1);
 
     var ctx = DrawContext{
         .allocator = parent_ctx.allocator,
@@ -2028,9 +2027,11 @@ fn buildRenderPage(
     var links = std.ArrayList(LinkAnnotation).empty;
     defer links.deinit(ctx.allocator);
     defer deinitLinkAnnotations(ctx.allocator, links.items);
+    try links.ensureTotalCapacity(ctx.allocator, commands.len);
     var destinations = std.ArrayList(DestinationAnnotation).empty;
     defer destinations.deinit(ctx.allocator);
     defer deinitDestinationAnnotations(ctx.allocator, destinations.items);
+    try destinations.ensureTotalCapacity(ctx.allocator, commands.len);
     ctx.link_annotations = &links;
     ctx.destinations = &destinations;
 
@@ -2091,9 +2092,33 @@ fn drawObjectCommand(ctx: *DrawContext, command: *const ObjectCommand) !void {
         ctx.tex_preamble = previous_preamble;
         ctx.tex_engine = previous_engine;
     }
+    if (command.render.kind == .text or
+        command.render.kind == .code or
+        command.render.kind == .vector_math or
+        (command.render.kind == .vector_asset and !isPdfAssetOp(command)) or
+        command.render.kind == .raster_asset)
+    {
+        var measurement = MeasurementScope.init(ctx);
+        try measurement.beginCapturing();
+        defer measurement.deinit();
+        try drawObjectContent(ctx, command);
+        const measured = try measurement.inkFrame();
+        measurement.end();
+
+        const visual_frame = expandFrameToMeasuredInk(command.frame, command.render, measured);
+        try addDestination(ctx, command.link_id, visual_frame);
+        try drawObjectChrome(ctx, visual_frame, command.render);
+        try measurement.commitCapturedContent();
+        return;
+    }
+
     const visual_frame = try measuredObjectCommandVisualFrame(ctx, command);
     try addDestination(ctx, command.link_id, visual_frame);
     try drawObjectChrome(ctx, visual_frame, command.render);
+    try drawObjectContent(ctx, command);
+}
+
+fn drawObjectContent(ctx: *DrawContext, command: *const ObjectCommand) !void {
     const content_frame = contentFrameForRender(command.frame, command.render);
     switch (command.render.kind) {
         .text => if (command.render.text) |text| try drawTextCommand(ctx, command, content_frame, text),
@@ -2169,6 +2194,8 @@ const MeasurementScope = struct {
     previous_destinations: ?*std.ArrayList(DestinationAnnotation),
     previous_emitter: ?render_emitter.Emitter,
     previous_measurement_bounds: ?*MeasurementBounds,
+    previous_capture_measurement_content: bool,
+    active: bool = false,
     bounds: MeasurementBounds = .{},
     page: render_ir.Page = .{
         .page_id = 0,
@@ -2189,10 +2216,19 @@ const MeasurementScope = struct {
             .previous_destinations = ctx.destinations,
             .previous_emitter = ctx.emitter,
             .previous_measurement_bounds = ctx.measurement_bounds,
+            .previous_capture_measurement_content = ctx.capture_measurement_content,
         };
     }
 
     fn begin(self: *MeasurementScope) !void {
+        try self.beginWithCapture(false);
+    }
+
+    fn beginCapturing(self: *MeasurementScope) !void {
+        try self.beginWithCapture(true);
+    }
+
+    fn beginWithCapture(self: *MeasurementScope, capture_content: bool) !void {
         const resources = if (self.previous_emitter) |*emitter| emitter.resources else &self.resources;
         const fonts = if (self.previous_emitter) |*emitter| emitter.fonts else &self.fonts;
         const math = if (self.previous_emitter) |*emitter| emitter.math else &self.math;
@@ -2208,9 +2244,14 @@ const MeasurementScope = struct {
         self.ctx.link_annotations = &self.links;
         self.ctx.destinations = &self.destinations;
         self.ctx.measurement_bounds = &self.bounds;
+        self.ctx.capture_measurement_content = capture_content;
+        self.active = true;
     }
 
     fn inkFrame(self: *MeasurementScope) !?Frame {
+        if (self.active and self.ctx.capture_measurement_content) {
+            for (self.page.items.items) |item| self.bounds.include(item.header().ink_bounds);
+        }
         const ink = self.bounds.ink orelse return null;
         return .{
             .x = @floatCast(ink.x),
@@ -2220,11 +2261,46 @@ const MeasurementScope = struct {
         };
     }
 
-    fn deinit(self: *MeasurementScope) void {
+    fn end(self: *MeasurementScope) void {
+        if (!self.active) return;
         self.ctx.link_annotations = self.previous_links;
         self.ctx.destinations = self.previous_destinations;
         self.ctx.emitter = self.previous_emitter;
         self.ctx.measurement_bounds = self.previous_measurement_bounds;
+        self.ctx.capture_measurement_content = self.previous_capture_measurement_content;
+        self.active = false;
+    }
+
+    fn commitCapturedContent(self: *MeasurementScope) !void {
+        std.debug.assert(!self.active);
+        const emitter = activeEmitter(self.ctx);
+        const destination_page = emitter.page;
+        const destination_links = self.ctx.link_annotations;
+        const destination_destinations = self.ctx.destinations;
+
+        try destination_page.items.ensureUnusedCapacity(self.ctx.allocator, self.page.items.items.len);
+        if (destination_links) |links| try links.ensureUnusedCapacity(self.ctx.allocator, self.links.items.len);
+        if (destination_destinations) |destinations| try destinations.ensureUnusedCapacity(self.ctx.allocator, self.destinations.items.len);
+
+        for (self.page.items.items) |item| {
+            var moved = item;
+            remapMovedItem(&moved, destination_page.index, destination_page.items.items.len);
+            destination_page.items.appendAssumeCapacity(moved);
+        }
+        self.page.items.clearRetainingCapacity();
+
+        if (destination_links) |links| {
+            for (self.links.items) |link| links.appendAssumeCapacity(link);
+            self.links.clearRetainingCapacity();
+        }
+        if (destination_destinations) |destinations| {
+            for (self.destinations.items) |destination| destinations.appendAssumeCapacity(destination);
+            self.destinations.clearRetainingCapacity();
+        }
+    }
+
+    fn deinit(self: *MeasurementScope) void {
+        self.end();
         deinitLinkAnnotations(self.ctx.allocator, self.links.items);
         self.links.deinit(self.ctx.allocator);
         deinitDestinationAnnotations(self.ctx.allocator, self.destinations.items);
@@ -2235,6 +2311,17 @@ const MeasurementScope = struct {
         self.math.deinit(self.ctx.allocator);
     }
 };
+
+fn remapMovedItem(item: *render_ir.Item, page_index: usize, paint_index: usize) void {
+    const index: u32 = @intCast(paint_index);
+    const item_id = (@as(u64, @intCast(page_index + 1)) << 32) | index;
+    switch (item.*) {
+        inline else => |*value| {
+            value.header.paint_index = index;
+            value.header.item_id = item_id;
+        },
+    }
+}
 
 fn measureObjectCommandContent(ctx: *DrawContext, command: *const ObjectCommand, maybe_text: ?TextPaint) !?Frame {
     var measurement = MeasurementScope.init(ctx);
@@ -2995,7 +3082,7 @@ fn strokeLine(ctx: *DrawContext, x1: f32, y1: f32, x2: f32, y2: f32, line_width:
             .width = @abs(dx) + x_padding * 2,
             .height = @abs(dy) + y_padding * 2,
         });
-        return;
+        if (!ctx.capture_measurement_content) return;
     }
     try activeEmitter(ctx).strokeLine(ctx.allocator, .{ .x = x1, .y = y1 }, .{ .x = x2, .y = y2 }, line_width, color, dash_on, dash_off);
 }
@@ -3038,7 +3125,7 @@ fn drawRoundedRect(ctx: *DrawContext, frame: Frame, radius: f32, fill: ?Color, s
             .width = frame.width + half_width * 2,
             .height = frame.height + half_width * 2,
         });
-        return;
+        if (!ctx.capture_measurement_content) return;
     }
     try activeEmitter(ctx).roundedRect(
         ctx.allocator,
@@ -3692,6 +3779,16 @@ fn layoutAtoms(ctx: *DrawContext, line: Line, text: TextPaint, atoms: *std.Array
 }
 
 fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, atoms: *std.ArrayList(Atom)) !void {
+    var atom_count = atoms.items.len;
+    for (runs) |run| {
+        atom_count += switch (run.kind) {
+            .math, .display_math => 1,
+            .icon => @intFromBool(run.icon != null),
+            .bold, .italic, .code, .link, .text => countTextTokens(run.text),
+        };
+    }
+    try atoms.ensureTotalCapacity(ctx.allocator, atom_count);
+
     for (runs) |run| {
         switch (run.kind) {
             .math, .display_math => {
@@ -3705,6 +3802,13 @@ fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, atoms: 
             .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline),
         }
     }
+}
+
+fn countTextTokens(value: []const u8) usize {
+    var count: usize = 0;
+    var tokenizer = text_tokenize.Tokenizer.init(value);
+    while (tokenizer.next() != null) count += 1;
+    return count;
 }
 
 fn lineContainsDisplayMath(line: Line) bool {
@@ -3839,13 +3943,33 @@ fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []cons
     var tokenizer = text_tokenize.Tokenizer.init(value);
     while (tokenizer.next()) |token| {
         const is_emoji = text_tokenize.isEmojiToken(token);
-        const measured_width = if (is_emoji)
+        var shaped_layout: ?render_ir.TextLayout = null;
+        errdefer if (shaped_layout) |*layout| layout.deinit(ctx.allocator);
+        const width = if (ctx.capture_measurement_content or ctx.measurement_bounds == null) blk: {
+            const emitter = activeEmitter(ctx);
+            shaped_layout = try render_text.shape(
+                ctx.allocator,
+                ctx.io,
+                emitter.resources,
+                emitter.fonts,
+                token,
+                font,
+                font_size,
+                0,
+                false,
+                emitter.text_cache,
+            );
+            const layout = &shaped_layout.?;
+            const logical_width: f32 = @floatCast(layout.logical_bounds.width);
+            if (!is_emoji) break :blk logical_width;
+            const ink_right: f32 = @floatCast(layout.ink_bounds.x + layout.ink_bounds.width);
+            break :blk @max(logical_width, ink_right);
+        } else if (is_emoji)
             try measureTextVisualWidth(ctx, token, font, font_size)
         else
             try measureText(ctx, token, font, font_size);
-        const width = measured_width;
         try atoms.append(ctx.allocator, .{
-            .content = .text,
+            .content = .{ .text = shaped_layout },
             .text = token,
             .font = font,
             .color = color,
@@ -3857,6 +3981,7 @@ fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []cons
             .underline_paint = underline_paint,
             .link_url = link_url,
         });
+        shaped_layout = null;
     }
 }
 
@@ -3945,8 +4070,10 @@ fn drawAtomsWithOptions(
 ) !f32 {
     var positions = std.ArrayList(AtomPosition).empty;
     defer positions.deinit(ctx.allocator);
+    try positions.ensureTotalCapacity(ctx.allocator, atoms.len);
     var lines = std.ArrayList(AtomVisualLine).empty;
     defer lines.deinit(ctx.allocator);
+    try lines.ensureTotalCapacity(ctx.allocator, atoms.len);
 
     var cursor = wrap_layout.Cursor{ .preserve_leading_space = preserve_leading_space };
     var line_start: usize = 0;
@@ -4030,9 +4157,9 @@ fn drawPositionedAtom(ctx: *DrawContext, atom: *Atom, x: f32, baseline_bl: f32, 
         .text => {
             const y_top = baselineTop(baseline_bl, paint.font_size);
             if (atom.link_url) |url| {
-                try drawLinkedRawText(ctx, x, y_top, @max(atom.width, 1), paint.line_height, atom.*, paint, url);
+                try drawLinkedRawText(ctx, x, y_top, @max(atom.width, 1), paint.line_height, atom, paint, url);
             } else {
-                try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom.*, paint, false);
+                try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
             }
         },
         .structured_math => |*math| {
@@ -4760,10 +4887,12 @@ fn emitStructuredMath(
     color: Color,
 ) !void {
     if (ctx.measurement_bounds) |bounds| {
-        var owned_layout = layout;
-        defer owned_layout.deinit(ctx.allocator);
         bounds.include(rect);
-        return;
+        if (!ctx.capture_measurement_content) {
+            var owned_layout = layout;
+            defer owned_layout.deinit(ctx.allocator);
+            return;
+        }
     }
     try activeEmitter(ctx).structuredMath(ctx.allocator, rect, tree, layout, color);
 }
@@ -4854,9 +4983,9 @@ fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: 
         const rect = render_ir.Rect{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height };
         if (ctx.measurement_bounds) |bounds| {
             bounds.include(rect);
-        } else {
-            try activeEmitter(ctx).pdfPage(ctx.allocator, rect, source, paint.pdf_page - 1, paint.pdf_box, true);
+            if (!ctx.capture_measurement_content) return;
         }
+        try activeEmitter(ctx).pdfPage(ctx.allocator, rect, source, paint.pdf_page - 1, paint.pdf_box, true);
         return;
     }
     return NativePdfError.UnsupportedAssetType;
@@ -4897,6 +5026,10 @@ fn drawRawText(
     const baseline_y = y_top + font_size;
     if (ctx.measurement_bounds) |bounds| {
         if (content.len == 0) return;
+        if (ctx.capture_measurement_content) {
+            try activeEmitter(ctx).textBaseline(ctx.allocator, x, baseline_y, width, content, font, font_size, color, wrap, decoration);
+            return;
+        }
         const measurement = try text_measure.layout(ctx.allocator, content, font, font_size, width, wrap, .{
             .strikethrough = decoration.strikethrough,
             .underline = decoration.underline,
@@ -4923,9 +5056,9 @@ fn drawRawText(
     try activeEmitter(ctx).textBaseline(ctx.allocator, x, baseline_y, width, content, font, font_size, color, wrap, decoration);
 }
 
-fn drawAtomRawText(ctx: *DrawContext, x: f32, y_top: f32, width: f32, atom: Atom, paint: AtomPaint, wrap: bool) !void {
+fn drawAtomRawText(ctx: *DrawContext, x: f32, y_top: f32, width: f32, atom: *Atom, paint: AtomPaint, wrap: bool) !void {
     const dash = atom.underline_paint.dash;
-    try drawRawText(ctx, x, y_top, width, atom.text, atom.font, paint.font_size, atom.color, wrap, .{
+    const decoration = render_emitter.TextDecoration{
         .strikethrough = atom.strikethrough,
         .underline = atom.underline,
         .underline_color = atom.underline_paint.color,
@@ -4934,6 +5067,30 @@ fn drawAtomRawText(ctx: *DrawContext, x: f32, y_top: f32, width: f32, atom: Atom
         .underline_offset = atom.underline_paint.offset,
         .underline_dash_on = if (dash) |value| value.on else 0,
         .underline_dash_off = if (dash) |value| value.off else 0,
+    };
+    if (atom.content.text) |layout| {
+        atom.content.text = null;
+        try activeEmitter(ctx).textLayoutBaseline(
+            ctx.allocator,
+            x,
+            y_top + paint.font_size,
+            width,
+            layout,
+            paint.font_size,
+            atom.color,
+            decoration,
+        );
+        return;
+    }
+    try drawRawText(ctx, x, y_top, width, atom.text, atom.font, paint.font_size, atom.color, wrap, .{
+        .strikethrough = decoration.strikethrough,
+        .underline = decoration.underline,
+        .underline_color = decoration.underline_color,
+        .underline_opacity = decoration.underline_opacity,
+        .underline_width = decoration.underline_width,
+        .underline_offset = decoration.underline_offset,
+        .underline_dash_on = decoration.underline_dash_on,
+        .underline_dash_off = decoration.underline_dash_off,
     });
 }
 
@@ -4943,7 +5100,7 @@ fn drawLinkedRawText(
     y_top: f32,
     link_width: f32,
     height: f32,
-    atom: Atom,
+    atom: *Atom,
     paint: AtomPaint,
     url: []const u8,
 ) !void {
@@ -5005,9 +5162,9 @@ fn drawRasterNatural(ctx: *DrawContext, frame: Frame, source: []const u8, asset:
     const rect = render_ir.Rect{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height };
     if (ctx.measurement_bounds) |bounds| {
         bounds.include(rect);
-    } else {
-        try activeEmitter(ctx).raster(ctx.allocator, rect, source);
+        if (!ctx.capture_measurement_content) return;
     }
+    try activeEmitter(ctx).raster(ctx.allocator, rect, source);
 }
 
 fn drawSvgNatural(ctx: *DrawContext, frame: Frame, svg_path: []const u8, asset: ?core.render_policy.AssetPaint) !void {
@@ -5016,9 +5173,9 @@ fn drawSvgNatural(ctx: *DrawContext, frame: Frame, svg_path: []const u8, asset: 
     const rect = render_ir.Rect{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height };
     if (ctx.measurement_bounds) |bounds| {
         bounds.include(rect);
-    } else {
-        try activeEmitter(ctx).svg(ctx.allocator, rect, svg_path, if (asset) |paint| paint.tint else null);
+        if (!ctx.capture_measurement_content) return;
     }
+    try activeEmitter(ctx).svg(ctx.allocator, rect, svg_path, if (asset) |paint| paint.tint else null);
 }
 
 fn drawSvgFrameTinted(ctx: *DrawContext, frame: Frame, svg_path: []const u8, color: Color) !void {
@@ -5029,9 +5186,9 @@ fn drawSvgFrame(ctx: *DrawContext, frame: Frame, svg_path: []const u8, tint: ?Co
     const rect = render_ir.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
     if (ctx.measurement_bounds) |bounds| {
         bounds.include(rect);
-    } else {
-        try activeEmitter(ctx).svg(ctx.allocator, rect, svg_path, tint);
+        if (!ctx.capture_measurement_content) return;
     }
+    try activeEmitter(ctx).svg(ctx.allocator, rect, svg_path, tint);
 }
 
 fn placeRawMathPdf(
@@ -5044,9 +5201,9 @@ fn placeRawMathPdf(
     const rect = render_ir.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
     if (ctx.measurement_bounds) |bounds| {
         bounds.include(rect);
-    } else {
-        try activeEmitter(ctx).rawMathPdf(ctx.allocator, rect, source, path, page_index);
+        if (!ctx.capture_measurement_content) return;
     }
+    try activeEmitter(ctx).rawMathPdf(ctx.allocator, rect, source, path, page_index);
 }
 
 const Size = struct { width: f32, height: f32 };

@@ -141,6 +141,12 @@ fn preparedDocument(
     compiler: *items.Compiler,
     resource_cache: ?*resource_compile.SourceCache,
 ) !render.Ir {
+    if (compiler.options.text_cache) |text_cache| {
+        const text_cache_start = utils.measure_profile.start();
+        try text_cache.beginDocument();
+        defer text_cache.endDocument();
+        utils.measure_profile.recordRenderCompile(.text_cache_begin, text_cache_start);
+    }
     if (compiler.options.page_cache) |page_cache| {
         page_cache.beginDocument(prepared_pages.pages.len);
         return try sequentialDocument(allocator, state, prepared_pages, compiler, resource_cache);
@@ -165,6 +171,7 @@ fn sequentialDocument(
     defer math.deinit(allocator);
     var pages = std.ArrayList(render.Page).empty;
     errdefer deinitPages(allocator, &pages);
+    try pages.ensureTotalCapacity(allocator, prepared_pages.pages.len);
     for (prepared_pages.pages) |*prepared_page| {
         var page = try compiler.compilePage(
             allocator,
@@ -175,7 +182,7 @@ fn sequentialDocument(
             &math,
         );
         errdefer page.deinit(allocator);
-        try pages.append(allocator, page);
+        pages.appendAssumeCapacity(page);
     }
     return try finishDocument(allocator, state, prepared_pages, &resources, &fonts, &math, &pages);
 }
@@ -213,7 +220,10 @@ fn parallelPreparedDocument(
     worker_count: usize,
 ) !render.Ir {
     var locked_allocator = LockedAllocator{ .child = allocator, .io = compiler.io };
-    const worker_allocator = locked_allocator.allocator();
+    const worker_allocator = if (compiler.options.thread_safe_allocator)
+        allocator
+    else
+        locked_allocator.allocator();
     const outputs = try allocator.alloc(PageCompilation, prepared_pages.pages.len);
     defer allocator.free(outputs);
     for (outputs) |*output| output.* = .{};
@@ -241,16 +251,19 @@ fn parallelPreparedDocument(
         work.failed.store(true, .seq_cst);
         for (threads[0..started]) |thread| thread.join();
     };
+    const workers_start = utils.measure_profile.start();
     while (started < worker_count) : (started += 1) {
         threads[started] = try std.Thread.spawn(.{}, pageCompilationWorker, .{&work});
     }
     for (threads[0..started]) |thread| thread.join();
+    utils.measure_profile.recordRenderCompile(.workers, workers_start);
     joined = true;
     if (work.failed.load(.seq_cst)) {
         for (outputs) |output| if (output.err) |err| return err;
         return error.RenderPageCompilationFailed;
     }
 
+    const merge_start = utils.measure_profile.start();
     var math = render.MathBuilder{};
     defer math.deinit(allocator);
     var pages = std.ArrayList(render.Page).empty;
@@ -264,6 +277,7 @@ fn parallelPreparedDocument(
         pages.appendAssumeCapacity(page.*);
         output.page = null;
     }
+    utils.measure_profile.recordRenderCompile(.merge_pages, merge_start);
     return try finishDocument(allocator, state, prepared_pages, &resources, &fonts, &math, &pages);
 }
 
@@ -307,6 +321,9 @@ fn finishDocument(
     math: *render.MathBuilder,
     pages: *std.ArrayList(render.Page),
 ) !render.Ir {
+    const profile_start = utils.measure_profile.start();
+    defer utils.measure_profile.recordRenderCompile(.finish_document, profile_start);
+    const sources_start = utils.measure_profile.start();
     var source_ranges = std.AutoHashMap(core.NodeId, render.SourceRange).init(allocator);
     defer source_ranges.deinit();
     for (state.object_sources.items) |source| {
@@ -324,15 +341,22 @@ fn finishDocument(
             try std.fmt.allocPrint(allocator, "Page {d}", .{prepared_page.index + 1});
         for (page.items.items) |*item| item.setSource(if (item.nodeId()) |node_id| source_ranges.get(node_id) else null);
     }
+    utils.measure_profile.recordRenderCompile(.finish_sources, sources_start);
     var ir = render.Ir{ .pages = &.{} };
     errdefer ir.deinit(allocator);
+    const semantics_start = utils.measure_profile.start();
     ir.semantics = try semantics.build(allocator, state, prepared_pages, pages.items);
+    utils.measure_profile.recordRenderCompile(.finish_semantics, semantics_start);
+    const catalogs_start = utils.measure_profile.start();
     ir.resources = try resources.take(allocator);
     ir.fonts = try fonts.take(allocator);
     ir.math = try math.take(allocator);
     ir.pages = try pages.toOwnedSlice(allocator);
     pages.* = .empty;
+    utils.measure_profile.recordRenderCompile(.finish_catalogs, catalogs_start);
+    const validation_start = utils.measure_profile.start();
     try ir.validate();
+    utils.measure_profile.recordRenderCompile(.finish_validation, validation_start);
     return ir;
 }
 
@@ -342,6 +366,7 @@ fn deinitPages(allocator: std.mem.Allocator, pages: *std.ArrayList(render.Page))
 }
 
 fn renderWorkerCount(page_count: usize, requested_jobs: ?usize) usize {
+    const automatic_job_cap = 8;
     if (page_count == 0) return 0;
     if (requested_jobs) |jobs| return @min(@max(@as(usize, 1), jobs), page_count);
     if (std.c.getenv("SS_RENDER_JOBS")) |raw| {
@@ -351,7 +376,7 @@ fn renderWorkerCount(page_count: usize, requested_jobs: ?usize) usize {
             return @min(@max(@as(usize, 1), jobs), page_count);
         } else |_| {}
     }
-    return @min(@max(@as(usize, 1), std.Thread.getCpuCount() catch 1), page_count);
+    return @min(@max(@as(usize, 1), std.Thread.getCpuCount() catch 1), @min(page_count, automatic_job_cap));
 }
 
 const LockedAllocator = struct {

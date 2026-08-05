@@ -7,6 +7,7 @@ import { assert, ssBin } from "./harness.mjs";
 
 await testRenderCacheGenerations();
 await testMeasurementCacheIsReused();
+await testRenderCompilationReusesTextShapes();
 await testRenderCachePruneIntervalSkipsFreshStamp();
 await testCacheStatsCommands();
 await testCacheClearRejectsActiveRender();
@@ -79,6 +80,25 @@ end
     await runSs(["dump", "slide.ss", "dump-2.json"], project);
     const secondStats = await fileStatSignature(measurementCachePath);
     assertFileStatUnchanged(firstStats, secondStats, "second dump should reuse the existing measurement cache index");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testRenderCompilationReusesTextShapes() {
+  const project = await mkdtempProject("ss-render-text-cache-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    await writeFile(slide, deckSource(Array.from({ length: 24 }, () => "Repeated compiler text")), "utf8");
+
+    const result = await runSs(["render", "slide.ss", "out.pdf"], project, {
+      env: { SS_MEASURE_PROFILE: "1", SS_RENDER_JOBS: "2" },
+    });
+    const profile = result.stderr.match(/text shape: hit (\d+) .* miss (\d+)/);
+    assert(profile, `render profile omitted text shape counters:\n${result.stderr}`);
+    assert(Number(profile[1]) > 0, `render compilation did not reuse any text shapes:\n${result.stderr}`);
+    assert(Number(profile[2]) > 0, `render compilation did not record the initial text shape:\n${result.stderr}`);
+    await assertPdfFile(path.join(project, "out.pdf"), "rendered PDF should remain valid after the text cache is released");
   } finally {
     await rm(project, { recursive: true, force: true });
   }

@@ -5,6 +5,7 @@ const lowering = @import("../lowering.zig");
 const render_layout = @import("../render/layout.zig");
 const render_compile = @import("../render/compile.zig");
 const render_html = @import("../render/html.zig");
+const render_text = @import("render_text");
 const dump = @import("../dump.zig");
 const utils = @import("utils");
 
@@ -24,10 +25,11 @@ const CompiledRendering = struct {
     pages: core.prepared.PreparedPages,
     layouts: core.layout.Document,
     ir: render.Ir,
+    ir_allocator: std.mem.Allocator,
 
     fn deinit(self: *CompiledRendering) void {
         const allocator = self.state.allocator;
-        self.ir.deinit(allocator);
+        self.ir.deinit(self.ir_allocator);
         self.layouts.deinit(allocator);
         self.pages.deinit(allocator);
         self.state.deinit();
@@ -222,11 +224,16 @@ fn compileRendering(
 
     progress.begin("Compile rendering");
     errdefer progress.abort();
-    var ir = render_compile.compilePrepared(state.allocator, io, &state, &pages, .{
+    var text_cache = render_text.Cache.init(std.heap.smp_allocator, io);
+    defer text_cache.deinit();
+    const ir_allocator = std.heap.smp_allocator;
+    var ir = render_compile.compilePrepared(ir_allocator, io, &state, &pages, .{
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
         .highlight_languages = options.highlight_languages,
+        .text_cache = &text_cache,
         .font_environment = font_environment,
+        .thread_safe_allocator = true,
     }) catch |err| {
         progress.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), &state);
@@ -234,7 +241,13 @@ fn compileRendering(
         if (error_report.hasDocumentStateErrors(&state)) return error.DiagnosticsFailed;
         return err;
     };
-    errdefer ir.deinit(state.allocator);
+    errdefer ir.deinit(ir_allocator);
     progress.complete();
-    return .{ .state = state, .pages = pages, .layouts = layouts, .ir = ir };
+    return .{
+        .state = state,
+        .pages = pages,
+        .layouts = layouts,
+        .ir = ir,
+        .ir_allocator = ir_allocator,
+    };
 }
