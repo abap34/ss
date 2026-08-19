@@ -86,7 +86,11 @@ export class LspClient {
   }
 
   send(message) {
-    const body = Buffer.from(JSON.stringify(message), "utf8");
+    this.sendRawBody(JSON.stringify(message));
+  }
+
+  sendRawBody(text) {
+    const body = Buffer.from(text, "utf8");
     this.child.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
     this.child.stdin.write(body);
   }

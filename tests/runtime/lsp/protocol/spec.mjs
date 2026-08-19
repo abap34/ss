@@ -20,6 +20,31 @@ end
 
   await withLspClient({ cwd: project }, async (client) => {
     await client.initialize();
+
+    const parseErrorResponse = client.waitForNotification(
+      (message) => message.id === null && message.error?.code === -32700,
+      "parse error response",
+    );
+    client.sendRawBody('{"jsonrpc":"2.0",');
+    const parseError = await parseErrorResponse;
+    assert(parseError.error.message === "Parse error", `unexpected parse error response: ${JSON.stringify(parseError)}`);
+
+    const nonObjectResponse = client.waitForNotification(
+      (message) => message.id === null && message.error?.code === -32600,
+      "non-object request response",
+    );
+    client.sendRawBody("[]");
+    const nonObjectError = await nonObjectResponse;
+    assert(nonObjectError.error.message === "Invalid Request", `unexpected invalid request response: ${JSON.stringify(nonObjectError)}`);
+
+    const missingMethodResponse = client.waitForNotification(
+      (message) => message.id === 9001 && message.error?.code === -32600,
+      "missing method response",
+    );
+    client.sendRawBody('{"jsonrpc":"2.0","id":9001}');
+    const missingMethodError = await missingMethodResponse;
+    assert(missingMethodError.error.message === "Invalid Request", `unexpected missing method response: ${JSON.stringify(missingMethodError)}`);
+
     const openedDiagnostics = client.waitForDiagnostics(
       uri,
       (diagnostics, message) => diagnostics.length === 0 && message.params.version === 1,

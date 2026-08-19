@@ -1392,26 +1392,46 @@ fn processEnvelope(server: *Server, value: transport.Envelope) !void {
         server.active_request = null;
     }
 
-    handleMessage(server, &envelope.message.value) catch |err| switch (err) {
-        error.Canceled => {
-            if (envelope.request) |request| try server.respondCanceled(request.key);
+    switch (envelope.payload) {
+        .parse_error => {
+            try protocol.respondError(server.allocator, null, -32700, "Parse error");
+            return;
         },
-        error.InvalidParams => {
-            if (envelope.request) |request| {
-                try protocol.respondErrorId(server.allocator, request.key, -32602, "Invalid params");
-            } else {
-                server.acceptCurrentRevision();
-            }
+        .message => |*message| handleMessage(server, &message.value) catch |err| switch (err) {
+            error.Canceled => {
+                if (envelope.request) |request| try server.respondCanceled(request.key);
+            },
+            error.InvalidParams => {
+                if (envelope.request) |request| {
+                    try protocol.respondErrorId(server.allocator, request.key, -32602, "Invalid params");
+                } else {
+                    server.acceptCurrentRevision();
+                }
+            },
+            else => return err,
         },
-        else => return err,
-    };
+    }
 }
 
 fn handleMessage(server: *Server, message: *const JsonValue) !void {
-    if (message.* != .object) return;
+    if (message.* != .object) {
+        try protocol.respondError(server.allocator, null, -32600, "Invalid Request");
+        return;
+    }
     const root = message.object;
-    const method = stringField(&root, "method") orelse return;
     const id = if (utils.json.fieldValue(&root, "id")) |value| value.* else null;
+    const rpc_version = stringField(&root, "jsonrpc") orelse {
+        try respondError(server.allocator, id, -32600, "Invalid Request");
+        return;
+    };
+    const method = stringField(&root, "method") orelse {
+        try respondError(server.allocator, id, -32600, "Invalid Request");
+        return;
+    };
+    if (!std.mem.eql(u8, rpc_version, "2.0")) {
+        try respondError(server.allocator, id, -32600, "Invalid Request");
+        return;
+    }
     const params = if (utils.json.fieldValue(&root, "params")) |value| value.* else null;
 
     if (std.mem.eql(u8, method, "initialize")) {

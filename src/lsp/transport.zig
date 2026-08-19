@@ -14,8 +14,13 @@ pub const Request = struct {
     state: *RequestState,
 };
 
-pub const Envelope = struct {
+pub const Payload = union(enum) {
     message: utils.json.ParsedValue,
+    parse_error,
+};
+
+pub const Envelope = struct {
+    payload: Payload,
     revision: u64,
     request: ?Request,
 
@@ -25,7 +30,10 @@ pub const Envelope = struct {
             ingress.allocator.free(request.key);
             ingress.allocator.destroy(request.state);
         }
-        self.message.deinit();
+        switch (self.payload) {
+            .message => |*message| message.deinit(),
+            .parse_error => {},
+        }
         self.* = undefined;
     }
 };
@@ -149,23 +157,32 @@ pub const Ingress = struct {
     fn readMessages(self: *Ingress) !void {
         while (try protocol.readMessage(self.allocator)) |body| {
             defer self.allocator.free(body);
-            var parsed = utils.json.parseValue(self.allocator, body, .{}) catch continue;
+            var parsed = utils.json.parseValue(self.allocator, body, .{}) catch |err| {
+                if (err == error.OutOfMemory) return err;
+                try self.enqueue(.{
+                    .payload = .parse_error,
+                    .revision = self.revision.load(.acquire),
+                    .request = null,
+                });
+                continue;
+            };
             var parsed_owned = true;
             defer if (parsed_owned) parsed.deinit();
-            if (parsed.value != .object) continue;
 
-            const root = parsed.value.object;
-            const method = protocol.stringField(&root, "method");
-            if (method) |name| {
-                if (std.mem.eql(u8, name, "$/cancelRequest")) {
-                    if (protocol.objectFieldObject(&root, "params")) |params| {
-                        if (utils.json.fieldValue(params, "id")) |id| {
-                            const key = try requestKey(self.allocator, id.*);
-                            defer self.allocator.free(key);
-                            self.requests.cancel(key);
+            const method = if (parsed.value == .object) protocol.stringField(&parsed.value.object, "method") else null;
+            if (parsed.value == .object) {
+                const root = &parsed.value.object;
+                if (method) |name| {
+                    if (std.mem.eql(u8, name, "$/cancelRequest")) {
+                        if (protocol.objectFieldObject(root, "params")) |params| {
+                            if (utils.json.fieldValue(params, "id")) |id| {
+                                const key = try requestKey(self.allocator, id.*);
+                                defer self.allocator.free(key);
+                                self.requests.cancel(key);
+                            }
                         }
+                        continue;
                     }
-                    continue;
                 }
             }
 
@@ -173,7 +190,7 @@ pub const Ingress = struct {
                 if (invalidatesAnalysis(name)) self.revision.fetchAdd(1, .acq_rel) + 1 else self.revision.load(.acquire)
             else
                 self.revision.load(.acquire);
-            const request = if (utils.json.fieldValue(&root, "id")) |id| blk: {
+            const request = if (parsed.value == .object) if (utils.json.fieldValue(&parsed.value.object, "id")) |id| blk: {
                 const key = try requestKey(self.allocator, id.*);
                 errdefer self.allocator.free(key);
                 const state = try self.allocator.create(RequestState);
@@ -181,7 +198,7 @@ pub const Ingress = struct {
                 state.* = .{};
                 try self.requests.register(key, state);
                 break :blk Request{ .key = key, .state = state };
-            } else null;
+            } else null else null;
             errdefer if (request) |value| {
                 self.requests.unregister(value.key, value.state);
                 self.allocator.free(value.key);
@@ -189,7 +206,7 @@ pub const Ingress = struct {
             };
 
             try self.enqueue(.{
-                .message = parsed,
+                .payload = .{ .message = parsed },
                 .revision = revision,
                 .request = request,
             });
