@@ -48,6 +48,11 @@ fn parseAndDeinitSource(allocator: std.mem.Allocator, source: []const u8) !void 
     defer program.deinit(allocator);
 }
 
+fn parseRecoveringAndDeinitSource(allocator: std.mem.Allocator, source: []const u8) !void {
+    var result = try syntax.parseRecoveringWithSourceName(allocator, source, "unit-test.ss");
+    defer result.deinit(allocator);
+}
+
 fn readFixture(path: []const u8) ![]u8 {
     const full_path = try std.fs.path.join(testing.allocator, &.{ "tests/fixtures/syntax", path });
     defer testing.allocator.free(full_path);
@@ -892,6 +897,31 @@ test "syntax spec: document and page parsing survive every allocation failure" {
             \\    let then_value = "then"
             \\  else
             \\    let else_value = "else"
+            \\  end
+            \\end
+            \\
+        },
+    );
+}
+
+test "syntax spec: recovering blocks propagate every allocation failure" {
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseRecoveringAndDeinitSource,
+        .{
+            \\page Recover
+            \\  bind x = 1
+            \\end
+            \\
+        },
+    );
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseRecoveringAndDeinitSource,
+        .{
+            \\page Recover
+            \\  if true
+            \\    bind x = 1
             \\  end
             \\end
             \\

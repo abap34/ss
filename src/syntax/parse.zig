@@ -139,7 +139,7 @@ const Parser = struct {
         while (!self.eof()) {
             const item_start = self.pos;
             self.parseTopLevelItem(&module, &imports_allowed) catch |err| {
-                if (!self.recovering) return err;
+                if (!self.recovering or err == error.OutOfMemory) return err;
                 try self.addTopLevelHole(err, item_start);
                 self.synchronizeTopLevelItem(item_start);
             };
@@ -1173,7 +1173,7 @@ const Parser = struct {
             }
             const statement_start = self.pos;
             var statement = self.parseStatement() catch |err| {
-                if (!self.recovering) return err;
+                if (!self.recovering or err == error.OutOfMemory) return err;
                 var hole_statement = try self.makeHoleStatementForError(err, statement_start);
                 var hole_statement_moved = false;
                 errdefer if (!hole_statement_moved) hole_statement.deinit(self.allocator);
@@ -1221,7 +1221,7 @@ const Parser = struct {
             }
             const statement_start = self.pos;
             var statement = self.parseStatement() catch |err| {
-                if (!self.recovering) return err;
+                if (!self.recovering or err == error.OutOfMemory) return err;
                 var hole_statement = try self.makeHoleStatementForError(err, statement_start);
                 var hole_statement_moved = false;
                 errdefer if (!hole_statement_moved) hole_statement.deinit(self.allocator);
