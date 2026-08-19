@@ -216,12 +216,18 @@ const Parser = struct {
             }
         } else if (try self.consumeKeyword("record")) {
             imports_allowed.* = false;
-            const record_decl = try self.parseRecordDeclAfterKeyword(item_start);
+            var record_decl = try self.parseRecordDeclAfterKeyword(item_start);
+            var record_decl_moved = false;
+            errdefer if (!record_decl_moved) record_decl.deinit(self.allocator);
             try module.records.append(self.allocator, record_decl);
+            record_decl_moved = true;
         } else if (try self.consumeKeyword("extend")) {
             imports_allowed.* = false;
-            const extension = try self.parseObjectExtensionAfterKeyword(item_start);
+            var extension = try self.parseObjectExtensionAfterKeyword(item_start);
+            var extension_moved = false;
+            errdefer if (!extension_moved) extension.deinit(self.allocator);
             try module.object_extensions.append(self.allocator, extension);
+            extension_moved = true;
         } else if (try self.consumeKeyword("document")) {
             imports_allowed.* = false;
             var statements = try self.parseBodyStatements();
@@ -572,6 +578,8 @@ const Parser = struct {
 
     fn parseObjectExtensionAfterKeyword(self: *Parser, start: usize) !ObjectExtensionDecl {
         const target = try self.parseIdentifierWithSpan();
+        var target_moved = false;
+        errdefer if (!target_moved) self.allocator.free(target.text);
         source.skipTriviaFrom(self.source, &self.pos);
         try self.expectChar('{');
         var extension = ObjectExtensionDecl{
@@ -581,6 +589,7 @@ const Parser = struct {
             .fields = .empty,
             .span = .{ .start = start, .end = start },
         };
+        target_moved = true;
         errdefer extension.deinit(self.allocator);
         try self.parseObjectMembers(null, &extension.implements, &extension.roles, &extension.fields);
         extension.span.end = self.pos;
@@ -612,6 +621,8 @@ const Parser = struct {
     }
 
     fn parseRecordDeclBody(self: *Parser, start: usize, name: ParsedName) !RecordDecl {
+        var name_moved = false;
+        errdefer if (!name_moved) self.allocator.free(name.text);
         source.skipTriviaFrom(self.source, &self.pos);
         try self.expectChar('{');
         var decl = RecordDecl{
@@ -620,6 +631,7 @@ const Parser = struct {
             .fields = .empty,
             .span = .{ .start = start, .end = start },
         };
+        name_moved = true;
         errdefer decl.deinit(self.allocator);
         try self.parseRecordMembers(&decl.fields);
         decl.span.end = self.pos;
@@ -631,6 +643,8 @@ const Parser = struct {
         while (!self.eof() and !self.peekChar('}')) {
             const member_start = self.pos;
             const name = try self.parseIdentifierWithSpan();
+            var name_moved = false;
+            errdefer if (!name_moved) self.allocator.free(name.text);
             source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
             self.pos += 1;
@@ -639,6 +653,13 @@ const Parser = struct {
             errdefer field_type.deinit(self.allocator);
             var default_value: ?*Expr = null;
             var default_property_value: ?[]const u8 = null;
+            errdefer {
+                if (default_value) |expr| {
+                    expr.deinit(self.allocator);
+                    self.allocator.destroy(expr);
+                }
+                if (default_property_value) |value| self.allocator.free(value);
+            }
             source.skipInlineSpaces(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == '=') {
                 self.pos += 1;
@@ -655,7 +676,10 @@ const Parser = struct {
                 .default_property_value = default_property_value,
                 .span = .{ .start = member_start, .end = self.pos },
             });
+            name_moved = true;
             field_type = ast.Type.none;
+            default_value = null;
+            default_property_value = null;
             try self.consumeStatementTerminator();
             source.skipTriviaFrom(self.source, &self.pos);
         }
@@ -674,21 +698,25 @@ const Parser = struct {
         while (!self.eof() and !self.peekChar('}')) {
             const member_start = self.pos;
             const name = try self.parseIdentifierWithSpan();
+            var name_moved = false;
+            errdefer if (!name_moved) self.allocator.free(name.text);
             source.skipInlineSpaces(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == '=') {
                 self.pos += 1;
                 source.skipTriviaFrom(self.source, &self.pos);
                 if (std.mem.eql(u8, name.text, "base")) {
                     if (maybe_base) |base| {
+                        const value = try self.parseIdentifier();
                         if (base.*) |existing| self.allocator.free(existing);
-                        base.* = try self.parseIdentifier();
+                        base.* = value;
                     } else {
                         return self.fail(error.ExpectedIdentifier);
                     }
                 } else if (std.mem.eql(u8, name.text, "implements")) {
                     if (maybe_implements) |implements| {
+                        const value = try self.parseIdentifier();
                         if (implements.*) |existing| self.allocator.free(existing);
-                        implements.* = try self.parseIdentifier();
+                        implements.* = value;
                     } else {
                         return self.fail(error.ExpectedIdentifier);
                     }
@@ -698,6 +726,7 @@ const Parser = struct {
                     return self.fail(error.ExpectedTypeAnnotation);
                 }
                 self.allocator.free(name.text);
+                name_moved = true;
                 try self.consumeStatementTerminator();
                 source.skipTriviaFrom(self.source, &self.pos);
                 continue;
@@ -709,6 +738,13 @@ const Parser = struct {
             errdefer field_type.deinit(self.allocator);
             var default_value: ?*Expr = null;
             var default_property_value: ?[]const u8 = null;
+            errdefer {
+                if (default_value) |expr| {
+                    expr.deinit(self.allocator);
+                    self.allocator.destroy(expr);
+                }
+                if (default_property_value) |value| self.allocator.free(value);
+            }
             source.skipInlineSpaces(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == '=') {
                 self.pos += 1;
@@ -725,7 +761,10 @@ const Parser = struct {
                 .default_property_value = default_property_value,
                 .span = .{ .start = member_start, .end = self.pos },
             });
+            name_moved = true;
             field_type = ast.Type.none;
+            default_value = null;
+            default_property_value = null;
             try self.consumeStatementTerminator();
             source.skipTriviaFrom(self.source, &self.pos);
         }
@@ -754,7 +793,9 @@ const Parser = struct {
         try self.expectChar('[');
         source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof() and !self.peekChar(']')) {
-            try out.append(self.allocator, try self.parseString());
+            const value = try self.parseString();
+            errdefer self.allocator.free(value);
+            try out.append(self.allocator, value);
             source.skipTriviaFrom(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == ',') {
                 self.pos += 1;

@@ -846,6 +846,67 @@ test "syntax spec: constant and enum parsing survive every allocation failure" {
     );
 }
 
+test "syntax spec: failed object declarations release parsed ownership" {
+    try expectParseErrorWithoutLeaks(error.ExpectedChar, "record Theme\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedChar, "extend Widget\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation,
+        \\record Theme {
+        \\  label
+        \\}
+        \\
+    );
+    try expectParseErrorWithoutLeaks(error.ExpectedIdentifier,
+        \\extend Widget {
+        \\  base = Parent
+        \\}
+        \\
+    );
+    try expectParseErrorWithoutLeaks(error.ExpectedChar,
+        \\type Card = object {
+        \\  label: String = "caption"
+        \\
+    );
+}
+
+test "syntax spec: object declarations survive every allocation failure" {
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseAndDeinitSource,
+        .{
+            \\type Card = object {
+            \\  base = OldBase
+            \\  base = NewBase
+            \\  roles = ["card", "panel"]
+            \\  handler: Selection<(Page -> Object)?> = build
+            \\}
+            \\
+        },
+    );
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseAndDeinitSource,
+        .{
+            \\record Theme {
+            \\  handler: Selection<(Page -> Object)?> = build
+            \\}
+            \\
+        },
+    );
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseAndDeinitSource,
+        .{
+            \\extend Card {
+            \\  implements = OldProtocol
+            \\  implements = NewProtocol
+            \\  roles = ["extended", "panel"]
+            \\  handler: Selection<(Page -> Object)?> = build
+            \\}
+            \\
+        },
+    );
+}
+
 test "syntax spec: optional types compose with functions and selections" {
     var parsed = try parse(
         \\fn keep(callback: (Page -> Object)?, maker: Page -> Object?, items: Selection<Text>?) -> Void
