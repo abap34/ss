@@ -1120,6 +1120,19 @@ test "syntax spec: module cloning survives every allocation failure" {
     );
 }
 
+test "syntax spec: paired functions survive every allocation failure" {
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseAndDeinitSource,
+        .{
+            \\fn/! note(text_value: String, tone: String = "soft") -> Object
+            \\  return text(text_value)
+            \\end
+            \\
+        },
+    );
+}
+
 test "syntax spec: qualified type names parse in annotations and type parameters" {
     const source =
         \\import std:core/classes as classes

@@ -470,8 +470,9 @@ const Parser = struct {
             for (inner_args.items) |*arg| arg.deinit(self.allocator);
             inner_args.deinit(self.allocator);
         }
+        try inner_args.ensureTotalCapacity(self.allocator, func.params.items.len);
         for (func.params.items) |param| {
-            try inner_args.append(self.allocator, .{ .ident = .{ .name = try self.allocator.dupe(u8, param.name) } });
+            inner_args.appendAssumeCapacity(.{ .ident = .{ .name = try self.allocator.dupe(u8, param.name) } });
         }
 
         var outer_args = std.ArrayList(Expr).empty;
@@ -479,11 +480,12 @@ const Parser = struct {
             for (outer_args.items) |*arg| arg.deinit(self.allocator);
             outer_args.deinit(self.allocator);
         }
-        try outer_args.append(self.allocator, .{ .call = .{
+        try outer_args.ensureTotalCapacity(self.allocator, 2);
+        outer_args.appendAssumeCapacity(.{ .call = .{
             .callee = .{ .name = try self.allocator.dupe(u8, "pagectx") },
             .args = .empty,
         } });
-        try outer_args.append(self.allocator, .{ .call = .{
+        outer_args.appendAssumeCapacity(.{ .call = .{
             .callee = .{ .name = try self.allocator.dupe(u8, func.name) },
             .args = inner_args,
         } });
