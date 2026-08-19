@@ -826,6 +826,19 @@ test "syntax spec: optional types compose with functions and selections" {
     try testing.expectEqualStrings("Text", items.optional_child.?.param_class_name.?);
 }
 
+test "syntax spec: malformed type parameters release owned inner types" {
+    var failure: syntax.ParseFailure = .{};
+    try testing.expectError(
+        error.ExpectedChar,
+        syntax.parseWithSourceNameAndFailure(
+            testing.allocator,
+            "fn bad(items: Selection<(Page -> Object)?) -> Void\nend\n",
+            "unit-test.ss",
+            &failure,
+        ),
+    );
+}
+
 test "syntax spec: qualified type names parse in annotations and type parameters" {
     const source =
         \\import std:core/classes as classes

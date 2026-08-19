@@ -917,7 +917,8 @@ const Parser = struct {
 
     fn parseTypeParam(self: *Parser) anyerror!ast.Type {
         try self.expectChar('<');
-        const inner = try self.parseTypeAnnotation();
+        var inner = try self.parseTypeAnnotation();
+        errdefer inner.deinit(self.allocator);
         try self.expectChar('>');
         return inner;
     }
