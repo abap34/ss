@@ -112,8 +112,14 @@ fn writeAll(bytes: []const u8) !void {
     var offset: usize = 0;
     while (offset < bytes.len) {
         const n = std.c.write(1, bytes[offset..].ptr, bytes.len - offset);
-        if (n <= 0) return error.WriteFailed;
-        offset += @intCast(n);
+        switch (std.posix.errno(n)) {
+            .SUCCESS => {
+                if (n == 0) return error.WriteFailed;
+                offset += std.math.cast(usize, n) orelse return error.WriteFailed;
+            },
+            .INTR => continue,
+            else => return error.WriteFailed,
+        }
     }
 }
 
