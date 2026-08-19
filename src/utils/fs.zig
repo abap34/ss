@@ -54,13 +54,42 @@ fn readHeaderBytes(
     const zpath = try allocator.dupeZ(u8, path);
     defer allocator.free(zpath);
 
-    const fd = std.c.open(zpath.ptr, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
-    if (fd < 0) return error.FileNotFound;
+    const fd = try openReadOnly(zpath.ptr);
     defer _ = std.c.close(fd);
 
-    const read_len = std.c.read(fd, buf, buf.len);
-    if (read_len <= 0) return invalid_err;
-    return buf[0..@intCast(read_len)];
+    while (true) {
+        const read_len = std.c.read(fd, buf, buf.len);
+        switch (std.posix.errno(read_len)) {
+            .SUCCESS => {
+                if (read_len == 0) return invalid_err;
+                return buf[0..@intCast(read_len)];
+            },
+            .INTR => continue,
+            .ISDIR => return error.IsDir,
+            .IO => return error.InputOutput,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+    }
+}
+
+fn openReadOnly(path: [*:0]const u8) !std.c.fd_t {
+    while (true) {
+        const fd = std.c.open(path, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
+        switch (std.posix.errno(fd)) {
+            .SUCCESS => return fd,
+            .INTR => continue,
+            .ACCES, .PERM => return error.AccessDenied,
+            .NOENT => return error.FileNotFound,
+            .NOTDIR => return error.NotDir,
+            .ISDIR => return error.IsDir,
+            .LOOP => return error.SymLinkLoop,
+            .NAMETOOLONG => return error.NameTooLong,
+            .MFILE => return error.ProcessFdQuotaExceeded,
+            .NFILE => return error.SystemFdQuotaExceeded,
+            .IO => return error.InputOutput,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+    }
 }
 
 pub fn readImageDimensions(allocator: std.mem.Allocator, path: []const u8) !ImageDimensions {

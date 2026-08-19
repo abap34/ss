@@ -39,3 +39,13 @@ test "utils fs spec: SVG image dimensions fall back to viewBox" {
     try testing.expectEqual(@as(f32, 512), dimensions.width);
     try testing.expectEqual(@as(f32, 256), dimensions.height);
 }
+
+test "utils fs spec: image dimension reads preserve directory errors" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    defer allocator.free(path);
+
+    try testing.expectError(error.IsDir, utils.fs.readImageDimensions(allocator, path));
+}
