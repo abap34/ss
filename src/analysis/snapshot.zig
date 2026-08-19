@@ -534,6 +534,7 @@ pub fn build(
     var parse_failure: syntax.ParseFailure = .{};
     const parse_result = syntax.parseRecoveringWithSourceNameAndFailure(allocator, entry_source, entry_path, &parse_failure) catch |err| {
         defer allocator.free(entry_source);
+        if (err == error.OutOfMemory) return err;
         const diagnostic = parse_failure.diagnostic;
         var message_buf: [256]u8 = undefined;
         const message = if (diagnostic) |diag|
@@ -569,11 +570,16 @@ pub fn build(
         defer parse_holes.deinit(allocator);
         defer allocator.free(entry_source);
         if (err == error.Canceled) return err;
+        if (err != error.DiagnosticsFailed and err != error.UnknownImport and !module_loader.isImportReadFailure(err)) return err;
         try diagnostic_bag.addSyntaxHoles(entry_path, entry_source, parse_holes);
         try addLoadDiagnostics(&diagnostic_bag, &load_diagnostics);
-        if (load_diagnostics.items.items.len != 0) {
-            const span = try module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics);
-            try diagnostic_bag.add(entry_path, entry_source, .@"error", "ImportFailed", "ImportFailed: imported module failed to load", span, null);
+        if (err == error.DiagnosticsFailed) {
+            if (load_diagnostics.items.items.len != 0) {
+                const span = try module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics);
+                try diagnostic_bag.add(entry_path, entry_source, .@"error", "ImportFailed", "ImportFailed: imported module failed to load", span, null);
+            } else {
+                try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, entry_source, err, null);
+            }
         } else if (err == error.UnknownImport) {
             if (try module_loader.findUnknownImportReport(allocator, sources.io, import_base_dir, program, &sources.overlay)) |found| {
                 var report = found;
@@ -583,7 +589,7 @@ pub fn build(
                     .end = report.span.end,
                 }, null);
             }
-        } else if (module_loader.isImportReadFailure(err)) {
+        } else {
             if (try module_loader.findImportReadFailureReport(allocator, sources.io, import_base_dir, program, &sources.overlay, err)) |found| {
                 var report = found;
                 defer report.deinit(allocator);
@@ -594,8 +600,6 @@ pub fn build(
             } else {
                 try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, entry_source, err, null);
             }
-        } else {
-            try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, entry_source, err, null);
         }
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     };

@@ -11,6 +11,7 @@ pub fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []con
     var failure: parser.ParseFailure = .{};
     return parser.parseRecoveringWithSourceNameAndFailure(allocator, source, path, &failure) catch |err| {
         if (progress) |p| p.abort();
+        if (err == error.OutOfMemory) return err;
         error_report.printParseError(path, source, err, failure.diagnostic);
         return err;
     };

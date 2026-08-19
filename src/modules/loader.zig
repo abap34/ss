@@ -535,23 +535,26 @@ const Builder = struct {
         const cached_index = if (self.embedded_cache != null and resolved.path == null) embeddedModuleIndex(resolved.spec) else null;
         var parse_failure: syntax.ParseFailure = .{};
         const module_syntax = if (cached_index) |index| self.embedded_cache.?.cloneModule(self.allocator, index, &parse_failure) catch |err| {
+            if (err == error.OutOfMemory) return err;
             try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
-            return err;
+            return error.DiagnosticsFailed;
         } else blk: {
             const parse_start = utils.measure_profile.start();
             defer utils.measure_profile.recordAnalysis(if (embeddedModuleIndex(resolved.spec) != null) .embedded_parse else .module_parse, parse_start);
             break :blk if (self.recovering) recover: {
                 var result = syntax.parseRecoveringWithSourceNameAndFailure(self.allocator, text, parse_path, &parse_failure) catch |err| {
+                    if (err == error.OutOfMemory) return err;
                     try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
-                    return err;
+                    return error.DiagnosticsFailed;
                 };
                 errdefer result.module.deinit(self.allocator);
                 defer result.holes.deinit(self.allocator);
                 try self.addParseHoleDiagnostics(parse_path, text, result.holes.diagnostics);
                 break :recover result.module;
             } else syntax.parseWithSourceNameAndFailure(self.allocator, text, parse_path, &parse_failure) catch |err| {
+                if (err == error.OutOfMemory) return err;
                 try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
-                return err;
+                return error.DiagnosticsFailed;
             };
         };
         var owns_module_syntax = true;

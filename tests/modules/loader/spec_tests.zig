@@ -64,6 +64,30 @@ test "module loader spec: import failure spans preserve allocation failures" {
     ));
 }
 
+test "module loader spec: source parse failures use the diagnostic error" {
+    const source = "import \"invalid-module\" as dependency\n";
+    var program = try compiler.syntax.parseWithSourceName(testing.allocator, source, "parse-failure-test.ss");
+    defer program.deinit(testing.allocator);
+    var overlay = compiler.module_loader.SourceOverlay.init(testing.allocator);
+    defer overlay.deinit();
+    try overlay.put("stdlib/core/invalid-module.ss", "@");
+    var diagnostics = compiler.module_loader.LoadDiagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+
+    try testing.expectError(error.DiagnosticsFailed, compiler.module_loader.loadGraphWithOptions(
+        testing.allocator,
+        testing.io,
+        "stdlib/core",
+        program,
+        .{
+            .overlay = &overlay,
+            .diagnostics = &diagnostics,
+            .print_diagnostics = false,
+        },
+    ));
+    try testing.expect(diagnostics.items.items.len != 0);
+}
+
 test "module loader spec: stdlib resolution frees partial allocations" {
     const source = "import std:core/prelude as core\n";
     var program = try compiler.syntax.parseWithSourceName(testing.allocator, source, "stdlib-allocation-test.ss");

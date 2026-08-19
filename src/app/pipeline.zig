@@ -96,18 +96,20 @@ pub fn analyzeFile(
         .embedded_cache = request.embedded_cache,
     }) catch |err| {
         if (progress) |p| p.abort();
-        if (load_diagnostics.items.items.len != 0) {
-            app_diagnostics.printLoadDiagnostics(&load_diagnostics);
-            try app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, import_base_dir, &parsed.module, request.overlay, &load_diagnostics);
+        if (err != error.DiagnosticsFailed and err != error.UnknownImport and !module_loader.isImportReadFailure(err)) return err;
+        app_diagnostics.printLoadDiagnostics(&load_diagnostics);
+        if (err == error.DiagnosticsFailed) {
+            if (load_diagnostics.items.items.len != 0) {
+                try app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, import_base_dir, &parsed.module, request.overlay, &load_diagnostics);
+            }
             return error.DiagnosticsFailed;
         } else if (err == error.UnknownImport) {
             try printUnknownImportDiagnostic(allocator, io, request, source, parsed.module);
             return error.DiagnosticsFailed;
-        } else if (module_loader.isImportReadFailure(err)) {
+        } else {
             try printImportReadFailureDiagnostic(allocator, io, request, source, parsed.module, err);
             return error.DiagnosticsFailed;
         }
-        return err;
     };
     defer index.deinit();
     var state = analysis.buildDocumentStateWithOptions(allocator, request.input_path, request.asset_base_dir, &source, &parsed.module, &index, .{
