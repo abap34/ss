@@ -20,9 +20,10 @@ pub const SolveOptions = graph.SolveOptions;
 
 pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOptions) !document.Document {
     try graph.checkCancellation(options);
-    try layout_trace.beginSolve(state.allocator, trace_path, options.trace_failure);
+    var trace_session = layout_trace.Session{};
+    try trace_session.begin(state.allocator, trace_path, options.trace_failure);
     var trace_active = true;
-    defer if (trace_active) layout_trace.abortSolve(state.allocator);
+    defer if (trace_active) trace_session.abort(state.allocator);
 
     for (state.page_order.items) |page_id| {
         try graph.checkCancellation(options);
@@ -57,7 +58,7 @@ pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOpti
         for (page_results.items) |*result| result.deinit(state.allocator);
         page_results.deinit(state.allocator);
     }
-    try runPageJobs(state, page_jobs, options, trace_path == null and !options.record_propagation, &page_results);
+    try runPageJobs(state, page_jobs, options, trace_path == null and !options.record_propagation, &trace_session, &page_results);
     try graph.checkCancellation(options);
     const pages = try page_results.toOwnedSlice(state.allocator);
     errdefer {
@@ -65,7 +66,7 @@ pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOpti
         state.allocator.free(pages);
     }
     trace_active = false;
-    try layout_trace.endSolve(state.allocator);
+    try trace_session.end(state.allocator);
     return .{ .pages = pages };
 }
 
@@ -73,11 +74,11 @@ const PageJob = struct {
     page_id: NodeId,
     page_index: usize,
 
-    fn run(self: PageJob, state: anytype, options: SolveOptions) !document.Page {
+    fn run(self: PageJob, state: anytype, trace_session: *layout_trace.Session, options: SolveOptions) !document.Page {
         try graph.checkCancellation(options);
         var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(state.allocator, options.measurement_provider);
         defer measurement_cache.deinit();
-        var result = try solvePageLayout(state, self.page_id, self.page_index, &measurement_cache, options);
+        var result = try solvePageLayout(state, self.page_id, self.page_index, &measurement_cache, trace_session, options);
         errdefer result.deinit(state.allocator);
         try graph.checkCancellation(options);
         return result;
@@ -103,7 +104,8 @@ const PageJob = struct {
         local_options.progress = null;
         var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(local_context.allocator, local_options.measurement_provider);
         defer measurement_cache.deinit();
-        var result = try solvePageLayout(&local_context, self.page_id, self.page_index, &measurement_cache, local_options);
+        var trace_session = layout_trace.Session{};
+        var result = try solvePageLayout(&local_context, self.page_id, self.page_index, &measurement_cache, &trace_session, local_options);
         defer result.deinit(local_context.allocator);
         try graph.checkCancellation(options);
         return try clonePage(allocator, &result);
@@ -128,16 +130,23 @@ fn PageWork(comptime ContextPtr: type) type {
     };
 }
 
-fn runPageJobs(state: anytype, jobs: []const PageJob, options: SolveOptions, parallel_allowed: bool, out: *std.ArrayList(document.Page)) !void {
+fn runPageJobs(
+    state: anytype,
+    jobs: []const PageJob,
+    options: SolveOptions,
+    parallel_allowed: bool,
+    trace_session: *layout_trace.Session,
+    out: *std.ArrayList(document.Page),
+) !void {
     const worker_count = layoutWorkerCount(jobs.len, options, parallel_allowed);
-    if (worker_count <= 1) return try runPageJobsSequential(state, jobs, options, out);
+    if (worker_count <= 1) return try runPageJobsSequential(state, jobs, trace_session, options, out);
     return try runPageJobsParallel(state, jobs, options, worker_count, out);
 }
 
-fn runPageJobsSequential(state: anytype, jobs: []const PageJob, options: SolveOptions, out: *std.ArrayList(document.Page)) !void {
+fn runPageJobsSequential(state: anytype, jobs: []const PageJob, trace_session: *layout_trace.Session, options: SolveOptions, out: *std.ArrayList(document.Page)) !void {
     for (jobs, 0..) |job, completed_index| {
         try graph.checkCancellation(options);
-        var result = try job.run(state, options);
+        var result = try job.run(state, trace_session, options);
         var result_transferred = false;
         errdefer if (!result_transferred) result.deinit(state.allocator);
         try out.append(state.allocator, result);
@@ -338,7 +347,14 @@ pub fn applyDocument(state: anytype, results: *const document.Document) !void {
     }
 }
 
-fn solvePageLayout(state: anytype, page_id: NodeId, page_index: usize, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !document.Page {
+fn solvePageLayout(
+    state: anytype,
+    page_id: NodeId,
+    page_index: usize,
+    measurement_cache: *metrics.MeasurementCache,
+    trace_session: *layout_trace.Session,
+    options: SolveOptions,
+) !document.Page {
     try graph.checkCancellation(options);
     const diagnostic_start = state.diagnostics.items.len;
     const constraint_failure_start = state.constraint_failures.items.len;
@@ -359,15 +375,15 @@ fn solvePageLayout(state: anytype, page_id: NodeId, page_index: usize, measureme
         if (horizontal_propagation) |*tracker| horizontal.propagation = tracker;
     }
 
-    try solvePageAxis(state, &horizontal, options);
+    try solvePageAxis(state, &horizontal, trace_session, options);
     try graph.checkCancellation(options);
 
     var horizontal_fallback = try fallback.buildHorizontalConstraints(state, &horizontal);
     defer horizontal_fallback.deinit(state.allocator);
-    layout_trace.recordDefaultConstraints(state.allocator, &horizontal, horizontal_fallback.items);
+    trace_session.recordDefaultConstraints(state.allocator, &horizontal, horizontal_fallback.items);
     horizontal.soft_constraints = horizontal_fallback.items;
-    try solvePageAxis(state, &horizontal, options);
-    try settleHorizontalAxis(state, &horizontal, options);
+    try solvePageAxis(state, &horizontal, trace_session, options);
+    try settleHorizontalAxis(state, &horizontal, trace_session, options);
     try applySolvedHorizontalFrames(state, &horizontal, measurement_cache, options);
     try graph.checkCancellation(options);
     try groups.propagateTargetedWidthsCached(state, &horizontal, measurement_cache);
@@ -382,13 +398,13 @@ fn solvePageLayout(state: anytype, page_id: NodeId, page_index: usize, measureme
         if (vertical_propagation) |*tracker| vertical.propagation = tracker;
     }
 
-    try solvePageAxis(state, &vertical, options);
+    try solvePageAxis(state, &vertical, trace_session, options);
     try graph.checkCancellation(options);
     var vertical_fallback = try fallback.buildVerticalConstraints(state, &vertical);
     defer vertical_fallback.deinit(state.allocator);
-    layout_trace.recordDefaultConstraints(state.allocator, &vertical, vertical_fallback.items);
+    trace_session.recordDefaultConstraints(state.allocator, &vertical, vertical_fallback.items);
     vertical.soft_constraints = vertical_fallback.items;
-    try solvePageAxis(state, &vertical, options);
+    try solvePageAxis(state, &vertical, trace_session, options);
 
     for (page_graph.child_ids, vertical.states) |child_id, v_state| {
         try graph.checkCancellation(options);
@@ -552,12 +568,12 @@ fn applySolvedHorizontalFrames(state: anytype, workspace: *const graph.AxisWorks
     }
 }
 
-fn settleHorizontalAxis(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
+fn settleHorizontalAxis(state: anytype, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !void {
     var pass: usize = 0;
     while (pass < 8) : (pass += 1) {
         try graph.checkCancellation(options);
         var changed = try finalizeHorizontalGroupStates(state, workspace, options);
-        changed = (try runPageAxisPass(state, workspace, options)) or changed;
+        changed = (try runPageAxisPassWithTrace(state, workspace, trace_session, options)) or changed;
         if (!changed) break;
     }
 }
@@ -604,9 +620,9 @@ fn capDefaultWrappedHorizontalWidths(state: anytype, workspace: *graph.AxisWorks
     return changed;
 }
 
-fn solvePageAxis(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
+fn solvePageAxis(state: anytype, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !void {
     try graph.checkCancellation(options);
-    _ = try runPageAxisPass(state, workspace, options);
+    _ = try runPageAxisPassWithTrace(state, workspace, trace_session, options);
 
     for (workspace.graph.child_ids, workspace.states, 0..) |child_id, *axis_state, index| {
         try graph.checkCancellation(options);
@@ -622,13 +638,18 @@ fn solvePageAxis(state: anytype, workspace: *graph.AxisWorkspace, options: Solve
     }
 
     try graph.checkCancellation(options);
-    _ = try runPageAxisPass(state, workspace, options);
+    _ = try runPageAxisPassWithTrace(state, workspace, trace_session, options);
 }
 
 pub fn runPageAxisPass(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
-    const trace_enabled = layout_trace.shouldTraceAxisPass(workspace);
-    const run_id = if (trace_enabled) layout_trace.nextRunId() else 0;
-    if (trace_enabled) layout_trace.axisPassBegin(state.allocator, state, workspace, run_id);
+    var trace_session = layout_trace.Session{};
+    return runPageAxisPassWithTrace(state, workspace, &trace_session, options);
+}
+
+fn runPageAxisPassWithTrace(state: anytype, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !bool {
+    const trace_enabled = trace_session.shouldTraceAxisPass(workspace);
+    const run_id = if (trace_enabled) trace_session.nextRunId() else 0;
+    if (trace_enabled) trace_session.axisPassBegin(state.allocator, state, workspace, run_id);
 
     var pass: usize = 0;
     var iteration_count: usize = 0;
@@ -654,14 +675,14 @@ pub fn runPageAxisPass(state: anytype, workspace: *graph.AxisWorkspace, options:
                 try graph.checkCancellation(options);
                 if (groups.constraintTargetsGroup(state, constraint)) continue;
                 if (groups.constraintUsesGroupSource(state, constraint)) continue;
-                local_changed = (try applyAxisConstraint(state, workspace, constraint, false, options)) or local_changed;
+                local_changed = (try applyAxisConstraint(state, workspace, constraint, false, trace_session, options)) or local_changed;
             }
 
             for (workspace.soft_constraints) |constraint| {
                 try graph.checkCancellation(options);
                 if (groups.constraintTargetsGroup(state, constraint)) continue;
                 if (groups.constraintUsesGroupSource(state, constraint)) continue;
-                local_changed = (try applyAxisConstraint(state, workspace, constraint, true, options)) or local_changed;
+                local_changed = (try applyAxisConstraint(state, workspace, constraint, true, trace_session, options)) or local_changed;
             }
 
             changed = local_changed or changed;
@@ -677,7 +698,7 @@ pub fn runPageAxisPass(state: anytype, workspace: *graph.AxisWorkspace, options:
         for (workspace.hard_constraints) |constraint| {
             try graph.checkCancellation(options);
             if (!groups.constraintUsesGroupSource(state, constraint)) continue;
-            const applied = try applyAxisConstraint(state, workspace, constraint, false, options);
+            const applied = try applyAxisConstraint(state, workspace, constraint, false, trace_session, options);
             group_sources_changed = applied or group_sources_changed;
             changed = applied or changed;
         }
@@ -686,13 +707,13 @@ pub fn runPageAxisPass(state: anytype, workspace: *graph.AxisWorkspace, options:
         for (workspace.soft_constraints) |constraint| {
             try graph.checkCancellation(options);
             if (!groups.constraintUsesGroupSource(state, constraint)) continue;
-            const applied = try applyAxisConstraint(state, workspace, constraint, true, options);
+            const applied = try applyAxisConstraint(state, workspace, constraint, true, trace_session, options);
             soft_group_sources_changed = applied or soft_group_sources_changed;
             changed = applied or changed;
         }
 
         if (trace_enabled) {
-            layout_trace.axisPassIteration(
+            trace_session.axisPassIteration(
                 state.allocator,
                 state,
                 run_id,
@@ -714,7 +735,7 @@ pub fn runPageAxisPass(state: anytype, workspace: *graph.AxisWorkspace, options:
         }
     }
 
-    if (trace_enabled) layout_trace.axisPassEnd(state.allocator, state, run_id, workspace, iteration_count, converged);
+    if (trace_enabled) trace_session.axisPassEnd(state.allocator, state, run_id, workspace, iteration_count, converged);
     return any_changed;
 }
 
@@ -780,7 +801,14 @@ fn constraintsSame(a: Constraint, b: Constraint) bool {
     };
 }
 
-fn applyAxisConstraint(state: anytype, workspace: *graph.AxisWorkspace, constraint: Constraint, is_soft: bool, options: SolveOptions) !bool {
+fn applyAxisConstraint(
+    state: anytype,
+    workspace: *graph.AxisWorkspace,
+    constraint: Constraint,
+    is_soft: bool,
+    trace_session: *layout_trace.Session,
+    options: SolveOptions,
+) !bool {
     try graph.checkCancellation(options);
     if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) return false;
 
@@ -863,7 +891,7 @@ fn applyAxisConstraint(state: anytype, workspace: *graph.AxisWorkspace, constrai
                 try recordSizeConstraintPropagation(state, workspace, target_index, constraint, size);
             }
             if (applied) {
-                layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
+                trace_session.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
             }
             return applied;
         },
@@ -875,7 +903,7 @@ fn applyAxisConstraint(state: anytype, workspace: *graph.AxisWorkspace, constrai
 
     const source_value = try graph.constraintSourceValue(state, workspace, constraint.source);
     if (source_value == null) {
-        return try applyReverseAxisConstraint(state, workspace, constraint, is_soft, target_index, options);
+        return try applyReverseAxisConstraint(state, workspace, constraint, is_soft, target_index, trace_session, options);
     }
 
     const target_value = source_value.? + constraint.offset;
@@ -883,7 +911,7 @@ fn applyAxisConstraint(state: anytype, workspace: *graph.AxisWorkspace, constrai
         if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
             try reconcileAppliedAxisState(state, workspace, target_index);
             try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
-            layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
+            trace_session.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
             return true;
         }
     }
@@ -892,7 +920,7 @@ fn applyAxisConstraint(state: anytype, workspace: *graph.AxisWorkspace, constrai
         if (graph.replaceAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
             try reconcileAppliedAxisState(state, workspace, target_index);
             try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
-            layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
+            trace_session.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
             return true;
         }
     }
@@ -902,7 +930,7 @@ fn applyAxisConstraint(state: anytype, workspace: *graph.AxisWorkspace, constrai
             if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
                 try reconcileAppliedAxisState(state, workspace, target_index);
                 try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
-                layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
+                trace_session.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
                 return true;
             }
         }
@@ -910,7 +938,7 @@ fn applyAxisConstraint(state: anytype, workspace: *graph.AxisWorkspace, constrai
             if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
                 try reconcileAppliedAxisState(state, workspace, target_index);
                 try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
-                layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
+                trace_session.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
                 return true;
             }
         }
@@ -919,7 +947,7 @@ fn applyAxisConstraint(state: anytype, workspace: *graph.AxisWorkspace, constrai
             if (existing != null and constraintInSlice(workspace.soft_constraints, existing.?) and graph.replaceAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
                 try reconcileAppliedAxisState(state, workspace, target_index);
                 try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
-                layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
+                trace_session.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
                 return true;
             }
         }
@@ -957,7 +985,7 @@ fn applyAxisConstraint(state: anytype, workspace: *graph.AxisWorkspace, constrai
     };
     if (applied) {
         try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
-        layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
+        trace_session.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, false);
     }
     return applied;
 }
@@ -1008,6 +1036,7 @@ fn applyReverseAxisConstraint(
     constraint: Constraint,
     is_soft: bool,
     target_index: usize,
+    trace_session: *layout_trace.Session,
     options: SolveOptions,
 ) !bool {
     try graph.checkCancellation(options);
@@ -1069,7 +1098,7 @@ fn applyReverseAxisConstraint(
     };
     if (applied) {
         try recordReverseAnchorConstraintPropagation(state, workspace, source_index, constraint, target_value - constraint.offset);
-        layout_trace.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, true);
+        trace_session.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, true);
     }
     return applied;
 }

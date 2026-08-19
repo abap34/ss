@@ -1310,6 +1310,84 @@ fn fakeAllLayoutMeasurement(
     return .{ .width = 1000, .height = 700 };
 }
 
+const NestedTraceMeasurementContext = struct {
+    inner_state: *core.DocumentState,
+    inner_trace_path: []const u8,
+    solved: bool = false,
+};
+
+fn solveNestedTraceDuringMeasurement(
+    context: *anyopaque,
+    state_ptr: *anyopaque,
+    node: *const model.Node,
+    width: f32,
+    mode: model.LayoutMeasurementMode,
+) anyerror!?model.LayoutMeasurement {
+    _ = state_ptr;
+    _ = node;
+    _ = width;
+    _ = mode;
+    const ctx: *NestedTraceMeasurementContext = @ptrCast(@alignCast(context));
+    if (!ctx.solved) {
+        ctx.solved = true;
+        var inner_document = try solver.solveDocument(ctx.inner_state, ctx.inner_trace_path, .{});
+        defer inner_document.deinit(ctx.inner_state.allocator);
+    }
+    return .{ .width = 240, .height = 80 };
+}
+
+fn expectTraceContainsOnly(path: []const u8, expected_name: []const u8, unexpected_name: []const u8) !void {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, testing.allocator, .limited(1024 * 1024));
+    defer testing.allocator.free(bytes);
+    var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, bytes, .{});
+    defer parsed.deinit();
+    const root = switch (parsed.value) {
+        .object => |object| object,
+        else => return error.ExpectedTraceObject,
+    };
+    const events = root.get("events") orelse return error.ExpectedTraceEvents;
+    try testing.expect(events.array.items.len > 0);
+    try testing.expect(std.mem.indexOf(u8, bytes, expected_name) != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, unexpected_name) == null);
+}
+
+test "nested layout traces keep independent sessions" {
+    var outer_state = try initEmptyDocumentState();
+    defer outer_state.deinit();
+    const outer_page = try outer_state.addPage("Outer");
+    _ = try outer_state.makeObject(outer_page, "outer-only", null, .text, .text, "outer");
+
+    var inner_state = try initEmptyDocumentState();
+    defer inner_state.deinit();
+    const inner_page = try inner_state.addPage("Inner");
+    _ = try inner_state.makeObject(inner_page, "inner-only", null, .text, .text, "inner");
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    defer testing.allocator.free(root);
+    const outer_trace_path = try std.fs.path.join(testing.allocator, &.{ root, "outer.json" });
+    defer testing.allocator.free(outer_trace_path);
+    const inner_trace_path = try std.fs.path.join(testing.allocator, &.{ root, "inner.json" });
+    defer testing.allocator.free(inner_trace_path);
+
+    var measurement = NestedTraceMeasurementContext{
+        .inner_state = &inner_state,
+        .inner_trace_path = inner_trace_path,
+    };
+    var outer_document = try solver.solveDocument(&outer_state, outer_trace_path, .{
+        .measurement_provider = .{
+            .context = &measurement,
+            .measure = solveNestedTraceDuringMeasurement,
+        },
+    });
+    defer outer_document.deinit(outer_state.allocator);
+
+    try testing.expect(measurement.solved);
+    try expectTraceContainsOnly(outer_trace_path, "outer-only", "inner-only");
+    try expectTraceContainsOnly(inner_trace_path, "inner-only", "outer-only");
+}
+
 test "layout solver uses render measurement provider for intrinsic object size" {
     var state = try initEmptyDocumentState();
     defer state.deinit();

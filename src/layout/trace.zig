@@ -8,208 +8,282 @@ const Constraint = model.Constraint;
 const Defaults = @import("document.zig").Defaults;
 const json = utils.json;
 
-const TraceState = struct {
+pub const Session = struct {
     json_path: ?[]const u8 = null,
     json_events: usize = 0,
     run_id: usize = 0,
     pending_messages: std.ArrayList(TraceMessage) = .empty,
     failure: ?graph.TraceFailure = null,
     failure_target: ?*graph.TraceFailure = null,
-};
 
-var trace_state = TraceState{};
+    pub fn begin(
+        self: *Session,
+        allocator: std.mem.Allocator,
+        json_path: ?[]const u8,
+        failure_target: ?*graph.TraceFailure,
+    ) !void {
+        if (failure_target) |target| target.* = .{};
+        self.* = .{
+            .json_path = json_path,
+            .failure_target = failure_target,
+        };
+        errdefer self.reset(allocator);
 
-pub fn beginSolve(
-    allocator: std.mem.Allocator,
-    json_path: ?[]const u8,
-    failure_target: ?*graph.TraceFailure,
-) !void {
-    if (failure_target) |target| target.* = .{};
-    trace_state = .{
-        .json_path = json_path,
-        .failure_target = failure_target,
-    };
-    errdefer reset(allocator);
+        if (self.json_path) |path| {
+            writePath(allocator, path, JsonPrefix, .truncate) catch |err| {
+                self.recordFailure(.output, "initialize layout trace output", err);
+                return error.LayoutTraceFailed;
+            };
+        }
+    }
 
-    if (trace_state.json_path) |path| {
-        writePath(allocator, path, JsonPrefix, .truncate) catch |err| {
-            recordFailure(.output, "initialize layout trace output", err);
+    pub fn end(self: *Session, allocator: std.mem.Allocator) !void {
+        defer self.reset(allocator);
+        var finish_failure: ?anyerror = null;
+        if (self.json_path) |path| {
+            writePath(allocator, path, JsonSuffix, .append) catch |err| {
+                finish_failure = err;
+            };
+        }
+        if (self.failure != null) return error.LayoutTraceFailed;
+        if (finish_failure) |err| {
+            self.recordFailure(.output, "finish layout trace output", err);
             return error.LayoutTraceFailed;
+        }
+    }
+
+    pub fn abort(self: *Session, allocator: std.mem.Allocator) void {
+        defer self.reset(allocator);
+        if (self.json_path) |path| {
+            writePath(allocator, path, JsonSuffix, .append) catch {};
+        }
+    }
+
+    fn reset(self: *Session, allocator: std.mem.Allocator) void {
+        self.clearPendingMessages(allocator);
+        self.pending_messages.deinit(allocator);
+        self.* = .{};
+    }
+
+    fn recordFailure(self: *Session, kind: graph.TraceFailureKind, operation: []const u8, cause: anyerror) void {
+        if (self.failure != null) return;
+        const failure = graph.TraceFailure{
+            .kind = kind,
+            .operation = operation,
+            .cause = cause,
         };
+        self.failure = failure;
+        if (self.failure_target) |target| target.* = failure;
     }
-}
 
-pub fn endSolve(allocator: std.mem.Allocator) !void {
-    defer reset(allocator);
-    var finish_failure: ?anyerror = null;
-    if (trace_state.json_path) |path| {
-        writePath(allocator, path, JsonSuffix, .append) catch |err| {
-            finish_failure = err;
-        };
+    pub fn shouldTraceAxisPass(self: *const Session, workspace: *const graph.AxisWorkspace) bool {
+        if (!workspace.owns_states) return false;
+        return self.json_path != null and self.failure == null;
     }
-    if (trace_state.failure != null) return error.LayoutTraceFailed;
-    if (finish_failure) |err| {
-        recordFailure(.output, "finish layout trace output", err);
-        return error.LayoutTraceFailed;
+
+    pub fn nextRunId(self: *Session) usize {
+        self.run_id += 1;
+        return self.run_id;
     }
-}
 
-pub fn abortSolve(allocator: std.mem.Allocator) void {
-    defer reset(allocator);
-    if (trace_state.json_path) |path| {
-        writePath(allocator, path, JsonSuffix, .append) catch {};
+    pub fn recordDefaultConstraints(
+        self: *Session,
+        allocator: std.mem.Allocator,
+        workspace: *const graph.AxisWorkspace,
+        constraints: []const Constraint,
+    ) void {
+        if (self.json_path == null or self.failure != null) return;
+        for (constraints) |constraint| {
+            if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) continue;
+            var snapshot = captureSnapshot(allocator, workspace) catch |err| {
+                self.recordFailure(.materialization, "capture layout trace constraint state", err);
+                return;
+            };
+            self.pending_messages.append(allocator, .{
+                .kind = .default_constraint,
+                .constraint = constraint,
+                .axis = workspace.axis,
+                .soft = true,
+                .affected_node = constraint.target_node,
+                .snapshot = snapshot,
+            }) catch |err| {
+                self.recordFailure(.materialization, "record layout trace constraint state", err);
+                snapshot.deinit(allocator);
+                return;
+            };
+        }
     }
-}
 
-fn reset(allocator: std.mem.Allocator) void {
-    clearPendingMessages(allocator);
-    trace_state.pending_messages.deinit(allocator);
-    trace_state = .{};
-}
-
-fn recordFailure(kind: graph.TraceFailureKind, operation: []const u8, cause: anyerror) void {
-    if (trace_state.failure != null) return;
-    const failure = graph.TraceFailure{
-        .kind = kind,
-        .operation = operation,
-        .cause = cause,
-    };
-    trace_state.failure = failure;
-    if (trace_state.failure_target) |target| target.* = failure;
-}
-
-pub fn shouldTraceAxisPass(workspace: *const graph.AxisWorkspace) bool {
-    if (!workspace.owns_states) return false;
-    return trace_state.json_path != null and trace_state.failure == null;
-}
-
-pub fn nextRunId() usize {
-    trace_state.run_id += 1;
-    return trace_state.run_id;
-}
-
-pub fn recordDefaultConstraints(
-    allocator: std.mem.Allocator,
-    workspace: *const graph.AxisWorkspace,
-    constraints: []const Constraint,
-) void {
-    if (trace_state.json_path == null or trace_state.failure != null) return;
-    for (constraints) |constraint| {
-        if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) continue;
+    pub fn recordConstraintPropagation(
+        self: *Session,
+        allocator: std.mem.Allocator,
+        workspace: *const graph.AxisWorkspace,
+        constraint: Constraint,
+        is_soft: bool,
+        reverse: bool,
+    ) void {
+        if (self.json_path == null or self.failure != null) return;
+        if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) return;
+        const affected_node: ?model.NodeId = if (reverse) switch (constraint.source) {
+            .page => null,
+            .node => |node_source| node_source.node_id,
+        } else constraint.target_node;
+        const affected_state = if (affected_node) |node_id| blk: {
+            const index = workspace.indexOf(node_id) orelse break :blk null;
+            break :blk workspace.states[index];
+        } else null;
         var snapshot = captureSnapshot(allocator, workspace) catch |err| {
-            recordFailure(.materialization, "capture layout trace constraint state", err);
+            self.recordFailure(.materialization, "capture layout trace propagation state", err);
             return;
         };
-        trace_state.pending_messages.append(allocator, .{
-            .kind = .default_constraint,
+        self.pending_messages.append(allocator, .{
+            .kind = .propagation,
             .constraint = constraint,
             .axis = workspace.axis,
-            .soft = true,
-            .affected_node = constraint.target_node,
+            .soft = is_soft,
+            .reverse = reverse,
+            .affected_node = affected_node,
+            .affected_state = affected_state,
             .snapshot = snapshot,
         }) catch |err| {
-            recordFailure(.materialization, "record layout trace constraint state", err);
+            self.recordFailure(.materialization, "record layout trace propagation state", err);
             snapshot.deinit(allocator);
-            return;
         };
     }
-}
 
-pub fn recordConstraintPropagation(
-    allocator: std.mem.Allocator,
-    workspace: *const graph.AxisWorkspace,
-    constraint: Constraint,
-    is_soft: bool,
-    reverse: bool,
-) void {
-    if (trace_state.json_path == null or trace_state.failure != null) return;
-    if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) return;
-    const affected_node: ?model.NodeId = if (reverse) switch (constraint.source) {
-        .page => null,
-        .node => |node_source| node_source.node_id,
-    } else constraint.target_node;
-    const affected_state = if (affected_node) |node_id| blk: {
-        const index = workspace.indexOf(node_id) orelse break :blk null;
-        break :blk workspace.states[index];
-    } else null;
-    var snapshot = captureSnapshot(allocator, workspace) catch |err| {
-        recordFailure(.materialization, "capture layout trace propagation state", err);
-        return;
-    };
-    trace_state.pending_messages.append(allocator, .{
-        .kind = .propagation,
-        .constraint = constraint,
-        .axis = workspace.axis,
-        .soft = is_soft,
-        .reverse = reverse,
-        .affected_node = affected_node,
-        .affected_state = affected_state,
-        .snapshot = snapshot,
-    }) catch |err| {
-        recordFailure(.materialization, "record layout trace propagation state", err);
-        snapshot.deinit(allocator);
-    };
-}
+    pub fn axisPassBegin(
+        self: *Session,
+        allocator: std.mem.Allocator,
+        state: anytype,
+        workspace: *const graph.AxisWorkspace,
+        run_id: usize,
+    ) void {
+        const summary = summarizeAxisStates(workspace.states);
+        self.emitEvent(allocator, state, workspace, .{
+            .name = "begin",
+            .run_id = run_id,
+            .summary = summary,
+        });
+    }
 
-pub fn axisPassBegin(
-    allocator: std.mem.Allocator,
-    state: anytype,
-    workspace: *const graph.AxisWorkspace,
-    run_id: usize,
-) void {
-    const summary = summarizeAxisStates(workspace.states);
-    emitEvent(allocator, state, workspace, .{
-        .name = "begin",
-        .run_id = run_id,
-        .summary = summary,
-    });
-}
+    pub fn axisPassIteration(
+        self: *Session,
+        allocator: std.mem.Allocator,
+        state: anytype,
+        run_id: usize,
+        workspace: *const graph.AxisWorkspace,
+        pass: usize,
+        local_iterations: usize,
+        changed: bool,
+        group_bounds_changed: bool,
+        group_targets_changed: bool,
+        group_sources_changed: bool,
+        soft_group_sources_changed: bool,
+    ) void {
+        const summary = summarizeAxisStates(workspace.states);
+        self.emitEvent(allocator, state, workspace, .{
+            .name = "iteration",
+            .run_id = run_id,
+            .pass = pass + 1,
+            .local_iterations = local_iterations,
+            .changed = changed,
+            .group_bounds_changed = group_bounds_changed,
+            .group_targets_changed = group_targets_changed,
+            .group_sources_changed = group_sources_changed,
+            .soft_group_sources_changed = soft_group_sources_changed,
+            .summary = summary,
+        });
+    }
 
-pub fn axisPassIteration(
-    allocator: std.mem.Allocator,
-    state: anytype,
-    run_id: usize,
-    workspace: *const graph.AxisWorkspace,
-    pass: usize,
-    local_iterations: usize,
-    changed: bool,
-    group_bounds_changed: bool,
-    group_targets_changed: bool,
-    group_sources_changed: bool,
-    soft_group_sources_changed: bool,
-) void {
-    const summary = summarizeAxisStates(workspace.states);
-    emitEvent(allocator, state, workspace, .{
-        .name = "iteration",
-        .run_id = run_id,
-        .pass = pass + 1,
-        .local_iterations = local_iterations,
-        .changed = changed,
-        .group_bounds_changed = group_bounds_changed,
-        .group_targets_changed = group_targets_changed,
-        .group_sources_changed = group_sources_changed,
-        .soft_group_sources_changed = soft_group_sources_changed,
-        .summary = summary,
-    });
-}
+    pub fn axisPassEnd(
+        self: *Session,
+        allocator: std.mem.Allocator,
+        state: anytype,
+        run_id: usize,
+        workspace: *const graph.AxisWorkspace,
+        iteration_count: usize,
+        converged: bool,
+    ) void {
+        const summary = summarizeAxisStates(workspace.states);
+        self.emitEvent(allocator, state, workspace, .{
+            .name = "end",
+            .run_id = run_id,
+            .iterations = iteration_count,
+            .converged = converged,
+            .summary = summary,
+        });
+    }
 
-pub fn axisPassEnd(
-    allocator: std.mem.Allocator,
-    state: anytype,
-    run_id: usize,
-    workspace: *const graph.AxisWorkspace,
-    iteration_count: usize,
-    converged: bool,
-) void {
-    const summary = summarizeAxisStates(workspace.states);
-    emitEvent(allocator, state, workspace, .{
-        .name = "end",
-        .run_id = run_id,
-        .iterations = iteration_count,
-        .converged = converged,
-        .summary = summary,
-    });
-}
+    fn emitEvent(self: *Session, allocator: std.mem.Allocator, state: anytype, workspace: *const graph.AxisWorkspace, event: Event) void {
+        if (self.json_path == null or self.failure != null) return;
+
+        var buffer = std.ArrayList(u8).empty;
+        defer buffer.deinit(allocator);
+        self.appendEventJson(allocator, &buffer, state, workspace, event) catch |err| {
+            self.recordFailure(.materialization, "encode layout trace event", err);
+            return;
+        };
+
+        if (self.json_path) |path| {
+            appendEventToPath(allocator, path, buffer.items, &self.json_events) catch |err| {
+                self.recordFailure(.output, "write layout trace event", err);
+            };
+        }
+        self.clearPendingMessages(allocator);
+    }
+
+    fn appendEventJson(self: *const Session, allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), state: anytype, workspace: *const graph.AxisWorkspace, event: Event) !void {
+        var object = try json.Object.beginBuffer(allocator, buffer);
+        try object.stringField("event", event.name);
+        try object.intField("run", event.run_id);
+        try object.intField("page", workspace.graph.page_id);
+        try object.stringField("axis", axisName(workspace.axis));
+        try object.floatField("page_width", Defaults.width, "{d:.4}");
+        try object.floatField("page_height", Defaults.height, "{d:.4}");
+        try object.intField("nodes", workspace.states.len);
+        try object.intField("soft_constraints", workspace.soft_constraints.len);
+        try object.optionalIntField("pass", event.pass);
+        try object.optionalIntField("local_iterations", event.local_iterations);
+        try object.optionalBoolField("changed", event.changed);
+        try object.optionalIntField("iterations", event.iterations);
+        try object.optionalBoolField("converged", event.converged);
+
+        var group_object = try object.objectField("groups");
+        try group_object.optionalBoolField("bounds_changed", event.group_bounds_changed);
+        try group_object.optionalBoolField("targets_changed", event.group_targets_changed);
+        try group_object.optionalBoolField("sources_changed", event.group_sources_changed);
+        try group_object.optionalBoolField("soft_sources_changed", event.soft_group_sources_changed);
+        try group_object.end();
+
+        var summary = try object.objectField("summary");
+        try summary.intField("start_known", event.summary.start_known);
+        try summary.intField("size_known", event.summary.size_known);
+        try summary.intField("end_known", event.summary.end_known);
+        try summary.intField("center_known", event.summary.center_known);
+        try summary.intField("complete", event.summary.complete);
+        try summary.intField("default_size", event.summary.default_size);
+        try summary.end();
+
+        var messages = try object.arrayField("messages");
+        for (self.pending_messages.items) |message| {
+            var item = try messages.objectItem();
+            try appendTraceMessage(&item, state, message);
+            try item.end();
+        }
+        try messages.end();
+
+        try appendStateArray(&object, state, "states", workspace.graph.child_ids, workspace.states);
+
+        try object.end();
+    }
+
+    fn clearPendingMessages(self: *Session, allocator: std.mem.Allocator) void {
+        for (self.pending_messages.items) |*message| {
+            message.deinit(allocator);
+        }
+        self.pending_messages.clearRetainingCapacity();
+    }
+};
 
 const Event = struct {
     name: []const u8,
@@ -226,24 +300,6 @@ const Event = struct {
     summary: AxisTraceSummary,
 };
 
-fn emitEvent(allocator: std.mem.Allocator, state: anytype, workspace: *const graph.AxisWorkspace, event: Event) void {
-    if (trace_state.json_path == null or trace_state.failure != null) return;
-
-    var buffer = std.ArrayList(u8).empty;
-    defer buffer.deinit(allocator);
-    appendEventJson(allocator, &buffer, state, workspace, event) catch |err| {
-        recordFailure(.materialization, "encode layout trace event", err);
-        return;
-    };
-
-    if (trace_state.json_path) |path| {
-        appendEventToPath(allocator, path, buffer.items, &trace_state.json_events) catch |err| {
-            recordFailure(.output, "write layout trace event", err);
-        };
-    }
-    clearPendingMessages(allocator);
-}
-
 fn appendEventToPath(allocator: std.mem.Allocator, path: []const u8, event_json: []const u8, count: *usize) !void {
     var buffer = std.ArrayList(u8).empty;
     defer buffer.deinit(allocator);
@@ -251,51 +307,6 @@ fn appendEventToPath(allocator: std.mem.Allocator, path: []const u8, event_json:
     try buffer.appendSlice(allocator, event_json);
     try writePath(allocator, path, buffer.items, .append);
     count.* += 1;
-}
-
-fn appendEventJson(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), state: anytype, workspace: *const graph.AxisWorkspace, event: Event) !void {
-    var object = try json.Object.beginBuffer(allocator, buffer);
-    try object.stringField("event", event.name);
-    try object.intField("run", event.run_id);
-    try object.intField("page", workspace.graph.page_id);
-    try object.stringField("axis", axisName(workspace.axis));
-    try object.floatField("page_width", Defaults.width, "{d:.4}");
-    try object.floatField("page_height", Defaults.height, "{d:.4}");
-    try object.intField("nodes", workspace.states.len);
-    try object.intField("soft_constraints", workspace.soft_constraints.len);
-    try object.optionalIntField("pass", event.pass);
-    try object.optionalIntField("local_iterations", event.local_iterations);
-    try object.optionalBoolField("changed", event.changed);
-    try object.optionalIntField("iterations", event.iterations);
-    try object.optionalBoolField("converged", event.converged);
-
-    var groups = try object.objectField("groups");
-    try groups.optionalBoolField("bounds_changed", event.group_bounds_changed);
-    try groups.optionalBoolField("targets_changed", event.group_targets_changed);
-    try groups.optionalBoolField("sources_changed", event.group_sources_changed);
-    try groups.optionalBoolField("soft_sources_changed", event.soft_group_sources_changed);
-    try groups.end();
-
-    var summary = try object.objectField("summary");
-    try summary.intField("start_known", event.summary.start_known);
-    try summary.intField("size_known", event.summary.size_known);
-    try summary.intField("end_known", event.summary.end_known);
-    try summary.intField("center_known", event.summary.center_known);
-    try summary.intField("complete", event.summary.complete);
-    try summary.intField("default_size", event.summary.default_size);
-    try summary.end();
-
-    var messages = try object.arrayField("messages");
-    for (trace_state.pending_messages.items) |message| {
-        var item = try messages.objectItem();
-        try appendTraceMessage(&item, state, message);
-        try item.end();
-    }
-    try messages.end();
-
-    try appendStateArray(&object, state, "states", workspace.graph.child_ids, workspace.states);
-
-    try object.end();
 }
 
 fn appendStateArray(object: *json.Object, state: anytype, field_name: []const u8, child_ids: []const model.NodeId, axis_states: []const AxisState) !void {
@@ -407,13 +418,6 @@ fn captureSnapshot(allocator: std.mem.Allocator, workspace: *const graph.AxisWor
         .child_ids = child_ids,
         .states = states,
     };
-}
-
-fn clearPendingMessages(allocator: std.mem.Allocator) void {
-    for (trace_state.pending_messages.items) |*message| {
-        message.deinit(allocator);
-    }
-    trace_state.pending_messages.clearRetainingCapacity();
 }
 
 fn affectedAnchor(message: TraceMessage) model.Anchor {
