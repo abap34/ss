@@ -26,6 +26,26 @@ pub const OutputTarget = struct {
     kind: OutputKind,
 };
 
+pub fn acquireRenderCacheLeaseOrPrintDiagnostic(io: std.Io) !utils.render_cache.Lease {
+    return utils.render_cache.Lease.acquire(io) catch |err| {
+        var message_buf: [8192]u8 = undefined;
+        var reason_buf: [256]u8 = undefined;
+        const message = std.fmt.bufPrint(
+            &message_buf,
+            "RenderCacheAccessFailed: could not acquire a render cache lease for '{s}': {s}; remove a conflicting file or fix the cache permissions",
+            .{ utils.render_cache.path, error_report.formatErrorReason(&reason_buf, err) },
+        ) catch "RenderCacheAccessFailed: could not acquire a render cache lease";
+        error_report.print(.{
+            .path = utils.render_cache.path,
+            .source = "",
+            .severity = .@"error",
+            .message = message,
+            .span = null,
+        });
+        return error.DiagnosticsFailed;
+    };
+}
+
 pub fn writeFileOrPrintDiagnostic(
     io: std.Io,
     path: []const u8,

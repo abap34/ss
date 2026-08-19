@@ -8,6 +8,7 @@ const module_loader = @import("../modules/loader.zig");
 const utils = @import("utils");
 
 const app_diagnostics = @import("diagnostics.zig");
+const app_output = @import("output.zig");
 const app_progress = @import("progress.zig");
 const types = @import("types.zig");
 
@@ -36,7 +37,7 @@ pub const AnalyzedProject = struct {
 };
 
 pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.DocumentState {
-    var render_cache_lease = try utils.render_cache.Lease.acquire(io);
+    var render_cache_lease = try app_output.acquireRenderCacheLeaseOrPrintDiagnostic(io);
     defer render_cache_lease.deinit();
     var analyzed = try analyzeFile(io, allocator, request, progress, .evaluation);
     errdefer analyzed.deinit();
