@@ -14,6 +14,32 @@ test "utils fs spec: file existence checks preserve allocation failures" {
     try testing.expectError(error.OutOfMemory, utils.fs.fileExists(failing.allocator(), "missing"));
 }
 
+test "utils fs spec: file existence checks distinguish present and missing paths" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const present = try writeTmpFile(allocator, tmp, "present.txt", "present");
+    defer allocator.free(present);
+    const missing = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/missing.txt", .{tmp.sub_path[0..]});
+    defer allocator.free(missing);
+
+    try testing.expect(try utils.fs.fileExists(allocator, present));
+    try testing.expect(!try utils.fs.fileExists(allocator, missing));
+}
+
+test "utils fs spec: file existence checks preserve symbolic link cycles" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/loop", .{tmp.sub_path[0..]});
+    defer allocator.free(path);
+    try std.Io.Dir.cwd().symLink(testing.io, "loop", path, .{});
+
+    try testing.expectError(error.SymLinkLoop, utils.fs.fileExists(allocator, path));
+}
+
 test "utils fs spec: file writes atomically replace existing contents" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

@@ -40,7 +40,19 @@ pub fn siblingPathWithExtension(
 pub fn fileExists(allocator: std.mem.Allocator, path: []const u8) !bool {
     const zpath = try allocator.dupeZ(u8, path);
     defer allocator.free(zpath);
-    return std.c.access(zpath.ptr, 0) == 0;
+    while (true) {
+        const result = std.c.access(zpath.ptr, 0);
+        switch (std.posix.errno(result)) {
+            .SUCCESS => return true,
+            .INTR => continue,
+            .NOENT, .NOTDIR => return false,
+            .ACCES, .PERM => return error.AccessDenied,
+            .LOOP => return error.SymLinkLoop,
+            .NAMETOOLONG => return error.NameTooLong,
+            .IO => return error.InputOutput,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+    }
 }
 
 const HEADER_BUF_SIZE = 256 * 1024;
