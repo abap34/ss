@@ -564,9 +564,9 @@ test "HTML renderer packages PDF.js with explicit page geometry" {
     const resource_path_z = try testing.allocator.dupeZ(u8, resource_path);
     defer testing.allocator.free(resource_path_z);
     const pdf = c.ss_pdf_create(resource_path_z.ptr, 120, 60) orelse return error.CairoCreateFailed;
+    defer c.ss_pdf_destroy(pdf);
     c.ss_pdf_end_page(pdf);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
-    c.ss_pdf_destroy(pdf);
     defer std.Io.Dir.cwd().deleteFile(testing.io, resource_path) catch {};
 
     var resource_builder = render_resources.Builder{};

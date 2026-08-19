@@ -639,9 +639,9 @@ test "resource compiler records deterministic raster SVG and PDF metadata" {
     const pdf_path_z = try testing.allocator.dupeZ(u8, pdf_path);
     defer testing.allocator.free(pdf_path_z);
     const pdf = c.ss_pdf_create(pdf_path_z.ptr, 120, 60) orelse return error.CairoCreateFailed;
+    defer c.ss_pdf_destroy(pdf);
     c.ss_pdf_end_page(pdf);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
-    c.ss_pdf_destroy(pdf);
 
     var builder = render_resources.Builder{};
     defer builder.deinit(testing.allocator);
