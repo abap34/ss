@@ -88,8 +88,8 @@ end
     const dump = JSON.parse(await readFile(path.join(project, "dump.json"), "utf8"));
     const vectorNodes = dump.nodes.filter((node) => node.role === "vector_path");
     const connectorNodes = dump.nodes.filter((node) => node.role === "connector");
-    assert(vectorNodes.length === 4, `expected four vector shape nodes，got ${vectorNodes.length}`);
-    assert(connectorNodes.length === 1, `expected one connector node，got ${connectorNodes.length}`);
+    assert(vectorNodes.length === 4, `expected four vector shape nodes, got ${vectorNodes.length}`);
+    assert(connectorNodes.length === 1, `expected one connector node, got ${connectorNodes.length}`);
 
     for (const node of vectorNodes) {
       const storedPath = JSON.parse(node.fields.path);
@@ -118,7 +118,7 @@ end
     const html = await readFile(path.join(project, "deck.html"), "utf8");
     const pdf = await readFile(path.join(project, "deck.pdf"));
     assert(pdf.subarray(0, 5).toString() === "%PDF-", "PDF rendering did not produce a PDF document");
-    assert(count(html, "ss-vector-path") === 8, "HTML did not contain the four shapes，derived connector path，and three marker paths");
+    assert(count(html, "ss-vector-path") === 8, "HTML did not contain the four shapes, derived connector path, and three marker paths");
     assert(count(html, "<linearGradient") === 1, "HTML omitted the linear gradient definition");
     assert(count(html, "<radialGradient") === 1, "HTML omitted the radial gradient definition");
     assert(count(html, "<pattern") === 1, "HTML omitted the tile pattern definition");
@@ -182,7 +182,7 @@ end
     expectSuccess(await runSs(["dump", "slide.ss", "dump.json"], project), "stdlib shape catalog dump");
     const dump = JSON.parse(await readFile(path.join(project, "dump.json"), "utf8"));
     const vectorNodes = dump.nodes.filter((node) => node.role === "vector_path");
-    assert(vectorNodes.length === constructors.length, `expected ${constructors.length} stdlib shapes，got ${vectorNodes.length}`);
+    assert(vectorNodes.length === constructors.length, `expected ${constructors.length} stdlib shapes, got ${vectorNodes.length}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -233,7 +233,7 @@ end
 }
 
 function taggedRecordField(record, name) {
-  assert(record.kind === "record", `expected tagged record，got ${JSON.stringify(record)}`);
+  assert(record.kind === "record", `expected tagged record, got ${JSON.stringify(record)}`);
   return record.fields.find((field) => field.name === name)?.value;
 }
 

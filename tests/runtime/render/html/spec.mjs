@@ -48,7 +48,7 @@ end
     assert(count(document, 'data-ss-src="ss-resource:svg:') === 4, "repeated SVG uses did not share one resource reference");
     assert(count(document, 'data-media-type="image/svg+xml"') === 1, "repeated SVG bytes were serialized more than once");
     assert(document.includes("data:text/css;charset=utf-8;base64,"), "HTML did not embed its style sheet");
-    assert(count(document, "data:text/javascript;charset=utf-8;base64,") === 3, "non-PDF content did not embed exactly resource loading，page navigation，and text alignment");
+    assert(count(document, "data:text/javascript;charset=utf-8;base64,") === 3, "non-PDF content did not embed exactly resource loading, page navigation, and text alignment");
     assert(!document.includes('data-ss-third-party-license="pdf.js"'), "non-PDF content embedded the PDF.js license");
     assert(!document.includes("manifest.json") && !document.includes("assets/"), "HTML retained an external bundle reference");
 
@@ -102,10 +102,10 @@ math!("z_2^3 + \\frac{b}{c}")`);
     );
     assert((await stat(path.join(project, "deck.pdf"))).isFile(), "structured math PDF was not created");
     const document = await readFile(path.join(project, "deck.html"), "utf8");
-    assert(count(document, "ss-math-text") >= 3, "block，inline，or display math did not use native HTML elements");
-    assert(count(document, "class=\"ss-mathml\"") >= 3, "block，inline，or display math omitted MathML semantics");
+    assert(count(document, "ss-math-text") >= 3, "block, inline, or display math did not use native HTML elements");
+    assert(count(document, "class=\"ss-mathml\"") >= 3, "block, inline, or display math omitted MathML semantics");
     assert(!document.includes("data-pdf-src"), "structured math used a PDF fallback");
-    assert(count(document, "data:text/javascript;charset=utf-8;base64,") === 3, "structured math did not embed exactly resource loading，page navigation，and text alignment");
+    assert(count(document, "data:text/javascript;charset=utf-8;base64,") === 3, "structured math did not embed exactly resource loading, page navigation, and text alignment");
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -131,7 +131,7 @@ async function testWatchPublishesHtmlGenerations() {
     await new Promise((resolve) => setTimeout(resolve, 250));
     const log = output.text();
     const changes = [...log.matchAll(/watch: change detected/g)].length;
-    assert(changes === 1, `watch should publish one generation for one source edit，got ${changes}:\n${log}`);
+    assert(changes === 1, `watch should publish one generation for one source edit, got ${changes}:\n${log}`);
   } finally {
     if (child && child.exitCode === null) {
       child.kill("SIGTERM");

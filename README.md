@@ -239,10 +239,10 @@ Run `ss doctor` to check project discovery, render tools, and tree-sitter syntax
 highlighting health in the current environment.
 
 Install Zig 0.16 and the Cairo/Pango/librsvg development files listed above,
-set up MD4C, and build. 
+set up MD4C, and build.
 The build prepares the pinned tree-sitter runtime and
 standard parsers under `~/.ss/cache/tree-sitter` when that cache is missing.
-(Full list of builtin languages is avaliable at: [third_party/tree-sitter-languages/README.md](third_party/tree-sitter-languages/README.md))
+(Full list of builtin languages is available at: [third_party/tree-sitter-languages/README.md](third_party/tree-sitter-languages/README.md))
 The first build may use network access for that cache.
 
 ```sh
@@ -343,9 +343,6 @@ searching upward from that file's directory for the nearest `ss.toml`.
 ss stores generated render artifacts under `.ss-cache/render`. Converted assets
 and math images live under `artifacts/`; the renderer keeps only the latest page
 generation for each deck under `decks/`.
-
-Preview tools that render through temporary paths can pass `--cache-id ID` to
-reuse the same deck generation across changing input paths.
 
 Environment knobs:
 

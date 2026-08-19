@@ -125,7 +125,7 @@ function parseMaximumRss(stderr) {
 
 function printResult(result) {
   for (const [name, metric] of Object.entries(result.metrics)) {
-    process.stdout.write(`${name}: median=${metric.median_ms.toFixed(2)} ms，max-rss=${formatBytes(metric.maximum_rss_bytes)}\n`);
+    process.stdout.write(`${name}: median=${metric.median_ms.toFixed(2)} ms, max-rss=${formatBytes(metric.maximum_rss_bytes)}\n`);
   }
 }
 

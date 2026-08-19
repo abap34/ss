@@ -27,7 +27,7 @@ pub fn infoFromType(ty: Type) TypeInfo {
 
 pub fn infoFromHole(hole_id: ast.HoleId) TypeInfo {
     return .{
-        // HoleType の意味は hole フィールドが持つ．ty は穴を見落とした経路で成功しにくい値にする．
+        // The hole field carries HoleType semantics. Keep ty difficult to accept if a path overlooks the hole.
         .ty = Type.none,
         .hole = .{ .hole_id = hole_id },
     };

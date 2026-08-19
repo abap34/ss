@@ -253,7 +253,7 @@ test "render IR validation rejects invalid colors and page names" {
     try testing.expectError(error.InvalidPageName, ir.validate());
 }
 
-test "render IR validates vector paths，gradients，patterns，and strokes" {
+test "render IR validates vector paths, gradients, patterns, and strokes" {
     var pages = try testing.allocator.alloc(render_ir.Page, 1);
     pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
     var ir = render_ir.Ir{ .pages = pages };

@@ -39,12 +39,12 @@ end
     assert(render.code === 0, `structured inline math render failed:\n${output}`);
     const document = await readFile(path.join(project, "out.html"), "utf8");
     const formulas = structuredMathBoxes(document);
-    assert(formulas.length === 5, `expected five structured inline formulas，got ${formulas.length}`);
+    assert(formulas.length === 5, `expected five structured inline formulas, got ${formulas.length}`);
 
     const expectedBaseSize = formulas[0].baseFontSize;
     assert(
       expectedBaseSize > 24 && expectedBaseSize < 25.2,
-      `default inline math should be slightly larger than 24pt body text，got ${expectedBaseSize}`,
+      `default inline math should be slightly larger than 24pt body text, got ${expectedBaseSize}`,
     );
     for (const formula of formulas.slice(1)) {
       assertNear(formula.baseFontSize, expectedBaseSize, 0.01, "inline math base font size changed with scripts");
@@ -88,7 +88,7 @@ end
     assert(render.code === 0, `TeX fallback inline math render failed:\n${output}`);
     const document = await readFile(path.join(project, "out.html"), "utf8");
     const formulas = mathBoxes(document, "ss-item ss-math ss-pdf");
-    assert(formulas.length === 2, `expected two TeX fallback formulas，got ${formulas.length}`);
+    assert(formulas.length === 2, `expected two TeX fallback formulas, got ${formulas.length}`);
     assert(
       formulas[1].height > formulas[0].height * 1.1,
       `TeX fallback still normalizes scripted math by its outer height: ${JSON.stringify(formulas)}`,
@@ -251,5 +251,5 @@ function styleNumber(style, name) {
 }
 
 function assertNear(actual, expected, tolerance, message) {
-  assert(Math.abs(actual - expected) <= tolerance, `${message}，expected ${expected}，got ${actual}`);
+  assert(Math.abs(actual - expected) <= tolerance, `${message}, expected ${expected}, got ${actual}`);
 }
