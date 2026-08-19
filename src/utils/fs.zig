@@ -37,8 +37,8 @@ pub fn siblingPathWithExtension(
     return std.fmt.allocPrint(allocator, "{s}/{s}.{s}", .{ dir, stem, ext });
 }
 
-pub fn fileExists(allocator: std.mem.Allocator, path: []const u8) bool {
-    const zpath = allocator.dupeZ(u8, path) catch return false;
+pub fn fileExists(allocator: std.mem.Allocator, path: []const u8) !bool {
+    const zpath = try allocator.dupeZ(u8, path);
     defer allocator.free(zpath);
     return std.c.access(zpath.ptr, 0) == 0;
 }

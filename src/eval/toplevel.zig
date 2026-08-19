@@ -1402,7 +1402,7 @@ fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_
     const resolved = try resolveAssetPath(state.allocator, state.asset_base_dir, requested);
     var resolved_owned = true;
     defer if (resolved_owned) state.allocator.free(resolved);
-    if (!fs_utils.fileExists(state.allocator, resolved)) {
+    if (!try fs_utils.fileExists(state.allocator, resolved)) {
         const requested_path = try state.allocator.dupe(u8, requested);
         resolved_owned = false;
         try state.addValidationDiagnostic(.@"error", page_id, object_id, diagnostic_origin.text, .{

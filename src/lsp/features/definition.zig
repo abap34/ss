@@ -111,7 +111,7 @@ fn stdModulePathFromRoot(allocator: std.mem.Allocator, root: []const u8, relativ
     defer allocator.free(joined);
     const absolute = try project.absolutePath(allocator, joined);
     errdefer allocator.free(absolute);
-    if (utils.fs.fileExists(allocator, absolute)) return absolute;
+    if (try utils.fs.fileExists(allocator, absolute)) return absolute;
     allocator.free(absolute);
     return null;
 }

@@ -141,7 +141,7 @@ pub fn discoverPath(allocator: std.mem.Allocator, start_dir: []const u8) !?[]u8 
 
     while (true) {
         const candidate = try std.fs.path.join(allocator, &.{ current, "ss.toml" });
-        if (utils.fs.fileExists(allocator, candidate)) {
+        if (try utils.fs.fileExists(allocator, candidate)) {
             return candidate;
         }
         allocator.free(candidate);

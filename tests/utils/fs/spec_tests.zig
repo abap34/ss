@@ -9,6 +9,11 @@ fn writeTmpFile(allocator: std.mem.Allocator, tmp: std.testing.TmpDir, name: []c
     return path;
 }
 
+test "utils fs spec: file existence checks preserve allocation failures" {
+    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    try testing.expectError(error.OutOfMemory, utils.fs.fileExists(failing.allocator(), "missing"));
+}
+
 test "utils fs spec: file writes atomically replace existing contents" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

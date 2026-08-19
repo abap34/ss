@@ -444,11 +444,11 @@ fn initProject(io: std.Io, allocator: std.mem.Allocator, options: InitOptions) !
 
     if (!options.force) {
         var failed = false;
-        if (utils.fs.fileExists(allocator, project_path)) {
+        if (try utils.fs.fileExists(allocator, project_path)) {
             std.debug.print("init: {s} already exists; pass --force to overwrite it\n", .{project_path});
             failed = true;
         }
-        if (utils.fs.fileExists(allocator, entry_path)) {
+        if (try utils.fs.fileExists(allocator, entry_path)) {
             std.debug.print("init: {s} already exists; pass --force to overwrite it\n", .{entry_path});
             failed = true;
         }
