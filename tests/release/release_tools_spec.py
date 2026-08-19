@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import hashlib
+import io
 import json
 import pathlib
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 
@@ -70,6 +72,34 @@ def test_bundled_md4c():
     for relative_path, expected_sha256 in files.items():
         actual_sha256 = hashlib.sha256((root / relative_path).read_bytes()).hexdigest()
         assert_equal(actual_sha256, expected_sha256)
+
+    archive = subprocess.run(
+        [
+            "git",
+            "archive",
+            "--format=tar",
+            "--prefix=ss-test/",
+            "HEAD",
+            "third_party/md4c",
+        ],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+        timeout=30,
+    ).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
+        archived = set(source.getnames())
+    required = {
+        f"ss-test/third_party/md4c/{relative_path}"
+        for relative_path in {
+            "LICENSE.md",
+            "README.md",
+            "manifest.json",
+            "src/md4c.c",
+            "src/md4c.h",
+        }
+    }
+    assert_equal(required - archived, set())
 
 
 def test_render_homebrew_formula():
