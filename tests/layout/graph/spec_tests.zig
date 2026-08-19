@@ -1437,17 +1437,13 @@ test "layout solver cooperatively cancels parallel page jobs" {
     try testing.expect(counter.checks.load(.seq_cst) >= counter.cancel_after);
 }
 
-test "layout metrics keep asset intrinsic size ahead of render measurement provider" {
+test "layout metrics prefer render measurement provider for asset size" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
     const page = try state.addPage("Page");
     const pdf = try state.makeObject(page, "pdf", null, .asset, .pdf_ref, "chart.pdf");
-    try setNumberField(&state, pdf, "asset_width", 220);
-    try setNumberField(&state, pdf, "asset_height", 70);
     const image = try state.makeObject(page, "image", null, .asset, .image_ref, "chart.png");
-    try setNumberField(&state, image, "asset_width", 180);
-    try setNumberField(&state, image, "asset_height", 90);
 
     var measurement = FakeAllMeasurementContext{};
     try solveDocumentStateWithOptions(&state, null, .{
@@ -1458,12 +1454,12 @@ test "layout metrics keep asset intrinsic size ahead of render measurement provi
     });
 
     const pdf_node = state.getNode(pdf).?;
-    try expectFloat(220, pdf_node.frame.width);
-    try expectFloat(70, pdf_node.frame.height);
+    try expectFloat(1000, pdf_node.frame.width);
+    try expectFloat(700, pdf_node.frame.height);
     const image_node = state.getNode(image).?;
-    try expectFloat(180, image_node.frame.width);
-    try expectFloat(90, image_node.frame.height);
-    try testing.expectEqual(@as(usize, 0), measurement.calls);
+    try expectFloat(1000, image_node.frame.width);
+    try expectFloat(700, image_node.frame.height);
+    try testing.expect(measurement.calls > 0);
 }
 
 test "layout metrics use measured font width for wrapped text height" {

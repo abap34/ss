@@ -57,11 +57,6 @@ const MeasurementKeyContext = struct {
 
 const MeasurementMap = std.HashMap(MeasurementKey, f32, MeasurementKeyContext, std.hash_map.default_max_load_percentage);
 
-const AssetIntrinsicSize = struct {
-    width: f32,
-    height: f32,
-};
-
 pub const MeasurementCache = struct {
     allocator: std.mem.Allocator,
     values: MeasurementMap,
@@ -233,9 +228,6 @@ fn intrinsicWidthWithCache(state: anytype, node: *const Node, cache: ?*Measureme
     const layout_style = styleForNode(state, node);
     const content = model.nodeDisplayContent(node);
     const chrome_width = 2.0 * chromePadX(state, node);
-    if (intrinsicAssetSize(state, node)) |asset| {
-        return asset.width * assetScale(state, node) + chrome_width;
-    }
     if (cache) |measurements| {
         const available_width = maxWidthForStyle(layout_style) + chrome_width;
         if (try measurements.renderedMeasurement(state, node, available_width, .natural)) |measured| {
@@ -249,8 +241,7 @@ fn intrinsicWidthWithCache(state: anytype, node: *const Node, cache: ?*Measureme
     }
     switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => {
-            const base_width = positiveNodeFloatProperty(state, node, "asset_width") orelse @min(maxWidthForStyle(layout_style), Defaults.default_asset_width);
-            return base_width * assetScale(state, node) + chrome_width;
+            return @min(maxWidthForStyle(layout_style), Defaults.default_asset_width) * assetScale(state, node) + chrome_width;
         },
         .figure_text => return maxWidthForStyle(layout_style) + chrome_width,
         .math_text, .math_tex => return maxWidthForStyle(layout_style) + chrome_width,
@@ -300,12 +291,6 @@ pub fn intrinsicHeightCached(state: anytype, node: *const Node, cache: *Measurem
 }
 
 pub fn frameConstrainedMeasurementCached(state: anytype, node: *const Node, cache: *MeasurementCache) !?model.LayoutMeasurement {
-    if (intrinsicAssetSize(state, node)) |asset| {
-        return .{
-            .width = asset.width * assetScale(state, node) + 2.0 * chromePadX(state, node),
-            .height = asset.height * assetScale(state, node) + 2.0 * chromePadY(state, node),
-        };
-    }
     const measured_outer_width = if (node.frame.width > 0) @max(@as(f32, 1.0), node.frame.width) else 1;
     return try cache.renderedMeasurement(state, node, measured_outer_width, .width_constrained);
 }
@@ -313,9 +298,6 @@ pub fn frameConstrainedMeasurementCached(state: anytype, node: *const Node, cach
 fn intrinsicHeightWithCache(state: anytype, node: *const Node, cache: ?*MeasurementCache) !f32 {
     const layout_style = styleForNode(state, node);
     const chrome_height = 2.0 * chromePadY(state, node);
-    if (intrinsicAssetSize(state, node)) |asset| {
-        return asset.height * assetScale(state, node) + chrome_height;
-    }
     const measured_outer_width = if (node.frame.width > 0)
         @max(@as(f32, 1.0), node.frame.width)
     else
@@ -326,10 +308,7 @@ fn intrinsicHeightWithCache(state: anytype, node: *const Node, cache: ?*Measurem
         }
     }
     return switch (node.payload_kind orelse .text) {
-        .image_ref, .pdf_ref => blk: {
-            const base_height = positiveNodeFloatProperty(state, node, "asset_height") orelse Defaults.max_figure_height;
-            break :blk base_height * assetScale(state, node) + chrome_height;
-        },
+        .image_ref, .pdf_ref => Defaults.max_figure_height * assetScale(state, node) + chrome_height,
         .figure_text => Defaults.max_figure_height + chrome_height,
         .math_text, .math_tex => blk: {
             const content = model.nodeDisplayContent(node);
@@ -357,17 +336,6 @@ fn intrinsicHeightWithCache(state: anytype, node: *const Node, cache: ?*Measurem
                 source.lineCount(content);
             break :blk @as(f32, @floatFromInt(lines)) * text_style.line_height + chrome_height;
         },
-    };
-}
-
-fn intrinsicAssetSize(state: anytype, node: *const Node) ?AssetIntrinsicSize {
-    switch (node.payload_kind orelse .text) {
-        .image_ref, .pdf_ref => {},
-        else => return null,
-    }
-    return .{
-        .width = positiveNodeFloatProperty(state, node, "asset_width") orelse return null,
-        .height = positiveNodeFloatProperty(state, node, "asset_height") orelse return null,
     };
 }
 
@@ -682,20 +650,6 @@ fn shouldUseFullWrapWidth(state: anytype, node: *const Node, content: []const u8
 
 pub fn shouldWrapNode(state: anytype, node: *const Node) bool {
     return style_defaults.shouldWrapNode(state, node);
-}
-
-fn parseNodeFloatProperty(state: anytype, node: *const Node, key: []const u8) ?f32 {
-    return style_defaults.parseNodeFloatProperty(state, node, key);
-}
-
-fn positiveNodeFloatProperty(state: anytype, node: *const Node, key: []const u8) ?f32 {
-    const value = parseNodeFloatProperty(state, node, key) orelse return null;
-    return if (value > 0) value else null;
-}
-
-fn nonNegativeNodeFloatProperty(state: anytype, node: *const Node, key: []const u8) ?f32 {
-    const value = parseNodeFloatProperty(state, node, key) orelse return null;
-    return if (value >= 0) value else null;
 }
 
 fn recordFloatProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {

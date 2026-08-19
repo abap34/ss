@@ -1400,21 +1400,19 @@ fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_
 
     const requested = node.content.?;
     const resolved = try resolveAssetPath(state.allocator, state.asset_base_dir, requested);
+    var resolved_owned = true;
+    defer if (resolved_owned) state.allocator.free(resolved);
     if (!fs_utils.fileExists(state.allocator, resolved)) {
+        const requested_path = try state.allocator.dupe(u8, requested);
+        resolved_owned = false;
         try state.addValidationDiagnostic(.@"error", page_id, object_id, diagnostic_origin.text, .{
             .asset_not_found = .{
-                .requested_path = try state.allocator.dupe(u8, requested),
+                .requested_path = requested_path,
                 .resolved_path = resolved,
                 .payload_kind = node.payload_kind,
             },
         });
         return;
-    }
-
-    if (node.payload_kind == .image_ref) {
-        try attachIntrinsicImageSize(state, object_id, resolved);
-    } else if (node.payload_kind == .pdf_ref) {
-        try attachIntrinsicPdfSize(state, object_id, resolved);
     }
 }
 
@@ -1455,21 +1453,6 @@ fn originForContentSpan(
         return try std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ start, end });
     }
     return null;
-}
-
-fn attachIntrinsicImageSize(state: *core.DocumentState, object_id: core.NodeId, resolved_path: []const u8) !void {
-    const dimensions = fs_utils.readImageDimensions(state.allocator, resolved_path) catch return;
-    try attachIntrinsicAssetSize(state, object_id, dimensions);
-}
-
-fn attachIntrinsicPdfSize(state: *core.DocumentState, object_id: core.NodeId, resolved_path: []const u8) !void {
-    const dimensions = fs_utils.readPdfDimensions(state.allocator, resolved_path) catch return;
-    try attachIntrinsicAssetSize(state, object_id, dimensions);
-}
-
-fn attachIntrinsicAssetSize(state: *core.DocumentState, object_id: core.NodeId, dimensions: fs_utils.ImageDimensions) !void {
-    try state.setNodeFieldValue(object_id, "asset_width", .{ .number = dimensions.width });
-    try state.setNodeFieldValue(object_id, "asset_height", .{ .number = dimensions.height });
 }
 
 fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requested: []const u8) ![]const u8 {

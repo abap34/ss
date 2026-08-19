@@ -267,6 +267,10 @@ end
       .sort((left, right) => left.height - right.height);
     assert(assets.length === 2, `expected two PDF asset nodes, got ${assets.length}`);
     const [small, large] = assets;
+    for (const asset of assets) {
+      assert(!Object.hasOwn(asset.fields, "asset_width"), "evaluation should not publish internal asset width fields");
+      assert(!Object.hasOwn(asset.fields, "asset_height"), "evaluation should not publish internal asset height fields");
+    }
     assert(small.height < 40, `small pdf factor should keep the asset near scaled natural height, got ${frameSummary(small)}`);
     assert(small.width < 80, `small pdf factor should keep the asset near scaled natural width, got ${frameSummary(small)}`);
     assert(large.height > small.height * 5, `pdf factor should affect measured height, small ${frameSummary(small)}, large ${frameSummary(large)}`);

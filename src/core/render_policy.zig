@@ -353,7 +353,10 @@ pub fn resolveTextMetrics(state: anytype, node: *const Node) TextMetrics {
 }
 
 pub fn shouldWrapText(state: anytype, node: *const Node) bool {
-    if (positiveFloatProperty(state, node, "asset_width") != null) return false;
+    switch (node.payload_kind orelse .text) {
+        .image_ref, .pdf_ref => return false,
+        else => {},
+    }
     if (fields.read(state.allocator, state, node, "layout", &.{"wrap"}, .text)) |wrap_mode| {
         if (std.mem.eql(u8, wrap_mode, "on")) return true;
         if (std.mem.eql(u8, wrap_mode, "off")) return false;
