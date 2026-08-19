@@ -256,9 +256,12 @@ const Parser = struct {
             try module.top_level_items.append(self.allocator, .{ .document = document_index });
         } else {
             imports_allowed.* = false;
-            const page = try self.parsePage();
+            var page = try self.parsePage();
+            var page_moved = false;
+            errdefer if (!page_moved) page.deinit(self.allocator);
             const page_index = module.pages.items.len;
             try module.pages.append(self.allocator, page);
+            page_moved = true;
             try module.top_level_items.append(self.allocator, .{ .page = page_index });
         }
     }
@@ -1016,7 +1019,12 @@ const Parser = struct {
         const start = self.pos;
         try self.expectKeyword("page");
         const name = try self.parsePageNameWithSpan();
-        const statements = try self.parseBodyStatements();
+        errdefer self.allocator.free(name.text);
+        var statements = try self.parseBodyStatements();
+        errdefer {
+            for (statements.items) |*statement| statement.deinit(self.allocator);
+            statements.deinit(self.allocator);
+        }
         return .{
             .name = name.text,
             .name_span = name.span,
@@ -1057,8 +1065,9 @@ const Parser = struct {
     fn resolvePageName(self: *Parser, name: []const u8, name_start: usize) ![]const u8 {
         errdefer self.allocator.free(name);
         if (names.isAnonymousPageName(name)) {
+            const generated = try self.generatedPageName();
             self.allocator.free(name);
-            return self.generatedPageName();
+            return generated;
         }
         if (std.mem.startsWith(u8, name, "#")) return self.failAt(name_start, error.ReservedPageNamePrefix);
         return name;
@@ -1163,14 +1172,21 @@ const Parser = struct {
                 return statements;
             }
             const statement_start = self.pos;
-            const statement = self.parseStatement() catch |err| {
+            var statement = self.parseStatement() catch |err| {
                 if (!self.recovering) return err;
-                try statements.append(self.allocator, try self.makeHoleStatementForError(err, statement_start));
+                var hole_statement = try self.makeHoleStatementForError(err, statement_start);
+                var hole_statement_moved = false;
+                errdefer if (!hole_statement_moved) hole_statement.deinit(self.allocator);
+                try statements.append(self.allocator, hole_statement);
+                hole_statement_moved = true;
                 self.synchronizeStatement(statement_start);
                 source.skipTriviaFrom(self.source, &self.pos);
                 continue;
             };
+            var statement_moved = false;
+            errdefer if (!statement_moved) statement.deinit(self.allocator);
             try statements.append(self.allocator, statement);
+            statement_moved = true;
             source.skipTriviaFrom(self.source, &self.pos);
         }
         return self.fail(error.ExpectedEnd);
@@ -1204,14 +1220,21 @@ const Parser = struct {
                 return .{ .statements = statements, .terminator = .end };
             }
             const statement_start = self.pos;
-            const statement = self.parseStatement() catch |err| {
+            var statement = self.parseStatement() catch |err| {
                 if (!self.recovering) return err;
-                try statements.append(self.allocator, try self.makeHoleStatementForError(err, statement_start));
+                var hole_statement = try self.makeHoleStatementForError(err, statement_start);
+                var hole_statement_moved = false;
+                errdefer if (!hole_statement_moved) hole_statement.deinit(self.allocator);
+                try statements.append(self.allocator, hole_statement);
+                hole_statement_moved = true;
                 self.synchronizeStatement(statement_start);
                 source.skipTriviaFrom(self.source, &self.pos);
                 continue;
             };
+            var statement_moved = false;
+            errdefer if (!statement_moved) statement.deinit(self.allocator);
             try statements.append(self.allocator, statement);
+            statement_moved = true;
             source.skipTriviaFrom(self.source, &self.pos);
         }
         return self.fail(error.ExpectedEnd);
@@ -1222,15 +1245,24 @@ const Parser = struct {
         const start = self.pos;
 
         if (try self.consumeKeyword("if")) {
-            const condition = try self.parseExpr();
+            var condition = try self.parseExpr();
+            errdefer condition.deinit(self.allocator);
             source.skipInlineSpaces(self.source, &self.pos);
             try self.expectLineBreakAfterHeader();
-            const then_block = try self.parseStatementsUntilElseOrEnd();
+            var then_block = try self.parseStatementsUntilElseOrEnd();
+            errdefer {
+                for (then_block.statements.items) |*statement| statement.deinit(self.allocator);
+                then_block.statements.deinit(self.allocator);
+            }
             var else_statements = std.ArrayList(Statement).empty;
+            errdefer {
+                for (else_statements.items) |*statement| statement.deinit(self.allocator);
+                else_statements.deinit(self.allocator);
+            }
             if (then_block.terminator == .@"else") {
                 const else_block = try self.parseStatementsUntilElseOrEnd();
-                if (else_block.terminator == .@"else") return self.fail(error.ExpectedEnd);
                 else_statements = else_block.statements;
+                if (else_block.terminator == .@"else") return self.fail(error.ExpectedEnd);
             }
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .if_stmt = .{
                 .condition = condition,

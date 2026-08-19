@@ -854,6 +854,51 @@ test "syntax spec: imports survive every allocation failure" {
     );
 }
 
+test "syntax spec: failed pages release parsed ownership" {
+    try expectParseErrorWithoutLeaks(error.ExpectedEnd,
+        \\page Broken
+        \\  let item = "owned"
+        \\
+    );
+}
+
+test "syntax spec: document and page parsing survive every allocation failure" {
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseAndDeinitSource,
+        .{
+            \\document
+            \\  let value = 1
+            \\end
+            \\
+        },
+    );
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseAndDeinitSource,
+        .{
+            \\page _
+            \\  let item = "owned"
+            \\end
+            \\
+        },
+    );
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseAndDeinitSource,
+        .{
+            \\page Nested
+            \\  if predicate
+            \\    let then_value = "then"
+            \\  else
+            \\    let else_value = "else"
+            \\  end
+            \\end
+            \\
+        },
+    );
+}
+
 test "syntax spec: failed object declarations release parsed ownership" {
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "record Theme\n");
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "extend Widget\n");

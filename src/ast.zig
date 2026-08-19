@@ -45,11 +45,7 @@ pub const Module = struct {
         self.document_blocks.deinit(allocator);
         for (self.document_statements.items) |*stmt| stmt.deinit(allocator);
         self.document_statements.deinit(allocator);
-        for (self.pages.items) |*page| {
-            allocator.free(page.name);
-            for (page.statements.items) |*stmt| stmt.deinit(allocator);
-            page.statements.deinit(allocator);
-        }
+        for (self.pages.items) |*page| page.deinit(allocator);
         self.pages.deinit(allocator);
     }
 
@@ -294,6 +290,12 @@ pub const PageDecl = struct {
     name_span: ?Span = null,
     statements: std.ArrayList(Statement),
     span: Span,
+
+    pub fn deinit(self: *PageDecl, allocator: Allocator) void {
+        allocator.free(self.name);
+        for (self.statements.items) |*statement| statement.deinit(allocator);
+        self.statements.deinit(allocator);
+    }
 
     pub fn clone(self: PageDecl, allocator: Allocator) anyerror!PageDecl {
         var statements = std.ArrayList(Statement).empty;
