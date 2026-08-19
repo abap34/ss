@@ -748,7 +748,7 @@ fn reconcileAxisStateLocalized(state: anytype, workspace: *graph.AxisWorkspace, 
                 if (incoming) |c| {
                     const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_frame_size;
                     const propagation = try reconciliationFailurePropagation(state, workspace, index, axis_state, err);
-                    state.noteConstraintFailureDetailedWithPropagation(
+                    try state.noteConstraintFailureDetailedWithPropagation(
                         workspace.graph.page_id,
                         c,
                         existing,
@@ -821,7 +821,7 @@ fn applyAxisConstraint(
         .tautology => return false,
         .conflict => {
             if (!is_soft and options.record_diagnostics) {
-                state.noteConstraintFailureDetailed(
+                try state.noteConstraintFailureDetailed(
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor),
@@ -839,7 +839,7 @@ fn applyAxisConstraint(
                 if (is_soft) return false;
                 if (options.record_diagnostics) {
                     const propagation = try negativeSizePropagation(state, workspace, target_index, constraint, size);
-                    state.noteConstraintFailureDetailedWithPropagation(
+                    try state.noteConstraintFailureDetailedWithPropagation(
                         workspace.graph.page_id,
                         constraint,
                         workspace.states[target_index].size_source,
@@ -859,7 +859,7 @@ fn applyAxisConstraint(
                 if (options.record_diagnostics) {
                     if (err == error.ConstraintConflict) {
                         const propagation = try sizeConflictPropagation(state, workspace, target_index, constraint, workspace.states[target_index].size, size);
-                        state.noteConstraintFailureDetailedWithPropagation(
+                        try state.noteConstraintFailureDetailedWithPropagation(
                             workspace.graph.page_id,
                             constraint,
                             workspace.states[target_index].size_source,
@@ -872,7 +872,7 @@ fn applyAxisConstraint(
                         );
                     } else {
                         const propagation = try negativeSizePropagation(state, workspace, target_index, constraint, size);
-                        state.noteConstraintFailureDetailedWithPropagation(
+                        try state.noteConstraintFailureDetailedWithPropagation(
                             workspace.graph.page_id,
                             constraint,
                             workspace.states[target_index].size_source,
@@ -955,7 +955,7 @@ fn applyAxisConstraint(
         if (options.record_diagnostics) {
             if (err == error.ConstraintConflict) {
                 const propagation = try anchorConflictPropagation(state, workspace, target_index, constraint, target_value);
-                state.noteConstraintFailureDetailedWithPropagation(
+                try state.noteConstraintFailureDetailedWithPropagation(
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor),
@@ -968,7 +968,7 @@ fn applyAxisConstraint(
                 );
             } else {
                 const propagation = try negativeAnchorPropagation(state, workspace, target_index);
-                state.noteConstraintFailureDetailedWithPropagation(
+                try state.noteConstraintFailureDetailedWithPropagation(
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor),
@@ -1068,7 +1068,7 @@ fn applyReverseAxisConstraint(
             const expected = target_value - constraint.offset;
             if (err == error.ConstraintConflict) {
                 const propagation = try reverseAnchorConflictPropagation(state, workspace, source_index, constraint, expected);
-                state.noteConstraintFailureDetailedWithPropagation(
+                try state.noteConstraintFailureDetailedWithPropagation(
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[source_index], node_source.anchor),
@@ -1081,7 +1081,7 @@ fn applyReverseAxisConstraint(
                 );
             } else {
                 const propagation = try negativeAnchorPropagation(state, workspace, source_index);
-                state.noteConstraintFailureDetailedWithPropagation(
+                try state.noteConstraintFailureDetailedWithPropagation(
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[source_index], node_source.anchor),
@@ -1683,7 +1683,7 @@ fn validatePageConstraints(state: anytype, page_id: NodeId, page_graph: *const g
             .known => |value| value,
             .unknown => {
                 const propagation = if (options.record_propagation) try constraintCyclePropagation(state, page_graph, constraint) else null;
-                state.noteConstraintFailureDetailedWithPropagation(page_id, constraint, null, .conflict, .constraint_cycle, graph.anchorAxis(constraint.target_anchor), null, null, propagation);
+                try state.noteConstraintFailureDetailedWithPropagation(page_id, constraint, null, .conflict, .constraint_cycle, graph.anchorAxis(constraint.target_anchor), null, null, propagation);
                 continue;
             },
         };
@@ -1692,7 +1692,7 @@ fn validatePageConstraints(state: anytype, page_id: NodeId, page_graph: *const g
             .known => |value| value,
             .unknown => {
                 const propagation = if (options.record_propagation) try constraintCyclePropagation(state, page_graph, constraint) else null;
-                state.noteConstraintFailureDetailedWithPropagation(page_id, constraint, null, .conflict, .constraint_cycle, graph.anchorAxis(constraint.target_anchor), target_value, null, propagation);
+                try state.noteConstraintFailureDetailedWithPropagation(page_id, constraint, null, .conflict, .constraint_cycle, graph.anchorAxis(constraint.target_anchor), target_value, null, propagation);
                 continue;
             },
         };
@@ -1701,7 +1701,7 @@ fn validatePageConstraints(state: anytype, page_id: NodeId, page_graph: *const g
         if (@abs(target_value - expected) > ConstraintTolerance) {
             const related = validationRelatedConstraint(page_graph, constraint);
             const propagation = if (options.record_propagation) try validationConflictPropagation(state, page_id, page_graph, constraint, related, target_value, expected) else null;
-            state.noteConstraintFailureDetailedWithPropagation(page_id, constraint, related, .conflict, .anchor_value_conflict, graph.anchorAxis(constraint.target_anchor), target_value, expected, propagation);
+            try state.noteConstraintFailureDetailedWithPropagation(page_id, constraint, related, .conflict, .anchor_value_conflict, graph.anchorAxis(constraint.target_anchor), target_value, expected, propagation);
         }
     }
 }

@@ -133,7 +133,7 @@ fn applyGroupTargetConstraintSlice(
             .tautology => continue,
             .conflict => {
                 if (options.record_diagnostics) {
-                    state.noteConstraintFailureDetailed(
+                    try state.noteConstraintFailureDetailed(
                         workspace.graph.page_id,
                         constraint,
                         graph.axisAnchorSource(temp.*, constraint.target_anchor),
@@ -149,7 +149,7 @@ fn applyGroupTargetConstraintSlice(
             .size => |size| {
                 if (size < -graph.ConstraintTolerance) {
                     if (options.record_diagnostics) {
-                        state.noteConstraintFailureDetailed(
+                        try state.noteConstraintFailureDetailed(
                             workspace.graph.page_id,
                             constraint,
                             temp.size_source,
@@ -165,7 +165,7 @@ fn applyGroupTargetConstraintSlice(
                 _ = graph.setAxisSize(temp, size, constraint) catch |err| {
                     if (options.record_diagnostics) {
                         const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_frame_size;
-                        state.noteConstraintFailureDetailed(
+                        try state.noteConstraintFailureDetailed(
                             workspace.graph.page_id,
                             constraint,
                             temp.size_source,
@@ -197,7 +197,7 @@ fn applyGroupTargetConstraintSlice(
         _ = graph.setAxisAnchor(temp, constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
             if (options.record_diagnostics) {
                 const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_frame_size;
-                state.noteConstraintFailureDetailed(
+                try state.noteConstraintFailureDetailed(
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(temp.*, constraint.target_anchor),
@@ -261,7 +261,7 @@ pub fn applyTargetConstraints(
             if (options.record_diagnostics) {
                 if (last_constraint) |constraint| {
                     const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_frame_size;
-                    state.noteConstraintFailureDetailed(
+                    try state.noteConstraintFailureDetailed(
                         workspace.graph.page_id,
                         constraint,
                         null,

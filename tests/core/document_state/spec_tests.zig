@@ -62,6 +62,28 @@ test "document state spec: module lookup supports indexed and sparse identifiers
     try testing.expectEqual(@as(?*core.SourceModule, null), state.moduleByIdMutable(1));
 }
 
+test "document state spec: constraint failure recording preserves allocation failures" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    const original_allocator = state.allocator;
+    state.allocator = failing.allocator();
+    defer state.allocator = original_allocator;
+
+    const constraint = core.Constraint{
+        .target_node = state.document_id,
+        .target_anchor = .left,
+        .source = .{ .page = .left },
+        .offset = 0,
+    };
+    try testing.expectError(
+        error.OutOfMemory,
+        state.noteConstraintFailure(state.document_id, constraint, null, .conflict),
+    );
+    try testing.expect(!state.hasConstraintFailures());
+}
+
 test "document state spec: pages are ordered document children with one-based page indexes" {
     var state = try initEmptyDocumentState();
     defer state.deinit();

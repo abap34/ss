@@ -1016,8 +1016,8 @@ pub const DocumentState = struct {
         try self.constraints.appendSlice(self.allocator, constraints.items.items);
     }
 
-    pub fn noteConstraintFailure(self: *DocumentState, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) void {
-        self.noteConstraintFailureDetailed(
+    pub fn noteConstraintFailure(self: *DocumentState, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) !void {
+        try self.noteConstraintFailureDetailed(
             page_id,
             constraint,
             existing_constraint,
@@ -1039,8 +1039,8 @@ pub const DocumentState = struct {
         axis: ?Axis,
         actual: ?f32,
         expected: ?f32,
-    ) void {
-        self.noteConstraintFailureDetailedWithPropagation(
+    ) !void {
+        try self.noteConstraintFailureDetailedWithPropagation(
             page_id,
             constraint,
             existing_constraint,
@@ -1064,7 +1064,7 @@ pub const DocumentState = struct {
         actual: ?f32,
         expected: ?f32,
         propagation: ?model.ConstraintPropagation,
-    ) void {
+    ) !void {
         var failure: ConstraintFailure = .{
             .kind = kind,
             .reason = reason,
@@ -1089,9 +1089,9 @@ pub const DocumentState = struct {
                 return;
             }
         }
-        self.constraint_failures.append(self.allocator, failure) catch {
+        self.constraint_failures.append(self.allocator, failure) catch |err| {
             failure.deinit(self.allocator);
-            return;
+            return err;
         };
         self.last_constraint_failure = self.constraint_failures.items[self.constraint_failures.items.len - 1];
     }
