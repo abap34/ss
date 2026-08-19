@@ -88,6 +88,17 @@ test "module loader spec: source parse failures use the diagnostic error" {
     try testing.expect(diagnostics.items.items.len != 0);
 }
 
+test "module loader spec: graph failures clean previously loaded modules" {
+    const source = "import \"missing-cleanup-test-module\" as dependency\n";
+    var program = try compiler.syntax.parseWithSourceName(testing.allocator, source, "graph-cleanup-test.ss");
+    defer program.deinit(testing.allocator);
+
+    try testing.expectError(
+        error.UnknownImport,
+        compiler.module_loader.loadGraph(testing.allocator, testing.io, ".", program),
+    );
+}
+
 test "module loader spec: stdlib resolution frees partial allocations" {
     const source = "import std:core/prelude as core\n";
     var program = try compiler.syntax.parseWithSourceName(testing.allocator, source, "stdlib-allocation-test.ss");

@@ -869,9 +869,13 @@ const Parser = struct {
         }
         if (std.mem.eql(u8, name.text, "Selection")) {
             self.allocator.free(name.text);
-            return ast.Type.selectionType(try self.parseOptionalTypeParam());
+            var item_type = try self.parseOptionalTypeParam();
+            defer item_type.deinit(self.allocator);
+            return ast.Type.selectionType(item_type);
         }
-        return ast.Type.objectClassAt(name.text, name.span);
+        const class_name = self.source[name.span.start..name.span.end];
+        self.allocator.free(name.text);
+        return ast.Type.objectClassAt(class_name, name.span);
     }
 
     fn parseQualifiedTypeName(self: *Parser) anyerror![]const u8 {
@@ -900,9 +904,9 @@ const Parser = struct {
         if (self.eof() or self.source[self.pos] != '<') return ast.Type.object;
         try self.expectChar('<');
         const class_name = try self.parseQualifiedTypeNameWithSpan();
-        errdefer self.allocator.free(class_name.text);
+        defer self.allocator.free(class_name.text);
         try self.expectChar('>');
-        return ast.Type.objectClassAt(class_name.text, class_name.span);
+        return ast.Type.objectClassAt(self.source[class_name.span.start..class_name.span.end], class_name.span);
     }
 
     fn parseOptionalTypeParam(self: *Parser) anyerror!ast.Type {
