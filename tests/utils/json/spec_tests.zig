@@ -54,6 +54,22 @@ test "utils json spec: field readers expose nested values" {
     try testing.expectEqual(@as(i64, 1), json.integerField(&items.items[0].object, "id").?);
 }
 
+test "utils json spec: integer readers reject floating-point and negative unsigned values" {
+    const allocator = testing.allocator;
+    var parsed = try json.parseValue(allocator,
+        \\{"integer":12,"integral_float":12.0,"fraction":12.5,"huge":1e100,"negative":-1}
+    , .{});
+    defer parsed.deinit();
+
+    const root = &parsed.value.object;
+    try testing.expectEqual(@as(i64, 12), json.intField(root, "integer").?);
+    try testing.expectEqual(@as(usize, 12), json.usizeField(root, "integer").?);
+    try testing.expect(json.intField(root, "integral_float") == null);
+    try testing.expect(json.intField(root, "fraction") == null);
+    try testing.expect(json.intField(root, "huge") == null);
+    try testing.expect(json.usizeField(root, "negative") == null);
+}
+
 test "utils json spec: value appender preserves parsed JSON" {
     const allocator = testing.allocator;
     var parsed = try json.parseValue(allocator, "{\"items\":[1,2],\"ok\":true}", .{});

@@ -272,8 +272,7 @@ pub fn integerField(object: *const ObjectMap, key: []const u8) ?i64 {
 
 pub fn usizeField(object: *const ObjectMap, key: []const u8) ?usize {
     const value = intField(object, key) orelse return null;
-    if (value < 0) return null;
-    return @intCast(value);
+    return std.math.cast(usize, value);
 }
 
 pub fn numberField(object: *const ObjectMap, key: []const u8) ?f64 {
@@ -306,7 +305,6 @@ pub fn arrayFieldObject(object: *const ObjectMap, key: []const u8) ?*const Value
 pub fn intValue(value: Value) ?i64 {
     return switch (value) {
         .integer => |integer| integer,
-        .float => |float_value| @intFromFloat(float_value),
         else => null,
     };
 }
