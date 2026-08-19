@@ -173,20 +173,19 @@ const Parser = struct {
             imports_allowed.* = false;
             const paired = self.consumePairedFunctionMarker();
             var func = try self.parseFunctionAfterKeyword(item_start, .{ .paired = paired });
+            var func_moved = false;
+            errdefer if (!func_moved) func.deinit(self.allocator);
             if (paired) {
                 var placed_func = try self.makePairedPlacementFunction(func);
-                var func_moved = false;
                 var placed_func_moved = false;
-                errdefer {
-                    if (!func_moved) func.deinit(self.allocator);
-                    if (!placed_func_moved) placed_func.deinit(self.allocator);
-                }
+                errdefer if (!placed_func_moved) placed_func.deinit(self.allocator);
                 try module.functions.append(self.allocator, func);
                 func_moved = true;
                 try module.functions.append(self.allocator, placed_func);
                 placed_func_moved = true;
             } else {
                 try module.functions.append(self.allocator, func);
+                func_moved = true;
             }
         } else if (try self.consumeKeyword("const")) {
             imports_allowed.* = false;
@@ -324,8 +323,8 @@ const Parser = struct {
 
     fn parseFunctionAfterKeyword(self: *Parser, start: usize, options: FunctionParseOptions) !FunctionDecl {
         const parsed_name = try self.parseCallableDeclNameWithSpan();
+        errdefer self.allocator.free(parsed_name.text);
         if (options.paired and names.hasBangSuffix(parsed_name.text)) {
-            defer self.allocator.free(parsed_name.text);
             return self.failAt(self.pos - 1, error.PairedFunctionNameCannotEndWithBang);
         }
         source.skipInlineSpaces(self.source, &self.pos);
@@ -340,13 +339,21 @@ const Parser = struct {
         source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof() and !self.peekChar(')')) {
             const param_name = try self.parseIdentifierWithSpan();
+            var param_name_owned = true;
+            errdefer if (param_name_owned) self.allocator.free(param_name.text);
             source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
             self.pos += 1;
             source.skipInlineSpaces(self.source, &self.pos);
-            const param_type = try self.parseTypeAnnotation();
+            var param_type = try self.parseTypeAnnotation();
+            var param_type_owned = true;
+            errdefer if (param_type_owned) param_type.deinit(self.allocator);
             source.skipInlineSpaces(self.source, &self.pos);
             var default_value: ?*Expr = null;
+            errdefer if (default_value) |expr| {
+                expr.deinit(self.allocator);
+                self.allocator.destroy(expr);
+            };
             if (!self.eof() and self.source[self.pos] == '=') {
                 self.pos += 1;
                 const expr = try self.allocator.create(Expr);
@@ -363,6 +370,9 @@ const Parser = struct {
                 .ty = param_type,
                 .default_value = default_value,
             });
+            param_name_owned = false;
+            param_type_owned = false;
+            default_value = null;
             source.skipTriviaFrom(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == ',') {
                 self.pos += 1;
@@ -376,8 +386,13 @@ const Parser = struct {
         if (!source.startsWithAt(self.source, self.pos, "->")) return self.fail(error.ExpectedTypeAnnotation);
         self.pos += 2;
         source.skipInlineSpaces(self.source, &self.pos);
-        const result_type = try self.parseTypeAnnotation();
-        const statements = try self.parseFunctionBody(result_type);
+        var result_type = try self.parseTypeAnnotation();
+        errdefer result_type.deinit(self.allocator);
+        var statements = try self.parseFunctionBody(result_type);
+        errdefer {
+            for (statements.items) |*statement| statement.deinit(self.allocator);
+            statements.deinit(self.allocator);
+        }
         if (result_type.kind != .void and !functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
         return .{ .name = parsed_name.text, .name_span = parsed_name.span, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .statements = statements };
     }
@@ -771,7 +786,8 @@ const Parser = struct {
             }
             source.skipInlineSpaces(self.source, &self.pos);
             while (!self.eof() and !self.peekChar(')')) {
-                const param_type = try self.parseTypeAnnotation();
+                var param_type = try self.parseTypeAnnotation();
+                errdefer param_type.deinit(self.allocator);
                 try params.append(self.allocator, param_type);
                 source.skipInlineSpaces(self.source, &self.pos);
                 if (!self.eof() and self.source[self.pos] == ',') {

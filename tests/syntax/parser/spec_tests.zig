@@ -67,6 +67,19 @@ fn expectParseError(expected: anyerror, source: []const u8) !void {
     _ = try expectParseErrorDiagnostic(expected, source);
 }
 
+fn expectParseErrorWithoutLeaks(expected: anyerror, source: []const u8) !void {
+    var failure: syntax.ParseFailure = .{};
+    if (syntax.parseWithSourceNameAndFailure(testing.allocator, source, "unit-test.ss", &failure)) |result| {
+        var program = result;
+        defer program.deinit(testing.allocator);
+        return error.ExpectedParseError;
+    } else |err| {
+        try testing.expectEqual(expected, err);
+        const diagnostic = failure.diagnostic orelse return error.MissingParseDiagnostic;
+        try testing.expectEqual(expected, diagnostic.err);
+    }
+}
+
 fn expectParseErrorAt(expected: anyerror, source: []const u8, expected_start: usize) !void {
     const diagnostic = try expectParseErrorDiagnostic(expected, source);
     try testing.expectEqual(expected_start, diagnostic.span.start);
@@ -826,16 +839,22 @@ test "syntax spec: optional types compose with functions and selections" {
     try testing.expectEqualStrings("Text", items.optional_child.?.param_class_name.?);
 }
 
-test "syntax spec: malformed type parameters release owned inner types" {
-    var failure: syntax.ParseFailure = .{};
-    try testing.expectError(
+test "syntax spec: failed function declarations release parsed ownership" {
+    try expectParseErrorWithoutLeaks(
         error.ExpectedChar,
-        syntax.parseWithSourceNameAndFailure(
-            testing.allocator,
-            "fn bad(items: Selection<(Page -> Object)?) -> Void\nend\n",
-            "unit-test.ss",
-            &failure,
-        ),
+        "fn bad(items: Selection<(Page -> Object)?) -> Void\nend\n",
+    );
+    try expectParseErrorWithoutLeaks(error.RequiredParameterAfterDefault,
+        \\fn bad(a: Number = 1, b: Number) -> Number
+        \\  return a
+        \\end
+        \\
+    );
+    try expectParseErrorWithoutLeaks(error.ExpectedReturn,
+        \\fn bad() -> Number
+        \\  let x = 1
+        \\end
+        \\
     );
 }
 
