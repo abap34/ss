@@ -53,7 +53,7 @@ pub const SourceSet = struct {
     }
 
     pub fn readFileAlloc(self: *const SourceSet, path: []const u8) ![]u8 {
-        if (self.overlay.get(path)) |text| return self.allocator.dupe(u8, text);
+        if (try self.overlay.get(path)) |text| return self.allocator.dupe(u8, text);
         return utils.fs.readFileAlloc(self.io, self.allocator, path);
     }
 };

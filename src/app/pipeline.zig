@@ -291,7 +291,7 @@ fn preloadLayoutArtifacts(
 
 fn readSource(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest) ![]u8 {
     if (request.overlay) |source_overlay| {
-        if (source_overlay.get(request.input_path)) |text| return try allocator.dupe(u8, text);
+        if (try source_overlay.get(request.input_path)) |text| return try allocator.dupe(u8, text);
     }
     return try utils.fs.readFileAlloc(io, allocator, request.input_path);
 }

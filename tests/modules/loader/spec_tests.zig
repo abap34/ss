@@ -1,0 +1,67 @@
+const std = @import("std");
+const compiler = @import("compiler");
+
+const testing = std.testing;
+
+test "module loader spec: source overlays preserve lookup allocation failures" {
+    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    var overlay = compiler.module_loader.SourceOverlay.init(failing.allocator());
+    defer overlay.deinit();
+
+    try testing.expectError(error.OutOfMemory, overlay.get("slide.ss"));
+}
+
+test "module loader spec: stdlib resolution frees partial allocations" {
+    const source = "import std:core/prelude as core\n";
+    var program = try compiler.syntax.parseWithSourceName(testing.allocator, source, "stdlib-allocation-test.ss");
+    defer program.deinit(testing.allocator);
+
+    var completed = false;
+    for (0..16) |fail_index| {
+        var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        var report = compiler.module_loader.findUnknownImportReport(
+            failing.allocator(),
+            testing.io,
+            ".",
+            program,
+            null,
+        ) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            continue;
+        };
+        defer if (report) |*value| value.deinit(failing.allocator());
+        try testing.expect(report == null);
+        completed = true;
+        break;
+    }
+    try testing.expect(completed);
+}
+
+test "module loader spec: explicit resolution frees partial allocations" {
+    const source = "import \"allocation-test-module\" as dependency\n";
+    var program = try compiler.syntax.parseWithSourceName(testing.allocator, source, "explicit-allocation-test.ss");
+    defer program.deinit(testing.allocator);
+    var overlay = compiler.module_loader.SourceOverlay.init(testing.allocator);
+    defer overlay.deinit();
+    try overlay.put("allocation-test-module.ss", "");
+
+    var completed = false;
+    for (0..16) |fail_index| {
+        var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        var report = compiler.module_loader.findUnknownImportReport(
+            failing.allocator(),
+            testing.io,
+            ".",
+            program,
+            &overlay,
+        ) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            continue;
+        };
+        defer if (report) |*value| value.deinit(failing.allocator());
+        try testing.expect(report == null);
+        completed = true;
+        break;
+    }
+    try testing.expect(completed);
+}

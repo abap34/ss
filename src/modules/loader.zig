@@ -44,8 +44,8 @@ pub const SourceOverlay = struct {
         try self.by_path.put(absolute, owned_text);
     }
 
-    pub fn get(self: *const SourceOverlay, path: []const u8) ?[]const u8 {
-        const absolute = std.fs.path.resolve(self.allocator, &.{path}) catch return null;
+    pub fn get(self: *const SourceOverlay, path: []const u8) !?[]const u8 {
+        const absolute = try std.fs.path.resolve(self.allocator, &.{path});
         defer self.allocator.free(absolute);
         return self.by_path.get(absolute);
     }
@@ -725,12 +725,12 @@ fn resolveImport(
     overlay: ?*const SourceOverlay,
 ) !ResolvedModule {
     if (std.mem.startsWith(u8, import_spec, "std:")) {
-        return resolveStdModule(allocator, import_spec) orelse error.UnknownImport;
+        return (try resolveStdModule(allocator, import_spec)) orelse error.UnknownImport;
     }
     const path = try resolveExplicitPath(allocator, importer_dir, import_spec);
     errdefer allocator.free(path);
     const module_text = if (overlay) |source_overlay|
-        if (source_overlay.get(path)) |text|
+        if (try source_overlay.get(path)) |text|
             try allocator.dupe(u8, text)
         else
             readModuleFile(allocator, io, path) catch |err| switch (err) {
@@ -742,11 +742,16 @@ fn resolveImport(
             error.FileNotFound => return error.UnknownImport,
             else => return err,
         };
+    errdefer allocator.free(module_text);
+    const key = try allocator.dupe(u8, path);
+    errdefer allocator.free(key);
+    const spec = try allocator.dupe(u8, import_spec);
+    errdefer allocator.free(spec);
     return .{
-        .key = try allocator.dupe(u8, path),
+        .key = key,
         .path = path,
         .source = module_text,
-        .spec = try allocator.dupe(u8, import_spec),
+        .spec = spec,
     };
 }
 
@@ -757,14 +762,19 @@ fn freeResolvedModule(allocator: std.mem.Allocator, resolved: ResolvedModule) vo
     allocator.free(resolved.spec);
 }
 
-fn resolveStdModule(allocator: std.mem.Allocator, spec: []const u8) ?ResolvedModule {
+fn resolveStdModule(allocator: std.mem.Allocator, spec: []const u8) !?ResolvedModule {
     for (embedded_modules) |module| {
         if (std.mem.eql(u8, module.spec, spec)) {
+            const key = try allocator.dupe(u8, spec);
+            errdefer allocator.free(key);
+            const module_source = try allocator.dupe(u8, module.source);
+            errdefer allocator.free(module_source);
+            const owned_spec = try allocator.dupe(u8, spec);
             return .{
-                .key = allocator.dupe(u8, spec) catch return null,
+                .key = key,
                 .path = null,
-                .source = allocator.dupe(u8, module.source) catch return null,
-                .spec = allocator.dupe(u8, spec) catch return null,
+                .source = module_source,
+                .spec = owned_spec,
             };
         }
     }
