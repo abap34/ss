@@ -84,6 +84,8 @@ pub fn writeScheduleTraceJson(io: std.Io, allocator: std.mem.Allocator, request:
 }
 
 pub fn writeLayoutTraceJson(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, output_path: []const u8, progress: *Progress) !void {
+    var render_cache_lease = try utils.render_cache.Lease.acquire(io);
+    defer render_cache_lease.deinit();
     var analyzed = try pipeline.analyzeFile(io, allocator, request, progress, .evaluation);
     defer analyzed.deinit();
     try app_output.validateOutputPathAgainstSources(io, allocator, &analyzed.state, output_path, .layout_trace);
@@ -118,6 +120,8 @@ fn layoutConflictReportJsonWithProtectedOutput(
     progress: ?*Progress,
     protected_output_path: ?[]const u8,
 ) ![]u8 {
+    var render_cache_lease = try utils.render_cache.Lease.acquire(io);
+    defer render_cache_lease.deinit();
     var analyzed = try pipeline.analyzeFile(io, allocator, request, progress, .evaluation);
     defer analyzed.deinit();
     if (protected_output_path) |path| {
@@ -172,6 +176,8 @@ pub fn writeLayoutConflictReportFile(
 }
 
 pub fn writePdf(io: std.Io, allocator: std.mem.Allocator, request: types.PdfWriteRequest, progress: *Progress) !void {
+    var render_cache_lease = try utils.render_cache.Lease.acquire(io);
+    defer render_cache_lease.deinit();
     var output_targets = [_]app_output.OutputTarget{
         .{ .path = request.output_path, .kind = .pdf },
         .{ .path = request.options.diagnostics_json_path orelse request.output_path, .kind = .diagnostics_json },
@@ -190,6 +196,8 @@ pub fn writePdf(io: std.Io, allocator: std.mem.Allocator, request: types.PdfWrit
 }
 
 pub fn writeHtml(io: std.Io, allocator: std.mem.Allocator, request: types.HtmlWriteRequest, progress: *Progress) !void {
+    var render_cache_lease = try utils.render_cache.Lease.acquire(io);
+    defer render_cache_lease.deinit();
     var output_targets = [_]app_output.OutputTarget{
         .{ .path = request.output_path, .kind = .html },
         .{ .path = request.options.diagnostics_json_path orelse request.output_path, .kind = .diagnostics_json },
@@ -217,6 +225,8 @@ pub fn writeHtml(io: std.Io, allocator: std.mem.Allocator, request: types.HtmlWr
 }
 
 pub fn writePdfAndHtml(io: std.Io, allocator: std.mem.Allocator, request: types.PdfAndHtmlWriteRequest, progress: *Progress) !void {
+    var render_cache_lease = try utils.render_cache.Lease.acquire(io);
+    defer render_cache_lease.deinit();
     var output_targets = [_]app_output.OutputTarget{
         .{ .path = request.pdf_output_path, .kind = .pdf },
         .{ .path = request.html_output_path, .kind = .html },

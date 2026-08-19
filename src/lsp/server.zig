@@ -470,6 +470,8 @@ const Server = struct {
         };
 
         if (state.has_external_evaluation_inputs) return false;
+        var render_cache_lease = utils.render_cache.Lease.acquire(self.io) catch return false;
+        defer render_cache_lease.deinit();
         var pages = try core.prepared.prepare(state.allocator, state);
         defer pages.deinit(state.allocator);
         if (hasExternalRenderDependency(&pages, snapshot.project.highlight.languages)) return false;
@@ -853,6 +855,8 @@ fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *co
 fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph) !analysis.snapshot.LayoutHookOutput {
     const hook: *AnalysisLayoutContext = @ptrCast(@alignCast(context));
     try hook.server.checkCanceled();
+    var render_cache_lease = try utils.render_cache.Lease.acquire(hook.server.io);
+    defer render_cache_lease.deinit();
     const layout_start = utils.measure_profile.start();
     var prepared = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph, .{
         .resource_cache = &hook.server.render_resource_cache,

@@ -1,10 +1,10 @@
 const std = @import("std");
-const json = @import("json.zig");
 
 pub const path = ".ss-cache/render";
 const artifacts_path = path ++ "/artifacts";
-const leases_path = path ++ "/leases";
 const prune_stamp_path = artifacts_path ++ "/.prune-stamp";
+const cache_parent_path = ".ss-cache";
+const guard_path = cache_parent_path ++ "/render.lock";
 
 const cache_size_kib: u64 = 1024;
 const cache_size_mib: u64 = cache_size_kib * 1024;
@@ -24,9 +24,26 @@ const FileEntry = struct {
     mtime_ns: i96,
 };
 
-pub fn clear(io: std.Io, allocator: std.mem.Allocator) !void {
-    try pruneStaleLeases(io, allocator);
-    if (try activeLeaseExists(io, allocator)) return error.ActiveRenderCacheLease;
+pub const Lease = struct {
+    io: std.Io,
+    guard: std.Io.File,
+
+    pub fn acquire(io: std.Io) !Lease {
+        return .{ .io = io, .guard = try openGuard(io, .shared, false) };
+    }
+
+    pub fn deinit(self: *Lease) void {
+        self.guard.close(self.io);
+        self.* = undefined;
+    }
+};
+
+pub fn clear(io: std.Io) !void {
+    const guard = openGuard(io, .exclusive, true) catch |err| switch (err) {
+        error.WouldBlock => return error.ActiveRenderCacheLease,
+        else => return err,
+    };
+    defer guard.close(io);
     std.Io.Dir.cwd().deleteTree(io, path) catch |err| {
         if (err == error.FileNotFound) return;
         return err;
@@ -181,61 +198,13 @@ fn fileOlderThan(_: void, lhs: FileEntry, rhs: FileEntry) bool {
     return lhs.mtime_ns < rhs.mtime_ns;
 }
 
-fn activeLeaseExists(io: std.Io, allocator: std.mem.Allocator) !bool {
-    var dir = std.Io.Dir.cwd().openDir(io, leases_path, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound) return false;
-        return err;
-    };
-    defer dir.close(io);
-    var iterator = dir.iterate();
-    while (try iterator.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        if (!isFinalLeaseFile(entry.name)) continue;
-        const lease_path = try std.fs.path.join(allocator, &.{ leases_path, entry.name });
-        defer allocator.free(lease_path);
-        if (try leaseBelongsToLiveProcess(io, allocator, lease_path)) return true;
-    }
-    return false;
-}
-
-fn pruneStaleLeases(io: std.Io, allocator: std.mem.Allocator) !void {
-    var dir = std.Io.Dir.cwd().openDir(io, leases_path, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound) return;
-        return err;
-    };
-    defer dir.close(io);
-    var iterator = dir.iterate();
-    while (try iterator.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        if (!isFinalLeaseFile(entry.name)) continue;
-        const lease_path = try std.fs.path.join(allocator, &.{ leases_path, entry.name });
-        defer allocator.free(lease_path);
-        if (try leaseBelongsToLiveProcess(io, allocator, lease_path)) continue;
-        std.Io.Dir.cwd().deleteFile(io, lease_path) catch {};
-    }
-}
-
-fn isFinalLeaseFile(name: []const u8) bool {
-    return std.mem.endsWith(u8, name, ".json") and std.mem.indexOf(u8, name, ".tmp-") == null;
-}
-
-fn leaseBelongsToLiveProcess(io: std.Io, allocator: std.mem.Allocator, lease_path: []const u8) !bool {
-    const text = std.Io.Dir.cwd().readFileAlloc(io, lease_path, allocator, .limited(64 * 1024)) catch |err| switch (err) {
-        error.FileNotFound => return false,
-        else => return err,
-    };
-    defer allocator.free(text);
-    var parsed = json.parseValue(allocator, text, .{}) catch return false;
-    defer parsed.deinit();
-    if (parsed.value != .object) return false;
-    const pid_value = json.integerField(&parsed.value.object, "pid") orelse return false;
-    if (pid_value <= 0 or pid_value > std.math.maxInt(std.c.pid_t)) return false;
-    const pid: std.c.pid_t = @intCast(pid_value);
-    const signal: std.c.SIG = @enumFromInt(0);
-    switch (std.c.errno(std.c.kill(pid, signal))) {
-        .SUCCESS => return true,
-        .SRCH => return false,
-        .PERM => return true,
-        else => return true,
-    }
+fn openGuard(io: std.Io, lock: std.Io.File.Lock, nonblocking: bool) !std.Io.File {
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(io, cache_parent_path);
+    return cwd.createFile(io, guard_path, .{
+        .read = true,
+        .truncate = false,
+        .lock = lock,
+        .lock_nonblocking = nonblocking,
+    });
 }

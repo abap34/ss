@@ -1228,7 +1228,7 @@ fn runProjectCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []cons
     }
     if (args.len < 1) return failUsage("missing project cache command", .{});
     if (args.len == 1 and std.mem.eql(u8, args[0], "clear")) {
-        utils.render_cache.clear(io, allocator) catch |err| switch (err) {
+        utils.render_cache.clear(io) catch |err| switch (err) {
             error.ActiveRenderCacheLease => return failCli("project render cache is currently in use", .{}),
             else => return err,
         };

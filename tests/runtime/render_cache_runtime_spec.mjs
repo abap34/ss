@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
@@ -13,6 +13,7 @@ await testRenderCompilationReusesTextShapes();
 await testRenderCachePruneIntervalSkipsFreshStamp();
 await testCacheStatsCommands();
 await testCacheClearRejectsActiveRender();
+await testCacheClearRemovesStaleLeaseRecords();
 
 async function testRenderCacheGenerations() {
   const project = await mkdtempProject("ss-render-cache-");
@@ -238,10 +239,37 @@ async function testCacheStatsCommands() {
 
 async function testCacheClearRejectsActiveRender() {
   const project = await mkdtempProject("ss-render-cache-clear-");
+  let renderPromise = null;
+  const release = path.join(project, "release-pdflatex");
   try {
-    const leases = path.join(project, ".ss-cache", "render", "leases");
-    await mkdir(leases, { recursive: true });
-    await writeFile(path.join(leases, "active.json"), JSON.stringify({ schema: 1, pid: process.pid }), "utf8");
+    const fakeBin = path.join(project, "bin");
+    const started = path.join(project, "pdflatex-started");
+    await mkdir(fakeBin);
+    const fakePdflatex = path.join(fakeBin, "pdflatex");
+    await writeFile(
+      fakePdflatex,
+      `#!/bin/sh
+: > ${shellQuote(started)}
+while [ ! -e ${shellQuote(release)} ]; do /bin/sleep 0.02; done
+exit 1
+`,
+      "utf8",
+    );
+    await chmod(fakePdflatex, 0o755);
+    await writeFile(
+      path.join(project, "slide.ss"),
+      `import std:themes/default as *
+
+page main
+tex!("x")
+end
+`,
+      "utf8",
+    );
+    renderPromise = spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project, {
+      env: { PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}` },
+    });
+    await waitForPath(started, 5_000);
 
     const result = await runSs(["cache", "project", "clear"], project, { allowFailure: true });
     assert(result.code !== 0, "cache project clear should fail while an active lease exists");
@@ -249,6 +277,27 @@ async function testCacheClearRejectsActiveRender() {
       result.stderr.includes("project render cache is currently in use"),
       `cache project clear did not report active lease: ${result.stderr}`,
     );
+
+    await writeFile(release, "", "utf8");
+    await renderPromise;
+    renderPromise = null;
+    await runSs(["cache", "project", "clear"], project);
+  } finally {
+    await writeFile(release, "", "utf8").catch(() => {});
+    await renderPromise?.catch(() => {});
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testCacheClearRemovesStaleLeaseRecords() {
+  const project = await mkdtempProject("ss-render-cache-stale-lease-");
+  try {
+    const leases = path.join(project, ".ss-cache", "render", "leases");
+    await mkdir(leases, { recursive: true });
+    await writeFile(path.join(leases, "stale.json"), JSON.stringify({ schema: 1, pid: process.pid }), "utf8");
+
+    await runSs(["cache", "project", "clear"], project);
+    await assertPathMissing(path.join(project, ".ss-cache", "render"), "cache clear should remove stale lease records");
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -356,6 +405,24 @@ function assertFileStatUnchanged(first, second, message) {
 
 async function delay(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForPath(target, timeoutMs) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    try {
+      await stat(target);
+      return;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    await delay(20);
+  }
+  throw new Error(`timed out waiting for ${target}`);
+}
+
+function shellQuote(value) {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 async function assertPdfFile(target, message) {

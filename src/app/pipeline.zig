@@ -36,6 +36,8 @@ pub const AnalyzedProject = struct {
 };
 
 pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.DocumentState {
+    var render_cache_lease = try utils.render_cache.Lease.acquire(io);
+    defer render_cache_lease.deinit();
     var analyzed = try analyzeFile(io, allocator, request, progress, .evaluation);
     errdefer analyzed.deinit();
     try evaluateDocument(&analyzed.state, analyzed.executionGraph(), progress);
