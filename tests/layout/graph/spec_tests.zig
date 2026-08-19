@@ -1265,6 +1265,31 @@ fn fakeLayoutMeasurement(
     };
 }
 
+const FailingMeasurementContext = struct {
+    target: model.NodeId,
+    constrained_calls: usize = 0,
+};
+
+fn failRepeatedConstrainedMeasurement(
+    context: *anyopaque,
+    state_ptr: *anyopaque,
+    node: *const model.Node,
+    width: f32,
+    mode: model.LayoutMeasurementMode,
+) anyerror!?model.LayoutMeasurement {
+    _ = state_ptr;
+    const ctx: *FailingMeasurementContext = @ptrCast(@alignCast(context));
+    if (node.id != ctx.target) return null;
+    return switch (mode) {
+        .natural => .{ .width = 321, .height = 1 },
+        .width_constrained => blk: {
+            ctx.constrained_calls += 1;
+            if (ctx.constrained_calls > 1) return error.TestMeasurementFailed;
+            break :blk .{ .width = width, .height = 87 };
+        },
+    };
+}
+
 const FakeAllMeasurementContext = struct {
     calls: usize = 0,
 };
@@ -1306,6 +1331,24 @@ test "layout solver uses render measurement provider for intrinsic object size" 
     try expectFloat(321, measurement.last_constrained_width);
     try testing.expect(measurement.natural_calls > 0);
     try testing.expect(measurement.constrained_calls > 0);
+}
+
+test "layout solver preserves render measurement errors after horizontal solving" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    const page = try state.addPage("Page");
+    const object = try state.makeObject(page, "body", null, .text, .text, "provider measured text");
+    try setLayoutWrap(&state, object, "on");
+    var measurement = FailingMeasurementContext{ .target = object };
+
+    try testing.expectError(error.TestMeasurementFailed, solver.solveDocument(&state, null, .{
+        .measurement_provider = .{
+            .context = &measurement,
+            .measure = failRepeatedConstrainedMeasurement,
+        },
+    }));
+    try testing.expectEqual(@as(usize, 2), measurement.constrained_calls);
 }
 
 const LayoutProgressCounter = struct {

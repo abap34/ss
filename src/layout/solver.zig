@@ -368,10 +368,7 @@ fn solvePageLayout(state: anytype, page_id: NodeId, page_index: usize, measureme
     horizontal.soft_constraints = horizontal_fallback.items;
     try solvePageAxis(state, &horizontal, options);
     try settleHorizontalAxis(state, &horizontal, options);
-    applySolvedHorizontalFrames(state, &horizontal, measurement_cache, options) catch |err| switch (err) {
-        error.Canceled => return error.Canceled,
-        else => return error.UnknownNode,
-    };
+    try applySolvedHorizontalFrames(state, &horizontal, measurement_cache, options);
     try graph.checkCancellation(options);
     try groups.propagateTargetedWidthsCached(state, &horizontal, measurement_cache);
     try graph.checkCancellation(options);
