@@ -194,6 +194,47 @@ test "captured measurement items keep page order and annotations" {
     }
 }
 
+test "render compiler rejects unavailable PDF pages" {
+    const root = ".ss-cache/test-render-invalid-pdf-page";
+    const pdf_path = root ++ "/page.pdf";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+
+    const pdf_path_z = try testing.allocator.dupeZ(u8, pdf_path);
+    defer testing.allocator.free(pdf_path_z);
+    const pdf = c.ss_pdf_create(pdf_path_z.ptr, 120, 60) orelse return error.CairoCreateFailed;
+    defer c.ss_pdf_destroy(pdf);
+    c.ss_pdf_end_page(pdf);
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
+
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("pdf-page");
+    const object_id = try state.makeObject(page_id, "pdf", null, .asset, .pdf_ref, pdf_path);
+    try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "vector_asset" });
+    const object = state.getNode(object_id) orelse return error.MissingTestObject;
+    object.frame = .{ .x = 40, .y = 60, .width = 240, .height = 120, .x_set = true, .y_set = true };
+
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    prepared.pages[0].objects[0].render.asset.?.pdf_page = 2;
+
+    if (render_compile.compile(
+        testing.allocator,
+        testing.io,
+        &state,
+        &prepared,
+        .{ .jobs = 1, .cache_dir = root ++ "/cache" },
+    )) |result| {
+        var ir = result;
+        defer ir.deinit(testing.allocator);
+        return error.ExpectedInvalidPdfResource;
+    } else |err| {
+        try testing.expectEqual(error.InvalidPdfResource, err);
+    }
+}
+
 test "text decorations and measurements use resolved font run metrics" {
     var page = render.Page{
         .page_id = 1,
