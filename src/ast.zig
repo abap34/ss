@@ -169,21 +169,31 @@ pub const ObjectFieldDecl = struct {
     }
 
     pub fn clone(self: ObjectFieldDecl, allocator: Allocator) anyerror!ObjectFieldDecl {
-        var result = ObjectFieldDecl{
-            .name = try allocator.dupe(u8, self.name),
-            .name_span = self.name_span,
-            .value_type = try self.value_type.clone(allocator),
-            .span = self.span,
+        const name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(name);
+        var value_type = try self.value_type.clone(allocator);
+        errdefer value_type.deinit(allocator);
+        var default_value: ?*Expr = null;
+        errdefer if (default_value) |expr| {
+            expr.deinit(allocator);
+            allocator.destroy(expr);
         };
-        errdefer result.deinit(allocator);
         if (self.default_value) |value| {
             const copy = try allocator.create(Expr);
             errdefer allocator.destroy(copy);
             copy.* = try value.clone(allocator);
-            result.default_value = copy;
+            default_value = copy;
         }
-        if (self.default_property_value) |value| result.default_property_value = try allocator.dupe(u8, value);
-        return result;
+        const default_property_value = if (self.default_property_value) |value| try allocator.dupe(u8, value) else null;
+        errdefer if (default_property_value) |value| allocator.free(value);
+        return .{
+            .name = name,
+            .name_span = self.name_span,
+            .value_type = value_type,
+            .default_value = default_value,
+            .default_property_value = default_property_value,
+            .span = self.span,
+        };
     }
 };
 
@@ -366,40 +376,57 @@ pub const FunctionDecl = struct {
     }
 
     pub fn cloneSignature(self: FunctionDecl, allocator: Allocator, name: []const u8, span: Span) anyerror!FunctionDecl {
+        const copied_name = try allocator.dupe(u8, name);
+        errdefer allocator.free(copied_name);
+        var result_type = try self.result_type.clone(allocator);
+        errdefer result_type.deinit(allocator);
         var params = std.ArrayList(ParamDecl).empty;
         errdefer {
             for (params.items) |*param| param.deinit(allocator);
             params.deinit(allocator);
         }
+        try params.ensureTotalCapacity(allocator, self.params.items.len);
         for (self.params.items) |param| {
-            try params.append(allocator, try param.clone(allocator));
+            params.appendAssumeCapacity(try param.clone(allocator));
         }
 
         return .{
-            .name = try allocator.dupe(u8, name),
+            .name = copied_name,
             .name_span = self.name_span,
             .span = span,
             .params = params,
-            .result_type = try self.result_type.clone(allocator),
+            .result_type = result_type,
             .statements = .empty,
         };
     }
 
     pub fn clone(self: FunctionDecl, allocator: Allocator) anyerror!FunctionDecl {
-        var result = FunctionDecl{
-            .name = try allocator.dupe(u8, self.name),
+        const name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(name);
+        var result_type = try self.result_type.clone(allocator);
+        errdefer result_type.deinit(allocator);
+        var params = std.ArrayList(ParamDecl).empty;
+        errdefer {
+            for (params.items) |*param| param.deinit(allocator);
+            params.deinit(allocator);
+        }
+        try params.ensureTotalCapacity(allocator, self.params.items.len);
+        for (self.params.items) |value| params.appendAssumeCapacity(try value.clone(allocator));
+        var statements = std.ArrayList(Statement).empty;
+        errdefer {
+            for (statements.items) |*statement| statement.deinit(allocator);
+            statements.deinit(allocator);
+        }
+        try statements.ensureTotalCapacity(allocator, self.statements.items.len);
+        for (self.statements.items) |value| statements.appendAssumeCapacity(try value.clone(allocator));
+        return .{
+            .name = name,
             .name_span = self.name_span,
             .span = self.span,
-            .params = .empty,
-            .result_type = try self.result_type.clone(allocator),
-            .statements = .empty,
+            .params = params,
+            .result_type = result_type,
+            .statements = statements,
         };
-        errdefer result.deinit(allocator);
-        try result.params.ensureTotalCapacity(allocator, self.params.items.len);
-        for (self.params.items) |value| result.params.appendAssumeCapacity(try value.clone(allocator));
-        try result.statements.ensureTotalCapacity(allocator, self.statements.items.len);
-        for (self.statements.items) |value| result.statements.appendAssumeCapacity(try value.clone(allocator));
-        return result;
     }
 };
 
@@ -419,7 +446,15 @@ pub const ParamDecl = struct {
     }
 
     pub fn clone(self: ParamDecl, allocator: Allocator) anyerror!ParamDecl {
+        const name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(name);
+        var ty = try self.ty.clone(allocator);
+        errdefer ty.deinit(allocator);
         var default_value: ?*Expr = null;
+        errdefer if (default_value) |expr| {
+            expr.deinit(allocator);
+            allocator.destroy(expr);
+        };
         if (self.default_value) |expr| {
             const copied = try allocator.create(Expr);
             errdefer allocator.destroy(copied);
@@ -427,9 +462,9 @@ pub const ParamDecl = struct {
             default_value = copied;
         }
         return .{
-            .name = try allocator.dupe(u8, self.name),
+            .name = name,
             .name_span = self.name_span,
-            .ty = try self.ty.clone(allocator),
+            .ty = ty,
             .default_value = default_value,
         };
     }
@@ -467,8 +502,10 @@ pub const CallableName = struct {
     }
 
     pub fn clone(self: CallableName, allocator: Allocator) !CallableName {
+        const qualifier = if (self.qualifier) |value| try allocator.dupe(u8, value) else null;
+        errdefer if (qualifier) |value| allocator.free(value);
         return .{
-            .qualifier = if (self.qualifier) |qualifier| try allocator.dupe(u8, qualifier) else null,
+            .qualifier = qualifier,
             .name = try allocator.dupe(u8, self.name),
             .name_hole = self.name_hole,
             .qualifier_span = self.qualifier_span,
@@ -496,19 +533,20 @@ pub const CallExpr = struct {
     }
 
     pub fn clone(self: CallExpr, allocator: Allocator) anyerror!CallExpr {
+        var callee = try self.callee.clone(allocator);
+        errdefer callee.deinit(allocator);
         var args = std.ArrayList(Expr).empty;
         errdefer {
             for (args.items) |*arg| arg.deinit(allocator);
             args.deinit(allocator);
         }
-        for (self.args.items) |arg| {
-            try args.append(allocator, try arg.clone(allocator));
-        }
+        try args.ensureTotalCapacity(allocator, self.args.items.len);
+        for (self.args.items) |arg| args.appendAssumeCapacity(try arg.clone(allocator));
         var arg_spans = std.ArrayList(Span).empty;
         errdefer arg_spans.deinit(allocator);
         try arg_spans.appendSlice(allocator, self.arg_spans.items);
         return .{
-            .callee = try self.callee.clone(allocator),
+            .callee = callee,
             .args = args,
             .arg_spans = arg_spans,
         };
@@ -532,15 +570,15 @@ pub const ApplyExpr = struct {
         const callee = try allocator.create(Expr);
         errdefer allocator.destroy(callee);
         callee.* = try self.callee.clone(allocator);
+        errdefer callee.deinit(allocator);
 
         var args = std.ArrayList(Expr).empty;
         errdefer {
             for (args.items) |*arg| arg.deinit(allocator);
             args.deinit(allocator);
         }
-        for (self.args.items) |arg| {
-            try args.append(allocator, try arg.clone(allocator));
-        }
+        try args.ensureTotalCapacity(allocator, self.args.items.len);
+        for (self.args.items) |arg| args.appendAssumeCapacity(try arg.clone(allocator));
         var arg_spans = std.ArrayList(Span).empty;
         errdefer arg_spans.deinit(allocator);
         try arg_spans.appendSlice(allocator, self.arg_spans.items);
@@ -571,13 +609,13 @@ pub const LambdaExpr = struct {
             for (params.items) |*param| param.deinit(allocator);
             params.deinit(allocator);
         }
-        for (self.params.items) |param| {
-            try params.append(allocator, try param.clone(allocator));
-        }
+        try params.ensureTotalCapacity(allocator, self.params.items.len);
+        for (self.params.items) |param| params.appendAssumeCapacity(try param.clone(allocator));
 
         const body = try allocator.create(Expr);
         errdefer allocator.destroy(body);
         body.* = try self.body.clone(allocator);
+        errdefer body.deinit(allocator);
 
         return .{
             .params = params,
@@ -603,6 +641,7 @@ pub const MemberExpr = struct {
         const target = try allocator.create(Expr);
         errdefer allocator.destroy(target);
         target.* = try self.target.clone(allocator);
+        errdefer target.deinit(allocator);
         return .{
             .target = target,
             .name = try allocator.dupe(u8, self.name),
@@ -623,8 +662,10 @@ pub const RecordFieldExpr = struct {
     }
 
     pub fn clone(self: RecordFieldExpr, allocator: Allocator) anyerror!RecordFieldExpr {
+        const name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(name);
         return .{
-            .name = try allocator.dupe(u8, self.name),
+            .name = name,
             .name_span = self.name_span,
             .value = try self.value.clone(allocator),
         };
@@ -648,9 +689,8 @@ pub const RecordExpr = struct {
             for (fields.items) |*field| field.deinit(allocator);
             fields.deinit(allocator);
         }
-        for (self.fields.items) |field| {
-            try fields.append(allocator, try field.clone(allocator));
-        }
+        try fields.ensureTotalCapacity(allocator, self.fields.items.len);
+        for (self.fields.items) |field| fields.appendAssumeCapacity(try field.clone(allocator));
         return .{
             .type_name = try allocator.dupe(u8, self.type_name),
             .type_name_span = self.type_name_span,
@@ -713,9 +753,8 @@ pub const RecordUpdateFieldExpr = struct {
             for (path.items) |*segment| segment.deinit(allocator);
             path.deinit(allocator);
         }
-        for (self.path.items) |segment| {
-            try path.append(allocator, try segment.clone(allocator));
-        }
+        try path.ensureTotalCapacity(allocator, self.path.items.len);
+        for (self.path.items) |segment| path.appendAssumeCapacity(try segment.clone(allocator));
         return .{
             .path = path,
             .path_span = self.path_span,
@@ -741,15 +780,15 @@ pub const RecordUpdateExpr = struct {
         const target = try allocator.create(Expr);
         errdefer allocator.destroy(target);
         target.* = try self.target.clone(allocator);
+        errdefer target.deinit(allocator);
 
         var fields = std.ArrayList(RecordUpdateFieldExpr).empty;
         errdefer {
             for (fields.items) |*field| field.deinit(allocator);
             fields.deinit(allocator);
         }
-        for (self.fields.items) |field| {
-            try fields.append(allocator, try field.clone(allocator));
-        }
+        try fields.ensureTotalCapacity(allocator, self.fields.items.len);
+        for (self.fields.items) |field| fields.appendAssumeCapacity(try field.clone(allocator));
         return .{
             .target = target,
             .fields = fields,
@@ -770,8 +809,10 @@ pub const EnumCaseExpr = struct {
     }
 
     pub fn clone(self: EnumCaseExpr, allocator: Allocator) anyerror!EnumCaseExpr {
+        const enum_name = try allocator.dupe(u8, self.enum_name);
+        errdefer allocator.free(enum_name);
         return .{
-            .enum_name = try allocator.dupe(u8, self.enum_name),
+            .enum_name = enum_name,
             .enum_name_span = self.enum_name_span,
             .case_name = try allocator.dupe(u8, self.case_name),
             .case_name_span = self.case_name_span,
@@ -810,10 +851,12 @@ pub const CoalesceExpr = struct {
         const target = try allocator.create(Expr);
         errdefer allocator.destroy(target);
         target.* = try self.target.clone(allocator);
+        errdefer target.deinit(allocator);
 
         const fallback = try allocator.create(Expr);
         errdefer allocator.destroy(fallback);
         fallback.* = try self.fallback.clone(allocator);
+        errdefer fallback.deinit(allocator);
 
         return .{
             .target = target,

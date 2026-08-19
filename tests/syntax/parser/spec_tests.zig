@@ -53,6 +53,11 @@ fn parseRecoveringAndDeinitSource(allocator: std.mem.Allocator, source: []const 
     defer result.deinit(allocator);
 }
 
+fn cloneAndDeinitModule(allocator: std.mem.Allocator, module: *const ast.Module) !void {
+    var cloned = try module.clone(allocator);
+    defer cloned.deinit(allocator);
+}
+
 fn readFixture(path: []const u8) ![]u8 {
     const full_path = try std.fs.path.join(testing.allocator, &.{ "tests/fixtures/syntax", path });
     defer testing.allocator.free(full_path);
@@ -1033,6 +1038,30 @@ test "syntax spec: failed function declarations release parsed ownership" {
         \\  let x = 1
         \\end
         \\
+    );
+}
+
+test "syntax spec: module cloning survives every allocation failure" {
+    const source =
+        \\type Card = object {
+        \\  label: String = "caption"
+        \\}
+        \\fn choose(tone: String = "soft") -> Object
+        \\  let applied = ((value: String) |-> text(value))(tone)
+        \\  let updated = Card { label = tone } with { label = applied }
+        \\  return docctx().footer_text? ?? updated
+        \\end
+        \\page Expressions
+        \\  let value = choose("loud")
+        \\end
+        \\
+    ;
+    var parsed = try parse(source);
+    defer parsed.deinit();
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        cloneAndDeinitModule,
+        .{&parsed.module},
     );
 }
 
