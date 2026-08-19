@@ -13,15 +13,7 @@ class @FORMULA_CLASS@ < Formula
   depends_on "pango"
   depends_on "qpdf"
 
-  resource "md4c" do
-    url "https://codeload.github.com/mity/md4c/tar.gz/@MD4C_COMMIT@"
-    sha256 "@MD4C_SHA256@"
-  end
-
   def install
-    mkdir_p buildpath/"third_party"
-    resource("md4c").stage buildpath/"third_party/md4c"
-
     system "zig", "build",
       "-Doptimize=ReleaseSafe",
       "-Dversion=#{version}",

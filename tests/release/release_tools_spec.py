@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import hashlib
+import json
 import pathlib
 import subprocess
 import sys
@@ -51,6 +53,25 @@ def test_homebrew_formula_names():
     assert_equal(homebrew_formula_class("ss@0.7.1-patch.1"), "SsAT071Patch1")
 
 
+def test_bundled_md4c():
+    root = ROOT / "third_party" / "md4c"
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    assert_equal(manifest["schema"], 1)
+    assert_equal(manifest["upstream"], "https://github.com/mity/md4c")
+    assert_equal(manifest["version"], "0.5.3")
+    assert_equal(manifest["tag"], "release-0.5.3")
+    assert_equal(manifest["commit"], "472c417005c2c71b8617de4f7b8d6b30411d78f4")
+    assert_equal(manifest["license"], "MIT")
+
+    entries = manifest["files"]
+    assert_equal(len(entries), 3)
+    files = {entry["path"]: entry["sha256"] for entry in entries}
+    assert_equal(set(files), {"LICENSE.md", "src/md4c.c", "src/md4c.h"})
+    for relative_path, expected_sha256 in files.items():
+        actual_sha256 = hashlib.sha256((root / relative_path).read_bytes()).hexdigest()
+        assert_equal(actual_sha256, expected_sha256)
+
+
 def test_render_homebrew_formula():
     with tempfile.TemporaryDirectory() as tmp:
         output = pathlib.Path(tmp) / "ss@0.7.1-patch.1.rb"
@@ -75,12 +96,16 @@ def test_render_homebrew_formula():
         assert "class SsAT071Patch1 < Formula" in formula
         assert 'version "0.7.1-patch.1"' in formula
         assert 'url "https://example.com/ss-0.7.1-patch.1.tar.gz"' in formula
+        assert 'resource "md4c"' not in formula
+        assert "third_party/md4c" not in formula
+        assert "codeload.github.com/mity/md4c" not in formula
         subprocess.run(["ruby", "-c", str(output)], check=True, timeout=30)
 
 
 def main():
     test_release_version_parsing()
     test_homebrew_formula_names()
+    test_bundled_md4c()
     test_render_homebrew_formula()
 
 

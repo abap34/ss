@@ -1,21 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import pathlib
-import re
 import sys
 
 from release_versions import homebrew_formula_class, homebrew_formula_name, parse_version
-
-
-MD4C_SHA256 = "ecbd85292465df929839897e314d809b5c8b267e20c4e5e24d51a1602d16d99a"
-
-
-def read_md4c_commit(root: pathlib.Path) -> str:
-    setup = (root / "scripts" / "setup-md4c.sh").read_text(encoding="utf-8")
-    match = re.search(r'^MD4C_COMMIT="([^"]+)"', setup, re.MULTILINE)
-    if not match:
-        raise SystemExit("scripts/setup-md4c.sh does not define MD4C_COMMIT")
-    return match.group(1)
 
 
 def main() -> int:
@@ -44,8 +32,6 @@ def main() -> int:
         "@VERSION@": parsed_version.version,
         "@SOURCE_URL@": args.source_url,
         "@SOURCE_SHA256@": args.source_sha256,
-        "@MD4C_COMMIT@": read_md4c_commit(root),
-        "@MD4C_SHA256@": MD4C_SHA256,
     }
     rendered = template
     for needle, value in replacements.items():

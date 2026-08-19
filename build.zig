@@ -172,12 +172,13 @@ pub fn build(b: *std.Build) void {
     }
 
     const md4c_src = "third_party/md4c/src";
-    b.build_root.handle.access(b.graph.io, md4c_src ++ "/md4c.c", .{}) catch
-        @panic(
-            \\MD4C sources are missing from third_party/md4c.
-            \\Run `scripts/setup-md4c.sh` from the repository root, then retry the build.
-            \\The setup requires Git and network access the first time it runs.
-        );
+    for ([_][]const u8{ md4c_src ++ "/md4c.c", md4c_src ++ "/md4c.h" }) |path| {
+        b.build_root.handle.access(b.graph.io, path, .{}) catch
+            @panic(
+                \\Bundled MD4C sources are missing from third_party/md4c/src.
+                \\Restore the tracked third_party/md4c files and retry the build.
+            );
+    }
     addPdfPkgConfigPath(b);
     const qpdf_config = qpdf.config(b);
     const dependency_checks = dependencies.create(b, .{

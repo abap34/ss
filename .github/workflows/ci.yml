@@ -78,15 +78,6 @@ jobs:
           fi
           echo "$HOME/.local/zig" >> "$GITHUB_PATH"
 
-      - name: Restore MD4C cache
-        uses: actions/cache@v4
-        with:
-          path: third_party/md4c
-          key: ${{ runner.os }}-md4c-${{ hashFiles('scripts/setup-md4c.sh') }}
-
-      - name: Set up MD4C
-        run: scripts/setup-md4c.sh
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -118,7 +109,6 @@ jobs:
           pkg-config --modversion pangocairo
           pkg-config --modversion librsvg-2.0
           pkg-config --modversion libqpdf
-          git -C third_party/md4c rev-parse HEAD
 
       - name: Check bundled tree-sitter language metadata
         run: node scripts/update-tree-sitter-languages.mjs --check
@@ -127,7 +117,9 @@ jobs:
         run: python scripts/update-fontawesome-categories.py --check
 
       - name: Check release metadata
-        run: release/tools/preflight.py
+        run: |
+          release/tools/preflight.py
+          python3 tests/release/release_tools_spec.py
 
       - name: Run tests
         run: zig build test

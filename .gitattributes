@@ -1,1 +1,2 @@
 *.ss -linguist-detectable
+third_party/md4c/src/* -whitespace

@@ -214,10 +214,9 @@ run pkg-config --exists cairo pangocairo librsvg-2.0
 
 step "release metadata"
 release/tools/preflight.py "$tag"
+run python3 tests/release/release_tools_spec.py
 release/tools/changelog-section.py "$tag" > "$notes_path"
 test -s "$notes_path"
-
-run scripts/setup-md4c.sh
 
 if [[ "$release_metadata_only" == true ]]; then
   echo

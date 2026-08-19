@@ -170,9 +170,9 @@ Set `HOMEBREW_TAP_TOKEN` with write access to `abap34/homebrew-ss` to let
 automatically. If the secret is absent, the workflow still uploads the rendered
 formula as an artifact.
 
-The formula builds from source with Zig and stages MD4C as a pinned Homebrew
-resource. This keeps VS Code binary distribution simple: the extension can
-continue to launch the configured `ss.cli.path` without bundling
+The formula builds from source with Zig and uses the MD4C sources included in
+the ss source archive. This keeps VS Code binary distribution simple: the
+extension can continue to launch the configured `ss.cli.path` without bundling
 platform-specific executables.
 
 The VS Code workflow waits for the GitHub Release created by the Homebrew

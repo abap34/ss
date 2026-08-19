@@ -239,14 +239,13 @@ Run `ss doctor` to check project discovery, render tools, and tree-sitter syntax
 highlighting health in the current environment.
 
 Install Zig 0.16 and the Cairo/Pango/librsvg development files listed above,
-set up MD4C, and build.
+then build. The MD4C sources are included in `third_party/md4c`.
 The build prepares the pinned tree-sitter runtime and
 standard parsers under `~/.ss/cache/tree-sitter` when that cache is missing.
 (Full list of builtin languages is available at: [third_party/tree-sitter-languages/README.md](third_party/tree-sitter-languages/README.md))
 The first build may use network access for that cache.
 
 ```sh
-scripts/setup-md4c.sh
 zig build -Doptimize=ReleaseSafe
 zig build -Doptimize=ReleaseSafe install --prefix ~/.local
 ```
