@@ -846,6 +846,14 @@ test "syntax spec: constant and enum parsing survive every allocation failure" {
     );
 }
 
+test "syntax spec: imports survive every allocation failure" {
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseAndDeinitSource,
+        .{"import \"dep\"\n"},
+    );
+}
+
 test "syntax spec: failed object declarations release parsed ownership" {
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "record Theme\n");
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "extend Widget\n");

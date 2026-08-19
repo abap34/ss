@@ -155,10 +155,14 @@ const Parser = struct {
         if (try self.consumeKeyword("import")) {
             if (!imports_allowed.*) return self.failAt(item_start, error.ImportMustBeAtTop);
             const spec = try self.parseImportSpec();
-            errdefer self.allocator.free(spec.text);
+            var spec_moved = false;
+            errdefer if (!spec_moved) self.allocator.free(spec.text);
             try self.validateImportSpec(spec.text);
             const mode = try self.parseImportMode(spec.text);
-            errdefer if (mode.mode.alias) |alias| self.allocator.free(alias);
+            var alias_moved = false;
+            errdefer if (!alias_moved) {
+                if (mode.mode.alias) |alias| self.allocator.free(alias);
+            };
             try self.consumeStatementTerminator();
             const import_index = module.imports.items.len;
             try module.imports.append(self.allocator, .{
@@ -168,6 +172,8 @@ const Parser = struct {
                 .alias_span = mode.alias_span,
                 .span = .{ .start = item_start, .end = self.pos },
             });
+            spec_moved = true;
+            alias_moved = true;
             try module.top_level_items.append(self.allocator, .{ .import = import_index });
         } else if (try self.consumeKeyword("fn")) {
             imports_allowed.* = false;
