@@ -43,6 +43,11 @@ fn parseRecovering(source: []const u8) !ParsedRecoveringModule {
     return .{ .arena = arena, .result = result };
 }
 
+fn parseAndDeinitSource(allocator: std.mem.Allocator, source: []const u8) !void {
+    var program = try syntax.parseWithSourceName(allocator, source, "unit-test.ss");
+    defer program.deinit(allocator);
+}
+
 fn readFixture(path: []const u8) ![]u8 {
     const full_path = try std.fs.path.join(testing.allocator, &.{ "tests/fixtures/syntax", path });
     defer testing.allocator.free(full_path);
@@ -809,6 +814,35 @@ test "syntax spec: incomplete enum declarations are rejected while parsing" {
         \\page bad
         \\end
         \\
+    );
+}
+
+test "syntax spec: failed constant and type declarations release parsed ownership" {
+    try expectParseErrorWithoutLeaks(
+        error.ExpectedChar,
+        "const value: (Page -> Object)?\n",
+    );
+    try expectParseErrorWithoutLeaks(error.ExpectedChar, "type Mode\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation,
+        \\type Mode = alpha |
+        \\
+    );
+    try expectParseErrorWithoutLeaks(
+        error.ExpectedChar,
+        "type Card = object\n",
+    );
+}
+
+test "syntax spec: constant and enum parsing survive every allocation failure" {
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseAndDeinitSource,
+        .{"const value: Selection<Text> = source\n"},
+    );
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseAndDeinitSource,
+        .{"type Mode = alpha | beta\n"},
     );
 }
 

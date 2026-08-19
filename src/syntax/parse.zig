@@ -189,17 +189,30 @@ const Parser = struct {
             }
         } else if (try self.consumeKeyword("const")) {
             imports_allowed.* = false;
-            const constant = try self.parseConstAfterKeyword(item_start);
+            var constant = try self.parseConstAfterKeyword(item_start);
+            var constant_moved = false;
+            errdefer if (!constant_moved) constant.deinit(self.allocator);
             try module.constants.append(self.allocator, constant);
+            constant_moved = true;
         } else if (try self.consumeKeyword("type")) {
             imports_allowed.* = false;
             const type_item = try self.parseTypeItemAfterKeyword(item_start);
             switch (type_item) {
-                .enum_decl => |type_decl| {
+                .enum_decl => |value| {
+                    var type_decl = value;
+                    var type_decl_moved = false;
+                    errdefer if (!type_decl_moved) type_decl.deinit(self.allocator);
                     try self.consumeStatementTerminator();
                     try module.types.append(self.allocator, type_decl);
+                    type_decl_moved = true;
                 },
-                .object => |object_decl| try module.objects.append(self.allocator, object_decl),
+                .object => |value| {
+                    var object_decl = value;
+                    var object_decl_moved = false;
+                    errdefer if (!object_decl_moved) object_decl.deinit(self.allocator);
+                    try module.objects.append(self.allocator, object_decl);
+                    object_decl_moved = true;
+                },
             }
         } else if (try self.consumeKeyword("record")) {
             imports_allowed.* = false;
@@ -478,14 +491,17 @@ const Parser = struct {
 
     fn parseConstAfterKeyword(self: *Parser, start: usize) !ConstDecl {
         const parsed_name = try self.parseIdentifierWithSpan();
+        errdefer self.allocator.free(parsed_name.text);
         source.skipInlineSpaces(self.source, &self.pos);
         if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
         self.pos += 1;
         source.skipInlineSpaces(self.source, &self.pos);
-        const result_type = try self.parseTypeAnnotation();
+        var result_type = try self.parseTypeAnnotation();
+        errdefer result_type.deinit(self.allocator);
         source.skipTriviaFrom(self.source, &self.pos);
         try self.expectChar('=');
-        const expr = try self.parseExpr();
+        var expr = try self.parseExpr();
+        errdefer expr.deinit(self.allocator);
         try self.consumeStatementTerminator();
 
         return .{
@@ -504,13 +520,17 @@ const Parser = struct {
 
     fn parseTypeItemAfterKeyword(self: *Parser, start: usize) !TypeItem {
         const parsed_name = try self.parseIdentifierWithSpan();
+        var parsed_name_moved = false;
+        errdefer if (!parsed_name_moved) self.allocator.free(parsed_name.text);
         source.skipInlineSpaces(self.source, &self.pos);
         try self.expectChar('=');
         source.skipInlineSpaces(self.source, &self.pos);
         if (try self.consumeKeyword("object")) {
+            parsed_name_moved = true;
             return .{ .object = try self.parseObjectDeclBody(start, parsed_name) };
         }
         if (try self.consumeKeyword("protocol")) {
+            parsed_name_moved = true;
             return .{ .object = try self.parseObjectDeclBody(start, parsed_name) };
         }
         var cases = std.ArrayList(ast.EnumCaseDecl).empty;
@@ -518,7 +538,6 @@ const Parser = struct {
         errdefer {
             for (cases.items) |*case_decl| case_decl.deinit(self.allocator);
             cases.deinit(self.allocator);
-            self.allocator.free(parsed_name.text);
         }
         while (true) {
             source.skipInlineSpaces(self.source, &self.pos);
@@ -527,10 +546,13 @@ const Parser = struct {
                 break;
             }
             const case_name = try self.parseIdentifierWithSpan();
+            var case_name_moved = false;
+            errdefer if (!case_name_moved) self.allocator.free(case_name.text);
             try cases.append(self.allocator, .{
                 .name = case_name.text,
                 .name_span = case_name.span,
             });
+            case_name_moved = true;
             needs_case = false;
             source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof() or self.source[self.pos] == '\n' or self.source[self.pos] == '@' or source.lineCommentMarkerLength(self.source, self.pos) != null) break;
@@ -539,6 +561,7 @@ const Parser = struct {
             needs_case = true;
         }
         if (cases.items.len == 0) return self.fail(error.ExpectedTypeAnnotation);
+        parsed_name_moved = true;
         return .{ .enum_decl = .{
             .name = parsed_name.text,
             .name_span = parsed_name.span,
@@ -565,6 +588,8 @@ const Parser = struct {
     }
 
     fn parseObjectDeclBody(self: *Parser, start: usize, name: ParsedName) !ObjectDecl {
+        var name_moved = false;
+        errdefer if (!name_moved) self.allocator.free(name.text);
         source.skipTriviaFrom(self.source, &self.pos);
         try self.expectChar('{');
         var decl = ObjectDecl{
@@ -574,6 +599,7 @@ const Parser = struct {
             .fields = .empty,
             .span = .{ .start = start, .end = start },
         };
+        name_moved = true;
         errdefer decl.deinit(self.allocator);
         try self.parseObjectMembers(&decl.base, null, &decl.roles, &decl.fields);
         decl.span.end = self.pos;
