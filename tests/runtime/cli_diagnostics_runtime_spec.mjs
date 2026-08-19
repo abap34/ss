@@ -567,7 +567,10 @@ async function testDumpWriteFailureReportsPath() {
     assert(result.code !== 0, "dump should fail when the destination cannot accept data");
     assert(output.includes("DumpOutputWriteFailed:"), `dump write failure omitted the output operation:\n${output}`);
     assert(output.includes("/dev/full"), `dump write failure omitted the output path:\n${output}`);
-    assert(output.includes("no free space"), `dump write failure omitted the operating-system reason:\n${output}`);
+    assert(
+      output.includes("no free space") || output.includes("permission denied"),
+      `dump write failure omitted the operating-system reason:\n${output}`,
+    );
     assert(!/^error: (?:NoSpaceLeft|InputOutput)\s*$/m.test(output), `dump write failure leaked a bare internal error:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });

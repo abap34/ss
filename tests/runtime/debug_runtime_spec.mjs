@@ -140,7 +140,10 @@ async function testDebugOutputWriteFailures() {
       assert(result.code !== 0, `${testCase.label} should fail when the destination cannot accept data`);
       assert(output.includes(testCase.code), `${testCase.label} failure omitted its operation:\n${output}`);
       assert(output.includes("/dev/full"), `${testCase.label} failure omitted the output path:\n${output}`);
-      assert(output.includes("no free space"), `${testCase.label} failure omitted the operating-system reason:\n${output}`);
+      assert(
+        output.includes("no free space") || output.includes("permission denied"),
+        `${testCase.label} failure omitted the operating-system reason:\n${output}`,
+      );
       assert(!/\bTraceWriteFailed\b/.test(output), `${testCase.label} leaked the old internal error name:\n${output}`);
     }
   } finally {

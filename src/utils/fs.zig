@@ -10,11 +10,11 @@ pub fn readFileAlloc(io: std.Io, allocator: std.mem.Allocator, path: []const u8)
 }
 
 pub fn writeFile(io: std.Io, path: []const u8, bytes: []const u8) !void {
-    try std.Io.Dir.cwd().writeFile(io, .{
-        .sub_path = path,
-        .data = bytes,
-        .flags = .{ .truncate = true },
-    });
+    const cwd = std.Io.Dir.cwd();
+    var atomic = try cwd.createFileAtomic(io, path, .{ .replace = true });
+    defer atomic.deinit(io);
+    try atomic.file.writeStreamingAll(io, bytes);
+    try atomic.replace(io);
 }
 
 pub fn validateOutputParent(io: std.Io, path: []const u8) !void {

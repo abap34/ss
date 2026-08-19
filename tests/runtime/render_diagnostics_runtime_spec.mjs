@@ -309,7 +309,10 @@ end
     assert(output.includes("ImageDecodeFailed:"), `primary decode cause was lost:\n${output}`);
     assert(output.includes("DiagnosticsOutputWriteFailed:"), `secondary diagnostics output failure was not reported:\n${output}`);
     assert(output.includes("/dev/full"), `secondary diagnostics output failure omitted its path:\n${output}`);
-    assert(output.includes("no free space"), `secondary diagnostics output failure omitted the operating-system reason:\n${output}`);
+    assert(
+      output.includes("no free space") || output.includes("permission denied"),
+      `secondary diagnostics output failure omitted the operating-system reason:\n${output}`,
+    );
   } finally {
     await rm(project, { recursive: true, force: true });
   }
