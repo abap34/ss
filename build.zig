@@ -911,8 +911,6 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         "tests/editor/shapes/spec.mjs",
         "tests/editor/icons/webview_spec.mjs",
         "tests/editor/translation/spec.mjs",
-        "tests/editor/vscode/controller/spec.mjs",
-        "tests/editor/vscode/spec.mjs",
         "tests/runtime/cli_diagnostics_runtime_spec.mjs",
         "tests/runtime/completion_runtime_spec.mjs",
         "tests/runtime/debug_runtime_spec.mjs",
@@ -951,9 +949,6 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
     for (node_spec_files) |path| {
         const node_spec = b.addSystemCommand(&.{"node"});
         node_spec.step.dependOn(&ctx.dependency_checks.node.step);
-        if (std.mem.eql(u8, path, "tests/editor/vscode/controller/spec.mjs")) {
-            node_spec.step.dependOn(&ctx.dependency_checks.vscode_packages.step);
-        }
         node_spec.setName(b.fmt("node {s}", .{path}));
         node_spec.addFileArg(b.path(path));
         node_spec.addFileArg(exe.getEmittedBin());
@@ -961,6 +956,13 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         node_spec.stdio = .inherit;
         test_step.dependOn(&node_spec.step);
     }
+
+    const vscode_tests = b.addSystemCommand(&.{ "npm", "test" });
+    vscode_tests.setName("npm test (editor/vscode)");
+    vscode_tests.setCwd(b.path("editor/vscode"));
+    vscode_tests.stdio = .inherit;
+    vscode_tests.step.dependOn(&ctx.dependency_checks.vscode_packages.step);
+    test_step.dependOn(&vscode_tests.step);
 }
 
 fn addBuildDependencyDiagnosticTest(ctx: BuildContext) void {

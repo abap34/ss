@@ -81,6 +81,10 @@ jobs:
             editor/vscode/package-lock.json
             editor/tree-sitter-ss/package-lock.json
 
+      - name: Install VS Code extension packages
+        working-directory: editor/vscode
+        run: npm ci
+
       - name: Validate Zig and LSP
         run: |
           release_version="${GITHUB_REF_NAME#v}"
@@ -98,10 +102,7 @@ jobs:
 
       - name: Package VS Code extension
         working-directory: editor/vscode
-        run: |
-          npm ci
-          npm run compile
-          npm run package -- --out "ss-language-support-${GITHUB_REF_NAME}.vsix" --allow-missing-repository --skip-license
+        run: npm run package:prebuilt -- --out "ss-language-support-${GITHUB_REF_NAME}.vsix" --allow-missing-repository --skip-license
 
       - name: Publish to Marketplace
         working-directory: editor/vscode

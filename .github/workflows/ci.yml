@@ -96,6 +96,10 @@ jobs:
             editor/vscode/package-lock.json
             editor/tree-sitter-ss/package-lock.json
 
+      - name: Install VS Code extension packages
+        working-directory: editor/vscode
+        run: npm ci
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -141,9 +145,3 @@ jobs:
         run: |
           npm ci
           npm test
-
-      - name: Compile VS Code extension
-        working-directory: editor/vscode
-        run: |
-          npm ci
-          npm run compile

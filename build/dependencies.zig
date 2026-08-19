@@ -42,7 +42,15 @@ pub fn create(b: *std.Build, options: Options) Checks {
 
     const vscode_packages = b.addRunArtifact(executable);
     vscode_packages.setName("check VS Code extension packages");
-    vscode_packages.addArgs(&.{ "node-modules", "editor/vscode", "esbuild/package.json" });
+    vscode_packages.addArgs(&.{
+        "node-modules",
+        "editor/vscode",
+        "esbuild/package.json",
+        "typescript/package.json",
+        "@types/node/package.json",
+        "@types/vscode/package.json",
+        "vscode-languageclient/package.json",
+    });
     vscode_packages.setCwd(b.path("."));
     vscode_packages.step.dependOn(&node.step);
 
