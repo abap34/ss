@@ -401,10 +401,10 @@ pub fn importFailureSpan(
     program: *const ast.Module,
     overlay: ?*const SourceOverlay,
     diagnostics: *const LoadDiagnostics,
-) ?source.ByteSpan {
+) !?source.ByteSpan {
     for (diagnostics.items.items) |diagnostic| {
         for (program.imports.items) |import_decl| {
-            if (importMatchesDiagnosticPath(allocator, io, base_dir, import_decl.spec, diagnostic.path, overlay) catch false) {
+            if (try importMatchesDiagnosticPath(allocator, io, base_dir, import_decl.spec, diagnostic.path, overlay)) {
                 return .{ .start = import_decl.span.start, .end = import_decl.span.end };
             }
         }

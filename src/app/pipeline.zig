@@ -98,7 +98,7 @@ pub fn analyzeFile(
         if (progress) |p| p.abort();
         if (load_diagnostics.items.items.len != 0) {
             app_diagnostics.printLoadDiagnostics(&load_diagnostics);
-            app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, import_base_dir, &parsed.module, request.overlay, &load_diagnostics);
+            try app_diagnostics.printImportFailureDiagnostic(allocator, io, request.input_path, source, import_base_dir, &parsed.module, request.overlay, &load_diagnostics);
             return error.DiagnosticsFailed;
         } else if (err == error.UnknownImport) {
             try printUnknownImportDiagnostic(allocator, io, request, source, parsed.module);

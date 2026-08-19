@@ -565,16 +565,14 @@ pub fn build(
         .recovering = true,
         .embedded_cache = options.embedded_cache,
     }) catch |err| {
-        if (err == error.Canceled) {
-            program.deinit(allocator);
-            parse_holes.deinit(allocator);
-            allocator.free(entry_source);
-            return err;
-        }
+        defer program.deinit(allocator);
+        defer parse_holes.deinit(allocator);
+        defer allocator.free(entry_source);
+        if (err == error.Canceled) return err;
         try diagnostic_bag.addSyntaxHoles(entry_path, entry_source, parse_holes);
         try addLoadDiagnostics(&diagnostic_bag, &load_diagnostics);
         if (load_diagnostics.items.items.len != 0) {
-            const span = module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics);
+            const span = try module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics);
             try diagnostic_bag.add(entry_path, entry_source, .@"error", "ImportFailed", "ImportFailed: imported module failed to load", span, null);
         } else if (err == error.UnknownImport) {
             if (try module_loader.findUnknownImportReport(allocator, sources.io, import_base_dir, program, &sources.overlay)) |found| {
@@ -599,9 +597,6 @@ pub fn build(
         } else {
             try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, entry_source, err, null);
         }
-        program.deinit(allocator);
-        parse_holes.deinit(allocator);
-        allocator.free(entry_source);
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     };
     defer index.deinit();

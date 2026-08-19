@@ -35,6 +35,35 @@ test "module loader spec: diagnostics free partial allocations" {
     try testing.expect(completed);
 }
 
+test "module loader spec: import failure spans preserve allocation failures" {
+    const source = "import \"allocation-test-module\" as dependency\n";
+    var program = try compiler.syntax.parseWithSourceName(testing.allocator, source, "span-allocation-test.ss");
+    defer program.deinit(testing.allocator);
+    var overlay = compiler.module_loader.SourceOverlay.init(testing.allocator);
+    defer overlay.deinit();
+    try overlay.put("allocation-test-module.ss", "");
+    var diagnostics = compiler.module_loader.LoadDiagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+    try diagnostics.add(
+        "allocation-test-module.ss",
+        "",
+        .@"error",
+        "ParseFailed",
+        "ParseFailed: invalid source",
+        null,
+    );
+
+    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    try testing.expectError(error.OutOfMemory, compiler.module_loader.importFailureSpan(
+        failing.allocator(),
+        testing.io,
+        ".",
+        &program,
+        &overlay,
+        &diagnostics,
+    ));
+}
+
 test "module loader spec: stdlib resolution frees partial allocations" {
     const source = "import std:core/prelude as core\n";
     var program = try compiler.syntax.parseWithSourceName(testing.allocator, source, "stdlib-allocation-test.ss");
