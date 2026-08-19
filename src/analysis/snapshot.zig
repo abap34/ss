@@ -533,6 +533,7 @@ pub fn build(
 
     var parse_failure: syntax.ParseFailure = .{};
     const parse_result = syntax.parseRecoveringWithSourceNameAndFailure(allocator, entry_source, entry_path, &parse_failure) catch |err| {
+        defer allocator.free(entry_source);
         const diagnostic = parse_failure.diagnostic;
         var message_buf: [256]u8 = undefined;
         const message = if (diagnostic) |diag|
@@ -543,7 +544,6 @@ pub fn build(
             .start = diag.span.start,
             .end = diag.span.end,
         } else null, null);
-        allocator.free(entry_source);
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     };
     var program = parse_result.module;
@@ -611,16 +611,11 @@ pub fn build(
         .allow_diagnostics = true,
         .parse_holes = parse_holes,
     }) catch |err| {
-        if (err == error.Canceled) {
-            program.deinit(allocator);
-            parse_holes.deinit(allocator);
-            if (entry_source.len != 0) allocator.free(entry_source);
-            return err;
-        }
+        defer program.deinit(allocator);
+        defer parse_holes.deinit(allocator);
+        defer if (entry_source.len != 0) allocator.free(entry_source);
+        if (err == error.Canceled) return err;
         try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, entry_source, err, null);
-        program.deinit(allocator);
-        parse_holes.deinit(allocator);
-        if (entry_source.len != 0) allocator.free(entry_source);
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     };
     defer parse_holes.deinit(allocator);
