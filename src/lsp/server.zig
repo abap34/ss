@@ -1396,6 +1396,13 @@ fn processEnvelope(server: *Server, value: transport.Envelope) !void {
         error.Canceled => {
             if (envelope.request) |request| try server.respondCanceled(request.key);
         },
+        error.InvalidParams => {
+            if (envelope.request) |request| {
+                try protocol.respondErrorId(server.allocator, request.key, -32602, "Invalid params");
+            } else {
+                server.acceptCurrentRevision();
+            }
+        },
         else => return err,
     };
 }
@@ -1433,37 +1440,34 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/didChange")) {
-        if (params) |p| if (objectField(p, "textDocument")) |doc| {
-            if (stringField(doc, "uri")) |uri| {
-                if (arrayField(p, "contentChanges")) |changes| if (changes.items.len != 0) {
-                    const path = try server.documents.absolutePathFromUri(uri);
-                    defer server.allocator.free(path);
-                    const previous_generation = server.documents.generation;
-                    for (changes.items) |*change| {
-                        if (change.* == .object) try server.documents.applyChangeAtPath(path, &change.object);
-                    }
-                    if (intField(doc, "version")) |version| try server.documents.setVersionAtPath(path, version);
-                    if (server.documents.generation == previous_generation) {
-                        server.acceptCurrentRevision();
-                        try server.republishCurrentDiagnostics();
-                        return;
-                    }
-                    try server.clearChangedDocumentDiagnostics(uri);
-                    if (server.generatedEditMatches(path)) {
-                        defer server.clearGeneratedEdit();
-                        if (server.generatedEditRequiresFullRebuild()) {
-                            try server.scheduleRebuild(path);
-                        } else {
-                            if (try server.tryApplyGeneratedEdit(path)) return;
-                            try server.scheduleTranslationPatchRebuild(path);
-                        }
-                    } else {
-                        server.clearGeneratedEdit();
-                        try server.scheduleRebuild(path);
-                    }
-                };
+        const p = params orelse return error.InvalidParams;
+        const doc = objectField(p, "textDocument") orelse return error.InvalidParams;
+        const uri = stringField(doc, "uri") orelse return error.InvalidParams;
+        const changes = arrayField(p, "contentChanges") orelse return error.InvalidParams;
+        const version = try protocol.requiredIntField(doc, "version");
+        const path = try server.documents.absolutePathFromUri(uri);
+        defer server.allocator.free(path);
+        const previous_generation = server.documents.generation;
+        _ = try server.documents.applyChangesAtPath(path, changes);
+        try server.documents.setVersionAtPath(path, version);
+        if (server.documents.generation == previous_generation) {
+            server.acceptCurrentRevision();
+            try server.republishCurrentDiagnostics();
+            return;
+        }
+        try server.clearChangedDocumentDiagnostics(uri);
+        if (server.generatedEditMatches(path)) {
+            defer server.clearGeneratedEdit();
+            if (server.generatedEditRequiresFullRebuild()) {
+                try server.scheduleRebuild(path);
+            } else {
+                if (try server.tryApplyGeneratedEdit(path)) return;
+                try server.scheduleTranslationPatchRebuild(path);
             }
-        };
+        } else {
+            server.clearGeneratedEdit();
+            try server.scheduleRebuild(path);
+        }
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/didSave")) {

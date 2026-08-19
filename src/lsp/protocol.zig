@@ -23,6 +23,20 @@ pub const objectFieldObject = json.objectFieldObject;
 pub const arrayField = json.arrayField;
 pub const arrayFieldObject = json.arrayFieldObject;
 
+pub fn requiredIntField(object: *const JsonObject, key: []const u8) !i64 {
+    return intField(object, key) orelse error.InvalidParams;
+}
+
+pub fn requiredUsizeField(object: *const JsonObject, key: []const u8) !usize {
+    const value = try requiredIntField(object, key);
+    return std.math.cast(usize, value) orelse error.InvalidParams;
+}
+
+pub fn requiredU32Field(object: *const JsonObject, key: []const u8) !u32 {
+    const value = try requiredIntField(object, key);
+    return std.math.cast(u32, value) orelse error.InvalidParams;
+}
+
 pub const Range = struct {
     start_line: usize,
     start_character: usize,
@@ -124,12 +138,12 @@ pub fn sendNotification(allocator: std.mem.Allocator, method: []const u8, params
     try sendRaw(out.items);
 }
 
-pub fn lspLine(object: *const JsonObject) usize {
-    return @intCast(@max(0, intField(object, "line") orelse 0));
+pub fn lspLine(object: *const JsonObject) !usize {
+    return try requiredUsizeField(object, "line");
 }
 
-pub fn lspCharacter(object: *const JsonObject) usize {
-    return @intCast(@max(0, intField(object, "character") orelse 0));
+pub fn lspCharacter(object: *const JsonObject) !usize {
+    return try requiredUsizeField(object, "character");
 }
 
 pub fn docPathFromParams(allocator: std.mem.Allocator, params: ?JsonValue) !?[]u8 {

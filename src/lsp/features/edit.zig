@@ -76,7 +76,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         return try statusJson(ctx.allocator, "stale", "The document changed before the edit was applied.");
     }
 
-    const node_id: u32 = @intCast(@max(0, protocol.intField(request_object, "nodeId") orelse 0));
+    const node_id = try protocol.requiredU32Field(request_object, "nodeId");
     const editing = editor.model.editingTarget(node_id) orelse
         return try statusJson(ctx.allocator, "unsupported", "This object has no editable binding in the page.");
     const requested_page_id = protocol.intField(request_object, "pageId") orelse -1;

@@ -45,41 +45,26 @@ pub const DocumentStore = struct {
         return path;
     }
 
-    pub fn applyChangeAtPath(self: *DocumentStore, path: []const u8, change: *const protocol.JsonObject) !void {
-        const text = protocol.stringField(change, "text") orelse "";
-        const range = protocol.objectFieldObject(change, "range") orelse {
-            try self.replacePath(path, text);
-            return;
-        };
-        const start = protocol.objectFieldObject(range, "start") orelse {
-            try self.replacePath(path, text);
-            return;
-        };
-        const end = protocol.objectFieldObject(range, "end") orelse {
-            try self.replacePath(path, text);
-            return;
-        };
+    pub fn applyChangesAtPath(self: *DocumentStore, path: []const u8, changes: *const protocol.JsonArray) !bool {
+        if (changes.items.len == 0) return error.InvalidParams;
+        const original = self.items.get(path) orelse "";
+        var current = try self.allocator.dupe(u8, original);
+        var current_owned = true;
+        defer if (current_owned) self.allocator.free(current);
 
-        const old_source = self.items.get(path) orelse "";
-        const start_offset = source.offsetForUtf16Position(old_source, protocol.lspLine(start), protocol.lspCharacter(start));
-        const end_offset = source.offsetForUtf16Position(old_source, protocol.lspLine(end), protocol.lspCharacter(end));
-        if (end_offset < start_offset) return error.InvalidLspRange;
-
-        var next = std.ArrayList(u8).empty;
-        errdefer next.deinit(self.allocator);
-        try next.appendSlice(self.allocator, old_source[0..start_offset]);
-        try next.appendSlice(self.allocator, text);
-        try next.appendSlice(self.allocator, old_source[end_offset..]);
-        const document_text = try next.toOwnedSlice(self.allocator);
-        errdefer self.allocator.free(document_text);
-
-        if (std.mem.eql(u8, old_source, document_text)) {
-            self.allocator.free(document_text);
-            return;
+        for (changes.items) |*change| {
+            if (change.* != .object) return error.InvalidParams;
+            const next = try applyChange(self.allocator, current, &change.object);
+            self.allocator.free(current);
+            current = next;
         }
 
+        if (std.mem.eql(u8, original, current)) return false;
+        const document_text = current;
         try self.putOwned(path, document_text);
+        current_owned = false;
         self.generation += 1;
+        return true;
     }
 
     pub fn removeUri(self: *DocumentStore, uri: []const u8) ?[]u8 {
@@ -188,15 +173,12 @@ pub fn requestPosition(
     documents: *DocumentStore,
     params: ?JsonValue,
 ) !?RequestPosition {
-    const p = params orelse return null;
-    const doc_path = try protocol.docPathFromParams(allocator, params) orelse return null;
+    const p = params orelse return error.InvalidParams;
+    const doc_path = try protocol.docPathFromParams(allocator, params) orelse return error.InvalidParams;
     errdefer allocator.free(doc_path);
-    const pos_obj = protocol.objectField(p, "position") orelse {
-        allocator.free(doc_path);
-        return null;
-    };
-    const line: usize = @intCast(@max(0, protocol.intField(pos_obj, "line") orelse 0));
-    const character: usize = @intCast(@max(0, protocol.intField(pos_obj, "character") orelse 0));
+    const pos_obj = protocol.objectField(p, "position") orelse return error.InvalidParams;
+    const line = try protocol.lspLine(pos_obj);
+    const character = try protocol.lspCharacter(pos_obj);
     const text = documents.sourceForPath(doc_path) orelse {
         allocator.free(doc_path);
         return null;
@@ -208,6 +190,25 @@ pub fn requestPosition(
         .line = line,
         .character = character,
     };
+}
+
+fn applyChange(allocator: std.mem.Allocator, old_source: []const u8, change: *const protocol.JsonObject) ![]u8 {
+    const text = protocol.stringField(change, "text") orelse return error.InvalidParams;
+    const range_value = utils.json.fieldValue(change, "range") orelse return allocator.dupe(u8, text);
+    if (range_value.* != .object) return error.InvalidParams;
+    const range = &range_value.object;
+    const start = protocol.objectFieldObject(range, "start") orelse return error.InvalidParams;
+    const end = protocol.objectFieldObject(range, "end") orelse return error.InvalidParams;
+    const start_offset = source.offsetForUtf16Position(old_source, try protocol.lspLine(start), try protocol.lspCharacter(start));
+    const end_offset = source.offsetForUtf16Position(old_source, try protocol.lspLine(end), try protocol.lspCharacter(end));
+    if (end_offset < start_offset) return error.InvalidParams;
+
+    var next = std.ArrayList(u8).empty;
+    errdefer next.deinit(allocator);
+    try next.appendSlice(allocator, old_source[0..start_offset]);
+    try next.appendSlice(allocator, text);
+    try next.appendSlice(allocator, old_source[end_offset..]);
+    return next.toOwnedSlice(allocator);
 }
 
 pub fn documentTextFromParams(
