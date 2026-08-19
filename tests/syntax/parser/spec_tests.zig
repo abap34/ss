@@ -1041,6 +1041,61 @@ test "syntax spec: failed function declarations release parsed ownership" {
     );
 }
 
+test "syntax spec: expression parsing survives every allocation failure" {
+    const source =
+        \\import std:core/classes as classes
+        \\type Align = left | center
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\  label: String = "caption"
+        \\}
+        \\record Theme {
+        \\  body: String = "body"
+        \\}
+        \\extend Card {
+        \\  implements = Base
+        \\  roles = ["extended"]
+        \\  detail: String = "detail"
+        \\}
+        \\const default_tone: String = "soft"
+        \\fn choose(callback: (Page -> Object)?, tone: String = "soft") -> Object
+        \\  let applied = ((value: String) |-> classes::text(value))(tone)
+        \\  let updated = Theme { body = tone } with {
+        \\    body.text.size = -(1 + 2)
+        \\  }
+        \\  if docctx().footer_text?
+        \\    return callback(pagectx()).body ?? updated
+        \\  else
+        \\    return applied
+        \\  end
+        \\end
+        \\document
+        \\  let title = "deck"
+        \\end
+        \\page Expressions
+        \\  let card = Card { label = default_tone }
+        \\  docctx().footer_text = card.label ++ "!"
+        \\  ~ card.left == page.left - 10
+        \\  text "caption"
+        \\end
+        \\
+    ;
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        parseAndDeinitSource,
+        .{source},
+    );
+}
+
+test "syntax spec: failed parenthesized expressions release parsed ownership" {
+    try expectParseErrorWithoutLeaks(error.ExpectedChar,
+        \\page Broken
+        \\  let value = (text("x")
+        \\end
+        \\
+    );
+}
+
 test "syntax spec: module cloning survives every allocation failure" {
     const source =
         \\type Card = object {
