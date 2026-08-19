@@ -1,5 +1,5 @@
 /.zig-cache
-/.ss-cache
+**/.ss-cache/
 /third_party/md4c
 /zig-out
 /editor/vscode/node_modules
@@ -9,3 +9,9 @@
 /editor/zed/grammars
 /editor/zed/target
 **/node_modules/**
+**/__pycache__/
+.pytest_cache/
+.coverage
+coverage.xml
+*.py[cod]
+.DS_Store
