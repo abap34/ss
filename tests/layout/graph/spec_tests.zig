@@ -1443,6 +1443,8 @@ test "layout metrics prefer render measurement provider for asset size" {
 
     const page = try state.addPage("Page");
     const pdf = try state.makeObject(page, "pdf", null, .asset, .pdf_ref, "chart.pdf");
+    try setNumberField(&state, pdf, "asset_width", 220);
+    try setNumberField(&state, pdf, "asset_height", 70);
     const image = try state.makeObject(page, "image", null, .asset, .image_ref, "chart.png");
 
     var measurement = FakeAllMeasurementContext{};
@@ -1460,6 +1462,17 @@ test "layout metrics prefer render measurement provider for asset size" {
     try expectFloat(1000, image_node.frame.width);
     try expectFloat(700, image_node.frame.height);
     try testing.expect(measurement.calls > 0);
+}
+
+test "asset payloads ignore text wrap requests" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    const page = try state.addPage("Page");
+    const image = try state.makeObject(page, "image", null, .asset, .image_ref, "chart.png");
+    try setLayoutWrap(&state, image, "on");
+
+    try testing.expect(!metrics.shouldWrapNode(&state, state.getNode(image).?));
 }
 
 test "layout metrics use measured font width for wrapped text height" {
