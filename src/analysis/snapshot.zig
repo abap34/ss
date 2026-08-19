@@ -531,8 +531,9 @@ pub fn build(
         return err;
     };
 
-    const parse_result = syntax.parseRecoveringWithSourceName(allocator, entry_source, entry_path) catch |err| {
-        const diagnostic = syntax.lastParseDiagnostic();
+    var parse_failure: syntax.ParseFailure = .{};
+    const parse_result = syntax.parseRecoveringWithSourceNameAndFailure(allocator, entry_source, entry_path, &parse_failure) catch |err| {
+        const diagnostic = parse_failure.diagnostic;
         var message_buf: [256]u8 = undefined;
         const message = if (diagnostic) |diag|
             utils.err.formatParseDiagnostic(&message_buf, diag)

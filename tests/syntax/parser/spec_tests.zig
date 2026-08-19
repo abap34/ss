@@ -49,46 +49,70 @@ fn readFixture(path: []const u8) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(testing.io, full_path, testing.allocator, .limited(64 * 1024));
 }
 
-fn expectParseError(expected: anyerror, source: []const u8) !void {
+fn expectParseErrorDiagnostic(expected: anyerror, source: []const u8) !syntax.ParseDiagnostic {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    var program = syntax.parseWithSourceName(arena.allocator(), source, "unit-test.ss") catch |err| {
+    var failure: syntax.ParseFailure = .{};
+    var program = syntax.parseWithSourceNameAndFailure(arena.allocator(), source, "unit-test.ss", &failure) catch |err| {
         try testing.expectEqual(expected, err);
-        const diagnostic = syntax.lastParseDiagnostic() orelse return error.MissingParseDiagnostic;
+        const diagnostic = failure.diagnostic orelse return error.MissingParseDiagnostic;
         try testing.expectEqual(expected, diagnostic.err);
-        return;
+        return diagnostic;
     };
     defer program.deinit(arena.allocator());
     return error.ExpectedParseError;
+}
+
+fn expectParseError(expected: anyerror, source: []const u8) !void {
+    _ = try expectParseErrorDiagnostic(expected, source);
 }
 
 fn expectParseErrorAt(expected: anyerror, source: []const u8, expected_start: usize) !void {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    var program = syntax.parseWithSourceName(arena.allocator(), source, "unit-test.ss") catch |err| {
-        try testing.expectEqual(expected, err);
-        const diagnostic = syntax.lastParseDiagnostic() orelse return error.MissingParseDiagnostic;
-        try testing.expectEqual(expected, diagnostic.err);
-        try testing.expectEqual(expected_start, diagnostic.span.start);
-        return;
-    };
-    defer program.deinit(arena.allocator());
-    return error.ExpectedParseError;
+    const diagnostic = try expectParseErrorDiagnostic(expected, source);
+    try testing.expectEqual(expected_start, diagnostic.span.start);
 }
 
 fn expectParseErrorSpan(expected: anyerror, source: []const u8, expected_start: usize, expected_end: usize) !void {
+    const diagnostic = try expectParseErrorDiagnostic(expected, source);
+    try testing.expectEqual(expected_start, diagnostic.span.start);
+    try testing.expectEqual(expected_end, diagnostic.span.end);
+}
+
+test "syntax spec: parse diagnostics belong to their parse attempt" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    var program = syntax.parseWithSourceName(arena.allocator(), source, "unit-test.ss") catch |err| {
-        try testing.expectEqual(expected, err);
-        const diagnostic = syntax.lastParseDiagnostic() orelse return error.MissingParseDiagnostic;
-        try testing.expectEqual(expected, diagnostic.err);
-        try testing.expectEqual(expected_start, diagnostic.span.start);
-        try testing.expectEqual(expected_end, diagnostic.span.end);
-        return;
-    };
+
+    var first_failure: syntax.ParseFailure = .{};
+    try testing.expectError(
+        error.ExpectedKeyword,
+        syntax.parseWithSourceNameAndFailure(arena.allocator(), "@", "first.ss", &first_failure),
+    );
+    const first = first_failure.diagnostic orelse return error.MissingParseDiagnostic;
+    try testing.expectEqual(error.ExpectedKeyword, first.err);
+    try testing.expectEqual(ast.Span{ .start = 0, .end = 1 }, first.span);
+    try testing.expectEqualStrings("keyword", first.expected.?);
+    try testing.expectEqualStrings("@", first.found.?);
+
+    var second_failure: syntax.ParseFailure = .{};
+    try testing.expectError(
+        error.ExpectedString,
+        syntax.parseWithSourceNameAndFailure(arena.allocator(), "page", "second.ss", &second_failure),
+    );
+    const second = second_failure.diagnostic orelse return error.MissingParseDiagnostic;
+    try testing.expectEqual(error.ExpectedString, second.err);
+    try testing.expectEqual(ast.Span{ .start = 4, .end = 4 }, second.span);
+    try testing.expectEqualStrings("string or page name", second.expected.?);
+    try testing.expectEqualStrings("end of file", second.found.?);
+    try testing.expectEqualStrings("@", first_failure.diagnostic.?.found.?);
+
+    var program = try syntax.parseWithSourceNameAndFailure(
+        arena.allocator(),
+        "page Good\nend\n",
+        "valid.ss",
+        &first_failure,
+    );
     defer program.deinit(arena.allocator());
-    return error.ExpectedParseError;
+    try testing.expect(first_failure.diagnostic == null);
 }
 
 fn expectCall(expr: ast.Expr, name: []const u8, arity: usize) !ast.CallExpr {
@@ -1429,13 +1453,12 @@ test "syntax spec: bare assignment must say let and page dimensions are not targ
         \\
     );
 
-    try expectParseError(error.PageCannotBeConstraintTarget,
+    const diagnostic = try expectParseErrorDiagnostic(error.PageCannotBeConstraintTarget,
         \\page Bad
         \\  ~ page.width == 100
         \\end
         \\
     );
-    const diagnostic = syntax.lastParseDiagnostic() orelse return error.MissingParseDiagnostic;
     try testing.expectEqualStrings("an object anchor as the constraint target", diagnostic.expected.?);
 }
 

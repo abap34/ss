@@ -100,13 +100,19 @@ pub const EmbeddedSyntaxCache = struct {
         return count;
     }
 
-    fn cloneModule(self: *EmbeddedSyntaxCache, allocator: std.mem.Allocator, index: usize) !ast.Module {
+    fn cloneModule(self: *EmbeddedSyntaxCache, allocator: std.mem.Allocator, index: usize, failure: *syntax.ParseFailure) !ast.Module {
+        failure.* = .{};
         while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
         defer self.mutex.unlock();
         if (self.modules[index] == null) {
             const parse_start = utils.measure_profile.start();
             defer utils.measure_profile.recordAnalysis(.embedded_parse, parse_start);
-            self.modules[index] = try syntax.parseWithSourceName(self.arena.allocator(), embedded_modules[index].source, embedded_modules[index].spec);
+            self.modules[index] = try syntax.parseWithSourceNameAndFailure(
+                self.arena.allocator(),
+                embedded_modules[index].source,
+                embedded_modules[index].spec,
+                failure,
+            );
         }
         const clone_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.embedded_clone, clone_start);
@@ -465,8 +471,7 @@ const Builder = struct {
         }
     }
 
-    fn addParseFailureDiagnostic(self: *Builder, path: []const u8, text: []const u8, err: anyerror) !void {
-        const diagnostic = syntax.lastDiagnostic();
+    fn addParseFailureDiagnostic(self: *Builder, path: []const u8, text: []const u8, err: anyerror, diagnostic: ?syntax.ParseDiagnostic) !void {
         var message_buf: [256]u8 = undefined;
         const message = if (diagnostic) |diag|
             error_report.formatParseDiagnostic(&message_buf, diag)
@@ -520,23 +525,24 @@ const Builder = struct {
         errdefer if (owns_source) self.allocator.free(text);
         const parse_path = resolved.path orelse resolved.spec;
         const cached_index = if (self.embedded_cache != null and resolved.path == null) embeddedModuleIndex(resolved.spec) else null;
-        const module_syntax = if (cached_index) |index| self.embedded_cache.?.cloneModule(self.allocator, index) catch |err| {
-            try self.addParseFailureDiagnostic(parse_path, text, err);
+        var parse_failure: syntax.ParseFailure = .{};
+        const module_syntax = if (cached_index) |index| self.embedded_cache.?.cloneModule(self.allocator, index, &parse_failure) catch |err| {
+            try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
             return err;
         } else blk: {
             const parse_start = utils.measure_profile.start();
             defer utils.measure_profile.recordAnalysis(if (embeddedModuleIndex(resolved.spec) != null) .embedded_parse else .module_parse, parse_start);
             break :blk if (self.recovering) recover: {
-                var result = syntax.parseRecoveringWithSourceName(self.allocator, text, parse_path) catch |err| {
-                    try self.addParseFailureDiagnostic(parse_path, text, err);
+                var result = syntax.parseRecoveringWithSourceNameAndFailure(self.allocator, text, parse_path, &parse_failure) catch |err| {
+                    try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
                     return err;
                 };
                 errdefer result.module.deinit(self.allocator);
                 defer result.holes.deinit(self.allocator);
                 try self.addParseHoleDiagnostics(parse_path, text, result.holes.diagnostics);
                 break :recover result.module;
-            } else syntax.parseWithSourceName(self.allocator, text, parse_path) catch |err| {
-                try self.addParseFailureDiagnostic(parse_path, text, err);
+            } else syntax.parseWithSourceNameAndFailure(self.allocator, text, parse_path, &parse_failure) catch |err| {
+                try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
                 return err;
             };
         };

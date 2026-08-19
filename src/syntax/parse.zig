@@ -25,7 +25,9 @@ const AnchorRef = ast.AnchorRef;
 
 pub const ParseDiagnostic = diagnostics.ParseDiagnostic;
 
-var last_diagnostic: ?ParseDiagnostic = null;
+pub const ParseFailure = struct {
+    diagnostic: ?ParseDiagnostic = null,
+};
 
 pub const ParseResult = struct {
     module: Module,
@@ -42,8 +44,16 @@ pub fn parse(allocator: Allocator, text: []const u8) !Module {
 }
 
 pub fn parseWithSourceName(allocator: Allocator, text: []const u8, source_name: []const u8) !Module {
+    return parseWithSourceNameInner(allocator, text, source_name, null);
+}
+
+pub fn parseWithSourceNameAndFailure(allocator: Allocator, text: []const u8, source_name: []const u8, failure: *ParseFailure) !Module {
+    return parseWithSourceNameInner(allocator, text, source_name, failure);
+}
+
+fn parseWithSourceNameInner(allocator: Allocator, text: []const u8, source_name: []const u8, failure: ?*ParseFailure) !Module {
+    if (failure) |out| out.* = .{};
     var parser = initParser(allocator, text, source_name);
-    last_diagnostic = null;
     return parser.parseModule() catch |err| {
         const pos = @min(parser.error_pos, text.len);
         const span = if (parser.error_span) |span|
@@ -53,12 +63,14 @@ pub fn parseWithSourceName(allocator: Allocator, text: []const u8, source_name: 
             }
         else
             ast.Span{ .start = pos, .end = @min(pos + 1, text.len) };
-        last_diagnostic = .{
-            .err = err,
-            .span = span,
-            .expected = diagnostics.expected(err),
-            .found = diagnostics.foundToken(text, pos),
-        };
+        if (failure) |out| {
+            out.diagnostic = .{
+                .err = err,
+                .span = span,
+                .expected = diagnostics.expected(err),
+                .found = diagnostics.foundToken(text, pos),
+            };
+        }
         return err;
     };
 }
@@ -68,6 +80,15 @@ pub fn parseRecovering(allocator: Allocator, text: []const u8) !ParseResult {
 }
 
 pub fn parseRecoveringWithSourceName(allocator: Allocator, text: []const u8, source_name: []const u8) !ParseResult {
+    return parseRecoveringWithSourceNameInner(allocator, text, source_name, null);
+}
+
+pub fn parseRecoveringWithSourceNameAndFailure(allocator: Allocator, text: []const u8, source_name: []const u8, failure: *ParseFailure) !ParseResult {
+    return parseRecoveringWithSourceNameInner(allocator, text, source_name, failure);
+}
+
+fn parseRecoveringWithSourceNameInner(allocator: Allocator, text: []const u8, source_name: []const u8, failure: ?*ParseFailure) !ParseResult {
+    if (failure) |out| out.* = .{};
     var builder = hole.Builder{ .allocator = allocator };
     errdefer builder.deinit();
 
@@ -75,16 +96,11 @@ pub fn parseRecoveringWithSourceName(allocator: Allocator, text: []const u8, sou
     parser.recovering = true;
     parser.reject_empty_args = true;
     parser.holes = &builder;
-    last_diagnostic = null;
 
     var module = try parser.parseModule();
     errdefer module.deinit(allocator);
     const holes = try builder.finish();
     return .{ .module = module, .holes = holes };
-}
-
-pub fn lastDiagnostic() ?ParseDiagnostic {
-    return last_diagnostic;
 }
 
 fn initParser(allocator: Allocator, text: []const u8, source_name: []const u8) Parser {

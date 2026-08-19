@@ -8,9 +8,10 @@ const utils = @import("utils");
 const error_report = utils.err;
 
 pub fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8, progress: ?*utils.progress.Progress) !parser.ParseResult {
-    return parser.parseRecoveringWithSourceName(allocator, source, path) catch |err| {
+    var failure: parser.ParseFailure = .{};
+    return parser.parseRecoveringWithSourceNameAndFailure(allocator, source, path, &failure) catch |err| {
         if (progress) |p| p.abort();
-        error_report.printParseError(path, source, err, parser.lastParseDiagnostic());
+        error_report.printParseError(path, source, err, failure.diagnostic);
         return err;
     };
 }
