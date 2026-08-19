@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { assert, withLspClient } from "../../harness.mjs";
+import { assert, LspClient, withLspClient } from "../../harness.mjs";
 
 const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-protocol-"));
 
@@ -95,4 +95,34 @@ end
   });
 } finally {
   await rm(project, { recursive: true, force: true });
+}
+
+await expectProtocolExit(
+  "oversized header",
+  "X".repeat(16 * 1024 + 1),
+);
+await expectProtocolExit(
+  "oversized message",
+  `Content-Length: ${64 * 1024 * 1024 + 1}\r\n\r\n`,
+);
+await expectProtocolExit(
+  "duplicate Content-Length",
+  "Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
+);
+
+async function expectProtocolExit(label, bytes) {
+  const client = new LspClient();
+  client.child.stdin.write(bytes);
+  let failure = null;
+  try {
+    await client.waitForExit();
+  } catch (error) {
+    failure = error;
+  } finally {
+    if (!client.exitStatus) client.child.kill();
+  }
+  assert(
+    failure instanceof Error && !failure.message.includes("did not exit"),
+    `${label} did not terminate the language server promptly: ${failure}`,
+  );
 }

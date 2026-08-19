@@ -23,6 +23,9 @@ pub const objectFieldObject = json.objectFieldObject;
 pub const arrayField = json.arrayField;
 pub const arrayFieldObject = json.arrayFieldObject;
 
+const max_header_bytes = 16 * 1024;
+const max_content_length = 64 * 1024 * 1024;
+
 pub fn requiredIntField(object: *const JsonObject, key: []const u8) !i64 {
     return intField(object, key) orelse error.InvalidParams;
 }
@@ -51,33 +54,51 @@ pub fn readMessage(allocator: std.mem.Allocator) !?[]u8 {
     while (true) {
         var byte: [1]u8 = undefined;
         const n = std.c.read(0, &byte, 1);
-        if (n == 0) return null;
-        if (n < 0) return error.ReadFailed;
+        switch (std.posix.errno(n)) {
+            .SUCCESS => {},
+            .INTR => continue,
+            .IO => return error.InputOutput,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+        if (n == 0) return if (header.items.len == 0) null else error.UnexpectedEndOfStream;
+        if (header.items.len == max_header_bytes) return error.HeaderTooLarge;
         try header.append(allocator, byte[0]);
         last4 = .{ last4[1], last4[2], last4[3], byte[0] };
         if (std.mem.eql(u8, &last4, "\r\n\r\n")) break;
     }
-    const content_length = parseContentLength(header.items) orelse return error.InvalidHeader;
+    const content_length = try parseContentLength(header.items);
+    if (content_length > max_content_length) return error.MessageTooLarge;
     const body = try allocator.alloc(u8, content_length);
+    errdefer allocator.free(body);
     var offset: usize = 0;
     while (offset < body.len) {
         const n = std.c.read(0, body[offset..].ptr, body.len - offset);
-        if (n <= 0) return error.ReadFailed;
-        offset += @intCast(n);
+        switch (std.posix.errno(n)) {
+            .SUCCESS => {},
+            .INTR => continue,
+            .IO => return error.InputOutput,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+        if (n == 0) return error.UnexpectedEndOfStream;
+        offset += std.math.cast(usize, n) orelse return error.InputOutput;
     }
     return body;
 }
 
-fn parseContentLength(header: []const u8) ?usize {
+fn parseContentLength(header: []const u8) !usize {
+    var content_length: ?usize = null;
     var lines = std.mem.splitSequence(u8, header, "\r\n");
     while (lines.next()) |line| {
         const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
         const name = std.mem.trim(u8, line[0..colon], " \t");
         if (!std.ascii.eqlIgnoreCase(name, "Content-Length")) continue;
+        if (content_length != null) return error.InvalidHeader;
         const value = std.mem.trim(u8, line[colon + 1 ..], " \t");
-        return std.fmt.parseUnsigned(usize, value, 10) catch null;
+        if (value.len == 0) return error.InvalidHeader;
+        for (value) |byte| if (!std.ascii.isDigit(byte)) return error.InvalidHeader;
+        content_length = std.fmt.parseUnsigned(usize, value, 10) catch return error.InvalidHeader;
     }
-    return null;
+    return content_length orelse error.InvalidHeader;
 }
 
 fn sendRaw(payload: []const u8) !void {
