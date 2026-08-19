@@ -517,11 +517,6 @@ pub const DocumentState = struct {
         return null;
     }
 
-    pub fn modulePath(self: *const DocumentState, id: SourceModuleId) ?[]const u8 {
-        const module = self.moduleById(id) orelse return null;
-        return module.path;
-    }
-
     fn freshId(self: *DocumentState) !NodeId {
         const id = self.next_id;
         try self.direct_page_ownership.append(self.allocator, .{});

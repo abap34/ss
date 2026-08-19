@@ -24,6 +24,7 @@ await testMissingProjectEntryReportsPath();
 await testDirectoryImportReportsPath();
 await testImportSymlinkLoopReportsReason();
 await testReadlinesSymlinkLoopReportsReason();
+await testStandardLibraryEvaluationReportsItsSource();
 await testDirectoryOutputReportsPath();
 await testDumpWriteFailureReportsPath();
 await testOutputPathConflictPreservesInput();
@@ -530,6 +531,34 @@ end
     assert(output.includes(loopPath), `readlines diagnostic omitted the resolved path:\n${output}`);
     assert(output.includes("symbolic-link cycle"), `readlines diagnostic omitted the actual cause:\n${output}`);
     assert(!output.includes("FileNotFound"), `readlines misdiagnosed a symbolic-link cycle as a missing file:\n${output}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testStandardLibraryEvaluationReportsItsSource() {
+  const project = await mkdtempProject("ss-cli-stdlib-evaluation-diagnostic-");
+  try {
+    await writeFile(
+      path.join(project, "slide.ss"),
+      `import std:themes/default as *
+
+page main
+code_file!("missing.txt")
+end
+`,
+      "utf8",
+    );
+
+    const result = await runSs(["check", "slide.ss"], project);
+    const output = combinedOutput(result);
+    assert(result.code !== 0, "check should fail when a standard-library helper cannot read its input");
+    const diagnostic = output.split("\n").find((line) => line.includes("ReadlinesFailed:"));
+    assert(diagnostic?.includes("std:themes/default:"), `standard-library diagnostic used the wrong source path:\n${output}`);
+    assert(
+      output.includes("|   return code(readlines(path_value), language_name, theme)"),
+      `standard-library diagnostic omitted its source excerpt:\n${output}`,
+    );
   } finally {
     await rm(project, { recursive: true, force: true });
   }

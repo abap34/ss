@@ -103,7 +103,6 @@ fn deinitValues(allocator: std.mem.Allocator, values: []core.Value) void {
     for (values) |*value| value.deinit(allocator);
 }
 
-var diagnostic_path: []const u8 = "";
 threadlocal var active_module_id: core.SourceModuleId = 0;
 threadlocal var active_call_depth: u32 = 0;
 threadlocal var active_declarations: ?*const declarations.DeclarationIndex = null;
@@ -430,7 +429,6 @@ fn executeUnit(
     active_call_depth = 0;
     defer active_module_id = previous_module_id;
     defer active_call_depth = previous_call_depth;
-    setLowerDiagnosticOrigin(unit.source, unit.path);
     switch (unit.kind) {
         .document_statement => |document_statement| {
             const entry = try document_states.getOrPut(unit.module_id);
@@ -502,11 +500,6 @@ fn diagnosticErrorCount(state: *const core.DocumentState) usize {
         if (diagnostic.severity == .@"error") count += 1;
     }
     return count;
-}
-
-fn setLowerDiagnosticOrigin(source: []const u8, path: []const u8) void {
-    _ = source;
-    diagnostic_path = path;
 }
 
 fn evalExpr(
@@ -2429,11 +2422,12 @@ fn invokeUserFunctionValues(
 }
 
 fn statementOrigin(state: *core.DocumentState, span: ast.Span) ![]const u8 {
-    if (state.modulePath(active_module_id)) |path| {
+    const path: []const u8 = if (state.moduleById(active_module_id)) |module|
+        module.path orelse module.spec
+    else
+        "";
+    if (path.len != 0) {
         return std.fmt.allocPrint(state.allocator, "path:{s}:bytes:{d}-{d}", .{ path, span.start, span.end });
-    }
-    if (diagnostic_path.len != 0) {
-        return std.fmt.allocPrint(state.allocator, "path:{s}:bytes:{d}-{d}", .{ diagnostic_path, span.start, span.end });
     }
     return std.fmt.allocPrint(state.allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
