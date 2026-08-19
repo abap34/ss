@@ -174,12 +174,20 @@ pub const LoadDiagnostics = struct {
         message: []const u8,
         span: ?source.ByteSpan,
     ) !void {
+        const owned_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(owned_path);
+        const owned_text = try self.allocator.dupe(u8, text);
+        errdefer self.allocator.free(owned_text);
+        const owned_code = try self.allocator.dupe(u8, code);
+        errdefer self.allocator.free(owned_code);
+        const owned_message = try self.allocator.dupe(u8, message);
+        errdefer self.allocator.free(owned_message);
         try self.items.append(self.allocator, .{
-            .path = try self.allocator.dupe(u8, path),
-            .source = try self.allocator.dupe(u8, text),
+            .path = owned_path,
+            .source = owned_text,
             .severity = severity,
-            .code = try self.allocator.dupe(u8, code),
-            .message = try self.allocator.dupe(u8, message),
+            .code = owned_code,
+            .message = owned_message,
             .span = span,
         });
     }

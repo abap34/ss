@@ -11,6 +11,30 @@ test "module loader spec: source overlays preserve lookup allocation failures" {
     try testing.expectError(error.OutOfMemory, overlay.get("slide.ss"));
 }
 
+test "module loader spec: diagnostics free partial allocations" {
+    var completed = false;
+    for (0..16) |fail_index| {
+        var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        var diagnostics = compiler.module_loader.LoadDiagnostics.init(failing.allocator());
+        defer diagnostics.deinit();
+        diagnostics.add(
+            "dependency.ss",
+            "invalid source",
+            .@"error",
+            "ParseFailed",
+            "ParseFailed: invalid source",
+            null,
+        ) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            continue;
+        };
+        try testing.expectEqual(@as(usize, 1), diagnostics.items.items.len);
+        completed = true;
+        break;
+    }
+    try testing.expect(completed);
+}
+
 test "module loader spec: stdlib resolution frees partial allocations" {
     const source = "import std:core/prelude as core\n";
     var program = try compiler.syntax.parseWithSourceName(testing.allocator, source, "stdlib-allocation-test.ss");
