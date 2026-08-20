@@ -36,6 +36,7 @@ pub const Emitter = struct {
     math: *render.MathBuilder,
     io: std.Io,
     text_cache: ?*text.Cache = null,
+    text_failure: ?*text.ShapeFailure = null,
     node_id: ?core.NodeId = null,
 
     pub fn replaceNodeId(self: *Emitter, node_id: ?core.NodeId) ?core.NodeId {
@@ -96,18 +97,33 @@ pub const Emitter = struct {
         wrap: bool,
         decoration: TextDecoration,
     ) !void {
-        const layout = try text.shape(
-            allocator,
-            self.io,
-            self.resources,
-            self.fonts,
-            content,
-            font,
-            font_size,
-            width,
-            wrap,
-            self.text_cache,
-        );
+        const layout = if (self.text_failure) |failure|
+            try text.shapeWithFailure(
+                allocator,
+                self.io,
+                self.resources,
+                self.fonts,
+                content,
+                font,
+                font_size,
+                width,
+                wrap,
+                self.text_cache,
+                failure,
+            )
+        else
+            try text.shape(
+                allocator,
+                self.io,
+                self.resources,
+                self.fonts,
+                content,
+                font,
+                font_size,
+                width,
+                wrap,
+                self.text_cache,
+            );
         try self.textLayoutBaseline(
             allocator,
             x,

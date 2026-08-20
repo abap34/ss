@@ -108,6 +108,8 @@ const Run = core.markdown.Run;
 const TexPreambleEntry = core.render_env.TexPreambleEntry;
 const TexEngine = core.render_env.TexEngine;
 
+const ContentRange = render_text.ContentRange;
+
 const NativePdfError = error{
     ImageDecodeFailed,
     AssetConversionFailed,
@@ -240,7 +242,9 @@ const MeasurementBounds = struct {
 };
 
 fn activeEmitter(ctx: *DrawContext) *render_emitter.Emitter {
-    return if (ctx.emitter) |*emitter| emitter else unreachable;
+    const emitter = if (ctx.emitter) |*value| value else unreachable;
+    emitter.text_failure = if (ctx.command_failure) |failure| &failure.text_failure else null;
+    return emitter;
 }
 
 const LinkAnnotation = struct {
@@ -392,14 +396,24 @@ const RenderDiagnosticTarget = struct {
 const CommandFailure = struct {
     allocator: Allocator,
     message: ?[]u8 = null,
+    text_failure: render_text.ShapeFailure = .{},
+    content_start: ?usize = null,
+    content_end: ?usize = null,
 
     fn deinit(self: *CommandFailure) void {
         if (self.message) |message| self.allocator.free(message);
+        self.text_failure.deinit(self.allocator);
     }
 
     fn record(self: *CommandFailure, message: []const u8) !void {
         if (self.message != null) return;
         self.message = try self.allocator.dupe(u8, message);
+    }
+
+    fn recordContentRange(self: *CommandFailure, start: usize, end: usize) void {
+        if (self.content_start != null or self.content_end != null) return;
+        self.content_start = start;
+        self.content_end = @max(start, end);
     }
 };
 
@@ -679,7 +693,7 @@ pub const LayoutMeasurementScope = struct {
         ) catch |err| {
             if (err == error.Canceled) return error.Canceled;
             recordTexPreambleFingerprintFailure(&measurement_ctx, command.tex_preamble);
-            try addMeasurementRenderDiagnostic(&measurement_ctx, state, &command, err, target.message);
+            try addMeasurementRenderDiagnostic(&measurement_ctx, state, &command, err, &target);
             return err;
         };
         utils.measure_profile.recordLayoutMeasurementCacheKey(profile_cache_key);
@@ -693,7 +707,7 @@ pub const LayoutMeasurementScope = struct {
         defer utils.measure_profile.recordRenderIntrinsic(profileRenderMeasureKind(command.render.kind), profile_intrinsic);
         var measured = measureObjectCommandIntrinsic(&measurement_ctx, &command, width, mode) catch |err| {
             if (err == error.Canceled) return error.Canceled;
-            try addMeasurementRenderDiagnostic(&measurement_ctx, state, &command, err, target.message);
+            try addMeasurementRenderDiagnostic(&measurement_ctx, state, &command, err, &target);
             return err;
         };
         if (measured) |*value| {
@@ -906,7 +920,7 @@ pub fn preloadPreparedPageArtifacts(
         diagnostic_ctx.command_failure = &failure;
         cached[index] = preloadTaskPresent(&diagnostic_ctx, task) catch |err| {
             utils.measure_profile.recordArtifactScan(profilePreloadKind(task), false, profile_scan);
-            if (err != error.Canceled) try addPreloadRenderDiagnostic(state, task, err, failure.message);
+            if (err != error.Canceled) try addPreloadRenderDiagnostic(state, task, err, &failure);
             return err;
         };
         utils.measure_profile.recordArtifactScan(profilePreloadKind(task), cached[index], profile_scan);
@@ -1483,9 +1497,9 @@ fn appendUniqueIndex(allocator: Allocator, values: *std.ArrayList(usize), value:
     try values.append(allocator, value);
 }
 
-fn addPreloadRenderDiagnostic(state: *core.DocumentState, task: PreloadTask, err: anyerror, maybe_message: ?[]const u8) !void {
+fn addPreloadRenderDiagnostic(state: *core.DocumentState, task: PreloadTask, err: anyerror, failure: ?*const CommandFailure) !void {
     const target = preloadTaskTarget(task);
-    try addTargetedRenderDiagnostic(state, target, preloadTaskLabel(task), err, maybe_message);
+    try addTargetedRenderDiagnostic(state, target, preloadTaskLabel(task), err, failure);
 }
 
 fn addTargetedRenderDiagnostic(
@@ -1493,20 +1507,59 @@ fn addTargetedRenderDiagnostic(
     target: RenderDiagnosticTarget,
     label: []const u8,
     err: anyerror,
-    maybe_message: ?[]const u8,
+    failure: ?*const CommandFailure,
 ) !void {
-    var origin = try preloadTaskDiagnosticOrigin(state, target);
+    var resolved_target = target;
+    if (failure) |detail| {
+        if (detail.content_start) |start| {
+            if (detail.content_end) |end| resolved_target = targetWithContentSpan(resolved_target, start, end);
+        }
+    }
+    var origin = try preloadTaskDiagnosticOrigin(state, resolved_target);
     defer origin.deinit(state.allocator);
+    if (err == error.UnsupportedSyntheticFont) {
+        const synthetic_font_failure = if (failure) |detail|
+            if (detail.text_failure.synthetic_font) |*font_failure| font_failure else null
+        else
+            null;
+        try addFontFaceUnavailableDiagnostic(
+            state,
+            resolved_target.page_id,
+            resolved_target.node_id,
+            origin.text,
+            synthetic_font_failure,
+        );
+        return;
+    }
     var detail_buffer: [512]u8 = undefined;
-    const detail = maybe_message orelse
+    const recorded_message = if (failure) |value| value.message else null;
+    const detail = recorded_message orelse
         render_text.diagnosticMessageForError(err) orelse
         renderFailureDiagnosticMessage(&detail_buffer, err);
     const reason = try std.fmt.allocPrint(state.allocator, "{s}: {s}", .{ label, detail });
-    try state.addRenderDiagnostic(.@"error", target.page_id, target.node_id, origin.text, .{
+    try state.addRenderDiagnostic(.@"error", resolved_target.page_id, resolved_target.node_id, origin.text, .{
         .render_failed = .{
             .reason = reason,
-            .payload_kind = target.payload_kind,
+            .payload_kind = resolved_target.payload_kind,
         },
+    });
+}
+
+pub fn addFontFaceUnavailableDiagnostic(
+    state: *core.DocumentState,
+    page_id: ?core.NodeId,
+    node_id: ?core.NodeId,
+    origin: ?[]const u8,
+    failure: ?*const render_text.SyntheticFontFailure,
+) !void {
+    var message_buffer: [1024]u8 = undefined;
+    const message = if (failure) |detail|
+        render_text.formatSyntheticFontDiagnostic(&message_buffer, detail)
+    else
+        render_text.genericSyntheticFontDiagnostic();
+    const owned_message = try state.allocator.dupe(u8, message);
+    try state.addRenderDiagnostic(.@"error", page_id, node_id, origin, .{
+        .user_report = .{ .message = owned_message },
     });
 }
 
@@ -1521,6 +1574,7 @@ fn renderFailureDiagnosticMessage(buffer: []u8, err: anyerror) []const u8 {
         error.InvalidSvgResource => "InvalidSvgResource: the file is not a valid SVG with usable intrinsic dimensions; repair or replace the SVG",
         error.InvalidPdfResource => "InvalidPdfResource: the file is not a readable PDF or the requested page is unavailable; verify the PDF and page number",
         error.ResourceChangedDuringRead => "ResourceChangedDuringRead: the asset changed repeatedly while it was being read; wait for the writer to finish and retry",
+        error.UnsupportedSyntheticFont => render_text.genericSyntheticFontDiagnostic(),
         error.MathFontRegistrationFailed => "MathFontRegistrationFailed: could not register the bundled STIX Two Math font; check render-cache permissions and Fontconfig",
         error.MissingMathFont => "MissingMathFont: STIX Two Math could not be selected; verify that Fontconfig can discover the bundled font",
         error.MissingMathTable => "MissingMathTable: the selected math font has no OpenType MATH table; ensure that STIX Two Math is available",
@@ -1581,11 +1635,11 @@ fn originForContentSpan(
     return null;
 }
 
-fn addObjectCommandDiagnostic(state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, maybe_message: ?[]const u8) !void {
-    try addTargetedRenderDiagnostic(state, objectCommandDiagnosticTarget(command), objectCommandLabel(command), err, maybe_message);
+fn addObjectCommandDiagnostic(state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, failure: ?*const CommandFailure) !void {
+    try addTargetedRenderDiagnostic(state, objectCommandDiagnosticTarget(command), objectCommandLabel(command), err, failure);
 }
 
-fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, maybe_message: ?[]const u8) !void {
+fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, failure: ?*const CommandFailure) !void {
     if (err == error.UnsupportedMathSyntax and try addUnsupportedMathDiagnostic(ctx, state, command)) return;
 
     var tasks = std.ArrayList(PreloadTask).empty;
@@ -1603,7 +1657,7 @@ fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: *core.DocumentState,
     defer page_deps.deinit(ctx.allocator);
 
     collectObjectPreloads(ctx, command, &tasks, &seen, &page_deps) catch {
-        try addObjectCommandDiagnostic(state, command, err, maybe_message);
+        try addObjectCommandDiagnostic(state, command, err, failure);
         return;
     };
 
@@ -1613,12 +1667,12 @@ fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: *core.DocumentState,
         var diagnostic_ctx = ctx.*;
         diagnostic_ctx.command_failure = &target;
         preloadOne(&diagnostic_ctx, task) catch |task_err| {
-            try addPreloadRenderDiagnostic(state, task, task_err, target.message);
+            try addPreloadRenderDiagnostic(state, task, task_err, &target);
             return;
         };
     }
 
-    try addObjectCommandDiagnostic(state, command, err, maybe_message);
+    try addObjectCommandDiagnostic(state, command, err, failure);
 }
 
 fn addUnsupportedMathDiagnostic(
@@ -2045,7 +2099,7 @@ fn collectPreloadTaskDiagnostics(
         var diagnostic_ctx = ctx.*;
         diagnostic_ctx.command_failure = &target;
         preloadOne(&diagnostic_ctx, task) catch |err| {
-            try addPreloadRenderDiagnostic(state, task, err, target.message);
+            try addPreloadRenderDiagnostic(state, task, err, &target);
         };
     }
 }
@@ -2143,7 +2197,7 @@ fn drawObjectCommandIntoIrWithDiagnostic(
         if (err == error.Canceled or render_text.diagnosticMessageForError(err) != null) return err;
         compiler.diagnostic_mutex.lockUncancelable(compiler.io);
         defer compiler.diagnostic_mutex.unlock(compiler.io);
-        try addObjectCommandDiagnostic(state, command, err, failure.message);
+        try addObjectCommandDiagnostic(state, command, err, &failure);
         return err;
     };
 }
@@ -3901,11 +3955,11 @@ fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, atoms: 
                 try appendMathAtom(ctx, atoms, run.text, text, if (run.kind == .display_math) .display else .inline_math);
             },
             .icon => if (run.icon) |source| try appendIconAtom(ctx, atoms, source, text),
-            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.markdown_bold_color orelse text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline),
-            .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline),
-            .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline),
-            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url, run.strikethrough, true, .{}),
-            .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline),
+            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.markdown_bold_color orelse text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
+            .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
+            .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
+            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url, run.strikethrough, true, .{}, .{ .start = run.source_start, .end = run.source_end }),
+            .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
         }
     }
 }
@@ -3915,6 +3969,34 @@ fn countTextTokens(value: []const u8) usize {
     var tokenizer = text_tokenize.Tokenizer.init(value);
     while (tokenizer.next() != null) count += 1;
     return count;
+}
+
+fn subsliceOffset(value: []const u8, subslice: []const u8) ?usize {
+    const value_start = @intFromPtr(value.ptr);
+    const subslice_start = @intFromPtr(subslice.ptr);
+    if (subslice_start < value_start) return null;
+    const offset = subslice_start - value_start;
+    if (offset > value.len or subslice.len > value.len - offset) return null;
+    return offset;
+}
+
+fn recordTextFailureRange(
+    failure: *CommandFailure,
+    content_range: ?ContentRange,
+    value: []const u8,
+    token: []const u8,
+) void {
+    const run_range = content_range orelse return;
+    const synthetic_font = if (failure.text_failure.synthetic_font) |*detail| detail else {
+        failure.recordContentRange(run_range.start, run_range.end);
+        return;
+    };
+    const token_offset = subsliceOffset(value, token) orelse {
+        failure.recordContentRange(run_range.start, run_range.end);
+        return;
+    };
+    const resolved = synthetic_font.contentRange(run_range, token_offset);
+    failure.recordContentRange(resolved.start, resolved.end);
 }
 
 fn lineContainsDisplayMath(line: Line) bool {
@@ -4045,7 +4127,19 @@ fn freeAtoms(allocator: Allocator, atoms: []Atom) void {
     for (atoms) |*atom| atom.content.deinit(allocator);
 }
 
-fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: FontFace, color: Color, font_size: f32, link_url: ?[]const u8, strikethrough: bool, underline: bool, underline_paint: core.render_policy.MarkdownUnderlinePaint) !void {
+fn appendTextAtoms(
+    ctx: *DrawContext,
+    atoms: *std.ArrayList(Atom),
+    value: []const u8,
+    font: FontFace,
+    color: Color,
+    font_size: f32,
+    link_url: ?[]const u8,
+    strikethrough: bool,
+    underline: bool,
+    underline_paint: core.render_policy.MarkdownUnderlinePaint,
+    content_range: ?ContentRange,
+) !void {
     var tokenizer = text_tokenize.Tokenizer.init(value);
     while (tokenizer.next()) |token| {
         const is_emoji = text_tokenize.isEmojiToken(token);
@@ -4053,18 +4147,39 @@ fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []cons
         errdefer if (shaped_layout) |*layout| layout.deinit(ctx.allocator);
         const width = if (ctx.capture_measurement_content or ctx.measurement_bounds == null) blk: {
             const emitter = activeEmitter(ctx);
-            shaped_layout = try render_text.shape(
-                ctx.allocator,
-                ctx.io,
-                emitter.resources,
-                emitter.fonts,
-                token,
-                font,
-                font_size,
-                0,
-                false,
-                emitter.text_cache,
-            );
+            const shape_result = if (emitter.text_failure) |failure|
+                render_text.shapeWithFailure(
+                    ctx.allocator,
+                    ctx.io,
+                    emitter.resources,
+                    emitter.fonts,
+                    token,
+                    font,
+                    font_size,
+                    0,
+                    false,
+                    emitter.text_cache,
+                    failure,
+                )
+            else
+                render_text.shape(
+                    ctx.allocator,
+                    ctx.io,
+                    emitter.resources,
+                    emitter.fonts,
+                    token,
+                    font,
+                    font_size,
+                    0,
+                    false,
+                    emitter.text_cache,
+                );
+            shaped_layout = shape_result catch |err| {
+                if (err == error.UnsupportedSyntheticFont) {
+                    if (ctx.command_failure) |failure| recordTextFailureRange(failure, content_range, value, token);
+                }
+                return err;
+            };
             const layout = &shaped_layout.?;
             const logical_width: f32 = @floatCast(layout.logical_bounds.width);
             if (!is_emoji) break :blk logical_width;
@@ -4351,7 +4466,7 @@ fn drawPlainTextAtTopWithOptions(
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
-    try appendTextAtoms(ctx, &atoms, content, font, color, font_size, null, false, false, .{});
+    try appendTextAtoms(ctx, &atoms, content, font, color, font_size, null, false, false, .{}, null);
     const paint = AtomPaint{
         .font = font,
         .font_size = font_size,

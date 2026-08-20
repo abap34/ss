@@ -15,6 +15,136 @@ const persistent_cache_filename = "shapes.bin";
 const persistent_cache_file_limit = 128 * 1024 * 1024;
 const persistent_cache_checksum_size = std.crypto.hash.sha2.Sha256.digest_length;
 
+pub const ContentRange = struct {
+    start: usize,
+    end: usize,
+};
+
+pub const ResolvedFontFace = struct {
+    path: []const u8,
+    family: []const u8,
+    postscript_name: []const u8,
+    synthetic_bold: bool,
+    synthetic_italic: bool,
+    source: TextRange,
+};
+
+pub const SyntheticFontFailure = struct {
+    requested: core.font.Face,
+    selected_family: []u8,
+    selected_postscript_name: []u8,
+    synthetic_bold: bool,
+    synthetic_italic: bool,
+    source: TextRange,
+
+    pub fn contentRange(self: *const SyntheticFontFailure, run: ContentRange, token_offset: usize) ContentRange {
+        const run_end = @max(run.start, run.end);
+        const run_length = run_end - run.start;
+        const token_start = @min(token_offset, run_length);
+        const token_capacity = run_length - token_start;
+        const source_start = @min(@as(usize, @intCast(self.source.start)), token_capacity);
+        const source_end = @min(@as(usize, @intCast(self.source.end)), token_capacity);
+        return .{
+            .start = run.start + token_start + source_start,
+            .end = run.start + token_start + @max(source_start, source_end),
+        };
+    }
+
+    fn deinit(self: *SyntheticFontFailure, allocator: Allocator) void {
+        allocator.free(self.requested.family);
+        allocator.free(self.selected_family);
+        allocator.free(self.selected_postscript_name);
+    }
+};
+
+pub const ShapeFailure = struct {
+    synthetic_font: ?SyntheticFontFailure = null,
+
+    pub fn deinit(self: *ShapeFailure, allocator: Allocator) void {
+        if (self.synthetic_font) |*failure| failure.deinit(allocator);
+        self.* = .{};
+    }
+
+    fn recordSyntheticFont(
+        self: *ShapeFailure,
+        allocator: Allocator,
+        requested: core.font.Face,
+        selected: ResolvedFontFace,
+    ) !void {
+        if (self.synthetic_font != null) return;
+        const requested_family = try allocator.dupe(u8, requested.family);
+        errdefer allocator.free(requested_family);
+        const selected_family = try allocator.dupe(u8, selected.family);
+        errdefer allocator.free(selected_family);
+        const selected_postscript_name = try allocator.dupe(u8, selected.postscript_name);
+        errdefer allocator.free(selected_postscript_name);
+        self.synthetic_font = .{
+            .requested = .{
+                .family = requested_family,
+                .weight = requested.weight,
+                .style = requested.style,
+                .stretch = requested.stretch,
+            },
+            .selected_family = selected_family,
+            .selected_postscript_name = selected_postscript_name,
+            .synthetic_bold = selected.synthetic_bold,
+            .synthetic_italic = selected.synthetic_italic,
+            .source = selected.source,
+        };
+    }
+};
+
+pub fn validateResolvedFontFace(
+    allocator: Allocator,
+    requested: core.font.Face,
+    selected: ResolvedFontFace,
+    failure: ?*ShapeFailure,
+) !void {
+    if (selected.path.len == 0) return error.MissingFontResource;
+    if (!selected.synthetic_bold and !selected.synthetic_italic) return;
+    if (failure) |target| try target.recordSyntheticFont(allocator, requested, selected);
+    return error.UnsupportedSyntheticFont;
+}
+
+pub fn formatSyntheticFontDiagnostic(buffer: []u8, failure: *const SyntheticFontFailure) []const u8 {
+    const synthesis = if (failure.synthetic_bold and failure.synthetic_italic)
+        "bold and italic"
+    else if (failure.synthetic_bold)
+        "bold"
+    else
+        "italic";
+    const remedy = if (failure.synthetic_bold and failure.synthetic_italic)
+        "install or select a font with an actual bold italic face, or use an available weight and style"
+    else if (failure.synthetic_bold)
+        "install or select a font with an actual bold face, or use an available weight such as 400"
+    else
+        "install or select a font with an actual italic face, or use an available style such as normal";
+    const requested_family = std.mem.trim(u8, failure.requested.family, " \t");
+    const selected_family = std.mem.trim(u8, failure.selected_family, " \t");
+    const selected_name = if (failure.selected_postscript_name.len != 0)
+        failure.selected_postscript_name
+    else
+        selected_family;
+    const uses_fallback = requested_family.len != 0 and selected_family.len != 0 and
+        !std.ascii.eqlIgnoreCase(requested_family, selected_family);
+    if (uses_fallback and selected_name.len != 0) {
+        return std.fmt.bufPrint(
+            buffer,
+            "FontFaceUnavailable: font '{s}' at weight {d} and style {s} resolved to synthesized {s} using fallback font '{s}', which ss cannot reproduce consistently in PDF and HTML; {s}",
+            .{ requested_family, failure.requested.weight, @tagName(failure.requested.style), synthesis, selected_name, remedy },
+        ) catch genericSyntheticFontDiagnostic();
+    }
+    return std.fmt.bufPrint(
+        buffer,
+        "FontFaceUnavailable: font '{s}' at weight {d} and style {s} resolved to synthesized {s}, which ss cannot reproduce consistently in PDF and HTML; {s}",
+        .{ requested_family, failure.requested.weight, @tagName(failure.requested.style), synthesis, remedy },
+    ) catch genericSyntheticFontDiagnostic();
+}
+
+pub fn genericSyntheticFontDiagnostic() []const u8 {
+    return "FontFaceUnavailable: the local font system synthesized a font face that ss cannot reproduce consistently in PDF and HTML; install or select a font with an actual matching face, or use an available weight or style";
+}
+
 const CacheKey = struct {
     source: []const u8,
     family: []const u8,
@@ -1031,6 +1161,38 @@ pub fn shape(
     wrap: bool,
     cache: ?*Cache,
 ) !render.TextLayout {
+    return shapeImpl(allocator, io, resources, fonts, source, requested_font, font_size, width, wrap, cache, null);
+}
+
+pub fn shapeWithFailure(
+    allocator: Allocator,
+    io: std.Io,
+    resources: *resources_compile.Builder,
+    fonts: *render.FontBuilder,
+    source: []const u8,
+    requested_font: core.font.Face,
+    font_size: f64,
+    width: f64,
+    wrap: bool,
+    cache: ?*Cache,
+    failure: *ShapeFailure,
+) !render.TextLayout {
+    return shapeImpl(allocator, io, resources, fonts, source, requested_font, font_size, width, wrap, cache, failure);
+}
+
+fn shapeImpl(
+    allocator: Allocator,
+    io: std.Io,
+    resources: *resources_compile.Builder,
+    fonts: *render.FontBuilder,
+    source: []const u8,
+    requested_font: core.font.Face,
+    font_size: f64,
+    width: f64,
+    wrap: bool,
+    cache: ?*Cache,
+    failure: ?*ShapeFailure,
+) !render.TextLayout {
     const profile_start = utils.measure_profile.start();
     var profile_hit = false;
     defer utils.measure_profile.recordTextShape(profile_hit, profile_start);
@@ -1069,7 +1231,7 @@ pub fn shape(
     ) != 0) return error.PangoCreateFailed;
     defer c.ss_text_shape_free(&native);
     if (!sameFontEnvironment(environment, native.environment)) return error.FontEnvironmentChanged;
-    const layout = try copy(allocator, io, resources, fonts, source, requested_font, font_size, native);
+    const layout = try copy(allocator, io, resources, fonts, source, requested_font, font_size, native, failure);
     if (cache) |shape_cache| shape_cache.put(
         source,
         requested_font,
@@ -1094,6 +1256,7 @@ fn copy(
     requested_font: core.font.Face,
     font_size: f64,
     native: c.SsTextShape,
+    failure: ?*ShapeFailure,
 ) !render.TextLayout {
     const owned_source = try allocator.dupeZ(u8, source);
     errdefer allocator.free(owned_source);
@@ -1119,8 +1282,17 @@ fn copy(
     };
     for (native.runs[0..native.run_count], 0..) |run, index| {
         const font_path = std.mem.span(run.font_path);
-        if (font_path.len == 0) return error.MissingFontResource;
-        if (run.synthetic_bold != 0 or run.synthetic_italic != 0) return error.UnsupportedSyntheticFont;
+        try validateResolvedFontFace(allocator, requested_font, .{
+            .path = font_path,
+            .family = std.mem.span(run.font_family),
+            .postscript_name = std.mem.span(run.font_postscript_name),
+            .synthetic_bold = run.synthetic_bold != 0,
+            .synthetic_italic = run.synthetic_italic != 0,
+            .source = .{
+                .start = @intCast(run.source_start),
+                .end = @intCast(run.source_end),
+            },
+        }, failure);
         const font_resource = try resources.addPath(allocator, io, .font, font_path);
         const font_instance = try fonts.add(allocator, io, fontSpecFromNative(run, requested_font, font_size, font_resource));
         const language = try allocator.dupeZ(u8, std.mem.span(run.language));

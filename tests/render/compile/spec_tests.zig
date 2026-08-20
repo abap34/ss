@@ -543,6 +543,101 @@ test "text shape cache persists across compiler processes and rejects corrupt da
     try testing.expectEqual(@as(usize, 0), corrupt_cache.entryCount());
 }
 
+test "synthetic font failures produce actionable font face diagnostics" {
+    const requested = core.font.Face{
+        .family = "Helvetica",
+        .weight = 700,
+        .style = .normal,
+        .stretch = .normal,
+    };
+    const cases = [_]struct {
+        bold: bool,
+        italic: bool,
+        synthesis: []const u8,
+        remedy: []const u8,
+    }{
+        .{
+            .bold = true,
+            .italic = false,
+            .synthesis = "synthesized bold",
+            .remedy = "actual bold face, or use an available weight such as 400",
+        },
+        .{
+            .bold = false,
+            .italic = true,
+            .synthesis = "synthesized italic",
+            .remedy = "actual italic face, or use an available style such as normal",
+        },
+        .{
+            .bold = true,
+            .italic = true,
+            .synthesis = "synthesized bold and italic",
+            .remedy = "actual bold italic face, or use an available weight and style",
+        },
+    };
+
+    for (cases, 0..) |case, index| {
+        var failure = render_text.ShapeFailure{};
+        defer failure.deinit(testing.allocator);
+        try testing.expectError(error.UnsupportedSyntheticFont, render_text.validateResolvedFontFace(
+            testing.allocator,
+            requested,
+            .{
+                .path = "font.otf",
+                .family = "Hiragino Sans",
+                .postscript_name = "HiraginoSans-W3",
+                .synthetic_bold = case.bold,
+                .synthetic_italic = case.italic,
+                .source = .{ .start = 2, .end = 5 },
+            },
+            &failure,
+        ));
+        const detail = if (failure.synthetic_font) |*value| value else return error.ExpectedSyntheticFontFailure;
+        try testing.expectEqual(@as(u32, 2), detail.source.start);
+        try testing.expectEqual(@as(u32, 5), detail.source.end);
+        const content_range = detail.contentRange(.{ .start = 100, .end = 200 }, 20);
+        try testing.expectEqual(@as(usize, 122), content_range.start);
+        try testing.expectEqual(@as(usize, 125), content_range.end);
+        var message_buffer: [1024]u8 = undefined;
+        const message = render_text.formatSyntheticFontDiagnostic(&message_buffer, detail);
+        try testing.expect(std.mem.startsWith(u8, message, "FontFaceUnavailable: font 'Helvetica' at weight 700 and style normal"));
+        try testing.expect(std.mem.indexOf(u8, message, case.synthesis) != null);
+        try testing.expect(std.mem.indexOf(u8, message, "using fallback font 'HiraginoSans-W3'") != null);
+        try testing.expect(std.mem.indexOf(u8, message, case.remedy) != null);
+        try testing.expect(std.mem.indexOf(u8, message, "UnsupportedSyntheticFont") == null);
+        try testing.expect(std.mem.indexOf(u8, message, "please report this as an ss bug") == null);
+
+        if (index == 0) {
+            var state = try initEmptyDocumentState();
+            defer state.deinit();
+            try render_compile.addFontFaceUnavailableDiagnostic(&state, null, null, null, detail);
+            try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
+            const diagnostic_message = switch (state.diagnostics.items[0].data) {
+                .user_report => |data| data.message,
+                else => return error.ExpectedFontFaceUnavailableDiagnostic,
+            };
+            try testing.expectEqualStrings(message, diagnostic_message);
+        }
+    }
+
+    var missing_failure = render_text.ShapeFailure{};
+    defer missing_failure.deinit(testing.allocator);
+    try testing.expectError(error.MissingFontResource, render_text.validateResolvedFontFace(
+        testing.allocator,
+        requested,
+        .{
+            .path = "",
+            .family = "Helvetica",
+            .postscript_name = "Helvetica",
+            .synthetic_bold = true,
+            .synthetic_italic = false,
+            .source = .{ .start = 0, .end = 1 },
+        },
+        &missing_failure,
+    ));
+    try testing.expect(missing_failure.synthetic_font == null);
+}
+
 test "markdown underline paint controls color opacity width offset and dash" {
     var page = render.Page{
         .page_id = 1,
