@@ -144,14 +144,12 @@ const Server = struct {
     active_request: ?*const transport.RequestState = null,
     exiting: bool = false,
     wysiwyg_paths: std.StringHashMap(void),
-    installed_stdlib_root: ?[]u8,
 
     fn init(io: std.Io, allocator: std.mem.Allocator, ingress: *transport.Ingress) Server {
         return .{
             .io = io,
             .allocator = allocator,
             .ingress = ingress,
-            .installed_stdlib_root = feature_definition.installedStdlibRoot(io, allocator),
             .documents = DocumentStore.init(allocator),
             .embedded_cache = module_loader.EmbeddedSyntaxCache.init(allocator),
             .render_resource_cache = render_resources.SourceCache.init(allocator, io),
@@ -176,7 +174,6 @@ const Server = struct {
         self.editor_diagnostics.deinit(self.allocator);
         lsp_state.deinitStringSet(self.allocator, &self.published_diagnostic_uris);
         lsp_state.deinitStringSet(self.allocator, &self.wysiwyg_paths);
-        if (self.installed_stdlib_root) |root| self.allocator.free(root);
         self.clearPendingRebuild();
         self.clearGeneratedEdit();
     }
@@ -1558,8 +1555,8 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
     if (std.mem.eql(u8, method, "textDocument/definition")) {
         var provider = analysisProvider(server);
         var ctx = feature_definition.Context{
+            .io = server.io,
             .allocator = server.allocator,
-            .installed_stdlib_root = server.installed_stdlib_root,
             .provider = &provider,
             .documents = &server.documents,
         };

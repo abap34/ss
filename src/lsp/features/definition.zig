@@ -1,29 +1,17 @@
 const std = @import("std");
-const build_options = @import("build_options");
 
 const analysis_snapshot = @import("../../analysis/snapshot.zig");
-const project = @import("../../project.zig");
-const utils = @import("utils");
+const stdlib_source = @import("../../modules/stdlib_source.zig");
 const protocol = @import("../protocol.zig");
 const query_budget = @import("../query_budget.zig");
 const lsp_state = @import("../state.zig");
 
 pub const Context = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
-    installed_stdlib_root: ?[]const u8,
     provider: *lsp_state.AnalysisProvider,
     documents: *lsp_state.DocumentStore,
 };
-
-/// An installed binary lives in `<prefix>/bin`, with the standard library at
-/// `<prefix>/<installed_stdlib_subdir>`, so the install stays relocatable. The
-/// executable path is process-constant; resolve it once at server startup.
-pub fn installedStdlibRoot(io: std.Io, allocator: std.mem.Allocator) ?[]u8 {
-    const exe_dir = std.process.executableDirPathAlloc(io, allocator) catch return null;
-    defer allocator.free(exe_dir);
-    const prefix = std.fs.path.dirname(exe_dir) orelse return null;
-    return std.fs.path.join(allocator, &.{ prefix, build_options.installed_stdlib_subdir }) catch null;
-}
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     var position = try lsp_state.requestPosition(ctx.allocator, ctx.documents, params) orelse return nullJson(ctx.allocator);
@@ -42,14 +30,14 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         .cancellation = ctx.provider.cancellation,
     });
     defer ctx.allocator.free(targets);
-    return json(ctx.allocator, ctx.installed_stdlib_root, targets);
+    return json(ctx.io, ctx.allocator, targets);
 }
 
 pub fn nullJson(allocator: std.mem.Allocator) ![]const u8 {
     return allocator.dupe(u8, "null");
 }
 
-pub fn json(allocator: std.mem.Allocator, installed_stdlib_root: ?[]const u8, targets: []const analysis_snapshot.DefinitionTarget) ![]const u8 {
+pub fn json(io: std.Io, allocator: std.mem.Allocator, targets: []const analysis_snapshot.DefinitionTarget) ![]const u8 {
     if (targets.len == 0) return nullJson(allocator);
 
     var out = std.ArrayList(u8).empty;
@@ -57,7 +45,7 @@ pub fn json(allocator: std.mem.Allocator, installed_stdlib_root: ?[]const u8, ta
     try out.append(allocator, '[');
     var first = true;
     for (targets) |target| {
-        _ = try appendTarget(allocator, installed_stdlib_root, &out, target, &first);
+        _ = try appendTarget(io, allocator, &out, target, &first);
     }
     if (first) {
         out.deinit(allocator);
@@ -68,8 +56,8 @@ pub fn json(allocator: std.mem.Allocator, installed_stdlib_root: ?[]const u8, ta
 }
 
 fn appendTarget(
+    io: std.Io,
     allocator: std.mem.Allocator,
-    installed_stdlib_root: ?[]const u8,
     out: *std.ArrayList(u8),
     target: analysis_snapshot.DefinitionTarget,
     first: *bool,
@@ -79,7 +67,7 @@ fn appendTarget(
     const path = if (target.path) |path|
         path
     else if (target.module_spec) |spec| blk: {
-        owned_path = try stdModulePath(allocator, installed_stdlib_root, spec);
+        owned_path = try stdlib_source.modulePath(io, allocator, spec);
         break :blk owned_path orelse return false;
     } else return false;
 
@@ -97,35 +85,4 @@ fn appendTarget(
         target.end_character,
     );
     return true;
-}
-
-fn stdModulePath(allocator: std.mem.Allocator, installed_stdlib_root: ?[]const u8, spec: []const u8) !?[]u8 {
-    if (!std.mem.startsWith(u8, spec, "std:")) return null;
-    const module_name = spec["std:".len..];
-    if (module_name.len == 0 or std.mem.indexOfScalar(u8, module_name, '\\') != null) return null;
-    const relative = try std.fmt.allocPrint(allocator, "{s}.ss", .{module_name});
-    defer allocator.free(relative);
-    if (try stdModulePathFromEnv(allocator, relative)) |path| return path;
-    if (try stdModulePathFromRoot(allocator, build_options.source_stdlib_dir, relative)) |path| return path;
-    if (installed_stdlib_root) |root| {
-        if (try stdModulePathFromRoot(allocator, root, relative)) |path| return path;
-    }
-    return stdModulePathFromRoot(allocator, "stdlib", relative);
-}
-
-fn stdModulePathFromEnv(allocator: std.mem.Allocator, relative: []const u8) !?[]u8 {
-    const raw = std.c.getenv("SS_STDLIB_DIR") orelse return null;
-    const root = std.mem.span(raw);
-    return stdModulePathFromRoot(allocator, root, relative);
-}
-
-fn stdModulePathFromRoot(allocator: std.mem.Allocator, root: []const u8, relative: []const u8) !?[]u8 {
-    if (root.len == 0) return null;
-    const joined = try std.fs.path.join(allocator, &.{ root, relative });
-    defer allocator.free(joined);
-    const absolute = try project.absolutePath(allocator, joined);
-    errdefer allocator.free(absolute);
-    if (utils.fs.fileExists(allocator, absolute)) return absolute;
-    allocator.free(absolute);
-    return null;
 }
