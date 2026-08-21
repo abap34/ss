@@ -643,15 +643,27 @@ fn doctorTreeSitter(
     configured_languages: ?[]const utils.highlight.Language,
 ) !usize {
     std.debug.print("\ntree-sitter:\n", .{});
-    if (utils.tree_sitter_cache.pathExists(allocator, build_options.tree_sitter_cache_root)) {
-        std.debug.print("  ok cache: {s}\n", .{build_options.tree_sitter_cache_root});
-    } else {
-        std.debug.print("  info cache: {s} not found\n", .{build_options.tree_sitter_cache_root});
-    }
-    if (utils.tree_sitter_cache.pathExists(allocator, build_options.tree_sitter_bundle_root)) {
-        std.debug.print("  ok bundle: {s}\n", .{build_options.tree_sitter_bundle_root});
-    } else {
-        std.debug.print("  info bundle: {s} not found\n", .{build_options.tree_sitter_bundle_root});
+    if (utils.tree_sitter_cache.defaultRoot(allocator, build_options.tree_sitter_cache_subdir)) |cache_root| {
+        defer allocator.free(cache_root);
+        if (utils.tree_sitter_cache.pathExists(allocator, cache_root)) {
+            std.debug.print("  ok cache: {s}\n", .{cache_root});
+        } else {
+            std.debug.print("  info cache: {s} not found\n", .{cache_root});
+        }
+        const bundle_root = try utils.tree_sitter_cache.bundlePath(
+            allocator,
+            cache_root,
+            build_options.tree_sitter_manifest_hash,
+        );
+        defer allocator.free(bundle_root);
+        if (utils.tree_sitter_cache.pathExists(allocator, bundle_root)) {
+            std.debug.print("  ok bundle: {s}\n", .{bundle_root});
+        } else {
+            std.debug.print("  info bundle: {s} not found\n", .{bundle_root});
+        }
+    } else |err| switch (err) {
+        error.HomeNotFound => std.debug.print("  info cache: HOME is not set\n", .{}),
+        else => |other| return other,
     }
     std.debug.print("  ok manifest hash: {s}\n", .{build_options.tree_sitter_manifest_hash});
     std.debug.print("  ok runtime ABI range: {d}..{d}\n", .{
@@ -1249,47 +1261,62 @@ fn runTreeSitterCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []c
         return;
     }
     if (args.len < 1) return failUsage("missing tree-sitter cache command", .{});
-    if (args.len == 1 and std.mem.eql(u8, args[0], "stats")) {
-        try printTreeSitterCacheStats(io, allocator);
-        return;
+    const command = std.meta.stringToEnum(enum { stats, clear, prune }, args[0]) orelse
+        return failUsage("unknown tree-sitter cache command: {s}", .{args[0]});
+    if (args.len > 1) return failUsage("unexpected argument after tree-sitter cache {s}: {s}", .{ args[0], args[1] });
+
+    const cache_root = try treeSitterCacheRoot(allocator);
+    defer allocator.free(cache_root);
+    switch (command) {
+        .stats => try printTreeSitterCacheStats(io, allocator, cache_root),
+        .clear => {
+            const before = try utils.tree_sitter_cache.stats(io, allocator, cache_root);
+            try utils.tree_sitter_cache.clear(io, cache_root);
+            std.debug.print("cleared tree-sitter cache: {s}\n", .{cache_root});
+            std.debug.print("removed: ", .{});
+            printByteSize(before.bytes);
+            std.debug.print("\n", .{});
+        },
+        .prune => {
+            const before = try utils.tree_sitter_cache.stats(io, allocator, cache_root);
+            const result = try utils.tree_sitter_cache.prune(
+                io,
+                allocator,
+                cache_root,
+                build_options.tree_sitter_manifest_hash,
+            );
+            const after = try utils.tree_sitter_cache.stats(io, allocator, cache_root);
+            std.debug.print("pruned tree-sitter cache: {s}\n", .{cache_root});
+            std.debug.print("removed bundles: {d}\n", .{result.removed_bundles});
+            std.debug.print("removed build dirs: {d}\n", .{result.removed_build_dirs});
+            std.debug.print("removed source dirs: {d}\n", .{result.removed_source_dirs});
+            std.debug.print("freed: ", .{});
+            printByteSize(before.bytes -| after.bytes);
+            std.debug.print("\n", .{});
+        },
     }
-    if (args.len == 1 and std.mem.eql(u8, args[0], "clear")) {
-        const before = try utils.tree_sitter_cache.stats(io, allocator, build_options.tree_sitter_cache_root);
-        try utils.tree_sitter_cache.clear(io, build_options.tree_sitter_cache_root);
-        std.debug.print("cleared tree-sitter cache: {s}\n", .{build_options.tree_sitter_cache_root});
-        std.debug.print("removed: ", .{});
-        printByteSize(before.bytes);
-        std.debug.print("\n", .{});
-        return;
-    }
-    if (args.len == 1 and std.mem.eql(u8, args[0], "prune")) {
-        const before = try utils.tree_sitter_cache.stats(io, allocator, build_options.tree_sitter_cache_root);
-        const result = try utils.tree_sitter_cache.prune(
-            io,
-            allocator,
-            build_options.tree_sitter_cache_root,
-            build_options.tree_sitter_manifest_hash,
-        );
-        const after = try utils.tree_sitter_cache.stats(io, allocator, build_options.tree_sitter_cache_root);
-        std.debug.print("pruned tree-sitter cache: {s}\n", .{build_options.tree_sitter_cache_root});
-        std.debug.print("removed bundles: {d}\n", .{result.removed_bundles});
-        std.debug.print("removed build dirs: {d}\n", .{result.removed_build_dirs});
-        std.debug.print("removed source dirs: {d}\n", .{result.removed_source_dirs});
-        std.debug.print("freed: ", .{});
-        printByteSize(before.bytes -| after.bytes);
-        std.debug.print("\n", .{});
-        return;
-    }
-    return failUsage("unknown tree-sitter cache command: {s}", .{args[0]});
 }
 
-fn printTreeSitterCacheStats(io: std.Io, allocator: std.mem.Allocator) !void {
-    const total = try utils.tree_sitter_cache.stats(io, allocator, build_options.tree_sitter_cache_root);
-    const current = try utils.tree_sitter_cache.stats(io, allocator, build_options.tree_sitter_bundle_root);
-    const bundles = try utils.tree_sitter_cache.bundleCount(io, allocator, build_options.tree_sitter_cache_root);
-    std.debug.print("tree-sitter cache: {s}\n", .{build_options.tree_sitter_cache_root});
+fn treeSitterCacheRoot(allocator: std.mem.Allocator) ![]u8 {
+    return utils.tree_sitter_cache.defaultRoot(allocator, build_options.tree_sitter_cache_subdir) catch |err| switch (err) {
+        error.HomeNotFound => return failCli("HOME is required to locate the tree-sitter cache", .{}),
+        else => |other| return other,
+    };
+}
+
+fn printTreeSitterCacheStats(io: std.Io, allocator: std.mem.Allocator, cache_root: []const u8) !void {
+    const bundle_root = try utils.tree_sitter_cache.bundlePath(
+        allocator,
+        cache_root,
+        build_options.tree_sitter_manifest_hash,
+    );
+    defer allocator.free(bundle_root);
+    const total = try utils.tree_sitter_cache.stats(io, allocator, cache_root);
+    const current = try utils.tree_sitter_cache.stats(io, allocator, bundle_root);
+    const bundles = try utils.tree_sitter_cache.bundleCount(io, allocator, cache_root);
+    std.debug.print("tree-sitter cache: {s}\n", .{cache_root});
     std.debug.print("current manifest hash: {s}\n", .{build_options.tree_sitter_manifest_hash});
-    std.debug.print("current bundle: {s}\n", .{build_options.tree_sitter_bundle_root});
+    std.debug.print("current bundle: {s}\n", .{bundle_root});
     std.debug.print("bundles: {d}\n", .{bundles});
     std.debug.print("total:\n", .{});
     printCacheTotals(total.files, total.directories, total.bytes);

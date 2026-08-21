@@ -1,10 +1,13 @@
 const std = @import("std");
-const dependencies = @import("build/dependencies.zig");
-const qpdf = @import("build/qpdf.zig");
-
 const Module = std.Build.Module;
 const Step = std.Build.Step;
 const Import = Module.Import;
+
+const dependencies = @import("build/dependencies.zig");
+const qpdf = @import("build/qpdf.zig");
+
+const installed_stdlib_subdir = "share/ss/stdlib";
+const tree_sitter_cache_subdir = ".ss/cache/tree-sitter";
 
 const BuildContext = struct {
     b: *std.Build,
@@ -50,6 +53,23 @@ const TreeSitterBundle = struct {
     bundle_root: []const u8,
     runtime_source_root: []const u8,
     generated_root: []const u8,
+};
+
+/// Pre-fetched grammar checkouts supplied through SS_TREE_SITTER_SOURCES, so
+/// the bundle can be staged without network access. Empty means "clone the
+/// manifest commits".
+const TreeSitterVendoredSources = struct {
+    runtime: ?[]const u8 = null,
+    languages: []const Entry = &.{},
+
+    const Entry = struct { name: []const u8, path: []const u8 };
+
+    fn find(self: TreeSitterVendoredSources, name: []const u8) ?[]const u8 {
+        for (self.languages) |entry| {
+            if (std.mem.eql(u8, entry.name, name)) return entry.path;
+        }
+        return null;
+    }
 };
 
 const TreeSitterCheck = struct {
@@ -155,13 +175,13 @@ pub fn build(b: *std.Build) void {
     const commit = b.option([]const u8, "commit", "Source commit reported by `ss --version`") orelse detectGitCommit(b) orelse "unknown";
     const uncommitted_changes = detectUncommittedChanges(b);
     const source_stdlib_dir = b.pathFromRoot("stdlib");
-    const installed_stdlib_dir = b.pathJoin(&.{ b.install_path, "share", "ss", "stdlib" });
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version);
     build_options.addOption([]const u8, "commit", commit);
     build_options.addOption([]const u8, "uncommitted_changes", uncommitted_changes);
     build_options.addOption([]const u8, "source_stdlib_dir", source_stdlib_dir);
-    build_options.addOption([]const u8, "installed_stdlib_dir", installed_stdlib_dir);
+    build_options.addOption([]const u8, "installed_stdlib_subdir", installed_stdlib_subdir);
+    build_options.addOption([]const u8, "tree_sitter_cache_subdir", tree_sitter_cache_subdir);
     const ss_highlight_query = b.build_root.handle.readFileAlloc(b.graph.io, "editor/tree-sitter-ss/queries/highlights.scm", b.allocator, .limited(64 * 1024)) catch
         @panic("editor/tree-sitter-ss/queries/highlights.scm is missing.");
     build_options.addOption([]const u8, "ss_highlight_query", ss_highlight_query);
@@ -198,8 +218,6 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "tree_sitter_manifest_hash", tree_sitter.manifest_hash);
     build_options.addOption(u32, "tree_sitter_language_version", tree_sitter.runtime_language_version);
     build_options.addOption(u32, "tree_sitter_min_compatible_language_version", tree_sitter.runtime_min_compatible_language_version);
-    build_options.addOption([]const u8, "tree_sitter_cache_root", tree_sitter.cache_root);
-    build_options.addOption([]const u8, "tree_sitter_bundle_root", tree_sitter.bundle_root);
 
     const modules = createProjectModules(ctx, md4c_src, b.path(md4c_src), build_options, tree_sitter);
     const tree_sitter_abi_check = addTreeSitterAbiCheck(ctx, tree_sitter);
@@ -226,7 +244,7 @@ pub fn build(b: *std.Build) void {
     b.installDirectory(.{
         .source_dir = b.path("stdlib"),
         .install_dir = .prefix,
-        .install_subdir = "share/ss/stdlib",
+        .install_subdir = installed_stdlib_subdir,
         .include_extensions = &.{".ss"},
     });
     b.installDirectory(.{
@@ -1047,6 +1065,7 @@ fn prepareTreeSitterBundle(b: *std.Build) TreeSitterBundle {
     const bundle_root = b.pathJoin(&.{ cache_root, "bundles", manifest_hash });
     const runtime_source_root = b.pathJoin(&.{ bundle_root, "runtime", "source" });
     const generated_root = b.pathJoin(&.{ bundle_root, "generated" });
+    const vendored = treeSitterVendoredSources(b, manifest);
     const bundle = TreeSitterBundle{
         .manifest_hash = manifest_hash,
         .runtime_language_version = 0,
@@ -1058,7 +1077,7 @@ fn prepareTreeSitterBundle(b: *std.Build) TreeSitterBundle {
     };
 
     if (!treeSitterBundleComplete(b, manifest, bundle)) {
-        buildTreeSitterBundle(b, manifest, bundle);
+        buildTreeSitterBundle(b, manifest, bundle, vendored);
     }
 
     validateTreeSitterBundle(b, bundle);
@@ -1088,6 +1107,39 @@ fn prepareTreeSitterBundle(b: *std.Build) TreeSitterBundle {
         .runtime_source_root = bundle.runtime_source_root,
         .generated_root = bundle.generated_root,
     };
+}
+
+/// The Nix package and the development shell both export
+/// SS_TREE_SITTER_SOURCES — whitespace-separated `NAME=PATH` fields, with
+/// `runtime` naming the tree-sitter runtime — so `zig build` stages the
+/// bundle from pinned checkouts instead of cloning over the network.
+/// Malformed fields and names the manifest does not know fail loudly.
+fn treeSitterVendoredSources(b: *std.Build, manifest: TreeSitterManifest) TreeSitterVendoredSources {
+    const environment = b.graph.environ_map.get("SS_TREE_SITTER_SOURCES") orelse return .{};
+
+    var runtime: ?[]const u8 = null;
+    var languages: std.ArrayList(TreeSitterVendoredSources.Entry) = .empty;
+    var fields = std.mem.tokenizeAny(u8, environment, " \t\n");
+    while (fields.next()) |field| {
+        const split = std.mem.indexOfScalar(u8, field, '=') orelse
+            std.debug.panic("SS_TREE_SITTER_SOURCES expects NAME=PATH fields, got: {s}", .{field});
+        const name = field[0..split];
+        const path = field[split + 1 ..];
+        if (name.len == 0 or path.len == 0)
+            std.debug.panic("SS_TREE_SITTER_SOURCES expects NAME=PATH fields, got: {s}", .{field});
+        if (std.mem.eql(u8, name, "runtime")) {
+            runtime = path;
+            continue;
+        }
+        const known = for (manifest.languages) |language| {
+            if (std.mem.eql(u8, language.name, name)) break true;
+        } else false;
+        if (!known)
+            std.debug.panic("SS_TREE_SITTER_SOURCES names a language missing from the manifest: {s}", .{name});
+        languages.append(b.allocator, .{ .name = name, .path = path }) catch @panic("OOM");
+    }
+
+    return .{ .runtime = runtime, .languages = languages.items };
 }
 
 fn validateTreeSitterBundle(b: *std.Build, tree_sitter: TreeSitterBundle) void {
@@ -1159,10 +1211,14 @@ fn hexDigit(value: u8) u8 {
 }
 
 fn treeSitterCacheRoot(b: *std.Build) []const u8 {
-    const home = b.graph.environ_map.get("HOME") orelse
-        b.graph.environ_map.get("USERPROFILE") orelse
+    const home = nonEmptyEnv(b, "HOME") orelse nonEmptyEnv(b, "USERPROFILE") orelse
         @panic("HOME is required to prepare the tree-sitter cache.");
-    return b.pathJoin(&.{ home, ".ss", "cache", "tree-sitter" });
+    return b.pathJoin(&.{ home, tree_sitter_cache_subdir });
+}
+
+fn nonEmptyEnv(b: *std.Build, name: []const u8) ?[]const u8 {
+    const value = b.graph.environ_map.get(name) orelse return null;
+    return if (value.len == 0) null else value;
 }
 
 fn treeSitterBundleComplete(b: *std.Build, manifest: TreeSitterManifest, bundle: TreeSitterBundle) bool {
@@ -1191,22 +1247,33 @@ fn treeSitterBundleComplete(b: *std.Build, manifest: TreeSitterManifest, bundle:
 
 const tree_sitter_support_headers = [_][]const u8{ "parser.h", "alloc.h", "array.h" };
 
-fn buildTreeSitterBundle(b: *std.Build, manifest: TreeSitterManifest, bundle: TreeSitterBundle) void {
+fn buildTreeSitterBundle(
+    b: *std.Build,
+    manifest: TreeSitterManifest,
+    bundle: TreeSitterBundle,
+    vendored: TreeSitterVendoredSources,
+) void {
     const cwd = std.Io.Dir.cwd();
     const building_root = b.pathJoin(&.{ bundle.cache_root, "bundles", b.fmt(".building-{s}", .{bundle.manifest_hash}) });
     deleteTreeIfExists(b, building_root);
     cwd.createDirPath(b.graph.io, building_root) catch |err|
         std.debug.panic("failed to create tree-sitter build directory {s}: {}", .{ building_root, err });
 
-    const runtime_checkout = b.pathJoin(&.{ building_root, "sources", "tree-sitter-runtime" });
-    std.debug.print("sync tree-sitter runtime {s}\n", .{manifest.runtime.commit});
-    checkoutCommit(b, manifest.runtime.repo, manifest.runtime.commit, runtime_checkout);
+    const runtime_checkout = vendored.runtime orelse blk: {
+        const checkout = b.pathJoin(&.{ building_root, "sources", "tree-sitter-runtime" });
+        std.debug.print("sync tree-sitter runtime {s}\n", .{manifest.runtime.commit});
+        checkoutCommit(b, manifest.runtime.repo, manifest.runtime.commit, checkout);
+        break :blk checkout;
+    };
     copyTreeSitterRuntime(b, runtime_checkout, b.pathJoin(&.{ building_root, "runtime", "source" }));
 
     for (manifest.languages) |language| {
-        std.debug.print("sync {s} {s}\n", .{ language.name, language.commit });
-        const checkout = b.pathJoin(&.{ building_root, "sources", language.name });
-        checkoutCommit(b, language.repo, language.commit, checkout);
+        const checkout = vendored.find(language.name) orelse blk: {
+            std.debug.print("sync {s} {s}\n", .{ language.name, language.commit });
+            const destination = b.pathJoin(&.{ building_root, "sources", language.name });
+            checkoutCommit(b, language.repo, language.commit, destination);
+            break :blk destination;
+        };
         var first_support_dir: ?[]const u8 = null;
         for (language.files) |file| {
             if (!isTreeSitterBundleSource(file.to)) continue;

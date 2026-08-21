@@ -1,5 +1,26 @@
 const std = @import("std");
 
+pub fn defaultRoot(
+    allocator: std.mem.Allocator,
+    cache_subdir: []const u8,
+) (error{HomeNotFound} || std.mem.Allocator.Error)![]u8 {
+    const home = homeDir("HOME") orelse homeDir("USERPROFILE") orelse return error.HomeNotFound;
+    return std.fs.path.join(allocator, &.{ home, cache_subdir });
+}
+
+pub fn bundlePath(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    manifest_hash: []const u8,
+) std.mem.Allocator.Error![]u8 {
+    return std.fs.path.join(allocator, &.{ root_path, "bundles", manifest_hash });
+}
+
+fn homeDir(name: [*:0]const u8) ?[]const u8 {
+    const value = std.mem.span(std.c.getenv(name) orelse return null);
+    return if (value.len == 0) null else value;
+}
+
 pub const Stats = struct {
     files: usize = 0,
     directories: usize = 0,
