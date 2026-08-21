@@ -9,7 +9,6 @@ async function testDoctorReportsTreeSitterHealth() {
   const output = `${result.stdout}\n${result.stderr}`;
   assert(result.code === 0, `doctor should exit successfully without --strict:\n${output}`);
   assert(output.includes("tree-sitter:"), `doctor output omitted tree-sitter section:\n${output}`);
-  assert(output.includes("ok cache:"), `doctor output omitted tree-sitter cache:\n${output}`);
   assert(output.includes("ok manifest hash:"), `doctor output omitted tree-sitter manifest hash:\n${output}`);
   assert(output.includes("ok runtime ABI range:"), `doctor output omitted tree-sitter runtime ABI range:\n${output}`);
   assert(output.includes("ok configured names:"), `doctor output omitted configured language count:\n${output}`);

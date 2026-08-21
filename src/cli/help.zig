@@ -457,19 +457,15 @@ fn cache(output: Output) void {
     outputPrint(output,
         \\{s}Usage:{s}
         \\  {s}ss cache project clear|stats{s}
-        \\  {s}ss cache tree-sitter clear|prune|stats{s}
         \\
         \\{s}Examples:{s}
         \\  {s}ss cache project stats{s}
         \\  {s}ss cache project clear{s}
-        \\  {s}ss cache tree-sitter prune{s}
         \\
     , .{
         s.heading, s.reset,
         s.command, s.reset,
-        s.command, s.reset,
         s.heading, s.reset,
-        s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,
     });
@@ -661,11 +657,9 @@ const bash_completion =
     \\      ;;
     \\    cache)
     \\      if [[ $COMP_CWORD -eq 2 ]]; then
-    \\        COMPREPLY=( $(compgen -W "project tree-sitter help --help -h" -- "$cur") )
-    \\      elif [[ "${COMP_WORDS[2]}" == "project" ]]; then
-    \\        COMPREPLY=( $(compgen -W "clear stats help --help -h" -- "$cur") )
+    \\        COMPREPLY=( $(compgen -W "project help --help -h" -- "$cur") )
     \\      else
-    \\        COMPREPLY=( $(compgen -W "clear prune stats help --help -h" -- "$cur") )
+    \\        COMPREPLY=( $(compgen -W "clear stats help --help -h" -- "$cur") )
     \\      fi
     \\      ;;
     \\    completion)
@@ -730,7 +724,7 @@ const zsh_completion =
     \\      _arguments '2:topic:(schedule layout help)' '3:layout topic:(conflicts trace help)' '*::arg:->args' $project_opts '--output[output path]:file:_files' $common_opts
     \\      ;;
     \\    cache)
-    \\      _arguments '2:target:(project tree-sitter help)' '3:command:(clear prune stats help)' $common_opts
+    \\      _arguments '2:target:(project help)' '3:command:(clear stats help)' $common_opts
     \\      ;;
     \\    completion)
     \\      _arguments '2:shell:(bash zsh fish help)' '--yes[install without prompting]' '--print[write script to stdout]' $common_opts
@@ -784,7 +778,7 @@ const fish_completion =
     \\
     \\complete -c ss -n '__fish_seen_subcommand_from watch' -a 'check render help' -d 'Watch mode'
     \\complete -c ss -n '__fish_seen_subcommand_from debug' -a 'schedule layout help' -d 'Debug topic'
-    \\complete -c ss -n '__fish_seen_subcommand_from cache' -a 'project tree-sitter help' -d 'Cache target'
+    \\complete -c ss -n '__fish_seen_subcommand_from cache' -a 'project help' -d 'Cache target'
     \\complete -c ss -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish help' -d 'Shell'
     \\complete -c ss -n '__fish_seen_subcommand_from help' -a 'init doctor check render dump watch debug cache lsp version completion' -d 'Command'
     \\

@@ -5,6 +5,7 @@ const Import = Module.Import;
 
 const dependencies = @import("build/dependencies.zig");
 const qpdf = @import("build/qpdf.zig");
+const tree_sitter_cache = @import("build/tree_sitter_cache.zig");
 
 const installed_stdlib_subdir = "share/ss/stdlib";
 const tree_sitter_cache_subdir = ".ss/cache/tree-sitter";
@@ -181,7 +182,6 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "uncommitted_changes", uncommitted_changes);
     build_options.addOption([]const u8, "source_stdlib_dir", source_stdlib_dir);
     build_options.addOption([]const u8, "installed_stdlib_subdir", installed_stdlib_subdir);
-    build_options.addOption([]const u8, "tree_sitter_cache_subdir", tree_sitter_cache_subdir);
     const ss_highlight_query = b.build_root.handle.readFileAlloc(b.graph.io, "editor/tree-sitter-ss/queries/highlights.scm", b.allocator, .limited(64 * 1024)) catch
         @panic("editor/tree-sitter-ss/queries/highlights.scm is missing.");
     build_options.addOption([]const u8, "ss_highlight_query", ss_highlight_query);
@@ -215,6 +215,7 @@ pub fn build(b: *std.Build) void {
         .qpdf_bridge = qpdf.create(b, target, optimize, qpdf_config, &dependency_checks.native_pdf.step),
     };
     const tree_sitter = prepareTreeSitterBundle(b);
+    tree_sitter_cache.addSteps(b, tree_sitter.cache_root, tree_sitter.manifest_hash);
     build_options.addOption([]const u8, "tree_sitter_manifest_hash", tree_sitter.manifest_hash);
     build_options.addOption(u32, "tree_sitter_language_version", tree_sitter.runtime_language_version);
     build_options.addOption(u32, "tree_sitter_min_compatible_language_version", tree_sitter.runtime_min_compatible_language_version);

@@ -227,10 +227,6 @@ async function testCacheStatsCommands() {
   try {
     const projectStats = await runSs(["cache", "project", "stats"], project);
     assert(projectStats.stderr.includes("render cache:"), `project cache stats omitted render cache path: ${projectStats.stderr}`);
-
-    const treeSitterStats = await runSs(["cache", "tree-sitter", "stats"], project);
-    assert(treeSitterStats.stderr.includes("tree-sitter cache:"), `tree-sitter cache stats omitted cache path: ${treeSitterStats.stderr}`);
-    assert(treeSitterStats.stderr.includes("current manifest hash:"), `tree-sitter cache stats omitted manifest hash: ${treeSitterStats.stderr}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
