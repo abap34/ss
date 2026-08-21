@@ -1555,6 +1555,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
     if (std.mem.eql(u8, method, "textDocument/definition")) {
         var provider = analysisProvider(server);
         var ctx = feature_definition.Context{
+            .io = server.io,
             .allocator = server.allocator,
             .provider = &provider,
             .documents = &server.documents,

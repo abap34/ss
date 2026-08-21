@@ -1,5 +1,6 @@
 /.zig-cache
 /.ss-cache
+/.direnv
 /third_party/md4c
 /zig-out
 /editor/vscode/node_modules

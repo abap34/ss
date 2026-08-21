@@ -206,6 +206,20 @@ language servers such as Taplo can use it for completion and validation.
 
 ## Installation
 
+### Nix
+
+With flakes enabled, install directly from GitHub:
+
+```sh
+nix profile install github:abap34/ss
+```
+
+From a local checkout, use `nix profile install .`. You can also run ss without
+installing it with `nix run github:abap34/ss -- --help`.
+
+The Nix package includes all native build and runtime libraries. Raw LaTeX math
+rendering still requires `pdflatex` or `lualatex` to be available on `PATH`.
+
 ### Homebrew
 
 On macOS, Homebrew is the recommended install path:
@@ -243,7 +257,22 @@ set up MD4C, and build.
 The build prepares the pinned tree-sitter runtime and
 standard parsers under `~/.ss/cache/tree-sitter` when that cache is missing.
 (Full list of builtin languages is avaliable at: [third_party/tree-sitter-languages/README.md](third_party/tree-sitter-languages/README.md))
-The first build may use network access for that cache.
+The first build may use network access for that cache. Manage the cache with
+`zig build tree-sitter-stats`, `zig build tree-sitter-prune` (drop stale
+bundles and staging leftovers), and `zig build tree-sitter-clean` (delete the
+whole cache).
+
+With Nix and direnv installed, the repository development environment provides
+Zig, Node.js, Python, and all native build dependencies. Enable it once per
+checkout:
+
+```sh
+direnv allow
+```
+
+Use `nix develop` directly when direnv is not available. The development shell
+supplies the pinned MD4C and tree-sitter sources, so `zig build` stages its
+tree-sitter bundle without network access.
 
 ```sh
 scripts/setup-md4c.sh
@@ -307,9 +336,6 @@ above must succeed before building ss.
 | `ss watch render [input.ss] [output.pdf]` | Re-render a PDF as project files change.                         |
 | `ss cache project stats`                  | Show project render cache file count, directory count, and size. |
 | `ss cache project clear`                  | Clear the project render cache under `.ss-cache/render`.         |
-| `ss cache tree-sitter stats`              | Show shared tree-sitter cache bundle count and size.             |
-| `ss cache tree-sitter prune`              | Remove stale tree-sitter bundles and unfinished build dirs.      |
-| `ss cache tree-sitter clear`              | Clear the shared tree-sitter cache.                              |
 
 Examples:
 
@@ -323,7 +349,6 @@ ss debug schedule --project . --output .ss-cache/schedule.json
 ss debug layout-trace --project . --output .ss-cache/layout-trace.json
 ss watch render slide.ss .ss-cache/deck.pdf
 ss cache project stats
-ss cache tree-sitter stats
 ```
 
 ### Project Discovery

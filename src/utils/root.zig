@@ -8,6 +8,5 @@ pub const Cancellation = cancellation.Cancellation;
 pub const progress = @import("progress.zig");
 pub const measure_profile = @import("measure_profile.zig");
 pub const render_cache = @import("render_cache.zig");
-pub const tree_sitter_cache = @import("tree_sitter_cache.zig");
 pub const io = @import("io.zig");
 pub const highlight = @import("highlight.zig");
