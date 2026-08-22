@@ -120,7 +120,7 @@ Basically, you can describe layout by adding constraints between objects:
 ~ program.bottom == caption.top + 10
 ```
 
-This method is enough to describe most layouts, but when you need to specify more 
+This method is enough to describe most layouts, but when you need to specify more
 precisely, you can use WYSIWYG editor that is integrated with the language.
 
 <figure>
@@ -239,9 +239,10 @@ Run `ss doctor` to check project discovery, render tools, and tree-sitter syntax
 highlighting health in the current environment.
 
 Install Zig 0.16 and the Cairo/Pango/librsvg development files listed above,
-then build. The MD4C sources are included in `third_party/md4c`.
+then build.
+
 The build prepares the pinned tree-sitter runtime and
-standard parsers under `~/.ss/cache/tree-sitter` when that cache is missing.
+builtin parsers under `~/.ss/cache/tree-sitter` when that cache is missing.
 (Full list of builtin languages is available at: [third_party/tree-sitter-languages/README.md](third_party/tree-sitter-languages/README.md))
 The first build may use network access for that cache.
 
