@@ -2,7 +2,6 @@ const std = @import("std");
 const c = @import("pdf_ffi").c;
 const render = @import("render");
 const html = @import("render_html");
-const render_math = @import("render_math");
 const render_support = @import("render_test_support");
 const render_resources = @import("render_resources");
 
@@ -464,56 +463,37 @@ test "HTML renderer applies page labels transforms clips opacity and blending" {
     try testing.expect(std.mem.indexOf(u8, generated, "border-radius:13.000000pt") != null);
 }
 
-test "HTML renderer emits structured MathML without SVG or PDF fallback" {
-    const output = ".ss-cache/test-render-html/math.html";
+test "HTML renderer embeds LaTeX PDF with math semantics" {
+    const output = ".ss-cache/test-render-html/latex.html";
+    const resource_path = ".ss-cache/test-render-html/latex-source.pdf";
     try prepareOutput(output);
     defer deleteOutput(output);
+    const resource_path_z = try testing.allocator.dupeZ(u8, resource_path);
+    defer testing.allocator.free(resource_path_z);
+    const pdf = c.ss_pdf_create(resource_path_z.ptr, 120, 60) orelse return error.CairoCreateFailed;
+    defer c.ss_pdf_destroy(pdf);
+    c.ss_pdf_end_page(pdf);
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
+    defer std.Io.Dir.cwd().deleteFile(testing.io, resource_path) catch {};
 
     var resource_builder = render_resources.Builder{};
     defer resource_builder.deinit(testing.allocator);
-    var font_builder = render.FontBuilder{};
-    defer font_builder.deinit(testing.allocator);
-
-    var math_builder = render.MathBuilder{};
-    defer math_builder.deinit(testing.allocator);
-    const compiled_math = try render_math.compile(
-        testing.allocator,
-        testing.io,
-        &resource_builder,
-        &font_builder,
-        &math_builder,
-        "x_1^2 + \\frac{\\alpha}{\\sqrt{y}}",
-        .display,
-        .{
-            .font_size = 48,
-            .display = true,
-        },
-    );
-    const tree = compiled_math.tree;
-    const math_layout = compiled_math.layout;
-    const rect = render.Rect{ .x = 80, .y = 100, .width = math_layout.width, .height = math_layout.height };
-    const catalogs = try render_support.takeCatalogs(testing.allocator, &resource_builder, &font_builder);
-    var resources = catalogs.resources;
+    const latex_resource = try resource_builder.addPath(testing.allocator, testing.io, .latex_pdf, resource_path);
+    var resources = try resource_builder.take(testing.allocator);
     errdefer resources.deinit(testing.allocator);
-    var fonts = catalogs.fonts;
-    errdefer fonts.deinit(testing.allocator);
-    var math = try math_builder.take(testing.allocator);
-    errdefer math.deinit(testing.allocator);
 
     var pages = try testing.allocator.alloc(render.Page, 1);
     pages[0] = .{ .page_id = 9, .index = 0, .width = 1280, .height = 720 };
-    var ir = render.Ir{ .resources = resources, .fonts = fonts, .math = math, .pages = pages };
+    var ir = render.Ir{ .resources = resources, .pages = pages };
     resources = .{};
-    fonts = .{};
-    math = .{};
     defer ir.deinit(testing.allocator);
-    try pages[0].appendStructuredMath(
+    try pages[0].appendLatexPdf(
         testing.allocator,
         43,
-        rect,
-        tree,
-        math_layout,
-        .{ .r = 0, .g = 0, .b = 0 },
+        .{ .x = 80, .y = 100, .width = 120, .height = 60 },
+        latex_resource,
+        0,
+        .crop,
     );
     pages[0].items.items[0].setSemanticId(3);
     pages[0].reading_order = try testing.allocator.dupe(render.SemanticId, &.{3});
@@ -532,28 +512,18 @@ test "HTML renderer emits structured MathML without SVG or PDF fallback" {
         .id = 3,
         .role = .math,
         .items = try testing.allocator.dupe(render.ItemId, &.{pages[0].items.items[0].header().item_id}),
-        .text = try testing.allocator.dupe(u8, "x_1^2 + \\frac{\\alpha}{\\sqrt{y}}"),
-        .math_tree = tree,
+        .text = try testing.allocator.dupe(u8, "$x_1^2 + \\frac{\\alpha}{\\sqrt{y}}$"),
     };
     ir.semantics = .{ .root = 1, .nodes = semantic_nodes };
 
     try html.write(testing.allocator, testing.io, &ir, output);
     const document = try std.Io.Dir.cwd().readFileAlloc(testing.io, output, testing.allocator, .unlimited);
     defer testing.allocator.free(document);
-    try testing.expect(std.mem.indexOf(u8, document, "class=\"ss-mathml\" xmlns=\"http://www.w3.org/1998/Math/MathML\"") != null);
-    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, document, "class=\"ss-mathml\""));
-    try testing.expect(std.mem.indexOf(u8, document, "<div class=\"ss-semantic-layer\"><math") != null);
-    try testing.expect(std.mem.indexOf(u8, document, "ss-math-text") != null);
-    try testing.expect(std.mem.indexOf(u8, document, "ss-math-rule") != null);
-    try testing.expect(std.mem.indexOf(u8, document, "<msubsup>") != null);
-    try testing.expect(std.mem.indexOf(u8, document, "<mfrac>") != null);
-    try testing.expect(std.mem.indexOf(u8, document, "<msqrt>") != null);
-    try testing.expect(std.mem.indexOf(u8, document, "α") != null);
-    try testing.expect(std.mem.indexOf(u8, document, "<svg") == null);
-    try testing.expect(std.mem.indexOf(u8, document, "data-pdf-src") == null);
-    const css = try embeddedStyleSheet(document);
-    defer testing.allocator.free(css);
-    try testing.expect(std.mem.indexOf(u8, css, "ascent-override") == null);
+    try testing.expect(std.mem.indexOf(u8, document, "class=\"ss-item ss-latex ss-pdf\"") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "data-pdf-src=\"ss-resource:latex_pdf:") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "class=\"ss-latex-semantic\" role=\"math\"") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "aria-label=\"$x_1^2 + \\frac{\\alpha}{\\sqrt{y}}$\"") != null);
+    try testing.expect(std.mem.indexOf(u8, document, "MathML") == null);
 }
 
 test "HTML renderer packages PDF.js with explicit page geometry" {

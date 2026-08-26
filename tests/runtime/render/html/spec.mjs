@@ -6,7 +6,7 @@ import path from "node:path";
 import { assert, ssBin } from "../../harness.mjs";
 
 await testDeterministicSingleFileReplacement();
-await testStructuredMathDoesNotRequireTex();
+if (await commandAvailable("pdflatex")) await testLatexMathUsesPdfResources();
 await testWatchPublishesHtmlGenerations();
 
 async function testDeterministicSingleFileReplacement() {
@@ -75,10 +75,10 @@ end
   }
 }
 
-async function testStructuredMathDoesNotRequireTex() {
-  const project = await mkdtemp(path.join(os.tmpdir(), "ss-html-math-"));
+async function testLatexMathUsesPdfResources() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-html-latex-"));
   try {
-    await writeSlide(project, `math!("x_1^2 + \\frac{\\alpha}{\\sqrt{y}}")
+    await writeSlide(project, `latex!("$x_1^2 + \\frac{\\alpha}{\\sqrt{y}}$")
 text! <<
 Inline $x_1^2 + \\alpha$
 
@@ -89,23 +89,22 @@ $$
 end
 
 page second
-math!("z_2^3 + \\frac{b}{c}")`);
-    const emptyPath = path.join(project, "empty-path");
-    await mkdir(emptyPath);
+latex!("$z_2^3 + \\frac{b}{c}$")`);
     await expectSuccess(
-      await runSs(["render", "--format", "html", "slide.ss", "deck.html"], project, { env: { PATH: emptyPath, SS_RENDER_JOBS: "4" } }),
-      "structured math HTML render without TeX",
+      await runSs(["render", "--format", "html", "slide.ss", "deck.html"], project, { env: { SS_RENDER_JOBS: "4" } }),
+      "LaTeX math HTML render",
     );
     await expectSuccess(
-      await runSs(["render", "slide.ss", "deck.pdf"], project, { env: { PATH: emptyPath } }),
-      "structured math PDF render without TeX",
+      await runSs(["render", "slide.ss", "deck.pdf"], project),
+      "LaTeX math PDF render",
     );
-    assert((await stat(path.join(project, "deck.pdf"))).isFile(), "structured math PDF was not created");
+    assert((await stat(path.join(project, "deck.pdf"))).isFile(), "LaTeX math PDF was not created");
     const document = await readFile(path.join(project, "deck.html"), "utf8");
-    assert(count(document, "ss-math-text") >= 3, "block, inline, or display math did not use native HTML elements");
-    assert(count(document, "class=\"ss-mathml\"") >= 3, "block, inline, or display math omitted MathML semantics");
-    assert(!document.includes("data-pdf-src"), "structured math used a PDF fallback");
-    assert(count(document, "data:text/javascript;charset=utf-8;base64,") === 3, "structured math did not embed exactly resource loading, page navigation, and text alignment");
+    assert(count(document, "class=\"ss-item ss-latex ss-pdf\"") >= 4, "LaTeX objects or Markdown mathematics omitted PDF items");
+    assert(document.includes('data-pdf-src="ss-resource:latex_pdf:'), "LaTeX output did not reference an embedded PDF resource");
+    assert(document.includes('data-media-type="application/pdf"'), "LaTeX PDF resource was not embedded");
+    assert(document.includes('class="ss-latex-semantic" role="math"'), "LaTeX output omitted math semantics");
+    assert(!document.includes("MathML"), "obsolete structured MathML output remained");
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -113,6 +112,14 @@ math!("z_2^3 + \\frac{b}{c}")`);
 
 function count(value, pattern) {
   return value.split(pattern).length - 1;
+}
+
+async function commandAvailable(command) {
+  return new Promise((resolve) => {
+    const child = spawn(command, ["--version"], { stdio: "ignore" });
+    child.once("error", () => resolve(false));
+    child.once("exit", (code) => resolve(code === 0));
+  });
 }
 
 async function testWatchPublishesHtmlGenerations() {

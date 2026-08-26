@@ -142,6 +142,65 @@ test "render IR page preserves PDF placement and annotations" {
     try testing.expectEqualStrings("section", page.links.items[0].target);
 }
 
+test "render IR LaTeX items require LaTeX PDF resources" {
+    var pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+
+    const bytes = try testing.allocator.dupe(u8, "%PDF-test");
+    const pdf_pages = try testing.allocator.alloc(render_ir.PdfPageMetadata, 1);
+    const box = render_ir.PdfBox{ .left = 0, .bottom = 0, .right = 120, .top = 60 };
+    pdf_pages[0] = .{
+        .media = box,
+        .crop = box,
+        .bleed = box,
+        .trim = box,
+        .art = box,
+        .user_unit = 1,
+        .rotation = 0,
+        .annotation_count = 0,
+        .has_unsafe_annotations = false,
+    };
+    const entries = try testing.allocator.alloc(render_ir.Resource, 1);
+    const latex_resource = render_ir.identifyResource(.latex_pdf, bytes);
+    entries[0] = .{
+        .id = latex_resource,
+        .kind = .latex_pdf,
+        .name = try testing.allocator.dupe(u8, "latex.pdf"),
+        .bytes = bytes,
+        .metadata = .{ .latex_pdf = .{
+            .pages = pdf_pages,
+            .encrypted = false,
+            .has_javascript = false,
+        } },
+    };
+    ir.resources = .{ .entries = entries };
+    try pages[0].appendLatexPdf(
+        testing.allocator,
+        7,
+        .{ .x = 20, .y = 30, .width = 120, .height = 60 },
+        latex_resource,
+        0,
+        .crop,
+    );
+
+    try ir.validate();
+
+    const metadata = switch (entries[0].metadata) {
+        .latex_pdf => |value| value,
+        else => unreachable,
+    };
+    const ordinary_pdf_resource = render_ir.identifyResource(.pdf, bytes);
+    try testing.expect(!std.mem.eql(u8, &latex_resource, &ordinary_pdf_resource));
+    entries[0].id = ordinary_pdf_resource;
+    entries[0].kind = .pdf;
+    entries[0].metadata = .{ .pdf = metadata };
+    pages[0].items.items[0].latex.resource = ordinary_pdf_resource;
+    try testing.expectError(error.InvalidResource, ir.validate());
+}
+
 test "stroke ink bounds follow the line normal without extending butt caps" {
     var page = render_ir.Page{
         .page_id = 1,
@@ -715,75 +774,4 @@ test "annotation validation rejects unsafe URI targets" {
     try addDocumentSemantics(&ir);
     try pages[0].appendLink(testing.allocator, .uri, "javascript:alert(1)", .{ .x = 0, .y = 0, .width = 10, .height = 10 });
     try testing.expectError(error.InvalidAnnotation, ir.validate());
-}
-
-test "math IR parses structured expressions and deduplicates equal inputs" {
-    var builder = render_ir.MathBuilder{};
-    defer builder.deinit(testing.allocator);
-
-    const source = "x_1^2 + \\frac{\\alpha}{\\sqrt{y}}";
-    const first = try builder.add(testing.allocator, source, .display);
-    const second = try builder.add(testing.allocator, source, .display);
-    try testing.expectEqual(first, second);
-
-    var catalog = try builder.take(testing.allocator);
-    defer catalog.deinit(testing.allocator);
-    const tree = catalog.find(first) orelse return error.MissingMathTree;
-    try testing.expectEqual(render_ir.MathInputKind.display, tree.input_kind);
-    try testing.expectEqualStrings(source, tree.source);
-
-    var has_scripts = false;
-    var has_fraction = false;
-    var has_square_root = false;
-    var has_alpha = false;
-    for (tree.nodes) |node| switch (node.kind) {
-        .subscript_superscript => has_scripts = true,
-        .fraction => has_fraction = true,
-        .square_root => has_square_root = true,
-        .identifier => if (node.text) |text| {
-            if (std.mem.eql(u8, text, "α")) has_alpha = true;
-        },
-        else => {},
-    };
-    try testing.expect(has_scripts);
-    try testing.expect(has_fraction);
-    try testing.expect(has_square_root);
-    try testing.expect(has_alpha);
-}
-
-test "math IR distinguishes raw TeX and rejects unsupported structured commands" {
-    var builder = render_ir.MathBuilder{};
-    defer builder.deinit(testing.allocator);
-
-    try testing.expectError(
-        error.UnsupportedMathSyntax,
-        builder.add(testing.allocator, "\\unsupported{x}", .display),
-    );
-    const raw_id = try builder.add(testing.allocator, "\\unsupported{x}", .raw);
-    var catalog = try builder.take(testing.allocator);
-    defer catalog.deinit(testing.allocator);
-    const raw = catalog.find(raw_id) orelse return error.MissingMathTree;
-    try testing.expectEqual(render_ir.MathInputKind.raw, raw.input_kind);
-    try testing.expectEqual(render_ir.MathNodeKind.raw_tex, raw.nodes[raw.root].kind);
-}
-
-test "render IR validation rejects malformed math catalogs" {
-    var pages = try testing.allocator.alloc(render_ir.Page, 1);
-    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
-    var ir = render_ir.Ir{ .pages = pages };
-    defer ir.deinit(testing.allocator);
-    try addDocumentSemantics(&ir);
-
-    var builder = render_ir.MathBuilder{};
-    defer builder.deinit(testing.allocator);
-    _ = try builder.add(testing.allocator, "x", .display);
-    ir.math = try builder.take(testing.allocator);
-
-    try ir.validate();
-    ir.math.trees[0].id = 2;
-    try testing.expectError(error.InvalidItemGeometry, ir.validate());
-    ir.math.trees[0].id = 1;
-    ir.math.trees[0].nodes[0].kind = .fraction;
-
-    try testing.expectError(error.InvalidItemGeometry, ir.validate());
 }
