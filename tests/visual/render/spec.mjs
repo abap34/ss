@@ -18,6 +18,7 @@ const output = path.join(repository, ".ss-cache/render-parity");
 const driver = path.resolve(repository, process.argv.slice(2).find((argument) => !argument.startsWith("--")) ?? "zig-out/bin/ss-render-parity-driver");
 const full = process.argv.includes("--full");
 const textBaselineTolerance = 0.03;
+const pdfViewerReadyTimeoutMs = 120_000;
 const pdfViewerThresholds = Object.freeze({
   ...defaultThresholds,
   largeDifferenceRatio: 0.006,
@@ -293,7 +294,7 @@ async function inspectEmbeddedPdf(browser, baseUrl) {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
   try {
     await page.goto(`${baseUrl}/pdf.html`, { waitUntil: "networkidle" });
-    await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: 120_000 });
+    await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: pdfViewerReadyTimeoutMs });
     const container = page.locator('.ss-page[data-ss-page-index="1"] .ss-pdf');
     assert.equal(await container.getAttribute("data-page"), "2", "HTML selected the wrong PDF source page");
     const textLayer = container.locator(".textLayer");
@@ -414,7 +415,7 @@ async function inspectMarkdownLatex(browser, baseUrl) {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
   try {
     await page.goto(`${baseUrl}/markdown-math.html`, { waitUntil: "networkidle" });
-    await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: 120_000 });
+    await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: pdfViewerReadyTimeoutMs });
     assert(await page.locator(".ss-latex.ss-pdf").count() >= 2, "Markdown mathematics omitted LaTeX PDF items");
     assert(await page.locator('.ss-semantic-layer .ss-latex-semantic[role="math"]').count() >= 2, "Markdown mathematics omitted semantic labels");
     assert.equal(await page.locator("math").count(), 0, "Markdown mathematics unexpectedly emitted MathML");
@@ -427,7 +428,7 @@ async function inspectLatexBody(browser, baseUrl) {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
   try {
     await page.goto(`${baseUrl}/algorithm2e.html`, { waitUntil: "networkidle" });
-    await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: 120_000 });
+    await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: pdfViewerReadyTimeoutMs });
     const container = page.locator(".ss-latex.ss-pdf");
     assert.equal(await container.count(), 1, "LaTeX body did not use one scoped PDF.js viewer");
     assert.equal(await container.getAttribute("data-canvas-background"), "transparent", "LaTeX body did not request a transparent PDF canvas");

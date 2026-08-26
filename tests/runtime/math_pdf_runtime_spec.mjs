@@ -5,6 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
 
+const commandProbeTimeoutMs = 10_000;
+const renderTimeoutMs = 30_000;
+
 const pdflatexAvailable = await commandSucceeds("pdflatex", ["--version"]);
 const lualatexAvailable = await commandSucceeds("lualatex", ["--version"]);
 const pdftotextAvailable = await commandSucceeds("pdftotext", ["-v"]);
@@ -206,7 +209,7 @@ end
       "utf8",
     );
 
-    const render = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project, 30000, instrumented.env);
+    const render = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project, { env: instrumented.env });
     assert(render.code === 0, `batched LaTeX render failed:\n${combinedOutput(render)}`);
     const runs = await pdflatexRunCount(instrumented.counter);
     assert(runs === 1, `two explicit latex bodies started pdflatex ${runs} times instead of once`);
@@ -234,7 +237,7 @@ end
       "utf8",
     );
 
-    const render = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project, 30000, instrumented.env);
+    const render = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project, { env: instrumented.env });
     assert(render.code === 0, `shared Markdown and explicit LaTeX render failed:\n${combinedOutput(render)}`);
     const runs = await pdflatexRunCount(instrumented.counter);
     assert(runs === 1, `Markdown and explicit LaTeX started pdflatex ${runs} times instead of sharing one process`);
@@ -264,7 +267,7 @@ end
       "utf8",
     );
 
-    const render = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project, 30000, instrumented.env);
+    const render = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project, { env: instrumented.env });
     assert(render.code === 0, `scoped LaTeX preamble render failed:\n${combinedOutput(render)}`);
     const runs = await pdflatexRunCount(instrumented.counter);
     assert(runs === 2, `two distinct LaTeX preambles started pdflatex ${runs} times instead of twice`);
@@ -294,16 +297,16 @@ end
       "utf8",
     );
 
-    const pdfRender = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project, 30000, instrumented.env);
+    const pdfRender = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project, { env: instrumented.env });
     assert(pdfRender.code === 0, `initial cached LaTeX render failed:\n${combinedOutput(pdfRender)}`);
     assert(await pdflatexRunCount(instrumented.counter) === 1, "initial LaTeX render did not use one batched process");
 
-    const htmlRender = await spawnCollect(ssBin, ["render", "--format", "html", "slide.ss", "out.html"], project, 30000, instrumented.env);
+    const htmlRender = await spawnCollect(ssBin, ["render", "--format", "html", "slide.ss", "out.html"], project, { env: instrumented.env });
     assert(htmlRender.code === 0, `cached HTML LaTeX render failed:\n${combinedOutput(htmlRender)}`);
     assert(await pdflatexRunCount(instrumented.counter) === 1, "HTML render did not reuse PDF-rendered LaTeX artifacts");
 
     await writeFile(path.join(project, "preamble.tex"), "\\newcommand{\\CacheToken}{Second}\n", "utf8");
-    const changedRender = await spawnCollect(ssBin, ["render", "--format", "html", "slide.ss", "changed.html"], project, 30000, instrumented.env);
+    const changedRender = await spawnCollect(ssBin, ["render", "--format", "html", "slide.ss", "changed.html"], project, { env: instrumented.env });
     assert(changedRender.code === 0, `changed-preamble LaTeX render failed:\n${combinedOutput(changedRender)}`);
     const runs = await pdflatexRunCount(instrumented.counter);
     assert(runs === 2, `changing a LaTeX preamble file produced ${runs} pdflatex runs instead of invalidating once`);
@@ -325,7 +328,7 @@ function mkdtempProject(prefix) {
 
 async function commandSucceeds(command, args) {
   try {
-    const result = await spawnCollect(command, args, process.cwd(), 10000);
+    const result = await spawnCollect(command, args, process.cwd(), { timeoutMs: commandProbeTimeoutMs });
     return result.code === 0;
   } catch {
     return false;
@@ -333,7 +336,7 @@ async function commandSucceeds(command, args) {
 }
 
 async function instrumentPdflatex(project) {
-  const lookup = await spawnCollect("sh", ["-lc", "command -v pdflatex"], process.cwd(), 10000);
+  const lookup = await spawnCollect("sh", ["-lc", "command -v pdflatex"], process.cwd(), { timeoutMs: commandProbeTimeoutMs });
   assert(lookup.code === 0, `could not locate pdflatex:\n${combinedOutput(lookup)}`);
   const realPdflatex = lookup.stdout.trim();
   assert(realPdflatex.length > 0, "pdflatex lookup returned an empty path");
@@ -358,7 +361,7 @@ async function pdflatexRunCount(counter) {
   return (await readFile(counter, "utf8")).trim().split(/\r?\n/).filter(Boolean).length;
 }
 
-function spawnCollect(command, args, cwd, timeoutMs = 30000, env = process.env) {
+function spawnCollect(command, args, cwd, { timeoutMs = renderTimeoutMs, env = process.env } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, env });
     let stdout = "";
