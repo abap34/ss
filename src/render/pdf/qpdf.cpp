@@ -66,11 +66,16 @@ struct SsQpdfFormKey {
     }
 };
 
+static void ss_qpdf_hash_combine(size_t& seed, size_t value) {
+    constexpr size_t hash_mix_constant = 0x9e3779b9;
+    seed ^= value + hash_mix_constant + (seed << 6) + (seed >> 2);
+}
+
 struct SsQpdfFormKeyHash {
     size_t operator()(SsQpdfFormKey const& key) const {
         auto value = std::hash<SsQpdfDocument const*>{}(key.source);
-        value ^= std::hash<size_t>{}(key.page_index) + 0x9e3779b9 + (value << 6) + (value >> 2);
-        value ^= std::hash<int>{}(key.box) + 0x9e3779b9 + (value << 6) + (value >> 2);
+        ss_qpdf_hash_combine(value, std::hash<size_t>{}(key.page_index));
+        ss_qpdf_hash_combine(value, std::hash<int>{}(key.box));
         return value;
     }
 };
