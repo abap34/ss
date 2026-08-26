@@ -416,7 +416,53 @@ test "document state spec: prepared pages collect inline math asset dependencies
     try testing.expectEqual(@as(usize, 1), object.asset_keys.len);
     try testing.expectEqual(@as(usize, 1), pages.pages[0].asset_keys.len);
     try testing.expectEqual(object.asset_keys[0], pages.pages[0].asset_keys[0]);
-    try testing.expectEqual(core.prepared.assetDependencyKey(object.asset_deps[0], object.tex_preamble, object.tex_engine), object.asset_keys[0]);
+    try testing.expectEqual(core.prepared.assetDependencyKey(object.asset_deps[0], object.latex_preamble, object.latex_engine), object.asset_keys[0]);
+}
+
+test "document state spec: prepared pages preserve explicit LaTeX body dependencies" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+
+    const page = try state.addPage("Page");
+    const latex_object = try state.makeObject(page, "latex", null, .asset, .latex, "\\begin{center}$x+y$\\end{center}");
+    try state.setNodeFieldValue(latex_object, "render_kind", .{ .enum_case = .{
+        .enum_name = "RenderKind",
+        .case_name = "latex",
+    } });
+
+    var pages = try core.prepared.prepare(testing.allocator, &state);
+    defer pages.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), pages.pages.len);
+    try testing.expectEqual(@as(usize, 1), pages.pages[0].objects.len);
+    const object = pages.pages[0].objects[0];
+    try testing.expectEqual(@as(usize, 1), object.asset_deps.len);
+    try testing.expectEqual(core.prepared.AssetDependency.Kind.latex_body, object.asset_deps[0].kind);
+    try testing.expectEqualStrings("\\begin{center}$x+y$\\end{center}", object.asset_deps[0].source);
+    try testing.expectEqual(@as(usize, 1), object.asset_keys.len);
+    try testing.expectEqual(object.asset_keys[0], pages.pages[0].asset_keys[0]);
+}
+
+test "document state spec: LaTeX asset keys distinguish kind engine and preamble" {
+    const inline_dep = core.prepared.AssetDependency{ .kind = .inline_math, .source = "x", .content_start = 0, .content_end = 1 };
+    const body = core.prepared.AssetDependency{ .kind = .latex_body, .source = "x", .content_start = 0, .content_end = 1 };
+    const first_preamble = [_]core.render_env.LatexPreambleEntry{
+        .{ .source = .text, .value = "\\newcommand{\\Token}{A}" },
+    };
+    const second_preamble = [_]core.render_env.LatexPreambleEntry{
+        .{ .source = .text, .value = "\\newcommand{\\Token}{B}" },
+    };
+
+    const inline_key = core.prepared.assetDependencyKey(inline_dep, &.{}, .pdflatex);
+    const body_key = core.prepared.assetDependencyKey(body, &.{}, .pdflatex);
+    const lualatex_key = core.prepared.assetDependencyKey(body, &.{}, .lualatex);
+    const first_preamble_key = core.prepared.assetDependencyKey(body, &first_preamble, .pdflatex);
+    const second_preamble_key = core.prepared.assetDependencyKey(body, &second_preamble, .pdflatex);
+
+    try testing.expect(inline_key != body_key);
+    try testing.expect(body_key != lualatex_key);
+    try testing.expect(body_key != first_preamble_key);
+    try testing.expect(first_preamble_key != second_preamble_key);
 }
 
 test "document state spec: prepared page asset keys attach to layout results" {
@@ -624,33 +670,33 @@ fn zeroSpan() ast.Span {
     return .{ .start = 0, .end = 0 };
 }
 
-test "document state spec: TeX render environment resolves preamble and engine by scope" {
+test "document state spec: LaTeX render environment resolves preamble and engine by scope" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
     const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "math", null, .text, .math_tex, "x");
+    const object = try state.makeObject(page, "latex", null, .asset, .latex, "$x$");
 
-    try state.extendRenderEnv(state.document_id, core.render_env.OpAdd, core.render_env.KeyMathTexPreamble, "doc preamble");
-    try state.extendRenderEnv(state.document_id, core.render_env.OpSet, core.render_env.KeyMathTexEngine, "lualatex");
-    try state.extendRenderEnv(page, core.render_env.OpAdd, core.render_env.KeyMathTexPreambleFile, "page.tex");
-    try state.extendRenderEnv(page, core.render_env.OpSet, core.render_env.KeyMathTexEngine, "pdflatex");
-    try state.extendRenderEnv(object, core.render_env.OpAdd, core.render_env.KeyMathTexPreamble, "object preamble");
+    try state.extendRenderEnv(state.document_id, core.render_env.OpAdd, core.render_env.KeyLatexPreamble, "doc preamble");
+    try state.extendRenderEnv(state.document_id, core.render_env.OpSet, core.render_env.KeyLatexEngine, "lualatex");
+    try state.extendRenderEnv(page, core.render_env.OpAdd, core.render_env.KeyLatexPreambleFile, "page.tex");
+    try state.extendRenderEnv(page, core.render_env.OpSet, core.render_env.KeyLatexEngine, "pdflatex");
+    try state.extendRenderEnv(object, core.render_env.OpAdd, core.render_env.KeyLatexPreamble, "object preamble");
 
     var env = try core.render_env.resolveForNode(testing.allocator, &state, state.getNode(object).?);
     defer env.deinit(testing.allocator);
 
-    try testing.expectEqual(@as(usize, 3), env.tex_preamble.items.len);
-    try testing.expectEqual(core.render_env.TexPreambleSource.text, env.tex_preamble.items[0].source);
-    try testing.expectEqualStrings("doc preamble", env.tex_preamble.items[0].value);
-    try testing.expectEqual(core.render_env.TexPreambleSource.file, env.tex_preamble.items[1].source);
-    try testing.expectEqualStrings("page.tex", env.tex_preamble.items[1].value);
-    try testing.expectEqual(core.render_env.TexPreambleSource.text, env.tex_preamble.items[2].source);
-    try testing.expectEqualStrings("object preamble", env.tex_preamble.items[2].value);
-    try testing.expectEqual(core.render_env.TexEngine.pdflatex, env.tex_engine);
+    try testing.expectEqual(@as(usize, 3), env.latex_preamble.items.len);
+    try testing.expectEqual(core.render_env.LatexPreambleSource.text, env.latex_preamble.items[0].source);
+    try testing.expectEqualStrings("doc preamble", env.latex_preamble.items[0].value);
+    try testing.expectEqual(core.render_env.LatexPreambleSource.file, env.latex_preamble.items[1].source);
+    try testing.expectEqualStrings("page.tex", env.latex_preamble.items[1].value);
+    try testing.expectEqual(core.render_env.LatexPreambleSource.text, env.latex_preamble.items[2].source);
+    try testing.expectEqualStrings("object preamble", env.latex_preamble.items[2].value);
+    try testing.expectEqual(core.render_env.LatexEngine.pdflatex, env.latex_engine);
 
     const document = state.getNode(state.document_id).?;
     var document_env = try core.render_env.resolveForNode(testing.allocator, &state, document);
     defer document_env.deinit(testing.allocator);
-    try testing.expectEqual(core.render_env.TexEngine.lualatex, document_env.tex_engine);
+    try testing.expectEqual(core.render_env.LatexEngine.lualatex, document_env.latex_engine);
 }

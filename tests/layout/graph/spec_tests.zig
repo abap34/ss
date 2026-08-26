@@ -142,7 +142,7 @@ fn recordTypeName(root_key: []const u8) []const u8 {
     if (std.mem.eql(u8, root_key, "text")) return "TextStyle";
     if (std.mem.eql(u8, root_key, "chrome")) return "ChromeStyle";
     if (std.mem.eql(u8, root_key, "rule")) return "RuleStyle";
-    if (std.mem.eql(u8, root_key, "math")) return "MathStyle";
+    if (std.mem.eql(u8, root_key, "latex")) return "LatexStyle";
     return root_key;
 }
 
@@ -2082,10 +2082,10 @@ test "render policy: math alignment applies to markdown and vector math" {
     const resolved_page_text = core.render_policy.resolve(&state, state.getNode(page_text_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.left, resolved_page_text.text.?.math_align);
 
-    const math_object = try state.makeObject(page, "math_tex", null, .text, .text, "\\int_0^1 x^2 \\, dx");
-    try setRenderKind(&state, math_object, "vector_math");
-    try setMathAlign(&state, math_object, "right");
+    const latex_object = try state.makeObject(page, "latex", null, .asset, .latex, "$\\int_0^1 x^2 \\, dx$");
+    try setRenderKind(&state, latex_object, "latex");
+    try setMathAlign(&state, latex_object, "right");
 
-    const resolved_math = core.render_policy.resolve(&state, state.getNode(math_object).?);
-    try testing.expectEqual(core.render_policy.HorizontalAlign.right, resolved_math.math.?.horizontal_align);
+    const resolved_latex = core.render_policy.resolve(&state, state.getNode(latex_object).?);
+    try testing.expectEqual(core.render_policy.HorizontalAlign.right, resolved_latex.latex.?.horizontal_align);
 }

@@ -7,23 +7,21 @@ import { assert, ssBin } from "./harness.mjs";
 
 const pdflatexAvailable = await commandAvailable("pdflatex");
 
-if (pdflatexAvailable) {
-  await testPreludeMathtexUsesRawTexPayload();
-}
+if (pdflatexAvailable) await testPreludeLatexUsesLiteralPayload();
 await testThemeStoredThemeOverride("academic");
 await testThemeStoredThemeOverride("pop");
 
-async function testPreludeMathtexUsesRawTexPayload() {
+async function testPreludeLatexUsesLiteralPayload() {
   const project = await mkdtempProject("ss-stdlib-wrappers-");
   try {
-    const source = "x";
+    const source = "$x$";
     await writeFile(
       path.join(project, "slide.ss"),
       `import std:core/prelude as *
 
-page raw_tex
-let raw = mathtex!("${source}")
-place!(raw)
+page latex
+let formula = latex!("${source}")
+place!(formula)
 end
 `,
       "utf8",
@@ -33,10 +31,10 @@ end
 
     const dump = JSON.parse(await readFile(dumpPath, "utf8"));
     const node = dump.nodes.find((candidate) => candidate.content === source);
-    assert(node, `mathtex node was not found: ${JSON.stringify(dump.nodes)}`);
-    assert(node.role === "math_tex", `mathtex should use math_tex role: ${JSON.stringify(node)}`);
-    assert(node.object_kind === "asset", `mathtex should use asset object kind: ${JSON.stringify(node)}`);
-    assert(node.payload_kind === "math_tex", `mathtex should use math_tex payload: ${JSON.stringify(node)}`);
+    assert(node, `latex node was not found: ${JSON.stringify(dump.nodes)}`);
+    assert(node.role === "latex", `latex should use latex role: ${JSON.stringify(node)}`);
+    assert(node.object_kind === "asset", `latex should use asset object kind: ${JSON.stringify(node)}`);
+    assert(node.payload_kind === "latex", `latex should use latex payload: ${JSON.stringify(node)}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

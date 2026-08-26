@@ -747,8 +747,7 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\  title!("Title")
         \\  subtitle!("Subtitle")
         \\  text!("Body")
-        \\  math!("x + y")
-        \\  mathtex!("x^2")
+        \\  latex!("$x + y$")
         \\  code_l!("const x = 1", "zig")
         \\  code!("print('x')", "python")
         \\  code_file!("snippet.zig", "zig")
@@ -795,6 +794,65 @@ test "compiler semantics: stdlib core components build when called directly" {
     );
 }
 
+test "compiler semantics: latex is the only public explicit LaTeX constructor" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  math!("x + y")
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownFunction: unknown function: math!");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  mathtex!("x + y")
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownFunction: unknown function: mathtex!");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  tex!("$x + y$")
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownFunction: unknown function: tex!");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  place!(math_obj("x + y"))
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownFunction: unknown function: math_obj");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  place!(tex_obj("$x + y$"))
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownFunction: unknown function: tex_obj");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\document
+        \\  tex_preamble("legacy")
+        \\end
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownFunction: unknown function: tex_preamble");
+}
+
 test "compiler semantics: connector components resolve generic connector rendering" {
     try expectDumpContains(
         \\import std:core/prelude
@@ -826,7 +884,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  head!("Head")
         \\  subhead!("Subhead")
         \\  text!("Body")
-        \\  tex!("x^2")
+        \\  latex!("$x^2$")
         \\  code!("print('x')", "python")
         \\  code_file!("snippet.zig", "zig")
         \\  toc!("Contents")
@@ -868,7 +926,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  head!("Head")
         \\  subhead!("Subhead")
         \\  text!("Body")
-        \\  tex!("x^2")
+        \\  latex!("$x^2$")
         \\  figure!("Figure")
         \\  image!("image.svg")
         \\  pdf!("doc.pdf")
@@ -1228,27 +1286,27 @@ test "compiler semantics: math alignment helpers are stdlib functions" {
         \\
         \\page ok
         \\  left_math(text("$$x^2$$"))
-        \\  math_align(tex("x^2 + y^2 = z^2"), Align.right)
+        \\  math_align(latex("$x^2 + y^2 = z^2$"), Align.right)
         \\end
         \\
     );
 }
 
-test "compiler semantics: TeX preamble helpers extend scoped render environment" {
+test "compiler semantics: LaTeX preamble helpers extend scoped render environment" {
     try expectDumpContains(
         \\import std:themes/default as *
         \\
         \\document
-        \\tex_engine(TexEngine.lualatex)
-        \\tex_preamble("doc preamble")
-        \\tex_preamble_file("tex/preamble.tex")
+        \\latex_engine(LatexEngine.lualatex)
+        \\latex_preamble("doc preamble")
+        \\latex_preamble_file("tex/preamble.tex")
         \\end
         \\
         \\page ok
-        \\  page_tex_engine(TexEngine.pdflatex)
-        \\  page_tex_preamble("page preamble")
-        \\  page_tex_preamble_file("tex/page.tex")
-        \\  tex("x")
+        \\  page_latex_engine(LatexEngine.pdflatex)
+        \\  page_latex_preamble("page preamble")
+        \\  page_latex_preamble_file("tex/page.tex")
+        \\  latex("$x$")
         \\end
         \\
     , &.{
@@ -1757,9 +1815,9 @@ test "compiler semantics: nested property assignment updates style records" {
         \\  body.layout.x = 123
         \\  body.layout.wrap = WrapMode.off
         \\
-        \\  let formula = math_obj("x")
-        \\  formula.math.scale = 2
-        \\  formula.math.align = Align.left
+        \\  let formula = latex_obj("$x$")
+        \\  formula.latex.scale = 2
+        \\  formula.latex.align = Align.left
         \\end
         \\
     ;
@@ -1771,8 +1829,8 @@ test "compiler semantics: nested property assignment updates style records" {
     try expectObjectFieldPath(source, "text", &.{ "font", "stretch" }, "expanded");
     try expectObjectFieldPath(source, "layout", &.{"x"}, "123");
     try expectObjectFieldPath(source, "layout", &.{"wrap"}, "off");
-    try expectObjectFieldPath(source, "math", &.{"scale"}, "2");
-    try expectObjectFieldPath(source, "math", &.{"align"}, "left");
+    try expectObjectFieldPath(source, "latex", &.{"scale"}, "2");
+    try expectObjectFieldPath(source, "latex", &.{"align"}, "left");
 }
 
 test "compiler semantics: nested property assignment preserves existing style record leaves" {
