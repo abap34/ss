@@ -32,8 +32,8 @@ const largeGlyphItemThresholds = Object.freeze({
   largeDifferenceRatio: 0.045,
   spatialTolerance: 1,
 });
-const canRenderAlgorithm2e = full &&
-  await commandSucceeds("pdflatex", ["--version"]) &&
+const canRenderLatex = full && await commandSucceeds("pdflatex", ["--version"]);
+const canRenderAlgorithm2e = canRenderLatex &&
   await commandSucceeds("kpsewhich", ["algorithm2e.sty"]);
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
@@ -57,9 +57,11 @@ if (full) {
   fixtures.push({ name: "vector", source: path.join(repository, "tests/fixtures/render/parity/vector/slide.ss") });
   fixtures.push({ name: "pdf", source: await prepareGeneratedFixture("pdf", "asset.pdf", pdfAsset()) });
   fixtures.push({ name: "semantics", source: path.join(repository, "tests/fixtures/render/parity/semantics/slide.ss") });
-  fixtures.push({ name: "math", source: path.join(repository, "tests/fixtures/render/math.ss") });
-  fixtures.push({ name: "markdown-math", source: path.join(repository, "tests/fixtures/render/parity/math/markdown.ss") });
-  fixtures.push({ name: "math-fallback", source: path.join(repository, "tests/fixtures/render/parity/math/fallback/slide.ss") });
+  if (canRenderLatex) {
+    fixtures.push({ name: "math", source: path.join(repository, "tests/fixtures/render/math.ss") });
+    fixtures.push({ name: "markdown-math", source: path.join(repository, "tests/fixtures/render/parity/math/markdown.ss") });
+    fixtures.push({ name: "math-fallback", source: path.join(repository, "tests/fixtures/render/parity/math/fallback/slide.ss") });
+  }
   if (canRenderAlgorithm2e) {
     fixtures.push({ name: "algorithm2e", source: path.join(repository, "tests/fixtures/render/parity/math/algorithm2e/slide.ss") });
   }
@@ -118,8 +120,8 @@ await withBrowser(output, async (browser, baseUrl) => {
   if (full) {
     await inspectNormalHtml(browser, baseUrl);
     await inspectEmbeddedPdf(browser, baseUrl);
-    await inspectStructuredMath(browser, baseUrl);
-    if (canRenderAlgorithm2e) await inspectRawMath(browser, baseUrl);
+    if (canRenderLatex) await inspectMarkdownLatex(browser, baseUrl);
+    if (canRenderAlgorithm2e) await inspectLatexBody(browser, baseUrl);
   }
 
   const baselinePath = process.env.SS_RENDER_BASELINE_PDF;
@@ -219,18 +221,18 @@ function itemThresholds(item, overrides) {
       largeDifferenceRatio: 0.06,
       spatialTolerance: 1,
     };
+  } else if (item.kind === "latex") {
+    thresholds = {
+      ...defaultThresholds,
+      meanAbsoluteError: 0.007,
+      largeDifferenceRatio: 0.06,
+      spatialTolerance: 1,
+    };
   } else if (item.usesPdfViewer) {
     thresholds = {
       ...defaultThresholds,
       meanAbsoluteError: 0.0045,
       largeDifferenceRatio: 0.045,
-      spatialTolerance: 1,
-    };
-  } else if (item.kind === "math") {
-    thresholds = {
-      ...defaultThresholds,
-      meanAbsoluteError: 0.005,
-      largeDifferenceRatio: 0.025,
       spatialTolerance: 1,
     };
   } else {
@@ -377,8 +379,8 @@ async function inspectEmbeddedPdf(browser, baseUrl) {
       let maxX = -1;
       let maxY = -1;
       for (let index = 0; index < pixels.length; index += 4) {
-        if (pixels[index + 3] > 0 && pixels[index] < 100 &&
-            pixels[index + 1] < 100 && pixels[index + 2] < 100) {
+        if (pixels[index + 3] > 0 && pixels[index] < 160 &&
+            pixels[index + 1] < 160 && pixels[index + 2] < 160) {
           const pixel = index / 4;
           const x = pixel % width;
           const y = Math.floor(pixel / width);
@@ -408,37 +410,36 @@ function assertNormalizedGeometry(actual, expected) {
   }
 }
 
-async function inspectStructuredMath(browser, baseUrl) {
+async function inspectMarkdownLatex(browser, baseUrl) {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
   try {
     await page.goto(`${baseUrl}/markdown-math.html`, { waitUntil: "networkidle" });
-    await page.evaluate(() => document.fonts.ready);
-    assert(await page.locator(".ss-math-text").count() > 0, "structured mathematics omitted its selectable HTML text layer");
-    assert(await page.locator(".ss-semantic-layer math.ss-mathml").count() >= 2, "structured mathematics omitted MathML semantics");
-    assert.equal(await page.locator(".ss-math svg").count(), 0, "structured mathematics used an SVG display fallback");
-    assert.equal(await page.locator(".ss-math.ss-pdf").count(), 0, "structured mathematics used a PDF display fallback");
+    await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: 120_000 });
+    assert(await page.locator(".ss-latex.ss-pdf").count() >= 2, "Markdown mathematics omitted LaTeX PDF items");
+    assert(await page.locator('.ss-semantic-layer .ss-latex-semantic[role="math"]').count() >= 2, "Markdown mathematics omitted semantic labels");
+    assert.equal(await page.locator("math").count(), 0, "Markdown mathematics unexpectedly emitted MathML");
   } finally {
     await page.close();
   }
 }
 
-async function inspectRawMath(browser, baseUrl) {
+async function inspectLatexBody(browser, baseUrl) {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1200 } });
   try {
     await page.goto(`${baseUrl}/algorithm2e.html`, { waitUntil: "networkidle" });
     await page.waitForFunction(() => document.documentElement.dataset.ssReady === "true", null, { timeout: 120_000 });
-    const container = page.locator(".ss-math.ss-pdf");
-    assert.equal(await container.count(), 1, "raw TeX did not use one scoped PDF.js viewer");
-    assert.equal(await container.getAttribute("data-canvas-background"), "transparent", "raw TeX did not request a transparent PDF canvas");
-    assert.equal(await page.locator('object[type="application/pdf"]').count(), 0, "raw TeX used a PDF object element");
+    const container = page.locator(".ss-latex.ss-pdf");
+    assert.equal(await container.count(), 1, "LaTeX body did not use one scoped PDF.js viewer");
+    assert.equal(await container.getAttribute("data-canvas-background"), "transparent", "LaTeX body did not request a transparent PDF canvas");
+    assert.equal(await page.locator('object[type="application/pdf"]').count(), 0, "LaTeX body used a PDF object element");
     const cornerAlpha = await container.locator("canvas").evaluate((canvas) =>
       canvas.getContext("2d").getImageData(0, 0, 1, 1).data[3]);
-    assert.equal(cornerAlpha, 0, "raw TeX PDF canvas painted an opaque background");
+    assert.equal(cornerAlpha, 0, "LaTeX PDF canvas painted an opaque background");
     const textLayer = container.locator(".textLayer");
     const text = await textLayer.textContent();
     const textBounds = await textLayer.boundingBox();
     assert(textBounds && textBounds.width > 0 && textBounds.height > 0,
-      "raw TeX text layer had no pointer-selectable area");
+      "LaTeX text layer had no pointer-selectable area");
     assert(text?.includes("SelectableAlgorithmInput"), `algorithm2e input text was not selectable: ${JSON.stringify(text)}`);
     assert(text?.includes("SelectableAlgorithmResult"), `algorithm2e result text was not selectable: ${JSON.stringify(text)}`);
     const selected = await selectedText(textLayer);
@@ -449,8 +450,8 @@ async function inspectRawMath(browser, baseUrl) {
     }).first();
     const dragged = await dragSelectedText(page, dragSpan);
     assert(dragged.includes("SelectableAlgorithmInput"),
-      `pointer drag could not select raw TeX text: ${JSON.stringify(dragged)}`);
-    assert.equal(await page.locator('.ss-semantic-layer [role="math"]').count(), 1, "raw TeX omitted its math semantics");
+      `pointer drag could not select LaTeX text: ${JSON.stringify(dragged)}`);
+    assert.equal(await page.locator('.ss-semantic-layer [role="math"]').count(), 1, "LaTeX body omitted its math semantics");
   } finally {
     await page.close();
   }

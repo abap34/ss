@@ -20,87 +20,40 @@ await rm(output, { recursive: true, force: true });
 await mkdir(projects, { recursive: true });
 await preparePdfViewer(output, repository);
 
-const mathPages = await renderMathCases();
+const latexPages = hasPdflatex ? await renderLatexCases() : null;
 await renderPdfAssetCases();
 await renderOffPageCase();
 
 await withBrowser(output, async (browser, baseUrl) => {
-  await testMathGeometry(browser, baseUrl, mathPages);
+  if (latexPages) await testLatexGeometry(browser, baseUrl, latexPages);
   await testPdfAssetGeometry(browser, baseUrl);
   await testOffPageObject(browser, baseUrl);
 });
 
-async function renderMathCases() {
-  const project = await createProject("math");
+async function renderLatexCases() {
+  const project = await createProject("latex");
   const pages = {
-    structuredOne: 0,
-    structuredTwo: 1,
-    rawWide: null,
-    rawNarrow: null,
-    globalNarrow: null,
-    localWide: null,
+    naturalOne: 0,
+    naturalTwo: 1,
   };
-  let source = `import std:themes/default as *
-
-${hasPdflatex ? `document
-raw_tex_width_ratio_all(0.82)
-end
-` : ""}
+  const source = `import std:themes/default as *
 
 page math_scale_one
-let formula = math!("x + y = z", 1)
+let formula = latex!("$x + y = z$", 1)
 ~ formula.left == page.left + 96
 ~ formula.right == page.right - 96
 ~ formula.top == page.top - 240
 end
 
 page math_scale_two
-let formula = math!("x + y = z", 2)
+let formula = latex!("$x + y = z$", 2)
 ~ formula.left == page.left + 96
 ~ formula.right == page.right - 96
 ~ formula.top == page.top - 240
 end
 `;
-  if (hasPdflatex) {
-    pages.rawWide = 2;
-    pages.rawNarrow = 3;
-    pages.globalNarrow = 4;
-    pages.localWide = 5;
-    source += `
-page tex_scale_one
-let formula = tex!("x + y = z", 1)
-formula.math.raw_tex_width_ratio = 1
-~ formula.left == page.left + 96
-~ formula.right == page.right - 96
-~ formula.top == page.top - 240
-end
-
-page tex_width_ratio
-let formula = tex!("x + y = z", 1)
-formula.math.raw_tex_width_ratio = 0.82
-~ formula.left == page.left + 96
-~ formula.right == page.right - 96
-~ formula.top == page.top - 240
-end
-
-page global_ratio
-let formula = tex!("x + y = z", 1)
-~ formula.left == page.left + 96
-~ formula.right == page.right - 96
-~ formula.top == page.top - 240
-end
-
-page local_override
-let formula = tex!("x + y = z", 1)
-formula.math.raw_tex_width_ratio = 1
-~ formula.left == page.left + 96
-~ formula.right == page.right - 96
-~ formula.top == page.top - 240
-end
-`;
-  }
   await writeFile(path.join(project, "slide.ss"), source, "utf8");
-  await render(project, "math.pdf");
+  await render(project, "latex.pdf");
   return pages;
 }
 
@@ -158,28 +111,15 @@ end
   assert.match(result.stderr, /PageOverflow/, "off-page object should produce PageOverflow");
 }
 
-async function testMathGeometry(browser, baseUrl, pages) {
-  const images = await capturePdfPages(browser, baseUrl, "math.pdf");
-  const structuredOne = trimmedGeometry(images[pages.structuredOne]);
-  const structuredTwo = trimmedGeometry(images[pages.structuredTwo]);
-  assert(structuredOne && structuredTwo, "structured math was not visible");
+async function testLatexGeometry(browser, baseUrl, pages) {
+  const images = await capturePdfPages(browser, baseUrl, "latex.pdf");
+  const naturalOne = trimmedGeometry(images[pages.naturalOne]);
+  const naturalTwo = trimmedGeometry(images[pages.naturalTwo]);
+  assert(naturalOne && naturalTwo, "LaTeX output was not visible");
   assert(
-    structuredTwo.width > structuredOne.width * 1.85 && structuredTwo.width < structuredOne.width * 2.15,
-    `structured math scale should roughly double width: ${summary(structuredOne)} -> ${summary(structuredTwo)}`,
+    naturalTwo.width > naturalOne.width * 1.85 && naturalTwo.width < naturalOne.width * 2.15,
+    `LaTeX scale should roughly double width: ${summary(naturalOne)} -> ${summary(naturalTwo)}`,
   );
-
-  if (pages.rawWide === null) return;
-  const rawWide = trimmedGeometry(images[pages.rawWide]);
-  const rawNarrow = trimmedGeometry(images[pages.rawNarrow]);
-  const globalNarrow = trimmedGeometry(images[pages.globalNarrow]);
-  const localWide = trimmedGeometry(images[pages.localWide]);
-  assert(rawWide && rawNarrow && globalNarrow && localWide, "raw TeX was not visible");
-  const availableWidth = (1280 - 96 * 2) * 2;
-  assert(rawWide.width > availableWidth * 0.85, `raw TeX should use most of its frame: ${summary(rawWide)}`);
-  assert(rawWide.width < availableWidth * 0.99, `raw TeX should retain breathing room: ${summary(rawWide)}`);
-  assert(rawNarrow.width < rawWide.width * 0.9, `local raw TeX ratio was ignored: ${summary(rawWide)} -> ${summary(rawNarrow)}`);
-  assert(globalNarrow.width < localWide.width * 0.9, `local raw TeX ratio should override the page policy: ${summary(globalNarrow)} -> ${summary(localWide)}`);
-  assert(structuredOne.width < rawWide.width * 0.25, `structured math should retain its natural width: ${summary(structuredOne)} vs ${summary(rawWide)}`);
 }
 
 async function testPdfAssetGeometry(browser, baseUrl) {

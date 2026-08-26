@@ -148,7 +148,7 @@ async function itemRegions(page, pageBox, targetWidth, targetHeight) {
       const box = item.getBoundingClientRect();
       let kind = "other";
       if (item.classList.contains("ss-line")) kind = "line";
-      else if (item.classList.contains("ss-math")) kind = "math";
+      else if (item.classList.contains("ss-latex")) kind = "latex";
       else if (item.classList.contains("ss-pdf")) kind = "pdf";
       else if (item.classList.contains("ss-text")) kind = "text";
       return {

@@ -26,8 +26,8 @@ They intentionally assert:
 PDF and HTML visual parity is a local test boundary under `tests/visual/`. It
 uses the same in-memory `render.Ir` for both outputs, then renders both with the
 pinned Chromium and PDF.js versions. Run `zig build test-render-parity` for the
-normal set and `zig build test-render-parity-full` to include structured
-mathematics and, when available, an `algorithm2e` raw-TeX case. PDF.js-backed
+normal set and `zig build test-render-parity-full` to include Markdown
+mathematics and, when available, an `algorithm2e` LaTeX-body case. PDF.js-backed
 pages allow a one-device-pixel spatial rasterization tolerance while retaining
 the same numeric difference limits and separate exact DOM-coordinate checks.
 These steps are intentionally outside normal CI and do not use Poppler or
@@ -35,8 +35,8 @@ ImageMagick.
 
 PDF-only pixel behavior is checked by `zig build test-render-behavior` with the
 same Chromium and PDF.js capture path. This local-only step covers off-page
-clipping, embedded PDF sizing, and math scaling. Raw TeX cases run only when
-their configured TeX engine is available. No visual test uses Poppler or
+clipping, embedded PDF sizing, and math scaling. LaTeX-body cases run only when
+their configured LaTeX engine is available. No visual test uses Poppler or
 ImageMagick.
 
 Fixed-document rendering performance is measured with five runs per mode by
