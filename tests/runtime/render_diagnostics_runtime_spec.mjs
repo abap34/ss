@@ -9,14 +9,14 @@ const pdflatexAvailable = await commandAvailable("pdflatex");
 
 if (pdflatexAvailable) {
   await testRenderFailureProducesDiagnostic();
+  await testRenderFailureWritesStructuredDiagnostic();
+  await testInlineMathRenderFailureLocatesFormula();
+  await testConcatenatedMathRenderFailureLocatesSourceLiteral();
 }
 if (process.platform !== "win32") {
   await testExternalCommandOutputLimitsAreActionable();
   await testInvalidExternalExecutableIsActionable();
 }
-await testRenderFailureWritesStructuredDiagnostic();
-await testInlineMathRenderFailureLocatesFormula();
-await testConcatenatedMathRenderFailureLocatesSourceLiteral();
 await testSvgAssetRenderFailureLocatesAssetReference();
 await testDiagnosticsWriteFailurePreservesPrimaryDiagnostic();
 await testHtmlWriteFailureStillWritesDiagnostics();
@@ -34,7 +34,7 @@ async function testRenderFailureProducesDiagnostic() {
       `import std:themes/default as *
 
 page bad
-tex!("\\notacommand")
+latex!("\\notacommand")
 end
 `,
       "utf8",
@@ -44,9 +44,9 @@ end
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code !== 0, "render should fail for an invalid artifact");
     assert(output.includes("RenderFailed:"), `render failure did not produce a render diagnostic:\n${output}`);
-    assertMathCommandSummary(output, "render diagnostic omitted command output summary");
-    assert(output.includes("slide.ss:4:7"), `render diagnostic omitted formula source location:\n${output}`);
-    assert(output.includes('| tex!("\\notacommand")'), `render diagnostic omitted formula source excerpt:\n${output}`);
+    assertLatexCommandSummary(output, "render diagnostic omitted command output summary");
+    assert(output.includes("slide.ss:4:9"), `render diagnostic omitted formula source location:\n${output}`);
+    assert(output.includes('| latex!("\\notacommand")'), `render diagnostic omitted formula source excerpt:\n${output}`);
     assert(!output.includes("panic:"), `render failure should not panic:\n${output}`);
     assert(!output.includes("native pdf:"), `render failure should not bypass diagnostics:\n${output}`);
   } finally {
@@ -74,7 +74,7 @@ stream.write("x".repeat(140 * 1024));
       `import std:themes/default as *
 
 page bad
-tex!("x")
+latex!("x")
 end
 `,
       "utf8",
@@ -93,7 +93,7 @@ end
       assert(result.code !== 0, `render should fail when ${testCase.stream} exceeds its capture limit`);
       assert(output.includes("RenderFailed:"), `${testCase.stream} limit did not produce a source diagnostic:\n${output}`);
       assert(output.includes(`more than ${testCase.limit} KiB to ${testCase.stream}`), `${testCase.stream} limit omitted its concrete bound:\n${output}`);
-      assert(output.includes("fix repeated diagnostics in the TeX source or configured preamble"), `${testCase.stream} limit omitted corrective guidance:\n${output}`);
+      assert(output.includes("fix repeated diagnostics in the LaTeX source or configured preamble"), `${testCase.stream} limit omitted corrective guidance:\n${output}`);
       assert(!output.includes("the file exceeds the supported size limit"), `${testCase.stream} limit was misreported as a file-size failure:\n${output}`);
     }
   } finally {
@@ -114,7 +114,7 @@ async function testInvalidExternalExecutableIsActionable() {
       `import std:themes/default as *
 
 page bad
-tex!("x")
+latex!("x")
 end
 `,
       "utf8",
@@ -124,10 +124,10 @@ end
       PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
     });
     const output = `${result.stdout}\n${result.stderr}`;
-    assert(result.code !== 0, "render should fail when tex_engine is not a runnable executable");
+    assert(result.code !== 0, "render should fail when latex_engine is not a runnable executable");
     assert(output.includes("RenderFailed:"), `invalid executable did not produce a source diagnostic:\n${output}`);
     assert(output.includes("is not runnable on this platform"), `invalid executable omitted the concrete cause:\n${output}`);
-    assert(output.includes("install a compatible executable or select another tex_engine"), `invalid executable omitted corrective guidance:\n${output}`);
+    assert(output.includes("install a compatible executable or select another latex_engine"), `invalid executable omitted corrective guidance:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -171,7 +171,7 @@ end
     assert(diagnostic.path.endsWith("/slide.ss"), `unexpected diagnostic path: ${JSON.stringify(diagnostic)}`);
     assert(diagnostic.range.start.line === 3, `unexpected diagnostic start line: ${JSON.stringify(diagnostic)}`);
     assert(diagnostic.range.start.character === 25, `unexpected diagnostic start character: ${JSON.stringify(diagnostic)}`);
-    assert(diagnostic.message.includes("UnsupportedMathSyntax"), `structured diagnostic omitted the math syntax error: ${diagnostic.message}`);
+    assert(diagnostic.message.includes("Undefined control sequence"), `structured diagnostic omitted the LaTeX error: ${diagnostic.message}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -196,7 +196,7 @@ end
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code !== 0, "render should fail for invalid inline math");
     assert(output.includes("RenderFailed:"), `inline math failure did not produce a render diagnostic:\n${output}`);
-    assert(output.includes("UnsupportedMathSyntax"), `inline math diagnostic omitted the math syntax error:\n${output}`);
+    assertLatexCommandSummary(output, "inline math diagnostic omitted the LaTeX error");
     assert(output.includes("slide.ss:4:26"), `inline math diagnostic did not point at the failing formula:\n${output}`);
     assert(output.includes('| text!("first $x$ second $\\notacommand$ third")'), `inline math diagnostic omitted source excerpt:\n${output}`);
   } finally {
@@ -224,7 +224,7 @@ end
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code !== 0, "render should fail for invalid concatenated inline math");
     assert(output.includes("RenderFailed:"), `concatenated math failure did not produce a render diagnostic:\n${output}`);
-    assert(output.includes("UnsupportedMathSyntax"), `concatenated math diagnostic omitted the math syntax error:\n${output}`);
+    assertLatexCommandSummary(output, "concatenated math diagnostic omitted the LaTeX error");
     assert(output.includes("slide.ss:5:19"), `concatenated math diagnostic did not point at the source literal:\n${output}`);
     assert(output.includes('| text!(prefix ++ "$\\notacommand$ third")'), `concatenated math diagnostic omitted source excerpt:\n${output}`);
   } finally {
@@ -476,7 +476,7 @@ async function mkdtempProject(prefix) {
   return mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
-function assertMathCommandSummary(output, label) {
+function assertLatexCommandSummary(output, label) {
   assert(output.includes("Undefined control sequence"), `${label}:\n${output}`);
 }
 

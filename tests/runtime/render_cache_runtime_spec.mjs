@@ -261,7 +261,7 @@ exit 1
       `import std:themes/default as *
 
 page main
-tex!("x")
+latex!("$x$")
 end
 `,
       "utf8",

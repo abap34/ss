@@ -11,10 +11,10 @@ await testNaturalTitleWidthDoesNotSelfWrap();
 await testCheckReportsRasterMeasurementFailure();
 await testCheckReportsUnknownStandaloneIcon();
 await testPanelHeightUsesRenderedIconMeasurement();
-await testCheckReportsUnsupportedInlineMath();
-await testPanelHeightUsesRenderedMathMeasurement();
 if (pdflatexAvailable) {
-  await testRawTexBlockUsesMostAvailableWidth();
+  await testPanelHeightUsesRenderedMathMeasurement();
+  await testCheckReportsInvalidInlineLatex();
+  await testLatexScaleChangesNaturalWidth();
 }
 await testPdfFactorScalesMeasuredAssetFrame();
 
@@ -125,7 +125,7 @@ end
   }
 }
 
-async function testCheckReportsUnsupportedInlineMath() {
+async function testCheckReportsInvalidInlineLatex() {
   const project = await mkdtempProject("ss-layout-measure-math-failure-");
   try {
     const slide = path.join(project, "slide.ss");
@@ -142,9 +142,8 @@ end
 
     const result = await spawnCollect(ssBin, ["check", "slide.ss"], project);
     const output = stripAnsi(`${result.stdout}\n${result.stderr}`);
-    assert(result.code !== 0, "check should fail when structured math syntax is unsupported");
-    assert(output.includes("RenderFailed:"), `unsupported math did not produce a render diagnostic:\n${output}`);
-    assert(output.includes("UnsupportedMathSyntax"), `render diagnostic omitted the structured math error:\n${output}`);
+    assert(result.code !== 0, "check should fail when LaTeX rejects inline mathematics");
+    assert(output.includes("RenderFailed:"), `invalid LaTeX did not produce a render diagnostic:\n${output}`);
     assert(output.includes("slide.ss:4:9"), `render diagnostic did not point at the failing formula:\n${output}`);
     assert(output.includes('| text!("$\\notacommand$")'), `measurement diagnostic omitted source excerpt:\n${output}`);
   } finally {
@@ -206,8 +205,8 @@ end
   }
 }
 
-async function testRawTexBlockUsesMostAvailableWidth() {
-  const project = await mkdtempProject("ss-layout-measure-raw-tex-width-");
+async function testLatexScaleChangesNaturalWidth() {
+  const project = await mkdtempProject("ss-layout-measure-latex-scale-");
   try {
     const slide = path.join(project, "slide.ss");
     const dumpPath = path.join(project, "dump.json");
@@ -215,12 +214,15 @@ async function testRawTexBlockUsesMostAvailableWidth() {
       slide,
       `import std:themes/default as *
 
-page raw_tex_width
-let formula = tex! <<
-\\begin{tabular}{l}one\\\\two\\\\three\\\\four\\end{tabular}
->>
+page latex_natural
+let formula = latex!("$x + y$")
 ~ formula.left == page.left + 100
-~ formula.right == page.right - 100
+~ formula.top == page.top - 160
+end
+
+page latex_scaled
+let formula = latex!("$x + y$", 2)
+~ formula.left == page.left + 100
 ~ formula.top == page.top - 160
 end
 `,
@@ -228,9 +230,9 @@ end
     );
 
     const dump = await dumpSlide(project, dumpPath);
-    const formula = dump.nodes.find((candidate) => typeof candidate.content === "string" && candidate.content.includes("\\begin{tabular}"));
-    assert(formula, "tex formula node was not found in dump");
-    assert(formula.width > 1000, `raw tex block frame should span the available width, got ${frameSummary(formula)}`);
+    const formulas = dump.nodes.filter((candidate) => candidate.content === "$x + y$");
+    assert(formulas.length === 2, `expected two latex nodes, got ${JSON.stringify(formulas)}`);
+    assert(formulas[1].width > formulas[0].width * 1.8, `LaTeX scale did not change natural width: ${frameSummary(formulas[0])} -> ${frameSummary(formulas[1])}`);
 
   } finally {
     await rm(project, { recursive: true, force: true });

@@ -41,9 +41,9 @@ automatic = false
 `, "utf8");
   const source = `import std:core/prelude as *
 
-page raw_tex
-let raw = mathtex!("x")
-place!(raw)
+page latex
+let formula = latex!("$x$")
+place!(formula)
 end
 `;
   await writeFile(slide, source, "utf8");
@@ -54,7 +54,7 @@ end
     const diagnostics = client.waitForDiagnostics(
       uri,
       (items, message) => items.length === 0 && message.params.version === 1,
-      "raw TeX source diagnostics",
+      "LaTeX source diagnostics",
     );
     client.openDocument({ uri, text: source, version: 1 });
     await diagnostics;

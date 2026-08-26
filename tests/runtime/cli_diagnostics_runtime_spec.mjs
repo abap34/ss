@@ -33,7 +33,6 @@ await testProjectImportsResolveFromEntryDirectory();
 await testWatchAssetBaseFailureReportsPaths();
 await testWatchFingerprintFailureIsDeduplicatedAndRecovers();
 await testRenderCachePathConflictReportsReason();
-await testMathFontCacheFailureReportsPath();
 await testMissingHighlightQueryReportsPath();
 await testFontEnvironmentRefreshFailureIsActionable();
 await testContextDiagnosticsDoNotLeakInternalErrors();
@@ -823,35 +822,6 @@ async function testRenderCachePathConflictReportsReason() {
       assert(output.includes("not a directory"), `${testCase.label} cache failure omitted the path conflict:\n${output}`);
       assert(!/^error: NotDir\s*$/m.test(output), `${testCase.label} cache failure leaked a bare internal error:\n${output}`);
     }
-  } finally {
-    await rm(project, { recursive: true, force: true });
-  }
-}
-
-async function testMathFontCacheFailureReportsPath() {
-  const project = await mkdtempProject("ss-cli-math-font-cache-conflict-");
-  try {
-    const renderCache = path.join(project, ".ss-cache", "render");
-    await mkdir(renderCache, { recursive: true });
-    await writeFile(path.join(renderCache, "fonts"), "not a directory\n", "utf8");
-    await writeFile(
-      path.join(project, "slide.ss"),
-      `import std:themes/default as *
-
-page main
-text!("value $x$")
-end
-`,
-      "utf8",
-    );
-
-    const result = await runSs(["render", "slide.ss", "out.pdf"], project);
-    const output = combinedOutput(result);
-    assert(result.code !== 0, "render should fail when the math-font cache path is a file");
-    assert(output.includes("RenderCacheAccessFailed:"), `math-font cache failure omitted its operation:\n${output}`);
-    assert(output.includes(path.join(".ss-cache", "render", "fonts")), `math-font cache failure omitted its path:\n${output}`);
-    assert(output.includes("not a directory"), `math-font cache failure omitted the path conflict:\n${output}`);
-    assert(!output.includes("CommandFailed:"), `math-font cache failure escaped to the command boundary:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
