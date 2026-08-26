@@ -611,9 +611,24 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
     try composed_pages[0].appendFillRect(allocator, null, .{ .x = 0, .y = 0, .width = 320, .height = 180 }, .{ .r = 1, .g = 1, .b = 1 });
     var resource_builder = render_resources.Builder{};
     defer resource_builder.deinit(allocator);
+    var composed_font_builder = render.FontBuilder{};
+    defer composed_font_builder.deinit(allocator);
     const source_resource = try resource_builder.addPath(allocator, testing.io, .pdf, source_path);
-    var resources = try resource_builder.take(allocator);
-    defer resources.deinit(allocator);
+    try render_support.appendText(
+        allocator,
+        testing.io,
+        &composed_pages[0],
+        &resource_builder,
+        &composed_font_builder,
+        10,
+        10,
+        16,
+        300,
+        "native text before PDF",
+        .{ .family = "sans-serif", .weight = 400, .style = .normal, .stretch = .normal },
+        10,
+        .{ .r = 0, .g = 0, .b = 0 },
+    );
     try composed_pages[0].appendPdfPage(
         allocator,
         11,
@@ -623,13 +638,28 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
         .crop,
         true,
     );
-    composed_pages[0].items.items[1].pdf_page.header.transform.x0 = 6;
-    composed_pages[0].items.items[1].pdf_page.header.clip = .{ .rect = .{ .x = 20, .y = 20, .width = 260, .height = 120 } };
-    composed_pages[0].items.items[1].pdf_page.header.opacity = 0.75;
-    composed_pages[0].items.items[1].pdf_page.header.blend_mode = .multiply;
+    composed_pages[0].items.items[2].pdf_page.header.transform.x0 = 6;
+    composed_pages[0].items.items[2].pdf_page.header.clip = .{ .rect = .{ .x = 20, .y = 20, .width = 260, .height = 120 } };
+    composed_pages[0].items.items[2].pdf_page.header.opacity = 0.75;
+    composed_pages[0].items.items[2].pdf_page.header.blend_mode = .multiply;
+    try render_support.appendText(
+        allocator,
+        testing.io,
+        &composed_pages[0],
+        &resource_builder,
+        &composed_font_builder,
+        12,
+        10,
+        176,
+        300,
+        "native text after PDF",
+        .{ .family = "sans-serif", .weight = 400, .style = .normal, .stretch = .normal },
+        10,
+        .{ .r = 0, .g = 0, .b = 0 },
+    );
     try composed_pages[0].appendStrokeLine(
         allocator,
-        12,
+        13,
         .{ .x = 20, .y = 20 },
         .{ .x = 300, .y = 160 },
         2,
@@ -637,9 +667,21 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
         0,
         0,
     );
+    const composed_catalogs = try render_support.takeCatalogs(allocator, &resource_builder, &composed_font_builder);
+    defer {
+        var owned_resources = composed_catalogs.resources;
+        owned_resources.deinit(allocator);
+        var owned_fonts = composed_catalogs.fonts;
+        owned_fonts.deinit(allocator);
+    }
     var composed_semantics = try documentSemantics(allocator, composed_pages.len);
     defer composed_semantics.deinit(allocator);
-    const composed_ir = render.Ir{ .resources = resources, .semantics = composed_semantics, .pages = &composed_pages };
+    const composed_ir = render.Ir{
+        .resources = composed_catalogs.resources,
+        .fonts = composed_catalogs.fonts,
+        .semantics = composed_semantics,
+        .pages = &composed_pages,
+    };
     try renderPage(&composed_ir, 0, output_path);
 
     const json = try qpdfJson(allocator, testing.io, output_path);
@@ -650,7 +692,9 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
     try expectContains(json, "https://example.com/page");
     if (try pdfTextIfAvailable(allocator, testing.io, output_path)) |text| {
         defer allocator.free(text);
+        try expectContains(text, "native text before PDF");
         try expectContains(text, "selectable page text");
+        try expectContains(text, "native text after PDF");
     }
     const first_layer_path = try std.fmt.allocPrint(allocator, "{s}.layer-0.pdf", .{output_path});
     defer allocator.free(first_layer_path);

@@ -52,29 +52,64 @@ fn renderComposed(
     output: []const u8,
     resources: *const ResourceFiles,
 ) !void {
-    var composition = Composition.init(allocator, io, ir, page, output, resources);
-    defer composition.deinit();
+    var plan = std.ArrayList(CompositionStep).empty;
+    defer plan.deinit(allocator);
 
     var segment_start: usize = 0;
     var first_native_layer = true;
     for (page.items.items, 0..) |item, item_index| {
         if (!isExternalPdfItem(item)) continue;
         if (segment_start < item_index or first_native_layer) {
-            try composition.appendNativeLayer(segment_start, item_index, first_native_layer);
+            try plan.append(allocator, .{ .native = .{
+                .start = segment_start,
+                .end = item_index,
+                .first_layer = first_native_layer,
+            } });
             first_native_layer = false;
         }
-        switch (item) {
-            .pdf_page => |value| try composition.appendPdfLayer(value),
-            .latex => |value| try composition.appendLatexLayer(value),
-            else => unreachable,
-        }
+        try plan.append(allocator, .{ .external = item_index });
         segment_start = item_index + 1;
     }
     if (segment_start < page.items.items.len) {
-        try composition.appendNativeLayer(segment_start, page.items.items.len, first_native_layer);
+        try plan.append(allocator, .{ .native = .{
+            .start = segment_start,
+            .end = page.items.items.len,
+            .first_layer = first_native_layer,
+        } });
+    }
+
+    var composition = Composition.init(allocator, io, ir, page, output, resources);
+    defer composition.deinit();
+    try composition.prepareNativeLayers(plan.items);
+
+    var native_page_index: usize = 0;
+    for (plan.items) |step| switch (step) {
+        .native => {
+            try composition.appendNativeLayer(native_page_index);
+            native_page_index += 1;
+        },
+        .external => |item_index| switch (page.items.items[item_index]) {
+            .pdf_page => |value| try composition.appendPdfLayer(value),
+            .latex => |value| try composition.appendLatexLayer(value),
+            else => unreachable,
+        },
+    };
+    if (native_page_index == 0) {
+        return error.InvalidRenderComposition;
     }
     try composition.write();
 }
+
+const NativeSegment = struct {
+    start: usize,
+    end: usize,
+    first_layer: bool,
+};
+
+const CompositionStep = union(enum) {
+    native: NativeSegment,
+    external: usize,
+};
 
 fn isExternalPdfItem(item: render_ir.Item) bool {
     return switch (item) {
@@ -92,9 +127,8 @@ const Composition = struct {
     output: []const u8,
     resources: *const ResourceFiles,
     layers: std.ArrayList(c.SsQpdfLayer) = .empty,
-    owned_paths: std.ArrayList([:0]u8) = .empty,
-    native_paths: std.ArrayList([]u8) = .empty,
-    next_layer_index: usize = 0,
+    native_path: ?[]u8 = null,
+    native_path_z: ?[:0]u8 = null,
 
     fn init(
         allocator: Allocator,
@@ -115,30 +149,32 @@ const Composition = struct {
     }
 
     fn deinit(self: *Composition) void {
-        for (self.native_paths.items) |path| {
+        if (self.native_path) |path| {
             deleteFileIfExists(self.io, path);
             self.allocator.free(path);
         }
-        self.native_paths.deinit(self.allocator);
-        for (self.owned_paths.items) |path| self.allocator.free(path);
-        self.owned_paths.deinit(self.allocator);
+        if (self.native_path_z) |path| self.allocator.free(path);
         self.layers.deinit(self.allocator);
     }
 
-    fn appendNativeLayer(self: *Composition, start: usize, end: usize, first_layer: bool) !void {
-        const native_path = try layerPath(self.allocator, self.output, self.next_layer_index);
+    fn prepareNativeLayers(self: *Composition, plan: []const CompositionStep) !void {
+        std.debug.assert(self.native_path == null);
+        std.debug.assert(self.native_path_z == null);
+        const native_path = try layerPath(self.allocator, self.output, 0);
         errdefer self.allocator.free(native_path);
         errdefer deleteFileIfExists(self.io, native_path);
-        try renderNativeLayer(self.allocator, self.ir, self.page, native_path, start, end, first_layer, self.resources);
+        try renderNativeLayers(self.allocator, self.ir, self.page, native_path, plan, self.resources);
 
         const native_path_z = try self.allocator.dupeZ(u8, native_path);
-        self.owned_paths.append(self.allocator, native_path_z) catch |err| {
-            self.allocator.free(native_path_z);
-            return err;
-        };
+        self.native_path = native_path;
+        self.native_path_z = native_path_z;
+    }
+
+    fn appendNativeLayer(self: *Composition, page_index: usize) !void {
+        const native_path = self.native_path_z orelse return error.MissingNativeLayer;
         try self.layers.append(self.allocator, .{
-            .path = native_path_z.ptr,
-            .page_index = 0,
+            .path = native_path.ptr,
+            .page_index = page_index,
             .box = @intFromEnum(core.render_policy.PdfPageBox.crop),
             .x = 0,
             .y = 0,
@@ -147,8 +183,6 @@ const Composition = struct {
             .copy_annotations = 0,
             .effects = identityLayerEffects(),
         });
-        try self.native_paths.append(self.allocator, native_path);
-        self.next_layer_index += 1;
     }
 
     fn appendPdfLayer(self: *Composition, item: render_ir.PdfPage) !void {
@@ -231,14 +265,12 @@ fn layerEffects(header: render_ir.ItemHeader, page_height: f64) c.SsLayerEffects
     return effects;
 }
 
-fn renderNativeLayer(
+fn renderNativeLayers(
     allocator: Allocator,
     ir: *const render_ir.Ir,
     page: *const render_ir.Page,
     path: []const u8,
-    start: usize,
-    end: usize,
-    first_layer: bool,
+    plan: []const CompositionStep,
     resources: *const ResourceFiles,
 ) !void {
     const path_z = try allocator.dupeZ(u8, path);
@@ -246,10 +278,18 @@ fn renderNativeLayer(
     const pdf = c.ss_pdf_create(path_z.ptr, page.width, page.height) orelse return cairoCreateFailure();
     defer c.ss_pdf_destroy(pdf);
     c.ss_pdf_set_creator(pdf, "ss page Cairo/Pango/libqpdf backend");
-    c.ss_pdf_begin_page(pdf, page.width, page.height);
-    if (first_layer) try emitAnnotations(pdf, page);
-    try replayItems(allocator, pdf, ir, page.items.items[start..end], resources);
-    c.ss_pdf_end_page(pdf);
+    var rendered_pages: usize = 0;
+    for (plan) |step| switch (step) {
+        .native => |segment| {
+            c.ss_pdf_begin_page(pdf, page.width, page.height);
+            if (segment.first_layer) try emitAnnotations(pdf, page);
+            try replayItems(allocator, pdf, ir, page.items.items[segment.start..segment.end], resources);
+            c.ss_pdf_end_page(pdf);
+            rendered_pages += 1;
+        },
+        .external => {},
+    };
+    if (rendered_pages == 0) return error.MissingNativeLayer;
     if (c.ss_pdf_finish(pdf) != 0) return cairoFailure(pdf);
 }
 
