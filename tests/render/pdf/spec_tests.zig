@@ -1124,6 +1124,44 @@ test "render PDF spec: libqpdf composes a selectable page form and copies links"
     }
 }
 
+test "render PDF spec: libqpdf reuses one imported form for repeated placements" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const base_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/base.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(base_path);
+    const source_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/source.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(source_path);
+    const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/composed.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(output_path);
+    const qdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/composed.qdf.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(qdf_path);
+    const base_path_z = try allocator.dupeZ(u8, base_path);
+    defer allocator.free(base_path_z);
+    const source_path_z = try allocator.dupeZ(u8, source_path);
+    defer allocator.free(source_path_z);
+    const output_path_z = try allocator.dupeZ(u8, output_path);
+    defer allocator.free(output_path_z);
+
+    try writeQpdfTestLayer(allocator, base_path, "base", null);
+    try writeQpdfTestLayer(allocator, source_path, "repeated form text", "https://example.com/repeated");
+    const layers = [_]c.SsQpdfLayer{
+        qpdfLayer(base_path_z.ptr, 0, 0, 320, 180, false),
+        qpdfLayer(source_path_z.ptr, 20, 30, 120, 68, true),
+        qpdfLayer(source_path_z.ptr, 170, 80, 120, 68, true),
+    };
+    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_compose(output_path_z.ptr, &layers, layers.len));
+
+    const json = try qpdfJson(allocator, testing.io, output_path);
+    defer allocator.free(json);
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, json, "https://example.com/repeated"));
+
+    const qdf = try qpdfQdf(allocator, testing.io, output_path, qdf_path);
+    defer allocator.free(qdf);
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, qdf, "/SsLayer1 Do"));
+    try testing.expect(!contains(qdf, "/SsLayer2 Do"));
+}
+
 test "render PDF spec: libqpdf omits source links when annotation copying is disabled" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

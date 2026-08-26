@@ -56,6 +56,30 @@ struct SsQpdfDocument {
     std::vector<QPDFPageObjectHelper> pages;
 };
 
+struct SsQpdfFormKey {
+    SsQpdfDocument const* source;
+    size_t page_index;
+    int box;
+
+    bool operator==(SsQpdfFormKey const& other) const {
+        return source == other.source && page_index == other.page_index && box == other.box;
+    }
+};
+
+struct SsQpdfFormKeyHash {
+    size_t operator()(SsQpdfFormKey const& key) const {
+        auto value = std::hash<SsQpdfDocument const*>{}(key.source);
+        value ^= std::hash<size_t>{}(key.page_index) + 0x9e3779b9 + (value << 6) + (value >> 2);
+        value ^= std::hash<int>{}(key.box) + 0x9e3779b9 + (value << 6) + (value >> 2);
+        return value;
+    }
+};
+
+struct SsQpdfImportedForm {
+    QPDFObjectHandle form;
+    std::string name;
+};
+
 static bool ss_qpdf_finite(double value) {
     return std::isfinite(value);
 }
@@ -590,11 +614,22 @@ extern "C" int ss_qpdf_compose(char const* output, SsQpdfLayer const* layers, si
         destination.processFile(layers[0].path);
         QPDFPageDocumentHelper destination_page_document(destination);
         auto destination_pages = destination_page_document.getAllPages();
-        if (destination_pages.size() != 1) throw std::runtime_error("base PDF layer must contain one page");
+        if (layers[0].page_index >= destination_pages.size()) {
+            throw std::runtime_error("base PDF layer page index is out of range");
+        }
+        for (size_t page_index = destination_pages.size(); page_index > 0; --page_index) {
+            const size_t index = page_index - 1;
+            if (index != layers[0].page_index) {
+                destination_page_document.removePage(destination_pages.at(index));
+            }
+        }
+        destination_pages = destination_page_document.getAllPages();
+        if (destination_pages.size() != 1) throw std::runtime_error("unable to isolate base PDF layer page");
         auto destination_page = destination_pages.at(0);
         std::vector<std::unique_ptr<SsQpdfDocument>> sources;
         sources.reserve(layer_count - 1);
         std::unordered_map<std::string, SsQpdfDocument*> sources_by_path;
+        std::unordered_map<SsQpdfFormKey, SsQpdfImportedForm, SsQpdfFormKeyHash> imported_forms;
 
         for (size_t index = 1; index < layer_count; ++index) {
             stage = "validate PDF layer";
@@ -619,19 +654,30 @@ extern "C" int ss_qpdf_compose(char const* output, SsQpdfLayer const* layers, si
                 layer.page_index,
                 layer.box
             );
-            stage = "create PDF form";
-            auto foreign_form = source_page.getFormXObjectForPage();
-            stage = "copy PDF form";
-            auto form = destination.copyForeignObject(foreign_form);
             stage = "prepare destination resources";
             auto resources = destination_page.getAttribute("/Resources", true);
-            int minimum_suffix = 1;
-            auto name = resources.getUniqueResourceName("/SsLayer", minimum_suffix);
+            auto form_key = SsQpdfFormKey{source_pointer, layer.page_index, layer.box};
+            auto imported_form = imported_forms.find(form_key);
+            if (imported_form == imported_forms.end()) {
+                stage = "create PDF form";
+                auto foreign_form = source_page.getFormXObjectForPage();
+                stage = "copy PDF form";
+                auto form = destination.copyForeignObject(foreign_form);
+                int minimum_suffix = 1;
+                auto name = resources.getUniqueResourceName("/SsLayer", minimum_suffix);
+                stage = "attach PDF form resources";
+                resources.mergeResources("<< /XObject << >> >>"_qpdf);
+                resources.getKey("/XObject").replaceKey(name, form);
+                imported_form = imported_forms.emplace(
+                    form_key,
+                    SsQpdfImportedForm{form, name}
+                ).first;
+            }
             QPDFMatrix matrix;
             stage = "place PDF form";
             auto content = destination_page.placeFormXObject(
-                form,
-                name,
+                imported_form->second.form,
+                imported_form->second.name,
                 {layer.x, layer.y, layer.x + layer.width, layer.y + layer.height},
                 matrix,
                 true,
@@ -639,9 +685,6 @@ extern "C" int ss_qpdf_compose(char const* output, SsQpdfLayer const* layers, si
                 true
             );
             if (content.empty()) throw std::runtime_error("unable to place PDF layer");
-            stage = "attach PDF form resources";
-            resources.mergeResources("<< /XObject << >> >>"_qpdf);
-            resources.getKey("/XObject").replaceKey(name, form);
             auto const& effects = layer.effects;
             QPDFMatrix effect_matrix(
                 effects.xx,
