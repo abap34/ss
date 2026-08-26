@@ -22,6 +22,31 @@ fn contains(haystack: []const u8, needle: []const u8) bool {
     return std.mem.indexOf(u8, haystack, needle) != null;
 }
 
+const LayerDrawStats = struct {
+    invocations: usize,
+    distinct_resources: usize,
+};
+
+fn layerDrawStats(allocator: std.mem.Allocator, qdf: []const u8) !LayerDrawStats {
+    var resources = std.StringHashMap(void).init(allocator);
+    defer resources.deinit();
+    var invocations: usize = 0;
+    var previous: ?[]const u8 = null;
+    var tokens = std.mem.tokenizeAny(u8, qdf, " \t\r\n");
+    while (tokens.next()) |token| {
+        if (std.mem.eql(u8, token, "Do")) {
+            if (previous) |name| {
+                if (std.mem.startsWith(u8, name, "/SsLayer")) {
+                    invocations += 1;
+                    try resources.put(name, {});
+                }
+            }
+        }
+        previous = token;
+    }
+    return .{ .invocations = invocations, .distinct_resources = resources.count() };
+}
+
 fn expectInternalDestination(json: []const u8) !void {
     const direct_dest = contains(json, "\"/Dest\": \"u:target\"") or
         contains(json, "\"/Dest\": \"target\"") or
@@ -1158,8 +1183,9 @@ test "render PDF spec: libqpdf reuses one imported form for repeated placements"
 
     const qdf = try qpdfQdf(allocator, testing.io, output_path, qdf_path);
     defer allocator.free(qdf);
-    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, qdf, "/SsLayer1 Do"));
-    try testing.expect(!contains(qdf, "/SsLayer2 Do"));
+    const draw_stats = try layerDrawStats(allocator, qdf);
+    try testing.expectEqual(@as(usize, 2), draw_stats.invocations);
+    try testing.expectEqual(@as(usize, 1), draw_stats.distinct_resources);
 }
 
 test "render PDF spec: libqpdf omits source links when annotation copying is disabled" {
