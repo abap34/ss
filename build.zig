@@ -659,6 +659,14 @@ fn addRenderTests(
     test_step: *Step,
 ) void {
     const b = ctx.b;
+    const render_latex_mod = createModule(ctx, "src/render/compile/latex.zig", &.{}, null);
+    const render_latex_spec_mod = createModule(ctx, "tests/render/latex/spec_tests.zig", &.{
+        import("render_latex", render_latex_mod),
+    }, null);
+    const render_latex_spec_tests = addTestArtifact(ctx, render_latex_spec_mod);
+    const run_render_latex_spec_tests = b.addRunArtifact(render_latex_spec_tests);
+    test_step.dependOn(&run_render_latex_spec_tests.step);
+    addFocusedTestStep(b, "test-render-latex", "Run focused LaTeX document tests", &run_render_latex_spec_tests.step);
     const render_pdf_document_mod = createModule(ctx, "src/render/pdf.zig", &.{
         import("pdf_backend", modules.pdf_backend),
         import("pdf_ffi", modules.pdf_ffi),
