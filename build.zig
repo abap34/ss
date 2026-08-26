@@ -25,14 +25,12 @@ const ProjectModules = struct {
     fontawesome_assets: *Module,
     pdfjs_assets: *Module,
     html_embeds: *Module,
-    math_assets: *Module,
     project: *Module,
     core: *Module,
     render: *Module,
     render_resources: *Module,
     pdf_ffi: *Module,
     render_text: *Module,
-    render_math: *Module,
     render_emitter: *Module,
     pdf_backend: *Module,
 };
@@ -351,7 +349,6 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     const fontawesome_assets_mod = createModule(ctx, "third_party/fontawesome-free/embed.zig", &.{}, null);
     const pdfjs_assets_mod = createModule(ctx, "third_party/pdfjs/embed.zig", &.{}, null);
     const html_embeds_mod = createHtmlEmbedsModule(ctx);
-    const math_assets_mod = createModule(ctx, "third_party/stix-two-math/embed.zig", &.{}, null);
     const project_mod = createModule(ctx, "src/project.zig", &.{
         import("utils", utils_mod),
     }, true);
@@ -387,14 +384,6 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         import("render_resources", render_resources_mod),
         import("utils", utils_mod),
     }, true);
-    const render_math_mod = createModule(ctx, "src/render/compile/math.zig", &.{
-        import("core", core_mod),
-        import("math_assets", math_assets_mod),
-        import("pdf_ffi", pdf_ffi_mod),
-        import("render", render_mod),
-        import("render_resources", render_resources_mod),
-        import("render_text", render_text_mod),
-    }, true);
     const render_emitter_mod = createModule(ctx, "src/render/compile/emitter.zig", &.{
         import("core", core_mod),
         import("render", render_mod),
@@ -416,14 +405,12 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .fontawesome_assets = fontawesome_assets_mod,
         .pdfjs_assets = pdfjs_assets_mod,
         .html_embeds = html_embeds_mod,
-        .math_assets = math_assets_mod,
         .project = project_mod,
         .core = core_mod,
         .render = render_mod,
         .render_resources = render_resources_mod,
         .pdf_ffi = pdf_ffi_mod,
         .render_text = render_text_mod,
-        .render_math = render_math_mod,
         .render_emitter = render_emitter_mod,
         .pdf_backend = pdf_backend_mod,
     };
@@ -684,7 +671,6 @@ fn addRenderTests(
         import("render", modules.render),
         import("render_resources", modules.render_resources),
         import("render_text", modules.render_text),
-        import("render_math", modules.render_math),
     }, true);
     const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{
         import("pdf_backend", modules.pdf_backend),
@@ -713,14 +699,12 @@ fn addRenderTests(
         import("html_embeds", modules.html_embeds),
         import("render", modules.render),
         import("pdfjs_assets", modules.pdfjs_assets),
-        import("math_assets", modules.math_assets),
         import("utils", modules.utils),
     }, null);
     const render_html_spec_mod = createModule(ctx, "tests/render/html/spec_tests.zig", &.{
         import("pdf_ffi", modules.pdf_ffi),
         import("render", modules.render),
         import("render_html", render_html_mod),
-        import("render_math", modules.render_math),
         import("render_resources", modules.render_resources),
         import("render_test_support", render_test_support_mod),
     }, null);
@@ -733,7 +717,6 @@ fn addRenderTests(
         import("pdf_ffi", modules.pdf_ffi),
         import("render", modules.render),
         import("render_emitter", modules.render_emitter),
-        import("render_math", modules.render_math),
         import("render_resources", modules.render_resources),
         import("render_text", modules.render_text),
         import("utils", modules.utils),
@@ -841,7 +824,6 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
         import("render_resources", modules.render_resources),
         import("pdf_ffi", modules.pdf_ffi),
         import("render_text", modules.render_text),
-        import("render_math", modules.render_math),
         import("render_emitter", modules.render_emitter),
         import("pdf_backend", modules.pdf_backend),
     }, link_libc);

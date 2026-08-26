@@ -54,21 +54,6 @@ fn documentDigest(ir: anytype, comptime include_source_ranges: bool, domain: []c
         hash.boolean(font.synthetic_italic);
         hash.boolean(font.family_substitution);
     }
-    hash.integer(ir.math.trees.len);
-    for (ir.math.trees) |tree| {
-        hash.integer(tree.id);
-        hash.tag(tree.input_kind);
-        hash.bytes(tree.source);
-        hash.integer(tree.root);
-        hash.integer(tree.nodes.len);
-        for (tree.nodes) |node| {
-            hash.integer(node.id);
-            hash.tag(node.kind);
-            hash.optionalBytes(node.text);
-            hash.integer(node.children.len);
-            for (node.children) |child| hash.integer(child);
-        }
-    }
     hash.optionalInteger(ir.semantics.root);
     hash.integer(ir.semantics.nodes.len);
     for (ir.semantics.nodes) |node| {
@@ -81,7 +66,6 @@ fn documentDigest(ir: anytype, comptime include_source_ranges: bool, domain: []c
         hash.optionalBytes(node.alt_text);
         hash.optionalBytes(node.language);
         hash.optionalBytes(node.code_language);
-        hash.optionalInteger(node.math_tree);
         hash.optionalTag(node.link_kind);
         hash.optionalBytes(node.link_target);
         hash.integer(node.children.len);
@@ -124,7 +108,7 @@ fn hashResourceMetadata(hash: anytype, metadata: anytype) void {
             hash.tag(value.alignment);
             hash.tag(value.scale);
         },
-        .pdf, .math_pdf => |value| {
+        .pdf, .latex_pdf => |value| {
             hash.boolean(value.encrypted);
             hash.boolean(value.has_javascript);
             hash.integer(value.pages.len);
@@ -216,41 +200,11 @@ fn pageDigestWithHash(
                 hash.bytes(&value.resource);
                 hashOptionalColor(&hash, value.tint);
             },
-            .math => |value| {
+            .latex => |value| {
                 hashRect(&hash, value.rect);
-                if (include_metadata) hash.integer(value.tree);
-                hash.tag(value.content);
-                switch (value.content) {
-                    .structured => |structured| {
-                        hashColor(&hash, structured.color);
-                        const layout = structured.layout;
-                        hash.float(layout.width);
-                        hash.float(layout.height);
-                        hash.float(layout.baseline);
-                        hash.integer(layout.elements.len);
-                        for (layout.elements) |element| {
-                            hash.tag(element);
-                            switch (element) {
-                                .text => |text| {
-                                    if (include_metadata) hash.integer(text.node);
-                                    hash.float(text.x);
-                                    hash.float(text.y);
-                                    hash.float(text.font_size);
-                                    hashTextLayout(&hash, text.layout);
-                                },
-                                .rule => |rule| {
-                                    if (include_metadata) hash.integer(rule.node);
-                                    hashRect(&hash, rule.rect);
-                                },
-                            }
-                        }
-                    },
-                    .raw_pdf => |raw| {
-                        hash.bytes(&raw.resource);
-                        hash.integer(raw.page_index);
-                        hash.tag(raw.box);
-                    },
-                }
+                hash.bytes(&value.resource);
+                hash.integer(value.page_index);
+                hash.tag(value.box);
             },
             .pdf_page => |value| {
                 hashRect(&hash, value.rect);

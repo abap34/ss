@@ -190,8 +190,8 @@ fn watermark!(text_value: String, theme: Theme = current_theme()) -> Void
   theme_base::watermark_with_style!(text_value, theme.generated.watermark)
 end
 
-fn/! tex(text_value: String, scale: Number = 1) -> Object
-  return base::tex(text_value, scale)
+fn/! latex(text_value: String, scale: Number = 1) -> Object
+  return base::latex(text_value, scale)
 end
 
 fn/! figure(text_value: String, theme: Theme = current_theme()) -> Object

@@ -640,7 +640,7 @@ fn probeMetadata(
         .raster => .{ .raster = try rasterMetadata(bytes) },
         .svg => .{ .svg = try svgMetadata(bytes) },
         .pdf => .{ .pdf = try pdfMetadata(allocator, bytes) },
-        .math_pdf => .{ .math_pdf = try pdfMetadata(allocator, bytes) },
+        .latex_pdf => .{ .latex_pdf = try pdfMetadata(allocator, bytes) },
     };
 }
 

@@ -7,7 +7,7 @@ const c = pdf_ffi.c;
 const Color = core.render_policy.Color;
 const FontFace = core.font.Face;
 const HorizontalAlign = core.render_policy.HorizontalAlign;
-const TexPreambleEntry = core.render_env.TexPreambleEntry;
+const LatexPreambleEntry = core.render_env.LatexPreambleEntry;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -23,10 +23,10 @@ pub const Command = struct {
     link_id: ?[]const u8,
     parse_mode: []const u8,
     render: core.render_policy.ResolvedRender,
-    tex_preamble: []const TexPreambleEntry,
-    tex_engine: core.render_env.TexEngine,
-    math_kind: []const u8,
-    raw_tex: bool,
+    latex_preamble: []const LatexPreambleEntry,
+    latex_engine: core.render_env.LatexEngine,
+    latex_kind: []const u8,
+    document_body: bool,
 };
 
 const File = struct {
@@ -108,21 +108,21 @@ pub fn renderPageKey(
             .link_id = command.link_id,
             .parse_mode = @tagName(command.parse_mode),
             .render = command.render,
-            .tex_preamble = command.tex_preamble,
-            .tex_engine = command.tex_engine,
-            .math_kind = @tagName(command.math_kind),
-            .raw_tex = command.math_kind == .raw_block,
+            .latex_preamble = command.latex_preamble,
+            .latex_engine = command.latex_engine,
+            .latex_kind = @tagName(command.latex_kind),
+            .document_body = command.latex_kind == .body,
         });
     }
     return hasher.final();
 }
 
-pub fn mathArtifactKey(
+pub fn latexArtifactKey(
     ctx: Context,
     cache_version: []const u8,
     source: []const u8,
-    preamble: []const TexPreambleEntry,
-    engine: core.render_env.TexEngine,
+    preamble: []const LatexPreambleEntry,
+    engine: core.render_env.LatexEngine,
     kind: []const u8,
 ) !u64 {
     var files = std.StringHashMap(File).init(ctx.allocator);
@@ -134,11 +134,11 @@ pub fn mathArtifactKey(
 
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, cache_version);
-    hashString(&hasher, "math");
+    hashString(&hasher, "latex");
     hashString(&hasher, @tagName(engine));
     hashString(&hasher, kind);
     hashString(&hasher, source);
-    try hashTexPreamble(ctx, &files, &hasher, preamble);
+    try hashLatexPreamble(ctx, &files, &hasher, preamble);
     return hasher.final();
 }
 
@@ -147,15 +147,15 @@ fn hashCommand(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.
     hashString(hasher, command.content);
     hashOptionalString(hasher, command.link_id);
     hashString(hasher, command.parse_mode);
-    if ((command.render.kind == .vector_math and command.raw_tex) or
-        (command.render.kind == .text and command.tex_preamble.len != 0))
+    if ((command.render.kind == .latex and command.document_body) or
+        (command.render.kind == .text and command.latex_preamble.len != 0))
     {
-        hashString(hasher, @tagName(command.tex_engine));
-        try hashTexPreamble(ctx, files, hasher, command.tex_preamble);
+        hashString(hasher, @tagName(command.latex_engine));
+        try hashLatexPreamble(ctx, files, hasher, command.latex_preamble);
     }
     hashResolvedRender(hasher, command.render);
     switch (command.render.kind) {
-        .vector_math => hashString(hasher, command.math_kind),
+        .latex => hashString(hasher, command.latex_kind),
         .vector_asset, .raster_asset => {
             if (core.fontawesome.parseSource(command.content) != null) {
                 hashString(hasher, core.fontawesome.cache_namespace);
@@ -169,7 +169,7 @@ fn hashCommand(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.
     }
 }
 
-fn hashTexPreamble(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.Wyhash, preamble: []const TexPreambleEntry) !void {
+fn hashLatexPreamble(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.Wyhash, preamble: []const LatexPreambleEntry) !void {
     hashUsize(hasher, preamble.len);
     for (preamble) |entry| {
         hashString(hasher, @tagName(entry.source));
@@ -227,7 +227,7 @@ fn readFileFingerprint(ctx: Context, source: []const u8) !File {
 fn hashResolvedRender(hasher: *std.hash.Wyhash, render: core.render_policy.ResolvedRender) void {
     hashString(hasher, @tagName(render.kind));
     hashOptionalTextPaint(hasher, render.text);
-    hashOptionalMathPaint(hasher, render.math);
+    hashOptionalLatexPaint(hasher, render.latex);
     hashOptionalAssetPaint(hasher, render.asset);
     hashOptionalCodePaint(hasher, render.code);
     hashOptionalVectorPathPaint(hasher, render.vector_path);
@@ -338,14 +338,12 @@ fn hashMarkdownQuotePaint(hasher: *std.hash.Wyhash, quote: core.render_policy.Ma
     }
 }
 
-fn hashOptionalMathPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.MathPaint) void {
+fn hashOptionalLatexPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.LatexPaint) void {
     hashBool(hasher, maybe != null);
-    if (maybe) |math| {
-        hashF32(hasher, math.min_height);
-        hashF32(hasher, math.raw_tex_width_ratio);
-        hashF32(hasher, math.scale);
-        hashHorizontalAlign(hasher, math.horizontal_align);
-        hashColor(hasher, math.color);
+    if (maybe) |latex| {
+        hashF32(hasher, latex.min_height);
+        hashF32(hasher, latex.scale);
+        hashHorizontalAlign(hasher, latex.horizontal_align);
     }
 }
 

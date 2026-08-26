@@ -37,7 +37,7 @@ pub const TextKind = enum {
 pub const RenderMeasureKind = enum {
     text,
     code,
-    vector_math,
+    latex,
     vector_asset,
     raster_asset,
     shape,
@@ -53,7 +53,7 @@ pub const LayoutMeasurementCacheKind = enum {
 };
 
 pub const ArtifactKind = enum {
-    math,
+    latex,
     icon,
     vector_pdf,
     raster,
@@ -147,15 +147,15 @@ var layout_measure_writes = CountTime{};
 
 var intrinsic_text = CountTime{};
 var intrinsic_code = CountTime{};
-var intrinsic_vector_math = CountTime{};
+var intrinsic_latex = CountTime{};
 var intrinsic_vector_asset = CountTime{};
 var intrinsic_raster_asset = CountTime{};
 var intrinsic_shape = CountTime{};
 var intrinsic_chrome_only = CountTime{};
 var intrinsic_other = CountTime{};
 
-var artifact_scan_math_hits = CountTime{};
-var artifact_scan_math_misses = CountTime{};
+var artifact_scan_latex_hits = CountTime{};
+var artifact_scan_latex_misses = CountTime{};
 var artifact_scan_icon_hits = CountTime{};
 var artifact_scan_icon_misses = CountTime{};
 var artifact_scan_vector_pdf_hits = CountTime{};
@@ -163,7 +163,7 @@ var artifact_scan_vector_pdf_misses = CountTime{};
 var artifact_scan_raster_hits = CountTime{};
 var artifact_scan_raster_misses = CountTime{};
 
-var artifact_build_math = CountTime{};
+var artifact_build_latex = CountTime{};
 var artifact_build_icon = CountTime{};
 var artifact_build_vector_pdf = CountTime{};
 var artifact_build_raster = CountTime{};
@@ -403,18 +403,18 @@ pub fn printIfEnabled() void {
 
     printCounter("intrinsic text", &intrinsic_text);
     printCounter("intrinsic code", &intrinsic_code);
-    printCounter("intrinsic vector math", &intrinsic_vector_math);
+    printCounter("intrinsic latex", &intrinsic_latex);
     printCounter("intrinsic vector asset", &intrinsic_vector_asset);
     printCounter("intrinsic raster asset", &intrinsic_raster_asset);
     printCounter("intrinsic shape", &intrinsic_shape);
     printCounter("intrinsic chrome only", &intrinsic_chrome_only);
     printCounter("intrinsic other", &intrinsic_other);
 
-    printCachePair("artifact scan math", &artifact_scan_math_hits, &artifact_scan_math_misses);
+    printCachePair("artifact scan latex", &artifact_scan_latex_hits, &artifact_scan_latex_misses);
     printCachePair("artifact scan icon", &artifact_scan_icon_hits, &artifact_scan_icon_misses);
     printCachePair("artifact scan vector pdf", &artifact_scan_vector_pdf_hits, &artifact_scan_vector_pdf_misses);
     printCachePair("artifact scan raster", &artifact_scan_raster_hits, &artifact_scan_raster_misses);
-    printCounter("artifact build math", &artifact_build_math);
+    printCounter("artifact build latex", &artifact_build_latex);
     printCounter("artifact build icon", &artifact_build_icon);
     printCounter("artifact build vector pdf", &artifact_build_vector_pdf);
     printCounter("artifact build raster", &artifact_build_raster);
@@ -503,7 +503,7 @@ fn renderIntrinsicCounter(kind: RenderMeasureKind) *CountTime {
     return switch (kind) {
         .text => &intrinsic_text,
         .code => &intrinsic_code,
-        .vector_math => &intrinsic_vector_math,
+        .latex => &intrinsic_latex,
         .vector_asset => &intrinsic_vector_asset,
         .raster_asset => &intrinsic_raster_asset,
         .shape => &intrinsic_shape,
@@ -514,7 +514,7 @@ fn renderIntrinsicCounter(kind: RenderMeasureKind) *CountTime {
 
 fn artifactScanCounter(kind: ArtifactKind, hit: bool) *CountTime {
     return switch (kind) {
-        .math => if (hit) &artifact_scan_math_hits else &artifact_scan_math_misses,
+        .latex => if (hit) &artifact_scan_latex_hits else &artifact_scan_latex_misses,
         .icon => if (hit) &artifact_scan_icon_hits else &artifact_scan_icon_misses,
         .vector_pdf => if (hit) &artifact_scan_vector_pdf_hits else &artifact_scan_vector_pdf_misses,
         .raster => if (hit) &artifact_scan_raster_hits else &artifact_scan_raster_misses,
@@ -523,7 +523,7 @@ fn artifactScanCounter(kind: ArtifactKind, hit: bool) *CountTime {
 
 fn artifactBuildCounter(kind: ArtifactKind) *CountTime {
     return switch (kind) {
-        .math => &artifact_build_math,
+        .latex => &artifact_build_latex,
         .icon => &artifact_build_icon,
         .vector_pdf => &artifact_build_vector_pdf,
         .raster => &artifact_build_raster,

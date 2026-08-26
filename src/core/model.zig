@@ -70,8 +70,7 @@ pub const ObjectKind = enum {
 pub const PayloadKind = enum {
     text,
     code,
-    math_text,
-    math_tex,
+    latex,
     figure_text,
     image_ref,
     pdf_ref,

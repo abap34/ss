@@ -198,12 +198,12 @@ fn/! text(text_value: String, theme: Theme = current_theme()) -> Object
   return base::text(text_value, theme)
 end
 
-fn/! tex(text_value: String, scale: Number = 1) -> Object
-  let obj = objects::tex_obj(text_value)
+fn/! latex(text_value: String, scale: Number = 1) -> Object
+  let obj = objects::latex_obj(text_value)
   obj.layout.x = 108
   obj.layout.right_inset = 108
   obj.layout.wrap = WrapMode.on
-  obj.math.scale = scale
+  obj.latex.scale = scale
   return obj
 end
 

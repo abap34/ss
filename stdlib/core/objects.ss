@@ -75,12 +75,8 @@ fn/! raw_obj(text_value: String, role_name: String, payload_name: String) -> Obj
   return obj(text_value, role_name, payload_name)
 end
 
-fn/! math_obj(text_value: String) -> Object
-  return raw_obj(text_value, "math", "math_text")
-end
-
-fn/! tex_obj(text_value: String) -> Object
-  return raw_obj(text_value, "math_tex", "math_tex")
+fn/! latex_obj(text_value: String) -> Object
+  return raw_obj(text_value, "latex", "latex")
 end
 
 fn/! fig_obj(text_value: String) -> Object

@@ -543,12 +543,8 @@ fn/! raw_obj(text_value: String, role_name: String, payload_name: String) -> Obj
   return objects::raw_obj(text_value, role_name, payload_name)
 end
 
-fn/! math_obj(text_value: String) -> Object
-  return objects::math_obj(text_value)
-end
-
-fn/! tex_obj(text_value: String) -> Object
-  return objects::tex_obj(text_value)
+fn/! latex_obj(text_value: String) -> Object
+  return objects::latex_obj(text_value)
 end
 
 fn/! fig_obj(text_value: String) -> Object
@@ -571,28 +567,28 @@ fn/! code_obj(text_value: String) -> Object
   return objects::code_obj(text_value)
 end
 
-fn tex_engine(engine: TexEngine) -> Void
-  render::tex_engine(engine)
+fn latex_engine(engine: LatexEngine) -> Void
+  render::latex_engine(engine)
 end
 
-fn page_tex_engine(engine: TexEngine) -> Void
-  render::page_tex_engine(engine)
+fn page_latex_engine(engine: LatexEngine) -> Void
+  render::page_latex_engine(engine)
 end
 
-fn tex_preamble(src: String) -> Void
-  render::tex_preamble(src)
+fn latex_preamble(src: String) -> Void
+  render::latex_preamble(src)
 end
 
-fn page_tex_preamble(src: String) -> Void
-  render::page_tex_preamble(src)
+fn page_latex_preamble(src: String) -> Void
+  render::page_latex_preamble(src)
 end
 
-fn tex_preamble_file(path: String) -> Void
-  render::tex_preamble_file(path)
+fn latex_preamble_file(path: String) -> Void
+  render::latex_preamble_file(path)
 end
 
-fn page_tex_preamble_file(path: String) -> Void
-  render::page_tex_preamble_file(path)
+fn page_latex_preamble_file(path: String) -> Void
+  render::page_latex_preamble_file(path)
 end
 
 fn link(obj: Object, id: String) -> Object
@@ -767,10 +763,6 @@ fn math_align_all(align_name: Align) -> Void
   utils::math_align_all(align_name)
 end
 
-fn raw_tex_width_ratio_all(ratio: Number) -> Void
-  utils::raw_tex_width_ratio_all(ratio)
-end
-
 fn left_math_all() -> Void
   utils::left_math_all()
 end
@@ -919,12 +911,8 @@ fn/! subtitle(text_value: String) -> Object
   return components::subtitle(text_value)
 end
 
-fn/! math(text_value: String, scale: Number = 1) -> Object
-  return components::math(text_value, scale)
-end
-
-fn/! mathtex(text_value: String) -> Object
-  return components::mathtex(text_value)
+fn/! latex(text_value: String, scale: Number = 1) -> Object
+  return components::latex(text_value, scale)
 end
 
 fn/! panel() -> Object
@@ -1029,10 +1017,6 @@ end
 
 fn/! text(text_value: String) -> Object
   return components::text(text_value)
-end
-
-fn/! tex(text_value: String, scale: Number = 1) -> Object
-  return components::tex(text_value, scale)
 end
 
 fn/! figure(text_value: String) -> Object

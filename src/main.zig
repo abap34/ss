@@ -633,7 +633,7 @@ fn doctorTools(allocator: std.mem.Allocator, environ: std.process.Environ) !usiz
         }
     }
     if (available != 0) return 0;
-    std.debug.print("  warn TeX engine: neither pdflatex nor lualatex was found\n", .{});
+    std.debug.print("  warn LaTeX engine: neither pdflatex nor lualatex was found\n", .{});
     return 1;
 }
 

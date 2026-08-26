@@ -1192,9 +1192,9 @@ fn validateExtendRenderEnvCall(
         }
     }
     if (key) |literal| {
-        if (!std.mem.eql(u8, literal, core.render_env.KeyMathTexPreamble) and
-            !std.mem.eql(u8, literal, core.render_env.KeyMathTexPreambleFile) and
-            !std.mem.eql(u8, literal, core.render_env.KeyMathTexEngine))
+        if (!std.mem.eql(u8, literal, core.render_env.KeyLatexPreamble) and
+            !std.mem.eql(u8, literal, core.render_env.KeyLatexPreambleFile) and
+            !std.mem.eql(u8, literal, core.render_env.KeyLatexEngine))
         {
             try addUserReport(state, origin, "InvalidRenderEnv: unsupported render environment key: {s}", .{literal});
             return error.InvalidType;
@@ -1204,18 +1204,18 @@ fn validateExtendRenderEnvCall(
         try addUserReport(state, origin, "InvalidRenderEnv: unsupported render environment operation", .{});
         return error.InvalidType;
     }
-    if (key != null and core.render_env.isTexPreambleFileKey(key.?)) {
+    if (key != null and core.render_env.isLatexPreambleFileKey(key.?)) {
         if (resolveStringLiteral(env, call.args.items[3])) |path| {
-            if (!core.render_env.isValidTexPreambleFilePath(path)) {
-                try addUserReport(state, origin, "InvalidRenderEnv: empty TeX preamble file path", .{});
+            if (!core.render_env.isValidLatexPreambleFilePath(path)) {
+                try addUserReport(state, origin, "InvalidRenderEnv: empty LaTeX preamble file path", .{});
                 return error.InvalidType;
             }
         }
     }
-    if (key != null and core.render_env.isTexEngineKey(key.?)) {
+    if (key != null and core.render_env.isLatexEngineKey(key.?)) {
         if (resolveStringLiteral(env, call.args.items[3])) |engine| {
-            if (!core.render_env.isValidTexEngine(engine)) {
-                try addUserReport(state, origin, "InvalidRenderEnv: TeX engine must be pdflatex or lualatex", .{});
+            if (!core.render_env.isValidLatexEngine(engine)) {
+                try addUserReport(state, origin, "InvalidRenderEnv: LaTeX engine must be pdflatex or lualatex", .{});
                 return error.InvalidType;
             }
         }

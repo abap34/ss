@@ -1187,7 +1187,7 @@ fn hasExternalRenderDependency(
     }
     for (pages.pages) |page| {
         for (page.objects) |object| {
-            for (object.tex_preamble) |entry| {
+            for (object.latex_preamble) |entry| {
                 if (entry.source == .file) return true;
             }
             switch (object.render.kind) {

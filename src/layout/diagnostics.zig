@@ -223,7 +223,7 @@ fn contentVisualFrame(state: anytype, node: *const Node, render: render_policy.R
     const content_height = @max(@as(f32, 1.0), measured.height - 2.0 * metrics.chromePadY(state, node));
 
     return switch (render.kind) {
-        .vector_math => mathContentVisualFrame(content_frame, content_width, content_height, render.math),
+        .latex => latexContentVisualFrame(content_frame, content_width, content_height, render.latex),
         .vector_asset, .raster_asset, .text, .code => topAnchoredContentVisualFrame(content_frame, content_width, content_height),
         .vector_path, .connector, .chrome_only => null,
     };
@@ -238,8 +238,8 @@ fn topAnchoredContentVisualFrame(frame: model.Frame, width: f32, height: f32) Vi
     };
 }
 
-fn mathContentVisualFrame(frame: model.Frame, width: f32, height: f32, math: ?render_policy.MathPaint) VisualFrame {
-    const horizontal_align = if (math) |paint| paint.horizontal_align else render_policy.HorizontalAlign.center;
+fn latexContentVisualFrame(frame: model.Frame, width: f32, height: f32, latex: ?render_policy.LatexPaint) VisualFrame {
+    const horizontal_align = if (latex) |paint| paint.horizontal_align else render_policy.HorizontalAlign.center;
     return .{
         .x = alignedX(frame.x, frame.width, width, horizontal_align),
         .y = frame.y + @max((frame.height - height) / 2.0, 0),

@@ -244,7 +244,7 @@ fn intrinsicWidthWithCache(state: anytype, node: *const Node, cache: ?*Measureme
             return @min(maxWidthForStyle(layout_style), Defaults.default_asset_width) * assetScale(state, node) + chrome_width;
         },
         .figure_text => return maxWidthForStyle(layout_style) + chrome_width,
-        .math_text, .math_tex => return maxWidthForStyle(layout_style) + chrome_width,
+        .latex => return maxWidthForStyle(layout_style) + chrome_width,
         else => {},
     }
 
@@ -310,7 +310,7 @@ fn intrinsicHeightWithCache(state: anytype, node: *const Node, cache: ?*Measurem
     return switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => Defaults.max_figure_height * assetScale(state, node) + chrome_height,
         .figure_text => Defaults.max_figure_height + chrome_height,
-        .math_text, .math_tex => blk: {
+        .latex => blk: {
             const content = model.nodeDisplayContent(node);
             const lines = @max(source.lineCount(content), 1);
             const base = @as(f32, @floatFromInt(lines)) * 22.0 + 2.0;

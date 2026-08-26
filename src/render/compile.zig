@@ -53,50 +53,19 @@ pub fn addFontEnvironmentDiagnostic(state: *core.DocumentState, err: anyerror) !
     return true;
 }
 
-fn addFontPreparationDiagnostic(state: *core.DocumentState, err: anyerror) !bool {
-    var reason_buf: [256]u8 = undefined;
-    var message_buf: [768]u8 = undefined;
-    const message = switch (err) {
-        error.MathFontRegistrationFailed => "MathFontRegistrationFailed: could not register the bundled STIX Two Math font; check Fontconfig and retry after 'fc-cache' completes",
-        else => if (utils.err.isFileSystemError(err))
-            std.fmt.bufPrint(
-                &message_buf,
-                "RenderCacheAccessFailed: could not prepare the bundled math font in '.ss-cache/render/fonts': {s}; remove a conflicting file or fix the cache permissions",
-                .{utils.err.formatErrorReason(&reason_buf, err)},
-            ) catch "RenderCacheAccessFailed: could not prepare the bundled math font cache"
-        else
-            return false,
-    };
-    for (state.diagnostics.items) |diagnostic| {
-        const existing_message = switch (diagnostic.data) {
-            .user_report => |data| data.message,
-            .render_failed => |data| data.reason,
-            else => continue,
-        };
-        if (std.mem.indexOf(u8, existing_message, message) != null) return true;
-    }
-    const owned_message = try state.allocator.dupe(u8, message);
-    try state.addRenderDiagnostic(.@"error", null, null, null, .{
-        .user_report = .{ .message = owned_message },
-    });
-    return true;
-}
-
 pub fn acquireFontEnvironment(
     allocator: std.mem.Allocator,
     io: std.Io,
     state: *core.DocumentState,
     pages: *const core.prepared.PreparedPages,
 ) !FontEnvironmentToken {
+    _ = state;
     const refresh_fonts_start = utils.measure_profile.start();
     _ = try text_compile.fontEnvironmentRefresh();
     utils.measure_profile.recordRenderCompile(.font_environment, refresh_fonts_start);
-    const prepare_fonts_start = utils.measure_profile.start();
-    items.prepareFonts(allocator, io, pages) catch |err| {
-        _ = try addFontPreparationDiagnostic(state, err);
-        return err;
-    };
-    utils.measure_profile.recordRenderCompile(.prepare_fonts, prepare_fonts_start);
+    _ = allocator;
+    _ = io;
+    _ = pages;
     const font_environment_start = utils.measure_profile.start();
     const font_environment = try text_compile.fontEnvironmentSnapshot();
     utils.measure_profile.recordRenderCompile(.font_environment, font_environment_start);
@@ -239,8 +208,6 @@ fn sequentialDocument(
     defer resources.deinit(allocator);
     var fonts = render.FontBuilder{};
     defer fonts.deinit(allocator);
-    var math = render.MathBuilder{};
-    defer math.deinit(allocator);
     var pages = std.ArrayList(render.Page).empty;
     errdefer deinitPages(allocator, &pages);
     try pages.ensureTotalCapacity(allocator, prepared_pages.pages.len);
@@ -251,22 +218,19 @@ fn sequentialDocument(
             prepared_page,
             &resources,
             &fonts,
-            &math,
         );
         errdefer page.deinit(allocator);
         pages.appendAssumeCapacity(page);
     }
-    return try finishDocument(allocator, state, prepared_pages, &resources, &fonts, &math, &pages);
+    return try finishDocument(allocator, state, prepared_pages, &resources, &fonts, &pages);
 }
 
 const PageCompilation = struct {
     page: ?render.Page = null,
-    math: render.MathBuilder = .{},
     err: ?anyerror = null,
 
     fn deinit(self: *PageCompilation, allocator: std.mem.Allocator) void {
         if (self.page) |*page| page.deinit(allocator);
-        self.math.deinit(allocator);
         self.* = .{};
     }
 };
@@ -336,21 +300,16 @@ fn parallelPreparedDocument(
     }
 
     const merge_start = utils.measure_profile.start();
-    var math = render.MathBuilder{};
-    defer math.deinit(allocator);
     var pages = std.ArrayList(render.Page).empty;
     errdefer deinitPages(allocator, &pages);
     try pages.ensureTotalCapacity(allocator, outputs.len);
     for (outputs) |*output| {
-        const math_mapping = try math.mergeFrom(allocator, &output.math);
-        defer allocator.free(math_mapping);
         const page = if (output.page) |*value| value else return error.RenderPageCompilationFailed;
-        try remapMathTrees(page, math_mapping);
         pages.appendAssumeCapacity(page.*);
         output.page = null;
     }
     utils.measure_profile.recordRenderCompile(.merge_pages, merge_start);
-    return try finishDocument(allocator, state, prepared_pages, &resources, &fonts, &math, &pages);
+    return try finishDocument(allocator, state, prepared_pages, &resources, &fonts, &pages);
 }
 
 fn pageCompilationWorker(work: *PageCompilationWork) void {
@@ -365,7 +324,6 @@ fn pageCompilationWorker(work: *PageCompilationWork) void {
             prepared_page,
             work.resources,
             work.fonts,
-            &output.math,
         ) catch |err| {
             output.err = err;
             work.failed.store(true, .seq_cst);
@@ -374,23 +332,12 @@ fn pageCompilationWorker(work: *PageCompilationWork) void {
     }
 }
 
-fn remapMathTrees(page: *render.Page, mapping: []const render.MathTreeId) !void {
-    for (page.items.items) |*item| switch (item.*) {
-        .math => |*value| {
-            if (value.tree == 0 or value.tree > mapping.len) return error.InvalidMathTree;
-            value.tree = mapping[value.tree - 1];
-        },
-        else => {},
-    };
-}
-
 fn finishDocument(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     prepared_pages: *const core.prepared.PreparedPages,
     resources: *resource_compile.Builder,
     fonts: *render.FontBuilder,
-    math: *render.MathBuilder,
     pages: *std.ArrayList(render.Page),
 ) !render.Ir {
     const profile_start = utils.measure_profile.start();
@@ -422,7 +369,6 @@ fn finishDocument(
     const catalogs_start = utils.measure_profile.start();
     ir.resources = try resources.take(allocator);
     ir.fonts = try fonts.take(allocator);
-    ir.math = try math.take(allocator);
     ir.pages = try pages.toOwnedSlice(allocator);
     pages.* = .empty;
     utils.measure_profile.recordRenderCompile(.finish_catalogs, catalogs_start);

@@ -33,7 +33,6 @@ pub const Emitter = struct {
     page: *render.Page,
     resources: *resources_compile.Builder,
     fonts: *render.FontBuilder,
-    math: *render.MathBuilder,
     io: std.Io,
     text_cache: ?*text.Cache = null,
     text_failure: ?*text.ShapeFailure = null,
@@ -255,28 +254,15 @@ pub const Emitter = struct {
         try self.page.appendPdfPage(allocator, self.node_id, rect, resource, page_index, box, copy_annotations);
     }
 
-    pub fn rawMathPdf(
+    pub fn latexPdf(
         self: *Emitter,
         allocator: Allocator,
         rect: render.Rect,
-        source: []const u8,
         path: []const u8,
         page_index: usize,
     ) !void {
-        const tree = try self.math.add(allocator, source, .raw);
-        const resource = try self.resources.addPath(allocator, self.io, .math_pdf, path);
-        try self.page.appendRawMathPdf(allocator, self.node_id, rect, tree, resource, page_index, .crop);
-    }
-
-    pub fn structuredMath(
-        self: *Emitter,
-        allocator: Allocator,
-        rect: render.Rect,
-        tree: render.MathTreeId,
-        layout: render.MathLayout,
-        color: Color,
-    ) !void {
-        try self.page.appendStructuredMath(allocator, self.node_id, rect, tree, layout, color);
+        const resource = try self.resources.addPath(allocator, self.io, .latex_pdf, path);
+        try self.page.appendLatexPdf(allocator, self.node_id, rect, resource, page_index, .crop);
     }
 };
 

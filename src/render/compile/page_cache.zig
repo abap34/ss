@@ -5,21 +5,6 @@ const resources_compile = @import("render_resources");
 
 const Allocator = std.mem.Allocator;
 
-const MathSpec = struct {
-    old_id: render.MathTreeId,
-    input_kind: render.MathInputKind,
-    source: []u8,
-
-    fn deinit(self: *MathSpec, allocator: Allocator) void {
-        allocator.free(self.source);
-    }
-};
-
-const MathMapping = struct {
-    old: render.MathTreeId,
-    new: render.MathTreeId,
-};
-
 const Entry = struct {
     page_id: core.NodeId,
     index: usize,
@@ -29,7 +14,6 @@ const Entry = struct {
     dependencies: []resources_compile.SourceDependency,
     resources: []render.ResourceId,
     fonts: []render.FontInstanceId,
-    math: []MathSpec,
     last_used: u64,
     document_epoch: u64,
     byte_size: usize,
@@ -39,8 +23,6 @@ const Entry = struct {
         resources_compile.deinitSourceDependencies(allocator, self.dependencies);
         allocator.free(self.resources);
         allocator.free(self.fonts);
-        for (self.math) |*spec| spec.deinit(allocator);
-        allocator.free(self.math);
     }
 };
 
@@ -110,12 +92,11 @@ pub const Cache = struct {
         resource_graph: *const render.ResourceGraph,
         source_dependencies: []const resources_compile.SourceDependency,
         font_catalog: *const render.FontCatalog,
-        math_catalog: *const render.MathCatalog,
     ) !bool {
         if (page_allocator.ptr != self.allocator.ptr or page_allocator.vtable != self.allocator.vtable) {
             return error.RenderPageCacheAllocatorMismatch;
         }
-        const entry_byte_size = pageCacheEntryByteSize(page, source_dependencies, resource_graph, font_catalog, math_catalog);
+        const entry_byte_size = pageCacheEntryByteSize(page, source_dependencies, resource_graph, font_catalog);
         const standalone_resource_bytes = resourceGraphByteSize(resource_graph);
         const standalone_font_bytes = fontCatalogByteSize(font_catalog);
         if (entry_byte_size > max_page_bytes or standalone_resource_bytes > max_resource_bytes or
@@ -153,21 +134,6 @@ pub const Cache = struct {
         const font_ids = try self.allocator.alloc(render.FontInstanceId, font_catalog.instances.len);
         errdefer self.allocator.free(font_ids);
         for (font_catalog.instances, 0..) |*font, index| font_ids[index] = font.id;
-        const math_specs = try self.allocator.alloc(MathSpec, math_catalog.trees.len);
-        var initialized_math: usize = 0;
-        errdefer {
-            for (math_specs[0..initialized_math]) |*spec| spec.deinit(self.allocator);
-            self.allocator.free(math_specs);
-        }
-        for (math_catalog.trees, 0..) |tree, index| {
-            math_specs[index] = .{
-                .old_id = tree.id,
-                .input_kind = tree.input_kind,
-                .source = try self.allocator.dupe(u8, tree.source),
-            };
-            initialized_math += 1;
-        }
-
         var retained_resources: usize = 0;
         errdefer for (resource_ids[0..retained_resources]) |id| self.releaseResource(id);
         for (resource_graph.entries) |*resource| {
@@ -196,7 +162,6 @@ pub const Cache = struct {
             .dependencies = dependencies,
             .resources = resource_ids,
             .fonts = font_ids,
-            .math = math_specs,
             .last_used = self.nextAccess(),
             .document_epoch = self.document_epoch,
             .byte_size = entry_byte_size,
@@ -218,7 +183,6 @@ pub const Cache = struct {
         io: std.Io,
         resources: *resources_compile.Builder,
         fonts: *render.FontBuilder,
-        math: *render.MathBuilder,
     ) !?render.Page {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
@@ -241,12 +205,6 @@ pub const Cache = struct {
             if (!std.mem.eql(u8, &added, &id)) return error.InvalidRenderPageCache;
         }
 
-        const mappings = try allocator.alloc(MathMapping, entry.math.len);
-        defer allocator.free(mappings);
-        for (entry.math, 0..) |spec, index| mappings[index] = .{
-            .old = spec.old_id,
-            .new = try math.add(allocator, spec.source, spec.input_kind),
-        };
         var page = try entry.content.materialize(
             allocator,
             entry.page_id,
@@ -255,10 +213,6 @@ pub const Cache = struct {
             entry.height,
         );
         errdefer page.deinit(allocator);
-        for (page.items.items) |*item| switch (item.*) {
-            .math => |*value| value.tree = mappedMathTree(mappings, value.tree) orelse return error.InvalidRenderPageCache,
-            else => {},
-        };
         return page;
     }
 
@@ -379,15 +333,12 @@ fn pageCacheEntryByteSize(
     source_dependencies: []const resources_compile.SourceDependency,
     resource_graph: *const render.ResourceGraph,
     font_catalog: *const render.FontCatalog,
-    math_catalog: *const render.MathCatalog,
 ) usize {
     var total = @sizeOf(Entry) +| page.ownedContentByteSize();
     total +|= source_dependencies.len *| @sizeOf(resources_compile.SourceDependency);
     for (source_dependencies) |dependency| total +|= dependency.path.len;
     total +|= resource_graph.entries.len *| @sizeOf(render.ResourceId);
     total +|= font_catalog.instances.len *| @sizeOf(render.FontInstanceId);
-    total +|= math_catalog.trees.len *| @sizeOf(MathSpec);
-    for (math_catalog.trees) |tree| total +|= tree.source.len;
     return total;
 }
 
@@ -401,9 +352,4 @@ fn fontCatalogByteSize(catalog: *const render.FontCatalog) usize {
     var total: usize = 0;
     for (catalog.instances) |*font| total +|= font.ownedByteSize();
     return total;
-}
-
-fn mappedMathTree(mappings: []const MathMapping, old: render.MathTreeId) ?render.MathTreeId {
-    for (mappings) |mapping| if (mapping.old == old) return mapping.new;
-    return null;
 }

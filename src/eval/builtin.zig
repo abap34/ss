@@ -465,15 +465,15 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 },
             };
             if (!core.render_env.isSupported(op, key)) {
-                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: supported render environment operations are add math.tex.preamble, add math.tex.preamble.file, and set math.tex.engine");
+                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: supported render environment operations are add latex.preamble, add latex.preamble.file, and set latex.engine");
                 break :blk target;
             }
-            if (core.render_env.isTexPreambleFileKey(key) and !core.render_env.isValidTexPreambleFilePath(value)) {
-                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: empty TeX preamble file path");
+            if (core.render_env.isLatexPreambleFileKey(key) and !core.render_env.isValidLatexPreambleFilePath(value)) {
+                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: empty LaTeX preamble file path");
                 break :blk target;
             }
-            if (core.render_env.isTexEngineKey(key) and !core.render_env.isValidTexEngine(value)) {
-                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: TeX engine must be pdflatex or lualatex");
+            if (core.render_env.isLatexEngineKey(key) and !core.render_env.isValidLatexEngine(value)) {
+                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: LaTeX engine must be pdflatex or lualatex");
                 break :blk target;
             }
             break :blk switch (target) {

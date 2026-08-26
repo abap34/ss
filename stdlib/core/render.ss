@@ -1,28 +1,28 @@
 import std:core/classes as classes
 import std:core/objects as objects
 
-fn tex_engine(engine: classes::TexEngine) -> Void
-  extend_render_env(docctx(), "set", "math.tex.engine", engine)
+fn latex_engine(engine: classes::LatexEngine) -> Void
+  extend_render_env(docctx(), "set", "latex.engine", engine)
 end
 
-fn page_tex_engine(engine: classes::TexEngine) -> Void
-  extend_render_env(pagectx(), "set", "math.tex.engine", engine)
+fn page_latex_engine(engine: classes::LatexEngine) -> Void
+  extend_render_env(pagectx(), "set", "latex.engine", engine)
 end
 
-fn tex_preamble(src: String) -> Void
-  extend_render_env(docctx(), "add", "math.tex.preamble", src)
+fn latex_preamble(src: String) -> Void
+  extend_render_env(docctx(), "add", "latex.preamble", src)
 end
 
-fn page_tex_preamble(src: String) -> Void
-  extend_render_env(pagectx(), "add", "math.tex.preamble", src)
+fn page_latex_preamble(src: String) -> Void
+  extend_render_env(pagectx(), "add", "latex.preamble", src)
 end
 
-fn tex_preamble_file(path: String) -> Void
-  extend_render_env(docctx(), "add", "math.tex.preamble.file", path)
+fn latex_preamble_file(path: String) -> Void
+  extend_render_env(docctx(), "add", "latex.preamble.file", path)
 end
 
-fn page_tex_preamble_file(path: String) -> Void
-  extend_render_env(pagectx(), "add", "math.tex.preamble.file", path)
+fn page_latex_preamble_file(path: String) -> Void
+  extend_render_env(pagectx(), "add", "latex.preamble.file", path)
 end
 
 fn link(obj: Object, id: String) -> Object

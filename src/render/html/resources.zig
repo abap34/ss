@@ -309,12 +309,9 @@ pub fn collect(allocator: std.mem.Allocator, ir: *const render.Ir, cache: ?*Cach
             .text => {},
             .raster => |value| try add(allocator, &assets, &asset_index, &ir.resources, .raster, value.resource, cache),
             .svg => |value| try add(allocator, &assets, &asset_index, &ir.resources, .svg, value.resource, cache),
-            .math => |value| switch (value.content) {
-                .structured => {},
-                .raw_pdf => |raw| {
-                    has_pdf = true;
-                    try add(allocator, &assets, &asset_index, &ir.resources, .math_pdf, raw.resource, cache);
-                },
+            .latex => |value| {
+                has_pdf = true;
+                try add(allocator, &assets, &asset_index, &ir.resources, .latex_pdf, value.resource, cache);
             },
             .pdf_page => |value| {
                 has_pdf = true;

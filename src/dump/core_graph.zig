@@ -87,19 +87,17 @@ fn writeFields(allocator: std.mem.Allocator, object: *json.Object, fields: anyty
 
 fn writeRenderEnv(object: *json.Object, env: core.render_env.Resolved) !void {
     var root = try object.objectField("render_env");
-    var math = try root.objectField("math");
-    var tex = try math.objectField("tex");
-    try tex.enumTagField("engine", env.tex_engine);
-    var preamble = try tex.arrayField("preamble");
-    for (env.tex_preamble.items) |entry| {
+    var latex = try root.objectField("latex");
+    try latex.enumTagField("engine", env.latex_engine);
+    var preamble = try latex.arrayField("preamble");
+    for (env.latex_preamble.items) |entry| {
         var item = try preamble.objectItem();
         try item.enumTagField("source", entry.source);
         try item.stringField("value", entry.value);
         try item.end();
     }
     try preamble.end();
-    try tex.end();
-    try math.end();
+    try latex.end();
     try root.end();
 }
 
@@ -179,7 +177,7 @@ fn writeRender(object: *json.Object, render: core.render_policy.ResolvedRender) 
     var render_object = try object.objectField("render");
     try render_object.enumTagField("kind", render.kind);
     try writeOptionalTextPaint(&render_object, render.text);
-    try writeOptionalMathPaint(&render_object, render.math);
+    try writeOptionalLatexPaint(&render_object, render.latex);
     try writeOptionalCodePaint(&render_object, render.code);
     try writeChromePaint(&render_object, render.chrome);
     try writeUnderlinePaint(&render_object, render.underline);
@@ -312,18 +310,17 @@ fn writeFontFace(object: *json.Object, key: []const u8, face: core.font.Face) !v
     try font.end();
 }
 
-fn writeOptionalMathPaint(object: *json.Object, maybe_math: ?core.render_policy.MathPaint) !void {
-    const math_spec = maybe_math orelse {
-        try object.nullField("math");
+fn writeOptionalLatexPaint(object: *json.Object, maybe_latex: ?core.render_policy.LatexPaint) !void {
+    const latex_spec = maybe_latex orelse {
+        try object.nullField("latex");
         return;
     };
 
-    var math = try object.objectField("math");
-    try math.floatField("min_height", math_spec.min_height, "{d:.1}");
-    try math.floatField("raw_tex_width_ratio", math_spec.raw_tex_width_ratio, "{d:.4}");
-    try math.floatField("scale", math_spec.scale, "{d:.4}");
-    try math.enumTagField("align", math_spec.horizontal_align);
-    try math.end();
+    var latex = try object.objectField("latex");
+    try latex.floatField("min_height", latex_spec.min_height, "{d:.1}");
+    try latex.floatField("scale", latex_spec.scale, "{d:.4}");
+    try latex.enumTagField("align", latex_spec.horizontal_align);
+    try latex.end();
 }
 
 fn writeOptionalCodePaint(object: *json.Object, maybe_code: ?core.render_policy.CodePaint) !void {

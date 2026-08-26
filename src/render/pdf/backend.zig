@@ -65,7 +65,7 @@ fn renderComposed(
         }
         switch (item) {
             .pdf_page => |value| try composition.appendPdfLayer(value),
-            .math => |value| try composition.appendMathLayer(value),
+            .latex => |value| try composition.appendLatexLayer(value),
             else => unreachable,
         }
         segment_start = item_index + 1;
@@ -79,7 +79,7 @@ fn renderComposed(
 fn isExternalPdfItem(item: render_ir.Item) bool {
     return switch (item) {
         .pdf_page => true,
-        .math => |value| value.content == .raw_pdf,
+        .latex => true,
         else => false,
     };
 }
@@ -166,16 +166,12 @@ const Composition = struct {
         });
     }
 
-    fn appendMathLayer(self: *Composition, item: render_ir.Math) !void {
-        const raw = switch (item.content) {
-            .raw_pdf => |value| value,
-            .structured => return error.MissingRenderResource,
-        };
-        const path = try self.resources.resolve(raw.resource, .math_pdf);
+    fn appendLatexLayer(self: *Composition, item: render_ir.Latex) !void {
+        const path = try self.resources.resolve(item.resource, .latex_pdf);
         try self.layers.append(self.allocator, .{
             .path = path.ptr,
-            .page_index = raw.page_index,
-            .box = @intFromEnum(raw.box),
+            .page_index = item.page_index,
+            .box = @intFromEnum(item.box),
             .x = item.rect.x,
             .y = self.page.height - item.rect.y - item.rect.height,
             .width = item.rect.width,
@@ -340,7 +336,7 @@ fn replayItem(
                 c.ss_pdf_draw_svg(pdf, path.ptr, value.rect.x, value.rect.y, value.rect.width, value.rect.height);
             if (result != 0) return imageFailure(pdf);
         },
-        .math => |value| try replayMath(allocator, pdf, ir, value, resources),
+        .latex => return error.UnsupportedAssetType,
         .pdf_page => return error.UnsupportedAssetType,
     }
 }
@@ -553,43 +549,6 @@ fn replayText(
     resources: *const ResourceFiles,
 ) !void {
     try replayTextLayout(allocator, pdf, ir, &text.layout, text.x, text.y, text.font_size, text.color, resources);
-}
-
-fn replayMath(
-    allocator: Allocator,
-    pdf: *c.SsPdf,
-    ir: *const render_ir.Ir,
-    math: render_ir.Math,
-    resources: *const ResourceFiles,
-) !void {
-    const structured = switch (math.content) {
-        .structured => |value| value,
-        .raw_pdf => return error.UnsupportedAssetType,
-    };
-    const layout = structured.layout;
-    for (layout.elements) |element| switch (element) {
-        .text => |text| try replayTextLayout(
-            allocator,
-            pdf,
-            ir,
-            &text.layout,
-            math.rect.x + text.x,
-            math.rect.y + text.y,
-            text.font_size,
-            structured.color,
-            resources,
-        ),
-        .rule => |rule| c.ss_pdf_fill_rect(
-            pdf,
-            math.rect.x + rule.rect.x,
-            math.rect.y + rule.rect.y,
-            rule.rect.width,
-            rule.rect.height,
-            structured.color.r,
-            structured.color.g,
-            structured.color.b,
-        ),
-    };
 }
 
 fn replayTextLayout(

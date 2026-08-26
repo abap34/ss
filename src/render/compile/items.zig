@@ -11,7 +11,6 @@ const render_emitter = @import("render_emitter");
 const c = @import("pdf_ffi").c;
 const render_ir = @import("render");
 const render_resources = @import("render_resources");
-const render_math = @import("render_math");
 const render_text = @import("render_text");
 const render_compile = @import("../compile.zig");
 const fingerprint = @import("fingerprint.zig");
@@ -97,7 +96,7 @@ const FontFace = core.font.Face;
 const ResolvedRender = core.render_policy.ResolvedRender;
 const TextPaint = core.render_policy.TextPaint;
 const CodePaint = core.render_policy.CodePaint;
-const MathPaint = core.render_policy.MathPaint;
+const LatexPaint = core.render_policy.LatexPaint;
 const VectorPathPaint = core.render_policy.VectorPathPaint;
 const ConnectorPaint = core.render_policy.ConnectorPaint;
 const MarkerPaint = core.render_policy.MarkerPaint;
@@ -105,8 +104,8 @@ const MarkdownDocument = core.markdown.MarkdownDocument;
 const Line = core.markdown.Line;
 const Block = core.markdown.Block;
 const Run = core.markdown.Run;
-const TexPreambleEntry = core.render_env.TexPreambleEntry;
-const TexEngine = core.render_env.TexEngine;
+const LatexPreambleEntry = core.render_env.LatexPreambleEntry;
+const LatexEngine = core.render_env.LatexEngine;
 
 const ContentRange = render_text.ContentRange;
 
@@ -227,8 +226,8 @@ const DrawContext = struct {
     emitter: ?render_emitter.Emitter = null,
     measurement_bounds: ?*MeasurementBounds = null,
     capture_measurement_content: bool = false,
-    tex_preamble: []const TexPreambleEntry = &.{},
-    tex_engine: TexEngine = .pdflatex,
+    latex_preamble: []const LatexPreambleEntry = &.{},
+    latex_engine: LatexEngine = .pdflatex,
     commands: ?[]const ObjectCommand = null,
 };
 
@@ -272,15 +271,11 @@ const DestinationAnnotation = struct {
     }
 };
 
-const MathKind = enum { inline_math, display, block, raw_block };
+const LatexFragmentKind = enum { inline_math, display_math, body };
 
 const AtomContent = union(enum) {
     text: ?render_ir.TextLayout,
-    structured_math: struct {
-        tree: render_ir.MathTreeId,
-        layout: render_ir.MathLayout,
-    },
-    raw_math: struct {
+    latex: struct {
         path: []const u8,
         page_index: usize,
     },
@@ -289,8 +284,7 @@ const AtomContent = union(enum) {
     fn deinit(self: *AtomContent, allocator: Allocator) void {
         switch (self.*) {
             .text => |*maybe_layout| if (maybe_layout.*) |*layout| layout.deinit(allocator),
-            .structured_math => |*math| math.layout.deinit(allocator),
-            .raw_math => |math| allocator.free(math.path),
+            .latex => |latex| allocator.free(latex.path),
             .icon => |icon| allocator.free(icon.path),
         }
     }
@@ -339,7 +333,7 @@ const SvgAsset = struct {
     height: f32,
 };
 
-const MathAsset = struct {
+const LatexAsset = struct {
     path: []const u8,
     page_index: usize,
     width: f32,
@@ -348,23 +342,23 @@ const MathAsset = struct {
     reference_height: f32,
 };
 
-const MathAssetGeometry = struct {
+const LatexAssetGeometry = struct {
     baseline_from_bottom: f32,
     reference_height: f32,
 };
 
 const PreloadTask = union(enum) {
-    math: MathPreload,
+    latex: LatexPreload,
     icon: IconPreload,
     vector_pdf: VectorPdfPreload,
     raster: RasterPreload,
 };
 
-const MathPreload = struct {
+const LatexPreload = struct {
     source: []const u8,
-    preamble: []const TexPreambleEntry,
-    engine: TexEngine,
-    kind: MathKind,
+    preamble: []const LatexPreambleEntry,
+    engine: LatexEngine,
+    kind: LatexFragmentKind,
     target: RenderDiagnosticTarget = .{},
 };
 
@@ -504,9 +498,9 @@ const ObjectCommand = struct {
     markdown_doc: ?*const MarkdownDocument = null,
     text_layout: ?*const core.markdown.TextLayout = null,
     asset_deps: []const core.prepared.AssetDependency = &.{},
-    tex_preamble: []const TexPreambleEntry,
-    tex_engine: TexEngine,
-    math_kind: MathKind = .block,
+    latex_preamble: []const LatexPreambleEntry,
+    latex_engine: LatexEngine,
+    latex_kind: LatexFragmentKind = .body,
     origin: ?[]const u8 = null,
     payload_kind: ?core.PayloadKind = null,
 
@@ -525,20 +519,20 @@ const PreloadWork = struct {
     highlight_languages: []const utils.highlight.Language,
 };
 
-const MathBatchEntry = struct {
+const LatexBatchEntry = struct {
     task_index: usize,
     source: []const u8,
-    preamble: []const TexPreambleEntry,
-    engine: TexEngine,
-    kind: MathKind,
+    preamble: []const LatexPreambleEntry,
+    engine: LatexEngine,
+    kind: LatexFragmentKind,
     out: []u8,
 };
 
-const MathBatchGroup = struct {
+const LatexBatchGroup = struct {
     key: []u8,
-    entries: std.ArrayList(MathBatchEntry) = .empty,
+    entries: std.ArrayList(LatexBatchEntry) = .empty,
 
-    fn deinit(self: *MathBatchGroup, allocator: Allocator) void {
+    fn deinit(self: *LatexBatchGroup, allocator: Allocator) void {
         allocator.free(self.key);
         for (self.entries.items) |entry| allocator.free(entry.out);
         self.entries.deinit(allocator);
@@ -685,14 +679,14 @@ pub const LayoutMeasurementScope = struct {
                 .link_id = command.link_id,
                 .parse_mode = @tagName(command.parse_mode),
                 .render = command.render,
-                .tex_preamble = command.tex_preamble,
-                .tex_engine = command.tex_engine,
-                .math_kind = @tagName(command.math_kind),
-                .raw_tex = command.math_kind == .raw_block,
+                .latex_preamble = command.latex_preamble,
+                .latex_engine = command.latex_engine,
+                .latex_kind = @tagName(command.latex_kind),
+                .document_body = command.latex_kind == .body,
             },
         ) catch |err| {
             if (err == error.Canceled) return error.Canceled;
-            recordTexPreambleFingerprintFailure(&measurement_ctx, command.tex_preamble);
+            recordLatexPreambleFingerprintFailure(&measurement_ctx, command.latex_preamble);
             try addMeasurementRenderDiagnostic(&measurement_ctx, state, &command, err, &target);
             return err;
         };
@@ -807,9 +801,9 @@ pub const LayoutMeasurementScope = struct {
             .markdown_doc = object.markdownDocument(),
             .text_layout = object.textLayout(),
             .asset_deps = object.asset_deps,
-            .tex_preamble = object.tex_preamble,
-            .tex_engine = object.tex_engine,
-            .math_kind = mathKindForNode(node),
+            .latex_preamble = object.latex_preamble,
+            .latex_engine = object.latex_engine,
+            .latex_kind = .body,
             .origin = object.origin,
             .payload_kind = object.payload_kind,
         };
@@ -978,7 +972,6 @@ pub const Compiler = struct {
             .cache_dir = self.options.cache_dir,
             .highlight_languages = self.options.highlight_languages,
         }, null);
-        try prepareFonts(allocator, self.io, pages);
         if (expected_environment) |expected| {
             try render_text.validateFontEnvironment(expected);
             self.font_environment = expected;
@@ -995,7 +988,6 @@ pub const Compiler = struct {
         prepared_page: *const core.prepared.PreparedPage,
         resources: *render_resources.Builder,
         fonts: *render_ir.FontBuilder,
-        math: *render_ir.MathBuilder,
     ) !render_ir.Page {
         try std.Io.checkCancel(self.io);
         const font_environment = self.font_environment orelse
@@ -1035,7 +1027,7 @@ pub const Compiler = struct {
                 self.options.highlight_languages,
                 commands,
             );
-            if (try cache.materialize(key, allocator, self.io, resources, fonts, math)) |page| {
+            if (try cache.materialize(key, allocator, self.io, resources, fonts)) |page| {
                 utils.measure_profile.recordRenderPage(true, page_cache_start);
                 return page;
             }
@@ -1044,8 +1036,6 @@ pub const Compiler = struct {
             defer local_resources.deinit(allocator);
             var local_fonts = render_ir.FontBuilder{};
             defer local_fonts.deinit(allocator);
-            var local_math = render_ir.MathBuilder{};
-            defer local_math.deinit(allocator);
             var page = try buildRenderPage(
                 self,
                 &draw_context,
@@ -1056,7 +1046,6 @@ pub const Compiler = struct {
                 commands,
                 &local_resources,
                 &local_fonts,
-                &local_math,
             );
             var page_live = true;
             errdefer if (page_live) page.deinit(allocator);
@@ -1066,8 +1055,6 @@ pub const Compiler = struct {
             defer resource_graph.deinit(allocator);
             var font_catalog = try local_fonts.take(allocator);
             defer font_catalog.deinit(allocator);
-            var math_catalog = try local_math.take(allocator);
-            defer math_catalog.deinit(allocator);
             try render_text.validateFontEnvironment(font_environment);
             const cached = try cache.put(
                 key,
@@ -1076,7 +1063,6 @@ pub const Compiler = struct {
                 &resource_graph,
                 source_dependencies,
                 &font_catalog,
-                &math_catalog,
             );
             if (!cached) {
                 try mergeUncachedPage(
@@ -1085,17 +1071,15 @@ pub const Compiler = struct {
                     &page,
                     &resource_graph,
                     &font_catalog,
-                    &math_catalog,
                     resources,
                     fonts,
-                    math,
                 );
                 utils.measure_profile.recordRenderPage(false, page_cache_start);
                 return page;
             }
             page.deinit(allocator);
             page_live = false;
-            const materialized = (try cache.materialize(key, allocator, self.io, resources, fonts, math)) orelse return error.InvalidRenderPageCache;
+            const materialized = (try cache.materialize(key, allocator, self.io, resources, fonts)) orelse return error.InvalidRenderPageCache;
             utils.measure_profile.recordRenderPage(false, page_cache_start);
             return materialized;
         }
@@ -1109,25 +1093,11 @@ pub const Compiler = struct {
             commands,
             resources,
             fonts,
-            math,
         );
     }
 };
 
-pub fn prepareFonts(
-    allocator: Allocator,
-    io: std.Io,
-    pages: *const core.prepared.PreparedPages,
-) !void {
-    if (preparedPagesNeedStructuredMath(pages)) try render_math.prepareFont(allocator, io);
-}
-
 pub const PageCache = page_cache.Cache;
-
-const MathTreeMapping = struct {
-    old: render_ir.MathTreeId,
-    new: render_ir.MathTreeId,
-};
 
 fn mergeUncachedPage(
     allocator: Allocator,
@@ -1135,10 +1105,8 @@ fn mergeUncachedPage(
     page: *render_ir.Page,
     resource_graph: *const render_ir.ResourceGraph,
     font_catalog: *const render_ir.FontCatalog,
-    math_catalog: *const render_ir.MathCatalog,
     resources: *render_resources.Builder,
     fonts: *render_ir.FontBuilder,
-    math: *render_ir.MathBuilder,
 ) !void {
     for (resource_graph.entries) |*resource| {
         const added = try resources.addResource(allocator, io, resource);
@@ -1148,36 +1116,7 @@ fn mergeUncachedPage(
         const added = try fonts.add(allocator, io, font.spec());
         if (!std.mem.eql(u8, &added, &font.id)) return error.InvalidRenderPageCache;
     }
-    const mappings = try allocator.alloc(MathTreeMapping, math_catalog.trees.len);
-    defer allocator.free(mappings);
-    for (math_catalog.trees, 0..) |tree, index| mappings[index] = .{
-        .old = tree.id,
-        .new = try math.add(allocator, tree.source, tree.input_kind),
-    };
-    for (page.items.items) |*item| switch (item.*) {
-        .math => |*value| {
-            value.tree = for (mappings) |mapping| {
-                if (mapping.old == value.tree) break mapping.new;
-            } else return error.InvalidRenderPageCache;
-        },
-        else => {},
-    };
-}
-
-fn preparedPagesNeedStructuredMath(pages: *const core.prepared.PreparedPages) bool {
-    for (pages.pages) |page| {
-        for (page.objects) |object| {
-            if (object.render.kind == .vector_math) {
-                if (object.payload_kind != .math_tex) return true;
-                continue;
-            }
-            for (object.asset_deps) |dependency| switch (dependency.kind) {
-                .inline_math, .display_math, .block_math => return true,
-                .icon, .vector_pdf, .raster_asset => {},
-            };
-        }
-    }
-    return false;
+    _ = page;
 }
 
 fn buildObjectCommands(
@@ -1218,9 +1157,9 @@ fn initObjectCommand(
         .markdown_doc = object.markdownDocument(),
         .text_layout = object.textLayout(),
         .asset_deps = object.asset_deps,
-        .tex_preamble = object.tex_preamble,
-        .tex_engine = object.tex_engine,
-        .math_kind = mathKindForNode(node),
+        .latex_preamble = object.latex_preamble,
+        .latex_engine = object.latex_engine,
+        .latex_kind = .body,
         .origin = object.origin,
         .payload_kind = object.payload_kind,
     };
@@ -1295,24 +1234,21 @@ fn collectPreparedObjectPreloads(
         const dep_target = targetWithContentSpan(target, dep.content_start, dep.content_end);
         switch (dep.kind) {
             .inline_math, .display_math => {
-                const kind: MathKind = if (dep.kind == .display_math) .display else .inline_math;
-                if (object.tex_preamble.len != 0 and !try supportsStructuredMath(ctx.allocator, dep.source, kind)) {
-                    try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
-                        .source = try ctx.allocator.dupe(u8, dep.source),
-                        .preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
-                        .engine = object.tex_engine,
-                        .kind = kind,
-                        .target = dep_target,
-                    } });
-                }
-            },
-            .block_math => {
-                const kind = mathKindForPreparedObject(object);
-                if (kind == .raw_block) try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
+                const kind: LatexFragmentKind = if (dep.kind == .display_math) .display_math else .inline_math;
+                try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .latex = .{
                     .source = try ctx.allocator.dupe(u8, dep.source),
-                    .preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
-                    .engine = object.tex_engine,
+                    .preamble = try cloneLatexPreambleEntries(ctx.allocator, object.latex_preamble),
+                    .engine = object.latex_engine,
                     .kind = kind,
+                    .target = dep_target,
+                } });
+            },
+            .latex_body => {
+                try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .latex = .{
+                    .source = try ctx.allocator.dupe(u8, dep.source),
+                    .preamble = try cloneLatexPreambleEntries(ctx.allocator, object.latex_preamble),
+                    .engine = object.latex_engine,
+                    .kind = .body,
                     .target = dep_target,
                 } });
             },
@@ -1342,14 +1278,6 @@ fn preparedObjectDiagnosticTarget(page_id: core.NodeId, object: *const core.prep
     };
 }
 
-fn mathKindForPreparedObject(object: *const core.prepared.PreparedObject) MathKind {
-    return switch (object.payload_kind orelse .text) {
-        .math_tex => .raw_block,
-        .math_text => .block,
-        else => .block,
-    };
-}
-
 fn collectObjectPreloads(
     ctx: *DrawContext,
     command: *const ObjectCommand,
@@ -1360,18 +1288,18 @@ fn collectObjectPreloads(
     const target = objectDiagnosticTarget(command);
     if (command.asset_deps.len != 0) {
         try collectAssetDepsForPlan(ctx, command, target, tasks, seen, page_deps);
-        if (command.render.kind == .text or command.render.kind == .vector_math or command.render.kind == .vector_asset) return;
+        if (command.render.kind == .text or command.render.kind == .latex or command.render.kind == .vector_asset) return;
     } else if (command.render.kind == .text) {
         return;
     }
     switch (command.render.kind) {
         .text => {},
-        .vector_math => {
-            if (command.math_kind == .raw_block) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
+        .latex => {
+            if (command.latex_kind == .body) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .latex = .{
                 .source = try ctx.allocator.dupe(u8, command.content),
-                .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
-                .engine = command.tex_engine,
-                .kind = command.math_kind,
+                .preamble = try cloneLatexPreambleEntries(ctx.allocator, command.latex_preamble),
+                .engine = command.latex_engine,
+                .kind = command.latex_kind,
                 .target = targetWithContentSpan(target, 0, command.content.len),
             } });
         },
@@ -1413,23 +1341,21 @@ fn collectAssetDepsForPlan(
         const dep_target = targetWithContentSpan(target, dep.content_start, dep.content_end);
         switch (dep.kind) {
             .inline_math, .display_math => {
-                const kind: MathKind = if (dep.kind == .display_math) .display else .inline_math;
-                if (command.tex_preamble.len != 0 and !try supportsStructuredMath(ctx.allocator, dep.source, kind)) {
-                    try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
-                        .source = try ctx.allocator.dupe(u8, dep.source),
-                        .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
-                        .engine = command.tex_engine,
-                        .kind = kind,
-                        .target = dep_target,
-                    } });
-                }
-            },
-            .block_math => {
-                if (command.math_kind == .raw_block) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
+                const kind: LatexFragmentKind = if (dep.kind == .display_math) .display_math else .inline_math;
+                try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .latex = .{
                     .source = try ctx.allocator.dupe(u8, dep.source),
-                    .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
-                    .engine = command.tex_engine,
-                    .kind = command.math_kind,
+                    .preamble = try cloneLatexPreambleEntries(ctx.allocator, command.latex_preamble),
+                    .engine = command.latex_engine,
+                    .kind = kind,
+                    .target = dep_target,
+                } });
+            },
+            .latex_body => {
+                if (command.latex_kind == .body) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .latex = .{
+                    .source = try ctx.allocator.dupe(u8, dep.source),
+                    .preamble = try cloneLatexPreambleEntries(ctx.allocator, command.latex_preamble),
+                    .engine = command.latex_engine,
+                    .kind = command.latex_kind,
                     .target = dep_target,
                 } });
             },
@@ -1567,7 +1493,7 @@ fn renderFailureDiagnosticMessage(buffer: []u8, err: anyerror) []const u8 {
     return switch (err) {
         error.ImageDecodeFailed => "ImageDecodeFailed: could not decode the image; verify that its contents match a supported image format",
         error.AssetConversionFailed => "AssetConversionFailed: could not convert the asset; verify the input and the required external tool",
-        error.InvalidPdfCache => "InvalidPdfCache: a generated or cached PDF artifact is invalid; verify the TeX or PDF input, then run 'ss cache project clear' if the failure persists",
+        error.InvalidPdfCache => "InvalidPdfCache: a generated or cached PDF artifact is invalid; verify the LaTeX or PDF input, then run 'ss cache project clear' if the failure persists",
         error.InvalidFontAwesomeIcon => "InvalidFontAwesomeIcon: the icon name is not in the bundled catalog; choose a valid fa-solid, fa-regular, or fa-brands icon",
         error.UnsupportedAssetType => "UnsupportedAssetType: this object cannot render the asset type; use image! for images and pdf! for PDF files",
         error.InvalidRasterResource => "InvalidRasterResource: the file is not a valid raster image; verify its contents and use pdf! for PDF files",
@@ -1575,14 +1501,6 @@ fn renderFailureDiagnosticMessage(buffer: []u8, err: anyerror) []const u8 {
         error.InvalidPdfResource => "InvalidPdfResource: the file is not a readable PDF or the requested page is unavailable; verify the PDF and page number",
         error.ResourceChangedDuringRead => "ResourceChangedDuringRead: the asset changed repeatedly while it was being read; wait for the writer to finish and retry",
         error.UnsupportedSyntheticFont => render_text.genericSyntheticFontDiagnostic(),
-        error.MathFontRegistrationFailed => "MathFontRegistrationFailed: could not register the bundled STIX Two Math font; check render-cache permissions and Fontconfig",
-        error.MissingMathFont => "MissingMathFont: STIX Two Math could not be selected; verify that Fontconfig can discover the bundled font",
-        error.MissingMathTable => "MissingMathTable: the selected math font has no OpenType MATH table; ensure that STIX Two Math is available",
-        error.InvalidMathSize => "InvalidMathSize: the math font size must be finite and greater than zero",
-        error.InvalidMathScale => "InvalidMathScale: the math scale must be finite and greater than zero",
-        error.InvalidMathTable => "InvalidMathTable: the bundled STIX Two Math metrics are unusable; reinstall ss, and report the failure if it persists",
-        error.InvalidMathTree => "InvalidMathTree: ss produced an inconsistent structured-math tree; report this as an ss bug with the source expression",
-        error.UnsupportedMathSyntax => "UnsupportedMathSyntax: the expression uses syntax unsupported by structured math; simplify it or use tex! for raw TeX",
         error.UnknownTreeSitterLanguage => "UnknownTreeSitterLanguage: the configured parser is unavailable; select a supported built-in parser in ss.toml",
         error.TreeSitterParserCreateFailed => "TreeSitterParserCreateFailed: could not initialize syntax highlighting; retry or disable highlighting for this language",
         error.TreeSitterLanguageRejected => "TreeSitterLanguageRejected: the bundled parser is incompatible with the tree-sitter runtime; reinstall or update ss, and report the failure if it persists",
@@ -1640,8 +1558,6 @@ fn addObjectCommandDiagnostic(state: *core.DocumentState, command: *const Object
 }
 
 fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, failure: ?*const CommandFailure) !void {
-    if (err == error.UnsupportedMathSyntax and try addUnsupportedMathDiagnostic(ctx, state, command)) return;
-
     var tasks = std.ArrayList(PreloadTask).empty;
     defer {
         freePreloadTasks(ctx.allocator, tasks.items);
@@ -1675,36 +1591,10 @@ fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: *core.DocumentState,
     try addObjectCommandDiagnostic(state, command, err, failure);
 }
 
-fn addUnsupportedMathDiagnostic(
-    ctx: *DrawContext,
-    state: *core.DocumentState,
-    command: *const ObjectCommand,
-) !bool {
-    const target = objectDiagnosticTarget(command);
-    for (command.asset_deps) |dep| {
-        const kind: MathKind = switch (dep.kind) {
-            .inline_math => .inline_math,
-            .display_math => .display,
-            .block_math => if (command.math_kind == .raw_block) continue else command.math_kind,
-            .icon, .vector_pdf, .raster_asset => continue,
-        };
-        if (try supportsStructuredMath(ctx.allocator, dep.source, kind)) continue;
-        try addTargetedRenderDiagnostic(
-            state,
-            targetWithContentSpan(target, dep.content_start, dep.content_end),
-            "math expression",
-            error.UnsupportedMathSyntax,
-            null,
-        );
-        return true;
-    }
-    return false;
-}
-
 fn objectCommandDiagnosticTarget(command: *const ObjectCommand) RenderDiagnosticTarget {
     const target = objectDiagnosticTarget(command);
     return switch (command.render.kind) {
-        .vector_math, .vector_asset, .raster_asset => targetWithContentSpan(target, 0, command.content.len),
+        .latex, .vector_asset, .raster_asset => targetWithContentSpan(target, 0, command.content.len),
         else => target,
     };
 }
@@ -1716,7 +1606,7 @@ fn objectCommandLabel(command: *const ObjectCommand) []const u8 {
         .chrome_only => "object chrome",
         .vector_path => "vector path object",
         .connector => "connector object",
-        .vector_math => "math expression",
+        .latex => "LaTeX fragment",
         .vector_asset => "vector asset",
         .raster_asset => "raster asset",
     };
@@ -1726,7 +1616,7 @@ fn profileRenderMeasureKind(kind: RenderKind) utils.measure_profile.RenderMeasur
     return switch (kind) {
         .text => .text,
         .code => .code,
-        .vector_math => .vector_math,
+        .latex => .latex,
         .vector_asset => .vector_asset,
         .raster_asset => .raster_asset,
         .vector_path => .shape,
@@ -1737,7 +1627,7 @@ fn profileRenderMeasureKind(kind: RenderKind) utils.measure_profile.RenderMeasur
 
 fn preloadTaskTarget(task: PreloadTask) RenderDiagnosticTarget {
     return switch (task) {
-        .math => |math| math.target,
+        .latex => |latex| latex.target,
         .icon => |icon| icon.target,
         .vector_pdf => |asset| asset.target,
         .raster => |raster| raster.target,
@@ -1746,7 +1636,7 @@ fn preloadTaskTarget(task: PreloadTask) RenderDiagnosticTarget {
 
 fn preloadTaskLabel(task: PreloadTask) []const u8 {
     return switch (task) {
-        .math => "math expression",
+        .latex => "LaTeX fragment",
         .icon => "icon",
         .vector_pdf => "PDF asset",
         .raster => "raster asset",
@@ -1755,7 +1645,7 @@ fn preloadTaskLabel(task: PreloadTask) []const u8 {
 
 fn profilePreloadKind(task: PreloadTask) utils.measure_profile.ArtifactKind {
     return switch (task) {
-        .math => .math,
+        .latex => .latex,
         .icon => .icon,
         .vector_pdf => .vector_pdf,
         .raster => .raster,
@@ -1770,14 +1660,14 @@ fn countCachedPreloadTasks(cached: []const bool) usize {
     return count;
 }
 
-fn preloadMathTaskBatches(
+fn preloadLatexTaskBatches(
     ctx: *DrawContext,
     tasks: []const PreloadTask,
     cached: []bool,
     progress: ?Progress,
     completed: *usize,
 ) !void {
-    var groups = std.ArrayList(MathBatchGroup).empty;
+    var groups = std.ArrayList(LatexBatchGroup).empty;
     defer {
         for (groups.items) |*group| group.deinit(ctx.allocator);
         groups.deinit(ctx.allocator);
@@ -1785,16 +1675,15 @@ fn preloadMathTaskBatches(
 
     for (tasks, 0..) |task, index| {
         if (cached[index]) continue;
-        const math = switch (task) {
-            .math => |value| value,
+        const latex = switch (task) {
+            .latex => |value| value,
             else => continue,
         };
-        if (math.kind == .raw_block) continue;
 
-        const out = try cachedMathPath(ctx, math.source, math.preamble, math.engine, math.kind, "ref");
+        const out = try cachedLatexPath(ctx, latex.source, latex.preamble, latex.engine, latex.kind, "ref");
         var out_owned = true;
         errdefer if (out_owned) ctx.allocator.free(out);
-        const key = try mathBatchGroupKey(ctx, math.preamble, math.engine);
+        const key = try latexBatchGroupKey(ctx, latex.preamble, latex.engine);
         var key_owned = true;
         errdefer if (key_owned) ctx.allocator.free(key);
 
@@ -1810,10 +1699,10 @@ fn preloadMathTaskBatches(
             key_owned = false;
             try groups.items[candidate_index].entries.append(ctx.allocator, .{
                 .task_index = index,
-                .source = math.source,
-                .preamble = math.preamble,
-                .engine = math.engine,
-                .kind = math.kind,
+                .source = latex.source,
+                .preamble = latex.preamble,
+                .engine = latex.engine,
+                .kind = latex.kind,
                 .out = out,
             });
             out_owned = false;
@@ -1822,10 +1711,10 @@ fn preloadMathTaskBatches(
             key_owned = false;
             try groups.items[groups.items.len - 1].entries.append(ctx.allocator, .{
                 .task_index = index,
-                .source = math.source,
-                .preamble = math.preamble,
-                .engine = math.engine,
-                .kind = math.kind,
+                .source = latex.source,
+                .preamble = latex.preamble,
+                .engine = latex.engine,
+                .kind = latex.kind,
                 .out = out,
             });
             out_owned = false;
@@ -1835,16 +1724,16 @@ fn preloadMathTaskBatches(
     for (groups.items) |group| {
         if (group.entries.items.len == 0) continue;
         const profile_build = utils.measure_profile.start();
-        try preloadMathBatchGroup(ctx, group.entries.items, progress, completed, tasks.len);
-        utils.measure_profile.recordArtifactBuildMany(.math, group.entries.items.len, profile_build);
+        try preloadLatexBatchGroup(ctx, group.entries.items, progress, completed, tasks.len);
+        utils.measure_profile.recordArtifactBuildMany(.latex, group.entries.items.len, profile_build);
         for (group.entries.items) |entry| cached[entry.task_index] = true;
     }
 }
 
-fn mathBatchGroupKey(ctx: *DrawContext, preamble: []const TexPreambleEntry, engine: TexEngine) ![]u8 {
+fn latexBatchGroupKey(ctx: *DrawContext, preamble: []const LatexPreambleEntry, engine: LatexEngine) ![]u8 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, native_artifact_cache_version);
-    hashString(&hasher, "math-batch");
+    hashString(&hasher, "latex-batch");
     hashString(&hasher, @tagName(engine));
     for (preamble) |entry| {
         hashString(&hasher, @tagName(entry.source));
@@ -1853,15 +1742,15 @@ fn mathBatchGroupKey(ctx: *DrawContext, preamble: []const TexPreambleEntry, engi
     return std.fmt.allocPrint(ctx.allocator, "{x}", .{hasher.final()});
 }
 
-fn preloadMathBatchGroup(
+fn preloadLatexBatchGroup(
     ctx: *DrawContext,
-    entries: []const MathBatchEntry,
+    entries: []const LatexBatchEntry,
     progress: ?Progress,
     completed: *usize,
     total: usize,
 ) !void {
     if (entries.len == 0) return;
-    const dir = try tempCachePath(ctx, entries[0].out, "math-batch-dir");
+    const dir = try tempCachePath(ctx, entries[0].out, "latex-batch-dir");
     defer ctx.allocator.free(dir);
     defer std.Io.Dir.cwd().deleteTree(ctx.io, dir) catch {};
     errdefer std.Io.Dir.cwd().deleteTree(ctx.io, dir) catch {};
@@ -1874,16 +1763,16 @@ fn preloadMathBatchGroup(
     const metrics_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.ssm" });
     defer ctx.allocator.free(metrics_path);
 
-    const tex = try mathBatchDocumentSource(ctx, entries);
+    const tex = try latexBatchDocumentSource(ctx, entries);
     defer ctx.allocator.free(tex);
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = tex, .flags = .{ .truncate = true } });
     try runChecked(ctx, &.{ entries[0].engine.executable(), "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
-    try publishMathBatch(ctx, entries, pdf_path, metrics_path, progress, completed, total);
+    try publishLatexBatch(ctx, entries, pdf_path, metrics_path, progress, completed, total);
 }
 
-fn publishMathBatch(
+fn publishLatexBatch(
     ctx: *DrawContext,
-    entries: []const MathBatchEntry,
+    entries: []const LatexBatchEntry,
     generated_pdf_path: []const u8,
     metrics_path: []const u8,
     progress: ?Progress,
@@ -1891,7 +1780,7 @@ fn publishMathBatch(
     total: usize,
 ) !void {
     if (entries.len == 0) return;
-    const batch_path = try mathBatchPdfPath(ctx, entries);
+    const batch_path = try latexBatchPdfPath(ctx, entries);
     defer ctx.allocator.free(batch_path);
     try publishGeneratedPdf(ctx, generated_pdf_path, batch_path);
 
@@ -1901,35 +1790,37 @@ fn publishMathBatch(
     defer ctx.allocator.free(widths);
     const heights = try ctx.allocator.alloc(f64, entries.len);
     defer ctx.allocator.free(heights);
-    const metrics = try readMathTexMetrics(ctx, metrics_path, entries.len);
+    const metrics = try readLatexMetrics(ctx, metrics_path, entries.len);
     defer ctx.allocator.free(metrics);
     if (c.ss_qpdf_page_sizes(batch_path_z.ptr, @intFromEnum(core.render_policy.PdfPageBox.crop), widths.ptr, heights.ptr, entries.len) != 0) {
-        try recordQpdfFailure(ctx, "read TeX PDF page geometry");
+        try recordQpdfFailure(ctx, "read LaTeX PDF page geometry");
         return NativePdfError.AssetConversionFailed;
     }
 
     for (entries, 0..) |entry, index| {
-        try writeMathReference(
+        const baseline_from_bottom = if (entry.kind == .body) 0 else heights[index] * metrics[index].baseline_ratio;
+        const reference_height = if (entry.kind == .body) heights[index] else heights[index] * metrics[index].reference_height_ratio;
+        try writeLatexReference(
             ctx,
             entry.out,
             batch_path,
             index,
             widths[index],
             heights[index],
-            heights[index] * metrics[index].baseline_ratio,
-            heights[index] * metrics[index].reference_height_ratio,
+            baseline_from_bottom,
+            reference_height,
         );
         completed.* += 1;
         if (progress) |p| p.artifactCompleted(p.context, completed.*, total);
     }
 }
 
-fn mathBatchPdfPath(ctx: *DrawContext, entries: []const MathBatchEntry) ![]u8 {
+fn latexBatchPdfPath(ctx: *DrawContext, entries: []const LatexBatchEntry) ![]u8 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, native_artifact_cache_version);
-    hashString(&hasher, "math-batch-pdf");
+    hashString(&hasher, "latex-batch-pdf");
     for (entries) |entry| hashString(&hasher, entry.out);
-    return std.fmt.allocPrint(ctx.allocator, "{s}/math-batch-{x}.pdf", .{ ctx.cache_dir, hasher.final() });
+    return std.fmt.allocPrint(ctx.allocator, "{s}/latex-batch-{x}.pdf", .{ ctx.cache_dir, hasher.final() });
 }
 
 fn publishGeneratedPdf(ctx: *DrawContext, generated_path: []const u8, output: []const u8) !void {
@@ -1943,7 +1834,7 @@ fn publishGeneratedPdf(ctx: *DrawContext, generated_path: []const u8, output: []
     try publishCacheFile(ctx, tmp, output);
 }
 
-fn writeMathReference(
+fn writeLatexReference(
     ctx: *DrawContext,
     output: []const u8,
     pdf_path: []const u8,
@@ -1979,7 +1870,7 @@ fn executePreloadTaskList(
 ) !void {
     if (tasks.len == 0 or miss_count == 0) return;
     var completed = tasks.len - miss_count;
-    try preloadMathTaskBatches(ctx, tasks, cached, progress, &completed);
+    try preloadLatexTaskBatches(ctx, tasks, cached, progress, &completed);
 
     const remaining_miss_count = tasks.len - countCachedPreloadTasks(cached);
     if (remaining_miss_count == 0) return;
@@ -2114,7 +2005,6 @@ fn buildRenderPage(
     commands: []ObjectCommand,
     resources: *render_resources.Builder,
     fonts: *render_ir.FontBuilder,
-    math: *render_ir.MathBuilder,
 ) !render_ir.Page {
     var page = render_ir.Page{
         .page_id = page_id,
@@ -2138,7 +2028,6 @@ fn buildRenderPage(
             .page = &page,
             .resources = resources,
             .fonts = fonts,
-            .math = math,
             .io = parent_ctx.io,
             .text_cache = parent_ctx.text_cache,
         },
@@ -2229,17 +2118,17 @@ fn deinitDestinationAnnotations(allocator: Allocator, destinations: []const Dest
 }
 
 fn drawObjectCommand(ctx: *DrawContext, command: *const ObjectCommand) !void {
-    const previous_preamble = ctx.tex_preamble;
-    const previous_engine = ctx.tex_engine;
-    ctx.tex_preamble = command.tex_preamble;
-    ctx.tex_engine = command.tex_engine;
+    const previous_preamble = ctx.latex_preamble;
+    const previous_engine = ctx.latex_engine;
+    ctx.latex_preamble = command.latex_preamble;
+    ctx.latex_engine = command.latex_engine;
     defer {
-        ctx.tex_preamble = previous_preamble;
-        ctx.tex_engine = previous_engine;
+        ctx.latex_preamble = previous_preamble;
+        ctx.latex_engine = previous_engine;
     }
     if (command.render.kind == .text or
         command.render.kind == .code or
-        command.render.kind == .vector_math or
+        command.render.kind == .latex or
         (command.render.kind == .vector_asset and !isPdfAssetOp(command)) or
         command.render.kind == .raster_asset)
     {
@@ -2273,7 +2162,7 @@ fn drawObjectContent(ctx: *DrawContext, command: *const ObjectCommand) !void {
             try drawCodeBlock(ctx, content_frame, command.content, code_text, command.render.code);
         },
         .chrome_only => {},
-        .vector_math => try drawVectorMathCommand(ctx, command, content_frame, command.render.math),
+        .latex => try drawLatexCommand(ctx, command, content_frame, command.render.latex),
         .vector_asset => try drawVectorAsset(ctx, content_frame, command.content, command.render.asset),
         .raster_asset => try drawRasterAsset(ctx, content_frame, command.content, command.render.asset),
         .vector_path => if (command.render.vector_path) |path| try drawVectorPathOp(ctx, content_frame, path),
@@ -2301,7 +2190,7 @@ fn measuredObjectCommandVisualFrame(ctx: *DrawContext, command: *const ObjectCom
             const measured = try measureObjectCommandContent(ctx, command, code_text);
             return expandFrameToMeasuredInk(command.frame, command.render, measured);
         },
-        .vector_math, .vector_asset, .raster_asset => {
+        .latex, .vector_asset, .raster_asset => {
             const measured = try measureObjectCommandContent(ctx, command, null);
             return expandFrameToMeasuredInk(command.frame, command.render, measured);
         },
@@ -2350,7 +2239,6 @@ const MeasurementScope = struct {
     },
     resources: render_resources.Builder = .{},
     fonts: render_ir.FontBuilder = .{},
-    math: render_ir.MathBuilder = .{},
     links: std.ArrayList(LinkAnnotation) = .empty,
     destinations: std.ArrayList(DestinationAnnotation) = .empty,
 
@@ -2376,12 +2264,10 @@ const MeasurementScope = struct {
     fn beginWithCapture(self: *MeasurementScope, capture_content: bool) !void {
         const resources = if (self.previous_emitter) |*emitter| emitter.resources else &self.resources;
         const fonts = if (self.previous_emitter) |*emitter| emitter.fonts else &self.fonts;
-        const math = if (self.previous_emitter) |*emitter| emitter.math else &self.math;
         self.ctx.emitter = .{
             .page = &self.page,
             .resources = resources,
             .fonts = fonts,
-            .math = math,
             .io = self.ctx.io,
             .text_cache = if (self.previous_emitter) |emitter| emitter.text_cache else self.ctx.text_cache,
             .node_id = if (self.previous_emitter) |emitter| emitter.node_id else null,
@@ -2453,7 +2339,6 @@ const MeasurementScope = struct {
         self.page.deinit(self.ctx.allocator);
         self.resources.deinit(self.ctx.allocator);
         self.fonts.deinit(self.ctx.allocator);
-        self.math.deinit(self.ctx.allocator);
     }
 };
 
@@ -2477,7 +2362,7 @@ fn measureObjectCommandContent(ctx: *DrawContext, command: *const ObjectCommand,
     switch (command.render.kind) {
         .text => if (maybe_text) |text| try drawTextCommand(ctx, command, content_frame, text),
         .code => if (maybe_text) |text| try drawCodeBlock(ctx, content_frame, command.content, text, command.render.code),
-        .vector_math => try drawVectorMathCommand(ctx, command, content_frame, command.render.math),
+        .latex => try drawLatexCommand(ctx, command, content_frame, command.render.latex),
         .vector_asset => try drawVectorAsset(ctx, content_frame, command.content, command.render.asset),
         .raster_asset => try drawRasterAsset(ctx, content_frame, command.content, command.render.asset),
         .vector_path => if (command.render.vector_path) |path| try drawVectorPathOp(ctx, content_frame, path),
@@ -2488,13 +2373,13 @@ fn measureObjectCommandContent(ctx: *DrawContext, command: *const ObjectCommand,
 }
 
 fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, outer_width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
-    const previous_preamble = ctx.tex_preamble;
-    const previous_engine = ctx.tex_engine;
-    ctx.tex_preamble = command.tex_preamble;
-    ctx.tex_engine = command.tex_engine;
+    const previous_preamble = ctx.latex_preamble;
+    const previous_engine = ctx.latex_engine;
+    ctx.latex_preamble = command.latex_preamble;
+    ctx.latex_engine = command.latex_engine;
     defer {
-        ctx.tex_preamble = previous_preamble;
-        ctx.tex_engine = previous_engine;
+        ctx.latex_preamble = previous_preamble;
+        ctx.latex_engine = previous_engine;
     }
     var render = command.render;
     if (mode == .natural) {
@@ -2516,7 +2401,7 @@ fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectComman
             code_text.font = text.code_font;
             break :blk try measureCodeIntrinsic(ctx, command, content_frame.width, code_text);
         } else return null,
-        .vector_math => try measureVectorMathIntrinsic(ctx, command, content_frame.width, content_frame.height),
+        .latex => try measureLatexIntrinsic(ctx, command, content_frame.width, content_frame.height),
         .vector_asset, .raster_asset => try measureAssetIntrinsic(
             ctx,
             command,
@@ -2632,38 +2517,10 @@ fn measureCodeIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
     return .{ .width = 1, .height = text.line_height };
 }
 
-fn measureVectorMathIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32, height: f32) !core.LayoutMeasurement {
-    if (command.math_kind != .raw_block) {
-        var resources = render_resources.Builder{};
-        defer resources.deinit(ctx.allocator);
-        var fonts = render_ir.FontBuilder{};
-        defer fonts.deinit(ctx.allocator);
-        var math = render_ir.MathBuilder{};
-        defer math.deinit(ctx.allocator);
-        var compiled = try render_math.compile(
-            ctx.allocator,
-            ctx.io,
-            &resources,
-            &fonts,
-            &math,
-            command.content,
-            mathInputKind(command.math_kind),
-            .{ .font_size = structured_math_design_size, .display = command.math_kind != .inline_math },
-        );
-        defer compiled.layout.deinit(ctx.allocator);
-        const fitted = fitVectorMathSize(
-            @floatCast(compiled.layout.width),
-            @floatCast(compiled.layout.height),
-            @max(width, 1),
-            @max(height, 1),
-            command.math_kind,
-            command.render.math,
-        );
-        return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
-    }
-    const math = try renderMathToPdf(ctx, command.content, command.tex_preamble, command.tex_engine, command.math_kind);
-    defer ctx.allocator.free(math.path);
-    const fitted = fitVectorMathSize(math.width, math.height, @max(width, 1), @max(height, 1), command.math_kind, command.render.math);
+fn measureLatexIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32, height: f32) !core.LayoutMeasurement {
+    const latex = try renderLatexToPdf(ctx, command.content, command.latex_preamble, command.latex_engine, command.latex_kind);
+    defer ctx.allocator.free(latex.path);
+    const fitted = fitLatexSize(latex.width, latex.height, @max(width, 1), @max(height, 1), command.render.latex);
     return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
 }
 
@@ -2713,8 +2570,8 @@ fn measurementFromInk(measurement: *MeasurementScope, baseline_bl: f32, next_bl:
     };
 }
 
-fn cloneTexPreambleEntries(allocator: Allocator, preamble: []const TexPreambleEntry) ![]const TexPreambleEntry {
-    const cloned = try allocator.alloc(TexPreambleEntry, preamble.len);
+fn cloneLatexPreambleEntries(allocator: Allocator, preamble: []const LatexPreambleEntry) ![]const LatexPreambleEntry {
+    const cloned = try allocator.alloc(LatexPreambleEntry, preamble.len);
     @memcpy(cloned, preamble);
     return cloned;
 }
@@ -2725,9 +2582,9 @@ fn freePreloadTasks(allocator: Allocator, tasks: []const PreloadTask) void {
 
 fn freePreloadTask(allocator: Allocator, task: PreloadTask) void {
     switch (task) {
-        .math => |math| {
-            allocator.free(math.source);
-            allocator.free(math.preamble);
+        .latex => |latex| {
+            allocator.free(latex.source);
+            allocator.free(latex.preamble);
         },
         .icon => |icon| allocator.free(icon.source),
         .vector_pdf => |asset| allocator.free(asset.source),
@@ -2737,34 +2594,34 @@ fn freePreloadTask(allocator: Allocator, task: PreloadTask) void {
 
 fn preloadTaskKey(ctx: *DrawContext, task: PreloadTask) ![]u8 {
     return switch (task) {
-        .math => |math| mathPreloadTaskKey(ctx, math),
+        .latex => |latex| latexPreloadTaskKey(ctx, latex),
         .icon => |icon| cachedIconPath(ctx, icon.source, "svg"),
         .vector_pdf => |asset| ctx.allocator.dupe(u8, asset.source),
         .raster => |raster| ctx.allocator.dupe(u8, raster.source),
     };
 }
 
-fn mathPreloadTaskKey(ctx: *DrawContext, math: MathPreload) ![]u8 {
+fn latexPreloadTaskKey(ctx: *DrawContext, latex: LatexPreload) ![]u8 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, native_artifact_cache_version);
-    hashString(&hasher, "math-preload");
-    hashString(&hasher, math.source);
-    hashString(&hasher, @tagName(math.engine));
-    hashString(&hasher, @tagName(math.kind));
-    hashUsize(&hasher, math.preamble.len);
-    for (math.preamble) |entry| {
+    hashString(&hasher, "latex-preload");
+    hashString(&hasher, latex.source);
+    hashString(&hasher, @tagName(latex.engine));
+    hashString(&hasher, @tagName(latex.kind));
+    hashUsize(&hasher, latex.preamble.len);
+    for (latex.preamble) |entry| {
         hashString(&hasher, @tagName(entry.source));
         hashString(&hasher, entry.value);
     }
-    return std.fmt.allocPrint(ctx.allocator, "math-{x}", .{hasher.final()});
+    return std.fmt.allocPrint(ctx.allocator, "latex-{x}", .{hasher.final()});
 }
 
 fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
     switch (task) {
-        .math => |math| {
-            const out = try cachedMathPath(ctx, math.source, math.preamble, math.engine, math.kind, "ref");
+        .latex => |latex| {
+            const out = try cachedLatexPath(ctx, latex.source, latex.preamble, latex.engine, latex.kind, "ref");
             defer ctx.allocator.free(out);
-            const asset = try cachedMathReference(ctx, out) orelse return false;
+            const asset = try cachedLatexReference(ctx, out) orelse return false;
             ctx.allocator.free(asset.path);
             return true;
         },
@@ -2780,10 +2637,10 @@ fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
 
 fn preloadTaskCached(ctx: *DrawContext, task: PreloadTask) !bool {
     switch (task) {
-        .math => |math| {
-            const out = try cachedMathPath(ctx, math.source, math.preamble, math.engine, math.kind, "ref");
+        .latex => |latex| {
+            const out = try cachedLatexPath(ctx, latex.source, latex.preamble, latex.engine, latex.kind, "ref");
             defer ctx.allocator.free(out);
-            const asset = try cachedMathReference(ctx, out) orelse return false;
+            const asset = try cachedLatexReference(ctx, out) orelse return false;
             ctx.allocator.free(asset.path);
             return true;
         },
@@ -2799,8 +2656,8 @@ fn preloadTaskCached(ctx: *DrawContext, task: PreloadTask) !bool {
 
 fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
     switch (task) {
-        .math => |math| {
-            const asset = try renderMathToPdf(ctx, math.source, math.preamble, math.engine, math.kind);
+        .latex => |latex| {
+            const asset = try renderLatexToPdf(ctx, latex.source, latex.preamble, latex.engine, latex.kind);
             ctx.allocator.free(asset.path);
         },
         .icon => |icon| {
@@ -3855,20 +3712,9 @@ fn inlineLineConstrainedLogicalWidth(ctx: *DrawContext, line: Line, text: TextPa
         const source_text = try displayMathSource(ctx.allocator, runs[display_start..index]);
         defer ctx.allocator.free(source_text);
         if (source_text.len > 0) {
-            const fitted = if (try compileMarkdownMath(ctx, source_text, .display)) |result| blk: {
-                var compiled = result;
-                defer compiled.layout.deinit(ctx.allocator);
-                break :blk fitDisplayMathBlockSize(
-                    @floatCast(compiled.layout.width),
-                    @floatCast(compiled.layout.height),
-                    width,
-                    text,
-                );
-            } else blk: {
-                const asset = try renderMathToPdf(ctx, source_text, ctx.tex_preamble, ctx.tex_engine, .display);
-                defer ctx.allocator.free(asset.path);
-                break :blk fitDisplayMathBlockSize(asset.width, asset.height, width, text);
-            };
+            const asset = try renderLatexToPdf(ctx, source_text, ctx.latex_preamble, ctx.latex_engine, .display_math);
+            defer ctx.allocator.free(asset.path);
+            const fitted = fitDisplayMathBlockSize(asset.width, asset.height, width, text);
             max_width = @max(max_width, fitted.width);
         }
         segment_start = index;
@@ -3952,7 +3798,7 @@ fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, atoms: 
     for (runs) |run| {
         switch (run.kind) {
             .math, .display_math => {
-                try appendMathAtom(ctx, atoms, run.text, text, if (run.kind == .display_math) .display else .inline_math);
+                try appendMathAtom(ctx, atoms, run.text, text, if (run.kind == .display_math) .display_math else .inline_math);
             },
             .icon => if (run.icon) |source| try appendIconAtom(ctx, atoms, source, text),
             .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.markdown_bold_color orelse text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
@@ -4065,20 +3911,11 @@ fn drawInlineRunSliceAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width:
 }
 
 fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, horizontal_align: HorizontalAlign) !f32 {
-    var compiled = try compileMarkdownMath(ctx, source, .display);
-    defer if (compiled) |*value| value.layout.deinit(ctx.allocator);
-    var raw_asset: ?MathAsset = null;
-    defer if (raw_asset) |asset| ctx.allocator.free(asset.path);
-    const source_size: Size = if (compiled) |value|
-        .{ .width = @floatCast(value.layout.width), .height = @floatCast(value.layout.height) }
-    else blk: {
-        raw_asset = try renderMathToPdf(ctx, source, ctx.tex_preamble, ctx.tex_engine, .display);
-        break :blk .{ .width = raw_asset.?.width, .height = raw_asset.?.height };
-    };
-    const fitted = fitDisplayMathBlockSize(source_size.width, source_size.height, width, text);
-    if (compiled) |*value| try scaleMathLayoutToSize(&value.layout, fitted);
-    const draw_width = if (compiled) |value| @as(f32, @floatCast(value.layout.width)) else fitted.width;
-    const draw_height = if (compiled) |value| @as(f32, @floatCast(value.layout.height)) else fitted.height;
+    const asset = try renderLatexToPdf(ctx, source, ctx.latex_preamble, ctx.latex_engine, .display_math);
+    defer ctx.allocator.free(asset.path);
+    const fitted = fitDisplayMathBlockSize(asset.width, asset.height, width, text);
+    const draw_width = fitted.width;
+    const draw_height = fitted.height;
     const vertical_pad = @max(text.line_height * 0.2, 2.0);
     const block_height = draw_height + vertical_pad * 2.0;
     const baseline_from_top = try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height);
@@ -4090,19 +3927,7 @@ fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, widt
         .width = draw_width,
         .height = draw_height,
     };
-    if (compiled) |*value| {
-        const owned_layout = value.layout;
-        value.layout = emptyMathLayout();
-        try emitStructuredMath(ctx, .{
-            .x = draw_frame.x,
-            .y = topOf(draw_frame),
-            .width = draw_frame.width,
-            .height = draw_frame.height,
-        }, value.tree, owned_layout, text.color);
-    } else {
-        const asset = raw_asset.?;
-        try placeRawMathPdf(ctx, draw_frame, asset.path, asset.page_index, source);
-    }
+    try placeLatexPdf(ctx, draw_frame, asset.path, asset.page_index);
     return block_bottom - baseline_from_top;
 }
 
@@ -4206,31 +4031,13 @@ fn appendTextAtoms(
     }
 }
 
-fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, text: TextPaint, kind: MathKind) !void {
+fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, text: TextPaint, kind: LatexFragmentKind) !void {
     const target_height = @max(text.font_size * text.inline_math_height_factor, 1);
-    if (try compileMarkdownMath(ctx, value, kind)) |result| {
-        var compiled = result;
-        errdefer compiled.layout.deinit(ctx.allocator);
-        const scale = @as(f64, target_height) / @max(compiled.reference_height, 1);
-        try render_math.scale(&compiled.layout, scale);
-        try atoms.append(ctx.allocator, .{
-            .content = .{ .structured_math = .{ .tree = compiled.tree, .layout = compiled.layout } },
-            .text = value,
-            .font = text.font,
-            .color = text.color,
-            .width = @floatCast(@max(compiled.layout.width, 1)),
-            .height = @floatCast(@max(compiled.layout.height, 1)),
-            .is_space = false,
-        });
-        compiled.layout = emptyMathLayout();
-        return;
-    }
-
-    const asset = try renderMathToPdf(ctx, value, ctx.tex_preamble, ctx.tex_engine, kind);
+    const asset = try renderLatexToPdf(ctx, value, ctx.latex_preamble, ctx.latex_engine, kind);
     errdefer ctx.allocator.free(asset.path);
     const scale = if (asset.reference_height > 0) target_height / asset.reference_height else 1;
     try atoms.append(ctx.allocator, .{
-        .content = .{ .raw_math = .{ .path = asset.path, .page_index = asset.page_index } },
+        .content = .{ .latex = .{ .path = asset.path, .page_index = asset.page_index } },
         .text = value,
         .font = text.font,
         .color = text.color,
@@ -4362,11 +4169,7 @@ const AtomVerticalExtents = struct {
 fn atomVerticalExtents(atom: *const Atom, default_ascent: f32, default_descent: f32) AtomVerticalExtents {
     return switch (atom.content) {
         .text => .{ .ascent = default_ascent, .descent = default_descent },
-        .structured_math => |math| .{
-            .ascent = @floatCast(math.layout.baseline),
-            .descent = @floatCast(@max(math.layout.height - math.layout.baseline, 0)),
-        },
-        .raw_math, .icon => .{
+        .latex, .icon => .{
             .ascent = @max(atom.height - atom.baseline_from_bottom, 0),
             .descent = @max(atom.baseline_from_bottom, 0),
         },
@@ -4383,19 +4186,9 @@ fn drawPositionedAtom(ctx: *DrawContext, atom: *Atom, x: f32, baseline_bl: f32, 
                 try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
             }
         },
-        .structured_math => |*math| {
-            const layout = math.layout;
-            math.layout = emptyMathLayout();
-            try emitStructuredMath(ctx, .{
-                .x = x,
-                .y = Defaults.height - baseline_bl - layout.baseline,
-                .width = layout.width,
-                .height = layout.height,
-            }, math.tree, layout, atom.color);
-        },
-        .raw_math => |math| {
+        .latex => |latex| {
             const frame = Frame{ .x = x, .y = baseline_bl - atom.baseline_from_bottom, .width = atom.width, .height = atom.height };
-            try placeRawMathPdf(ctx, frame, math.path, math.page_index, atom.text);
+            try placeLatexPdf(ctx, frame, latex.path, latex.page_index);
         },
         .icon => |icon| {
             const frame = Frame{ .x = x, .y = baseline_bl - atom.baseline_from_bottom, .width = atom.width, .height = atom.height };
@@ -4423,7 +4216,7 @@ fn atomAdvance(atoms: []const Atom, index: usize, paint: AtomPaint) f32 {
     const atom = atoms[index];
     return switch (atom.content) {
         .text => atom.width + atomSpacingAfter(atoms, index, paint),
-        .structured_math, .raw_math => atom.width + paint.font_size * paint.inline_math_spacing,
+        .latex => atom.width + paint.font_size * paint.inline_math_spacing,
         .icon => atom.width,
     };
 }
@@ -5079,129 +4872,18 @@ fn isPythonKeyword(segment: []const u8) bool {
     return false;
 }
 
-fn drawVectorMathCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Frame, math: ?MathPaint) !void {
-    if (command.math_kind != .raw_block) {
-        try drawStructuredMath(ctx, command.content, command.math_kind, frame, math);
-        return;
-    }
-    const asset = try renderMathToPdf(ctx, command.content, command.tex_preamble, command.tex_engine, command.math_kind);
+fn drawLatexCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Frame, latex: ?LatexPaint) !void {
+    const asset = try renderLatexToPdf(ctx, command.content, command.latex_preamble, command.latex_engine, command.latex_kind);
     defer ctx.allocator.free(asset.path);
-    const fitted = fitVectorMathSize(asset.width, asset.height, frame.width, frame.height, command.math_kind, math);
-    const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
+    const fitted = fitLatexSize(asset.width, asset.height, frame.width, frame.height, latex);
+    const horizontal_align = if (latex) |paint| paint.horizontal_align else HorizontalAlign.center;
     const draw_frame = Frame{
         .x = alignedX(frame.x, frame.width, fitted.width, horizontal_align),
         .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
         .width = fitted.width,
         .height = fitted.height,
     };
-    try placeRawMathPdf(ctx, draw_frame, asset.path, asset.page_index, command.content);
-}
-
-const structured_math_design_size: f64 = 48;
-
-fn mathInputKind(kind: MathKind) render_ir.MathInputKind {
-    return switch (kind) {
-        .inline_math => .@"inline",
-        .display => .display,
-        .block => .block,
-        .raw_block => .raw,
-    };
-}
-
-fn compileStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind) !render_math.Compiled {
-    const emitter = activeEmitter(ctx);
-    return render_math.compile(
-        ctx.allocator,
-        ctx.io,
-        emitter.resources,
-        emitter.fonts,
-        emitter.math,
-        source,
-        mathInputKind(kind),
-        .{
-            .font_size = structured_math_design_size,
-            .display = kind != .inline_math,
-            .text_cache = emitter.text_cache,
-        },
-    );
-}
-
-fn emitStructuredMath(
-    ctx: *DrawContext,
-    rect: render_ir.Rect,
-    tree: render_ir.MathTreeId,
-    layout: render_ir.MathLayout,
-    color: Color,
-) !void {
-    if (ctx.measurement_bounds) |bounds| {
-        bounds.include(rect);
-        if (!ctx.capture_measurement_content) {
-            var owned_layout = layout;
-            defer owned_layout.deinit(ctx.allocator);
-            return;
-        }
-    }
-    try activeEmitter(ctx).structuredMath(ctx.allocator, rect, tree, layout, color);
-}
-
-fn supportsStructuredMath(allocator: Allocator, source: []const u8, kind: MathKind) !bool {
-    var math = render_ir.MathBuilder{};
-    defer math.deinit(allocator);
-    _ = math.add(allocator, source, mathInputKind(kind)) catch |err| switch (err) {
-        error.UnsupportedMathSyntax => return false,
-        else => return err,
-    };
-    return true;
-}
-
-fn compileMarkdownMath(ctx: *DrawContext, source: []const u8, kind: MathKind) !?render_math.Compiled {
-    return compileStructuredMath(ctx, source, kind) catch |err| switch (err) {
-        error.UnsupportedMathSyntax => if (ctx.tex_preamble.len != 0) null else return err,
-        else => return err,
-    };
-}
-
-fn scaleMathLayoutToSize(layout: *render_ir.MathLayout, size: Size) !void {
-    const factor = @min(
-        @as(f64, size.width) / @max(layout.width, 1),
-        @as(f64, size.height) / @max(layout.height, 1),
-    );
-    try render_math.scale(layout, factor);
-}
-
-fn emptyMathLayout() render_ir.MathLayout {
-    return .{ .width = 0, .height = 0, .baseline = 0, .elements = &.{} };
-}
-
-fn drawStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind, frame: Frame, maybe_paint: ?MathPaint) !void {
-    var compiled = try compileStructuredMath(ctx, source, kind);
-    errdefer compiled.layout.deinit(ctx.allocator);
-    const fitted = fitVectorMathSize(
-        @floatCast(compiled.layout.width),
-        @floatCast(compiled.layout.height),
-        frame.width,
-        frame.height,
-        kind,
-        maybe_paint,
-    );
-    try scaleMathLayoutToSize(&compiled.layout, fitted);
-    const width: f32 = @floatCast(compiled.layout.width);
-    const height: f32 = @floatCast(compiled.layout.height);
-    const paint = maybe_paint orelse defaultMathPaint();
-    const rect = render_ir.Rect{
-        .x = alignedX(frame.x, frame.width, width, paint.horizontal_align),
-        .y = topOf(.{
-            .x = frame.x,
-            .y = frame.y + @max((frame.height - height) / 2, 0),
-            .width = width,
-            .height = height,
-        }),
-        .width = width,
-        .height = height,
-    };
-    const owned_layout = compiled.layout;
-    compiled.layout = emptyMathLayout();
-    try emitStructuredMath(ctx, rect, compiled.tree, owned_layout, paint.color);
+    try placeLatexPdf(ctx, draw_frame, asset.path, asset.page_index);
 }
 
 fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: ?core.render_policy.AssetPaint) !void {
@@ -5438,19 +5120,18 @@ fn drawSvgFrame(ctx: *DrawContext, frame: Frame, svg_path: []const u8, tint: ?Co
     try activeEmitter(ctx).svg(ctx.allocator, rect, svg_path, tint);
 }
 
-fn placeRawMathPdf(
+fn placeLatexPdf(
     ctx: *DrawContext,
     frame: Frame,
     path: []const u8,
     page_index: usize,
-    source: []const u8,
 ) !void {
     const rect = render_ir.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
     if (ctx.measurement_bounds) |bounds| {
         bounds.include(rect);
         if (!ctx.capture_measurement_content) return;
     }
-    try activeEmitter(ctx).rawMathPdf(ctx.allocator, rect, source, path, page_index);
+    try activeEmitter(ctx).latexPdf(ctx.allocator, rect, path, page_index);
 }
 
 const Size = struct { width: f32, height: f32 };
@@ -5484,7 +5165,7 @@ fn pdfAssetSize(
         const resource = emitter.resources.get(ctx.io, id) orelse return error.MissingRenderResource;
         const metadata = switch (resource.metadata) {
             .pdf => |value| value,
-            .math_pdf => |value| value,
+            .latex_pdf => |value| value,
             else => return error.RenderResourceKindConflict,
         };
         const page_number = if (asset) |paint| paint.pdf_page else 1;
@@ -5510,9 +5191,9 @@ fn pdfAssetSize(
     return .{ .width = @floatCast(source_width), .height = @floatCast(source_height) };
 }
 
-fn cachedMathReference(ctx: *DrawContext, reference_path: []const u8) !?MathAsset {
+fn cachedLatexReference(ctx: *DrawContext, reference_path: []const u8) !?LatexAsset {
     if (!fileExists(reference_path)) return null;
-    return readMathReference(ctx, reference_path) catch |err| switch (err) {
+    return readLatexReference(ctx, reference_path) catch |err| switch (err) {
         error.InvalidPdfCache => {
             deleteFileIfExists(ctx, reference_path);
             return null;
@@ -5521,7 +5202,7 @@ fn cachedMathReference(ctx: *DrawContext, reference_path: []const u8) !?MathAsse
     };
 }
 
-fn readMathReference(ctx: *DrawContext, reference_path: []const u8) !MathAsset {
+fn readLatexReference(ctx: *DrawContext, reference_path: []const u8) !LatexAsset {
     const contents = std.Io.Dir.cwd().readFileAlloc(ctx.io, reference_path, ctx.allocator, .limited(4096)) catch return NativePdfError.InvalidPdfCache;
     defer ctx.allocator.free(contents);
     const trimmed = std.mem.trim(u8, contents, " \t\r\n");
@@ -5581,34 +5262,21 @@ fn scaledAssetSize(size: Size, asset: ?core.render_policy.AssetPaint) Size {
     };
 }
 
-fn fitVectorMathSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, kind: MathKind, math: ?MathPaint) Size {
+fn fitLatexSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, latex: ?LatexPaint) Size {
     if (source_width <= 0 or source_height <= 0) return .{ .width = max_width, .height = max_height };
-    const paint = math orelse defaultMathPaint();
-    return switch (kind) {
-        .raw_block => fitRawTexObjectSize(source_width, source_height, max_width, max_height, paint),
-        .inline_math, .display, .block => fitFormulaObjectSize(source_width, source_height, max_width, max_height, paint),
-    };
+    const paint = latex orelse defaultLatexPaint();
+    return fitLatexObjectSize(source_width, source_height, max_width, max_height, paint);
 }
 
-fn defaultMathPaint() MathPaint {
+fn defaultLatexPaint() LatexPaint {
     return .{
         .min_height = 30,
-        .raw_tex_width_ratio = 0.96,
         .scale = 1,
         .horizontal_align = .center,
-        .color = .{ .r = 0, .g = 0, .b = 0.0353 },
     };
 }
 
-fn fitRawTexObjectSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, paint: MathPaint) Size {
-    // Raw TeX is commonly used as a slide-level diagram or algorithm box, so it uses most of the available content width.
-    const target_width = @max(max_width * paint.raw_tex_width_ratio * paint.scale, 1);
-    const scale = @min(target_width / source_width, max_height / source_height);
-    return .{ .width = @max(source_width * scale, 1), .height = @max(source_height * scale, 1) };
-}
-
-fn fitFormulaObjectSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, paint: MathPaint) Size {
-    // Formula objects keep their natural TeX size, with scale acting like an authored size change.
+fn fitLatexObjectSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, paint: LatexPaint) Size {
     const styled_height = @max(source_height * paint.scale, paint.min_height * paint.scale);
     const style_scale = styled_height / source_height;
     const styled_width = source_width * style_scale;
@@ -5630,17 +5298,17 @@ fn resolveAssetPath(ctx: *DrawContext, rel_path: []const u8) ![]const u8 {
     return std.fs.path.join(ctx.allocator, &.{ ctx.asset_base_dir, rel_path });
 }
 
-fn renderMathToPdf(
+fn renderLatexToPdf(
     ctx: *DrawContext,
     source: []const u8,
-    preamble: []const TexPreambleEntry,
-    engine: TexEngine,
-    kind: MathKind,
-) !MathAsset {
-    const reference_path = try cachedMathPath(ctx, source, preamble, engine, kind, "ref");
+    preamble: []const LatexPreambleEntry,
+    engine: LatexEngine,
+    kind: LatexFragmentKind,
+) !LatexAsset {
+    const reference_path = try cachedLatexPath(ctx, source, preamble, engine, kind, "ref");
     defer ctx.allocator.free(reference_path);
-    if (try cachedMathReference(ctx, reference_path)) |asset| return asset;
-    const output_pdf_path = try cachedMathPath(ctx, source, preamble, engine, kind, "pdf");
+    if (try cachedLatexReference(ctx, reference_path)) |asset| return asset;
+    const output_pdf_path = try cachedLatexPath(ctx, source, preamble, engine, kind, "pdf");
     defer ctx.allocator.free(output_pdf_path);
     const dir = try tempCachePath(ctx, reference_path, "dir");
     defer ctx.allocator.free(dir);
@@ -5653,23 +5321,23 @@ fn renderMathToPdf(
     defer ctx.allocator.free(pdf_path);
     const metrics_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.ssm" });
     defer ctx.allocator.free(metrics_path);
-    const tex = try mathDocumentSource(ctx, source, preamble, kind);
+    const tex = try latexDocumentSource(ctx, source, preamble, kind);
     defer ctx.allocator.free(tex);
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = tex, .flags = .{ .truncate = true } });
     try runChecked(ctx, &.{ engine.executable(), "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
     try publishGeneratedPdf(ctx, pdf_path, output_pdf_path);
-    const size = try pdfAssetSize(ctx, output_pdf_path, null, .math_pdf);
-    const geometry: MathAssetGeometry = if (kind == .raw_block)
+    const size = try pdfAssetSize(ctx, output_pdf_path, null, .latex_pdf);
+    const geometry: LatexAssetGeometry = if (kind == .body)
         .{ .baseline_from_bottom = @as(f32, 0), .reference_height = size.height }
     else blk: {
-        const metrics = try readMathTexMetrics(ctx, metrics_path, 1);
+        const metrics = try readLatexMetrics(ctx, metrics_path, 1);
         defer ctx.allocator.free(metrics);
         break :blk .{
             .baseline_from_bottom = size.height * @as(f32, @floatCast(metrics[0].baseline_ratio)),
             .reference_height = size.height * @as(f32, @floatCast(metrics[0].reference_height_ratio)),
         };
     };
-    try writeMathReference(
+    try writeLatexReference(
         ctx,
         reference_path,
         output_pdf_path,
@@ -5679,7 +5347,7 @@ fn renderMathToPdf(
         geometry.baseline_from_bottom,
         geometry.reference_height,
     );
-    return (try cachedMathReference(ctx, reference_path)) orelse NativePdfError.InvalidPdfCache;
+    return (try cachedLatexReference(ctx, reference_path)) orelse NativePdfError.InvalidPdfCache;
 }
 
 fn renderIconToSvg(ctx: *DrawContext, source: []const u8) !SvgAsset {
@@ -5700,17 +5368,17 @@ fn renderIconToSvg(ctx: *DrawContext, source: []const u8) !SvgAsset {
     return try svgAsset(ctx, out);
 }
 
-const MathTexMetrics = struct {
+const LatexMetrics = struct {
     baseline_ratio: f64,
     reference_height_ratio: f64,
 };
 
-fn readMathTexMetrics(ctx: *DrawContext, path: []const u8, expected_count: usize) ![]MathTexMetrics {
+fn readLatexMetrics(ctx: *DrawContext, path: []const u8, expected_count: usize) ![]LatexMetrics {
     const contents = std.Io.Dir.cwd().readFileAlloc(ctx.io, path, ctx.allocator, .limited(1024 * 1024)) catch {
         return NativePdfError.AssetConversionFailed;
     };
     defer ctx.allocator.free(contents);
-    const metrics = try ctx.allocator.alloc(MathTexMetrics, expected_count);
+    const metrics = try ctx.allocator.alloc(LatexMetrics, expected_count);
     errdefer ctx.allocator.free(metrics);
     var count: usize = 0;
     var lines = std.mem.splitScalar(u8, contents, '\n');
@@ -5749,12 +5417,12 @@ fn readMathTexMetrics(ctx: *DrawContext, path: []const u8, expected_count: usize
     return metrics;
 }
 
-fn mathDocumentSource(ctx: *DrawContext, source: []const u8, preamble: []const TexPreambleEntry, kind: MathKind) ![]const u8 {
-    const preamble_lines = try mathPreambleLines(ctx, preamble);
+fn latexDocumentSource(ctx: *DrawContext, source: []const u8, preamble: []const LatexPreambleEntry, kind: LatexFragmentKind) ![]const u8 {
+    const preamble_lines = try latexPreambleLines(ctx, preamble);
     defer ctx.allocator.free(preamble_lines);
-    const fragment = try mathTexFragment(ctx.allocator, source, kind);
+    const fragment = try latexFragment(ctx.allocator, source, kind);
     defer ctx.allocator.free(fragment);
-    if (kind == .raw_block) return std.fmt.allocPrint(ctx.allocator,
+    if (kind == .body) return std.fmt.allocPrint(ctx.allocator,
         \\ \documentclass[border=0pt]{{standalone}}
         \\ \usepackage{{amsmath,amssymb}}
         \\ \usepackage{{graphicx}}
@@ -5781,11 +5449,11 @@ fn mathDocumentSource(ctx: *DrawContext, source: []const u8, preamble: []const T
         \\ \immediate\closeout\ssmetrics
         \\ \end{{document}}
         \\
-    , .{ preamble_lines, fragment, mathTexReferenceFragment(kind) });
+    , .{ preamble_lines, fragment, latexReferenceFragment(kind) });
 }
 
-fn mathBatchDocumentSource(ctx: *DrawContext, entries: []const MathBatchEntry) ![]const u8 {
-    const preamble_lines = try mathPreambleLines(ctx, entries[0].preamble);
+fn latexBatchDocumentSource(ctx: *DrawContext, entries: []const LatexBatchEntry) ![]const u8 {
+    const preamble_lines = try latexPreambleLines(ctx, entries[0].preamble);
     defer ctx.allocator.free(preamble_lines);
 
     var out = std.ArrayList(u8).empty;
@@ -5808,12 +5476,25 @@ fn mathBatchDocumentSource(ctx: *DrawContext, entries: []const MathBatchEntry) !
         \\
     );
     for (entries) |entry| {
-        const fragment = try mathTexFragment(ctx.allocator, entry.source, entry.kind);
+        const fragment = try latexFragment(ctx.allocator, entry.source, entry.kind);
         defer ctx.allocator.free(fragment);
+        if (entry.kind == .body) {
+            try out.appendSlice(ctx.allocator,
+                \\ \immediate\write\ssmetrics{1,1,0,1,0}
+                \\ \begin{preview}
+                \\
+            );
+            try out.appendSlice(ctx.allocator, fragment);
+            try out.appendSlice(ctx.allocator,
+                \\ \end{preview}
+                \\
+            );
+            continue;
+        }
         try out.appendSlice(ctx.allocator, "\\setbox0=\\hbox{");
         try out.appendSlice(ctx.allocator, fragment);
         try out.appendSlice(ctx.allocator, "}\n\\setbox1=\\hbox{");
-        try out.appendSlice(ctx.allocator, mathTexReferenceFragment(entry.kind));
+        try out.appendSlice(ctx.allocator, latexReferenceFragment(entry.kind));
         try out.appendSlice(ctx.allocator,
             \\ }
             \\ \immediate\write\ssmetrics{\number\wd0,\number\ht0,\number\dp0,\number\ht1,\number\dp1}
@@ -5831,57 +5512,30 @@ fn mathBatchDocumentSource(ctx: *DrawContext, entries: []const MathBatchEntry) !
     return try out.toOwnedSlice(ctx.allocator);
 }
 
-fn mathTexFragment(allocator: Allocator, source: []const u8, kind: MathKind) ![]const u8 {
+fn latexFragment(allocator: Allocator, source: []const u8, kind: LatexFragmentKind) ![]const u8 {
     switch (kind) {
         .inline_math => return std.fmt.allocPrint(allocator, "$\\mathstrut {s}$\n", .{source}),
-        .display => return std.fmt.allocPrint(allocator, "$\\displaystyle\\mathstrut {s}$\n", .{source}),
-        .raw_block => return allocator.dupe(u8, source),
-        .block => {
-            var normalized = std.ArrayList(u8).empty;
-            defer normalized.deinit(allocator);
-            var lines = utils.source.lineIterator(source);
-            while (lines.next()) |line_view| {
-                const line = line_view.text(source);
-                const trimmed = std.mem.trim(u8, line, " \t\r\n");
-                if (trimmed.len == 0) continue;
-                if (normalized.items.len > 0) try normalized.append(allocator, '\n');
-                try normalized.appendSlice(allocator, trimmed);
-            }
-            return std.fmt.allocPrint(allocator,
-                \\$\displaystyle
-                \\\begin{{array}}{{l}}
-                \\{s}
-                \\\end{{array}}$
-                \\
-            , .{normalized.items});
-        },
+        .display_math => return std.fmt.allocPrint(allocator, "$\\displaystyle\\mathstrut {s}$\n", .{source}),
+        .body => return allocator.dupe(u8, source),
     }
 }
 
-fn mathTexReferenceFragment(kind: MathKind) []const u8 {
+fn latexReferenceFragment(kind: LatexFragmentKind) []const u8 {
     return switch (kind) {
         .inline_math => "$\\mathstrut$",
-        .display, .block => "$\\displaystyle\\mathstrut$",
-        .raw_block => "",
+        .display_math => "$\\displaystyle\\mathstrut$",
+        .body => "",
     };
 }
 
-fn mathKindForNode(node: *const core.Node) MathKind {
-    return switch (node.payload_kind orelse .text) {
-        .math_tex => .raw_block,
-        .math_text => .block,
-        else => .block,
-    };
-}
-
-fn mathPreambleLines(ctx: *DrawContext, preamble: []const TexPreambleEntry) ![]const u8 {
+fn latexPreambleLines(ctx: *DrawContext, preamble: []const LatexPreambleEntry) ![]const u8 {
     const allocator = ctx.allocator;
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     for (preamble) |entry| {
         const text = switch (entry.source) {
             .text => entry.value,
-            .file => try readTexPreambleFile(ctx, entry.value),
+            .file => try readLatexPreambleFile(ctx, entry.value),
         };
         defer if (entry.source == .file) allocator.free(text);
         if (std.mem.trim(u8, text, " \t\r\n").len == 0) continue;
@@ -5892,7 +5546,7 @@ fn mathPreambleLines(ctx: *DrawContext, preamble: []const TexPreambleEntry) ![]c
     return try out.toOwnedSlice(allocator);
 }
 
-fn readTexPreambleFile(ctx: *DrawContext, path: []const u8) ![]const u8 {
+fn readLatexPreambleFile(ctx: *DrawContext, path: []const u8) ![]const u8 {
     const resolved = try resolveAssetPath(ctx, path);
     defer ctx.allocator.free(resolved);
     return std.Io.Dir.cwd().readFileAlloc(ctx.io, resolved, ctx.allocator, .unlimited) catch |err| {
@@ -5900,7 +5554,7 @@ fn readTexPreambleFile(ctx: *DrawContext, path: []const u8) ![]const u8 {
             var reason_buf: [256]u8 = undefined;
             const message = try std.fmt.allocPrint(
                 ctx.allocator,
-                "TeX preamble '{s}' could not be read (resolved to '{s}'): {s}",
+                "LaTeX preamble '{s}' could not be read (resolved to '{s}'): {s}",
                 .{ path, resolved, utils.err.formatErrorReason(&reason_buf, err) },
             );
             defer ctx.allocator.free(message);
@@ -5910,15 +5564,15 @@ fn readTexPreambleFile(ctx: *DrawContext, path: []const u8) ![]const u8 {
     };
 }
 
-fn cachedMathPath(
+fn cachedLatexPath(
     ctx: *DrawContext,
     source: []const u8,
-    preamble: []const TexPreambleEntry,
-    engine: TexEngine,
-    kind: MathKind,
+    preamble: []const LatexPreambleEntry,
+    engine: LatexEngine,
+    kind: LatexFragmentKind,
     extension: []const u8,
 ) ![]u8 {
-    const key = fingerprint.mathArtifactKey(
+    const key = fingerprint.latexArtifactKey(
         .{
             .allocator = ctx.allocator,
             .io = ctx.io,
@@ -5931,17 +5585,17 @@ fn cachedMathPath(
         engine,
         @tagName(kind),
     ) catch |err| {
-        recordTexPreambleFingerprintFailure(ctx, preamble);
+        recordLatexPreambleFingerprintFailure(ctx, preamble);
         return err;
     };
-    return std.fmt.allocPrint(ctx.allocator, "{s}/math-{x}.{s}", .{ ctx.cache_dir, key, extension });
+    return std.fmt.allocPrint(ctx.allocator, "{s}/latex-{x}.{s}", .{ ctx.cache_dir, key, extension });
 }
 
-fn recordTexPreambleFingerprintFailure(ctx: *DrawContext, preamble: []const TexPreambleEntry) void {
+fn recordLatexPreambleFingerprintFailure(ctx: *DrawContext, preamble: []const LatexPreambleEntry) void {
     if (ctx.command_failure == null) return;
     for (preamble) |entry| {
         if (entry.source != .file) continue;
-        const text = readTexPreambleFile(ctx, entry.value) catch return;
+        const text = readLatexPreambleFile(ctx, entry.value) catch return;
         ctx.allocator.free(text);
     }
 }
@@ -6294,15 +5948,15 @@ fn commandSpawnFailureMessage(allocator: Allocator, argv: []const []const u8, er
     if (err == error.FileNotFound and argv.len != 0) {
         try out.appendSlice(allocator, "executable '");
         try out.appendSlice(allocator, argv[0]);
-        try out.appendSlice(allocator, "' was not found in PATH; install it or select an available tex_engine; command:");
+        try out.appendSlice(allocator, "' was not found in PATH; install it or select an available latex_engine; command:");
     } else if (err == error.InvalidExe and argv.len != 0) {
         try out.appendSlice(allocator, "executable '");
         try out.appendSlice(allocator, argv[0]);
-        try out.appendSlice(allocator, "' is not runnable on this platform; install a compatible executable or select another tex_engine; command:");
+        try out.appendSlice(allocator, "' is not runnable on this platform; install a compatible executable or select another latex_engine; command:");
     } else if (err == error.Timeout) {
         const prefix = try std.fmt.allocPrint(
             allocator,
-            "command exceeded the {d}-second limit; fix TeX source or configured preamble content that stalls the engine; command:",
+            "command exceeded the {d}-second limit; fix LaTeX source or configured preamble content that stalls the engine; command:",
             .{external_command_timeout_seconds},
         );
         defer allocator.free(prefix);
@@ -6310,7 +5964,7 @@ fn commandSpawnFailureMessage(allocator: Allocator, argv: []const []const u8, er
     } else if (err == error.CommandStdoutTooLong) {
         const prefix = try std.fmt.allocPrint(
             allocator,
-            "command wrote more than {d} KiB to stdout; fix repeated diagnostics in the TeX source or configured preamble; command:",
+            "command wrote more than {d} KiB to stdout; fix repeated diagnostics in the LaTeX source or configured preamble; command:",
             .{external_command_stdout_limit / 1024},
         );
         defer allocator.free(prefix);
@@ -6318,7 +5972,7 @@ fn commandSpawnFailureMessage(allocator: Allocator, argv: []const []const u8, er
     } else if (err == error.CommandStderrTooLong) {
         const prefix = try std.fmt.allocPrint(
             allocator,
-            "command wrote more than {d} KiB to stderr; fix repeated diagnostics in the TeX source or configured preamble; command:",
+            "command wrote more than {d} KiB to stderr; fix repeated diagnostics in the LaTeX source or configured preamble; command:",
             .{external_command_stderr_limit / 1024},
         );
         defer allocator.free(prefix);

@@ -1,5 +1,4 @@
 const std = @import("std");
-const math_validation = @import("validation/math.zig");
 const text_validation = @import("validation/text.zig");
 
 pub const Error = error{
@@ -45,7 +44,6 @@ pub fn document(ir: anytype) Error!void {
     }
     try fontCatalog(ir);
     try semanticTree(ir);
-    try math_validation.catalog(ir);
     for (ir.pages, 0..) |*page, page_index| {
         if (page.index != page_index) return error.InvalidPageIndex;
         if (!positiveFinite(page.width) or !positiveFinite(page.height)) return error.InvalidPageSize;
@@ -96,7 +94,7 @@ fn resourceMetadata(metadata: anytype) Error!void {
                     !positiveFinite(view_box.width) or !positiveFinite(view_box.height)) return error.InvalidResource;
             }
         },
-        .pdf, .math_pdf => |value| {
+        .pdf, .latex_pdf => |value| {
             if (value.pages.len == 0) return error.InvalidResource;
             for (value.pages) |page| {
                 if (!positiveFinite(page.user_unit) or
@@ -143,10 +141,6 @@ fn semanticTree(ir: anytype) Error!void {
     for (ir.semantics.nodes, 0..) |node, index| {
         if (node.id != index + 1) return error.InvalidSemantics;
         try semanticNode(node);
-        if (node.role == .math) {
-            const tree_id = node.math_tree orelse return error.InvalidSemantics;
-            if (ir.math.find(tree_id) == null) return error.InvalidSemantics;
-        } else if (node.math_tree != null) return error.InvalidSemantics;
         for (node.children) |child| {
             const child_node = ir.semantics.find(child) orelse return error.InvalidSemantics;
             if (!validSemanticChild(node.role, child_node.role)) return error.InvalidSemantics;
@@ -325,38 +319,15 @@ fn itemGeometry(ir: anytype, item: anytype) Error!void {
             if (!value.rect.isValid() or (value.tint != null and !validColor(value.tint.?))) return error.InvalidItemGeometry;
             try requireResource(ir, value.resource, .svg);
         },
-        .math => |value| {
+        .latex => |value| {
             if (!value.rect.isValid()) return error.InvalidItemGeometry;
-            const tree = ir.math.find(value.tree) orelse return error.InvalidItemGeometry;
-            switch (value.content) {
-                .structured => |structured| {
-                    if (tree.input_kind == .raw or !validColor(structured.color)) return error.InvalidItemGeometry;
-                    const layout = structured.layout;
-                    if (!nonNegativeFinite(layout.width) or !nonNegativeFinite(layout.height) or
-                        !nonNegativeFinite(layout.baseline) or layout.baseline > layout.height) return error.InvalidItemGeometry;
-                    for (layout.elements) |element| switch (element) {
-                        .text => |text| {
-                            if (tree.find(text.node) == null or !std.math.isFinite(text.x) or !std.math.isFinite(text.y) or
-                                !positiveFinite(text.font_size))
-                            {
-                                return error.InvalidItemGeometry;
-                            }
-                            try text_validation.layout(ir, text.layout);
-                        },
-                        .rule => |rule| if (tree.find(rule.node) == null or !rule.rect.isValid()) return error.InvalidItemGeometry,
-                    };
-                },
-                .raw_pdf => |raw| {
-                    if (tree.input_kind != .raw) return error.InvalidItemGeometry;
-                    try requireResource(ir, raw.resource, .math_pdf);
-                    const resource = ir.resources.find(raw.resource) orelse return error.MissingResource;
-                    const metadata = switch (resource.metadata) {
-                        .math_pdf => |metadata| metadata,
-                        else => return error.InvalidResource,
-                    };
-                    if (raw.page_index >= metadata.pages.len) return error.InvalidResource;
-                },
-            }
+            try requireResource(ir, value.resource, .latex_pdf);
+            const resource = ir.resources.find(value.resource) orelse return error.MissingResource;
+            const metadata = switch (resource.metadata) {
+                .latex_pdf => |metadata| metadata,
+                else => return error.InvalidResource,
+            };
+            if (value.page_index >= metadata.pages.len) return error.InvalidResource;
         },
         .pdf_page => |value| {
             if (!value.rect.isValid()) return error.InvalidItemGeometry;

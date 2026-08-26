@@ -53,12 +53,11 @@ pub fn build(
             for (item_indices.items) |item_index| {
                 const item = &page.items.items[item_index];
                 var item_semantic_id = semantic_id;
-                if (item.* == .math) {
+                if (item.* == .latex) {
                     if (next_math >= math_semantics.items.len) return error.MissingMathSemantics;
                     item_semantic_id = math_semantics.items[next_math];
                     next_math += 1;
                     const math_node = &builder.nodes.items[builder.index(item_semantic_id)];
-                    math_node.math_tree = item.math.tree;
                     if (item_semantic_id != semantic_id) {
                         if (math_node.items.len != 0) return error.DuplicateMathSemantics;
                         math_node.items = try allocator.dupe(render.ItemId, &.{item.header().item_id});
@@ -142,7 +141,7 @@ const Builder = struct {
             self.nodes.items[self.index(id)].alt_text = try duplicateOptional(self.allocator, label);
             return id;
         }
-        if (prepared_object.render.kind == .vector_math) {
+        if (prepared_object.render.kind == .latex) {
             const id = try self.append(.math);
             self.nodes.items[self.index(id)].text = try duplicateOptional(self.allocator, prepared_object.content);
             return id;

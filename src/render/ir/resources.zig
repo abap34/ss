@@ -7,7 +7,7 @@ pub const Kind = enum {
     raster,
     svg,
     pdf,
-    math_pdf,
+    latex_pdf,
 };
 
 pub const RasterOrientation = enum(u8) {
@@ -132,12 +132,12 @@ pub const Metadata = union(Kind) {
     raster: RasterMetadata,
     svg: SvgMetadata,
     pdf: PdfMetadata,
-    math_pdf: PdfMetadata,
+    latex_pdf: PdfMetadata,
 
     pub fn deinit(self: *Metadata, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .pdf => |*value| value.deinit(allocator),
-            .math_pdf => |*value| value.deinit(allocator),
+            .latex_pdf => |*value| value.deinit(allocator),
             .font, .raster, .svg => {},
         }
     }
@@ -193,7 +193,7 @@ pub const Resource = struct {
                 .encrypted = value.encrypted,
                 .has_javascript = value.has_javascript,
             } },
-            .math_pdf => |value| .{ .math_pdf = .{
+            .latex_pdf => |value| .{ .latex_pdf = .{
                 .pages = try allocator.dupe(PdfPageMetadata, value.pages),
                 .encrypted = value.encrypted,
                 .has_javascript = value.has_javascript,
@@ -213,7 +213,7 @@ pub const Resource = struct {
         var total = self.name.len +| self.bytes.len;
         switch (self.metadata) {
             .pdf => |value| total +|= value.pages.len *| @sizeOf(PdfPageMetadata),
-            .math_pdf => |value| total +|= value.pages.len *| @sizeOf(PdfPageMetadata),
+            .latex_pdf => |value| total +|= value.pages.len *| @sizeOf(PdfPageMetadata),
             .font, .raster, .svg => {},
         }
         if (self.shared_owner != null) total +|= @sizeOf(SharedOwner);
@@ -235,7 +235,7 @@ pub const Resource = struct {
             else
                 "font/sfnt",
             .svg => "image/svg+xml",
-            .pdf, .math_pdf => "application/pdf",
+            .pdf, .latex_pdf => "application/pdf",
             .raster => if (std.mem.startsWith(u8, self.bytes, "\x89PNG\r\n\x1a\n"))
                 "image/png"
             else if (std.mem.startsWith(u8, self.bytes, "GIF87a") or std.mem.startsWith(u8, self.bytes, "GIF89a"))
@@ -301,7 +301,7 @@ pub fn extensionFor(kind: Kind, bytes: []const u8) []const u8 {
         else
             "ttf",
         .svg => "svg",
-        .pdf, .math_pdf => "pdf",
+        .pdf, .latex_pdf => "pdf",
         .raster => if (std.mem.startsWith(u8, bytes, "\x89PNG\r\n\x1a\n"))
             "png"
         else if (std.mem.startsWith(u8, bytes, "GIF87a") or std.mem.startsWith(u8, bytes, "GIF89a"))

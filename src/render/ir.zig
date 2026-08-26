@@ -3,7 +3,6 @@ const core = @import("core");
 const fonts = @import("ir/fonts.zig");
 const geometry = @import("ir/geometry.zig");
 const ir_fingerprint = @import("ir/fingerprint.zig");
-const math = @import("ir/math.zig");
 const resources = @import("ir/resources.zig");
 const semantics = @import("ir/semantics.zig");
 const text_ir = @import("ir/text.zig");
@@ -52,18 +51,6 @@ pub const SemanticRole = semantics.Role;
 pub const SemanticLinkKind = semantics.LinkKind;
 pub const SemanticNode = semantics.Node;
 pub const SemanticTree = semantics.Tree;
-pub const MathTreeId = math.TreeId;
-pub const MathNodeId = math.NodeId;
-pub const MathInputKind = math.InputKind;
-pub const MathNodeKind = math.Kind;
-pub const MathNode = math.Node;
-pub const MathTree = math.Tree;
-pub const MathCatalog = math.Catalog;
-pub const MathBuilder = math.Builder;
-pub const MathLayout = math.Layout;
-pub const MathElement = math.Element;
-pub const MathTextElement = math.TextElement;
-pub const MathRuleElement = math.RuleElement;
 
 pub const ItemId = u64;
 
@@ -298,34 +285,12 @@ pub const PdfPage = struct {
     copy_annotations: bool,
 };
 
-pub const StructuredMath = struct {
-    layout: MathLayout,
-    color: core.render_policy.Color,
-};
-
-pub const RawMathPdf = struct {
+pub const Latex = struct {
+    header: ItemHeader,
+    rect: Rect,
     resource: ResourceId,
     page_index: usize,
     box: core.render_policy.PdfPageBox,
-};
-
-pub const MathContent = union(enum) {
-    structured: StructuredMath,
-    raw_pdf: RawMathPdf,
-
-    fn deinit(self: *MathContent, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .structured => |*value| value.layout.deinit(allocator),
-            .raw_pdf => {},
-        }
-    }
-};
-
-pub const Math = struct {
-    header: ItemHeader,
-    rect: Rect,
-    tree: MathTreeId,
-    content: MathContent,
 };
 
 pub const Item = union(enum) {
@@ -336,15 +301,14 @@ pub const Item = union(enum) {
     text: Text,
     raster: Raster,
     svg: Svg,
-    math: Math,
+    latex: Latex,
     pdf_page: PdfPage,
 
     pub fn deinit(self: *Item, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .text => |*item| item.deinit(allocator),
-            .math => |*item| item.content.deinit(allocator),
             .vector_path => |*item| item.deinit(allocator),
-            .fill_rect, .stroke_line, .rounded_rect, .raster, .svg, .pdf_page => {},
+            .fill_rect, .stroke_line, .rounded_rect, .raster, .svg, .latex, .pdf_page => {},
         }
     }
 
@@ -499,16 +463,12 @@ pub const Page = struct {
             self.destinations.capacity *| @sizeOf(Destination);
         for (self.items.items) |item| switch (item) {
             .text => |value| total +|= value.layout.ownedByteSize(),
-            .math => |value| switch (value.content) {
-                .structured => |structured| total +|= structured.layout.ownedByteSize(),
-                .raw_pdf => {},
-            },
             .vector_path => |value| {
                 total +|= value.commands.len *| @sizeOf(PathCommand);
                 total +|= fillPaintOwnedByteSize(value.fill);
                 if (value.stroke) |stroke| total +|= stroke.dash.len *| @sizeOf(f64);
             },
-            .fill_rect, .stroke_line, .rounded_rect, .raster, .svg, .pdf_page => {},
+            .fill_rect, .stroke_line, .rounded_rect, .raster, .svg, .latex, .pdf_page => {},
         };
         for (self.links.items) |link| total +|= link.target.len +| 1;
         for (self.destinations.items) |destination| total +|= destination.name.len +| 1;
@@ -518,7 +478,7 @@ pub const Page = struct {
     pub fn hasPdfPages(self: *const Page) bool {
         for (self.items.items) |item| {
             if (item == .pdf_page) return true;
-            if (item == .math and item.math.content == .raw_pdf) return true;
+            if (item == .latex) return true;
         }
         return false;
     }
@@ -719,40 +679,21 @@ pub const Page = struct {
         } });
     }
 
-    pub fn appendStructuredMath(
+    pub fn appendLatexPdf(
         self: *Page,
         allocator: std.mem.Allocator,
         node_id: ?core.NodeId,
         rect: Rect,
-        tree: MathTreeId,
-        layout: MathLayout,
-        color: core.render_policy.Color,
-    ) !void {
-        var owned_layout = layout;
-        errdefer owned_layout.deinit(allocator);
-        try self.items.append(allocator, .{ .math = .{
-            .header = self.itemHeader(node_id, rect, rect),
-            .rect = rect,
-            .tree = tree,
-            .content = .{ .structured = .{ .layout = owned_layout, .color = color } },
-        } });
-    }
-
-    pub fn appendRawMathPdf(
-        self: *Page,
-        allocator: std.mem.Allocator,
-        node_id: ?core.NodeId,
-        rect: Rect,
-        tree: MathTreeId,
         resource: ResourceId,
         page_index: usize,
         box: core.render_policy.PdfPageBox,
     ) !void {
-        try self.items.append(allocator, .{ .math = .{
+        try self.items.append(allocator, .{ .latex = .{
             .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
-            .tree = tree,
-            .content = .{ .raw_pdf = .{ .resource = resource, .page_index = page_index, .box = box } },
+            .resource = resource,
+            .page_index = page_index,
+            .box = box,
         } });
     }
 
@@ -805,7 +746,6 @@ pub const Ir = struct {
     resources: ResourceGraph = .{},
     fonts: FontCatalog = .{},
     semantics: SemanticTree = .{},
-    math: MathCatalog = .{},
     pages: []Page,
 
     pub fn deinit(self: *Ir, allocator: std.mem.Allocator) void {
@@ -814,7 +754,6 @@ pub const Ir = struct {
         self.resources.deinit(allocator);
         self.fonts.deinit(allocator);
         self.semantics.deinit(allocator);
-        self.math.deinit(allocator);
         self.* = .{ .pages = &.{} };
     }
 

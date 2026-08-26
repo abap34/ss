@@ -17,14 +17,10 @@ fn/! subtitle(text_value: String) -> Object
   return objects::sub_obj(text_value)
 end
 
-fn/! math(text_value: String, scale: Number = 1) -> Object
-  let obj = objects::math_obj(text_value)
-  obj.math.scale = scale
+fn/! latex(text_value: String, scale: Number = 1) -> Object
+  let obj = objects::latex_obj(text_value)
+  obj.latex.scale = scale
   return obj
-end
-
-fn/! mathtex(text_value: String) -> Object
-  return objects::tex_obj(text_value)
 end
 
 fn/! panel() -> Object
@@ -295,15 +291,6 @@ end
 
 fn/! text(text_value: String) -> Object
   return objects::body_obj(text_value)
-end
-
-fn/! tex(text_value: String, scale: Number = 1) -> Object
-  let obj = objects::tex_obj(text_value)
-  obj.layout.x = 102
-  obj.layout.right_inset = 102
-  obj.layout.wrap = WrapMode.on
-  obj.math.scale = scale
-  return obj
 end
 
 fn/! figure(text_value: String) -> Object

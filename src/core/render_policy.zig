@@ -20,7 +20,7 @@ pub const Dash = struct {
 pub const RenderKind = enum {
     text,
     code,
-    vector_math,
+    latex,
     vector_asset,
     raster_asset,
     vector_path,
@@ -237,12 +237,10 @@ pub const TextPaint = struct {
     }
 };
 
-pub const MathPaint = struct {
+pub const LatexPaint = struct {
     min_height: f32,
-    raw_tex_width_ratio: f32,
     scale: f32,
     horizontal_align: HorizontalAlign,
-    color: Color,
 };
 
 pub const AssetPaint = struct {
@@ -298,7 +296,7 @@ pub const RulePaint = struct {
 pub const ResolvedRender = struct {
     kind: RenderKind,
     text: ?TextPaint,
-    math: ?MathPaint,
+    latex: ?LatexPaint,
     asset: ?AssetPaint,
     code: ?CodePaint,
     vector_path: ?VectorPathPaint,
@@ -316,7 +314,7 @@ pub fn resolve(state: anytype, node: *const Node) ResolvedRender {
     return .{
         .kind = kind,
         .text = resolveText(state, node, kind),
-        .math = resolveMath(state, node, kind),
+        .latex = resolveLatex(state, node, kind),
         .asset = resolveAsset(state, node, kind),
         .code = resolveCode(state, node, kind),
         .vector_path = resolveVectorPath(node, kind),
@@ -486,14 +484,12 @@ fn resolveMarkdownHeadingUnderline(node: *const Node, heading_field: []const u8)
     };
 }
 
-fn resolveMath(state: anytype, node: *const Node, kind: RenderKind) ?MathPaint {
-    if (kind != .vector_math) return null;
+fn resolveLatex(state: anytype, node: *const Node, kind: RenderKind) ?LatexPaint {
+    if (kind != .latex) return null;
     return .{
-        .min_height = positiveRecordFloatProperty(state, node, "math", "min_height") orelse 30,
-        .raw_tex_width_ratio = inheritedMathRawTexWidthRatio(state, node) orelse 0.96,
-        .scale = positiveRecordFloatProperty(state, node, "math", "scale") orelse 1,
-        .horizontal_align = inheritedMathHorizontalAlign(state, node) orelse .center,
-        .color = parseRecordColorProperty(state, node, "math", "color") orelse FALLBACK_TEXT_COLOR,
+        .min_height = positiveRecordFloatProperty(state, node, "latex", "min_height") orelse 30,
+        .scale = positiveRecordFloatProperty(state, node, "latex", "scale") orelse 1,
+        .horizontal_align = inheritedLatexHorizontalAlign(state, node) orelse .center,
     };
 }
 
@@ -926,16 +922,11 @@ fn inheritedTextHorizontalAlign(state: anytype, node: *const Node) ?HorizontalAl
     return parseHorizontalAlign(value);
 }
 
-fn inheritedMathHorizontalAlign(state: anytype, node: *const Node) ?HorizontalAlign {
-    if (explicitRecordHorizontalAlign(node, "math", "align")) |value| return value;
+fn inheritedLatexHorizontalAlign(state: anytype, node: *const Node) ?HorizontalAlign {
+    if (explicitRecordHorizontalAlign(node, "latex", "align")) |value| return value;
     if (inheritedHorizontalAlignProperty(state, node, "math_align")) |value| return value;
-    const value = fields.read(state.allocator, state, node, "math", &.{"align"}, .text) orelse return null;
+    const value = fields.read(state.allocator, state, node, "latex", &.{"align"}, .text) orelse return null;
     return parseHorizontalAlign(value);
-}
-
-fn inheritedMathRawTexWidthRatio(state: anytype, node: *const Node) ?f32 {
-    if (explicitPositiveRecordFloatProperty(node, "math", "raw_tex_width_ratio")) |value| return value;
-    return inheritedPositiveFloatProperty(state, node, "raw_tex_width_ratio");
 }
 
 fn explicitPositiveRecordFloatProperty(node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {

@@ -1,5 +1,5 @@
 type LayoutPolicy = top | top_flow | center | center_stack
-type RenderKind = text | code | vector_math | vector_asset | raster_asset | vector_path | connector | chrome_only
+type RenderKind = text | code | latex | vector_asset | raster_asset | vector_path | connector | chrome_only
 type LineCap = butt | round | square
 type LineJoin = miter | round | bevel
 type FillRule = nonzero | even_odd
@@ -15,7 +15,7 @@ type FitPolicy = warn | error | ignore
 type Align = left | center | right
 type FontStyle = normal | oblique | italic
 type FontStretch = ultra_condensed | extra_condensed | condensed | semi_condensed | normal | semi_expanded | expanded | extra_expanded | ultra_expanded
-type TexEngine = pdflatex | lualatex
+type LatexEngine = pdflatex | lualatex
 type PathVerb = move | line | quadratic | cubic | arc | close
 
 record PathCommand {
@@ -218,12 +218,10 @@ record MarkdownHeadingStyles {
   h6: MarkdownHeadingStyle? = none
 }
 
-record MathStyle {
+record LatexStyle {
   scale: Number = 1
   min_height: Number = 30
-  raw_tex_width_ratio: Number = 0.96
   align: Align = Align.center
-  color: Color = c"0,0,0.0353"
 }
 
 record CodeStyle {
@@ -284,7 +282,6 @@ type Doc = object {
   logo_scale: Number = 1
   watermark: String? = none
   math_align: Align = Align.center
-  raw_tex_width_ratio: Number = 0.96
   code_theme_plain_color: Color? = none
   code_theme_keyword_color: Color? = none
   code_theme_function_color: Color? = none
@@ -462,12 +459,12 @@ type Code = object {
   }
 }
 
-type Math = object {
+type Latex = object {
   base = Text
-  roles = ["math"]
+  roles = ["latex"]
 
-  math: MathStyle = MathStyle {}
-  render_kind: RenderKind = RenderKind.vector_math
+  latex: LatexStyle = LatexStyle {}
+  render_kind: RenderKind = RenderKind.latex
   text: TextStyle = TextStyle {
     parse = TextParseMode.none
     font = FontFace { family = "Courier" }
@@ -480,12 +477,6 @@ type Math = object {
     right_inset = 102
     wrap = WrapMode.off
   }
-}
-
-type Tex = object {
-  base = Math
-  roles = ["math_tex"]
-
 }
 
 type Fig = object {

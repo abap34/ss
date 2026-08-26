@@ -115,7 +115,7 @@ export interface DisplayTranslation {
 }
 
 export interface DisplayAsset {
-  kind: "font" | "raster" | "svg" | "pdf" | "math_pdf";
+  kind: "font" | "raster" | "svg" | "pdf" | "latex_pdf";
   resource_id: string;
   digest: string;
   media_type: string;

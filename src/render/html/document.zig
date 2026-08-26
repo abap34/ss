@@ -23,10 +23,7 @@ pub const fragment_css =
     \\.ss-text-cluster { position: absolute; top: 0; white-space: pre; }
     \\.ss-line { display: block; }
     \\.ss-image { display: block; object-fit: fill; }
-    \\.ss-math { display: block; }
-    \\.ss-math-text { position: absolute; white-space: pre; }
-    \\.ss-math-rule { position: absolute; }
-    \\.ss-mathml { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+    \\.ss-latex { display: block; }
     \\.ss-pdf { overflow: hidden; }
     \\.ss-pdf > canvas, .ss-pdf-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
     \\.ss-pdf > canvas { display: block; }
@@ -286,12 +283,7 @@ fn appendSemanticNode(
     const tree = &ir.semantics;
     if (depth > tree.nodes.len) return error.InvalidSemantics;
     const semantic = tree.find(semantic_id) orelse return error.InvalidSemantics;
-    const math_tree = if (semantic.role == .math)
-        ir.math.find(semantic.math_tree orelse return error.InvalidSemantics) orelse return error.InvalidSemantics
-    else
-        null;
-    const raw_math = if (math_tree) |value| value.input_kind == .raw else false;
-    const tag = if (raw_math) "span" else semanticTag(semantic.*);
+    const tag = if (semantic.role == .math) "span" else semanticTag(semantic.*);
     try appendFormat(allocator, out, "<{s} data-ss-semantic-id=\"{d}\"", .{ tag, semantic.id });
     if (semantic.role == .list and semantic.list_ordered.? and semantic.list_start.? != 1) {
         try appendFormat(allocator, out, " start=\"{d}\"", .{semantic.list_start.?});
@@ -308,28 +300,18 @@ fn appendSemanticNode(
         try out.append(allocator, '"');
     }
     if (semantic.alt_text) |alt| {
-        if (!raw_math) {
-            try out.appendSlice(allocator, " aria-label=\"");
-            try appendAttribute(allocator, out, alt);
-            try out.append(allocator, '"');
-        }
+        try out.appendSlice(allocator, " aria-label=\"");
+        try appendAttribute(allocator, out, alt);
+        try out.append(allocator, '"');
     }
     if (semantic.role == .math) {
-        try out.appendSlice(allocator, " class=\"ss-mathml\"");
-        if (raw_math) {
-            try out.appendSlice(allocator, " role=\"math\" aria-label=\"");
-            try appendAttribute(allocator, out, semantic.alt_text orelse math_tree.?.source);
-            try out.append(allocator, '"');
-        } else {
-            try out.appendSlice(allocator, " xmlns=\"http://www.w3.org/1998/Math/MathML\"");
-            try appendFormat(allocator, out, " display=\"{s}\"", .{if (math_tree.?.input_kind == .@"inline") "inline" else "block"});
-        }
+        try out.appendSlice(allocator, " class=\"ss-latex-semantic\" role=\"math\" aria-label=\"");
+        try appendAttribute(allocator, out, semantic.alt_text orelse semantic.text orelse "");
+        try out.append(allocator, '"');
     }
     try out.append(allocator, '>');
     if (semantic.role == .code) try out.appendSlice(allocator, "<code>");
-    if (semantic.role == .math and !raw_math) {
-        try appendMathNode(allocator, out, math_tree.?, math_tree.?.root, 0);
-    } else if (semantic.text) |value| try appendText(allocator, out, value);
+    if (semantic.text) |value| try appendText(allocator, out, value);
     for (semantic.children) |child| try appendSemanticNode(allocator, out, ir, child, depth + 1);
     if (semantic.role == .code) try out.appendSlice(allocator, "</code>");
     try appendFormat(allocator, out, "</{s}>", .{tag});
@@ -466,50 +448,14 @@ fn appendItem(
                 try out.appendSlice(allocator, "\">");
             }
         },
-        .math => |value| {
-            const tree = ir.math.find(value.tree) orelse return error.InvalidMathTree;
-            switch (value.content) {
-                .structured => |structured| {
-                    if (tree.input_kind == .raw) return error.InvalidMathTree;
-                    const layout = structured.layout;
-                    try appendItemStart(allocator, out, "span", "ss-math", header, .{ .x = value.rect.x, .y = value.rect.y }, null, .{});
-                    try appendRectStyle(allocator, out, value.rect);
-                    try out.appendSlice(allocator, "\">");
-                    for (layout.elements) |element| switch (element) {
-                        .text => |text| {
-                            try appendFormat(allocator, out, "<span class=\"ss-math-text\" style=\"left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt\">", .{
-                                normalized(text.x),
-                                normalized(text.y),
-                                normalized(text.layout.logical_bounds.width),
-                                normalized(text.layout.logical_bounds.height),
-                            });
-                            try appendTextRuns(allocator, out, ir, &text.layout, text.font_size, structured.color);
-                            try out.appendSlice(allocator, "</span>");
-                        },
-                        .rule => |rule| {
-                            try appendFormat(allocator, out, "<span class=\"ss-math-rule\" style=\"left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt;background:", .{
-                                normalized(rule.rect.x),
-                                normalized(rule.rect.y),
-                                normalized(rule.rect.width),
-                                normalized(rule.rect.height),
-                            });
-                            try appendColor(allocator, out, structured.color);
-                            try out.appendSlice(allocator, "\"></span>");
-                        },
-                    };
-                    try out.appendSlice(allocator, "</span>");
-                },
-                .raw_pdf => |raw| {
-                    if (tree.input_kind != .raw) return error.InvalidMathTree;
-                    const path = assets.reference(.math_pdf, raw.resource) orelse return error.MissingHtmlResource;
-                    const resource = ir.resources.find(raw.resource) orelse return error.MissingHtmlResource;
-                    const metadata = switch (resource.metadata) {
-                        .math_pdf => |metadata| metadata,
-                        else => return error.MissingHtmlResource,
-                    };
-                    try appendPdfViewer(allocator, out, header, value.rect, "ss-math ss-pdf", path, raw.page_index, raw.box, &metadata, false);
-                },
-            }
+        .latex => |value| {
+            const path = assets.reference(.latex_pdf, value.resource) orelse return error.MissingHtmlResource;
+            const resource = ir.resources.find(value.resource) orelse return error.MissingHtmlResource;
+            const metadata = switch (resource.metadata) {
+                .latex_pdf => |metadata| metadata,
+                else => return error.MissingHtmlResource,
+            };
+            try appendPdfViewer(allocator, out, header, value.rect, "ss-latex ss-pdf", path, value.page_index, value.box, &metadata, false);
         },
         .pdf_page => |value| {
             const path = assets.reference(.pdf, value.resource) orelse return error.MissingHtmlResource;
@@ -770,37 +716,6 @@ fn appendTextRuns(
         }
         try out.appendSlice(allocator, "</span>");
     }
-}
-
-fn appendMathNode(
-    allocator: std.mem.Allocator,
-    out: *FragmentOutput,
-    tree: *const render.MathTree,
-    node_id: render.MathNodeId,
-    depth: usize,
-) !void {
-    if (depth > tree.nodes.len) return error.InvalidMathTree;
-    const node = tree.find(node_id) orelse return error.InvalidMathTree;
-    const tag: []const u8 = switch (node.kind) {
-        .row => "mrow",
-        .identifier => "mi",
-        .number => "mn",
-        .operator => "mo",
-        .text => "mtext",
-        .space => "mspace",
-        .fraction => "mfrac",
-        .square_root => "msqrt",
-        .superscript => "msup",
-        .subscript => "msub",
-        .subscript_superscript => "msubsup",
-        .raw_tex => return error.UnsupportedMathSyntax,
-    };
-    try appendFormat(allocator, out, "<{s}", .{tag});
-    if (node.kind == .space) try out.appendSlice(allocator, " width=\"0.25em\"");
-    try out.append(allocator, '>');
-    if (node.text) |value| try appendText(allocator, out, value);
-    for (node.children) |child| try appendMathNode(allocator, out, tree, child, depth + 1);
-    try appendFormat(allocator, out, "</{s}>", .{tag});
 }
 
 const ItemStartOptions = struct {
