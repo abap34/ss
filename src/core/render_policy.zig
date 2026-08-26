@@ -243,6 +243,8 @@ pub const LatexPaint = struct {
     horizontal_align: HorizontalAlign,
 };
 
+pub const default_latex_min_height: f32 = 30;
+
 pub const AssetPaint = struct {
     scale: f32,
     tint: ?Color,
@@ -487,7 +489,7 @@ fn resolveMarkdownHeadingUnderline(node: *const Node, heading_field: []const u8)
 fn resolveLatex(state: anytype, node: *const Node, kind: RenderKind) ?LatexPaint {
     if (kind != .latex) return null;
     return .{
-        .min_height = positiveRecordFloatProperty(state, node, "latex", "min_height") orelse 30,
+        .min_height = positiveRecordFloatProperty(state, node, "latex", "min_height") orelse default_latex_min_height,
         .scale = positiveRecordFloatProperty(state, node, "latex", "scale") orelse 1,
         .horizontal_align = inheritedLatexHorizontalAlign(state, node) orelse .center,
     };

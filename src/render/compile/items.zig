@@ -13,6 +13,7 @@ const render_resources = @import("render_resources");
 const render_text = @import("render_text");
 const render_compile = @import("../compile.zig");
 const fingerprint = @import("fingerprint.zig");
+const latex_document = @import("latex.zig");
 const page_cache = @import("page_cache.zig");
 const external_process = @import("external_process.zig");
 const text_measure = core.render_text_measure;
@@ -115,6 +116,7 @@ const NativePdfError = error{
     InvalidPdfCache,
     InvalidFontAwesomeIcon,
     UnsupportedAssetType,
+    InvalidRenderPolicy,
 };
 
 pub const native_artifact_cache_version = "ss-native-artifacts-v7";
@@ -212,7 +214,7 @@ const DestinationAnnotation = struct {
     }
 };
 
-const LatexFragmentKind = enum { inline_math, display_math, body };
+const LatexFragmentKind = latex_document.FragmentKind;
 
 const AtomContent = union(enum) {
     text: ?render_ir.TextLayout,
@@ -1609,6 +1611,8 @@ fn preloadLatexTaskBatches(
     completed: *usize,
 ) !void {
     var groups = std.ArrayList(LatexBatchGroup).empty;
+    var group_indices = std.StringHashMap(usize).init(ctx.allocator);
+    defer group_indices.deinit();
     defer {
         for (groups.items) |*group| group.deinit(ctx.allocator);
         groups.deinit(ctx.allocator);
@@ -1628,14 +1632,7 @@ fn preloadLatexTaskBatches(
         var key_owned = true;
         errdefer if (key_owned) ctx.allocator.free(key);
 
-        var group_index: ?usize = null;
-        for (groups.items, 0..) |group, candidate_index| {
-            if (std.mem.eql(u8, group.key, key)) {
-                group_index = candidate_index;
-                break;
-            }
-        }
-        if (group_index) |candidate_index| {
+        if (group_indices.get(key)) |candidate_index| {
             ctx.allocator.free(key);
             key_owned = false;
             try groups.items[candidate_index].entries.append(ctx.allocator, .{
@@ -1650,7 +1647,9 @@ fn preloadLatexTaskBatches(
         } else {
             try groups.append(ctx.allocator, .{ .key = key });
             key_owned = false;
-            try groups.items[groups.items.len - 1].entries.append(ctx.allocator, .{
+            const candidate_index = groups.items.len - 1;
+            try group_indices.put(groups.items[candidate_index].key, candidate_index);
+            try groups.items[candidate_index].entries.append(ctx.allocator, .{
                 .task_index = index,
                 .source = latex.source,
                 .preamble = latex.preamble,
@@ -1664,10 +1663,18 @@ fn preloadLatexTaskBatches(
 
     for (groups.items) |group| {
         if (group.entries.items.len == 0) continue;
-        const profile_build = utils.measure_profile.start();
-        try preloadLatexBatchGroup(ctx, group.entries.items, progress, completed, tasks.len);
-        utils.measure_profile.recordArtifactBuildMany(.latex, group.entries.items.len, profile_build);
-        for (group.entries.items) |entry| cached[entry.task_index] = true;
+        const document_entries = try latexDocumentEntries(ctx.allocator, group.entries.items);
+        defer ctx.allocator.free(document_entries);
+        var start: usize = 0;
+        while (start < group.entries.items.len) {
+            const end = latex_document.batchChunkEnd(document_entries, start);
+            const chunk = group.entries.items[start..end];
+            const profile_build = utils.measure_profile.start();
+            try preloadLatexBatchGroup(ctx, chunk, progress, completed, tasks.len);
+            utils.measure_profile.recordArtifactBuildMany(.latex, chunk.len, profile_build);
+            for (chunk) |entry| cached[entry.task_index] = true;
+            start = end;
+        }
     }
 }
 
@@ -1691,24 +1698,13 @@ fn preloadLatexBatchGroup(
     total: usize,
 ) !void {
     if (entries.len == 0) return;
-    const dir = try tempCachePath(ctx, entries[0].out, "latex-batch-dir");
-    defer ctx.allocator.free(dir);
-    defer std.Io.Dir.cwd().deleteTree(ctx.io, dir) catch {};
-    errdefer std.Io.Dir.cwd().deleteTree(ctx.io, dir) catch {};
-    try std.Io.Dir.cwd().createDirPath(ctx.io, dir);
-
-    const tex_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.tex" });
-    defer ctx.allocator.free(tex_path);
-    const pdf_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.pdf" });
-    defer ctx.allocator.free(pdf_path);
-    const metrics_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.ssm" });
-    defer ctx.allocator.free(metrics_path);
-
-    const tex = try latexBatchDocumentSource(ctx, entries);
+    const document_entries = try latexDocumentEntries(ctx.allocator, entries);
+    defer ctx.allocator.free(document_entries);
+    const tex = try latexDocumentSource(ctx, entries[0].preamble, document_entries);
     defer ctx.allocator.free(tex);
-    try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = tex, .flags = .{ .truncate = true } });
-    try runChecked(ctx, &.{ entries[0].engine.executable(), "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
-    try publishLatexBatch(ctx, entries, pdf_path, metrics_path, progress, completed, total);
+    var generated = try compileLatexDocument(ctx, entries[0].out, entries[0].engine, tex);
+    defer generated.deinit(ctx);
+    try publishLatexBatch(ctx, entries, generated.pdf_path, generated.metrics_path, progress, completed, total);
 }
 
 fn publishLatexBatch(
@@ -1731,7 +1727,9 @@ fn publishLatexBatch(
     defer ctx.allocator.free(widths);
     const heights = try ctx.allocator.alloc(f64, entries.len);
     defer ctx.allocator.free(heights);
-    const metrics = try readLatexMetrics(ctx, metrics_path, entries.len);
+    const document_entries = try latexDocumentEntries(ctx.allocator, entries);
+    defer ctx.allocator.free(document_entries);
+    const metrics = try readLatexMetrics(ctx, metrics_path, document_entries);
     defer ctx.allocator.free(metrics);
     if (c.ss_qpdf_page_sizes(batch_path_z.ptr, @intFromEnum(core.render_policy.PdfPageBox.crop), widths.ptr, heights.ptr, entries.len) != 0) {
         try recordQpdfFailure(ctx, "read LaTeX PDF page geometry");
@@ -1739,8 +1737,8 @@ fn publishLatexBatch(
     }
 
     for (entries, 0..) |entry, index| {
-        const baseline_from_bottom = if (entry.kind == .body) 0 else heights[index] * metrics[index].baseline_ratio;
-        const reference_height = if (entry.kind == .body) heights[index] else heights[index] * metrics[index].reference_height_ratio;
+        const baseline_from_bottom = if (metrics[index]) |metric| heights[index] * metric.baseline_ratio else 0;
+        const reference_height = if (metrics[index]) |metric| heights[index] * metric.reference_height_ratio else heights[index];
         try writeLatexReference(
             ctx,
             entry.out,
@@ -1799,6 +1797,43 @@ fn writeLatexReference(
     errdefer deleteFileIfExists(ctx, tmp);
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tmp, .data = contents, .flags = .{ .truncate = true } });
     try publishCacheFile(ctx, tmp, output);
+}
+
+const GeneratedLatexDocument = struct {
+    dir: []u8,
+    pdf_path: []u8,
+    metrics_path: []u8,
+
+    fn deinit(self: *GeneratedLatexDocument, ctx: *DrawContext) void {
+        std.Io.Dir.cwd().deleteTree(ctx.io, self.dir) catch {};
+        ctx.allocator.free(self.metrics_path);
+        ctx.allocator.free(self.pdf_path);
+        ctx.allocator.free(self.dir);
+        self.* = undefined;
+    }
+};
+
+fn compileLatexDocument(
+    ctx: *DrawContext,
+    output_anchor: []const u8,
+    engine: LatexEngine,
+    source: []const u8,
+) !GeneratedLatexDocument {
+    const dir = try tempCachePath(ctx, output_anchor, "latex-dir");
+    errdefer ctx.allocator.free(dir);
+    errdefer std.Io.Dir.cwd().deleteTree(ctx.io, dir) catch {};
+    try std.Io.Dir.cwd().createDirPath(ctx.io, dir);
+
+    const tex_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.tex" });
+    defer ctx.allocator.free(tex_path);
+    const pdf_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.pdf" });
+    errdefer ctx.allocator.free(pdf_path);
+    const metrics_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.ssm" });
+    errdefer ctx.allocator.free(metrics_path);
+
+    try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = source, .flags = .{ .truncate = true } });
+    try runChecked(ctx, &.{ engine.executable(), "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
+    return .{ .dir = dir, .pdf_path = pdf_path, .metrics_path = metrics_path };
 }
 
 fn executePreloadTaskList(
@@ -2103,7 +2138,7 @@ fn drawObjectContent(ctx: *DrawContext, command: *const ObjectCommand) !void {
             try drawCodeBlock(ctx, content_frame, command.content, code_text, command.render.code);
         },
         .chrome_only => {},
-        .latex => try drawLatexCommand(ctx, command, content_frame, command.render.latex),
+        .latex => try drawLatexCommand(ctx, command, content_frame, try requiredLatexPaint(command)),
         .vector_asset => try drawVectorAsset(ctx, content_frame, command.content, command.render.asset),
         .raster_asset => try drawRasterAsset(ctx, content_frame, command.content, command.render.asset),
         .vector_path => if (command.render.vector_path) |path| try drawVectorPathOp(ctx, content_frame, path),
@@ -2303,7 +2338,7 @@ fn measureObjectCommandContent(ctx: *DrawContext, command: *const ObjectCommand,
     switch (command.render.kind) {
         .text => if (maybe_text) |text| try drawTextCommand(ctx, command, content_frame, text),
         .code => if (maybe_text) |text| try drawCodeBlock(ctx, content_frame, command.content, text, command.render.code),
-        .latex => try drawLatexCommand(ctx, command, content_frame, command.render.latex),
+        .latex => try drawLatexCommand(ctx, command, content_frame, try requiredLatexPaint(command)),
         .vector_asset => try drawVectorAsset(ctx, content_frame, command.content, command.render.asset),
         .raster_asset => try drawRasterAsset(ctx, content_frame, command.content, command.render.asset),
         .vector_path => if (command.render.vector_path) |path| try drawVectorPathOp(ctx, content_frame, path),
@@ -2461,7 +2496,7 @@ fn measureCodeIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
 fn measureLatexIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32, height: f32) !core.LayoutMeasurement {
     const latex = try renderLatexToPdf(ctx, command.content, command.latex_preamble, command.latex_engine, command.latex_kind);
     defer ctx.allocator.free(latex.path);
-    const fitted = fitLatexSize(latex.width, latex.height, @max(width, 1), @max(height, 1), command.render.latex);
+    const fitted = fitLatexSize(latex.width, latex.height, @max(width, 1), @max(height, 1), try requiredLatexPaint(command));
     return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
 }
 
@@ -2559,13 +2594,7 @@ fn latexPreloadTaskKey(ctx: *DrawContext, latex: LatexPreload) ![]u8 {
 
 fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
     switch (task) {
-        .latex => |latex| {
-            const out = try cachedLatexPath(ctx, latex.source, latex.preamble, latex.engine, latex.kind, "ref");
-            defer ctx.allocator.free(out);
-            const asset = try cachedLatexReference(ctx, out) orelse return false;
-            ctx.allocator.free(asset.path);
-            return true;
-        },
+        .latex => |latex| return cachedLatexAvailable(ctx, latex),
         .icon => |icon| {
             const out = try cachedIconPath(ctx, icon.source, "svg");
             defer ctx.allocator.free(out);
@@ -2578,13 +2607,7 @@ fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
 
 fn preloadTaskCached(ctx: *DrawContext, task: PreloadTask) !bool {
     switch (task) {
-        .latex => |latex| {
-            const out = try cachedLatexPath(ctx, latex.source, latex.preamble, latex.engine, latex.kind, "ref");
-            defer ctx.allocator.free(out);
-            const asset = try cachedLatexReference(ctx, out) orelse return false;
-            ctx.allocator.free(asset.path);
-            return true;
-        },
+        .latex => |latex| return cachedLatexAvailable(ctx, latex),
         .icon => |icon| {
             const out = try cachedIconPath(ctx, icon.source, "svg");
             defer ctx.allocator.free(out);
@@ -2593,6 +2616,14 @@ fn preloadTaskCached(ctx: *DrawContext, task: PreloadTask) !bool {
         .vector_pdf => return false,
         .raster => return false,
     }
+}
+
+fn cachedLatexAvailable(ctx: *DrawContext, latex: LatexPreload) !bool {
+    const out = try cachedLatexPath(ctx, latex.source, latex.preamble, latex.engine, latex.kind, "ref");
+    defer ctx.allocator.free(out);
+    const asset = try cachedLatexReference(ctx, out) orelse return false;
+    ctx.allocator.free(asset.path);
+    return true;
 }
 
 fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
@@ -4813,18 +4844,22 @@ fn isPythonKeyword(segment: []const u8) bool {
     return false;
 }
 
-fn drawLatexCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Frame, latex: ?LatexPaint) !void {
+fn drawLatexCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Frame, latex: LatexPaint) !void {
     const asset = try renderLatexToPdf(ctx, command.content, command.latex_preamble, command.latex_engine, command.latex_kind);
     defer ctx.allocator.free(asset.path);
     const fitted = fitLatexSize(asset.width, asset.height, frame.width, frame.height, latex);
-    const horizontal_align = if (latex) |paint| paint.horizontal_align else HorizontalAlign.center;
     const draw_frame = Frame{
-        .x = alignedX(frame.x, frame.width, fitted.width, horizontal_align),
+        .x = alignedX(frame.x, frame.width, fitted.width, latex.horizontal_align),
         .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
         .width = fitted.width,
         .height = fitted.height,
     };
     try placeLatexPdf(ctx, draw_frame, asset.path, asset.page_index);
+}
+
+fn requiredLatexPaint(command: *const ObjectCommand) !LatexPaint {
+    if (command.render.kind != .latex) return NativePdfError.InvalidRenderPolicy;
+    return command.render.latex orelse NativePdfError.InvalidRenderPolicy;
 }
 
 fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: ?core.render_policy.AssetPaint) !void {
@@ -5203,18 +5238,9 @@ fn scaledAssetSize(size: Size, asset: ?core.render_policy.AssetPaint) Size {
     };
 }
 
-fn fitLatexSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, latex: ?LatexPaint) Size {
+fn fitLatexSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, latex: LatexPaint) Size {
     if (source_width <= 0 or source_height <= 0) return .{ .width = max_width, .height = max_height };
-    const paint = latex orelse defaultLatexPaint();
-    return fitLatexObjectSize(source_width, source_height, max_width, max_height, paint);
-}
-
-fn defaultLatexPaint() LatexPaint {
-    return .{
-        .min_height = 30,
-        .scale = 1,
-        .horizontal_align = .center,
-    };
+    return fitLatexObjectSize(source_width, source_height, max_width, max_height, latex);
 }
 
 fn fitLatexObjectSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, paint: LatexPaint) Size {
@@ -5251,31 +5277,22 @@ fn renderLatexToPdf(
     if (try cachedLatexReference(ctx, reference_path)) |asset| return asset;
     const output_pdf_path = try cachedLatexPath(ctx, source, preamble, engine, kind, "pdf");
     defer ctx.allocator.free(output_pdf_path);
-    const dir = try tempCachePath(ctx, reference_path, "dir");
-    defer ctx.allocator.free(dir);
-    defer std.Io.Dir.cwd().deleteTree(ctx.io, dir) catch {};
-    errdefer std.Io.Dir.cwd().deleteTree(ctx.io, dir) catch {};
-    try std.Io.Dir.cwd().createDirPath(ctx.io, dir);
-    const tex_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.tex" });
-    defer ctx.allocator.free(tex_path);
-    const pdf_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.pdf" });
-    defer ctx.allocator.free(pdf_path);
-    const metrics_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.ssm" });
-    defer ctx.allocator.free(metrics_path);
-    const tex = try latexDocumentSource(ctx, source, preamble, kind);
+    const document_entries = [_]latex_document.Entry{.{ .source = source, .kind = kind }};
+    const tex = try latexDocumentSource(ctx, preamble, &document_entries);
     defer ctx.allocator.free(tex);
-    try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = tex, .flags = .{ .truncate = true } });
-    try runChecked(ctx, &.{ engine.executable(), "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
-    try publishGeneratedPdf(ctx, pdf_path, output_pdf_path);
+    var generated = try compileLatexDocument(ctx, reference_path, engine, tex);
+    defer generated.deinit(ctx);
+    try publishGeneratedPdf(ctx, generated.pdf_path, output_pdf_path);
     const size = try pdfAssetSize(ctx, output_pdf_path, null, .latex_pdf);
     const geometry: LatexAssetGeometry = if (kind == .body)
         .{ .baseline_from_bottom = @as(f32, 0), .reference_height = size.height }
     else blk: {
-        const metrics = try readLatexMetrics(ctx, metrics_path, 1);
+        const metrics = try readLatexMetrics(ctx, generated.metrics_path, &document_entries);
         defer ctx.allocator.free(metrics);
+        const metric = metrics[0] orelse return NativePdfError.AssetConversionFailed;
         break :blk .{
-            .baseline_from_bottom = size.height * @as(f32, @floatCast(metrics[0].baseline_ratio)),
-            .reference_height = size.height * @as(f32, @floatCast(metrics[0].reference_height_ratio)),
+            .baseline_from_bottom = size.height * @as(f32, @floatCast(metric.baseline_ratio)),
+            .reference_height = size.height * @as(f32, @floatCast(metric.reference_height_ratio)),
         };
     };
     try writeLatexReference(
@@ -5309,164 +5326,40 @@ fn renderIconToSvg(ctx: *DrawContext, source: []const u8) !SvgAsset {
     return try svgAsset(ctx, out);
 }
 
-const LatexMetrics = struct {
-    baseline_ratio: f64,
-    reference_height_ratio: f64,
-};
-
-fn readLatexMetrics(ctx: *DrawContext, path: []const u8, expected_count: usize) ![]LatexMetrics {
-    const contents = std.Io.Dir.cwd().readFileAlloc(ctx.io, path, ctx.allocator, .limited(1024 * 1024)) catch {
+fn readLatexMetrics(
+    ctx: *DrawContext,
+    path: []const u8,
+    entries: []const latex_document.Entry,
+) ![]?latex_document.Metrics {
+    const contents = std.Io.Dir.cwd().readFileAlloc(
+        ctx.io,
+        path,
+        ctx.allocator,
+        .limited(latex_document.metrics_read_limit),
+    ) catch {
         return NativePdfError.AssetConversionFailed;
     };
     defer ctx.allocator.free(contents);
-    const metrics = try ctx.allocator.alloc(LatexMetrics, expected_count);
-    errdefer ctx.allocator.free(metrics);
-    var count: usize = 0;
-    var lines = std.mem.splitScalar(u8, contents, '\n');
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) continue;
-        if (count >= expected_count) return NativePdfError.AssetConversionFailed;
-        var fields = std.mem.tokenizeAny(u8, trimmed, " \t,");
-        const width_sp = std.fmt.parseInt(i64, fields.next() orelse return NativePdfError.AssetConversionFailed, 10) catch {
-            return NativePdfError.AssetConversionFailed;
-        };
-        const height_sp = std.fmt.parseInt(i64, fields.next() orelse return NativePdfError.AssetConversionFailed, 10) catch {
-            return NativePdfError.AssetConversionFailed;
-        };
-        const depth_sp = std.fmt.parseInt(i64, fields.next() orelse return NativePdfError.AssetConversionFailed, 10) catch {
-            return NativePdfError.AssetConversionFailed;
-        };
-        const reference_height_sp = std.fmt.parseInt(i64, fields.next() orelse return NativePdfError.AssetConversionFailed, 10) catch {
-            return NativePdfError.AssetConversionFailed;
-        };
-        const reference_depth_sp = std.fmt.parseInt(i64, fields.next() orelse return NativePdfError.AssetConversionFailed, 10) catch {
-            return NativePdfError.AssetConversionFailed;
-        };
-        const total_height_sp = std.math.add(i64, height_sp, depth_sp) catch return NativePdfError.AssetConversionFailed;
-        const reference_total_height_sp = std.math.add(i64, reference_height_sp, reference_depth_sp) catch return NativePdfError.AssetConversionFailed;
-        if (fields.next() != null or width_sp <= 0 or total_height_sp <= 0 or reference_total_height_sp <= 0) {
-            return NativePdfError.AssetConversionFailed;
-        }
-        metrics[count] = .{
-            .baseline_ratio = @as(f64, @floatFromInt(depth_sp)) / @as(f64, @floatFromInt(total_height_sp)),
-            .reference_height_ratio = @as(f64, @floatFromInt(reference_total_height_sp)) / @as(f64, @floatFromInt(total_height_sp)),
-        };
-        count += 1;
-    }
-    if (count != expected_count) return NativePdfError.AssetConversionFailed;
-    return metrics;
+    return latex_document.parseMetrics(ctx.allocator, contents, entries) catch
+        return NativePdfError.AssetConversionFailed;
 }
 
-fn latexDocumentSource(ctx: *DrawContext, source: []const u8, preamble: []const LatexPreambleEntry, kind: LatexFragmentKind) ![]const u8 {
+fn latexDocumentSource(
+    ctx: *DrawContext,
+    preamble: []const LatexPreambleEntry,
+    entries: []const latex_document.Entry,
+) ![]u8 {
     const preamble_lines = try latexPreambleLines(ctx, preamble);
     defer ctx.allocator.free(preamble_lines);
-    const fragment = try latexFragment(ctx.allocator, source, kind);
-    defer ctx.allocator.free(fragment);
-    if (kind == .body) return std.fmt.allocPrint(ctx.allocator,
-        \\ \documentclass[border=0pt]{{standalone}}
-        \\ \usepackage{{amsmath,amssymb}}
-        \\ \usepackage{{graphicx}}
-        \\ \usepackage{{xcolor}}
-        \\{s}
-        \\ \begin{{document}}
-        \\{s}
-        \\ \end{{document}}
-        \\
-    , .{ preamble_lines, fragment });
-    return std.fmt.allocPrint(ctx.allocator,
-        \\ \documentclass[border=0pt]{{standalone}}
-        \\ \usepackage{{amsmath,amssymb}}
-        \\ \usepackage{{graphicx}}
-        \\ \usepackage{{xcolor}}
-        \\{s}
-        \\ \newwrite\ssmetrics
-        \\ \begin{{document}}
-        \\ \immediate\openout\ssmetrics=main.ssm
-        \\ \setbox0=\hbox{{{s}}}
-        \\ \setbox1=\hbox{{{s}}}
-        \\ \immediate\write\ssmetrics{{\number\wd0,\number\ht0,\number\dp0,\number\ht1,\number\dp1}}
-        \\ \copy0
-        \\ \immediate\closeout\ssmetrics
-        \\ \end{{document}}
-        \\
-    , .{ preamble_lines, fragment, latexReferenceFragment(kind) });
+    return latex_document.documentSource(ctx.allocator, preamble_lines, entries);
 }
 
-fn latexBatchDocumentSource(ctx: *DrawContext, entries: []const LatexBatchEntry) ![]const u8 {
-    const preamble_lines = try latexPreambleLines(ctx, entries[0].preamble);
-    defer ctx.allocator.free(preamble_lines);
-
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(ctx.allocator);
-    try out.appendSlice(ctx.allocator,
-        \\ \documentclass{article}
-        \\ \usepackage[active,tightpage]{preview}
-        \\ \PreviewBorder=0pt
-        \\ \usepackage{amsmath,amssymb}
-        \\ \usepackage{graphicx}
-        \\ \usepackage{xcolor}
-        \\ \newwrite\ssmetrics
-        \\
-    );
-    try out.appendSlice(ctx.allocator, preamble_lines);
-    try out.appendSlice(ctx.allocator,
-        \\ \pagestyle{empty}
-        \\ \begin{document}
-        \\ \immediate\openout\ssmetrics=main.ssm
-        \\
-    );
-    for (entries) |entry| {
-        const fragment = try latexFragment(ctx.allocator, entry.source, entry.kind);
-        defer ctx.allocator.free(fragment);
-        if (entry.kind == .body) {
-            try out.appendSlice(ctx.allocator,
-                \\ \immediate\write\ssmetrics{1,1,0,1,0}
-                \\ \begin{preview}
-                \\
-            );
-            try out.appendSlice(ctx.allocator, fragment);
-            try out.appendSlice(ctx.allocator,
-                \\ \end{preview}
-                \\
-            );
-            continue;
-        }
-        try out.appendSlice(ctx.allocator, "\\setbox0=\\hbox{");
-        try out.appendSlice(ctx.allocator, fragment);
-        try out.appendSlice(ctx.allocator, "}\n\\setbox1=\\hbox{");
-        try out.appendSlice(ctx.allocator, latexReferenceFragment(entry.kind));
-        try out.appendSlice(ctx.allocator,
-            \\ }
-            \\ \immediate\write\ssmetrics{\number\wd0,\number\ht0,\number\dp0,\number\ht1,\number\dp1}
-            \\ \begin{preview}
-            \\ \copy0
-            \\ \end{preview}
-            \\
-        );
+fn latexDocumentEntries(allocator: Allocator, entries: []const LatexBatchEntry) ![]latex_document.Entry {
+    const document_entries = try allocator.alloc(latex_document.Entry, entries.len);
+    for (entries, document_entries) |entry, *document_entry| {
+        document_entry.* = .{ .source = entry.source, .kind = entry.kind };
     }
-    try out.appendSlice(ctx.allocator,
-        \\ \immediate\closeout\ssmetrics
-        \\ \end{document}
-        \\
-    );
-    return try out.toOwnedSlice(ctx.allocator);
-}
-
-fn latexFragment(allocator: Allocator, source: []const u8, kind: LatexFragmentKind) ![]const u8 {
-    switch (kind) {
-        .inline_math => return std.fmt.allocPrint(allocator, "$\\mathstrut {s}$\n", .{source}),
-        .display_math => return std.fmt.allocPrint(allocator, "$\\displaystyle\\mathstrut {s}$\n", .{source}),
-        .body => return allocator.dupe(u8, source),
-    }
-}
-
-fn latexReferenceFragment(kind: LatexFragmentKind) []const u8 {
-    return switch (kind) {
-        .inline_math => "$\\mathstrut$",
-        .display_math => "$\\displaystyle\\mathstrut$",
-        .body => "",
-    };
+    return document_entries;
 }
 
 fn latexPreambleLines(ctx: *DrawContext, preamble: []const LatexPreambleEntry) ![]const u8 {
@@ -5490,7 +5383,12 @@ fn latexPreambleLines(ctx: *DrawContext, preamble: []const LatexPreambleEntry) !
 fn readLatexPreambleFile(ctx: *DrawContext, path: []const u8) ![]const u8 {
     const resolved = try resolveAssetPath(ctx, path);
     defer ctx.allocator.free(resolved);
-    return std.Io.Dir.cwd().readFileAlloc(ctx.io, resolved, ctx.allocator, .unlimited) catch |err| {
+    return std.Io.Dir.cwd().readFileAlloc(
+        ctx.io,
+        resolved,
+        ctx.allocator,
+        .limited(latex_document.preamble_read_limit),
+    ) catch |err| {
         if (ctx.command_failure) |target| {
             var reason_buf: [256]u8 = undefined;
             const message = try std.fmt.allocPrint(
