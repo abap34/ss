@@ -195,6 +195,36 @@ typedef struct SsLayerEffects {
     int blend_mode;
 } SsLayerEffects;
 
+typedef struct SsPdfStrokeLine {
+    double x1;
+    double y1;
+    double x2;
+    double y2;
+    double line_width;
+    double r;
+    double g;
+    double b;
+    double dash_on;
+    double dash_off;
+} SsPdfStrokeLine;
+
+typedef struct SsPdfRoundedRect {
+    double x;
+    double y;
+    double width;
+    double height;
+    double radius;
+    int has_fill;
+    double fill_r;
+    double fill_g;
+    double fill_b;
+    int has_stroke;
+    double stroke_r;
+    double stroke_g;
+    double stroke_b;
+    double line_width;
+} SsPdfRoundedRect;
+
 typedef struct SsQpdfLayer {
     const char *path;
     size_t page_index;
@@ -231,36 +261,8 @@ int ss_pdf_finish(SsPdf *pdf);
 int ss_pdf_begin_item(SsPdf *pdf, const SsLayerEffects *effects);
 int ss_pdf_end_item(SsPdf *pdf);
 void ss_pdf_fill_rect(SsPdf *pdf, double x, double y, double width, double height, double r, double g, double b);
-void ss_pdf_stroke_line(
-    SsPdf *pdf,
-    double x1,
-    double y1,
-    double x2,
-    double y2,
-    double line_width,
-    double r,
-    double g,
-    double b,
-    double dash_on,
-    double dash_off
-);
-void ss_pdf_fill_stroke_rounded_rect(
-    SsPdf *pdf,
-    double x,
-    double y,
-    double width,
-    double height,
-    double radius,
-    int has_fill,
-    double fill_r,
-    double fill_g,
-    double fill_b,
-    int has_stroke,
-    double stroke_r,
-    double stroke_g,
-    double stroke_b,
-    double line_width
-);
+void ss_pdf_stroke_line(SsPdf *pdf, const SsPdfStrokeLine *line);
+void ss_pdf_fill_stroke_rounded_rect(SsPdf *pdf, const SsPdfRoundedRect *rect);
 void ss_pdf_state_save(SsPdf *pdf);
 void ss_pdf_state_restore(SsPdf *pdf);
 void ss_pdf_path_new(SsPdf *pdf);

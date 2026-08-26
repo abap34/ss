@@ -1037,62 +1037,34 @@ void ss_pdf_fill_rect(SsPdf *pdf, double x, double y, double width, double heigh
     cairo_fill(pdf->cr);
 }
 
-void ss_pdf_stroke_line(
-    SsPdf *pdf,
-    double x1,
-    double y1,
-    double x2,
-    double y2,
-    double line_width,
-    double r,
-    double g,
-    double b,
-    double dash_on,
-    double dash_off
-) {
-    if (pdf == NULL || pdf->cr == NULL) return;
-    ss_pdf_set_rgb(r, g, b, pdf->cr);
-    cairo_set_line_width(pdf->cr, line_width);
-    if (dash_on > 0 && dash_off > 0) {
-        double dashes[2] = { dash_on, dash_off };
+void ss_pdf_stroke_line(SsPdf *pdf, const SsPdfStrokeLine *line) {
+    if (pdf == NULL || pdf->cr == NULL || line == NULL) return;
+    ss_pdf_set_rgb(line->r, line->g, line->b, pdf->cr);
+    cairo_set_line_width(pdf->cr, line->line_width);
+    if (line->dash_on > 0 && line->dash_off > 0) {
+        double dashes[2] = { line->dash_on, line->dash_off };
         cairo_set_dash(pdf->cr, dashes, 2, 0);
     }
-    cairo_move_to(pdf->cr, x1, y1);
-    cairo_line_to(pdf->cr, x2, y2);
+    cairo_move_to(pdf->cr, line->x1, line->y1);
+    cairo_line_to(pdf->cr, line->x2, line->y2);
     cairo_stroke(pdf->cr);
     cairo_set_dash(pdf->cr, NULL, 0, 0);
 }
 
-void ss_pdf_fill_stroke_rounded_rect(
-    SsPdf *pdf,
-    double x,
-    double y,
-    double width,
-    double height,
-    double radius,
-    int has_fill,
-    double fill_r,
-    double fill_g,
-    double fill_b,
-    int has_stroke,
-    double stroke_r,
-    double stroke_g,
-    double stroke_b,
-    double line_width
-) {
-    if (pdf == NULL || pdf->cr == NULL) return;
-    ss_pdf_rounded_rect_path(pdf->cr, x, y, width, height, radius);
-    if (has_fill) {
-        ss_pdf_set_rgb(fill_r, fill_g, fill_b, pdf->cr);
-        if (has_stroke) {
+void ss_pdf_fill_stroke_rounded_rect(SsPdf *pdf, const SsPdfRoundedRect *rect) {
+    if (pdf == NULL || pdf->cr == NULL || rect == NULL) return;
+    ss_pdf_rounded_rect_path(pdf->cr, rect->x, rect->y, rect->width, rect->height, rect->radius);
+    if (rect->has_fill) {
+        ss_pdf_set_rgb(rect->fill_r, rect->fill_g, rect->fill_b, pdf->cr);
+        if (rect->has_stroke) {
             cairo_fill_preserve(pdf->cr);
         } else {
             cairo_fill(pdf->cr);
         }
     }
-    if (has_stroke) {
-        ss_pdf_set_rgb(stroke_r, stroke_g, stroke_b, pdf->cr);
-        cairo_set_line_width(pdf->cr, line_width);
+    if (rect->has_stroke) {
+        ss_pdf_set_rgb(rect->stroke_r, rect->stroke_g, rect->stroke_b, pdf->cr);
+        cairo_set_line_width(pdf->cr, rect->line_width);
         cairo_stroke(pdf->cr);
     }
 }

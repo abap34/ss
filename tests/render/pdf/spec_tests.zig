@@ -547,6 +547,61 @@ test "render PDF spec: Cairo item effects preserve drawing state" {
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
 }
 
+test "render PDF spec: native primitive parameters cross the C boundary intact" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/native-primitives.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(output_path);
+    const qdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/native-primitives.qdf.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(qdf_path);
+
+    var pages = [_]render.Page{.{
+        .page_id = 1,
+        .index = 0,
+        .width = 320,
+        .height = 180,
+    }};
+    defer pages[0].deinit(allocator);
+    try pages[0].appendFillRect(
+        allocator,
+        null,
+        .{ .x = 0, .y = 0, .width = 320, .height = 180 },
+        .{ .r = 1, .g = 1, .b = 1 },
+    );
+    try pages[0].appendStrokeLine(
+        allocator,
+        10,
+        .{ .x = 20, .y = 30 },
+        .{ .x = 300, .y = 150 },
+        7,
+        .{ .r = 0.1, .g = 0.2, .b = 0.3 },
+        11,
+        13,
+    );
+    try pages[0].appendRoundedRect(
+        allocator,
+        11,
+        .{ .x = 40, .y = 50, .width = 120, .height = 70 },
+        9,
+        .{ .r = 0.2, .g = 0.4, .b = 0.6 },
+        .{ .r = 0.7, .g = 0.8, .b = 0.9 },
+        5,
+    );
+    var semantics = try documentSemantics(allocator, pages.len);
+    defer semantics.deinit(allocator);
+    const ir = render.Ir{ .semantics = semantics, .pages = &pages };
+    try renderPage(&ir, 0, output_path);
+
+    const qdf = try qpdfQdf(allocator, testing.io, output_path, qdf_path);
+    defer allocator.free(qdf);
+    try expectContains(qdf, "0.1 0.2 0.3 RG 7 w");
+    try expectContains(qdf, "[ 11 13] 0 d");
+    try expectContains(qdf, "20 30 m 300 150 l S");
+    try expectContains(qdf, "0.2 0.4 0.6 rg");
+    try expectContains(qdf, "0.7 0.8 0.9 RG 5 w");
+}
+
 test "render PDF spec: page renderer replays and composes ordered resources" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
