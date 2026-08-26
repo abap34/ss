@@ -187,31 +187,33 @@ const Composition = struct {
 
     fn appendPdfLayer(self: *Composition, item: render_ir.PdfPage) !void {
         const path = try self.resources.resolve(item.resource, .pdf);
-        try self.layers.append(self.allocator, .{
-            .path = path.ptr,
-            .page_index = item.page_index,
-            .box = @intFromEnum(item.box),
-            .x = item.rect.x,
-            .y = self.page.height - item.rect.y - item.rect.height,
-            .width = item.rect.width,
-            .height = item.rect.height,
-            .copy_annotations = if (item.copy_annotations) 1 else 0,
-            .effects = layerEffects(item.header, self.page.height),
-        });
+        try self.appendExternalLayer(path, item.page_index, item.box, item.rect, item.header, item.copy_annotations);
     }
 
     fn appendLatexLayer(self: *Composition, item: render_ir.Latex) !void {
         const path = try self.resources.resolve(item.resource, .latex_pdf);
+        try self.appendExternalLayer(path, item.page_index, item.box, item.rect, item.header, false);
+    }
+
+    fn appendExternalLayer(
+        self: *Composition,
+        path: [:0]const u8,
+        page_index: usize,
+        box: core.render_policy.PdfPageBox,
+        rect: render_ir.Rect,
+        header: render_ir.ItemHeader,
+        copy_annotations: bool,
+    ) !void {
         try self.layers.append(self.allocator, .{
             .path = path.ptr,
-            .page_index = item.page_index,
-            .box = @intFromEnum(item.box),
-            .x = item.rect.x,
-            .y = self.page.height - item.rect.y - item.rect.height,
-            .width = item.rect.width,
-            .height = item.rect.height,
-            .copy_annotations = 0,
-            .effects = layerEffects(item.header, self.page.height),
+            .page_index = page_index,
+            .box = @intFromEnum(box),
+            .x = rect.x,
+            .y = self.page.height - rect.y - rect.height,
+            .width = rect.width,
+            .height = rect.height,
+            .copy_annotations = if (copy_annotations) 1 else 0,
+            .effects = layerEffects(header, self.page.height),
         });
     }
 
