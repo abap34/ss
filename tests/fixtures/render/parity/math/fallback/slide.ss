@@ -1,7 +1,7 @@
 import std:themes/default as *
 
 page fallback_baselines
-let heading = h1!("TeX fallback baselines")
+let heading = h1!("LaTeX baselines")
 ~ heading.left == page.left + 72
 ~ heading.top == page.top - 56
 
@@ -19,5 +19,5 @@ tall.text.line_height = 96
 end
 
 document
-  tex_preamble_file("preamble.tex")
+  latex_preamble_file("preamble.tex")
 end

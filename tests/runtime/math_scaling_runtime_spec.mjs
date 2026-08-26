@@ -5,11 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
 
-await testInlineMathKeepsBaseSizeAcrossScripts();
-
 if (await commandAvailable("pdflatex")) {
-  await testTexFallbackUsesReferenceHeight();
-  await testTexRespectsFixedFrameHeight();
+  await testInlineMathKeepsBaseSizeAcrossScripts();
+  await testLatexRendererUsesReferenceHeight();
+  await testLatexRespectsFixedFrameHeight();
 }
 
 async function testInlineMathKeepsBaseSizeAcrossScripts() {
@@ -36,19 +35,11 @@ end
 
     const render = await runSs(["render", "--format", "html", "slide.ss", "out.html"], project);
     const output = combinedOutput(render);
-    assert(render.code === 0, `structured inline math render failed:\n${output}`);
+    assert(render.code === 0, `LaTeX inline math render failed:\n${output}`);
     const document = await readFile(path.join(project, "out.html"), "utf8");
-    const formulas = structuredMathBoxes(document);
-    assert(formulas.length === 5, `expected five structured inline formulas, got ${formulas.length}`);
-
-    const expectedBaseSize = formulas[0].baseFontSize;
-    assert(
-      expectedBaseSize > 24 && expectedBaseSize < 25.2,
-      `default inline math should be slightly larger than 24pt body text, got ${expectedBaseSize}`,
-    );
-    for (const formula of formulas.slice(1)) {
-      assertNear(formula.baseFontSize, expectedBaseSize, 0.01, "inline math base font size changed with scripts");
-    }
+    const formulas = mathBoxes(document, "ss-item ss-latex ss-pdf");
+    assert(formulas.length === 5, `expected five LaTeX inline formulas, got ${formulas.length}`);
+    assert(formulas[3].height > formulas[0].height, `scripts did not increase LaTeX formula height: ${JSON.stringify(formulas)}`);
     const firstBoth = formulas[3];
     const secondBoth = formulas[4];
     assert(
@@ -60,8 +51,8 @@ end
   }
 }
 
-async function testTexFallbackUsesReferenceHeight() {
-  const project = await mkdtempProject("ss-inline-math-tex-size-");
+async function testLatexRendererUsesReferenceHeight() {
+  const project = await mkdtempProject("ss-inline-math-latex-size-");
   try {
     await writeFile(
       path.join(project, "slide.ss"),
@@ -77,7 +68,7 @@ $\\FallbackMath{x_i^j}$
 end
 
 document
-  tex_preamble("\\newcommand{\\FallbackMath}[1]{#1}")
+  latex_preamble("\\newcommand{\\FallbackMath}[1]{#1}")
 end
 `,
       "utf8",
@@ -85,32 +76,32 @@ end
 
     const render = await runSs(["render", "--format", "html", "slide.ss", "out.html"], project);
     const output = combinedOutput(render);
-    assert(render.code === 0, `TeX fallback inline math render failed:\n${output}`);
+    assert(render.code === 0, `LaTeX inline math render failed:\n${output}`);
     const document = await readFile(path.join(project, "out.html"), "utf8");
-    const formulas = mathBoxes(document, "ss-item ss-math ss-pdf");
-    assert(formulas.length === 2, `expected two TeX fallback formulas, got ${formulas.length}`);
+    const formulas = mathBoxes(document, "ss-item ss-latex ss-pdf");
+    assert(formulas.length === 2, `expected two LaTeX formulas, got ${formulas.length}`);
     assert(
       formulas[1].height > formulas[0].height * 1.1,
-      `TeX fallback still normalizes scripted math by its outer height: ${JSON.stringify(formulas)}`,
+      `LaTeX rendering still normalizes scripted math by its outer height: ${JSON.stringify(formulas)}`,
     );
     assert(
       formulas[1].top + 0.01 >= formulas[0].top + formulas[0].height,
-      `TeX fallback inline math lines overlap: ${JSON.stringify(formulas)}`,
+      `LaTeX inline math lines overlap: ${JSON.stringify(formulas)}`,
     );
   } finally {
     await rm(project, { recursive: true, force: true });
   }
 }
 
-async function testTexRespectsFixedFrameHeight() {
+async function testLatexRespectsFixedFrameHeight() {
   const project = await mkdtempProject("ss-math-frame-height-");
   try {
     await writeFile(
       path.join(project, "slide.ss"),
       `import std:themes/default as *
 
-page tex_fixed_height
-let formula = tex! <<
+page latex_fixed_height
+let formula = latex! <<
 \\begin{tabular}{l}
 alpha \\\\
 beta \\\\
@@ -141,7 +132,7 @@ upsilon
 end
 
 page oversized_math_frame
-let formula = math!("x + y = z", 1)
+let formula = latex!("$x + y = z$", 1)
 ~ formula.left == page.left + 96
 ~ formula.right == page.right - 96
 ~ formula.top == page.top + 120
@@ -224,14 +215,6 @@ function combinedOutput(result) {
   return `${result.stdout}\n${result.stderr}${timeout}`;
 }
 
-function structuredMathBoxes(document) {
-  const pattern = /<span class="ss-item ss-math"[^>]*style="([^"]*)"[^>]*>.*?font-size:([0-9.]+)pt/gs;
-  return [...document.matchAll(pattern)].map((match) => ({
-    ...boxFromStyle(match[1]),
-    baseFontSize: Number(match[2]),
-  }));
-}
-
 function mathBoxes(document, className) {
   const pattern = new RegExp(`<(?:span|div) class="${className}"[^>]*style="([^"]*)"`, "g");
   return [...document.matchAll(pattern)].map((match) => boxFromStyle(match[1]));
@@ -248,8 +231,4 @@ function styleNumber(style, name) {
   const match = new RegExp(`(?:^|;)${name}:([-0-9.]+)pt(?:;|$)`).exec(style);
   assert(match, `missing ${name} in style: ${style}`);
   return Number(match[1]);
-}
-
-function assertNear(actual, expected, tolerance, message) {
-  assert(Math.abs(actual - expected) <= tolerance, `${message}, expected ${expected}, got ${actual}`);
 }
