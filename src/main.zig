@@ -106,6 +106,7 @@ const CommandOptions = struct {
     jobs: ?usize = null,
     diagnostics_json_path: ?[]const u8 = null,
     diagnostic_level: ?error_report.DiagnosticLevel = null,
+    measure_profile: bool = false,
     quiet: bool = false,
     interval_ms: u64 = 500,
     format: RenderFormat = .pdf,
@@ -221,6 +222,10 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
             options.quiet = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--measure-profile")) {
+            options.measure_profile = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--color")) {
             if (i + 1 >= args.len) return failUsage("missing value for --color", .{});
             const value = args[i + 1];
@@ -251,6 +256,7 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
         }
         positional_index += 1;
     }
+    utils.measure_profile.setEnabled(options.measure_profile);
     return options;
 }
 

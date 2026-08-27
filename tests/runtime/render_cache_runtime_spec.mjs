@@ -182,9 +182,7 @@ async function testRenderCompilationReusesTextShapes() {
     const slide = path.join(project, "slide.ss");
     await writeFile(slide, deckSource(Array.from({ length: 24 }, () => "Repeated compiler text")), "utf8");
 
-    const result = await runSs(["render", "--jobs", "2", "slide.ss", "out.pdf"], project, {
-      env: { SS_MEASURE_PROFILE: "1" },
-    });
+    const result = await runSs(["render", "--jobs", "2", "--measure-profile", "slide.ss", "out.pdf"], project);
     const profile = result.stderr.match(/text shape: hit (\d+) .* miss (\d+)/);
     assert(profile, `render profile omitted text shape counters:\n${result.stderr}`);
     assert(Number(profile[1]) > 0, `render compilation did not reuse any text shapes:\n${result.stderr}`);

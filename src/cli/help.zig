@@ -249,6 +249,7 @@ fn check(output: Output) void {
         \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
         \\  {s}--warnings off{s}          Hide warning diagnostics
         \\  {s}--quiet{s}                 Hide progress and warning diagnostics
+        \\  {s}--measure-profile{s}       Print detailed timing counters
         \\
         \\{s}Examples:{s}
         \\  {s}ss check slide.ss{s}
@@ -259,6 +260,7 @@ fn check(output: Output) void {
         s.command, s.reset,
         s.command, s.reset,
         s.heading, s.reset,
+        s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
@@ -290,12 +292,14 @@ fn render(output: Output) void {
         \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
         \\  {s}--warnings off{s}          Hide warning diagnostics
         \\  {s}--quiet{s}                 Hide progress and warning diagnostics
+        \\  {s}--measure-profile{s}       Print detailed timing counters
         \\
     , .{
         s.heading, s.reset,
         s.command, s.reset,
         s.command, s.reset,
         s.heading, s.reset,
+        s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
@@ -339,11 +343,7 @@ fn dump(output: Output) void {
         \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
         \\  {s}--warnings off{s}          Hide warning diagnostics
         \\  {s}--quiet{s}                 Hide progress and warning diagnostics
-        \\
-        \\{s}Examples:{s}
-        \\  {s}ss dump slide.ss{s}
-        \\  {s}ss dump slide.ss state.json{s}
-        \\  {s}ss dump --project slides --output state.json{s}
+        \\  {s}--measure-profile{s}       Print detailed timing counters
         \\
     , .{
         s.heading, s.reset,
@@ -358,6 +358,15 @@ fn dump(output: Output) void {
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
+        s.option,  s.reset,
+    });
+    outputPrint(output,
+        \\{s}Examples:{s}
+        \\  {s}ss dump slide.ss{s}
+        \\  {s}ss dump slide.ss state.json{s}
+        \\  {s}ss dump --project slides --output state.json{s}
+        \\
+    , .{
         s.heading, s.reset,
         s.command, s.reset,
         s.command, s.reset,
@@ -383,12 +392,14 @@ fn watch(output: Output) void {
         \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
         \\  {s}--warnings off{s}          Hide warning diagnostics
         \\  {s}--quiet{s}                 Hide progress and warning diagnostics
+        \\  {s}--measure-profile{s}       Print detailed timing counters
         \\
     , .{
         s.heading, s.reset,
         s.command, s.reset,
         s.command, s.reset,
         s.heading, s.reset,
+        s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
@@ -433,10 +444,7 @@ fn debug(output: Output) void {
         \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
         \\  {s}--warnings off{s}          Hide warning diagnostics
         \\  {s}--quiet{s}                 Hide progress and warning diagnostics
-        \\
-        \\{s}Examples:{s}
-        \\  {s}ss debug schedule slide.ss --output execution.json{s}
-        \\  {s}ss debug layout conflicts --project slides --output layout-conflicts.json{s}
+        \\  {s}--measure-profile{s}       Print detailed timing counters
         \\
     , .{
         s.heading, s.reset,
@@ -452,6 +460,14 @@ fn debug(output: Output) void {
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
+        s.option,  s.reset,
+    });
+    outputPrint(output,
+        \\{s}Examples:{s}
+        \\  {s}ss debug schedule slide.ss --output execution.json{s}
+        \\  {s}ss debug layout conflicts --project slides --output layout-conflicts.json{s}
+        \\
+    , .{
         s.heading, s.reset,
         s.command, s.reset,
         s.command, s.reset,
@@ -600,7 +616,7 @@ const bash_completion =
     \\
     \\  local commands="init doctor check render dump watch debug cache lsp version completion help"
     \\  local common_opts="help --help -h"
-    \\  local diagnostic_opts="--diagnostic-level --warnings --quiet"
+    \\  local diagnostic_opts="--diagnostic-level --warnings --quiet --measure-profile"
     \\  local project_opts="--project --asset-base-dir --jobs --color $diagnostic_opts"
     \\  local render_opts="$project_opts --output --format --diagnostics-json"
     \\
@@ -708,7 +724,7 @@ const zsh_completion =
     \\
     \\  local -a common_opts project_opts render_opts
     \\  common_opts=('help[show command help]' '--help[show command help]' '-h[show command help]')
-    \\  project_opts=('--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--jobs[parallel page-processing jobs]:jobs:' '--color[color mode]:(auto always never)' '--diagnostic-level[diagnostic display level]:(note warning error off)' '--warnings[warning display]:(off)' '--quiet[hide progress and warning diagnostics]')
+    \\  project_opts=('--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--jobs[parallel page-processing jobs]:jobs:' '--color[color mode]:(auto always never)' '--diagnostic-level[diagnostic display level]:(note warning error off)' '--warnings[warning display]:(off)' '--quiet[hide progress and warning diagnostics]' '--measure-profile[print detailed timing counters]')
     \\  render_opts=($project_opts '--output[output path]:file:_files' '--format[output format]:(pdf html)' '--diagnostics-json[diagnostics JSON path]:file:_files')
     \\
     \\  if (( CURRENT == 2 )); then
@@ -779,6 +795,7 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l diagnostic-level -r -a 'note warning error off' -d 'Diagnostic display level'
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l warnings -r -a 'off' -d 'Warning display'
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l quiet -d 'Hide progress and warning diagnostics'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l measure-profile -d 'Print detailed timing counters'
     \\complete -c ss -n '__fish_seen_subcommand_from dump render watch debug' -l output -r -d 'Output path'
     \\complete -c ss -n '__fish_seen_subcommand_from render watch' -l format -r -a 'pdf html' -d 'Output format'
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l jobs -r -d 'Parallel page-processing jobs'

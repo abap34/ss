@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const env_name = "SS_MEASURE_PROFILE";
-
 const CountTime = struct {
     count: std.atomic.Value(u64) = .init(0),
     ns: std.atomic.Value(u64) = .init(0),
@@ -109,7 +107,7 @@ pub const RenderCompileKind = enum {
     finish_validation,
 };
 
-var enabled_state: std.atomic.Value(u8) = .init(0);
+var enabled_state: std.atomic.Value(bool) = .init(false);
 
 var text_advance_hits = CountTime{};
 var text_advance_misses = CountTime{};
@@ -202,12 +200,11 @@ var wysiwyg_render_compile = CountTime{};
 var wysiwyg_snapshot = CountTime{};
 
 pub fn isEnabled() bool {
-    const state = enabled_state.load(.monotonic);
-    if (state == 1) return false;
-    if (state == 2) return true;
-    const enabled = detectEnabled();
-    enabled_state.store(if (enabled) 2 else 1, .monotonic);
-    return enabled;
+    return enabled_state.load(.monotonic);
+}
+
+pub fn setEnabled(enabled: bool) void {
+    enabled_state.store(enabled, .monotonic);
 }
 
 pub fn start() i128 {
@@ -474,17 +471,6 @@ fn analysisCounter(kind: AnalysisKind) *CountTime {
         .semantics_placement_effects => &analysis_semantics_placement_effects,
         .execution_graph => &analysis_execution_graph,
     };
-}
-
-fn detectEnabled() bool {
-    const raw = std.c.getenv(env_name) orelse return false;
-    const value = std.mem.span(raw);
-    if (value.len == 0) return false;
-    if (std.ascii.eqlIgnoreCase(value, "0")) return false;
-    if (std.ascii.eqlIgnoreCase(value, "false")) return false;
-    if (std.ascii.eqlIgnoreCase(value, "off")) return false;
-    if (std.ascii.eqlIgnoreCase(value, "no")) return false;
-    return true;
 }
 
 fn monotonicNowNs() i128 {
