@@ -344,12 +344,18 @@ ss stores generated render artifacts under `.ss-cache/render`. Converted assets
 and math images live under `artifacts/`; the renderer keeps only the latest page
 generation for each deck under `decks/`.
 
-Environment knobs:
+Parallel page processing can be configured per invocation with `--jobs N` or
+per project in `ss.toml`:
+
+```toml
+[cli]
+jobs = 4
+```
+
+Cache environment knobs:
 
 | Variable                  | Meaning                            |
 | ------------------------- | ---------------------------------- |
-| `SS_RENDER_JOBS=4`        | Override the render worker count.  |
-| `SS_RENDER_JOBS=off`      | Disable parallel cache generation. |
 | `SS_CACHE_MAX_BYTES=512M` | Override the managed cache budget. |
 | `SS_CACHE_MAX_BYTES=off`  | Disable cache pruning.             |
 

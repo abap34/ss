@@ -387,13 +387,6 @@ fn renderWorkerCount(page_count: usize, requested_jobs: ?usize) usize {
     const automatic_job_cap = 8;
     if (page_count == 0) return 0;
     if (requested_jobs) |jobs| return @min(@max(@as(usize, 1), jobs), page_count);
-    if (std.c.getenv("SS_RENDER_JOBS")) |raw| {
-        const text = std.mem.span(raw);
-        if (std.ascii.eqlIgnoreCase(text, "off")) return 1;
-        if (std.fmt.parseUnsigned(usize, text, 10)) |jobs| {
-            return @min(@max(@as(usize, 1), jobs), page_count);
-        } else |_| {}
-    }
     return @min(@max(@as(usize, 1), std.Thread.getCpuCount() catch 1), @min(page_count, automatic_job_cap));
 }
 

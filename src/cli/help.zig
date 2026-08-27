@@ -244,6 +244,7 @@ fn check(output: Output) void {
         \\{s}Options:{s}
         \\  {s}--project FILE_OR_DIR{s}   Load entry and asset base from ss.toml
         \\  {s}--asset-base-dir DIR{s}    Resolve relative assets from DIR
+        \\  {s}--jobs N{s}                Parallel page-processing jobs
         \\  {s}--color auto|always|never{s}
         \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
         \\  {s}--warnings off{s}          Hide warning diagnostics
@@ -258,6 +259,7 @@ fn check(output: Output) void {
         s.command, s.reset,
         s.command, s.reset,
         s.heading, s.reset,
+        s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
@@ -282,7 +284,7 @@ fn render(output: Output) void {
         \\  {s}--asset-base-dir DIR{s}    Resolve relative assets from DIR
         \\  {s}--output FILE{s}           PDF or self-contained HTML file
         \\  {s}--format pdf|html{s}        Output format
-        \\  {s}--jobs N{s}                Parallel render jobs
+        \\  {s}--jobs N{s}                Parallel page-processing jobs
         \\  {s}--diagnostics-json FILE{s} Write diagnostics JSON
         \\  {s}--color auto|always|never{s}
         \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
@@ -332,6 +334,7 @@ fn dump(output: Output) void {
         \\  {s}--project FILE_OR_DIR{s}   Load entry and asset base from ss.toml
         \\  {s}--asset-base-dir DIR{s}    Resolve relative assets from DIR
         \\  {s}--output FILE{s}           JSON output path
+        \\  {s}--jobs N{s}                Parallel page-processing jobs
         \\  {s}--color auto|always|never{s}
         \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
         \\  {s}--warnings off{s}          Hide warning diagnostics
@@ -347,6 +350,7 @@ fn dump(output: Output) void {
         s.command, s.reset,
         s.command, s.reset,
         s.heading, s.reset,
+        s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
@@ -374,7 +378,7 @@ fn watch(output: Output) void {
         \\  {s}--output FILE{s}           PDF or self-contained HTML file
         \\  {s}--format pdf|html{s}       Output format for watch render
         \\  {s}--interval-ms N{s}         Poll interval
-        \\  {s}--jobs N{s}                Parallel render jobs
+        \\  {s}--jobs N{s}                Parallel page-processing jobs
         \\  {s}--color auto|always|never{s}
         \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
         \\  {s}--warnings off{s}          Hide warning diagnostics
@@ -424,6 +428,7 @@ fn debug(output: Output) void {
         \\  {s}--project FILE_OR_DIR{s}   Load entry and asset base from ss.toml
         \\  {s}--asset-base-dir DIR{s}    Resolve relative assets from DIR
         \\  {s}--output FILE{s}           Required JSON output path
+        \\  {s}--jobs N{s}                Parallel page-processing jobs
         \\  {s}--color auto|always|never{s}
         \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
         \\  {s}--warnings off{s}          Hide warning diagnostics
@@ -439,6 +444,7 @@ fn debug(output: Output) void {
         s.command, s.reset,
         s.command, s.reset,
         s.heading, s.reset,
+        s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
@@ -595,8 +601,8 @@ const bash_completion =
     \\  local commands="init doctor check render dump watch debug cache lsp version completion help"
     \\  local common_opts="help --help -h"
     \\  local diagnostic_opts="--diagnostic-level --warnings --quiet"
-    \\  local project_opts="--project --asset-base-dir --color $diagnostic_opts"
-    \\  local render_opts="--project --asset-base-dir --output --format --jobs --diagnostics-json --color $diagnostic_opts"
+    \\  local project_opts="--project --asset-base-dir --jobs --color $diagnostic_opts"
+    \\  local render_opts="$project_opts --output --format --diagnostics-json"
     \\
     \\  case "$prev" in
     \\    --project|--asset-base-dir|--output|--diagnostics-json|--entry)
@@ -702,8 +708,8 @@ const zsh_completion =
     \\
     \\  local -a common_opts project_opts render_opts
     \\  common_opts=('help[show command help]' '--help[show command help]' '-h[show command help]')
-    \\  project_opts=('--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--color[color mode]:(auto always never)' '--diagnostic-level[diagnostic display level]:(note warning error off)' '--warnings[warning display]:(off)' '--quiet[hide progress and warning diagnostics]')
-    \\  render_opts=($project_opts '--output[output path]:file:_files' '--format[output format]:(pdf html)' '--jobs[parallel render jobs]:jobs:' '--diagnostics-json[diagnostics JSON path]:file:_files')
+    \\  project_opts=('--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--jobs[parallel page-processing jobs]:jobs:' '--color[color mode]:(auto always never)' '--diagnostic-level[diagnostic display level]:(note warning error off)' '--warnings[warning display]:(off)' '--quiet[hide progress and warning diagnostics]')
+    \\  render_opts=($project_opts '--output[output path]:file:_files' '--format[output format]:(pdf html)' '--diagnostics-json[diagnostics JSON path]:file:_files')
     \\
     \\  if (( CURRENT == 2 )); then
     \\    _describe 'command' commands
@@ -775,7 +781,7 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l quiet -d 'Hide progress and warning diagnostics'
     \\complete -c ss -n '__fish_seen_subcommand_from dump render watch debug' -l output -r -d 'Output path'
     \\complete -c ss -n '__fish_seen_subcommand_from render watch' -l format -r -a 'pdf html' -d 'Output format'
-    \\complete -c ss -n '__fish_seen_subcommand_from render watch' -l jobs -r -d 'Parallel render jobs'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l jobs -r -d 'Parallel page-processing jobs'
     \\complete -c ss -n '__fish_seen_subcommand_from render' -l diagnostics-json -r -d 'Diagnostics JSON path'
     \\complete -c ss -n '__fish_seen_subcommand_from watch' -l interval-ms -r -d 'Poll interval'
     \\complete -c ss -n '__fish_seen_subcommand_from doctor' -l strict -d 'Fail on issues'

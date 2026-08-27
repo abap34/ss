@@ -57,6 +57,7 @@ pub const PageGuideConfig = struct {
 
 pub const CliConfig = struct {
     diagnostic_level: ?error_report.DiagnosticLevel = null,
+    jobs: ?usize = null,
 };
 
 pub const Resolved = struct {
@@ -164,6 +165,7 @@ pub fn isConfigError(err: anyerror) bool {
         error.UnknownHighlightParser,
         error.DuplicateHighlightLanguage,
         error.InvalidDiagnosticLevel,
+        error.InvalidCliJobs,
         => true,
         else => false,
     };
@@ -179,6 +181,7 @@ pub fn configErrorMessage(err: anyerror) ?[]const u8 {
         error.UnknownHighlightParser => "UnknownHighlightParser: use a supported built-in tree-sitter parser name",
         error.DuplicateHighlightLanguage => "DuplicateHighlightLanguage: each highlight language name may be declared only once",
         error.InvalidDiagnosticLevel => "InvalidDiagnosticLevel: use note, warning, error, or off for cli.diagnostic_level",
+        error.InvalidCliJobs => "InvalidCliJobs: cli.jobs must be a positive integer",
         else => null,
     };
 }
@@ -244,6 +247,7 @@ pub fn configErrorSpan(text: []const u8, err: anyerror) ?source.ByteSpan {
         error.DuplicateHighlightLanguage,
         => highlightConfigErrorSpan(text, err),
         error.InvalidDiagnosticLevel => tomlKeySpan(text, "cli", "diagnostic_level") orelse tomlSectionSpan(text, "cli"),
+        error.InvalidCliJobs => tomlKeySpan(text, "cli", "jobs") orelse tomlSectionSpan(text, "cli"),
         else => null,
     };
 }
@@ -293,9 +297,16 @@ fn parsePageGuideConfig(text: []const u8) PageGuideConfig {
 }
 
 fn parseCliConfig(text: []const u8) !CliConfig {
-    const value = parseString(text, "cli", "diagnostic_level") orelse return .{};
-    const level = error_report.parseDiagnosticLevel(value) orelse return error.InvalidDiagnosticLevel;
-    return .{ .diagnostic_level = level };
+    var config = CliConfig{};
+    if (parseString(text, "cli", "diagnostic_level")) |value| {
+        config.diagnostic_level = error_report.parseDiagnosticLevel(value) orelse return error.InvalidDiagnosticLevel;
+    }
+    if (parseValue(text, "cli", "jobs")) |value| {
+        const jobs = std.fmt.parseUnsigned(usize, value, 10) catch return error.InvalidCliJobs;
+        if (jobs == 0) return error.InvalidCliJobs;
+        config.jobs = jobs;
+    }
+    return config;
 }
 
 fn parseHighlightConfig(allocator: std.mem.Allocator, project_dir: []const u8, text: []const u8) !highlight.Config {

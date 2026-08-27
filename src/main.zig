@@ -276,6 +276,10 @@ fn effectiveDiagnosticLevel(options: CommandOptions, resolved: ?*const project.R
     return .warning;
 }
 
+fn effectiveJobs(options: CommandOptions, resolved: *const project.Resolved) ?usize {
+    return options.jobs orelse resolved.cli.jobs;
+}
+
 fn commandProgress(total: usize, options: CommandOptions) utils.progress.Progress {
     return if (options.quiet)
         utils.progress.Progress.disabled(total)
@@ -1055,7 +1059,7 @@ fn runResolvedWatch(
         .project_file = resolved.project_file,
         .highlight_languages = resolved.highlight.languages,
         .format = options.format,
-        .jobs = options.jobs,
+        .jobs = effectiveJobs(options, resolved),
         .interval_ms = options.interval_ms,
         .quiet = options.quiet,
     });
@@ -1094,7 +1098,7 @@ fn runDebugCommand(
         try app.writeScheduleTraceJson(io, allocator, .{
             .input_path = resolved.entry_path,
             .asset_base_dir = resolved.asset_base_dir,
-            .layout_jobs = options.jobs,
+            .layout_jobs = effectiveJobs(options, &resolved),
         }, output_path, &progress);
         return;
     }
@@ -1116,7 +1120,7 @@ fn runDebugCommand(
             try app.writeLayoutTraceJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
-                .layout_jobs = options.jobs,
+                .layout_jobs = effectiveJobs(options, &resolved),
             }, output_path, &progress);
             return;
         }
@@ -1125,7 +1129,7 @@ fn runDebugCommand(
             try app.writeLayoutConflictReportFile(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
-                .layout_jobs = options.jobs,
+                .layout_jobs = effectiveJobs(options, &resolved),
             }, output_path, &progress);
             return;
         }
@@ -1345,7 +1349,7 @@ fn run(init: std.process.Init) !void {
         try app.checkFile(io, allocator, .{
             .input_path = resolved.entry_path,
             .asset_base_dir = resolved.asset_base_dir,
-            .layout_jobs = options.jobs,
+            .layout_jobs = effectiveJobs(options, &resolved),
             .highlight_languages = resolved.highlight.languages,
         }, &progress);
         return;
@@ -1368,7 +1372,7 @@ fn run(init: std.process.Init) !void {
             try app.writeContextJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
-                .layout_jobs = options.jobs,
+                .layout_jobs = effectiveJobs(options, &resolved),
                 .highlight_languages = resolved.highlight.languages,
             }, output_path, &progress);
         } else {
@@ -1376,7 +1380,7 @@ fn run(init: std.process.Init) !void {
             try app.printContextJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
-                .layout_jobs = options.jobs,
+                .layout_jobs = effectiveJobs(options, &resolved),
                 .highlight_languages = resolved.highlight.languages,
             }, &progress);
         }
@@ -1407,14 +1411,15 @@ fn run(init: std.process.Init) !void {
         const output_target_count: usize = if (options.diagnostics_json_path == null) 1 else 2;
         try validateOutputPathConflicts(io, allocator, &resolved, output_targets[0..output_target_count]);
         var progress = commandProgress(app.render_progress_steps, options);
+        const jobs = effectiveJobs(options, &resolved);
         const render_options = app.RenderOptions{
-            .jobs = options.jobs,
+            .jobs = jobs,
             .highlight_languages = resolved.highlight.languages,
         };
         const source = app.SourceRequest{
             .input_path = resolved.entry_path,
             .asset_base_dir = resolved.asset_base_dir,
-            .layout_jobs = options.jobs,
+            .layout_jobs = jobs,
             .highlight_languages = resolved.highlight.languages,
         };
         switch (options.format) {

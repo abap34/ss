@@ -23,6 +23,23 @@
         }
       }
     },
+    "cli": {
+      "type": "object",
+      "description": "Command-line defaults for the project.",
+      "additionalProperties": false,
+      "properties": {
+        "diagnostic_level": {
+          "type": "string",
+          "enum": ["note", "warning", "error", "off"],
+          "description": "Minimum diagnostic level printed by default."
+        },
+        "jobs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Default number of parallel page-processing jobs."
+        }
+      }
+    },
     "editor": {
       "type": "object",
       "description": "Editor integration settings.",

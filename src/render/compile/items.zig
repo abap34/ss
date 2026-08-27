@@ -2642,7 +2642,7 @@ fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
 }
 
 fn preloadWorkerCount(task_count: usize, missing_artifacts: usize, options: Options) usize {
-    if (configuredWorkerCount(task_count, options)) |count| return count;
+    if (options.jobs) |jobs| return clampWorkerCount(jobs, task_count);
     const cpu = autoCpuCount();
     const desired = if (missing_artifacts == 0)
         @min(cpu, warm_render_job_cap)
@@ -2651,18 +2651,6 @@ fn preloadWorkerCount(task_count: usize, missing_artifacts: usize, options: Opti
     else
         @min(cpu * 2, cold_render_job_cap);
     return clampWorkerCount(desired, task_count);
-}
-
-fn configuredWorkerCount(task_count: usize, options: Options) ?usize {
-    if (options.jobs) |jobs| return clampWorkerCount(jobs, task_count);
-    if (std.c.getenv("SS_RENDER_JOBS")) |raw| {
-        const text = std.mem.span(raw);
-        if (std.ascii.eqlIgnoreCase(text, "off")) return 1;
-        if (std.fmt.parseUnsigned(usize, text, 10)) |value| {
-            return clampWorkerCount(value, task_count);
-        } else |_| {}
-    }
-    return null;
 }
 
 fn autoCpuCount() usize {

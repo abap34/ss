@@ -182,8 +182,8 @@ async function testRenderCompilationReusesTextShapes() {
     const slide = path.join(project, "slide.ss");
     await writeFile(slide, deckSource(Array.from({ length: 24 }, () => "Repeated compiler text")), "utf8");
 
-    const result = await runSs(["render", "slide.ss", "out.pdf"], project, {
-      env: { SS_MEASURE_PROFILE: "1", SS_RENDER_JOBS: "2" },
+    const result = await runSs(["render", "--jobs", "2", "slide.ss", "out.pdf"], project, {
+      env: { SS_MEASURE_PROFILE: "1" },
     });
     const profile = result.stderr.match(/text shape: hit (\d+) .* miss (\d+)/);
     assert(profile, `render profile omitted text shape counters:\n${result.stderr}`);

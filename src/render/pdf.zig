@@ -1258,11 +1258,6 @@ fn validatePdf(allocator: Allocator, io: std.Io, path: []const u8) !void {
 fn configuredWorkerCount(requested: ?usize, task_count: usize) usize {
     if (task_count == 0) return 0;
     if (requested) |jobs| return @min(@max(jobs, 1), task_count);
-    if (std.c.getenv("SS_RENDER_JOBS")) |raw| {
-        const value = std.mem.span(raw);
-        if (std.ascii.eqlIgnoreCase(value, "off")) return 1;
-        if (std.fmt.parseUnsigned(usize, value, 10)) |jobs| return @min(@max(jobs, 1), task_count) else |_| {}
-    }
     return @min(@max(std.Thread.getCpuCount() catch 1, 1), @min(task_count, 4));
 }
 

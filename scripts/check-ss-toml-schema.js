@@ -7,6 +7,7 @@ const schemaPath = path.join(root, "schemas", "ss-toml.schema.json");
 const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
 
 const properties = schema.properties;
+const cli = properties.cli.properties;
 const editor = properties.editor.properties;
 const lsp = editor.lsp.properties;
 const wysiwyg = editor.wysiwyg.properties;
@@ -14,6 +15,9 @@ const wysiwyg = editor.wysiwyg.properties;
 assert.strictEqual(schema.$schema, "http://json-schema.org/draft-04/schema#");
 assert.deepStrictEqual(properties.project.required, ["entry"]);
 assert.strictEqual(properties.project.properties.entry.type, "string");
+assert.deepStrictEqual(cli.diagnostic_level.enum, ["note", "warning", "error", "off"]);
+assert.strictEqual(cli.jobs.type, "integer");
+assert.strictEqual(cli.jobs.minimum, 1);
 assert(!("inlay_hints" in lsp), "inlay hints must not be configurable");
 
 assert.strictEqual(wysiwyg.debounce.type, "integer");

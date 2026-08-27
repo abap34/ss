@@ -76,18 +76,20 @@ test "project spec: editor settings parse from ss.toml" {
     try testing.expect(!cfg.page_guide.gutter_icon);
 }
 
-test "project spec: cli diagnostic level parses from ss.toml" {
+test "project spec: cli settings parse from ss.toml" {
     var cfg = try project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml",
         \\[project]
         \\entry = "slides/main.ss"
         \\
         \\[cli]
         \\diagnostic_level = "error"
+        \\jobs = 6
         \\
     );
     defer cfg.deinit(testing.allocator);
 
     try testing.expectEqual(utils.err.DiagnosticLevel.@"error", cfg.cli.diagnostic_level.?);
+    try testing.expectEqual(@as(usize, 6), cfg.cli.jobs.?);
 }
 
 test "project spec: cli diagnostic level rejects unknown values" {
@@ -101,6 +103,19 @@ test "project spec: cli diagnostic level rejects unknown values" {
     ;
     try testing.expectError(error.InvalidDiagnosticLevel, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml", source));
     try expectConfigSpanText(source, error.InvalidDiagnosticLevel, "diagnostic_level = \"verbose\"");
+}
+
+test "project spec: cli jobs rejects non-positive values" {
+    const source =
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[cli]
+        \\jobs = 0
+        \\
+    ;
+    try testing.expectError(error.InvalidCliJobs, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml", source));
+    try expectConfigSpanText(source, error.InvalidCliJobs, "jobs = 0");
 }
 
 test "project spec: highlight languages parse from ss.toml" {

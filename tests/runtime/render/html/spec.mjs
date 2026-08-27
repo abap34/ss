@@ -31,11 +31,11 @@ end
     );
 
     await expectSuccess(
-      await runSs(["render", "--format", "html", "slide.ss", "deck-a.html"], project, { env: { SS_RENDER_JOBS: "1" } }),
+      await runSs(["render", "--format", "html", "--jobs", "1", "slide.ss", "deck-a.html"], project),
       "serial HTML render",
     );
     await expectSuccess(
-      await runSs(["render", "slide.ss", "deck-b.html", "--format", "html"], project, { env: { SS_RENDER_JOBS: "4" } }),
+      await runSs(["render", "slide.ss", "deck-b.html", "--format", "html", "--jobs", "4"], project),
       "parallel HTML render",
     );
 
@@ -91,7 +91,7 @@ end
 page second
 latex!("$z_2^3 + \\frac{b}{c}$")`);
     await expectSuccess(
-      await runSs(["render", "--format", "html", "slide.ss", "deck.html"], project, { env: { SS_RENDER_JOBS: "4" } }),
+      await runSs(["render", "--format", "html", "--jobs", "4", "slide.ss", "deck.html"], project),
       "LaTeX math HTML render",
     );
     await expectSuccess(
