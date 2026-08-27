@@ -118,6 +118,59 @@ test "project spec: cli jobs rejects non-positive values" {
     try expectConfigSpanText(source, error.InvalidCliJobs, "jobs = 0");
 }
 
+test "project spec: cache settings parse from ss.toml" {
+    var cfg = try project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml",
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[cache]
+        \\automatic_pruning = false
+        \\max_size_mib = 128
+        \\prune_interval_seconds = 0
+        \\
+    );
+    defer cfg.deinit(testing.allocator);
+
+    try testing.expect(!cfg.cache.automatic_pruning);
+    try testing.expectEqual(@as(u64, 128), cfg.cache.max_size_mib);
+    try testing.expectEqual(@as(u64, 0), cfg.cache.prune_interval_seconds);
+}
+
+test "project spec: cache settings reject invalid values" {
+    const invalid_automatic =
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[cache]
+        \\automatic_pruning = "yes"
+        \\
+    ;
+    try testing.expectError(error.InvalidCacheAutomaticPruning, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml", invalid_automatic));
+    try expectConfigSpanText(invalid_automatic, error.InvalidCacheAutomaticPruning, "automatic_pruning = \"yes\"");
+
+    const invalid_size =
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[cache]
+        \\max_size_mib = 0
+        \\
+    ;
+    try testing.expectError(error.InvalidCacheMaxSize, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml", invalid_size));
+    try expectConfigSpanText(invalid_size, error.InvalidCacheMaxSize, "max_size_mib = 0");
+
+    const invalid_interval =
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[cache]
+        \\prune_interval_seconds = -1
+        \\
+    ;
+    try testing.expectError(error.InvalidCachePruneInterval, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml", invalid_interval));
+    try expectConfigSpanText(invalid_interval, error.InvalidCachePruneInterval, "prune_interval_seconds = -1");
+}
+
 test "project spec: highlight languages parse from ss.toml" {
     var cfg = try project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml",
         \\[project]

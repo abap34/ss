@@ -9,6 +9,7 @@ pub const RenderFormat = enum {
 pub const RenderOptions = struct {
     jobs: ?usize = null,
     cache_dir: []const u8 = ".ss-cache/render",
+    cache: utils.render_cache.Config = .{},
     highlight_languages: []const utils.highlight.Language = &.{},
 };
 

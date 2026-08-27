@@ -40,6 +40,30 @@
         }
       }
     },
+    "cache": {
+      "type": "object",
+      "description": "Managed render-cache pruning settings.",
+      "additionalProperties": false,
+      "properties": {
+        "automatic_pruning": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prune old render-cache artifacts automatically after successful output writes."
+        },
+        "max_size_mib": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 512,
+          "description": "Maximum size of managed render-cache artifacts in MiB."
+        },
+        "prune_interval_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 300,
+          "description": "Minimum interval between automatic pruning runs in seconds. Zero prunes after every successful output write."
+        }
+      }
+    },
     "editor": {
       "type": "object",
       "description": "Editor integration settings.",

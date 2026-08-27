@@ -352,12 +352,14 @@ per project in `ss.toml`:
 jobs = 4
 ```
 
-Cache environment knobs:
+Automatic cache pruning is configured in `ss.toml`:
 
-| Variable                  | Meaning                            |
-| ------------------------- | ---------------------------------- |
-| `SS_CACHE_MAX_BYTES=512M` | Override the managed cache budget. |
-| `SS_CACHE_MAX_BYTES=off`  | Disable cache pruning.             |
+```toml
+[cache]
+automatic_pruning = true
+max_size_mib = 512
+prune_interval_seconds = 300
+```
 
 ## Editor Support
 

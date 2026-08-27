@@ -200,27 +200,30 @@ async function testRenderCachePruneIntervalSkipsFreshStamp() {
   try {
     const slide = path.join(project, "slide.ss");
     await writeFile(slide, deckSource(["Prune interval"]), "utf8");
+    const projectConfig = path.join(project, "ss.toml");
+    await writeFile(projectConfig, cacheProjectConfig(300), "utf8");
 
     const artifacts = path.join(project, ".ss-cache", "render", "artifacts");
     await mkdir(artifacts, { recursive: true });
     const oldArtifact = path.join(artifacts, "old.bin");
-    await writeFile(oldArtifact, "x".repeat(1024), "utf8");
+    await writeFile(oldArtifact, "x".repeat(2 * 1024 * 1024), "utf8");
     await writeFile(path.join(artifacts, ".prune-stamp"), "", "utf8");
     const oldDate = new Date(Date.now() - 60_000);
     await utimes(oldArtifact, oldDate, oldDate);
 
-    await runSs(["render", "slide.ss", "out-1.pdf"], project, {
-      env: { SS_CACHE_MAX_BYTES: "1b" },
-    });
+    await runSs(["render", "slide.ss", "out-1.pdf"], project);
     await stat(oldArtifact);
 
-    await runSs(["render", "slide.ss", "out-2.pdf"], project, {
-      env: { SS_CACHE_MAX_BYTES: "1b", SS_CACHE_PRUNE_INTERVAL_SECONDS: "always" },
-    });
+    await writeFile(projectConfig, cacheProjectConfig(0), "utf8");
+    await runSs(["render", "slide.ss", "out-2.pdf"], project);
     await assertPathMissing(oldArtifact, "forced prune should remove the stale artifact");
   } finally {
     await rm(project, { recursive: true, force: true });
   }
+}
+
+function cacheProjectConfig(pruneIntervalSeconds) {
+  return `[project]\nentry = "slide.ss"\n\n[cache]\nmax_size_mib = 1\nprune_interval_seconds = ${pruneIntervalSeconds}\n`;
 }
 
 async function testCacheStatsCommands() {

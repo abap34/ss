@@ -8,6 +8,7 @@ const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
 
 const properties = schema.properties;
 const cli = properties.cli.properties;
+const cache = properties.cache.properties;
 const editor = properties.editor.properties;
 const lsp = editor.lsp.properties;
 const wysiwyg = editor.wysiwyg.properties;
@@ -18,6 +19,14 @@ assert.strictEqual(properties.project.properties.entry.type, "string");
 assert.deepStrictEqual(cli.diagnostic_level.enum, ["note", "warning", "error", "off"]);
 assert.strictEqual(cli.jobs.type, "integer");
 assert.strictEqual(cli.jobs.minimum, 1);
+assert.strictEqual(cache.automatic_pruning.type, "boolean");
+assert.strictEqual(cache.automatic_pruning.default, true);
+assert.strictEqual(cache.max_size_mib.type, "integer");
+assert.strictEqual(cache.max_size_mib.minimum, 1);
+assert.strictEqual(cache.max_size_mib.default, 512);
+assert.strictEqual(cache.prune_interval_seconds.type, "integer");
+assert.strictEqual(cache.prune_interval_seconds.minimum, 0);
+assert.strictEqual(cache.prune_interval_seconds.default, 300);
 assert(!("inlay_hints" in lsp), "inlay hints must not be configurable");
 
 assert.strictEqual(wysiwyg.debounce.type, "integer");

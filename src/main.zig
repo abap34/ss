@@ -1060,6 +1060,7 @@ fn runResolvedWatch(
         .highlight_languages = resolved.highlight.languages,
         .format = options.format,
         .jobs = effectiveJobs(options, resolved),
+        .cache = resolved.cache,
         .interval_ms = options.interval_ms,
         .quiet = options.quiet,
     });
@@ -1414,6 +1415,7 @@ fn run(init: std.process.Init) !void {
         const jobs = effectiveJobs(options, &resolved);
         const render_options = app.RenderOptions{
             .jobs = jobs,
+            .cache = resolved.cache,
             .highlight_languages = resolved.highlight.languages,
         };
         const source = app.SourceRequest{

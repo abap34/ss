@@ -18,6 +18,7 @@ pub const Options = struct {
     highlight_languages: []const utils.highlight.Language = &.{},
     format: app.RenderFormat = .pdf,
     jobs: ?usize = null,
+    cache: utils.render_cache.Config = .{},
     interval_ms: u64 = 500,
     quiet: bool = false,
 };
@@ -227,6 +228,7 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
                 utils.progress.Progress.init(app.render_progress_steps);
             const render_options = app.RenderOptions{
                 .jobs = options.jobs,
+                .cache = options.cache,
                 .highlight_languages = options.highlight_languages,
             };
             const source = app.SourceRequest{

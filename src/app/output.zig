@@ -156,8 +156,8 @@ pub fn layoutTraceMaterializationFailed(path: []const u8, operation: []const u8,
     return error.DiagnosticsFailed;
 }
 
-pub fn pruneRenderCacheOrPrintWarning(io: std.Io, allocator: std.mem.Allocator) void {
-    utils.render_cache.pruneFromEnv(io, allocator) catch |err| {
+pub fn pruneRenderCacheOrPrintWarning(io: std.Io, allocator: std.mem.Allocator, config: utils.render_cache.Config) void {
+    utils.render_cache.pruneConfigured(io, allocator, config) catch |err| {
         var message_buf: [8192]u8 = undefined;
         var reason_buf: [256]u8 = undefined;
         const message = std.fmt.bufPrint(

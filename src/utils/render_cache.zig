@@ -6,11 +6,17 @@ const prune_stamp_path = artifacts_path ++ "/.prune-stamp";
 const cache_parent_path = ".ss-cache";
 const guard_path = cache_parent_path ++ "/render.lock";
 
-const cache_size_kib: u64 = 1024;
-const cache_size_mib: u64 = cache_size_kib * 1024;
-const cache_size_gib: u64 = cache_size_mib * 1024;
-const default_cache_budget: u64 = 512 * cache_size_mib;
-const default_prune_interval_ns: i128 = 5 * 60 * std.time.ns_per_s;
+const bytes_per_mib: u64 = 1024 * 1024;
+
+pub const Config = struct {
+    automatic_pruning: bool = true,
+    max_size_mib: u64 = 512,
+    prune_interval_seconds: u64 = 5 * 60,
+
+    pub fn maxBytes(self: Config) !u64 {
+        return std.math.mul(u64, self.max_size_mib, bytes_per_mib) catch error.InvalidCacheMaxSize;
+    }
+};
 
 pub const Stats = struct {
     files: usize = 0,
@@ -77,49 +83,16 @@ pub fn stats(io: std.Io, allocator: std.mem.Allocator) !Stats {
     return result;
 }
 
-pub fn pruneFromEnv(io: std.Io, allocator: std.mem.Allocator) !void {
-    const max_bytes = configuredMaxBytes() orelse return;
-    if (!try pruneDue(io)) return;
-    try prune(io, allocator, artifacts_path, max_bytes);
+pub fn pruneConfigured(io: std.Io, allocator: std.mem.Allocator, config: Config) !void {
+    if (!config.automatic_pruning) return;
+    if (!try pruneDue(io, config.prune_interval_seconds)) return;
+    try prune(io, allocator, artifacts_path, try config.maxBytes());
     try touchPruneStamp(io);
 }
 
-fn configuredMaxBytes() ?u64 {
-    const raw = std.c.getenv("SS_CACHE_MAX_BYTES") orelse return default_cache_budget;
-    const text = std.mem.trim(u8, std.mem.span(raw), " \t\r\n");
-    if (text.len == 0) return null;
-    if (std.ascii.eqlIgnoreCase(text, "off")) return null;
-    return parseByteBudget(text) catch null;
-}
-
-fn parseByteBudget(text: []const u8) !u64 {
-    const suffix = text[text.len - 1];
-    const multiplier: u64 = switch (suffix) {
-        'k', 'K' => cache_size_kib,
-        'm', 'M' => cache_size_mib,
-        'g', 'G' => cache_size_gib,
-        'b', 'B' => 1,
-        else => 1,
-    };
-    const number_text = if (std.ascii.isAlphabetic(suffix)) text[0 .. text.len - 1] else text;
-    const trimmed = std.mem.trim(u8, number_text, " \t\r\n");
-    if (trimmed.len == 0) return error.InvalidCacheBudget;
-    const value = try std.fmt.parseUnsigned(u64, trimmed, 10);
-    return std.math.mul(u64, value, multiplier) catch error.InvalidCacheBudget;
-}
-
-fn configuredPruneIntervalNs() i128 {
-    const raw = std.c.getenv("SS_CACHE_PRUNE_INTERVAL_SECONDS") orelse return default_prune_interval_ns;
-    const text = std.mem.trim(u8, std.mem.span(raw), " \t\r\n");
-    if (text.len == 0) return default_prune_interval_ns;
-    if (std.ascii.eqlIgnoreCase(text, "always")) return 0;
-    const seconds = std.fmt.parseUnsigned(u64, text, 10) catch return default_prune_interval_ns;
-    return @as(i128, @intCast(seconds)) * std.time.ns_per_s;
-}
-
-fn pruneDue(io: std.Io) !bool {
-    const interval_ns = configuredPruneIntervalNs();
-    if (interval_ns <= 0) return true;
+fn pruneDue(io: std.Io, interval_seconds: u64) !bool {
+    if (interval_seconds == 0) return true;
+    const interval_ns = @as(i128, @intCast(interval_seconds)) * std.time.ns_per_s;
     const stat = std.Io.Dir.cwd().statFile(io, prune_stamp_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return true,
         else => return err,

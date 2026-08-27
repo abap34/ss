@@ -15,6 +15,7 @@ pub const Config = struct {
     page_guide: PageGuideConfig = .{},
     highlight: highlight.Config = .{},
     cli: CliConfig = .{},
+    cache: utils.render_cache.Config = .{},
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         allocator.free(self.path);
@@ -67,6 +68,7 @@ pub const Resolved = struct {
     project_dir: ?[]u8 = null,
     highlight: highlight.Config = .{},
     cli: CliConfig = .{},
+    cache: utils.render_cache.Config = .{},
 
     pub fn deinit(self: *Resolved, allocator: std.mem.Allocator) void {
         allocator.free(self.entry_path);
@@ -120,6 +122,7 @@ pub fn resolve(
         .project_dir = if (config) |cfg| try allocator.dupe(u8, cfg.dir) else null,
         .highlight = if (config) |cfg| try cfg.highlight.clone(allocator) else try highlight.defaultConfig(allocator),
         .cli = if (config) |cfg| cfg.cli else .{},
+        .cache = if (config) |cfg| cfg.cache else .{},
     };
 }
 
@@ -166,6 +169,9 @@ pub fn isConfigError(err: anyerror) bool {
         error.DuplicateHighlightLanguage,
         error.InvalidDiagnosticLevel,
         error.InvalidCliJobs,
+        error.InvalidCacheAutomaticPruning,
+        error.InvalidCacheMaxSize,
+        error.InvalidCachePruneInterval,
         => true,
         else => false,
     };
@@ -182,6 +188,9 @@ pub fn configErrorMessage(err: anyerror) ?[]const u8 {
         error.DuplicateHighlightLanguage => "DuplicateHighlightLanguage: each highlight language name may be declared only once",
         error.InvalidDiagnosticLevel => "InvalidDiagnosticLevel: use note, warning, error, or off for cli.diagnostic_level",
         error.InvalidCliJobs => "InvalidCliJobs: cli.jobs must be a positive integer",
+        error.InvalidCacheAutomaticPruning => "InvalidCacheAutomaticPruning: cache.automatic_pruning must be true or false",
+        error.InvalidCacheMaxSize => "InvalidCacheMaxSize: cache.max_size_mib must be a positive integer whose byte value fits in 64 bits",
+        error.InvalidCachePruneInterval => "InvalidCachePruneInterval: cache.prune_interval_seconds must be a non-negative integer",
         else => null,
     };
 }
@@ -222,6 +231,7 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, text: []const
     var highlight_config = try highlight.configWithDefaults(allocator, parsed_highlight.languages);
     errdefer highlight_config.deinit(allocator);
     const cli_config = try parseCliConfig(text);
+    const cache_config = try parseCacheConfig(text);
 
     return .{
         .path = try allocator.dupe(u8, path),
@@ -233,6 +243,7 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, text: []const
         .page_guide = parsePageGuideConfig(text),
         .highlight = highlight_config,
         .cli = cli_config,
+        .cache = cache_config,
     };
 }
 
@@ -248,6 +259,9 @@ pub fn configErrorSpan(text: []const u8, err: anyerror) ?source.ByteSpan {
         => highlightConfigErrorSpan(text, err),
         error.InvalidDiagnosticLevel => tomlKeySpan(text, "cli", "diagnostic_level") orelse tomlSectionSpan(text, "cli"),
         error.InvalidCliJobs => tomlKeySpan(text, "cli", "jobs") orelse tomlSectionSpan(text, "cli"),
+        error.InvalidCacheAutomaticPruning => tomlKeySpan(text, "cache", "automatic_pruning") orelse tomlSectionSpan(text, "cache"),
+        error.InvalidCacheMaxSize => tomlKeySpan(text, "cache", "max_size_mib") orelse tomlSectionSpan(text, "cache"),
+        error.InvalidCachePruneInterval => tomlKeySpan(text, "cache", "prune_interval_seconds") orelse tomlSectionSpan(text, "cache"),
         else => null,
     };
 }
@@ -305,6 +319,28 @@ fn parseCliConfig(text: []const u8) !CliConfig {
         const jobs = std.fmt.parseUnsigned(usize, value, 10) catch return error.InvalidCliJobs;
         if (jobs == 0) return error.InvalidCliJobs;
         config.jobs = jobs;
+    }
+    return config;
+}
+
+fn parseCacheConfig(text: []const u8) !utils.render_cache.Config {
+    var config = utils.render_cache.Config{};
+    if (parseValue(text, "cache", "automatic_pruning")) |value| {
+        if (std.mem.eql(u8, value, "true")) {
+            config.automatic_pruning = true;
+        } else if (std.mem.eql(u8, value, "false")) {
+            config.automatic_pruning = false;
+        } else {
+            return error.InvalidCacheAutomaticPruning;
+        }
+    }
+    if (parseValue(text, "cache", "max_size_mib")) |value| {
+        config.max_size_mib = std.fmt.parseUnsigned(u64, value, 10) catch return error.InvalidCacheMaxSize;
+        if (config.max_size_mib == 0) return error.InvalidCacheMaxSize;
+        _ = config.maxBytes() catch return error.InvalidCacheMaxSize;
+    }
+    if (parseValue(text, "cache", "prune_interval_seconds")) |value| {
+        config.prune_interval_seconds = std.fmt.parseUnsigned(u64, value, 10) catch return error.InvalidCachePruneInterval;
     }
     return config;
 }
