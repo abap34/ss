@@ -93,16 +93,9 @@ fn stdModulePath(allocator: std.mem.Allocator, spec: []const u8) !?[]u8 {
     if (module_name.len == 0 or std.mem.indexOfScalar(u8, module_name, '\\') != null) return null;
     const relative = try std.fmt.allocPrint(allocator, "{s}.ss", .{module_name});
     defer allocator.free(relative);
-    if (try stdModulePathFromEnv(allocator, relative)) |path| return path;
     if (try stdModulePathFromRoot(allocator, build_options.source_stdlib_dir, relative)) |path| return path;
     if (try stdModulePathFromRoot(allocator, build_options.installed_stdlib_dir, relative)) |path| return path;
     return stdModulePathFromRoot(allocator, "stdlib", relative);
-}
-
-fn stdModulePathFromEnv(allocator: std.mem.Allocator, relative: []const u8) !?[]u8 {
-    const raw = std.c.getenv("SS_STDLIB_DIR") orelse return null;
-    const root = std.mem.span(raw);
-    return stdModulePathFromRoot(allocator, root, relative);
 }
 
 fn stdModulePathFromRoot(allocator: std.mem.Allocator, root: []const u8, relative: []const u8) !?[]u8 {
