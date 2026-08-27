@@ -61,7 +61,6 @@ pub const MeasurementCache = struct {
     allocator: std.mem.Allocator,
     values: MeasurementMap,
     render_provider: ?model.LayoutMeasurementProvider = null,
-    used_keys: std.ArrayList(u64) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) MeasurementCache {
         return .{
@@ -85,20 +84,6 @@ pub const MeasurementCache = struct {
             self.allocator.free(key.family);
         }
         self.values.deinit();
-        self.used_keys.deinit(self.allocator);
-    }
-
-    pub fn usedKeyCount(self: *const MeasurementCache) usize {
-        return self.used_keys.items.len;
-    }
-
-    pub fn appendUsedKeysSince(self: *const MeasurementCache, allocator: std.mem.Allocator, start: usize, out: *std.ArrayList(u64)) !void {
-        if (start >= self.used_keys.items.len) return;
-        try out.appendSlice(allocator, self.used_keys.items[start..]);
-    }
-
-    fn recordUsedKey(self: *MeasurementCache, key: u64) void {
-        self.used_keys.append(self.allocator, key) catch {};
     }
 
     fn advanceWidth(self: *MeasurementCache, text: []const u8, font: font_model.Face, font_size: f32) !f32 {
@@ -116,7 +101,6 @@ pub const MeasurementCache = struct {
         defer utils.measure_profile.recordText(profileTextKind(kind), profile_hit, profile_start);
 
         const lookup = measurementKey(kind, text, font, font_size);
-        self.recordUsedKey(MeasurementKeyContext.hash(.{}, lookup));
         if (self.values.get(lookup)) |cached| {
             profile_hit = true;
             return cached;
@@ -152,11 +136,7 @@ pub const MeasurementCache = struct {
     fn renderedMeasurement(self: *MeasurementCache, state: anytype, node: *const Node, width: f32, mode: model.LayoutMeasurementMode) !?model.LayoutMeasurement {
         const provider = self.render_provider orelse return null;
         const state_ptr: *anyopaque = @ptrCast(@alignCast(state));
-        const measured = try provider.measure(provider.context, state_ptr, node, width, mode);
-        if (measured) |value| {
-            if (value.cache_key) |key| self.recordUsedKey(key);
-        }
-        return measured;
+        return try provider.measure(provider.context, state_ptr, node, width, mode);
     }
 };
 

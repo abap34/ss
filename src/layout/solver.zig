@@ -295,15 +295,10 @@ fn clonePage(allocator: std.mem.Allocator, result: *const document.Page) !docume
         copied_failures += 1;
     }
 
-    const measurement_keys = try allocator.dupe(u64, result.measurement_keys);
-    var measurement_keys_transferred = false;
-    errdefer if (!measurement_keys_transferred) allocator.free(measurement_keys);
-
     object_frames_transferred = true;
     fallback_constraints_transferred = true;
     diagnostics_transferred = true;
     failures_transferred = true;
-    measurement_keys_transferred = true;
     return .{
         .page_id = result.page_id,
         .index = result.index,
@@ -311,7 +306,6 @@ fn clonePage(allocator: std.mem.Allocator, result: *const document.Page) !docume
         .fallback_constraints = fallback_constraints,
         .diagnostics = diagnostics_slice,
         .constraint_failures = failure_slice,
-        .measurement_keys = measurement_keys,
     };
 }
 
@@ -353,11 +347,10 @@ fn solvePageLayout(
     try graph.checkCancellation(options);
     const diagnostic_start = state.diagnostics.items.len;
     const constraint_failure_start = state.constraint_failures.items.len;
-    const measurement_key_start = measurement_cache.usedKeyCount();
     var page_graph = try graph.PageLayoutGraph.init(state.allocator, state, page_id);
     defer page_graph.deinit();
     try graph.checkCancellation(options);
-    if (page_graph.len() == 0) return try collectPage(state, page_id, page_index, &.{}, &.{}, &.{}, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start, options);
+    if (page_graph.len() == 0) return try collectPage(state, page_id, page_index, &.{}, &.{}, &.{}, diagnostic_start, constraint_failure_start, options);
     try initializePageObjectMeasurements(state, &page_graph, measurement_cache, options);
     try graph.checkCancellation(options);
 
@@ -425,8 +418,6 @@ fn solvePageLayout(
         vertical_fallback.items,
         diagnostic_start,
         constraint_failure_start,
-        measurement_cache,
-        measurement_key_start,
         options,
     );
 }
@@ -440,8 +431,6 @@ fn collectPage(
     vertical_fallback: []const Constraint,
     diagnostic_start: usize,
     constraint_failure_start: usize,
-    measurement_cache: *const metrics.MeasurementCache,
-    measurement_key_start: usize,
     options: SolveOptions,
 ) !document.Page {
     try graph.checkCancellation(options);
@@ -449,7 +438,6 @@ fn collectPage(
     var fallback_constraints = std.ArrayList(Constraint).empty;
     var diagnostics_out = std.ArrayList(model.Diagnostic).empty;
     var failures_out = std.ArrayList(model.ConstraintFailure).empty;
-    var measurement_keys = std.ArrayList(u64).empty;
     errdefer {
         frames.deinit(state.allocator);
         fallback_constraints.deinit(state.allocator);
@@ -457,7 +445,6 @@ fn collectPage(
         diagnostics_out.deinit(state.allocator);
         for (failures_out.items) |*failure| failure.deinit(state.allocator);
         failures_out.deinit(state.allocator);
-        measurement_keys.deinit(state.allocator);
     }
     try fallback_constraints.appendSlice(state.allocator, horizontal_fallback);
     try fallback_constraints.appendSlice(state.allocator, vertical_fallback);
@@ -489,7 +476,6 @@ fn collectPage(
         cloned_transferred = true;
     }
     try graph.checkCancellation(options);
-    try measurement_cache.appendUsedKeysSince(state.allocator, measurement_key_start, &measurement_keys);
     const frame_slice = try frames.toOwnedSlice(state.allocator);
     var frame_slice_transferred = false;
     errdefer if (!frame_slice_transferred) state.allocator.free(frame_slice);
@@ -512,14 +498,10 @@ fn collectPage(
             state.allocator.free(failure_slice);
         }
     }
-    const measurement_key_slice = try measurement_keys.toOwnedSlice(state.allocator);
-    var measurement_key_slice_transferred = false;
-    errdefer if (!measurement_key_slice_transferred) state.allocator.free(measurement_key_slice);
     frame_slice_transferred = true;
     fallback_slice_transferred = true;
     diagnostic_slice_transferred = true;
     failure_slice_transferred = true;
-    measurement_key_slice_transferred = true;
     return .{
         .page_id = page_id,
         .index = page_index,
@@ -527,7 +509,6 @@ fn collectPage(
         .fallback_constraints = fallback_slice,
         .diagnostics = diagnostic_slice,
         .constraint_failures = failure_slice,
-        .measurement_keys = measurement_key_slice,
     };
 }
 

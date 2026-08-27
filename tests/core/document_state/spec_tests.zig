@@ -456,7 +456,6 @@ test "document state spec: layout results collect solved page frames" {
     try testing.expect(result_frame.x_set);
     try testing.expect(result_frame.y_set);
     try testing.expectEqual(node_frame, result_frame);
-    try testing.expect(results.pages[0].measurement_keys.len > 0);
 }
 
 test "document state spec: layout results own page diagnostics" {

@@ -25,7 +25,6 @@ pub const Page = struct {
     fallback_constraints: []model.Constraint = &.{},
     diagnostics: []model.Diagnostic = &.{},
     constraint_failures: []model.ConstraintFailure = &.{},
-    measurement_keys: []u64 = &.{},
 
     pub fn deinit(self: *Page, allocator: std.mem.Allocator) void {
         allocator.free(self.object_frames);
@@ -34,7 +33,6 @@ pub const Page = struct {
         allocator.free(self.diagnostics);
         for (self.constraint_failures) |*failure| failure.deinit(allocator);
         allocator.free(self.constraint_failures);
-        allocator.free(self.measurement_keys);
         self.* = .{
             .page_id = 0,
             .index = 0,
