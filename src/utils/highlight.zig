@@ -60,6 +60,55 @@ pub const CaptureRole = enum {
     string,
 };
 
+const CaptureRuleKind = enum {
+    segment,
+    exact,
+    prefix,
+};
+
+const CaptureRule = struct {
+    kind: CaptureRuleKind = .segment,
+    name: []const u8,
+    role: CaptureRole,
+};
+
+const capture_rules = [_]CaptureRule{
+    .{ .name = "comment", .role = .comment },
+    .{ .name = "escape", .role = .string },
+    .{ .name = "string", .role = .string },
+    .{ .name = "character", .role = .string },
+    .{ .name = "operator", .role = .operator },
+    .{ .name = "punctuation", .role = .operator },
+    .{ .name = "delimiter", .role = .operator },
+    .{ .name = "keyword", .role = .keyword },
+    .{ .name = "import", .role = .keyword },
+    .{ .name = "media", .role = .keyword },
+    .{ .name = "supports", .role = .keyword },
+    .{ .name = "charset", .role = .keyword },
+    .{ .name = "keyframes", .role = .keyword },
+    .{ .kind = .exact, .name = "cImport", .role = .function },
+    .{ .name = "function", .role = .function },
+    .{ .name = "method", .role = .function },
+    .{ .name = "macro", .role = .function },
+    .{ .name = "constructor", .role = .type },
+    .{ .name = "type", .role = .type },
+    .{ .name = "namespace", .role = .type },
+    .{ .name = "module", .role = .type },
+    .{ .name = "tag", .role = .type },
+    .{ .name = "number", .role = .number },
+    .{ .name = "float", .role = .number },
+    .{ .name = "constant", .role = .constant },
+    .{ .name = "boolean", .role = .constant },
+    .{ .name = "attribute", .role = .constant },
+    .{ .name = "label", .role = .constant },
+    .{ .name = "property", .role = .variable },
+    .{ .name = "field", .role = .variable },
+    .{ .name = "parameter", .role = .variable },
+    .{ .name = "member", .role = .variable },
+    .{ .name = "variable", .role = .variable },
+    .{ .kind = .prefix, .name = "_", .role = .operator },
+};
+
 pub const builtin_languages = [_]BuiltinLanguage{
     .{ .name = "ss", .parser = "ss", .query = "builtin:ss" },
     .{ .name = "bash", .parser = "bash", .query = "builtin:bash" },
@@ -144,49 +193,34 @@ pub fn isBuiltinLanguageName(name: []const u8) bool {
 }
 
 pub fn isBuiltinParserName(name: []const u8) bool {
+    return canonicalParserName(name) != null;
+}
+
+pub fn canonicalParserName(name: []const u8) ?[]const u8 {
     for (builtin_languages) |language| {
-        if (std.ascii.eqlIgnoreCase(language.name, name)) return true;
-        if (std.ascii.eqlIgnoreCase(language.parser, name)) return true;
+        if (std.ascii.eqlIgnoreCase(language.name, name)) return language.parser;
+        if (std.ascii.eqlIgnoreCase(language.parser, name)) return language.parser;
     }
-    return false;
+    return null;
+}
+
+pub fn findLanguage(languages: []const Language, name: []const u8) ?*const Language {
+    for (languages) |*language| {
+        if (std.ascii.eqlIgnoreCase(language.name, name)) return language;
+    }
+    return null;
 }
 
 pub fn roleForCapture(capture_name: []const u8) ?CaptureRole {
     if (capture_name.len == 0) return null;
-    if (captureHasSegment(capture_name, "comment")) return .comment;
-    if (captureHasSegment(capture_name, "escape")) return .string;
-    if (captureHasSegment(capture_name, "string")) return .string;
-    if (captureHasSegment(capture_name, "character")) return .string;
-    if (captureHasSegment(capture_name, "operator")) return .operator;
-    if (captureHasSegment(capture_name, "punctuation")) return .operator;
-    if (captureHasSegment(capture_name, "delimiter")) return .operator;
-    if (captureHasSegment(capture_name, "keyword")) return .keyword;
-    if (captureHasSegment(capture_name, "import")) return .keyword;
-    if (captureHasSegment(capture_name, "media")) return .keyword;
-    if (captureHasSegment(capture_name, "supports")) return .keyword;
-    if (captureHasSegment(capture_name, "charset")) return .keyword;
-    if (captureHasSegment(capture_name, "keyframes")) return .keyword;
-    if (std.mem.eql(u8, capture_name, "cImport")) return .function;
-    if (captureHasSegment(capture_name, "function")) return .function;
-    if (captureHasSegment(capture_name, "method")) return .function;
-    if (captureHasSegment(capture_name, "macro")) return .function;
-    if (captureHasSegment(capture_name, "constructor")) return .type;
-    if (captureHasSegment(capture_name, "type")) return .type;
-    if (captureHasSegment(capture_name, "namespace")) return .type;
-    if (captureHasSegment(capture_name, "module")) return .type;
-    if (captureHasSegment(capture_name, "tag")) return .type;
-    if (captureHasSegment(capture_name, "number")) return .number;
-    if (captureHasSegment(capture_name, "float")) return .number;
-    if (captureHasSegment(capture_name, "constant")) return .constant;
-    if (captureHasSegment(capture_name, "boolean")) return .constant;
-    if (captureHasSegment(capture_name, "attribute")) return .constant;
-    if (captureHasSegment(capture_name, "label")) return .constant;
-    if (captureHasSegment(capture_name, "property")) return .variable;
-    if (captureHasSegment(capture_name, "field")) return .variable;
-    if (captureHasSegment(capture_name, "parameter")) return .variable;
-    if (captureHasSegment(capture_name, "member")) return .variable;
-    if (captureHasSegment(capture_name, "variable")) return .variable;
-    if (std.mem.startsWith(u8, capture_name, "_")) return .operator;
+    for (capture_rules) |rule| {
+        const matches = switch (rule.kind) {
+            .segment => captureHasSegment(capture_name, rule.name),
+            .exact => std.mem.eql(u8, capture_name, rule.name),
+            .prefix => std.mem.startsWith(u8, capture_name, rule.name),
+        };
+        if (matches) return rule.role;
+    }
     return null;
 }
 
