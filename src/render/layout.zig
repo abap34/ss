@@ -117,7 +117,6 @@ pub fn solvePreparedPages(
         _ = try compiler.addFontEnvironmentDiagnostic(state, err);
         return err;
     };
-    try core.prepared.attachAssetKeys(state.allocator, &results, pages);
     try options.checkCanceled();
     return results;
 }

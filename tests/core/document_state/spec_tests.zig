@@ -413,10 +413,6 @@ test "document state spec: prepared pages collect inline math asset dependencies
     try testing.expectEqual(@as(usize, 1), object.asset_deps.len);
     try testing.expectEqual(core.prepared.AssetDependency.Kind.inline_math, object.asset_deps[0].kind);
     try testing.expectEqualStrings("x+y", object.asset_deps[0].source);
-    try testing.expectEqual(@as(usize, 1), object.asset_keys.len);
-    try testing.expectEqual(@as(usize, 1), pages.pages[0].asset_keys.len);
-    try testing.expectEqual(object.asset_keys[0], pages.pages[0].asset_keys[0]);
-    try testing.expectEqual(core.prepared.assetDependencyKey(object.asset_deps[0], object.latex_preamble, object.latex_engine), object.asset_keys[0]);
 }
 
 test "document state spec: prepared pages preserve explicit LaTeX body dependencies" {
@@ -439,50 +435,6 @@ test "document state spec: prepared pages preserve explicit LaTeX body dependenc
     try testing.expectEqual(@as(usize, 1), object.asset_deps.len);
     try testing.expectEqual(core.prepared.AssetDependency.Kind.latex_body, object.asset_deps[0].kind);
     try testing.expectEqualStrings("\\begin{center}$x+y$\\end{center}", object.asset_deps[0].source);
-    try testing.expectEqual(@as(usize, 1), object.asset_keys.len);
-    try testing.expectEqual(object.asset_keys[0], pages.pages[0].asset_keys[0]);
-}
-
-test "document state spec: LaTeX asset keys distinguish kind engine and preamble" {
-    const inline_dep = core.prepared.AssetDependency{ .kind = .inline_math, .source = "x", .content_start = 0, .content_end = 1 };
-    const body = core.prepared.AssetDependency{ .kind = .latex_body, .source = "x", .content_start = 0, .content_end = 1 };
-    const first_preamble = [_]core.render_env.LatexPreambleEntry{
-        .{ .source = .text, .value = "\\newcommand{\\Token}{A}" },
-    };
-    const second_preamble = [_]core.render_env.LatexPreambleEntry{
-        .{ .source = .text, .value = "\\newcommand{\\Token}{B}" },
-    };
-
-    const inline_key = core.prepared.assetDependencyKey(inline_dep, &.{}, .pdflatex);
-    const body_key = core.prepared.assetDependencyKey(body, &.{}, .pdflatex);
-    const lualatex_key = core.prepared.assetDependencyKey(body, &.{}, .lualatex);
-    const first_preamble_key = core.prepared.assetDependencyKey(body, &first_preamble, .pdflatex);
-    const second_preamble_key = core.prepared.assetDependencyKey(body, &second_preamble, .pdflatex);
-
-    try testing.expect(inline_key != body_key);
-    try testing.expect(body_key != lualatex_key);
-    try testing.expect(body_key != first_preamble_key);
-    try testing.expect(first_preamble_key != second_preamble_key);
-}
-
-test "document state spec: prepared page asset keys attach to layout results" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "body", null, .text, .text, "value $x+y$");
-    try state.addAnchorConstraint(object, .left, .{ .page = .left }, 40, "body-left");
-    try state.addAnchorConstraint(object, .top, .{ .page = .top }, -80, "body-top");
-
-    var pages = try core.prepared.prepare(testing.allocator, &state);
-    defer pages.deinit(testing.allocator);
-    var results = try core.layout.solveDocument(&state, null, .{});
-    defer results.deinit(testing.allocator);
-    try core.prepared.attachAssetKeys(testing.allocator, &results, &pages);
-
-    try testing.expectEqual(@as(usize, 1), results.pages.len);
-    try testing.expectEqual(@as(usize, 1), results.pages[0].asset_keys.len);
-    try testing.expectEqual(pages.pages[0].asset_keys[0], results.pages[0].asset_keys[0]);
 }
 
 test "document state spec: layout results collect solved page frames" {

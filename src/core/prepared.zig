@@ -1,7 +1,6 @@
 const std = @import("std");
 const model = @import("model");
 const DocumentState = @import("document_state.zig").DocumentState;
-const layout_model = @import("../layout/root.zig");
 const markdown = @import("markdown.zig");
 const render_env = @import("render_env.zig");
 const render_policy = @import("render_policy.zig");
@@ -16,7 +15,6 @@ pub const PreparedObject = struct {
     markdown_doc: ?markdown.MarkdownDocument = null,
     text_layout: ?markdown.TextLayout = null,
     asset_deps: []AssetDependency = &.{},
-    asset_keys: []u64 = &.{},
     latex_preamble: []const render_env.LatexPreambleEntry,
     latex_engine: render_env.LatexEngine,
     origin: ?[]const u8,
@@ -26,7 +24,6 @@ pub const PreparedObject = struct {
     pub fn deinit(self: *PreparedObject, allocator: std.mem.Allocator) void {
         for (self.asset_deps) |*dep| dep.deinit(allocator);
         allocator.free(self.asset_deps);
-        allocator.free(self.asset_keys);
         if (self.markdown_doc) |*doc| doc.deinit();
         if (self.text_layout) |*layout| layout.deinit(allocator);
         allocator.free(self.latex_preamble);
@@ -71,14 +68,12 @@ pub const PreparedPage = struct {
     object_ids: []model.NodeId,
     constraints: []model.Constraint,
     objects: []PreparedObject,
-    asset_keys: []u64 = &.{},
 
     pub fn deinit(self: *PreparedPage, allocator: std.mem.Allocator) void {
         allocator.free(self.object_ids);
         allocator.free(self.constraints);
         for (self.objects) |*object| object.deinit(allocator);
         allocator.free(self.objects);
-        allocator.free(self.asset_keys);
     }
 };
 
@@ -137,10 +132,6 @@ pub fn prepare(allocator: std.mem.Allocator, state: *DocumentState) !PreparedPag
                 allocator.free(object_slice);
             }
         }
-        const page_asset_keys = try collectPageAssetKeys(allocator, object_slice);
-        var page_asset_keys_transferred = false;
-        errdefer if (!page_asset_keys_transferred) allocator.free(page_asset_keys);
-
         try pages.append(allocator, .{
             .page_id = page_id,
             .index = page_index,
@@ -148,12 +139,10 @@ pub fn prepare(allocator: std.mem.Allocator, state: *DocumentState) !PreparedPag
             .object_ids = ids_slice,
             .constraints = constraint_slice,
             .objects = object_slice,
-            .asset_keys = page_asset_keys,
         });
         ids_transferred = true;
         constraints_transferred = true;
         objects_transferred = true;
-        page_asset_keys_transferred = true;
     }
 
     return .{ .pages = try pages.toOwnedSlice(allocator) };
@@ -234,12 +223,8 @@ pub fn prepareObjectWithRender(
     const latex_preamble = try cloneLatexPreambleEntries(allocator, env.latex_preamble.items);
     var latex_preamble_transferred = false;
     errdefer if (!latex_preamble_transferred) allocator.free(latex_preamble);
-    const asset_key_slice = try assetKeysForObject(allocator, asset_dep_slice, latex_preamble, env.latex_engine);
-    var asset_keys_transferred = false;
-    errdefer if (!asset_keys_transferred) allocator.free(asset_key_slice);
     asset_deps_transferred = true;
     latex_preamble_transferred = true;
-    asset_keys_transferred = true;
     return .{
         .node_id = node.id,
         .content = content,
@@ -250,7 +235,6 @@ pub fn prepareObjectWithRender(
         .markdown_doc = markdown_doc,
         .text_layout = text_layout,
         .asset_deps = asset_dep_slice,
-        .asset_keys = asset_key_slice,
         .latex_preamble = latex_preamble,
         .latex_engine = env.latex_engine,
         .origin = node.origin,
@@ -259,65 +243,11 @@ pub fn prepareObjectWithRender(
     };
 }
 
-pub fn attachAssetKeys(
-    allocator: std.mem.Allocator,
-    document: *layout_model.Document,
-    pages: *const PreparedPages,
-) !void {
-    for (document.pages) |*result| {
-        const page = pageById(pages, result.page_id) orelse continue;
-        const keys = try allocator.dupe(u64, page.asset_keys);
-        errdefer allocator.free(keys);
-        allocator.free(result.asset_keys);
-        result.asset_keys = keys;
-    }
-}
-
 pub fn pageById(pages: *const PreparedPages, page_id: model.NodeId) ?*const PreparedPage {
     for (pages.pages) |*page| {
         if (page.page_id == page_id) return page;
     }
     return null;
-}
-
-pub fn assetDependencyKey(
-    dep: AssetDependency,
-    latex_preamble: []const render_env.LatexPreambleEntry,
-    latex_engine: render_env.LatexEngine,
-) u64 {
-    var hasher = std.hash.Wyhash.init(0);
-    hashString(&hasher, "ss-prepared-asset-v2");
-    hashString(&hasher, @tagName(dep.kind));
-    hashString(&hasher, dep.source);
-    switch (dep.kind) {
-        .inline_math, .display_math, .latex_body => {
-            hashString(&hasher, @tagName(latex_engine));
-            hashLatexPreamble(&hasher, latex_preamble);
-        },
-        .icon, .vector_pdf, .raster_asset => {},
-    }
-    return hasher.final();
-}
-
-fn assetKeysForObject(
-    allocator: std.mem.Allocator,
-    deps: []const AssetDependency,
-    latex_preamble: []const render_env.LatexPreambleEntry,
-    latex_engine: render_env.LatexEngine,
-) ![]u64 {
-    var keys = std.ArrayList(u64).empty;
-    errdefer keys.deinit(allocator);
-    for (deps) |dep| try appendUniqueKey(allocator, &keys, assetDependencyKey(dep, latex_preamble, latex_engine));
-    return try keys.toOwnedSlice(allocator);
-}
-
-fn collectPageAssetKeys(allocator: std.mem.Allocator, objects: []const PreparedObject) ![]u64 {
-    var keys = std.ArrayList(u64).empty;
-    errdefer keys.deinit(allocator);
-    for (objects) |object| {
-        for (object.asset_keys) |key| try appendUniqueKey(allocator, &keys, key);
-    }
-    return try keys.toOwnedSlice(allocator);
 }
 
 fn collectMarkdownBlockAssetDeps(
@@ -467,13 +397,6 @@ fn appendUniqueNodeId(allocator: std.mem.Allocator, items: *std.ArrayList(model.
     try items.append(allocator, node_id);
 }
 
-fn appendUniqueKey(allocator: std.mem.Allocator, items: *std.ArrayList(u64), key: u64) !void {
-    for (items.items) |existing| {
-        if (existing == key) return;
-    }
-    try items.append(allocator, key);
-}
-
 fn cloneLatexPreambleEntries(allocator: std.mem.Allocator, preamble: []const render_env.LatexPreambleEntry) ![]const render_env.LatexPreambleEntry {
     const cloned = try allocator.alloc(render_env.LatexPreambleEntry, preamble.len);
     @memcpy(cloned, preamble);
@@ -486,22 +409,4 @@ fn nodeStringField(node: *const model.Node, key: []const u8) ?[]const u8 {
         .string => |text| text,
         else => null,
     };
-}
-
-fn hashLatexPreamble(hasher: *std.hash.Wyhash, preamble: []const render_env.LatexPreambleEntry) void {
-    hashUsize(hasher, preamble.len);
-    for (preamble) |entry| {
-        hashString(hasher, @tagName(entry.source));
-        hashString(hasher, entry.value);
-    }
-}
-
-fn hashString(hasher: *std.hash.Wyhash, value: []const u8) void {
-    hashUsize(hasher, value.len);
-    hasher.update(value);
-}
-
-fn hashUsize(hasher: *std.hash.Wyhash, value: usize) void {
-    const normalized: u64 = @intCast(value);
-    hasher.update(std.mem.asBytes(&normalized));
 }

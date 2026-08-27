@@ -295,9 +295,6 @@ fn clonePage(allocator: std.mem.Allocator, result: *const document.Page) !docume
         copied_failures += 1;
     }
 
-    const asset_keys = try allocator.dupe(u64, result.asset_keys);
-    var asset_keys_transferred = false;
-    errdefer if (!asset_keys_transferred) allocator.free(asset_keys);
     const measurement_keys = try allocator.dupe(u64, result.measurement_keys);
     var measurement_keys_transferred = false;
     errdefer if (!measurement_keys_transferred) allocator.free(measurement_keys);
@@ -306,7 +303,6 @@ fn clonePage(allocator: std.mem.Allocator, result: *const document.Page) !docume
     fallback_constraints_transferred = true;
     diagnostics_transferred = true;
     failures_transferred = true;
-    asset_keys_transferred = true;
     measurement_keys_transferred = true;
     return .{
         .page_id = result.page_id,
@@ -315,7 +311,6 @@ fn clonePage(allocator: std.mem.Allocator, result: *const document.Page) !docume
         .fallback_constraints = fallback_constraints,
         .diagnostics = diagnostics_slice,
         .constraint_failures = failure_slice,
-        .asset_keys = asset_keys,
         .measurement_keys = measurement_keys,
     };
 }
