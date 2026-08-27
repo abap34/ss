@@ -35,13 +35,10 @@ const TSLanguage *tree_sitter_zig(void);
 #error tree-sitter headers expose an invalid ABI range
 #endif
 
-static int trace_enabled(void) {
-  const char *value = getenv("SS_TREE_SITTER_CHECK_TRACE");
-  return value != NULL && value[0] != '\0';
-}
+static int trace_enabled = 0;
 
 static int check_language(TSParser *parser, const char *name, const TSLanguage *language, const char *sample) {
-  if (trace_enabled()) {
+  if (trace_enabled) {
     fprintf(stderr, "checking tree-sitter %s\n", name);
     fflush(stderr);
   }
@@ -73,7 +70,16 @@ static int check_language(TSParser *parser, const char *name, const TSLanguage *
   return 0;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+  for (int index = 1; index < argc; index += 1) {
+    if (strcmp(argv[index], "--trace") == 0) {
+      trace_enabled = 1;
+      continue;
+    }
+    fprintf(stderr, "unknown argument: %s\n", argv[index]);
+    return 2;
+  }
+
   TSParser *parser = ts_parser_new();
   if (parser == NULL) {
     fprintf(stderr, "failed to create tree-sitter parser\n");

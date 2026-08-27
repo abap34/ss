@@ -1414,7 +1414,7 @@ fn addTreeSitterAbiCheck(ctx: BuildContext, tree_sitter: TreeSitterBundle) TreeS
     const run_check = b.addRunArtifact(check_exe);
     run_check.setName("tree-sitter ABI and parser check");
     if (ctx.tree_sitter_ubsan) {
-        run_check.setEnvironmentVariable("SS_TREE_SITTER_CHECK_TRACE", "1");
+        run_check.addArg("--trace");
     }
     return .{ .compile = check_exe, .run = run_check };
 }
