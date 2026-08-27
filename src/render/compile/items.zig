@@ -1,7 +1,6 @@
 const std = @import("std");
 const core = @import("core");
 const utils = @import("utils");
-const build_options = @import("build_options");
 
 const text_tokenize = core.text_tokenize;
 const wrap_layout = core.render_wrap;
@@ -16,76 +15,8 @@ const fingerprint = @import("fingerprint.zig");
 const latex_document = @import("latex.zig");
 const page_cache = @import("page_cache.zig");
 const external_process = @import("external_process.zig");
+const syntax_highlight = @import("syntax_highlight.zig");
 const text_measure = core.render_text_measure;
-
-const TSLanguage = opaque {};
-const TSParser = opaque {};
-const TSTree = opaque {};
-const TSQuery = opaque {};
-const TSQueryCursor = opaque {};
-
-const TSQueryError = enum(c_int) {
-    none = 0,
-    syntax = 1,
-    node_type = 2,
-    field = 3,
-    capture = 4,
-    structure = 5,
-    language = 6,
-};
-
-const TSNode = extern struct {
-    context: [4]u32,
-    id: ?*const anyopaque,
-    tree: ?*const TSTree,
-};
-
-const TSQueryCapture = extern struct {
-    node: TSNode,
-    index: u32,
-};
-
-const TSQueryMatch = extern struct {
-    id: u32,
-    pattern_index: u16,
-    capture_count: u16,
-    captures: [*c]const TSQueryCapture,
-};
-
-extern fn tree_sitter_ss() *const TSLanguage;
-extern fn tree_sitter_bash() *const TSLanguage;
-extern fn tree_sitter_c() *const TSLanguage;
-extern fn tree_sitter_cpp() *const TSLanguage;
-extern fn tree_sitter_css() *const TSLanguage;
-extern fn tree_sitter_go() *const TSLanguage;
-extern fn tree_sitter_html() *const TSLanguage;
-extern fn tree_sitter_java() *const TSLanguage;
-extern fn tree_sitter_javascript() *const TSLanguage;
-extern fn tree_sitter_json() *const TSLanguage;
-extern fn tree_sitter_julia() *const TSLanguage;
-extern fn tree_sitter_python() *const TSLanguage;
-extern fn tree_sitter_rust() *const TSLanguage;
-extern fn tree_sitter_toml() *const TSLanguage;
-extern fn tree_sitter_typescript() *const TSLanguage;
-extern fn tree_sitter_tsx() *const TSLanguage;
-extern fn tree_sitter_yaml() *const TSLanguage;
-extern fn tree_sitter_zig() *const TSLanguage;
-
-extern fn ts_parser_new() ?*TSParser;
-extern fn ts_parser_delete(*TSParser) void;
-extern fn ts_parser_set_language(*TSParser, *const TSLanguage) bool;
-extern fn ts_parser_parse_string(*TSParser, ?*const TSTree, [*c]const u8, u32) ?*TSTree;
-extern fn ts_tree_delete(*TSTree) void;
-extern fn ts_tree_root_node(*const TSTree) TSNode;
-extern fn ts_query_new(*const TSLanguage, [*c]const u8, u32, *u32, *TSQueryError) ?*TSQuery;
-extern fn ts_query_delete(*TSQuery) void;
-extern fn ts_query_capture_name_for_id(*const TSQuery, u32, *u32) ?[*]const u8;
-extern fn ts_query_cursor_new() ?*TSQueryCursor;
-extern fn ts_query_cursor_delete(*TSQueryCursor) void;
-extern fn ts_query_cursor_exec(*TSQueryCursor, *const TSQuery, TSNode) void;
-extern fn ts_query_cursor_next_capture(*TSQueryCursor, *TSQueryMatch, *u32) bool;
-extern fn ts_node_start_byte(TSNode) u32;
-extern fn ts_node_end_byte(TSNode) u32;
 
 const Allocator = std.mem.Allocator;
 const Color = core.render_policy.Color;
@@ -128,10 +59,6 @@ const command_failure_output_limit: usize = 1600;
 const warm_render_job_cap: usize = 4;
 const cold_render_job_cap: usize = 16;
 const artifact_job_slack: usize = 2;
-const highlight_query_read_limit = 1024 * 1024;
-
-pub const tree_sitter_language_version: u32 = build_options.tree_sitter_language_version;
-pub const tree_sitter_min_compatible_language_version: u32 = build_options.tree_sitter_min_compatible_language_version;
 
 pub const NativeRuntimeVersions = struct {
     cairo: []const u8,
@@ -358,75 +285,6 @@ pub const Options = struct {
     jobs: ?usize = null,
     cache_dir: []const u8 = ".ss-cache/render",
     highlight_languages: []const utils.highlight.Language = &.{},
-};
-
-const HighlightSpan = struct {
-    start: usize,
-    end: usize,
-    color: Color,
-};
-
-const HighlightLanguageHandle = struct {
-    language: *const TSLanguage,
-
-    fn deinit(_: *HighlightLanguageHandle) void {}
-};
-
-pub const TreeSitterHealthStatus = enum {
-    ok,
-    warning,
-    fail,
-};
-
-pub const TreeSitterHealthItem = struct {
-    name: []u8,
-    parser: []u8,
-    query: []u8,
-    status: TreeSitterHealthStatus,
-    detail: []u8,
-    capture_count: usize = 0,
-    mapped_capture_count: usize = 0,
-
-    pub fn deinit(self: *TreeSitterHealthItem, allocator: Allocator) void {
-        allocator.free(self.name);
-        allocator.free(self.parser);
-        allocator.free(self.query);
-        allocator.free(self.detail);
-    }
-};
-
-pub const TreeSitterHealthReport = struct {
-    configured_languages: usize,
-    failures: usize,
-    warnings: usize,
-    items: []TreeSitterHealthItem,
-
-    pub fn deinit(self: *TreeSitterHealthReport, allocator: Allocator) void {
-        for (self.items) |*item| item.deinit(allocator);
-        allocator.free(self.items);
-    }
-};
-
-const TreeSitterRuntime = struct {
-    parser_new: *const fn () callconv(.c) ?*TSParser,
-    parser_delete: *const fn (*TSParser) callconv(.c) void,
-    parser_set_language: *const fn (*TSParser, *const TSLanguage) callconv(.c) bool,
-    parser_parse_string: *const fn (*TSParser, ?*const TSTree, [*c]const u8, u32) callconv(.c) ?*TSTree,
-    tree_delete: *const fn (*TSTree) callconv(.c) void,
-    tree_root_node: *const fn (*const TSTree) callconv(.c) TSNode,
-    query_new: *const fn (*const TSLanguage, [*c]const u8, u32, *u32, *TSQueryError) callconv(.c) ?*TSQuery,
-    query_delete: *const fn (*TSQuery) callconv(.c) void,
-    query_capture_name_for_id: *const fn (*const TSQuery, u32, *u32) callconv(.c) ?[*]const u8,
-    query_cursor_new: *const fn () callconv(.c) ?*TSQueryCursor,
-    query_cursor_delete: *const fn (*TSQueryCursor) callconv(.c) void,
-    query_cursor_exec: *const fn (*TSQueryCursor, *const TSQuery, TSNode) callconv(.c) void,
-    query_cursor_next_capture: *const fn (*TSQueryCursor, *TSQueryMatch, *u32) callconv(.c) bool,
-    node_start_byte: *const fn (TSNode) callconv(.c) u32,
-    node_end_byte: *const fn (TSNode) callconv(.c) u32,
-
-    fn deinit(self: *TreeSitterRuntime) void {
-        _ = self;
-    }
 };
 
 const ObjectCommand = struct {
@@ -3299,7 +3157,7 @@ fn markdownCodeBlockPaint(block: *const Block, text: TextPaint) CodePaint {
 
 fn drawMarkdownCodeBlockContent(ctx: *DrawContext, x: f32, first_baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, code_paint: CodePaint) !void {
     if (code_paint.language) |language| {
-        if (highlightLanguageFor(ctx, language) != null) {
+        if (utils.highlight.findLanguage(ctx.highlight_languages, language) != null) {
             try drawHighlightedCodeLines(ctx, x, first_baseline_bl, width, source, text.code_font, text.markdown_code_font_size, text.markdown_code_line_height, code_paint, text.emoji_spacing, true);
             return;
         }
@@ -4232,13 +4090,6 @@ fn drawPlainTextAtTopWithOptions(
     return atomLineAdvance(atoms.items, paint);
 }
 
-fn highlightLanguageFor(ctx: *DrawContext, language: []const u8) ?*const utils.highlight.Language {
-    for (ctx.highlight_languages) |*configured| {
-        if (std.ascii.eqlIgnoreCase(configured.name, language)) return configured;
-    }
-    return null;
-}
-
 fn drawTreeSitterCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: TextPaint, code: CodePaint, font_size: f32, line_height: f32) !void {
     const first_baseline_bl = try baselineBlForBox(ctx, frame, text.code_font, font_size, line_height);
     try drawHighlightedCodeLines(ctx, frame.x, first_baseline_bl, frame.width, content, text.code_font, font_size, line_height, code, text.emoji_spacing, false);
@@ -4269,7 +4120,18 @@ fn drawHighlightedCodeLines(
         return;
     };
 
-    var spans = try collectTreeSitterHighlightSpans(ctx, language, content, code);
+    var failure: syntax_highlight.Failure = .none;
+    var spans = syntax_highlight.collectSpans(
+        ctx.allocator,
+        ctx.io,
+        ctx.highlight_languages,
+        language,
+        content,
+        &failure,
+    ) catch |err| {
+        try recordSyntaxHighlightFailure(ctx, failure);
+        return err;
+    };
     defer spans.deinit(ctx.allocator);
 
     var cursor_bl = first_baseline_bl;
@@ -4279,7 +4141,7 @@ fn drawHighlightedCodeLines(
         if (trim_trailing_empty_line and line.len == 0 and line_view.raw_end == content.len and content.len > 0 and content[content.len - 1] == '\n') break;
         const line_start = line_view.span.start;
         const line_end = line_view.span.end;
-        try drawHighlightedCodeLine(ctx, x, baselineTop(cursor_bl, font_size), width, content, line_start, line_end, spans.items, font, font_size, line_height, code.plain, emoji_spacing);
+        try drawHighlightedCodeLine(ctx, x, baselineTop(cursor_bl, font_size), width, content, line_start, line_end, spans.items, font, font_size, line_height, code, emoji_spacing);
         cursor_bl -= line_height;
     }
 }
@@ -4292,407 +4154,34 @@ fn drawHighlightedCodeLine(
     content: []const u8,
     line_start: usize,
     line_end: usize,
-    spans: []const HighlightSpan,
+    spans: []const syntax_highlight.Span,
     font: FontFace,
     font_size: f32,
     line_height: f32,
-    plain_color: Color,
+    code: CodePaint,
     emoji_spacing: f32,
 ) !void {
     var cursor_x = x;
     var pos = line_start;
     _ = width;
     while (pos < line_end) {
-        var next = nextHighlightBoundary(spans, pos, line_end);
+        var next = syntax_highlight.nextBoundary(spans, pos, line_end);
         if (next <= pos) next = @min(pos + 1, line_end);
-        const color = highlightColorAt(spans, pos, next) orelse plain_color;
+        const color = if (syntax_highlight.roleAt(spans, pos, next)) |role| colorForHighlightRole(code, role) else code.plain;
         try drawCodeSegment(ctx, &cursor_x, y_top, content[pos..next], font, font_size, line_height, color, emoji_spacing);
         pos = next;
     }
 }
 
-fn collectTreeSitterHighlightSpans(ctx: *DrawContext, language_name: []const u8, content: []const u8, code: CodePaint) !std.ArrayList(HighlightSpan) {
-    var spans = std.ArrayList(HighlightSpan).empty;
-    errdefer spans.deinit(ctx.allocator);
-    const configured = highlightLanguageFor(ctx, language_name) orelse return spans;
-    if (content.len > std.math.maxInt(u32)) return spans;
-
-    var runtime = try loadTreeSitterRuntime();
-    defer runtime.deinit();
-
-    var handle = try loadTreeSitterLanguage(configured);
-    defer handle.deinit();
-
-    var query_source = loadHighlightQuerySource(ctx, configured) catch |err| {
-        if (ctx.command_failure) |failure| {
-            var reason_buf: [256]u8 = undefined;
-            const message = try std.fmt.allocPrint(
-                ctx.allocator,
-                "highlight query '{s}' could not be read: {s}",
-                .{ configured.query, utils.err.formatErrorReason(&reason_buf, err) },
-            );
-            defer ctx.allocator.free(message);
-            try failure.record(message);
-        }
-        return err;
-    };
-    defer query_source.deinit(ctx.allocator);
-
-    const parser = runtime.parser_new() orelse return error.TreeSitterParserCreateFailed;
-    defer runtime.parser_delete(parser);
-    if (!runtime.parser_set_language(parser, handle.language)) return error.TreeSitterLanguageRejected;
-    const tree = runtime.parser_parse_string(parser, null, @ptrCast(content.ptr), @intCast(content.len)) orelse return error.TreeSitterParseFailed;
-    defer runtime.tree_delete(tree);
-
-    var query_error_offset: u32 = 0;
-    var query_error_type: TSQueryError = .none;
-    const query = runtime.query_new(handle.language, @ptrCast(query_source.text.ptr), @intCast(query_source.text.len), &query_error_offset, &query_error_type) orelse {
-        if (ctx.command_failure) |failure| {
-            const message = try std.fmt.allocPrint(
-                ctx.allocator,
-                "highlight query '{s}' is invalid at byte {d} ({s})",
-                .{ configured.query, query_error_offset, @tagName(query_error_type) },
-            );
-            defer ctx.allocator.free(message);
-            try failure.record(message);
-        }
-        return error.TreeSitterQueryFailed;
-    };
-    defer runtime.query_delete(query);
-
-    const cursor = runtime.query_cursor_new() orelse return error.TreeSitterQueryCursorCreateFailed;
-    defer runtime.query_cursor_delete(cursor);
-    runtime.query_cursor_exec(cursor, query, runtime.tree_root_node(tree));
-
-    var match = std.mem.zeroes(TSQueryMatch);
-    var capture_index: u32 = 0;
-    while (runtime.query_cursor_next_capture(cursor, &match, &capture_index)) {
-        if (capture_index >= match.capture_count) continue;
-        const capture = match.captures[capture_index];
-        var capture_name_len: u32 = 0;
-        const capture_name_ptr = runtime.query_capture_name_for_id(query, capture.index, &capture_name_len) orelse continue;
-        const capture_name = @as([*]const u8, @ptrCast(capture_name_ptr))[0..capture_name_len];
-        const color = colorForCapture(code, capture_name) orelse continue;
-        const start: usize = runtime.node_start_byte(capture.node);
-        const end: usize = runtime.node_end_byte(capture.node);
-        if (start >= end or end > content.len) continue;
-        try spans.append(ctx.allocator, .{ .start = start, .end = end, .color = color });
-    }
-
-    std.mem.sort(HighlightSpan, spans.items, {}, highlightSpanLessThan);
-    return spans;
+fn recordSyntaxHighlightFailure(ctx: *DrawContext, failure: syntax_highlight.Failure) !void {
+    const command_failure = ctx.command_failure orelse return;
+    const message = try failure.messageAlloc(ctx.allocator) orelse return;
+    defer ctx.allocator.free(message);
+    try command_failure.record(message);
 }
 
-pub fn treeSitterHealthReport(
-    allocator: Allocator,
-    io: std.Io,
-    languages: []const utils.highlight.Language,
-) !TreeSitterHealthReport {
-    var items = std.ArrayList(TreeSitterHealthItem).empty;
-    errdefer {
-        for (items.items) |*item| item.deinit(allocator);
-        items.deinit(allocator);
-    }
-
-    var failures: usize = 0;
-    var warnings: usize = 0;
-    for (languages) |language| {
-        var item = try checkTreeSitterLanguageHealth(allocator, io, language);
-        const status = item.status;
-        items.append(allocator, item) catch |err| {
-            item.deinit(allocator);
-            return err;
-        };
-        switch (status) {
-            .ok => {},
-            .warning => warnings += 1,
-            .fail => failures += 1,
-        }
-    }
-
-    return .{
-        .configured_languages = languages.len,
-        .failures = failures,
-        .warnings = warnings,
-        .items = try items.toOwnedSlice(allocator),
-    };
-}
-
-fn checkTreeSitterLanguageHealth(
-    allocator: Allocator,
-    io: std.Io,
-    language: utils.highlight.Language,
-) !TreeSitterHealthItem {
-    var runtime = loadTreeSitterRuntime() catch |err| {
-        var reason_buf: [256]u8 = undefined;
-        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "runtime unavailable: {s}", .{utils.err.formatErrorReason(&reason_buf, err)});
-    };
-    defer runtime.deinit();
-
-    var handle = loadTreeSitterLanguage(&language) catch |err| {
-        var reason_buf: [256]u8 = undefined;
-        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "language load failed: {s}", .{utils.err.formatErrorReason(&reason_buf, err)});
-    };
-    defer handle.deinit();
-
-    var query_source = loadHighlightQuerySourceForHealth(allocator, io, &language) catch |err| {
-        var reason_buf: [256]u8 = undefined;
-        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "query load failed: {s}", .{utils.err.formatErrorReason(&reason_buf, err)});
-    };
-    defer query_source.deinit(allocator);
-    if (query_source.text.len == 0) {
-        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "query source is empty", .{});
-    }
-
-    const parser = runtime.parser_new() orelse {
-        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "parser creation failed", .{});
-    };
-    defer runtime.parser_delete(parser);
-    if (!runtime.parser_set_language(parser, handle.language)) {
-        return makeTreeSitterLanguageRejectedHealthItem(allocator, language);
-    }
-
-    const sample = treeSitterHealthSample(language.parser);
-    const tree = runtime.parser_parse_string(parser, null, @ptrCast(sample.ptr), @intCast(sample.len)) orelse {
-        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "sample parse failed", .{});
-    };
-    defer runtime.tree_delete(tree);
-
-    var query_error_offset: u32 = 0;
-    var query_error_type: TSQueryError = .none;
-    const query = runtime.query_new(handle.language, @ptrCast(query_source.text.ptr), @intCast(query_source.text.len), &query_error_offset, &query_error_type) orelse {
-        return makeTreeSitterHealthItem(
-            allocator,
-            language,
-            .fail,
-            0,
-            0,
-            "query compile failed at byte {d}: {s}",
-            .{ query_error_offset, @tagName(query_error_type) },
-        );
-    };
-    defer runtime.query_delete(query);
-
-    const cursor = runtime.query_cursor_new() orelse {
-        return makeTreeSitterHealthItem(allocator, language, .fail, 0, 0, "query cursor creation failed", .{});
-    };
-    defer runtime.query_cursor_delete(cursor);
-    runtime.query_cursor_exec(cursor, query, runtime.tree_root_node(tree));
-
-    var capture_count: usize = 0;
-    var mapped_capture_count: usize = 0;
-    var match = std.mem.zeroes(TSQueryMatch);
-    var capture_index: u32 = 0;
-    while (runtime.query_cursor_next_capture(cursor, &match, &capture_index)) {
-        if (capture_index >= match.capture_count) continue;
-        const capture = match.captures[capture_index];
-        var capture_name_len: u32 = 0;
-        const capture_name_ptr = runtime.query_capture_name_for_id(query, capture.index, &capture_name_len) orelse continue;
-        const capture_name = @as([*]const u8, @ptrCast(capture_name_ptr))[0..capture_name_len];
-        capture_count += 1;
-        if (utils.highlight.roleForCapture(capture_name) != null) mapped_capture_count += 1;
-    }
-
-    if (capture_count == 0) {
-        return makeTreeSitterHealthItem(allocator, language, .warning, capture_count, mapped_capture_count, "query compiled but sample produced no captures", .{});
-    }
-    if (mapped_capture_count == 0) {
-        return makeTreeSitterHealthItem(allocator, language, .warning, capture_count, mapped_capture_count, "query captures do not map to ss highlight roles", .{});
-    }
-    return makeTreeSitterHealthItem(
-        allocator,
-        language,
-        .ok,
-        capture_count,
-        mapped_capture_count,
-        "parser/query ok; captures={d}, mapped={d}",
-        .{ capture_count, mapped_capture_count },
-    );
-}
-
-fn makeTreeSitterLanguageRejectedHealthItem(
-    allocator: Allocator,
-    language: utils.highlight.Language,
-) !TreeSitterHealthItem {
-    if (builtinTreeSitterLanguage(language.parser) != null) {
-        return makeTreeSitterHealthItem(
-            allocator,
-            language,
-            .fail,
-            0,
-            0,
-            "parser rejected language; tree-sitter runtime accepts ABI range {d}..{d}",
-            .{ tree_sitter_min_compatible_language_version, tree_sitter_language_version },
-        );
-    }
-    return makeTreeSitterHealthItem(
-        allocator,
-        language,
-        .fail,
-        0,
-        0,
-        "parser rejected language",
-        .{},
-    );
-}
-
-fn makeTreeSitterHealthItem(
-    allocator: Allocator,
-    language: utils.highlight.Language,
-    status: TreeSitterHealthStatus,
-    capture_count: usize,
-    mapped_capture_count: usize,
-    comptime fmt: []const u8,
-    args: anytype,
-) !TreeSitterHealthItem {
-    const name = try allocator.dupe(u8, language.name);
-    errdefer allocator.free(name);
-    const parser = try allocator.dupe(u8, language.parser);
-    errdefer allocator.free(parser);
-    const query = try allocator.dupe(u8, language.query);
-    errdefer allocator.free(query);
-    const detail = try std.fmt.allocPrint(allocator, fmt, args);
-    return .{
-        .name = name,
-        .parser = parser,
-        .query = query,
-        .status = status,
-        .detail = detail,
-        .capture_count = capture_count,
-        .mapped_capture_count = mapped_capture_count,
-    };
-}
-
-fn treeSitterHealthSample(parser: []const u8) []const u8 {
-    if (std.ascii.eqlIgnoreCase(parser, "ss")) return "import std:themes/default as *\n\npage sample\ntext!(\"hello\")\nend\n";
-    if (std.ascii.eqlIgnoreCase(parser, "bash") or std.ascii.eqlIgnoreCase(parser, "sh") or std.ascii.eqlIgnoreCase(parser, "shell")) return "echo \"$HOME\"\n";
-    if (std.ascii.eqlIgnoreCase(parser, "c")) return "#include <stdio.h>\nint main(void) { return 0; }\n";
-    if (std.ascii.eqlIgnoreCase(parser, "cpp") or std.ascii.eqlIgnoreCase(parser, "c++") or std.ascii.eqlIgnoreCase(parser, "cc")) return "class Sample { public: auto method() { return nullptr; } };\n";
-    if (std.ascii.eqlIgnoreCase(parser, "css")) return "body { color: red; }\n";
-    if (std.ascii.eqlIgnoreCase(parser, "go") or std.ascii.eqlIgnoreCase(parser, "golang")) return "package main\nfunc main() { println(\"hello\") }\n";
-    if (std.ascii.eqlIgnoreCase(parser, "html")) return "<!doctype html><p class=\"sample\">hello</p>\n";
-    if (std.ascii.eqlIgnoreCase(parser, "java")) return "class Main { public static void main(String[] args) { System.out.println(\"hello\"); } }\n";
-    if (std.ascii.eqlIgnoreCase(parser, "javascript") or std.ascii.eqlIgnoreCase(parser, "js")) return "function main() { return 1; }\n";
-    if (std.ascii.eqlIgnoreCase(parser, "json")) return "{\"name\": true, \"count\": 1}\n";
-    if (std.ascii.eqlIgnoreCase(parser, "julia") or std.ascii.eqlIgnoreCase(parser, "jl")) return "function f(x)\n  x + 1\nend\n";
-    if (std.ascii.eqlIgnoreCase(parser, "python") or std.ascii.eqlIgnoreCase(parser, "py")) return "def f(x):\n    return x + 1\n";
-    if (std.ascii.eqlIgnoreCase(parser, "rust") or std.ascii.eqlIgnoreCase(parser, "rs")) return "fn main() { let value = 1; }\n";
-    if (std.ascii.eqlIgnoreCase(parser, "toml")) return "name = \"ss\"\ncount = 1\n";
-    if (std.ascii.eqlIgnoreCase(parser, "typescript") or std.ascii.eqlIgnoreCase(parser, "ts")) return "const value: number = 1;\n";
-    if (std.ascii.eqlIgnoreCase(parser, "tsx")) return "const value = <div>{1}</div>;\n";
-    if (std.ascii.eqlIgnoreCase(parser, "yaml") or std.ascii.eqlIgnoreCase(parser, "yml")) return "name: ss\nitems:\n  - one\n";
-    if (std.ascii.eqlIgnoreCase(parser, "zig")) return "pub fn main() void { const value = 1; }\n";
-    return "value\n";
-}
-
-const LoadedHighlightQuery = struct {
-    text: []const u8,
-    owned: bool = false,
-
-    fn deinit(self: *LoadedHighlightQuery, allocator: Allocator) void {
-        if (self.owned) allocator.free(self.text);
-    }
-};
-
-fn loadHighlightQuerySource(ctx: *DrawContext, configured: *const utils.highlight.Language) !LoadedHighlightQuery {
-    if (builtinHighlightQuery(configured.query)) |query| return .{ .text = query };
-    return .{
-        .text = try std.Io.Dir.cwd().readFileAlloc(ctx.io, configured.query, ctx.allocator, .limited(highlight_query_read_limit)),
-        .owned = true,
-    };
-}
-
-fn loadHighlightQuerySourceForHealth(allocator: Allocator, io: std.Io, configured: *const utils.highlight.Language) !LoadedHighlightQuery {
-    if (builtinHighlightQuery(configured.query)) |query| return .{ .text = query };
-    return .{
-        .text = try std.Io.Dir.cwd().readFileAlloc(io, configured.query, allocator, .limited(highlight_query_read_limit)),
-        .owned = true,
-    };
-}
-
-fn builtinHighlightQuery(query: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, query, "builtin:ss")) return build_options.ss_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:bash")) return build_options.bash_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:c")) return build_options.c_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:cpp")) return build_options.cpp_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:css")) return build_options.css_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:go")) return build_options.go_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:html")) return build_options.html_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:java")) return build_options.java_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:javascript")) return build_options.javascript_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:json")) return build_options.json_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:julia")) return build_options.julia_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:python")) return build_options.python_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:rust")) return build_options.rust_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:toml")) return build_options.toml_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:typescript")) return build_options.typescript_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:yaml")) return build_options.yaml_highlight_query;
-    if (std.mem.eql(u8, query, "builtin:zig")) return build_options.zig_highlight_query;
-    return null;
-}
-
-fn loadTreeSitterLanguage(configured: *const utils.highlight.Language) !HighlightLanguageHandle {
-    if (builtinTreeSitterLanguage(configured.parser)) |language| {
-        return .{ .language = language };
-    }
-    return error.UnknownTreeSitterLanguage;
-}
-
-fn builtinTreeSitterLanguage(parser: []const u8) ?*const TSLanguage {
-    if (std.ascii.eqlIgnoreCase(parser, "ss")) return tree_sitter_ss();
-    if (std.ascii.eqlIgnoreCase(parser, "bash")) return tree_sitter_bash();
-    if (std.ascii.eqlIgnoreCase(parser, "sh")) return tree_sitter_bash();
-    if (std.ascii.eqlIgnoreCase(parser, "shell")) return tree_sitter_bash();
-    if (std.ascii.eqlIgnoreCase(parser, "c")) return tree_sitter_c();
-    if (std.ascii.eqlIgnoreCase(parser, "cpp")) return tree_sitter_cpp();
-    if (std.ascii.eqlIgnoreCase(parser, "c++")) return tree_sitter_cpp();
-    if (std.ascii.eqlIgnoreCase(parser, "cc")) return tree_sitter_cpp();
-    if (std.ascii.eqlIgnoreCase(parser, "css")) return tree_sitter_css();
-    if (std.ascii.eqlIgnoreCase(parser, "go")) return tree_sitter_go();
-    if (std.ascii.eqlIgnoreCase(parser, "golang")) return tree_sitter_go();
-    if (std.ascii.eqlIgnoreCase(parser, "html")) return tree_sitter_html();
-    if (std.ascii.eqlIgnoreCase(parser, "java")) return tree_sitter_java();
-    if (std.ascii.eqlIgnoreCase(parser, "javascript")) return tree_sitter_javascript();
-    if (std.ascii.eqlIgnoreCase(parser, "js")) return tree_sitter_javascript();
-    if (std.ascii.eqlIgnoreCase(parser, "json")) return tree_sitter_json();
-    if (std.ascii.eqlIgnoreCase(parser, "julia")) return tree_sitter_julia();
-    if (std.ascii.eqlIgnoreCase(parser, "jl")) return tree_sitter_julia();
-    if (std.ascii.eqlIgnoreCase(parser, "python")) return tree_sitter_python();
-    if (std.ascii.eqlIgnoreCase(parser, "py")) return tree_sitter_python();
-    if (std.ascii.eqlIgnoreCase(parser, "rust")) return tree_sitter_rust();
-    if (std.ascii.eqlIgnoreCase(parser, "rs")) return tree_sitter_rust();
-    if (std.ascii.eqlIgnoreCase(parser, "toml")) return tree_sitter_toml();
-    if (std.ascii.eqlIgnoreCase(parser, "typescript")) return tree_sitter_typescript();
-    if (std.ascii.eqlIgnoreCase(parser, "ts")) return tree_sitter_typescript();
-    if (std.ascii.eqlIgnoreCase(parser, "tsx")) return tree_sitter_tsx();
-    if (std.ascii.eqlIgnoreCase(parser, "yaml")) return tree_sitter_yaml();
-    if (std.ascii.eqlIgnoreCase(parser, "yml")) return tree_sitter_yaml();
-    if (std.ascii.eqlIgnoreCase(parser, "zig")) return tree_sitter_zig();
-    return null;
-}
-
-fn loadTreeSitterRuntime() !TreeSitterRuntime {
-    return .{
-        .parser_new = ts_parser_new,
-        .parser_delete = ts_parser_delete,
-        .parser_set_language = ts_parser_set_language,
-        .parser_parse_string = ts_parser_parse_string,
-        .tree_delete = ts_tree_delete,
-        .tree_root_node = ts_tree_root_node,
-        .query_new = ts_query_new,
-        .query_delete = ts_query_delete,
-        .query_capture_name_for_id = ts_query_capture_name_for_id,
-        .query_cursor_new = ts_query_cursor_new,
-        .query_cursor_delete = ts_query_cursor_delete,
-        .query_cursor_exec = ts_query_cursor_exec,
-        .query_cursor_next_capture = ts_query_cursor_next_capture,
-        .node_start_byte = ts_node_start_byte,
-        .node_end_byte = ts_node_end_byte,
-    };
-}
-
-fn colorForCapture(code: CodePaint, capture_name: []const u8) ?Color {
-    return switch (utils.highlight.roleForCapture(capture_name) orelse return null) {
+fn colorForHighlightRole(code: CodePaint, role: utils.highlight.CaptureRole) Color {
+    return switch (role) {
         .plain => code.plain,
         .keyword => code.keyword,
         .function => code.function,
@@ -4704,41 +4193,6 @@ fn colorForCapture(code: CodePaint, capture_name: []const u8) ?Color {
         .comment => code.comment,
         .string => code.string,
     };
-}
-
-fn highlightSpanLessThan(_: void, lhs: HighlightSpan, rhs: HighlightSpan) bool {
-    if (lhs.start != rhs.start) return lhs.start < rhs.start;
-    const lhs_len = lhs.end - lhs.start;
-    const rhs_len = rhs.end - rhs.start;
-    return lhs_len < rhs_len;
-}
-
-fn nextHighlightBoundary(spans: []const HighlightSpan, pos: usize, line_end: usize) usize {
-    var next = line_end;
-    for (spans) |span| {
-        if (span.end <= pos or span.start >= line_end) continue;
-        if (span.start > pos) next = @min(next, span.start);
-        if (span.start <= pos and span.end > pos) next = @min(next, span.end);
-    }
-    return next;
-}
-
-fn highlightColorAt(spans: []const HighlightSpan, start: usize, end: usize) ?Color {
-    var best: ?HighlightSpan = null;
-    for (spans) |span| {
-        if (span.start > start or span.end < end) continue;
-        if (best == null or highlightSpanMoreSpecific(span, best.?)) {
-            best = span;
-        }
-    }
-    return if (best) |span| span.color else null;
-}
-
-fn highlightSpanMoreSpecific(candidate: HighlightSpan, current: HighlightSpan) bool {
-    const candidate_len = candidate.end - candidate.start;
-    const current_len = current.end - current.start;
-    if (candidate_len != current_len) return candidate_len < current_len;
-    return candidate.start >= current.start;
 }
 
 fn drawCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: TextPaint, code: ?CodePaint) !void {
@@ -4756,7 +4210,7 @@ fn drawCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: Tex
         .string = text.color,
     };
     if (code_paint.language) |language| {
-        if (highlightLanguageFor(ctx, language) != null) {
+        if (utils.highlight.findLanguage(ctx.highlight_languages, language) != null) {
             return drawTreeSitterCodeBlock(ctx, frame, content, text, code_paint, text.font_size, text.line_height);
         }
     }
