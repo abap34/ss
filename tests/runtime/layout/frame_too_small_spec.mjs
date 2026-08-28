@@ -45,13 +45,13 @@ async function testMarkdownTableUsesConstrainedWidthForDiagnostics() {
 
 page table_ok
   let body = text! <<
-**\`kernel_seidel_2d\` での観測**
+**Observed \`kernel_seidel_2d\` updates**
 
-| 適用回数 | 指標 1 | 指標 2 | 指標 3 |
+| Applications | Metric 1 | Metric 2 | Metric 3 |
 | ---: | ---: | ---: | ---: |
 | 630 | 475 | 472 | 335 |
 
-古い状態を先に流したあと，同じ辺で再更新が繰り返されている．
+Repeated updates continue along the same edge after the older state is processed.
 >>
   body.text.size = 16
   body.text.line_height = 22
