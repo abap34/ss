@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const oldQpdfPkgConfig = path.join(root, "tests/fixtures/build/dependencies/qpdf-10");
+const newQpdfPkgConfig = path.join(root, "tests/fixtures/build/dependencies/qpdf-13");
 const dependencyChecker = process.argv[2] ? path.resolve(root, process.argv[2]) : undefined;
 
 assert.ok(dependencyChecker, "dependency checker executable argument is missing");
@@ -92,6 +93,15 @@ function runDependencyChecker(args, cwd) {
   assert.match(output, /libqpdf 10\.6\.3 is too old/);
   assert.match(output, /requires libqpdf 11\.2\.0 or newer/);
   assert.match(output, /ppa:qpdf\/qpdf/);
+}
+
+{
+  const pkgConfigPath = process.env.PKG_CONFIG_PATH
+    ? `${newQpdfPkgConfig}${path.delimiter}${process.env.PKG_CONFIG_PATH}`
+    : newQpdfPkgConfig;
+  const output = runBuild([], { PKG_CONFIG_PATH: pkgConfigPath });
+  assert.match(output, /libqpdf 13\.0\.0 is newer than the supported range/);
+  assert.match(output, /supports libqpdf 11\.2\.0 or newer and earlier than 13\.0\.0/);
 }
 
 console.log("build dependency diagnostic tests passed");

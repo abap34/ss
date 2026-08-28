@@ -232,7 +232,7 @@ ss has the following dependencies:
 | A C++20 compiler, such as GCC or Clang | Build the small libqpdf C ABI bridge. |
 | tree-sitter | Syntax Highlight. |
 | `git` | Fetch pinned tree-sitter runtime and parser sources during the first build. |
-| libqpdf 11.2.0 or newer, including headers | In-process PDF assembly and embedded PDF placement. |
+| libqpdf 11.2.0 or newer and earlier than 13.0.0, including headers | In-process PDF assembly and embedded PDF placement. |
 | `pdflatex` or `lualatex` | Raw LaTeX math rendering, according to the document or page setting. |
 
 Run `ss doctor` to check project discovery, render tools, and tree-sitter syntax
@@ -263,7 +263,7 @@ Example apt command on Ubuntu/Debian:
 sudo apt-get install -y \
   pkg-config qpdf libcairo2-dev libgdk-pixbuf-2.0-dev libpango1.0-dev \
   libqpdf-dev librsvg2-dev
-pkg-config --atleast-version=11.2.0 libqpdf
+pkg-config --exists 'libqpdf >= 11.2.0' 'libqpdf < 13.0.0'
 ```
 
 The qpdf bridge also needs a C++20 compiler. The build invokes `c++` by

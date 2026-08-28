@@ -36,8 +36,8 @@ pub fn main(init: std.process.Init) void {
     if (args.len < 2) fatal("internal build error: dependency-check mode is missing", .{});
 
     if (std.mem.eql(u8, args[1], "native-pdf")) {
-        if (args.len != 5) fatal("internal build error: native-pdf dependency-check arguments are incomplete", .{});
-        checkNativePdfDependencies(allocator, init.io, args[2], args[3], args[4]);
+        if (args.len != 6) fatal("internal build error: native-pdf dependency-check arguments are incomplete", .{});
+        checkNativePdfDependencies(allocator, init.io, args[2], args[3], args[4], args[5]);
         return;
     }
     if (std.mem.eql(u8, args[1], "node")) {
@@ -64,6 +64,7 @@ fn checkNativePdfDependencies(
     pkg_config: []const u8,
     cpp: []const u8,
     minimum_qpdf_version: []const u8,
+    maximum_exclusive_qpdf_version: []const u8,
 ) void {
     const pkg_config_version = run(allocator, io, &.{ pkg_config, "--version" });
     switch (pkg_config_version.status) {
@@ -79,7 +80,13 @@ fn checkNativePdfDependencies(
         .succeeded => {},
     }
 
-    checkQpdfLibrary(allocator, io, pkg_config, minimum_qpdf_version);
+    checkQpdfLibrary(
+        allocator,
+        io,
+        pkg_config,
+        minimum_qpdf_version,
+        maximum_exclusive_qpdf_version,
+    );
 
     var missing: [pdf_packages.len]bool = @splat(false);
     var missing_count: usize = 0;
@@ -102,17 +109,20 @@ fn checkQpdfLibrary(
     io: std.Io,
     pkg_config: []const u8,
     minimum_version: []const u8,
+    maximum_exclusive_version: []const u8,
 ) void {
     const exists = run(allocator, io, &.{ pkg_config, "--exists", "libqpdf" });
     switch (exists.status) {
         .missing => missingPkgConfig(pkg_config),
-        .failed => missingQpdf(minimum_version),
+        .failed => missingQpdf(minimum_version, maximum_exclusive_version),
         .succeeded => {},
     }
 
-    const requirement = std.fmt.allocPrint(allocator, "--atleast-version={s}", .{minimum_version}) catch
+    const minimum_requirement = std.fmt.allocPrint(allocator, "libqpdf >= {s}", .{minimum_version}) catch
         fatal("out of memory while checking libqpdf", .{});
-    const compatible = run(allocator, io, &.{ pkg_config, requirement, "libqpdf" });
+    const maximum_requirement = std.fmt.allocPrint(allocator, "libqpdf < {s}", .{maximum_exclusive_version}) catch
+        fatal("out of memory while checking libqpdf", .{});
+    const compatible = run(allocator, io, &.{ pkg_config, "--exists", minimum_requirement, maximum_requirement });
     switch (compatible.status) {
         .missing => missingPkgConfig(pkg_config),
         .succeeded => return,
@@ -122,7 +132,14 @@ fn checkQpdfLibrary(
     const version_result = run(allocator, io, &.{ pkg_config, "--modversion", "libqpdf" });
     if (version_result.status != .succeeded) commandFailure(pkg_config, version_result);
     const installed_version = std.mem.trim(u8, version_result.stdout, " \t\r\n");
-    oldQpdf(if (installed_version.len == 0) "unknown" else installed_version, minimum_version);
+    const reported_version = if (installed_version.len == 0) "unknown" else installed_version;
+
+    const satisfies_minimum = run(allocator, io, &.{ pkg_config, "--exists", minimum_requirement });
+    switch (satisfies_minimum.status) {
+        .missing => missingPkgConfig(pkg_config),
+        .failed => oldQpdf(reported_version, minimum_version),
+        .succeeded => tooNewQpdf(reported_version, minimum_version, maximum_exclusive_version),
+    }
 }
 
 fn checkNode(allocator: std.mem.Allocator, io: std.Io) void {
@@ -300,11 +317,11 @@ fn missingCpp(command: []const u8) noreturn {
     std.process.exit(1);
 }
 
-fn missingQpdf(minimum_version: []const u8) noreturn {
+fn missingQpdf(minimum_version: []const u8, maximum_exclusive_version: []const u8) noreturn {
     std.debug.print(
         \\error: pkg-config could not find libqpdf.
         \\
-        \\ss requires libqpdf {s} or newer, including its C++ headers and pkg-config metadata.
+        \\ss supports libqpdf {s} or newer and earlier than {s}, including its C++ headers and pkg-config metadata.
         \\Install it and retry:
         \\  Ubuntu/Debian: sudo apt-get install qpdf libqpdf-dev
         \\  macOS/Homebrew: brew install qpdf
@@ -317,7 +334,7 @@ fn missingQpdf(minimum_version: []const u8) noreturn {
         \\
         \\If libqpdf is installed in a custom prefix, add its pkgconfig directory to PKG_CONFIG_PATH.
         \\
-    , .{minimum_version});
+    , .{ minimum_version, maximum_exclusive_version });
     std.process.exit(1);
 }
 
@@ -338,6 +355,26 @@ fn oldQpdf(installed_version: []const u8, minimum_version: []const u8) noreturn 
         \\If a compatible version is already installed elsewhere, place its pkgconfig directory first in PKG_CONFIG_PATH.
         \\
     , .{ installed_version, minimum_version });
+    std.process.exit(1);
+}
+
+fn tooNewQpdf(
+    installed_version: []const u8,
+    minimum_version: []const u8,
+    maximum_exclusive_version: []const u8,
+) noreturn {
+    std.debug.print(
+        \\error: libqpdf {s} is newer than the supported range.
+        \\
+        \\ss supports libqpdf {s} or newer and earlier than {s}.
+        \\Install a supported qpdf release and retry.
+        \\
+        \\Verify the selected version with:
+        \\  pkg-config --modversion libqpdf
+        \\
+        \\If a supported version is already installed elsewhere, place its pkgconfig directory first in PKG_CONFIG_PATH.
+        \\
+    , .{ installed_version, minimum_version, maximum_exclusive_version });
     std.process.exit(1);
 }
 

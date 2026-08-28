@@ -4,6 +4,7 @@ const Module = std.Build.Module;
 const Step = std.Build.Step;
 
 pub const minimum_version = "11.2.0";
+pub const maximum_exclusive_version = "13.0.0";
 
 pub const Config = struct {
     cpp: []const u8,

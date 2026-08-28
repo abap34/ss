@@ -15,6 +15,7 @@ pub const Options = struct {
     pkg_config: []const u8,
     cpp: []const u8,
     minimum_qpdf_version: []const u8,
+    maximum_exclusive_qpdf_version: []const u8,
 };
 
 pub fn create(b: *std.Build, options: Options) Checks {
@@ -30,7 +31,13 @@ pub fn create(b: *std.Build, options: Options) Checks {
 
     const native_pdf = b.addRunArtifact(executable);
     native_pdf.setName("check native PDF build dependencies");
-    native_pdf.addArgs(&.{ "native-pdf", options.pkg_config, options.cpp, options.minimum_qpdf_version });
+    native_pdf.addArgs(&.{
+        "native-pdf",
+        options.pkg_config,
+        options.cpp,
+        options.minimum_qpdf_version,
+        options.maximum_exclusive_qpdf_version,
+    });
 
     const node = b.addRunArtifact(executable);
     node.setName("check Node.js test dependency");

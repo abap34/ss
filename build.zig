@@ -183,6 +183,7 @@ pub fn build(b: *std.Build) void {
         .pkg_config = qpdf_config.pkg_config,
         .cpp = qpdf_config.cpp,
         .minimum_qpdf_version = qpdf.minimum_version,
+        .maximum_exclusive_qpdf_version = qpdf.maximum_exclusive_version,
     });
     const ctx = BuildContext{
         .b = b,
