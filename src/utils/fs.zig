@@ -6,7 +6,48 @@ pub const ImageDimensions = struct {
 };
 
 pub fn readFileAlloc(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
+    return readFileAllocLimited(io, allocator, path, .unlimited);
+}
+
+pub fn readFileAllocLimited(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    limit: std.Io.Limit,
+) ![]u8 {
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, limit) catch |err|
+        return normalizePathError(io, path, err);
+}
+
+pub fn statFile(io: std.Io, path: []const u8) !std.Io.Dir.Stat {
+    return std.Io.Dir.cwd().statFile(io, path, .{}) catch |err|
+        return normalizePathError(io, path, err);
+}
+
+pub fn openDir(io: std.Io, path: []const u8, options: std.Io.Dir.OpenOptions) !std.Io.Dir {
+    return std.Io.Dir.cwd().openDir(io, path, options) catch |err|
+        return normalizePathError(io, path, err);
+}
+
+fn normalizePathError(io: std.Io, path: []const u8, err: anyerror) anyerror {
+    if (err != error.FileNotFound) return err;
+
+    var ancestor = std.fs.path.dirname(path) orelse return err;
+    const cwd = std.Io.Dir.cwd();
+    while (ancestor.len != 0) {
+        const stat = cwd.statFile(io, ancestor, .{}) catch |ancestor_err| switch (ancestor_err) {
+            error.FileNotFound => {
+                const parent = std.fs.path.dirname(ancestor) orelse return err;
+                if (std.mem.eql(u8, parent, ancestor)) return err;
+                ancestor = parent;
+                continue;
+            },
+            error.NotDir => return error.NotDir,
+            else => return ancestor_err,
+        };
+        return if (stat.kind == .directory) err else error.NotDir;
+    }
+    return err;
 }
 
 pub fn writeFile(io: std.Io, path: []const u8, bytes: []const u8) !void {
@@ -20,7 +61,7 @@ pub fn writeFile(io: std.Io, path: []const u8, bytes: []const u8) !void {
 pub fn validateOutputParent(io: std.Io, path: []const u8) !void {
     const parent = std.fs.path.dirname(path) orelse return;
     if (parent.len == 0) return;
-    const stat = std.Io.Dir.cwd().statFile(io, parent, .{}) catch |err| switch (err) {
+    const stat = statFile(io, parent) catch |err| switch (err) {
         error.FileNotFound => return error.OutputParentNotFound,
         else => return err,
     };

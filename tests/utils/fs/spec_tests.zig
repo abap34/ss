@@ -40,6 +40,26 @@ test "utils fs spec: file existence checks preserve symbolic link cycles" {
     try testing.expectError(error.SymLinkLoop, utils.fs.fileExists(allocator, path));
 }
 
+test "utils fs spec: path operations distinguish missing paths from non-directory ancestors" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const blocker = try writeTmpFile(allocator, tmp, "blocker", "not a directory");
+    defer allocator.free(blocker);
+    const blocked_path = try std.fs.path.join(allocator, &.{ blocker, "missing", "child.txt" });
+    defer allocator.free(blocked_path);
+    const missing_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/missing/child.txt", .{tmp.sub_path[0..]});
+    defer allocator.free(missing_path);
+
+    try testing.expectError(error.NotDir, utils.fs.statFile(testing.io, blocked_path));
+    try testing.expectError(error.NotDir, utils.fs.openDir(testing.io, blocked_path, .{}));
+    try testing.expectError(error.NotDir, utils.fs.readFileAlloc(testing.io, allocator, blocked_path));
+
+    try testing.expectError(error.FileNotFound, utils.fs.statFile(testing.io, missing_path));
+    try testing.expectError(error.FileNotFound, utils.fs.openDir(testing.io, missing_path, .{}));
+    try testing.expectError(error.FileNotFound, utils.fs.readFileAlloc(testing.io, allocator, missing_path));
+}
+
 test "utils fs spec: file writes atomically replace existing contents" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
