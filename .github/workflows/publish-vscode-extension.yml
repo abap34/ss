@@ -15,7 +15,7 @@ jobs:
   publish-vscode:
     name: Validate, package, and publish VSIX
     if: ${{ !contains(github.ref_name, '-patch.') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out repository
