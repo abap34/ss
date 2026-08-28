@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { access, link, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { access, link, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
@@ -1252,7 +1252,7 @@ end
 }
 
 async function mkdtempProject(prefix) {
-  return mkdtemp(path.join(os.tmpdir(), prefix));
+  return realpath(await mkdtemp(path.join(os.tmpdir(), prefix)));
 }
 
 function combinedOutput(result) {
