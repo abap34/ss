@@ -193,7 +193,7 @@ struct SsNamedDestination {
     QPDFObjectHandle value;
 };
 
-static QPDFObjectHandle ss_qpdf_copy_destination_component(QPDFObjectHandle const& value) {
+static QPDFObjectHandle ss_qpdf_copy_destination_component(QPDFObjectHandle value) {
     if (value.isNull()) return QPDFObjectHandle::newNull();
     if (value.isName()) return QPDFObjectHandle::newName(value.getName());
     if (value.isInteger()) return QPDFObjectHandle::newInteger(value.getIntValue());
