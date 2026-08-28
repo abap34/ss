@@ -948,7 +948,7 @@ fn persistOutputManifest(
 }
 
 fn readOutputManifest(allocator: Allocator, io: std.Io, path: []const u8) !?OutputManifest {
-    const text = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(output_manifest_read_limit)) catch |err| switch (err) {
+    const text = utils.fs.readFileAllocLimited(io, allocator, path, .limited(output_manifest_read_limit)) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
@@ -1201,10 +1201,10 @@ fn readCacheSeal(
 ) !?[cache_checksum_size]u8 {
     const seal_path = try cacheSealPath(allocator, path);
     defer allocator.free(seal_path);
-    const source = std.Io.Dir.cwd().readFileAlloc(
+    const source = utils.fs.readFileAllocLimited(
         io,
-        seal_path,
         allocator,
+        seal_path,
         .limited(cache_checksum_size + 1),
     ) catch |err| switch (err) {
         error.FileNotFound, error.StreamTooLong => return null,

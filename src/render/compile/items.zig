@@ -643,7 +643,7 @@ fn readPersistedMeasurements(
     path: []const u8,
     target: *std.AutoHashMap(u64, core.LayoutMeasurement),
 ) !void {
-    const text = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(layout_measurement_cache_read_limit)) catch return;
+    const text = utils.fs.readFileAllocLimited(io, allocator, path, .limited(layout_measurement_cache_read_limit)) catch return;
     defer allocator.free(text);
 
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -4621,7 +4621,7 @@ fn cachedLatexReference(ctx: *DrawContext, reference_path: []const u8) !?LatexAs
 }
 
 fn readLatexReference(ctx: *DrawContext, reference_path: []const u8) !LatexAsset {
-    const contents = std.Io.Dir.cwd().readFileAlloc(ctx.io, reference_path, ctx.allocator, .limited(4096)) catch return NativePdfError.InvalidPdfCache;
+    const contents = utils.fs.readFileAllocLimited(ctx.io, ctx.allocator, reference_path, .limited(4096)) catch return NativePdfError.InvalidPdfCache;
     defer ctx.allocator.free(contents);
     const trimmed = std.mem.trim(u8, contents, " \t\r\n");
     var fields = std.mem.splitScalar(u8, trimmed, '\t');
@@ -4773,10 +4773,10 @@ fn readLatexMetrics(
     path: []const u8,
     entries: []const latex_document.Entry,
 ) ![]?latex_document.Metrics {
-    const contents = std.Io.Dir.cwd().readFileAlloc(
+    const contents = utils.fs.readFileAllocLimited(
         ctx.io,
-        path,
         ctx.allocator,
+        path,
         .limited(latex_document.metrics_read_limit),
     ) catch {
         return NativePdfError.AssetConversionFailed;
@@ -4825,10 +4825,10 @@ fn latexPreambleLines(ctx: *DrawContext, preamble: []const LatexPreambleEntry) !
 fn readLatexPreambleFile(ctx: *DrawContext, path: []const u8) ![]const u8 {
     const resolved = try resolveAssetPath(ctx, path);
     defer ctx.allocator.free(resolved);
-    return std.Io.Dir.cwd().readFileAlloc(
+    return utils.fs.readFileAllocLimited(
         ctx.io,
-        resolved,
         ctx.allocator,
+        resolved,
         .limited(latex_document.preamble_read_limit),
     ) catch |err| {
         if (ctx.command_failure) |target| {

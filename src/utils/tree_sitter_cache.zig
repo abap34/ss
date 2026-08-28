@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs = @import("fs.zig");
 
 pub const Stats = struct {
     files: usize = 0,
@@ -13,7 +14,7 @@ pub const PruneResult = struct {
 };
 
 pub fn stats(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8) !Stats {
-    var dir = std.Io.Dir.cwd().openDir(io, root_path, .{ .iterate = true }) catch |err| {
+    var dir = fs.openDir(io, root_path, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) return .{};
         return err;
     };
@@ -43,7 +44,7 @@ pub fn bundleCount(io: std.Io, allocator: std.mem.Allocator, root_path: []const 
     const bundles_path = try std.fs.path.join(allocator, &.{ root_path, "bundles" });
     defer allocator.free(bundles_path);
 
-    var dir = std.Io.Dir.cwd().openDir(io, bundles_path, .{ .iterate = true }) catch |err| {
+    var dir = fs.openDir(io, bundles_path, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) return 0;
         return err;
     };
@@ -81,7 +82,7 @@ pub fn prune(
     const bundles_path = try std.fs.path.join(allocator, &.{ root_path, "bundles" });
     defer allocator.free(bundles_path);
 
-    var dir = std.Io.Dir.cwd().openDir(io, bundles_path, .{ .iterate = true }) catch |err| {
+    var dir = fs.openDir(io, bundles_path, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) return .{};
         return err;
     };

@@ -326,10 +326,10 @@ pub const Cache = struct {
     fn restoreLocked(self: *Cache, cache_dir: []const u8) !void {
         const path = try persistentCachePath(self.allocator, cache_dir);
         defer self.allocator.free(path);
-        const source = std.Io.Dir.cwd().readFileAlloc(
+        const source = utils.fs.readFileAllocLimited(
             self.io,
-            path,
             self.allocator,
+            path,
             .limited(persistent_cache_file_limit),
         ) catch |err| switch (err) {
             error.FileNotFound => return,

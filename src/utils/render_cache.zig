@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs = @import("fs.zig");
 
 pub const path = ".ss-cache/render";
 const artifacts_path = path ++ "/artifacts";
@@ -57,7 +58,7 @@ pub fn clear(io: std.Io) !void {
 }
 
 pub fn stats(io: std.Io, allocator: std.mem.Allocator) !Stats {
-    var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch |err| {
+    var dir = fs.openDir(io, path, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) return .{};
         return err;
     };
@@ -93,7 +94,7 @@ pub fn pruneConfigured(io: std.Io, allocator: std.mem.Allocator, config: Config)
 fn pruneDue(io: std.Io, interval_seconds: u64) !bool {
     if (interval_seconds == 0) return true;
     const interval_ns = @as(i128, @intCast(interval_seconds)) * std.time.ns_per_s;
-    const stat = std.Io.Dir.cwd().statFile(io, prune_stamp_path, .{}) catch |err| switch (err) {
+    const stat = fs.statFile(io, prune_stamp_path) catch |err| switch (err) {
         error.FileNotFound => return true,
         else => return err,
     };
@@ -135,7 +136,7 @@ fn prune(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8, max_by
 }
 
 fn collectFiles(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8, files: *std.ArrayList(FileEntry)) !Stats {
-    var dir = std.Io.Dir.cwd().openDir(io, root_path, .{ .iterate = true }) catch |err| {
+    var dir = fs.openDir(io, root_path, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) return .{};
         return err;
     };
