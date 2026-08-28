@@ -597,8 +597,7 @@ fn doctorResolvedProject(
     } else {
         std.debug.print("  ok ss.toml: {s}\n", .{project_file});
     }
-    const cwd = std.Io.Dir.cwd();
-    const entry_stat = cwd.statFile(io, entry_path, .{}) catch |err| blk: {
+    const entry_stat = utils.fs.statFile(io, entry_path) catch |err| blk: {
         var reason_buf: [256]u8 = undefined;
         std.debug.print("  fail entry: {s}: {s}\n", .{ entry_path, error_report.formatErrorReason(&reason_buf, err) });
         issues += 1;
@@ -612,7 +611,7 @@ fn doctorResolvedProject(
             std.debug.print("  ok entry: {s}\n", .{entry_path});
         }
     }
-    const asset_base_stat = cwd.statFile(io, asset_base_dir, .{}) catch |err| blk: {
+    const asset_base_stat = utils.fs.statFile(io, asset_base_dir) catch |err| blk: {
         var reason_buf: [256]u8 = undefined;
         std.debug.print("  fail asset base: {s}: {s}\n", .{ asset_base_dir, error_report.formatErrorReason(&reason_buf, err) });
         issues += 1;
@@ -808,7 +807,7 @@ fn validateResolvedEntryPath(
     options: CommandOptions,
     resolved: *const project.Resolved,
 ) !void {
-    const stat = std.Io.Dir.cwd().statFile(io, resolved.entry_path, .{}) catch |err| switch (err) {
+    const stat = utils.fs.statFile(io, resolved.entry_path) catch |err| switch (err) {
         error.FileNotFound => {
             try printEntryPathDiagnostic(allocator, io, options, resolved, .not_found);
             return error.DiagnosticsFailed;
@@ -1163,7 +1162,7 @@ fn validateOutputParentOrCliError(io: std.Io, output_path: []const u8) !void {
             return failCli("{s}", .{error_report.formatPathFailure(&message_buf, "OutputPathAccessFailed", "inspect output parent", parent, err)});
         },
     };
-    const output_stat = std.Io.Dir.cwd().statFile(io, output_path, .{}) catch |err| switch (err) {
+    const output_stat = utils.fs.statFile(io, output_path) catch |err| switch (err) {
         error.FileNotFound => return,
         else => {
             if (!error_report.isFileSystemError(err)) return err;

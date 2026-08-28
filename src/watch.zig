@@ -300,7 +300,7 @@ fn fingerprintImpl(
     try mixHighlightLanguageStats(io, &hash, options.highlight_languages, context);
     try mixModuleDependencyStats(io, allocator, &hash, options, context);
 
-    var dir = std.Io.Dir.cwd().openDir(io, options.asset_base_dir, .{ .iterate = true }) catch |err| {
+    var dir = utils.fs.openDir(io, options.asset_base_dir, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) return hash;
         try context.record(.asset_base, options.asset_base_dir, err);
         return err;
@@ -442,7 +442,7 @@ fn mixStatFile(
     target: FingerprintTarget,
     context: *FingerprintContext,
 ) !void {
-    const stat = std.Io.Dir.cwd().statFile(io, path, .{}) catch |err| {
+    const stat = utils.fs.statFile(io, path) catch |err| {
         if (err == error.FileNotFound) return;
         try context.record(target, path, err);
         return err;

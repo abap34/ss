@@ -201,7 +201,7 @@ fn writeFileWithParents(io: std.Io, path: []const u8, bytes: []const u8) !void {
 }
 
 fn readFileOrNull(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
-    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited) catch |err| switch (err) {
+    return utils.fs.readFileAlloc(io, allocator, path) catch |err| switch (err) {
         error.FileNotFound => null,
         else => return err,
     };

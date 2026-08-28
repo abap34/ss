@@ -820,7 +820,7 @@ fn readModuleFile(
     io: std.Io,
     path: []const u8,
 ) ![]u8 {
-    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_module_bytes));
+    return utils.fs.readFileAllocLimited(io, allocator, path, .limited(max_module_bytes));
 }
 
 fn tryReadModuleFile(

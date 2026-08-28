@@ -598,7 +598,7 @@ const LoadedHighlightQuery = struct {
 fn loadHighlightQuerySource(allocator: Allocator, io: std.Io, configured: *const utils.highlight.Language) !LoadedHighlightQuery {
     if (builtinHighlightQuery(configured.query)) |query| return .{ .text = query };
     return .{
-        .text = try std.Io.Dir.cwd().readFileAlloc(io, configured.query, allocator, .limited(query_read_limit)),
+        .text = try utils.fs.readFileAllocLimited(io, allocator, configured.query, .limited(query_read_limit)),
         .owned = true,
     };
 }
