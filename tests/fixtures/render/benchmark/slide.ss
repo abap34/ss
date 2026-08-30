@@ -71,6 +71,26 @@ $$
 ~ body.top == formula.bottom - 64
 end
 
+page dense_inline_math
+let heading = h1!("Dense inline LaTeX")
+let body = text! <<
+This Markdown page contains many small formulas among short prose fragments.
+
+$x_1$, $x_2$, $x_3$, $x_4$, $x_5$, $x_6$, $x_7$, $x_8$, $x_9$, $x_{10}$, $x_{11}$, $x_{12}$.
+
+$a+b$, $a-b$, $ab$, $a/b$, $a^2$, $b^2$, $a_1$, $b_1$, $\alpha$, $\beta$, $\gamma$, $\delta$.
+
+$f(x)$, $g(x)$, $h(x)$, $\sin x$, $\cos x$, $\tan x$, $e^x$, $\log x$, $\sqrt{x}$, $|x|$, $x!$, $n!$.
+
+$u_1$, $u_2$, $v_1$, $v_2$, $p+q$, $p-q$, $pq$, $p/q$, $r^2$, $s^2$, $i+j$, $i-j$.
+>>
+~ heading.left == page.left + 88
+~ heading.top == page.top - 64
+~ body.left == page.left + 104
+~ body.right == page.right - 104
+~ body.top == heading.bottom - 48
+end
+
 page vector_asset
 let heading = h1!("Explicit SVG resource")
 let asset = image!("asset.svg", 0.72)
