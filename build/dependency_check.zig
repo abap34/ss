@@ -18,7 +18,6 @@ const PdfPackage = struct {
 };
 
 const pdf_packages = [_]PdfPackage{
-    .{ .name = "cairo", .purpose = "PDF drawing" },
     .{ .name = "pangocairo", .purpose = "text layout with Cairo" },
     .{ .name = "pangofc", .purpose = "font discovery for Pango" },
     .{ .name = "librsvg-2.0", .purpose = "SVG rendering" },
@@ -36,8 +35,8 @@ pub fn main(init: std.process.Init) void {
     if (args.len < 2) fatal("internal build error: dependency-check mode is missing", .{});
 
     if (std.mem.eql(u8, args[1], "native-pdf")) {
-        if (args.len != 6) fatal("internal build error: native-pdf dependency-check arguments are incomplete", .{});
-        checkNativePdfDependencies(allocator, init.io, args[2], args[3], args[4], args[5]);
+        if (args.len != 8) fatal("internal build error: native-pdf dependency-check arguments are incomplete", .{});
+        checkNativePdfDependencies(allocator, init.io, args[2], args[3], args[4], args[5], args[6], args[7]);
         return;
     }
     if (std.mem.eql(u8, args[1], "node")) {
@@ -63,6 +62,8 @@ fn checkNativePdfDependencies(
     io: std.Io,
     pkg_config: []const u8,
     cpp: []const u8,
+    minimum_cairo_version: []const u8,
+    maximum_exclusive_cairo_version: []const u8,
     minimum_qpdf_version: []const u8,
     maximum_exclusive_qpdf_version: []const u8,
 ) void {
@@ -80,6 +81,13 @@ fn checkNativePdfDependencies(
         .succeeded => {},
     }
 
+    checkCairoLibrary(
+        allocator,
+        io,
+        pkg_config,
+        minimum_cairo_version,
+        maximum_exclusive_cairo_version,
+    );
     checkQpdfLibrary(
         allocator,
         io,
@@ -104,6 +112,75 @@ fn checkNativePdfDependencies(
     if (missing_count != 0) missingPdfPackages(missing);
 }
 
+fn checkCairoLibrary(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    pkg_config: []const u8,
+    minimum_version: []const u8,
+    maximum_exclusive_version: []const u8,
+) void {
+    const status = versionedPackageStatus(
+        allocator,
+        io,
+        pkg_config,
+        "cairo",
+        minimum_version,
+        maximum_exclusive_version,
+    );
+    switch (status.kind) {
+        .compatible => return,
+        .missing => missingCairo(minimum_version, maximum_exclusive_version),
+        .too_old => oldCairo(status.version, minimum_version),
+        .too_new => tooNewCairo(status.version, minimum_version, maximum_exclusive_version),
+    }
+}
+
+const VersionedPackageStatus = struct {
+    kind: Kind,
+    version: []const u8 = "unknown",
+
+    const Kind = enum { compatible, missing, too_old, too_new };
+};
+
+fn versionedPackageStatus(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    pkg_config: []const u8,
+    package: []const u8,
+    minimum_version: []const u8,
+    maximum_exclusive_version: []const u8,
+) VersionedPackageStatus {
+    const exists = run(allocator, io, &.{ pkg_config, "--exists", package });
+    switch (exists.status) {
+        .missing => missingPkgConfig(pkg_config),
+        .failed => return .{ .kind = .missing },
+        .succeeded => {},
+    }
+
+    const minimum_requirement = std.fmt.allocPrint(allocator, "{s} >= {s}", .{ package, minimum_version }) catch
+        fatal("out of memory while checking {s}", .{package});
+    const maximum_requirement = std.fmt.allocPrint(allocator, "{s} < {s}", .{ package, maximum_exclusive_version }) catch
+        fatal("out of memory while checking {s}", .{package});
+    const compatible = run(allocator, io, &.{ pkg_config, "--exists", minimum_requirement, maximum_requirement });
+    switch (compatible.status) {
+        .missing => missingPkgConfig(pkg_config),
+        .succeeded => return .{ .kind = .compatible },
+        .failed => {},
+    }
+
+    const version_result = run(allocator, io, &.{ pkg_config, "--modversion", package });
+    if (version_result.status != .succeeded) commandFailure(pkg_config, version_result);
+    const installed_version = std.mem.trim(u8, version_result.stdout, " \t\r\n");
+    const reported_version = if (installed_version.len == 0) "unknown" else installed_version;
+
+    const satisfies_minimum = run(allocator, io, &.{ pkg_config, "--exists", minimum_requirement });
+    return switch (satisfies_minimum.status) {
+        .missing => missingPkgConfig(pkg_config),
+        .failed => .{ .kind = .too_old, .version = reported_version },
+        .succeeded => .{ .kind = .too_new, .version = reported_version },
+    };
+}
+
 fn checkQpdfLibrary(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -111,34 +188,19 @@ fn checkQpdfLibrary(
     minimum_version: []const u8,
     maximum_exclusive_version: []const u8,
 ) void {
-    const exists = run(allocator, io, &.{ pkg_config, "--exists", "libqpdf" });
-    switch (exists.status) {
-        .missing => missingPkgConfig(pkg_config),
-        .failed => missingQpdf(minimum_version, maximum_exclusive_version),
-        .succeeded => {},
-    }
-
-    const minimum_requirement = std.fmt.allocPrint(allocator, "libqpdf >= {s}", .{minimum_version}) catch
-        fatal("out of memory while checking libqpdf", .{});
-    const maximum_requirement = std.fmt.allocPrint(allocator, "libqpdf < {s}", .{maximum_exclusive_version}) catch
-        fatal("out of memory while checking libqpdf", .{});
-    const compatible = run(allocator, io, &.{ pkg_config, "--exists", minimum_requirement, maximum_requirement });
-    switch (compatible.status) {
-        .missing => missingPkgConfig(pkg_config),
-        .succeeded => return,
-        .failed => {},
-    }
-
-    const version_result = run(allocator, io, &.{ pkg_config, "--modversion", "libqpdf" });
-    if (version_result.status != .succeeded) commandFailure(pkg_config, version_result);
-    const installed_version = std.mem.trim(u8, version_result.stdout, " \t\r\n");
-    const reported_version = if (installed_version.len == 0) "unknown" else installed_version;
-
-    const satisfies_minimum = run(allocator, io, &.{ pkg_config, "--exists", minimum_requirement });
-    switch (satisfies_minimum.status) {
-        .missing => missingPkgConfig(pkg_config),
-        .failed => oldQpdf(reported_version, minimum_version),
-        .succeeded => tooNewQpdf(reported_version, minimum_version, maximum_exclusive_version),
+    const status = versionedPackageStatus(
+        allocator,
+        io,
+        pkg_config,
+        "libqpdf",
+        minimum_version,
+        maximum_exclusive_version,
+    );
+    switch (status.kind) {
+        .compatible => return,
+        .missing => missingQpdf(minimum_version, maximum_exclusive_version),
+        .too_old => oldQpdf(status.version, minimum_version),
+        .too_new => tooNewQpdf(status.version, minimum_version, maximum_exclusive_version),
     }
 }
 
@@ -335,6 +397,54 @@ fn missingQpdf(minimum_version: []const u8, maximum_exclusive_version: []const u
         \\If libqpdf is installed in a custom prefix, add its pkgconfig directory to PKG_CONFIG_PATH.
         \\
     , .{ minimum_version, maximum_exclusive_version });
+    std.process.exit(1);
+}
+
+fn missingCairo(minimum_version: []const u8, maximum_exclusive_version: []const u8) noreturn {
+    std.debug.print(
+        \\error: pkg-config could not find Cairo.
+        \\
+        \\ss supports Cairo {s} or newer and earlier than {s}, including its development headers and pkg-config metadata.
+        \\Install it and retry:
+        \\  Ubuntu/Debian: sudo apt-get install libcairo2-dev
+        \\  macOS/Homebrew: brew install cairo
+        \\
+        \\If Cairo is installed in a custom prefix, add its pkgconfig directory to PKG_CONFIG_PATH.
+        \\
+    , .{ minimum_version, maximum_exclusive_version });
+    std.process.exit(1);
+}
+
+fn oldCairo(installed_version: []const u8, minimum_version: []const u8) noreturn {
+    std.debug.print(
+        \\error: Cairo {s} is too old; ss requires Cairo {s} or newer.
+        \\
+        \\Verify the selected version with:
+        \\  pkg-config --modversion cairo
+        \\
+        \\If a compatible version is already installed elsewhere, place its pkgconfig directory first in PKG_CONFIG_PATH.
+        \\
+    , .{ installed_version, minimum_version });
+    std.process.exit(1);
+}
+
+fn tooNewCairo(
+    installed_version: []const u8,
+    minimum_version: []const u8,
+    maximum_exclusive_version: []const u8,
+) noreturn {
+    std.debug.print(
+        \\error: Cairo {s} is newer than the supported range.
+        \\
+        \\ss supports Cairo {s} or newer and earlier than {s}.
+        \\Install a supported Cairo release and retry.
+        \\
+        \\Verify the selected version with:
+        \\  pkg-config --modversion cairo
+        \\
+        \\If a supported version is already installed elsewhere, place its pkgconfig directory first in PKG_CONFIG_PATH.
+        \\
+    , .{ installed_version, minimum_version, maximum_exclusive_version });
     std.process.exit(1);
 }
 

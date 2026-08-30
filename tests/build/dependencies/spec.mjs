@@ -6,6 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const oldCairoPkgConfig = path.join(root, "tests/fixtures/build/dependencies/cairo-1.15");
+const newCairoPkgConfig = path.join(root, "tests/fixtures/build/dependencies/cairo-2");
 const oldQpdfPkgConfig = path.join(root, "tests/fixtures/build/dependencies/qpdf-10");
 const newQpdfPkgConfig = path.join(root, "tests/fixtures/build/dependencies/qpdf-13");
 const dependencyChecker = process.argv[2] ? path.resolve(root, process.argv[2]) : undefined;
@@ -83,6 +85,24 @@ function runDependencyChecker(args, cwd) {
   const output = runBuild(["-Dqpdf-pkg-config=ss-missing-pkg-config"]);
   assert.match(output, /pkg-config command 'ss-missing-pkg-config' was not found/);
   assert.match(output, /-Dqpdf-pkg-config=\/absolute\/path\/to\/pkg-config/);
+}
+
+{
+  const pkgConfigPath = process.env.PKG_CONFIG_PATH
+    ? `${oldCairoPkgConfig}${path.delimiter}${process.env.PKG_CONFIG_PATH}`
+    : oldCairoPkgConfig;
+  const output = runBuild([], { PKG_CONFIG_PATH: pkgConfigPath });
+  assert.match(output, /Cairo 1\.15\.10 is too old/);
+  assert.match(output, /requires Cairo 1\.16\.0 or newer/);
+}
+
+{
+  const pkgConfigPath = process.env.PKG_CONFIG_PATH
+    ? `${newCairoPkgConfig}${path.delimiter}${process.env.PKG_CONFIG_PATH}`
+    : newCairoPkgConfig;
+  const output = runBuild([], { PKG_CONFIG_PATH: pkgConfigPath });
+  assert.match(output, /Cairo 2\.0\.0 is newer than the supported range/);
+  assert.match(output, /supports Cairo 1\.16\.0 or newer and earlier than 2\.0\.0/);
 }
 
 {

@@ -1,0 +1,9 @@
+prefix=/usr
+libdir=${prefix}/lib
+includedir=${prefix}/include/cairo
+
+Name: cairo
+Description: Deliberately new Cairo metadata for build diagnostic tests
+Version: 2.0.0
+Libs: -L${libdir} -lcairo
+Cflags: -I${includedir}

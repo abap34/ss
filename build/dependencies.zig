@@ -14,6 +14,8 @@ pub const Checks = struct {
 pub const Options = struct {
     pkg_config: []const u8,
     cpp: []const u8,
+    minimum_cairo_version: []const u8,
+    maximum_exclusive_cairo_version: []const u8,
     minimum_qpdf_version: []const u8,
     maximum_exclusive_qpdf_version: []const u8,
 };
@@ -35,6 +37,8 @@ pub fn create(b: *std.Build, options: Options) Checks {
         "native-pdf",
         options.pkg_config,
         options.cpp,
+        options.minimum_cairo_version,
+        options.maximum_exclusive_cairo_version,
         options.minimum_qpdf_version,
         options.maximum_exclusive_qpdf_version,
     });

@@ -1,4 +1,5 @@
 const std = @import("std");
+const cairo = @import("build/cairo.zig");
 const dependencies = @import("build/dependencies.zig");
 const qpdf = @import("build/qpdf.zig");
 
@@ -182,6 +183,8 @@ pub fn build(b: *std.Build) void {
     const dependency_checks = dependencies.create(b, .{
         .pkg_config = qpdf_config.pkg_config,
         .cpp = qpdf_config.cpp,
+        .minimum_cairo_version = cairo.minimum_version,
+        .maximum_exclusive_cairo_version = cairo.maximum_exclusive_version,
         .minimum_qpdf_version = qpdf.minimum_version,
         .maximum_exclusive_qpdf_version = qpdf.maximum_exclusive_version,
     });
