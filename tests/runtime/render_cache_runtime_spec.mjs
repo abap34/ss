@@ -7,6 +7,7 @@ import { assert, ssBin } from "./harness.mjs";
 
 await testRenderCacheGenerations();
 await testRenderManifestFallbacks();
+await testAnnotationChangesReusePageCache();
 await testDeltaRejectsInternalLinkChanges();
 await testMeasurementCacheIsReused();
 await testRenderCompilationReusesTextShapes();
@@ -29,7 +30,7 @@ async function testRenderCacheGenerations() {
     await assertPathMissing(path.join(cacheRoot, "pages"), "top-level page cache directory should not be created");
     await assertPathMissing(path.join(cacheRoot, "chunks"), "top-level chunk cache directory should not be created");
 
-    const contentCache = path.join(cacheRoot, "ss-pdf-render-ir-v1");
+    const contentCache = path.join(cacheRoot, "ss-pdf-render-ir-v2");
     const firstPages = await pdfFiles(path.join(contentCache, "pages"));
     assert(firstPages.length === firstPagesSource.length, `expected ${firstPagesSource.length} cached page PDFs, got ${firstPages.length}`);
     const firstDocuments = await pdfFiles(path.join(contentCache, "documents"));
@@ -80,7 +81,7 @@ async function testRenderManifestFallbacks() {
   try {
     const slide = path.join(project, "slide.ss");
     const output = path.join(project, "out.pdf");
-    const cacheRoot = path.join(project, ".ss-cache", "render", "ss-pdf-render-ir-v1");
+    const cacheRoot = path.join(project, ".ss-cache", "render", "ss-pdf-render-ir-v2");
     await writeFile(slide, deckSource(["First", "Second", "Third", "Fourth"]), "utf8");
     await runSs(["render", "slide.ss", output], project);
     const manifestDir = path.join(cacheRoot, "output-manifests");
@@ -122,7 +123,7 @@ async function testDeltaRejectsInternalLinkChanges() {
     await writeFile(slide, internalLinkDeckSource("Target", "Jump"), "utf8");
     await runSs(["render", "slide.ss", output], project);
 
-    const manifestDir = path.join(project, ".ss-cache", "render", "ss-pdf-render-ir-v1", "output-manifests");
+    const manifestDir = path.join(project, ".ss-cache", "render", "ss-pdf-render-ir-v2", "output-manifests");
     const manifestNames = (await readdir(manifestDir)).filter((name) => name.endsWith(".manifest"));
     assert(manifestNames.length === 1, `expected one internal-link manifest, got ${manifestNames.length}`);
     const manifest = path.join(manifestDir, manifestNames[0]);
@@ -142,6 +143,40 @@ async function testDeltaRejectsInternalLinkChanges() {
       changedDestinationManifest.includes("\nassembly\tfull\n"),
       `changing a destination definition unexpectedly used delta assembly:\n${changedDestinationManifest}`,
     );
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testAnnotationChangesReusePageCache() {
+  const project = await mkdtempProject("ss-render-annotation-cache-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    const output = path.join(project, "out.pdf");
+    const cacheRoot = path.join(project, ".ss-cache", "render", "ss-pdf-render-ir-v2");
+    await writeFile(slide, uriLinkDeckSource("https://example.com/first"), "utf8");
+    await runSs(["render", "slide.ss", output], project);
+
+    const pageDir = path.join(cacheRoot, "pages");
+    const firstPages = await pdfFiles(pageDir);
+    const firstPageStats = await fileStats(pageDir, firstPages);
+    const manifestDir = path.join(cacheRoot, "output-manifests");
+    const manifestNames = (await readdir(manifestDir)).filter((name) => name.endsWith(".manifest"));
+    assert(manifestNames.length === 1, `expected one URI-link manifest, got ${manifestNames.length}`);
+    const manifest = path.join(manifestDir, manifestNames[0]);
+
+    await writeFile(slide, uriLinkDeckSource("https://example.com/second"), "utf8");
+    const secondRun = await runSs(["render", "slide.ss", output], project);
+    assert(secondRun.stderr.includes("pages 1/1"), `URI-only change rerendered its page:\n${secondRun.stderr}`);
+    const secondPages = await pdfFiles(pageDir);
+    assertFileSetUnchanged(firstPageStats, await fileStats(pageDir, secondPages), "URI-only change modified page cache entries");
+    const secondManifest = await readFile(manifest, "utf8");
+    assert(secondManifest.includes("\nassembly\tfull\n"), `URI-only change did not rebuild document annotations:\n${secondManifest}`);
+
+    const inspected = await spawnCollect("qpdf", ["--json", output], project);
+    assert(inspected.code === 0, `qpdf could not inspect URI-link output:\n${inspected.stderr}`);
+    assert(inspected.stdout.includes("https://example.com/second"), "rebuilt document omitted the changed URI");
+    assert(!inspected.stdout.includes("https://example.com/first"), "rebuilt document retained the old URI");
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -329,6 +364,17 @@ end
 page link
 text! <<
 [${linkText}](#target)
+>>
+end
+`;
+}
+
+function uriLinkDeckSource(target) {
+  return `import std:themes/default as *
+
+page link
+text! <<
+[Jump](${target})
 >>
 end
 `;

@@ -418,8 +418,8 @@ async function testPdfCacheAccessFailureReportsCachePath() {
   const project = await mkdtempProject("ss-render-pdf-cache-access-");
   try {
     const renderCache = path.join(project, ".ss-cache", "render");
-    const pdfCache = path.join(renderCache, "ss-pdf-render-ir-v1");
-    const pageCacheRelative = path.join(".ss-cache", "render", "ss-pdf-render-ir-v1", "pages");
+    const pdfCache = path.join(renderCache, "ss-pdf-render-ir-v2");
+    const pageCacheRelative = path.join(".ss-cache", "render", "ss-pdf-render-ir-v2", "pages");
     const pageCache = path.join(project, pageCacheRelative);
     await mkdir(pdfCache, { recursive: true });
     await writeFile(pageCache, "not a directory\n", "utf8");

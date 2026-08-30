@@ -477,6 +477,13 @@ test "render IR buffered page fingerprints match the unbuffered reference" {
     const buffered = render_ir.pageFingerprint(&page);
     const reference = render_ir.pageFingerprintUnbufferedForTesting(&page);
     try testing.expectEqualSlices(u8, &reference, &buffered);
+    const content_buffered = render_ir.pageContentFingerprint(&page);
+    const content_reference = render_ir.pageContentFingerprintUnbufferedForTesting(&page);
+    try testing.expectEqualSlices(u8, &content_reference, &content_buffered);
+
+    page.destinations.items[0].point.x += 1;
+    try testing.expect(!std.mem.eql(u8, &buffered, &render_ir.pageFingerprint(&page)));
+    try testing.expectEqualSlices(u8, &content_buffered, &render_ir.pageContentFingerprint(&page));
 }
 
 test "render IR validation rejects invalid source and clip ranges" {

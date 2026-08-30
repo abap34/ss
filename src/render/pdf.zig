@@ -7,7 +7,7 @@ const utils = @import("utils");
 const Allocator = std.mem.Allocator;
 var temporary_counter: usize = 0;
 
-pub const cache_version = "ss-pdf-render-ir-v1";
+pub const cache_version = "ss-pdf-render-ir-v2";
 const output_manifest_version = "ss-pdf-output-manifest-v3";
 const document_digest_version = "ss-pdf-document-pages-v3";
 const cache_seal_version = "ss-pdf-cache-seal-v1";
@@ -34,6 +34,7 @@ const CacheIdentity = struct {
 
 const ManifestPage = struct {
     digest: render.Fingerprint,
+    content_digest: render.Fingerprint,
     has_annotations: bool,
 };
 
@@ -250,7 +251,7 @@ pub fn writeValidated(
     defer allocator.free(missing);
     var missing_count: usize = 0;
     for (current_manifest.pages, 0..) |page, index| {
-        page_paths[index] = digestPath(allocator, page_cache, page.digest) catch |err| {
+        page_paths[index] = digestPath(allocator, page_cache, page.content_digest) catch |err| {
             recordWriteFailure(allocator, options, .preparation, "prepare cached PDF page path", page_cache, err);
             return err;
         };
@@ -837,17 +838,19 @@ fn buildOutputManifest(
     ir: *const render.Ir,
     requested_jobs: ?usize,
 ) !OutputManifest {
+    const environment_digest = backendEnvironmentDigest();
     const pages = try allocator.alloc(ManifestPage, ir.pages.len);
     errdefer allocator.free(pages);
     const worker_count = configuredWorkerCount(requested_jobs, ir.pages.len);
     if (worker_count <= 1) {
         for (ir.pages, pages) |*page, *manifest_page| {
-            manifest_page.* = manifestPage(page);
+            manifest_page.* = manifestPage(page, environment_digest);
         }
     } else {
         var work = ManifestWork{
             .ir = ir,
             .pages = pages,
+            .environment_digest = environment_digest,
         };
         const threads = try allocator.alloc(std.Thread, worker_count);
         defer allocator.free(threads);
@@ -863,7 +866,7 @@ fn buildOutputManifest(
         joined = true;
     }
     return .{
-        .document_digest = documentDigest(pages),
+        .document_digest = documentDigest(pages, environment_digest),
         .assembly = .full,
         .pages = pages,
     };
@@ -872,6 +875,7 @@ fn buildOutputManifest(
 const ManifestWork = struct {
     ir: *const render.Ir,
     pages: []ManifestPage,
+    environment_digest: render.Fingerprint,
     next: std.atomic.Value(usize) = .init(0),
 };
 
@@ -879,25 +883,28 @@ fn manifestWorker(work: *ManifestWork) void {
     while (true) {
         const index = work.next.fetchAdd(1, .monotonic);
         if (index >= work.pages.len) return;
-        work.pages[index] = manifestPage(&work.ir.pages[index]);
+        work.pages[index] = manifestPage(&work.ir.pages[index], work.environment_digest);
     }
 }
 
-fn manifestPage(page: *const render.Page) ManifestPage {
+fn manifestPage(page: *const render.Page, environment_digest: render.Fingerprint) ManifestPage {
     return .{
         .digest = render.pageFingerprint(page),
+        .content_digest = pageContentCacheDigest(page, environment_digest),
         .has_annotations = page.links.items.len != 0 or page.destinations.items.len != 0,
     };
 }
 
-fn documentDigest(pages: []const ManifestPage) render.Fingerprint {
+fn documentDigest(pages: []const ManifestPage, environment_digest: render.Fingerprint) render.Fingerprint {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(document_digest_version);
+    hasher.update(&environment_digest);
     var count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &count_bytes, @intCast(pages.len), .little);
     hasher.update(&count_bytes);
     for (pages) |page| {
         hasher.update(&page.digest);
+        hasher.update(&page.content_digest);
         hasher.update(&.{@as(u8, @intFromBool(page.has_annotations))});
     }
     var digest: render.Fingerprint = undefined;
@@ -905,10 +912,51 @@ fn documentDigest(pages: []const ManifestPage) render.Fingerprint {
     return digest;
 }
 
+fn pageContentCacheDigest(page: *const render.Page, environment_digest: render.Fingerprint) render.Fingerprint {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("ss-pdf-page-content-cache-v1");
+    hasher.update(&environment_digest);
+    const content_digest = render.pageContentFingerprint(page);
+    hasher.update(&content_digest);
+    var digest: render.Fingerprint = undefined;
+    hasher.final(&digest);
+    return digest;
+}
+
+fn backendEnvironmentDigest() render.Fingerprint {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("ss-pdf-native-environment-v1");
+    hashVersionString(&hasher, c.ss_pdf_cairo_version_string());
+    hashVersionString(&hasher, c.ss_pdf_pango_version_string());
+    hashVersionString(&hasher, c.ss_pdf_librsvg_version_string());
+    hashVersionString(&hasher, c.ss_pdf_gdk_pixbuf_version_string());
+    var fontconfig_bytes: [4]u8 = undefined;
+    std.mem.writeInt(i32, &fontconfig_bytes, c.ss_pdf_fontconfig_version(), .little);
+    hasher.update(&fontconfig_bytes);
+    hashVersionString(&hasher, c.ss_pdf_harfbuzz_version_string());
+    hashVersionString(&hasher, c.ss_qpdf_version_string());
+    var digest: render.Fingerprint = undefined;
+    hasher.final(&digest);
+    return digest;
+}
+
+fn hashVersionString(hasher: *std.crypto.hash.sha2.Sha256, pointer: [*c]const u8) void {
+    if (pointer == null) {
+        var length_bytes: [8]u8 = @splat(0);
+        hasher.update(&length_bytes);
+        return;
+    }
+    const value = std.mem.span(@as([*:0]const u8, @ptrCast(pointer)));
+    var length_bytes: [8]u8 = undefined;
+    std.mem.writeInt(u64, &length_bytes, @intCast(value.len), .little);
+    hasher.update(&length_bytes);
+    hasher.update(value);
+}
+
 fn pageCacheIdentity(page: ManifestPage) CacheIdentity {
     return .{
         .kind = .page,
-        .key = page.digest,
+        .key = page.content_digest,
         .page_count = 1,
     };
 }
@@ -939,11 +987,13 @@ fn writeOutputManifest(
     );
     for (manifest.pages) |page| {
         const page_hex = std.fmt.bytesToHex(page.digest, .lower);
+        const content_hex = std.fmt.bytesToHex(page.content_digest, .lower);
         try text.print(
             allocator,
-            "page\t{s}\t{d}\n",
+            "page\t{s}\t{s}\t{d}\n",
             .{
                 &page_hex,
+                &content_hex,
                 @intFromBool(page.has_annotations),
             },
         );
@@ -994,6 +1044,7 @@ fn readOutputManifest(allocator: Allocator, io: std.Io, path: []const u8) !?Outp
             return error.InvalidOutputManifest;
         }
         const digest = try parseDigest(fields.next() orelse return error.InvalidOutputManifest);
+        const content_digest = try parseDigest(fields.next() orelse return error.InvalidOutputManifest);
         const annotations = fields.next() orelse return error.InvalidOutputManifest;
         if (fields.next() != null or
             !validManifestBoolean(annotations))
@@ -1002,11 +1053,12 @@ fn readOutputManifest(allocator: Allocator, io: std.Io, path: []const u8) !?Outp
         }
         page.* = .{
             .digest = digest,
+            .content_digest = content_digest,
             .has_annotations = annotations[0] == '1',
         };
     }
     while (lines.next()) |line| if (line.len != 0) return error.InvalidOutputManifest;
-    const actual_document_digest = documentDigest(pages);
+    const actual_document_digest = documentDigest(pages, backendEnvironmentDigest());
     if (!std.mem.eql(u8, &actual_document_digest, &document_digest)) return error.InvalidOutputManifest;
     return .{
         .document_digest = document_digest,

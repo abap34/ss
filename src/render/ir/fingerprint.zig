@@ -75,7 +75,7 @@ fn documentDigest(ir: anytype, comptime include_source_ranges: bool, domain: []c
     }
     hash.integer(ir.pages.len);
     for (ir.pages) |*page_value| {
-        const digest = pageDigest(page_value, true, include_source_ranges);
+        const digest = pageDigest(page_value, true, include_source_ranges, true);
         hash.bytes(&digest);
     }
     return hash.final();
@@ -135,24 +135,38 @@ fn hashPdfBox(hash: anytype, box: anytype) void {
 }
 
 pub fn page(page_value: anytype) Digest {
-    return pageDigest(page_value, false, false);
+    return pageDigest(page_value, false, false, true);
+}
+
+pub fn pageContent(page_value: anytype) Digest {
+    return pageDigest(page_value, false, false, false);
 }
 
 pub fn pageUnbufferedForTesting(page_value: anytype) Digest {
-    return pageDigestWithHash(page_value, false, false, ReferenceHash);
+    return pageDigestWithHash(page_value, false, false, true, ReferenceHash);
 }
 
-fn pageDigest(page_value: anytype, comptime include_metadata: bool, comptime include_source_ranges: bool) Digest {
-    return pageDigestWithHash(page_value, include_metadata, include_source_ranges, Hash);
+pub fn pageContentUnbufferedForTesting(page_value: anytype) Digest {
+    return pageDigestWithHash(page_value, false, false, false, ReferenceHash);
+}
+
+fn pageDigest(
+    page_value: anytype,
+    comptime include_metadata: bool,
+    comptime include_source_ranges: bool,
+    comptime include_annotations: bool,
+) Digest {
+    return pageDigestWithHash(page_value, include_metadata, include_source_ranges, include_annotations, Hash);
 }
 
 fn pageDigestWithHash(
     page_value: anytype,
     comptime include_metadata: bool,
     comptime include_source_ranges: bool,
+    comptime include_annotations: bool,
     comptime HashType: type,
 ) Digest {
-    var hash = HashType.init("ss-render-ir-page-v1");
+    var hash = HashType.init(if (include_annotations) "ss-render-ir-page-v1" else "ss-render-ir-page-content-v1");
     if (include_metadata) {
         hash.integer(page_value.page_id);
         hash.integer(page_value.index);
@@ -215,16 +229,18 @@ fn pageDigestWithHash(
             },
         }
     }
-    hash.integer(page_value.links.items.len);
-    for (page_value.links.items) |link| {
-        hash.tag(link.kind);
-        hash.bytes(link.target);
-        hashRect(&hash, link.rect);
-    }
-    hash.integer(page_value.destinations.items.len);
-    for (page_value.destinations.items) |destination| {
-        hash.bytes(destination.name);
-        hashPoint(&hash, destination.point);
+    if (include_annotations) {
+        hash.integer(page_value.links.items.len);
+        for (page_value.links.items) |link| {
+            hash.tag(link.kind);
+            hash.bytes(link.target);
+            hashRect(&hash, link.rect);
+        }
+        hash.integer(page_value.destinations.items.len);
+        for (page_value.destinations.items) |destination| {
+            hash.bytes(destination.name);
+            hashPoint(&hash, destination.point);
+        }
     }
     if (include_metadata) {
         hash.integer(page_value.reading_order.len);

@@ -851,6 +851,14 @@ pub fn pageFingerprint(page: *const Page) Fingerprint {
     return ir_fingerprint.page(page);
 }
 
+pub fn pageContentFingerprint(page: *const Page) Fingerprint {
+    return ir_fingerprint.pageContent(page);
+}
+
 pub fn pageFingerprintUnbufferedForTesting(page: *const Page) Fingerprint {
     return ir_fingerprint.pageUnbufferedForTesting(page);
+}
+
+pub fn pageContentFingerprintUnbufferedForTesting(page: *const Page) Fingerprint {
+    return ir_fingerprint.pageContentUnbufferedForTesting(page);
 }
