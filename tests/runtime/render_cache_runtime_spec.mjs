@@ -40,7 +40,7 @@ async function testRenderCacheGenerations() {
     assert(manifests.length === 1, `expected one output manifest, got ${manifests.length}`);
     const manifestPath = path.join(contentCache, "output-manifests", manifests[0]);
     const firstManifest = await readFile(manifestPath, "utf8");
-    assert(firstManifest.startsWith("ss-pdf-output-manifest-v2\n"), "output manifest omitted its cache version");
+    assert(firstManifest.startsWith("ss-pdf-output-manifest-v3\n"), "output manifest omitted its cache version");
     assert(firstManifest.includes("\nassembly\tfull\n"), `initial render did not record full assembly:\n${firstManifest}`);
     assert(firstManifest.includes("\npages\t18\n"), "output manifest omitted the page count");
 

@@ -8,8 +8,8 @@ const Allocator = std.mem.Allocator;
 var temporary_counter: usize = 0;
 
 pub const cache_version = "ss-pdf-render-ir-v1";
-const output_manifest_version = "ss-pdf-output-manifest-v2";
-const document_digest_version = "ss-pdf-document-pages-v2";
+const output_manifest_version = "ss-pdf-output-manifest-v3";
+const document_digest_version = "ss-pdf-document-pages-v3";
 const cache_seal_version = "ss-pdf-cache-seal-v1";
 const output_manifest_read_limit = 2 * 1024 * 1024;
 const max_replacement_pages = 8;
@@ -34,8 +34,7 @@ const CacheIdentity = struct {
 
 const ManifestPage = struct {
     digest: render.Fingerprint,
-    has_destinations: bool,
-    has_destination_links: bool,
+    has_annotations: bool,
 };
 
 const OutputManifest = struct {
@@ -723,11 +722,7 @@ fn prepareReplacementPlan(
     defer if (changed_active) changed.deinit(allocator);
     for (previous.pages, current.pages, 0..) |old_page, new_page, index| {
         if (std.mem.eql(u8, &old_page.digest, &new_page.digest)) continue;
-        if (old_page.has_destinations or new_page.has_destinations or
-            old_page.has_destination_links or new_page.has_destination_links)
-        {
-            return null;
-        }
+        if (old_page.has_annotations or new_page.has_annotations) return null;
         changed.append(allocator, index) catch |err| {
             recordWriteFailure(allocator, options, .preparation, "compare prior PDF page fingerprints", manifest_path, err);
             return err;
@@ -858,8 +853,7 @@ fn manifestWorker(work: *ManifestWork) void {
 fn manifestPage(page: *const render.Page) ManifestPage {
     return .{
         .digest = render.pageFingerprint(page),
-        .has_destinations = page.destinations.items.len != 0,
-        .has_destination_links = hasDestinationLinks(page),
+        .has_annotations = page.links.items.len != 0 or page.destinations.items.len != 0,
     };
 }
 
@@ -871,19 +865,11 @@ fn documentDigest(pages: []const ManifestPage) render.Fingerprint {
     hasher.update(&count_bytes);
     for (pages) |page| {
         hasher.update(&page.digest);
-        hasher.update(&.{
-            @as(u8, @intFromBool(page.has_destinations)),
-            @as(u8, @intFromBool(page.has_destination_links)),
-        });
+        hasher.update(&.{@as(u8, @intFromBool(page.has_annotations))});
     }
     var digest: render.Fingerprint = undefined;
     hasher.final(&digest);
     return digest;
-}
-
-fn hasDestinationLinks(page: *const render.Page) bool {
-    for (page.links.items) |link| if (link.kind == .destination) return true;
-    return false;
 }
 
 fn pageCacheIdentity(page: ManifestPage) CacheIdentity {
@@ -922,11 +908,10 @@ fn writeOutputManifest(
         const page_hex = std.fmt.bytesToHex(page.digest, .lower);
         try text.print(
             allocator,
-            "page\t{s}\t{d}\t{d}\n",
+            "page\t{s}\t{d}\n",
             .{
                 &page_hex,
-                @intFromBool(page.has_destinations),
-                @intFromBool(page.has_destination_links),
+                @intFromBool(page.has_annotations),
             },
         );
     }
@@ -976,18 +961,15 @@ fn readOutputManifest(allocator: Allocator, io: std.Io, path: []const u8) !?Outp
             return error.InvalidOutputManifest;
         }
         const digest = try parseDigest(fields.next() orelse return error.InvalidOutputManifest);
-        const destinations = fields.next() orelse return error.InvalidOutputManifest;
-        const destination_links = fields.next() orelse return error.InvalidOutputManifest;
+        const annotations = fields.next() orelse return error.InvalidOutputManifest;
         if (fields.next() != null or
-            !validManifestBoolean(destinations) or
-            !validManifestBoolean(destination_links))
+            !validManifestBoolean(annotations))
         {
             return error.InvalidOutputManifest;
         }
         page.* = .{
             .digest = digest,
-            .has_destinations = destinations[0] == '1',
-            .has_destination_links = destination_links[0] == '1',
+            .has_annotations = annotations[0] == '1',
         };
     }
     while (lines.next()) |line| if (line.len != 0) return error.InvalidOutputManifest;
