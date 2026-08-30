@@ -270,6 +270,20 @@ fn renderPage(ir: *const render.Ir, page_index: usize, output: []const u8) !void
     try pdf_backend.render(testing.allocator, testing.io, ir, page_index, output, &resources);
 }
 
+fn renderDocument(ir: *const render.Ir, output: []const u8) !void {
+    const cache_dir = try std.fmt.allocPrint(testing.allocator, "{s}.cache", .{output});
+    defer testing.allocator.free(cache_dir);
+    try pdf_document.write(testing.allocator, testing.io, ir, output, .{ .cache_dir = cache_dir }, null);
+}
+
+fn writeCairoPage(path: [*c]const u8, width: f64, height: f64) !void {
+    const pdf = c.ss_pdf_create(path, width, height) orelse return error.CairoCreateFailed;
+    defer c.ss_pdf_destroy(pdf);
+    c.ss_pdf_begin_page(pdf, width, height);
+    c.ss_pdf_end_page(pdf);
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
+}
+
 test "render PDF spec: Cairo shim exposes rendering dependency versions" {
     try expectCString(c.ss_pdf_cairo_version_string());
     try expectCString(c.ss_pdf_pango_version_string());
@@ -473,7 +487,10 @@ test "render PDF spec: qpdf replaces selected pages in an immutable base documen
     const output_z = try allocator.dupeZ(u8, output_path);
     defer allocator.free(output_z);
     const inputs = [_][*c]const u8{ first_z.ptr, old_z.ptr, last_z.ptr };
-    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_merge(base_z.ptr, inputs[0..].ptr, inputs.len, 1));
+    try testing.expectEqual(
+        @as(c_int, 0),
+        c.ss_qpdf_merge(base_z.ptr, inputs[0..].ptr, inputs.len, 1, null, 0, null, 0),
+    );
     const replacements = [_][*c]const u8{replacement_z.ptr};
     const page_indices = [_]usize{1};
     try testing.expectEqual(
@@ -508,7 +525,7 @@ test "render PDF spec: qpdf replaces selected pages in an immutable base documen
     try testing.expect(!contains(json, "https://example.com/old"));
 }
 
-test "render PDF spec: Cairo shim and page merge preserve link annotations and destinations" {
+test "render PDF spec: qpdf merge creates link annotations and destinations" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const allocator = testing.allocator;
@@ -526,27 +543,102 @@ test "render PDF spec: Cairo shim and page merge preserve link annotations and d
         defer c.ss_pdf_destroy(pdf);
         try expectCString(c.ss_pdf_status_string(pdf));
         c.ss_pdf_begin_page(pdf, 320, 180);
-        try testing.expectEqual(@as(c_int, 0), c.ss_pdf_add_destination(pdf, "target", 20, 20));
-        try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_uri_link(pdf, 20, 20, 120, 24, "https://example.com"));
         c.ss_pdf_fill_rect(pdf, 20, 20, 120, 24, 0, 0, 0);
-        c.ss_pdf_end_link(pdf);
-        try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_dest_link(pdf, 20, 60, 120, 24, "target"));
         c.ss_pdf_fill_rect(pdf, 20, 60, 120, 24, 0, 0, 0);
-        c.ss_pdf_end_link(pdf);
         c.ss_pdf_end_page(pdf);
         try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
     }
 
     const inputs = [_][*c]const u8{pdf_path_z.ptr};
-    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_merge(merged_path_z.ptr, inputs[0..].ptr, inputs.len, 1));
+    const links = [_]c.SsQpdfLink{
+        .{
+            .page_index = 0,
+            .kind = c.SS_QPDF_LINK_URI,
+            .target = "https://example.com",
+            .x = 20,
+            .y = 20,
+            .width = 120,
+            .height = 24,
+        },
+        .{
+            .page_index = 0,
+            .kind = c.SS_QPDF_LINK_DESTINATION,
+            .target = "target",
+            .x = 20,
+            .y = 60,
+            .width = 120,
+            .height = 24,
+        },
+    };
+    const destinations = [_]c.SsQpdfDestination{
+        .{
+            .page_index = 0,
+            .name = "target",
+            .x = 20,
+            .y = 20,
+        },
+        .{
+            .page_index = 0,
+            .name = "section 'one' \\ café λ",
+            .x = 40,
+            .y = 40,
+        },
+    };
+    try testing.expectEqual(
+        @as(c_int, 0),
+        c.ss_qpdf_merge(
+            merged_path_z.ptr,
+            inputs[0..].ptr,
+            inputs.len,
+            1,
+            &links,
+            links.len,
+            &destinations,
+            destinations.len,
+        ),
+    );
     const json = try qpdfJson(allocator, testing.io, merged_path);
     defer allocator.free(json);
     try expectContains(json, "\"/Names\"");
     try expectContains(json, "\"/Annots\"");
     try expectContains(json, "\"/Subtype\": \"/Link\"");
+    try expectContains(json, "\"/P\"");
     try expectContains(json, "\"/S\": \"/URI\"");
     try expectContains(json, "https://example.com");
+    try expectContains(json, "café λ");
+    try expectUriLinkRect(json, "https://example.com", .{ 20, 136, 140, 160 });
     try expectInternalDestination(json);
+}
+
+test "render PDF spec: qpdf merge rejects unsafe link annotations" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const pdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/unsafe-link.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(pdf_path);
+    const pdf_path_z = try allocator.dupeZ(u8, pdf_path);
+    defer allocator.free(pdf_path_z);
+    const merged_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/unsafe-link-merged.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(merged_path);
+    const merged_path_z = try allocator.dupeZ(u8, merged_path);
+    defer allocator.free(merged_path_z);
+
+    try writeCairoPage(pdf_path_z.ptr, 320, 180);
+    const inputs = [_][*c]const u8{pdf_path_z.ptr};
+    const links = [_]c.SsQpdfLink{.{
+        .page_index = 0,
+        .kind = c.SS_QPDF_LINK_URI,
+        .target = "javascript:alert(1)",
+        .x = 20,
+        .y = 20,
+        .width = 120,
+        .height = 24,
+    }};
+    try testing.expectEqual(
+        @as(c_int, 1),
+        c.ss_qpdf_merge(merged_path_z.ptr, inputs[0..].ptr, inputs.len, 1, &links, links.len, null, 0),
+    );
+    try expectContains(cStringSlice(c.ss_qpdf_last_error()), "unsafe PDF link URI");
 }
 
 test "render PDF spec: Cairo item effects preserve drawing state" {
@@ -679,7 +771,7 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
         .semantics = source_semantics,
         .pages = &source_pages,
     };
-    try renderPage(&source_ir, 0, source_path);
+    try renderDocument(&source_ir, source_path);
 
     var composed_pages = [_]render.Page{.{
         .page_id = 2,
@@ -1066,7 +1158,7 @@ test "render PDF spec: raster replay preserves image failure detail" {
     try testing.expect(contains(detail, "could not load raster image"));
 }
 
-test "render PDF spec: glyph and annotation failures preserve native error details" {
+test "render PDF spec: glyph failures preserve native error details" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const allocator = testing.allocator;
@@ -1098,12 +1190,6 @@ test "render PDF spec: glyph and annotation failures preserve native error detai
     const glyph_error = cStringSlice(c.ss_pdf_status_string(pdf));
     try testing.expect(contains(glyph_error, "could not load PDF font face"));
     try testing.expect(contains(glyph_error, "missing-font-face.ttf"));
-
-    try testing.expectEqual(@as(c_int, 1), c.ss_pdf_begin_uri_link(pdf, 20, 20, 120, 30, null));
-    try testing.expectEqualStrings("invalid PDF link", cStringSlice(c.ss_pdf_status_string(pdf)));
-
-    try testing.expectEqual(@as(c_int, 1), c.ss_pdf_add_destination(pdf, null, 20, 20));
-    try testing.expectEqualStrings("invalid PDF destination", cStringSlice(c.ss_pdf_status_string(pdf)));
 }
 
 test "render PDF spec: libqpdf composes a selectable page form and copies links" {
@@ -1353,5 +1439,5 @@ fn writeQpdfTestLayerSized(
     const catalogs = try render_support.takeCatalogs(allocator, &resources, &fonts);
     ir.resources = catalogs.resources;
     ir.fonts = catalogs.fonts;
-    try renderPage(&ir, 0, path);
+    try renderDocument(&ir, path);
 }

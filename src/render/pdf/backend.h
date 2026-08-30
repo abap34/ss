@@ -237,6 +237,28 @@ typedef struct SsQpdfLayer {
     SsLayerEffects effects;
 } SsQpdfLayer;
 
+typedef enum SsQpdfLinkKind {
+    SS_QPDF_LINK_URI = 0,
+    SS_QPDF_LINK_DESTINATION = 1
+} SsQpdfLinkKind;
+
+typedef struct SsQpdfLink {
+    size_t page_index;
+    int kind;
+    const char *target;
+    double x;
+    double y;
+    double width;
+    double height;
+} SsQpdfLink;
+
+typedef struct SsQpdfDestination {
+    size_t page_index;
+    const char *name;
+    double x;
+    double y;
+} SsQpdfDestination;
+
 const char *ss_pdf_cairo_version_string(void);
 const char *ss_pdf_pango_version_string(void);
 const char *ss_pdf_librsvg_version_string(void);
@@ -314,10 +336,6 @@ void ss_pdf_path_stroke(
     size_t dash_count,
     double dash_offset
 );
-int ss_pdf_begin_uri_link(SsPdf *pdf, double x, double y, double width, double height, const char *uri);
-int ss_pdf_begin_dest_link(SsPdf *pdf, double x, double y, double width, double height, const char *dest);
-void ss_pdf_end_link(SsPdf *pdf);
-int ss_pdf_add_destination(SsPdf *pdf, const char *name, double x, double y);
 int ss_pdf_draw_glyph_run(
     SsPdf *pdf,
     const char *font_path,
@@ -374,7 +392,16 @@ int ss_pdf_draw_svg_tinted(SsPdf *pdf, const char *path, double x, double y, dou
 
 SS_QPDF_BRIDGE_API const char *ss_qpdf_version_string(void);
 SS_QPDF_BRIDGE_API int ss_qpdf_validate(const char *path, size_t expected_page_count, int strict);
-SS_QPDF_BRIDGE_API int ss_qpdf_merge(const char *output, const char *const *inputs, size_t input_count, int single_page_inputs);
+SS_QPDF_BRIDGE_API int ss_qpdf_merge(
+    const char *output,
+    const char *const *inputs,
+    size_t input_count,
+    int single_page_inputs,
+    const SsQpdfLink *links,
+    size_t link_count,
+    const SsQpdfDestination *destinations,
+    size_t destination_count
+);
 SS_QPDF_BRIDGE_API int ss_qpdf_replace_pages(
     const char *output,
     const char *base,

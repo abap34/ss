@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cctype>
 #include <exception>
+#include <initializer_list>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -262,16 +263,168 @@ static void ss_qpdf_install_named_destinations(
     }
     auto destinations = QPDFObjectHandle::newDictionary();
     destinations.replaceKey("/Names", values);
-    auto names = QPDFObjectHandle::newDictionary();
+    auto root = destination.getRoot();
+    auto names = root.getKey("/Names");
+    if (names.isNull()) {
+        names = QPDFObjectHandle::newDictionary();
+    } else if (!names.isDictionary()) {
+        throw std::runtime_error("PDF catalog contains an invalid name dictionary");
+    }
     names.replaceKey("/Dests", destinations);
-    destination.getRoot().replaceKey("/Names", names);
+    root.replaceKey("/Names", names);
+}
+
+static bool ss_qpdf_safe_uri(std::string const& value);
+
+static bool ss_qpdf_valid_text(char const* value) {
+    if (value == nullptr || value[0] == '\0') return false;
+    for (unsigned char byte: std::string(value)) {
+        if (byte < 0x20 || byte == 0x7f) return false;
+    }
+    return true;
+}
+
+static QPDFObjectHandle ss_qpdf_number_array(std::initializer_list<double> values) {
+    auto result = QPDFObjectHandle::newArray();
+    for (double value: values) result.appendItem(QPDFObjectHandle::newReal(value, 12));
+    return result;
+}
+
+static QPDFObjectHandle::Rectangle ss_qpdf_annotation_rectangle(
+    QPDFPageObjectHelper& page,
+    double x,
+    double y,
+    double width,
+    double height
+) {
+    if (!ss_qpdf_finite(x) || !ss_qpdf_finite(y) ||
+        !ss_qpdf_finite(width) || !ss_qpdf_finite(height) || width < 0 || height < 0) {
+        throw std::runtime_error("PDF link annotation has invalid geometry");
+    }
+    auto box = page.getMediaBox().getArrayAsRectangle();
+    const double page_height = box.ury - box.lly;
+    if (!ss_qpdf_finite(page_height) || page_height <= 0) {
+        throw std::runtime_error("PDF link page has an invalid media box");
+    }
+    return {
+        box.llx + x,
+        box.lly + page_height - y - height,
+        box.llx + x + width,
+        box.lly + page_height - y,
+    };
+}
+
+static void ss_qpdf_append_annotation(
+    QPDF& destination,
+    QPDFPageObjectHelper& page,
+    QPDFObjectHandle annotation
+) {
+    auto page_object = page.getObjectHandle();
+    auto annotations = page_object.getKey("/Annots");
+    if (annotations.isNull()) {
+        annotations = QPDFObjectHandle::newArray();
+        page_object.replaceKey("/Annots", annotations);
+    } else if (!annotations.isArray()) {
+        throw std::runtime_error("PDF page contains an invalid annotation array");
+    }
+    annotations.appendItem(destination.makeIndirectObject(annotation));
+}
+
+static void ss_qpdf_add_links(
+    QPDF& destination,
+    std::vector<QPDFPageObjectHelper>& pages,
+    SsQpdfLink const* links,
+    size_t link_count
+) {
+    if (link_count != 0 && links == nullptr) {
+        throw std::runtime_error("null PDF link annotation array");
+    }
+    for (size_t index = 0; index < link_count; ++index) {
+        auto const& link = links[index];
+        if (link.page_index >= pages.size()) {
+            throw std::runtime_error("PDF link annotation page index is out of range");
+        }
+        if (!ss_qpdf_valid_text(link.target)) {
+            throw std::runtime_error("PDF link annotation has an invalid target");
+        }
+        auto& page = pages.at(link.page_index);
+        auto rectangle = ss_qpdf_annotation_rectangle(
+            page,
+            link.x,
+            link.y,
+            link.width,
+            link.height
+        );
+        auto annotation = QPDFObjectHandle::newDictionary();
+        annotation.replaceKey("/Type", QPDFObjectHandle::newName("/Annot"));
+        annotation.replaceKey("/Subtype", QPDFObjectHandle::newName("/Link"));
+        annotation.replaceKey("/P", page.getObjectHandle());
+        annotation.replaceKey(
+            "/Rect",
+            ss_qpdf_number_array({rectangle.llx, rectangle.lly, rectangle.urx, rectangle.ury})
+        );
+        auto border_style = QPDFObjectHandle::newDictionary();
+        border_style.replaceKey("/W", QPDFObjectHandle::newInteger(0));
+        annotation.replaceKey("/BS", border_style);
+
+        std::string target(link.target);
+        if (link.kind == SS_QPDF_LINK_URI) {
+            if (!ss_qpdf_safe_uri(target)) throw std::runtime_error("unsafe PDF link URI");
+            auto action = QPDFObjectHandle::newDictionary();
+            action.replaceKey("/Type", QPDFObjectHandle::newName("/Action"));
+            action.replaceKey("/S", QPDFObjectHandle::newName("/URI"));
+            action.replaceKey("/URI", QPDFObjectHandle::newUnicodeString(target));
+            annotation.replaceKey("/A", action);
+        } else if (link.kind == SS_QPDF_LINK_DESTINATION) {
+            annotation.replaceKey("/Dest", QPDFObjectHandle::newUnicodeString(target));
+        } else {
+            throw std::runtime_error("PDF link annotation has an unknown kind");
+        }
+        ss_qpdf_append_annotation(destination, page, annotation);
+    }
+}
+
+static void ss_qpdf_add_named_destinations(
+    std::vector<QPDFPageObjectHelper>& pages,
+    SsQpdfDestination const* destinations,
+    size_t destination_count,
+    std::vector<SsNamedDestination>& result
+) {
+    if (destination_count != 0 && destinations == nullptr) {
+        throw std::runtime_error("null PDF destination array");
+    }
+    for (size_t index = 0; index < destination_count; ++index) {
+        auto const& destination = destinations[index];
+        if (destination.page_index >= pages.size() || !ss_qpdf_valid_text(destination.name) ||
+            !ss_qpdf_finite(destination.x) || !ss_qpdf_finite(destination.y)) {
+            throw std::runtime_error("invalid named PDF destination");
+        }
+        auto& page = pages.at(destination.page_index);
+        auto box = page.getMediaBox().getArrayAsRectangle();
+        const double page_height = box.ury - box.lly;
+        if (!ss_qpdf_finite(page_height) || page_height <= 0) {
+            throw std::runtime_error("named PDF destination page has an invalid media box");
+        }
+        auto value = QPDFObjectHandle::newArray();
+        value.appendItem(page.getObjectHandle());
+        value.appendItem(QPDFObjectHandle::newName("/XYZ"));
+        value.appendItem(QPDFObjectHandle::newReal(box.llx + destination.x, 12));
+        value.appendItem(QPDFObjectHandle::newReal(box.lly + page_height - destination.y, 12));
+        value.appendItem(QPDFObjectHandle::newNull());
+        auto name = QPDFObjectHandle::newUnicodeString(destination.name);
+        result.push_back({name.getStringValue(), value});
+    }
 }
 
 extern "C" int ss_qpdf_merge(
     char const* output,
     char const* const* inputs,
     size_t input_count,
-    int single_page_inputs
+    int single_page_inputs,
+    SsQpdfLink const* links,
+    size_t link_count,
+    SsQpdfDestination const* destinations,
+    size_t destination_count
 ) {
     ss_qpdf_error.clear();
     if (output == nullptr || (input_count != 0 && inputs == nullptr)) {
@@ -307,6 +460,16 @@ extern "C" int ss_qpdf_merge(
                 for (auto& page: source.pages) destination_pages.addPage(page, false);
             }
         }
+        stage = "add PDF link annotations";
+        auto copied_pages = destination_pages.getAllPages();
+        ss_qpdf_add_links(destination, copied_pages, links, link_count);
+        stage = "add named PDF destinations";
+        ss_qpdf_add_named_destinations(
+            copied_pages,
+            destinations,
+            destination_count,
+            named_destinations
+        );
         ss_qpdf_install_named_destinations(destination, named_destinations);
         stage = "write merged PDF";
         QPDFWriter writer(destination, output);

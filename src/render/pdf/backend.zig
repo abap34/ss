@@ -39,7 +39,6 @@ fn renderCairo(
     c.ss_pdf_set_creator(pdf, "ss page Cairo/Pango backend");
     c.ss_pdf_begin_page(pdf, page.width, page.height);
     try replayItems(allocator, pdf, ir, page.items.items, resources);
-    try emitAnnotations(pdf, page);
     c.ss_pdf_end_page(pdf);
     if (c.ss_pdf_finish(pdf) != 0) return cairoFailure(pdf);
 }
@@ -56,16 +55,15 @@ fn renderComposed(
     defer plan.deinit(allocator);
 
     var segment_start: usize = 0;
-    var first_native_layer = true;
+    var needs_base_layer = true;
     for (page.items.items, 0..) |item, item_index| {
         if (!isExternalPdfItem(item)) continue;
-        if (segment_start < item_index or first_native_layer) {
+        if (segment_start < item_index or needs_base_layer) {
             try plan.append(allocator, .{ .native = .{
                 .start = segment_start,
                 .end = item_index,
-                .first_layer = first_native_layer,
             } });
-            first_native_layer = false;
+            needs_base_layer = false;
         }
         try plan.append(allocator, .{ .external = item_index });
         segment_start = item_index + 1;
@@ -74,7 +72,6 @@ fn renderComposed(
         try plan.append(allocator, .{ .native = .{
             .start = segment_start,
             .end = page.items.items.len,
-            .first_layer = first_native_layer,
         } });
     }
 
@@ -103,7 +100,6 @@ fn renderComposed(
 const NativeSegment = struct {
     start: usize,
     end: usize,
-    first_layer: bool,
 };
 
 const CompositionStep = union(enum) {
@@ -284,7 +280,6 @@ fn renderNativeLayers(
     for (plan) |step| switch (step) {
         .native => |segment| {
             c.ss_pdf_begin_page(pdf, page.width, page.height);
-            if (segment.first_layer) try emitAnnotations(pdf, page);
             try replayItems(allocator, pdf, ir, page.items.items[segment.start..segment.end], resources);
             c.ss_pdf_end_page(pdf);
             rendered_pages += 1;
@@ -663,22 +658,6 @@ fn replayTextLayout(
             @intCast(clusters.len),
             @intFromBool(run.direction == .right_to_left),
         ) != 0) return cairoFailure(pdf);
-    }
-}
-
-fn emitAnnotations(pdf: *c.SsPdf, page: *const render_ir.Page) !void {
-    for (page.destinations.items) |destination| {
-        if (c.ss_pdf_add_destination(pdf, destination.name.ptr, destination.point.x, destination.point.y) != 0) {
-            return cairoFailure(pdf);
-        }
-    }
-    for (page.links.items) |link| {
-        const result = switch (link.kind) {
-            .destination => c.ss_pdf_begin_dest_link(pdf, link.rect.x, link.rect.y, link.rect.width, link.rect.height, link.target.ptr),
-            .uri => c.ss_pdf_begin_uri_link(pdf, link.rect.x, link.rect.y, link.rect.width, link.rect.height, link.target.ptr),
-        };
-        if (result != 0) return cairoFailure(pdf);
-        c.ss_pdf_end_link(pdf);
     }
 }
 

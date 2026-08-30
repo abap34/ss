@@ -375,7 +375,7 @@ pub fn writeValidated(
                 );
             }
         }
-        mergePages(allocator, ir.pages.len, page_paths, temporary_document) catch |err| {
+        mergePages(allocator, ir, page_paths, temporary_document) catch |err| {
             recordWriteFailureWithDetail(
                 allocator,
                 options,
@@ -675,10 +675,10 @@ fn renderPageToCache(
     };
 }
 
-fn mergePages(allocator: Allocator, page_count: usize, inputs: []const []u8, output: []const u8) !void {
+fn mergePages(allocator: Allocator, ir: *const render.Ir, inputs: []const []u8, output: []const u8) !void {
     const output_z = try allocator.dupeZ(u8, output);
     defer allocator.free(output_z);
-    if (page_count == 0) {
+    if (ir.pages.len == 0) {
         if (c.ss_qpdf_empty(output_z.ptr) != 0) return error.PdfAssemblyFailed;
         return;
     }
@@ -695,7 +695,40 @@ fn mergePages(allocator: Allocator, page_count: usize, inputs: []const []u8, out
         initialized += 1;
         pointers[index] = paths[index].ptr;
     }
-    if (c.ss_qpdf_merge(output_z.ptr, pointers.ptr, pointers.len, 1) != 0) return error.PdfAssemblyFailed;
+    var links = std.ArrayList(c.SsQpdfLink).empty;
+    defer links.deinit(allocator);
+    var destinations = std.ArrayList(c.SsQpdfDestination).empty;
+    defer destinations.deinit(allocator);
+    for (ir.pages, 0..) |page, page_index| {
+        for (page.links.items) |link| try links.append(allocator, .{
+            .page_index = page_index,
+            .kind = switch (link.kind) {
+                .uri => c.SS_QPDF_LINK_URI,
+                .destination => c.SS_QPDF_LINK_DESTINATION,
+            },
+            .target = link.target.ptr,
+            .x = link.rect.x,
+            .y = link.rect.y,
+            .width = link.rect.width,
+            .height = link.rect.height,
+        });
+        for (page.destinations.items) |destination| try destinations.append(allocator, .{
+            .page_index = page_index,
+            .name = destination.name.ptr,
+            .x = destination.point.x,
+            .y = destination.point.y,
+        });
+    }
+    if (c.ss_qpdf_merge(
+        output_z.ptr,
+        pointers.ptr,
+        pointers.len,
+        1,
+        if (links.items.len == 0) null else links.items.ptr,
+        links.items.len,
+        if (destinations.items.len == 0) null else destinations.items.ptr,
+        destinations.items.len,
+    ) != 0) return error.PdfAssemblyFailed;
 }
 
 fn prepareReplacementPlan(
