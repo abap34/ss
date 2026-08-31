@@ -44,7 +44,7 @@ Default highlighting is enabled for these code block language names:
 | HTML | https://github.com/tree-sitter/tree-sitter-html | 73a3947324f6efddf9e17c0ea58d454843590cc0 |
 | Java | https://github.com/tree-sitter/tree-sitter-java | e10607b45ff745f5f876bfa3e94fbcc6b44bdc11 |
 | JavaScript | https://github.com/tree-sitter/tree-sitter-javascript | 58404d8cf191d69f2674a8fd507bd5776f46cb11 |
-| JSON | https://github.com/tree-sitter/tree-sitter-json | 001c28d7a29832b06b0e831ec77845553c89b56d |
+| JSON | https://github.com/tree-sitter/tree-sitter-json | 254c42a6476413b776221e03982ac8ae159eeb72 |
 | Julia | https://github.com/tree-sitter/tree-sitter-julia | e0f9dcd180fdcfcfa8d79a3531e11d99e79321d3 |
 | Python | https://github.com/tree-sitter/tree-sitter-python | 26855eabccb19c6abf499fbc5b8dc7cc9ab8bc64 |
 | Rust | https://github.com/tree-sitter/tree-sitter-rust | 77a3747266f4d621d0757825e6b11edcbf991ca5 |
