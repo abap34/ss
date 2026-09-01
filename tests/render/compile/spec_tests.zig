@@ -458,7 +458,7 @@ test "text layout append failure consumes one shared reference" {
 
 test "text shape cache persists across compiler processes and rejects corrupt data" {
     const root = ".ss-cache/test-render-persistent-text-shapes";
-    const cache_path = root ++ "/text-shapes-v2/shapes.bin";
+    const cache_path = root ++ "/text-shapes-v3/shapes.bin";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
 
@@ -622,6 +622,57 @@ test "synthetic font failures produce actionable font face diagnostics" {
         &missing_failure,
     ));
     try testing.expect(missing_failure.synthetic_font == null);
+}
+
+test "text shaping replaces synthesized faces with an actual fallback" {
+    const requested_family = "Droid Sans Fallback";
+    const cjk_text = "\u{6f22}\u{5b57}";
+    var measurement = std.mem.zeroes(c.SsTextMeasurement);
+    try testing.expectEqual(@as(c_int, 0), c.ss_text_measure_layout(
+        cjk_text,
+        requested_family,
+        700,
+        0,
+        4,
+        48,
+        640,
+        0,
+        &measurement,
+    ));
+    var shape = std.mem.zeroes(c.SsTextShape);
+    try testing.expectEqual(@as(c_int, 0), c.ss_text_shape(
+        cjk_text,
+        requested_family,
+        700,
+        0,
+        4,
+        48,
+        640,
+        0,
+        &shape,
+    ));
+    defer c.ss_text_shape_free(&shape);
+
+    const advance_width = c.ss_text_measure_text(cjk_text, requested_family, 700, 0, 4, 48);
+    const visual_width = c.ss_text_measure_text_visual_width(cjk_text, requested_family, 700, 0, 4, 48);
+    const expected_visual_width = @max(
+        shape.logical_bounds.width,
+        shape.ink_bounds.x + shape.ink_bounds.width,
+    );
+    try testing.expectApproxEqAbs(shape.logical_bounds.width, advance_width, 0.001);
+    try testing.expectApproxEqAbs(expected_visual_width, visual_width, 0.001);
+    try testing.expectApproxEqAbs(measurement.logical_bounds.width, shape.logical_bounds.width, 0.001);
+    try testing.expectApproxEqAbs(measurement.logical_bounds.height, shape.logical_bounds.height, 0.001);
+    try testing.expect(shape.run_count != 0);
+    var used_fallback = false;
+    for (shape.runs[0..shape.run_count]) |run| {
+        try testing.expect(run.font_path != null);
+        try testing.expectEqual(@as(c_int, 0), run.synthetic_bold);
+        try testing.expectEqual(@as(c_int, 0), run.synthetic_italic);
+        const family_ptr: [*:0]const u8 = @ptrCast(run.font_family);
+        if (!std.mem.eql(u8, requested_family, std.mem.span(family_ptr))) used_fallback = true;
+    }
+    try testing.expect(used_fallback);
 }
 
 test "markdown underline paint controls color opacity width offset and dash" {

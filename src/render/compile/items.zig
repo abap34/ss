@@ -52,7 +52,7 @@ const NativePdfError = error{
 
 pub const native_artifact_cache_version = "ss-native-artifacts-v7";
 const render_page_cache_version = "ss-render-page-v2";
-const layout_measurement_cache_version = "ss-native-layout-measure-v17";
+const layout_measurement_cache_version = "ss-native-layout-measure-v18";
 const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
 const command_failure_output_limit: usize = 1600;

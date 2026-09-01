@@ -1258,6 +1258,12 @@ cleanup:
     return result;
 }
 
+static int ss_layout_replace_synthetic_fonts(
+    PangoLayout *layout,
+    const char *text,
+    const PangoFontDescription *requested
+);
+
 static double ss_measure_text_on_cairo(cairo_t *cr, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size, int visual_width) {
     if (cr == NULL) return 0.0;
 
@@ -1270,14 +1276,16 @@ static double ss_measure_text_on_cairo(cairo_t *cr, const char *text, const char
         return 0.0;
     }
     pango_layout_set_font_description(layout, desc);
-    pango_font_description_free(desc);
     char *valid_text = g_utf8_make_valid(text, -1);
     if (valid_text == NULL) {
+        pango_font_description_free(desc);
         g_object_unref(layout);
         return 0.0;
     }
     pango_layout_set_text(layout, valid_text, -1);
+    ss_layout_replace_synthetic_fonts(layout, valid_text, desc);
     g_free(valid_text);
+    pango_font_description_free(desc);
 
     if (visual_width) {
         PangoRectangle ink = {0};
@@ -1425,6 +1433,14 @@ static int ss_font_source_fc_width(PangoStretch stretch) {
     }
 }
 
+static int ss_font_source_fc_slant(PangoStyle style) {
+    switch (style) {
+        case PANGO_STYLE_ITALIC: return FC_SLANT_ITALIC;
+        case PANGO_STYLE_OBLIQUE: return FC_SLANT_OBLIQUE;
+        default: return FC_SLANT_ROMAN;
+    }
+}
+
 static void ss_font_source_copy_fallback(
     const PangoFontDescription *description,
     char **path_out,
@@ -1456,8 +1472,7 @@ static void ss_font_source_copy_fallback(
             if (family != NULL) FcPatternAddString(query, FC_FAMILY, (const FcChar8 *)family);
             FcPatternAddInteger(query, FC_WEIGHT, FcWeightFromOpenTypeDouble((double)pango_font_description_get_weight(description)));
             FcPatternAddInteger(query, FC_WIDTH, ss_font_source_fc_width(pango_font_description_get_stretch(description)));
-            const PangoStyle style = pango_font_description_get_style(description);
-            FcPatternAddInteger(query, FC_SLANT, style == PANGO_STYLE_NORMAL ? FC_SLANT_ROMAN : (style == PANGO_STYLE_ITALIC ? FC_SLANT_ITALIC : FC_SLANT_OBLIQUE));
+            FcPatternAddInteger(query, FC_SLANT, ss_font_source_fc_slant(pango_font_description_get_style(description)));
             FcConfigSubstitute(ss_font_config, query, FcMatchPattern);
             FcDefaultSubstitute(query);
             FcResult result = FcResultNoMatch;
@@ -1503,6 +1518,160 @@ static void ss_font_source_copy(
     PangoFontDescription *description = pango_font_describe(font);
     ss_font_source_copy_fallback(description, path_out, index_out, postscript_name_out, synthetic_bold_out, synthetic_italic_out);
     if (description != NULL) pango_font_description_free(description);
+}
+
+static FcCharSet *ss_font_charset_for_text(const char *text, size_t length) {
+    FcCharSet *charset = FcCharSetCreate();
+    if (charset == NULL) return NULL;
+    const char *cursor = text;
+    const char *end = text + length;
+    while (cursor < end) {
+        const gunichar codepoint = g_utf8_get_char(cursor);
+        if (!FcCharSetAddChar(charset, (FcChar32)codepoint)) {
+            FcCharSetDestroy(charset);
+            return NULL;
+        }
+        cursor = g_utf8_next_char(cursor);
+    }
+    return charset;
+}
+
+static int ss_font_pattern_uses_synthesis(FcPattern *pattern) {
+    FcBool embolden = FcFalse;
+    if (FcPatternGetBool(pattern, FC_EMBOLDEN, 0, &embolden) == FcResultMatch && embolden == FcTrue) return 1;
+    FcMatrix *matrix = NULL;
+    if (FcPatternGetMatrix(pattern, FC_MATRIX, 0, &matrix) == FcResultMatch && matrix != NULL) {
+        if (matrix->xy != 0 || matrix->yx != 0) return 1;
+    }
+    return 0;
+}
+
+static int ss_font_uses_synthesis(PangoFont *font) {
+    if (font == NULL) return 0;
+    if (PANGO_IS_FC_FONT(font)) {
+        return ss_font_pattern_uses_synthesis(pango_fc_font_get_pattern(PANGO_FC_FONT(font)));
+    }
+    char *path = NULL;
+    char *postscript_name = NULL;
+    unsigned int face_index = 0;
+    int synthetic_bold = 0;
+    int synthetic_italic = 0;
+    ss_font_source_copy(
+        font,
+        &path,
+        &face_index,
+        &postscript_name,
+        &synthetic_bold,
+        &synthetic_italic
+    );
+    g_free(path);
+    g_free(postscript_name);
+    return synthetic_bold || synthetic_italic;
+}
+
+static int ss_font_pattern_integer_equals(FcPattern *pattern, const char *property, int expected) {
+    int actual = 0;
+    return FcPatternGetInteger(pattern, property, 0, &actual) == FcResultMatch && actual == expected;
+}
+
+static PangoFontDescription *ss_real_fallback_description(
+    const PangoFontDescription *requested,
+    const char *text,
+    size_t length
+) {
+    if (requested == NULL || text == NULL || length == 0 || ss_font_config == NULL) return NULL;
+    FcCharSet *charset = ss_font_charset_for_text(text, length);
+    if (charset == NULL) return NULL;
+    FcPattern *query = FcPatternCreate();
+    if (query == NULL) {
+        FcCharSetDestroy(charset);
+        return NULL;
+    }
+    const char *requested_family = pango_font_description_get_family(requested);
+    if (requested_family != NULL && requested_family[0] != '\0') {
+        FcPatternAddString(query, FC_FAMILY, (const FcChar8 *)requested_family);
+    }
+    const int requested_weight = FcWeightFromOpenTypeDouble((double)pango_font_description_get_weight(requested));
+    const int requested_width = ss_font_source_fc_width(pango_font_description_get_stretch(requested));
+    const int requested_slant = ss_font_source_fc_slant(pango_font_description_get_style(requested));
+    FcPatternAddInteger(query, FC_WEIGHT, requested_weight);
+    FcPatternAddInteger(query, FC_WIDTH, requested_width);
+    FcPatternAddInteger(query, FC_SLANT, requested_slant);
+    FcPatternAddCharSet(query, FC_CHARSET, charset);
+    FcConfigSubstitute(ss_font_config, query, FcMatchPattern);
+    FcDefaultSubstitute(query);
+
+    FcResult result = FcResultNoMatch;
+    FcFontSet *matches = FcFontSort(ss_font_config, query, FcFalse, NULL, &result);
+    PangoFontDescription *fallback = NULL;
+    if (matches != NULL) {
+        for (int index = 0; index < matches->nfont; index++) {
+            FcPattern *candidate = matches->fonts[index];
+            if (candidate == NULL || ss_font_pattern_uses_synthesis(candidate)) continue;
+            if (!ss_font_pattern_integer_equals(candidate, FC_WEIGHT, requested_weight) ||
+                !ss_font_pattern_integer_equals(candidate, FC_WIDTH, requested_width) ||
+                !ss_font_pattern_integer_equals(candidate, FC_SLANT, requested_slant)) continue;
+            FcCharSet *coverage = NULL;
+            if (FcPatternGetCharSet(candidate, FC_CHARSET, 0, &coverage) != FcResultMatch ||
+                coverage == NULL || !FcCharSetIsSubset(charset, coverage)) continue;
+            FcChar8 *path = NULL;
+            FcChar8 *family = NULL;
+            if (FcPatternGetString(candidate, FC_FILE, 0, &path) != FcResultMatch || path == NULL || path[0] == '\0') continue;
+            if (FcPatternGetString(candidate, FC_FAMILY, 0, &family) != FcResultMatch || family == NULL || family[0] == '\0') continue;
+            fallback = pango_font_description_copy(requested);
+            if (fallback != NULL) pango_font_description_set_family(fallback, (const char *)family);
+            break;
+        }
+        FcFontSetDestroy(matches);
+    }
+    FcPatternDestroy(query);
+    FcCharSetDestroy(charset);
+    return fallback;
+}
+
+static int ss_layout_replace_synthetic_fonts(
+    PangoLayout *layout,
+    const char *text,
+    const PangoFontDescription *requested
+) {
+    if (layout == NULL || text == NULL || requested == NULL) return 0;
+    PangoAttrList *attributes = NULL;
+    int replacements = 0;
+    const int line_count = pango_layout_get_line_count(layout);
+    for (int line_index = 0; line_index < line_count; line_index++) {
+        PangoLayoutLine *line = pango_layout_get_line_readonly(layout, line_index);
+        if (line == NULL) continue;
+        for (GSList *entry = line->runs; entry != NULL; entry = entry->next) {
+            PangoGlyphItem *glyph_item = (PangoGlyphItem *)entry->data;
+            if (glyph_item == NULL || glyph_item->item == NULL) continue;
+            PangoItem *item = glyph_item->item;
+            if (!ss_font_uses_synthesis(item->analysis.font)) continue;
+            if (item->offset < 0 || item->length <= 0) continue;
+            PangoFontDescription *fallback = ss_real_fallback_description(
+                requested,
+                text + item->offset,
+                (size_t)item->length
+            );
+            if (fallback == NULL) continue;
+            if (attributes == NULL) attributes = pango_attr_list_new();
+            if (attributes == NULL) {
+                pango_font_description_free(fallback);
+                continue;
+            }
+            PangoAttribute *attribute = pango_attr_font_desc_new(fallback);
+            pango_font_description_free(fallback);
+            if (attribute == NULL) continue;
+            attribute->start_index = (guint)item->offset;
+            attribute->end_index = (guint)(item->offset + item->length);
+            pango_attr_list_insert(attributes, attribute);
+            replacements++;
+        }
+    }
+    if (attributes != NULL) {
+        if (replacements != 0) pango_layout_set_attributes(layout, attributes);
+        pango_attr_list_unref(attributes);
+    }
+    return replacements;
 }
 
 static double ss_math_constant_ratio(hb_font_t *font, hb_ot_math_constant_t constant, double font_size) {
@@ -1590,21 +1759,23 @@ int ss_text_measure_layout(
         return 1;
     }
     pango_layout_set_font_description(layout, description);
-    pango_font_description_free(description);
     char *valid_text = g_utf8_make_valid(text, -1);
     if (valid_text == NULL) {
+        pango_font_description_free(description);
         g_object_unref(layout);
         g_rw_lock_reader_unlock(&ss_font_config_lock);
         return 1;
     }
     pango_layout_set_text(layout, valid_text, -1);
-    g_free(valid_text);
     if (wrap && width > 0) {
         pango_layout_set_width(layout, (int)(width * PANGO_SCALE));
         pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
     } else {
         pango_layout_set_width(layout, -1);
     }
+    ss_layout_replace_synthetic_fonts(layout, valid_text, description);
+    g_free(valid_text);
+    pango_font_description_free(description);
 
     PangoRectangle ink = {0};
     PangoRectangle logical = {0};
@@ -1648,9 +1819,9 @@ int ss_text_shape(
         return 1;
     }
     pango_layout_set_font_description(layout, description);
-    pango_font_description_free(description);
     char *valid_text = g_utf8_make_valid(text, -1);
     if (valid_text == NULL) {
+        pango_font_description_free(description);
         g_object_unref(layout);
         g_rw_lock_reader_unlock(&ss_font_config_lock);
         return 1;
@@ -1662,6 +1833,8 @@ int ss_text_shape(
     } else {
         pango_layout_set_width(layout, -1);
     }
+    ss_layout_replace_synthetic_fonts(layout, valid_text, description);
+    pango_font_description_free(description);
 
     const int line_count = pango_layout_get_line_count(layout);
     size_t run_count = 0;
