@@ -6,18 +6,23 @@ import std:core/objects as objects
 import std:core/render as render
 import std:core/generated as generated
 
-fn default_theme() -> Theme
+fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme
   let highlight = render::code_theme_github_light()
+  let base_text = TextStyle {
+    font = FontFace { family = options.font_family ?? "Helvetica" }
+    code_font = FontFace { family = options.code_font_family ?? "monospace" }
+    color = options.text_color ?? c"0.08,0.08,0.08"
+    link_color = options.accent_color ?? c"0.1,0.25,0.75"
+    markdown_bold_color = options.accent_color
+  }
   return Theme {
     body = TextBlockStyle {
-      text = TextStyle {
+      text = base_text with {
         parse = TextParseMode.block
-        font = FontFace { family = "Helvetica" }
-        code_font = FontFace { family = "monospace" }
         size = 24
         line_height = 31
-        color = c"0.07,0.08,0.10"
-        markdown_bold_color = c"0.05,0.30,0.58"
+        color = options.text_color ?? c"0.07,0.08,0.10"
+        markdown_bold_color = options.accent_color ?? c"0.05,0.30,0.58"
         markdown_quote = MarkdownQuoteStyle {
           color = c"#374151"
           inset = 14
@@ -50,11 +55,11 @@ fn default_theme() -> Theme
       }
     }
     h1 = TextBlockStyle {
-      text = TextStyle {
-        font = FontFace { family = "Helvetica", weight = 700 }
+      text = base_text with {
+        font.weight = 700
         size = 40
         line_height = 47
-        color = c"0.04,0.06,0.09"
+        color = options.text_color ?? c"0.04,0.06,0.09"
       }
       layout = LayoutStyle {
         spacing_after = 42
@@ -63,11 +68,11 @@ fn default_theme() -> Theme
       }
     }
     h2 = TextBlockStyle {
-      text = TextStyle {
-        font = FontFace { family = "Helvetica", weight = 700 }
+      text = base_text with {
+        font.weight = 700
         size = 30
         line_height = 37
-        color = c"0.07,0.09,0.13"
+        color = options.text_color ?? c"0.07,0.09,0.13"
       }
       layout = LayoutStyle {
         spacing_after = 34
@@ -76,11 +81,11 @@ fn default_theme() -> Theme
       }
     }
     h3 = TextBlockStyle {
-      text = TextStyle {
-        font = FontFace { family = "Helvetica", weight = 700 }
+      text = base_text with {
+        font.weight = 700
         size = 24
         line_height = 31
-        color = c"0.10,0.12,0.16"
+        color = options.text_color ?? c"0.10,0.12,0.16"
       }
       layout = LayoutStyle {
         spacing_after = 28
@@ -89,11 +94,11 @@ fn default_theme() -> Theme
       }
     }
     h4 = TextBlockStyle {
-      text = TextStyle {
-        font = FontFace { family = "Helvetica", weight = 700 }
+      text = base_text with {
+        font.weight = 700
         size = 22
         line_height = 29
-        color = c"0.12,0.14,0.18"
+        color = options.text_color ?? c"0.12,0.14,0.18"
       }
       layout = LayoutStyle {
         spacing_after = 24
@@ -102,11 +107,11 @@ fn default_theme() -> Theme
       }
     }
     h5 = TextBlockStyle {
-      text = TextStyle {
-        font = FontFace { family = "Helvetica", weight = 700 }
+      text = base_text with {
+        font.weight = 700
         size = 20
         line_height = 27
-        color = c"0.14,0.16,0.20"
+        color = options.text_color ?? c"0.14,0.16,0.20"
       }
       layout = LayoutStyle {
         spacing_after = 22
@@ -115,11 +120,11 @@ fn default_theme() -> Theme
       }
     }
     h6 = TextBlockStyle {
-      text = TextStyle {
-        font = FontFace { family = "Helvetica", weight = 700 }
+      text = base_text with {
+        font.weight = 700
         size = 18
         line_height = 25
-        color = c"0.16,0.18,0.22"
+        color = options.text_color ?? c"0.16,0.18,0.22"
       }
       layout = LayoutStyle {
         spacing_after = 20
@@ -127,25 +132,38 @@ fn default_theme() -> Theme
         right_inset = 96
       }
     }
-    head = TextBlockStyle {
-      text = TextStyle {
-        font = FontFace { family = "Helvetica", weight = 700 }
-        size = 36
-        line_height = 44
-        color = c"0.04,0.06,0.09"
+    head = HeadStyle {
+      title = TextBlockStyle {
+        text = base_text with {
+          font.weight = 700
+          size = 36
+          line_height = 44
+          color = options.accent_color ?? c"0.04,0.06,0.09"
+        }
+        layout = LayoutStyle {
+          spacing_after = 34
+          x = 72
+          right_inset = 72
+        }
       }
-      layout = LayoutStyle {
-        spacing_after = 34
-        x = 72
-        right_inset = 72
+      rule = RuleBlockStyle {
+        rule = RuleStyle {
+          stroke = options.accent_color ?? c"0.32,0.50,0.72"
+          line_width = 2.0
+        }
+        layout = LayoutStyle {
+          spacing_after = 48
+        }
       }
+      top = 56
+      gap = 0
     }
     subhead = TextBlockStyle {
-      text = TextStyle {
-        font = FontFace { family = "Helvetica", weight = 700 }
+      text = base_text with {
+        font.weight = 700
         size = 26
         line_height = 33
-        color = c"0.08,0.10,0.14"
+        color = options.text_color ?? c"0.08,0.10,0.14"
       }
       layout = LayoutStyle {
         spacing_after = 30
@@ -154,11 +172,10 @@ fn default_theme() -> Theme
       }
     }
     note = TextBlockStyle {
-      text = TextStyle {
-        font = FontFace { family = "Helvetica" }
+      text = base_text with {
         size = 15
         line_height = 20
-        color = c"0.38,0.42,0.48"
+        color = options.muted_color ?? c"0.38,0.42,0.48"
       }
       layout = LayoutStyle {
         spacing_after = 16
@@ -167,11 +184,10 @@ fn default_theme() -> Theme
       }
     }
     byline = TextBlockStyle {
-      text = TextStyle {
-        font = FontFace { family = "Helvetica" }
+      text = base_text with {
         size = 20
         line_height = 26
-        color = c"0.38,0.42,0.48"
+        color = options.muted_color ?? c"0.38,0.42,0.48"
       }
       layout = LayoutStyle {
         spacing_after = 18
@@ -180,11 +196,11 @@ fn default_theme() -> Theme
       }
     }
     label = TextBlockStyle {
-      text = TextStyle {
-        font = FontFace { family = "Helvetica", weight = 700 }
+      text = base_text with {
+        font.weight = 700
         size = 14
         line_height = 18
-        color = c"0.2745,0.5098,0.7059"
+        color = options.accent_color ?? c"0.2745,0.5098,0.7059"
       }
       layout = LayoutStyle {
         spacing_after = 0
@@ -194,13 +210,12 @@ fn default_theme() -> Theme
       }
     }
     citation = TextBlockStyle {
-      text = TextStyle {
+      text = base_text with {
         parse = TextParseMode.inline
-        font = FontFace { family = "Helvetica" }
         size = 13
         line_height = 17
-        color = c"0.58,0.58,0.58"
-        link_color = c"0.58,0.58,0.58"
+        color = options.muted_color ?? c"0.58,0.58,0.58"
+        link_color = options.muted_color ?? options.accent_color ?? c"0.58,0.58,0.58"
       }
       layout = LayoutStyle {
         spacing_after = 0
@@ -210,13 +225,12 @@ fn default_theme() -> Theme
       }
     }
     code = CodeBlockStyle {
-      text = TextStyle {
+      text = base_text with {
         parse = TextParseMode.none
-        font = FontFace { family = "monospace" }
-        code_font = FontFace { family = "monospace" }
+        font = FontFace { family = options.code_font_family ?? "monospace" }
         size = 16
         line_height = none
-        color = c"0.12,0.12,0.12"
+        color = options.text_color ?? c"0.12,0.12,0.12"
       }
       layout = LayoutStyle {
         spacing_after = 30
@@ -235,13 +249,12 @@ fn default_theme() -> Theme
       }
     }
     figure = FigureBlockStyle {
-      text = TextStyle {
+      text = base_text with {
         parse = TextParseMode.block
-        font = FontFace { family = "Helvetica" }
         size = 24
         line_height = 31
-        color = c"0.07,0.08,0.10"
-        markdown_bold_color = c"0.05,0.30,0.58"
+        color = options.text_color ?? c"0.07,0.08,0.10"
+        markdown_bold_color = options.accent_color ?? c"0.05,0.30,0.58"
       }
       layout = LayoutStyle {
         spacing_after = 34
@@ -283,11 +296,11 @@ fn default_theme() -> Theme
     }
     toc = TocStyle {
       title = TextBlockStyle {
-        text = TextStyle {
-          font = FontFace { family = "Helvetica", weight = 700 }
+        text = base_text with {
+          font.weight = 700
           size = 36
           line_height = 44
-          color = c"0.04,0.06,0.09"
+          color = options.accent_color ?? c"0.04,0.06,0.09"
         }
         layout = LayoutStyle {
           spacing_after = 34
@@ -296,12 +309,11 @@ fn default_theme() -> Theme
         }
       }
       body = TextBlockStyle {
-        text = TextStyle {
+        text = base_text with {
           parse = TextParseMode.block
-          font = FontFace { family = "Helvetica" }
           size = 18
           line_height = 25
-          color = c"0.07,0.08,0.10"
+          color = options.text_color ?? c"0.07,0.08,0.10"
         }
         layout = LayoutStyle {
           spacing_after = 28
@@ -320,11 +332,11 @@ fn default_theme() -> Theme
     }
     cover = CoverStyle {
       title = TextBlockStyle {
-        text = TextStyle {
-          font = FontFace { family = "Helvetica", weight = 700 }
+        text = base_text with {
+          font.weight = 700
           size = 56
           line_height = 64
-          color = c"0.04,0.06,0.09"
+          color = options.accent_color ?? c"0.04,0.06,0.09"
         }
         layout = LayoutStyle {
           spacing_after = 26
@@ -333,11 +345,10 @@ fn default_theme() -> Theme
         }
       }
       subtitle = TextBlockStyle {
-        text = TextStyle {
-          font = FontFace { family = "Helvetica" }
+        text = base_text with {
           size = 30
           line_height = 38
-          color = c"0.20,0.25,0.32"
+          color = options.text_color ?? c"0.20,0.25,0.32"
         }
         layout = LayoutStyle {
           spacing_after = 24
@@ -346,11 +357,10 @@ fn default_theme() -> Theme
         }
       }
       author = TextBlockStyle {
-        text = TextStyle {
-          font = FontFace { family = "Helvetica" }
+        text = base_text with {
           size = 20
           line_height = 26
-          color = c"0.38,0.42,0.48"
+          color = options.accent_color ?? c"0.38,0.42,0.48"
         }
         layout = LayoutStyle {
           spacing_after = 18
@@ -360,41 +370,56 @@ fn default_theme() -> Theme
       }
       accent = RuleBlockStyle {
         rule = RuleStyle {
-          stroke = c"0.32,0.50,0.72"
+          stroke = options.accent_color ?? c"0.32,0.50,0.72"
           line_width = 2.0
         }
       }
     }
     callout = MarkedCalloutStyle {
-      text_size = 24
-      text_line_height = 31
-      text_color = c"0.07,0.08,0.10"
-      target_color = c"0.04,0.06,0.09"
-      target_weight = 700
-      target_fill = none
-      target_border = none
-      target_border_width = 0
-      target_pad_x = 0
-      target_pad_y = 0
+      text = base_text with {
+        size = 24
+        line_height = 31
+        color = options.text_color ?? c"0.07,0.08,0.10"
+      }
+      target = base_text with {
+        font.weight = 700
+        size = 24
+        line_height = 31
+        color = options.accent_color ?? c"0.04,0.06,0.09"
+      }
+      target_chrome = ChromeStyle {
+        fill = none
+        stroke = none
+        line_width = 0
+        radius = 0
+        pad_x = 0
+        pad_y = 0
+      }
       callout = CalloutStyle {
-        stroke = c"0.32,0.50,0.72"
+        stroke = options.accent_color ?? c"0.32,0.50,0.72"
         line_width = 1.6
         marker_size = 10
-        border = c"0.72,0.80,0.90"
-        border_width = 1
-        radius = 8
-        text_size = 17
-        text_line_height = 25
-        text_color = c"0.30,0.34,0.40"
+        text = base_text with {
+          size = 17
+          line_height = 25
+          color = options.muted_color ?? c"0.30,0.34,0.40"
+        }
+        chrome = ChromeStyle {
+          fill = none
+          stroke = c"0.72,0.80,0.90"
+          line_width = 1
+          radius = 8
+          pad_x = 18
+          pad_y = 12
+        }
       }
     }
     generated = GeneratedStyle {
       pageno = TextBlockStyle {
-        text = TextStyle {
-          font = FontFace { family = "Helvetica" }
+        text = base_text with {
           size = 13
           line_height = 16
-          color = c"0.5,0.5,0.5"
+          color = options.muted_color ?? c"0.5,0.5,0.5"
         }
         layout = LayoutStyle {
           spacing_after = 0
@@ -405,11 +430,10 @@ fn default_theme() -> Theme
         }
       }
       footer = TextBlockStyle {
-        text = TextStyle {
-          font = FontFace { family = "Helvetica" }
+        text = base_text with {
           size = 12
           line_height = 15
-          color = c"0.42,0.42,0.42"
+          color = options.muted_color ?? c"0.42,0.42,0.42"
         }
         layout = LayoutStyle {
           spacing_after = 0
@@ -419,11 +443,10 @@ fn default_theme() -> Theme
         }
       }
       watermark = TextBlockStyle {
-        text = TextStyle {
-          font = FontFace { family = "Helvetica" }
+        text = base_text with {
           size = 72
           line_height = 80
-          color = c"0.85,0.85,0.85"
+          color = options.muted_color ?? c"0.85,0.85,0.85"
         }
         layout = LayoutStyle {
           spacing_after = 0
@@ -481,14 +504,13 @@ end
 fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
   let rule = components::rule()
   let title = objects::title_obj(title_text)
-  base::apply_text_block_style(title, theme.head)
-  base::apply_rule_block_style(rule, theme.cover.accent)
-  rule.layout.spacing_after = 48
-  ~ title.left == page.left + 72
-  ~ title.top == page.top - 56
-  ~ rule.left == page.left + 72
-  ~ rule.right == page.right - 72
-  ~ rule.top == title.bottom + 4
+  base::apply_text_block_style(title, theme.head.title)
+  base::apply_rule_block_style(rule, theme.head.rule)
+  ~ title.left == page.left + theme.head.title.layout.x
+  ~ title.top == page.top - theme.head.top
+  ~ rule.left == title.left
+  ~ rule.right == page.right - theme.head.title.layout.right_inset
+  ~ rule.top == title.bottom - theme.head.gap
   return group(title, rule)
 end
 

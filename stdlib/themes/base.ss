@@ -8,6 +8,13 @@ record TextBlockStyle {
   underline: UnderlineStyle = UnderlineStyle {}
 }
 
+record HeadStyle {
+  title: TextBlockStyle = TextBlockStyle {}
+  rule: RuleBlockStyle = RuleBlockStyle {}
+  top: Number = 56
+  gap: Number = 0
+}
+
 record RuleBlockStyle {
   rule: RuleStyle = RuleStyle {}
   layout: LayoutStyle = LayoutStyle {}
@@ -52,6 +59,14 @@ record GeneratedStyle {
   watermark: TextBlockStyle = TextBlockStyle {}
 }
 
+record ThemeOptions {
+  font_family: String? = none
+  code_font_family: String? = none
+  text_color: Color? = none
+  accent_color: Color? = none
+  muted_color: Color? = none
+}
+
 record Theme {
   body: TextBlockStyle = TextBlockStyle {}
   h1: TextBlockStyle = TextBlockStyle {}
@@ -60,7 +75,7 @@ record Theme {
   h4: TextBlockStyle = TextBlockStyle {}
   h5: TextBlockStyle = TextBlockStyle {}
   h6: TextBlockStyle = TextBlockStyle {}
-  head: TextBlockStyle = TextBlockStyle {}
+  head: HeadStyle = HeadStyle {}
   subhead: TextBlockStyle = TextBlockStyle {}
   note: TextBlockStyle = TextBlockStyle {}
   byline: TextBlockStyle = TextBlockStyle {}

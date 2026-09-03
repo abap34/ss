@@ -201,6 +201,30 @@ ss render --project . --output deck.pdf
 `entry` is required. `asset_base_dir` defaults to the entry file's parent
 directory when omitted.
 
+Common fonts and colors can be applied across a theme without repeating every
+component path:
+
+```ss
+document
+theme!(default_theme(ThemeOptions {
+  font_family = "M PLUS 1p"
+  code_font_family = "JuliaMono"
+  text_color = c"#000009"
+  accent_color = c"#4682b4"
+  muted_color = c"#808080"
+}) with {
+  head.gap = 4
+})
+end
+```
+
+`ThemeOptions` is resolved while `default_theme` constructs the theme. The
+resulting `Theme` remains open to precise `with` overrides. The default theme
+uses `head.title`, `head.rule`, and `head.gap` for its page heading.
+`accent_color` applies to links, bold text, page headings,
+and cover accents; `muted_color` applies to notes, citations, and generated
+page text.
+
 The JSON Schema for `ss.toml` lives at [schemas/ss-toml.schema.json](schemas/ss-toml.schema.json). TOML
 language servers such as Taplo can use it for completion and validation.
 

@@ -674,7 +674,7 @@ function assertSameLabels(left, right, label) {
 function declarationDefinitionLocation(uri, text, keyword, name) {
   const needle = `${keyword} ${name}`;
   const lines = text.split("\n");
-  const line = lines.findIndex((lineText) => lineText.includes(needle));
+  const line = lines.findIndex((lineText) => lineText.trim() === `${needle} {`);
   assert(line >= 0, `fixture did not contain ${needle}`);
   const character = lines[line].indexOf(name);
   assert(character >= 0, `fixture did not contain ${name} on ${needle} line`);
@@ -683,7 +683,7 @@ function declarationDefinitionLocation(uri, text, keyword, name) {
 
 function recordFieldDefinitionLocation(uri, text, recordName, fieldName) {
   const lines = text.split("\n");
-  const start = lines.findIndex((lineText) => lineText.includes(`record ${recordName}`));
+  const start = lines.findIndex((lineText) => lineText.trim() === `record ${recordName} {`);
   assert(start >= 0, `fixture did not contain record ${recordName}`);
   for (let line = start + 1; line < lines.length; line += 1) {
     if (lines[line].trim() === "}") break;

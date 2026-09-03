@@ -636,8 +636,8 @@ test "compiler semantics: theme text size override keeps automatic line height" 
         \\page ok
         \\  let title = head!("large text
         \\next line", current_theme() with {
-        \\    head.text.size = 64
-        \\    head.text.line_height = none
+        \\    head.title.text.size = 64
+        \\    head.title.text.line_height = none
         \\  })
         \\end
         \\

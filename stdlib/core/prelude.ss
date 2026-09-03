@@ -955,8 +955,8 @@ fn/! bracket_callout(target: Object, text_value: String, x: Number, top_y: Numbe
   return components::bracket_callout(target, text_value, x, top_y, width, style)
 end
 
-fn/! marked_callout_text(text_value: String, color_name: Color, weight: Number, size: Number, line_height: Number) -> Object
-  return components::marked_callout_text(text_value, color_name, weight, size, line_height)
+fn/! marked_callout_text(text_value: String, style: TextStyle) -> Object
+  return components::marked_callout_text(text_value, style)
 end
 
 fn marked_callout!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = MarkedCalloutStyle {}) -> Object

@@ -1147,7 +1147,7 @@ end
 function typeDefinitionLocation(uri, text, keyword, name) {
   const needle = `${keyword} ${name}`;
   const lines = text.split("\n");
-  const line = lines.findIndex((lineText) => lineText.includes(needle));
+  const line = lines.findIndex((lineText) => lineText.trim() === `${needle} {`);
   assert(line >= 0, `fixture did not contain ${needle}`);
   const character = lines[line].indexOf(name);
   assert(character >= 0, `fixture did not contain ${name} on ${needle} line`);

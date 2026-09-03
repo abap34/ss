@@ -48,33 +48,48 @@ record CalloutStyle {
   bracket_width: Number = 24
   bracket_pad_x: Number = 14
   bracket_pad_y: Number = 8
-  text_size: Number = 17
-  text_line_height: Number = 25
-  text_color: Color = c"#374151"
-  text_weight: Number = 400
-  fill: Color? = none
-  border: Color? = c"#4b5563"
-  border_width: Number = 1
-  radius: Number = 6
-  pad_x: Number = 18
-  pad_y: Number = 12
+  text: TextStyle = TextStyle {
+    font = FontFace { family = "Helvetica" }
+    code_font = FontFace { family = "monospace" }
+    size = 17
+    line_height = 25
+    color = c"#374151"
+  }
+  chrome: ChromeStyle = ChromeStyle {
+    fill = none
+    stroke = c"#4b5563"
+    line_width = 1
+    radius = 6
+    pad_x = 18
+    pad_y = 12
+  }
 }
 
 record MarkedCalloutStyle {
   x: Number = 96
   top_y: Number = 220
-  text_size: Number = 25
-  text_line_height: Number = 34
-  text_color: Color = c"#111827"
-  text_weight: Number = 400
-  target_color: Color = c"#111827"
-  target_weight: Number = 700
-  target_fill: Color? = none
-  target_border: Color? = none
-  target_border_width: Number = 0
-  target_radius: Number = 0
-  target_pad_x: Number = 0
-  target_pad_y: Number = 0
+  text: TextStyle = TextStyle {
+    font = FontFace { family = "Helvetica" }
+    code_font = FontFace { family = "monospace" }
+    size = 25
+    line_height = 34
+    color = c"#111827"
+  }
+  target: TextStyle = TextStyle {
+    font = FontFace { family = "Helvetica" weight = 700 }
+    code_font = FontFace { family = "monospace" }
+    size = 25
+    line_height = 34
+    color = c"#111827"
+  }
+  target_chrome: ChromeStyle = ChromeStyle {
+    fill = none
+    stroke = none
+    line_width = 0
+    radius = 0
+    pad_x = 0
+    pad_y = 0
+  }
   callout_x: Number = 780
   callout_top_y: Number = 486
   callout_width: Number = 300
@@ -83,12 +98,7 @@ record MarkedCalloutStyle {
 
 fn/! callout_text(text_value: String, style: CalloutStyle) -> Object
   let obj = objects::body_obj(text_value)
-  obj.text = TextStyle {
-    font = FontFace { family = "Helvetica" weight = style.text_weight }
-    size = style.text_size
-    line_height = style.text_line_height
-    color = style.text_color
-  }
+  obj.text = style.text
   obj.layout = LayoutStyle {
     spacing_after = 0
     x = 0
@@ -153,8 +163,8 @@ fn/! bracket_callout(target: Object, text_value: String, x: Number, top_y: Numbe
   ~ note.top == page.top - top_y
 
   let chrome = panel()
-  render::box(chrome, style.fill, style.border, style.border_width, style.radius)
-  layout::surround(chrome, note, style.pad_x, style.pad_y)
+  chrome.chrome = style.chrome
+  layout::surround(chrome, note, style.chrome.pad_x, style.chrome.pad_y)
 
   if style.left_bracket
     let bracket = callout_left_bracket(chrome, style)
@@ -166,14 +176,9 @@ fn/! bracket_callout(target: Object, text_value: String, x: Number, top_y: Numbe
   end
 end
 
-fn/! marked_callout_text(text_value: String, color_name: Color, weight: Number, size: Number, line_height: Number) -> Object
+fn/! marked_callout_text(text_value: String, style: TextStyle) -> Object
   let obj = objects::body_obj(text_value)
-  obj.text = TextStyle {
-    font = FontFace { family = "Helvetica" weight = weight }
-    size = size
-    line_height = line_height
-    color = color_name
-  }
+  obj.text = style
   obj.layout = LayoutStyle {
     spacing_after = 0
     x = 0
@@ -189,19 +194,19 @@ fn marked_callout!(source_text: String, target_text: String, note_text: String, 
     report_warning("MarkedCalloutTargetMissing: target text was not found in source text")
   end
 
-  let before = marked_callout_text!(str_before(source_text, target_text), style.text_color, style.text_weight, style.text_size, style.text_line_height)
-  let target = marked_callout_text!(target_text, style.target_color, style.target_weight, style.text_size, style.text_line_height)
-  let after = marked_callout_text!(str_after(source_text, target_text), style.text_color, style.text_weight, style.text_size, style.text_line_height)
+  let before = marked_callout_text!(str_before(source_text, target_text), style.text)
+  let target = marked_callout_text!(target_text, style.target)
+  let after = marked_callout_text!(str_after(source_text, target_text), style.text)
 
   let target_back = panel!()
-  render::box(target_back, style.target_fill, style.target_border, style.target_border_width, style.target_radius)
-  layout::surround(target_back, target, style.target_pad_x, style.target_pad_y)
+  target_back.chrome = style.target_chrome
+  layout::surround(target_back, target, style.target_chrome.pad_x, style.target_chrome.pad_y)
 
   ~ before.left == page.left + style.x
   ~ before.top == page.top - style.top_y
-  ~ target.left == before.right + style.target_pad_x
+  ~ target.left == before.right + style.target_chrome.pad_x
   ~ target.top == before.top
-  ~ after.left == target.right + style.target_pad_x
+  ~ after.left == target.right + style.target_chrome.pad_x
   ~ after.top == before.top
 
   let callout = bracket_callout!(target, note_text, style.callout_x, style.callout_top_y, style.callout_width, style.callout)

@@ -6,11 +6,11 @@ import std:core/layout as layout
 import std:core/objects as objects
 import std:core/generated as generated
 
-fn default_theme() -> Theme
-  return base::default_theme() with {
+fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme
+  return base::default_theme(options) with {
     body.text.size = 20
     body.text.line_height = 28
-    body.text.color = c"0.1569,0.1333,0.2196"
+    body.text.color = options.text_color ?? c"0.1569,0.1333,0.2196"
     body.text.markdown_code_font_size = 18
     body.text.markdown_code_line_height = 24
     body.text.markdown_code_pad_x = 14
@@ -29,24 +29,25 @@ fn default_theme() -> Theme
     body.text.markdown_quote.bar_width = 5
     h1.text.size = 36
     h1.text.line_height = 42
-    h1.text.color = c"1,0.3765,0.5098"
+    h1.text.color = options.text_color ?? c"1,0.3765,0.5098"
     h1.layout.spacing_after = 46
     h1.layout.x = 72
     h1.layout.right_inset = 72
     h2.text.size = 22
     h2.text.line_height = 30
-    h2.text.color = c"0.1569,0.1333,0.2196"
+    h2.text.color = options.text_color ?? c"0.1569,0.1333,0.2196"
     h2.text.font.weight = 400
     h2.layout.spacing_after = 22
     h2.layout.x = 78
     h2.layout.right_inset = 78
-    head.text.size = 36
-    head.text.line_height = 42
-    head.text.color = c"1,0.3765,0.5098"
-    head.layout.spacing_after = 46
+    head.title.text.size = 36
+    head.title.text.line_height = 42
+    head.title.text.color = options.accent_color ?? c"1,0.3765,0.5098"
+    head.title.layout.spacing_after = 46
+    head.top = 98
     subhead.text.size = 22
     subhead.text.line_height = 30
-    subhead.text.color = c"0.1569,0.1333,0.2196"
+    subhead.text.color = options.text_color ?? c"0.1569,0.1333,0.2196"
     subhead.text.font.weight = 700
     subhead.layout.spacing_after = 22
     note.layout.x = 124
@@ -85,7 +86,7 @@ fn default_theme() -> Theme
     pdf.chrome.pad_y = 12
     toc.title.text.size = 36
     toc.title.text.line_height = 42
-    toc.title.text.color = c"1,0.3765,0.5098"
+    toc.title.text.color = options.accent_color ?? c"1,0.3765,0.5098"
     toc.title.layout.spacing_after = 46
     toc.chrome.fill = c"1,0.9647,0.9294"
     toc.chrome.stroke = c"1,0.7373,0.3843"
@@ -95,37 +96,39 @@ fn default_theme() -> Theme
     toc.chrome.pad_y = 12
     cover.title.text.size = 52
     cover.title.text.line_height = 60
-    cover.title.text.color = c"0.4745,0.3765,1"
+    cover.title.text.color = options.accent_color ?? c"0.4745,0.3765,1"
     cover.title.text.font.weight = 700
     cover.subtitle.text.size = 22
     cover.subtitle.text.line_height = 30
-    cover.subtitle.text.color = c"0.1569,0.1333,0.2196"
+    cover.subtitle.text.color = options.text_color ?? c"0.1569,0.1333,0.2196"
     cover.subtitle.text.font.weight = 400
     cover.author.text.size = 18
     cover.author.text.line_height = 24
-    cover.author.text.color = c"1,0.6706,0.2941"
+    cover.author.text.color = options.accent_color ?? c"1,0.6706,0.2941"
     cover.author.text.font.weight = 700
-    callout.text_size = 20
-    callout.text_line_height = 28
-    callout.text_color = c"0.1569,0.1333,0.2196"
-    callout.target_color = c"0.4745,0.3765,1"
-    callout.target_weight = 700
-    callout.target_fill = c"1,0.9647,0.9294"
-    callout.target_border = c"1,0.7373,0.3843"
-    callout.target_border_width = 1.4
-    callout.target_radius = 12
-    callout.target_pad_x = 8
-    callout.target_pad_y = 4
-    callout.callout.stroke = c"1,0.3765,0.5098"
+    callout.text.size = 20
+    callout.text.line_height = 28
+    callout.text.color = options.text_color ?? c"0.1569,0.1333,0.2196"
+    callout.target.size = 20
+    callout.target.line_height = 28
+    callout.target.color = options.accent_color ?? c"0.4745,0.3765,1"
+    callout.target.font.weight = 700
+    callout.target_chrome.fill = c"1,0.9647,0.9294"
+    callout.target_chrome.stroke = c"1,0.7373,0.3843"
+    callout.target_chrome.line_width = 1.4
+    callout.target_chrome.radius = 12
+    callout.target_chrome.pad_x = 8
+    callout.target_chrome.pad_y = 4
+    callout.callout.stroke = options.accent_color ?? c"1,0.3765,0.5098"
     callout.callout.line_width = 2.4
     callout.callout.marker_size = 14
-    callout.callout.fill = c"1,0.9647,0.9294"
-    callout.callout.border = c"1,0.7373,0.3843"
-    callout.callout.border_width = 1.4
-    callout.callout.radius = 14
-    callout.callout.text_size = 18
-    callout.callout.text_line_height = 27
-    callout.callout.text_color = c"0.1569,0.1333,0.2196"
+    callout.callout.chrome.fill = c"1,0.9647,0.9294"
+    callout.callout.chrome.stroke = c"1,0.7373,0.3843"
+    callout.callout.chrome.line_width = 1.4
+    callout.callout.chrome.radius = 14
+    callout.callout.text.size = 18
+    callout.callout.text.line_height = 27
+    callout.callout.text.color = options.muted_color ?? c"0.1569,0.1333,0.2196"
   }
 end
 
@@ -176,10 +179,10 @@ fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
     line_width = 1
     radius = 10
   }
-  theme_base::apply_text_block_style(title, theme.head)
-  ~ title.left == page.left + 72
-  ~ title.top == page.top - 98
-  ~ chip.right == page.right - 72
+  theme_base::apply_text_block_style(title, theme.head.title)
+  ~ title.left == page.left + theme.head.title.layout.x
+  ~ title.top == page.top - theme.head.top
+  ~ chip.right == page.right - theme.head.title.layout.right_inset
   ~ chip.top == title.top + 8
   layout::surround(chip_bg, chip, 12, 6)
   return group(title, chip_bg, chip)
