@@ -91,6 +91,7 @@ const DrawContext = struct {
     text_cache: ?*render_text.Cache = null,
     resource_cache: ?*render_resources.SourceCache = null,
     command_failure: ?*CommandFailure = null,
+    synthetic_font_detected: ?*bool = null,
     link_annotations: ?*std.ArrayList(LinkAnnotation) = null,
     destinations: ?*std.ArrayList(DestinationAnnotation) = null,
     emitter: ?render_emitter.Emitter = null,
@@ -796,6 +797,7 @@ pub const Compiler = struct {
         try render_text.validateFontEnvironment(font_environment);
         const asset_cache_dir = try std.fs.path.join(allocator, &.{ self.options.cache_dir, "artifacts", "native" });
         defer allocator.free(asset_cache_dir);
+        var synthetic_font_detected = false;
         var draw_context = DrawContext{
             .allocator = allocator,
             .io = self.io,
@@ -804,6 +806,7 @@ pub const Compiler = struct {
             .highlight_languages = self.options.highlight_languages,
             .text_cache = self.options.text_cache,
             .resource_cache = self.options.resource_cache,
+            .synthetic_font_detected = &synthetic_font_detected,
         };
 
         const commands = try buildObjectCommands(allocator, state, prepared_page);
@@ -857,14 +860,17 @@ pub const Compiler = struct {
             var font_catalog = try local_fonts.take(allocator);
             defer font_catalog.deinit(allocator);
             try render_text.validateFontEnvironment(font_environment);
-            const cached = try cache.put(
-                key,
-                allocator,
-                &page,
-                &resource_graph,
-                source_dependencies,
-                &font_catalog,
-            );
+            const cached = if (synthetic_font_detected)
+                false
+            else
+                try cache.put(
+                    key,
+                    allocator,
+                    &page,
+                    &resource_graph,
+                    source_dependencies,
+                    &font_catalog,
+                );
             if (!cached) {
                 try mergeUncachedPage(
                     allocator,
@@ -1244,20 +1250,6 @@ fn addTargetedRenderDiagnostic(
     }
     var origin = try preloadTaskDiagnosticOrigin(state, resolved_target);
     defer origin.deinit(state.allocator);
-    if (err == error.UnsupportedSyntheticFont) {
-        const synthetic_font_failure = if (failure) |detail|
-            if (detail.text_failure.synthetic_font) |*font_failure| font_failure else null
-        else
-            null;
-        try addFontFaceUnavailableDiagnostic(
-            state,
-            resolved_target.page_id,
-            resolved_target.node_id,
-            origin.text,
-            synthetic_font_failure,
-        );
-        return;
-    }
     var detail_buffer: [512]u8 = undefined;
     const recorded_message = if (failure) |value| value.message else null;
     const detail = recorded_message orelse
@@ -1272,7 +1264,7 @@ fn addTargetedRenderDiagnostic(
     });
 }
 
-pub fn addFontFaceUnavailableDiagnostic(
+pub fn addFontFaceSubstitutionWarning(
     state: *core.DocumentState,
     page_id: ?core.NodeId,
     node_id: ?core.NodeId,
@@ -1281,11 +1273,19 @@ pub fn addFontFaceUnavailableDiagnostic(
 ) !void {
     var message_buffer: [1024]u8 = undefined;
     const message = if (failure) |detail|
-        render_text.formatSyntheticFontDiagnostic(&message_buffer, detail)
+        render_text.formatSyntheticFontWarning(&message_buffer, detail)
     else
-        render_text.genericSyntheticFontDiagnostic();
+        render_text.genericSyntheticFontWarning();
+    for (state.diagnostics.items) |diagnostic| {
+        if (diagnostic.phase != .render or diagnostic.severity != .warning) continue;
+        const existing = switch (diagnostic.data) {
+            .user_report => |report| report.message,
+            else => continue,
+        };
+        if (std.mem.eql(u8, existing, message)) return;
+    }
     const owned_message = try state.allocator.dupe(u8, message);
-    try state.addRenderDiagnostic(.@"error", page_id, node_id, origin, .{
+    try state.addRenderDiagnostic(.warning, page_id, node_id, origin, .{
         .user_report = .{ .message = owned_message },
     });
 }
@@ -1301,7 +1301,6 @@ fn renderFailureDiagnosticMessage(buffer: []u8, err: anyerror) []const u8 {
         error.InvalidSvgResource => "InvalidSvgResource: the file is not a valid SVG with usable intrinsic dimensions; repair or replace the SVG",
         error.InvalidPdfResource => "InvalidPdfResource: the file is not a readable PDF or the requested page is unavailable; verify the PDF and page number",
         error.ResourceChangedDuringRead => "ResourceChangedDuringRead: the asset changed repeatedly while it was being read; wait for the writer to finish and retry",
-        error.UnsupportedSyntheticFont => render_text.genericSyntheticFontDiagnostic(),
         error.UnknownTreeSitterLanguage => "UnknownTreeSitterLanguage: the configured parser is unavailable; select a supported built-in parser in ss.toml",
         error.TreeSitterParserCreateFailed => "TreeSitterParserCreateFailed: could not initialize syntax highlighting; retry or disable highlighting for this language",
         error.TreeSitterLanguageRejected => "TreeSitterLanguageRejected: the bundled parser is incompatible with the tree-sitter runtime; reinstall or update ss, and report the failure if it persists",
@@ -1356,6 +1355,17 @@ fn originForContentSpan(
 
 fn addObjectCommandDiagnostic(state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, failure: ?*const CommandFailure) !void {
     try addTargetedRenderDiagnostic(state, objectCommandDiagnosticTarget(command), objectCommandLabel(command), err, failure);
+}
+
+fn addObjectFontSubstitutionWarning(state: *core.DocumentState, command: *const ObjectCommand, failure: *const CommandFailure) !void {
+    var target = objectCommandDiagnosticTarget(command);
+    if (failure.content_start) |start| {
+        if (failure.content_end) |end| target = targetWithContentSpan(target, start, end);
+    }
+    var origin = try preloadTaskDiagnosticOrigin(state, target);
+    defer origin.deinit(state.allocator);
+    const synthetic_font = if (failure.text_failure.synthetic_font) |*detail| detail else null;
+    try addFontFaceSubstitutionWarning(state, target.page_id, target.node_id, origin.text, synthetic_font);
 }
 
 fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, failure: ?*const CommandFailure) !void {
@@ -1858,6 +1868,7 @@ fn buildRenderPage(
         .text_cache = parent_ctx.text_cache,
         .resource_cache = parent_ctx.resource_cache,
         .command_failure = parent_ctx.command_failure,
+        .synthetic_font_detected = parent_ctx.synthetic_font_detected,
         .emitter = .{
             .page = &page,
             .resources = resources,
@@ -1923,6 +1934,12 @@ fn drawObjectCommandIntoIrWithDiagnostic(
         try addObjectCommandDiagnostic(state, command, err, &failure);
         return err;
     };
+    if (failure.text_failure.synthetic_font != null) {
+        if (ctx.synthetic_font_detected) |detected| detected.* = true;
+        compiler.diagnostic_mutex.lockUncancelable(compiler.io);
+        defer compiler.diagnostic_mutex.unlock(compiler.io);
+        try addObjectFontSubstitutionWarning(state, command, &failure);
+    }
 }
 
 fn drawObjectCommandIntoIr(ctx: *DrawContext, command: *const ObjectCommand) !void {
@@ -3790,6 +3807,10 @@ fn appendTextAtoms(
         errdefer if (shaped_layout) |*layout| layout.deinit(ctx.allocator);
         const width = if (ctx.capture_measurement_content or ctx.measurement_bounds == null) blk: {
             const emitter = activeEmitter(ctx);
+            const had_synthetic_font = if (emitter.text_failure) |failure|
+                failure.synthetic_font != null
+            else
+                false;
             const shape_result = if (emitter.text_failure) |failure|
                 render_text.shapeWithFailure(
                     ctx.allocator,
@@ -3817,12 +3838,14 @@ fn appendTextAtoms(
                     false,
                     emitter.text_cache,
                 );
-            shaped_layout = shape_result catch |err| {
-                if (err == error.UnsupportedSyntheticFont) {
-                    if (ctx.command_failure) |failure| recordTextFailureRange(failure, content_range, value, token);
+            shaped_layout = try shape_result;
+            if (!had_synthetic_font) {
+                if (ctx.command_failure) |failure| {
+                    if (failure.text_failure.synthetic_font != null) {
+                        recordTextFailureRange(failure, content_range, value, token);
+                    }
                 }
-                return err;
-            };
+            }
             const layout = &shaped_layout.?;
             const logical_width: f32 = @floatCast(layout.logical_bounds.width);
             if (!is_emoji) break :blk logical_width;

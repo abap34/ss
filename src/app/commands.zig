@@ -311,6 +311,7 @@ fn compileRendering(
 
     progress.begin("Compile rendering");
     errdefer progress.abort();
+    const diagnostic_start = state.diagnostics.items.len;
     var text_cache = render_text.Cache.init(std.heap.smp_allocator, io);
     defer text_cache.deinit();
     text_cache.restore(options.cache_dir);
@@ -332,6 +333,7 @@ fn compileRendering(
     errdefer ir.deinit(ir_allocator);
     text_cache.persist(options.cache_dir);
     progress.complete();
+    error_report.printDocumentStateDiagnosticsFrom(state.projectPath(), state.projectSource(), &state, diagnostic_start);
     return .{
         .state = state,
         .pages = pages,

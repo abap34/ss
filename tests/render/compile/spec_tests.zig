@@ -458,7 +458,7 @@ test "text layout append failure consumes one shared reference" {
 
 test "text shape cache persists across compiler processes and rejects corrupt data" {
     const root = ".ss-cache/test-render-persistent-text-shapes";
-    const cache_path = root ++ "/text-shapes-v3/shapes.bin";
+    const cache_path = root ++ "/text-shapes-v4/shapes.bin";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
 
@@ -529,7 +529,7 @@ test "text shape cache persists across compiler processes and rejects corrupt da
     try testing.expectEqual(@as(usize, 0), corrupt_cache.entryCount());
 }
 
-test "synthetic font failures produce actionable font face diagnostics" {
+test "synthetic font faces produce non-fatal deduplicated warnings" {
     const requested = core.font.Face{
         .family = "Helvetica",
         .weight = 700,
@@ -540,32 +540,28 @@ test "synthetic font failures produce actionable font face diagnostics" {
         bold: bool,
         italic: bool,
         synthesis: []const u8,
-        remedy: []const u8,
     }{
         .{
             .bold = true,
             .italic = false,
             .synthesis = "synthesized bold",
-            .remedy = "actual bold face, or use an available weight such as 400",
         },
         .{
             .bold = false,
             .italic = true,
             .synthesis = "synthesized italic",
-            .remedy = "actual italic face, or use an available style such as normal",
         },
         .{
             .bold = true,
             .italic = true,
             .synthesis = "synthesized bold and italic",
-            .remedy = "actual bold italic face, or use an available weight and style",
         },
     };
 
     for (cases, 0..) |case, index| {
         var failure = render_text.ShapeFailure{};
         defer failure.deinit(testing.allocator);
-        try testing.expectError(error.UnsupportedSyntheticFont, render_text.validateResolvedFontFace(
+        try render_text.validateResolvedFontFace(
             testing.allocator,
             requested,
             .{
@@ -577,7 +573,7 @@ test "synthetic font failures produce actionable font face diagnostics" {
                 .source = .{ .start = 2, .end = 5 },
             },
             &failure,
-        ));
+        );
         const detail = if (failure.synthetic_font) |*value| value else return error.ExpectedSyntheticFontFailure;
         try testing.expectEqual(@as(u32, 2), detail.source.start);
         try testing.expectEqual(@as(u32, 5), detail.source.end);
@@ -585,24 +581,26 @@ test "synthetic font failures produce actionable font face diagnostics" {
         try testing.expectEqual(@as(usize, 122), content_range.start);
         try testing.expectEqual(@as(usize, 125), content_range.end);
         var message_buffer: [1024]u8 = undefined;
-        const message = render_text.formatSyntheticFontDiagnostic(&message_buffer, detail);
-        try testing.expect(std.mem.startsWith(u8, message, "FontFaceUnavailable: font 'Helvetica' at weight 700 and style normal"));
+        const message = render_text.formatSyntheticFontWarning(&message_buffer, detail);
+        try testing.expect(std.mem.startsWith(u8, message, "FontFaceSubstituted: font 'Helvetica' at weight 700 and style normal"));
         try testing.expect(std.mem.indexOf(u8, message, case.synthesis) != null);
         try testing.expect(std.mem.indexOf(u8, message, "using fallback font 'HiraginoSans-W3'") != null);
-        try testing.expect(std.mem.indexOf(u8, message, case.remedy) != null);
-        try testing.expect(std.mem.indexOf(u8, message, "UnsupportedSyntheticFont") == null);
-        try testing.expect(std.mem.indexOf(u8, message, "please report this as an ss bug") == null);
+        try testing.expect(std.mem.indexOf(u8, message, "rendering will continue") != null);
+        try testing.expect(std.mem.indexOf(u8, message, "appearance may vary by output target") != null);
 
         if (index == 0) {
             var state = try initEmptyDocumentState();
             defer state.deinit();
-            try render_compile.addFontFaceUnavailableDiagnostic(&state, null, null, null, detail);
+            try render_compile.addFontFaceSubstitutionWarning(&state, null, null, null, detail);
             try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
+            try testing.expectEqual(core.DiagnosticSeverity.warning, state.diagnostics.items[0].severity);
             const diagnostic_message = switch (state.diagnostics.items[0].data) {
                 .user_report => |data| data.message,
-                else => return error.ExpectedFontFaceUnavailableDiagnostic,
+                else => return error.ExpectedFontFaceSubstitutionWarning,
             };
             try testing.expectEqualStrings(message, diagnostic_message);
+            try render_compile.addFontFaceSubstitutionWarning(&state, null, null, null, detail);
+            try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
         }
     }
 

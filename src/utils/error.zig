@@ -217,7 +217,12 @@ pub fn printParseError(path: []const u8, text: []const u8, err: anyerror, diagno
 }
 
 pub fn printDocumentStateDiagnostics(path: []const u8, text: []const u8, state: anytype) void {
-    for (state.diagnostics.items) |diagnostic| {
+    printDocumentStateDiagnosticsFrom(path, text, state, 0);
+}
+
+pub fn printDocumentStateDiagnosticsFrom(path: []const u8, text: []const u8, state: anytype, start: usize) void {
+    const first = @min(start, state.diagnostics.items.len);
+    for (state.diagnostics.items[first..]) |diagnostic| {
         var resolved = resolveContextDiagnostic(state.allocator, path, text, state, diagnostic) catch {
             var message_buf: [128]u8 = undefined;
             print(.{

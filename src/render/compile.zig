@@ -33,7 +33,7 @@ pub const tree_sitter_min_compatible_language_version = syntax_highlight.tree_si
 pub const native_artifact_cache_version = items.native_artifact_cache_version;
 pub const nativeRuntimeVersions = items.nativeRuntimeVersions;
 pub const treeSitterHealthReport = syntax_highlight.treeSitterHealthReport;
-pub const addFontFaceUnavailableDiagnostic = items.addFontFaceUnavailableDiagnostic;
+pub const addFontFaceSubstitutionWarning = items.addFontFaceSubstitutionWarning;
 pub const validateFontEnvironment = text_compile.validateFontEnvironment;
 pub const refreshAndValidateFontEnvironment = text_compile.refreshAndValidateFontEnvironment;
 
