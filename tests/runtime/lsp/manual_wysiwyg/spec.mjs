@@ -150,7 +150,7 @@ automatic = false
   await rm(project, { recursive: true, force: true });
 }
 
-await testContinuousPositionEdits(250);
+await testContinuousPositionEdits(5000);
 await testContinuousPositionEdits(0);
 await testSignedZeroPositionEdits();
 await testConnectorForcesFullDisplay();
