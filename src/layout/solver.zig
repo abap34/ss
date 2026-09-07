@@ -1729,7 +1729,7 @@ fn constraintCyclePropagation(state: anytype, page_graph: *const graph.PageLayou
             );
         }
 
-        current = findConstraintTargetingEndpoint(page_graph, source_endpoint, axis) orelse return null;
+        current = page_graph.constraintTargetingAnchor(source_endpoint.node_id, source_endpoint.anchor) orelse return null;
     }
     return null;
 }
@@ -1793,7 +1793,7 @@ fn finalConstraintSourceTrace(state: anytype, page_id: NodeId, page_graph: *cons
     return switch (source) {
         .page => |anchor| try finalPageAnchorTrace(state, page_id, anchor, value),
         .node => |node_source| blk: {
-            if (findConstraintTargetingEndpoint(page_graph, .{ .node_id = node_source.node_id, .anchor = node_source.anchor }, graph.anchorAxis(node_source.anchor))) |source_constraint| {
+            if (page_graph.constraintTargetingAnchor(node_source.node_id, node_source.anchor)) |source_constraint| {
                 break :blk try finalConstraintTrace(state, page_id, page_graph, source_constraint, value, depth);
             }
             break :blk try finalNodeAnchorTrace(state, node_source.node_id, node_source.anchor, value);
@@ -1847,14 +1847,6 @@ fn constraintSourceEndpoint(source: model.ConstraintSource) ?ConstraintEndpoint 
     };
 }
 
-fn findConstraintTargetingEndpoint(page_graph: *const graph.PageLayoutGraph, endpoint: ConstraintEndpoint, axis: model.Axis) ?Constraint {
-    for (page_graph.constraints) |constraint| {
-        if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
-        if (constraint.target_node == endpoint.node_id and constraint.target_anchor == endpoint.anchor) return constraint;
-    }
-    return null;
-}
-
 fn constraintEndpointSame(a: ConstraintEndpoint, b: ConstraintEndpoint) bool {
     return a.node_id == b.node_id and a.anchor == b.anchor;
 }
@@ -1867,7 +1859,8 @@ fn constraintAlreadyFailed(state: anytype, constraint: Constraint) bool {
 }
 
 fn validationRelatedConstraint(page_graph: *const graph.PageLayoutGraph, failure: Constraint) ?Constraint {
-    for (page_graph.constraints) |candidate| {
+    for (page_graph.targetConstraintIndexes(failure.target_node)) |index| {
+        const candidate = page_graph.constraints[index];
         if (candidate.target_node != failure.target_node) continue;
         if (candidate.target_anchor != failure.target_anchor) continue;
         if (constraintsSame(candidate, failure)) continue;

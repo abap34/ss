@@ -25,10 +25,7 @@ pub fn buildHorizontalConstraints(state: anytype, workspace: *const graph.AxisWo
     const allocator = state.allocator;
     var components = try workspace.dependencyComponents(allocator, state, .{});
     defer components.deinit();
-    var roots = try components.rootIndexes(allocator);
-    defer roots.deinit(allocator);
-
-    for (roots.items) |root| {
+    for (components.rootIndexes()) |root| {
         if (components.isPageDependent(root)) continue;
         const placement_index = if (try computeHorizontalComponentUnit(state, workspace, &components, root)) |unit|
             unit.placement_index
@@ -793,7 +790,7 @@ fn flowChildIndex(
     if (!components.contains(component_root, index)) return null;
     const node = state.getNode(child_id) orelse return null;
     if (groups.isGroupNode(node) and scope != .group) return null;
-    if (scope == .page and directParentGroupIndex(state, workspace, components, component_root, child_id) != null) return null;
+    if (scope == .page and directParentGroupIndex(workspace, components, component_root, child_id) != null) return null;
     const axis_state = workspace.states[index];
     if (axis_state.start != null or axis_state.end != null or axis_state.center != null) return null;
     if (workspace.graph.hasTargetConstraint(state, child_id, .vertical, &.{})) return null;
@@ -812,7 +809,7 @@ fn localFlowChildIndex(
     if (!components.contains(component_root, index)) return null;
     const node = state.getNode(child_id) orelse return null;
     if (groups.isGroupNode(node) and scope != .group) return null;
-    if (scope == .page and directParentGroupIndex(state, workspace, components, component_root, child_id) != null) return null;
+    if (scope == .page and directParentGroupIndex(workspace, components, component_root, child_id) != null) return null;
     return index;
 }
 
@@ -895,7 +892,8 @@ fn hasFallbackTargetConstraint(constraints: []const Constraint, node_id: NodeId,
 }
 
 fn hasHardPositionTargetConstraint(workspace: *const graph.AxisWorkspace, node_id: NodeId, axis: Axis) bool {
-    for (workspace.hard_constraints) |constraint| {
+    for (workspace.graph.targetConstraintIndexes(node_id)) |index| {
+        const constraint = workspace.graph.constraints[index];
         if (constraint.target_node != node_id) continue;
         if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
         switch (graph.classifySelfConstraint(constraint, axis)) {
@@ -928,12 +926,13 @@ fn componentHasInconsistentHardPositionCycle(
     component_root: usize,
     axis: Axis,
 ) bool {
-    for (workspace.hard_constraints) |constraint| {
-        if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
-        const target_index = workspace.indexOf(constraint.target_node) orelse continue;
-        if (!components.contains(component_root, target_index)) continue;
-        const offset = hardConstraintCycleOffset(workspace, constraint, axis) orelse continue;
-        if (@abs(offset) > graph.ConstraintTolerance) return true;
+    for (components.memberIndexes(component_root)) |target_index| {
+        for (workspace.graph.targetConstraintIndexes(workspace.nodeAt(target_index))) |index| {
+            const constraint = workspace.graph.constraints[index];
+            if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
+            const offset = hardConstraintCycleOffset(workspace, constraint, axis) orelse continue;
+            if (@abs(offset) > graph.ConstraintTolerance) return true;
+        }
     }
     return false;
 }
@@ -952,7 +951,7 @@ fn hardConstraintCycleOffset(workspace: *const graph.AxisWorkspace, start_constr
         if (graph.anchorAxis(source_endpoint.anchor) != axis) return null;
         if (constraintEndpointSame(source_endpoint, start_endpoint)) return accumulated_offset;
 
-        current = findHardConstraintTargetingEndpoint(workspace, source_endpoint, axis) orelse return null;
+        current = workspace.graph.constraintTargetingAnchor(source_endpoint.node_id, source_endpoint.anchor) orelse return null;
     }
     return null;
 }
@@ -964,27 +963,13 @@ fn constraintSourceEndpoint(source: ConstraintSource) ?ConstraintEndpoint {
     };
 }
 
-fn findHardConstraintTargetingEndpoint(workspace: *const graph.AxisWorkspace, endpoint: ConstraintEndpoint, axis: Axis) ?Constraint {
-    for (workspace.hard_constraints) |constraint| {
-        if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
-        if (constraint.target_node == endpoint.node_id and constraint.target_anchor == endpoint.anchor) return constraint;
-    }
-    return null;
-}
-
 fn constraintEndpointSame(a: ConstraintEndpoint, b: ConstraintEndpoint) bool {
     return a.node_id == b.node_id and a.anchor == b.anchor;
 }
 
-fn directParentGroupIndex(state: anytype, workspace: *const graph.AxisWorkspace, components: *const graph.ComponentSet, component_root: usize, child_id: NodeId) ?usize {
-    for (workspace.graph.child_ids, 0..) |candidate_id, index| {
-        if (!components.contains(component_root, index)) continue;
-        const candidate = state.getNode(candidate_id) orelse continue;
-        if (!groups.isGroupNode(candidate)) continue;
-        const children = state.childrenOf(candidate_id) orelse continue;
-        for (children) |group_child_id| {
-            if (group_child_id == child_id) return index;
-        }
+fn directParentGroupIndex(workspace: *const graph.AxisWorkspace, components: *const graph.ComponentSet, component_root: usize, child_id: NodeId) ?usize {
+    for (workspace.graph.parentGroupIndexes(child_id)) |index| {
+        if (components.contains(component_root, index)) return index;
     }
     return null;
 }

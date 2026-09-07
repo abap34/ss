@@ -472,18 +472,11 @@ test "layout graph spec: page graph indexes direct page children and filters axi
     try testing.expect(page_graph.hasTargetConstraint(&state, a, .vertical, &.{}));
     try testing.expect(!page_graph.hasTargetConstraint(&state, b, .vertical, &.{}));
 
-    var horizontal = try page_graph.constraintsForAxis(testing.allocator, &state, .horizontal, &.{});
-    defer horizontal.deinit(testing.allocator);
-    try testing.expectEqual(@as(usize, 2), horizontal.items.len);
-
-    var targets_a = try page_graph.targetConstraints(testing.allocator, &state, a, .horizontal, &.{});
-    defer targets_a.deinit(testing.allocator);
-    try testing.expectEqual(@as(usize, 1), targets_a.items.len);
-
-    var sourced_by_a = try page_graph.sourceConstraints(testing.allocator, &state, a, .horizontal, &.{});
-    defer sourced_by_a.deinit(testing.allocator);
-    try testing.expectEqual(@as(usize, 1), sourced_by_a.items.len);
-    try testing.expectEqual(b, sourced_by_a.items[0].target_node);
+    try testing.expectEqual(@as(usize, 2), page_graph.constraintsOnAxis(.horizontal).len);
+    try testing.expectEqualSlices(usize, &.{ 0, 1 }, page_graph.targetConstraintIndexes(a));
+    try testing.expectEqualSlices(usize, &.{2}, page_graph.targetConstraintIndexes(b));
+    try testing.expectEqual(a, page_graph.constraintTargetingAnchor(b, .left).?.source.node.node_id);
+    try testing.expect(page_graph.constraintTargetingAnchor(b, .top) == null);
 }
 
 test "layout graph spec: implicit constraint objects stay page local" {
@@ -2158,4 +2151,43 @@ fn initPageGraph(state: *core.DocumentState, page_id: model.NodeId) !graph.PageL
         if (page.page_id == page_id) return graph.PageLayoutGraph.init(testing.allocator, state, page);
     }
     return error.UnknownNode;
+}
+
+test "layout graph: adjacency preserves shared parents and component order across allocation failures" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("page");
+    const a = try state.makeObject(page, "a", null, .text, .text, "a");
+    const b = try state.makeObject(page, "b", null, .text, .text, "b");
+    const c = try state.makeObject(page, "c", null, .text, .text, "c");
+    const left = try state.makeGroupWithOrigin(page, true, &.{ a, b }, null);
+    const right = try state.makeGroupWithOrigin(page, true, &.{ b, c }, null);
+    const outer = try state.makeGroupWithOrigin(page, true, &.{ left, right }, null);
+    try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 30, null);
+    try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 40, null);
+    try state.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 0, null);
+    var inputs = try core.layout.partition.Document.init(testing.allocator, &state);
+    defer inputs.deinit(testing.allocator);
+    try inspectIndexedPageGraph(testing.allocator, &state, inputs.pages[0], b, outer);
+    try testing.checkAllAllocationFailures(testing.allocator, inspectIndexedPageGraph, .{ &state, inputs.pages[0], b, outer });
+}
+
+fn inspectIndexedPageGraph(allocator: std.mem.Allocator, state: *core.DocumentState, inputs: core.layout.partition.Page, target: model.NodeId, outer: model.NodeId) !void {
+    var page_graph = try graph.PageLayoutGraph.init(allocator, state, inputs);
+    defer page_graph.deinit();
+    try testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, page_graph.targetConstraintIndexes(target));
+    try testing.expectEqualSlices(usize, &.{ 3, 4 }, page_graph.parentGroupIndexes(target));
+    try testing.expectEqual(@as(f32, 30), page_graph.constraintTargetingAnchor(target, .left).?.offset);
+    try testing.expectEqual(@as(usize, 0), page_graph.targetConstraintIndexes(9999).len);
+    try testing.expectEqual(@as(usize, 0), page_graph.parentGroupIndexes(9999).len);
+    var workspace = try graph.AxisWorkspace.init(allocator, state, &page_graph, .horizontal);
+    defer workspace.deinit();
+    var components = try workspace.dependencyComponents(allocator, state, .{});
+    defer components.deinit();
+    try testing.expectEqualSlices(usize, &.{ 1, 2, 3, 4, 5 }, components.rootIndexes());
+    try testing.expectEqualSlices(usize, &.{ 0, 1 }, components.memberIndexes(1));
+    try testing.expectEqual(@as(?usize, 0), components.fallbackRootIndex(state, 1));
+    var subgraph = try page_graph.groupSubgraph(allocator, state, outer);
+    defer subgraph.deinit();
+    try testing.expectEqualSlices(usize, &.{ 3, 0, 1, 4, 2 }, subgraph.indexes.items);
 }
