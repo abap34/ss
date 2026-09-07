@@ -37,7 +37,7 @@ test "document evaluation cooperatively cancels without adding a diagnostic" {
         &source,
         &syntax,
         &index,
-        .{ .allow_diagnostics = true },
+        .{},
     );
     defer state.deinit();
     var graph = (try compiler.analysis.analyzeDocumentStateWithMode(allocator, &state, .evaluation)).?;

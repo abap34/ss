@@ -111,7 +111,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .string = try ctx.readlines(path) };
         },
         .foreach => blk: {
-            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            var target = try ctx.evalExprValue(call.args.items[0]);
             errdefer target.deinit(ctx.state.allocator);
             var callback = try evalFunctionArg(ctx, call, 1);
             defer callback.deinit(ctx.state.allocator);
@@ -135,7 +135,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk target;
         },
         .foreach_enumerate => blk: {
-            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            var target = try ctx.evalExprValue(call.args.items[0]);
             errdefer target.deinit(ctx.state.allocator);
             var callback = try evalFunctionArg(ctx, call, 1);
             defer callback.deinit(ctx.state.allocator);
@@ -160,7 +160,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk target;
         },
         .fold => blk: {
-            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            var target = try ctx.evalExprValue(call.args.items[0]);
             defer target.deinit(ctx.state.allocator);
             var accumulator = try ctx.evalStringArg(call, 1);
             var callback = try evalFunctionArg(ctx, call, 2);
@@ -190,7 +190,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .string = accumulator };
         },
         .join => blk: {
-            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            var target = try ctx.evalExprValue(call.args.items[0]);
             defer target.deinit(ctx.state.allocator);
             const separator = try ctx.evalStringArg(call, 1);
             var callback = try evalFunctionArg(ctx, call, 2);
@@ -229,7 +229,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .string = try ctx.ownStringWithProvenance(try out.toOwnedSlice(ctx.state.allocator), provenance.items) };
         },
         .first => blk: {
-            const selection = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            const selection = try ctx.evalExprValue(call.args.items[0]);
             break :blk switch (selection) {
                 .selection => |sel| switch (sel.item_tag) {
                     .object => .{ .object = sel.first() orelse return error.EmptySelection },
@@ -239,9 +239,9 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             };
         },
         .selection_union, .selection_intersection, .selection_difference => blk: {
-            var left_value = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            var left_value = try ctx.evalExprValue(call.args.items[0]);
             defer left_value.deinit(ctx.state.allocator);
-            var right_value = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[1]));
+            var right_value = try ctx.evalExprValue(call.args.items[1]);
             defer right_value.deinit(ctx.state.allocator);
             const left = switch (left_value) {
                 .selection => |selection| selection,
@@ -306,7 +306,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .string = try ctx.reprNode(object_id) };
         },
         .prop => blk: {
-            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            var target = try ctx.evalExprValue(call.args.items[0]);
             defer target.deinit(ctx.state.allocator);
             const key = try ctx.evalStringArg(call, 1);
             const default_value = try ctx.evalStringArg(call, 2);
@@ -318,13 +318,13 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .string = text };
         },
         .has_prop => blk: {
-            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            var target = try ctx.evalExprValue(call.args.items[0]);
             defer target.deinit(ctx.state.allocator);
             const key = try ctx.evalStringArg(call, 1);
             break :blk .{ .boolean = ctx.nodeField(target, key) != null };
         },
         .prop_eq => blk: {
-            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            var target = try ctx.evalExprValue(call.args.items[0]);
             defer target.deinit(ctx.state.allocator);
             const key = try ctx.evalStringArg(call, 1);
             const expected = try ctx.evalStringArg(call, 2);
@@ -334,7 +334,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .boolean = std.mem.eql(u8, text, expected) };
         },
         .selection_empty, .selection_count => blk: {
-            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            var target = try ctx.evalExprValue(call.args.items[0]);
             defer target.deinit(ctx.state.allocator);
             const selection = switch (target) {
                 .selection => |sel| sel,
@@ -392,8 +392,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .object = object_id };
         },
         .set_prop => blk: {
-            const raw_target = try ctx.evalExprValue(call.args.items[0]);
-            var target = try ctx.materializeForUse(raw_target);
+            var target = try ctx.evalExprValue(call.args.items[0]);
             const key = try ctx.evalStringArg(call, 1);
             var value_arg = try ctx.evalExprValue(call.args.items[2]);
             defer value_arg.deinit(ctx.state.allocator);
@@ -456,8 +455,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             };
         },
         .extend_render_env => blk: {
-            const raw_target = try ctx.evalExprValue(call.args.items[0]);
-            var target = try ctx.materializeForUse(raw_target);
+            var target = try ctx.evalExprValue(call.args.items[0]);
             const op = try ctx.evalStringArg(call, 1);
             const key = try ctx.evalStringArg(call, 2);
             var raw_value = try ctx.evalExprValue(call.args.items[3]);

@@ -56,9 +56,7 @@ pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, s
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{});
     defer index.deinit();
 
-    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
-        .allow_diagnostics = true,
-    });
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
     defer state.deinit();
 
     try analyzeAndFinalizeDocumentState(allocator, &state);
@@ -95,9 +93,7 @@ pub fn buildSourceWithOverlays(
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{ .overlay = &overlay });
     defer index.deinit();
 
-    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
-        .allow_diagnostics = true,
-    });
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
     defer state.deinit();
 
     try analyzeAndFinalizeDocumentState(allocator, &state);
@@ -463,9 +459,7 @@ pub fn expectOverlayDiagnostic(
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{ .overlay = &overlay });
     defer index.deinit();
 
-    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
-        .allow_diagnostics = true,
-    });
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
     defer state.deinit();
 
     analysis.analyzeDocumentState(allocator, &state) catch {};
@@ -501,9 +495,7 @@ pub fn expectDiagnosticWithOverlays(
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{ .overlay = &overlay });
     defer index.deinit();
 
-    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
-        .allow_diagnostics = true,
-    });
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
     defer state.deinit();
 
     analysis.analyzeDocumentState(allocator, &state) catch {};
@@ -525,9 +517,7 @@ fn buildFinalizedDocumentState(io: std.Io, allocator: std.mem.Allocator, path: [
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{});
     defer index.deinit();
 
-    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
-        .allow_diagnostics = true,
-    });
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
     errdefer state.deinit();
 
     try analyzeAndFinalizeDocumentState(allocator, &state);
@@ -553,9 +543,7 @@ fn buildFinalizedDocumentStateWithOverlays(
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{ .overlay = &overlay });
     defer index.deinit();
 
-    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
-        .allow_diagnostics = true,
-    });
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
     errdefer state.deinit();
 
     try analyzeAndFinalizeDocumentState(allocator, &state);
@@ -576,9 +564,7 @@ pub fn expectDiagnostic(
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{});
     defer index.deinit();
 
-    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
-        .allow_diagnostics = true,
-    });
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
     defer state.deinit();
 
     analysis.analyzeDocumentState(allocator, &state) catch {};
@@ -606,9 +592,7 @@ pub fn expectLoweringErrorDiagnostic(
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program, .{});
     defer index.deinit();
 
-    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
-        .allow_diagnostics = true,
-    });
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
     defer state.deinit();
 
     var execution_graph = analysis.analyzeDocumentStateWithMode(allocator, &state, .evaluation) catch null;

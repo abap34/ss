@@ -24,7 +24,6 @@ const FunctionBoolMap = std.HashMap(core.FunctionKey, bool, core.FunctionKeyCont
 const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 
 pub const BuildDocumentStateOptions = struct {
-    allow_diagnostics: bool = false,
     parse_holes: ?syntax_hole.Result = null,
 };
 

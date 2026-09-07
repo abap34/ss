@@ -30,9 +30,7 @@ fn exerciseWithOptions(source: []const u8, first: []const u8, second: []const u8
     var syntax = try compiler.syntax.parseWithSourceName(allocator, source_buf, path);
     var modules = try compiler.analysis.loadModuleIndex(allocator, testing.io, root, syntax, .{ .overlay = &overlay });
     defer modules.deinit();
-    var state = try compiler.analysis.buildDocumentStateWithOptions(allocator, path, root, &source_buf, &syntax, &modules, .{
-        .allow_diagnostics = true,
-    });
+    var state = try compiler.analysis.buildDocumentStateWithOptions(allocator, path, root, &source_buf, &syntax, &modules, .{});
     defer state.deinit();
     errdefer for (state.diagnostics.items) |diagnostic| {
         if (diagnostic.data == .user_report) std.debug.print("{s}: {s}\n", .{ diagnostic.origin orelse "", diagnostic.data.user_report.message });

@@ -667,7 +667,6 @@ fn buildWithSyntax(
     }
 
     var state = analysis_pipeline.buildDocumentStateWithOptions(allocator, entry_path, asset_base_dir, &entry_source, &program, &index, .{
-        .allow_diagnostics = true,
         .parse_holes = parse_holes,
     }) catch |err| {
         defer program.deinit(allocator);
