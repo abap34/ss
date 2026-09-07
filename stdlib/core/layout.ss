@@ -1,4 +1,4 @@
-import std:core/classes as classes
+import std:core/classes
 
 record Cols {
   left: Number = 96

@@ -1,4 +1,5 @@
 const std = @import("std");
+const model = @import("model");
 
 pub const SourceSpan = struct {
     start: usize,
@@ -7,6 +8,7 @@ pub const SourceSpan = struct {
 
 pub const Type = struct {
     kind: Kind,
+    nominal_module_id: ?u32 = null,
     param: Kind = .none,
     class_name: ?[]const u8 = null,
     class_name_span: ?SourceSpan = null,
@@ -79,6 +81,20 @@ pub const Type = struct {
         return .{ .kind = .record, .class_name = name, .class_name_span = span };
     }
 
+    pub fn inModule(self: Type, module_id: u32) Type {
+        std.debug.assert(self.kind == .record or self.kind == .enum_type or self.kind == .object);
+        var resolved = self;
+        resolved.nominal_module_id = module_id;
+        return resolved;
+    }
+
+    pub fn nominalId(self: Type) ?model.NominalId {
+        return .{
+            .module_id = self.nominal_module_id orelse return null,
+            .name = (if (self.kind == .enum_type) self.enum_name else self.class_name) orelse return null,
+        };
+    }
+
     pub fn hole(hole_id: u32) Type {
         return .{ .kind = .hole, .hole_id = hole_id };
     }
@@ -106,9 +122,11 @@ pub const Type = struct {
     pub fn functionType(allocator: std.mem.Allocator, params: []const Type, result: Type) anyerror!Type {
         const copied_params = try allocator.alloc(Type, params.len);
         errdefer allocator.free(copied_params);
-        for (params, 0..) |param, index| copied_params[index] = try param.clone(allocator);
-        errdefer {
-            for (copied_params) |*param| param.deinit(allocator);
+        var initialized: usize = 0;
+        errdefer for (copied_params[0..initialized]) |*param| param.deinit(allocator);
+        for (params, 0..) |param, index| {
+            copied_params[index] = try param.clone(allocator);
+            initialized += 1;
         }
         const copied_result = try allocator.create(Type);
         errdefer allocator.destroy(copied_result);
@@ -187,7 +205,8 @@ pub const Type = struct {
             }
             return true;
         }
-        return normalizeParam(a.param) == normalizeParam(b.param) and
+        return a.nominal_module_id == b.nominal_module_id and
+            normalizeParam(a.param) == normalizeParam(b.param) and
             optionalStringEql(a.class_name, b.class_name) and
             optionalStringEql(a.param_class_name, b.param_class_name) and
             optionalStringEql(a.enum_name, b.enum_name);
@@ -212,11 +231,13 @@ pub const Type = struct {
         if (expected.kind == .enum_type or actual.kind == .enum_type) {
             return expected.kind == .enum_type and
                 actual.kind == .enum_type and
+                expected.nominal_module_id == actual.nominal_module_id and
                 optionalStringEql(expected.enum_name, actual.enum_name);
         }
         if (expected.kind == .record or actual.kind == .record) {
             return expected.kind == .record and
                 actual.kind == .record and
+                expected.nominal_module_id == actual.nominal_module_id and
                 optionalStringEql(expected.class_name, actual.class_name);
         }
         if (expected.kind != actual.kind) return false;

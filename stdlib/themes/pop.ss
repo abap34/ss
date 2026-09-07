@@ -1,12 +1,12 @@
 import std:themes/default as base
 import std:themes/base as theme_base
-import std:core/classes as classes
+import std:core/classes
 import std:core/components as components
 import std:core/layout as layout
 import std:core/objects as objects
 import std:core/generated as generated
 
-fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme
+fn default_theme(options: theme_base::ThemeOptions = theme_base::ThemeOptions {}) -> theme_base::Theme
   return base::default_theme(options) with {
     body.text.size = 20
     body.text.line_height = 28
@@ -132,11 +132,11 @@ fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme
   }
 end
 
-fn theme!(theme_value: Theme) -> Void
+fn theme!(theme_value: theme_base::Theme) -> Void
   theme_base::set_theme!(theme_value)
 end
 
-fn current_theme() -> Theme
+fn current_theme() -> theme_base::Theme
   return docctx().theme ?? default_theme()
 end
 
@@ -144,31 +144,31 @@ fn annotate!(source_text: String, target_text: String, note_text: String, style:
   return theme_base::annotate_with_style!(source_text, target_text, note_text, style)
 end
 
-fn/! h1(title_text: String, theme: Theme = current_theme()) -> Object
+fn/! h1(title_text: String, theme: theme_base::Theme = current_theme()) -> Object
   return base::h1(title_text, theme)
 end
 
-fn/! h2(subtitle_text: String, theme: Theme = current_theme()) -> Object
+fn/! h2(subtitle_text: String, theme: theme_base::Theme = current_theme()) -> Object
   return base::h2(subtitle_text, theme)
 end
 
-fn/! h3(subtitle_text: String, theme: Theme = current_theme()) -> Object
+fn/! h3(subtitle_text: String, theme: theme_base::Theme = current_theme()) -> Object
   return base::h3(subtitle_text, theme)
 end
 
-fn/! h4(subtitle_text: String, theme: Theme = current_theme()) -> Object
+fn/! h4(subtitle_text: String, theme: theme_base::Theme = current_theme()) -> Object
   return base::h4(subtitle_text, theme)
 end
 
-fn/! h5(subtitle_text: String, theme: Theme = current_theme()) -> Object
+fn/! h5(subtitle_text: String, theme: theme_base::Theme = current_theme()) -> Object
   return base::h5(subtitle_text, theme)
 end
 
-fn/! h6(subtitle_text: String, theme: Theme = current_theme()) -> Object
+fn/! h6(subtitle_text: String, theme: theme_base::Theme = current_theme()) -> Object
   return base::h6(subtitle_text, theme)
 end
 
-fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
+fn/! head(title_text: String, theme: theme_base::Theme = current_theme()) -> Object
   let chip = objects::txt_obj(title_text, "label")
   let chip_bg = components::panel()
   let title = objects::txt_obj(title_text, "title")
@@ -188,7 +188,7 @@ fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
   return group(title, chip_bg, chip)
 end
 
-fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
+fn/! subhead(subtitle_text: String, theme: theme_base::Theme = current_theme()) -> Object
   let subtitle = objects::sub_obj(subtitle_text)
   theme_base::apply_text_block_style(subtitle, theme.subhead)
   ~ subtitle.left == page.left + 110
@@ -197,7 +197,7 @@ fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
   return subtitle
 end
 
-fn/! text(text_value: String, theme: Theme = current_theme()) -> Object
+fn/! text(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
   return base::text(text_value, theme)
 end
 
@@ -210,60 +210,60 @@ fn/! latex(text_value: String, scale: Number = 1) -> Object
   return obj
 end
 
-fn/! figure(text_value: String, theme: Theme = current_theme()) -> Object
+fn/! figure(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
   return base::figure(text_value, theme)
 end
 
-fn/! image(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
+fn/! image(path_value: String, factor: Number = 1, theme: theme_base::Theme = current_theme()) -> Object
   return base::image(path_value, factor, theme)
 end
 
-fn/! pdf(path_value: String, factor: Number = 1, page_number: Number = 1, page_box: PdfPageBox = PdfPageBox.crop, theme: Theme = current_theme()) -> Object
+fn/! pdf(path_value: String, factor: Number = 1, page_number: Number = 1, page_box: PdfPageBox = PdfPageBox.crop, theme: theme_base::Theme = current_theme()) -> Object
   return base::pdf(path_value, factor, page_number, page_box, theme)
 end
 
-fn/! code(text_value: String, language_name: String = "python", theme: Theme = current_theme()) -> Object
+fn/! code(text_value: String, language_name: String = "python", theme: theme_base::Theme = current_theme()) -> Object
   return base::code(text_value, language_name, theme)
 end
 
-fn/! code_file(path_value: String, language_name: String = "plain", theme: Theme = current_theme()) -> Object
+fn/! code_file(path_value: String, language_name: String = "plain", theme: theme_base::Theme = current_theme()) -> Object
   return code(readlines(path_value), language_name, theme)
 end
 
-fn/! note(text_value: String, theme: Theme = current_theme()) -> Object
+fn/! note(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
   let note = objects::note_obj(text_value)
   return theme_base::apply_text_block_style(note, theme.note)
 end
 
-fn/! byline(text_value: String, theme: Theme = current_theme()) -> Object
+fn/! byline(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
   return theme_base::byline_with_style(text_value, theme.byline)
 end
 
-fn/! label(text_value: String, theme: Theme = current_theme()) -> Object
+fn/! label(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
   return theme_base::label_with_style(text_value, theme.label)
 end
 
-fn/! citation(target: Object, number: Number, reference_text: String, theme: Theme = current_theme()) -> Object
+fn/! citation(target: Object, number: Number, reference_text: String, theme: theme_base::Theme = current_theme()) -> Object
   return theme_base::citation_with_style(target, number, reference_text, theme.citation)
 end
 
-fn/! pageno(theme: Theme = current_theme()) -> Object
+fn/! pageno(theme: theme_base::Theme = current_theme()) -> Object
   return theme_base::pageno_with_style(theme.generated.pageno)
 end
 
-fn pagenos!(format: String? = none, theme: Theme = current_theme()) -> Void
+fn pagenos!(format: String? = none, theme: theme_base::Theme = current_theme()) -> Void
   theme_base::pagenos_with_style!(format, theme.generated.pageno)
 end
 
-fn footers!(text_value: String, theme: Theme = current_theme()) -> Void
+fn footers!(text_value: String, theme: theme_base::Theme = current_theme()) -> Void
   theme_base::footers_with_style!(text_value, theme.generated.footer)
 end
 
-fn watermark!(text_value: String, theme: Theme = current_theme()) -> Void
+fn watermark!(text_value: String, theme: theme_base::Theme = current_theme()) -> Void
   theme_base::watermark_with_style!(text_value, theme.generated.watermark)
 end
 
-fn toc(title_text: String, theme: Theme = current_theme()) -> Object
+fn toc(title_text: String, theme: theme_base::Theme = current_theme()) -> Object
   let title = objects::txt_obj(title_text, "label")
   theme_base::apply_text_block_style(title, theme.toc.title)
   let list = generated::toc_obj()
@@ -277,13 +277,13 @@ fn toc(title_text: String, theme: Theme = current_theme()) -> Object
   return group(title, chrome, list)
 end
 
-fn toc!(title_text: String, theme: Theme = current_theme()) -> Object
+fn toc!(title_text: String, theme: theme_base::Theme = current_theme()) -> Object
   let contents = objects::place!(toc(title_text, theme))
   pageno!(theme)
   return contents
 end
 
-fn/! cover(title_text: String, subtitle_text: String, author_name: String, theme: Theme = current_theme()) -> Object
+fn/! cover(title_text: String, subtitle_text: String, author_name: String, theme: theme_base::Theme = current_theme()) -> Object
   let title = objects::txt_obj(title_text, "title")
   let subtitle = objects::txt_obj(subtitle_text, "subtitle")
   let author = objects::txt_obj(author_name, "byline")

@@ -97,7 +97,7 @@ fn appendCommand(allocator: std.mem.Allocator, commands: *std.ArrayList(core.Pat
 fn enumField(record: core.RecordValue, name: []const u8, expected_type: []const u8) ![]const u8 {
     const value = record.field(name) orelse return error.MissingPathCommandField;
     return switch (value) {
-        .enum_case => |case| if (std.mem.eql(u8, case.enum_name, expected_type)) case.case_name else error.InvalidPathCommandField,
+        .enum_case => |case| if (case.module_id == record.module_id and std.mem.eql(u8, case.enum_name, expected_type)) case.case_name else error.InvalidPathCommandField,
         else => error.InvalidPathCommandField,
     };
 }

@@ -457,10 +457,14 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/syntax/scanner/spec_tests.zig", &.{
         import("scanner", scanner_mod),
     }, null);
-    addModuleTest(ctx, test_step, "tests/language/type/spec_tests.zig", &.{
+    const language_type_spec_mod = createModule(ctx, "tests/language/type/spec_tests.zig", &.{
         import("model", modules.model),
         import("language_type", modules.language_type),
     }, null);
+    const language_type_spec_tests = addTestArtifact(ctx, language_type_spec_mod);
+    const run_language_type_spec_tests = b.addRunArtifact(language_type_spec_tests);
+    test_step.dependOn(&run_language_type_spec_tests.step);
+    addFocusedTestStep(b, "test-language-type", "Run focused language type tests", &run_language_type_spec_tests.step);
     const analysis_mod = createCommonTestModule(ctx, test_step, "src/analysis.zig", modules, true);
     addModuleTest(ctx, test_step, "tests/analysis/types/spec_tests.zig", &.{
         import("core", modules.core),
@@ -530,11 +534,15 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/core/markdown/spec_tests.zig", &.{
         import("core", modules.core),
     }, true);
-    addModuleTest(ctx, test_step, "tests/core/value_text/spec_tests.zig", &.{
+    const value_text_spec_mod = createModule(ctx, "tests/core/value_text/spec_tests.zig", &.{
         import("core", modules.core),
         import("ast", modules.ast),
         import("language_type", modules.language_type),
     }, true);
+    const value_text_spec_tests = addTestArtifact(ctx, value_text_spec_mod);
+    const run_value_text_spec_tests = b.addRunArtifact(value_text_spec_tests);
+    test_step.dependOn(&run_value_text_spec_tests.step);
+    addFocusedTestStep(b, "test-value-text", "Run focused tagged property value tests", &run_value_text_spec_tests.step);
     const layout_graph_spec_mod = createModule(ctx, "tests/layout/graph/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
@@ -639,6 +647,14 @@ fn addTestStep(
     const run_module_loader_spec_tests = b.addRunArtifact(module_loader_spec_tests);
     test_step.dependOn(&run_module_loader_spec_tests.step);
     addFocusedTestStep(b, "test-module-loader", "Run focused module loader tests", &run_module_loader_spec_tests.step);
+    const nominal_spec_mod = createModule(ctx, "tests/compiler/nominal/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    const nominal_spec_tests = addTestArtifact(ctx, nominal_spec_mod);
+    const run_nominal_spec_tests = b.addRunArtifact(nominal_spec_tests);
+    test_step.dependOn(&run_nominal_spec_tests.step);
+    addFocusedTestStep(b, "test-nominal-types", "Run focused nominal type identity tests", &run_nominal_spec_tests.step);
+
     const inheritance_spec_mod = createModule(ctx, "tests/compiler/inheritance/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);
@@ -653,9 +669,13 @@ fn addTestStep(
     const run_return_facts_tests = b.addRunArtifact(return_facts_tests);
     test_step.dependOn(&run_return_facts_tests.step);
     addFocusedTestStep(b, "test-return-facts", "Run focused argument-sensitive return inference tests", &run_return_facts_tests.step);
-    addModuleTest(ctx, test_step, "tests/lsp/completion/spec_tests.zig", &.{
+    const completion_spec_mod = createModule(ctx, "tests/lsp/completion/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);
+    const completion_spec_tests = addTestArtifact(ctx, completion_spec_mod);
+    const run_completion_spec_tests = b.addRunArtifact(completion_spec_tests);
+    test_step.dependOn(&run_completion_spec_tests.step);
+    addFocusedTestStep(b, "test-completion", "Run focused analysis completion tests", &run_completion_spec_tests.step);
     const source_index_mod = createModule(ctx, "tests/utils/source/index_spec_tests.zig", &.{
         import("utils", modules.utils),
     }, null);

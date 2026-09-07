@@ -546,6 +546,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             defer values.deinit(ctx.state.allocator);
             defer deinitValues(ctx.state.allocator, values.items);
             for (call.args.items) |arg| try values.append(ctx.state.allocator, try ctx.evalExprValue(arg));
+            for (values.items, 0..) |value, index| try ctx.ensurePrimitiveArgType(descriptor, index, value);
             break :blk .{ .path = try path_eval.build(ctx.state.allocator, values.items) };
         },
     };

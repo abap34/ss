@@ -540,6 +540,7 @@ fn evalExpr(
         .none => .{ .none = {} },
         .enum_case => |case| .{ .enum_case = .{
             .enum_name = case.enum_name,
+            .module_id = case.module_id,
             .case_name = case.case_name,
         } },
         .call => |call| try evalCall(state, page_id, context, mode, env, functions, closures, current_origin, call),
@@ -704,8 +705,8 @@ fn evalRecord(
     current_origin: []const u8,
     record: ast.RecordExpr,
 ) !core.Value {
-    const resolved = findRecordDecl(state, record.type_name) orelse {
-        if (findEnumDecl(state, record.type_name) != null) {
+    const resolved = findRecordDecl(state, record.module_id, record.type_name) orelse {
+        if (findEnumDecl(state, record.module_id, record.type_name) != null) {
             try reportInvalidRecordLiteral(state, current_origin, record.type_name);
             return error.InvalidType;
         }
@@ -716,6 +717,7 @@ fn evalRecord(
     defer active_module_id = caller_module_id;
 
     var value = core.RecordValue.init(resolved.decl.name);
+    value.module_id = resolved.module_id;
     errdefer value.deinit(state.allocator);
 
     var default_env = std.StringHashMap(core.Value).init(state.allocator);
@@ -751,16 +753,17 @@ fn evalRecordDefaults(
     functions: *const core.FunctionMap,
     closures: *ClosureStore,
     current_origin: []const u8,
-    record_name: []const u8,
+    record_id: core.NominalId,
 ) !core.RecordValue {
-    const resolved = findRecordDecl(state, record_name) orelse {
-        try reportNamedResolutionError(state, error.UnknownType, "record type", record_name, current_origin);
+    const resolved = findRecordDecl(state, record_id.module_id, record_id.name) orelse {
+        try reportNamedResolutionError(state, error.UnknownType, "record type", record_id.name, current_origin);
         return error.UnknownType;
     };
     const caller_module_id = active_module_id;
     defer active_module_id = caller_module_id;
 
     var value = core.RecordValue.init(resolved.decl.name);
+    value.module_id = resolved.module_id;
     errdefer value.deinit(state.allocator);
 
     var default_env = std.StringHashMap(core.Value).init(state.allocator);
@@ -841,29 +844,18 @@ const ResolvedRecordDecl = struct {
     module_id: core.SourceModuleId,
 };
 
-fn findRecordDecl(state: *const core.DocumentState, type_name: []const u8) ?ResolvedRecordDecl {
-    var index = state.module_order.items.len;
-    while (index > 0) {
-        index -= 1;
-        const module = state.moduleById(state.module_order.items[index]) orelse continue;
-        for (module.syntax.records.items) |*decl| {
-            if (std.mem.eql(u8, decl.name, type_name)) return .{
-                .decl = decl,
-                .module_id = module.id,
-            };
-        }
+fn findRecordDecl(state: *const core.DocumentState, module_id: ?core.SourceModuleId, type_name: []const u8) ?ResolvedRecordDecl {
+    const module = state.moduleById(module_id orelse return null) orelse return null;
+    for (module.syntax.records.items) |*decl| {
+        if (std.mem.eql(u8, decl.name, type_name)) return .{ .decl = decl, .module_id = module.id };
     }
     return null;
 }
 
-fn findEnumDecl(state: *const core.DocumentState, type_name: []const u8) ?*const ast.TypeDecl {
-    var index = state.module_order.items.len;
-    while (index > 0) {
-        index -= 1;
-        const module = state.moduleById(state.module_order.items[index]) orelse continue;
-        for (module.syntax.types.items) |*decl| {
-            if (std.mem.eql(u8, decl.name, type_name)) return decl;
-        }
+fn findEnumDecl(state: *const core.DocumentState, module_id: ?core.SourceModuleId, type_name: []const u8) ?*const ast.TypeDecl {
+    const module = state.moduleById(module_id orelse return null) orelse return null;
+    for (module.syntax.types.items) |*decl| {
+        if (std.mem.eql(u8, decl.name, type_name)) return decl;
     }
     return null;
 }
@@ -905,15 +897,16 @@ fn materializePropertyRecord(
         if (slot.owns_tagged_text) return try cloneTaggedRecordForRuntime(state, slot.value.record);
         return try slot.value.record.clone(state.allocator);
     }
-    const record_name = ty.class_name orelse {
-        try reportRecordUpdateError(state, origin, "InvalidRecordUpdatePath: ss produced a record type without a name while evaluating this update; report this as an ss bug with the source file", .{});
+    const record_id = ty.nominalId() orelse {
+        try reportRecordUpdateError(state, origin, "InvalidRecordUpdatePath: ss produced a record type without a resolved declaration while evaluating this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
-    return evalRecordDefaults(state, page_id, context, mode, functions, closures, origin, record_name);
+    return evalRecordDefaults(state, page_id, context, mode, functions, closures, origin, record_id);
 }
 
 fn cloneTaggedRecordForRuntime(state: *core.DocumentState, record: core.RecordValue) anyerror!core.RecordValue {
     var cloned = core.RecordValue.init(try state.copyString(record.type_name));
+    cloned.module_id = record.module_id;
     errdefer cloned.deinit(state.allocator);
     for (record.fields.items) |field| {
         try cloned.fields.append(state.allocator, .{
@@ -930,6 +923,7 @@ fn cloneTaggedValueForRuntime(state: *core.DocumentState, value: core.Value) any
         .string => |text| .{ .string = try state.copyString(text) },
         .enum_case => |case| .{ .enum_case = .{
             .enum_name = try state.copyString(case.enum_name),
+            .module_id = case.module_id,
             .case_name = try state.copyString(case.case_name),
         } },
         .record => |record| .{ .record = try cloneTaggedRecordForRuntime(state, record) },
@@ -1340,6 +1334,12 @@ const BuiltinContext = struct {
 
     pub fn emitDiagnosticReport(self: *BuiltinContext, severity: core.DiagnosticSeverity, message: []const u8) !void {
         try emitUserReport(self.state, self.page_id, self.current_origin, severity, message);
+    }
+
+    pub fn ensurePrimitiveArgType(self: *BuiltinContext, descriptor: registry.PrimitiveDescriptor, index: usize, value: core.Value) !void {
+        const sema = SemanticEnv.init(self.state, active_declarations, self.functions).forModule(active_module_id);
+        const expected = sema.primitiveArgType(descriptor, index) orelse return;
+        try value_contracts.ensureValueConformsToType(self.state, self.page_id, value, expected, self.current_origin, .UnmatchedArgumentType);
     }
 
     pub fn checkAssetExists(self: *BuiltinContext, object_id: core.NodeId) !void {

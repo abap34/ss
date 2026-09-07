@@ -2,6 +2,7 @@ const model = @import("model");
 
 pub const Allocator = model.Allocator;
 pub const NodeId = model.NodeId;
+pub const NominalId = model.NominalId;
 pub const NodeKind = model.NodeKind;
 pub const Field = model.Field;
 pub const Role = model.Role;

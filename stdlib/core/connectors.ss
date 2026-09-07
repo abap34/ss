@@ -1,4 +1,4 @@
-import std:core/classes as classes
+import std:core/classes
 import std:core/fills as fills
 import std:core/objects as objects
 import std:core/shapes as shapes

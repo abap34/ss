@@ -89,14 +89,14 @@ pub fn valueConformsToType(value: core.Value, expected: ast.Type) bool {
     if (expected.kind == .enum_type) {
         const expected_name = expected.enum_name orelse return false;
         return switch (value) {
-            .enum_case => |case| std.mem.eql(u8, case.enum_name, expected_name),
+            .enum_case => |case| case.module_id == expected.nominal_module_id and std.mem.eql(u8, case.enum_name, expected_name),
             else => false,
         };
     }
     if (expected.kind == .record) {
         const expected_name = expected.class_name orelse return false;
         return switch (value) {
-            .record => |record| std.mem.eql(u8, record.type_name, expected_name),
+            .record => |record| record.module_id == expected.nominal_module_id and std.mem.eql(u8, record.type_name, expected_name),
             else => false,
         };
     }

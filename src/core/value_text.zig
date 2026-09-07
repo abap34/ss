@@ -65,6 +65,7 @@ pub fn typedPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: as
         .string, .color => .{ .string = text },
         .enum_type => .{ .enum_case = .{
             .enum_name = ty.enum_name orelse "",
+            .module_id = ty.nominal_module_id,
             .case_name = text,
         } },
         .record => blk: {
@@ -74,7 +75,7 @@ pub fn typedPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: as
                 return error.InvalidValueTag;
             }
             if (ty.class_name) |expected| {
-                if (!std.mem.eql(u8, parsed.record.type_name, expected)) {
+                if (parsed.record.module_id != ty.nominal_module_id or !std.mem.eql(u8, parsed.record.type_name, expected)) {
                     return error.InvalidValueTag;
                 }
             }
@@ -139,6 +140,7 @@ fn appendTaggedValueJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
         .enum_case => |case| {
             try out.appendSlice(allocator, "{\"kind\":\"enum\",\"type\":");
             try json.appendString(allocator, out, case.enum_name);
+            try appendModuleId(allocator, out, case.module_id);
             try out.appendSlice(allocator, ",\"case\":");
             try json.appendString(allocator, out, case.case_name);
             try out.append(allocator, '}');
@@ -146,6 +148,7 @@ fn appendTaggedValueJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
         .record => |record| {
             try out.appendSlice(allocator, "{\"kind\":\"record\",\"type\":");
             try json.appendString(allocator, out, record.type_name);
+            try appendModuleId(allocator, out, record.module_id);
             try out.appendSlice(allocator, ",\"fields\":[");
             for (record.fields.items, 0..) |field, index| {
                 if (index > 0) try out.append(allocator, ',');
@@ -200,6 +203,20 @@ fn appendTaggedValueJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
     }
 }
 
+fn appendModuleId(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module_id: ?u32) !void {
+    if (module_id) |id| {
+        const text = try std.fmt.allocPrint(allocator, ",\"module\":{d}", .{id});
+        defer allocator.free(text);
+        try out.appendSlice(allocator, text);
+    }
+}
+
+fn parseModuleId(object: *const json.ObjectMap) !?u32 {
+    const value = json.fieldValue(object, "module") orelse return null;
+    if (value.* != .integer or value.integer < 0 or value.integer > std.math.maxInt(u32)) return error.InvalidValueTag;
+    return @intCast(value.integer);
+}
+
 fn appendPathPointJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), verb: []const u8, point: model.PathPoint) !void {
     try out.appendSlice(allocator, "{\"verb\":");
     try json.appendString(allocator, out, verb);
@@ -229,8 +246,12 @@ fn parseTaggedValue(allocator: std.mem.Allocator, value: json.Value) !model.Valu
     if (std.mem.eql(u8, kind, "enum")) {
         const type_value = json.stringField(object, "type") orelse return error.InvalidValueTag;
         const case_value = json.stringField(object, "case") orelse return error.InvalidValueTag;
+        const module_id = try parseModuleId(object);
+        const enum_name = try allocator.dupe(u8, type_value);
+        errdefer allocator.free(enum_name);
         return .{ .enum_case = .{
-            .enum_name = try allocator.dupe(u8, type_value),
+            .module_id = module_id,
+            .enum_name = enum_name,
             .case_name = try allocator.dupe(u8, case_value),
         } };
     }
@@ -246,6 +267,7 @@ fn parseTaggedValue(allocator: std.mem.Allocator, value: json.Value) !model.Valu
         const fields = json.arrayFieldObject(object, "fields") orelse return error.InvalidValueTag;
         var record = model.RecordValue.init(try allocator.dupe(u8, type_value));
         errdefer deinitParsedRecordValue(allocator, &record);
+        record.module_id = try parseModuleId(object);
         for (fields.items) |field_item| {
             if (field_item != .object) return error.InvalidValueTag;
             const field_object = &field_item.object;

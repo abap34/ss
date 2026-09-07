@@ -15,6 +15,7 @@ const KeyContext = struct {
         for (key.arguments) |argument| {
             // Full type equality below handles recursive structure and normalized parameters.
             std.hash.autoHash(&hasher, argument.ty.kind);
+            std.hash.autoHash(&hasher, argument.ty.nominal_module_id);
             hashString(&hasher, argument.object_class);
             hashString(&hasher, argument.string_literal);
             std.hash.autoHash(&hasher, if (argument.hole) |hole| @as(?u32, hole.hole_id) else null);

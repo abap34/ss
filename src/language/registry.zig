@@ -80,6 +80,7 @@ pub const PrimitiveDescriptor = struct {
     max_arity: u8,
     arg_names: []const []const u8,
     arg_types: []const Type,
+    type_module: ?[]const u8 = null,
     result_type: ?Type,
     result_policy: PrimitiveResultPolicy = .declared,
     result_arg_index: usize = 0,
@@ -179,7 +180,7 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .report_error, .name = "report_error", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_types = &.{Type.string}, .result_type = Type.string, .summary = "Report error diagnostics from user-defined checks" },
     .{ .op = .report_warning, .name = "report_warning", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_types = &.{Type.string}, .result_type = Type.string, .summary = "Report warning diagnostics from user-defined checks" },
     .{ .op = .require_asset_exists, .name = "require_asset_exists", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_types = &.{Type.object}, .result_type = Type.object, .summary = "Check that the referenced file for an asset object exists" },
-    .{ .op = .path, .name = "path", .min_arity = 1, .max_arity = 255, .arg_names = &.{"command"}, .arg_types = &.{Type.recordType("PathCommand")}, .result_type = Type.path, .summary = "Build an immutable vector path from path commands" },
+    .{ .op = .path, .name = "path", .min_arity = 1, .max_arity = 255, .arg_names = &.{"command"}, .arg_types = &.{Type.recordType("PathCommand")}, .type_module = "std:core/classes", .result_type = Type.path, .summary = "Build an immutable vector path from path commands" },
 };
 
 const query_descriptors = [_]QueryDescriptor{

@@ -359,30 +359,6 @@ fn definitionInModule(snapshot: anytype, module_id: core.SourceModuleId, name: [
     return null;
 }
 
-fn typeDefinitionByKindAndName(snapshot: anytype, kind: anytype, name: []const u8) ?TypeDefinition {
-    var index = snapshot.type_definitions.len;
-    while (index > 0) {
-        index -= 1;
-        const item = snapshot.type_definitions[index];
-        if (item.kind != kind) continue;
-        if (!std.mem.eql(u8, item.name, name)) continue;
-        return resolvedTypeDefinition(item);
-    }
-    return null;
-}
-
-fn typeDefinitionInContext(snapshot: anytype, module_id: core.SourceModuleId, kind: anytype, name: []const u8) ?TypeDefinition {
-    if (typeDefinitionInModule(snapshot, module_id, kind, name)) |item| return item;
-    var index = snapshot.module_order.len;
-    while (index > 0) {
-        index -= 1;
-        const current_id = snapshot.module_order[index];
-        if (current_id == module_id) continue;
-        if (typeDefinitionInModule(snapshot, current_id, kind, name)) |item| return item;
-    }
-    return null;
-}
-
 fn typeDefinitionInModule(snapshot: anytype, module_id: core.SourceModuleId, kind: anytype, name: []const u8) ?TypeDefinition {
     for (snapshot.type_definitions) |item| {
         if (item.kind != kind) continue;
@@ -403,43 +379,48 @@ fn resolvedTypeDefinition(item: anytype) TypeDefinition {
     };
 }
 
+const SnapshotImports = struct {
+    pub fn resolveAlias(resolver: anytype, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
+        return aliasTarget(resolver.snapshot, module_id, alias);
+    }
+
+    pub fn explicitImportCount(resolver: anytype, module_id: core.SourceModuleId) usize {
+        const module = resolver.snapshot.moduleById(module_id) orelse return 0;
+        return module.imports.len;
+    }
+
+    pub fn explicitImport(resolver: anytype, module_id: core.SourceModuleId, index: usize) ?name_resolution.OpenImport {
+        const module = resolver.snapshot.moduleById(module_id) orelse return null;
+        if (index >= module.imports.len) return null;
+        const import_info = module.imports[index];
+        return .{ .unqualified = import_info.unqualified, .module_id = import_info.module_id };
+    }
+
+    pub fn implicitImportCount(resolver: anytype, module_id: core.SourceModuleId) usize {
+        const module = resolver.snapshot.moduleById(module_id) orelse return 0;
+        return module.implicit_import_ids.len;
+    }
+
+    pub fn implicitImport(resolver: anytype, module_id: core.SourceModuleId, index: usize) ?core.SourceModuleId {
+        const module = resolver.snapshot.moduleById(module_id) orelse return null;
+        if (index >= module.implicit_import_ids.len) return null;
+        return module.implicit_import_ids[index];
+    }
+};
+
 fn DefinitionResolver(comptime SnapshotPtr: type) type {
     return struct {
         snapshot: SnapshotPtr,
         kind: core.DefinitionKind,
 
-        pub fn resolveAlias(self: @This(), module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
-            return aliasTarget(self.snapshot, module_id, alias);
-        }
+        pub const resolveAlias = SnapshotImports.resolveAlias;
+        pub const explicitImportCount = SnapshotImports.explicitImportCount;
+        pub const explicitImport = SnapshotImports.explicitImport;
+        pub const implicitImportCount = SnapshotImports.implicitImportCount;
+        pub const implicitImport = SnapshotImports.implicitImport;
 
         pub fn findInModule(self: @This(), module_id: core.SourceModuleId, name: []const u8) ?core.Definition {
             return definitionInModule(self.snapshot, module_id, name, self.kind);
-        }
-
-        pub fn explicitImportCount(self: @This(), module_id: core.SourceModuleId) usize {
-            const module = self.snapshot.moduleById(module_id) orelse return 0;
-            return module.imports.len;
-        }
-
-        pub fn explicitImport(self: @This(), module_id: core.SourceModuleId, index: usize) ?name_resolution.OpenImport {
-            const module = self.snapshot.moduleById(module_id) orelse return null;
-            if (index >= module.imports.len) return null;
-            const import_info = module.imports[index];
-            return .{
-                .unqualified = import_info.unqualified,
-                .module_id = import_info.module_id,
-            };
-        }
-
-        pub fn implicitImportCount(self: @This(), module_id: core.SourceModuleId) usize {
-            const module = self.snapshot.moduleById(module_id) orelse return 0;
-            return module.implicit_import_ids.len;
-        }
-
-        pub fn implicitImport(self: @This(), module_id: core.SourceModuleId, index: usize) ?core.SourceModuleId {
-            const module = self.snapshot.moduleById(module_id) orelse return null;
-            if (index >= module.implicit_import_ids.len) return null;
-            return module.implicit_import_ids[index];
         }
     };
 }
@@ -449,38 +430,14 @@ fn ValueBindingResolver(comptime SnapshotPtr: type) type {
         snapshot: SnapshotPtr,
         kind: core.DefinitionKind,
 
-        pub fn resolveAlias(self: @This(), module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
-            return aliasTarget(self.snapshot, module_id, alias);
-        }
+        pub const resolveAlias = SnapshotImports.resolveAlias;
+        pub const explicitImportCount = SnapshotImports.explicitImportCount;
+        pub const explicitImport = SnapshotImports.explicitImport;
+        pub const implicitImportCount = SnapshotImports.implicitImportCount;
+        pub const implicitImport = SnapshotImports.implicitImport;
 
         pub fn findInModule(self: @This(), module_id: core.SourceModuleId, name: []const u8) ?ValueBinding {
             return valueBindingInModule(self.snapshot, module_id, name, self.kind);
-        }
-
-        pub fn explicitImportCount(self: @This(), module_id: core.SourceModuleId) usize {
-            const module = self.snapshot.moduleById(module_id) orelse return 0;
-            return module.imports.len;
-        }
-
-        pub fn explicitImport(self: @This(), module_id: core.SourceModuleId, index: usize) ?name_resolution.OpenImport {
-            const module = self.snapshot.moduleById(module_id) orelse return null;
-            if (index >= module.imports.len) return null;
-            const import_info = module.imports[index];
-            return .{
-                .unqualified = import_info.unqualified,
-                .module_id = import_info.module_id,
-            };
-        }
-
-        pub fn implicitImportCount(self: @This(), module_id: core.SourceModuleId) usize {
-            const module = self.snapshot.moduleById(module_id) orelse return 0;
-            return module.implicit_import_ids.len;
-        }
-
-        pub fn implicitImport(self: @This(), module_id: core.SourceModuleId, index: usize) ?core.SourceModuleId {
-            const module = self.snapshot.moduleById(module_id) orelse return null;
-            if (index >= module.implicit_import_ids.len) return null;
-            return module.implicit_import_ids[index];
         }
     };
 }
@@ -489,20 +446,29 @@ fn TypeResolver(comptime SnapshotPtr: type) type {
     return struct {
         snapshot: SnapshotPtr,
 
-        pub fn resolveAlias(self: @This(), module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
-            return aliasTarget(self.snapshot, module_id, alias);
-        }
+        pub const resolveAlias = SnapshotImports.resolveAlias;
+        pub const explicitImportCount = SnapshotImports.explicitImportCount;
+        pub const explicitImport = SnapshotImports.explicitImport;
+        pub const implicitImportCount = SnapshotImports.implicitImportCount;
+        pub const implicitImport = SnapshotImports.implicitImport;
 
-        pub fn findRecord(self: @This(), name: []const u8) ?TypeDefinition {
-            return typeDefinitionByKindAndName(self.snapshot, .record, name);
-        }
-
-        pub fn findObject(self: @This(), name: []const u8) ?TypeDefinition {
-            return typeDefinitionByKindAndName(self.snapshot, .object, name);
-        }
-
-        pub fn findEnum(self: @This(), module_id: core.SourceModuleId, name: []const u8) ?TypeDefinition {
-            return typeDefinitionInContext(self.snapshot, module_id, .enum_type, name);
+        pub fn findInModule(self: @This(), module_id: core.SourceModuleId, name: []const u8) ?type_resolution.Binding(TypeDefinition) {
+            if (typeDefinitionInModule(self.snapshot, module_id, .record, name)) |target| return .{
+                .kind = .record,
+                .ty = ast.Type.recordType(target.name).inModule(module_id),
+                .target = target,
+            };
+            if (typeDefinitionInModule(self.snapshot, module_id, .object, name)) |target| return .{
+                .kind = .object,
+                .ty = ast.Type.objectClass(target.name),
+                .target = target,
+            };
+            if (typeDefinitionInModule(self.snapshot, module_id, .enum_type, name)) |target| return .{
+                .kind = .enum_type,
+                .ty = ast.Type.enumType(target.name).inModule(module_id),
+                .target = target,
+            };
+            return null;
         }
     };
 }

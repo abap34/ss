@@ -1,5 +1,5 @@
-import std:core/classes as classes
-import std:core/layout as layout
+import std:core/classes
+import std:core/layout
 import std:core/objects as objects
 import std:core/paths as paths
 import std:core/fills as fills
@@ -9,7 +9,7 @@ import std:core/render as render
 import std:core/selectors as selectors
 import std:core/utils as utils
 import std:core/generated as generated
-import std:core/components as components
+import std:core/components
 
 fn move_to(x: Number, y: Number) -> PathCommand
   return paths::move_to(x, y)

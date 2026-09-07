@@ -178,7 +178,7 @@ fn exprInfoWithOptions(
         .boolean => infoFromType(Type.boolean),
         .none => infoFromType(Type.none),
         .enum_case => |case| blk: {
-            var info = infoFromType(Type.enumType(case.enum_name));
+            var info = infoFromType(Type.enumType(case.enum_name).inModule(case.module_id orelse sema.module_id));
             info.string_literal = case.case_name;
             break :blk info;
         },
@@ -216,8 +216,8 @@ fn inferRecordInfo(
     origin: []const u8,
     options: InferenceOptions,
 ) !TypeInfo {
-    const record_decl = sema.record(record.type_name) orelse {
-        if (sema.enumExistsAny(record.type_name)) {
+    const record_decl = sema.record(record.module_id, record.type_name) orelse {
+        if (sema.enumExists(record.module_id, record.type_name)) {
             try addUserReportAtSpan(allocator, state, origin, record.type_name_span, "InvalidRecordLiteral: {s} is an enum type, not a record; use {s}.<case>", .{ record.type_name, record.type_name });
             return error.InvalidType;
         }
@@ -232,7 +232,7 @@ fn inferRecordInfo(
             return error.InvalidType;
         }
         try seen.put(field_expr.name, {});
-        const field = sema.recordField(record.type_name, field_expr.name) orelse {
+        const field = sema.recordField(.{ .module_id = record_decl.module_id, .name = record_decl.name }, field_expr.name) orelse {
             try addUserReportAtSpan(allocator, state, origin, field_expr.name_span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record.type_name, field_expr.name });
             return error.InvalidType;
         };
@@ -240,7 +240,7 @@ fn inferRecordInfo(
         const actual = try exprInfoWithOptions(allocator, state, sema, env, field_expr.value, origin, options);
         try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
     }
-    return infoFromType(Type.recordType(record_decl.name));
+    return infoFromType(Type.recordType(record_decl.name).inModule(record_decl.module_id));
 }
 
 fn inferRecordUpdateInfo(
@@ -260,14 +260,14 @@ fn inferRecordUpdateInfo(
         try addUserReport(state, origin, "InvalidRecordUpdate: with expects a record value, got {s}", .{actual});
         return error.InvalidType;
     }
-    const record_name = target_info.ty.class_name orelse {
-        try addUserReport(state, origin, "InvalidRecordUpdate: ss produced a record type without a name while checking this update; report this as an ss bug with the source file", .{});
+    const record_id = target_info.ty.nominalId() orelse {
+        try addUserReport(state, origin, "InvalidRecordUpdate: ss produced a record type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
 
     try rejectOverlappingRecordUpdateFields(allocator, state, update.fields.items, origin);
     for (update.fields.items) |field| {
-        try inferRecordUpdateField(allocator, state, sema, env, record_name, field, origin, options);
+        try inferRecordUpdateField(allocator, state, sema, env, record_id, field, origin, options);
     }
     return infoFromType(target_info.ty);
 }
@@ -296,16 +296,16 @@ fn inferRecordUpdateField(
     state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
-    base_record_name: []const u8,
+    base_record_id: core.NominalId,
     update_field: ast.RecordUpdateFieldExpr,
     origin: []const u8,
     options: InferenceOptions,
 ) !void {
-    var current_record_name = base_record_name;
+    var current_record_id = base_record_id;
     for (update_field.path.items, 0..) |segment, index| {
         if (segment.name_hole != null) return;
-        const field = sema.recordField(current_record_name, segment.name) orelse {
-            try addUserReportAtSpan(allocator, state, origin, segment.span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment.name });
+        const field = sema.recordField(current_record_id, segment.name) orelse {
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_id.name, segment.name });
             return error.InvalidType;
         };
         const field_type = field.value_type;
@@ -323,8 +323,8 @@ fn inferRecordUpdateField(
             try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path, label });
             return error.InvalidType;
         }
-        current_record_name = field_type.class_name orelse {
-            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: ss produced a record type without a name while checking this update; report this as an ss bug with the source file", .{});
+        current_record_id = field_type.nominalId() orelse {
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: ss produced a record type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
     }
@@ -343,7 +343,7 @@ fn inferMemberInfo(
     if (member.target.* == .ident) {
         const enum_name = member.target.ident.name;
         if (env.get(enum_name) == null and sema.function(enum_name) == null) {
-            if (sema.enumExistsAny(enum_name)) {
+            if (sema.enumExists(null, enum_name)) {
                 try addUserReportAtSpan(allocator, state, origin, member.name_span, "UnknownEnumCase: enum '{s}' has no case '{s}'", .{ enum_name, member.name });
                 return error.InvalidType;
             }
@@ -372,12 +372,12 @@ fn inferMemberInfoFromTargetInfo(
         if (child.kind == .record) return inferOptionalRecordMemberInfo(allocator, state, sema, child.*, member_name, member_span, origin);
     }
     if (target_info.ty.kind == .record) {
-        const record_name = target_info.ty.class_name orelse {
-            try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidRecordType: ss produced a record type without a name; report this as an ss bug with the source file", .{});
+        const record_id = target_info.ty.nominalId() orelse {
+            try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidRecordType: ss produced a record type without a resolved declaration; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
-        const field = sema.recordField(record_name, member_name) orelse {
-            try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member_name });
+        const field = sema.recordField(record_id, member_name) orelse {
+            try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_id.name, member_name });
             return error.InvalidType;
         };
         const field_type = field.value_type;
@@ -409,12 +409,12 @@ fn inferOptionalRecordMemberInfo(
     member_span: ?ast.Span,
     origin: []const u8,
 ) !TypeInfo {
-    const record_name = record_type.class_name orelse {
-        try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidRecordType: ss produced a record type without a name; report this as an ss bug with the source file", .{});
+    const record_id = record_type.nominalId() orelse {
+        try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidRecordType: ss produced a record type without a resolved declaration; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
-    const field = sema.recordField(record_name, member_name) orelse {
-        try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member_name });
+    const field = sema.recordField(record_id, member_name) orelse {
+        try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_id.name, member_name });
         return error.InvalidType;
     };
     const field_type = field.value_type;
@@ -661,7 +661,7 @@ fn inferPrimitiveCallInfo(
     for (call.args.items, 0..) |arg, index| {
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
         const actual = try exprInfoWithOptions(allocator, state, sema, env, arg, origin, options);
-        if (registry.primitiveArgType(descriptor, index)) |expected| {
+        if (sema.primitiveArgType(descriptor, index)) |expected| {
             try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
         }
     }
@@ -1414,14 +1414,14 @@ fn validateNestedPropertySetPath(
         try addUserReportAtSpan(allocator, state, origin, path[0].span, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
         return error.InvalidType;
     }
-    var current_record_name = root_type.class_name orelse {
-        try addUserReportAtSpan(allocator, state, origin, path[0].span, "InvalidRecordUpdatePath: ss produced a record type without a name while checking this update; report this as an ss bug with the source file", .{});
+    var current_record_id = root_type.nominalId() orelse {
+        try addUserReportAtSpan(allocator, state, origin, path[0].span, "InvalidRecordUpdatePath: ss produced a record type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
     for (path[1..], 1..) |segment, index| {
         if (segment.name_hole != null) return;
-        const field = sema.recordField(current_record_name, segment.name) orelse {
-            try addUserReportAtSpan(allocator, state, origin, segment.span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment.name });
+        const field = sema.recordField(current_record_id, segment.name) orelse {
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_id.name, segment.name });
             return error.InvalidType;
         };
         if (index + 1 == path.len) {
@@ -1438,8 +1438,8 @@ fn validateNestedPropertySetPath(
             try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
             return error.InvalidType;
         }
-        current_record_name = field.value_type.class_name orelse {
-            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: ss produced a record type without a name while checking this update; report this as an ss bug with the source file", .{});
+        current_record_id = field.value_type.nominalId() orelse {
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: ss produced a record type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
     }

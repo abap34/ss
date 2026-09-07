@@ -1,4 +1,4 @@
-import std:core/classes as classes
+import std:core/classes
 
 fn move_to(x: Number, y: Number) -> PathCommand
   return PathCommand { verb = PathVerb.move x = x y = y }

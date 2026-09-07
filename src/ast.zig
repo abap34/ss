@@ -673,6 +673,7 @@ pub const RecordFieldExpr = struct {
 };
 
 pub const RecordExpr = struct {
+    module_id: ?u32 = null,
     type_name: []const u8,
     type_name_span: ?Span = null,
     fields: std.ArrayList(RecordFieldExpr),
@@ -694,6 +695,7 @@ pub const RecordExpr = struct {
         return .{
             .type_name = try allocator.dupe(u8, self.type_name),
             .type_name_span = self.type_name_span,
+            .module_id = self.module_id,
             .fields = fields,
         };
     }
@@ -798,6 +800,7 @@ pub const RecordUpdateExpr = struct {
 };
 
 pub const EnumCaseExpr = struct {
+    module_id: ?u32 = null,
     enum_name: []const u8,
     enum_name_span: ?Span = null,
     case_name: []const u8,
@@ -814,6 +817,7 @@ pub const EnumCaseExpr = struct {
         return .{
             .enum_name = enum_name,
             .enum_name_span = self.enum_name_span,
+            .module_id = self.module_id,
             .case_name = try allocator.dupe(u8, self.case_name),
             .case_name_span = self.case_name_span,
         };

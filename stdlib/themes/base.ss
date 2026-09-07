@@ -1,4 +1,4 @@
-import std:core/classes as classes
+import std:core/classes
 import std:core/components as components
 import std:core/generated as generated
 

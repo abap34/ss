@@ -8,6 +8,15 @@ pub const PathCubic = path_model.Cubic;
 
 pub const Allocator = std.mem.Allocator;
 pub const NodeId = u32;
+
+pub const NominalId = struct {
+    module_id: u32,
+    name: []const u8,
+
+    pub fn eql(a: NominalId, b: NominalId) bool {
+        return a.module_id == b.module_id and std.mem.eql(u8, a.name, b.name);
+    }
+};
 pub const Role = []const u8;
 pub const GroupRole: Role = "group";
 pub const ConnectorRole: Role = "connector";
@@ -494,6 +503,7 @@ pub const FunctionRef = struct {
 };
 
 pub const EnumCaseValue = struct {
+    module_id: ?u32 = null,
     enum_name: []const u8,
     case_name: []const u8,
 };
@@ -517,6 +527,7 @@ pub const RecordFieldValue = struct {
 };
 
 pub const RecordValue = struct {
+    module_id: ?u32 = null,
     type_name: []const u8,
     fields: std.ArrayList(RecordFieldValue),
 
@@ -534,6 +545,7 @@ pub const RecordValue = struct {
 
     pub fn clone(self: RecordValue, allocator: Allocator) anyerror!RecordValue {
         var copied = RecordValue.init(self.type_name);
+        copied.module_id = self.module_id;
         errdefer copied.deinit(allocator);
         try copied.fields.ensureTotalCapacity(allocator, self.fields.items.len);
         for (self.fields.items) |item| {

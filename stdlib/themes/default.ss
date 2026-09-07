@@ -1,5 +1,5 @@
-import std:themes/base as base
-import std:core/classes as classes
+import std:themes/base
+import std:core/classes
 import std:core/components as components
 import std:core/layout as layout
 import std:core/objects as objects

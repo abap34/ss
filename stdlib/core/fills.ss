@@ -1,4 +1,4 @@
-import std:core/classes as classes
+import std:core/classes
 import std:core/paths as paths
 
 fn vector_stroke(color_name: Color?, width: Number = 1, cap: LineCap = LineCap.butt, join: LineJoin = LineJoin.miter, dash: String = "", dash_offset: Number = 0) -> VectorStrokeStyle

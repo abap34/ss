@@ -123,6 +123,14 @@ pub const SemanticEnv = struct {
         return null;
     }
 
+    pub fn primitiveArgType(self: *const SemanticEnv, descriptor: registry.PrimitiveDescriptor, index: usize) ?ast.Type {
+        const ty = registry.primitiveArgType(descriptor, index) orelse return null;
+        const spec = descriptor.type_module orelse return ty;
+        const state = self.state orelse return ty;
+        const module = state.moduleByPathOrSpec(spec) orelse return ty;
+        return ty.inModule(module.id);
+    }
+
     pub fn query(self: *const SemanticEnv, name: []const u8) ?registry.QueryDescriptor {
         _ = self;
         return registry.lookupQueryOp(name);
@@ -138,18 +146,16 @@ pub const SemanticEnv = struct {
         return false;
     }
 
-    pub fn record(self: *const SemanticEnv, name: []const u8) ?declarations.RecordDescriptor {
-        if (self.declarationIndex()) |index| return index.recordByName(name);
-        return null;
+    pub fn record(self: *const SemanticEnv, module_id: ?core.SourceModuleId, name: []const u8) ?declarations.RecordDescriptor {
+        const index = self.declarationIndex() orelse return null;
+        if (module_id) |id| return index.record(.{ .module_id = id, .name = name });
+        const ty = self.resolveTypeNameInContext(self.module_id, name) orelse return null;
+        if (ty.kind != .record) return null;
+        return index.record(ty.nominalId() orelse return null);
     }
 
-    pub fn recordExists(self: *const SemanticEnv, name: []const u8) bool {
-        if (self.declarationIndex()) |index| return index.recordExists(name);
-        return false;
-    }
-
-    pub fn recordField(self: *const SemanticEnv, record_name: []const u8, field_name: []const u8) ?declarations.RecordFieldDescriptor {
-        if (self.declarationIndex()) |index| return index.recordField(record_name, field_name);
+    pub fn recordField(self: *const SemanticEnv, id: core.NominalId, field_name: []const u8) ?declarations.RecordFieldDescriptor {
+        if (self.declarationIndex()) |index| return index.recordField(id, field_name);
         return null;
     }
 
@@ -168,61 +174,19 @@ pub const SemanticEnv = struct {
         return null;
     }
 
-    pub fn typeDescriptor(
-        self: *const SemanticEnv,
-        module_id: core.SourceModuleId,
-        name: []const u8,
-    ) ?declarations.TypeDescriptor {
-        if (self.declarationIndex()) |index| {
-            if (index.typeInModule(module_id, name)) |descriptor| return descriptor;
-            if (self.state) |state| {
-                var order_index = state.module_order.items.len;
-                while (order_index > 0) {
-                    order_index -= 1;
-                    const current_id = state.module_order.items[order_index];
-                    if (current_id == module_id) continue;
-                    if (index.typeInModule(current_id, name)) |descriptor| return descriptor;
-                }
-            } else {
-                return index.typeByName(name);
-            }
-            return null;
-        }
-
-        return null;
-    }
-
-    pub fn enumDescriptor(
-        self: *const SemanticEnv,
-        module_id: core.SourceModuleId,
-        name: []const u8,
-    ) ?declarations.TypeDescriptor {
-        return self.typeDescriptor(module_id, name);
-    }
-
-    pub fn enumHasCase(
-        self: *const SemanticEnv,
-        module_id: core.SourceModuleId,
-        name: []const u8,
-        case_name: []const u8,
-    ) bool {
-        const descriptor = self.enumDescriptor(module_id, name) orelse return false;
+    pub fn enumHasCase(self: *const SemanticEnv, id: core.NominalId, case_name: []const u8) bool {
+        const index = self.declarationIndex() orelse return false;
+        const descriptor = index.typeInModule(id.module_id, id.name) orelse return false;
         return type_defs.enumCasesContain(descriptor.cases, case_name);
     }
 
-    pub fn enumHasCaseAny(self: *const SemanticEnv, name: []const u8, case_name: []const u8) bool {
-        if (self.declarationIndex()) |index| {
-            const descriptor = index.typeByName(name) orelse return false;
-            return type_defs.enumCasesContain(descriptor.cases, case_name);
+    pub fn enumExists(self: *const SemanticEnv, module_id: ?core.SourceModuleId, name: []const u8) bool {
+        if (module_id) |id| {
+            const index = self.declarationIndex() orelse return false;
+            return index.typeInModule(id, name) != null;
         }
-        return false;
-    }
-
-    pub fn enumExistsAny(self: *const SemanticEnv, name: []const u8) bool {
-        if (self.declarationIndex()) |index| {
-            return index.typeByName(name) != null;
-        }
-        return false;
+        const ty = self.resolveTypeNameInContext(self.module_id, name) orelse return false;
+        return ty.kind == .enum_type;
     }
 
     pub fn resolveTypeName(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
@@ -388,19 +352,40 @@ const TypeResolver = struct {
         return self.env.resolveAliasInModule(module_id, alias);
     }
 
-    pub fn findRecord(self: TypeResolver, name: []const u8) ?void {
-        if (self.env.recordExists(name)) return {};
+    pub fn findInModule(self: TypeResolver, module_id: core.SourceModuleId, name: []const u8) ?type_resolution.Binding(void) {
+        const index = self.env.declarationIndex() orelse return null;
+        if (index.record(.{ .module_id = module_id, .name = name })) |decl| return .{
+            .kind = .record,
+            .ty = ast.Type.recordType(decl.name).inModule(module_id),
+            .target = {},
+        };
+        if (index.classInModule(module_id, name)) |decl| return .{
+            .kind = .object,
+            .ty = ast.Type.objectClass(decl.name),
+            .target = {},
+        };
+        if (index.typeInModule(module_id, name)) |decl| return .{
+            .kind = .enum_type,
+            .ty = ast.Type.enumType(decl.name).inModule(module_id),
+            .target = {},
+        };
         return null;
     }
 
-    pub fn findObject(self: TypeResolver, name: []const u8) ?void {
-        if (self.env.classExists(name)) return {};
-        return null;
+    pub fn explicitImportCount(self: TypeResolver, module_id: core.SourceModuleId) usize {
+        return self.env.explicitImportCount(module_id);
     }
 
-    pub fn findEnum(self: TypeResolver, module_id: core.SourceModuleId, name: []const u8) ?void {
-        if (self.env.enumDescriptor(module_id, name) != null) return {};
-        return null;
+    pub fn explicitImport(self: TypeResolver, module_id: core.SourceModuleId, index: usize) ?name_resolution.OpenImport {
+        return self.env.explicitImport(module_id, index);
+    }
+
+    pub fn implicitImportCount(self: TypeResolver, module_id: core.SourceModuleId) usize {
+        return self.env.implicitImportCount(module_id);
+    }
+
+    pub fn implicitImport(self: TypeResolver, module_id: core.SourceModuleId, index: usize) ?core.SourceModuleId {
+        return self.env.implicitImport(module_id, index);
     }
 };
 

@@ -503,6 +503,7 @@ fn staticPropertyValueFromExpr(
         .none => .{ .none = {} },
         .enum_case => |case| .{ .enum_case = .{
             .enum_name = case.enum_name,
+            .module_id = case.module_id,
             .case_name = case.case_name,
         } },
         .record => |record| try staticRecordPropertyValue(allocator, sema, module_id, record),
@@ -518,11 +519,12 @@ fn staticRecordPropertyValue(
     record_expr: ast.RecordExpr,
 ) anyerror!?core.Value {
     var record = core.RecordValue.init(record_expr.type_name);
+    record.module_id = record_expr.module_id;
     errdefer record.deinit(allocator);
 
     if (sema.declarations) |index| {
         for (index.record_fields.items) |field| {
-            if (!std.mem.eql(u8, field.record_name, record_expr.type_name)) continue;
+            if (field.module_id != record_expr.module_id or !std.mem.eql(u8, field.record_name, record_expr.type_name)) continue;
             const default_value = field.default_value orelse continue;
             var value = (try staticPropertyValueFromExpr(allocator, sema, field.module_id, default_value.*)) orelse {
                 record.deinit(allocator);
@@ -581,7 +583,9 @@ fn resolveRecordTypeName(
     sema: *const SemanticEnv,
     record: *ast.RecordExpr,
 ) !void {
+    if (record.module_id != null) return;
     const resolved = sema.resolveTypeNameInContext(module_id, record.type_name) orelse return;
+    record.module_id = resolved.nominal_module_id;
     const resolved_name = switch (resolved.kind) {
         .record, .object => resolved.class_name orelse return,
         .enum_type => resolved.enum_name orelse return,
@@ -711,13 +715,15 @@ fn resolveMemberAsEnumCase(
             const resolved = sema.resolveTypeNameInContext(module_id, enum_name) orelse return false;
             if (resolved.kind != .enum_type) return false;
             const resolved_enum_name = resolved.enum_name orelse return false;
-            if (!sema.enumHasCase(module_id, resolved_enum_name, member.name)) return false;
+            if (!sema.enumHasCase(resolved.nominalId() orelse return false, member.name)) return false;
             const target = member.target;
             const case_name = member.name;
+            const owned_enum_name = try allocator.dupe(u8, resolved_enum_name);
             allocator.destroy(target);
             expr.* = .{ .enum_case = .{
-                .enum_name = try allocator.dupe(u8, resolved_enum_name),
+                .enum_name = owned_enum_name,
                 .enum_name_span = enum_ident.name_span,
+                .module_id = resolved.nominal_module_id,
                 .case_name = case_name,
                 .case_name_span = member.name_span,
             } };
@@ -950,7 +956,7 @@ fn checkTypeAnnotation(
     }
     if (ty.kind == .record) {
         const record_name = ty.class_name orelse return;
-        if (!sema.recordExists(record_name)) return reportUnknownType(state, origin, record_name);
+        if (sema.record(ty.nominal_module_id, record_name) == null) return reportUnknownType(state, origin, record_name);
     } else if (ty.class_name) |class_name| {
         if (!sema.classExists(class_name)) {
             return reportUnknownType(state, origin, class_name);

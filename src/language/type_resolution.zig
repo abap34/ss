@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
+const name_resolution = @import("name_resolution.zig");
 
 pub const TypeName = struct {
     qualifier: ?[]const u8 = null,
@@ -66,11 +67,17 @@ pub fn resolve(
     current_module_id: core.SourceModuleId,
     name: TypeName,
 ) Resolution(Target) {
-    if (name.qualifier) |alias| {
-        const module_id = resolver.resolveAlias(current_module_id, alias) orelse return .{ .unknown_alias = alias };
-        return resolveUnqualified(Target, resolver, module_id, name.name);
+    if (name.qualifier == null) {
+        if (builtinType(name.name)) |ty| return .{ .found = .{ .kind = .builtin, .ty = ty, .target = null } };
     }
-    return resolveUnqualified(Target, resolver, current_module_id, name.name);
+    return switch (name_resolution.resolve(Binding(Target), resolver, current_module_id, .{
+        .qualifier = name.qualifier,
+        .name = name.name,
+    })) {
+        .found => |binding| .{ .found = binding },
+        .unknown => .unknown,
+        .unknown_alias => |alias| .{ .unknown_alias = alias },
+    };
 }
 
 pub fn resolveUnqualified(
@@ -79,27 +86,7 @@ pub fn resolveUnqualified(
     module_id: core.SourceModuleId,
     name: []const u8,
 ) Resolution(Target) {
-    if (builtinType(name)) |ty| return .{ .found = .{
-        .kind = .builtin,
-        .ty = ty,
-        .target = null,
-    } };
-    if (resolver.findRecord(name)) |target| return .{ .found = .{
-        .kind = .record,
-        .ty = ast.Type.recordType(name),
-        .target = target,
-    } };
-    if (resolver.findObject(name)) |target| return .{ .found = .{
-        .kind = .object,
-        .ty = ast.Type.objectClass(name),
-        .target = target,
-    } };
-    if (resolver.findEnum(module_id, name)) |target| return .{ .found = .{
-        .kind = .enum_type,
-        .ty = ast.Type.enumType(name),
-        .target = target,
-    } };
-    return .unknown;
+    return resolve(Target, resolver, module_id, .{ .name = name });
 }
 
 pub fn parse(text: []const u8) TypeName {

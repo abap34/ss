@@ -1,4 +1,4 @@
-import std:core/classes as classes
+import std:core/classes
 import std:core/objects as objects
 
 fn latex_engine(engine: classes::LatexEngine) -> Void

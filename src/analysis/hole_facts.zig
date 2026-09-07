@@ -135,7 +135,7 @@ fn callArgExpectedTypes(
         .primitive => |primitive| {
             const count = @min(call.args.items.len, primitive.arg_types.len);
             for (call.args.items[0..count], 0..) |arg, index| {
-                if (registry.primitiveArgType(primitive, index)) |expected| try expectExpr(allocator, holes, arg, expected);
+                if (sema.primitiveArgType(primitive, index)) |expected| try expectExpr(allocator, holes, arg, expected);
             }
         },
     };
@@ -147,8 +147,9 @@ fn recordFieldExpectedTypes(
     record: ast.RecordExpr,
     holes: *syntax_hole.Result,
 ) !void {
+    const decl = sema.record(record.module_id, record.type_name) orelse return;
     for (record.fields.items) |field_expr| {
-        const field = sema.recordField(record.type_name, field_expr.name) orelse continue;
+        const field = sema.recordField(.{ .module_id = decl.module_id, .name = decl.name }, field_expr.name) orelse continue;
         try expectExpr(allocator, holes, field_expr.value, field.value_type);
     }
 }
