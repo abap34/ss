@@ -144,6 +144,7 @@ pub const ModuleFact = struct {
     spec: []u8,
     path: ?[]u8,
     source: []u8,
+    line_index: utils.source.LineIndex,
     imports: []ImportFact = &.{},
     implicit_import_ids: []core.SourceModuleId = &.{},
     function_scopes: []ScopeFact = &.{},
@@ -371,6 +372,7 @@ pub const AnalysisSnapshot = struct {
     pub fn deinit(self: *AnalysisSnapshot) void {
         self.project.deinit(self.allocator);
         for (self.modules) |module| {
+            module.line_index.deinit(self.allocator);
             self.allocator.free(module.spec);
             if (module.path) |path| self.allocator.free(path);
             self.allocator.free(module.source);
@@ -917,6 +919,7 @@ fn cloneModules(allocator: std.mem.Allocator, modules: []const core.SourceModule
     var out = std.ArrayList(ModuleFact).empty;
     errdefer {
         for (out.items) |module| {
+            module.line_index.deinit(allocator);
             allocator.free(module.spec);
             if (module.path) |path| allocator.free(path);
             allocator.free(module.source);
@@ -936,6 +939,8 @@ fn cloneModules(allocator: std.mem.Allocator, modules: []const core.SourceModule
         errdefer if (path) |owned_path| allocator.free(owned_path);
         const source_copy = try allocator.dupe(u8, module.source);
         errdefer allocator.free(source_copy);
+        const line_index = try module.line_index.clone(allocator, source_copy);
+        errdefer line_index.deinit(allocator);
         const imports = try cloneImports(allocator, module);
         errdefer deinitImports(allocator, imports);
         const implicit_import_ids = try allocator.dupe(core.SourceModuleId, module.implicit_import_ids.items);
@@ -946,7 +951,7 @@ fn cloneModules(allocator: std.mem.Allocator, modules: []const core.SourceModule
         errdefer deinitScopes(allocator, page_scopes);
         const symbols = try query_symbols.collect(allocator, module.source, module.syntax);
         errdefer query_symbols.deinit(allocator, symbols);
-        const folding_ranges = try query_folding.collect(allocator, module.source, module.syntax);
+        const folding_ranges = try query_folding.collect(allocator, module.line_index, module.syntax);
         errdefer allocator.free(folding_ranges);
 
         const fact = ModuleFact{
@@ -955,6 +960,7 @@ fn cloneModules(allocator: std.mem.Allocator, modules: []const core.SourceModule
             .spec = spec,
             .path = path,
             .source = source_copy,
+            .line_index = line_index,
             .imports = imports,
             .implicit_import_ids = implicit_import_ids,
             .function_scopes = function_scopes,
@@ -1062,7 +1068,7 @@ fn appendTypeDefinition(
     name_span: ?ast.Span,
 ) !void {
     const span = name_span orelse return;
-    const source_location = utils.source.locationAt(module.source, span.start);
+    const source_location = module.line_index.locationAt(span.start);
     try out.append(allocator, .{
         .name = try allocator.dupe(u8, name),
         .kind = kind,

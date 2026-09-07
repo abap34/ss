@@ -633,6 +633,7 @@ fn addTestStep(
     addFocusedTestStep(b, "test-stdlib-cache", "Run focused standard-library cache tests", &run_stdlib_cache_spec_tests.step);
     const module_loader_spec_mod = createModule(ctx, "tests/modules/loader/spec_tests.zig", &.{
         import("compiler", compiler_mod),
+        import("utils", modules.utils),
     }, true);
     const module_loader_spec_tests = addTestArtifact(ctx, module_loader_spec_mod);
     const run_module_loader_spec_tests = b.addRunArtifact(module_loader_spec_tests);
@@ -655,6 +656,22 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/lsp/completion/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);
+    const source_index_mod = createModule(ctx, "tests/utils/source/index_spec_tests.zig", &.{
+        import("utils", modules.utils),
+    }, null);
+    const source_index_tests = addTestArtifact(ctx, source_index_mod);
+    const run_source_index_tests = b.addRunArtifact(source_index_tests);
+    test_step.dependOn(&run_source_index_tests.step);
+    const lsp_positions_api = createCommonModule(ctx, "src/lsp.zig", modules, true);
+    const lsp_positions_mod = createModule(ctx, "tests/lsp/source_positions/spec_tests.zig", &.{
+        import("lsp", lsp_positions_api),
+    }, true);
+    const lsp_positions_tests = addTestArtifact(ctx, lsp_positions_mod);
+    const run_lsp_positions_tests = b.addRunArtifact(lsp_positions_tests);
+    test_step.dependOn(&run_lsp_positions_tests.step);
+    const source_positions_step = b.step("test-source-positions", "Run focused source position and document update tests");
+    source_positions_step.dependOn(&run_source_index_tests.step);
+    source_positions_step.dependOn(&run_lsp_positions_tests.step);
     const editor_edit_mod = createModule(ctx, "src/editor/edit.zig", &.{
         import("utils", modules.utils),
     }, null);

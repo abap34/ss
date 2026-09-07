@@ -1,4 +1,5 @@
 const std = @import("std");
+const LineIndex = @import("utils").source.LineIndex;
 
 const analysis_snapshot = @import("../../analysis/snapshot.zig");
 const query_symbols = @import("../../analysis/query/symbols.zig");
@@ -19,8 +20,8 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
     const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse return try ctx.allocator.dupe(u8, "[]");
     if (!lsp_state.featureEnabledForAnalysis(snapshot, .document_symbols)) return try ctx.allocator.dupe(u8, "[]");
-    const text = analysis_snapshot.sourceForPath(snapshot, doc_path) orelse return try ctx.allocator.dupe(u8, "[]");
-    return json(ctx.allocator, text, analysis_snapshot.documentSymbols(snapshot, doc_path));
+    const module = snapshot.moduleForPath(doc_path) orelse return try ctx.allocator.dupe(u8, "[]");
+    return jsonWithIndex(ctx.allocator, module.line_index, analysis_snapshot.documentSymbols(snapshot, doc_path));
 }
 
 const DocumentSymbol = struct {
@@ -31,6 +32,12 @@ const DocumentSymbol = struct {
 };
 
 pub fn json(allocator: std.mem.Allocator, text: []const u8, symbols: []const query_symbols.Symbol) ![]const u8 {
+    const index = try LineIndex.init(allocator, text);
+    defer index.deinit(allocator);
+    return jsonWithIndex(allocator, index, symbols);
+}
+
+fn jsonWithIndex(allocator: std.mem.Allocator, text: LineIndex, symbols: []const query_symbols.Symbol) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     try out.append(allocator, '[');
     for (symbols, 0..) |symbol, index| {
@@ -41,12 +48,12 @@ pub fn json(allocator: std.mem.Allocator, text: []const u8, symbols: []const que
     return out.toOwnedSlice(allocator);
 }
 
-fn documentSymbol(text: []const u8, symbol: query_symbols.Symbol) DocumentSymbol {
+fn documentSymbol(text: LineIndex, symbol: query_symbols.Symbol) DocumentSymbol {
     return .{
         .name = symbol.name,
         .kind = symbolKind(symbol.kind),
-        .range = protocol.rangeFromSpan(text, symbol.span),
-        .selection_range = protocol.rangeFromSpan(text, symbol.selection_span),
+        .range = protocol.rangeFromIndex(text, symbol.span),
+        .selection_range = protocol.rangeFromIndex(text, symbol.selection_span),
     };
 }
 

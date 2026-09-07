@@ -15,6 +15,84 @@ pub const Utf16Position = struct {
     character: usize,
 };
 
+// The text is borrowed from the source generation; only line starts are owned.
+pub const LineIndex = struct {
+    text: []const u8,
+    starts: []usize,
+
+    pub const empty: LineIndex = .{ .text = "", .starts = &.{} };
+
+    pub fn init(allocator: std.mem.Allocator, text: []const u8) !LineIndex {
+        const starts = try allocator.alloc(usize, lineCount(text));
+        starts[0] = 0;
+        var next: usize = 1;
+        for (text, 0..) |byte, index| {
+            if (byte == '\n') {
+                starts[next] = index + 1;
+                next += 1;
+            }
+        }
+        return .{ .text = text, .starts = starts };
+    }
+
+    pub fn clone(self: LineIndex, allocator: std.mem.Allocator, text: []const u8) !LineIndex {
+        std.debug.assert(self.text.len == text.len);
+        return .{ .text = text, .starts = try allocator.dupe(usize, self.starts) };
+    }
+
+    pub fn deinit(self: LineIndex, allocator: std.mem.Allocator) void {
+        allocator.free(self.starts);
+    }
+
+    pub fn lineAt(self: LineIndex, byte_offset: usize) Line {
+        const number = self.lineNumber(byte_offset);
+        return self.lineByNumber(number + 1).?;
+    }
+
+    pub fn lineByNumber(self: LineIndex, number: usize) ?Line {
+        if (number == 0 or number > @max(self.starts.len, 1)) return null;
+        const index = number - 1;
+        const start = if (self.starts.len == 0) 0 else self.starts[index];
+        const raw_end = if (number < self.starts.len) self.starts[number] - 1 else self.text.len;
+        const end = if (raw_end > start and self.text[raw_end - 1] == '\r') raw_end - 1 else raw_end;
+        return .{ .number = number, .span = .{ .start = start, .end = end }, .raw_end = raw_end };
+    }
+
+    pub fn locationAt(self: LineIndex, byte_offset: usize) Location {
+        const line = self.lineAt(byte_offset);
+        const prefix = self.text[line.span.start..@min(byte_offset, self.text.len)];
+        return .{
+            .line = line.number,
+            .column = (std.unicode.utf8CountCodepoints(prefix) catch prefix.len) + 1,
+        };
+    }
+
+    pub fn utf16PositionAt(self: LineIndex, byte_offset: usize) Utf16Position {
+        const line = self.lineAt(byte_offset);
+        return .{
+            .line = line.number - 1,
+            .character = utf16Units(self.text[line.span.start..@min(byte_offset, self.text.len)]),
+        };
+    }
+
+    pub fn offsetForUtf16Position(self: LineIndex, target_line: usize, target_character: usize) usize {
+        if (target_line >= @max(self.starts.len, 1)) return self.text.len;
+        const line = self.lineByNumber(target_line + 1).?;
+        return offsetInLine(self.text, line.span.start, line.raw_end, target_character);
+    }
+
+    fn lineNumber(self: LineIndex, byte_offset: usize) usize {
+        const limit = @min(byte_offset, self.text.len);
+        var low: usize = 0;
+        var high = self.starts.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            if (self.starts[middle] <= limit) low = middle + 1 else high = middle;
+        }
+        return low -| 1;
+    }
+};
+
 pub const Line = struct {
     number: usize,
     span: ByteSpan,
@@ -113,6 +191,14 @@ pub fn lineAt(source: []const u8, byte_index: usize) Line {
     };
 }
 
+pub fn lineSpanAt(source: []const u8, byte_index: usize) ByteSpan {
+    const limit = @min(byte_index, source.len);
+    const start = if (std.mem.lastIndexOfScalar(u8, source[0..limit], '\n')) |newline| newline + 1 else 0;
+    const raw_end = std.mem.indexOfScalarPos(u8, source, limit, '\n') orelse source.len;
+    const end = if (raw_end > start and source[raw_end - 1] == '\r') raw_end - 1 else raw_end;
+    return .{ .start = start, .end = end };
+}
+
 pub fn lineByNumber(source: []const u8, number: usize) ?Line {
     var lines = lineIterator(source);
     while (lines.next()) |line| {
@@ -174,18 +260,19 @@ pub fn offsetForUtf16Position(source: []const u8, target_line: usize, target_cha
         }
     }
     if (line < target_line) return source.len;
+    const line_end = std.mem.indexOfScalarPos(u8, source, line_start, '\n') orelse source.len;
+    return offsetInLine(source, line_start, line_end, target_character);
+}
 
+fn offsetInLine(source: []const u8, line_start: usize, line_end: usize, target_character: usize) usize {
     var character: usize = 0;
-    index = line_start;
-    while (index < source.len and source[index] != '\n') {
+    var index = line_start;
+    while (index < line_end) {
         if (character >= target_character) return index;
-        const len = std.unicode.utf8ByteSequenceLength(source[index]) catch 1;
-        const end = @min(index + len, source.len);
-        const cp = std.unicode.utf8Decode(source[index..end]) catch source[index];
-        const width: usize = if (cp >= 0x10000) 2 else 1;
-        if (character + width > target_character) return index;
-        character += width;
-        index = end;
+        const unit = utf8Unit(source[0..line_end], index);
+        if (unit.width > target_character - character) return index;
+        character += unit.width;
+        index = unit.end;
     }
     return index;
 }
@@ -194,13 +281,22 @@ pub fn utf16Units(bytes: []const u8) usize {
     var units: usize = 0;
     var index: usize = 0;
     while (index < bytes.len) {
-        const len = std.unicode.utf8ByteSequenceLength(bytes[index]) catch 1;
-        const end = @min(index + len, bytes.len);
-        const cp = std.unicode.utf8Decode(bytes[index..end]) catch bytes[index];
-        units += if (cp > 0xFFFF) @as(usize, 2) else 1;
-        index = end;
+        const unit = utf8Unit(bytes, index);
+        units += unit.width;
+        index = unit.end;
     }
     return units;
+}
+
+const Utf8Unit = struct { end: usize, width: usize };
+
+fn utf8Unit(bytes: []const u8, index: usize) Utf8Unit {
+    const fallback = Utf8Unit{ .end = index + 1, .width = 1 };
+    const length = std.unicode.utf8ByteSequenceLength(bytes[index]) catch return fallback;
+    if (length > bytes.len - index) return fallback;
+    const end = index + length;
+    const codepoint = std.unicode.utf8Decode(bytes[index..end]) catch return fallback;
+    return .{ .end = end, .width = if (codepoint > 0xffff) 2 else 1 };
 }
 
 pub fn spanView(source: []const u8, span: ByteSpan) SpanView {
@@ -256,7 +352,7 @@ pub fn codeBytes(source: []const u8, start: usize, end: usize) CodeByteIterator 
 
 pub fn wordSpanAt(source: []const u8, offset: usize, comptime isWordByte: fn (u8) bool) ?ByteSpan {
     const pos = @min(offset, source.len);
-    const line = lineAt(source, pos).span;
+    const line = lineSpanAt(source, pos);
     var start = pos;
     while (start > line.start and isWordByte(source[start - 1])) start -= 1;
     var end = pos;

@@ -58,6 +58,7 @@ pub const LocatedOrigin = struct {
 pub const SourceReport = struct {
     path: []const u8 = "",
     source: []const u8,
+    line_index: ?source.LineIndex = null,
     severity: Severity,
     message: []const u8,
     span: ?source.ByteSpan = null,
@@ -98,7 +99,7 @@ pub fn print(report: SourceReport) void {
     printSeverityPrefix(report.severity);
     const span = report.span;
     if (span) |s| {
-        const loc = source.locationAt(report.source, s.start);
+        const loc = indexedLocation(report.source, report.line_index, s.start);
         printColor(report.severity);
         if (report.path.len != 0) {
             std.debug.print("{s}:{d}:{d}: {s}", .{ report.path, loc.line, loc.column, report.message });
@@ -107,7 +108,7 @@ pub fn print(report: SourceReport) void {
         }
         printReset();
         std.debug.print("\n", .{});
-        printExcerpt(report.source, s, report.severity, report.message, report.context_lines);
+        printExcerpt(report.source, report.line_index, s, report.severity, report.message, report.context_lines);
     } else if (report.path.len != 0) {
         printColor(report.severity);
         std.debug.print("{s}: {s}", .{ report.path, report.message });
@@ -134,7 +135,7 @@ pub fn printLabeledOrigin(text: []const u8, label: []const u8, origin: ?[]const 
     std.debug.print("  {s} from {d}:{d}", .{ label, loc.line, loc.column });
     printReset();
     std.debug.print("\n", .{});
-    printExcerpt(text, span, .note, label, 0);
+    printExcerpt(text, null, span, .note, label, 0);
 }
 
 fn sourceForLocatedOrigin(
@@ -142,17 +143,26 @@ fn sourceForLocatedOrigin(
     default_source: []const u8,
     state: anytype,
     located: LocatedOrigin,
-) struct { path: []const u8, source: []const u8 } {
+) struct { path: []const u8, source: []const u8, line_index: ?source.LineIndex = null } {
     if (located.path) |origin_path| {
         if (state.moduleByPathOrSpec(origin_path)) |module| {
             return .{
                 .path = module.path orelse module.spec,
                 .source = module.source,
+                .line_index = module.line_index,
             };
         }
-        return .{ .path = origin_path, .source = default_source };
+        return .{
+            .path = origin_path,
+            .source = default_source,
+            .line_index = if (state.moduleByPathOrSpec(default_path)) |module| module.line_index else null,
+        };
     }
-    return .{ .path = default_path, .source = default_source };
+    return .{
+        .path = default_path,
+        .source = default_source,
+        .line_index = if (state.moduleByPathOrSpec(default_path)) |module| module.line_index else null,
+    };
 }
 
 fn printLocatedOrigin(
@@ -168,6 +178,7 @@ fn printLocatedOrigin(
     print(.{
         .path = resolved.path,
         .source = resolved.source,
+        .line_index = resolved.line_index,
         .severity = severity,
         .message = message,
         .span = located.span,
@@ -185,12 +196,12 @@ fn printLabeledLocatedOrigin(
     const origin_text = origin orelse return;
     const located = parseLocatedOrigin(origin_text) orelse return;
     const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
-    const loc = source.locationAt(resolved.source, located.span.start);
+    const loc = indexedLocation(resolved.source, resolved.line_index, located.span.start);
     printDim();
     std.debug.print("  {s} from {s}:{d}:{d}", .{ label, resolved.path, loc.line, loc.column });
     printReset();
     std.debug.print("\n", .{});
-    printExcerpt(resolved.source, located.span, .note, label, 0);
+    printExcerpt(resolved.source, resolved.line_index, located.span, .note, label, 0);
 }
 
 pub fn printParseError(path: []const u8, text: []const u8, err: anyerror, diagnostic: anytype) void {
@@ -239,6 +250,7 @@ pub fn printDocumentStateDiagnosticsFrom(path: []const u8, text: []const u8, sta
         print(.{
             .path = resolved.path,
             .source = resolved.source,
+            .line_index = resolved.line_index,
             .severity = resolved.report_severity,
             .message = resolved.message,
             .span = resolved.span,
@@ -303,6 +315,7 @@ const ResolvedContextDiagnostic = struct {
     message: []const u8,
     path: []const u8,
     source: []const u8,
+    line_index: ?source.LineIndex,
     span: ?source.ByteSpan,
 
     fn deinit(self: *ResolvedContextDiagnostic, allocator: std.mem.Allocator) void {
@@ -331,6 +344,7 @@ fn resolveContextDiagnostic(
         .message = message,
         .path = location.path,
         .source = location.source,
+        .line_index = location.line_index,
         .span = location.span,
     };
 }
@@ -351,8 +365,8 @@ fn writeContextDiagnosticJson(
     try item.optionalIntField("node_id", diagnostic.node_id);
     if (resolved.span) |span| {
         var range = try item.objectField("range");
-        try writeJsonLocation(&range, "start", resolved.source, span.start);
-        try writeJsonLocation(&range, "end", resolved.source, @max(span.end, span.start));
+        try writeJsonLocation(&range, "start", resolved.source, resolved.line_index, span.start);
+        try writeJsonLocation(&range, "end", resolved.source, resolved.line_index, @max(span.end, span.start));
         try range.end();
     } else {
         try item.nullField("range");
@@ -360,8 +374,8 @@ fn writeContextDiagnosticJson(
     try item.end();
 }
 
-fn writeJsonLocation(object: *json.Object, key: []const u8, text: []const u8, byte_index: usize) !void {
-    const location = source.locationAt(text, byte_index);
+fn writeJsonLocation(object: *json.Object, key: []const u8, text: []const u8, index: ?source.LineIndex, byte_index: usize) !void {
+    const location = indexedLocation(text, index, byte_index);
     var child = try object.objectField(key);
     try child.intField("line", if (location.line == 0) 0 else location.line - 1);
     try child.intField("character", if (location.column == 0) 0 else location.column - 1);
@@ -373,7 +387,7 @@ fn resolveContextDiagnosticLocation(
     default_source: []const u8,
     state: anytype,
     diagnostic: anytype,
-) struct { path: []const u8, source: []const u8, span: ?source.ByteSpan } {
+) struct { path: []const u8, source: []const u8, span: ?source.ByteSpan, line_index: ?source.LineIndex = null } {
     const located = if (diagnostic.origin) |origin|
         parseLocatedOrigin(origin)
     else if (diagnostic.node_id) |node_id| blk: {
@@ -382,7 +396,7 @@ fn resolveContextDiagnosticLocation(
     } else null;
     if (located) |origin| {
         const resolved = sourceForLocatedOrigin(default_path, default_source, state, origin);
-        return .{ .path = resolved.path, .source = resolved.source, .span = origin.span };
+        return .{ .path = resolved.path, .source = resolved.source, .span = origin.span, .line_index = resolved.line_index };
     }
     return .{ .path = default_path, .source = default_source, .span = null };
 }
@@ -628,12 +642,12 @@ fn printRustLocatedOrigin(
     const origin_text = origin orelse return false;
     const located = parseLocatedOrigin(origin_text) orelse return false;
     const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
-    const loc = source.locationAt(resolved.source, located.span.start);
+    const loc = indexedLocation(resolved.source, resolved.line_index, located.span.start);
     printDim();
     std.debug.print("  --> {s}:{d}:{d}\n", .{ resolved.path, loc.line, loc.column });
     std.debug.print("   |\n", .{});
     printReset();
-    printExcerpt(resolved.source, located.span, severity, label, 1);
+    printExcerpt(resolved.source, resolved.line_index, located.span, severity, label, 1);
     return true;
 }
 
@@ -803,9 +817,9 @@ fn constraintOriginSnippet(
     const located = parseLocatedOrigin(origin) orelse return null;
     const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
     if (resolved.source.len == 0) return null;
-    const line = source.lineAt(resolved.source, located.span.start);
+    const line = if (resolved.line_index) |index| index.lineAt(located.span.start) else source.lineAt(resolved.source, located.span.start);
     const code = std.mem.trim(u8, line.text(resolved.source), " \t\r\n");
-    const loc = source.locationAt(resolved.source, located.span.start);
+    const loc = indexedLocation(resolved.source, resolved.line_index, located.span.start);
     if (resolved.path.len == 0) {
         return try std.fmt.allocPrint(allocator, "line {d}:{d}: {s}", .{ loc.line, loc.column, code });
     }
@@ -1116,15 +1130,20 @@ pub fn formatContextDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype
     };
 }
 
-fn printExcerpt(text: []const u8, span: source.ByteSpan, severity: Severity, label: []const u8, context: usize) void {
-    const target = source.lineAt(text, span.start);
+fn indexedLocation(text: []const u8, index: ?source.LineIndex, offset: usize) source.Location {
+    return if (index) |value| value.locationAt(offset) else source.locationAt(text, offset);
+}
+
+fn printExcerpt(text: []const u8, index: ?source.LineIndex, span: source.ByteSpan, severity: Severity, label: []const u8, context: usize) void {
+    const target = if (index) |value| value.lineAt(span.start) else source.lineAt(text, span.start);
     const first_line = if (target.number > context) target.number - context else 1;
-    const last_line = @min(source.lineCount(text), target.number + context);
+    const line_count = if (index) |value| @max(value.starts.len, 1) else source.lineCount(text);
+    const last_line = @min(line_count, target.number + context);
     const width = decimalWidth(last_line);
 
     var line = first_line;
     while (line <= last_line) : (line += 1) {
-        const current = source.lineByNumber(text, line) orelse break;
+        const current = (if (index) |value| value.lineByNumber(line) else source.lineByNumber(text, line)) orelse break;
         printDim();
         std.debug.print(" ", .{});
         printSpaces(width - decimalWidth(line));

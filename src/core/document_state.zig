@@ -150,11 +150,13 @@ pub const SourceModule = struct {
     spec: []u8,
     path: ?[]u8,
     source: []u8,
+    line_index: @import("utils").source.LineIndex,
     syntax: ast.Module,
     implicit_import_ids: std.ArrayList(SourceModuleId),
     resolved_import_ids: std.ArrayList(SourceModuleId),
 
     pub fn deinit(self: *SourceModule, allocator: Allocator) void {
+        self.line_index.deinit(allocator);
         self.syntax.deinit(allocator);
         self.implicit_import_ids.deinit(allocator);
         self.resolved_import_ids.deinit(allocator);
@@ -311,12 +313,15 @@ pub const DocumentState = struct {
         });
         state.document_id = doc_id;
 
+        const line_index = try @import("utils").source.LineIndex.init(allocator, project_source);
+        errdefer line_index.deinit(allocator);
         try state.modules.append(allocator, .{
             .id = 0,
             .kind = .project,
             .spec = project_spec,
             .path = project_path,
             .source = project_source,
+            .line_index = line_index,
             .syntax = project_syntax,
             .implicit_import_ids = .empty,
             .resolved_import_ids = .empty,

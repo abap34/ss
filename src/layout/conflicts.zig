@@ -489,20 +489,20 @@ fn appendOriginObject(object: *json.Object, field_name: []const u8, state: anyty
         return;
     };
     var path = state.projectPath();
-    var source = state.projectSource();
+    var source = state.projectModule().line_index;
     if (located.path) |origin_path| {
         if (state.moduleByPathOrSpec(origin_path)) |module| {
             path = module.path orelse module.spec;
-            source = module.source;
+            source = module.line_index;
         } else {
             path = origin_path;
         }
     } else {
         const module = state.projectModule();
         path = module.path orelse module.spec;
-        source = module.source;
+        source = module.line_index;
     }
-    const loc = utils.source.locationAt(source, located.span.start);
+    const loc = source.locationAt(located.span.start);
 
     var child = try object.objectField(field_name);
     try child.stringField("path", path);

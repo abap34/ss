@@ -8,7 +8,7 @@ pub const Range = struct {
     span: source.ByteSpan,
 };
 
-pub fn collect(allocator: std.mem.Allocator, text: []const u8, program: ast.Module) ![]Range {
+pub fn collect(allocator: std.mem.Allocator, text: source.LineIndex, program: ast.Module) ![]Range {
     var out = std.ArrayList(Range).empty;
     errdefer out.deinit(allocator);
 
@@ -22,9 +22,9 @@ pub fn collect(allocator: std.mem.Allocator, text: []const u8, program: ast.Modu
     return out.toOwnedSlice(allocator);
 }
 
-fn appendFromSpan(allocator: std.mem.Allocator, out: *std.ArrayList(Range), text: []const u8, span: ast.Span) !void {
-    const start_line = source.lineAt(text, @min(span.start, text.len)).number;
-    const end_line = source.lineAt(text, @min(@max(span.end, span.start + 1), text.len)).number;
+fn appendFromSpan(allocator: std.mem.Allocator, out: *std.ArrayList(Range), text: source.LineIndex, span: ast.Span) !void {
+    const start_line = text.lineAt(@min(span.start, text.text.len)).number;
+    const end_line = text.lineAt(@min(@max(span.end, span.start + 1), text.text.len)).number;
     if (end_line <= start_line) return;
     try out.append(allocator, .{ .span = .{ .start = span.start, .end = span.end } });
 }

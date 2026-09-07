@@ -436,7 +436,7 @@ fn appendImportAsCompletions(builder: *CandidateBuilder, source: []const u8, off
 
 fn importAsSpecBeforeCursor(source: []const u8, offset: usize) ?[]const u8 {
     const safe_offset = @min(offset, source.len);
-    const line_start = utils.source.lineAt(source, safe_offset).span.start;
+    const line_start = utils.source.lineSpanAt(source, safe_offset).start;
     const before = std.mem.trim(u8, source[line_start..safe_offset], " \t\r");
     if (!std.mem.startsWith(u8, before, "import ")) return null;
     const as_index = std.mem.lastIndexOf(u8, before, " as") orelse return null;

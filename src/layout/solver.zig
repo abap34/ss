@@ -1341,20 +1341,20 @@ fn constraintOriginLabel(allocator: std.mem.Allocator, state: anytype, constrain
     const origin_text = constraint.origin orelse return allocator.dupe(u8, "fallback");
     const located = utils.err.parseLocatedOrigin(origin_text) orelse return allocator.dupe(u8, "unknown");
     var path = state.projectPath();
-    var source = state.projectSource();
+    var source = state.projectModule().line_index;
     if (located.path) |origin_path| {
         if (state.moduleByPathOrSpec(origin_path)) |module| {
             path = module.path orelse module.spec;
-            source = module.source;
+            source = module.line_index;
         } else {
             path = origin_path;
         }
     } else {
         const module = state.projectModule();
         path = module.path orelse module.spec;
-        source = module.source;
+        source = module.line_index;
     }
-    const loc = utils.source.locationAt(source, located.span.start);
+    const loc = source.locationAt(located.span.start);
     return std.fmt.allocPrint(allocator, "{s}:{d}", .{ path, loc.line });
 }
 

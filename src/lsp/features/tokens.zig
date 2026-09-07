@@ -1,4 +1,5 @@
 const std = @import("std");
+const LineIndex = @import("utils").source.LineIndex;
 
 const scanner = @import("../../syntax/scanner.zig");
 const protocol = @import("../protocol.zig");
@@ -15,10 +16,17 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     if (!lsp_state.featureEnabledForCurrent(ctx.current_snapshot, .semantic_tokens)) return try ctx.allocator.dupe(u8, "{\"data\":[]}");
     var doc = try lsp_state.documentTextFromParams(ctx.io, ctx.allocator, ctx.documents, params) orelse return try ctx.allocator.dupe(u8, "{\"data\":[]}");
     defer doc.deinit(ctx.allocator);
-    return json(ctx.allocator, doc.source);
+    return jsonWithIndex(ctx.allocator, doc.line_index);
 }
 
 pub fn json(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    const index = try LineIndex.init(allocator, text);
+    defer index.deinit(allocator);
+    return jsonWithIndex(allocator, index);
+}
+
+fn jsonWithIndex(allocator: std.mem.Allocator, source_index: LineIndex) ![]const u8 {
+    const text = source_index.text;
     const tokens = try scanner.semanticTokens(allocator, text);
     defer allocator.free(tokens);
 
@@ -28,7 +36,7 @@ pub fn json(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     var previous_start: usize = 0;
     for (tokens, 0..) |semantic, index| {
         if (index != 0) try out.append(allocator, ',');
-        const range = protocol.rangeFromSpan(text, semantic.token.span);
+        const range = protocol.rangeFromIndex(source_index, semantic.token.span);
         const line = range.start_line;
         const start = range.start_character;
         const length = @max(1, range.end_character - range.start_character);

@@ -9,14 +9,14 @@ const utils = @import("utils");
 pub fn populateDocumentStateAnalysis(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
     for (state.modules.items) |module| {
         if (module.kind == .project) continue;
-        try collectDefinitionsFromModule(allocator, module.source, module.syntax, module.id, module.path, false, &state.definitions);
+        try collectDefinitionsFromModule(allocator, module.line_index, module.syntax, module.id, module.path, false, &state.definitions);
     }
-    try collectDefinitionsFromModule(allocator, state.projectSource(), state.projectSyntax(), state.project_module_id, null, true, &state.definitions);
+    try collectDefinitionsFromModule(allocator, state.projectModule().line_index, state.projectSyntax(), state.project_module_id, null, true, &state.definitions);
 }
 
 fn collectDefinitionsFromModule(
     allocator: std.mem.Allocator,
-    source: []const u8,
+    source: utils.source.LineIndex,
     program: ast.Module,
     module_id: core.SourceModuleId,
     file: ?[]const u8,
@@ -24,7 +24,7 @@ fn collectDefinitionsFromModule(
     definitions: *std.ArrayList(core.Definition),
 ) !void {
     for (program.functions.items) |func| {
-        try putDefinitionAtSpan(allocator, definitions, source, func.name, func.name_span, 0, source.len, .function, module_id, file, .module, null);
+        try putDefinitionAtSpan(allocator, definitions, source, func.name, func.name_span, 0, source.text.len, .function, module_id, file, .module, null);
         if (include_variables) {
             const scope = analysis_scope.functionScope(func);
             for (func.params.items) |param| {
@@ -36,12 +36,12 @@ fn collectDefinitionsFromModule(
         }
     }
     for (program.constants.items) |constant_decl| {
-        try putDefinitionAtSpan(allocator, definitions, source, constant_decl.name, constant_decl.name_span, 0, source.len, .constant, module_id, file, .module, null);
+        try putDefinitionAtSpan(allocator, definitions, source, constant_decl.name, constant_decl.name_span, 0, source.text.len, .constant, module_id, file, .module, null);
     }
     if (include_variables) {
-        const document_scope = analysis_scope.documentScope(source.len);
+        const document_scope = analysis_scope.documentScope(source.text.len);
         for (program.document_statements.items) |stmt| {
-            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, document_scope, source.len);
+            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, document_scope, source.text.len);
         }
         for (program.pages.items) |page| {
             const scope = analysis_scope.pageScope(page);
@@ -54,7 +54,7 @@ fn collectDefinitionsFromModule(
 
 fn collectDefinitionsFromStatement(
     allocator: std.mem.Allocator,
-    source: []const u8,
+    source: utils.source.LineIndex,
     module_id: core.SourceModuleId,
     stmt: ast.Statement,
     definitions: *std.ArrayList(core.Definition),
@@ -80,7 +80,7 @@ fn collectDefinitionsFromStatement(
 fn putDefinitionAtSpan(
     allocator: std.mem.Allocator,
     definitions: *std.ArrayList(core.Definition),
-    source: []const u8,
+    source: utils.source.LineIndex,
     name: []const u8,
     name_span: ?ast.Span,
     visible_start: usize,
@@ -92,7 +92,7 @@ fn putDefinitionAtSpan(
     scope_name: ?[]const u8,
 ) !void {
     const span = name_span orelse return;
-    const loc = utils.source.locationAt(source, span.start);
+    const loc = source.locationAt(span.start);
     try putDefinition(allocator, definitions, name, loc.line, loc.column, span.start, @max(span.end, span.start) - span.start, visible_start, visible_end, kind, module_id, file, scope_kind, scope_name);
 }
 

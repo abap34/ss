@@ -1,4 +1,5 @@
 const std = @import("std");
+const LineIndex = @import("utils").source.LineIndex;
 
 const analysis_snapshot = @import("../../analysis/snapshot.zig");
 const query_folding = @import("../../analysis/query/folding.zig");
@@ -17,8 +18,8 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
     const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse return try ctx.allocator.dupe(u8, "[]");
     if (!lsp_state.featureEnabledForAnalysis(snapshot, .folding_ranges)) return try ctx.allocator.dupe(u8, "[]");
-    const text = analysis_snapshot.sourceForPath(snapshot, doc_path) orelse return try ctx.allocator.dupe(u8, "[]");
-    return json(ctx.allocator, text, analysis_snapshot.foldingRanges(snapshot, doc_path));
+    const module = snapshot.moduleForPath(doc_path) orelse return try ctx.allocator.dupe(u8, "[]");
+    return jsonWithIndex(ctx.allocator, module.line_index, analysis_snapshot.foldingRanges(snapshot, doc_path));
 }
 
 const FoldingRange = struct {
@@ -27,6 +28,12 @@ const FoldingRange = struct {
 };
 
 pub fn json(allocator: std.mem.Allocator, text: []const u8, ranges: []const query_folding.Range) ![]const u8 {
+    const index = try LineIndex.init(allocator, text);
+    defer index.deinit(allocator);
+    return jsonWithIndex(allocator, index, ranges);
+}
+
+fn jsonWithIndex(allocator: std.mem.Allocator, text: LineIndex, ranges: []const query_folding.Range) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     try out.append(allocator, '[');
     var emitted: usize = 0;
@@ -40,8 +47,8 @@ pub fn json(allocator: std.mem.Allocator, text: []const u8, ranges: []const quer
     return out.toOwnedSlice(allocator);
 }
 
-fn foldingRange(text: []const u8, range: query_folding.Range) ?FoldingRange {
-    const lsp_range = protocol.rangeFromSpan(text, range.span);
+fn foldingRange(text: LineIndex, range: query_folding.Range) ?FoldingRange {
+    const lsp_range = protocol.rangeFromIndex(text, range.span);
     if (lsp_range.end_line <= lsp_range.start_line) return null;
     return .{
         .start_line = lsp_range.start_line,

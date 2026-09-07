@@ -1045,6 +1045,8 @@ fn canRebaseGeneratedSource(
     for (generated.replacements, 0..) |replacement, index| {
         const span = replacement.offset_span;
         if (span.end <= span.start or span.end > generated.base_source.len) return false;
+        if (std.mem.indexOfScalar(u8, generated.base_source[span.start..span.end], '\n') != null or
+            std.mem.indexOfScalar(u8, generated.source[span.start..span.end], '\n') != null) return false;
         if (std.mem.eql(
             u8,
             generated.base_source[span.start..span.end],

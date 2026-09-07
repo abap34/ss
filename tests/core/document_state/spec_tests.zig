@@ -20,12 +20,15 @@ fn appendSparseSourceModule(state: *core.DocumentState, id: core.SourceModuleId)
     errdefer testing.allocator.free(spec);
     const source = try testing.allocator.dupe(u8, "");
     errdefer testing.allocator.free(source);
+    const line_index = try @import("utils").source.LineIndex.init(testing.allocator, source);
+    errdefer line_index.deinit(testing.allocator);
     try state.modules.append(testing.allocator, .{
         .id = id,
         .kind = .library,
         .spec = spec,
         .path = null,
         .source = source,
+        .line_index = line_index,
         .syntax = ast.Module.init(),
         .implicit_import_ids = .empty,
         .resolved_import_ids = .empty,

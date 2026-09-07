@@ -586,12 +586,16 @@ const Builder = struct {
         var owns_path = path != null;
         errdefer if (owns_path) if (path) |owned_path| self.allocator.free(owned_path);
 
+        const line_index = try source.LineIndex.init(self.allocator, text);
+        var owns_line_index = true;
+        errdefer if (owns_line_index) line_index.deinit(self.allocator);
         try self.modules.append(self.allocator, .{
             .id = module_id,
             .kind = kind,
             .spec = spec,
             .path = path,
             .source = text,
+            .line_index = line_index,
             .syntax = module_syntax,
             .implicit_import_ids = .empty,
             .resolved_import_ids = .empty,
@@ -600,6 +604,7 @@ const Builder = struct {
         owns_module_syntax = false;
         owns_spec = false;
         owns_path = false;
+        owns_line_index = false;
 
         const importer_base_dir = if (path) |module_path| std.fs.path.dirname(module_path) orelse "." else ".";
         if (shouldImplicitlyImportPrelude(kind, spec)) {

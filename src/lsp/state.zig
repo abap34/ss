@@ -11,16 +11,30 @@ const source = utils.source;
 pub const JsonValue = protocol.JsonValue;
 pub const AnalysisSnapshot = analysis_snapshot.AnalysisSnapshot;
 
+const OpenDocument = struct {
+    text: []u8,
+    line_index: source.LineIndex,
+
+    fn init(allocator: std.mem.Allocator, text: []u8) !OpenDocument {
+        return .{ .text = text, .line_index = try source.LineIndex.init(allocator, text) };
+    }
+
+    fn deinit(self: OpenDocument, allocator: std.mem.Allocator) void {
+        self.line_index.deinit(allocator);
+        allocator.free(self.text);
+    }
+};
+
 pub const DocumentStore = struct {
     allocator: std.mem.Allocator,
-    items: std.StringHashMap([]u8),
+    items: std.StringHashMap(OpenDocument),
     versions: std.StringHashMap(i64),
     generation: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator) DocumentStore {
         return .{
             .allocator = allocator,
-            .items = std.StringHashMap([]u8).init(allocator),
+            .items = std.StringHashMap(OpenDocument).init(allocator),
             .versions = std.StringHashMap(i64).init(allocator),
         };
     }
@@ -29,7 +43,7 @@ pub const DocumentStore = struct {
         var it = self.items.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
         }
         self.items.deinit();
         var version_iterator = self.versions.iterator();
@@ -47,22 +61,26 @@ pub const DocumentStore = struct {
 
     pub fn applyChangesAtPath(self: *DocumentStore, path: []const u8, changes: *const protocol.JsonArray) !bool {
         if (changes.items.len == 0) return error.InvalidParams;
-        const original = self.items.get(path) orelse "";
-        var current = try self.allocator.dupe(u8, original);
-        var current_owned = true;
-        defer if (current_owned) self.allocator.free(current);
+        const original = self.items.get(path);
+        var current: ?OpenDocument = null;
+        defer if (current) |document| document.deinit(self.allocator);
 
         for (changes.items) |*change| {
             if (change.* != .object) return error.InvalidParams;
-            const next = try applyChange(self.allocator, current, &change.object);
-            self.allocator.free(current);
+            const old_index = if (current) |document| document.line_index else if (original) |document| document.line_index else source.LineIndex.empty;
+            const next_text = try applyChange(self.allocator, old_index, &change.object);
+            const next = OpenDocument.init(self.allocator, next_text) catch |err| {
+                self.allocator.free(next_text);
+                return err;
+            };
+            if (current) |document| document.deinit(self.allocator);
             current = next;
         }
 
-        if (std.mem.eql(u8, original, current)) return false;
-        const document_text = current;
-        try self.putOwned(path, document_text);
-        current_owned = false;
+        const original_text = if (original) |document| document.text else "";
+        if (std.mem.eql(u8, original_text, current.?.text)) return false;
+        try self.putOwned(path, current.?);
+        current = null;
         self.generation += 1;
         return true;
     }
@@ -71,7 +89,7 @@ pub const DocumentStore = struct {
         const path = self.absolutePathFromUri(uri) catch return null;
         if (self.items.fetchRemove(path)) |entry| {
             self.allocator.free(entry.key);
-            self.allocator.free(entry.value);
+            entry.value.deinit(self.allocator);
             self.generation += 1;
         }
         if (self.versions.fetchRemove(path)) |entry| self.allocator.free(entry.key);
@@ -79,15 +97,20 @@ pub const DocumentStore = struct {
     }
 
     pub fn sourceForPath(self: *DocumentStore, path: []const u8) ?[]const u8 {
+        return if (self.indexForPath(path)) |index| index.text else null;
+    }
+
+    pub fn indexForPath(self: *DocumentStore, path: []const u8) ?source.LineIndex {
         const absolute = project.absolutePath(self.allocator, path) catch return null;
         defer self.allocator.free(absolute);
-        return self.items.get(absolute);
+        const document = self.items.get(absolute) orelse return null;
+        return document.line_index;
     }
 
     pub fn fillOverlay(self: *DocumentStore, overlay: *module_loader.SourceOverlay) !void {
         var it = self.items.iterator();
         while (it.next()) |entry| {
-            try overlay.put(entry.key_ptr.*, entry.value_ptr.*);
+            try overlay.put(entry.key_ptr.*, entry.value_ptr.text);
         }
     }
 
@@ -113,7 +136,7 @@ pub const DocumentStore = struct {
         return self.versionForPath(path);
     }
 
-    pub fn iterator(self: *DocumentStore) std.StringHashMap([]u8).Iterator {
+    pub fn iterator(self: *DocumentStore) std.StringHashMap(OpenDocument).Iterator {
         return self.items.iterator();
     }
 
@@ -125,23 +148,25 @@ pub const DocumentStore = struct {
 
     fn replacePath(self: *DocumentStore, path: []const u8, text: []const u8) !void {
         if (self.items.get(path)) |current| {
-            if (std.mem.eql(u8, current, text)) return;
+            if (std.mem.eql(u8, current.text, text)) return;
         }
         const document_text = try self.allocator.dupe(u8, text);
         errdefer self.allocator.free(document_text);
-        try self.putOwned(path, document_text);
+        const document = try OpenDocument.init(self.allocator, document_text);
+        errdefer document.line_index.deinit(self.allocator);
+        try self.putOwned(path, document);
         self.generation += 1;
     }
 
-    fn putOwned(self: *DocumentStore, path: []const u8, document_text: []u8) !void {
+    fn putOwned(self: *DocumentStore, path: []const u8, document: OpenDocument) !void {
         if (self.items.getPtr(path)) |existing| {
-            self.allocator.free(existing.*);
-            existing.* = document_text;
+            existing.deinit(self.allocator);
+            existing.* = document;
             return;
         }
         const key = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(key);
-        try self.items.put(key, document_text);
+        try self.items.put(key, document);
     }
 };
 
@@ -160,11 +185,15 @@ pub const RequestPosition = struct {
 pub const DocumentText = struct {
     path: []u8,
     source: []const u8,
+    line_index: source.LineIndex,
     owned_source: ?[]u8 = null,
 
     pub fn deinit(self: *DocumentText, allocator: std.mem.Allocator) void {
         allocator.free(self.path);
-        if (self.owned_source) |text| allocator.free(text);
+        if (self.owned_source) |text| {
+            self.line_index.deinit(allocator);
+            allocator.free(text);
+        }
     }
 };
 
@@ -179,28 +208,29 @@ pub fn requestPosition(
     const pos_obj = protocol.objectField(p, "position") orelse return error.InvalidParams;
     const line = try protocol.lspLine(pos_obj);
     const character = try protocol.lspCharacter(pos_obj);
-    const text = documents.sourceForPath(doc_path) orelse {
+    const index = documents.indexForPath(doc_path) orelse {
         allocator.free(doc_path);
         return null;
     };
     return .{
         .doc_path = doc_path,
-        .source = text,
-        .offset = source.offsetForUtf16Position(text, line, character),
+        .source = index.text,
+        .offset = index.offsetForUtf16Position(line, character),
         .line = line,
         .character = character,
     };
 }
 
-fn applyChange(allocator: std.mem.Allocator, old_source: []const u8, change: *const protocol.JsonObject) ![]u8 {
+fn applyChange(allocator: std.mem.Allocator, old_index: source.LineIndex, change: *const protocol.JsonObject) ![]u8 {
+    const old_source = old_index.text;
     const text = protocol.stringField(change, "text") orelse return error.InvalidParams;
     const range_value = utils.json.fieldValue(change, "range") orelse return allocator.dupe(u8, text);
     if (range_value.* != .object) return error.InvalidParams;
     const range = &range_value.object;
     const start = protocol.objectFieldObject(range, "start") orelse return error.InvalidParams;
     const end = protocol.objectFieldObject(range, "end") orelse return error.InvalidParams;
-    const start_offset = source.offsetForUtf16Position(old_source, try protocol.lspLine(start), try protocol.lspCharacter(start));
-    const end_offset = source.offsetForUtf16Position(old_source, try protocol.lspLine(end), try protocol.lspCharacter(end));
+    const start_offset = old_index.offsetForUtf16Position(try protocol.lspLine(start), try protocol.lspCharacter(start));
+    const end_offset = old_index.offsetForUtf16Position(try protocol.lspLine(end), try protocol.lspCharacter(end));
     if (end_offset < start_offset) return error.InvalidParams;
 
     var next = std.ArrayList(u8).empty;
@@ -219,12 +249,15 @@ pub fn documentTextFromParams(
 ) !?DocumentText {
     const doc_path = try protocol.docPathFromParams(allocator, params) orelse return null;
     errdefer allocator.free(doc_path);
-    if (documents.sourceForPath(doc_path)) |text| {
-        return .{ .path = doc_path, .source = text };
+    if (documents.indexForPath(doc_path)) |index| {
+        return .{ .path = doc_path, .source = index.text, .line_index = index };
     }
-    const owned = utils.fs.readFileAlloc(io, allocator, doc_path) catch return null;
+    const owned = utils.fs.readFileAlloc(io, allocator, doc_path) catch {
+        allocator.free(doc_path);
+        return null;
+    };
     errdefer allocator.free(owned);
-    return .{ .path = doc_path, .source = owned, .owned_source = owned };
+    return .{ .path = doc_path, .source = owned, .line_index = try source.LineIndex.init(allocator, owned), .owned_source = owned };
 }
 
 pub const Feature = enum {

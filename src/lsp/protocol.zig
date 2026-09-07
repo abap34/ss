@@ -203,6 +203,7 @@ pub fn uriFromPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 
 fn percentDecode(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
     var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
     var i: usize = 0;
     while (i < text.len) : (i += 1) {
         if (text[i] == '%' and i + 2 < text.len) {
@@ -222,6 +223,21 @@ fn percentDecode(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
 pub fn rangeFromSpan(text: []const u8, span: source.ByteSpan) Range {
     const start = source.utf16PositionAt(text, @min(span.start, text.len));
     const end = source.utf16PositionAt(text, @min(@max(span.end, span.start + 1), text.len));
+    return .{
+        .start_line = start.line,
+        .start_character = start.character,
+        .end_line = end.line,
+        .end_character = end.character,
+    };
+}
+
+pub fn rangeFromIndex(index: source.LineIndex, span: source.ByteSpan) Range {
+    return rangeFromOffsets(index, span.start, @max(span.end, span.start +| 1));
+}
+
+pub fn rangeFromOffsets(index: source.LineIndex, start_offset: usize, end_offset: usize) Range {
+    const start = index.utf16PositionAt(start_offset);
+    const end = index.utf16PositionAt(end_offset);
     return .{
         .start_line = start.line,
         .start_character = start.character,

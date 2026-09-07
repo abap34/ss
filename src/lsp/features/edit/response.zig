@@ -59,30 +59,18 @@ fn appendWorkspaceEdit(
     source: []const u8,
     edits: anytype,
 ) !void {
+    const source_index = try utils.source.LineIndex.init(allocator, source);
+    defer source_index.deinit(allocator);
     try out.appendSlice(allocator, "{\"schema\":1,\"status\":\"ok\",\"workspaceEdit\":{\"changes\":{");
     try protocol.appendJsonString(allocator, out, uri);
     try out.appendSlice(allocator, ":[");
     for (edits, 0..) |edit, index| {
         if (index != 0) try out.append(allocator, ',');
         try out.appendSlice(allocator, "{\"range\":");
-        try appendEditRange(allocator, out, source, edit);
+        try protocol.appendRange(allocator, out, protocol.rangeFromOffsets(source_index, edit.start, edit.end));
         try out.appendSlice(allocator, ",\"newText\":");
         try protocol.appendJsonString(allocator, out, edit.text);
         try out.append(allocator, '}');
     }
     try out.appendSlice(allocator, "]}}");
-}
-
-fn appendEditRange(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source: []const u8, edit: anytype) !void {
-    const start = utils.source.utf16PositionAt(source, edit.start);
-    const end = utils.source.utf16PositionAt(source, edit.end);
-    try out.appendSlice(allocator, "{\"start\":{\"line\":");
-    try protocol.appendInt(allocator, out, start.line);
-    try out.appendSlice(allocator, ",\"character\":");
-    try protocol.appendInt(allocator, out, start.character);
-    try out.appendSlice(allocator, "},\"end\":{\"line\":");
-    try protocol.appendInt(allocator, out, end.line);
-    try out.appendSlice(allocator, ",\"character\":");
-    try protocol.appendInt(allocator, out, end.character);
-    try out.appendSlice(allocator, "}}");
 }

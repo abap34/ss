@@ -230,13 +230,13 @@ fn appendTargetFromSpan(
 ) !bool {
     const span = maybe_span orelse return false;
     const module = snapshot.moduleById(module_id) orelse return false;
-    const loc = utils.source.locationAt(module.source, span.start);
     var target = moduleBackedTarget(snapshot, module_id, request_path);
-    const start = lspLocation(loc.line, loc.column);
+    const start = module.line_index.utf16PositionAt(span.start);
+    const end = module.line_index.utf16PositionAt(span.end);
     target.line = start.line;
     target.character = start.character;
-    target.end_line = start.line;
-    target.end_character = start.character + @max(span.end, span.start) - span.start;
+    target.end_line = end.line;
+    target.end_character = end.character;
     try out.append(allocator, target);
     return true;
 }
@@ -298,6 +298,15 @@ fn definitionTarget(snapshot: anytype, definition: core.Definition, request_path
     if (definition.file) |path| {
         target.path = path;
         target.module_spec = null;
+    }
+    if (snapshot.moduleById(definition.module_id)) |module| {
+        const start = module.line_index.utf16PositionAt(definition.span_start);
+        const end = module.line_index.utf16PositionAt(@max(definition.span_end, definition.span_start +| 1));
+        target.line = start.line;
+        target.character = start.character;
+        target.end_line = end.line;
+        target.end_character = end.character;
+        return target;
     }
     const start = lspLocation(definition.line, definition.column);
     target.line = start.line;

@@ -19,7 +19,7 @@ pub fn documentColorsResult(ctx: *Context, params: ?protocol.JsonValue) ![]const
     if (!lsp_state.featureEnabledForCurrent(ctx.current_snapshot, .colors)) return try ctx.allocator.dupe(u8, "[]");
     var doc = try lsp_state.documentTextFromParams(ctx.io, ctx.allocator, ctx.documents, params) orelse return try ctx.allocator.dupe(u8, "[]");
     defer doc.deinit(ctx.allocator);
-    return documentColorsJson(ctx.allocator, doc.source);
+    return documentColorsWithIndex(ctx.allocator, doc.line_index);
 }
 
 pub fn colorPresentationResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
@@ -39,6 +39,13 @@ const Color = struct {
 };
 
 pub fn documentColorsJson(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    const index = try source.LineIndex.init(allocator, text);
+    defer index.deinit(allocator);
+    return documentColorsWithIndex(allocator, index);
+}
+
+fn documentColorsWithIndex(allocator: std.mem.Allocator, source_index: source.LineIndex) ![]const u8 {
+    const text = source_index.text;
     const colors = try scan(allocator, text);
     defer allocator.free(colors);
 
@@ -47,7 +54,7 @@ pub fn documentColorsJson(allocator: std.mem.Allocator, text: []const u8) ![]con
     for (colors, 0..) |color, index| {
         if (index != 0) try out.append(allocator, ',');
         try out.appendSlice(allocator, "{\"range\":");
-        try protocol.appendRange(allocator, &out, protocol.rangeFromSpan(text, color.span));
+        try protocol.appendRange(allocator, &out, protocol.rangeFromIndex(source_index, color.span));
         try out.appendSlice(allocator, ",\"color\":{\"red\":");
         try protocol.appendFloat(allocator, &out, color.red);
         try out.appendSlice(allocator, ",\"green\":");

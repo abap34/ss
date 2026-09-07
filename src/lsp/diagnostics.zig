@@ -83,8 +83,19 @@ pub const DiagnosticSet = struct {
     }
 
     pub fn addAnalysisBag(self: *DiagnosticSet, bag: *const analysis_diagnostics.DiagnosticBag) !void {
+        var indexes = std.StringHashMap(source.LineIndex).init(self.allocator);
+        defer {
+            var values = indexes.valueIterator();
+            while (values.next()) |index| index.deinit(self.allocator);
+            indexes.deinit();
+        }
         for (bag.items.items) |item| {
-            try self.addAnalysisDiagnostic(item);
+            const entry = try indexes.getOrPut(item.path);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = .empty;
+                entry.value_ptr.* = try source.LineIndex.init(self.allocator, item.source);
+            }
+            try self.addAnalysisDiagnostic(item, entry.value_ptr.*);
         }
     }
 
@@ -160,7 +171,7 @@ pub const DiagnosticSet = struct {
         try self.addWithRelated(primary.path, primary.source, .@"error", constraintFailureCode(failure), message, primary.span, related.items);
     }
 
-    fn addAnalysisDiagnostic(self: *DiagnosticSet, item: analysis_diagnostics.Diagnostic) !void {
+    fn addAnalysisDiagnostic(self: *DiagnosticSet, item: analysis_diagnostics.Diagnostic, source_index: source.LineIndex) !void {
         if (item.severity == .warning and isLayoutOverflowCode(item.code)) return;
         const span = item.span orelse source.ByteSpan{ .start = 0, .end = 0 };
         const uri = try protocol.uriFromPath(self.allocator, item.path);
@@ -171,7 +182,7 @@ pub const DiagnosticSet = struct {
         errdefer self.allocator.free(message);
         try self.items.append(self.allocator, .{
             .uri = uri,
-            .range = protocol.rangeFromSpan(item.source, span),
+            .range = protocol.rangeFromIndex(source_index, span),
             .severity = item.severity,
             .code = code,
             .message = message,

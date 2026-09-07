@@ -48,12 +48,15 @@ fn appendOwnedModule(allocator: std.mem.Allocator, modules: *std.ArrayList(compi
     errdefer allocator.free(spec);
     const source = try allocator.dupe(u8, "// owned source\n");
     errdefer allocator.free(source);
+    const line_index = try @import("utils").source.LineIndex.init(allocator, source);
+    errdefer line_index.deinit(allocator);
     try modules.append(allocator, .{
         .id = id,
         .kind = .library,
         .spec = spec,
         .path = null,
         .source = source,
+        .line_index = line_index,
         .syntax = .init(),
         .implicit_import_ids = .empty,
         .resolved_import_ids = .empty,
