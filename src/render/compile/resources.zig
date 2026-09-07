@@ -61,19 +61,41 @@ pub const FileFingerprint = struct {
 
 const CachedFingerprint = struct {
     path: []u8,
-    inode: std.Io.File.INode,
-    size: u64,
-    mtime_ns: i96,
-    ctime_ns: i96,
+    identity: FileIdentity,
     digest: u64,
+    previous: ?usize = null,
+    next: ?usize = null,
+};
+
+const SourceKey = struct {
+    kind: ?render.ResourceKind,
+    path: []const u8,
+};
+
+const SourceKeyContext = struct {
+    pub fn hash(_: SourceKeyContext, key: SourceKey) u64 {
+        var hasher = std.hash.Wyhash.init(if (key.kind) |kind| @intFromEnum(kind) + 1 else 0);
+        hasher.update(key.path);
+        return hasher.final();
+    }
+
+    pub fn eql(_: SourceKeyContext, a: SourceKey, b: SourceKey) bool {
+        return a.kind == b.kind and std.mem.eql(u8, a.path, b.path);
+    }
 };
 
 pub const SourceCache = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     mutex: std.Io.Mutex = .init,
+    ready: std.Io.Condition = .init,
+    in_flight: std.HashMapUnmanaged(SourceKey, void, SourceKeyContext, std.hash_map.default_max_load_percentage) = .{},
     sources: std.ArrayList(CachedSource) = .empty,
+    source_indexes: std.HashMapUnmanaged(SourceKey, usize, SourceKeyContext, std.hash_map.default_max_load_percentage) = .{},
     fingerprints: std.ArrayList(CachedFingerprint) = .empty,
+    fingerprint_indexes: std.StringHashMapUnmanaged(usize) = .{},
+    oldest_fingerprint: ?usize = null,
+    newest_fingerprint: ?usize = null,
     source_bytes: usize = 0,
     access_clock: u64 = 0,
 
@@ -81,35 +103,42 @@ pub const SourceCache = struct {
     const max_source_bytes = 512 * 1024 * 1024;
     const max_fingerprints = 4096;
 
+    // Concurrent callers must provide an allocator supporting concurrent use.
     pub fn init(allocator: std.mem.Allocator, io: std.Io) SourceCache {
         return .{ .allocator = allocator, .io = io };
     }
 
     pub fn deinit(self: *SourceCache) void {
+        std.debug.assert(self.in_flight.count() == 0);
+        self.in_flight.deinit(self.allocator);
+        self.source_indexes.deinit(self.allocator);
         for (self.sources.items) |*source| source.deinit(self.allocator);
         self.sources.deinit(self.allocator);
+        self.fingerprint_indexes.deinit(self.allocator);
         for (self.fingerprints.items) |fingerprint| self.allocator.free(fingerprint.path);
         self.fingerprints.deinit(self.allocator);
         self.* = undefined;
     }
 
     pub fn fileFingerprint(self: *SourceCache, path: []const u8) !FileFingerprint {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
-
+        const key = SourceKey{ .kind = null, .path = path };
+        try self.claim(key);
+        defer self.release(key);
         for (0..max_stable_read_attempts) |_| {
             const stat = statPath(self.io, path) catch |err| switch (err) {
                 error.FileNotFound => return .{ .present = false, .digest = 0 },
                 else => return err,
             };
-            for (self.fingerprints.items) |fingerprint| {
-                if (!std.mem.eql(u8, fingerprint.path, path)) continue;
-                if (fingerprint.inode == stat.inode and fingerprint.size == stat.size and
-                    fingerprint.mtime_ns == stat.mtime.nanoseconds and fingerprint.ctime_ns == stat.ctime.nanoseconds)
-                {
-                    return .{ .present = true, .digest = fingerprint.digest };
+            {
+                self.mutex.lockUncancelable(self.io);
+                defer self.mutex.unlock(self.io);
+                if (self.fingerprint_indexes.get(path)) |index| {
+                    const fingerprint = self.fingerprints.items[index];
+                    if (fingerprint.identity.matchesStat(stat)) {
+                        self.touchFingerprint(index);
+                        return .{ .present = true, .digest = fingerprint.digest };
+                    }
                 }
-                break;
             }
 
             const hashed = (try hashFileGeneration(self.io, path)) orelse continue;
@@ -118,29 +147,7 @@ pub const SourceCache = struct {
                 else => return err,
             };
             if (!hashed.identity.matchesStat(confirmed)) continue;
-            for (self.fingerprints.items) |*fingerprint| {
-                if (!std.mem.eql(u8, fingerprint.path, path)) continue;
-                fingerprint.size = hashed.identity.size;
-                fingerprint.inode = hashed.identity.inode;
-                fingerprint.mtime_ns = hashed.identity.mtime_ns;
-                fingerprint.ctime_ns = hashed.identity.ctime_ns;
-                fingerprint.digest = hashed.digest;
-                return .{ .present = true, .digest = hashed.digest };
-            }
-            const owned_path = try self.allocator.dupe(u8, path);
-            errdefer self.allocator.free(owned_path);
-            if (self.fingerprints.items.len >= max_fingerprints) {
-                for (self.fingerprints.items) |fingerprint| self.allocator.free(fingerprint.path);
-                self.fingerprints.clearRetainingCapacity();
-            }
-            try self.fingerprints.append(self.allocator, .{
-                .path = owned_path,
-                .inode = hashed.identity.inode,
-                .size = hashed.identity.size,
-                .mtime_ns = hashed.identity.mtime_ns,
-                .ctime_ns = hashed.identity.ctime_ns,
-                .digest = hashed.digest,
-            });
+            try self.publishFingerprint(path, hashed);
             return .{ .present = true, .digest = hashed.digest };
         }
         return error.ResourceChangedDuringRead;
@@ -153,91 +160,165 @@ pub const SourceCache = struct {
         path: []const u8,
         identity: *FileIdentity,
     ) !render.Resource {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
-
+        const key = SourceKey{ .kind = kind, .path = path };
+        try self.claim(key);
+        defer self.release(key);
         const stat = try statPath(self.io, path);
-        var existing_index: ?usize = null;
-        for (self.sources.items, 0..) |*source, index| {
-            if (source.resource.kind != kind or !std.mem.eql(u8, source.path, path)) continue;
-            if (source.inode == stat.inode and source.size == stat.size and
-                source.mtime_ns == stat.mtime.nanoseconds and source.ctime_ns == stat.ctime.nanoseconds)
-            {
-                source.last_used = self.nextAccess();
-                identity.* = source.identity();
-                return try source.cloneResource(allocator);
+        {
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
+            if (self.source_indexes.get(key)) |index| {
+                const source = &self.sources.items[index];
+                if (source.identity().matchesStat(stat)) {
+                    source.last_used = self.nextAccess();
+                    identity.* = source.identity();
+                    return try source.cloneResource(allocator);
+                }
             }
-            existing_index = index;
-            break;
         }
 
         var replacement = try self.loadSource(kind, path);
-        const replacement_bytes = replacement.byte_size;
-        if (replacement_bytes > max_source_bytes) {
+        var replacement_owned = true;
+        defer if (replacement_owned) replacement.deinit(self.allocator);
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        const existing_index = self.source_indexes.get(key);
+        if (replacement.byte_size > max_source_bytes) {
             identity.* = replacement.identity();
-            self.allocator.free(replacement.path);
-            const result = replacement.resource;
-            if (existing_index) |index| {
-                var removed = self.sources.swapRemove(index);
-                self.source_bytes -= removed.byte_size;
-                removed.deinit(self.allocator);
-            }
+            const result = try replacement.cloneResource(allocator);
+            if (existing_index) |index| self.removeSource(index);
             return result;
         }
         replacement.last_used = self.nextAccess();
+        const replacement_index = existing_index orelse self.sources.items.len;
         if (existing_index) |index| {
             const source = &self.sources.items[index];
-            const previous_bytes = source.byte_size;
+            _ = self.source_indexes.remove(key);
+            self.source_bytes -= source.byte_size;
             source.deinit(self.allocator);
             source.* = replacement;
-            self.source_bytes -= previous_bytes;
-            self.source_bytes += replacement_bytes;
-            var result = try source.cloneResource(allocator);
-            errdefer result.deinit(allocator);
-            identity.* = source.identity();
-            self.trimSources();
-            return result;
+        } else {
+            try self.source_indexes.ensureUnusedCapacity(self.allocator, 1);
+            try self.sources.ensureUnusedCapacity(self.allocator, 1);
+            self.sources.appendAssumeCapacity(replacement);
         }
-
-        var replacement_owned = true;
-        errdefer if (replacement_owned) replacement.deinit(self.allocator);
-        try self.sources.append(self.allocator, replacement);
+        self.source_indexes.putAssumeCapacity(.{ .kind = kind, .path = replacement.path }, replacement_index);
         replacement_owned = false;
-        self.source_bytes += replacement_bytes;
-        var result = try self.sources.items[self.sources.items.len - 1].cloneResource(allocator);
-        errdefer result.deinit(allocator);
-        identity.* = self.sources.items[self.sources.items.len - 1].identity();
+        self.source_bytes += replacement.byte_size;
+        identity.* = replacement.identity();
+        const result = try replacement.cloneResource(allocator);
         self.trimSources();
         return result;
     }
 
-    fn loadSource(
-        self: *SourceCache,
-        kind: render.ResourceKind,
-        path: []const u8,
-    ) !CachedSource {
+    fn loadSource(self: *SourceCache, kind: render.ResourceKind, path: []const u8) !CachedSource {
+        for (0..max_stable_read_attempts) |_| {
+            var identity: FileIdentity = undefined;
+            var value = try loadStableResource(self.allocator, self.io, kind, path, &identity);
+            var value_owned = true;
+            defer if (value_owned) value.deinit(self.allocator);
+            // Decoding can outlast the stable byte read. Confirm the path again
+            // before publishing while same-key callers remain behind this load.
+            const confirmed = try statPath(self.io, path);
+            if (!identity.matchesStat(confirmed)) continue;
+            try value.share(self.allocator);
+            const owned_path = try self.allocator.dupe(u8, path);
+            value_owned = false;
+            return .{
+                .path = owned_path,
+                .inode = identity.inode,
+                .size = identity.size,
+                .mtime_ns = identity.mtime_ns,
+                .ctime_ns = identity.ctime_ns,
+                .resource = value,
+                .byte_size = @sizeOf(CachedSource) +| owned_path.len +| value.retainedByteSize(),
+            };
+        }
+        return error.ResourceChangedDuringRead;
+    }
+
+    fn claim(self: *SourceCache, key: SourceKey) !void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        while (self.in_flight.contains(key)) try self.ready.wait(self.io, &self.mutex);
+        // The caller retains the borrowed path until release, including errors.
+        try self.in_flight.put(self.allocator, key, {});
+    }
+
+    fn release(self: *SourceCache, key: SourceKey) void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        const removed = self.in_flight.remove(key);
+        std.debug.assert(removed);
+        self.ready.broadcast(self.io);
+    }
+
+    fn publishFingerprint(self: *SourceCache, path: []const u8, hashed: HashedGeneration) !void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        if (self.fingerprint_indexes.get(path)) |index| {
+            self.fingerprints.items[index].identity = hashed.identity;
+            self.fingerprints.items[index].digest = hashed.digest;
+            self.touchFingerprint(index);
+            return;
+        }
         const owned_path = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(owned_path);
-        var identity: FileIdentity = undefined;
-        var resource_value = try loadStableResource(self.allocator, self.io, kind, path, &identity);
-        errdefer resource_value.deinit(self.allocator);
-        try resource_value.share(self.allocator);
-        const byte_size = @sizeOf(CachedSource) +| owned_path.len +| resource_value.retainedByteSize();
-        return .{
-            .path = owned_path,
-            .inode = identity.inode,
-            .size = identity.size,
-            .mtime_ns = identity.mtime_ns,
-            .ctime_ns = identity.ctime_ns,
-            .resource = resource_value,
-            .byte_size = byte_size,
+        try self.fingerprint_indexes.ensureUnusedCapacity(self.allocator, 1);
+        if (self.fingerprints.items.len < max_fingerprints) try self.fingerprints.ensureUnusedCapacity(self.allocator, 1);
+        const replacement = CachedFingerprint{ .path = owned_path, .identity = hashed.identity, .digest = hashed.digest };
+        const index = if (self.fingerprints.items.len == max_fingerprints) blk: {
+            const oldest = self.oldest_fingerprint.?;
+            self.unlinkFingerprint(oldest);
+            const removed = &self.fingerprints.items[oldest];
+            _ = self.fingerprint_indexes.remove(removed.path);
+            self.allocator.free(removed.path);
+            removed.* = replacement;
+            break :blk oldest;
+        } else blk: {
+            const added = self.fingerprints.items.len;
+            self.fingerprints.appendAssumeCapacity(replacement);
+            break :blk added;
         };
+        self.fingerprint_indexes.putAssumeCapacity(owned_path, index);
+        self.appendFingerprint(index);
+    }
+
+    fn touchFingerprint(self: *SourceCache, index: usize) void {
+        if (self.newest_fingerprint == index) return;
+        self.unlinkFingerprint(index);
+        self.appendFingerprint(index);
+    }
+
+    fn unlinkFingerprint(self: *SourceCache, index: usize) void {
+        const entry = &self.fingerprints.items[index];
+        if (entry.previous) |previous| self.fingerprints.items[previous].next = entry.next else self.oldest_fingerprint = entry.next;
+        if (entry.next) |next| self.fingerprints.items[next].previous = entry.previous else self.newest_fingerprint = entry.previous;
+    }
+
+    fn appendFingerprint(self: *SourceCache, index: usize) void {
+        const entry = &self.fingerprints.items[index];
+        entry.previous = self.newest_fingerprint;
+        entry.next = null;
+        if (self.newest_fingerprint) |previous| self.fingerprints.items[previous].next = index else self.oldest_fingerprint = index;
+        self.newest_fingerprint = index;
     }
 
     fn nextAccess(self: *SourceCache) u64 {
         self.access_clock +%= 1;
         if (self.access_clock == 0) self.access_clock = 1;
         return self.access_clock;
+    }
+
+    fn removeSource(self: *SourceCache, index: usize) void {
+        var removed = self.sources.swapRemove(index);
+        _ = self.source_indexes.remove(.{ .kind = removed.resource.kind, .path = removed.path });
+        if (index < self.sources.items.len) {
+            const moved = self.sources.items[index];
+            self.source_indexes.getPtr(.{ .kind = moved.resource.kind, .path = moved.path }).?.* = index;
+        }
+        self.source_bytes -= removed.byte_size;
+        removed.deinit(self.allocator);
     }
 
     fn trimSources(self: *SourceCache) void {
@@ -251,9 +332,7 @@ pub const SourceCache = struct {
                 oldest_index = index;
                 oldest_access = source.last_used;
             }
-            var removed = self.sources.swapRemove(oldest_index);
-            self.source_bytes -= removed.byte_size;
-            removed.deinit(self.allocator);
+            self.removeSource(oldest_index);
         }
     }
 };

@@ -1016,6 +1016,197 @@ test "source cache bounds paths without invalidating builder resources" {
     try testing.expectEqualStrings(font, resource.bytes);
 }
 
+const ResourceReadProbe = struct {
+    pause_next: std.atomic.Value(bool) = .init(false),
+    paused: std.atomic.Value(bool) = .init(false),
+    released: std.atomic.Value(bool) = .init(false),
+    reads: std.atomic.Value(usize) = .init(0),
+
+    var active: *ResourceReadProbe = undefined;
+
+    fn read(userdata: ?*anyopaque, file: std.Io.File, data: []const []u8, offset: u64) std.Io.File.ReadPositionalError!usize {
+        const probe = active;
+        if (offset == 0) _ = probe.reads.fetchAdd(1, .monotonic);
+        if (probe.pause_next.swap(false, .acq_rel)) {
+            probe.paused.store(true, .release);
+            while (!probe.released.load(.acquire)) try std.Io.sleep(testing.io, .fromMilliseconds(1), .awake);
+        }
+        return testing.io.vtable.fileReadPositional(userdata, file, data, offset);
+    }
+};
+
+const SourceCacheWork = struct {
+    cache: *render_resources.SourceCache,
+    path: []const u8,
+    fingerprint: bool,
+    finished: std.atomic.Value(bool) = .init(false),
+    failure: ?anyerror = null,
+    digest: u64 = 0,
+
+    fn run(self: *SourceCacheWork) void {
+        defer self.finished.store(true, .release);
+        self.load() catch |err| {
+            self.failure = err;
+        };
+    }
+
+    fn load(self: *SourceCacheWork) !void {
+        if (self.fingerprint) {
+            self.digest = (try self.cache.fileFingerprint(self.path)).digest;
+        } else {
+            var builder = render_resources.Builder{ .cache = self.cache };
+            defer builder.deinit(testing.allocator);
+            const id = try builder.addPath(testing.allocator, self.cache.io, .font, self.path);
+            self.digest = std.hash.Wyhash.hash(0, builder.get(self.cache.io, id).?.bytes);
+        }
+    }
+};
+
+fn waitForResourceFlag(flag: *const std.atomic.Value(bool)) !bool {
+    for (0..1000) |_| {
+        if (flag.load(.acquire)) return true;
+        try std.Io.sleep(testing.io, .fromMilliseconds(1), .awake);
+    }
+    return flag.load(.acquire);
+}
+
+test "source cache: unrelated loads proceed while same-path callers share a blocked read" {
+    const root = ".ss-cache/test-source-cache-independent-loads";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    for ([_][]const u8{ root ++ "/slow.ttf", root ++ "/fast.ttf" }) |path| {
+        try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "synthetic font bytes" });
+    }
+    for ([_]bool{ false, true }) |fingerprint| {
+        var probe = ResourceReadProbe{ .pause_next = .init(true) };
+        ResourceReadProbe.active = &probe;
+        var vtable = testing.io.vtable.*;
+        vtable.fileReadPositional = ResourceReadProbe.read;
+        const io = std.Io{ .userdata = testing.io.userdata, .vtable = &vtable };
+        var cache = render_resources.SourceCache.init(testing.allocator, io);
+        defer cache.deinit();
+        var slow = SourceCacheWork{ .cache = &cache, .path = root ++ "/slow.ttf", .fingerprint = fingerprint };
+        var fast = SourceCacheWork{ .cache = &cache, .path = root ++ "/fast.ttf", .fingerprint = fingerprint };
+        var same = SourceCacheWork{ .cache = &cache, .path = slow.path, .fingerprint = fingerprint };
+        const slow_thread = try std.Thread.spawn(.{}, SourceCacheWork.run, .{&slow});
+        var fast_thread: ?std.Thread = null;
+        var same_thread: ?std.Thread = null;
+        var joined = false;
+        defer if (!joined) {
+            probe.released.store(true, .release);
+            slow_thread.join();
+            if (fast_thread) |thread| thread.join();
+            if (same_thread) |thread| thread.join();
+        };
+        try testing.expect(try waitForResourceFlag(&probe.paused));
+        same_thread = try std.Thread.spawn(.{}, SourceCacheWork.run, .{&same});
+        fast_thread = try std.Thread.spawn(.{}, SourceCacheWork.run, .{&fast});
+        try testing.expect(try waitForResourceFlag(&fast.finished));
+        try testing.expect(!same.finished.load(.acquire));
+        probe.released.store(true, .release);
+        slow_thread.join();
+        fast_thread.?.join();
+        same_thread.?.join();
+        joined = true;
+        try testing.expect(slow.failure == null and fast.failure == null and same.failure == null);
+        try testing.expectEqual(@as(usize, 2), probe.reads.load(.monotonic));
+        try testing.expectEqual(@as(u32, 0), cache.in_flight.count());
+    }
+}
+
+test "source cache: fingerprints evict the least recently used path without flushing hot entries" {
+    const root = ".ss-cache/test-source-cache-fingerprint-capacity";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    var probe = ResourceReadProbe{};
+    ResourceReadProbe.active = &probe;
+    var vtable = testing.io.vtable.*;
+    vtable.fileReadPositional = ResourceReadProbe.read;
+    var cache = render_resources.SourceCache.init(testing.allocator, .{ .userdata = testing.io.userdata, .vtable = &vtable });
+    defer cache.deinit();
+    var path_buffer: [160]u8 = undefined;
+    for (0..4096) |index| {
+        const path = try std.fmt.bufPrint(&path_buffer, "{s}/{d}", .{ root, index });
+        try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "fingerprint bytes" });
+        _ = try cache.fileFingerprint(path);
+    }
+    try testing.expectEqual(@as(usize, 4096), probe.reads.load(.monotonic));
+    _ = try cache.fileFingerprint(root ++ "/0");
+    for (4096..4112) |index| {
+        const path = try std.fmt.bufPrint(&path_buffer, "{s}/{d}", .{ root, index });
+        try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "fingerprint bytes" });
+        _ = try cache.fileFingerprint(path);
+        _ = try cache.fileFingerprint(root ++ "/0");
+        try testing.expectEqual(@as(usize, 4096), cache.fingerprints.items.len);
+        try testing.expectEqual(@as(u32, 4096), cache.fingerprint_indexes.count());
+    }
+    try testing.expectEqual(@as(usize, 4112), probe.reads.load(.monotonic));
+    try testing.expect(!cache.fingerprint_indexes.contains(root ++ "/1"));
+    try testing.expect(cache.fingerprint_indexes.contains(root ++ "/0"));
+    _ = try cache.fileFingerprint(root ++ "/1");
+    try testing.expectEqual(@as(usize, 4113), probe.reads.load(.monotonic));
+    _ = try cache.fileFingerprint(root ++ "/0");
+    try testing.expectEqual(@as(usize, 4113), probe.reads.load(.monotonic));
+}
+
+test "source cache: atomic replacement during a read publishes the current generation" {
+    const root = ".ss-cache/test-source-cache-replacement-during-read";
+    const path = root ++ "/font.ttf";
+    const replacement = root ++ "/replacement.ttf";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    for ([_]bool{ false, true }) |fingerprint| {
+        try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "old generation" });
+        try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = replacement, .data = "new generation" });
+        var probe = ResourceReadProbe{ .pause_next = .init(true) };
+        ResourceReadProbe.active = &probe;
+        var vtable = testing.io.vtable.*;
+        vtable.fileReadPositional = ResourceReadProbe.read;
+        var cache = render_resources.SourceCache.init(testing.allocator, .{ .userdata = testing.io.userdata, .vtable = &vtable });
+        defer cache.deinit();
+        var work = SourceCacheWork{ .cache = &cache, .path = path, .fingerprint = fingerprint };
+        const thread = try std.Thread.spawn(.{}, SourceCacheWork.run, .{&work});
+        var joined = false;
+        defer if (!joined) {
+            probe.released.store(true, .release);
+            thread.join();
+        };
+        try testing.expect(try waitForResourceFlag(&probe.paused));
+        try std.Io.Dir.cwd().rename(replacement, std.Io.Dir.cwd(), path, testing.io);
+        probe.released.store(true, .release);
+        thread.join();
+        joined = true;
+        try testing.expect(work.failure == null);
+        try testing.expectEqual(std.hash.Wyhash.hash(0, "new generation"), work.digest);
+        const reads = probe.reads.load(.monotonic);
+        try work.load();
+        try testing.expectEqual(std.hash.Wyhash.hash(0, "new generation"), work.digest);
+        try testing.expectEqual(reads, probe.reads.load(.monotonic));
+    }
+}
+
+fn inspectSourceCacheAllocations(allocator: std.mem.Allocator, path: []const u8) !void {
+    var cache = render_resources.SourceCache.init(allocator, testing.io);
+    defer cache.deinit();
+    _ = try cache.fileFingerprint(path);
+    var builder = render_resources.Builder{ .cache = &cache };
+    defer builder.deinit(allocator);
+    _ = try builder.addPath(allocator, testing.io, .font, path);
+}
+
+test "source cache: failed publication releases in-flight claims and partial storage" {
+    const root = ".ss-cache/test-source-cache-allocation-failure";
+    const path = root ++ "/font.ttf";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "synthetic font bytes" });
+    try testing.checkAllAllocationFailures(testing.allocator, inspectSourceCacheAllocations, .{path});
+}
+
 test "page cache keeps materialized content alive across eviction" {
     var cache = render_compile.PageCache.init(testing.allocator, testing.io);
     var cache_live = true;
