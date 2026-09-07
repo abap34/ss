@@ -13,30 +13,32 @@ pub const Context = struct {
     qualifier: ?[]u8 = null,
     parsed: source_query.ParsedSource = .{},
     offset: usize,
+    budget: ?types.QueryBudget = null,
 
     pub fn init(allocator: std.mem.Allocator, req: types.SourceRequest) !Context {
         return initWithBudget(allocator, req, null);
     }
 
     pub fn initWithBudget(allocator: std.mem.Allocator, req: types.SourceRequest, budget: ?types.QueryBudget) !Context {
-        return initWithParsed(allocator, req, try source_query.ParsedSource.parse(allocator, req, budget));
+        return initWithParsed(allocator, req, try source_query.ParsedSource.parse(allocator, req, budget), budget);
     }
 
     pub fn initFromSnapshot(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, budget: ?types.QueryBudget) !Context {
-        return initWithParsed(allocator, req, try source_query.ParsedSource.init(allocator, snapshot, req, budget));
+        return initWithParsed(allocator, req, try source_query.ParsedSource.init(allocator, snapshot, req, budget), budget);
     }
 
-    fn initWithParsed(allocator: std.mem.Allocator, req: types.SourceRequest, source: source_query.ParsedSource) !Context {
+    fn initWithParsed(allocator: std.mem.Allocator, req: types.SourceRequest, source: source_query.ParsedSource, budget: ?types.QueryBudget) !Context {
         var parsed = source;
         errdefer parsed.deinit(allocator);
         const parsed_module = parsed.module();
-        const target = try targetAtOffset(allocator, req.source, req.offset, parsed_module) orelse return error.NoQueryTarget;
+        const target = try targetAtOffset(allocator, req.source, req.offset, parsed_module, budget) orelse return error.NoQueryTarget;
         return .{
             .target = target.text,
             .target_kind = target.kind,
             .qualifier = target.qualifier,
             .parsed = parsed,
             .offset = req.offset,
+            .budget = budget,
         };
     }
 
@@ -46,6 +48,10 @@ pub const Context = struct {
         self.parsed.deinit(allocator);
     }
 
+    pub fn expired(self: *const Context) bool {
+        return if (self.budget) |value| value.expired() else false;
+    }
+
     pub fn module(self: *const Context) ?*const ast.Module {
         return self.parsed.module();
     }
@@ -53,25 +59,25 @@ pub const Context = struct {
     pub fn qualifiedCallableAlias(self: *const Context) ?[]const u8 {
         if (self.kindIs(.callable_name)) return self.qualifier;
         const parsed = self.module() orelse return null;
-        return cursor.qualifiedCallableQualifierForName(parsed, self.offset);
+        return cursor.qualifiedCallableQualifierForName(self.budget, parsed, self.offset);
     }
 
     pub fn isQualifiedCallableQualifier(self: *const Context) bool {
         if (self.kindIs(.callable_qualifier)) return true;
         const parsed = self.module() orelse return false;
-        return cursor.isQualifiedCallableQualifierAt(parsed, self.offset);
+        return cursor.isQualifiedCallableQualifierAt(self.budget, parsed, self.offset);
     }
 
     pub fn isImportAlias(self: *const Context) bool {
         if (self.kindIs(.import_alias)) return true;
         const parsed = self.module() orelse return false;
-        return cursor.isImportAliasAt(parsed, self.offset);
+        return cursor.isImportAliasAt(self.budget, parsed, self.offset);
     }
 
     pub fn importSpecAtOffset(self: *const Context) bool {
         if (self.kindIs(.import_spec)) return true;
         const parsed = self.module() orelse return false;
-        return cursor.importSpecAt(parsed, self.offset) != null;
+        return cursor.importSpecAt(self.budget, parsed, self.offset) != null;
     }
 
     pub fn targetKindIs(self: *const Context, kind: cursor.SourceNameKind) bool {
@@ -80,7 +86,7 @@ pub const Context = struct {
 
     pub fn callableRoleIsName(self: *const Context) bool {
         const parsed = self.module() orelse return false;
-        if (cursor.callableAt(parsed, self.offset)) |target| {
+        if (cursor.callableAt(self.budget, parsed, self.offset)) |target| {
             return target.role == .name;
         }
         return false;
@@ -97,9 +103,9 @@ const TargetAtOffset = struct {
     qualifier: ?[]u8 = null,
 };
 
-fn targetAtOffset(allocator: std.mem.Allocator, text: []const u8, offset: usize, program: ?*const ast.Module) !?TargetAtOffset {
+fn targetAtOffset(allocator: std.mem.Allocator, text: []const u8, offset: usize, program: ?*const ast.Module, budget: ?types.QueryBudget) !?TargetAtOffset {
     if (program) |parsed| {
-        if (cursor.sourceNameAt(parsed, offset)) |target| {
+        if (cursor.sourceNameAt(budget, parsed, offset)) |target| {
             const name = try allocator.dupe(u8, target.text);
             errdefer allocator.free(name);
             return .{

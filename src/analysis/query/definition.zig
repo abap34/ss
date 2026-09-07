@@ -22,15 +22,14 @@ pub fn at(
         else => return err,
     };
     defer context.deinit(allocator);
+    if (context.expired()) return allocator.alloc(types.DefinitionTarget, 0);
 
     var out = std.ArrayList(types.DefinitionTarget).empty;
-    errdefer out.deinit(allocator);
-    if (try appendImportTarget(allocator, &out, snapshot, &context, req.path)) {
-        return out.toOwnedSlice(allocator);
+    defer out.deinit(allocator);
+    if (!try appendImportTarget(allocator, &out, snapshot, &context, req.path) and !context.expired()) {
+        _ = try appendResolvedTarget(allocator, &out, snapshot, &context, req);
     }
-    if (try appendResolvedTarget(allocator, &out, snapshot, &context, req)) {
-        return out.toOwnedSlice(allocator);
-    }
+    if (context.expired()) return allocator.alloc(types.DefinitionTarget, 0);
     return out.toOwnedSlice(allocator);
 }
 
@@ -58,13 +57,14 @@ fn appendResolvedTarget(
     if (context.importSpecAtOffset()) return false;
     const module = snapshot.moduleForPath(req.path) orelse return false;
     if (try appendStructuredTarget(allocator, out, snapshot, module.id, context, req.path)) return true;
-    if (try appendVisibleVariable(allocator, out, snapshot, module.id, req, context.target, req.path)) return true;
+    if (context.expired()) return true;
+    if (try appendVisibleVariable(context.budget, allocator, out, snapshot, module.id, req, context.target, req.path)) return true;
     const qualifier = context.qualifiedCallableAlias();
     const primary_kind = definitionKind(context);
-    if (try appendDefinitionOfKind(allocator, out, snapshot, module.id, context.target, qualifier, primary_kind, req.path)) return true;
+    if (try appendDefinitionOfKind(context.budget, allocator, out, snapshot, module.id, context.target, qualifier, primary_kind, req.path)) return true;
     const alternate_kind: core.DefinitionKind = if (primary_kind == .function) .constant else .function;
-    if (try appendDefinitionOfKind(allocator, out, snapshot, module.id, context.target, qualifier, alternate_kind, req.path)) return true;
-    return appendTypeDefinitionTarget(allocator, out, snapshot, module.id, context.target, qualifier, req.path);
+    if (try appendDefinitionOfKind(context.budget, allocator, out, snapshot, module.id, context.target, qualifier, alternate_kind, req.path)) return true;
+    return appendTypeDefinitionTarget(context.budget, allocator, out, snapshot, module.id, context.target, qualifier, req.path);
 }
 
 fn appendStructuredTarget(
@@ -77,26 +77,27 @@ fn appendStructuredTarget(
 ) !bool {
     if (context.targetKindIs(.member_name)) {
         if (context.qualifier) |receiver| {
-            if (try appendEnumCaseTarget(allocator, out, snapshot, current_module_id, receiver, context.target, request_path)) return true;
+            if (try appendEnumCaseTarget(context.budget, allocator, out, snapshot, current_module_id, receiver, context.target, request_path)) return true;
         }
         const parsed = context.module() orelse return false;
-        const member = cursor.memberAt(parsed, context.offset) orelse return false;
-        if (try appendMemberTarget(allocator, out, snapshot, current_module_id, context.offset, member, request_path)) return true;
+        const member = cursor.memberAt(context.budget, parsed, context.offset) orelse return false;
+        if (try appendMemberTarget(context.budget, allocator, out, snapshot, current_module_id, context.offset, member, request_path)) return true;
         return false;
     }
     if (context.targetKindIs(.record_field_name)) {
         const record_name = context.qualifier orelse return false;
-        return appendRecordFieldTarget(allocator, out, snapshot, current_module_id, record_name, context.target, request_path);
+        return appendRecordFieldTarget(context.budget, allocator, out, snapshot, current_module_id, record_name, context.target, request_path);
     }
     if (context.targetKindIs(.record_update_path_segment)) {
         const parsed = context.module() orelse return false;
-        const path_target = cursor.recordUpdatePathAt(parsed, context.offset) orelse return false;
-        return appendRecordUpdatePathTarget(allocator, out, snapshot, current_module_id, context.offset, path_target, request_path);
+        const path_target = cursor.recordUpdatePathAt(context.budget, parsed, context.offset) orelse return false;
+        return appendRecordUpdatePathTarget(context.budget, allocator, out, snapshot, current_module_id, context.offset, path_target, request_path);
     }
     return false;
 }
 
 fn appendEnumCaseTarget(
+    budget: ?types.QueryBudget,
     allocator: std.mem.Allocator,
     out: *std.ArrayList(types.DefinitionTarget),
     snapshot: anytype,
@@ -105,13 +106,14 @@ fn appendEnumCaseTarget(
     case_name: []const u8,
     request_path: []const u8,
 ) !bool {
-    const ty = resolve_query.resolvedTypeName(snapshot, current_module_id, receiver) orelse return false;
+    const ty = resolve_query.resolvedTypeName(budget, snapshot, current_module_id, receiver) orelse return false;
     if (ty.kind != .enum_type) return false;
     const id = ty.nominalId() orelse return false;
-    return appendEnumCaseInModule(allocator, out, snapshot, id.module_id, id.name, case_name, request_path);
+    return appendEnumCaseInModule(budget, allocator, out, snapshot, id.module_id, id.name, case_name, request_path);
 }
 
 fn appendEnumCaseInModule(
+    budget: ?types.QueryBudget,
     allocator: std.mem.Allocator,
     out: *std.ArrayList(types.DefinitionTarget),
     snapshot: anytype,
@@ -122,6 +124,7 @@ fn appendEnumCaseInModule(
 ) !bool {
     var index = snapshot.enum_cases.len;
     while (index > 0) {
+        if (budget) |value| if (value.expired()) return false;
         index -= 1;
         const item = snapshot.enum_cases[index];
         if (item.module_id != module_id) continue;
@@ -133,6 +136,7 @@ fn appendEnumCaseInModule(
 }
 
 fn appendRecordFieldTarget(
+    budget: ?types.QueryBudget,
     allocator: std.mem.Allocator,
     out: *std.ArrayList(types.DefinitionTarget),
     snapshot: anytype,
@@ -141,12 +145,13 @@ fn appendRecordFieldTarget(
     field_name: []const u8,
     request_path: []const u8,
 ) !bool {
-    const id = resolve_query.recordIdForTypeName(snapshot, current_module_id, receiver) orelse return false;
-    const field = resolve_query.recordField(snapshot, id, field_name) orelse return false;
+    const id = resolve_query.recordIdForTypeName(budget, snapshot, current_module_id, receiver) orelse return false;
+    const field = resolve_query.recordField(budget, snapshot, id, field_name) orelse return false;
     return appendTargetFromSpan(allocator, out, snapshot, field.module_id, field.name_span, request_path);
 }
 
 fn appendRecordUpdatePathTarget(
+    budget: ?types.QueryBudget,
     allocator: std.mem.Allocator,
     out: *std.ArrayList(types.DefinitionTarget),
     snapshot: anytype,
@@ -155,14 +160,15 @@ fn appendRecordUpdatePathTarget(
     target: cursor.RecordUpdatePathTarget,
     request_path: []const u8,
 ) !bool {
-    const base_record_name = resolve_query.recordIdForExpr(snapshot, current_module_id, offset, target.target) orelse return false;
-    const current_record_name = resolve_query.recordIdAfterPath(snapshot, base_record_name, target.path[0..target.segment_index]) orelse return false;
+    const base_record_name = resolve_query.recordIdForExpr(budget, snapshot, current_module_id, offset, target.target) orelse return false;
+    const current_record_name = resolve_query.recordIdAfterPath(budget, snapshot, base_record_name, target.path[0..target.segment_index]) orelse return false;
     const segment = target.path[target.segment_index];
-    const field = resolve_query.recordField(snapshot, current_record_name, segment.name) orelse return false;
+    const field = resolve_query.recordField(budget, snapshot, current_record_name, segment.name) orelse return false;
     return appendTargetFromSpan(allocator, out, snapshot, field.module_id, field.name_span, request_path);
 }
 
 fn appendMemberTarget(
+    budget: ?types.QueryBudget,
     allocator: std.mem.Allocator,
     out: *std.ArrayList(types.DefinitionTarget),
     snapshot: anytype,
@@ -171,8 +177,8 @@ fn appendMemberTarget(
     member: cursor.MemberTarget,
     request_path: []const u8,
 ) !bool {
-    const ty = resolve_query.typeForExpr(snapshot, current_module_id, offset, member.target) orelse return false;
-    const field = resolve_query.fieldForType(snapshot, ty, member.name) orelse return false;
+    const ty = resolve_query.typeForExpr(budget, snapshot, current_module_id, offset, member.target) orelse return false;
+    const field = resolve_query.fieldForType(budget, snapshot, ty, member.name) orelse return false;
     return appendTargetFromSpan(allocator, out, snapshot, field.module_id, field.name_span, request_path);
 }
 
@@ -198,6 +204,7 @@ fn appendTargetFromSpan(
 }
 
 fn appendVisibleVariable(
+    budget: ?types.QueryBudget,
     allocator: std.mem.Allocator,
     out: *std.ArrayList(types.DefinitionTarget),
     snapshot: anytype,
@@ -206,12 +213,13 @@ fn appendVisibleVariable(
     target: []const u8,
     request_path: []const u8,
 ) !bool {
-    const definition = resolve_query.visibleVariable(snapshot, module_id, req.offset, target) orelse return false;
+    const definition = resolve_query.visibleVariable(budget, snapshot, module_id, req.offset, target) orelse return false;
     try out.append(allocator, definitionTarget(snapshot, definition, request_path));
     return true;
 }
 
 fn appendDefinitionOfKind(
+    budget: ?types.QueryBudget,
     allocator: std.mem.Allocator,
     out: *std.ArrayList(types.DefinitionTarget),
     snapshot: anytype,
@@ -221,12 +229,13 @@ fn appendDefinitionOfKind(
     kind: core.DefinitionKind,
     request_path: []const u8,
 ) !bool {
-    const definition = resolve_query.valueDefinition(snapshot, current_module_id, target, qualifier, kind) orelse return false;
+    const definition = resolve_query.valueDefinition(budget, snapshot, current_module_id, target, qualifier, kind) orelse return false;
     try out.append(allocator, definitionTarget(snapshot, definition, request_path));
     return true;
 }
 
 fn appendTypeDefinitionTarget(
+    budget: ?types.QueryBudget,
     allocator: std.mem.Allocator,
     out: *std.ArrayList(types.DefinitionTarget),
     snapshot: anytype,
@@ -238,7 +247,7 @@ fn appendTypeDefinitionTarget(
     const resolved_target = resolve_query.typeNameReceiver(target);
     const target_name = if (resolved_target) |name| name.name else target;
     const target_qualifier = if (resolved_target) |name| name.qualifier else qualifier;
-    const definition = resolve_query.typeDefinition(snapshot, current_module_id, target_name, target_qualifier) orelse return false;
+    const definition = resolve_query.typeDefinition(budget, snapshot, current_module_id, target_name, target_qualifier) orelse return false;
     try out.append(allocator, typeDefinitionTarget(snapshot, definition, request_path));
     return true;
 }

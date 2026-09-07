@@ -9,6 +9,7 @@ const cursor = @import("cursor.zig");
 const source_query = @import("source.zig");
 const types = @import("types.zig");
 const utils = @import("utils");
+const QueryBudget = types.QueryBudget;
 
 const Candidate = types.CompletionCandidate;
 const Result = types.CompletionResult;
@@ -30,19 +31,28 @@ pub fn at(
     var parsed = try source_query.ParsedSource.init(allocator, snapshot, req, budget);
     defer parsed.deinit(allocator);
     if (budget.expired()) return emptyResult(allocator);
-    const parsed_module = parsed.module();
-    if (try completeRecordUpdateAt(allocator, snapshot, req, parsed_module)) |result| return result;
-    if (try completeModuleAccessAt(allocator, snapshot, req, parsed_module)) |result| return result;
-    if (try completeMemberAccessAt(allocator, snapshot, req, parsed_module)) |result| return result;
-    return completeRegular(allocator, snapshot, req, parsed_module);
+    return complete(allocator, snapshot, req, parsed.module(), budget) catch |err| switch (err) {
+        error.QueryExpired => emptyResult(allocator),
+        else => err,
+    };
+}
+
+fn complete(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, parsed_module: ?*const ast.Module, budget: QueryBudget) !Result {
+    if (try completeRecordUpdateAt(allocator, snapshot, req, parsed_module, budget)) |result| return result;
+    if (budget.expired()) return error.QueryExpired;
+    if (try completeModuleAccessAt(allocator, snapshot, req, parsed_module, budget)) |result| return result;
+    if (budget.expired()) return error.QueryExpired;
+    if (try completeMemberAccessAt(allocator, snapshot, req, parsed_module, budget)) |result| return result;
+    if (budget.expired()) return error.QueryExpired;
+    return completeRegular(allocator, snapshot, req, parsed_module, budget);
 }
 
 fn emptyResult(allocator: std.mem.Allocator) !Result {
     return .{ .items = try allocator.alloc(Candidate, 0) };
 }
 
-fn completeRegular(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !Result {
-    var builder = CandidateBuilder.init(allocator);
+fn completeRegular(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module, budget: QueryBudget) !Result {
+    var builder = CandidateBuilder.init(allocator, budget);
     defer builder.deinit();
 
     for (language_names.keywordLabels()) |keyword| try builder.add(.{ .label = keyword, .kind = .keyword, .detail = "keyword" });
@@ -60,12 +70,14 @@ fn completeRegular(allocator: std.mem.Allocator, snapshot: anytype, req: types.S
 
 const CandidateBuilder = struct {
     allocator: std.mem.Allocator,
+    budget: QueryBudget,
     items: std.ArrayList(Candidate),
     seen: std.StringHashMap(void),
 
-    fn init(allocator: std.mem.Allocator) CandidateBuilder {
+    fn init(allocator: std.mem.Allocator, budget: QueryBudget) CandidateBuilder {
         return .{
             .allocator = allocator,
+            .budget = budget,
             .items = .empty,
             .seen = std.StringHashMap(void).init(allocator),
         };
@@ -76,56 +88,63 @@ const CandidateBuilder = struct {
         self.seen.deinit();
     }
 
+    fn checkBudget(self: *const CandidateBuilder) !void {
+        if (self.budget.expired()) return error.QueryExpired;
+    }
+
     fn add(self: *CandidateBuilder, candidate: Candidate) !void {
+        try self.checkBudget();
         if (candidate.label.len == 0 or self.seen.contains(candidate.label)) return;
         try self.seen.put(candidate.label, {});
         try self.items.append(self.allocator, candidate);
     }
 
     fn finish(self: *CandidateBuilder) !Result {
+        try self.checkBudget();
         return .{ .items = try self.items.toOwnedSlice(self.allocator) };
     }
 };
 
-fn completeModuleAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !?Result {
+fn completeModuleAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module, budget: QueryBudget) !?Result {
     const parsed = program orelse return null;
-    const callable = cursor.callableAt(parsed, req.offset) orelse return null;
+    const callable = cursor.callableAt(budget, parsed, req.offset) orelse return null;
     if (callable.role != .name) return null;
     const alias = callable.callee.qualifier orelse return null;
-    var builder = CandidateBuilder.init(allocator);
+    var builder = CandidateBuilder.init(allocator, budget);
     defer builder.deinit();
 
     const module = snapshot.moduleForPath(req.path) orelse return try builder.finish();
-    const module_id = resolve_query.aliasTarget(snapshot, module.id, alias) orelse return try builder.finish();
+    const module_id = resolve_query.aliasTarget(budget, snapshot, module.id, alias) orelse return try builder.finish();
     try appendModuleValues(&builder, snapshot, module_id);
     return try builder.finish();
 }
 
-fn completeMemberAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !?Result {
+fn completeMemberAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module, budget: QueryBudget) !?Result {
     const parsed = program orelse return null;
-    const member = cursor.memberAt(parsed, req.offset) orelse return null;
-    var builder = CandidateBuilder.init(allocator);
+    const member = cursor.memberAt(budget, parsed, req.offset) orelse return null;
+    var builder = CandidateBuilder.init(allocator, budget);
     defer builder.deinit();
-    if (enumTypeForExpr(snapshot, req, member.target)) |enum_type| {
+    if (enumTypeForExpr(budget, snapshot, req, member.target)) |enum_type| {
         try appendEnumCases(&builder, snapshot, enum_type);
-    } else if (propertyTargetForExpr(snapshot, req, parsed, member.target, 0)) |target| {
+    } else if (propertyTargetForExpr(budget, snapshot, req, parsed, member.target, 0)) |target| {
         try appendProperties(&builder, snapshot, target);
     }
     return try builder.finish();
 }
 
-fn completeRecordUpdateAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !?Result {
+fn completeRecordUpdateAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module, budget: QueryBudget) !?Result {
     const parsed = program orelse return null;
-    const target = cursor.recordUpdateCompletionAt(parsed, req.offset) orelse return null;
-    const base_record_name = recordIdForCompletionExpr(snapshot, req, parsed, target.target, 0) orelse return null;
-    const record_name = resolve_query.recordIdAfterPath(snapshot, base_record_name, target.path_prefix) orelse return null;
-    var builder = CandidateBuilder.init(allocator);
+    const target = cursor.recordUpdateCompletionAt(budget, parsed, req.offset) orelse return null;
+    const base_record_name = recordIdForCompletionExpr(budget, snapshot, req, parsed, target.target, 0) orelse return null;
+    const record_name = resolve_query.recordIdAfterPath(budget, snapshot, base_record_name, target.path_prefix) orelse return null;
+    var builder = CandidateBuilder.init(allocator, budget);
     defer builder.deinit();
     try appendProperties(&builder, snapshot, .{ .record = record_name });
     return try builder.finish();
 }
 
 fn appendVisibleValues(builder: *CandidateBuilder, snapshot: anytype, path: []const u8) !void {
+    try builder.checkBudget();
     if (snapshot.moduleForPath(path)) |module| {
         var visiting = std.AutoHashMap(core.SourceModuleId, void).init(builder.allocator);
         defer visiting.deinit();
@@ -133,11 +152,13 @@ fn appendVisibleValues(builder: *CandidateBuilder, snapshot: anytype, path: []co
 
         var implicit_index = module.implicit_import_ids.len;
         while (implicit_index > 0) {
+            try builder.checkBudget();
             implicit_index -= 1;
             try appendOpenValues(builder, snapshot, module.implicit_import_ids[implicit_index], &visiting);
         }
     } else {
         for (snapshot.value_bindings) |binding| {
+            try builder.checkBudget();
             if (binding.module_id != null) continue;
             try appendValueBinding(builder, binding);
         }
@@ -145,6 +166,7 @@ fn appendVisibleValues(builder: *CandidateBuilder, snapshot: anytype, path: []co
     }
 
     for (snapshot.value_bindings) |binding| {
+        try builder.checkBudget();
         if (!binding.primitive) continue;
         try appendValueBinding(builder, binding);
     }
@@ -156,12 +178,14 @@ fn appendOpenValues(
     module_id: core.SourceModuleId,
     visiting: *std.AutoHashMap(core.SourceModuleId, void),
 ) !void {
+    try builder.checkBudget();
     if (visiting.contains(module_id)) return;
     try visiting.put(module_id, {});
     try appendModuleValues(builder, snapshot, module_id);
     const module = snapshot.moduleById(module_id) orelse return;
     var index = module.imports.len;
     while (index > 0) {
+        try builder.checkBudget();
         index -= 1;
         const import_info = module.imports[index];
         if (!import_info.unqualified) continue;
@@ -171,13 +195,16 @@ fn appendOpenValues(
 }
 
 fn appendModuleValues(builder: *CandidateBuilder, snapshot: anytype, module_id: core.SourceModuleId) !void {
+    try builder.checkBudget();
     for (snapshot.value_bindings) |binding| {
+        try builder.checkBudget();
         if ((binding.module_id orelse continue) != module_id) continue;
         try appendValueBinding(builder, binding);
     }
 }
 
 fn appendValueBinding(builder: *CandidateBuilder, binding: anytype) !void {
+    try builder.checkBudget();
     switch (binding.kind) {
         .function => try builder.add(.{
             .label = binding.name,
@@ -195,9 +222,11 @@ fn appendValueBinding(builder: *CandidateBuilder, binding: anytype) !void {
 }
 
 fn appendVisibleVariables(builder: *CandidateBuilder, snapshot: anytype, module_id: core.SourceModuleId, offset: usize) !void {
+    try builder.checkBudget();
     for (snapshot.variable_bindings) |binding| {
-        if (!resolve_query.variableBindingVisibleAt(snapshot, module_id, offset, binding)) continue;
-        const visible = resolve_query.visibleVariableBinding(snapshot, module_id, offset, binding.name) orelse continue;
+        try builder.checkBudget();
+        if (!resolve_query.variableBindingVisibleAt(builder.budget, snapshot, module_id, offset, binding)) continue;
+        const visible = resolve_query.visibleVariableBinding(builder.budget, snapshot, module_id, offset, binding.name) orelse continue;
         try builder.add(.{
             .label = visible.name,
             .kind = .variable,
@@ -207,11 +236,14 @@ fn appendVisibleVariables(builder: *CandidateBuilder, snapshot: anytype, module_
 }
 
 fn appendTypeNameCompletions(builder: *CandidateBuilder, snapshot: anytype, program: ?*const ast.Module, source: []const u8) !void {
+    try builder.checkBudget();
     for (type_resolution.builtinTypes()) |builtin| {
+        try builder.checkBudget();
         try builder.add(.{ .label = builtin.name, .kind = .type_decl, .detail = "builtin type" });
     }
     try appendParsedTypeNameCompletions(builder, program, source);
     for (snapshot.type_definitions) |definition| {
+        try builder.checkBudget();
         try builder.add(.{
             .label = definition.name,
             .kind = switch (definition.kind) {
@@ -228,16 +260,20 @@ fn appendTypeNameCompletions(builder: *CandidateBuilder, snapshot: anytype, prog
 }
 
 fn appendParsedTypeNameCompletions(builder: *CandidateBuilder, program: ?*const ast.Module, source: []const u8) !void {
+    try builder.checkBudget();
     const parsed = program orelse return;
     for (parsed.types.items) |decl| {
+        try builder.checkBudget();
         const label = spanText(source, decl.name_span) orelse continue;
         try builder.add(.{ .label = label, .kind = .type_decl, .detail = "type" });
     }
     for (parsed.records.items) |decl| {
+        try builder.checkBudget();
         const label = spanText(source, decl.name_span) orelse continue;
         try builder.add(.{ .label = label, .kind = .type_decl, .detail = "record" });
     }
     for (parsed.objects.items) |decl| {
+        try builder.checkBudget();
         const label = spanText(source, decl.name_span) orelse continue;
         try builder.add(.{ .label = label, .kind = .class });
     }
@@ -250,6 +286,7 @@ fn spanText(source: []const u8, maybe_span: ?ast.Span) ?[]const u8 {
 }
 
 fn appendProperties(builder: *CandidateBuilder, snapshot: anytype, target: PropertyTarget) !void {
+    try builder.checkBudget();
     switch (target) {
         .record => |record_name| {
             try appendRecordFields(builder, snapshot, record_name);
@@ -260,17 +297,20 @@ fn appendProperties(builder: *CandidateBuilder, snapshot: anytype, target: Prope
 
     var index = snapshot.fields.len;
     while (index > 0) {
+        try builder.checkBudget();
         index -= 1;
         const field = snapshot.fields[index];
-        if (!fieldAppliesToTarget(snapshot, field, target)) continue;
+        if (!fieldAppliesToTarget(builder.budget, snapshot, field, target)) continue;
         try builder.add(.{ .label = field.name, .kind = .property, .detail = field.type_label });
     }
     try builder.add(.{ .label = "content", .kind = .property, .detail = "String" });
 }
 
 fn appendRecordFields(builder: *CandidateBuilder, snapshot: anytype, record_id: core.NominalId) !void {
+    try builder.checkBudget();
     var index = snapshot.record_fields.len;
     while (index > 0) {
+        try builder.checkBudget();
         index -= 1;
         const field = snapshot.record_fields[index];
         if (field.module_id != record_id.module_id or !std.mem.eql(u8, field.record_name, record_id.name)) continue;
@@ -279,8 +319,10 @@ fn appendRecordFields(builder: *CandidateBuilder, snapshot: anytype, record_id: 
 }
 
 fn appendEnumCases(builder: *CandidateBuilder, snapshot: anytype, enum_type: TypeDefinitionRef) !void {
+    try builder.checkBudget();
     var index = snapshot.enum_cases.len;
     while (index > 0) {
+        try builder.checkBudget();
         index -= 1;
         const case = snapshot.enum_cases[index];
         if (case.module_id != enum_type.module_id) continue;
@@ -294,54 +336,57 @@ const TypeDefinitionRef = struct {
     module_id: core.SourceModuleId,
 };
 
-fn enumTypeForExpr(snapshot: anytype, req: types.SourceRequest, expr: ast.Expr) ?TypeDefinitionRef {
+fn enumTypeForExpr(budget: QueryBudget, snapshot: anytype, req: types.SourceRequest, expr: ast.Expr) ?TypeDefinitionRef {
+    if (budget.expired()) return null;
     const receiver = switch (expr) {
         .ident => |ident| ident.name,
         else => return null,
     };
     const module = snapshot.moduleForPath(req.path) orelse return null;
-    const ty = resolve_query.resolvedTypeName(snapshot, module.id, receiver) orelse return null;
+    const ty = resolve_query.resolvedTypeName(budget, snapshot, module.id, receiver) orelse return null;
     if (ty.kind != .enum_type) return null;
     const id = ty.nominalId() orelse return null;
     return .{ .name = id.name, .module_id = id.module_id };
 }
 
-fn propertyTargetForExpr(snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) ?PropertyTarget {
+fn propertyTargetForExpr(budget: QueryBudget, snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) ?PropertyTarget {
+    if (budget.expired()) return null;
     const module = snapshot.moduleForPath(req.path) orelse return null;
-    if (recordIdForCompletionExpr(snapshot, req, program, expr, depth)) |record_name| return .{ .record = record_name };
+    if (recordIdForCompletionExpr(budget, snapshot, req, program, expr, depth)) |record_name| return .{ .record = record_name };
     if (depth > 16) return null;
     return switch (expr) {
         .ident => |ident| blk: {
-            if (resolve_query.visibleVariableBinding(snapshot, module.id, req.offset, ident.name)) |variable| {
+            if (resolve_query.visibleVariableBinding(budget, snapshot, module.id, req.offset, ident.name)) |variable| {
                 if (propertyTargetForVariable(snapshot, variable)) |target| break :blk target;
             }
-            if (cursor.visibleLetBindingAt(program, req.offset, ident.name)) |binding| {
-                if (propertyTargetForExpr(snapshot, req, program, binding.expr, depth + 1)) |target| break :blk target;
+            if (cursor.visibleLetBindingAt(budget, program, req.offset, ident.name)) |binding| {
+                if (propertyTargetForExpr(budget, snapshot, req, program, binding.expr, depth + 1)) |target| break :blk target;
             }
-            if (resolve_query.valueBinding(snapshot, module.id, ident.name, null, .constant)) |constant| {
+            if (resolve_query.valueBinding(budget, snapshot, module.id, ident.name, null, .constant)) |constant| {
                 if (propertyTargetForType(snapshot, constant.value_type)) |target| break :blk target;
             }
-            if (resolve_query.valueBinding(snapshot, module.id, ident.name, null, .function)) |function| {
+            if (resolve_query.valueBinding(budget, snapshot, module.id, ident.name, null, .function)) |function| {
                 if (propertyTargetForType(snapshot, function.value_type)) |target| break :blk target;
             }
             break :blk null;
         },
         .call => |call| blk: {
-            const function = resolve_query.valueBinding(snapshot, module.id, call.callee.name, call.callee.qualifier, .function) orelse break :blk null;
+            const function = resolve_query.valueBinding(budget, snapshot, module.id, call.callee.name, call.callee.qualifier, .function) orelse break :blk null;
             break :blk propertyTargetForType(snapshot, function.value_type);
         },
         else => null,
     };
 }
 
-fn recordIdForCompletionExpr(snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) ?core.NominalId {
+fn recordIdForCompletionExpr(budget: QueryBudget, snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) ?core.NominalId {
+    if (budget.expired()) return null;
     const module = snapshot.moduleForPath(req.path) orelse return null;
-    if (resolve_query.recordIdForExpr(snapshot, module.id, req.offset, expr)) |record_name| return record_name;
+    if (resolve_query.recordIdForExpr(budget, snapshot, module.id, req.offset, expr)) |record_name| return record_name;
     if (depth > 16) return null;
     return switch (expr) {
         .ident => |ident| blk: {
-            const binding = cursor.visibleLetBindingAt(program, req.offset, ident.name) orelse break :blk null;
-            break :blk recordIdForCompletionExpr(snapshot, req, program, binding.expr, depth + 1);
+            const binding = cursor.visibleLetBindingAt(budget, program, req.offset, ident.name) orelse break :blk null;
+            break :blk recordIdForCompletionExpr(budget, snapshot, req, program, binding.expr, depth + 1);
         },
         else => null,
     };
@@ -362,27 +407,29 @@ fn propertyTargetForType(snapshot: anytype, ty: ast.Type) ?PropertyTarget {
     };
 }
 
-fn fieldAppliesToTarget(snapshot: anytype, field: anytype, target: PropertyTarget) bool {
+fn fieldAppliesToTarget(budget: QueryBudget, snapshot: anytype, field: anytype, target: PropertyTarget) bool {
     return switch (target) {
         .any_object => true,
-        .class => |id| classContains(snapshot, id, .{ .module_id = field.class_module_id, .name = field.class_name }),
+        .class => |id| classContains(budget, snapshot, id, .{ .module_id = field.class_module_id, .name = field.class_name }),
         .record => false,
     };
 }
 
-fn classContains(snapshot: anytype, class_id: core.NominalId, expected: core.NominalId) bool {
+fn classContains(budget: QueryBudget, snapshot: anytype, class_id: core.NominalId, expected: core.NominalId) bool {
     var current: ?core.NominalId = class_id;
     var remaining_bases = snapshot.classes.len;
     while (current) |id| {
+        if (budget.expired()) return false;
         if (id.eql(expected)) return true;
         if (remaining_bases == 0) return false;
         remaining_bases -= 1;
-        current = resolve_query.classBase(snapshot, id);
+        current = resolve_query.classBase(budget, snapshot, id);
     }
     return false;
 }
 
 fn appendImportAsCompletions(builder: *CandidateBuilder, source: []const u8, offset: usize) !void {
+    try builder.checkBudget();
     const spec = importAsSpecBeforeCursor(source, offset) orelse return;
     try builder.add(.{ .label = "*", .kind = .keyword, .detail = "bare names" });
     if (defaultAliasCandidate(spec)) |alias| {

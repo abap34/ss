@@ -42,6 +42,7 @@ const ModuleVisitStack = struct {
 };
 
 pub fn resolve(comptime Resolved: type, resolver: anytype, current_module_id: core.SourceModuleId, name: Name) Resolution(Resolved) {
+    if (!shouldContinue(resolver)) return .unknown;
     if (name.qualifier) |alias| {
         const module_id = resolver.resolveAlias(current_module_id, alias) orelse return .{ .unknown_alias = alias };
         return if (resolver.findInModule(module_id, name.name)) |resolved|
@@ -65,6 +66,7 @@ pub fn resolve(comptime Resolved: type, resolver: anytype, current_module_id: co
 fn resolveExplicitOpen(comptime Resolved: type, resolver: anytype, module_id: core.SourceModuleId, name: []const u8) Resolution(Resolved) {
     var index = resolver.explicitImportCount(module_id);
     while (index > 0) {
+        if (!shouldContinue(resolver)) return .unknown;
         index -= 1;
         const import_info = resolver.explicitImport(module_id, index) orelse continue;
         if (!import_info.unqualified) continue;
@@ -81,6 +83,7 @@ fn resolveExplicitOpen(comptime Resolved: type, resolver: anytype, module_id: co
 fn resolveImplicitOpen(comptime Resolved: type, resolver: anytype, module_id: core.SourceModuleId, name: []const u8) Resolution(Resolved) {
     var index = resolver.implicitImportCount(module_id);
     while (index > 0) {
+        if (!shouldContinue(resolver)) return .unknown;
         index -= 1;
         const imported_id = resolver.implicitImport(module_id, index) orelse continue;
         var stack = ModuleVisitStack{};
@@ -99,6 +102,7 @@ fn resolveOpenInModule(
     name: []const u8,
     stack: *ModuleVisitStack,
 ) Resolution(Resolved) {
+    if (!shouldContinue(resolver)) return .unknown;
     if (!stack.push(module_id)) return .unknown;
     defer stack.pop();
 
@@ -106,6 +110,7 @@ fn resolveOpenInModule(
 
     var index = resolver.explicitImportCount(module_id);
     while (index > 0) {
+        if (!shouldContinue(resolver)) return .unknown;
         index -= 1;
         const import_info = resolver.explicitImport(module_id, index) orelse continue;
         if (!import_info.unqualified) continue;
@@ -116,4 +121,9 @@ fn resolveOpenInModule(
         }
     }
     return .unknown;
+}
+
+fn shouldContinue(resolver: anytype) bool {
+    if (@hasDecl(@TypeOf(resolver), "shouldContinue")) return resolver.shouldContinue();
+    return true;
 }

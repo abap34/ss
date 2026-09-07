@@ -5,6 +5,7 @@ const core = @import("core");
 const name_resolution = @import("../../language/name_resolution.zig");
 const type_resolution = @import("../../language/type_resolution.zig");
 const utils = @import("utils");
+const QueryBudget = @import("types.zig").QueryBudget;
 
 pub const TypeNameReceiver = struct {
     qualifier: ?[]const u8 = null,
@@ -65,11 +66,13 @@ pub const FieldRef = struct {
     name_span: ?ast.Span = null,
 };
 
-pub fn visibleVariable(snapshot: anytype, module_id: core.SourceModuleId, offset: usize, name: []const u8) ?core.Definition {
-    const scope = requestScope(snapshot, module_id, offset);
+pub fn visibleVariable(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, name: []const u8) ?core.Definition {
+    if (expired(budget)) return null;
+    const scope = requestScope(budget, snapshot, module_id, offset);
     var best: ?core.Definition = null;
     var best_start: usize = 0;
     for (snapshot.definitions) |item| {
+        if (expired(budget)) return null;
         if (item.kind != .variable) continue;
         if (item.module_id != module_id) continue;
         if (!std.mem.eql(u8, item.name, name)) continue;
@@ -83,11 +86,13 @@ pub fn visibleVariable(snapshot: anytype, module_id: core.SourceModuleId, offset
     return best;
 }
 
-pub fn visibleVariableBinding(snapshot: anytype, module_id: core.SourceModuleId, offset: usize, name: []const u8) ?VariableBinding {
-    const scope = requestScope(snapshot, module_id, offset);
+pub fn visibleVariableBinding(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, name: []const u8) ?VariableBinding {
+    if (expired(budget)) return null;
+    const scope = requestScope(budget, snapshot, module_id, offset);
     var best: ?VariableBinding = null;
     var best_start: usize = 0;
     for (snapshot.variable_bindings) |binding| {
+        if (expired(budget)) return null;
         if (binding.module_id != module_id) continue;
         if (!std.mem.eql(u8, binding.name, name)) continue;
         if (offset < binding.visible_start or offset > binding.visible_end) continue;
@@ -106,15 +111,18 @@ pub fn visibleVariableBinding(snapshot: anytype, module_id: core.SourceModuleId,
     return best;
 }
 
-pub fn variableBindingVisibleAt(snapshot: anytype, module_id: core.SourceModuleId, offset: usize, binding: anytype) bool {
+pub fn variableBindingVisibleAt(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, binding: anytype) bool {
+    if (expired(budget)) return false;
     if (binding.module_id != module_id) return false;
     if (offset < binding.visible_start or offset > binding.visible_end) return false;
-    return scopeMatches(binding.scope_kind, binding.scope_name, requestScope(snapshot, module_id, offset));
+    return scopeMatches(binding.scope_kind, binding.scope_name, requestScope(budget, snapshot, module_id, offset));
 }
 
-pub fn recordField(snapshot: anytype, record_id: core.NominalId, field_name: []const u8) ?FieldRef {
+pub fn recordField(budget: ?QueryBudget, snapshot: anytype, record_id: core.NominalId, field_name: []const u8) ?FieldRef {
+    if (expired(budget)) return null;
     var index = snapshot.record_fields.len;
     while (index > 0) {
+        if (expired(budget)) return null;
         index -= 1;
         const field = snapshot.record_fields[index];
         if (field.module_id != record_id.module_id or !std.mem.eql(u8, field.record_name, record_id.name)) continue;
@@ -134,44 +142,49 @@ pub fn recordIdForType(ty: ast.Type) ?core.NominalId {
     return if (ty.kind == .record) ty.nominalId() else null;
 }
 
-pub fn recordIdForExpr(snapshot: anytype, module_id: core.SourceModuleId, offset: usize, expr: ast.Expr) ?core.NominalId {
-    return recordIdForType(typeForExpr(snapshot, module_id, offset, expr) orelse return null);
+pub fn recordIdForExpr(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, expr: ast.Expr) ?core.NominalId {
+    if (expired(budget)) return null;
+    return recordIdForType(typeForExpr(budget, snapshot, module_id, offset, expr) orelse return null);
 }
 
-pub fn typeForExpr(snapshot: anytype, module_id: core.SourceModuleId, offset: usize, expr: ast.Expr) ?ast.Type {
+pub fn typeForExpr(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, expr: ast.Expr) ?ast.Type {
+    if (expired(budget)) return null;
     return switch (expr) {
-        .record => |record| if (record.module_id) |id| ast.Type.recordType(record.type_name).inModule(id) else resolvedTypeName(snapshot, module_id, record.type_name),
-        .record_update => |update| typeForExpr(snapshot, module_id, offset, update.target.*),
+        .record => |record| if (record.module_id) |id| ast.Type.recordType(record.type_name).inModule(id) else resolvedTypeName(budget, snapshot, module_id, record.type_name),
+        .record_update => |update| typeForExpr(budget, snapshot, module_id, offset, update.target.*),
         .ident => |ident| blk: {
-            if (visibleVariableBinding(snapshot, module_id, offset, ident.name)) |binding| {
+            if (visibleVariableBinding(budget, snapshot, module_id, offset, ident.name)) |binding| {
                 if (binding.object_class) |id| {
                     break :blk if (binding.value_type.kind == .selection) ast.Type.selectionType(ast.Type.objectId(id)) else ast.Type.objectId(id);
                 }
                 break :blk binding.value_type;
             }
-            if (valueBinding(snapshot, module_id, ident.name, null, .constant)) |binding| break :blk binding.value_type;
+            if (valueBinding(budget, snapshot, module_id, ident.name, null, .constant)) |binding| break :blk binding.value_type;
             break :blk null;
         },
         .call => |call| blk: {
-            const binding = valueBinding(snapshot, module_id, call.callee.name, call.callee.qualifier, .function) orelse break :blk null;
+            const binding = valueBinding(budget, snapshot, module_id, call.callee.name, call.callee.qualifier, .function) orelse break :blk null;
             break :blk binding.value_type;
         },
         .member => |member| blk: {
-            const target = typeForExpr(snapshot, module_id, offset, member.target.*) orelse break :blk null;
-            const field = fieldForType(snapshot, target, member.name) orelse break :blk null;
+            const target = typeForExpr(budget, snapshot, module_id, offset, member.target.*) orelse break :blk null;
+            const field = fieldForType(budget, snapshot, target, member.name) orelse break :blk null;
             break :blk field.value_type;
         },
         else => null,
     };
 }
 
-pub fn fieldForType(snapshot: anytype, ty: ast.Type, name: []const u8) ?FieldRef {
-    if (recordIdForType(ty)) |id| return recordField(snapshot, id, name);
+pub fn fieldForType(budget: ?QueryBudget, snapshot: anytype, ty: ast.Type, name: []const u8) ?FieldRef {
+    if (expired(budget)) return null;
+    if (recordIdForType(ty)) |id| return recordField(budget, snapshot, id, name);
     var current = objectClassForType(snapshot, ty);
     var remaining = snapshot.classes.len;
     while (current) |id| {
+        if (expired(budget)) return null;
         var index = snapshot.fields.len;
         while (index > 0) {
+            if (expired(budget)) return null;
             index -= 1;
             const field = snapshot.fields[index];
             if (field.class_module_id != id.module_id or !std.mem.eql(u8, field.class_name, id.name) or !std.mem.eql(u8, field.name, name)) continue;
@@ -179,7 +192,7 @@ pub fn fieldForType(snapshot: anytype, ty: ast.Type, name: []const u8) ?FieldRef
         }
         if (remaining == 0) return null;
         remaining -= 1;
-        current = classBase(snapshot, id);
+        current = classBase(budget, snapshot, id);
     }
     return null;
 }
@@ -196,30 +209,36 @@ pub fn objectClassForType(snapshot: anytype, ty: ast.Type) ?core.NominalId {
     };
 }
 
-pub fn classBase(snapshot: anytype, class_id: core.NominalId) ?core.NominalId {
+pub fn classBase(budget: ?QueryBudget, snapshot: anytype, class_id: core.NominalId) ?core.NominalId {
+    if (expired(budget)) return null;
     for (snapshot.classes) |item| {
+        if (expired(budget)) return null;
         if (item.module_id == class_id.module_id and std.mem.eql(u8, item.name, class_id.name)) return item.base;
     }
     return null;
 }
 
-pub fn recordIdAfterPath(snapshot: anytype, base_record_name: core.NominalId, path: []const ast.RecordPathSegment) ?core.NominalId {
+pub fn recordIdAfterPath(budget: ?QueryBudget, snapshot: anytype, base_record_name: core.NominalId, path: []const ast.RecordPathSegment) ?core.NominalId {
+    if (expired(budget)) return null;
     var current_record_name = base_record_name;
     for (path) |segment| {
+        if (expired(budget)) return null;
         if (segment.name.len == 0) return null;
-        const field = recordField(snapshot, current_record_name, segment.name) orelse return null;
+        const field = recordField(budget, snapshot, current_record_name, segment.name) orelse return null;
         current_record_name = recordIdForType(field.value_type) orelse return null;
     }
     return current_record_name;
 }
 
-pub fn recordIdForTypeName(snapshot: anytype, current_module_id: core.SourceModuleId, name: []const u8) ?core.NominalId {
-    return recordIdForType(resolvedTypeName(snapshot, current_module_id, name) orelse return null);
+pub fn recordIdForTypeName(budget: ?QueryBudget, snapshot: anytype, current_module_id: core.SourceModuleId, name: []const u8) ?core.NominalId {
+    if (expired(budget)) return null;
+    return recordIdForType(resolvedTypeName(budget, snapshot, current_module_id, name) orelse return null);
 }
 
-pub fn resolvedTypeName(snapshot: anytype, current_module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
+pub fn resolvedTypeName(budget: ?QueryBudget, snapshot: anytype, current_module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
+    if (expired(budget)) return null;
     const Resolver = TypeResolver(@TypeOf(snapshot));
-    return switch (type_resolution.resolveText(TypeDefinition, Resolver{ .snapshot = snapshot }, current_module_id, name)) {
+    return switch (type_resolution.resolveText(TypeDefinition, Resolver{ .budget = budget, .snapshot = snapshot }, current_module_id, name)) {
         .found => |binding| binding.ty,
         else => null,
     };
@@ -230,12 +249,15 @@ const RequestScope = struct {
     name: ?[]const u8 = null,
 };
 
-fn requestScope(snapshot: anytype, module_id: core.SourceModuleId, offset: usize) RequestScope {
+fn requestScope(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize) RequestScope {
+    if (expired(budget)) return .{ .kind = .document };
     const module = snapshot.moduleById(module_id) orelse return .{ .kind = .document };
     for (module.function_scopes) |scope| {
+        if (expired(budget)) return .{ .kind = .document };
         if (offset >= scope.start and offset <= scope.end) return .{ .kind = .function, .name = scope.name };
     }
     for (module.page_scopes) |scope| {
+        if (expired(budget)) return .{ .kind = .document };
         if (offset >= scope.start and offset <= scope.end) return .{ .kind = .page, .name = scope.name };
     }
     return .{ .kind = .document };
@@ -248,14 +270,16 @@ fn scopeMatches(kind: core.DefinitionScopeKind, name: ?[]const u8, request_scope
 }
 
 pub fn valueDefinition(
+    budget: ?QueryBudget,
     snapshot: anytype,
     current_module_id: core.SourceModuleId,
     name: []const u8,
     qualifier: ?[]const u8,
     kind: core.DefinitionKind,
 ) ?core.Definition {
+    if (expired(budget)) return null;
     const Resolver = DefinitionResolver(@TypeOf(snapshot));
-    const resolved = name_resolution.resolve(core.Definition, Resolver{ .snapshot = snapshot, .kind = kind }, current_module_id, .{
+    const resolved = name_resolution.resolve(core.Definition, Resolver{ .budget = budget, .snapshot = snapshot, .kind = kind }, current_module_id, .{
         .qualifier = qualifier,
         .name = name,
     });
@@ -266,31 +290,35 @@ pub fn valueDefinition(
 }
 
 pub fn valueBinding(
+    budget: ?QueryBudget,
     snapshot: anytype,
     current_module_id: core.SourceModuleId,
     name: []const u8,
     qualifier: ?[]const u8,
     kind: core.DefinitionKind,
 ) ?ValueBinding {
+    if (expired(budget)) return null;
     const Resolver = ValueBindingResolver(@TypeOf(snapshot));
-    const resolved = name_resolution.resolve(ValueBinding, Resolver{ .snapshot = snapshot, .kind = kind }, current_module_id, .{
+    const resolved = name_resolution.resolve(ValueBinding, Resolver{ .budget = budget, .snapshot = snapshot, .kind = kind }, current_module_id, .{
         .qualifier = qualifier,
         .name = name,
     });
     return switch (resolved) {
         .found => |item| item,
-        .unknown, .unknown_alias => if (kind == .function and qualifier == null) primitiveBinding(snapshot, name) else null,
+        .unknown, .unknown_alias => if (kind == .function and qualifier == null) primitiveBinding(budget, snapshot, name) else null,
     };
 }
 
 pub fn typeDefinition(
+    budget: ?QueryBudget,
     snapshot: anytype,
     current_module_id: core.SourceModuleId,
     name: []const u8,
     qualifier: ?[]const u8,
 ) ?TypeDefinition {
+    if (expired(budget)) return null;
     const Resolver = TypeResolver(@TypeOf(snapshot));
-    const resolved = type_resolution.resolve(TypeDefinition, Resolver{ .snapshot = snapshot }, current_module_id, .{
+    const resolved = type_resolution.resolve(TypeDefinition, Resolver{ .budget = budget, .snapshot = snapshot }, current_module_id, .{
         .qualifier = qualifier,
         .name = name,
     });
@@ -300,8 +328,10 @@ pub fn typeDefinition(
     };
 }
 
-fn primitiveBinding(snapshot: anytype, name: []const u8) ?ValueBinding {
+fn primitiveBinding(budget: ?QueryBudget, snapshot: anytype, name: []const u8) ?ValueBinding {
+    if (expired(budget)) return null;
     for (snapshot.value_bindings) |binding| {
+        if (expired(budget)) return null;
         if (!binding.primitive) continue;
         if (!std.mem.eql(u8, binding.name, name)) continue;
         return valueBindingFromSnapshot(binding);
@@ -309,10 +339,12 @@ fn primitiveBinding(snapshot: anytype, name: []const u8) ?ValueBinding {
     return null;
 }
 
-pub fn aliasTarget(snapshot: anytype, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
+pub fn aliasTarget(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
+    if (expired(budget)) return null;
     const module = snapshot.moduleById(module_id) orelse return null;
     var index = module.imports.len;
     while (index > 0) {
+        if (expired(budget)) return null;
         index -= 1;
         const import_info = module.imports[index];
         if (!std.mem.eql(u8, import_info.alias orelse "", alias)) continue;
@@ -321,8 +353,10 @@ pub fn aliasTarget(snapshot: anytype, module_id: core.SourceModuleId, alias: []c
     return null;
 }
 
-fn valueBindingInModule(snapshot: anytype, module_id: core.SourceModuleId, name: []const u8, kind: core.DefinitionKind) ?ValueBinding {
+fn valueBindingInModule(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, name: []const u8, kind: core.DefinitionKind) ?ValueBinding {
+    if (expired(budget)) return null;
     for (snapshot.value_bindings) |binding| {
+        if (expired(budget)) return null;
         switch (kind) {
             .function => if (binding.kind != .function) continue,
             .constant => if (binding.kind != .constant) continue,
@@ -351,8 +385,10 @@ fn valueBindingFromSnapshot(binding: anytype) ValueBinding {
     };
 }
 
-fn definitionInModule(snapshot: anytype, module_id: core.SourceModuleId, name: []const u8, kind: core.DefinitionKind) ?core.Definition {
+fn definitionInModule(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, name: []const u8, kind: core.DefinitionKind) ?core.Definition {
+    if (expired(budget)) return null;
     for (snapshot.definitions) |definition_item| {
+        if (expired(budget)) return null;
         if (definition_item.kind != kind) continue;
         if (definition_item.module_id != module_id) continue;
         if (!std.mem.eql(u8, definition_item.name, name)) continue;
@@ -361,8 +397,10 @@ fn definitionInModule(snapshot: anytype, module_id: core.SourceModuleId, name: [
     return null;
 }
 
-fn typeDefinitionInModule(snapshot: anytype, module_id: core.SourceModuleId, kind: anytype, name: []const u8) ?TypeDefinition {
+fn typeDefinitionInModule(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, kind: anytype, name: []const u8) ?TypeDefinition {
+    if (expired(budget)) return null;
     for (snapshot.type_definitions) |item| {
+        if (expired(budget)) return null;
         if (item.kind != kind) continue;
         if (item.module_id != module_id) continue;
         if (!std.mem.eql(u8, item.name, name)) continue;
@@ -382,8 +420,12 @@ fn resolvedTypeDefinition(item: anytype) TypeDefinition {
 }
 
 const SnapshotImports = struct {
+    pub fn shouldContinue(resolver: anytype) bool {
+        return !expired(resolver.budget);
+    }
+
     pub fn resolveAlias(resolver: anytype, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
-        return aliasTarget(resolver.snapshot, module_id, alias);
+        return aliasTarget(resolver.budget, resolver.snapshot, module_id, alias);
     }
 
     pub fn explicitImportCount(resolver: anytype, module_id: core.SourceModuleId) usize {
@@ -412,9 +454,11 @@ const SnapshotImports = struct {
 
 fn DefinitionResolver(comptime SnapshotPtr: type) type {
     return struct {
+        budget: ?QueryBudget,
         snapshot: SnapshotPtr,
         kind: core.DefinitionKind,
 
+        pub const shouldContinue = SnapshotImports.shouldContinue;
         pub const resolveAlias = SnapshotImports.resolveAlias;
         pub const explicitImportCount = SnapshotImports.explicitImportCount;
         pub const explicitImport = SnapshotImports.explicitImport;
@@ -422,16 +466,18 @@ fn DefinitionResolver(comptime SnapshotPtr: type) type {
         pub const implicitImport = SnapshotImports.implicitImport;
 
         pub fn findInModule(self: @This(), module_id: core.SourceModuleId, name: []const u8) ?core.Definition {
-            return definitionInModule(self.snapshot, module_id, name, self.kind);
+            return definitionInModule(self.budget, self.snapshot, module_id, name, self.kind);
         }
     };
 }
 
 fn ValueBindingResolver(comptime SnapshotPtr: type) type {
     return struct {
+        budget: ?QueryBudget,
         snapshot: SnapshotPtr,
         kind: core.DefinitionKind,
 
+        pub const shouldContinue = SnapshotImports.shouldContinue;
         pub const resolveAlias = SnapshotImports.resolveAlias;
         pub const explicitImportCount = SnapshotImports.explicitImportCount;
         pub const explicitImport = SnapshotImports.explicitImport;
@@ -439,15 +485,17 @@ fn ValueBindingResolver(comptime SnapshotPtr: type) type {
         pub const implicitImport = SnapshotImports.implicitImport;
 
         pub fn findInModule(self: @This(), module_id: core.SourceModuleId, name: []const u8) ?ValueBinding {
-            return valueBindingInModule(self.snapshot, module_id, name, self.kind);
+            return valueBindingInModule(self.budget, self.snapshot, module_id, name, self.kind);
         }
     };
 }
 
 fn TypeResolver(comptime SnapshotPtr: type) type {
     return struct {
+        budget: ?QueryBudget,
         snapshot: SnapshotPtr,
 
+        pub const shouldContinue = SnapshotImports.shouldContinue;
         pub const resolveAlias = SnapshotImports.resolveAlias;
         pub const explicitImportCount = SnapshotImports.explicitImportCount;
         pub const explicitImport = SnapshotImports.explicitImport;
@@ -455,17 +503,17 @@ fn TypeResolver(comptime SnapshotPtr: type) type {
         pub const implicitImport = SnapshotImports.implicitImport;
 
         pub fn findInModule(self: @This(), module_id: core.SourceModuleId, name: []const u8) ?type_resolution.Binding(TypeDefinition) {
-            if (typeDefinitionInModule(self.snapshot, module_id, .record, name)) |target| return .{
+            if (typeDefinitionInModule(self.budget, self.snapshot, module_id, .record, name)) |target| return .{
                 .kind = .record,
                 .ty = ast.Type.recordType(target.name).inModule(module_id),
                 .target = target,
             };
-            if (typeDefinitionInModule(self.snapshot, module_id, .object, name)) |target| return .{
+            if (typeDefinitionInModule(self.budget, self.snapshot, module_id, .object, name)) |target| return .{
                 .kind = .object,
                 .ty = ast.Type.objectClass(target.name).inModule(module_id),
                 .target = target,
             };
-            if (typeDefinitionInModule(self.snapshot, module_id, .enum_type, name)) |target| return .{
+            if (typeDefinitionInModule(self.budget, self.snapshot, module_id, .enum_type, name)) |target| return .{
                 .kind = .enum_type,
                 .ty = ast.Type.enumType(target.name).inModule(module_id),
                 .target = target,
@@ -473,4 +521,8 @@ fn TypeResolver(comptime SnapshotPtr: type) type {
             return null;
         }
     };
+}
+
+fn expired(budget: ?QueryBudget) bool {
+    return if (budget) |value| value.expired() else false;
 }

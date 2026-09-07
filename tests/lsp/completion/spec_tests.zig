@@ -96,7 +96,7 @@ test "analysis completion: visible function prefers imported module definitions 
 
     const snapshot = try case.snapshotFor(case.source);
     const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
-    const item = resolve_query.valueBinding(snapshot, module.id, "text", null, .function) orelse return error.ExpectedFunction;
+    const item = resolve_query.valueBinding(null, snapshot, module.id, "text", null, .function) orelse return error.ExpectedFunction;
 
     try testing.expectEqualStrings("text", item.name);
     try testing.expectEqualStrings("text(text_value: String, theme: Theme = current_theme()) -> Object", item.signature);
@@ -127,10 +127,10 @@ test "analysis completion: visible variables and definitions use shared scope re
         const snapshot = try case.snapshotFor(case.source);
         const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
         const offset = offsetAfter(case.source, "doc_probe = x");
-        const variable = resolve_query.visibleVariableBinding(snapshot, module.id, offset, "x") orelse return error.ExpectedVariable;
+        const variable = resolve_query.visibleVariableBinding(null, snapshot, module.id, offset, "x") orelse return error.ExpectedVariable;
         try testing.expectEqualStrings("x", variable.name);
         try testing.expectEqualStrings("String", variable.type_label);
-        const definition = resolve_query.visibleVariable(snapshot, module.id, offset, "x") orelse return error.ExpectedDefinition;
+        const definition = resolve_query.visibleVariable(null, snapshot, module.id, offset, "x") orelse return error.ExpectedDefinition;
         try testing.expectEqual(compiler.core.DefinitionKind.variable, definition.kind);
         try testing.expectEqual(module.id, definition.module_id);
     }
@@ -139,9 +139,9 @@ test "analysis completion: visible variables and definitions use shared scope re
         const snapshot = try case.snapshotFor(case.source);
         const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
         const offset = offsetAfter(case.source, "page_probe = x");
-        const variable = resolve_query.visibleVariableBinding(snapshot, module.id, offset, "x") orelse return error.ExpectedVariable;
+        const variable = resolve_query.visibleVariableBinding(null, snapshot, module.id, offset, "x") orelse return error.ExpectedVariable;
         try testing.expectEqualStrings("Number", variable.type_label);
-        const definition = resolve_query.visibleVariable(snapshot, module.id, offset, "x") orelse return error.ExpectedDefinition;
+        const definition = resolve_query.visibleVariable(null, snapshot, module.id, offset, "x") orelse return error.ExpectedDefinition;
         try testing.expectEqual(compiler.core.DefinitionKind.variable, definition.kind);
         try testing.expectEqual(module.id, definition.module_id);
     }
@@ -150,9 +150,9 @@ test "analysis completion: visible variables and definitions use shared scope re
         const snapshot = try case.snapshotFor(case.source);
         const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
         const offset = offsetAfter(case.source, "fn_probe = x");
-        const variable = resolve_query.visibleVariableBinding(snapshot, module.id, offset, "x") orelse return error.ExpectedVariable;
+        const variable = resolve_query.visibleVariableBinding(null, snapshot, module.id, offset, "x") orelse return error.ExpectedVariable;
         try testing.expectEqualStrings("Bool", variable.type_label);
-        const definition = resolve_query.visibleVariable(snapshot, module.id, offset, "x") orelse return error.ExpectedDefinition;
+        const definition = resolve_query.visibleVariable(null, snapshot, module.id, offset, "x") orelse return error.ExpectedDefinition;
         try testing.expectEqual(compiler.core.DefinitionKind.variable, definition.kind);
         try testing.expectEqual(module.id, definition.module_id);
     }
@@ -855,4 +855,97 @@ test "analysis queries: parser cancellation releases partial expressions and dec
         };
         parsed.deinit(testing.allocator);
     }
+}
+
+test "analysis queries: retained syntax traversal stops before reaching a distant target" {
+    const source = ("fn repeated(value: Number) -> Number\n  return add(value, 1)\nend\n" ** 100) ++
+        "page title\n  let target = 1\nend\n";
+    var parsed = try compiler.syntax.parseRecoveringWithSourceName(testing.allocator, source, "traversal.ss");
+    defer parsed.deinit(testing.allocator);
+    const SyntaxView = struct {
+        tree: *const compiler.syntax.Module,
+
+        pub fn syntaxForSource(self: @This(), _: []const u8, _: []const u8) ?*const compiler.syntax.Module {
+            return self.tree;
+        }
+    };
+    var cancellation = ParseCancellation{ .limit = 40 };
+    const budget = query_types.QueryBudget.start(.{
+        .budget_ms = 1000,
+        .cancellation = .{ .context = &cancellation, .is_canceled = ParseCancellation.canceled },
+    });
+    var context = try compiler.analysis.query.context.Context.initFromSnapshot(testing.allocator, SyntaxView{ .tree = &parsed.module }, .{
+        .path = "traversal.ss",
+        .source = source,
+        .offset = offsetAfter(source, "tar"),
+    }, budget);
+    defer context.deinit(testing.allocator);
+    try testing.expectEqual(&parsed.module, context.module().?);
+    try testing.expect(context.parsed.owned == null);
+    try testing.expect(context.target_kind == null);
+    try testing.expectEqualStrings("target", context.target);
+    try testing.expect(cancellation.checks >= cancellation.limit);
+    try testing.expect(cancellation.checks <= cancellation.limit + 8);
+}
+
+test "analysis queries: canceled candidate collection releases partial results" {
+    var case = try CompletionCase.init("page title\nend\n");
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = 0 };
+    for ([_]usize{ 128, 512 }) |limit| {
+        var cancellation = ParseCancellation{ .limit = limit };
+        var allocations = testing.FailingAllocator.init(testing.allocator, .{});
+        var result = try snapshot_api.completeAt(allocations.allocator(), snapshot, req, .{
+            .budget_ms = 1000,
+            .cancellation = .{ .context = &cancellation, .is_canceled = ParseCancellation.canceled },
+        });
+        defer result.deinit(allocations.allocator());
+        try testing.expectEqual(@as(usize, 0), result.items.len);
+        try testing.expect(allocations.alloc_index > 0);
+        try testing.expect(cancellation.checks >= limit);
+        try testing.expect(cancellation.checks <= limit + 8);
+    }
+}
+
+test "analysis queries: fact lookup and import traversal honor cancellation" {
+    var case = try CompletionCase.init("page title\nend\n");
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    const module = snapshot.moduleForPath(case.path).?;
+    var cancellation = ParseCancellation{ .limit = 40 };
+    var budget = query_types.QueryBudget.start(.{
+        .budget_ms = 1000,
+        .cancellation = .{ .context = &cancellation, .is_canceled = ParseCancellation.canceled },
+    });
+    try testing.expect(resolve_query.valueBinding(budget, snapshot, module.id, "absent", null, .function) == null);
+    try testing.expect(cancellation.checks >= cancellation.limit);
+    try testing.expect(cancellation.checks <= cancellation.limit + 8);
+
+    const ImportView = struct {
+        value_bindings: []const snapshot_api.ValueBinding = &.{},
+        imports: []const snapshot_api.ImportFact,
+        visits: *usize,
+
+        const Module = struct {
+            imports: []const snapshot_api.ImportFact,
+            implicit_import_ids: []const compiler.core.SourceModuleId = &.{},
+        };
+
+        pub fn moduleById(self: @This(), _: compiler.core.SourceModuleId) ?Module {
+            self.visits.* += 1;
+            return .{ .imports = self.imports };
+        }
+    };
+    const imports = [_]snapshot_api.ImportFact{.{ .spec = &.{}, .spec_span = .{ .start = 0, .end = 0 }, .unqualified = true }} ** 512;
+    var visits: usize = 0;
+    cancellation.checks = 0;
+    budget = query_types.QueryBudget.start(.{
+        .budget_ms = 1000,
+        .cancellation = .{ .context = &cancellation, .is_canceled = ParseCancellation.canceled },
+    });
+    try testing.expect(resolve_query.valueBinding(budget, ImportView{ .imports = &imports, .visits = &visits }, 0, "absent", null, .function) == null);
+    try testing.expect(cancellation.checks >= cancellation.limit);
+    try testing.expect(cancellation.checks <= cancellation.limit + 8);
+    try testing.expect(visits < cancellation.limit);
 }

@@ -18,29 +18,40 @@ pub fn at(
         else => return err,
     };
     defer context.deinit(allocator);
+    if (context.expired()) return null;
+    var result = try resolveHover(allocator, snapshot, req, &context, budget);
+    if (context.expired()) {
+        if (result) |*item| item.deinit(allocator);
+        return null;
+    }
+    return result;
+}
 
-    if (try importHoverMarkdown(allocator, snapshot, &context, req.path)) |markdown| {
+fn resolveHover(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, context: *const context_query.Context, budget: types.QueryBudget) !?types.HoverInfo {
+    if (try importHoverMarkdown(allocator, snapshot, context, req.path)) |markdown| {
         return .{ .markdown = markdown };
     }
 
+    if (context.expired()) return null;
     const module = snapshot.moduleForPath(req.path) orelse return null;
-    if (resolve_query.visibleVariableBinding(snapshot, module.id, req.offset, context.target)) |variable| {
+    if (resolve_query.visibleVariableBinding(budget, snapshot, module.id, req.offset, context.target)) |variable| {
         return .{
             .markdown = try std.fmt.allocPrint(allocator, "```ss\n({s}: {s})\n```", .{ variable.name, variable.type_label }),
         };
     }
     const qualifier = context.qualifiedCallableAlias();
-    if (resolve_query.valueBinding(snapshot, module.id, context.target, qualifier, .function)) |binding| {
+    if (context.expired()) return null;
+    if (resolve_query.valueBinding(budget, snapshot, module.id, context.target, qualifier, .function)) |binding| {
         return .{
             .markdown = try std.fmt.allocPrint(allocator, "```ss\n{s}\n```\n{s}", .{ binding.signature, binding.documentation }),
         };
     }
-    if (resolve_query.valueBinding(snapshot, module.id, context.target, qualifier, .constant)) |binding| {
+    if (resolve_query.valueBinding(budget, snapshot, module.id, context.target, qualifier, .constant)) |binding| {
         return .{
             .markdown = try std.fmt.allocPrint(allocator, "```ss\n{s}\n```\n{s}", .{ binding.signature, binding.documentation }),
         };
     }
-    if (resolve_query.typeDefinition(snapshot, module.id, context.target, context.qualifiedCallableAlias())) |type_definition| {
+    if (resolve_query.typeDefinition(budget, snapshot, module.id, context.target, context.qualifiedCallableAlias())) |type_definition| {
         _ = type_definition;
         return .{
             .markdown = try std.fmt.allocPrint(allocator, "```ss\ntype {s}\n```", .{context.target}),

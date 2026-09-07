@@ -6,8 +6,10 @@ const context_query = @import("context.zig");
 
 pub fn moduleIdForContext(snapshot: anytype, context: *const context_query.Context, request_path: []const u8) ?core.SourceModuleId {
     const module = snapshot.moduleForPath(request_path) orelse return null;
+    const alias_context = context.isQualifiedCallableQualifier() or context.isImportAlias();
     for (module.imports) |import_fact| {
-        if (context.isQualifiedCallableQualifier() or context.isImportAlias()) {
+        if (context.expired()) return null;
+        if (alias_context) {
             const alias = import_fact.alias orelse continue;
             if (!std.mem.eql(u8, alias, context.target)) continue;
             return import_fact.module_id;

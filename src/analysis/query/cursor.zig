@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("ast");
+const QueryBudget = @import("types.zig").QueryBudget;
 
 const language_names = @import("../../language/names.zig");
 
@@ -58,31 +59,40 @@ pub const CallableTarget = struct {
     role: QualifiedCallableRole,
 };
 
-pub fn callableAt(program: *const ast.Module, offset: usize) ?CallableTarget {
+pub fn callableAt(budget: ?QueryBudget, program: *const ast.Module, offset: usize) ?CallableTarget {
+    if (expired(budget)) return null;
     for (program.records.items) |record| {
-        if (callableInFields(record.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (callableInFields(budget, record.fields.items, offset)) |target| return target;
     }
     for (program.objects.items) |object| {
-        if (callableInFields(object.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (callableInFields(budget, object.fields.items, offset)) |target| return target;
     }
     for (program.object_extensions.items) |extension| {
-        if (callableInFields(extension.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (callableInFields(budget, extension.fields.items, offset)) |target| return target;
     }
     for (program.constants.items) |constant_decl| {
-        if (callableInExpr(constant_decl.value, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (callableInExpr(budget, constant_decl.value, offset)) |target| return target;
     }
     for (program.functions.items) |func| {
-        if (callableInStatements(func.statements.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (callableInStatements(budget, func.statements.items, offset)) |target| return target;
     }
-    if (callableInStatements(program.document_statements.items, offset)) |target| return target;
+    if (callableInStatements(budget, program.document_statements.items, offset)) |target| return target;
     for (program.pages.items) |page| {
-        if (callableInStatements(page.statements.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (callableInStatements(budget, page.statements.items, offset)) |target| return target;
     }
     return null;
 }
 
-pub fn sourceNameAt(program: *const ast.Module, offset: usize) ?SourceNameTarget {
+pub fn sourceNameAt(budget: ?QueryBudget, program: *const ast.Module, offset: usize) ?SourceNameTarget {
+    if (expired(budget)) return null;
     for (program.imports.items) |import_decl| {
+        if (expired(budget)) return null;
         if (spanContainsOffset(import_decl.spec_span, offset)) return .{
             .text = import_decl.spec,
             .kind = .import_spec,
@@ -95,139 +105,175 @@ pub fn sourceNameAt(program: *const ast.Module, offset: usize) ?SourceNameTarget
         }
     }
     for (program.records.items) |record| {
-        if (sourceNameInFields(record.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (sourceNameInFields(budget, record.fields.items, offset)) |target| return target;
     }
     for (program.objects.items) |object| {
-        if (sourceNameInFields(object.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (sourceNameInFields(budget, object.fields.items, offset)) |target| return target;
     }
     for (program.object_extensions.items) |extension| {
-        if (sourceNameInFields(extension.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (sourceNameInFields(budget, extension.fields.items, offset)) |target| return target;
     }
     for (program.constants.items) |constant_decl| {
-        if (sourceNameInType(constant_decl.value_type, offset)) |target| return target;
-        if (sourceNameInExpr(constant_decl.value, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (sourceNameInType(budget, constant_decl.value_type, offset)) |target| return target;
+        if (sourceNameInExpr(budget, constant_decl.value, offset)) |target| return target;
     }
     for (program.functions.items) |func| {
+        if (expired(budget)) return null;
         for (func.params.items) |param| {
+            if (expired(budget)) return null;
             if (spanContainsOptional(param.name_span, offset)) return .{
                 .text = param.name,
                 .kind = .identifier,
             };
-            if (sourceNameInType(param.ty, offset)) |target| return target;
+            if (sourceNameInType(budget, param.ty, offset)) |target| return target;
         }
-        if (sourceNameInType(func.result_type, offset)) |target| return target;
-        if (sourceNameInStatements(func.statements.items, offset)) |target| return target;
+        if (sourceNameInType(budget, func.result_type, offset)) |target| return target;
+        if (sourceNameInStatements(budget, func.statements.items, offset)) |target| return target;
     }
-    if (sourceNameInStatements(program.document_statements.items, offset)) |target| return target;
+    if (sourceNameInStatements(budget, program.document_statements.items, offset)) |target| return target;
     for (program.pages.items) |page| {
-        if (sourceNameInStatements(page.statements.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (sourceNameInStatements(budget, page.statements.items, offset)) |target| return target;
     }
     return null;
 }
 
-pub fn recordUpdatePathAt(program: *const ast.Module, offset: usize) ?RecordUpdatePathTarget {
+pub fn recordUpdatePathAt(budget: ?QueryBudget, program: *const ast.Module, offset: usize) ?RecordUpdatePathTarget {
+    if (expired(budget)) return null;
     for (program.records.items) |record| {
-        if (recordUpdatePathInFields(record.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (recordUpdatePathInFields(budget, record.fields.items, offset)) |target| return target;
     }
     for (program.objects.items) |object| {
-        if (recordUpdatePathInFields(object.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (recordUpdatePathInFields(budget, object.fields.items, offset)) |target| return target;
     }
     for (program.object_extensions.items) |extension| {
-        if (recordUpdatePathInFields(extension.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (recordUpdatePathInFields(budget, extension.fields.items, offset)) |target| return target;
     }
     for (program.constants.items) |constant_decl| {
-        if (recordUpdatePathInExpr(constant_decl.value, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (recordUpdatePathInExpr(budget, constant_decl.value, offset)) |target| return target;
     }
     for (program.functions.items) |func| {
+        if (expired(budget)) return null;
         for (func.params.items) |param| {
+            if (expired(budget)) return null;
             if (param.default_value) |default_value| {
-                if (recordUpdatePathInExpr(default_value.*, offset)) |target| return target;
+                if (recordUpdatePathInExpr(budget, default_value.*, offset)) |target| return target;
             }
         }
-        if (recordUpdatePathInStatements(func.statements.items, offset)) |target| return target;
+        if (recordUpdatePathInStatements(budget, func.statements.items, offset)) |target| return target;
     }
-    if (recordUpdatePathInStatements(program.document_statements.items, offset)) |target| return target;
+    if (recordUpdatePathInStatements(budget, program.document_statements.items, offset)) |target| return target;
     for (program.pages.items) |page| {
-        if (recordUpdatePathInStatements(page.statements.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (recordUpdatePathInStatements(budget, page.statements.items, offset)) |target| return target;
     }
     return null;
 }
 
-pub fn recordUpdateCompletionAt(program: *const ast.Module, offset: usize) ?RecordUpdateCompletionTarget {
+pub fn recordUpdateCompletionAt(budget: ?QueryBudget, program: *const ast.Module, offset: usize) ?RecordUpdateCompletionTarget {
+    if (expired(budget)) return null;
     for (program.records.items) |record| {
-        if (recordUpdateCompletionInFields(record.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (recordUpdateCompletionInFields(budget, record.fields.items, offset)) |target| return target;
     }
     for (program.objects.items) |object| {
-        if (recordUpdateCompletionInFields(object.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (recordUpdateCompletionInFields(budget, object.fields.items, offset)) |target| return target;
     }
     for (program.object_extensions.items) |extension| {
-        if (recordUpdateCompletionInFields(extension.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (recordUpdateCompletionInFields(budget, extension.fields.items, offset)) |target| return target;
     }
     for (program.constants.items) |constant_decl| {
-        if (recordUpdateCompletionInExpr(constant_decl.value, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (recordUpdateCompletionInExpr(budget, constant_decl.value, offset)) |target| return target;
     }
     for (program.functions.items) |func| {
+        if (expired(budget)) return null;
         for (func.params.items) |param| {
+            if (expired(budget)) return null;
             if (param.default_value) |default_value| {
-                if (recordUpdateCompletionInExpr(default_value.*, offset)) |target| return target;
+                if (recordUpdateCompletionInExpr(budget, default_value.*, offset)) |target| return target;
             }
         }
-        if (recordUpdateCompletionInStatements(func.statements.items, offset)) |target| return target;
+        if (recordUpdateCompletionInStatements(budget, func.statements.items, offset)) |target| return target;
     }
-    if (recordUpdateCompletionInStatements(program.document_statements.items, offset)) |target| return target;
+    if (recordUpdateCompletionInStatements(budget, program.document_statements.items, offset)) |target| return target;
     for (program.pages.items) |page| {
-        if (recordUpdateCompletionInStatements(page.statements.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (recordUpdateCompletionInStatements(budget, page.statements.items, offset)) |target| return target;
     }
     return null;
 }
 
-pub fn memberAt(program: *const ast.Module, offset: usize) ?MemberTarget {
+pub fn memberAt(budget: ?QueryBudget, program: *const ast.Module, offset: usize) ?MemberTarget {
+    if (expired(budget)) return null;
     for (program.records.items) |record| {
-        if (memberInFields(record.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (memberInFields(budget, record.fields.items, offset)) |target| return target;
     }
     for (program.objects.items) |object| {
-        if (memberInFields(object.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (memberInFields(budget, object.fields.items, offset)) |target| return target;
     }
     for (program.object_extensions.items) |extension| {
-        if (memberInFields(extension.fields.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (memberInFields(budget, extension.fields.items, offset)) |target| return target;
     }
     for (program.constants.items) |constant_decl| {
-        if (memberInExpr(constant_decl.value, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (memberInExpr(budget, constant_decl.value, offset)) |target| return target;
     }
     for (program.functions.items) |func| {
+        if (expired(budget)) return null;
         for (func.params.items) |param| {
+            if (expired(budget)) return null;
             if (param.default_value) |default_value| {
-                if (memberInExpr(default_value.*, offset)) |target| return target;
+                if (memberInExpr(budget, default_value.*, offset)) |target| return target;
             }
         }
-        if (memberInStatements(func.statements.items, offset)) |target| return target;
+        if (memberInStatements(budget, func.statements.items, offset)) |target| return target;
     }
-    if (memberInStatements(program.document_statements.items, offset)) |target| return target;
+    if (memberInStatements(budget, program.document_statements.items, offset)) |target| return target;
     for (program.pages.items) |page| {
-        if (memberInStatements(page.statements.items, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (memberInStatements(budget, page.statements.items, offset)) |target| return target;
     }
     return null;
 }
 
-pub fn visibleLetBindingAt(program: *const ast.Module, offset: usize, name: []const u8) ?LetBindingTarget {
+pub fn visibleLetBindingAt(budget: ?QueryBudget, program: *const ast.Module, offset: usize, name: []const u8) ?LetBindingTarget {
+    if (expired(budget)) return null;
     for (program.functions.items) |func| {
+        if (expired(budget)) return null;
         if (!spanContainsOffset(func.span, offset)) continue;
-        return visibleLetBindingInStatements(func.statements.items, offset, name);
+        return visibleLetBindingInStatements(budget, func.statements.items, offset, name);
     }
     for (program.document_blocks.items) |block| {
+        if (expired(budget)) return null;
         if (!spanContainsOffset(block.span, offset)) continue;
         const statements = program.document_statements.items[block.statement_start .. block.statement_start + block.statement_count];
-        return visibleLetBindingInStatements(statements, offset, name);
+        return visibleLetBindingInStatements(budget, statements, offset, name);
     }
     for (program.pages.items) |page| {
+        if (expired(budget)) return null;
         if (!spanContainsOffset(page.span, offset)) continue;
-        return visibleLetBindingInStatements(page.statements.items, offset, name);
+        return visibleLetBindingInStatements(budget, page.statements.items, offset, name);
     }
     return null;
 }
 
-pub fn qualifiedCallableAt(program: *const ast.Module, offset: usize) ?QualifiedCallableTarget {
-    const target = callableAt(program, offset) orelse return null;
+pub fn qualifiedCallableAt(budget: ?QueryBudget, program: *const ast.Module, offset: usize) ?QualifiedCallableTarget {
+    if (expired(budget)) return null;
+    const target = callableAt(budget, program, offset) orelse return null;
     const qualifier = target.callee.qualifier orelse return null;
     return .{
         .qualifier = qualifier,
@@ -236,111 +282,144 @@ pub fn qualifiedCallableAt(program: *const ast.Module, offset: usize) ?Qualified
     };
 }
 
-pub fn qualifiedCallableQualifierForName(program: *const ast.Module, offset: usize) ?[]const u8 {
-    const target = qualifiedCallableAt(program, offset) orelse return null;
+pub fn qualifiedCallableQualifierForName(budget: ?QueryBudget, program: *const ast.Module, offset: usize) ?[]const u8 {
+    if (expired(budget)) return null;
+    const target = qualifiedCallableAt(budget, program, offset) orelse return null;
     if (target.role != .name) return null;
     return target.qualifier;
 }
 
-pub fn isQualifiedCallableQualifierAt(program: *const ast.Module, offset: usize) bool {
-    const target = qualifiedCallableAt(program, offset) orelse return false;
+pub fn isQualifiedCallableQualifierAt(budget: ?QueryBudget, program: *const ast.Module, offset: usize) bool {
+    if (expired(budget)) return false;
+    const target = qualifiedCallableAt(budget, program, offset) orelse return false;
     return target.role == .qualifier;
 }
 
-pub fn isImportAliasAt(program: *const ast.Module, offset: usize) bool {
+pub fn isImportAliasAt(budget: ?QueryBudget, program: *const ast.Module, offset: usize) bool {
+    if (expired(budget)) return false;
     for (program.imports.items) |import_decl| {
+        if (expired(budget)) return false;
         const alias_span = import_decl.alias_span orelse continue;
         if (spanContainsOffset(alias_span, offset)) return true;
     }
     return false;
 }
 
-pub fn importSpecAt(program: *const ast.Module, offset: usize) ?[]const u8 {
+pub fn importSpecAt(budget: ?QueryBudget, program: *const ast.Module, offset: usize) ?[]const u8 {
+    if (expired(budget)) return null;
     for (program.imports.items) |import_decl| {
+        if (expired(budget)) return null;
         if (spanContainsOffset(import_decl.spec_span, offset)) return import_decl.spec;
     }
     return null;
 }
 
-fn callableInFields(fields: []const ast.ObjectFieldDecl, offset: usize) ?CallableTarget {
+fn callableInFields(budget: ?QueryBudget, fields: []const ast.ObjectFieldDecl, offset: usize) ?CallableTarget {
+    if (expired(budget)) return null;
     for (fields) |field| {
+        if (expired(budget)) return null;
         const default_value = field.default_value orelse continue;
-        if (callableInExpr(default_value.*, offset)) |target| return target;
+        if (callableInExpr(budget, default_value.*, offset)) |target| return target;
     }
     return null;
 }
 
-fn sourceNameInFields(fields: []const ast.ObjectFieldDecl, offset: usize) ?SourceNameTarget {
+fn sourceNameInFields(budget: ?QueryBudget, fields: []const ast.ObjectFieldDecl, offset: usize) ?SourceNameTarget {
+    if (expired(budget)) return null;
     for (fields) |field| {
-        if (sourceNameInType(field.value_type, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (sourceNameInType(budget, field.value_type, offset)) |target| return target;
         const default_value = field.default_value orelse continue;
-        if (sourceNameInExpr(default_value.*, offset)) |target| return target;
+        if (sourceNameInExpr(budget, default_value.*, offset)) |target| return target;
     }
     return null;
 }
 
-fn recordUpdatePathInFields(fields: []const ast.ObjectFieldDecl, offset: usize) ?RecordUpdatePathTarget {
+fn recordUpdatePathInFields(budget: ?QueryBudget, fields: []const ast.ObjectFieldDecl, offset: usize) ?RecordUpdatePathTarget {
+    if (expired(budget)) return null;
     for (fields) |field| {
+        if (expired(budget)) return null;
         const default_value = field.default_value orelse continue;
-        if (recordUpdatePathInExpr(default_value.*, offset)) |target| return target;
+        if (recordUpdatePathInExpr(budget, default_value.*, offset)) |target| return target;
     }
     return null;
 }
 
-fn recordUpdateCompletionInFields(fields: []const ast.ObjectFieldDecl, offset: usize) ?RecordUpdateCompletionTarget {
+fn recordUpdateCompletionInFields(budget: ?QueryBudget, fields: []const ast.ObjectFieldDecl, offset: usize) ?RecordUpdateCompletionTarget {
+    if (expired(budget)) return null;
     for (fields) |field| {
+        if (expired(budget)) return null;
         const default_value = field.default_value orelse continue;
-        if (recordUpdateCompletionInExpr(default_value.*, offset)) |target| return target;
+        if (recordUpdateCompletionInExpr(budget, default_value.*, offset)) |target| return target;
     }
     return null;
 }
 
-fn memberInFields(fields: []const ast.ObjectFieldDecl, offset: usize) ?MemberTarget {
+fn memberInFields(budget: ?QueryBudget, fields: []const ast.ObjectFieldDecl, offset: usize) ?MemberTarget {
+    if (expired(budget)) return null;
     for (fields) |field| {
+        if (expired(budget)) return null;
         const default_value = field.default_value orelse continue;
-        if (memberInExpr(default_value.*, offset)) |target| return target;
+        if (memberInExpr(budget, default_value.*, offset)) |target| return target;
     }
     return null;
 }
 
-fn callableInStatements(statements: []const ast.Statement, offset: usize) ?CallableTarget {
+fn callableInStatements(budget: ?QueryBudget, statements: []const ast.Statement, offset: usize) ?CallableTarget {
+    if (expired(budget)) return null;
     for (statements) |stmt| {
-        if (callableInStatement(stmt, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (!spanContainsOffset(stmt.span, offset)) continue;
+        if (callableInStatement(budget, stmt, offset)) |target| return target;
     }
     return null;
 }
 
-fn sourceNameInStatements(statements: []const ast.Statement, offset: usize) ?SourceNameTarget {
+fn sourceNameInStatements(budget: ?QueryBudget, statements: []const ast.Statement, offset: usize) ?SourceNameTarget {
+    if (expired(budget)) return null;
     for (statements) |stmt| {
-        if (sourceNameInStatement(stmt, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (!spanContainsOffset(stmt.span, offset)) continue;
+        if (sourceNameInStatement(budget, stmt, offset)) |target| return target;
     }
     return null;
 }
 
-fn recordUpdatePathInStatements(statements: []const ast.Statement, offset: usize) ?RecordUpdatePathTarget {
+fn recordUpdatePathInStatements(budget: ?QueryBudget, statements: []const ast.Statement, offset: usize) ?RecordUpdatePathTarget {
+    if (expired(budget)) return null;
     for (statements) |stmt| {
-        if (recordUpdatePathInStatement(stmt, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (!spanContainsOffset(stmt.span, offset)) continue;
+        if (recordUpdatePathInStatement(budget, stmt, offset)) |target| return target;
     }
     return null;
 }
 
-fn recordUpdateCompletionInStatements(statements: []const ast.Statement, offset: usize) ?RecordUpdateCompletionTarget {
+fn recordUpdateCompletionInStatements(budget: ?QueryBudget, statements: []const ast.Statement, offset: usize) ?RecordUpdateCompletionTarget {
+    if (expired(budget)) return null;
     for (statements) |stmt| {
-        if (recordUpdateCompletionInStatement(stmt, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (!spanContainsOffset(stmt.span, offset)) continue;
+        if (recordUpdateCompletionInStatement(budget, stmt, offset)) |target| return target;
     }
     return null;
 }
 
-fn memberInStatements(statements: []const ast.Statement, offset: usize) ?MemberTarget {
+fn memberInStatements(budget: ?QueryBudget, statements: []const ast.Statement, offset: usize) ?MemberTarget {
+    if (expired(budget)) return null;
     for (statements) |stmt| {
-        if (memberInStatement(stmt, offset)) |target| return target;
+        if (expired(budget)) return null;
+        if (!spanContainsOffset(stmt.span, offset)) continue;
+        if (memberInStatement(budget, stmt, offset)) |target| return target;
     }
     return null;
 }
 
-fn visibleLetBindingInStatements(statements: []const ast.Statement, offset: usize, name: []const u8) ?LetBindingTarget {
+fn visibleLetBindingInStatements(budget: ?QueryBudget, statements: []const ast.Statement, offset: usize, name: []const u8) ?LetBindingTarget {
+    if (expired(budget)) return null;
     var best: ?LetBindingTarget = null;
     for (statements) |stmt| {
+        if (expired(budget)) return null;
         if (stmt.span.start > offset) break;
         switch (stmt.kind) {
             .let_binding => |binding| {
@@ -350,8 +429,8 @@ fn visibleLetBindingInStatements(statements: []const ast.Statement, offset: usiz
             },
             .if_stmt => |if_stmt| {
                 if (spanContainsOffset(stmt.span, offset)) {
-                    if (visibleLetBindingInStatements(if_stmt.then_statements.items, offset, name)) |target| best = target;
-                    if (visibleLetBindingInStatements(if_stmt.else_statements.items, offset, name)) |target| best = target;
+                    if (visibleLetBindingInStatements(budget, if_stmt.then_statements.items, offset, name)) |target| best = target;
+                    if (visibleLetBindingInStatements(budget, if_stmt.else_statements.items, offset, name)) |target| best = target;
                 }
             },
             else => {},
@@ -360,27 +439,29 @@ fn visibleLetBindingInStatements(statements: []const ast.Statement, offset: usiz
     return best;
 }
 
-fn callableInStatement(stmt: ast.Statement, offset: usize) ?CallableTarget {
+fn callableInStatement(budget: ?QueryBudget, stmt: ast.Statement, offset: usize) ?CallableTarget {
+    if (expired(budget)) return null;
     return switch (stmt.kind) {
         .hole => null,
-        .let_binding => |binding| callableInExpr(binding.expr, offset),
-        .return_expr => |expr| callableInExpr(expr, offset),
+        .let_binding => |binding| callableInExpr(budget, binding.expr, offset),
+        .return_expr => |expr| callableInExpr(budget, expr, offset),
         .return_void => null,
-        .constrain => |constraint| if (constraint.offset) |expr| callableInExpr(expr, offset) else null,
+        .constrain => |constraint| if (constraint.offset) |expr| callableInExpr(budget, expr, offset) else null,
         .property_set => |property_set| blk: {
-            if (callableInExpr(property_set.target, offset)) |target| break :blk target;
-            break :blk callableInExpr(property_set.value, offset);
+            if (callableInExpr(budget, property_set.target, offset)) |target| break :blk target;
+            break :blk callableInExpr(budget, property_set.value, offset);
         },
         .if_stmt => |if_stmt| blk: {
-            if (callableInExpr(if_stmt.condition, offset)) |target| break :blk target;
-            if (callableInStatements(if_stmt.then_statements.items, offset)) |target| break :blk target;
-            break :blk callableInStatements(if_stmt.else_statements.items, offset);
+            if (callableInExpr(budget, if_stmt.condition, offset)) |target| break :blk target;
+            if (callableInStatements(budget, if_stmt.then_statements.items, offset)) |target| break :blk target;
+            break :blk callableInStatements(budget, if_stmt.else_statements.items, offset);
         },
-        .expr_stmt => |expr| callableInExpr(expr, offset),
+        .expr_stmt => |expr| callableInExpr(budget, expr, offset),
     };
 }
 
-fn sourceNameInStatement(stmt: ast.Statement, offset: usize) ?SourceNameTarget {
+fn sourceNameInStatement(budget: ?QueryBudget, stmt: ast.Statement, offset: usize) ?SourceNameTarget {
+    if (expired(budget)) return null;
     return switch (stmt.kind) {
         .hole => null,
         .let_binding => |binding| blk: {
@@ -389,133 +470,142 @@ fn sourceNameInStatement(stmt: ast.Statement, offset: usize) ?SourceNameTarget {
                 .kind = .identifier,
             };
             if (binding.type_annotation) |annotation| {
-                if (sourceNameInType(annotation, offset)) |target| break :blk target;
+                if (sourceNameInType(budget, annotation, offset)) |target| break :blk target;
             }
-            break :blk sourceNameInExpr(binding.expr, offset);
+            break :blk sourceNameInExpr(budget, binding.expr, offset);
         },
-        .return_expr => |expr| sourceNameInExpr(expr, offset),
+        .return_expr => |expr| sourceNameInExpr(budget, expr, offset),
         .return_void => null,
-        .constrain => |constraint| if (constraint.offset) |expr| sourceNameInExpr(expr, offset) else null,
+        .constrain => |constraint| if (constraint.offset) |expr| sourceNameInExpr(budget, expr, offset) else null,
         .property_set => |property_set| blk: {
-            if (sourceNameInExpr(property_set.target, offset)) |target| break :blk target;
-            if (pathSegmentAt(property_set.path.items, offset)) |target| break :blk .{
+            if (sourceNameInExpr(budget, property_set.target, offset)) |target| break :blk target;
+            if (pathSegmentAt(budget, property_set.path.items, offset)) |target| break :blk .{
                 .text = target.segment.name,
                 .kind = .member_name,
             };
-            break :blk sourceNameInExpr(property_set.value, offset);
+            break :blk sourceNameInExpr(budget, property_set.value, offset);
         },
         .if_stmt => |if_stmt| blk: {
-            if (sourceNameInExpr(if_stmt.condition, offset)) |target| break :blk target;
-            if (sourceNameInStatements(if_stmt.then_statements.items, offset)) |target| break :blk target;
-            break :blk sourceNameInStatements(if_stmt.else_statements.items, offset);
+            if (sourceNameInExpr(budget, if_stmt.condition, offset)) |target| break :blk target;
+            if (sourceNameInStatements(budget, if_stmt.then_statements.items, offset)) |target| break :blk target;
+            break :blk sourceNameInStatements(budget, if_stmt.else_statements.items, offset);
         },
-        .expr_stmt => |expr| sourceNameInExpr(expr, offset),
+        .expr_stmt => |expr| sourceNameInExpr(budget, expr, offset),
     };
 }
 
-fn recordUpdatePathInStatement(stmt: ast.Statement, offset: usize) ?RecordUpdatePathTarget {
+fn recordUpdatePathInStatement(budget: ?QueryBudget, stmt: ast.Statement, offset: usize) ?RecordUpdatePathTarget {
+    if (expired(budget)) return null;
     return switch (stmt.kind) {
         .hole, .return_void => null,
-        .let_binding => |binding| recordUpdatePathInExpr(binding.expr, offset),
-        .return_expr => |expr| recordUpdatePathInExpr(expr, offset),
-        .constrain => |constraint| if (constraint.offset) |expr| recordUpdatePathInExpr(expr, offset) else null,
+        .let_binding => |binding| recordUpdatePathInExpr(budget, binding.expr, offset),
+        .return_expr => |expr| recordUpdatePathInExpr(budget, expr, offset),
+        .constrain => |constraint| if (constraint.offset) |expr| recordUpdatePathInExpr(budget, expr, offset) else null,
         .property_set => |property_set| blk: {
-            if (recordUpdatePathInExpr(property_set.target, offset)) |target| break :blk target;
-            break :blk recordUpdatePathInExpr(property_set.value, offset);
+            if (recordUpdatePathInExpr(budget, property_set.target, offset)) |target| break :blk target;
+            break :blk recordUpdatePathInExpr(budget, property_set.value, offset);
         },
         .if_stmt => |if_stmt| blk: {
-            if (recordUpdatePathInExpr(if_stmt.condition, offset)) |target| break :blk target;
-            if (recordUpdatePathInStatements(if_stmt.then_statements.items, offset)) |target| break :blk target;
-            break :blk recordUpdatePathInStatements(if_stmt.else_statements.items, offset);
+            if (recordUpdatePathInExpr(budget, if_stmt.condition, offset)) |target| break :blk target;
+            if (recordUpdatePathInStatements(budget, if_stmt.then_statements.items, offset)) |target| break :blk target;
+            break :blk recordUpdatePathInStatements(budget, if_stmt.else_statements.items, offset);
         },
-        .expr_stmt => |expr| recordUpdatePathInExpr(expr, offset),
+        .expr_stmt => |expr| recordUpdatePathInExpr(budget, expr, offset),
     };
 }
 
-fn recordUpdateCompletionInStatement(stmt: ast.Statement, offset: usize) ?RecordUpdateCompletionTarget {
+fn recordUpdateCompletionInStatement(budget: ?QueryBudget, stmt: ast.Statement, offset: usize) ?RecordUpdateCompletionTarget {
+    if (expired(budget)) return null;
     return switch (stmt.kind) {
         .hole, .return_void => null,
-        .let_binding => |binding| recordUpdateCompletionInExpr(binding.expr, offset),
-        .return_expr => |expr| recordUpdateCompletionInExpr(expr, offset),
-        .constrain => |constraint| if (constraint.offset) |expr| recordUpdateCompletionInExpr(expr, offset) else null,
+        .let_binding => |binding| recordUpdateCompletionInExpr(budget, binding.expr, offset),
+        .return_expr => |expr| recordUpdateCompletionInExpr(budget, expr, offset),
+        .constrain => |constraint| if (constraint.offset) |expr| recordUpdateCompletionInExpr(budget, expr, offset) else null,
         .property_set => |property_set| blk: {
-            if (recordUpdateCompletionInExpr(property_set.target, offset)) |target| break :blk target;
-            break :blk recordUpdateCompletionInExpr(property_set.value, offset);
+            if (recordUpdateCompletionInExpr(budget, property_set.target, offset)) |target| break :blk target;
+            break :blk recordUpdateCompletionInExpr(budget, property_set.value, offset);
         },
         .if_stmt => |if_stmt| blk: {
-            if (recordUpdateCompletionInExpr(if_stmt.condition, offset)) |target| break :blk target;
-            if (recordUpdateCompletionInStatements(if_stmt.then_statements.items, offset)) |target| break :blk target;
-            break :blk recordUpdateCompletionInStatements(if_stmt.else_statements.items, offset);
+            if (recordUpdateCompletionInExpr(budget, if_stmt.condition, offset)) |target| break :blk target;
+            if (recordUpdateCompletionInStatements(budget, if_stmt.then_statements.items, offset)) |target| break :blk target;
+            break :blk recordUpdateCompletionInStatements(budget, if_stmt.else_statements.items, offset);
         },
-        .expr_stmt => |expr| recordUpdateCompletionInExpr(expr, offset),
+        .expr_stmt => |expr| recordUpdateCompletionInExpr(budget, expr, offset),
     };
 }
 
-fn memberInStatement(stmt: ast.Statement, offset: usize) ?MemberTarget {
+fn memberInStatement(budget: ?QueryBudget, stmt: ast.Statement, offset: usize) ?MemberTarget {
+    if (expired(budget)) return null;
     return switch (stmt.kind) {
         .hole, .return_void => null,
-        .let_binding => |binding| memberInExpr(binding.expr, offset),
-        .return_expr => |expr| memberInExpr(expr, offset),
-        .constrain => |constraint| if (constraint.offset) |expr| memberInExpr(expr, offset) else null,
+        .let_binding => |binding| memberInExpr(budget, binding.expr, offset),
+        .return_expr => |expr| memberInExpr(budget, expr, offset),
+        .constrain => |constraint| if (constraint.offset) |expr| memberInExpr(budget, expr, offset) else null,
         .property_set => |property_set| blk: {
-            if (memberInExpr(property_set.target, offset)) |target| break :blk target;
-            const target = pathSegmentAt(property_set.path.items, offset) orelse break :blk memberInExpr(property_set.value, offset);
+            if (memberInExpr(budget, property_set.target, offset)) |target| break :blk target;
+            const target = pathSegmentAt(budget, property_set.path.items, offset) orelse break :blk memberInExpr(budget, property_set.value, offset);
             if (target.index == 0) break :blk .{
                 .target = property_set.target,
                 .name = target.segment.name,
             };
-            break :blk memberInExpr(property_set.value, offset);
+            break :blk memberInExpr(budget, property_set.value, offset);
         },
         .if_stmt => |if_stmt| blk: {
-            if (memberInExpr(if_stmt.condition, offset)) |target| break :blk target;
-            if (memberInStatements(if_stmt.then_statements.items, offset)) |target| break :blk target;
-            break :blk memberInStatements(if_stmt.else_statements.items, offset);
+            if (memberInExpr(budget, if_stmt.condition, offset)) |target| break :blk target;
+            if (memberInStatements(budget, if_stmt.then_statements.items, offset)) |target| break :blk target;
+            break :blk memberInStatements(budget, if_stmt.else_statements.items, offset);
         },
-        .expr_stmt => |expr| memberInExpr(expr, offset),
+        .expr_stmt => |expr| memberInExpr(budget, expr, offset),
     };
 }
 
-fn callableInExpr(expr: ast.Expr, offset: usize) ?CallableTarget {
+fn callableInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?CallableTarget {
+    if (expired(budget)) return null;
     return switch (expr) {
         .call => |call| blk: {
             if (callableNameAt(call.callee, offset)) |target| break :blk target;
             for (call.args.items) |arg| {
-                if (callableInExpr(arg, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (callableInExpr(budget, arg, offset)) |target| break :blk target;
             }
             break :blk null;
         },
         .apply => |apply| blk: {
-            if (callableInExpr(apply.callee.*, offset)) |target| break :blk target;
+            if (callableInExpr(budget, apply.callee.*, offset)) |target| break :blk target;
             for (apply.args.items) |arg| {
-                if (callableInExpr(arg, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (callableInExpr(budget, arg, offset)) |target| break :blk target;
             }
             break :blk null;
         },
-        .lambda => |lambda| callableInExpr(lambda.body.*, offset),
+        .lambda => |lambda| callableInExpr(budget, lambda.body.*, offset),
         .record => |record| blk: {
             for (record.fields.items) |field| {
-                if (callableInExpr(field.value, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (callableInExpr(budget, field.value, offset)) |target| break :blk target;
             }
             break :blk null;
         },
         .record_update => |update| blk: {
-            if (callableInExpr(update.target.*, offset)) |target| break :blk target;
+            if (callableInExpr(budget, update.target.*, offset)) |target| break :blk target;
             for (update.fields.items) |field| {
-                if (callableInExpr(field.value, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (callableInExpr(budget, field.value, offset)) |target| break :blk target;
             }
             break :blk null;
         },
-        .member => |member| callableInExpr(member.target.*, offset),
-        .optional_check => |check| callableInExpr(check.target.*, offset),
+        .member => |member| callableInExpr(budget, member.target.*, offset),
+        .optional_check => |check| callableInExpr(budget, check.target.*, offset),
         .coalesce => |coalesce| blk: {
-            if (callableInExpr(coalesce.target.*, offset)) |target| break :blk target;
-            break :blk callableInExpr(coalesce.fallback.*, offset);
+            if (callableInExpr(budget, coalesce.target.*, offset)) |target| break :blk target;
+            break :blk callableInExpr(budget, coalesce.fallback.*, offset);
         },
         else => null,
     };
 }
 
-fn sourceNameInType(ty: ast.Type, offset: usize) ?SourceNameTarget {
+fn sourceNameInType(budget: ?QueryBudget, ty: ast.Type, offset: usize) ?SourceNameTarget {
+    if (expired(budget)) return null;
     return switch (ty.kind) {
         .object, .record => if (spanContainsOptional(ty.class_name_span, offset)) .{
             .text = ty.class_name orelse "",
@@ -531,17 +621,19 @@ fn sourceNameInType(ty: ast.Type, offset: usize) ?SourceNameTarget {
         } else null,
         .function => blk: {
             for (ty.fn_params) |param| {
-                if (sourceNameInType(param, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (sourceNameInType(budget, param, offset)) |target| break :blk target;
             }
-            if (ty.fn_result) |result| break :blk sourceNameInType(result.*, offset);
+            if (ty.fn_result) |result| break :blk sourceNameInType(budget, result.*, offset);
             break :blk null;
         },
-        .optional => if (ty.optional_child) |child| sourceNameInType(child.*, offset) else null,
+        .optional => if (ty.optional_child) |child| sourceNameInType(budget, child.*, offset) else null,
         else => null,
     };
 }
 
-fn sourceNameInExpr(expr: ast.Expr, offset: usize) ?SourceNameTarget {
+fn sourceNameInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?SourceNameTarget {
+    if (expired(budget)) return null;
     return switch (expr) {
         .ident => |ident| if (spanContainsOptional(ident.name_span, offset)) .{
             .text = ident.name,
@@ -550,25 +642,28 @@ fn sourceNameInExpr(expr: ast.Expr, offset: usize) ?SourceNameTarget {
         .call => |call| blk: {
             if (sourceNameInCallable(call.callee, offset)) |target| break :blk target;
             for (call.args.items) |arg| {
-                if (sourceNameInExpr(arg, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (sourceNameInExpr(budget, arg, offset)) |target| break :blk target;
             }
             break :blk null;
         },
         .apply => |apply| blk: {
-            if (sourceNameInExpr(apply.callee.*, offset)) |target| break :blk target;
+            if (sourceNameInExpr(budget, apply.callee.*, offset)) |target| break :blk target;
             for (apply.args.items) |arg| {
-                if (sourceNameInExpr(arg, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (sourceNameInExpr(budget, arg, offset)) |target| break :blk target;
             }
             break :blk null;
         },
         .lambda => |lambda| blk: {
             for (lambda.params.items) |param| {
+                if (expired(budget)) return null;
                 if (spanContainsOptional(param.name_span, offset)) break :blk .{
                     .text = param.name,
                     .kind = .identifier,
                 };
             }
-            break :blk sourceNameInExpr(lambda.body.*, offset);
+            break :blk sourceNameInExpr(budget, lambda.body.*, offset);
         },
         .member => |member| blk: {
             if (spanContainsOptional(member.name_span, offset)) break :blk .{
@@ -576,7 +671,7 @@ fn sourceNameInExpr(expr: ast.Expr, offset: usize) ?SourceNameTarget {
                 .kind = .member_name,
                 .qualifier = simpleIdentifierName(member.target.*),
             };
-            break :blk sourceNameInExpr(member.target.*, offset);
+            break :blk sourceNameInExpr(budget, member.target.*, offset);
         },
         .record => |record| blk: {
             if (spanContainsOptional(record.type_name_span, offset)) break :blk .{
@@ -584,25 +679,28 @@ fn sourceNameInExpr(expr: ast.Expr, offset: usize) ?SourceNameTarget {
                 .kind = .identifier,
             };
             for (record.fields.items) |field| {
+                if (expired(budget)) return null;
                 if (spanContainsOptional(field.name_span, offset)) break :blk .{
                     .text = field.name,
                     .kind = .record_field_name,
                     .qualifier = record.type_name,
                 };
-                if (sourceNameInExpr(field.value, offset)) |target| break :blk target;
+                if (sourceNameInExpr(budget, field.value, offset)) |target| break :blk target;
             }
             break :blk null;
         },
         .record_update => |update| blk: {
-            if (sourceNameInExpr(update.target.*, offset)) |target| break :blk target;
+            if (sourceNameInExpr(budget, update.target.*, offset)) |target| break :blk target;
             for (update.fields.items) |field| {
+                if (expired(budget)) return null;
                 for (field.path.items) |segment| {
+                    if (expired(budget)) return null;
                     if (spanContainsOffset(segment.span, offset)) break :blk .{
                         .text = segment.name,
                         .kind = .record_update_path_segment,
                     };
                 }
-                if (sourceNameInExpr(field.value, offset)) |target| break :blk target;
+                if (sourceNameInExpr(budget, field.value, offset)) |target| break :blk target;
             }
             break :blk null;
         },
@@ -617,88 +715,100 @@ fn sourceNameInExpr(expr: ast.Expr, offset: usize) ?SourceNameTarget {
             };
             break :blk null;
         },
-        .optional_check => |check| sourceNameInExpr(check.target.*, offset),
+        .optional_check => |check| sourceNameInExpr(budget, check.target.*, offset),
         .coalesce => |coalesce| blk: {
-            if (sourceNameInExpr(coalesce.target.*, offset)) |target| break :blk target;
-            break :blk sourceNameInExpr(coalesce.fallback.*, offset);
+            if (sourceNameInExpr(budget, coalesce.target.*, offset)) |target| break :blk target;
+            break :blk sourceNameInExpr(budget, coalesce.fallback.*, offset);
         },
         else => null,
     };
 }
 
-fn recordUpdatePathInExpr(expr: ast.Expr, offset: usize) ?RecordUpdatePathTarget {
+fn recordUpdatePathInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?RecordUpdatePathTarget {
+    if (expired(budget)) return null;
     return switch (expr) {
         .call => |call| blk: {
             for (call.args.items) |arg| {
-                if (recordUpdatePathInExpr(arg, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (recordUpdatePathInExpr(budget, arg, offset)) |target| break :blk target;
             }
             break :blk null;
         },
         .apply => |apply| blk: {
-            if (recordUpdatePathInExpr(apply.callee.*, offset)) |target| break :blk target;
+            if (recordUpdatePathInExpr(budget, apply.callee.*, offset)) |target| break :blk target;
             for (apply.args.items) |arg| {
-                if (recordUpdatePathInExpr(arg, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (recordUpdatePathInExpr(budget, arg, offset)) |target| break :blk target;
             }
             break :blk null;
         },
-        .lambda => |lambda| recordUpdatePathInExpr(lambda.body.*, offset),
-        .member => |member| recordUpdatePathInExpr(member.target.*, offset),
+        .lambda => |lambda| recordUpdatePathInExpr(budget, lambda.body.*, offset),
+        .member => |member| recordUpdatePathInExpr(budget, member.target.*, offset),
         .record => |record| blk: {
             for (record.fields.items) |field| {
-                if (recordUpdatePathInExpr(field.value, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (recordUpdatePathInExpr(budget, field.value, offset)) |target| break :blk target;
             }
             break :blk null;
         },
         .record_update => |update| blk: {
-            if (recordUpdatePathInExpr(update.target.*, offset)) |target| break :blk target;
+            if (recordUpdatePathInExpr(budget, update.target.*, offset)) |target| break :blk target;
             for (update.fields.items) |field| {
+                if (expired(budget)) return null;
                 for (field.path.items, 0..) |segment, segment_index| {
+                    if (expired(budget)) return null;
                     if (spanContainsOffset(segment.span, offset)) break :blk .{
                         .target = update.target.*,
                         .path = field.path.items,
                         .segment_index = segment_index,
                     };
                 }
-                if (recordUpdatePathInExpr(field.value, offset)) |target| break :blk target;
+                if (recordUpdatePathInExpr(budget, field.value, offset)) |target| break :blk target;
             }
             break :blk null;
         },
-        .optional_check => |check| recordUpdatePathInExpr(check.target.*, offset),
+        .optional_check => |check| recordUpdatePathInExpr(budget, check.target.*, offset),
         .coalesce => |coalesce| blk: {
-            if (recordUpdatePathInExpr(coalesce.target.*, offset)) |target| break :blk target;
-            break :blk recordUpdatePathInExpr(coalesce.fallback.*, offset);
+            if (recordUpdatePathInExpr(budget, coalesce.target.*, offset)) |target| break :blk target;
+            break :blk recordUpdatePathInExpr(budget, coalesce.fallback.*, offset);
         },
         else => null,
     };
 }
 
-fn recordUpdateCompletionInExpr(expr: ast.Expr, offset: usize) ?RecordUpdateCompletionTarget {
+fn recordUpdateCompletionInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?RecordUpdateCompletionTarget {
+    if (expired(budget)) return null;
     return switch (expr) {
         .call => |call| blk: {
             for (call.args.items) |arg| {
-                if (recordUpdateCompletionInExpr(arg, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (recordUpdateCompletionInExpr(budget, arg, offset)) |target| break :blk target;
             }
             break :blk null;
         },
         .apply => |apply| blk: {
-            if (recordUpdateCompletionInExpr(apply.callee.*, offset)) |target| break :blk target;
+            if (recordUpdateCompletionInExpr(budget, apply.callee.*, offset)) |target| break :blk target;
             for (apply.args.items) |arg| {
-                if (recordUpdateCompletionInExpr(arg, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (recordUpdateCompletionInExpr(budget, arg, offset)) |target| break :blk target;
             }
             break :blk null;
         },
-        .lambda => |lambda| recordUpdateCompletionInExpr(lambda.body.*, offset),
-        .member => |member| recordUpdateCompletionInExpr(member.target.*, offset),
+        .lambda => |lambda| recordUpdateCompletionInExpr(budget, lambda.body.*, offset),
+        .member => |member| recordUpdateCompletionInExpr(budget, member.target.*, offset),
         .record => |record| blk: {
             for (record.fields.items) |field| {
-                if (recordUpdateCompletionInExpr(field.value, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (recordUpdateCompletionInExpr(budget, field.value, offset)) |target| break :blk target;
             }
             break :blk null;
         },
         .record_update => |update| blk: {
-            if (recordUpdateCompletionInExpr(update.target.*, offset)) |target| break :blk target;
+            if (recordUpdateCompletionInExpr(budget, update.target.*, offset)) |target| break :blk target;
             for (update.fields.items) |field| {
+                if (expired(budget)) return null;
                 for (field.path.items, 0..) |segment, segment_index| {
+                    if (expired(budget)) return null;
                     if (spanContainsOffset(segment.span, offset)) break :blk .{
                         .target = update.target.*,
                         .path_prefix = field.path.items[0..segment_index],
@@ -706,10 +816,10 @@ fn recordUpdateCompletionInExpr(expr: ast.Expr, offset: usize) ?RecordUpdateComp
                 }
                 if (spanContainsOffset(field.path_span, offset)) break :blk .{
                     .target = update.target.*,
-                    .path_prefix = field.path.items[0..pathPrefixLengthAt(field.path.items, offset)],
+                    .path_prefix = field.path.items[0..(pathPrefixLengthAt(budget, field.path.items, offset) orelse return null)],
                 };
                 if (spanContainsOffset(field.value_span, offset)) {
-                    if (recordUpdateCompletionInExpr(field.value, offset)) |target| break :blk target;
+                    if (recordUpdateCompletionInExpr(budget, field.value, offset)) |target| break :blk target;
                     break :blk null;
                 }
             }
@@ -719,17 +829,19 @@ fn recordUpdateCompletionInExpr(expr: ast.Expr, offset: usize) ?RecordUpdateComp
             };
             break :blk null;
         },
-        .optional_check => |check| recordUpdateCompletionInExpr(check.target.*, offset),
+        .optional_check => |check| recordUpdateCompletionInExpr(budget, check.target.*, offset),
         .coalesce => |coalesce| blk: {
-            if (recordUpdateCompletionInExpr(coalesce.target.*, offset)) |target| break :blk target;
-            break :blk recordUpdateCompletionInExpr(coalesce.fallback.*, offset);
+            if (recordUpdateCompletionInExpr(budget, coalesce.target.*, offset)) |target| break :blk target;
+            break :blk recordUpdateCompletionInExpr(budget, coalesce.fallback.*, offset);
         },
         else => null,
     };
 }
 
-fn pathPrefixLengthAt(path: []const ast.RecordPathSegment, offset: usize) usize {
+fn pathPrefixLengthAt(budget: ?QueryBudget, path: []const ast.RecordPathSegment, offset: usize) ?usize {
+    if (expired(budget)) return null;
     for (path, 0..) |segment, index| {
+        if (expired(budget)) return null;
         if (offset <= segment.span.end) return index;
     }
     return path.len;
@@ -740,8 +852,10 @@ const PathSegmentTarget = struct {
     index: usize,
 };
 
-fn pathSegmentAt(path: []const ast.RecordPathSegment, offset: usize) ?PathSegmentTarget {
+fn pathSegmentAt(budget: ?QueryBudget, path: []const ast.RecordPathSegment, offset: usize) ?PathSegmentTarget {
+    if (expired(budget)) return null;
     for (path, 0..) |segment, index| {
+        if (expired(budget)) return null;
         if (spanContainsOffset(segment.span, offset)) return .{
             .segment = segment,
             .index = index,
@@ -750,46 +864,51 @@ fn pathSegmentAt(path: []const ast.RecordPathSegment, offset: usize) ?PathSegmen
     return null;
 }
 
-fn memberInExpr(expr: ast.Expr, offset: usize) ?MemberTarget {
+fn memberInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?MemberTarget {
+    if (expired(budget)) return null;
     return switch (expr) {
         .call => |call| blk: {
             for (call.args.items) |arg| {
-                if (memberInExpr(arg, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (memberInExpr(budget, arg, offset)) |target| break :blk target;
             }
             break :blk null;
         },
         .apply => |apply| blk: {
-            if (memberInExpr(apply.callee.*, offset)) |target| break :blk target;
+            if (memberInExpr(budget, apply.callee.*, offset)) |target| break :blk target;
             for (apply.args.items) |arg| {
-                if (memberInExpr(arg, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (memberInExpr(budget, arg, offset)) |target| break :blk target;
             }
             break :blk null;
         },
-        .lambda => |lambda| memberInExpr(lambda.body.*, offset),
+        .lambda => |lambda| memberInExpr(budget, lambda.body.*, offset),
         .member => |member| blk: {
             if (spanContainsOptional(member.name_span, offset)) break :blk .{
                 .target = member.target.*,
                 .name = member.name,
             };
-            break :blk memberInExpr(member.target.*, offset);
+            break :blk memberInExpr(budget, member.target.*, offset);
         },
         .record => |record| blk: {
             for (record.fields.items) |field| {
-                if (memberInExpr(field.value, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (memberInExpr(budget, field.value, offset)) |target| break :blk target;
             }
             break :blk null;
         },
         .record_update => |update| blk: {
-            if (memberInExpr(update.target.*, offset)) |target| break :blk target;
+            if (memberInExpr(budget, update.target.*, offset)) |target| break :blk target;
             for (update.fields.items) |field| {
-                if (memberInExpr(field.value, offset)) |target| break :blk target;
+                if (expired(budget)) return null;
+                if (memberInExpr(budget, field.value, offset)) |target| break :blk target;
             }
             break :blk null;
         },
-        .optional_check => |check| memberInExpr(check.target.*, offset),
+        .optional_check => |check| memberInExpr(budget, check.target.*, offset),
         .coalesce => |coalesce| blk: {
-            if (memberInExpr(coalesce.target.*, offset)) |target| break :blk target;
-            break :blk memberInExpr(coalesce.fallback.*, offset);
+            if (memberInExpr(budget, coalesce.target.*, offset)) |target| break :blk target;
+            break :blk memberInExpr(budget, coalesce.fallback.*, offset);
         },
         else => null,
     };
@@ -843,4 +962,8 @@ fn spanContainsOffset(span: ast.Span, offset: usize) bool {
 
 fn spanContainsOptional(span: ?ast.Span, offset: usize) bool {
     return if (span) |value| spanContainsOffset(value, offset) else false;
+}
+
+fn expired(budget: ?QueryBudget) bool {
+    return if (budget) |value| value.expired() else false;
 }
