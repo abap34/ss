@@ -150,3 +150,87 @@ fn expectFingerprintFailure(
         },
     }
 }
+
+test "watch spec: unchanged inspections retain only cached import edges" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    defer testing.allocator.free(root);
+    const entry_path = try std.fs.path.join(testing.allocator, &.{ root, "main.ss" });
+    defer testing.allocator.free(entry_path);
+    const dependency = try std.fs.path.join(testing.allocator, &.{ root, "dependency.ss" });
+    defer testing.allocator.free(dependency);
+    try writeSource(entry_path, "import ./dependency\npage main\nend\n");
+    try writeSource(dependency, "fn value() -> Number\nreturn 1\nend\n");
+    var accounting = testing.FailingAllocator.init(testing.allocator, .{});
+    const allocator = accounting.allocator();
+    var cache = watch.ImportCache.init(allocator);
+    defer cache.deinit();
+    const options = watch.Options{ .input_path = entry_path, .asset_base_dir = root };
+    const first = try inspectWithCache(allocator, options, &cache);
+    const retained = accounting.allocated_bytes - accounting.freed_bytes;
+    for (0..100) |_| {
+        try testing.expectEqual(first, try inspectWithCache(allocator, options, &cache));
+        try testing.expectEqual(retained, accounting.allocated_bytes - accounting.freed_bytes);
+    }
+    try testing.expectEqual(@as(usize, 2), cache.parsed_modules);
+    try testing.expectEqual(@as(usize, 2), cache.entries.count());
+
+    try writeSource(dependency, "fn value() -> Number\nreturn 200\nend\n");
+    try testing.expect(first != try inspectWithCache(allocator, options, &cache));
+    try testing.expectEqual(@as(usize, 3), cache.parsed_modules);
+}
+
+test "watch spec: import replacement evicts obsolete edges and malformed edits preserve known edges" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    defer allocator.free(root);
+    const entry_path = try std.fs.path.join(allocator, &.{ root, "main.ss" });
+    defer allocator.free(entry_path);
+    const empty_assets = try std.fs.path.join(allocator, &.{ root, "assets" });
+    defer allocator.free(empty_assets);
+    try std.Io.Dir.cwd().createDirPath(testing.io, empty_assets);
+    var cache = watch.ImportCache.init(allocator);
+    defer cache.deinit();
+    const options = watch.Options{ .input_path = entry_path, .asset_base_dir = empty_assets };
+    for (0..30) |index| {
+        const dependency = try std.fmt.allocPrint(allocator, "{s}/dependency_{d}.ss", .{ root, index });
+        defer allocator.free(dependency);
+        const source = try std.fmt.allocPrint(allocator, "import ./dependency_{d}\npage main\nend\n", .{index});
+        defer allocator.free(source);
+        try writeSource(dependency, "fn value() -> Number\nreturn 1\nend\n");
+        try writeSource(entry_path, source);
+        _ = try inspectWithCache(allocator, options, &cache);
+        try testing.expectEqual(@as(usize, 2), cache.entries.count());
+    }
+    try writeSource(entry_path, "import ./dependency_29\npage main\nlet incomplete =\nend\n");
+    const incomplete = try inspectWithCache(allocator, options, &cache);
+    const parsed_before = cache.parsed_modules;
+    try testing.expectEqual(incomplete, try inspectWithCache(allocator, options, &cache));
+    try testing.expectEqual(parsed_before, cache.parsed_modules);
+    try testing.expectEqual(@as(usize, 2), cache.entries.count());
+    try writeSource(entry_path, "page main\nend\n");
+    const removed = try inspectWithCache(allocator, options, &cache);
+    try testing.expectEqual(@as(usize, 1), cache.entries.count());
+    const old_dependency = try std.fs.path.join(allocator, &.{ root, "dependency_29.ss" });
+    defer allocator.free(old_dependency);
+    try writeSource(old_dependency, "fn value() -> Number\nreturn 500\nend\n");
+    try testing.expectEqual(removed, try inspectWithCache(allocator, options, &cache));
+}
+
+fn writeSource(path: []const u8, contents: []const u8) !void {
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = contents, .flags = .{ .truncate = true } });
+}
+
+fn inspectWithCache(allocator: std.mem.Allocator, options: watch.Options, cache: *watch.ImportCache) !u64 {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var inspection = try watch.inspectFingerprintWithCache(testing.io, arena.allocator(), options, cache);
+    defer inspection.deinit(arena.allocator());
+    return switch (inspection) {
+        .value => |value| value,
+        .failure => |failure| failure.cause,
+    };
+}

@@ -1069,7 +1069,7 @@ fn runResolvedWatch(
     if (mode == .render) {
         if (output_path) |path| try validateOutputPathConflicts(io, allocator, resolved, &.{.{ .path = path, .option = "--output" }});
     }
-    try watcher.run(io, allocator, mode, .{
+    try watcher.run(io, std.heap.smp_allocator, mode, .{
         .input_path = resolved.entry_path,
         .output_path = output_path,
         .asset_base_dir = resolved.asset_base_dir,

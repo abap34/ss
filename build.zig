@@ -675,9 +675,13 @@ fn addTestStep(
     addFocusedTestStep(b, "test-icons", "Run focused bundled icon catalog tests", &run_editor_icons_spec_tests.step);
     const watch_mod = createCommonModule(ctx, "src/watch.zig", modules, true);
     addNativePdfHeadersAndLibraries(b, watch_mod);
-    addModuleTest(ctx, test_step, "tests/watch/fingerprint/spec_tests.zig", &.{
+    const watch_spec_mod = createModule(ctx, "tests/watch/fingerprint/spec_tests.zig", &.{
         import("watch", watch_mod),
     }, true);
+    const watch_spec_tests = addTestArtifact(ctx, watch_spec_mod);
+    const run_watch_spec_tests = b.addRunArtifact(watch_spec_tests);
+    test_step.dependOn(&run_watch_spec_tests.step);
+    addFocusedTestStep(b, "test-watch", "Run focused watch dependency tests", &run_watch_spec_tests.step);
     addRenderTests(ctx, modules, build_options, test_step);
     const render_wrap_mod = createModule(ctx, "src/render/text/wrap.zig", &.{}, null);
     addModuleTest(ctx, test_step, "tests/render/wrap/spec_tests.zig", &.{

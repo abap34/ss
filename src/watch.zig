@@ -1,9 +1,8 @@
 const std = @import("std");
 const app = @import("app.zig");
-const syntax = @import("syntax.zig");
-const names = @import("language/names.zig");
 const module_loader = @import("modules/loader.zig");
 const utils = @import("utils");
+pub const ImportCache = @import("watch/imports.zig").Cache;
 
 pub const Mode = enum {
     check,
@@ -82,8 +81,13 @@ const FingerprintContext = struct {
 };
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Options) !void {
+    var imports = ImportCache.init(allocator);
+    defer imports.deinit();
+    var inspection_arena = std.heap.ArenaAllocator.init(allocator);
+    defer inspection_arena.deinit();
+    const scratch = inspection_arena.allocator();
     const interval_ms = @max(options.interval_ms, 50);
-    var initial_inspection = inspectFingerprint(io, allocator, options) catch |err| {
+    var initial_inspection = inspectFingerprintWithCache(io, scratch, options, &imports) catch |err| {
         printUnlocatedFingerprintFailure(options, err);
         return error.DiagnosticsFailed;
     };
@@ -91,11 +95,11 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
         .value => |value| value,
         .failure => |failure| {
             printFingerprintFailure(failure);
-            initial_inspection.deinit(allocator);
+            initial_inspection.deinit(scratch);
             return error.DiagnosticsFailed;
         },
     };
-    initial_inspection.deinit(allocator);
+    initial_inspection.deinit(scratch);
 
     var last_failure: ?FingerprintFailure = null;
     defer if (last_failure) |*failure| failure.deinit(allocator);
@@ -107,9 +111,10 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
     _ = runOnce(io, allocator, mode, options, &embedded_cache);
 
     while (true) {
+        _ = inspection_arena.reset(.retain_capacity);
         const sleep_ms: i64 = @intCast(@min(interval_ms, @as(u64, std.math.maxInt(i64))));
         try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(sleep_ms), .awake);
-        var inspection = inspectFingerprint(io, allocator, options) catch |err| {
+        var inspection = inspectFingerprintWithCache(io, scratch, options, &imports) catch |err| {
             clearFingerprintFailure(allocator, &last_failure);
             if (last_unlocated_error == null or last_unlocated_error.? != err) {
                 printUnlocatedFingerprintFailure(options, err);
@@ -117,7 +122,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
             last_unlocated_error = err;
             continue;
         };
-        defer inspection.deinit(allocator);
+        defer inspection.deinit(scratch);
         const next_fingerprint = switch (inspection) {
             .value => |value| blk: {
                 if (last_failure) |failure| printFingerprintRecovery(failure);
@@ -204,7 +209,10 @@ fn fingerprintTargetLabel(target: FingerprintTarget) []const u8 {
     };
 }
 
-fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Options, embedded_cache: *module_loader.EmbeddedSyntaxCache) bool {
+fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options: Options, embedded_cache: *module_loader.EmbeddedSyntaxCache) bool {
+    var arena = std.heap.ArenaAllocator.init(backing_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     switch (mode) {
         .check => {
             app.checkFile(io, allocator, .{
@@ -275,9 +283,17 @@ pub fn fingerprint(io: std.Io, allocator: std.mem.Allocator, options: Options) !
 }
 
 pub fn inspectFingerprint(io: std.Io, allocator: std.mem.Allocator, options: Options) !FingerprintInspection {
+    var imports = ImportCache.init(allocator);
+    defer imports.deinit();
+    return inspectFingerprintWithCache(io, allocator, options, &imports);
+}
+
+pub fn inspectFingerprintWithCache(io: std.Io, allocator: std.mem.Allocator, options: Options, imports: *ImportCache) !FingerprintInspection {
+    imports.beginInspection();
+    defer imports.finishInspection();
     var context = FingerprintContext{ .allocator = allocator };
     defer context.deinit();
-    const value = fingerprintImpl(io, allocator, options, &context) catch |err| {
+    const value = fingerprintImpl(io, allocator, options, &context, imports) catch |err| {
         if (context.take()) |failure| return .{ .failure = failure };
         return err;
     };
@@ -289,16 +305,16 @@ fn fingerprintImpl(
     allocator: std.mem.Allocator,
     options: Options,
     context: *FingerprintContext,
+    imports: *ImportCache,
 ) !u64 {
     var hash: u64 = 14695981039346656037;
     mixBytes(&hash, options.input_path);
-    try mixStatFile(io, &hash, options.input_path, .input_file, context);
     if (options.project_file) |project_file| {
         mixBytes(&hash, project_file);
-        try mixStatFile(io, &hash, project_file, .project_configuration, context);
+        _ = try mixStatFile(io, &hash, project_file, .project_configuration, context);
     }
     try mixHighlightLanguageStats(io, &hash, options.highlight_languages, context);
-    try mixModuleDependencyStats(io, allocator, &hash, options, context);
+    try mixModuleDependencyStats(io, allocator, &hash, options, context, imports);
 
     var dir = utils.fs.openDir(io, options.asset_base_dir, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) return hash;
@@ -363,7 +379,7 @@ fn mixHighlightLanguageStats(
         mixBytes(hash, language.parser);
         mixBytes(hash, language.query);
         if (!std.mem.startsWith(u8, language.query, "builtin:")) {
-            try mixStatFile(io, hash, language.query, .highlight_query, context);
+            _ = try mixStatFile(io, hash, language.query, .highlight_query, context);
         }
     }
 }
@@ -374,6 +390,7 @@ fn mixModuleDependencyStats(
     hash: *u64,
     options: Options,
     context: *FingerprintContext,
+    imports: *ImportCache,
 ) !void {
     var visited = std.StringHashMap(void).init(allocator);
     defer {
@@ -381,7 +398,7 @@ fn mixModuleDependencyStats(
         while (key_it.next()) |key| allocator.free(key.*);
         visited.deinit();
     }
-    try mixModuleImportGraph(io, allocator, hash, options.input_path, .input_file, &visited, context);
+    try mixModuleImportGraph(io, allocator, hash, options.input_path, .input_file, &visited, context, imports);
 }
 
 fn mixModuleImportGraph(
@@ -392,6 +409,7 @@ fn mixModuleImportGraph(
     target: FingerprintTarget,
     visited: *std.StringHashMap(void),
     context: *FingerprintContext,
+    imports: *ImportCache,
 ) !void {
     const resolved_module_path = try std.fs.path.resolve(allocator, &.{module_path});
     defer allocator.free(resolved_module_path);
@@ -403,36 +421,15 @@ fn mixModuleImportGraph(
     };
 
     mixBytes(hash, resolved_module_path);
-    try mixStatFile(io, hash, resolved_module_path, target, context);
-
-    const source = utils.fs.readFileAlloc(io, allocator, resolved_module_path) catch |err| {
+    const stat = try mixStatFile(io, hash, resolved_module_path, target, context) orelse return;
+    const dependencies = imports.read(io, allocator, resolved_module_path, stat) catch |err| {
         if (err == error.FileNotFound) return;
         try context.record(target, resolved_module_path, err);
         return err;
     };
-    defer allocator.free(source);
-
-    var program = syntax.parseWithSourceName(allocator, source, resolved_module_path) catch return;
-    defer program.deinit(allocator);
-
-    const base_dir = std.fs.path.dirname(resolved_module_path) orelse ".";
-    for (program.imports.items) |import_decl| {
-        mixBytes(hash, import_decl.spec);
-        if (std.mem.startsWith(u8, import_decl.spec, "std:")) continue;
-
-        const import_path = try resolveExplicitImportPath(allocator, base_dir, import_decl.spec);
-        defer allocator.free(import_path);
-        mixBytes(hash, import_path);
-        try mixStatFile(io, hash, import_path, .imported_source, context);
-        try mixModuleImportGraph(io, allocator, hash, import_path, .imported_source, visited, context);
+    for (dependencies) |import_path| {
+        try mixModuleImportGraph(io, allocator, hash, import_path, .imported_source, visited, context, imports);
     }
-}
-
-fn resolveExplicitImportPath(allocator: std.mem.Allocator, base_dir: []const u8, spec: []const u8) ![]u8 {
-    const path = try names.importPathWithDefaultExtension(allocator, spec);
-    defer allocator.free(path);
-    if (std.fs.path.isAbsolute(path)) return allocator.dupe(u8, path);
-    return std.fs.path.resolve(allocator, &.{ base_dir, path });
 }
 
 fn mixStatFile(
@@ -441,15 +438,18 @@ fn mixStatFile(
     path: []const u8,
     target: FingerprintTarget,
     context: *FingerprintContext,
-) !void {
+) !?std.Io.Dir.Stat {
     const stat = utils.fs.statFile(io, path) catch |err| {
-        if (err == error.FileNotFound) return;
+        if (err == error.FileNotFound) return null;
         try context.record(target, path, err);
         return err;
     };
     mixValue(u64, hash, stat.size);
     mixValue(i96, hash, stat.mtime.nanoseconds);
+    mixValue(i96, hash, stat.ctime.nanoseconds);
+    mixValue(std.Io.File.INode, hash, stat.inode);
     mixValue(u8, hash, @intFromEnum(stat.kind));
+    return stat;
 }
 
 fn skipDirectory(name: []const u8) bool {
