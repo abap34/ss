@@ -38,11 +38,6 @@ pub fn get(allocator: std.mem.Allocator, state: anytype, node: *const Node, key:
     return defaultValue(allocator, state, node, key);
 }
 
-pub fn getWithEnv(allocator: std.mem.Allocator, node: *const Node, key: []const u8, sema: anytype) !?ValueSlot {
-    if (model.nodeField(node, key)) |found| return .{ .value = found };
-    return defaultValueWithEnv(allocator, node, key, sema);
-}
-
 pub fn read(
     allocator: std.mem.Allocator,
     state: anytype,
@@ -73,46 +68,17 @@ pub fn className(state: anytype, node: *const Node) ?[]const u8 {
     };
 }
 
-pub fn classNameWithEnv(node: *const Node, sema: anytype) ?[]const u8 {
-    return switch (node.kind) {
-        .document => "Doc",
-        .page => "PageContext",
-        .object => if (node.role) |role| sema.roleClass(role) else null,
-    };
-}
-
 pub fn roleClass(state: anytype, role_name: []const u8) ?[]const u8 {
-    var index = state.module_order.items.len;
-    while (index > 0) {
-        index -= 1;
-        const module = state.moduleById(state.module_order.items[index]) orelse continue;
-        for (module.syntax.object_extensions.items) |extension| {
-            for (extension.roles.items) |role| {
-                if (std.mem.eql(u8, role, role_name)) return extension.target;
-            }
-        }
-        for (module.syntax.objects.items) |decl| {
-            for (decl.roles.items) |role| {
-                if (std.mem.eql(u8, role, role_name)) return decl.name;
-            }
-        }
-    }
-    return null;
+    return state.declaration_index.roleClass(role_name);
 }
 
 fn defaultValue(allocator: std.mem.Allocator, state: anytype, node: *const Node, key: []const u8) !?ValueSlot {
     const class_name = className(state, node) orelse return null;
-    const descriptor = fieldDescriptor(state, class_name, key) orelse return null;
+    const descriptor = state.declaration_index.field(class_name, key) orelse return null;
     const text = descriptor.default_property_value orelse return null;
     if (!isNoneDefault(text) and value_text.typedPropertyValueOwnsTaggedText(descriptor.value_type)) {
         return .{ .value = try state.cachedFieldDefault(text, descriptor.value_type) };
     }
-    return try parseDefault(allocator, descriptor.default_property_value, descriptor.value_type);
-}
-
-fn defaultValueWithEnv(allocator: std.mem.Allocator, node: *const Node, key: []const u8, sema: anytype) !?ValueSlot {
-    const class_name = classNameWithEnv(node, sema) orelse return null;
-    const descriptor = sema.field(class_name, key) orelse return null;
     return try parseDefault(allocator, descriptor.default_property_value, descriptor.value_type);
 }
 
@@ -127,66 +93,6 @@ fn parseDefault(allocator: std.mem.Allocator, maybe_text: ?[]const u8, ty: ast.T
         .owned = true,
         .owns_tagged_text = !isNoneDefault(text) and value_text.typedPropertyValueOwnsTaggedText(ty),
     };
-}
-
-const FieldDescriptor = struct {
-    default_property_value: ?[]const u8,
-    value_type: ast.Type,
-};
-
-fn fieldDescriptor(state: anytype, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
-    var current: ?[]const u8 = class_name;
-    var remaining_bases: usize = 0;
-    for (state.module_order.items) |module_id| {
-        const module = state.moduleById(module_id) orelse continue;
-        remaining_bases += module.syntax.objects.items.len;
-    }
-    while (current) |name| {
-        if (fieldDescriptorInClass(state, name, field_name)) |descriptor| return descriptor;
-        if (remaining_bases == 0) return null;
-        remaining_bases -= 1;
-        current = classBase(state, name);
-    }
-    return null;
-}
-
-fn fieldDescriptorInClass(state: anytype, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
-    var index = state.module_order.items.len;
-    while (index > 0) {
-        index -= 1;
-        const module = state.moduleById(state.module_order.items[index]) orelse continue;
-        for (module.syntax.object_extensions.items) |extension| {
-            if (!std.mem.eql(u8, extension.target, class_name)) continue;
-            for (extension.fields.items) |field| {
-                if (std.mem.eql(u8, field.name, field_name)) return .{
-                    .default_property_value = field.default_property_value,
-                    .value_type = field.value_type,
-                };
-            }
-        }
-        for (module.syntax.objects.items) |decl| {
-            if (!std.mem.eql(u8, decl.name, class_name)) continue;
-            for (decl.fields.items) |field| {
-                if (std.mem.eql(u8, field.name, field_name)) return .{
-                    .default_property_value = field.default_property_value,
-                    .value_type = field.value_type,
-                };
-            }
-        }
-    }
-    return null;
-}
-
-fn classBase(state: anytype, class_name: []const u8) ?[]const u8 {
-    var index = state.module_order.items.len;
-    while (index > 0) {
-        index -= 1;
-        const module = state.moduleById(state.module_order.items[index]) orelse continue;
-        for (module.syntax.objects.items) |decl| {
-            if (std.mem.eql(u8, decl.name, class_name)) return decl.base;
-        }
-    }
-    return null;
 }
 
 fn readSlotPath(

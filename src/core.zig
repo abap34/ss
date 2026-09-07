@@ -81,3 +81,5 @@ pub const value_text = @import("core/value_text.zig");
 pub const text_tokenize = @import("core/text_tokenize.zig");
 pub const render_text_measure = @import("render/text/measure.zig");
 pub const render_wrap = @import("render/text/wrap.zig");
+
+pub const declarations = @import("core/declarations.zig");

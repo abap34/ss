@@ -647,6 +647,14 @@ fn addTestStep(
     const run_module_loader_spec_tests = b.addRunArtifact(module_loader_spec_tests);
     test_step.dependOn(&run_module_loader_spec_tests.step);
     addFocusedTestStep(b, "test-module-loader", "Run focused module loader tests", &run_module_loader_spec_tests.step);
+    const declaration_spec_mod = createModule(ctx, "tests/compiler/declarations/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    const declaration_spec_tests = addTestArtifact(ctx, declaration_spec_mod);
+    const run_declaration_spec_tests = b.addRunArtifact(declaration_spec_tests);
+    test_step.dependOn(&run_declaration_spec_tests.step);
+    addFocusedTestStep(b, "test-declarations", "Run focused shared declaration index tests", &run_declaration_spec_tests.step);
+
     const nominal_spec_mod = createModule(ctx, "tests/compiler/nominal/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);

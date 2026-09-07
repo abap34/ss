@@ -2,16 +2,14 @@ const std = @import("std");
 const core = @import("core");
 
 const analysis = @import("../analysis.zig");
-const declarations = @import("../language/declarations.zig");
 const json = @import("utils").json;
 
 pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, state: *core.DocumentState) !void {
     var variables = try root.arrayField("variables");
-    var declaration_index = try declarations.build(allocator, state);
-    defer declaration_index.deinit();
+    const declaration_index = state.declaration_index;
     for (state.modules.items) |module| {
         if (module.path == null) continue;
-        var variable_infos = try analysis.collectScopedVariableInfoFromModule(allocator, state, &declaration_index, module.syntax, module.id, module.source.len);
+        var variable_infos = try analysis.collectScopedVariableInfoFromModule(allocator, state, declaration_index, module.syntax, module.id, module.source.len);
         defer variable_infos.deinit(allocator);
         for (variable_infos.items) |entry| {
             var item = try variables.objectItem();

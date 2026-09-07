@@ -7,8 +7,6 @@ const lowering = compiler.lowering;
 const analysis = compiler.analysis;
 const module_loader = compiler.module_loader;
 const core = compiler.core;
-const declarations = compiler.declarations;
-const semantic_env = compiler.semantic_env;
 
 pub const BodyTextDefaults = struct {
     inline_math_height_factor: f32,
@@ -276,15 +274,11 @@ pub fn expectClassDefaultProperty(
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    var declaration_index = try declarations.build(allocator, &state);
-    defer declaration_index.deinit();
-    const sema = semantic_env.SemanticEnv.init(&state, &declaration_index, &state.functions);
-
     for (state.nodes.items) |node| {
         if (node.kind != .object) continue;
         const node_role = node.role orelse continue;
         if (!std.mem.eql(u8, node_role, role)) continue;
-        var slot = (try core.fields.getWithEnv(allocator, &node, key, &sema)) orelse {
+        var slot = (try core.fields.get(allocator, &state, &node, key)) orelse {
             if (expected == null) return;
             return error.ExpectedObjectPropertyMissing;
         };

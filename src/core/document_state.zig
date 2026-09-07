@@ -3,6 +3,7 @@ const model = @import("model");
 const layout = @import("../layout/root.zig");
 const ast = @import("ast");
 const value_text = @import("value_text.zig");
+const declarations = @import("declarations.zig");
 
 const Allocator = model.Allocator;
 const NodeId = model.NodeId;
@@ -80,9 +81,14 @@ const DefaultValueCache = struct {
         return cache;
     }
 
-    fn destroy(self: *DefaultValueCache) void {
+    fn clear(self: *DefaultValueCache) void {
         var iterator = self.values.valueIterator();
         while (iterator.next()) |value| value_text.deinitParsedPropertyValue(self.allocator, value);
+        self.values.clearRetainingCapacity();
+    }
+
+    fn destroy(self: *DefaultValueCache) void {
+        self.clear();
         self.values.deinit();
         self.allocator.destroy(self);
     }
@@ -228,6 +234,7 @@ pub const DocumentState = struct {
     asset_base_dir: []u8,
     modules: std.ArrayList(SourceModule),
     module_order: std.ArrayList(SourceModuleId),
+    declaration_index: *declarations.DeclarationIndex,
     project_module_id: SourceModuleId,
     constants: ConstMap,
     const_values: ConstValueMap,
@@ -265,12 +272,18 @@ pub const DocumentState = struct {
         project_source: []u8,
         project_syntax: ast.Module,
     ) !DocumentState {
-        const default_values = try DefaultValueCache.create(allocator);
+        const declaration_index = try allocator.create(declarations.DeclarationIndex);
+        const default_values = DefaultValueCache.create(allocator) catch |err| {
+            allocator.destroy(declaration_index);
+            return err;
+        };
+        declaration_index.* = declarations.DeclarationIndex.init(allocator);
         var state = DocumentState{
             .allocator = allocator,
             .asset_base_dir = asset_base_dir,
             .modules = .empty,
             .module_order = .empty,
+            .declaration_index = declaration_index,
             .project_module_id = 0,
             .constants = ConstMap.init(allocator),
             .const_values = ConstValueMap.init(allocator),
@@ -327,10 +340,20 @@ pub const DocumentState = struct {
             .resolved_import_ids = .empty,
         });
 
+        try state.rebuildDeclarationIndex();
         return state;
     }
 
+    pub fn rebuildDeclarationIndex(self: *DocumentState) !void {
+        const next = try declarations.build(self.allocator, self);
+        self.declaration_index.deinit();
+        self.declaration_index.* = next;
+        self.default_values.clear();
+    }
+
     fn deinitPartial(self: *DocumentState) void {
+        self.declaration_index.deinit();
+        self.allocator.destroy(self.declaration_index);
         self.modules.deinit(self.allocator);
         self.module_order.deinit(self.allocator);
         self.constants.deinit();
@@ -364,6 +387,8 @@ pub const DocumentState = struct {
     }
 
     pub fn deinit(self: *DocumentState) void {
+        self.declaration_index.deinit();
+        self.allocator.destroy(self.declaration_index);
         for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);
         self.module_order.deinit(self.allocator);

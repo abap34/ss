@@ -645,14 +645,7 @@ pub fn build(
         try diagnostic_bag.addDocumentStateFrom(&state, 0);
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     }
-    var fallback_declarations: ?declarations.DeclarationIndex = null;
-    defer if (fallback_declarations) |*index_value| index_value.deinit();
-    const declaration_index: *const declarations.DeclarationIndex = if (execution_graph) |*graph|
-        &graph.declarations
-    else blk: {
-        fallback_declarations = try declarations.build(allocator, &state);
-        break :blk &fallback_declarations.?;
-    };
+    const declaration_index = state.declaration_index;
     try hole_facts.populateExpectedTypes(allocator, &state, declaration_index, &parse_holes);
     try options.checkCanceled();
     try diagnostic_bag.addDocumentStateFrom(&state, 0);

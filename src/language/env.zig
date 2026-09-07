@@ -205,8 +205,7 @@ pub const SemanticEnv = struct {
 
     fn declarationIndex(self: *const SemanticEnv) ?*const declarations.DeclarationIndex {
         if (self.declarations) |index| return index;
-        std.debug.assert(self.state == null);
-        return null;
+        return if (self.state) |state| state.declaration_index else null;
     }
 
     pub fn callParamName(self: *const SemanticEnv, call_name: []const u8, index: usize) ?[]const u8 {

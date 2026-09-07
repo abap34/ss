@@ -51,7 +51,8 @@ pub const DependencyEdge = struct {
 
 pub const ExecutionGraph = struct {
     allocator: std.mem.Allocator,
-    declarations: declarations.DeclarationIndex,
+    // Borrowed from the document whose source generation defines this graph.
+    declarations: *const declarations.DeclarationIndex,
     units: std.ArrayList(ExecutionUnit),
     edges: std.ArrayList(DependencyEdge),
     order: []usize,
@@ -60,12 +61,12 @@ pub const ExecutionGraph = struct {
         allocator: std.mem.Allocator,
         state: *const core.DocumentState,
         diagnostic_state: *core.DocumentState,
-        declaration_index: *declarations.DeclarationIndex,
+        declaration_index: *const declarations.DeclarationIndex,
         options: BuildOptions,
     ) !ExecutionGraph {
         var graph = ExecutionGraph{
             .allocator = allocator,
-            .declarations = declarations.DeclarationIndex.init(allocator),
+            .declarations = declaration_index,
             .units = .empty,
             .edges = .empty,
             .order = &.{},
@@ -99,9 +100,6 @@ pub const ExecutionGraph = struct {
             }
             return err;
         };
-        graph.declarations.deinit();
-        graph.declarations = declaration_index.*;
-        declaration_index.* = declarations.DeclarationIndex.init(allocator);
         return graph;
     }
 
@@ -110,14 +108,13 @@ pub const ExecutionGraph = struct {
         self.edges.deinit(self.allocator);
         for (self.units.items) |*unit| unit.deinit();
         self.units.deinit(self.allocator);
-        self.declarations.deinit();
     }
 };
 
 pub fn validateDependencies(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
-    declaration_index: *declarations.DeclarationIndex,
+    declaration_index: *const declarations.DeclarationIndex,
 ) !void {
     var graph = try ExecutionGraph.build(allocator, state, state, declaration_index, .{ .page_id_mode = .synthetic });
     defer graph.deinit();

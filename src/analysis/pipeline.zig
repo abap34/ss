@@ -81,9 +81,7 @@ pub fn checkFunctionDefinitions(
     state: *core.DocumentState,
     functions: *const core.FunctionMap,
 ) !void {
-    var declaration_index = try declarations.build(allocator, state);
-    defer declaration_index.deinit();
-    const sema = SemanticEnv.init(state, &declaration_index, functions);
+    const sema = SemanticEnv.init(state, state.declaration_index, functions);
     var inference_context = infer.Context.init(allocator);
     defer inference_context.deinit();
     try checkFunctionDefinitionsWithEnv(&inference_context, allocator, state, &sema);
@@ -141,17 +139,16 @@ pub fn analyzeDocumentState(
     state: *core.DocumentState,
 ) !void {
     defer state.deduplicateValidationUserReports();
-    var declaration_index: declarations.DeclarationIndex = undefined;
+    var declaration_index: *const declarations.DeclarationIndex = undefined;
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.static_semantics, measure_start);
         declaration_index = try analyzeDocumentStateSemantics(allocator, state);
     }
-    defer declaration_index.deinit();
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.execution_graph, measure_start);
-        try execution.validateDependencies(allocator, state, &declaration_index);
+        try execution.validateDependencies(allocator, state, declaration_index);
     }
 }
 
@@ -161,31 +158,29 @@ pub fn analyzeDocumentStateWithMode(
     mode: AnalysisMode,
 ) !?execution.ExecutionGraph {
     defer state.deduplicateValidationUserReports();
-    var declaration_index: declarations.DeclarationIndex = undefined;
+    var declaration_index: *const declarations.DeclarationIndex = undefined;
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.static_semantics, measure_start);
         declaration_index = try analyzeDocumentStateSemantics(allocator, state);
     }
-    defer declaration_index.deinit();
     const measure_start = utils.measure_profile.start();
     defer utils.measure_profile.recordAnalysis(.execution_graph, measure_start);
     return switch (mode) {
         .diagnostics_only => blk: {
-            try execution.validateDependencies(allocator, state, &declaration_index);
+            try execution.validateDependencies(allocator, state, declaration_index);
             break :blk null;
         },
-        .evaluation => try execution.ExecutionGraph.build(allocator, state, state, &declaration_index, .{ .page_id_mode = .create }),
+        .evaluation => try execution.ExecutionGraph.build(allocator, state, state, declaration_index, .{ .page_id_mode = .create }),
     };
 }
 
 fn analyzeDocumentStateSemantics(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
-) !declarations.DeclarationIndex {
-    var declaration_index = try declarations.build(allocator, state);
-    errdefer declaration_index.deinit();
-    const sema = SemanticEnv.init(state, &declaration_index, &state.functions);
+) !*const declarations.DeclarationIndex {
+    const declaration_index = state.declaration_index;
+    const sema = SemanticEnv.init(state, declaration_index, &state.functions);
     var inference_context = infer.Context.init(allocator);
     defer inference_context.deinit();
 
@@ -615,12 +610,7 @@ pub fn collectVariableInfoFromModule(
     program: ast.Module,
     diagnostic_state: ?*core.DocumentState,
 ) !std.StringHashMap(VariableInfo) {
-    var declaration_index: ?declarations.DeclarationIndex = if (diagnostic_state) |state|
-        try declarations.build(allocator, state)
-    else
-        null;
-    defer if (declaration_index) |*index| index.deinit();
-    const declaration_ptr = if (declaration_index) |*index| index else null;
+    const declaration_ptr = if (diagnostic_state) |state| state.declaration_index else null;
     const sema = SemanticEnv.init(diagnostic_state, declaration_ptr, functions);
     var variables = std.StringHashMap(VariableInfo).init(allocator);
     errdefer variables.deinit();
@@ -776,15 +766,15 @@ pub fn buildDocumentStateWithOptions(
     if (state.module_order.items.len == 0 or state.module_order.items[state.module_order.items.len - 1] != state.project_module_id) {
         try state.module_order.append(allocator, state.project_module_id);
     }
+    try state.rebuildDeclarationIndex();
     {
-        var declaration_index = try declarations.build(allocator, &state);
-        defer declaration_index.deinit();
-        const sema = SemanticEnv.init(&state, &declaration_index, &state.functions);
+        const sema = SemanticEnv.init(&state, state.declaration_index, &state.functions);
         try semantics.resolveTypeReferences(allocator, &state, &sema);
         try semantics.resolveEnumCaseExpressionsAndDefaults(allocator, &state, &sema);
         try semantics.rebuildConstDeclarations(allocator, &state);
         try semantics.rebuildFunctionDeclarations(allocator, &state);
     }
+    try state.rebuildDeclarationIndex();
     try analysis_index.populateDocumentStateAnalysis(allocator, &state);
     return state;
 }

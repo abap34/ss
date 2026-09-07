@@ -331,7 +331,7 @@ pub fn executeGraph(
     const previous_declarations = active_declarations;
     const previous_name_resolution_cache = active_name_resolution_cache;
     const previous_cancellation = active_cancellation;
-    active_declarations = &graph.declarations;
+    active_declarations = graph.declarations;
     active_cancellation = options.cancellation;
     defer active_declarations = previous_declarations;
     defer active_name_resolution_cache = previous_name_resolution_cache;
@@ -839,25 +839,12 @@ fn updateRecordFieldPath(
     return error.UnknownRecordField;
 }
 
-const ResolvedRecordDecl = struct {
-    decl: *const ast.RecordDecl,
-    module_id: core.SourceModuleId,
-};
-
-fn findRecordDecl(state: *const core.DocumentState, module_id: ?core.SourceModuleId, type_name: []const u8) ?ResolvedRecordDecl {
-    const module = state.moduleById(module_id orelse return null) orelse return null;
-    for (module.syntax.records.items) |*decl| {
-        if (std.mem.eql(u8, decl.name, type_name)) return .{ .decl = decl, .module_id = module.id };
-    }
-    return null;
+fn findRecordDecl(state: *const core.DocumentState, module_id: ?core.SourceModuleId, type_name: []const u8) ?declarations.RecordDescriptor {
+    return state.declaration_index.record(.{ .module_id = module_id orelse return null, .name = type_name });
 }
 
-fn findEnumDecl(state: *const core.DocumentState, module_id: ?core.SourceModuleId, type_name: []const u8) ?*const ast.TypeDecl {
-    const module = state.moduleById(module_id orelse return null) orelse return null;
-    for (module.syntax.types.items) |*decl| {
-        if (std.mem.eql(u8, decl.name, type_name)) return decl;
-    }
-    return null;
+fn findEnumDecl(state: *const core.DocumentState, module_id: ?core.SourceModuleId, type_name: []const u8) ?declarations.TypeDescriptor {
+    return state.declaration_index.typeInModule(module_id orelse return null, type_name);
 }
 
 fn putRecordFieldValue(allocator: std.mem.Allocator, record: *core.RecordValue, name: []const u8, value: core.Value, explicit: bool) !void {
@@ -886,11 +873,10 @@ fn materializePropertyRecord(
     closures: *ClosureStore,
     origin: []const u8,
     node: *const core.Node,
-    sema: *const SemanticEnv,
     key: []const u8,
     ty: ast.Type,
 ) !core.RecordValue {
-    if (try core.fields.getWithEnv(state.allocator, node, key, sema)) |slot_value| {
+    if (try core.fields.get(state.allocator, state, node, key)) |slot_value| {
         var slot = slot_value;
         defer slot.deinit(state.allocator);
         if (slot.value != .record) return error.InvalidValueTag;
@@ -1967,13 +1953,13 @@ fn writePropertyPathToNode(
 
     const node = state.getNode(node_id) orelse return error.UnknownNode;
     const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
-    const maybe_field = if (core.fields.classNameWithEnv(node, &sema)) |class_name|
+    const maybe_field = if (core.fields.className(state, node)) |class_name|
         sema.field(class_name, property_name)
     else
         sema.fieldByName(property_name);
     const field = maybe_field orelse return error.InvalidType;
     if (field.value_type.kind != .record) return error.InvalidValueTag;
-    var record = try materializePropertyRecord(state, page_id, context, mode, functions, closures, origin, node, &sema, property_name, field.value_type);
+    var record = try materializePropertyRecord(state, page_id, context, mode, functions, closures, origin, node, property_name, field.value_type);
     defer record.deinit(state.allocator);
 
     var value_copy = try value.clone(state.allocator);
@@ -2011,7 +1997,7 @@ fn executeStatement(
     origin_override: ?[]const u8,
 ) anyerror!ExecFlow {
     try checkCancellation();
-    const origin = if (origin_override) |override| override else try statementOrigin(state, stmt.span);
+    const origin = if (origin_override) |override| override else try state.ownString(try statementOrigin(state, stmt.span));
     switch (stmt.kind) {
         .hole => return error.HoleStatement,
         .let_binding => |binding| {
@@ -2410,7 +2396,7 @@ fn invokeUserFunctionValues(
     return error.FunctionDidNotReturnValue;
 }
 
-fn statementOrigin(state: *core.DocumentState, span: ast.Span) ![]const u8 {
+fn statementOrigin(state: *core.DocumentState, span: ast.Span) ![]u8 {
     const path: []const u8 = if (state.moduleById(active_module_id)) |module|
         module.path orelse module.spec
     else
