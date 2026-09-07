@@ -693,6 +693,13 @@ fn addTestStep(
     const run_return_facts_tests = b.addRunArtifact(return_facts_tests);
     test_step.dependOn(&run_return_facts_tests.step);
     addFocusedTestStep(b, "test-return-facts", "Run focused argument-sensitive return inference tests", &run_return_facts_tests.step);
+    const resources_spec_mod = createModule(ctx, "tests/analysis/resources/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    const resources_spec_tests = addTestArtifact(ctx, resources_spec_mod);
+    const run_resources_spec_tests = b.addRunArtifact(resources_spec_tests);
+    test_step.dependOn(&run_resources_spec_tests.step);
+    addFocusedTestStep(b, "test-resource-index", "Run focused dependency resource index tests", &run_resources_spec_tests.step);
     const completion_spec_mod = createModule(ctx, "tests/lsp/completion/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);

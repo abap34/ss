@@ -1,6 +1,7 @@
 pub const check = @import("analysis/check.zig");
 pub const cache = @import("analysis/cache.zig");
 pub const contracts = @import("analysis/contracts.zig");
+pub const resource_index = @import("analysis/resource_index.zig");
 pub const dependencies = @import("analysis/dependencies.zig");
 pub const diagnostics = @import("analysis/diagnostics.zig");
 pub const hole_facts = @import("analysis/hole_facts.zig");
