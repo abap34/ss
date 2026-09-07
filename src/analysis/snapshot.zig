@@ -24,6 +24,7 @@ const syntax_hole = @import("../syntax/hole.zig");
 const syntax = @import("../syntax.zig");
 const utils = @import("utils");
 
+pub const SyntaxStorage = @import("snapshot/syntax.zig").Storage;
 pub const TypeStorage = @import("snapshot/types.zig").Storage;
 pub const SourceRequest = query_types.SourceRequest;
 pub const QueryOptions = query_types.QueryOptions;
@@ -309,6 +310,7 @@ pub const LayoutOutput = struct {
 
 pub const AnalysisSnapshot = struct {
     builtin_module_id: ?core.SourceModuleId = null,
+    syntax_storage: ?SyntaxStorage = null,
     type_storage: ?TypeStorage = null,
     allocator: std.mem.Allocator,
     generation: u64 = 0,
@@ -380,7 +382,16 @@ pub const AnalysisSnapshot = struct {
         return snapshot;
     }
 
+    pub fn syntaxForSource(self: *const AnalysisSnapshot, path: []const u8, source: []const u8) ?*const ast.Module {
+        return if (self.syntax_storage) |*storage| storage.forSource(path, source) else null;
+    }
+
+    pub fn updateSyntax(self: *AnalysisSnapshot, path: []const u8, source: []const u8, cancellation: ?utils.Cancellation) !void {
+        if (self.syntax_storage) |*storage| try storage.replace(path, source, cancellation);
+    }
+
     pub fn deinit(self: *AnalysisSnapshot) void {
+        if (self.syntax_storage) |*storage| storage.deinit();
         if (self.type_storage) |*storage| storage.deinit();
         self.project.deinit(self.allocator);
         for (self.modules) |module| {
@@ -519,6 +530,21 @@ pub fn build(
     asset_base_dir: []const u8,
     options: Options,
 ) !AnalysisSnapshot {
+    var syntax_storage = SyntaxStorage.init(allocator);
+    errdefer syntax_storage.deinit();
+    var snapshot = try buildWithSyntax(allocator, sources, entry_path, asset_base_dir, options, &syntax_storage);
+    snapshot.syntax_storage = syntax_storage;
+    return snapshot;
+}
+
+fn buildWithSyntax(
+    allocator: std.mem.Allocator,
+    sources: *const SourceSet,
+    entry_path: []const u8,
+    asset_base_dir: []const u8,
+    options: Options,
+    syntax_storage: *SyntaxStorage,
+) !AnalysisSnapshot {
     try options.checkCanceled();
     var diagnostic_bag = diagnostics.DiagnosticBag.init(allocator);
     var diagnostics_moved = false;
@@ -546,9 +572,9 @@ pub fn build(
     };
 
     var parse_failure: syntax.ParseFailure = .{};
-    const parse_result = syntax.parseRecoveringWithSourceNameAndFailure(allocator, entry_source, entry_path, &parse_failure) catch |err| {
+    const parse_result = syntax.parseRecoveringWithOptions(allocator, entry_source, entry_path, .{ .failure = &parse_failure, .cancellation = options.cancellation }) catch |err| {
         defer allocator.free(entry_source);
-        if (err == error.OutOfMemory) return err;
+        if (err == error.OutOfMemory or err == error.Canceled) return err;
         const diagnostic = parse_failure.diagnostic;
         var message_buf: [256]u8 = undefined;
         const message = if (diagnostic) |diag|
@@ -563,6 +589,12 @@ pub fn build(
     };
     var program = parse_result.module;
     var parse_holes = parse_result.holes;
+    syntax_storage.capture(entry_path, entry_source, program) catch |err| {
+        program.deinit(allocator);
+        parse_holes.deinit(allocator);
+        allocator.free(entry_source);
+        return err;
+    };
     options.checkCanceled() catch |err| {
         program.deinit(allocator);
         parse_holes.deinit(allocator);
@@ -624,6 +656,15 @@ pub fn build(
         allocator.free(entry_source);
         return err;
     };
+
+    for (index.module_graph.modules.items) |module| {
+        if (module.path) |path| syntax_storage.capture(path, module.source, module.syntax) catch |err| {
+            program.deinit(allocator);
+            parse_holes.deinit(allocator);
+            allocator.free(entry_source);
+            return err;
+        };
+    }
 
     var state = analysis_pipeline.buildDocumentStateWithOptions(allocator, entry_path, asset_base_dir, &entry_source, &program, &index, .{
         .allow_diagnostics = true,

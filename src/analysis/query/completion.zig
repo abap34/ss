@@ -6,7 +6,7 @@ const language_names = @import("../../language/names.zig");
 const type_resolution = @import("../../language/type_resolution.zig");
 const resolve_query = @import("resolve.zig");
 const cursor = @import("cursor.zig");
-const syntax = @import("../../syntax.zig");
+const source_query = @import("source.zig");
 const types = @import("types.zig");
 const utils = @import("utils");
 
@@ -27,16 +27,10 @@ pub fn at(
 ) !Result {
     const budget = types.QueryBudget.start(opts);
     if (budget.expired()) return emptyResult(allocator);
-    var parsed = syntax.parseRecoveringWithSourceName(allocator, req.source, req.path) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        else => null,
-    };
-    defer if (parsed) |*result| result.deinit(allocator);
-    if (budget.expired()) {
-        if (parsed) |*result| result.deinit(allocator);
-        parsed = null;
-    }
-    const parsed_module = if (parsed) |*result| &result.module else null;
+    var parsed = try source_query.ParsedSource.init(allocator, snapshot, req, budget);
+    defer parsed.deinit(allocator);
+    if (budget.expired()) return emptyResult(allocator);
+    const parsed_module = parsed.module();
     if (try completeRecordUpdateAt(allocator, snapshot, req, parsed_module)) |result| return result;
     if (try completeModuleAccessAt(allocator, snapshot, req, parsed_module)) |result| return result;
     if (try completeMemberAccessAt(allocator, snapshot, req, parsed_module)) |result| return result;

@@ -17,7 +17,7 @@ pub fn at(
 ) ![]types.DefinitionTarget {
     const budget = types.QueryBudget.start(opts);
     if (budget.expired()) return allocator.alloc(types.DefinitionTarget, 0);
-    var context = context_query.Context.initWithBudget(allocator, req, budget) catch |err| switch (err) {
+    var context = context_query.Context.initFromSnapshot(allocator, snapshot, req, budget) catch |err| switch (err) {
         error.NoQueryTarget => return allocator.alloc(types.DefinitionTarget, 0),
         else => return err,
     };

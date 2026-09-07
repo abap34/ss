@@ -25,6 +25,11 @@ const AnchorRef = ast.AnchorRef;
 
 pub const ParseDiagnostic = diagnostics.ParseDiagnostic;
 
+pub const ParseOptions = struct {
+    failure: ?*ParseFailure = null,
+    cancellation: ?utils.Cancellation = null,
+};
+
 pub const ParseFailure = struct {
     diagnostic: ?ParseDiagnostic = null,
 };
@@ -80,19 +85,21 @@ pub fn parseRecovering(allocator: Allocator, text: []const u8) !ParseResult {
 }
 
 pub fn parseRecoveringWithSourceName(allocator: Allocator, text: []const u8, source_name: []const u8) !ParseResult {
-    return parseRecoveringWithSourceNameInner(allocator, text, source_name, null);
+    return parseRecoveringWithOptions(allocator, text, source_name, .{});
 }
 
 pub fn parseRecoveringWithSourceNameAndFailure(allocator: Allocator, text: []const u8, source_name: []const u8, failure: *ParseFailure) !ParseResult {
-    return parseRecoveringWithSourceNameInner(allocator, text, source_name, failure);
+    return parseRecoveringWithOptions(allocator, text, source_name, .{ .failure = failure });
 }
 
-fn parseRecoveringWithSourceNameInner(allocator: Allocator, text: []const u8, source_name: []const u8, failure: ?*ParseFailure) !ParseResult {
-    if (failure) |out| out.* = .{};
+pub fn parseRecoveringWithOptions(allocator: Allocator, text: []const u8, source_name: []const u8, options: ParseOptions) !ParseResult {
+    if (options.failure) |out| out.* = .{};
+    if (options.cancellation) |cancellation| try cancellation.check();
     var builder = hole.Builder{ .allocator = allocator };
     errdefer builder.deinit();
 
     var parser = initParser(allocator, text, source_name);
+    parser.cancellation = options.cancellation;
     parser.recovering = true;
     parser.reject_empty_args = true;
     parser.holes = &builder;
@@ -129,6 +136,11 @@ const Parser = struct {
     recovering: bool,
     reject_empty_args: bool,
     holes: ?*hole.Builder,
+    cancellation: ?utils.Cancellation = null,
+
+    fn checkCanceled(self: *const Parser) !void {
+        if (self.cancellation) |cancellation| try cancellation.check();
+    }
 
     fn parseModule(self: *Parser) !Module {
         var module = Module.init();
@@ -139,7 +151,7 @@ const Parser = struct {
         while (!self.eof()) {
             const item_start = self.pos;
             self.parseTopLevelItem(&module, &imports_allowed) catch |err| {
-                if (!self.recovering or err == error.OutOfMemory) return err;
+                if (!self.recovering or err == error.OutOfMemory or err == error.Canceled) return err;
                 try self.addTopLevelHole(err, item_start);
                 self.synchronizeTopLevelItem(item_start);
             };
@@ -149,6 +161,7 @@ const Parser = struct {
     }
 
     fn parseTopLevelItem(self: *Parser, module: *Module, imports_allowed: *bool) !void {
+        try self.checkCanceled();
         const item_start = self.pos;
         if (self.source[self.pos] == '@') return self.fail(error.ExpectedKeyword);
 
@@ -915,6 +928,7 @@ const Parser = struct {
     }
 
     fn parsePrimaryTypeAnnotation(self: *Parser) anyerror!ast.Type {
+        try self.checkCanceled();
         const name = try self.parseQualifiedTypeNameWithSpan();
         if (std.mem.eql(u8, name.text, "Document")) {
             self.allocator.free(name.text);
@@ -1175,7 +1189,7 @@ const Parser = struct {
             }
             const statement_start = self.pos;
             var statement = self.parseStatement() catch |err| {
-                if (!self.recovering or err == error.OutOfMemory) return err;
+                if (!self.recovering or err == error.OutOfMemory or err == error.Canceled) return err;
                 var hole_statement = try self.makeHoleStatementForError(err, statement_start);
                 var hole_statement_moved = false;
                 errdefer if (!hole_statement_moved) hole_statement.deinit(self.allocator);
@@ -1223,7 +1237,7 @@ const Parser = struct {
             }
             const statement_start = self.pos;
             var statement = self.parseStatement() catch |err| {
-                if (!self.recovering or err == error.OutOfMemory) return err;
+                if (!self.recovering or err == error.OutOfMemory or err == error.Canceled) return err;
                 var hole_statement = try self.makeHoleStatementForError(err, statement_start);
                 var hole_statement_moved = false;
                 errdefer if (!hole_statement_moved) hole_statement.deinit(self.allocator);
@@ -1243,6 +1257,7 @@ const Parser = struct {
     }
 
     fn parseStatement(self: *Parser) anyerror!Statement {
+        try self.checkCanceled();
         source.skipTriviaFrom(self.source, &self.pos);
         const start = self.pos;
 
@@ -1368,6 +1383,7 @@ const Parser = struct {
     }
 
     fn parseExpr(self: *Parser) anyerror!Expr {
+        try self.checkCanceled();
         return self.parseConcatExpr();
     }
 
@@ -1416,6 +1432,7 @@ const Parser = struct {
     }
 
     fn parseUnaryExpr(self: *Parser) anyerror!Expr {
+        try self.checkCanceled();
         source.skipInlineSpaces(self.source, &self.pos);
         if (!self.eof() and self.source[self.pos] == '!') {
             self.pos += 1;
@@ -1626,6 +1643,7 @@ const Parser = struct {
     }
 
     fn parsePrimaryExpr(self: *Parser) anyerror!Expr {
+        try self.checkCanceled();
         source.skipInlineSpaces(self.source, &self.pos);
         if (self.reject_empty_args) {
             if (self.eof()) {
@@ -1953,7 +1971,8 @@ const Parser = struct {
 
     fn parseMemberAssignmentStatement(self: *Parser, start: usize) !?Statement {
         const saved = self.pos;
-        var target = self.parseCallTargetExpr() catch {
+        var target = self.parseCallTargetExpr() catch |err| {
+            if (err == error.OutOfMemory or err == error.Canceled) return err;
             self.pos = saved;
             return null;
         };
@@ -2539,6 +2558,7 @@ const Parser = struct {
     }
 
     fn consumeKeyword(self: *Parser, keyword: []const u8) !bool {
+        try self.checkCanceled();
         source.skipTriviaFrom(self.source, &self.pos);
         return self.consumeKeywordNoTrivia(keyword);
     }
@@ -2554,6 +2574,7 @@ const Parser = struct {
     }
 
     fn expectChar(self: *Parser, ch: u8) !void {
+        try self.checkCanceled();
         source.skipTriviaFrom(self.source, &self.pos);
         if (self.eof() or self.source[self.pos] != ch) return self.fail(error.ExpectedChar);
         self.pos += 1;

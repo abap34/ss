@@ -3,7 +3,7 @@ const ast = @import("ast");
 
 const language_names = @import("../../language/names.zig");
 const cursor = @import("cursor.zig");
-const syntax = @import("../../syntax.zig");
+const source_query = @import("source.zig");
 const types = @import("types.zig");
 const utils = @import("utils");
 
@@ -11,7 +11,7 @@ pub const Context = struct {
     target: []u8,
     target_kind: ?cursor.SourceNameKind = null,
     qualifier: ?[]u8 = null,
-    parsed: ?syntax.ParseResult = null,
+    parsed: source_query.ParsedSource = .{},
     offset: usize,
 
     pub fn init(allocator: std.mem.Allocator, req: types.SourceRequest) !Context {
@@ -19,18 +19,17 @@ pub const Context = struct {
     }
 
     pub fn initWithBudget(allocator: std.mem.Allocator, req: types.SourceRequest, budget: ?types.QueryBudget) !Context {
-        var parsed = syntax.parseRecoveringWithSourceName(allocator, req.source, req.path) catch |err| switch (err) {
-            error.OutOfMemory => return err,
-            else => null,
-        };
-        errdefer if (parsed) |*result| result.deinit(allocator);
-        if (budget) |query_budget| {
-            if (query_budget.expired()) {
-                if (parsed) |*result| result.deinit(allocator);
-                parsed = null;
-            }
-        }
-        const parsed_module = if (parsed) |*result| &result.module else null;
+        return initWithParsed(allocator, req, try source_query.ParsedSource.parse(allocator, req, budget));
+    }
+
+    pub fn initFromSnapshot(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, budget: ?types.QueryBudget) !Context {
+        return initWithParsed(allocator, req, try source_query.ParsedSource.init(allocator, snapshot, req, budget));
+    }
+
+    fn initWithParsed(allocator: std.mem.Allocator, req: types.SourceRequest, source: source_query.ParsedSource) !Context {
+        var parsed = source;
+        errdefer parsed.deinit(allocator);
+        const parsed_module = parsed.module();
         const target = try targetAtOffset(allocator, req.source, req.offset, parsed_module) orelse return error.NoQueryTarget;
         return .{
             .target = target.text,
@@ -44,11 +43,11 @@ pub const Context = struct {
     pub fn deinit(self: *Context, allocator: std.mem.Allocator) void {
         allocator.free(self.target);
         if (self.qualifier) |qualifier| allocator.free(qualifier);
-        if (self.parsed) |*result| result.deinit(allocator);
+        self.parsed.deinit(allocator);
     }
 
     pub fn module(self: *const Context) ?*const ast.Module {
-        return if (self.parsed) |*result| &result.module else null;
+        return self.parsed.module();
     }
 
     pub fn qualifiedCallableAlias(self: *const Context) ?[]const u8 {
@@ -100,11 +99,15 @@ const TargetAtOffset = struct {
 
 fn targetAtOffset(allocator: std.mem.Allocator, text: []const u8, offset: usize, program: ?*const ast.Module) !?TargetAtOffset {
     if (program) |parsed| {
-        if (cursor.sourceNameAt(parsed, offset)) |target| return .{
-            .text = try allocator.dupe(u8, target.text),
-            .kind = target.kind,
-            .qualifier = if (target.qualifier) |qualifier| try allocator.dupe(u8, qualifier) else null,
-        };
+        if (cursor.sourceNameAt(parsed, offset)) |target| {
+            const name = try allocator.dupe(u8, target.text);
+            errdefer allocator.free(name);
+            return .{
+                .text = name,
+                .kind = target.kind,
+                .qualifier = if (target.qualifier) |qualifier| try allocator.dupe(u8, qualifier) else null,
+            };
+        }
     }
     const span = utils.source.wordSpanAt(text, offset, language_names.isCallableNameChar) orelse return null;
     return .{

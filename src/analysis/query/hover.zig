@@ -13,7 +13,7 @@ pub fn at(
 ) !?types.HoverInfo {
     const budget = types.QueryBudget.start(opts);
     if (budget.expired()) return null;
-    var context = context_query.Context.initWithBudget(allocator, req, budget) catch |err| switch (err) {
+    var context = context_query.Context.initFromSnapshot(allocator, snapshot, req, budget) catch |err| switch (err) {
         error.NoQueryTarget => return null,
         else => return err,
     };

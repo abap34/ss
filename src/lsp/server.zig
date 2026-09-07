@@ -518,7 +518,7 @@ const Server = struct {
             self.allocator.free(conflicts_json);
             return err;
         };
-        const next_layout = try analysis.snapshot.LayoutOutput.fromDocumentStateWithOwnedReport(
+        var next_layout = try analysis.snapshot.LayoutOutput.fromDocumentStateWithOwnedReport(
             self.allocator,
             state,
             collected.takeReport(),
@@ -526,8 +526,12 @@ const Server = struct {
             conflicts_json,
         );
 
+        var next_layout_owned = true;
+        errdefer if (next_layout_owned) next_layout.deinit(self.allocator);
+        try snapshot.updateSyntax(path, generated.source, .{ .context = self, .is_canceled = analysisCanceled });
         previous_layout.deinit(self.allocator);
         snapshot.layout_output = next_layout;
+        next_layout_owned = false;
         rebaseSnapshotSource(snapshot, path, generated.source);
         snapshot.generation = self.documents.generation;
         self.analysis_revision = self.active_revision;

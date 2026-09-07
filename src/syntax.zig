@@ -28,3 +28,5 @@ pub const parseRecovering = syntax.parseRecovering;
 pub const parseRecoveringWithSourceName = syntax.parseRecoveringWithSourceName;
 pub const parseRecoveringWithSourceNameAndFailure = syntax.parseRecoveringWithSourceNameAndFailure;
 pub const ParseResult = syntax.ParseResult;
+pub const ParseOptions = syntax.ParseOptions;
+pub const parseRecoveringWithOptions = syntax.parseRecoveringWithOptions;

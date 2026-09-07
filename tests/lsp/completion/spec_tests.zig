@@ -686,3 +686,173 @@ fn expectUnique(result: query_types.CompletionResult) !void {
 fn expectOnlyKind(result: query_types.CompletionResult, kind: query_types.CompletionKind) !void {
     for (result.items) |item| try testing.expectEqual(kind, item.kind);
 }
+
+test "analysis queries: recovery syntax is borrowed for repeated requests" {
+    var case = try CompletionCase.init(
+        \\page title
+        \\  let t = text("body")
+        \\  t.
+        \\end
+        \\
+    );
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    const tree = snapshot.syntaxForSource(case.path, case.source) orelse return error.TestUnexpectedResult;
+    const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, "  t") };
+    for (0..32) |_| {
+        var limited = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 1 });
+        var context = try compiler.analysis.query.context.Context.initFromSnapshot(limited.allocator(), snapshot, req, null);
+        defer context.deinit(limited.allocator());
+        try testing.expectEqual(tree, context.module().?);
+        try testing.expect(context.parsed.owned == null);
+        try testing.expectEqualStrings("t", context.target);
+    }
+    var completion = try snapshot_api.completeAt(testing.allocator, snapshot, .{
+        .path = case.path,
+        .source = case.source,
+        .offset = offsetAfter(case.source, "t."),
+    }, .{ .budget_ms = 1000 });
+    defer completion.deinit(testing.allocator);
+    try expectHas(completion, "text");
+    try expectHas(completion, "content");
+}
+
+test "analysis queries: failed imports keep the entry recovery tree" {
+    var case = try CompletionCase.init(
+        \\import ./absent.ss as missing
+        \\page title
+        \\  missing::unfinished()
+        \\end
+        \\
+    );
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    try testing.expect(snapshot.diagnostics.hasErrors());
+    const tree = snapshot.syntaxForSource(case.path, case.source) orelse return error.TestUnexpectedResult;
+    var context = try compiler.analysis.query.context.Context.initFromSnapshot(testing.allocator, snapshot, .{
+        .path = case.path,
+        .source = case.source,
+        .offset = offsetAfter(case.source, "missing::un"),
+    }, null);
+    defer context.deinit(testing.allocator);
+    try testing.expectEqual(tree, context.module().?);
+    try testing.expectEqualStrings("missing", context.qualifiedCallableAlias().?);
+}
+
+const retained_source =
+    \\fn accept(value: first::Card?, callback: (second::Card) -> first::Card) -> first::Card = callback(value?)
+    \\page title
+    \\  let broken: third::Card =
+    \\end
+    \\
+;
+
+fn ownQuerySyntax(allocator: std.mem.Allocator) !void {
+    var storage = snapshot_api.SyntaxStorage.init(allocator);
+    defer storage.deinit();
+    {
+        const source = try testing.allocator.dupe(u8, retained_source);
+        defer testing.allocator.free(source);
+        var parsed = try compiler.syntax.parseRecoveringWithSourceName(testing.allocator, source, "owned.ss");
+        defer parsed.deinit(testing.allocator);
+        try storage.capture("owned.ss", source, parsed.module);
+    }
+    const tree = storage.forSource("owned.ss", retained_source) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 1), tree.functions.items.len);
+    const function = tree.functions.items[0];
+    try testing.expectEqualStrings("first::Card", function.result_type.class_name.?);
+    try testing.expectEqualStrings("first::Card", function.params.items[0].ty.optional_child.?.class_name.?);
+    try testing.expectEqualStrings("second::Card", function.params.items[1].ty.fn_params[0].class_name.?);
+    try testing.expectEqualStrings("first::Card", function.params.items[1].ty.fn_result.?.class_name.?);
+    try testing.expect(storage.forSource("owned.ss", "page changed\nend\n") == null);
+    try storage.replace("owned.ss", "page changed\nend\n", null);
+    try testing.expect(storage.forSource("owned.ss", retained_source) == null);
+    try testing.expect(storage.forSource("owned.ss", "page changed\nend\n") != null);
+}
+
+test "analysis queries: retained syntax owns all type spellings and partial allocations" {
+    try ownQuerySyntax(testing.allocator);
+    try testing.checkAllAllocationFailures(testing.allocator, ownQuerySyntax, .{});
+}
+
+const ParseCancellation = struct {
+    checks: usize = 0,
+    limit: usize,
+
+    fn canceled(context: *const anyopaque) bool {
+        const self: *ParseCancellation = @ptrCast(@alignCast(@constCast(context)));
+        self.checks += 1;
+        return self.checks >= self.limit;
+    }
+};
+
+test "analysis queries: fallback parsing checks cancellation inside a document" {
+    const source = "page title\n" ++ ("  let value = add(1, 2)\n" ** 100) ++ "end\n";
+    var cancellation = ParseCancellation{ .limit = 20 };
+    const budget = query_types.QueryBudget.start(.{
+        .budget_ms = 1000,
+        .cancellation = .{ .context = &cancellation, .is_canceled = ParseCancellation.canceled },
+    });
+    var context = try compiler.analysis.query.context.Context.initWithBudget(testing.allocator, .{
+        .path = "cancel.ss",
+        .source = source,
+        .offset = offsetAfter(source, "val"),
+    }, budget);
+    defer context.deinit(testing.allocator);
+    try testing.expect(context.module() == null);
+    try testing.expectEqualStrings("value", context.target);
+    try testing.expectEqual(@as(usize, 20), cancellation.checks);
+}
+
+test "analysis queries: replacing source invalidates syntax and keeps failed replacements atomic" {
+    var case = try CompletionCase.init("page title\n  let value = 1\nend\n");
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    const old_tree = snapshot.syntaxForSource(case.path, case.source).?;
+    const changed = "page title\n  let value = 2\nend\n";
+    var context = try compiler.analysis.query.context.Context.initFromSnapshot(testing.allocator, snapshot, .{
+        .path = case.path,
+        .source = changed,
+        .offset = offsetAfter(changed, "val"),
+    }, null);
+    defer context.deinit(testing.allocator);
+    try testing.expect(context.parsed.owned != null);
+    try testing.expectEqual(old_tree, snapshot.syntaxForSource(case.path, case.source).?);
+    var cancellation = ParseCancellation{ .limit = 1 };
+    try testing.expectError(error.Canceled, snapshot.updateSyntax(case.path, changed, .{
+        .context = &cancellation,
+        .is_canceled = ParseCancellation.canceled,
+    }));
+    try testing.expectEqual(old_tree, snapshot.syntaxForSource(case.path, case.source).?);
+    try snapshot.updateSyntax(case.path, changed, null);
+    try testing.expect(snapshot.syntaxForSource(case.path, case.source) == null);
+    const new_tree = snapshot.syntaxForSource(case.path, changed) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(f64, 2), new_tree.pages.items[0].statements.items[0].kind.let_binding.expr.number);
+}
+
+test "analysis queries: parser cancellation releases partial expressions and declarations" {
+    const source =
+        \\fn scale(value: Number, transform: (Number) -> Number) -> Number
+        \\  if true
+        \\    return transform(add(value, 1))
+        \\  else
+        \\    return 0
+        \\  end
+        \\end
+        \\page title
+        \\  let label = text("value")
+        \\  label.text.size = 20
+        \\end
+        \\
+    ;
+    for (1..120) |limit| {
+        var cancellation = ParseCancellation{ .limit = limit };
+        var parsed = compiler.syntax.parseRecoveringWithOptions(testing.allocator, source, "cancel.ss", .{
+            .cancellation = .{ .context = &cancellation, .is_canceled = ParseCancellation.canceled },
+        }) catch |err| {
+            try testing.expectEqual(error.Canceled, err);
+            continue;
+        };
+        parsed.deinit(testing.allocator);
+    }
+}

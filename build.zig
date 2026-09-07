@@ -443,7 +443,7 @@ fn addTestStep(
     const syntax_mod = createCommonTestModule(ctx, test_step, "src/syntax.zig", modules, true);
     const main_tests_mod = createCliModule(ctx, modules, build_options);
     addQpdfTestModule(ctx, test_step, main_tests_mod);
-    addModuleTest(ctx, test_step, "tests/syntax/parser/spec_tests.zig", &.{
+    const parser_spec_mod = createModule(ctx, "tests/syntax/parser/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
         import("ast", modules.ast),
@@ -451,6 +451,10 @@ fn addTestStep(
         import("language_type", modules.language_type),
         import("syntax", syntax_mod),
     }, true);
+    const parser_spec_tests = addTestArtifact(ctx, parser_spec_mod);
+    const run_parser_spec_tests = b.addRunArtifact(parser_spec_tests);
+    test_step.dependOn(&run_parser_spec_tests.step);
+    addFocusedTestStep(b, "test-parser", "Run focused syntax parser tests", &run_parser_spec_tests.step);
     const scanner_mod = createModule(ctx, "src/syntax/scanner.zig", &.{
         import("utils", modules.utils),
     }, null);
@@ -471,9 +475,13 @@ fn addTestStep(
         import("language_type", modules.language_type),
         import("analysis", analysis_mod),
     }, true);
-    addModuleTest(ctx, test_step, "tests/analysis/query/spec_tests.zig", &.{
+    const analysis_query_spec_mod = createModule(ctx, "tests/analysis/query/spec_tests.zig", &.{
         import("analysis", analysis_mod),
     }, true);
+    const analysis_query_spec_tests = addTestArtifact(ctx, analysis_query_spec_mod);
+    const run_analysis_query_spec_tests = b.addRunArtifact(analysis_query_spec_tests);
+    test_step.dependOn(&run_analysis_query_spec_tests.step);
+    addFocusedTestStep(b, "test-analysis-query", "Run focused analysis query tests", &run_analysis_query_spec_tests.step);
     const analysis_snapshot_spec_mod = createModule(ctx, "tests/analysis/snapshot/spec_tests.zig", &.{
         import("analysis", analysis_mod),
         import("ast", modules.ast),
