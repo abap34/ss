@@ -7,6 +7,10 @@ const Module = std.Build.Module;
 const Step = std.Build.Step;
 const Import = Module.Import;
 
+const installed_stdlib_subdir = "share/ss/stdlib";
+const tree_sitter_cache_subdir = ".ss/cache/tree-sitter";
+const nix_tree_sitter_sources_dir = ".ss-cache/nix/tree-sitter-sources";
+
 const BuildContext = struct {
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -154,13 +158,13 @@ pub fn build(b: *std.Build) void {
     const commit = b.option([]const u8, "commit", "Source commit reported by `ss --version`") orelse detectGitCommit(b) orelse "unknown";
     const uncommitted_changes = detectUncommittedChanges(b);
     const source_stdlib_dir = b.pathFromRoot("stdlib");
-    const installed_stdlib_dir = b.pathJoin(&.{ b.install_path, "share", "ss", "stdlib" });
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version);
     build_options.addOption([]const u8, "commit", commit);
     build_options.addOption([]const u8, "uncommitted_changes", uncommitted_changes);
     build_options.addOption([]const u8, "source_stdlib_dir", source_stdlib_dir);
-    build_options.addOption([]const u8, "installed_stdlib_dir", installed_stdlib_dir);
+    build_options.addOption([]const u8, "installed_stdlib_subdir", installed_stdlib_subdir);
+    build_options.addOption([]const u8, "tree_sitter_cache_subdir", tree_sitter_cache_subdir);
     const ss_highlight_query = b.build_root.handle.readFileAlloc(b.graph.io, "editor/tree-sitter-ss/queries/highlights.scm", b.allocator, .limited(64 * 1024)) catch
         @panic("editor/tree-sitter-ss/queries/highlights.scm is missing.");
     build_options.addOption([]const u8, "ss_highlight_query", ss_highlight_query);
@@ -201,8 +205,6 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "tree_sitter_manifest_hash", tree_sitter.manifest_hash);
     build_options.addOption(u32, "tree_sitter_language_version", tree_sitter.runtime_language_version);
     build_options.addOption(u32, "tree_sitter_min_compatible_language_version", tree_sitter.runtime_min_compatible_language_version);
-    build_options.addOption([]const u8, "tree_sitter_cache_root", tree_sitter.cache_root);
-    build_options.addOption([]const u8, "tree_sitter_bundle_root", tree_sitter.bundle_root);
 
     const modules = createProjectModules(ctx, md4c_src, b.path(md4c_src), build_options, tree_sitter);
     const tree_sitter_abi_check = addTreeSitterAbiCheck(ctx, tree_sitter);
@@ -229,7 +231,7 @@ pub fn build(b: *std.Build) void {
     b.installDirectory(.{
         .source_dir = b.path("stdlib"),
         .install_dir = .prefix,
-        .install_subdir = "share/ss/stdlib",
+        .install_subdir = installed_stdlib_subdir,
         .include_extensions = &.{".ss"},
     });
     b.installDirectory(.{
@@ -1061,6 +1063,7 @@ fn prepareTreeSitterBundle(b: *std.Build) TreeSitterBundle {
     const bundle_root = b.pathJoin(&.{ cache_root, "bundles", manifest_hash });
     const runtime_source_root = b.pathJoin(&.{ bundle_root, "runtime", "source" });
     const generated_root = b.pathJoin(&.{ bundle_root, "generated" });
+    const nix_sources_root = nixTreeSitterSourcesRoot(b);
     const bundle = TreeSitterBundle{
         .manifest_hash = manifest_hash,
         .runtime_language_version = 0,
@@ -1072,7 +1075,7 @@ fn prepareTreeSitterBundle(b: *std.Build) TreeSitterBundle {
     };
 
     if (!treeSitterBundleComplete(b, manifest, bundle)) {
-        buildTreeSitterBundle(b, manifest, bundle);
+        buildTreeSitterBundle(b, manifest, bundle, nix_sources_root);
     }
 
     validateTreeSitterBundle(b, bundle);
@@ -1102,6 +1105,22 @@ fn prepareTreeSitterBundle(b: *std.Build) TreeSitterBundle {
         .runtime_source_root = bundle.runtime_source_root,
         .generated_root = bundle.generated_root,
     };
+}
+
+/// Nix places its pinned source checkouts under a private build directory.
+/// Other builds leave the directory absent and fetch the manifest commits.
+fn nixTreeSitterSourcesRoot(b: *std.Build) ?[]const u8 {
+    const root = b.pathFromRoot(nix_tree_sitter_sources_dir);
+    return if (pathExists(b, root)) root else null;
+}
+
+fn nixTreeSitterSource(b: *std.Build, root: ?[]const u8, name: []const u8) ?[]const u8 {
+    const sources_root = root orelse return null;
+    const path = b.pathJoin(&.{ sources_root, name });
+    if (!pathExists(b, path)) {
+        std.debug.panic("Nix tree-sitter source is missing: {s}", .{path});
+    }
+    return path;
 }
 
 fn validateTreeSitterBundle(b: *std.Build, tree_sitter: TreeSitterBundle) void {
@@ -1173,10 +1192,14 @@ fn hexDigit(value: u8) u8 {
 }
 
 fn treeSitterCacheRoot(b: *std.Build) []const u8 {
-    const home = b.graph.environ_map.get("HOME") orelse
-        b.graph.environ_map.get("USERPROFILE") orelse
+    const home = nonEmptyEnv(b, "HOME") orelse nonEmptyEnv(b, "USERPROFILE") orelse
         @panic("HOME is required to prepare the tree-sitter cache.");
-    return b.pathJoin(&.{ home, ".ss", "cache", "tree-sitter" });
+    return b.pathJoin(&.{ home, tree_sitter_cache_subdir });
+}
+
+fn nonEmptyEnv(b: *std.Build, name: []const u8) ?[]const u8 {
+    const value = b.graph.environ_map.get(name) orelse return null;
+    return if (value.len == 0) null else value;
 }
 
 fn treeSitterBundleComplete(b: *std.Build, manifest: TreeSitterManifest, bundle: TreeSitterBundle) bool {
@@ -1205,22 +1228,33 @@ fn treeSitterBundleComplete(b: *std.Build, manifest: TreeSitterManifest, bundle:
 
 const tree_sitter_support_headers = [_][]const u8{ "parser.h", "alloc.h", "array.h" };
 
-fn buildTreeSitterBundle(b: *std.Build, manifest: TreeSitterManifest, bundle: TreeSitterBundle) void {
+fn buildTreeSitterBundle(
+    b: *std.Build,
+    manifest: TreeSitterManifest,
+    bundle: TreeSitterBundle,
+    nix_sources_root: ?[]const u8,
+) void {
     const cwd = std.Io.Dir.cwd();
     const building_root = b.pathJoin(&.{ bundle.cache_root, "bundles", b.fmt(".building-{s}", .{bundle.manifest_hash}) });
     deleteTreeIfExists(b, building_root);
     cwd.createDirPath(b.graph.io, building_root) catch |err|
         std.debug.panic("failed to create tree-sitter build directory {s}: {}", .{ building_root, err });
 
-    const runtime_checkout = b.pathJoin(&.{ building_root, "sources", "tree-sitter-runtime" });
-    std.debug.print("sync tree-sitter runtime {s}\n", .{manifest.runtime.commit});
-    checkoutCommit(b, manifest.runtime.repo, manifest.runtime.commit, runtime_checkout);
+    const runtime_checkout = nixTreeSitterSource(b, nix_sources_root, "runtime") orelse blk: {
+        const checkout = b.pathJoin(&.{ building_root, "sources", "tree-sitter-runtime" });
+        std.debug.print("sync tree-sitter runtime {s}\n", .{manifest.runtime.commit});
+        checkoutCommit(b, manifest.runtime.repo, manifest.runtime.commit, checkout);
+        break :blk checkout;
+    };
     copyTreeSitterRuntime(b, runtime_checkout, b.pathJoin(&.{ building_root, "runtime", "source" }));
 
     for (manifest.languages) |language| {
-        std.debug.print("sync {s} {s}\n", .{ language.name, language.commit });
-        const checkout = b.pathJoin(&.{ building_root, "sources", language.name });
-        checkoutCommit(b, language.repo, language.commit, checkout);
+        const checkout = nixTreeSitterSource(b, nix_sources_root, language.name) orelse blk: {
+            std.debug.print("sync {s} {s}\n", .{ language.name, language.commit });
+            const destination = b.pathJoin(&.{ building_root, "sources", language.name });
+            checkoutCommit(b, language.repo, language.commit, destination);
+            break :blk destination;
+        };
         var first_support_dir: ?[]const u8 = null;
         for (language.files) |file| {
             if (!isTreeSitterBundleSource(file.to)) continue;

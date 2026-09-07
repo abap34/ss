@@ -243,6 +243,42 @@ The Homebrew formula installs the dependencies **without** the TeX tools.
 Raw LaTeX math rendering still needs a TeX distribution that provides the
 configured engine.
 
+### Nix
+
+With flakes enabled, install directly from GitHub:
+
+```sh
+nix profile install github:abap34/ss
+```
+
+From a local checkout, use:
+
+```sh
+nix profile install .
+```
+
+You can also run ss without installing it:
+
+```sh
+nix run github:abap34/ss -- --help
+```
+
+The flake supports `aarch64-darwin`, `aarch64-linux`, and `x86_64-linux`.
+Intel macOS (`x86_64-darwin`) is not supported.
+
+The Nix package includes the native build and runtime libraries. Raw LaTeX
+math rendering still requires `pdflatex` or `lualatex` to be available on
+`PATH`.
+
+For development, enter the included development shell with:
+
+```sh
+nix develop
+```
+
+The development shell provides Zig, ZLS, Node.js, Python, and the native build
+dependencies.
+
 ### Build From Source
 
 ss has the following dependencies:
