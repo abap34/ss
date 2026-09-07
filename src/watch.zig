@@ -21,6 +21,39 @@ pub const Options = struct {
     interval_ms: u64 = 500,
     quiet: bool = false,
     file_inputs: ?*utils.FileInputs = null,
+    configuration: ?Configuration = null,
+};
+
+pub const Configuration = struct {
+    paths: []const []const u8,
+    fingerprint: u64,
+
+    pub fn init(io: std.Io, paths: []const []const u8) Configuration {
+        return .{ .paths = paths, .fingerprint = inspect(io, paths) };
+    }
+
+    pub fn changed(self: Configuration, io: std.Io) bool {
+        return self.fingerprint != inspect(io, self.paths);
+    }
+
+    pub fn waitForChange(self: Configuration, io: std.Io, interval_ms: u64) !void {
+        while (!self.changed(io)) try sleep(io, interval_ms);
+    }
+
+    fn inspect(io: std.Io, paths: []const []const u8) u64 {
+        var hash: u64 = 14695981039346656037;
+        for (paths) |path| {
+            mixBytes(&hash, path);
+            const stat = utils.fs.statFile(io, path) catch |err| {
+                mixBytes(&hash, @errorName(err));
+                if (err == error.FileNotFound or err == error.NotDir) continue;
+                break;
+            };
+            mixStat(&hash, stat);
+            break;
+        }
+        return hash;
+    }
 };
 
 pub const FingerprintTarget = enum {
@@ -82,6 +115,9 @@ const FingerprintContext = struct {
 };
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, initial_options: Options) !void {
+    if (initial_options.configuration) |configuration| {
+        if (configuration.changed(io)) return;
+    }
     var inputs = utils.FileInputs.init(allocator);
     defer inputs.deinit();
     var options = initial_options;
@@ -120,8 +156,13 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, initial_options
 
     while (true) {
         _ = inspection_arena.reset(.retain_capacity);
-        const sleep_ms: i64 = @intCast(@min(interval_ms, @as(u64, std.math.maxInt(i64))));
-        try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(sleep_ms), .awake);
+        try sleep(io, interval_ms);
+        if (options.configuration) |configuration| {
+            if (configuration.changed(io)) {
+                std.debug.print("watch: project configuration changed\n", .{});
+                return;
+            }
+        }
         var inspection = inspectFingerprintWithCache(io, scratch, options, &imports) catch |err| {
             clearFingerprintFailure(allocator, &last_failure);
             if (last_unlocated_error == null or last_unlocated_error.? != err) {
@@ -155,6 +196,11 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, initial_options
         std.debug.print("watch: change detected\n", .{});
         _ = runOnce(io, allocator, mode, options, &embedded_cache);
     }
+}
+
+fn sleep(io: std.Io, interval_ms: u64) !void {
+    const sleep_ms: i64 = @intCast(@min(@max(interval_ms, 50), @as(u64, std.math.maxInt(i64))));
+    try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(sleep_ms), .awake);
 }
 
 fn sameFingerprintFailure(previous: ?FingerprintFailure, current: FingerprintFailure) bool {
@@ -478,12 +524,16 @@ fn mixStatFile(
         try context.record(target, path, err);
         return err;
     };
+    mixStat(hash, stat);
+    return stat;
+}
+
+fn mixStat(hash: *u64, stat: std.Io.Dir.Stat) void {
     mixValue(u64, hash, stat.size);
     mixValue(i96, hash, stat.mtime.nanoseconds);
     mixValue(i96, hash, stat.ctime.nanoseconds);
     mixValue(std.Io.File.INode, hash, stat.inode);
     mixValue(u8, hash, @intFromEnum(stat.kind));
-    return stat;
 }
 
 fn skipDirectory(name: []const u8) bool {

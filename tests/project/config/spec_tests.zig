@@ -4,6 +4,37 @@ const utils = @import("utils");
 
 const testing = std.testing;
 
+test "project spec: configuration discovery paths include missing nearer candidates" {
+    const paths = try project.configurationPaths(testing.allocator, "/tmp/ss-watch/deck/slide.ss", null);
+    defer {
+        for (paths) |path| testing.allocator.free(path);
+        testing.allocator.free(paths);
+    }
+    try testing.expectEqual(@as(usize, 4), paths.len);
+    try testing.expectEqualStrings("/tmp/ss-watch/deck/ss.toml", paths[0]);
+    try testing.expectEqualStrings("/tmp/ss-watch/ss.toml", paths[1]);
+    try testing.expectEqualStrings("/tmp/ss.toml", paths[2]);
+    try testing.expectEqualStrings("/ss.toml", paths[3]);
+}
+
+test "project spec: configuration path ownership survives allocation failures" {
+    try testing.checkAllAllocationFailures(testing.allocator, collectConfigurationPaths, .{@as(?[]const u8, null)});
+    try testing.checkAllAllocationFailures(testing.allocator, collectConfigurationPaths, .{@as(?[]const u8, "/tmp/project")});
+    try testing.checkAllAllocationFailures(testing.allocator, collectConfigurationPaths, .{@as(?[]const u8, "/tmp/project.toml")});
+}
+
+fn collectConfigurationPaths(allocator: std.mem.Allocator, project_arg: ?[]const u8) !void {
+    const paths = try project.configurationPaths(allocator, "/tmp/project/deck/slide.ss", project_arg);
+    defer {
+        for (paths) |path| allocator.free(path);
+        allocator.free(paths);
+    }
+    if (project_arg) |arg| {
+        try testing.expectEqual(@as(usize, 1), paths.len);
+        try testing.expectEqualStrings(if (std.mem.endsWith(u8, arg, ".toml")) arg else "/tmp/project/ss.toml", paths[0]);
+    }
+}
+
 test "project spec: entry is required in the project table" {
     try testing.expectError(error.MissingProjectEntry, project.parseSource(testing.allocator, "/tmp/ss-project-spec/ss.toml",
         \\[project]

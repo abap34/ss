@@ -140,22 +140,62 @@ pub fn discover(allocator: std.mem.Allocator, io: std.Io, start_dir: []const u8)
 }
 
 pub fn discoverPath(allocator: std.mem.Allocator, start_dir: []const u8) !?[]u8 {
-    var current = try absolutePath(allocator, start_dir);
-    defer allocator.free(current);
-
-    while (true) {
-        const candidate = try std.fs.path.join(allocator, &.{ current, "ss.toml" });
+    var paths = try ConfigurationSearch.init(allocator, start_dir);
+    defer paths.deinit(allocator);
+    while (try paths.next(allocator)) |candidate| {
+        errdefer allocator.free(candidate);
         if (try utils.fs.fileExists(allocator, candidate)) {
             return candidate;
         }
         allocator.free(candidate);
-        const parent = std.fs.path.dirname(current) orelse break;
-        if (std.mem.eql(u8, parent, current)) break;
-        const next = try allocator.dupe(u8, parent);
-        allocator.free(current);
-        current = next;
     }
     return null;
+}
+
+const ConfigurationSearch = struct {
+    start: []u8,
+    current: ?[]const u8,
+
+    fn init(allocator: std.mem.Allocator, start_dir: []const u8) !ConfigurationSearch {
+        const start = try absolutePath(allocator, start_dir);
+        return .{ .start = start, .current = start };
+    }
+
+    fn deinit(self: *ConfigurationSearch, allocator: std.mem.Allocator) void {
+        allocator.free(self.start);
+    }
+
+    fn next(self: *ConfigurationSearch, allocator: std.mem.Allocator) !?[]u8 {
+        const current = self.current orelse return null;
+        const candidate = try std.fs.path.join(allocator, &.{ current, "ss.toml" });
+        const parent = std.fs.path.dirname(current);
+        self.current = if (parent != null and !std.mem.eql(u8, parent.?, current)) parent else null;
+        return candidate;
+    }
+};
+
+// Include missing candidates so creating a nearer configuration changes discovery.
+pub fn configurationPaths(allocator: std.mem.Allocator, input_path: ?[]const u8, project_arg: ?[]const u8) ![][]const u8 {
+    var paths: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (paths.items) |path| allocator.free(path);
+        paths.deinit(allocator);
+    }
+    if (project_arg) |arg| {
+        const path = try projectArgumentPath(allocator, arg);
+        errdefer allocator.free(path);
+        try paths.append(allocator, path);
+    } else {
+        const input = if (input_path) |path| try absolutePath(allocator, path) else null;
+        defer if (input) |path| allocator.free(path);
+        var search = try ConfigurationSearch.init(allocator, if (input) |path| std.fs.path.dirname(path) orelse "." else ".");
+        defer search.deinit(allocator);
+        while (try search.next(allocator)) |path| {
+            errdefer allocator.free(path);
+            try paths.append(allocator, path);
+        }
+    }
+    return try paths.toOwnedSlice(allocator);
 }
 
 pub fn isConfigError(err: anyerror) bool {
@@ -196,14 +236,18 @@ pub fn configErrorMessage(err: anyerror) ?[]const u8 {
 }
 
 pub fn loadProjectArgument(allocator: std.mem.Allocator, io: std.Io, arg: []const u8) !Config {
+    const path = try projectArgumentPath(allocator, arg);
+    defer allocator.free(path);
+    return try loadFile(allocator, io, path);
+}
+
+pub fn projectArgumentPath(allocator: std.mem.Allocator, arg: []const u8) ![]u8 {
     const absolute = try absolutePath(allocator, arg);
     defer allocator.free(absolute);
-    const path = if (std.mem.endsWith(u8, absolute, ".toml"))
+    return if (std.mem.endsWith(u8, absolute, ".toml"))
         try allocator.dupe(u8, absolute)
     else
         try std.fs.path.join(allocator, &.{ absolute, "ss.toml" });
-    defer allocator.free(path);
-    return try loadFile(allocator, io, path);
 }
 
 pub fn loadFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Config {

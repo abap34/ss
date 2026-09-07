@@ -597,10 +597,14 @@ fn addTestStep(
     const progress_test_step = b.step("test-progress", "Run focused progress display tests");
     progress_test_step.dependOn(&run_progress_spec_tests.step);
     progress_test_step.dependOn(&progress_runtime_spec.step);
-    addModuleTest(ctx, test_step, "tests/project/config/spec_tests.zig", &.{
+    const project_spec_mod = createModule(ctx, "tests/project/config/spec_tests.zig", &.{
         import("project", modules.project),
         import("utils", modules.utils),
     }, null);
+    const project_spec_tests = addTestArtifact(ctx, project_spec_mod);
+    const run_project_spec_tests = b.addRunArtifact(project_spec_tests);
+    test_step.dependOn(&run_project_spec_tests.step);
+    addFocusedTestStep(b, "test-project", "Run focused project configuration tests", &run_project_spec_tests.step);
     const app_output_app_mod = createCommonModule(ctx, "src/app.zig", modules, true);
     app_output_app_mod.addOptions("build_options", build_options);
     const app_output_spec_mod = createModule(ctx, "tests/app/output/spec_tests.zig", &.{
@@ -690,6 +694,14 @@ fn addTestStep(
     watch_inputs_spec.stdio = .inherit;
     test_step.dependOn(&watch_inputs_spec.step);
     addFocusedTestStep(b, "test-watch-inputs", "Run focused observed watch input tests", &watch_inputs_spec.step);
+    const watch_configuration_spec = b.addSystemCommand(&.{"node"});
+    watch_configuration_spec.step.dependOn(&ctx.dependency_checks.node.step);
+    watch_configuration_spec.addFileArg(b.path("tests/runtime/watch/configuration/spec.mjs"));
+    watch_configuration_spec.addFileArg(exe.getEmittedBin());
+    watch_configuration_spec.setCwd(b.path("."));
+    watch_configuration_spec.stdio = .inherit;
+    test_step.dependOn(&watch_configuration_spec.step);
+    addFocusedTestStep(b, "test-watch-configuration", "Run focused watch configuration reload tests", &watch_configuration_spec.step);
     const file_inputs_mod = createModule(ctx, "tests/utils/file_inputs/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);

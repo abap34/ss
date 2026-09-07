@@ -929,10 +929,7 @@ fn printProjectConfigErrorForOptions(
 
 fn projectConfigPathForOptions(allocator: std.mem.Allocator, options: CommandOptions) !?[]u8 {
     if (options.project_path) |arg| {
-        const absolute = try project.absolutePath(allocator, arg);
-        defer allocator.free(absolute);
-        if (std.mem.endsWith(u8, absolute, ".toml")) return try allocator.dupe(u8, absolute);
-        return try std.fs.path.join(allocator, &.{ absolute, "ss.toml" });
+        return try project.projectArgumentPath(allocator, arg);
     }
     if (options.input_path) |input| {
         const absolute = try project.absolutePath(allocator, input);
@@ -949,59 +946,42 @@ fn runWatchCommand(
     mode: watcher.Mode,
     options: CommandOptions,
 ) !void {
-    var resolved = project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir) catch |err| {
-        if (watchRecoverableProjectError(options, err)) {
-            try printWatchProjectError(io, allocator, options, err);
-            try waitForWatchProject(io, allocator, mode, options, err);
-            return;
-        }
-        if (err == error.MissingInputPath) return failUsage("missing input path or --project", .{});
-        if (error_report.isFileSystemError(err)) {
-            try printWatchProjectError(io, allocator, options, err);
-            return error.DiagnosticsFailed;
-        }
-        return err;
-    };
-    defer resolved.deinit(allocator);
-    applyDiagnosticOptions(options, &resolved);
-    try runResolvedWatch(io, allocator, mode, options, &resolved);
-}
-
-fn waitForWatchProject(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    mode: watcher.Mode,
-    options: CommandOptions,
-    first_error: anyerror,
-) !void {
-    const interval_ms = @max(options.interval_ms, 50);
-    std.debug.print("watch: project configuration is unavailable: {s}; waiting every {d}ms\n", .{ project.configErrorMessage(first_error) orelse "project configuration could not be loaded", interval_ms });
-    var last_error = first_error;
+    const configuration_paths = try project.configurationPaths(allocator, options.input_path, options.project_path);
+    defer {
+        for (configuration_paths) |path| allocator.free(path);
+        allocator.free(configuration_paths);
+    }
+    var last_error: ?anyerror = null;
     while (true) {
-        const sleep_ms: i64 = @intCast(@min(interval_ms, @as(u64, std.math.maxInt(i64))));
-        try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(sleep_ms), .awake);
-
-        var resolved = project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir) catch |err| {
+        var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        defer arena.deinit();
+        const generation_allocator = arena.allocator();
+        const configuration = watcher.Configuration.init(io, configuration_paths);
+        var resolved = project.resolve(generation_allocator, io, options.input_path, options.project_path, options.asset_base_dir) catch |err| {
             if (watchRecoverableProjectError(options, err)) {
-                if (err != last_error) {
-                    try printWatchProjectError(io, allocator, options, err);
-                    std.debug.print("watch: project configuration is still unavailable: {s}\n", .{project.configErrorMessage(err) orelse "project configuration could not be loaded"});
-                    last_error = err;
+                if (last_error == null or last_error.? != err) {
+                    try printWatchProjectError(io, generation_allocator, options, err);
+                    std.debug.print("watch: project configuration is unavailable: {s}; waiting every {d}ms\n", .{
+                        project.configErrorMessage(err) orelse "project configuration could not be loaded",
+                        @max(options.interval_ms, 50),
+                    });
                 }
+                last_error = err;
+                try configuration.waitForChange(io, options.interval_ms);
                 continue;
             }
             if (err == error.MissingInputPath) return failUsage("missing input path or --project", .{});
             if (error_report.isFileSystemError(err)) {
-                try printWatchProjectError(io, allocator, options, err);
+                try printWatchProjectError(io, generation_allocator, options, err);
                 return error.DiagnosticsFailed;
             }
             return err;
         };
-        defer resolved.deinit(allocator);
-        std.debug.print("watch: project configuration is valid\n", .{});
+        defer resolved.deinit(generation_allocator);
+        if (last_error != null) std.debug.print("watch: project configuration is valid\n", .{});
+        last_error = null;
         applyDiagnosticOptions(options, &resolved);
-        try runResolvedWatch(io, allocator, mode, options, &resolved);
-        return;
+        try runResolvedWatch(io, generation_allocator, mode, options, &resolved, configuration);
     }
 }
 
@@ -1047,7 +1027,7 @@ fn printWatchProjectError(
 fn watchRecoverableProjectError(options: CommandOptions, err: anyerror) bool {
     return project.isConfigError(err) or
         (options.input_path == null and err == error.MissingInputPath) or
-        (options.project_path != null and error_report.isFileSystemError(err));
+        error_report.isFileSystemError(err);
 }
 
 fn runResolvedWatch(
@@ -1056,6 +1036,7 @@ fn runResolvedWatch(
     mode: watcher.Mode,
     options: CommandOptions,
     resolved: *const project.Resolved,
+    configuration: watcher.Configuration,
 ) !void {
     const output_path = if (mode == .render)
         options.output_path orelse try utils.fs.siblingPathWithExtension(
@@ -1080,6 +1061,7 @@ fn runResolvedWatch(
         .cache = resolved.cache,
         .interval_ms = options.interval_ms,
         .quiet = options.quiet,
+        .configuration = configuration,
     });
 }
 
