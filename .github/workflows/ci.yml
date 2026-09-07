@@ -152,7 +152,6 @@ jobs:
             qpdf-version: "11.2.0"
           - environment: Ubuntu 24.04, Cairo 1.18, qpdf 12.4
             runner: ubuntu-24.04
-            # renovate: datasource=github-releases depName=qpdf/qpdf
             qpdf-version: "12.4.0"
           - environment: Ubuntu 26.04 system packages
             runner: ubuntu-26.04
