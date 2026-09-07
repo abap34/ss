@@ -133,6 +133,7 @@ pub fn analyzeFile(
     };
     app_diagnostics.clearParseHoles(&parsed, allocator);
     errdefer state.deinit();
+    state.file_inputs = request.file_inputs;
 
     var execution_graph = analysis.analyzeDocumentStateWithMode(allocator, &state, mode) catch |err| {
         if (progress) |p| p.abort();

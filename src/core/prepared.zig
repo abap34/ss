@@ -114,6 +114,7 @@ pub fn prepare(allocator: std.mem.Allocator, state: *DocumentState) !PreparedPag
             var unit = try prepareObject(allocator, state, node);
             var unit_transferred = false;
             errdefer if (!unit_transferred) unit.deinit(allocator);
+            try recordFileInputs(state, &unit);
             try objects.append(allocator, unit);
             unit_transferred = true;
         }
@@ -150,6 +151,30 @@ pub fn prepare(allocator: std.mem.Allocator, state: *DocumentState) !PreparedPag
 
 pub fn prepareObject(allocator: std.mem.Allocator, state: *DocumentState, node: *const model.Node) !PreparedObject {
     return try prepareObjectWithRender(allocator, state, node, render_policy.resolve(state, node));
+}
+
+fn recordFileInputs(state: *DocumentState, object: *const PreparedObject) !void {
+    const inputs = state.file_inputs orelse return;
+    if (!object.attached) return;
+    switch (object.render.kind) {
+        .vector_asset, .raster_asset => try inputs.record(state.asset_base_dir, object.content, .file),
+        else => {},
+    }
+    var uses_latex = object.render.kind == .latex;
+    for (object.asset_deps) |dependency| {
+        switch (dependency.kind) {
+            .vector_pdf, .raster_asset => try inputs.record(state.asset_base_dir, dependency.source, .file),
+            .inline_math, .display_math, .latex_body => uses_latex = true,
+            .icon => {},
+        }
+    }
+    if (uses_latex) {
+        for (object.latex_preamble) |entry| {
+            if (entry.source == .file) try inputs.record(state.asset_base_dir, entry.value, .file);
+        }
+        // TeX can read additional files from user preambles and fragment contents.
+        try inputs.record(".", state.asset_base_dir, .directory);
+    }
 }
 
 pub fn prepareObjectWithRender(

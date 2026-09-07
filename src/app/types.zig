@@ -25,6 +25,7 @@ pub const SourceRequest = struct {
     highlight_languages: []const utils.highlight.Language = &.{},
     overlay: ?*const module_loader.SourceOverlay = null,
     embedded_cache: ?*module_loader.EmbeddedSyntaxCache = null,
+    file_inputs: ?*utils.FileInputs = null,
 };
 
 pub const PdfWriteRequest = struct {

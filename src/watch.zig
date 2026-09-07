@@ -20,6 +20,7 @@ pub const Options = struct {
     cache: utils.render_cache.Config = .{},
     interval_ms: u64 = 500,
     quiet: bool = false,
+    file_inputs: ?*utils.FileInputs = null,
 };
 
 pub const FingerprintTarget = enum {
@@ -80,7 +81,14 @@ const FingerprintContext = struct {
     }
 };
 
-pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Options) !void {
+pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, initial_options: Options) !void {
+    var inputs = utils.FileInputs.init(allocator);
+    defer inputs.deinit();
+    var options = initial_options;
+    options.file_inputs = &inputs;
+    const output_path = if (options.output_path) |path| try std.fs.path.resolve(allocator, &.{path}) else null;
+    defer if (output_path) |path| allocator.free(path);
+    options.output_path = output_path;
     var imports = ImportCache.init(allocator);
     defer imports.deinit();
     var inspection_arena = std.heap.ArenaAllocator.init(allocator);
@@ -213,6 +221,12 @@ fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options
     var arena = std.heap.ArenaAllocator.init(backing_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
+    var inputs = utils.FileInputs.init(backing_allocator);
+    defer inputs.deinit();
+    var completed = false;
+    defer if (options.file_inputs) |destination| {
+        if (completed or inputs.paths.count() != 0) std.mem.swap(utils.FileInputs, destination, &inputs);
+    };
     switch (mode) {
         .check => {
             app.checkFile(io, allocator, .{
@@ -220,6 +234,7 @@ fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options
                 .asset_base_dir = options.asset_base_dir,
                 .highlight_languages = options.highlight_languages,
                 .embedded_cache = embedded_cache,
+                .file_inputs = &inputs,
             }, null) catch |err| {
                 reportRunError("check", err);
                 return false;
@@ -245,6 +260,7 @@ fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options
                 .layout_jobs = options.jobs,
                 .highlight_languages = options.highlight_languages,
                 .embedded_cache = embedded_cache,
+                .file_inputs = &inputs,
             };
             (switch (options.format) {
                 .pdf => app.writePdf(io, allocator, .{
@@ -263,6 +279,7 @@ fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options
             };
         },
     }
+    completed = true;
     return true;
 }
 
@@ -315,10 +332,29 @@ fn fingerprintImpl(
     }
     try mixHighlightLanguageStats(io, &hash, options.highlight_languages, context);
     try mixModuleDependencyStats(io, allocator, &hash, options, context, imports);
-
-    var dir = utils.fs.openDir(io, options.asset_base_dir, .{ .iterate = true }) catch |err| {
+    var base = utils.fs.openDir(io, options.asset_base_dir, .{}) catch |err| {
         if (err == error.FileNotFound) return hash;
         try context.record(.asset_base, options.asset_base_dir, err);
+        return err;
+    };
+    base.close(io);
+    if (options.file_inputs) |inputs| {
+        for (inputs.items()) |input| {
+            if (isOutputPath(allocator, options, input.path)) continue;
+            mixBytes(&hash, input.path);
+            switch (input.kind) {
+                .file => _ = try mixStatFile(io, &hash, input.path, .asset_path, context),
+                .directory => try mixAssetDirectory(io, allocator, &hash, options, input.path, context),
+            }
+        }
+    }
+    return hash;
+}
+
+fn mixAssetDirectory(io: std.Io, allocator: std.mem.Allocator, hash: *u64, options: Options, directory: []const u8, context: *FingerprintContext) !void {
+    var dir = utils.fs.openDir(io, directory, .{ .iterate = true }) catch |err| {
+        if (err == error.FileNotFound) return;
+        try context.record(.asset_base, directory, err);
         return err;
     };
     defer dir.close(io);
@@ -327,32 +363,30 @@ fn fingerprintImpl(
     defer walker.deinit();
 
     while (walker.next(io) catch |err| {
-        try context.record(.asset_base, options.asset_base_dir, err);
+        try context.record(.asset_base, directory, err);
         return err;
     }) |entry| {
         if (entry.kind == .directory) {
             if (!skipDirectory(entry.basename) and !isOutputPath(allocator, options, entry.path)) {
                 walker.enter(io, entry) catch |err| {
-                    try recordAssetFailure(allocator, context, options.asset_base_dir, entry.path, err);
+                    try recordAssetFailure(allocator, context, directory, entry.path, err);
                     return err;
                 };
             }
             continue;
         }
         if (isOutputPath(allocator, options, entry.path)) continue;
-        if (!watchFile(entry.path)) continue;
+        if (!isTexResource(entry.path)) continue;
         const stat = entry.dir.statFile(io, entry.basename, .{}) catch |err| {
             if (err == error.FileNotFound) continue;
-            try recordAssetFailure(allocator, context, options.asset_base_dir, entry.path, err);
+            try recordAssetFailure(allocator, context, directory, entry.path, err);
             return err;
         };
-        mixBytes(&hash, entry.path);
-        mixValue(u64, &hash, stat.size);
-        mixValue(i96, &hash, stat.mtime.nanoseconds);
-        mixValue(u8, &hash, @intFromEnum(stat.kind));
+        mixBytes(hash, entry.path);
+        mixValue(u64, hash, stat.size);
+        mixValue(i96, hash, stat.mtime.nanoseconds);
+        mixValue(u8, hash, @intFromEnum(stat.kind));
     }
-
-    return hash;
 }
 
 fn recordAssetFailure(
@@ -460,24 +494,16 @@ fn skipDirectory(name: []const u8) bool {
         std.mem.eql(u8, name, "node_modules");
 }
 
-fn watchFile(path: []const u8) bool {
-    const ext = std.fs.path.extension(path);
-    return std.mem.eql(u8, ext, ".ss") or
-        std.mem.eql(u8, ext, ".svg") or
-        std.mem.eql(u8, ext, ".pdf") or
-        std.mem.eql(u8, ext, ".png") or
-        std.mem.eql(u8, ext, ".jpg") or
-        std.mem.eql(u8, ext, ".jpeg") or
-        std.mem.eql(u8, ext, ".gif") or
-        std.mem.eql(u8, ext, ".webp") or
-        std.mem.eql(u8, ext, ".tex") or
-        std.mem.eql(u8, ext, ".bib") or
-        std.mem.eql(u8, ext, ".ttf") or
-        std.mem.eql(u8, ext, ".otf") or
-        std.mem.eql(u8, ext, ".woff") or
-        std.mem.eql(u8, ext, ".woff2") or
-        std.mem.eql(u8, ext, ".md") or
-        std.mem.eql(u8, ext, ".toml");
+fn isTexResource(path: []const u8) bool {
+    const extension = std.fs.path.extension(path);
+    for ([_][]const u8{
+        ".tex",  ".bib", ".sty", ".cls",  ".bst",   ".def", ".cfg", ".fd",  ".clo",  ".ltx",
+        ".tfm",  ".pfb", ".enc", ".map",  ".pdf",   ".svg", ".png", ".jpg", ".jpeg", ".gif",
+        ".webp", ".ttf", ".otf", ".woff", ".woff2",
+    }) |candidate| {
+        if (std.ascii.eqlIgnoreCase(extension, candidate)) return true;
+    }
+    return false;
 }
 
 fn isOutputPath(allocator: std.mem.Allocator, options: Options, relative_path: []const u8) bool {

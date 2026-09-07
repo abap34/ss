@@ -251,6 +251,8 @@ pub const DocumentState = struct {
     string_provenance: std.AutoHashMap(usize, std.ArrayList(ContentProvenance)),
     default_values: *DefaultValueCache,
     has_external_evaluation_inputs: bool,
+    // Borrowed observer owned by the host build request.
+    file_inputs: ?*@import("utils").FileInputs = null,
     next_id: NodeId,
     document_id: NodeId,
 

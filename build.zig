@@ -682,6 +682,21 @@ fn addTestStep(
     const run_watch_spec_tests = b.addRunArtifact(watch_spec_tests);
     test_step.dependOn(&run_watch_spec_tests.step);
     addFocusedTestStep(b, "test-watch", "Run focused watch dependency tests", &run_watch_spec_tests.step);
+    const watch_inputs_spec = b.addSystemCommand(&.{"node"});
+    watch_inputs_spec.step.dependOn(&ctx.dependency_checks.node.step);
+    watch_inputs_spec.addFileArg(b.path("tests/runtime/watch/inputs/spec.mjs"));
+    watch_inputs_spec.addFileArg(exe.getEmittedBin());
+    watch_inputs_spec.setCwd(b.path("."));
+    watch_inputs_spec.stdio = .inherit;
+    test_step.dependOn(&watch_inputs_spec.step);
+    addFocusedTestStep(b, "test-watch-inputs", "Run focused observed watch input tests", &watch_inputs_spec.step);
+    const file_inputs_mod = createModule(ctx, "tests/utils/file_inputs/spec_tests.zig", &.{
+        import("utils", modules.utils),
+    }, true);
+    const file_inputs_tests = addTestArtifact(ctx, file_inputs_mod);
+    const run_file_inputs_tests = b.addRunArtifact(file_inputs_tests);
+    test_step.dependOn(&run_file_inputs_tests.step);
+    addFocusedTestStep(b, "test-file-inputs", "Run focused filesystem input ownership tests", &run_file_inputs_tests.step);
     addRenderTests(ctx, modules, build_options, test_step);
     const render_wrap_mod = createModule(ctx, "src/render/text/wrap.zig", &.{}, null);
     addModuleTest(ctx, test_step, "tests/render/wrap/spec_tests.zig", &.{
