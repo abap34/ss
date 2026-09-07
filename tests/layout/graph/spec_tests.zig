@@ -462,7 +462,7 @@ test "layout graph spec: page graph indexes direct page children and filters axi
     try state.addAnchorConstraint(a, .top, .{ .page = .top }, -10, "a-top");
     try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 20, "b-left");
 
-    var page_graph = try graph.PageLayoutGraph.init(testing.allocator, &state, page);
+    var page_graph = try initPageGraph(&state, page);
     defer page_graph.deinit();
 
     try testing.expectEqual(@as(usize, 3), page_graph.len());
@@ -498,13 +498,13 @@ test "layout graph spec: implicit constraint objects stay page local" {
     try state.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = helper, .anchor = .top } }, 10, "helper-top");
     try state.addAnchorConstraint(placed, .left, .{ .node = .{ .node_id = foreign, .anchor = .left } }, 20, "foreign-left");
 
-    var first_graph = try graph.PageLayoutGraph.init(testing.allocator, &state, first_page);
+    var first_graph = try initPageGraph(&state, first_page);
     defer first_graph.deinit();
     try testing.expect(first_graph.indexOf(placed) != null);
     try testing.expect(first_graph.indexOf(helper) == null);
     try testing.expect(first_graph.indexOf(foreign) == null);
 
-    var second_graph = try graph.PageLayoutGraph.init(testing.allocator, &state, second_page);
+    var second_graph = try initPageGraph(&state, second_page);
     defer second_graph.deinit();
     try testing.expect(second_graph.indexOf(foreign) != null);
     try testing.expect(second_graph.indexOf(placed) == null);
@@ -519,7 +519,7 @@ test "layout graph spec: constraint classification names layout dependency roles
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
     const group_id = try state.makeGroupWithOrigin(page, true, &.{ a, b }, "group");
 
-    var page_graph = try graph.PageLayoutGraph.init(testing.allocator, &state, page);
+    var page_graph = try initPageGraph(&state, page);
     defer page_graph.deinit();
 
     try testing.expectEqual(graph.ConstraintClass.page_source, page_graph.constraintClass(&state, .{
@@ -591,7 +591,7 @@ test "layout graph spec: axis workspaces seed known frames only without target c
     state.getNode(constrained).?.frame = .{ .x = 100, .y = 200, .width = 50, .height = 60, .x_set = true, .y_set = true };
     try state.addAnchorConstraint(constrained, .left, .{ .page = .left }, 15, "fixed-left");
 
-    var page_graph = try graph.PageLayoutGraph.init(testing.allocator, &state, page);
+    var page_graph = try initPageGraph(&state, page);
     defer page_graph.deinit();
     var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .horizontal);
     defer workspace.deinit();
@@ -2149,4 +2149,13 @@ test "render policy: math alignment applies to markdown and vector math" {
 
     const resolved_latex = core.render_policy.resolve(&state, state.getNode(latex_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.right, resolved_latex.latex.?.horizontal_align);
+}
+
+fn initPageGraph(state: *core.DocumentState, page_id: model.NodeId) !graph.PageLayoutGraph {
+    var inputs = try core.layout.partition.Document.init(testing.allocator, state);
+    defer inputs.deinit(testing.allocator);
+    for (inputs.pages) |page| {
+        if (page.page_id == page_id) return graph.PageLayoutGraph.init(testing.allocator, state, page);
+    }
+    return error.UnknownNode;
 }

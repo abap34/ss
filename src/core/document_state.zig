@@ -1390,10 +1390,21 @@ pub const DocumentState = struct {
     }
 
     pub fn layoutPageOf(self: *DocumentState, node_id: NodeId) ?NodeId {
+        return self.layoutPageOfReference(node_id, false);
+    }
+
+    pub fn layoutPageOfConstraintEndpoint(self: *DocumentState, node_id: NodeId) ?NodeId {
+        return self.layoutPageOfReference(node_id, true);
+    }
+
+    fn layoutPageOfReference(self: *DocumentState, node_id: NodeId, referenced: bool) ?NodeId {
         const direct = self.directPageOwnershipInfo(node_id);
         if (direct.count == 1) return direct.first;
         if (direct.count > 1) return null;
-        if (!self.isConstraintReferencedGroupWithAttachedDescendant(node_id)) return null;
+        const node = self.getNode(node_id) orelse return null;
+        if (!roleEq(node.role, GroupRole)) return null;
+        if (!referenced and !self.constraintReferencesNode(node_id)) return null;
+        if (!self.hasAttachedDescendant(node_id)) return null;
         return self.uniqueAttachedDescendantPage(node_id);
     }
 
@@ -1421,10 +1432,10 @@ pub const DocumentState = struct {
     }
 
     fn addCrossPageConstraintDiagnosticIfKnown(self: *DocumentState, constraint: Constraint) !void {
-        const target_page = self.layoutPageOf(constraint.target_node) orelse return;
+        const target_page = self.layoutPageOfConstraintEndpoint(constraint.target_node) orelse return;
         const source_page = switch (constraint.source) {
             .page => target_page,
-            .node => |source| self.layoutPageOf(source.node_id) orelse return,
+            .node => |source| self.layoutPageOfConstraintEndpoint(source.node_id) orelse return,
         };
         if (target_page == source_page) return;
         if (self.hasCrossPageConstraintDiagnostic(constraint)) return;
@@ -1450,7 +1461,7 @@ pub const DocumentState = struct {
     }
 
     fn addConstraintEndpointOwnershipDiagnostic(self: *DocumentState, node_id: NodeId, role: []const u8, origin: ?[]const u8) !void {
-        if (self.layoutPageOf(node_id) != null) return;
+        if (self.layoutPageOfConstraintEndpoint(node_id) != null) return;
         const ownership = self.directPageOwnershipInfo(node_id);
         if (ownership.count > 1) return;
         const node = self.getNode(node_id) orelse return;

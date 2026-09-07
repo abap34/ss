@@ -103,6 +103,7 @@ pub fn solvePreparedPages(
     defer measurement_scope.deinit();
     var results = lowering.solveDocument(state, options.trace_path, .{
         .measurement_provider = measurement_scope.provider(),
+        .page_inputs = pages.layout.pages,
         .progress = options.progress,
         .jobs = options.jobs,
         .cancellation = options.cancellation,

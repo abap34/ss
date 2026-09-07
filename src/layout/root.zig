@@ -23,3 +23,5 @@ pub const contentFrame = metrics.contentFrame;
 pub const lineCount = metrics.lineCount;
 pub const anchorAxis = graph.anchorAxis;
 pub const approxEq = graph.approxEq;
+
+pub const partition = @import("partition.zig");

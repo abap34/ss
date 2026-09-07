@@ -551,6 +551,14 @@ fn addTestStep(
     const run_value_text_spec_tests = b.addRunArtifact(value_text_spec_tests);
     test_step.dependOn(&run_value_text_spec_tests.step);
     addFocusedTestStep(b, "test-value-text", "Run focused tagged property value tests", &run_value_text_spec_tests.step);
+    const layout_partition_spec_mod = createModule(ctx, "tests/layout/partition/spec_tests.zig", &.{
+        import("core", modules.core),
+        import("ast", modules.ast),
+    }, true);
+    const layout_partition_spec_tests = addTestArtifact(ctx, layout_partition_spec_mod);
+    const run_layout_partition_spec_tests = b.addRunArtifact(layout_partition_spec_tests);
+    test_step.dependOn(&run_layout_partition_spec_tests.step);
+    addFocusedTestStep(b, "test-layout-partition", "Run focused page partition tests", &run_layout_partition_spec_tests.step);
     const layout_graph_spec_mod = createModule(ctx, "tests/layout/graph/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),

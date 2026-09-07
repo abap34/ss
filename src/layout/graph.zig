@@ -1,6 +1,7 @@
 const std = @import("std");
 const model = @import("model");
 const utils = @import("utils");
+const partition = @import("partition.zig");
 
 const NodeId = model.NodeId;
 const Node = model.Node;
@@ -45,6 +46,7 @@ pub const SolveOptions = struct {
     jobs: ?usize = null,
     cancellation: ?utils.Cancellation = null,
     trace_failure: ?*TraceFailure = null,
+    page_inputs: ?[]const partition.Page = null,
 };
 
 pub const TraceFailureKind = enum {
@@ -213,14 +215,9 @@ pub const PageLayoutGraph = struct {
     horizontal_target_anchor_mask: []u8,
     vertical_target_anchor_mask: []u8,
 
-    pub fn init(allocator: std.mem.Allocator, state: anytype, page_id: NodeId) !PageLayoutGraph {
-        var child_ids_list = std.ArrayList(NodeId).empty;
-        errdefer child_ids_list.deinit(allocator);
-        if (state.contains.get(page_id)) |children| {
-            try child_ids_list.appendSlice(allocator, children.items);
-        }
-        try appendImplicitLayoutNodes(allocator, state, page_id, &child_ids_list);
-        const child_ids = try child_ids_list.toOwnedSlice(allocator);
+    pub fn init(allocator: std.mem.Allocator, state: anytype, page: partition.Page) !PageLayoutGraph {
+        const page_id = page.page_id;
+        const child_ids = try allocator.dupe(NodeId, page.node_ids);
         errdefer allocator.free(child_ids);
         const flow_root_ids = try allocator.dupe(NodeId, state.flowRootsOf(page_id));
         errdefer allocator.free(flow_root_ids);
@@ -251,7 +248,8 @@ pub const PageLayoutGraph = struct {
         errdefer horizontal_constraint_list.deinit(allocator);
         var vertical_constraint_list = std.ArrayList(Constraint).empty;
         errdefer vertical_constraint_list.deinit(allocator);
-        for (state.constraints.items) |constraint| {
+        for (page.constraint_indexes) |constraint_index| {
+            const constraint = state.constraints.items[constraint_index];
             const target_index = index_by_node.get(constraint.target_node) orelse continue;
             try constraint_list.append(allocator, constraint);
             const axis = anchorAxis(constraint.target_anchor);
@@ -480,68 +478,6 @@ pub const PageLayoutGraph = struct {
     }
 };
 
-fn appendImplicitLayoutNodes(allocator: std.mem.Allocator, state: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId)) !void {
-    var changed = true;
-    while (changed) {
-        const before = child_ids.items.len;
-        try appendConstraintConnectedObjects(allocator, state, page_id, child_ids);
-        try appendImplicitConstraintGroups(allocator, state, child_ids);
-        changed = child_ids.items.len != before;
-    }
-}
-
-fn appendConstraintConnectedObjects(allocator: std.mem.Allocator, state: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId)) !void {
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (state.constraints.items) |constraint| {
-            if (containsNodeId(child_ids.items, constraint.target_node)) {
-                switch (constraint.source) {
-                    .page => {},
-                    .node => |source| changed = (try appendLayoutObjectCandidate(allocator, state, page_id, child_ids, source.node_id)) or changed,
-                }
-            }
-            switch (constraint.source) {
-                .page => {},
-                .node => |source| {
-                    if (containsNodeId(child_ids.items, source.node_id)) {
-                        changed = (try appendLayoutObjectCandidate(allocator, state, page_id, child_ids, constraint.target_node)) or changed;
-                    }
-                },
-            }
-        }
-    }
-}
-
-fn appendLayoutObjectCandidate(allocator: std.mem.Allocator, state: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId), node_id: NodeId) !bool {
-    if (containsNodeId(child_ids.items, node_id)) return false;
-    const node = state.getNode(node_id) orelse return false;
-    if (node.kind != .object) return false;
-    if (!layoutObjectCanJoinPage(state, page_id, node_id, node)) return false;
-    try child_ids.append(allocator, node_id);
-    return true;
-}
-
-fn layoutObjectCanJoinPage(state: anytype, page_id: NodeId, node_id: NodeId, node: *const Node) bool {
-    _ = node;
-    return (state.layoutPageOf(node_id) orelse return false) == page_id;
-}
-
-fn appendImplicitConstraintGroups(allocator: std.mem.Allocator, state: anytype, child_ids: *std.ArrayList(NodeId)) !void {
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (state.nodes.items) |node| {
-            if (!isGroupNode(&node)) continue;
-            if (containsNodeId(child_ids.items, node.id)) continue;
-            if (!groupHasLayoutDescendant(state, child_ids.items, node.id)) continue;
-            if (!groupIsReferencedByConstraint(state, node.id)) continue;
-            try child_ids.append(allocator, node.id);
-            changed = true;
-        }
-    }
-}
-
 fn anchorMaskBit(anchor: Anchor) u8 {
     return switch (anchor) {
         .left, .bottom => 1 << 0,
@@ -557,27 +493,6 @@ fn anchorMaskCount(mask: u8) usize {
         if ((value & 1) != 0) count += 1;
     }
     return count;
-}
-
-fn groupIsReferencedByConstraint(state: anytype, group_id: NodeId) bool {
-    for (state.constraints.items) |constraint| {
-        if (constraint.target_node == group_id) return true;
-        switch (constraint.source) {
-            .page => {},
-            .node => |source| if (source.node_id == group_id) return true,
-        }
-    }
-    return false;
-}
-
-fn groupHasLayoutDescendant(state: anytype, layout_nodes: []const NodeId, group_id: NodeId) bool {
-    const children = state.childrenOf(group_id) orelse return false;
-    for (children) |child_id| {
-        if (containsNodeId(layout_nodes, child_id)) return true;
-        const child = state.getNode(child_id) orelse continue;
-        if (isGroupNode(child) and groupHasLayoutDescendant(state, layout_nodes, child_id)) return true;
-    }
-    return false;
 }
 
 pub const AxisWorkspace = struct {
@@ -1308,13 +1223,6 @@ pub fn approxEq(a: f32, b: f32) bool {
 fn containsIndex(items: []const usize, index: usize) bool {
     for (items) |item| {
         if (item == index) return true;
-    }
-    return false;
-}
-
-fn containsNodeId(items: []const NodeId, node_id: NodeId) bool {
-    for (items) |item| {
-        if (item == node_id) return true;
     }
     return false;
 }

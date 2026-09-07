@@ -4,6 +4,7 @@ const diagnostics = @import("diagnostics.zig");
 const document = @import("document.zig");
 const fallback = @import("fallback.zig");
 const graph = @import("graph.zig");
+const partition = @import("partition.zig");
 const groups = @import("groups.zig");
 const metrics = @import("metrics.zig");
 const style_defaults = @import("style.zig");
@@ -43,12 +44,20 @@ pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOpti
         if (options.progress) |progress| progress.pageStarted(progress.context, 0, page_count);
     }
 
+    var owned_inputs: ?partition.Document = null;
+    defer if (owned_inputs) |*inputs| inputs.deinit(state.allocator);
+    const page_inputs = options.page_inputs orelse blk: {
+        owned_inputs = try partition.Document.init(state.allocator, state);
+        break :blk owned_inputs.?.pages;
+    };
+    if (page_inputs.len != page_count) return error.InvalidPageLayoutInputs;
     const page_jobs = try state.allocator.alloc(PageJob, page_count);
     defer state.allocator.free(page_jobs);
-    for (state.page_order.items, 0..) |page_id, page_index| {
+    for (state.page_order.items, page_inputs, 0..) |page_id, inputs, page_index| {
         try graph.checkCancellation(options);
+        if (inputs.page_id != page_id) return error.InvalidPageLayoutInputs;
         page_jobs[page_index] = .{
-            .page_id = page_id,
+            .page = inputs,
             .page_index = page_index,
         };
     }
@@ -71,14 +80,14 @@ pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOpti
 }
 
 const PageJob = struct {
-    page_id: NodeId,
+    page: partition.Page,
     page_index: usize,
 
     fn run(self: PageJob, state: anytype, trace_session: *layout_trace.Session, options: SolveOptions) !document.Page {
         try graph.checkCancellation(options);
         var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(state.allocator, options.measurement_provider);
         defer measurement_cache.deinit();
-        var result = try solvePageLayout(state, self.page_id, self.page_index, &measurement_cache, trace_session, options);
+        var result = try solvePageLayout(state, self.page, self.page_index, &measurement_cache, trace_session, options);
         errdefer result.deinit(state.allocator);
         try graph.checkCancellation(options);
         return result;
@@ -105,7 +114,7 @@ const PageJob = struct {
         var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(local_context.allocator, local_options.measurement_provider);
         defer measurement_cache.deinit();
         var trace_session = layout_trace.Session{};
-        var result = try solvePageLayout(&local_context, self.page_id, self.page_index, &measurement_cache, &trace_session, local_options);
+        var result = try solvePageLayout(&local_context, self.page, self.page_index, &measurement_cache, &trace_session, local_options);
         defer result.deinit(local_context.allocator);
         try graph.checkCancellation(options);
         return try clonePage(allocator, &result);
@@ -338,7 +347,7 @@ pub fn applyDocument(state: anytype, results: *const document.Document) !void {
 
 fn solvePageLayout(
     state: anytype,
-    page_id: NodeId,
+    page_inputs: partition.Page,
     page_index: usize,
     measurement_cache: *metrics.MeasurementCache,
     trace_session: *layout_trace.Session,
@@ -347,7 +356,8 @@ fn solvePageLayout(
     try graph.checkCancellation(options);
     const diagnostic_start = state.diagnostics.items.len;
     const constraint_failure_start = state.constraint_failures.items.len;
-    var page_graph = try graph.PageLayoutGraph.init(state.allocator, state, page_id);
+    const page_id = page_inputs.page_id;
+    var page_graph = try graph.PageLayoutGraph.init(state.allocator, state, page_inputs);
     defer page_graph.deinit();
     try graph.checkCancellation(options);
     if (page_graph.len() == 0) return try collectPage(state, page_id, page_index, &.{}, &.{}, &.{}, diagnostic_start, constraint_failure_start, options);

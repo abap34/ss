@@ -4,6 +4,7 @@ const DocumentState = @import("document_state.zig").DocumentState;
 const markdown = @import("markdown.zig");
 const render_env = @import("render_env.zig");
 const render_policy = @import("render_policy.zig");
+const partition = @import("../layout/partition.zig");
 
 pub const PreparedObject = struct {
     node_id: model.NodeId,
@@ -65,13 +66,9 @@ pub const PreparedPage = struct {
     page_id: model.NodeId,
     index: usize,
     background: ?render_policy.Color,
-    object_ids: []model.NodeId,
-    constraints: []model.Constraint,
     objects: []PreparedObject,
 
     pub fn deinit(self: *PreparedPage, allocator: std.mem.Allocator) void {
-        allocator.free(self.object_ids);
-        allocator.free(self.constraints);
         for (self.objects) |*object| object.deinit(allocator);
         allocator.free(self.objects);
     }
@@ -79,36 +76,34 @@ pub const PreparedPage = struct {
 
 pub const PreparedPages = struct {
     pages: []PreparedPage,
+    layout: partition.Document = .{},
 
     pub fn deinit(self: *PreparedPages, allocator: std.mem.Allocator) void {
         for (self.pages) |*page| page.deinit(allocator);
         allocator.free(self.pages);
+        self.layout.deinit(allocator);
     }
 };
 
 pub fn prepare(allocator: std.mem.Allocator, state: *DocumentState) !PreparedPages {
+    var layout = try partition.Document.init(allocator, state);
+    errdefer layout.deinit(allocator);
     var pages = std.ArrayList(PreparedPage).empty;
     errdefer {
         for (pages.items) |*page| page.deinit(allocator);
         pages.deinit(allocator);
     }
 
-    for (state.page_order.items, 0..) |page_id, page_index| {
-        const page = state.getNode(page_id) orelse continue;
-        var object_ids = std.ArrayList(model.NodeId).empty;
-        errdefer object_ids.deinit(allocator);
-        try collectPageObjectIds(allocator, state, page_id, &object_ids);
-
-        var constraints = std.ArrayList(model.Constraint).empty;
-        errdefer constraints.deinit(allocator);
-        try collectPageConstraints(allocator, state, page_id, &constraints);
-
+    try pages.ensureTotalCapacity(allocator, layout.pages.len);
+    for (layout.pages, 0..) |page_layout, page_index| {
+        const page_id = page_layout.page_id;
+        const page = state.getNode(page_id) orelse return error.UnknownNode;
         var objects = std.ArrayList(PreparedObject).empty;
         errdefer {
             for (objects.items) |*object| object.deinit(allocator);
             objects.deinit(allocator);
         }
-        for (object_ids.items) |node_id| {
+        for (page_layout.node_ids) |node_id| {
             const node = state.getNode(node_id) orelse continue;
             if (node.kind != .object) continue;
             var unit = try prepareObject(allocator, state, node);
@@ -119,34 +114,15 @@ pub fn prepare(allocator: std.mem.Allocator, state: *DocumentState) !PreparedPag
             unit_transferred = true;
         }
 
-        const ids_slice = try object_ids.toOwnedSlice(allocator);
-        var ids_transferred = false;
-        errdefer if (!ids_transferred) allocator.free(ids_slice);
-        const constraint_slice = try constraints.toOwnedSlice(allocator);
-        var constraints_transferred = false;
-        errdefer if (!constraints_transferred) allocator.free(constraint_slice);
-        const object_slice = try objects.toOwnedSlice(allocator);
-        var objects_transferred = false;
-        errdefer {
-            if (!objects_transferred) {
-                for (object_slice) |*object| object.deinit(allocator);
-                allocator.free(object_slice);
-            }
-        }
-        try pages.append(allocator, .{
+        pages.appendAssumeCapacity(.{
             .page_id = page_id,
             .index = page_index,
             .background = render_policy.resolvePageBackground(state, page),
-            .object_ids = ids_slice,
-            .constraints = constraint_slice,
-            .objects = object_slice,
+            .objects = try objects.toOwnedSlice(allocator),
         });
-        ids_transferred = true;
-        constraints_transferred = true;
-        objects_transferred = true;
     }
 
-    return .{ .pages = try pages.toOwnedSlice(allocator) };
+    return .{ .pages = try pages.toOwnedSlice(allocator), .layout = layout };
 }
 
 pub fn prepareObject(allocator: std.mem.Allocator, state: *DocumentState, node: *const model.Node) !PreparedObject {
@@ -377,49 +353,6 @@ fn displayMathSource(allocator: std.mem.Allocator, runs: []const markdown.Run) !
     }
     const trimmed = std.mem.trim(u8, joined.items, " \t\r\n");
     return try allocator.dupe(u8, trimmed);
-}
-
-fn collectPageObjectIds(
-    allocator: std.mem.Allocator,
-    state: *DocumentState,
-    page_id: model.NodeId,
-    object_ids: *std.ArrayList(model.NodeId),
-) !void {
-    if (state.childrenOf(page_id)) |children| {
-        for (children) |child_id| try appendUniqueNodeId(allocator, object_ids, child_id);
-    }
-    for (state.constraints.items) |constraint| {
-        if (state.layoutPageOf(constraint.target_node) == page_id) {
-            try appendUniqueNodeId(allocator, object_ids, constraint.target_node);
-        }
-        switch (constraint.source) {
-            .page => {},
-            .node => |source| {
-                if (state.layoutPageOf(source.node_id) == page_id) {
-                    try appendUniqueNodeId(allocator, object_ids, source.node_id);
-                }
-            },
-        }
-    }
-}
-
-fn collectPageConstraints(
-    allocator: std.mem.Allocator,
-    state: *DocumentState,
-    page_id: model.NodeId,
-    constraints: *std.ArrayList(model.Constraint),
-) !void {
-    for (state.constraints.items) |constraint| {
-        if (state.layoutPageOf(constraint.target_node) != page_id) continue;
-        try constraints.append(allocator, constraint);
-    }
-}
-
-fn appendUniqueNodeId(allocator: std.mem.Allocator, items: *std.ArrayList(model.NodeId), node_id: model.NodeId) !void {
-    for (items.items) |existing| {
-        if (existing == node_id) return;
-    }
-    try items.append(allocator, node_id);
 }
 
 fn cloneLatexPreambleEntries(allocator: std.mem.Allocator, preamble: []const render_env.LatexPreambleEntry) ![]const render_env.LatexPreambleEntry {

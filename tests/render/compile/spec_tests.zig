@@ -67,8 +67,6 @@ fn preparedPage(page_id: core.NodeId, index: usize) core.prepared.PreparedPage {
         .page_id = page_id,
         .index = index,
         .background = null,
-        .object_ids = &.{},
-        .constraints = &.{},
         .objects = &.{},
     };
 }
@@ -1389,8 +1387,6 @@ test "preload cache scan reports the LaTeX preamble path" {
             .page_id = 1,
             .index = 0,
             .background = null,
-            .object_ids = &.{},
-            .constraints = &.{},
             .objects = &objects,
         },
     };
