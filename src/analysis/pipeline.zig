@@ -84,10 +84,13 @@ pub fn checkFunctionDefinitions(
     var declaration_index = try declarations.build(allocator, state);
     defer declaration_index.deinit();
     const sema = SemanticEnv.init(state, &declaration_index, functions);
-    try checkFunctionDefinitionsWithEnv(allocator, state, &sema);
+    var inference_context = infer.Context.init(allocator);
+    defer inference_context.deinit();
+    try checkFunctionDefinitionsWithEnv(&inference_context, allocator, state, &sema);
 }
 
 fn checkFunctionDefinitionsWithEnv(
+    inference_context: *infer.Context,
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     sema: *const SemanticEnv,
@@ -110,7 +113,7 @@ fn checkFunctionDefinitionsWithEnv(
         };
         const module_sema = sema.forModule(module_id);
         const diagnostic_count = state.diagnostics.items.len;
-        checker.checkConst(allocator, state, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
+        checker.checkConst(inference_context, allocator, state, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
             try checker.continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
         };
@@ -125,7 +128,7 @@ fn checkFunctionDefinitionsWithEnv(
         };
         const module_sema = sema.forModule(module_id);
         const diagnostic_count = state.diagnostics.items.len;
-        checker.checkFunction(allocator, state, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
+        checker.checkFunction(inference_context, allocator, state, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
             try checker.continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
         };
@@ -183,6 +186,8 @@ fn analyzeDocumentStateSemantics(
     var declaration_index = try declarations.build(allocator, state);
     errdefer declaration_index.deinit();
     const sema = SemanticEnv.init(state, &declaration_index, &state.functions);
+    var inference_context = infer.Context.init(allocator);
+    defer inference_context.deinit();
 
     {
         const measure_start = utils.measure_profile.start();
@@ -209,7 +214,7 @@ fn analyzeDocumentStateSemantics(
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.semantics_functions, measure_start);
-        try checkFunctionDefinitionsWithEnv(allocator, state, &sema);
+        try checkFunctionDefinitionsWithEnv(&inference_context, allocator, state, &sema);
     }
     {
         const measure_start = utils.measure_profile.start();
@@ -217,7 +222,7 @@ fn analyzeDocumentStateSemantics(
         for (state.module_order.items) |module_id| {
             const module = state.moduleById(module_id) orelse continue;
             const module_sema = sema.forModule(module_id);
-            try checker.checkPageStatements(allocator, state, &module_sema, checker.originPathForModule(module), module.syntax);
+            try checker.checkPageStatements(&inference_context, allocator, state, &module_sema, checker.originPathForModule(module), module.syntax);
         }
     }
     {

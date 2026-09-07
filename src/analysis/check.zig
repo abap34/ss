@@ -13,7 +13,7 @@ const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
 const ensureType = semantic_types.ensureType;
 const infoFromType = semantic_types.infoFromType;
-const inferExprInfo = infer.exprInfo;
+const inferExprInfo = infer.exprInfoWithContext;
 const validatePropertySetStatement = infer.validatePropertySetStatement;
 const FunctionBoolMap = std.HashMap(core.FunctionKey, bool, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
@@ -268,6 +268,7 @@ pub fn checkPageNamesUnique(
 }
 
 pub fn checkFunction(
+    inference_context: *infer.Context,
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     sema: *const SemanticEnv,
@@ -282,7 +283,7 @@ pub fn checkFunction(
     for (func.params.items) |param| {
         try rejectDuplicateBinding(state, &env, param.name, func_origin);
         if (param.default_value) |default_value| {
-            const info = try inferExprInfo(allocator, state, sema, &env, default_value.*, func_origin);
+            const info = try inferExprInfo(inference_context, allocator, state, sema, &env, default_value.*, func_origin);
             try ensureType(state, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
         }
         try env.put(param.name, infoFromType(param.ty));
@@ -291,7 +292,7 @@ pub fn checkFunction(
     var had_diagnostics = false;
     for (func.statements.items) |stmt| {
         const diagnostic_count = state.diagnostics.items.len;
-        checkStatement(allocator, state, sema, origin_path, &env, func.result_type, stmt) catch |err| {
+        checkStatement(inference_context, allocator, state, sema, origin_path, &env, func.result_type, stmt) catch |err| {
             try continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
         };
@@ -300,6 +301,7 @@ pub fn checkFunction(
 }
 
 pub fn checkConst(
+    inference_context: *infer.Context,
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     sema: *const SemanticEnv,
@@ -326,7 +328,7 @@ pub fn checkConst(
     }
     {
         const diagnostic_count = state.diagnostics.items.len;
-        const actual = inferExprInfo(allocator, state, sema, &env, constant_decl.value, origin) catch |err| {
+        const actual = inferExprInfo(inference_context, allocator, state, sema, &env, constant_decl.value, origin) catch |err| {
             try continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
             return error.DiagnosticsFailed;
@@ -340,6 +342,7 @@ pub fn checkConst(
 }
 
 pub fn checkPageStatements(
+    inference_context: *infer.Context,
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     sema: *const SemanticEnv,
@@ -357,7 +360,7 @@ pub fn checkPageStatements(
         defer scope.deinit();
         for (program.document_statements.items) |stmt| {
             const diagnostic_count = state.diagnostics.items.len;
-            checkTopLevelStatement(allocator, state, sema, origin_path, .document, &env, &scope, &page_context, stmt) catch |err| {
+            checkTopLevelStatement(inference_context, allocator, state, sema, origin_path, .document, &env, &scope, &page_context, stmt) catch |err| {
                 try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
             };
@@ -371,7 +374,7 @@ pub fn checkPageStatements(
 
         for (page.statements.items) |stmt| {
             const diagnostic_count = state.diagnostics.items.len;
-            checkTopLevelStatement(allocator, state, sema, origin_path, .page, &env, &scope, &page_context, stmt) catch |err| {
+            checkTopLevelStatement(inference_context, allocator, state, sema, origin_path, .page, &env, &scope, &page_context, stmt) catch |err| {
                 try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
             };
@@ -381,6 +384,7 @@ pub fn checkPageStatements(
 }
 
 fn checkTopLevelStatement(
+    inference_context: *infer.Context,
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     sema: *const SemanticEnv,
@@ -399,7 +403,7 @@ fn checkTopLevelStatement(
             const binds_name = !language_names.isDiscardBindingName(binding.name);
             if (binds_name) try rejectDuplicateBinding(state, env, binding.name, origin);
             try rejectPageOnlyExpr(state, context, origin, page_context, scope, binding.expr);
-            const inferred = try inferExprInfo(allocator, state, sema, env, binding.expr, origin);
+            const inferred = try inferExprInfo(inference_context, allocator, state, sema, env, binding.expr, origin);
             const info = try checkedLetBindingInfo(allocator, state, binding, inferred, origin);
             try rejectVoidValue(state, info, origin);
             if (!binds_name) return;
@@ -417,30 +421,30 @@ fn checkTopLevelStatement(
         .property_set => |property_set| {
             try rejectPageOnlyExpr(state, context, origin, page_context, scope, property_set.target);
             try rejectPageOnlyExpr(state, context, origin, page_context, scope, property_set.value);
-            try validatePropertySetStatement(allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin);
+            try validatePropertySetStatement(inference_context, allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
             try rejectPageOnlyExpr(state, context, origin, page_context, scope, if_stmt.condition);
-            const condition = try inferExprInfo(allocator, state, sema, env, if_stmt.condition, origin);
+            const condition = try inferExprInfo(inference_context, allocator, state, sema, env, if_stmt.condition, origin);
             try ensureType(state, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
             var then_env = try env.clone();
             defer then_env.deinit();
             var then_scope = try scope.clone();
             defer then_scope.deinit();
             for (if_stmt.then_statements.items) |nested| {
-                try checkTopLevelStatement(allocator, state, sema, origin_path, context, &then_env, &then_scope, page_context, nested);
+                try checkTopLevelStatement(inference_context, allocator, state, sema, origin_path, context, &then_env, &then_scope, page_context, nested);
             }
             var else_env = try env.clone();
             defer else_env.deinit();
             var else_scope = try scope.clone();
             defer else_scope.deinit();
             for (if_stmt.else_statements.items) |nested| {
-                try checkTopLevelStatement(allocator, state, sema, origin_path, context, &else_env, &else_scope, page_context, nested);
+                try checkTopLevelStatement(inference_context, allocator, state, sema, origin_path, context, &else_env, &else_scope, page_context, nested);
             }
         },
         .expr_stmt => |expr| {
             try rejectPageOnlyExpr(state, context, origin, page_context, scope, expr);
-            _ = try inferExprInfo(allocator, state, sema, env, expr, origin);
+            _ = try inferExprInfo(inference_context, allocator, state, sema, env, expr, origin);
         },
         .constrain => |decl| {
             if (context != .page) {
@@ -451,7 +455,7 @@ fn checkTopLevelStatement(
             if (decl.source) |source| try validateAnchorRef(allocator, state, sema, env, origin, source, false);
             if (decl.offset) |expr| {
                 try rejectPageOnlyExpr(state, context, origin, page_context, scope, expr);
-                const actual = try inferExprInfo(allocator, state, sema, env, expr, origin);
+                const actual = try inferExprInfo(inference_context, allocator, state, sema, env, expr, origin);
                 try ensureType(state, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },
@@ -561,6 +565,7 @@ fn isObjectLike(info: semantic_types.TypeInfo) bool {
 }
 
 fn checkStatement(
+    inference_context: *infer.Context,
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     sema: *const SemanticEnv,
@@ -576,14 +581,14 @@ fn checkStatement(
         .let_binding => |binding| {
             const binds_name = !language_names.isDiscardBindingName(binding.name);
             if (binds_name) try rejectDuplicateBinding(state, env, binding.name, origin);
-            const inferred = try inferExprInfo(allocator, state, sema, env, binding.expr, origin);
+            const inferred = try inferExprInfo(inference_context, allocator, state, sema, env, binding.expr, origin);
             const info = try checkedLetBindingInfo(allocator, state, binding, inferred, origin);
             try rejectVoidValue(state, info, origin);
             if (!binds_name) return;
             try env.put(binding.name, info);
         },
         .return_expr => |expr| {
-            const actual = try inferExprInfo(allocator, state, sema, env, expr, origin);
+            const actual = try inferExprInfo(inference_context, allocator, state, sema, env, expr, origin);
             try ensureType(state, allocator, actual, result_type, origin, .UnmatchedReturnType);
         },
         .return_void => {
@@ -592,28 +597,28 @@ fn checkStatement(
             }
         },
         .property_set => |property_set| {
-            try validatePropertySetStatement(allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin);
+            try validatePropertySetStatement(inference_context, allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
-            const condition = try inferExprInfo(allocator, state, sema, env, if_stmt.condition, origin);
+            const condition = try inferExprInfo(inference_context, allocator, state, sema, env, if_stmt.condition, origin);
             try ensureType(state, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
             var then_env = try env.clone();
             defer then_env.deinit();
             for (if_stmt.then_statements.items) |nested| {
-                try checkStatement(allocator, state, sema, origin_path, &then_env, result_type, nested);
+                try checkStatement(inference_context, allocator, state, sema, origin_path, &then_env, result_type, nested);
             }
             var else_env = try env.clone();
             defer else_env.deinit();
             for (if_stmt.else_statements.items) |nested| {
-                try checkStatement(allocator, state, sema, origin_path, &else_env, result_type, nested);
+                try checkStatement(inference_context, allocator, state, sema, origin_path, &else_env, result_type, nested);
             }
         },
         .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, state, sema, env, expr, origin);
+            _ = try inferExprInfo(inference_context, allocator, state, sema, env, expr, origin);
         },
         .constrain => |decl| {
             if (decl.offset) |expr| {
-                const actual = try inferExprInfo(allocator, state, sema, env, expr, origin);
+                const actual = try inferExprInfo(inference_context, allocator, state, sema, env, expr, origin);
                 try ensureType(state, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },

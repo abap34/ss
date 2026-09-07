@@ -8,6 +8,7 @@ const registry = @import("../language/registry.zig");
 const contracts = @import("contracts.zig");
 const semantic_types = @import("types.zig");
 const utils = @import("utils");
+const return_facts = @import("return_facts.zig");
 
 const Type = ast.Type;
 const SemanticEnv = semantic_env.SemanticEnv;
@@ -24,11 +25,10 @@ const singleFunctionLabel = semantic_types.singleFunctionLabel;
 const targetClassForInfo = semantic_types.targetClassForInfo;
 const typeInfoLabelAlloc = semantic_types.typeInfoLabelAlloc;
 const typeLabelAlloc = semantic_types.typeLabelAlloc;
-const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
-
-threadlocal var active_return_visiting: ?*FunctionVisitSet = null;
+pub const Context = return_facts.Cache;
 
 const InferenceOptions = struct {
+    context: *Context,
     validate_contracts: bool = true,
 };
 
@@ -136,7 +136,21 @@ pub fn exprInfo(
     expr: ast.Expr,
     origin: []const u8,
 ) anyerror!TypeInfo {
-    return exprInfoWithOptions(allocator, state, sema, env, expr, origin, .{});
+    var context = Context.init(allocator);
+    defer context.deinit();
+    return exprInfoWithContext(&context, allocator, state, sema, env, expr, origin);
+}
+
+pub fn exprInfoWithContext(
+    context: *Context,
+    allocator: std.mem.Allocator,
+    state: ?*core.DocumentState,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    expr: ast.Expr,
+    origin: []const u8,
+) anyerror!TypeInfo {
+    return exprInfoWithOptions(allocator, state, sema, env, expr, origin, .{ .context = context });
 }
 
 fn exprInfoWithOptions(
@@ -612,12 +626,17 @@ fn inferUserCallInfo(
         }
         return error.InvalidArity;
     }
+    const needs_facts = returnTypeNeedsInferredFacts(func.result_type);
+    const actual_arguments = try allocator.alloc(TypeInfo, if (needs_facts) call.args.items.len else 0);
+    defer allocator.free(actual_arguments);
     for (call.args.items, 0..) |arg, index| {
         const param = func.params.items[index];
         const actual = try exprInfoWithOptions(allocator, state, caller_sema, env, arg, origin, options);
+        if (needs_facts) actual_arguments[index] = actual;
         try ensureType(state, allocator, actual, param.ty, origin, .UnmatchedArgumentType);
     }
-    return try inferUserFunctionReturnInfo(allocator, state, callee_sema, env, func, call, caller_sema, origin, options);
+    if (!needs_facts) return infoFromType(func.result_type);
+    return try inferUserFunctionReturnInfo(allocator, state, callee_sema, func, actual_arguments, origin, options);
 }
 
 fn inferPrimitiveCallInfo(
@@ -649,10 +668,10 @@ fn inferPrimitiveCallInfo(
     const info = try primitiveResultTypeInfo(allocator, state, sema, env, call, descriptor, origin, options);
     if (state != null and options.validate_contracts) {
         switch (descriptor.op) {
-            .prop, .has_prop, .prop_eq => try validateKnownPropertyKeyCall(state.?, call, env, sema, origin),
-            .set_prop => try validateSetPropCall(state.?, call, env, sema, origin),
+            .prop, .has_prop, .prop_eq => try validateKnownPropertyKeyCall(state.?, call, env, sema, origin, options),
+            .set_prop => try validateSetPropCall(state.?, call, env, sema, origin, options),
             .set_repr => try validateSetReprCall(allocator, state.?, call, env, sema, origin, options),
-            .extend_render_env => try validateExtendRenderEnvCall(state.?, call, env, sema, origin),
+            .extend_render_env => try validateExtendRenderEnvCall(state.?, call, env, sema, origin, options),
             else => {},
         }
     }
@@ -665,6 +684,7 @@ fn validateKnownPropertyKeyCall(
     env: *const TypeEnv,
     sema: *const SemanticEnv,
     origin: []const u8,
+    options: InferenceOptions,
 ) !void {
     if (call.args.items.len < 2) return;
     const key = switch (call.args.items[1]) {
@@ -675,7 +695,7 @@ fn validateKnownPropertyKeyCall(
             return error.InvalidType;
         },
     };
-    const target_info = try exprInfo(state.allocator, state, sema, env, call.args.items[0], origin);
+    const target_info = try exprInfoWithOptions(state.allocator, state, sema, env, call.args.items[0], origin, options);
     if (target_info.hole != null) return;
     if (lookupFieldForTarget(sema, target_info, key) == null) {
         try addUserReport(state, origin, "UnknownField: unknown field: {s}", .{key});
@@ -718,30 +738,6 @@ fn isPrimitiveFunctionArgument(descriptor: registry.PrimitiveDescriptor, index: 
     return index == callback.function_arg_index;
 }
 
-fn inferUserFunctionReturnInfo(
-    allocator: std.mem.Allocator,
-    state: ?*core.DocumentState,
-    sema: *const SemanticEnv,
-    caller_env: *const TypeEnv,
-    func: ast.FunctionDecl,
-    call: ast.CallExpr,
-    caller_sema: *const SemanticEnv,
-    origin: []const u8,
-    options: InferenceOptions,
-) !TypeInfo {
-    if (!returnTypeNeedsInferredFacts(func.result_type)) {
-        return infoFromType(func.result_type);
-    }
-    if (active_return_visiting) |visiting| {
-        return inferUserFunctionReturnInfoInner(allocator, state, sema, caller_env, func, call, caller_sema, origin, options, visiting);
-    }
-    var visiting = FunctionVisitSet.init(allocator);
-    defer visiting.deinit();
-    active_return_visiting = &visiting;
-    defer active_return_visiting = null;
-    return inferUserFunctionReturnInfoInner(allocator, state, sema, caller_env, func, call, caller_sema, origin, options, &visiting);
-}
-
 fn returnTypeNeedsInferredFacts(ty: Type) bool {
     return switch (ty.kind) {
         .any,
@@ -768,57 +764,64 @@ fn returnTypeNeedsInferredFacts(ty: Type) bool {
     };
 }
 
-fn inferUserFunctionReturnInfoInner(
+fn inferUserFunctionReturnInfo(
     allocator: std.mem.Allocator,
     state: ?*core.DocumentState,
     sema: *const SemanticEnv,
-    caller_env: *const TypeEnv,
     func: ast.FunctionDecl,
-    call: ast.CallExpr,
-    caller_sema: *const SemanticEnv,
+    actual_arguments: []const TypeInfo,
     origin: []const u8,
     options: InferenceOptions,
-    visiting: *FunctionVisitSet,
 ) !TypeInfo {
+    const context = options.context;
     const visit_key = core.functionKey(sema.module_id, func.name);
-    if (visiting.contains(visit_key)) {
+    if (context.visiting.contains(visit_key)) {
+        context.recursive_calls += 1;
         var info = infoFromType(func.result_type);
         info.object_class = func.result_type.class_name;
         return info;
     }
-    try visiting.put(visit_key, {});
-    defer _ = visiting.remove(visit_key);
+    try context.visiting.put(visit_key, {});
+    defer _ = context.visiting.remove(visit_key);
+    const recursive_calls_before = context.recursive_calls;
 
     var env = TypeEnv.init(allocator);
     defer env.deinit();
+    const arguments = try allocator.alloc(TypeInfo, func.params.items.len);
+    defer allocator.free(arguments);
     for (func.params.items, 0..) |param, index| {
         var param_info = infoFromType(param.ty);
-        if (index >= call.args.items.len) {
+        if (index >= actual_arguments.len) {
             if (param.default_value) |default_value| {
                 const default_info = try exprInfoWithOptions(allocator, state, sema, &env, default_value.*, origin, options);
                 try ensureType(state, allocator, default_info, param.ty, origin, .UnmatchedArgumentType);
                 param_info = try mergeTypeInfo(allocator, param_info, default_info);
             }
         } else {
-            const actual_info = try exprInfoWithOptions(allocator, state, caller_sema, caller_env, call.args.items[index], origin, options);
-            param_info = try mergeTypeInfo(allocator, param_info, actual_info);
+            param_info = try mergeTypeInfo(allocator, param_info, actual_arguments[index]);
         }
+        arguments[index] = param_info;
         try env.put(param.name, param_info);
     }
 
+    const key = return_facts.Key{ .function = visit_key, .arguments = arguments };
+    if (context.get(key)) |cached| return cached;
+    context.body_analyses += 1;
     var result = infoFromType(func.result_type);
     try inferReturnInfoFromStatements(
         allocator,
         state,
         sema,
         originPathForFunction(sema, func),
-        .{ .validate_contracts = false },
+        .{ .context = context, .validate_contracts = false },
         &env,
         func.statements.items,
         &result,
     );
     result.ty = func.result_type;
     if (func.result_type.class_name) |class_name| result.object_class = class_name;
+    // A result that used a recursive fallback depends on the active call chain.
+    if (context.recursive_calls == recursive_calls_before) try context.put(key, result);
     return result;
 }
 
@@ -1120,6 +1123,7 @@ fn validateSetPropCall(
     env: *const TypeEnv,
     sema: *const SemanticEnv,
     origin: []const u8,
+    options: InferenceOptions,
 ) !void {
     if (call.args.items.len < 3) return;
     const key = switch (call.args.items[1]) {
@@ -1130,7 +1134,7 @@ fn validateSetPropCall(
             return error.InvalidType;
         },
     };
-    const target_info = try exprInfo(state.allocator, state, sema, env, call.args.items[0], origin);
+    const target_info = try exprInfoWithOptions(state.allocator, state, sema, env, call.args.items[0], origin, options);
     if (target_info.hole != null) return;
     if (!isPropertyTarget(target_info)) {
         const actual_label = try typeInfoLabelAlloc(state.allocator, target_info);
@@ -1144,7 +1148,7 @@ fn validateSetPropCall(
         return error.InvalidType;
     }
 
-    const value_info = try exprInfo(state.allocator, state, sema, env, call.args.items[2], origin);
+    const value_info = try exprInfoWithOptions(state.allocator, state, sema, env, call.args.items[2], origin, options);
     if (value_info.hole != null) return;
     if (value_info.ty.kind == .function) {
         try addUserReport(state, origin, "InvalidProperty: function values cannot be stored as properties", .{});
@@ -1165,9 +1169,10 @@ fn validateExtendRenderEnvCall(
     env: *const TypeEnv,
     sema: *const SemanticEnv,
     origin: []const u8,
+    options: InferenceOptions,
 ) !void {
     if (call.args.items.len < 4) return;
-    const target_info = try exprInfo(state.allocator, state, sema, env, call.args.items[0], origin);
+    const target_info = try exprInfoWithOptions(state.allocator, state, sema, env, call.args.items[0], origin, options);
     if (target_info.hole != null) return;
     if (!isPropertyTarget(target_info)) {
         const actual_label = try typeInfoLabelAlloc(state.allocator, target_info);
@@ -1284,6 +1289,7 @@ fn validateExpectedFieldValueAtSpan(
 }
 
 pub fn validatePropertySetStatement(
+    context: *Context,
     allocator: std.mem.Allocator,
     state: ?*core.DocumentState,
     sema: *const SemanticEnv,
@@ -1293,7 +1299,7 @@ pub fn validatePropertySetStatement(
     value: ast.Expr,
     origin: []const u8,
 ) !void {
-    return validatePropertySetStatementWithOptions(allocator, state, sema, env, target, path, value, origin, .{});
+    return validatePropertySetStatementWithOptions(allocator, state, sema, env, target, path, value, origin, .{ .context = context });
 }
 
 fn validatePropertySetStatementWithOptions(

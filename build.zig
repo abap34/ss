@@ -641,6 +641,13 @@ fn addTestStep(
     const run_inheritance_spec_tests = b.addRunArtifact(inheritance_spec_tests);
     test_step.dependOn(&run_inheritance_spec_tests.step);
     addFocusedTestStep(b, "test-inheritance", "Run focused object inheritance tests", &run_inheritance_spec_tests.step);
+    const return_facts_mod = createModule(ctx, "tests/analysis/return_facts/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    const return_facts_tests = addTestArtifact(ctx, return_facts_mod);
+    const run_return_facts_tests = b.addRunArtifact(return_facts_tests);
+    test_step.dependOn(&run_return_facts_tests.step);
+    addFocusedTestStep(b, "test-return-facts", "Run focused argument-sensitive return inference tests", &run_return_facts_tests.step);
     addModuleTest(ctx, test_step, "tests/lsp/completion/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);
@@ -681,9 +688,13 @@ fn addTestStep(
         import("utils", modules.utils),
         import("compiler", compiler_mod),
     }, true);
-    addModuleTest(ctx, test_step, "tests/compiler/semantics/spec_tests.zig", &.{
+    const compiler_semantics_mod = createModule(ctx, "tests/compiler/semantics/spec_tests.zig", &.{
         import("compiler_semantics", compiler_semantics_support_mod),
     }, true);
+    const compiler_semantics_tests = addTestArtifact(ctx, compiler_semantics_mod);
+    const run_compiler_semantics_tests = b.addRunArtifact(compiler_semantics_tests);
+    test_step.dependOn(&run_compiler_semantics_tests.step);
+    addFocusedTestStep(b, "test-compiler-semantics", "Run focused compiler semantic tests", &run_compiler_semantics_tests.step);
 
     addNodeSpecTests(ctx, test_step, exe);
     addSmokeChecks(b, test_step, exe);
