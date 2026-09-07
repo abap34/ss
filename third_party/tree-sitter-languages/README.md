@@ -21,8 +21,10 @@ Run this command to advance every bundled parser to the current upstream HEAD:
 node scripts/update-tree-sitter-languages.mjs --latest
 ```
 
-The scheduled GitHub Actions workflow runs the `--latest` form and opens a pull
-request when upstream commits change tracked queries or licenses.
+The `--latest` form also synchronizes the Nix flake inputs and lock file. It
+therefore requires Nix. The scheduled GitHub Actions workflow runs this form and
+opens a pull request when upstream commits change tracked queries, licenses, or
+Nix inputs.
 
 All listed parsers are MIT licensed. Each language directory keeps the upstream
 `LICENSE` file.
