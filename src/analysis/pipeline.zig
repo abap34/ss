@@ -767,8 +767,7 @@ pub fn buildDocumentStateWithOptions(
     index.module_graph.project_implicit_import_ids = .empty;
     state.projectModuleMutable().resolved_import_ids = index.module_graph.project_import_ids;
     index.module_graph.project_import_ids = .empty;
-    for (index.module_graph.modules.items) |module| try state.modules.append(allocator, module);
-    index.module_graph.modules = .empty;
+    try index.module_graph.moveModulesTo(&state.modules);
     if (state.module_order.items.len == 0 or state.module_order.items[state.module_order.items.len - 1] != state.project_module_id) {
         try state.module_order.append(allocator, state.project_module_id);
     }

@@ -127,6 +127,15 @@ pub const ModuleGraph = struct {
     project_implicit_import_ids: std.ArrayList(core.SourceModuleId),
     project_import_ids: std.ArrayList(core.SourceModuleId),
 
+    // Both lists and their modules use this graph's allocator. Allocation
+    // failure leaves both owners unchanged.
+    pub fn moveModulesTo(self: *ModuleGraph, destination: *std.ArrayList(core.SourceModule)) !void {
+        try destination.ensureUnusedCapacity(self.allocator, self.modules.items.len);
+        destination.appendSliceAssumeCapacity(self.modules.items);
+        self.modules.deinit(self.allocator);
+        self.modules = .empty;
+    }
+
     pub fn deinit(self: *ModuleGraph) void {
         for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);

@@ -3,6 +3,63 @@ const compiler = @import("compiler");
 
 const testing = std.testing;
 
+test "module loader spec: module transfer preserves ownership on every allocation failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, transferModuleOwnership, .{});
+}
+
+fn transferModuleOwnership(allocator: std.mem.Allocator) !void {
+    var graph = compiler.module_loader.ModuleGraph{
+        .allocator = allocator,
+        .modules = .empty,
+        .module_order = .empty,
+        .project_implicit_import_ids = .empty,
+        .project_import_ids = .empty,
+    };
+    defer graph.deinit();
+    var destination = std.ArrayList(compiler.core.SourceModule).empty;
+    defer {
+        for (destination.items) |*module| module.deinit(allocator);
+        destination.deinit(allocator);
+    }
+
+    try appendOwnedModule(allocator, &destination, 0);
+    for (1..17) |id| try appendOwnedModule(allocator, &graph.modules, @intCast(id));
+
+    graph.moveModulesTo(&destination) catch |err| {
+        try testing.expectEqual(@as(usize, 1), destination.items.len);
+        try testing.expectEqual(@as(usize, 16), graph.modules.items.len);
+        for (graph.modules.items, 1..) |module, id| {
+            try testing.expectEqual(@as(compiler.core.SourceModuleId, @intCast(id)), module.id);
+        }
+        return err;
+    };
+    try testing.expectEqual(@as(usize, 0), graph.modules.items.len);
+    try testing.expectEqual(@as(usize, 17), destination.items.len);
+    for (destination.items, 0..) |module, id| {
+        try testing.expectEqual(@as(compiler.core.SourceModuleId, @intCast(id)), module.id);
+        try testing.expectEqualStrings("// owned source\n", module.source);
+    }
+    try graph.moveModulesTo(&destination);
+    try testing.expectEqual(@as(usize, 17), destination.items.len);
+}
+
+fn appendOwnedModule(allocator: std.mem.Allocator, modules: *std.ArrayList(compiler.core.SourceModule), id: compiler.core.SourceModuleId) !void {
+    const spec = try std.fmt.allocPrint(allocator, "module-{d}", .{id});
+    errdefer allocator.free(spec);
+    const source = try allocator.dupe(u8, "// owned source\n");
+    errdefer allocator.free(source);
+    try modules.append(allocator, .{
+        .id = id,
+        .kind = .library,
+        .spec = spec,
+        .path = null,
+        .source = source,
+        .syntax = .init(),
+        .implicit_import_ids = .empty,
+        .resolved_import_ids = .empty,
+    });
+}
+
 test "module loader spec: source overlays preserve lookup allocation failures" {
     var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
     var overlay = compiler.module_loader.SourceOverlay.init(failing.allocator());
