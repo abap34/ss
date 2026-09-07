@@ -191,6 +191,7 @@ pub fn writePdf(io: std.Io, allocator: std.mem.Allocator, request: types.PdfWrit
     errdefer progress.abort();
     try app_output.writePdfOrPrintDiagnostics(allocator, io, &compiled.state, &compiled.ir, request.output_path, request.options.render, progress, request.options.diagnostics_json_path);
     try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &compiled.state, request.options.diagnostics_json_path);
+    render_cache_lease.deinit();
     app_output.pruneRenderCacheOrPrintWarning(io, allocator, request.options.render.cache);
     progress.complete();
 }
@@ -220,6 +221,7 @@ pub fn writeHtml(io: std.Io, allocator: std.mem.Allocator, request: types.HtmlWr
         return failure;
     };
     try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &compiled.state, request.options.diagnostics_json_path);
+    render_cache_lease.deinit();
     app_output.pruneRenderCacheOrPrintWarning(io, allocator, request.options.render.cache);
     progress.complete();
 }
@@ -263,6 +265,7 @@ pub fn writePdfAndHtml(io: std.Io, allocator: std.mem.Allocator, request: types.
         return failure;
     };
     try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &compiled.state, request.options.diagnostics_json_path);
+    render_cache_lease.deinit();
     app_output.pruneRenderCacheOrPrintWarning(io, allocator, request.options.render.cache);
     progress.complete();
 }

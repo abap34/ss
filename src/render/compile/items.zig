@@ -4646,38 +4646,18 @@ fn cachedLatexReference(ctx: *DrawContext, reference_path: []const u8) !?LatexAs
 fn readLatexReference(ctx: *DrawContext, reference_path: []const u8) !LatexAsset {
     const contents = utils.fs.readFileAllocLimited(ctx.io, ctx.allocator, reference_path, .limited(4096)) catch return NativePdfError.InvalidPdfCache;
     defer ctx.allocator.free(contents);
-    const trimmed = std.mem.trim(u8, contents, " \t\r\n");
-    var fields = std.mem.splitScalar(u8, trimmed, '\t');
-    const page_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
-    const width_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
-    const height_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
-    const baseline_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
-    const reference_height_text = fields.next() orelse return NativePdfError.InvalidPdfCache;
-    const pdf_name = fields.next() orelse return NativePdfError.InvalidPdfCache;
-    if (fields.next() != null or pdf_name.len == 0 or !std.mem.eql(u8, std.fs.path.basename(pdf_name), pdf_name)) {
-        return NativePdfError.InvalidPdfCache;
-    }
-    const page_index = std.fmt.parseInt(usize, page_text, 10) catch return NativePdfError.InvalidPdfCache;
-    const width = std.fmt.parseFloat(f32, width_text) catch return NativePdfError.InvalidPdfCache;
-    const height = std.fmt.parseFloat(f32, height_text) catch return NativePdfError.InvalidPdfCache;
-    const baseline_from_bottom = std.fmt.parseFloat(f32, baseline_text) catch return NativePdfError.InvalidPdfCache;
-    const reference_height = std.fmt.parseFloat(f32, reference_height_text) catch return NativePdfError.InvalidPdfCache;
-    if (!std.math.isFinite(width) or !std.math.isFinite(height) or !std.math.isFinite(baseline_from_bottom) or !std.math.isFinite(reference_height) or
-        width <= 0 or height <= 0 or reference_height <= 0)
-    {
-        return NativePdfError.InvalidPdfCache;
-    }
+    const reference = try utils.render_cache.LatexReference.parse(contents);
     const directory = std.fs.path.dirname(reference_path) orelse ".";
-    const pdf_path = try std.fs.path.join(ctx.allocator, &.{ directory, pdf_name });
+    const pdf_path = try std.fs.path.join(ctx.allocator, &.{ directory, reference.pdf_name });
     errdefer ctx.allocator.free(pdf_path);
     if (!try cachedPdfAvailable(ctx, pdf_path)) return NativePdfError.InvalidPdfCache;
     return .{
         .path = pdf_path,
-        .page_index = page_index,
-        .width = width,
-        .height = height,
-        .baseline_from_bottom = baseline_from_bottom,
-        .reference_height = reference_height,
+        .page_index = reference.page_index,
+        .width = reference.width,
+        .height = reference.height,
+        .baseline_from_bottom = reference.baseline_from_bottom,
+        .reference_height = reference.reference_height,
     };
 }
 

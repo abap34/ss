@@ -565,6 +565,21 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/utils/json/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);
+    const cache_reference_mod = createModule(ctx, "tests/utils/render_cache/reference_spec_tests.zig", &.{
+        import("utils", modules.utils),
+    }, true);
+    const cache_reference_tests = addTestArtifact(ctx, cache_reference_mod);
+    const run_cache_reference_tests = b.addRunArtifact(cache_reference_tests);
+    const cache_pruning_spec = b.addSystemCommand(&.{"node"});
+    cache_pruning_spec.step.dependOn(&ctx.dependency_checks.node.step);
+    cache_pruning_spec.addFileArg(b.path("tests/runtime/cache/pruning/spec.mjs"));
+    cache_pruning_spec.addFileArg(exe.getEmittedBin());
+    cache_pruning_spec.setCwd(b.path("."));
+    cache_pruning_spec.stdio = .inherit;
+    const cache_test_step = b.step("test-render-cache", "Run focused render cache reference and pruning tests");
+    cache_test_step.dependOn(&run_cache_reference_tests.step);
+    cache_test_step.dependOn(&cache_pruning_spec.step);
+    test_step.dependOn(cache_test_step);
     const progress_spec_mod = createModule(ctx, "tests/utils/progress/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);
