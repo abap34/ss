@@ -1,33 +1,28 @@
 const std = @import("std");
 const core = @import("core");
 
-const analysis = @import("../analysis.zig");
 const json = @import("utils").json;
 
-pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, state: *core.DocumentState) !void {
+pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, state: *const core.DocumentState) !void {
     var variables = try root.arrayField("variables");
-    const declaration_index = state.declaration_index;
-    for (state.modules.items) |module| {
-        if (module.path == null) continue;
-        var variable_infos = try analysis.collectScopedVariableInfoFromModule(allocator, state, declaration_index, module.syntax, module.id, module.source.len);
-        defer variable_infos.deinit(allocator);
-        for (variable_infos.items) |entry| {
-            var item = try variables.objectItem();
-            try item.stringField("name", entry.name);
-            const type_label = try entry.info.ty.formatAlloc(allocator);
-            defer allocator.free(type_label);
-            try item.stringField("type", type_label);
-            try item.optionalStringField("objectClass", if (entry.info.object_class) |id| id.name else null);
-            if (entry.info.object_class) |id| try item.intField("objectClassModuleId", id.module_id);
-            try item.intField("moduleId", entry.module_id);
-            try item.enumTagField("scopeKind", entry.scope_kind);
-            try item.optionalStringField("scopeName", entry.scope_name);
-            try item.intField("spanStart", entry.span_start);
-            try item.intField("spanEnd", entry.span_end);
-            try item.intField("visibleStart", entry.visible_start);
-            try item.intField("visibleEnd", entry.visible_end);
-            try item.end();
-        }
+    for (state.definitions.items) |definition| {
+        if (definition.kind != .variable) continue;
+        const info = state.bindingTypeAt(definition.module_id, definition.span_start) orelse continue;
+        var item = try variables.objectItem();
+        try item.stringField("name", definition.name);
+        const type_label = try info.ty.formatAlloc(allocator);
+        defer allocator.free(type_label);
+        try item.stringField("type", type_label);
+        try item.optionalStringField("objectClass", if (info.object_class) |id| id.name else null);
+        if (info.object_class) |id| try item.intField("objectClassModuleId", id.module_id);
+        try item.intField("moduleId", definition.module_id);
+        try item.enumTagField("scopeKind", definition.scope_kind);
+        try item.optionalStringField("scopeName", definition.scope_name);
+        try item.intField("spanStart", definition.span_start);
+        try item.intField("spanEnd", definition.span_end);
+        try item.intField("visibleStart", definition.visible_start);
+        try item.intField("visibleEnd", definition.visible_end);
+        try item.end();
     }
     try variables.end();
 }

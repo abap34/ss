@@ -768,6 +768,14 @@ fn addTestStep(
         import("render_wrap", render_wrap_mod),
     }, null);
 
+    const binding_types_mod = createModule(ctx, "tests/compiler/bindings/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    const binding_types_tests = addTestArtifact(ctx, binding_types_mod);
+    const run_binding_types_tests = b.addRunArtifact(binding_types_tests);
+    test_step.dependOn(&run_binding_types_tests.step);
+    addFocusedTestStep(b, "test-binding-types", "Run focused checked binding type tests", &run_binding_types_tests.step);
+
     const compiler_semantics_support_mod = createModule(ctx, "tests/compiler/semantics/support.zig", &.{
         import("utils", modules.utils),
         import("compiler", compiler_mod),

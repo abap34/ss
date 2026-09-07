@@ -719,7 +719,7 @@ test "analysis queries: recovery syntax is borrowed for repeated requests" {
 
 test "analysis queries: failed imports keep the entry recovery tree" {
     var case = try CompletionCase.init(
-        \\import ./absent.ss as missing
+        \\import ./absent as missing
         \\page title
         \\  missing::unfinished()
         \\end

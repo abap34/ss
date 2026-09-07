@@ -15,7 +15,6 @@ pub const syntax_hole = @import("syntax/hole.zig");
 pub const types = @import("analysis/types.zig");
 
 pub const VariableInfo = types.TypeInfo;
-pub const ScopedVariableInfo = pipeline.ScopedVariableInfo;
 pub const ModuleIndex = module_index.Index;
 pub const BuildDocumentStateOptions = pipeline.BuildDocumentStateOptions;
 pub const AnalysisMode = pipeline.AnalysisMode;
@@ -30,8 +29,6 @@ pub const collectConstantsFromModules = pipeline.collectConstantsFromModules;
 pub const checkFunctionDefinitions = pipeline.checkFunctionDefinitions;
 pub const analyzeDocumentState = pipeline.analyzeDocumentState;
 pub const analyzeDocumentStateWithMode = pipeline.analyzeDocumentStateWithMode;
-pub const collectVariableInfoFromModule = pipeline.collectVariableInfoFromModule;
-pub const collectScopedVariableInfoFromModule = pipeline.collectScopedVariableInfoFromModule;
 pub const buildDocumentState = pipeline.buildDocumentState;
 pub const buildDocumentStateWithOptions = pipeline.buildDocumentStateWithOptions;
 pub const loadModuleIndex = module_index.load;

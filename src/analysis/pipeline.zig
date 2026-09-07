@@ -13,8 +13,6 @@ const infer = @import("infer.zig");
 const analysis_index = @import("index.zig");
 const registry = @import("../language/registry.zig");
 const execution = @import("execution.zig");
-const analysis_scope = @import("scope.zig");
-const semantic_types = @import("types.zig");
 const semantics = @import("semantics.zig");
 const syntax = @import("../syntax/parse.zig");
 const syntax_hole = @import("../syntax/hole.zig");
@@ -22,21 +20,6 @@ const type_defs = @import("../language/type_defs.zig");
 const utils = @import("utils");
 const SemanticEnv = semantic_env.SemanticEnv;
 
-const TypeEnv = semantic_types.TypeEnv;
-pub const VariableInfo = semantic_types.TypeInfo;
-pub const ScopedVariableInfo = struct {
-    name: []const u8,
-    info: VariableInfo,
-    module_id: core.SourceModuleId,
-    scope_kind: core.DefinitionScopeKind,
-    scope_name: ?[]const u8,
-    span_start: usize,
-    span_end: usize,
-    visible_start: usize,
-    visible_end: usize,
-};
-const ensureType = semantic_types.ensureType;
-const inferExprInfo = infer.exprInfo;
 const FunctionBoolMap = std.HashMap(core.FunctionKey, bool, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 
@@ -206,10 +189,14 @@ fn analyzeDocumentStateSemantics(
             try checkPlacementEffectDeclarations(allocator, state, &sema);
         }
     }
+    var had_body_diagnostics = false;
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.semantics_functions, measure_start);
-        try checkFunctionDefinitionsWithEnv(&inference_context, allocator, state, &sema);
+        checkFunctionDefinitionsWithEnv(&inference_context, allocator, state, &sema) catch |err| {
+            if (err != error.DiagnosticsFailed) return err;
+            had_body_diagnostics = true;
+        };
     }
     {
         const measure_start = utils.measure_profile.start();
@@ -217,9 +204,13 @@ fn analyzeDocumentStateSemantics(
         for (state.module_order.items) |module_id| {
             const module = state.moduleById(module_id) orelse continue;
             const module_sema = sema.forModule(module_id);
-            try checker.checkPageStatements(&inference_context, allocator, state, &module_sema, checker.originPathForModule(module), module.syntax);
+            checker.checkPageStatements(&inference_context, allocator, state, &module_sema, checker.originPathForModule(module), module.syntax) catch |err| {
+                if (err != error.DiagnosticsFailed) return err;
+                had_body_diagnostics = true;
+            };
         }
     }
+    if (had_body_diagnostics) return error.DiagnosticsFailed;
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.semantics_dependency_queries, measure_start);
@@ -604,116 +595,6 @@ fn functionOrigin(
     return std.fmt.allocPrint(allocator, "path:{s}", .{path});
 }
 
-pub fn collectVariableInfoFromModule(
-    allocator: std.mem.Allocator,
-    functions: *const core.FunctionMap,
-    program: ast.Module,
-    diagnostic_state: ?*core.DocumentState,
-) !std.StringHashMap(VariableInfo) {
-    const declaration_ptr = if (diagnostic_state) |state| state.declaration_index else null;
-    const sema = SemanticEnv.init(diagnostic_state, declaration_ptr, functions);
-    var variables = std.StringHashMap(VariableInfo).init(allocator);
-    errdefer variables.deinit();
-
-    for (program.functions.items) |func| {
-        var env = TypeEnv.init(allocator);
-        defer env.deinit();
-
-        for (func.params.items) |param| {
-            if (param.default_value) |default_value| {
-                const origin = try statementOrigin(allocator, func.span);
-                defer allocator.free(origin);
-                const info = try inferExprInfo(allocator, diagnostic_state, &sema, &env, default_value.*, origin);
-                try ensureType(diagnostic_state, allocator, info, param.ty, origin, .UnmatchedArgumentType);
-            }
-            const info = semantic_types.infoFromType(param.ty);
-            try env.put(param.name, info);
-            try variables.put(param.name, info);
-        }
-
-        for (func.statements.items) |stmt| {
-            try collectVariableTypesFromStatement(allocator, diagnostic_state, &env, &sema, stmt, &variables);
-        }
-    }
-
-    {
-        var env = TypeEnv.init(allocator);
-        defer env.deinit();
-        for (program.document_statements.items) |stmt| {
-            try collectVariableTypesFromStatement(allocator, diagnostic_state, &env, &sema, stmt, &variables);
-        }
-    }
-
-    for (program.pages.items) |page| {
-        var env = TypeEnv.init(allocator);
-        defer env.deinit();
-
-        for (page.statements.items) |stmt| {
-            try collectVariableTypesFromStatement(allocator, diagnostic_state, &env, &sema, stmt, &variables);
-        }
-    }
-
-    return variables;
-}
-
-pub fn collectScopedVariableInfoFromModule(
-    allocator: std.mem.Allocator,
-    state: *core.DocumentState,
-    declaration_index: *const declarations.DeclarationIndex,
-    program: ast.Module,
-    module_id: core.SourceModuleId,
-    source_len: usize,
-) !std.ArrayList(ScopedVariableInfo) {
-    const root_sema = SemanticEnv.init(state, declaration_index, &state.functions);
-    const sema = root_sema.forModule(module_id);
-    var variables = std.ArrayList(ScopedVariableInfo).empty;
-    errdefer variables.deinit(allocator);
-
-    for (program.functions.items) |func| {
-        var env = TypeEnv.init(allocator);
-        defer env.deinit();
-
-        for (func.params.items) |param| {
-            if (param.default_value) |default_value| {
-                const origin = try statementOrigin(allocator, func.span);
-                defer allocator.free(origin);
-                const info = try inferExprInfo(allocator, state, &sema, &env, default_value.*, origin);
-                try ensureType(state, allocator, info, param.ty, origin, .UnmatchedArgumentType);
-            }
-            const info = semantic_types.infoFromType(param.ty);
-            try env.put(param.name, info);
-            const func_scope = analysis_scope.functionScope(func);
-            const param_span = param.name_span orelse func.span;
-            try appendScopedVariable(allocator, &variables, param.name, info, module_id, func_scope, param_span.start, param_span.end, func.span.start, func.span.end);
-        }
-
-        for (func.statements.items) |stmt| {
-            try collectScopedVariableTypesFromStatement(allocator, state, &env, &sema, stmt, &variables, module_id, analysis_scope.functionScope(func), func.span.end);
-        }
-    }
-
-    {
-        var env = TypeEnv.init(allocator);
-        defer env.deinit();
-        const document_scope = analysis_scope.documentScope(source_len);
-        for (program.document_statements.items) |stmt| {
-            try collectScopedVariableTypesFromStatement(allocator, state, &env, &sema, stmt, &variables, module_id, document_scope, source_len);
-        }
-    }
-
-    for (program.pages.items) |page| {
-        var env = TypeEnv.init(allocator);
-        defer env.deinit();
-        const page_scope = analysis_scope.pageScope(page);
-
-        for (page.statements.items) |stmt| {
-            try collectScopedVariableTypesFromStatement(allocator, state, &env, &sema, stmt, &variables, module_id, page_scope, page.span.end);
-        }
-    }
-
-    return variables;
-}
-
 pub fn buildDocumentState(
     allocator: std.mem.Allocator,
     input_path: []const u8,
@@ -791,199 +672,4 @@ fn addParseHoleDiagnostics(state: *core.DocumentState, holes: syntax_hole.Result
             .user_report = .{ .message = try state.allocator.dupe(u8, message_text) },
         });
     }
-}
-
-fn collectVariableTypesFromStatement(
-    allocator: std.mem.Allocator,
-    diagnostic_state: ?*core.DocumentState,
-    env: *TypeEnv,
-    sema: *const SemanticEnv,
-    stmt: ast.Statement,
-    variables: *std.StringHashMap(VariableInfo),
-) anyerror!void {
-    const diagnostic_count = if (diagnostic_state) |state| state.diagnostics.items.len else 0;
-    collectVariableTypesFromStatementUnchecked(allocator, diagnostic_state, env, sema, stmt, variables) catch |err| {
-        if (diagnostic_state) |state| {
-            if (state.diagnostics.items.len > diagnostic_count) return;
-        }
-        if (isFactInferenceFailure(err)) return;
-        return err;
-    };
-}
-
-fn collectVariableTypesFromStatementUnchecked(
-    allocator: std.mem.Allocator,
-    diagnostic_state: ?*core.DocumentState,
-    env: *TypeEnv,
-    sema: *const SemanticEnv,
-    stmt: ast.Statement,
-    variables: *std.StringHashMap(VariableInfo),
-) !void {
-    const origin = try statementOrigin(allocator, stmt.span);
-    defer allocator.free(origin);
-    switch (stmt.kind) {
-        .hole => {},
-        .let_binding => |binding| {
-            const inferred = try inferExprInfo(allocator, diagnostic_state, sema, env, binding.expr, origin);
-            const info = letBindingInfo(binding, inferred);
-            if (language_names.isDiscardBindingName(binding.name)) return;
-            try env.put(binding.name, info);
-            try variables.put(binding.name, info);
-        },
-        .return_expr => |expr| {
-            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, expr, origin);
-        },
-        .return_void => {},
-        .property_set => |property_set| {
-            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, property_set.target, origin);
-            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, property_set.value, origin);
-        },
-        .if_stmt => |if_stmt| {
-            const condition = try inferExprInfo(allocator, diagnostic_state, sema, env, if_stmt.condition, origin);
-            try semantic_types.ensureType(diagnostic_state, allocator, condition, ast.Type.boolean, origin, .UnmatchedArgumentType);
-            var then_env = try env.clone();
-            defer then_env.deinit();
-            for (if_stmt.then_statements.items) |nested| {
-                try collectVariableTypesFromStatement(allocator, diagnostic_state, &then_env, sema, nested, variables);
-            }
-            var else_env = try env.clone();
-            defer else_env.deinit();
-            for (if_stmt.else_statements.items) |nested| {
-                try collectVariableTypesFromStatement(allocator, diagnostic_state, &else_env, sema, nested, variables);
-            }
-        },
-        .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, expr, origin);
-        },
-        .constrain => |decl| {
-            if (decl.offset) |expr| {
-                _ = try inferExprInfo(allocator, diagnostic_state, sema, env, expr, origin);
-            }
-        },
-    }
-}
-
-fn collectScopedVariableTypesFromStatement(
-    allocator: std.mem.Allocator,
-    diagnostic_state: ?*core.DocumentState,
-    env: *TypeEnv,
-    sema: *const SemanticEnv,
-    stmt: ast.Statement,
-    variables: *std.ArrayList(ScopedVariableInfo),
-    module_id: core.SourceModuleId,
-    scope: analysis_scope.SourceScope,
-    visible_end: usize,
-) anyerror!void {
-    const diagnostic_count = if (diagnostic_state) |state| state.diagnostics.items.len else 0;
-    collectScopedVariableTypesFromStatementUnchecked(allocator, diagnostic_state, env, sema, stmt, variables, module_id, scope, visible_end) catch |err| {
-        if (diagnostic_state) |state| {
-            if (state.diagnostics.items.len > diagnostic_count) return;
-        }
-        if (isFactInferenceFailure(err)) return;
-        return err;
-    };
-}
-
-fn collectScopedVariableTypesFromStatementUnchecked(
-    allocator: std.mem.Allocator,
-    diagnostic_state: ?*core.DocumentState,
-    env: *TypeEnv,
-    sema: *const SemanticEnv,
-    stmt: ast.Statement,
-    variables: *std.ArrayList(ScopedVariableInfo),
-    module_id: core.SourceModuleId,
-    scope: analysis_scope.SourceScope,
-    visible_end: usize,
-) !void {
-    const origin = try statementOrigin(allocator, stmt.span);
-    defer allocator.free(origin);
-    switch (stmt.kind) {
-        .hole => {},
-        .let_binding => |binding| {
-            const inferred = try inferExprInfo(allocator, diagnostic_state, sema, env, binding.expr, origin);
-            const info = letBindingInfo(binding, inferred);
-            if (language_names.isDiscardBindingName(binding.name)) return;
-            try env.put(binding.name, info);
-            try appendScopedVariable(allocator, variables, binding.name, info, module_id, scope, stmt.span.start, stmt.span.end, stmt.span.start, visible_end);
-        },
-        .return_expr => |expr| {
-            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, expr, origin);
-        },
-        .return_void => {},
-        .property_set => |property_set| {
-            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, property_set.target, origin);
-            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, property_set.value, origin);
-        },
-        .if_stmt => |if_stmt| {
-            const condition = try inferExprInfo(allocator, diagnostic_state, sema, env, if_stmt.condition, origin);
-            try semantic_types.ensureType(diagnostic_state, allocator, condition, ast.Type.boolean, origin, .UnmatchedArgumentType);
-            var then_env = try env.clone();
-            defer then_env.deinit();
-            const then_end = analysis_scope.statementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
-            for (if_stmt.then_statements.items) |nested| {
-                try collectScopedVariableTypesFromStatement(allocator, diagnostic_state, &then_env, sema, nested, variables, module_id, scope, then_end);
-            }
-            var else_env = try env.clone();
-            defer else_env.deinit();
-            const else_end = analysis_scope.statementsVisibleEnd(if_stmt.else_statements.items, stmt.span.end);
-            for (if_stmt.else_statements.items) |nested| {
-                try collectScopedVariableTypesFromStatement(allocator, diagnostic_state, &else_env, sema, nested, variables, module_id, scope, else_end);
-            }
-        },
-        .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, expr, origin);
-        },
-        .constrain => |decl| {
-            if (decl.offset) |expr| {
-                _ = try inferExprInfo(allocator, diagnostic_state, sema, env, expr, origin);
-            }
-        },
-    }
-}
-
-fn letBindingInfo(binding: anytype, inferred: VariableInfo) VariableInfo {
-    if (binding.type_annotation) |annotation| return semantic_types.infoFromType(annotation);
-    return inferred;
-}
-
-fn isFactInferenceFailure(err: anyerror) bool {
-    return switch (err) {
-        error.DuplicateBinding,
-        error.InvalidArity,
-        error.InvalidType,
-        error.UnknownFunction,
-        error.UnknownIdentifier,
-        error.UnknownQuery,
-        => true,
-        else => false,
-    };
-}
-
-fn appendScopedVariable(
-    allocator: std.mem.Allocator,
-    variables: *std.ArrayList(ScopedVariableInfo),
-    name: []const u8,
-    info: VariableInfo,
-    module_id: core.SourceModuleId,
-    scope: analysis_scope.SourceScope,
-    span_start: usize,
-    span_end: usize,
-    visible_start: usize,
-    visible_end: usize,
-) !void {
-    try variables.append(allocator, .{
-        .name = name,
-        .info = info,
-        .module_id = module_id,
-        .scope_kind = scope.kind,
-        .scope_name = scope.name,
-        .span_start = span_start,
-        .span_end = span_end,
-        .visible_start = visible_start,
-        .visible_end = visible_end,
-    });
-}
-
-fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
-    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }

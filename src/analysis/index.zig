@@ -7,15 +7,17 @@ const analysis_scope = @import("scope.zig");
 const utils = @import("utils");
 
 pub fn populateDocumentStateAnalysis(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+    state.binding_types.clearRetainingCapacity();
     for (state.modules.items) |module| {
         if (module.kind == .project) continue;
-        try collectDefinitionsFromModule(allocator, module.line_index, module.syntax, module.id, module.path, false, &state.definitions);
+        try collectDefinitionsFromModule(allocator, state, module.line_index, module.syntax, module.id, module.path, module.path != null, &state.definitions);
     }
-    try collectDefinitionsFromModule(allocator, state.projectModule().line_index, state.projectSyntax(), state.project_module_id, null, true, &state.definitions);
+    try collectDefinitionsFromModule(allocator, state, state.projectModule().line_index, state.projectSyntax(), state.project_module_id, null, true, &state.definitions);
 }
 
 fn collectDefinitionsFromModule(
     allocator: std.mem.Allocator,
+    state: *core.DocumentState,
     source: utils.source.LineIndex,
     program: ast.Module,
     module_id: core.SourceModuleId,
@@ -28,10 +30,11 @@ fn collectDefinitionsFromModule(
         if (include_variables) {
             const scope = analysis_scope.functionScope(func);
             for (func.params.items) |param| {
+                try recordAnnotation(state, module_id, param.name_span, param.ty);
                 try putDefinitionAtSpan(allocator, definitions, source, param.name, param.name_span, func.span.start, func.span.end, .variable, module_id, null, scope.kind, scope.name);
             }
             for (func.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, scope, func.span.end);
+                try collectDefinitionsFromStatement(allocator, state, source, module_id, stmt, definitions, scope, func.span.end);
             }
         }
     }
@@ -41,12 +44,12 @@ fn collectDefinitionsFromModule(
     if (include_variables) {
         const document_scope = analysis_scope.documentScope(source.text.len);
         for (program.document_statements.items) |stmt| {
-            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, document_scope, source.text.len);
+            try collectDefinitionsFromStatement(allocator, state, source, module_id, stmt, definitions, document_scope, source.text.len);
         }
         for (program.pages.items) |page| {
             const scope = analysis_scope.pageScope(page);
             for (page.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, scope, page.span.end);
+                try collectDefinitionsFromStatement(allocator, state, source, module_id, stmt, definitions, scope, page.span.end);
             }
         }
     }
@@ -54,6 +57,7 @@ fn collectDefinitionsFromModule(
 
 fn collectDefinitionsFromStatement(
     allocator: std.mem.Allocator,
+    state: *core.DocumentState,
     source: utils.source.LineIndex,
     module_id: core.SourceModuleId,
     stmt: ast.Statement,
@@ -64,14 +68,15 @@ fn collectDefinitionsFromStatement(
     switch (stmt.kind) {
         .let_binding => |binding| {
             if (!language_names.isDiscardBindingName(binding.name)) {
+                if (binding.type_annotation) |annotation| try recordAnnotation(state, module_id, binding.name_span, annotation);
                 try putDefinitionAtSpan(allocator, definitions, source, binding.name, binding.name_span, stmt.span.start, visible_end, .variable, module_id, null, scope.kind, scope.name);
             }
         },
         .if_stmt => |if_stmt| {
             const then_end = analysis_scope.statementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
-            for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope, then_end);
+            for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, state, source, module_id, nested, definitions, scope, then_end);
             const else_end = analysis_scope.statementsVisibleEnd(if_stmt.else_statements.items, stmt.span.end);
-            for (if_stmt.else_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope, else_end);
+            for (if_stmt.else_statements.items) |nested| try collectDefinitionsFromStatement(allocator, state, source, module_id, nested, definitions, scope, else_end);
         },
         else => {},
     }
@@ -126,5 +131,12 @@ fn putDefinition(
         .file = if (file) |path| try allocator.dupe(u8, path) else null,
         .scope_kind = scope_kind,
         .scope_name = if (scope_name) |scope| try allocator.dupe(u8, scope) else null,
+    });
+}
+
+fn recordAnnotation(state: *core.DocumentState, module_id: core.SourceModuleId, span: ?ast.Span, ty: ast.Type) !void {
+    try state.recordBindingType(module_id, span, .{
+        .ty = ty,
+        .object_class = @import("types.zig").infoFromType(ty).object_class,
     });
 }

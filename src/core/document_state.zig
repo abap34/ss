@@ -203,6 +203,17 @@ pub const DefinitionScopeKind = enum {
     page,
 };
 
+const BindingLocation = struct {
+    module_id: SourceModuleId,
+    offset: usize,
+};
+
+// These types borrow the analyzed source generation, like function signatures.
+pub const BindingType = struct {
+    ty: ast.Type,
+    object_class: ?model.NominalId = null,
+};
+
 pub const Definition = struct {
     name: []const u8,
     line: usize,
@@ -241,6 +252,7 @@ pub const DocumentState = struct {
     const_eval_states: ConstEvalStateMap,
     functions: FunctionMap,
     definitions: std.ArrayList(Definition),
+    binding_types: std.AutoHashMap(BindingLocation, BindingType),
     nodes: std.ArrayList(Node),
     page_order: std.ArrayList(NodeId),
     contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
@@ -290,6 +302,7 @@ pub const DocumentState = struct {
             .const_eval_states = ConstEvalStateMap.init(allocator),
             .functions = FunctionMap.init(allocator),
             .definitions = .empty,
+            .binding_types = .init(allocator),
             .nodes = .empty,
             .page_order = .empty,
             .contains = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
@@ -344,6 +357,17 @@ pub const DocumentState = struct {
         return state;
     }
 
+    pub fn recordBindingType(self: *DocumentState, module_id: SourceModuleId, span: ?ast.Span, value: BindingType) !void {
+        const location = span orelse return;
+        const module = self.moduleById(module_id) orelse return;
+        if (module.path == null) return;
+        try self.binding_types.put(.{ .module_id = module_id, .offset = location.start }, value);
+    }
+
+    pub fn bindingTypeAt(self: *const DocumentState, module_id: SourceModuleId, offset: usize) ?BindingType {
+        return self.binding_types.get(.{ .module_id = module_id, .offset = offset });
+    }
+
     pub fn builtinClass(self: *const DocumentState, name: []const u8) ?model.NominalId {
         return self.declaration_index.builtinClass(name);
     }
@@ -369,6 +393,7 @@ pub const DocumentState = struct {
         self.const_eval_states.deinit();
         self.functions.deinit();
         self.definitions.deinit(self.allocator);
+        self.binding_types.deinit();
         self.contains.deinit();
         self.page_flow_roots.deinit();
         self.page_overlay_roots.deinit();
@@ -410,6 +435,7 @@ pub const DocumentState = struct {
             if (definition.scope_name) |scope_name| self.allocator.free(scope_name);
         }
         self.definitions.deinit(self.allocator);
+        self.binding_types.deinit();
         self.allocator.free(self.asset_base_dir);
         var it = self.contains.iterator();
         while (it.next()) |entry| {

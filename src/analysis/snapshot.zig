@@ -358,7 +358,7 @@ pub const AnalysisSnapshot = struct {
         snapshot.type_storage = TypeStorage.init(allocator);
         const type_storage = &snapshot.type_storage.?;
         snapshot.value_bindings = try collectValueBindings(allocator, type_storage, state);
-        snapshot.variable_bindings = try collectVariableBindings(allocator, type_storage, state, declaration_index);
+        snapshot.variable_bindings = try collectVariableBindings(allocator, type_storage, state);
         snapshot.role_bindings = try collectRoleBindings(allocator, declaration_index.roles.items);
         snapshot.classes = try collectClasses(allocator, declaration_index.classes.items);
         snapshot.fields = try collectFields(allocator, type_storage, declaration_index.fields.items);
@@ -1220,36 +1220,38 @@ fn valueNameExists(state: *const core.DocumentState, name: []const u8) bool {
 fn collectVariableBindings(
     allocator: std.mem.Allocator,
     type_storage: *TypeStorage,
-    state: *core.DocumentState,
-    declaration_index: *const declarations.DeclarationIndex,
+    state: *const core.DocumentState,
 ) ![]VariableBinding {
     var out = std.ArrayList(VariableBinding).empty;
     errdefer {
         deinitVariableBindingItems(allocator, out.items);
         out.deinit(allocator);
     }
-    for (state.modules.items) |module| {
-        if (module.path == null) continue;
-        var infos = try analysis_pipeline.collectScopedVariableInfoFromModule(allocator, state, declaration_index, module.syntax, module.id, module.source.len);
-        defer infos.deinit(allocator);
-        for (infos.items) |entry| {
-            const retained_type = try type_storage.retain(entry.info.ty);
-            const type_label: []u8 = @constCast(try semantic_types.typeInfoLabelAlloc(allocator, entry.info));
-            errdefer allocator.free(type_label);
-            try out.append(allocator, .{
-                .name = try allocator.dupe(u8, entry.name),
-                .type_label = type_label,
-                .object_class = if (entry.info.object_class) |id| .{ .module_id = id.module_id, .name = try allocator.dupe(u8, id.name) } else null,
-                .value_type = retained_type,
-                .module_id = entry.module_id,
-                .scope_kind = entry.scope_kind,
-                .scope_name = if (entry.scope_name) |scope_name| try allocator.dupe(u8, scope_name) else null,
-                .span_start = entry.span_start,
-                .span_end = entry.span_end,
-                .visible_start = entry.visible_start,
-                .visible_end = entry.visible_end,
-            });
-        }
+    for (state.definitions.items) |definition| {
+        if (definition.kind != .variable) continue;
+        const info = state.bindingTypeAt(definition.module_id, definition.span_start) orelse continue;
+        const retained_type = try type_storage.retain(info.ty);
+        const type_label: []u8 = @constCast(try semantic_types.typeInfoLabelAlloc(allocator, .{ .ty = info.ty }));
+        errdefer allocator.free(type_label);
+        const name = try allocator.dupe(u8, definition.name);
+        errdefer allocator.free(name);
+        const object_class: ?core.NominalId = if (info.object_class) |id| .{ .module_id = id.module_id, .name = try allocator.dupe(u8, id.name) } else null;
+        errdefer if (object_class) |id| allocator.free(id.name);
+        const scope_name = if (definition.scope_name) |scope_name| try allocator.dupe(u8, scope_name) else null;
+        errdefer if (scope_name) |value| allocator.free(value);
+        try out.append(allocator, .{
+            .name = name,
+            .type_label = type_label,
+            .object_class = object_class,
+            .value_type = retained_type,
+            .module_id = definition.module_id,
+            .scope_kind = definition.scope_kind,
+            .scope_name = scope_name,
+            .span_start = definition.span_start,
+            .span_end = definition.span_end,
+            .visible_start = definition.visible_start,
+            .visible_end = definition.visible_end,
+        });
     }
     return out.toOwnedSlice(allocator);
 }

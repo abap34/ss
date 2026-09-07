@@ -286,7 +286,9 @@ pub fn checkFunction(
             const info = try inferExprInfo(inference_context, allocator, state, sema, &env, default_value.*, func_origin);
             try ensureType(state, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
         }
-        try env.put(param.name, infoFromType(param.ty));
+        const param_info = infoFromType(param.ty);
+        try env.put(param.name, param_info);
+        try recordBindingType(state, sema.module_id, param.name_span, param_info);
     }
 
     var had_diagnostics = false;
@@ -408,6 +410,7 @@ fn checkTopLevelStatement(
             try rejectVoidValue(state, info, origin);
             if (!binds_name) return;
             try env.put(binding.name, info);
+            try recordBindingType(state, sema.module_id, binding.name_span, info);
             try scope.put(binding.name);
         },
         .return_expr => {
@@ -460,6 +463,13 @@ fn checkTopLevelStatement(
             }
         },
     }
+}
+
+fn recordBindingType(state: *core.DocumentState, module_id: core.SourceModuleId, span: ?ast.Span, info: semantic_types.TypeInfo) !void {
+    try state.recordBindingType(module_id, span, .{
+        .ty = if (info.hole) |hole| Type.hole(hole.hole_id) else info.ty,
+        .object_class = info.object_class,
+    });
 }
 
 fn rejectVoidValue(state: *core.DocumentState, info: semantic_types.TypeInfo, origin: []const u8) !void {
@@ -586,6 +596,7 @@ fn checkStatement(
             try rejectVoidValue(state, info, origin);
             if (!binds_name) return;
             try env.put(binding.name, info);
+            try recordBindingType(state, sema.module_id, binding.name_span, info);
         },
         .return_expr => |expr| {
             const actual = try inferExprInfo(inference_context, allocator, state, sema, env, expr, origin);
