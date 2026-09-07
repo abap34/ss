@@ -13,6 +13,11 @@ pub const NominalId = struct {
     module_id: u32,
     name: []const u8,
 
+    pub fn optionalEql(a: ?NominalId, b: ?NominalId) bool {
+        if ((a == null) != (b == null)) return false;
+        return if (a) |id| id.eql(b.?) else true;
+    }
+
     pub fn eql(a: NominalId, b: NominalId) bool {
         return a.module_id == b.module_id and std.mem.eql(u8, a.name, b.name);
     }

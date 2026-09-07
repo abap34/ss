@@ -93,13 +93,13 @@ module.exports = grammar({
     ),
 
     object_member: $ => choice($.object_base, $.object_implements, $.object_roles, $.object_field),
-    object_base: $ => seq("base", "=", field("type", $.type_identifier), optional($._terminator)),
-    object_implements: $ => seq("implements", "=", field("type", $.type_identifier), optional($._terminator)),
+    object_base: $ => seq("base", "=", field("type", $._type_name), optional($._terminator)),
+    object_implements: $ => seq("implements", "=", field("type", $._type_name), optional($._terminator)),
     object_roles: $ => seq("roles", "=", field("value", $.list_expression), optional($._terminator)),
 
     object_extension: $ => seq(
       "extend",
-      field("target", $.type_identifier),
+      field("target", $._type_name),
       "{",
       repeat($._terminator),
       repeat($.object_member),
@@ -241,8 +241,8 @@ module.exports = grammar({
     primary_type: $ => choice(
       "document",
       "page",
-      seq("object", optional(seq("<", $.type_identifier, ">"))),
-      seq("selection", optional(seq("<", $.type, ">"))),
+      seq(choice("object", "Object"), optional(seq("<", $._type_name, ">"))),
+      seq(choice("selection", "Selection"), optional(seq("<", $.type, ">"))),
       "anchor",
       "string",
       "number",
@@ -253,7 +253,7 @@ module.exports = grammar({
       "void",
       "Void",
       seq("(", $.type, ")"),
-      $.type_identifier,
+      $._type_name,
     ),
 
     identifier: _ => /[A-Za-z_][A-Za-z0-9_]*/,
@@ -261,6 +261,8 @@ module.exports = grammar({
     bare_callable_identifier: $ => prec(1, seq($.identifier, optional("!"))),
     qualified_callable_identifier: $ => prec(1, seq(field("module", $.identifier), "::", field("name", $.bare_callable_identifier))),
     import_spec: _ => /[A-Za-z0-9_./:-]+/,
+    _type_name: $ => choice(alias($.identifier, $.type_identifier), $.qualified_type_identifier),
+    qualified_type_identifier: $ => seq(field("module", $.identifier), "::", field("name", $.type_identifier)),
     type_identifier: _ => /[A-Z][A-Za-z0-9_]*/,
     string: _ => token(choice(
       seq('"""', repeat(choice(/[^"]+/, /"[^"]/, /""[^"]/)), '"""'),

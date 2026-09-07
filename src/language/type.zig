@@ -13,6 +13,7 @@ pub const Type = struct {
     class_name: ?[]const u8 = null,
     class_name_span: ?SourceSpan = null,
     param_class_name: ?[]const u8 = null,
+    param_module_id: ?u32 = null,
     param_class_name_span: ?SourceSpan = null,
     enum_name: ?[]const u8 = null,
     enum_name_span: ?SourceSpan = null,
@@ -61,6 +62,10 @@ pub const Type = struct {
         return .{ .kind = .object, .class_name = name };
     }
 
+    pub fn objectId(id: model.NominalId) Type {
+        return objectClass(id.name).inModule(id.module_id);
+    }
+
     pub fn objectClassAt(name: []const u8, span: SourceSpan) Type {
         return .{ .kind = .object, .class_name = name, .class_name_span = span };
     }
@@ -95,6 +100,10 @@ pub const Type = struct {
         };
     }
 
+    pub fn selectionItemId(self: Type) ?model.NominalId {
+        return .{ .module_id = self.param_module_id orelse return null, .name = self.param_class_name orelse return null };
+    }
+
     pub fn hole(hole_id: u32) Type {
         return .{ .kind = .hole, .hole_id = hole_id };
     }
@@ -115,6 +124,7 @@ pub const Type = struct {
             .kind = .selection,
             .param = normalizeParam(item.kind),
             .param_class_name = if (item.kind == .object) item.class_name else null,
+            .param_module_id = if (item.kind == .object) item.nominal_module_id else null,
             .param_class_name_span = if (item.kind == .object) item.class_name_span else null,
         };
     }
@@ -206,6 +216,7 @@ pub const Type = struct {
             return true;
         }
         return a.nominal_module_id == b.nominal_module_id and
+            a.param_module_id == b.param_module_id and
             normalizeParam(a.param) == normalizeParam(b.param) and
             optionalStringEql(a.class_name, b.class_name) and
             optionalStringEql(a.param_class_name, b.param_class_name) and
@@ -251,13 +262,13 @@ pub const Type = struct {
             return accepts(expected.fn_result.?.*, actual.fn_result.?.*);
         }
         if (expected.kind == .object and expected.class_name != null and actual.class_name != null) {
-            if (!std.mem.eql(u8, expected.class_name.?, actual.class_name.?)) return false;
+            if (expected.nominal_module_id != actual.nominal_module_id or !std.mem.eql(u8, expected.class_name.?, actual.class_name.?)) return false;
         }
         const expected_param = normalizeParam(expected.param);
         const actual_param = normalizeParam(actual.param);
         if (!(expected_param == .any or actual_param == .any or expected_param == actual_param)) return false;
         if (expected_param == .object and expected.param_class_name != null and actual.param_class_name != null) {
-            if (!std.mem.eql(u8, expected.param_class_name.?, actual.param_class_name.?)) return false;
+            if (expected.param_module_id != actual.param_module_id or !std.mem.eql(u8, expected.param_class_name.?, actual.param_class_name.?)) return false;
         }
         return true;
     }

@@ -93,8 +93,8 @@ test "inheritance spec: unvalidated cyclic fields terminate in analysis and core
     defer state.deinit();
     var index = try compiler.declarations.build(testing.allocator, &state);
     defer index.deinit();
-    try testing.expect(index.field("Second", "missing") == null);
-    try testing.expect(index.field("Second", "value") != null);
+    try testing.expect(index.field(.{ .module_id = 0, .name = "Second" }, "missing") == null);
+    try testing.expect(index.field(.{ .module_id = 0, .name = "Second" }, "value") != null);
 
     const node = core.Node{ .id = 0, .kind = .object, .name = "recursive", .role = "recursive" };
     try testing.expect(try core.fields.get(testing.allocator, &state, &node, "missing") == null);
@@ -128,7 +128,7 @@ test "inheritance spec: long acyclic base chains preserve inherited defaults" {
     try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
     var index = try compiler.declarations.build(testing.allocator, &state);
     defer index.deinit();
-    try testing.expectEqualStrings("Base0", index.field("Leaf", "value").?.class_name);
+    try testing.expectEqualStrings("Base0", index.field(.{ .module_id = 0, .name = "Leaf" }, "value").?.class_name);
     const node = core.Node{ .id = 0, .kind = .object, .name = "leaf", .role = "leaf" };
     var value = (try core.fields.get(testing.allocator, &state, &node, "value")).?;
     defer value.deinit(testing.allocator);

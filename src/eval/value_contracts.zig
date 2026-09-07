@@ -57,7 +57,7 @@ pub fn ensureValueConformsToType(
     origin: []const u8,
     code: core.TypeMismatchCode,
 ) !void {
-    if (valueConformsToType(value, expected)) return;
+    if (valueConformsToType(state, value, expected)) return;
 
     const actual = runtimeKind(value);
     if (expectedRuntimeKind(expected)) |expected_kind| {
@@ -78,13 +78,13 @@ pub fn ensureValueConformsToType(
     return error.InvalidValueTag;
 }
 
-pub fn valueConformsToType(value: core.Value, expected: ast.Type) bool {
+pub fn valueConformsToType(state: anytype, value: core.Value, expected: ast.Type) bool {
     if (expected.kind == .hole) return false;
     if (expected.kind == .any) return true;
     if (expected.kind == .optional) {
         if (runtimeKind(value) == .none) return true;
         const child = expected.optional_child orelse return false;
-        return valueConformsToType(value, child.*);
+        return valueConformsToType(state, value, child.*);
     }
     if (expected.kind == .enum_type) {
         const expected_name = expected.enum_name orelse return false;
@@ -99,6 +99,26 @@ pub fn valueConformsToType(value: core.Value, expected: ast.Type) bool {
             .record => |record| record.module_id == expected.nominal_module_id and std.mem.eql(u8, record.type_name, expected_name),
             else => false,
         };
+    }
+    if (expected.kind == .object and expected.class_name != null) {
+        const id = expected.nominalId() orelse return false;
+        if (value != .object) return false;
+        const node = state.getNode(value.object) orelse return false;
+        const actual_id = core.fields.classId(state, node) orelse return false;
+        return id.eql(actual_id);
+    }
+    if (expected.kind == .selection and expected.param != .any and expected.param != .none) {
+        if (value != .selection) return false;
+        if ((expected.param == .object and value.selection.item_tag != .object) or
+            (expected.param == .page and value.selection.item_tag != .page)) return false;
+        if (expected.selectionItemId()) |id| {
+            for (value.selection.ids.items) |node_id| {
+                const node = state.getNode(node_id) orelse return false;
+                const actual_id = core.fields.classId(state, node) orelse return false;
+                if (!id.eql(actual_id)) return false;
+            }
+        }
+        return true;
     }
     const expected_kind = expectedRuntimeKind(expected) orelse return false;
     return runtimeKind(value) == expected_kind;

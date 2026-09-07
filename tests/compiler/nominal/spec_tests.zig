@@ -4,7 +4,17 @@ const core = compiler.core;
 const Type = compiler.language.Type;
 const testing = std.testing;
 
+const ExerciseOptions = struct {
+    diagnostic: ?[]const u8 = null,
+    evaluation_error: ?anyerror = null,
+    verify: ?*const fn (*core.DocumentState) anyerror!void = null,
+};
+
 fn exercise(source: []const u8, first: []const u8, second: []const u8, expected_diagnostic: ?[]const u8) !void {
+    return exerciseWithOptions(source, first, second, .{ .diagnostic = expected_diagnostic });
+}
+
+fn exerciseWithOptions(source: []const u8, first: []const u8, second: []const u8, options: ExerciseOptions) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -27,7 +37,7 @@ fn exercise(source: []const u8, first: []const u8, second: []const u8, expected_
     errdefer for (state.diagnostics.items) |diagnostic| {
         if (diagnostic.data == .user_report) std.debug.print("{s}: {s}\n", .{ diagnostic.origin orelse "", diagnostic.data.user_report.message });
     };
-    if (expected_diagnostic) |expected| {
+    if (options.diagnostic) |expected| {
         compiler.analysis.analyzeDocumentState(allocator, &state) catch {};
         for (state.diagnostics.items) |diagnostic| {
             if (diagnostic.data == .user_report and std.mem.startsWith(u8, diagnostic.data.user_report.message, expected)) return;
@@ -36,7 +46,12 @@ fn exercise(source: []const u8, first: []const u8, second: []const u8, expected_
     }
     var graph = (try compiler.analysis.analyzeDocumentStateWithMode(allocator, &state, .evaluation)).?;
     defer graph.deinit();
+    if (options.evaluation_error) |expected| {
+        try testing.expectError(expected, compiler.lowering.evaluateDocument(&state, &graph, .{}));
+        return;
+    }
     try compiler.lowering.evaluateDocument(&state, &graph, .{});
+    if (options.verify) |verify| try verify(&state);
     for (state.diagnostics.items) |diagnostic| {
         if (diagnostic.severity == .@"error") return error.UnexpectedDiagnostic;
     }
@@ -245,4 +260,159 @@ fn cloneNestedTypes(allocator: std.mem.Allocator) !void {
 
 test "nominal types: partially cloned function parameters are released on allocation failure" {
     try testing.checkAllAllocationFailures(testing.allocator, cloneNestedTypes, .{});
+}
+
+const first_object =
+    \\type Base = object {
+    \\  amount: Number = 12
+    \\}
+    \\type Box = object {
+    \\  base = Base
+    \\  roles = ["a-box"]
+    \\}
+    \\fn make() -> Box
+    \\  return new("", "a-box", "text")
+    \\end
+    \\fn accept(value: Box) -> Number
+    \\  return value.amount ?? 0
+    \\end
+;
+const second_object =
+    \\type Base = object {
+    \\  amount: String = "second"
+    \\}
+    \\type Box = object {
+    \\  base = Base
+    \\  roles = ["b-box"]
+    \\}
+    \\fn make() -> Box
+    \\  return new("", "b-box", "text")
+    \\end
+    \\fn accept(value: Box) -> String
+    \\  return value.amount ?? ""
+    \\end
+;
+
+test "nominal objects: inherited fields and function arguments ignore import order" {
+    const body =
+        \\page main
+        \\  let first: a::Box = a::make()
+        \\  let second: b::Box = b::make()
+        \\  first.amount = 24
+        \\  second.amount = "changed"
+        \\  let amount: Number = a::accept(first)
+        \\  text!(b::accept(second))
+        \\end
+    ;
+    try exercise("import \"a\" as a\nimport \"b\" as b\n" ++ body, first_object, second_object, null);
+    try exercise("import \"b\" as b\nimport \"a\" as a\n" ++ body, first_object, second_object, null);
+}
+
+test "nominal objects: same named imported classes are not interchangeable" {
+    try exercise(
+        \\import "a" as a
+        \\import "b" as b
+        \\page main
+        \\  let invalid: a::Box = b::make()
+        \\end
+    , first_object, second_object, "TypeMismatch:");
+    try exercise(
+        \\import "a" as a
+        \\page main
+        \\  let invalid: Box = a::make()
+        \\end
+    , first_object, "", "UnknownType:");
+}
+
+test "nominal objects: qualified bases and extensions retain their target module" {
+    try exerciseWithOptions(
+        \\import "a" as a
+        \\import "b" as b
+        \\type Derived = object {
+        \\  base = a::Base
+        \\  roles = ["derived"]
+        \\}
+        \\extend a::Box {
+        \\  amount: Number = 35
+        \\}
+        \\extend b::Box {
+        \\  amount: String = "extended"
+        \\}
+        \\page main
+        \\  let child = new("", "derived", "text")
+        \\  let number: Number = child.amount ?? 0
+        \\  let first: Number = a::accept(a::make())
+        \\  text!(b::accept(b::make()))
+        \\end
+    , first_object, second_object, .{ .verify = struct {
+        fn verify(state: *core.DocumentState) !void {
+            var found: usize = 0;
+            for (state.nodes.items) |*node| {
+                const role = node.role orelse continue;
+                if (std.mem.eql(u8, role, "a-box")) {
+                    var field = (try core.fields.get(state.allocator, state, node, "amount")).?;
+                    defer field.deinit(state.allocator);
+                    try testing.expectEqual(@as(f32, 35), field.value.number);
+                    found += 1;
+                } else if (std.mem.eql(u8, role, "b-box")) {
+                    var field = (try core.fields.get(state.allocator, state, node, "amount")).?;
+                    defer field.deinit(state.allocator);
+                    try testing.expectEqualStrings("extended", field.value.string);
+                    found += 1;
+                }
+            }
+            try testing.expectEqual(@as(usize, 2), found);
+        }
+    }.verify });
+}
+
+test "nominal objects: a shadowing base name does not create an inheritance cycle" {
+    try exercise(
+        \\import "a" as a
+        \\type Base = object {
+        \\  base = a::Base
+        \\  roles = ["derived"]
+        \\}
+        \\page main
+        \\  let child = new("", "derived", "text")
+        \\  let number: Number = child.amount ?? 0
+        \\end
+    , first_object, "", null);
+}
+
+test "nominal objects: selections retain their element module" {
+    const first = Type.objectClass("Box").inModule(1);
+    const second = Type.objectClass("Box").inModule(2);
+    const selection = Type.selectionType(first);
+    try testing.expect(!Type.eql(first, second));
+    try testing.expect(!Type.accepts(first, second));
+    try testing.expect(!Type.eql(selection, Type.selectionType(second)));
+    try testing.expect(!Type.accepts(selection, Type.selectionType(second)));
+    var cloned = try selection.clone(testing.allocator);
+    defer cloned.deinit(testing.allocator);
+    try testing.expect(selection.selectionItemId().?.eql(cloned.selectionItemId().?));
+}
+
+test "nominal objects: unknown receivers do not select an arbitrary field type" {
+    try exercise(
+        \\import "a" as a
+        \\import "b" as b
+        \\fn read(value: Object) -> String
+        \\  return value.amount ?? ""
+        \\end
+    , first_object, second_object, "UnknownField:");
+}
+
+test "nominal objects: dynamic object arguments are checked at runtime" {
+    try exerciseWithOptions(
+        \\import "a" as a
+        \\import "b" as b
+        \\fn create(role: String) -> Object
+        \\  return new("", role, "text")
+        \\end
+        \\page main
+        \\  let value: Object = create("b-box")
+        \\  let invalid = a::accept(value)
+        \\end
+    , first_object, second_object, .{ .evaluation_error = error.InvalidValueTag });
 }

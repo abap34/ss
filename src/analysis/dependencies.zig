@@ -27,19 +27,19 @@ pub const ObjectIdentity = struct {
 };
 
 pub const ObjectOwner = struct {
-    class_name: ?[]const u8 = null,
+    class_id: ?core.NominalId = null,
     identity: ?ObjectIdentity = null,
 
     pub fn intersects(self: ObjectOwner, other: ObjectOwner) bool {
         if (self.identity != null and other.identity != null) {
             return self.identity.?.eql(other.identity.?);
         }
-        return optionalNameIntersects(self.class_name, other.class_name);
+        return (self.class_id == null or other.class_id == null or self.class_id.?.eql(other.class_id.?));
     }
 
     pub fn merge(self: ObjectOwner, other: ObjectOwner) ObjectOwner {
         return .{
-            .class_name = mergeOptionalNames(self.class_name, other.class_name),
+            .class_id = if (core.NominalId.optionalEql(self.class_id, other.class_id)) self.class_id else null,
             .identity = if (self.identity != null and other.identity != null and self.identity.?.eql(other.identity.?))
                 self.identity
             else
@@ -48,7 +48,7 @@ pub const ObjectOwner = struct {
     }
 
     pub fn isUnknown(self: ObjectOwner) bool {
-        return self.class_name == null and self.identity == null;
+        return self.class_id == null and self.identity == null;
     }
 };
 
@@ -477,7 +477,7 @@ fn appendPropertyOwner(
         .page => try out.appendSlice(allocator, "page"),
         .object => |object_owner| {
             try out.appendSlice(allocator, "object:");
-            try appendOptionalNameOrAny(allocator, out, object_owner.class_name);
+            try appendOptionalNameOrAny(allocator, out, if (object_owner.class_id) |id| id.name else null);
             if (object_owner.identity) |identity| {
                 try out.append(allocator, '#');
                 try appendObjectIdentity(allocator, out, identity, options);
@@ -611,13 +611,13 @@ const PropertyTarget = struct {
         return .{ .owner = .page };
     }
 
-    fn object(class_name: ?[]const u8) PropertyTarget {
-        return .{ .owner = .{ .object = .{ .class_name = class_name } } };
+    fn object(class_id: ?core.NominalId) PropertyTarget {
+        return .{ .owner = .{ .object = .{ .class_id = class_id } } };
     }
 
-    fn objectWithIdentity(class_name: ?[]const u8, scope: ResourceScope, name: []const u8) PropertyTarget {
+    fn objectWithIdentity(class_id: ?core.NominalId, scope: ResourceScope, name: []const u8) PropertyTarget {
         return .{ .owner = .{ .object = .{
-            .class_name = class_name,
+            .class_id = class_id,
             .identity = .{ .scope = scope, .name = name },
         } } };
     }
@@ -831,7 +831,7 @@ pub const Analyzer = struct {
         return switch (value.owner) {
             .object => |owner| blk: {
                 if (owner.identity != null or let_policy == .local) break :blk value;
-                break :blk PropertyTarget.objectWithIdentity(owner.class_name, self.variable_scope, name);
+                break :blk PropertyTarget.objectWithIdentity(owner.class_id, self.variable_scope, name);
             },
             .any, .document, .page => value,
         };
@@ -2015,10 +2015,10 @@ pub const Analyzer = struct {
         return switch (ty.kind) {
             .document => PropertyTarget.document(),
             .page => PropertyTarget.page(),
-            .object => PropertyTarget.object(ty.class_name),
+            .object => PropertyTarget.object(ty.nominalId()),
             .selection => switch (ty.param) {
                 .page => PropertyTarget.page(),
-                .object, .any => PropertyTarget.object(ty.param_class_name),
+                .object, .any => PropertyTarget.object(ty.selectionItemId()),
                 else => null,
             },
             .optional => if (ty.optional_child) |child| self.propertyTargetForType(child.*) else null,
@@ -2026,9 +2026,9 @@ pub const Analyzer = struct {
         };
     }
 
-    fn objectClassForRole(self: *Analyzer, role_name: ?[]const u8) ?[]const u8 {
+    fn objectClassForRole(self: *Analyzer, role_name: ?[]const u8) ?core.NominalId {
         const name = role_name orelse return null;
-        return self.sema.roleClass(name) orelse name;
+        return self.sema.roleClass(name);
     }
 
     fn objectRoleArg(self: *Analyzer, call: ast.CallExpr, index: usize) !?[]const u8 {
@@ -2224,7 +2224,11 @@ fn appendPropertyOwnerKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8),
         .page => try out.append(allocator, 'p'),
         .object => |object_owner| {
             try out.append(allocator, 'o');
-            try appendOptionalBytesKey(allocator, out, object_owner.class_name);
+            if (object_owner.class_id) |id| {
+                try out.append(allocator, 's');
+                try out.appendSlice(allocator, std.mem.asBytes(&id.module_id));
+                try appendKeyBytes(allocator, out, id.name);
+            } else try out.append(allocator, 'n');
             if (object_owner.identity) |identity| {
                 try out.append(allocator, 'i');
                 try appendResourceScopeKey(allocator, out, identity.scope);

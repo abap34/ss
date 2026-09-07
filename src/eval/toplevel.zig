@@ -1953,7 +1953,7 @@ fn writePropertyPathToNode(
 
     const node = state.getNode(node_id) orelse return error.UnknownNode;
     const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
-    const maybe_field = if (core.fields.className(state, node)) |class_name|
+    const maybe_field = if (core.fields.classId(state, node)) |class_name|
         sema.field(class_name, property_name)
     else
         sema.fieldByName(property_name);

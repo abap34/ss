@@ -39,6 +39,7 @@ pub const TypeDefinition = struct {
 };
 
 pub const ValueBinding = struct {
+    value_type: ast.Type,
     name: []const u8,
     kind: core.DefinitionKind,
     module_id: ?core.SourceModuleId,
@@ -49,15 +50,16 @@ pub const ValueBinding = struct {
 };
 
 pub const VariableBinding = struct {
+    value_type: ast.Type,
     name: []const u8,
     type_label: []const u8,
-    object_class: ?[]const u8 = null,
+    object_class: ?core.NominalId = null,
     module_id: core.SourceModuleId,
 };
 
-pub const RecordFieldRef = struct {
+pub const FieldRef = struct {
+    value_type: ast.Type,
     name: []const u8,
-    record_name: []const u8,
     type_label: []const u8,
     module_id: core.SourceModuleId,
     name_span: ?ast.Span = null,
@@ -94,6 +96,7 @@ pub fn visibleVariableBinding(snapshot: anytype, module_id: core.SourceModuleId,
             best = .{
                 .name = binding.name,
                 .type_label = binding.type_label,
+                .value_type = binding.value_type,
                 .object_class = binding.object_class,
                 .module_id = binding.module_id,
             };
@@ -109,16 +112,16 @@ pub fn variableBindingVisibleAt(snapshot: anytype, module_id: core.SourceModuleI
     return scopeMatches(binding.scope_kind, binding.scope_name, requestScope(snapshot, module_id, offset));
 }
 
-pub fn recordField(snapshot: anytype, record_name: []const u8, field_name: []const u8) ?RecordFieldRef {
+pub fn recordField(snapshot: anytype, record_id: core.NominalId, field_name: []const u8) ?FieldRef {
     var index = snapshot.record_fields.len;
     while (index > 0) {
         index -= 1;
         const field = snapshot.record_fields[index];
-        if (!std.mem.eql(u8, field.record_name, record_name)) continue;
+        if (field.module_id != record_id.module_id or !std.mem.eql(u8, field.record_name, record_id.name)) continue;
         if (!std.mem.eql(u8, field.name, field_name)) continue;
         return .{
             .name = field.name,
-            .record_name = field.record_name,
+            .value_type = field.value_type,
             .type_label = field.type_label,
             .module_id = field.module_id,
             .name_span = field.name_span,
@@ -127,101 +130,99 @@ pub fn recordField(snapshot: anytype, record_name: []const u8, field_name: []con
     return null;
 }
 
-pub fn recordFieldTypeLabel(snapshot: anytype, record_name: []const u8, field_name: []const u8) ?[]const u8 {
-    const field = recordField(snapshot, record_name, field_name) orelse return null;
-    return field.type_label;
+pub fn recordIdForType(ty: ast.Type) ?core.NominalId {
+    return if (ty.kind == .record) ty.nominalId() else null;
 }
 
-pub fn recordNameForTypeLabel(snapshot: anytype, type_label: []const u8) ?[]const u8 {
-    const name = bareTypeName(type_label) orelse return null;
-    var index = snapshot.records.len;
-    while (index > 0) {
-        index -= 1;
-        const record = snapshot.records[index];
-        if (std.mem.eql(u8, record.name, name)) return record.name;
-    }
-    return null;
+pub fn recordIdForExpr(snapshot: anytype, module_id: core.SourceModuleId, offset: usize, expr: ast.Expr) ?core.NominalId {
+    return recordIdForType(typeForExpr(snapshot, module_id, offset, expr) orelse return null);
 }
 
-pub fn recordNameForExpr(
-    snapshot: anytype,
-    current_module_id: core.SourceModuleId,
-    offset: usize,
-    expr: ast.Expr,
-) ?[]const u8 {
+pub fn typeForExpr(snapshot: anytype, module_id: core.SourceModuleId, offset: usize, expr: ast.Expr) ?ast.Type {
     return switch (expr) {
-        .record => |record| recordNameForTypeName(snapshot, current_module_id, record.type_name),
-        .record_update => |update| recordNameForExpr(snapshot, current_module_id, offset, update.target.*),
+        .record => |record| if (record.module_id) |id| ast.Type.recordType(record.type_name).inModule(id) else resolvedTypeName(snapshot, module_id, record.type_name),
+        .record_update => |update| typeForExpr(snapshot, module_id, offset, update.target.*),
         .ident => |ident| blk: {
-            if (visibleVariableBinding(snapshot, current_module_id, offset, ident.name)) |binding| {
-                if (recordNameForTypeLabel(snapshot, binding.type_label)) |record_name| break :blk record_name;
+            if (visibleVariableBinding(snapshot, module_id, offset, ident.name)) |binding| {
+                if (binding.object_class) |id| {
+                    break :blk if (binding.value_type.kind == .selection) ast.Type.selectionType(ast.Type.objectId(id)) else ast.Type.objectId(id);
+                }
+                break :blk binding.value_type;
             }
-            if (valueBinding(snapshot, current_module_id, ident.name, null, .constant)) |binding| {
-                if (recordNameForTypeLabel(snapshot, binding.type_label)) |record_name| break :blk record_name;
-            }
-            if (valueBinding(snapshot, current_module_id, ident.name, null, .function)) |binding| {
-                if (recordNameForTypeLabel(snapshot, binding.type_label)) |record_name| break :blk record_name;
-            }
+            if (valueBinding(snapshot, module_id, ident.name, null, .constant)) |binding| break :blk binding.value_type;
             break :blk null;
         },
         .call => |call| blk: {
-            const binding = valueBinding(snapshot, current_module_id, call.callee.name, call.callee.qualifier, .function) orelse break :blk null;
-            break :blk recordNameForTypeLabel(snapshot, binding.type_label);
+            const binding = valueBinding(snapshot, module_id, call.callee.name, call.callee.qualifier, .function) orelse break :blk null;
+            break :blk binding.value_type;
         },
         .member => |member| blk: {
-            const target_record = recordNameForExpr(snapshot, current_module_id, offset, member.target.*) orelse break :blk null;
-            const field = recordField(snapshot, target_record, member.name) orelse break :blk null;
-            break :blk recordNameForTypeLabel(snapshot, field.type_label);
+            const target = typeForExpr(snapshot, module_id, offset, member.target.*) orelse break :blk null;
+            const field = fieldForType(snapshot, target, member.name) orelse break :blk null;
+            break :blk field.value_type;
         },
         else => null,
     };
 }
 
-pub fn recordNameAfterPath(snapshot: anytype, base_record_name: []const u8, path: []const ast.RecordPathSegment) ?[]const u8 {
+pub fn fieldForType(snapshot: anytype, ty: ast.Type, name: []const u8) ?FieldRef {
+    if (recordIdForType(ty)) |id| return recordField(snapshot, id, name);
+    var current = objectClassForType(snapshot, ty);
+    var remaining = snapshot.classes.len;
+    while (current) |id| {
+        var index = snapshot.fields.len;
+        while (index > 0) {
+            index -= 1;
+            const field = snapshot.fields[index];
+            if (field.class_module_id != id.module_id or !std.mem.eql(u8, field.class_name, id.name) or !std.mem.eql(u8, field.name, name)) continue;
+            return .{ .name = field.name, .value_type = field.value_type, .type_label = field.type_label, .module_id = field.module_id, .name_span = field.name_span };
+        }
+        if (remaining == 0) return null;
+        remaining -= 1;
+        current = classBase(snapshot, id);
+    }
+    return null;
+}
+
+pub fn objectClassForType(snapshot: anytype, ty: ast.Type) ?core.NominalId {
+    return switch (ty.kind) {
+        .object => ty.nominalId(),
+        .selection => ty.selectionItemId(),
+        .document, .page => .{
+            .module_id = snapshot.builtin_module_id orelse return null,
+            .name = if (ty.kind == .document) "Doc" else "PageContext",
+        },
+        else => null,
+    };
+}
+
+pub fn classBase(snapshot: anytype, class_id: core.NominalId) ?core.NominalId {
+    for (snapshot.classes) |item| {
+        if (item.module_id == class_id.module_id and std.mem.eql(u8, item.name, class_id.name)) return item.base;
+    }
+    return null;
+}
+
+pub fn recordIdAfterPath(snapshot: anytype, base_record_name: core.NominalId, path: []const ast.RecordPathSegment) ?core.NominalId {
     var current_record_name = base_record_name;
     for (path) |segment| {
         if (segment.name.len == 0) return null;
         const field = recordField(snapshot, current_record_name, segment.name) orelse return null;
-        current_record_name = recordNameForTypeLabel(snapshot, field.type_label) orelse return null;
+        current_record_name = recordIdForType(field.value_type) orelse return null;
     }
     return current_record_name;
 }
 
-pub fn recordNameForTypeName(snapshot: anytype, current_module_id: core.SourceModuleId, type_name: []const u8) ?[]const u8 {
-    const parsed = typeNameReceiver(type_name) orelse return null;
-    if (parsed.qualifier) |alias| {
-        const module_id = aliasTarget(snapshot, current_module_id, alias) orelse return null;
-        return recordNameInModule(snapshot, module_id, parsed.name);
-    }
-    if (recordNameInModule(snapshot, current_module_id, parsed.name)) |record_name| return record_name;
-    var index = snapshot.records.len;
-    while (index > 0) {
-        index -= 1;
-        const record = snapshot.records[index];
-        if (std.mem.eql(u8, record.name, parsed.name)) return record.name;
-    }
-    return null;
+pub fn recordIdForTypeName(snapshot: anytype, current_module_id: core.SourceModuleId, name: []const u8) ?core.NominalId {
+    return recordIdForType(resolvedTypeName(snapshot, current_module_id, name) orelse return null);
 }
 
-pub fn bareTypeName(type_label: []const u8) ?[]const u8 {
-    var trimmed = std.mem.trim(u8, type_label, " \t\r\n");
-    if (trimmed.len == 0) return null;
-    if (trimmed[trimmed.len - 1] == '?') return null;
-    if (std.mem.indexOfAny(u8, trimmed, "<>|")) |_| return null;
-    if (std.mem.lastIndexOf(u8, trimmed, "::")) |separator| trimmed = trimmed[separator + 2 ..];
-    if (!isIdentifier(trimmed)) return null;
-    return trimmed;
-}
-
-fn recordNameInModule(snapshot: anytype, module_id: core.SourceModuleId, name: []const u8) ?[]const u8 {
-    var index = snapshot.records.len;
-    while (index > 0) {
-        index -= 1;
-        const record = snapshot.records[index];
-        if (record.module_id != module_id) continue;
-        if (std.mem.eql(u8, record.name, name)) return record.name;
-    }
-    return null;
+pub fn resolvedTypeName(snapshot: anytype, current_module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
+    const Resolver = TypeResolver(@TypeOf(snapshot));
+    return switch (type_resolution.resolveText(TypeDefinition, Resolver{ .snapshot = snapshot }, current_module_id, name)) {
+        .found => |binding| binding.ty,
+        else => null,
+    };
 }
 
 const RequestScope = struct {
@@ -344,6 +345,7 @@ fn valueBindingFromSnapshot(binding: anytype) ValueBinding {
         .module_id = binding.module_id,
         .signature = binding.signature,
         .type_label = binding.type_label,
+        .value_type = binding.value_type,
         .documentation = binding.documentation,
         .primitive = binding.primitive,
     };
@@ -460,7 +462,7 @@ fn TypeResolver(comptime SnapshotPtr: type) type {
             };
             if (typeDefinitionInModule(self.snapshot, module_id, .object, name)) |target| return .{
                 .kind = .object,
-                .ty = ast.Type.objectClass(target.name),
+                .ty = ast.Type.objectClass(target.name).inModule(module_id),
                 .target = target,
             };
             if (typeDefinitionInModule(self.snapshot, module_id, .enum_type, name)) |target| return .{

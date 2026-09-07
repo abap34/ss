@@ -14,9 +14,9 @@ const Candidate = types.CompletionCandidate;
 const Result = types.CompletionResult;
 
 const PropertyTarget = union(enum) {
-    class: []const u8,
+    class: core.NominalId,
     any_object,
-    record: []const u8,
+    record: core.NominalId,
 };
 
 pub fn at(
@@ -123,8 +123,8 @@ fn completeMemberAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: 
 fn completeRecordUpdateAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !?Result {
     const parsed = program orelse return null;
     const target = cursor.recordUpdateCompletionAt(parsed, req.offset) orelse return null;
-    const base_record_name = recordNameForCompletionExpr(snapshot, req, parsed, target.target, 0) orelse return null;
-    const record_name = resolve_query.recordNameAfterPath(snapshot, base_record_name, target.path_prefix) orelse return null;
+    const base_record_name = recordIdForCompletionExpr(snapshot, req, parsed, target.target, 0) orelse return null;
+    const record_name = resolve_query.recordIdAfterPath(snapshot, base_record_name, target.path_prefix) orelse return null;
     var builder = CandidateBuilder.init(allocator);
     defer builder.deinit();
     try appendProperties(&builder, snapshot, .{ .record = record_name });
@@ -274,12 +274,12 @@ fn appendProperties(builder: *CandidateBuilder, snapshot: anytype, target: Prope
     try builder.add(.{ .label = "content", .kind = .property, .detail = "String" });
 }
 
-fn appendRecordFields(builder: *CandidateBuilder, snapshot: anytype, record_name: []const u8) !void {
+fn appendRecordFields(builder: *CandidateBuilder, snapshot: anytype, record_id: core.NominalId) !void {
     var index = snapshot.record_fields.len;
     while (index > 0) {
         index -= 1;
         const field = snapshot.record_fields[index];
-        if (!std.mem.eql(u8, field.record_name, record_name)) continue;
+        if (field.module_id != record_id.module_id or !std.mem.eql(u8, field.record_name, record_id.name)) continue;
         try builder.add(.{ .label = field.name, .kind = .property, .detail = field.type_label });
     }
 }
@@ -305,43 +305,16 @@ fn enumTypeForExpr(snapshot: anytype, req: types.SourceRequest, expr: ast.Expr) 
         .ident => |ident| ident.name,
         else => return null,
     };
-    const type_name = resolve_query.typeNameReceiver(receiver) orelse return null;
-    const module = snapshot.moduleForPath(req.path) orelse {
-        if (type_name.qualifier != null) return null;
-        return enumTypeByName(snapshot, type_name.name);
-    };
-    if (type_name.qualifier) |alias| {
-        const module_id = resolve_query.aliasTarget(snapshot, module.id, alias) orelse return null;
-        return enumTypeInModule(snapshot, module_id, type_name.name);
-    }
-    if (enumTypeInModule(snapshot, module.id, type_name.name)) |resolved| return resolved;
-    return enumTypeByName(snapshot, type_name.name);
-}
-
-fn enumTypeByName(snapshot: anytype, name: []const u8) ?TypeDefinitionRef {
-    var index = snapshot.enum_cases.len;
-    while (index > 0) {
-        index -= 1;
-        const item = snapshot.enum_cases[index];
-        if (std.mem.eql(u8, item.enum_name, name)) return .{ .name = item.enum_name, .module_id = item.module_id };
-    }
-    return null;
-}
-
-fn enumTypeInModule(snapshot: anytype, module_id: core.SourceModuleId, name: []const u8) ?TypeDefinitionRef {
-    var index = snapshot.enum_cases.len;
-    while (index > 0) {
-        index -= 1;
-        const item = snapshot.enum_cases[index];
-        if (item.module_id != module_id) continue;
-        if (std.mem.eql(u8, item.enum_name, name)) return .{ .name = item.enum_name, .module_id = item.module_id };
-    }
-    return null;
+    const module = snapshot.moduleForPath(req.path) orelse return null;
+    const ty = resolve_query.resolvedTypeName(snapshot, module.id, receiver) orelse return null;
+    if (ty.kind != .enum_type) return null;
+    const id = ty.nominalId() orelse return null;
+    return .{ .name = id.name, .module_id = id.module_id };
 }
 
 fn propertyTargetForExpr(snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) ?PropertyTarget {
     const module = snapshot.moduleForPath(req.path) orelse return null;
-    if (recordNameForCompletionExpr(snapshot, req, program, expr, depth)) |record_name| return .{ .record = record_name };
+    if (recordIdForCompletionExpr(snapshot, req, program, expr, depth)) |record_name| return .{ .record = record_name };
     if (depth > 16) return null;
     return switch (expr) {
         .ident => |ident| blk: {
@@ -352,78 +325,67 @@ fn propertyTargetForExpr(snapshot: anytype, req: types.SourceRequest, program: *
                 if (propertyTargetForExpr(snapshot, req, program, binding.expr, depth + 1)) |target| break :blk target;
             }
             if (resolve_query.valueBinding(snapshot, module.id, ident.name, null, .constant)) |constant| {
-                if (propertyTargetForTypeLabel(snapshot, constant.type_label)) |target| break :blk target;
+                if (propertyTargetForType(snapshot, constant.value_type)) |target| break :blk target;
             }
             if (resolve_query.valueBinding(snapshot, module.id, ident.name, null, .function)) |function| {
-                if (propertyTargetForTypeLabel(snapshot, function.type_label)) |target| break :blk target;
+                if (propertyTargetForType(snapshot, function.value_type)) |target| break :blk target;
             }
             break :blk null;
         },
         .call => |call| blk: {
             const function = resolve_query.valueBinding(snapshot, module.id, call.callee.name, call.callee.qualifier, .function) orelse break :blk null;
-            break :blk propertyTargetForTypeLabel(snapshot, function.type_label);
+            break :blk propertyTargetForType(snapshot, function.value_type);
         },
         else => null,
     };
 }
 
-fn recordNameForCompletionExpr(snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) ?[]const u8 {
+fn recordIdForCompletionExpr(snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) ?core.NominalId {
     const module = snapshot.moduleForPath(req.path) orelse return null;
-    if (resolve_query.recordNameForExpr(snapshot, module.id, req.offset, expr)) |record_name| return record_name;
+    if (resolve_query.recordIdForExpr(snapshot, module.id, req.offset, expr)) |record_name| return record_name;
     if (depth > 16) return null;
     return switch (expr) {
         .ident => |ident| blk: {
             const binding = cursor.visibleLetBindingAt(program, req.offset, ident.name) orelse break :blk null;
-            break :blk recordNameForCompletionExpr(snapshot, req, program, binding.expr, depth + 1);
+            break :blk recordIdForCompletionExpr(snapshot, req, program, binding.expr, depth + 1);
         },
         else => null,
     };
 }
 
 fn propertyTargetForVariable(snapshot: anytype, variable: anytype) ?PropertyTarget {
-    if (variable.object_class) |class_name| if (class_name.len != 0) return .{ .class = class_name };
-    return propertyTargetForTypeLabel(snapshot, variable.type_label);
+    if (variable.object_class) |id| return .{ .class = id };
+    return propertyTargetForType(snapshot, variable.value_type);
 }
 
-fn propertyTargetForTypeLabel(snapshot: anytype, type_label: []const u8) ?PropertyTarget {
-    if (std.mem.eql(u8, type_label, "Document")) return .{ .class = "Doc" };
-    if (std.mem.eql(u8, type_label, "Page")) return .{ .class = "PageContext" };
-    if (std.mem.startsWith(u8, type_label, "Object<") and std.mem.endsWith(u8, type_label, ">")) {
-        return .{ .class = type_label["Object<".len .. type_label.len - 1] };
-    }
-    if (std.mem.eql(u8, type_label, "Object") or std.mem.startsWith(u8, type_label, "Selection<Object")) return .any_object;
-    if (resolve_query.recordNameForTypeLabel(snapshot, type_label)) |record_name| return .{ .record = record_name };
-    return null;
+fn propertyTargetForType(snapshot: anytype, ty: ast.Type) ?PropertyTarget {
+    if (resolve_query.objectClassForType(snapshot, ty)) |id| return .{ .class = id };
+    return switch (ty.kind) {
+        .object => .any_object,
+        .selection => if (ty.param == .object) .any_object else null,
+        .record => if (ty.nominalId()) |id| .{ .record = id } else null,
+        else => null,
+    };
 }
 
 fn fieldAppliesToTarget(snapshot: anytype, field: anytype, target: PropertyTarget) bool {
     return switch (target) {
         .any_object => true,
-        .class => |class_name| classContains(snapshot, class_name, field.class_name),
+        .class => |id| classContains(snapshot, id, .{ .module_id = field.class_module_id, .name = field.class_name }),
         .record => false,
     };
 }
 
-fn classContains(snapshot: anytype, class_name: []const u8, expected: []const u8) bool {
-    var current: ?[]const u8 = class_name;
+fn classContains(snapshot: anytype, class_id: core.NominalId, expected: core.NominalId) bool {
+    var current: ?core.NominalId = class_id;
     var remaining_bases = snapshot.classes.len;
-    while (current) |name| {
-        if (std.mem.eql(u8, name, expected)) return true;
+    while (current) |id| {
+        if (id.eql(expected)) return true;
         if (remaining_bases == 0) return false;
         remaining_bases -= 1;
-        current = classBase(snapshot, name);
+        current = resolve_query.classBase(snapshot, id);
     }
     return false;
-}
-
-fn classBase(snapshot: anytype, class_name: []const u8) ?[]const u8 {
-    var index = snapshot.classes.len;
-    while (index > 0) {
-        index -= 1;
-        const item = snapshot.classes[index];
-        if (std.mem.eql(u8, item.name, class_name)) return item.base;
-    }
-    return null;
 }
 
 fn appendImportAsCompletions(builder: *CandidateBuilder, source: []const u8, offset: usize) !void {

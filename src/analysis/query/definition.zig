@@ -81,7 +81,7 @@ fn appendStructuredTarget(
         }
         const parsed = context.module() orelse return false;
         const member = cursor.memberAt(parsed, context.offset) orelse return false;
-        if (try appendRecordMemberTarget(allocator, out, snapshot, current_module_id, context.offset, member, request_path)) return true;
+        if (try appendMemberTarget(allocator, out, snapshot, current_module_id, context.offset, member, request_path)) return true;
         return false;
     }
     if (context.targetKindIs(.record_field_name)) {
@@ -105,21 +105,10 @@ fn appendEnumCaseTarget(
     case_name: []const u8,
     request_path: []const u8,
 ) !bool {
-    const type_name = resolve_query.typeNameReceiver(receiver) orelse return false;
-    if (type_name.qualifier) |alias| {
-        const module_id = resolve_query.aliasTarget(snapshot, current_module_id, alias) orelse return false;
-        return appendEnumCaseInModule(allocator, out, snapshot, module_id, type_name.name, case_name, request_path);
-    }
-    if (try appendEnumCaseInModule(allocator, out, snapshot, current_module_id, type_name.name, case_name, request_path)) return true;
-    var index = snapshot.enum_cases.len;
-    while (index > 0) {
-        index -= 1;
-        const item = snapshot.enum_cases[index];
-        if (!std.mem.eql(u8, item.enum_name, type_name.name)) continue;
-        if (!std.mem.eql(u8, item.name, case_name)) continue;
-        return appendTargetFromSpan(allocator, out, snapshot, item.module_id, item.name_span, request_path);
-    }
-    return false;
+    const ty = resolve_query.resolvedTypeName(snapshot, current_module_id, receiver) orelse return false;
+    if (ty.kind != .enum_type) return false;
+    const id = ty.nominalId() orelse return false;
+    return appendEnumCaseInModule(allocator, out, snapshot, id.module_id, id.name, case_name, request_path);
 }
 
 fn appendEnumCaseInModule(
@@ -152,42 +141,9 @@ fn appendRecordFieldTarget(
     field_name: []const u8,
     request_path: []const u8,
 ) !bool {
-    const type_name = resolve_query.typeNameReceiver(receiver) orelse return false;
-    if (type_name.qualifier) |alias| {
-        const module_id = resolve_query.aliasTarget(snapshot, current_module_id, alias) orelse return false;
-        return appendRecordFieldInModule(allocator, out, snapshot, module_id, type_name.name, field_name, request_path);
-    }
-    if (try appendRecordFieldInModule(allocator, out, snapshot, current_module_id, type_name.name, field_name, request_path)) return true;
-    var index = snapshot.record_fields.len;
-    while (index > 0) {
-        index -= 1;
-        const item = snapshot.record_fields[index];
-        if (!std.mem.eql(u8, item.record_name, type_name.name)) continue;
-        if (!std.mem.eql(u8, item.name, field_name)) continue;
-        return appendTargetFromSpan(allocator, out, snapshot, item.module_id, item.name_span, request_path);
-    }
-    return false;
-}
-
-fn appendRecordFieldInModule(
-    allocator: std.mem.Allocator,
-    out: *std.ArrayList(types.DefinitionTarget),
-    snapshot: anytype,
-    module_id: core.SourceModuleId,
-    record_name: []const u8,
-    field_name: []const u8,
-    request_path: []const u8,
-) !bool {
-    var index = snapshot.record_fields.len;
-    while (index > 0) {
-        index -= 1;
-        const item = snapshot.record_fields[index];
-        if (item.module_id != module_id) continue;
-        if (!std.mem.eql(u8, item.record_name, record_name)) continue;
-        if (!std.mem.eql(u8, item.name, field_name)) continue;
-        return appendTargetFromSpan(allocator, out, snapshot, item.module_id, item.name_span, request_path);
-    }
-    return false;
+    const id = resolve_query.recordIdForTypeName(snapshot, current_module_id, receiver) orelse return false;
+    const field = resolve_query.recordField(snapshot, id, field_name) orelse return false;
+    return appendTargetFromSpan(allocator, out, snapshot, field.module_id, field.name_span, request_path);
 }
 
 fn appendRecordUpdatePathTarget(
@@ -199,14 +155,14 @@ fn appendRecordUpdatePathTarget(
     target: cursor.RecordUpdatePathTarget,
     request_path: []const u8,
 ) !bool {
-    const base_record_name = resolve_query.recordNameForExpr(snapshot, current_module_id, offset, target.target) orelse return false;
-    const current_record_name = resolve_query.recordNameAfterPath(snapshot, base_record_name, target.path[0..target.segment_index]) orelse return false;
+    const base_record_name = resolve_query.recordIdForExpr(snapshot, current_module_id, offset, target.target) orelse return false;
+    const current_record_name = resolve_query.recordIdAfterPath(snapshot, base_record_name, target.path[0..target.segment_index]) orelse return false;
     const segment = target.path[target.segment_index];
     const field = resolve_query.recordField(snapshot, current_record_name, segment.name) orelse return false;
     return appendTargetFromSpan(allocator, out, snapshot, field.module_id, field.name_span, request_path);
 }
 
-fn appendRecordMemberTarget(
+fn appendMemberTarget(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(types.DefinitionTarget),
     snapshot: anytype,
@@ -215,8 +171,8 @@ fn appendRecordMemberTarget(
     member: cursor.MemberTarget,
     request_path: []const u8,
 ) !bool {
-    const record_name = resolve_query.recordNameForExpr(snapshot, current_module_id, offset, member.target) orelse return false;
-    const field = resolve_query.recordField(snapshot, record_name, member.name) orelse return false;
+    const ty = resolve_query.typeForExpr(snapshot, current_module_id, offset, member.target) orelse return false;
+    const field = resolve_query.fieldForType(snapshot, ty, member.name) orelse return false;
     return appendTargetFromSpan(allocator, out, snapshot, field.module_id, field.name_span, request_path);
 }
 

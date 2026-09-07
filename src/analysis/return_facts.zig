@@ -16,7 +16,9 @@ const KeyContext = struct {
             // Full type equality below handles recursive structure and normalized parameters.
             std.hash.autoHash(&hasher, argument.ty.kind);
             std.hash.autoHash(&hasher, argument.ty.nominal_module_id);
-            hashString(&hasher, argument.object_class);
+            std.hash.autoHash(&hasher, argument.ty.param_module_id);
+            std.hash.autoHash(&hasher, if (argument.object_class) |id| @as(?u32, id.module_id) else null);
+            hashString(&hasher, if (argument.object_class) |id| id.name else null);
             hashString(&hasher, argument.string_literal);
             std.hash.autoHash(&hasher, if (argument.hole) |hole| @as(?u32, hole.hole_id) else null);
             std.hash.autoHash(&hasher, argument.function_labels.len);
@@ -29,7 +31,7 @@ const KeyContext = struct {
         if (!(core.FunctionKeyContext{}).eql(left.function, right.function)) return false;
         if (left.arguments.len != right.arguments.len) return false;
         for (left.arguments, right.arguments) |a, b| {
-            if (!Type.eql(a.ty, b.ty) or !stringEql(a.object_class, b.object_class) or
+            if (!Type.eql(a.ty, b.ty) or !core.NominalId.optionalEql(a.object_class, b.object_class) or
                 !stringEql(a.string_literal, b.string_literal) or a.function_labels.len != b.function_labels.len)
             {
                 return false;

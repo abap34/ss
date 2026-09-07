@@ -588,7 +588,7 @@ const Parser = struct {
     }
 
     fn parseObjectExtensionAfterKeyword(self: *Parser, start: usize) !ObjectExtensionDecl {
-        const target = try self.parseIdentifierWithSpan();
+        const target = try self.parseQualifiedTypeNameWithSpan();
         var target_moved = false;
         errdefer if (!target_moved) self.allocator.free(target.text);
         source.skipTriviaFrom(self.source, &self.pos);
@@ -717,7 +717,7 @@ const Parser = struct {
                 source.skipTriviaFrom(self.source, &self.pos);
                 if (std.mem.eql(u8, name.text, "base")) {
                     if (maybe_base) |base| {
-                        const value = try self.parseIdentifier();
+                        const value = try self.parseQualifiedTypeName();
                         if (base.*) |existing| self.allocator.free(existing);
                         base.* = value;
                     } else {
@@ -725,7 +725,7 @@ const Parser = struct {
                     }
                 } else if (std.mem.eql(u8, name.text, "implements")) {
                     if (maybe_implements) |implements| {
-                        const value = try self.parseIdentifier();
+                        const value = try self.parseQualifiedTypeName();
                         if (implements.*) |existing| self.allocator.free(existing);
                         implements.* = value;
                     } else {

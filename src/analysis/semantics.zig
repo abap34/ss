@@ -245,6 +245,11 @@ pub fn resolveTypeReferences(
     }
 }
 
+fn resolvedClassModule(sema: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?core.SourceModuleId {
+    const ty = sema.resolveTypeNameInContext(module_id, name) orelse return null;
+    return if (ty.kind == .object) ty.nominal_module_id else null;
+}
+
 fn resolveModuleTypeReferences(
     allocator: std.mem.Allocator,
     program: *ast.Module,
@@ -258,12 +263,15 @@ fn resolveModuleTypeReferences(
         }
     }
     for (program.objects.items) |*object_decl| {
+        if (object_decl.base) |base| object_decl.base_module_id = resolvedClassModule(sema, module_id, base);
         for (object_decl.fields.items) |*field| {
             try resolveTypeReference(&field.value_type, module_id, sema);
             if (field.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, sema);
         }
     }
     for (program.object_extensions.items) |*extension| {
+        extension.target_module_id = resolvedClassModule(sema, module_id, extension.target);
+        if (extension.implements) |name| extension.implements_module_id = resolvedClassModule(sema, module_id, name);
         for (extension.fields.items) |*field| {
             try resolveTypeReference(&field.value_type, module_id, sema);
             if (field.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, sema);
@@ -762,7 +770,10 @@ fn resolveTypeReference(
         .selection => if (ty.param_class_name) |name| {
             if (sema.resolveTypeNameInContext(module_id, name)) |resolved| {
                 const param_class_name_span = ty.param_class_name_span;
-                if (resolved.kind == .object) ty.param_class_name = resolved.class_name;
+                if (resolved.kind == .object) {
+                    ty.param_class_name = resolved.class_name;
+                    ty.param_module_id = resolved.nominal_module_id;
+                }
                 ty.param_class_name_span = param_class_name_span;
             }
         },
@@ -958,12 +969,12 @@ fn checkTypeAnnotation(
         const record_name = ty.class_name orelse return;
         if (sema.record(ty.nominal_module_id, record_name) == null) return reportUnknownType(state, origin, record_name);
     } else if (ty.class_name) |class_name| {
-        if (!sema.classExists(class_name)) {
+        if (ty.nominal_module_id == null or sema.class(ty.nominal_module_id, class_name) == null) {
             return reportUnknownType(state, origin, class_name);
         }
     }
     if (ty.param_class_name) |class_name| {
-        if (!sema.classExists(class_name)) return reportUnknownType(state, origin, class_name);
+        if (ty.param_module_id == null or sema.class(ty.param_module_id, class_name) == null) return reportUnknownType(state, origin, class_name);
     }
     if (ty.kind == .function) {
         var had_diagnostics = false;

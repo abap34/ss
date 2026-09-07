@@ -10,6 +10,7 @@ const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
 
 pub fn checkObjectDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
+    // Roles form a document-wide namespace for dynamic object construction.
     var roles = std.StringHashMap([]const u8).init(allocator);
     defer roles.deinit();
 
@@ -24,15 +25,16 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, state: *core.Docume
     for (state.module_order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         const origin_path = originPathForModule(module);
+        const module_sema = sema.forModule(module_id);
         for (module.syntax.records.items) |record_decl| {
-            try checkRecordDeclaration(allocator, state, sema, origin_path, record_decl);
+            try checkRecordDeclaration(allocator, state, &module_sema, origin_path, record_decl);
         }
         for (module.syntax.objects.items) |object_decl| {
-            try checkObjectDeclaration(allocator, state, sema, origin_path, object_decl);
+            try checkObjectDeclaration(allocator, state, &module_sema, origin_path, object_decl);
             try checkRolesUnique(allocator, state, origin_path, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
         }
         for (module.syntax.object_extensions.items) |extension| {
-            try checkObjectExtension(allocator, state, sema, origin_path, extension);
+            try checkObjectExtension(allocator, state, &module_sema, origin_path, extension);
             try checkRolesUnique(allocator, state, origin_path, &roles, extension.target, extension.roles.items, extension.span);
         }
     }
@@ -61,7 +63,7 @@ fn checkObjectInheritance(allocator: std.mem.Allocator, state: *core.DocumentSta
                         const module = state.moduleById(class.module_id) orelse continue;
                         const origin = try statementOrigin(allocator, originPathForModule(module), class.span);
                         defer allocator.free(origin);
-                        try addUserReport(state, origin, "ObjectInheritanceCycle: object class '{s}' inherits from '{s}' in a cycle", .{ class.name, class.base.? });
+                        try addUserReport(state, origin, "ObjectInheritanceCycle: object class '{s}' inherits from '{s}' in a cycle", .{ class.name, class.base.?.name });
                     }
                     return error.InvalidType;
                 },
@@ -69,7 +71,7 @@ fn checkObjectInheritance(allocator: std.mem.Allocator, state: *core.DocumentSta
             }
             visits[class_index] = .active;
             try path.append(allocator, class_index);
-            current = if (index.classes.items[class_index].base) |base| index.class_by_name.get(base) else null;
+            current = if (index.classes.items[class_index].base) |base| index.class_by_module.get(base) else null;
         }
         for (path.items) |member| visits[member] = .complete;
     }
@@ -133,7 +135,7 @@ fn checkObjectDeclaration(
     const origin = try statementOrigin(allocator, origin_path, object_decl.span);
     defer allocator.free(origin);
     if (object_decl.base) |base| {
-        if (!sema.classExists(base)) {
+        if (object_decl.base_module_id == null) {
             try addUserReport(state, origin, "InvalidObjectDeclaration: unknown base object class: {s}", .{base});
             return error.InvalidType;
         }
@@ -150,12 +152,12 @@ fn checkObjectExtension(
 ) !void {
     const origin = try statementOrigin(allocator, origin_path, extension.span);
     defer allocator.free(origin);
-    if (!sema.classExists(extension.target)) {
+    if (extension.target_module_id == null) {
         try addUserReport(state, origin, "InvalidObjectExtension: unknown object class: {s}", .{extension.target});
         return error.InvalidType;
     }
     if (extension.implements) |implements| {
-        if (!sema.classExists(implements)) {
+        if (extension.implements_module_id == null) {
             try addUserReport(state, origin, "InvalidObjectExtension: unknown protocol: {s}", .{implements});
             return error.InvalidType;
         }

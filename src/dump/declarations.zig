@@ -31,7 +31,8 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, state: *core
     for (index.classes.items) |class| {
         var item = try classes.objectItem();
         try item.stringField("name", class.name);
-        try item.optionalStringField("base", class.base);
+        try item.optionalStringField("base", if (class.base) |base| base.name else null);
+        if (class.base) |base| try item.intField("baseModuleId", base.module_id);
         try item.intField("moduleId", class.module_id);
         try item.end();
     }
@@ -42,6 +43,7 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, state: *core
         var item = try roles.objectItem();
         try item.stringField("name", role.name);
         try item.stringField("class", role.class_name);
+        try item.intField("classModuleId", role.class_module_id);
         try item.intField("moduleId", role.module_id);
         try item.end();
     }
@@ -54,6 +56,7 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, state: *core
         defer allocator.free(type_label);
         try item.stringField("name", field.name);
         try item.stringField("class", field.class_name);
+        try item.intField("classModuleId", field.class_module_id);
         try item.stringField("type", type_label);
         try item.optionalStringField("defaultProperty", field.default_property_value);
         try item.intField("moduleId", field.module_id);

@@ -94,3 +94,22 @@ test "analysis snapshot owned layout output releases every partial allocation" {
         .{},
     );
 }
+
+fn retainQueryTypes(allocator: std.mem.Allocator) !void {
+    var storage = analysis.snapshot.TypeStorage.init(allocator);
+    defer storage.deinit();
+    var record = ast.Type.recordType("Style").inModule(12);
+    const optional = ast.Type{ .kind = .optional, .optional_child = &record };
+    var params = [_]ast.Type{optional};
+    const function = ast.Type{ .kind = .function, .fn_params = &params, .fn_result = &record };
+    const retained = try storage.retain(function);
+    try testing.expect(ast.Type.eql(function, retained));
+    try testing.expect(retained.fn_result.?.class_name.?.ptr != record.class_name.?.ptr);
+    try testing.expect(retained.fn_params[0].optional_child.?.class_name.?.ptr != record.class_name.?.ptr);
+    try testing.expectEqual(@as(?u32, 12), retained.fn_params[0].optional_child.?.nominal_module_id);
+}
+
+test "analysis snapshot types retain nested names independently of source owners" {
+    try retainQueryTypes(testing.allocator);
+    try testing.checkAllAllocationFailures(testing.allocator, retainQueryTypes, .{});
+}

@@ -726,7 +726,7 @@ fn validateSetReprCall(
         return error.InvalidArity;
     }
     const object_arg_type = if (object_info.ty.kind == .object and object_info.object_class != null)
-        Type.objectClass(object_info.object_class.?)
+        Type.objectId(object_info.object_class.?)
     else
         Type.object;
     try ensureType(state, allocator, infoFromType(object_arg_type), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
@@ -777,9 +777,7 @@ fn inferUserFunctionReturnInfo(
     const visit_key = core.functionKey(sema.module_id, func.name);
     if (context.visiting.contains(visit_key)) {
         context.recursive_calls += 1;
-        var info = infoFromType(func.result_type);
-        info.object_class = func.result_type.class_name;
-        return info;
+        return infoFromType(func.result_type);
     }
     try context.visiting.put(visit_key, {});
     defer _ = context.visiting.remove(visit_key);
@@ -819,7 +817,9 @@ fn inferUserFunctionReturnInfo(
         &result,
     );
     result.ty = func.result_type;
-    if (func.result_type.class_name) |class_name| result.object_class = class_name;
+    if (func.result_type.kind == .object) {
+        if (func.result_type.nominalId()) |class_id| result.object_class = class_id;
+    }
     // A result that used a recursive fallback depends on the active call chain.
     if (context.recursive_calls == recursive_calls_before) try context.put(key, result);
     return result;
@@ -920,7 +920,7 @@ fn primitiveResultTypeInfo(
             };
             if (info.ty.kind == .object) {
                 info.object_class = selection_info.object_class;
-                info.ty.class_name = selection_info.object_class;
+                if (selection_info.object_class) |id| info.ty = Type.objectId(id);
             }
             return info;
         },
@@ -950,11 +950,11 @@ fn primitiveResultTypeInfo(
 
     var info = infoFromType(result_type);
     info.object_class = switch (descriptor.result_policy) {
-        .group_object => "Group",
+        .group_object => sema.builtinClass("Group"),
         .object_from_role_arg => inferObjectConstructorClass(sema, env, call, if (descriptor.op == .new) 1 else 2),
         else => null,
     };
-    if (info.object_class) |class_name| info.ty.class_name = class_name;
+    if (info.object_class) |id| info.ty = Type.objectId(id);
     return info;
 }
 
@@ -991,7 +991,7 @@ fn validateCallbackShape(
     }
     const item_type = switch (selection_info.ty.param) {
         .page => Type.page,
-        .object => if (selection_info.object_class orelse selection_info.ty.param_class_name) |class_name| Type.objectClass(class_name) else Type.object,
+        .object => if (selection_info.object_class orelse selection_info.ty.selectionItemId()) |id| Type.objectId(id) else Type.object,
         .any, .none => Type.object,
         else => Type.any,
     };
@@ -1055,7 +1055,9 @@ fn inferSelectionAlgebraInfo(
     const item_tag = if (left.ty.param != .any) left.ty.param else right.ty.param;
     var info = infoFromType(Type.selection(item_tag));
     info.object_class = mergeObjectClass(left.object_class, right.object_class);
-    if (info.ty.param == .object) info.ty.param_class_name = info.object_class;
+    if (info.ty.param == .object) if (info.object_class) |id| {
+        info.ty = Type.selectionType(Type.objectId(id));
+    };
     return info;
 }
 
@@ -1088,7 +1090,9 @@ fn inferSelectCallInfo(
     }
     var info = infoFromType(registry.queryOutputType(query));
     info.object_class = inferQueryOutputClass(sema, env, query, call, base);
-    if (info.ty.kind == .selection and info.ty.param == .object) info.ty.param_class_name = info.object_class;
+    if (info.ty.kind == .selection and info.ty.param == .object) if (info.object_class) |id| {
+        info.ty = Type.selectionType(Type.objectId(id));
+    };
     return info;
 }
 
@@ -1098,7 +1102,7 @@ fn inferQueryOutputClass(
     query: registry.QueryDescriptor,
     call: ast.CallExpr,
     base: TypeInfo,
-) ?[]const u8 {
+) ?core.NominalId {
     return switch (query.op) {
         .self_object => base.object_class,
         .page_objects_by_role, .document_objects_by_role => blk: {
@@ -1111,7 +1115,7 @@ fn inferQueryOutputClass(
     };
 }
 
-fn inferObjectConstructorClass(sema: *const SemanticEnv, env: *const TypeEnv, call: ast.CallExpr, role_index: usize) ?[]const u8 {
+fn inferObjectConstructorClass(sema: *const SemanticEnv, env: *const TypeEnv, call: ast.CallExpr, role_index: usize) ?core.NominalId {
     if (call.args.items.len <= role_index) return null;
     const role_name = resolveStringLiteral(env, call.args.items[role_index]) orelse return null;
     return sema.roleClass(role_name);
@@ -1228,7 +1232,7 @@ fn validateExtendRenderEnvCall(
 }
 
 fn lookupFieldForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []const u8) ?declarations.FieldDescriptor {
-    if (targetClassForInfo(target_info)) |class_name| {
+    if (targetClassForInfo(target_info, sema)) |class_name| {
         return sema.field(class_name, key);
     }
     if (target_info.ty.kind == .object or (target_info.ty.kind == .selection and (target_info.ty.param == .object or target_info.ty.param == .any))) {

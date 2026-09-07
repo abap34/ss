@@ -10,7 +10,7 @@ pub const HoleType = syntax_hole.HoleType;
 pub const TypeInfo = struct {
     ty: Type = Type.any,
     hole: ?HoleType = null,
-    object_class: ?[]const u8 = null,
+    object_class: ?core.NominalId = null,
     string_literal: ?[]const u8 = null,
     function_labels: []const []const u8 = &.{},
 };
@@ -21,7 +21,7 @@ pub fn infoFromType(ty: Type) TypeInfo {
     if (holeIdFromType(ty)) |hole_id| return infoFromHole(hole_id);
     return .{
         .ty = ty,
-        .object_class = if (ty.kind == .object) ty.class_name else if (ty.kind == .selection and ty.param == .object) ty.param_class_name else null,
+        .object_class = if (ty.kind == .object) ty.nominalId() else if (ty.kind == .selection and ty.param == .object) ty.selectionItemId() else null,
     };
 }
 
@@ -80,10 +80,10 @@ fn appendUniqueLabel(allocator: std.mem.Allocator, labels: *std.ArrayList([]cons
     try labels.append(allocator, label);
 }
 
-pub fn mergeObjectClass(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
+pub fn mergeObjectClass(a: ?core.NominalId, b: ?core.NominalId) ?core.NominalId {
     if (a == null) return b;
     if (b == null) return a;
-    if (std.mem.eql(u8, a.?, b.?)) return a;
+    if (a.?.eql(b.?)) return a;
     return null;
 }
 
@@ -110,11 +110,11 @@ pub fn isPropertyTarget(info: TypeInfo) bool {
     };
 }
 
-pub fn targetClassForInfo(info: TypeInfo) ?[]const u8 {
+pub fn targetClassForInfo(info: TypeInfo, sema: *const @import("../language/env.zig").SemanticEnv) ?core.NominalId {
     if (info.hole != null) return null;
     return switch (info.ty.kind) {
-        .document => "Doc",
-        .page => "PageContext",
+        .document => sema.builtinClass("Doc"),
+        .page => sema.builtinClass("PageContext"),
         .object => info.object_class,
         .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_class else null,
         else => null,

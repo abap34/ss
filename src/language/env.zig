@@ -136,14 +136,17 @@ pub const SemanticEnv = struct {
         return registry.lookupQueryOp(name);
     }
 
-    pub fn class(self: *const SemanticEnv, name: []const u8) ?declarations.ClassDescriptor {
-        if (self.declarationIndex()) |index| return index.classByName(name);
-        return null;
+    pub fn class(self: *const SemanticEnv, module_id: ?core.SourceModuleId, name: []const u8) ?declarations.ClassDescriptor {
+        const index = self.declarationIndex() orelse return null;
+        if (module_id) |id| return index.classInModule(id, name);
+        const ty = self.resolveTypeNameInContext(self.module_id, name) orelse return null;
+        if (ty.kind != .object) return null;
+        return index.classById(ty.nominalId() orelse return null);
     }
 
-    pub fn classExists(self: *const SemanticEnv, name: []const u8) bool {
-        if (self.declarationIndex()) |index| return index.classExists(name);
-        return false;
+    pub fn builtinClass(self: *const SemanticEnv, name: []const u8) ?core.NominalId {
+        const state = self.state orelse return null;
+        return state.builtinClass(name);
     }
 
     pub fn record(self: *const SemanticEnv, module_id: ?core.SourceModuleId, name: []const u8) ?declarations.RecordDescriptor {
@@ -159,13 +162,13 @@ pub const SemanticEnv = struct {
         return null;
     }
 
-    pub fn roleClass(self: *const SemanticEnv, role_name: []const u8) ?[]const u8 {
+    pub fn roleClass(self: *const SemanticEnv, role_name: []const u8) ?core.NominalId {
         if (self.declarationIndex()) |index| return index.roleClass(role_name);
         return null;
     }
 
-    pub fn field(self: *const SemanticEnv, class_name: []const u8, field_name: []const u8) ?declarations.FieldDescriptor {
-        if (self.declarationIndex()) |index| return index.field(class_name, field_name);
+    pub fn field(self: *const SemanticEnv, class_id: core.NominalId, field_name: []const u8) ?declarations.FieldDescriptor {
+        if (self.declarationIndex()) |index| return index.field(class_id, field_name);
         return null;
     }
 
@@ -360,7 +363,7 @@ const TypeResolver = struct {
         };
         if (index.classInModule(module_id, name)) |decl| return .{
             .kind = .object,
-            .ty = ast.Type.objectClass(decl.name),
+            .ty = ast.Type.objectClass(decl.name).inModule(module_id),
             .target = {},
         };
         if (index.typeInModule(module_id, name)) |decl| return .{

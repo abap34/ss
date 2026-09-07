@@ -1,0 +1,71 @@
+================================================================================
+Qualified object bases and extension targets
+================================================================================
+
+type Derived = object {
+  base = library::Base
+}
+
+extend library::Derived {
+  implements = protocols::Contract
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_identifier)
+    (object_type
+      (object_member
+        (object_base
+          (qualified_type_identifier
+            (identifier)
+            (type_identifier))))))
+  (object_extension
+    (qualified_type_identifier
+      (identifier)
+      (type_identifier))
+    (object_member
+      (object_implements
+        (qualified_type_identifier
+          (identifier)
+          (type_identifier))))))
+
+================================================================================
+Qualified object and selection annotations
+================================================================================
+
+fn keep(value: Object<library::Derived>, values: Selection<Object<library::Derived>>) -> library::Derived
+  return value
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (bare_callable_identifier
+      (identifier))
+    (parameters
+      (parameter
+        (identifier)
+        (type
+          (primary_type
+            (qualified_type_identifier
+              (identifier)
+              (type_identifier)))))
+      (parameter
+        (identifier)
+        (type
+          (primary_type
+            (type
+              (primary_type
+                (qualified_type_identifier
+                  (identifier)
+                  (type_identifier))))))))
+    (type
+      (primary_type
+        (qualified_type_identifier
+          (identifier)
+          (type_identifier))))
+    (return_statement
+      (identifier))))

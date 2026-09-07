@@ -497,6 +497,91 @@ test "analysis completion: chevron blocks and comments do not create fake bindin
     }
 }
 
+test "analysis queries: module identity survives nested fields and label changes" {
+    try checkNominalQueries("import \"a\" as a\nimport \"b\" as b\n");
+    try checkNominalQueries("import \"b\" as b\nimport \"a\" as a\n");
+}
+
+fn checkNominalQueries(imports: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const root = ".ss-cache/query-nominal-fixture";
+    const path = root ++ "/main.ss";
+    const source = try std.mem.concat(allocator, u8, &.{
+        imports,
+        \\page main
+        \\  let first = a::make()
+        \\  let second = b::make()
+        \\  let ar = a::record_value()
+        \\  let br = b::record_value()
+        \\  let ax = first.object_a
+        \\  let bx = second.object_b
+        \\  let av = ar.value.only_a
+        \\  let bv = br.value.only_b
+        \\  let am = a::Mode.alpha
+        \\  let bm = b::Mode.beta
+        \\end
+    });
+    var sources = snapshot_api.SourceSet.init(allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    try sources.put(root ++ "/a.ss",
+        \\record Style { only_a: Number = 1 }
+        \\record Box { value: Style = Style {} }
+        \\type Base = object { object_a: Number = 1 }
+        \\type Card = object { base = Base
+        \\  roles = ["query-a"] }
+        \\type Mode = alpha
+        \\fn make() -> Card
+        \\  return new("", "query-a", "text")
+        \\end
+        \\fn record_value() -> Box
+        \\  return Box {}
+        \\end
+    );
+    try sources.put(root ++ "/b.ss",
+        \\record Style { only_b: String = "b" }
+        \\record Box { value: Style = Style {} }
+        \\type Base = object { object_b: String = "b" }
+        \\type Card = object { base = Base
+        \\  roles = ["query-b"] }
+        \\type Mode = beta
+        \\fn make() -> Card
+        \\  return new("", "query-b", "text")
+        \\end
+        \\fn record_value() -> Box
+        \\  return Box {}
+        \\end
+    );
+    var snapshot = try snapshot_api.build(allocator, &sources, path, root, .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    for (snapshot.value_bindings) |*binding| @memset(binding.type_label, '!');
+    for (snapshot.variable_bindings) |*binding| @memset(binding.type_label, '!');
+    for (snapshot.record_fields) |*field| @memset(field.type_label, '!');
+    const queries = .{
+        .{ "first.", "object_a", "object_b" },
+        .{ "second.", "object_b", "object_a" },
+        .{ "ar.value.", "only_a", "only_b" },
+        .{ "br.value.", "only_b", "only_a" },
+        .{ "a::Mode.", "alpha", "beta" },
+        .{ "b::Mode.", "beta", "alpha" },
+    };
+    inline for (queries) |query| {
+        var result = try snapshot_api.completeAt(allocator, &snapshot, .{ .path = path, .source = source, .offset = offsetAfter(source, query[0]) }, .{ .budget_ms = 100 });
+        defer result.deinit(allocator);
+        try expectHas(result, query[1]);
+        try expectMissing(result, query[2]);
+    }
+    inline for (.{ .{ "ar.value.only_a", "a.ss" }, .{ "br.value.only_b", "b.ss" }, .{ "first.object_a", "a.ss" }, .{ "second.object_b", "b.ss" } }) |query| {
+        const targets = try snapshot_api.definitionAt(allocator, &snapshot, .{ .path = path, .source = source, .offset = offsetAfter(source, query[0]) - 1 }, .{ .budget_ms = 100 });
+        defer allocator.free(targets);
+        try testing.expectEqual(@as(usize, 1), targets.len);
+        try testing.expect(std.mem.endsWith(u8, targets[0].path orelse "", query[1]));
+    }
+}
+
 const CompletionCase = struct {
     arena: *std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,

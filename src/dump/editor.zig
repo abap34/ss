@@ -17,7 +17,8 @@ pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, sta
             const type_label = try entry.info.ty.formatAlloc(allocator);
             defer allocator.free(type_label);
             try item.stringField("type", type_label);
-            try item.optionalStringField("objectClass", entry.info.object_class);
+            try item.optionalStringField("objectClass", if (entry.info.object_class) |id| id.name else null);
+            if (entry.info.object_class) |id| try item.intField("objectClassModuleId", id.module_id);
             try item.intField("moduleId", entry.module_id);
             try item.enumTagField("scopeKind", entry.scope_kind);
             try item.optionalStringField("scopeName", entry.scope_name);

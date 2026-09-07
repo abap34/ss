@@ -24,6 +24,7 @@ const syntax_hole = @import("../syntax/hole.zig");
 const syntax = @import("../syntax.zig");
 const utils = @import("utils");
 
+pub const TypeStorage = @import("snapshot/types.zig").Storage;
 pub const SourceRequest = query_types.SourceRequest;
 pub const QueryOptions = query_types.QueryOptions;
 pub const HoverInfo = query_types.HoverInfo;
@@ -189,6 +190,7 @@ pub const ValueBindingKind = enum {
 };
 
 pub const ValueBinding = struct {
+    value_type: ast.Type = ast.Type.any,
     name: []u8,
     kind: ValueBindingKind,
     module_id: ?core.SourceModuleId,
@@ -199,9 +201,10 @@ pub const ValueBinding = struct {
 };
 
 pub const VariableBinding = struct {
+    value_type: ast.Type = ast.Type.any,
     name: []u8,
     type_label: []u8,
-    object_class: ?[]u8 = null,
+    object_class: ?core.NominalId = null,
     module_id: core.SourceModuleId,
     scope_kind: core.DefinitionScopeKind,
     scope_name: ?[]u8 = null,
@@ -219,13 +222,15 @@ pub const RoleBinding = struct {
 
 pub const ClassFact = struct {
     name: []u8,
-    base: ?[]u8 = null,
+    base: ?core.NominalId = null,
     module_id: core.SourceModuleId,
 };
 
 pub const FieldFact = struct {
+    value_type: ast.Type = ast.Type.any,
     name: []u8,
     class_name: []u8,
+    class_module_id: core.SourceModuleId,
     type_label: []u8,
     module_id: core.SourceModuleId,
     name_span: ?ast.Span = null,
@@ -237,6 +242,7 @@ pub const RecordFact = struct {
 };
 
 pub const RecordFieldFact = struct {
+    value_type: ast.Type = ast.Type.any,
     name: []u8,
     record_name: []u8,
     type_label: []u8,
@@ -302,6 +308,8 @@ pub const LayoutOutput = struct {
 };
 
 pub const AnalysisSnapshot = struct {
+    builtin_module_id: ?core.SourceModuleId = null,
+    type_storage: ?TypeStorage = null,
     allocator: std.mem.Allocator,
     generation: u64 = 0,
     project: ProjectFacts = .{},
@@ -338,19 +346,22 @@ pub const AnalysisSnapshot = struct {
         };
         errdefer snapshot.deinit();
 
+        snapshot.builtin_module_id = declaration_index.builtin_module_id;
         snapshot.diagnostics.sortByPath();
         snapshot.modules = try cloneModules(allocator, state.modules.items);
         snapshot.module_order = try allocator.dupe(core.SourceModuleId, state.module_order.items);
         snapshot.holes = if (holes) |hole_table| try cloneHoles(allocator, hole_table.holes) else &.{};
         snapshot.definitions = try cloneDefinitions(allocator, state.definitions.items);
         snapshot.type_definitions = try collectTypeDefinitions(allocator, state);
-        snapshot.value_bindings = try collectValueBindings(allocator, state);
-        snapshot.variable_bindings = try collectVariableBindings(allocator, state, declaration_index);
+        snapshot.type_storage = TypeStorage.init(allocator);
+        const type_storage = &snapshot.type_storage.?;
+        snapshot.value_bindings = try collectValueBindings(allocator, type_storage, state);
+        snapshot.variable_bindings = try collectVariableBindings(allocator, type_storage, state, declaration_index);
         snapshot.role_bindings = try collectRoleBindings(allocator, declaration_index.roles.items);
         snapshot.classes = try collectClasses(allocator, declaration_index.classes.items);
-        snapshot.fields = try collectFields(allocator, declaration_index.fields.items);
+        snapshot.fields = try collectFields(allocator, type_storage, declaration_index.fields.items);
         snapshot.records = try collectRecords(allocator, declaration_index.records.items);
-        snapshot.record_fields = try collectRecordFields(allocator, declaration_index.record_fields.items);
+        snapshot.record_fields = try collectRecordFields(allocator, type_storage, declaration_index.record_fields.items);
         snapshot.enum_cases = try collectEnumCases(allocator, declaration_index.types.items);
         return snapshot;
     }
@@ -370,6 +381,7 @@ pub const AnalysisSnapshot = struct {
     }
 
     pub fn deinit(self: *AnalysisSnapshot) void {
+        if (self.type_storage) |*storage| storage.deinit();
         self.project.deinit(self.allocator);
         for (self.modules) |module| {
             module.line_index.deinit(self.allocator);
@@ -1072,7 +1084,7 @@ fn appendTypeDefinition(
     });
 }
 
-fn collectValueBindings(allocator: std.mem.Allocator, state: *core.DocumentState) ![]ValueBinding {
+fn collectValueBindings(allocator: std.mem.Allocator, type_storage: *TypeStorage, state: *core.DocumentState) ![]ValueBinding {
     var out = std.ArrayList(ValueBinding).empty;
     errdefer {
         deinitValueBindingItems(allocator, out.items);
@@ -1080,6 +1092,7 @@ fn collectValueBindings(allocator: std.mem.Allocator, state: *core.DocumentState
     }
     for (registry.primitiveDescriptors()) |descriptor| {
         if (valueNameExists(state, descriptor.name)) continue;
+        const retained_type = try type_storage.retain(registry.primitiveResultType(descriptor) orelse ast.Type.any);
         const signature: []u8 = @constCast(try query_signature.formatPrimitiveSignature(allocator, descriptor));
         errdefer allocator.free(signature);
         const type_label: []u8 = @constCast(if (registry.primitiveResultType(descriptor)) |ty|
@@ -1095,17 +1108,20 @@ fn collectValueBindings(allocator: std.mem.Allocator, state: *core.DocumentState
             .type_label = type_label,
             .documentation = try allocator.dupe(u8, descriptor.summary),
             .primitive = true,
+            .value_type = retained_type,
         });
     }
     var function_iterator = state.functions.iterator();
     while (function_iterator.next()) |entry| {
         const func = entry.value_ptr.*;
+        const retained_type = try type_storage.retain(func.result_type);
         const signature: []u8 = @constCast(try query_signature.formatUserSignature(allocator, func.name, func));
         errdefer allocator.free(signature);
         const type_label: []u8 = @constCast(try func.result_type.formatAlloc(allocator));
         errdefer allocator.free(type_label);
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, func.name),
+            .value_type = retained_type,
             .kind = .function,
             .module_id = entry.key_ptr.module_id,
             .signature = signature,
@@ -1116,12 +1132,14 @@ fn collectValueBindings(allocator: std.mem.Allocator, state: *core.DocumentState
     var constant_iterator = state.constants.iterator();
     while (constant_iterator.next()) |entry| {
         const constant_decl = entry.value_ptr.*;
+        const retained_type = try type_storage.retain(constant_decl.value_type);
         const signature: []u8 = @constCast(try query_signature.formatConstSignature(allocator, constant_decl.name, constant_decl));
         errdefer allocator.free(signature);
         const type_label: []u8 = @constCast(try constant_decl.value_type.formatAlloc(allocator));
         errdefer allocator.free(type_label);
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, constant_decl.name),
+            .value_type = retained_type,
             .kind = .constant,
             .module_id = entry.key_ptr.module_id,
             .signature = signature,
@@ -1160,6 +1178,7 @@ fn valueNameExists(state: *const core.DocumentState, name: []const u8) bool {
 
 fn collectVariableBindings(
     allocator: std.mem.Allocator,
+    type_storage: *TypeStorage,
     state: *core.DocumentState,
     declaration_index: *const declarations.DeclarationIndex,
 ) ![]VariableBinding {
@@ -1173,12 +1192,14 @@ fn collectVariableBindings(
         var infos = try analysis_pipeline.collectScopedVariableInfoFromModule(allocator, state, declaration_index, module.syntax, module.id, module.source.len);
         defer infos.deinit(allocator);
         for (infos.items) |entry| {
+            const retained_type = try type_storage.retain(entry.info.ty);
             const type_label: []u8 = @constCast(try semantic_types.typeInfoLabelAlloc(allocator, entry.info));
             errdefer allocator.free(type_label);
             try out.append(allocator, .{
                 .name = try allocator.dupe(u8, entry.name),
                 .type_label = type_label,
-                .object_class = if (entry.info.object_class) |class_name| try allocator.dupe(u8, class_name) else null,
+                .object_class = if (entry.info.object_class) |id| .{ .module_id = id.module_id, .name = try allocator.dupe(u8, id.name) } else null,
+                .value_type = retained_type,
                 .module_id = entry.module_id,
                 .scope_kind = entry.scope_kind,
                 .scope_name = if (entry.scope_name) |scope_name| try allocator.dupe(u8, scope_name) else null,
@@ -1201,7 +1222,7 @@ fn deinitVariableBindingItems(allocator: std.mem.Allocator, bindings: []Variable
     for (bindings) |binding| {
         allocator.free(binding.name);
         allocator.free(binding.type_label);
-        if (binding.object_class) |class_name| allocator.free(class_name);
+        if (binding.object_class) |id| allocator.free(id.name);
         if (binding.scope_name) |scope_name| allocator.free(scope_name);
     }
 }
@@ -1240,7 +1261,7 @@ fn collectClasses(allocator: std.mem.Allocator, classes: []const declarations.Cl
     }
     for (classes) |item| try out.append(allocator, .{
         .name = try allocator.dupe(u8, item.name),
-        .base = if (item.base) |base| try allocator.dupe(u8, base) else null,
+        .base = if (item.base) |base| .{ .module_id = base.module_id, .name = try allocator.dupe(u8, base.name) } else null,
         .module_id = item.module_id,
     });
     return out.toOwnedSlice(allocator);
@@ -1254,23 +1275,26 @@ fn deinitClasses(allocator: std.mem.Allocator, classes: []ClassFact) void {
 fn deinitClassItems(allocator: std.mem.Allocator, classes: []ClassFact) void {
     for (classes) |item| {
         allocator.free(item.name);
-        if (item.base) |base| allocator.free(base);
+        if (item.base) |base| allocator.free(base.name);
     }
 }
 
-fn collectFields(allocator: std.mem.Allocator, fields: []const declarations.FieldDescriptor) ![]FieldFact {
+fn collectFields(allocator: std.mem.Allocator, type_storage: *TypeStorage, fields: []const declarations.FieldDescriptor) ![]FieldFact {
     var out = std.ArrayList(FieldFact).empty;
     errdefer {
         deinitFieldItems(allocator, out.items);
         out.deinit(allocator);
     }
     for (fields) |item| {
+        const retained_type = try type_storage.retain(item.value_type);
         const type_label = try item.value_type.formatAlloc(allocator);
         errdefer allocator.free(type_label);
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, item.name),
             .class_name = try allocator.dupe(u8, item.class_name),
+            .class_module_id = item.class_module_id,
             .type_label = @constCast(type_label),
+            .value_type = retained_type,
             .module_id = item.module_id,
             .name_span = item.name_span,
         });
@@ -1313,19 +1337,21 @@ fn deinitRecordItems(allocator: std.mem.Allocator, records: []RecordFact) void {
     for (records) |item| allocator.free(item.name);
 }
 
-fn collectRecordFields(allocator: std.mem.Allocator, fields: []const declarations.RecordFieldDescriptor) ![]RecordFieldFact {
+fn collectRecordFields(allocator: std.mem.Allocator, type_storage: *TypeStorage, fields: []const declarations.RecordFieldDescriptor) ![]RecordFieldFact {
     var out = std.ArrayList(RecordFieldFact).empty;
     errdefer {
         deinitRecordFieldItems(allocator, out.items);
         out.deinit(allocator);
     }
     for (fields) |item| {
+        const retained_type = try type_storage.retain(item.value_type);
         const type_label = try item.value_type.formatAlloc(allocator);
         errdefer allocator.free(type_label);
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, item.name),
             .record_name = try allocator.dupe(u8, item.record_name),
             .type_label = @constCast(type_label),
+            .value_type = retained_type,
             .module_id = item.module_id,
             .name_span = item.name_span,
         });

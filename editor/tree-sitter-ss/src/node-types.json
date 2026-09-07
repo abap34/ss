@@ -2221,6 +2221,10 @@
         "required": true,
         "types": [
           {
+            "type": "qualified_type_identifier",
+            "named": true
+          },
+          {
             "type": "type_identifier",
             "named": true
           }
@@ -2236,6 +2240,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "qualified_type_identifier",
+            "named": true
+          },
           {
             "type": "type_identifier",
             "named": true
@@ -2362,6 +2370,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "qualified_type_identifier",
+            "named": true
+          },
           {
             "type": "type_identifier",
             "named": true
@@ -2701,6 +2713,10 @@
       "required": false,
       "types": [
         {
+          "type": "qualified_type_identifier",
+          "named": true
+        },
+        {
           "type": "type",
           "named": true
         },
@@ -2937,6 +2953,32 @@
         "types": [
           {
             "type": "bare_callable_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "qualified_type_identifier",
+    "named": true,
+    "fields": {
+      "module": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
             "named": true
           }
         ]
@@ -3306,6 +3348,14 @@
     "named": false
   },
   {
+    "type": "Object",
+    "named": false
+  },
+  {
+    "type": "Selection",
+    "named": false
+  },
+  {
     "type": "Void",
     "named": false
   },
@@ -3424,11 +3474,11 @@
   },
   {
     "type": "number",
-    "named": false
+    "named": true
   },
   {
     "type": "number",
-    "named": true
+    "named": false
   },
   {
     "type": "object",

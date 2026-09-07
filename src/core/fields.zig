@@ -60,20 +60,20 @@ pub fn readExplicit(
     return readValue(field, as);
 }
 
-pub fn className(state: anytype, node: *const Node) ?[]const u8 {
+pub fn classId(state: anytype, node: *const Node) ?model.NominalId {
     return switch (node.kind) {
-        .document => "Doc",
-        .page => "PageContext",
+        .document => state.builtinClass("Doc"),
+        .page => state.builtinClass("PageContext"),
         .object => if (node.role) |role| roleClass(state, role) else null,
     };
 }
 
-pub fn roleClass(state: anytype, role_name: []const u8) ?[]const u8 {
+pub fn roleClass(state: anytype, role_name: []const u8) ?model.NominalId {
     return state.declaration_index.roleClass(role_name);
 }
 
 fn defaultValue(allocator: std.mem.Allocator, state: anytype, node: *const Node, key: []const u8) !?ValueSlot {
-    const class_name = className(state, node) orelse return null;
+    const class_name = classId(state, node) orelse return null;
     const descriptor = state.declaration_index.field(class_name, key) orelse return null;
     const text = descriptor.default_property_value orelse return null;
     if (!isNoneDefault(text) and value_text.typedPropertyValueOwnsTaggedText(descriptor.value_type)) {

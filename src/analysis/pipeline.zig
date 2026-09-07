@@ -770,6 +770,7 @@ pub fn buildDocumentStateWithOptions(
     {
         const sema = SemanticEnv.init(&state, state.declaration_index, &state.functions);
         try semantics.resolveTypeReferences(allocator, &state, &sema);
+        try state.rebuildDeclarationIndex();
         try semantics.resolveEnumCaseExpressionsAndDefaults(allocator, &state, &sema);
         try semantics.rebuildConstDeclarations(allocator, &state);
         try semantics.rebuildFunctionDeclarations(allocator, &state);

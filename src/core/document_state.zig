@@ -344,6 +344,10 @@ pub const DocumentState = struct {
         return state;
     }
 
+    pub fn builtinClass(self: *const DocumentState, name: []const u8) ?model.NominalId {
+        return self.declaration_index.builtinClass(name);
+    }
+
     pub fn rebuildDeclarationIndex(self: *DocumentState) !void {
         const next = try declarations.build(self.allocator, self);
         self.declaration_index.deinit();

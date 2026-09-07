@@ -201,6 +201,7 @@ pub const ObjectDecl = struct {
     name: []const u8,
     name_span: ?Span = null,
     base: ?[]const u8 = null,
+    base_module_id: ?u32 = null,
     roles: std.ArrayList([]const u8),
     fields: std.ArrayList(ObjectFieldDecl),
     span: Span,
@@ -219,6 +220,7 @@ pub const ObjectDecl = struct {
             .name = try allocator.dupe(u8, self.name),
             .name_span = self.name_span,
             .base = null,
+            .base_module_id = self.base_module_id,
             .roles = .empty,
             .fields = .empty,
             .span = self.span,
@@ -262,6 +264,8 @@ pub const RecordDecl = struct {
 pub const ObjectExtensionDecl = struct {
     target: []const u8,
     target_span: ?Span = null,
+    target_module_id: ?u32 = null,
+    implements_module_id: ?u32 = null,
     implements: ?[]const u8 = null,
     roles: std.ArrayList([]const u8),
     fields: std.ArrayList(ObjectFieldDecl),
@@ -280,6 +284,8 @@ pub const ObjectExtensionDecl = struct {
         var result = ObjectExtensionDecl{
             .target = try allocator.dupe(u8, self.target),
             .target_span = self.target_span,
+            .target_module_id = self.target_module_id,
+            .implements_module_id = self.implements_module_id,
             .implements = null,
             .roles = .empty,
             .fields = .empty,

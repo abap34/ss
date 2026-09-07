@@ -59,7 +59,7 @@ test "declaration index: document moves and graph disposal preserve shared decla
     evaluated.graph.deinit();
 
     const sema = compiler.semantic_env.SemanticEnv.init(&state, null, &state.functions);
-    const descriptor = sema.field("Card", "style").?;
+    const descriptor = sema.field(.{ .module_id = 0, .name = "Card" }, "style").?;
     try testing.expectEqualStrings("Base", descriptor.class_name);
     const index_fields = state.declaration_index.fields.items.ptr;
     var previous_fields: ?[*]core.RecordFieldValue = null;
@@ -99,7 +99,7 @@ test "declaration index: refreshing declarations invalidates parsed field defaul
         defer original.deinit(testing.allocator);
         try testing.expectEqual(@as(f32, 12), original.value.record.field("amount").?.number);
     }
-    const descriptor = state.declaration_index.field("Card", "style").?;
+    const descriptor = state.declaration_index.field(.{ .module_id = 0, .name = "Card" }, "style").?;
     const text = descriptor.default_property_value.?;
     const offset = std.mem.indexOf(u8, text, "12").?;
     @memcpy(@constCast(text[offset .. offset + 2]), "34");
@@ -140,7 +140,7 @@ test "declaration index: repeated extensions have the same precedence in analysi
     defer state.deinit();
     try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
     const sema = compiler.semantic_env.SemanticEnv.init(&state, null, &state.functions);
-    try testing.expectEqualStrings("3", sema.field("Card", "amount").?.default_property_value.?);
+    try testing.expectEqualStrings("3", sema.field(.{ .module_id = 0, .name = "Card" }, "amount").?.default_property_value.?);
     var slot = (try core.fields.get(testing.allocator, &state, &card, "amount")).?;
     defer slot.deinit(testing.allocator);
     try testing.expectEqual(@as(f32, 3), slot.value.number);
@@ -149,7 +149,7 @@ test "declaration index: repeated extensions have the same precedence in analysi
 fn buildIndex(allocator: std.mem.Allocator, state: *const core.DocumentState) !void {
     var index = try core.declarations.build(allocator, state);
     defer index.deinit();
-    try testing.expectEqualStrings("Base", index.field("Card", "style").?.class_name);
+    try testing.expectEqualStrings("Base", index.field(.{ .module_id = 0, .name = "Card" }, "style").?.class_name);
 }
 
 test "declaration index: failed collection releases every partial container" {
