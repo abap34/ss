@@ -136,8 +136,15 @@ const FieldDescriptor = struct {
 
 fn fieldDescriptor(state: anytype, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
     var current: ?[]const u8 = class_name;
+    var remaining_bases: usize = 0;
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
+        remaining_bases += module.syntax.objects.items.len;
+    }
     while (current) |name| {
         if (fieldDescriptorInClass(state, name, field_name)) |descriptor| return descriptor;
+        if (remaining_bases == 0) return null;
+        remaining_bases -= 1;
         current = classBase(state, name);
     }
     return null;

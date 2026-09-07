@@ -6,6 +6,7 @@ pub const ClassDescriptor = struct {
     name: []const u8,
     base: ?[]const u8,
     module_id: core.SourceModuleId,
+    span: ast.Span = .{ .start = 0, .end = 0 },
 };
 
 pub const RoleDescriptor = struct {
@@ -185,8 +186,11 @@ pub const DeclarationIndex = struct {
 
     pub fn field(self: *const DeclarationIndex, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
         var current: ?[]const u8 = class_name;
+        var remaining_bases = self.classes.items.len;
         while (current) |name| {
             if (self.fieldInClass(name, field_name)) |descriptor| return descriptor;
+            if (remaining_bases == 0) return null;
+            remaining_bases -= 1;
             current = self.classBase(name);
         }
         return null;
@@ -247,6 +251,7 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
             .name = decl.name,
             .base = decl.base,
             .module_id = module.id,
+            .span = decl.span,
         });
         try index.class_by_name.put(decl.name, class_index);
         try appendRoles(index, module.id, decl.name, decl.roles.items);

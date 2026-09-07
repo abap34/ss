@@ -18,6 +18,12 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, state: *core.Docume
         const origin_path = originPathForModule(module);
         try checkObjectNamesUnique(allocator, state, origin_path, module.syntax.objects.items);
         try checkRecordNamesUnique(allocator, state, origin_path, module.syntax.records.items);
+    }
+    try checkObjectInheritance(allocator, state, sema);
+
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
+        const origin_path = originPathForModule(module);
         for (module.syntax.records.items) |record_decl| {
             try checkRecordDeclaration(allocator, state, sema, origin_path, record_decl);
         }
@@ -29,6 +35,43 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, state: *core.Docume
             try checkObjectExtension(allocator, state, sema, origin_path, extension);
             try checkRolesUnique(allocator, state, origin_path, &roles, extension.target, extension.roles.items, extension.span);
         }
+    }
+}
+
+fn checkObjectInheritance(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
+    const index = sema.declarations orelse return;
+    const Visit = enum { unseen, active, complete };
+    const visits = try allocator.alloc(Visit, index.classes.items.len);
+    defer allocator.free(visits);
+    @memset(visits, .unseen);
+    var path = std.ArrayList(usize).empty;
+    defer path.deinit(allocator);
+
+    for (0..index.classes.items.len) |root| {
+        if (visits[root] != .unseen) continue;
+        path.clearRetainingCapacity();
+        var current: ?usize = root;
+        while (current) |class_index| {
+            switch (visits[class_index]) {
+                .complete => break,
+                .active => {
+                    const cycle_start = std.mem.indexOfScalar(usize, path.items, class_index).?;
+                    for (path.items[cycle_start..]) |member| {
+                        const class = index.classes.items[member];
+                        const module = state.moduleById(class.module_id) orelse continue;
+                        const origin = try statementOrigin(allocator, originPathForModule(module), class.span);
+                        defer allocator.free(origin);
+                        try addUserReport(state, origin, "ObjectInheritanceCycle: object class '{s}' inherits from '{s}' in a cycle", .{ class.name, class.base.? });
+                    }
+                    return error.InvalidType;
+                },
+                .unseen => {},
+            }
+            visits[class_index] = .active;
+            try path.append(allocator, class_index);
+            current = if (index.classes.items[class_index].base) |base| index.class_by_name.get(base) else null;
+        }
+        for (path.items) |member| visits[member] = .complete;
     }
 }
 

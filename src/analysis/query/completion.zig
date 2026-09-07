@@ -406,8 +406,11 @@ fn fieldAppliesToTarget(snapshot: anytype, field: anytype, target: PropertyTarge
 
 fn classContains(snapshot: anytype, class_name: []const u8, expected: []const u8) bool {
     var current: ?[]const u8 = class_name;
+    var remaining_bases = snapshot.classes.len;
     while (current) |name| {
         if (std.mem.eql(u8, name, expected)) return true;
+        if (remaining_bases == 0) return false;
+        remaining_bases -= 1;
         current = classBase(snapshot, name);
     }
     return false;
