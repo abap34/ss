@@ -9,6 +9,7 @@ const repoRoot = path.resolve(scriptDir, "..");
 const trackedRoot = path.join(repoRoot, "third_party", "tree-sitter-languages");
 const manifestPath = path.join(trackedRoot, "manifest.json");
 const readmePath = path.join(trackedRoot, "README.md");
+const flakePath = path.join(repoRoot, "flake.nix");
 const workRoot = path.join(repoRoot, ".ss-cache", "tree-sitter-languages");
 
 const args = new Set(process.argv.slice(2));
@@ -30,12 +31,15 @@ validateManifest(manifest);
 if (checkOnly) {
   await checkManifestFiles(manifest);
   await checkReadme(manifest);
+  await checkFlakeInputs(manifest);
   process.exit(0);
 }
 
 if (updateLatest) {
   await updateManifestToLatest(manifest);
   await writeManifest(manifest);
+  await syncFlakeInputs(manifest);
+  run("nix", ["--extra-experimental-features", "nix-command flakes", "flake", "lock"]);
 }
 
 await syncLanguages(manifest, { workRoot });
@@ -116,6 +120,91 @@ async function checkReadme(manifest) {
   if (actual !== expected) {
     throw new Error("third_party/tree-sitter-languages/README.md is out of sync; run scripts/update-tree-sitter-languages.mjs");
   }
+}
+
+async function checkFlakeInputs(manifest) {
+  const flake = await fs.readFile(flakePath, "utf8");
+  const inputs = parseFlakeInputs(flake);
+  const expectedInputs = expectedFlakeInputs(manifest);
+  const drift = [];
+  for (const expected of expectedInputs) {
+    const actual = inputs.get(expected.name);
+    if (!actual) {
+      drift.push(`${expected.name}: missing input`);
+    } else if (actual.repo !== expected.repo || actual.commit !== expected.commit) {
+      drift.push(
+        `${expected.name}: expected github:${expected.repo}/${expected.commit}, got github:${actual.repo}/${actual.commit}`,
+      );
+    }
+  }
+  for (const name of inputs.keys()) {
+    if (!expectedInputs.some((expected) => expected.name === name)) {
+      drift.push(`${name}: no matching manifest entry`);
+    }
+  }
+  if (drift.length !== 0) {
+    throw new Error(`flake.nix tree-sitter inputs are out of sync:\n  ${drift.join("\n  ")}`);
+  }
+}
+
+async function syncFlakeInputs(manifest) {
+  const flake = await fs.readFile(flakePath, "utf8");
+  const expected = new Map(expectedFlakeInputs(manifest).map((input) => [input.name, input]));
+  const actual = parseFlakeInputs(flake);
+
+  for (const [name, input] of expected) {
+    const found = actual.get(name);
+    if (!found) throw new Error(`flake.nix is missing input ${name}`);
+    if (found.repo !== input.repo) {
+      throw new Error(`flake.nix input ${name} uses github:${found.repo}, expected github:${input.repo}`);
+    }
+  }
+  for (const name of actual.keys()) {
+    if (!expected.has(name)) throw new Error(`flake.nix input ${name} has no matching manifest entry`);
+  }
+
+  const updated = flake.replace(flakeInputPattern(), (match, indentation, name, prefix, repo) => {
+    return `${indentation}${name}${prefix}${repo}/${expected.get(name).commit}";`;
+  });
+  await fs.writeFile(flakePath, updated, "utf8");
+}
+
+function expectedFlakeInputs(manifest) {
+  return [
+    {
+      name: "tree-sitter-runtime",
+      repo: githubRepo(manifest.runtime.repo),
+      commit: manifest.runtime.commit,
+    },
+    ...manifest.languages.map((language) => ({
+      name: `tree-sitter-${language.name}`,
+      repo: githubRepo(language.repo),
+      commit: language.commit,
+    })),
+  ];
+}
+
+function parseFlakeInputs(flake) {
+  const inputs = new Map();
+  for (const match of flake.matchAll(flakeInputPattern())) {
+    const [, , name, , repo, commit] = match;
+    if (inputs.has(name)) throw new Error(`flake.nix declares input ${name} more than once`);
+    inputs.set(name, { repo, commit });
+  }
+  return inputs;
+}
+
+function flakeInputPattern() {
+  return /^(\s*)(tree-sitter-[a-z0-9_-]+)(\s*=\s*\{\s*\n\s*url\s*=\s*\"github:)([^/\"\s]+\/[^/\"\s]+)\/([0-9a-f]{40})\";/gm;
+}
+
+function githubRepo(repo) {
+  const url = new URL(repo);
+  const parts = url.pathname.replace(/\.git$/, "").split("/").filter(Boolean);
+  if (url.hostname !== "github.com" || parts.length !== 2) {
+    throw new Error(`tree-sitter repository must be a GitHub repository: ${repo}`);
+  }
+  return parts.join("/");
 }
 
 async function updateManifestToLatest(manifest) {
@@ -211,8 +300,10 @@ Run this command to advance every bundled parser to the current upstream HEAD:
 node scripts/update-tree-sitter-languages.mjs --latest
 \`\`\`
 
-The scheduled GitHub Actions workflow runs the \`--latest\` form and opens a pull
-request when upstream commits change tracked queries or licenses.
+The \`--latest\` form also synchronizes the Nix flake inputs and lock file. It
+therefore requires Nix. The scheduled GitHub Actions workflow runs this form and
+opens a pull request when upstream commits change tracked queries, licenses, or
+Nix inputs.
 
 All listed parsers are MIT licensed. Each language directory keeps the upstream
 \`LICENSE\` file.

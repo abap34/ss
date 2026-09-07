@@ -152,7 +152,6 @@ jobs:
             qpdf-version: "11.2.0"
           - environment: Ubuntu 24.04, Cairo 1.18, qpdf 12.4
             runner: ubuntu-24.04
-            # renovate: datasource=github-releases depName=qpdf/qpdf
             qpdf-version: "12.4.0"
           - environment: Ubuntu 26.04 system packages
             runner: ubuntu-26.04
@@ -199,7 +198,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.QPDF_PREFIX }}
-          key: ${{ runner.os }}-${{ runner.arch }}-qpdf-${{ matrix.qpdf-version }}-v1
+          key: ${{ matrix.runner }}-${{ runner.arch }}-qpdf-${{ matrix.qpdf-version }}-v1
 
       - name: Build qpdf
         if: matrix.qpdf-version != 'system' && steps.qpdf-cache.outputs.cache-hit != 'true'

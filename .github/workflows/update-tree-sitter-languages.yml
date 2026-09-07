@@ -25,13 +25,16 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
       - name: Sync bundled grammars
         run: node scripts/update-tree-sitter-languages.mjs --latest
 
       - name: Detect changes
         id: diff
         run: |
-          if git diff --quiet -- third_party/tree-sitter-languages; then
+          if git diff --quiet -- third_party/tree-sitter-languages flake.nix flake.lock; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -56,7 +59,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$branch"
-          git add third_party/tree-sitter-languages
+          git add third_party/tree-sitter-languages flake.nix flake.lock
           git commit -m "$title"
           git push --force origin "$branch"
 
