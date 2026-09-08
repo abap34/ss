@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { PageGuideSettings, projectSettings } from "./projectConfig";
+import { onDidChangeProjectSettings, PageGuideSettings, projectSettings } from "./projectConfig";
 
 type BlockKind = "page" | "other";
 
@@ -74,17 +74,13 @@ export class PageGuideDecorations implements vscode.Disposable {
 
   constructor() {
     this.rebuildDecorations(projectSettings(undefined).pageGuide);
-    const projectWatcher = vscode.workspace.createFileSystemWatcher("**/ss.toml");
 
     this.disposables.push(
-      projectWatcher,
       vscode.workspace.onDidChangeTextDocument((event) => this.refreshDocument(event.document)),
       vscode.workspace.onDidSaveTextDocument((document) => this.refreshDocument(document)),
       vscode.window.onDidChangeActiveTextEditor((editor) => this.refreshEditor(editor)),
       vscode.window.onDidChangeVisibleTextEditors(() => this.refreshVisibleEditors()),
-      projectWatcher.onDidChange(() => this.refreshVisibleEditors()),
-      projectWatcher.onDidCreate(() => this.refreshVisibleEditors()),
-      projectWatcher.onDidDelete(() => this.refreshVisibleEditors()),
+      onDidChangeProjectSettings(() => this.refreshVisibleEditors()),
     );
 
     this.refreshVisibleEditors();

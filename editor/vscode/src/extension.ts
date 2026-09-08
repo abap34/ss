@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { LanguageClient, LanguageClientOptions, Middleware, ServerOptions, Trace } from "vscode-languageclient/node";
 import { PageGuideDecorations } from "./pageGuide";
-import { projectSettings } from "./projectConfig";
+import { initializeProjectSettings, projectSettings } from "./projectConfig";
 import { EditorController } from "./editor/controller";
 
 let client: LanguageClient | undefined;
@@ -10,6 +10,7 @@ let editorController: EditorController | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  context.subscriptions.push(initializeProjectSettings());
   const output = vscode.window.createOutputChannel("ss");
   outputChannel = output;
   pageGuide = new PageGuideDecorations();

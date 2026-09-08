@@ -1181,6 +1181,12 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
     vscode_tests.step.dependOn(&ctx.dependency_checks.vscode_packages.step);
     test_step.dependOn(&vscode_tests.step);
 
+    const project_settings_tests = b.addSystemCommand(&.{ "node", "tests/editor/vscode/project_config/spec.mjs" });
+    project_settings_tests.setCwd(b.path("."));
+    project_settings_tests.stdio = .inherit;
+    project_settings_tests.step.dependOn(&ctx.dependency_checks.vscode_packages.step);
+    addFocusedTestStep(b, "test-editor-project-settings", "Run focused editor project settings cache tests", &project_settings_tests.step);
+
     const editor_view_tests = b.addSystemCommand(&.{ "node", "tests/editor/vscode/view/spec.mjs" });
     editor_view_tests.setCwd(b.path("."));
     editor_view_tests.stdio = .inherit;

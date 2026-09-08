@@ -1,11 +1,12 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
+import { LoadedProject, ProjectSettingsCache } from "./projectConfig/cache";
 
 export interface ProjectSettings {
-  lsp: LspSettings;
-  wysiwyg: WysiwygSettings;
-  pageGuide: PageGuideSettings;
+  readonly lsp: Readonly<LspSettings>;
+  readonly wysiwyg: Readonly<WysiwygSettings>;
+  readonly pageGuide: Readonly<PageGuideSettings>;
 }
 
 export interface LspSettings {
@@ -38,7 +39,7 @@ export interface PageGuideSettings {
   overviewRuler: boolean;
 }
 
-const defaultSettings: ProjectSettings = {
+const defaultSettings: ProjectSettings = freezeSettings({
   lsp: {
     enabled: true,
     debounceMs: 120,
@@ -66,19 +67,50 @@ const defaultSettings: ProjectSettings = {
     gutterIcon: true,
     overviewRuler: true,
   },
-};
+});
+
+const cache = new ProjectSettingsCache(loadProject, { settings: defaultSettings });
+
+export function initializeProjectSettings(): vscode.Disposable {
+  return cache.start();
+}
+
+export function onDidChangeProjectSettings(listener: () => void): vscode.Disposable {
+  return cache.onDidChange(listener);
+}
 
 export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
-  const projectFile = findProjectFile(uri);
-  if (!projectFile) {
-    return cloneDefaults();
-  }
-  const source = readProjectFile(projectFile);
-  if (source === undefined) {
-    return cloneDefaults();
+  return cache.get(uri).settings;
+}
+
+export function projectEntryUri(uri: vscode.Uri | undefined): vscode.Uri | undefined {
+  return cache.get(uri).entry;
+}
+
+function loadProject(projectFile: string): LoadedProject {
+  let source: string;
+  try {
+    source = fs.readFileSync(projectFile, "utf8");
+  } catch {
+    return { settings: defaultSettings };
   }
   const table = parseTomlSubset(source);
+  const entry = stringValue(table, "project", "entry");
   return {
+    settings: settingsFromTable(table),
+    entry: entry ? vscode.Uri.file(path.resolve(path.dirname(projectFile), entry)) : undefined,
+  };
+}
+
+function freezeSettings(settings: ProjectSettings): ProjectSettings {
+  Object.freeze(settings.lsp);
+  Object.freeze(settings.wysiwyg);
+  Object.freeze(settings.pageGuide);
+  return Object.freeze(settings);
+}
+
+function settingsFromTable(table: TomlSubset): ProjectSettings {
+  return freezeSettings({
     lsp: {
       enabled: boolValue(table, "editor.lsp", "enabled", defaultSettings.lsp.enabled),
       debounceMs: numberValue(table, "editor.lsp", "debounce", defaultSettings.lsp.debounceMs, 0),
@@ -106,49 +138,7 @@ export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
       gutterIcon: boolValue(table, "editor.page_guide", "gutter_icon", defaultSettings.pageGuide.gutterIcon),
       overviewRuler: boolValue(table, "editor.page_guide", "overview_ruler", defaultSettings.pageGuide.overviewRuler),
     },
-  };
-}
-
-export function projectEntryUri(uri: vscode.Uri | undefined): vscode.Uri | undefined {
-  const projectFile = findProjectFile(uri);
-  if (!projectFile) return undefined;
-  const source = readProjectFile(projectFile);
-  if (source === undefined) return undefined;
-  const entry = stringValue(parseTomlSubset(source), "project", "entry");
-  if (!entry) return undefined;
-  return vscode.Uri.file(path.resolve(path.dirname(projectFile), entry));
-}
-
-function readProjectFile(projectFile: string): string | undefined {
-  try {
-    return fs.readFileSync(projectFile, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
-function cloneDefaults(): ProjectSettings {
-  return {
-    lsp: { ...defaultSettings.lsp },
-    wysiwyg: { ...defaultSettings.wysiwyg },
-    pageGuide: { ...defaultSettings.pageGuide },
-  };
-}
-
-function findProjectFile(uri: vscode.Uri | undefined): string | undefined {
-  let current = uri?.scheme === "file" ? path.dirname(uri.fsPath) : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  while (current) {
-    const candidate = path.join(current, "ss.toml");
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return undefined;
-    }
-    current = parent;
-  }
-  return undefined;
+  });
 }
 
 type TomlSubset = Map<string, Map<string, string>>;

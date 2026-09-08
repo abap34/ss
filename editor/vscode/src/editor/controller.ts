@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { LanguageClient } from "vscode-languageclient/node";
-import { projectEntryUri, projectSettings } from "../projectConfig";
+import { onDidChangeProjectSettings, projectEntryUri, projectSettings } from "../projectConfig";
 import {
   ComponentDeleteResult,
   EditorSnapshot,
@@ -109,24 +109,12 @@ export class EditorController implements vscode.Disposable {
       this.refreshAffected(event.document.uri);
     }));
     const sourceWatcher = vscode.workspace.createFileSystemWatcher("**/*.ss");
-    const projectWatcher = vscode.workspace.createFileSystemWatcher(
-      "**/ss.toml",
-    );
     this.disposables.push(
       sourceWatcher,
-      projectWatcher,
       sourceWatcher.onDidChange((uri) => this.refreshAffected(uri, 0)),
       sourceWatcher.onDidCreate(() => this.refreshAll(immediateRefreshDelayMs)),
       sourceWatcher.onDidDelete((uri) => this.refreshAffected(uri, 0)),
-      projectWatcher.onDidChange(() =>
-        this.refreshAll(immediateRefreshDelayMs)
-      ),
-      projectWatcher.onDidCreate(() =>
-        this.refreshAll(immediateRefreshDelayMs)
-      ),
-      projectWatcher.onDidDelete(() =>
-        this.refreshAll(immediateRefreshDelayMs)
-      ),
+      onDidChangeProjectSettings(() => this.refreshAll(immediateRefreshDelayMs)),
     );
   }
 

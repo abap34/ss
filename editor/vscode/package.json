@@ -24,7 +24,7 @@
     "watch": "node scripts/build.js --watch",
     "package": "npm run compile && vsce package",
     "package:prebuilt": "vsce package",
-    "test": "npm run compile && node ../../scripts/check-ss-toml-schema.js && node ../../tests/editor/vscode/spec.mjs && node ../../tests/editor/vscode/controller/spec.mjs && node ../../tests/editor/vscode/view/spec.mjs && node ../../tests/editor/vscode/request/spec.mjs && node ../../tests/editor/vscode/timing/spec.mjs"
+    "test": "npm run compile && node ../../scripts/check-ss-toml-schema.js && node ../../tests/editor/vscode/spec.mjs && node ../../tests/editor/vscode/controller/spec.mjs && node ../../tests/editor/vscode/project_config/spec.mjs && node ../../tests/editor/vscode/view/spec.mjs && node ../../tests/editor/vscode/request/spec.mjs && node ../../tests/editor/vscode/timing/spec.mjs"
   },
   "activationEvents": [
     "onLanguage:ss-slide",

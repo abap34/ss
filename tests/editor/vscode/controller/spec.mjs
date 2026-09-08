@@ -39,6 +39,7 @@ const output = await esbuild.build({
           export const workspace = mock.workspace;
           export const window = mock.window;
           export const Uri = mock.Uri;
+          export const RelativePattern = mock.RelativePattern;
           export const WorkspaceEdit = mock.WorkspaceEdit;
           export const TextEdit = mock.TextEdit;
           export const Range = mock.Range;
@@ -952,6 +953,7 @@ async function waitFor(predicate) {
 
 function vscodeMock() {
   const changeListeners = [];
+  const workspaceListeners = new Set();
   const disposables = [];
   const openedDocuments = [];
   const panels = [];
@@ -1025,6 +1027,10 @@ function vscodeMock() {
       changeListeners.push(listener);
       return disposable();
     },
+    onDidChangeWorkspaceFolders(listener) {
+      workspaceListeners.add(listener);
+      return { dispose: () => workspaceListeners.delete(listener) };
+    },
     createFileSystemWatcher: watcher,
     getWorkspaceFolder: () => undefined,
   };
@@ -1065,6 +1071,9 @@ function vscodeMock() {
     workspace,
     window,
     Uri,
+    RelativePattern: class {
+      constructor(baseUri, pattern) { this.baseUri = baseUri; this.pattern = pattern; }
+    },
     WorkspaceEdit,
     TextEdit: { replace: (range, newText) => ({ range, newText }) },
     Range,
@@ -1088,6 +1097,7 @@ function vscodeMock() {
       openedDocuments.length = 0;
       panels.length = 0;
       warnings.length = 0;
+      for (const listener of [...workspaceListeners]) listener({ added: [], removed: [] });
     },
   };
 }
