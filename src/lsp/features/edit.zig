@@ -9,31 +9,9 @@ const protocol = @import("../protocol.zig");
 const lsp_state = @import("../state.zig");
 const utils = @import("utils");
 
-pub const GeneratedEditMode = enum {
-    absolute,
-    relative,
-    width,
-};
-
-pub const GeneratedConstraintReplacement = struct {
-    index: usize,
-    expected: core.Constraint,
-    offset_span: utils.source.ByteSpan,
-    literal_scale: f32,
-    new_offset: f32,
-};
-
-pub const GeneratedEdit = struct {
-    path: []const u8,
-    base_source: []const u8,
-    source: []const u8,
-    base_generation: u64,
-    base_snapshot_id: []const u8,
-    node_id: core.NodeId,
-    page_id: core.NodeId,
-    mode: GeneratedEditMode,
-    replacements: []const GeneratedConstraintReplacement,
-};
+pub const GeneratedEditMode = editor_edit.generated.Mode;
+pub const GeneratedConstraintReplacement = editor_edit.generated.Replacement;
+pub const GeneratedEdit = editor_edit.generated.Edit;
 
 pub const Context = struct {
     io: std.Io,
@@ -46,6 +24,8 @@ pub const Context = struct {
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
+    const profile_start = utils.measure_profile.start();
+    defer utils.measure_profile.recordGeneratedEdit(.request, profile_start);
     const request = params orelse return try statusJson(ctx.allocator, "unsupported", "Missing edit request.");
     if (request != .object) return try statusJson(ctx.allocator, "unsupported", "Invalid edit request.");
     const request_object = &request.object;

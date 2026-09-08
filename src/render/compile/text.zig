@@ -1128,7 +1128,7 @@ pub fn diagnosticMessageForError(err: anyerror) ?[]const u8 {
     };
 }
 
-fn sameFontEnvironment(left: FontEnvironment, right: FontEnvironment) bool {
+pub fn sameFontEnvironment(left: FontEnvironment, right: FontEnvironment) bool {
     return left.generation == right.generation and std.mem.eql(u8, &left.id, &right.id);
 }
 

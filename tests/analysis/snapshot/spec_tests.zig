@@ -2,6 +2,7 @@ const std = @import("std");
 const analysis = @import("analysis");
 const ast = @import("ast");
 const core = @import("core");
+const render_text = @import("render_text");
 
 const testing = std.testing;
 
@@ -112,4 +113,36 @@ fn retainQueryTypes(allocator: std.mem.Allocator) !void {
 test "analysis snapshot types retain nested names independently of source owners" {
     try retainQueryTypes(testing.allocator);
     try testing.checkAllAllocationFailures(testing.allocator, retainQueryTypes, .{});
+}
+
+fn releasePreparedLayoutInputs(allocator: std.mem.Allocator, retain_state: bool) !void {
+    var state = try initDocumentState(allocator);
+    var state_owned = true;
+    defer if (state_owned) state.deinit();
+    const page_id = try state.addPage("retained");
+    _ = try state.makeObject(page_id, "object", null, .text, .text, "");
+    var output = analysis.snapshot.LayoutHookOutput{ .reuse_inputs = .{
+        .pages = try core.prepared.prepare(allocator, &state),
+        .font_environment = std.mem.zeroes(render_text.FontEnvironment),
+    } };
+    defer output.deinit(allocator);
+    try testing.expectEqual(@as(usize, 1), output.reuse_inputs.?.pages.pages.len);
+    try testing.expectEqual(@as(usize, 1), output.reuse_inputs.?.pages.pages[0].objects.len);
+    if (retain_state) {
+        var retained = analysis.snapshot.RetainedLayoutState{ .state = state, .reuse_inputs = output.reuse_inputs };
+        state_owned = false;
+        output.reuse_inputs = null;
+        retained.deinit();
+    } else {
+        // Canceled layout work releases its prepared inputs while the caller still owns the state.
+        output.deinit(allocator);
+        try testing.expect(state.getNode(state.page_order.items[0]) != null);
+    }
+}
+
+test "prepared layout inputs follow retained state ownership and canceled hook output" {
+    for ([_]bool{ false, true }) |retain_state| {
+        try releasePreparedLayoutInputs(testing.allocator, retain_state);
+        try testing.checkAllAllocationFailures(testing.allocator, releasePreparedLayoutInputs, .{retain_state});
+    }
 }

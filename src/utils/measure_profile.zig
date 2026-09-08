@@ -94,6 +94,22 @@ pub const WysiwygKind = enum {
     snapshot,
 };
 
+pub const GeneratedEditKind = enum {
+    request,
+    validation,
+    prepare,
+    solve,
+    translations,
+    snapshot,
+    syntax,
+};
+
+var generated_edits = [_]CountTime{.{}} ** @typeInfo(GeneratedEditKind).@"enum".fields.len;
+
+pub fn recordGeneratedEdit(kind: GeneratedEditKind, start_ns: i128) void {
+    if (start_ns != 0) generated_edits[@intFromEnum(kind)].add(elapsed(start_ns));
+}
+
 pub const RenderCompileKind = enum {
     prepare_fonts,
     font_environment,
@@ -448,6 +464,9 @@ pub fn printIfEnabled() void {
     printCounter("WYSIWYG solve", &wysiwyg_solve);
     printCounter("WYSIWYG render compile", &wysiwyg_render_compile);
     printCounter("WYSIWYG snapshot", &wysiwyg_snapshot);
+    inline for (@typeInfo(GeneratedEditKind).@"enum".fields) |field| {
+        printCounter("generated edit " ++ field.name, &generated_edits[field.value]);
+    }
 }
 
 fn analysisCounter(kind: AnalysisKind) *CountTime {

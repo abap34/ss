@@ -501,9 +501,10 @@ fn lsp(output: Output) void {
     const s = style(output);
     outputPrint(output,
         \\{s}Usage:{s}
-        \\  {s}ss lsp{s}
+        \\  {s}ss lsp{s} [--measure-profile]
         \\
         \\Run the language server over stdio.
+        \\Use --measure-profile to print detailed timing counters on stderr.
         \\
     , .{
         s.heading, s.reset,

@@ -81,6 +81,58 @@ fn emptyState() !core.DocumentState {
     return core.DocumentState.init(testing.allocator, base, path, source, ast.Module.init());
 }
 
+const MeasuredPages = struct {
+    mask: u8 = 0,
+
+    fn measure(context: *anyopaque, opaque_state: *anyopaque, node: *const core.Node, _: f32, _: core.LayoutMeasurementMode) anyerror!?core.LayoutMeasurement {
+        const self: *MeasuredPages = @ptrCast(@alignCast(context));
+        const state: *core.DocumentState = @ptrCast(@alignCast(opaque_state));
+        const page = state.layoutPageOf(node.id) orelse return error.UnknownNode;
+        self.mask |= @as(u8, 1) << @as(u3, @intCast(state.pageIndexOf(page) - 1));
+        return .{ .width = 100, .height = 40 };
+    }
+};
+
+test "layout partition: solving one page preserves other frames and fallback ordering" {
+    var state = try emptyState();
+    defer state.deinit();
+    var nodes: [3]core.NodeId = undefined;
+    for (&nodes) |*node| {
+        const page = try state.addPage("page");
+        node.* = try state.makeObject(page, "body", null, .text, .text, "body");
+        _ = try state.makeObject(page, "next", null, .text, .text, "next");
+        try state.addAnchorConstraint(node.*, .left, .{ .page = .left }, 60, null);
+    }
+    var measured = MeasuredPages{};
+    const options = core.layout.graph.SolveOptions{ .measurement_provider = .{
+        .context = &measured,
+        .measure = MeasuredPages.measure,
+    } };
+    var initial = try state.finalizeDocument(null, options);
+    defer initial.deinit(testing.allocator);
+    try testing.expectEqual(@as(u8, 7), measured.mask);
+    const first = state.getNode(nodes[0]).?.frame;
+    const last = state.getNode(nodes[2]).?.frame;
+    var inputs = try partition.Document.init(testing.allocator, &state);
+    defer inputs.deinit(testing.allocator);
+    state.constraints.items[1].offset = 80;
+    measured.mask = 0;
+    var selected = try core.layout.solver.solvePage(&state, inputs.pages[1], 1, null, options);
+    defer selected.deinit(testing.allocator);
+    try core.layout.solver.applyPage(&state, &selected);
+    try testing.expectEqual(@as(u8, 2), measured.mask);
+    try testing.expectEqualDeep(first, state.getNode(nodes[0]).?.frame);
+    try testing.expectEqualDeep(last, state.getNode(nodes[2]).?.frame);
+    try testing.expectApproxEqAbs(@as(f32, 80), state.getNode(nodes[1]).?.frame.x, core.layout.graph.ConstraintTolerance);
+    const fallbacks = try testing.allocator.dupe(core.Constraint, state.fallback_constraints.items);
+    defer testing.allocator.free(fallbacks);
+    var full = try state.finalizeDocument(null, options);
+    defer full.deinit(testing.allocator);
+    try testing.expectEqualDeep(full.pages[1].object_frames, selected.object_frames);
+    try testing.expectEqualDeep(fallbacks, state.fallback_constraints.items);
+    try testing.expectError(error.InvalidPageLayoutInputs, core.layout.solver.solvePage(&state, inputs.pages[1], 0, null, options));
+}
+
 test "layout partition: implicit groups retain page ownership and foreign endpoints stay external" {
     var state = try emptyState();
     defer state.deinit();

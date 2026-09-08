@@ -1489,6 +1489,9 @@ fn run(init: std.process.Init) !void {
             _ = cli_help.command(.stdout, "lsp");
             return;
         }
+        for (args[2..]) |arg| {
+            if (std.mem.eql(u8, arg, "--measure-profile")) utils.measure_profile.setEnabled(true);
+        }
         try lsp.run(io, std.heap.smp_allocator);
         return;
     }

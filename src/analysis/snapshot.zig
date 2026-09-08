@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 const editor_snapshot = @import("../editor/snapshot.zig");
+const ReuseInputs = @import("../render/layout/inputs.zig").Inputs;
 const project = @import("../project.zig");
 
 const diagnostics = @import("diagnostics.zig");
@@ -61,6 +62,7 @@ pub const SourceSet = struct {
 };
 
 pub const LayoutHookOutput = struct {
+    reuse_inputs: ?ReuseInputs = null,
     editor: ?editor_snapshot.Output = null,
     conflicts_json: ?[]u8 = null,
     report: ?core.layout.conflicts.Report = null,
@@ -69,6 +71,7 @@ pub const LayoutHookOutput = struct {
         if (self.editor) |*value| value.deinit();
         if (self.conflicts_json) |value| allocator.free(value);
         if (self.report) |*value| value.deinit();
+        if (self.reuse_inputs) |*value| value.deinit(allocator);
         self.* = .{};
     }
 };
@@ -107,8 +110,10 @@ pub const RetainedLayoutInputs = struct {
 
 pub const RetainedLayoutState = struct {
     state: core.DocumentState,
+    reuse_inputs: ?ReuseInputs = null,
 
     pub fn deinit(self: *RetainedLayoutState) void {
+        if (self.reuse_inputs) |*value| value.deinit(self.state.allocator);
         self.state.deinit();
         self.* = undefined;
     }
@@ -485,6 +490,8 @@ pub const AnalysisSnapshot = struct {
         }
 
         if (hook.run(hook.context, &inputs.state, &inputs.graph)) |result| {
+            var reuse_inputs = result.reuse_inputs;
+            defer if (reuse_inputs) |*value| value.deinit(self.allocator);
             const retain_state = result.editor != null;
             self.layout_output = try LayoutOutput.fromDocumentStateWithOwnedReport(
                 self.allocator,
@@ -495,7 +502,8 @@ pub const AnalysisSnapshot = struct {
             );
             try self.diagnostics.addDocumentStateFrom(&inputs.state, inputs.diagnostic_count);
             if (retain_state) {
-                self.retained_layout_state = .{ .state = inputs.state };
+                self.retained_layout_state = .{ .state = inputs.state, .reuse_inputs = reuse_inputs };
+                reuse_inputs = null;
                 state_retained = true;
             }
         } else |err| switch (err) {
@@ -701,6 +709,8 @@ fn buildWithSyntax(
     try hole_facts.populateExpectedTypes(allocator, &state, declaration_index, &parse_holes);
     try options.checkCanceled();
     try diagnostic_bag.addDocumentStateFrom(&state, 0);
+    var reuse_inputs: ?ReuseInputs = null;
+    defer if (reuse_inputs) |*value| value.deinit(allocator);
     const analyzed_diagnostic_count = state.diagnostics.items.len;
     try options.checkCanceled();
     if (!diagnostic_bag.hasErrors()) {
@@ -708,6 +718,7 @@ fn buildWithSyntax(
             if (execution_graph) |*graph| {
                 try options.checkCanceled();
                 if (hook.run(hook.context, &state, graph)) |result| {
+                    reuse_inputs = result.reuse_inputs;
                     layout_output = try LayoutOutput.fromDocumentStateWithOwnedReport(
                         allocator,
                         &state,
@@ -765,7 +776,8 @@ fn buildWithSyntax(
         snapshot.layout_output.?.editor != null and
         !snapshot.diagnostics.hasErrors())
     {
-        snapshot.retained_layout_state = .{ .state = state };
+        snapshot.retained_layout_state = .{ .state = state, .reuse_inputs = reuse_inputs };
+        reuse_inputs = null;
         state_owned = false;
     }
     return snapshot;

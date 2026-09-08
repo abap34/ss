@@ -486,6 +486,7 @@ fn addTestStep(
         import("analysis", analysis_mod),
         import("ast", modules.ast),
         import("core", modules.core),
+        import("render_text", modules.render_text),
     }, true);
     const analysis_snapshot_spec_tests = addTestArtifact(ctx, analysis_snapshot_spec_mod);
     const run_analysis_snapshot_spec_tests = b.addRunArtifact(analysis_snapshot_spec_tests);
@@ -753,6 +754,7 @@ fn addTestStep(
     source_positions_step.dependOn(&run_source_index_tests.step);
     source_positions_step.dependOn(&run_lsp_positions_tests.step);
     const editor_edit_mod = createModule(ctx, "src/editor/edit.zig", &.{
+        import("model", modules.model),
         import("utils", modules.utils),
     }, null);
     const editor_edit_spec_mod = createModule(ctx, "tests/editor/edit/spec_tests.zig", &.{
@@ -762,6 +764,13 @@ fn addTestStep(
     const run_editor_edit_spec_tests = b.addRunArtifact(editor_edit_spec_tests);
     test_step.dependOn(&run_editor_edit_spec_tests.step);
     addFocusedTestStep(b, "test-editor-edit", "Run focused WYSIWYG source edit tests", &run_editor_edit_spec_tests.step);
+    const generated_edit_spec_mod = createModule(ctx, "tests/editor/edit/generated/spec_tests.zig", &.{
+        import("editor_edit", editor_edit_mod),
+    }, null);
+    const generated_edit_spec_tests = addTestArtifact(ctx, generated_edit_spec_mod);
+    const run_generated_edit_spec_tests = b.addRunArtifact(generated_edit_spec_tests);
+    test_step.dependOn(&run_generated_edit_spec_tests.step);
+    addFocusedTestStep(b, "test-editor-generated", "Run focused generated edit validation and ownership tests", &run_generated_edit_spec_tests.step);
     const editor_icons_mod = createModule(ctx, "src/editor/icons.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
@@ -1135,6 +1144,7 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         "tests/runtime/layout/vflow/policy_spec.mjs",
         "tests/runtime/lsp/cancellation/spec.mjs",
         "tests/runtime/lsp/diagnostics/spec.mjs",
+        "tests/runtime/lsp/generated_edit/spec.mjs",
         "tests/runtime/lsp/manual_wysiwyg/spec.mjs",
         "tests/runtime/lsp/protocol/spec.mjs",
         "tests/runtime/lsp/render_cancellation/spec.mjs",

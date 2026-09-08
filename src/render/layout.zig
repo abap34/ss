@@ -10,6 +10,7 @@ pub const FontEnvironmentToken = compiler.FontEnvironmentToken;
 pub const HighlightCache = compiler.HighlightCache;
 
 pub const Options = struct {
+    page_id: ?core.NodeId = null,
     trace_path: ?[]const u8 = null,
     progress: ?core.layout.graph.LayoutProgress = null,
     jobs: ?usize = null,
@@ -25,10 +26,7 @@ pub const Options = struct {
     }
 };
 
-pub const EvaluatedPreparedPages = struct {
-    pages: core.prepared.PreparedPages,
-    font_environment: FontEnvironmentToken,
-};
+pub const EvaluatedPreparedPages = @import("layout/inputs.zig").Inputs;
 
 pub fn evaluateAndSolvePreparedPages(
     io: std.Io,
@@ -104,14 +102,18 @@ pub fn solvePreparedPages(
         return err;
     };
     defer measurement_scope.deinit();
-    var results = lowering.solveDocument(state, options.trace_path, .{
+    const solve_options = core.layout.graph.SolveOptions{
         .measurement_provider = measurement_scope.provider(),
         .page_inputs = pages.layout.pages,
         .progress = options.progress,
         .jobs = options.jobs,
         .cancellation = options.cancellation,
         .trace_failure = options.trace_failure,
-    }) catch |err| {
+    };
+    var results = (if (options.page_id) |page_id|
+        solveSelectedPage(state, pages, page_id, options.trace_path, solve_options)
+    else
+        lowering.solveDocument(state, options.trace_path, solve_options)) catch |err| {
         _ = try compiler.addFontEnvironmentDiagnostic(state, err);
         return err;
     };
@@ -123,4 +125,27 @@ pub fn solvePreparedPages(
     };
     try options.checkCanceled();
     return results;
+}
+
+fn solveSelectedPage(
+    state: *core.DocumentState,
+    pages: *const core.prepared.PreparedPages,
+    page_id: core.NodeId,
+    trace_path: ?[]const u8,
+    options: core.layout.graph.SolveOptions,
+) !core.layout.Document {
+    for (pages.layout.pages, 0..) |inputs, index| {
+        if (inputs.page_id != page_id) continue;
+        const output = try state.allocator.alloc(core.layout.Page, 1);
+        errdefer state.allocator.free(output);
+        output[0] = try core.layout.solver.solvePage(state, inputs, index, trace_path, options);
+        errdefer output[0].deinit(state.allocator);
+        if (output[0].constraint_failures.len != 0) return switch (output[0].constraint_failures[0].kind) {
+            .conflict => error.ConstraintConflict,
+            .negative_frame_size => error.NegativeFrameSize,
+        };
+        try core.layout.solver.applyPage(state, &output[0]);
+        return .{ .pages = output };
+    }
+    return error.InvalidPageLayoutInputs;
 }

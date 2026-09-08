@@ -121,6 +121,46 @@ const PageJob = struct {
     }
 };
 
+pub fn solvePage(state: anytype, inputs: partition.Page, page_index: usize, trace_path: ?[]const u8, options: SolveOptions) !document.Page {
+    if (page_index >= state.page_order.items.len or state.page_order.items[page_index] != inputs.page_id) {
+        return error.InvalidPageLayoutInputs;
+    }
+    var trace_session = layout_trace.Session{};
+    try trace_session.begin(state.allocator, trace_path, options.trace_failure);
+    var trace_active = true;
+    defer if (trace_active) trace_session.abort(state.allocator);
+    var result = try (PageJob{ .page = inputs, .page_index = page_index }).run(state, &trace_session, options);
+    errdefer result.deinit(state.allocator);
+    try trace_session.end(state.allocator);
+    trace_active = false;
+    return result;
+}
+
+pub fn applyPage(state: anytype, page: *const document.Page) !void {
+    var constraints = std.ArrayList(Constraint).empty;
+    errdefer constraints.deinit(state.allocator);
+    try constraints.ensureTotalCapacity(state.allocator, state.fallback_constraints.items.len + page.fallback_constraints.len);
+    var inserted = false;
+    const page_index = state.pageIndexOf(page.page_id);
+    for (state.fallback_constraints.items) |constraint| {
+        const owner = state.layoutPageOfConstraintEndpoint(constraint.target_node);
+        if (!inserted and owner != null and state.pageIndexOf(owner.?) >= page_index) {
+            constraints.appendSliceAssumeCapacity(page.fallback_constraints);
+            inserted = true;
+        }
+        if (owner != page.page_id) constraints.appendAssumeCapacity(constraint);
+    }
+    if (!inserted) constraints.appendSliceAssumeCapacity(page.fallback_constraints);
+    for (page.object_frames) |entry| {
+        if (state.getNode(entry.node_id) == null) return error.UnknownNode;
+    }
+    for (page.object_frames) |entry| {
+        state.getNode(entry.node_id).?.frame = entry.frame;
+    }
+    state.fallback_constraints.deinit(state.allocator);
+    state.fallback_constraints = constraints;
+}
+
 const PageLayoutJobOutput = struct {
     result: ?document.Page = null,
     err: ?anyerror = null,
