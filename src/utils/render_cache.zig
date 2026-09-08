@@ -1,12 +1,14 @@
 const std = @import("std");
 const fs = @import("fs.zig");
 pub const LatexReference = @import("render_cache/latex_reference.zig").LatexReference;
+pub const PdfReference = @import("render_cache/pdf_reference.zig");
+const published = @import("render_cache/published.zig");
+pub const PublishedLease = published.Lease;
+const cache_guard = @import("render_cache/guard.zig");
 
-pub const path = ".ss-cache/render";
+pub const path = cache_guard.path;
 const artifacts_path = path ++ "/artifacts";
 const prune_stamp_path = artifacts_path ++ "/.prune-stamp";
-const cache_parent_path = ".ss-cache";
-const guard_path = cache_parent_path ++ "/render.lock";
 
 const bytes_per_mib: u64 = 1024 * 1024;
 
@@ -33,6 +35,7 @@ const FileEntry = struct {
 const ArtifactGroup = struct {
     first: ?usize = null,
     mtime_ns: i96 = std.math.minInt(i96),
+    pinned: bool = false,
 };
 
 pub const Lease = struct {
@@ -40,7 +43,7 @@ pub const Lease = struct {
     guard: ?std.Io.File,
 
     pub fn acquire(io: std.Io) !Lease {
-        return .{ .io = io, .guard = try openGuard(io, .shared, false) };
+        return .{ .io = io, .guard = try cache_guard.open(io, .shared, false) };
     }
 
     pub fn deinit(self: *Lease) void {
@@ -49,12 +52,15 @@ pub const Lease = struct {
     }
 };
 
-pub fn clear(io: std.Io) !void {
-    const guard = openGuard(io, .exclusive, true) catch |err| switch (err) {
+pub fn clear(io: std.Io, allocator: std.mem.Allocator) !void {
+    const guard = cache_guard.open(io, .exclusive, true) catch |err| switch (err) {
         error.WouldBlock => return error.ActiveRenderCacheLease,
         else => return err,
     };
     defer guard.close(io);
+    var protection = try published.collect(io, allocator);
+    defer protection.deinit();
+    if (protection.active) return error.ActiveRenderCacheLease;
     std.Io.Dir.cwd().deleteTree(io, path) catch |err| {
         if (err == error.FileNotFound) return;
         return err;
@@ -67,13 +73,15 @@ pub fn stats(io: std.Io, allocator: std.mem.Allocator) !Stats {
 
 pub fn pruneConfigured(io: std.Io, allocator: std.mem.Allocator, config: Config) !void {
     if (!config.automatic_pruning) return;
-    const guard = openGuard(io, .exclusive, true) catch |err| switch (err) {
+    const guard = cache_guard.open(io, .exclusive, true) catch |err| switch (err) {
         error.WouldBlock => return,
         else => return err,
     };
     defer guard.close(io);
     if (!try pruneDue(io, config.prune_interval_seconds)) return;
-    try prune(io, allocator, artifacts_path, try config.maxBytes());
+    var protection = try published.collect(io, allocator);
+    defer protection.deinit();
+    try prune(io, allocator, path, try config.maxBytes(), &protection);
     try touchPruneStamp(io);
 }
 
@@ -100,7 +108,7 @@ fn touchPruneStamp(io: std.Io) !void {
     });
 }
 
-fn prune(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8, max_bytes: u64) !void {
+fn prune(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8, max_bytes: u64, protection: *const published.Protection) !void {
     var files = std.ArrayList(FileEntry).empty;
     defer {
         for (files.items) |entry| allocator.free(entry.path);
@@ -108,18 +116,18 @@ fn prune(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8, max_by
     }
 
     const current = try collectFiles(io, allocator, root_path, &files);
-    if (current.bytes <= max_bytes) return;
+    if (current <= max_bytes) return;
 
-    const groups = try groupArtifacts(io, allocator, root_path, files.items);
+    const groups = try groupArtifacts(io, allocator, root_path, files.items, protection);
     defer allocator.free(groups);
     var order = std.ArrayList(usize).empty;
     defer order.deinit(allocator);
     for (groups, 0..) |group, index| {
-        if (group.first != null) try order.append(allocator, index);
+        if (group.first != null and !group.pinned) try order.append(allocator, index);
     }
     const context = GroupOrder{ .files = files.items, .groups = groups };
     std.sort.heap(usize, order.items, context, GroupOrder.olderThan);
-    var remaining = current.bytes;
+    var remaining = current;
     for (order.items) |group_index| {
         if (remaining <= max_bytes) break;
         var member = groups[group_index].first;
@@ -141,11 +149,32 @@ fn prune(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8, max_by
     }
 }
 
-fn groupArtifacts(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8, files: []FileEntry) ![]ArtifactGroup {
+fn groupArtifacts(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8, files: []FileEntry, protection: *const published.Protection) ![]ArtifactGroup {
     var by_path = std.StringHashMap(usize).init(allocator);
     defer by_path.deinit();
     for (files, 0..) |entry, index| try by_path.put(entry.path, index);
     for (files) |*entry| {
+        if (std.mem.endsWith(u8, entry.path, ".pdf.sha256")) {
+            entry.group = by_path.get(entry.path[0 .. entry.path.len - ".sha256".len]) orelse continue;
+            continue;
+        }
+        const entry_directory = std.fs.path.dirname(entry.path) orelse "";
+        if (std.mem.eql(u8, std.fs.path.basename(entry_directory), "output-manifests") and std.mem.endsWith(u8, entry.path, ".manifest")) {
+            const full_path = try std.fs.path.join(allocator, &.{ root_path, entry.path });
+            defer allocator.free(full_path);
+            const contents = fs.readFileAllocLimited(io, allocator, full_path, .limited(PdfReference.read_limit)) catch |err| switch (err) {
+                error.FileNotFound, error.StreamTooLong => continue,
+                else => return err,
+            };
+            defer allocator.free(contents);
+            var lines = std.mem.splitScalar(u8, contents, '\n');
+            const digest = PdfReference.document(&lines) catch continue;
+            const hex = std.fmt.bytesToHex(digest, .lower);
+            const target_path = try std.fmt.allocPrint(allocator, "{s}/documents/{s}.pdf", .{ std.fs.path.dirname(entry_directory) orelse "", hex });
+            defer allocator.free(target_path);
+            entry.group = by_path.get(target_path) orelse continue;
+            continue;
+        }
         if (!std.mem.endsWith(u8, entry.path, ".ref")) continue;
         const full_path = try std.fs.path.join(allocator, &.{ root_path, entry.path });
         defer allocator.free(full_path);
@@ -166,6 +195,7 @@ fn groupArtifacts(io: std.Io, allocator: std.mem.Allocator, root_path: []const u
         entry.next = group.first;
         group.first = index;
         group.mtime_ns = @max(group.mtime_ns, entry.mtime_ns);
+        group.pinned = group.pinned or protection.paths.contains(entry.path);
     }
     return groups;
 }
@@ -177,16 +207,19 @@ fn deleteArtifact(io: std.Io, allocator: std.mem.Allocator, root_path: []const u
     return true;
 }
 
-fn collectFiles(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8, files: *std.ArrayList(FileEntry)) !Stats {
+fn collectFiles(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8, files: *std.ArrayList(FileEntry)) !u64 {
     var collector = FileCollector{ .allocator = allocator, .files = files };
-    return fs.walkFiles(io, allocator, root_path, &collector);
+    _ = try fs.walkFiles(io, allocator, root_path, &collector);
+    return collector.bytes;
 }
 
 const FileCollector = struct {
     allocator: std.mem.Allocator,
     files: *std.ArrayList(FileEntry),
+    bytes: u64 = 0,
 
     pub fn visit(self: *FileCollector, relative_path: []const u8, stat: std.Io.File.Stat) !void {
+        if (std.mem.startsWith(u8, relative_path, "leases/") or std.mem.eql(u8, relative_path, "artifacts/.prune-stamp")) return;
         const owned_path = try self.allocator.dupe(u8, relative_path);
         errdefer self.allocator.free(owned_path);
         try self.files.append(self.allocator, .{
@@ -195,6 +228,7 @@ const FileCollector = struct {
             .mtime_ns = stat.mtime.nanoseconds,
             .group = self.files.items.len,
         });
+        self.bytes +|= stat.size;
     }
 };
 
@@ -207,14 +241,3 @@ const GroupOrder = struct {
         return self.groups[lhs].mtime_ns < self.groups[rhs].mtime_ns;
     }
 };
-
-fn openGuard(io: std.Io, lock: std.Io.File.Lock, nonblocking: bool) !std.Io.File {
-    const cwd = std.Io.Dir.cwd();
-    try cwd.createDirPath(io, cache_parent_path);
-    return cwd.createFile(io, guard_path, .{
-        .read = true,
-        .truncate = false,
-        .lock = lock,
-        .lock_nonblocking = nonblocking,
-    });
-}

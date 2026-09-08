@@ -1,6 +1,7 @@
 const std = @import("std");
 const render = @import("render");
 const render_html = @import("../render/html.zig");
+const utils = @import("utils");
 
 var temporary_counter: usize = 0;
 
@@ -107,6 +108,19 @@ pub const Asset = struct {
 
 pub const Set = struct {
     assets: []Asset = &.{},
+
+    pub fn retainResources(self: *const Set, allocator: std.mem.Allocator, io: std.Io) !?*utils.render_cache.PublishedLease {
+        var paths = std.ArrayList([]const u8).empty;
+        defer {
+            for (paths.items) |path| allocator.free(path);
+            paths.deinit(allocator);
+        }
+        try paths.ensureTotalCapacity(allocator, self.assets.len);
+        for (self.assets) |asset| {
+            paths.appendAssumeCapacity(try std.fs.path.join(allocator, &.{ "editor", asset.relative_path }));
+        }
+        return utils.render_cache.PublishedLease.create(allocator, io, paths.items);
+    }
 
     pub fn deinit(self: *Set, allocator: std.mem.Allocator) void {
         for (self.assets) |*asset| asset.deinit(allocator);

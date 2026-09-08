@@ -126,6 +126,7 @@ window.addEventListener("message", (event) => {
   if (message.type === "snapshot") {
     if (workspace.isPointerOperationActive()) deferSnapshot(message);
     else acceptSnapshot(message);
+    reportSnapshotResources(message.snapshot?.snapshot_id);
   } else if (message.type === "buildStatus") {
     acceptBuildStatus(message);
   } else if (message.type === "error") {
@@ -273,6 +274,19 @@ function flushDeferredSnapshots() {
   deferredSnapshot = null;
   if (snapshot) acceptSnapshot(snapshot);
   if (renderDeferred) render();
+  if (snapshot) reportSnapshotResources(snapshot.snapshot?.snapshot_id);
+}
+
+function reportSnapshotResources(observedSnapshotId) {
+  if (typeof observedSnapshotId !== "string") return;
+  vscode.postMessage({
+    type: "snapshotResources",
+    observedSnapshotId,
+    retainedSnapshotIds: [...new Set([
+      state.snapshot?.snapshot_id,
+      deferredSnapshot?.snapshot?.snapshot_id,
+    ].filter((id) => typeof id === "string"))],
+  });
 }
 
 function editFailureMessage(fallback) {

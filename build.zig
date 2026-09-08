@@ -626,6 +626,16 @@ fn addTestStep(
     cache_test_step.dependOn(&run_cache_reference_tests.step);
     cache_test_step.dependOn(&cache_pruning_spec.step);
     test_step.dependOn(cache_test_step);
+    const editor_resource_mod = createModule(ctx, "src/editor/resource_clients.zig", &.{
+        import("utils", modules.utils),
+    }, true);
+    const editor_resource_spec_mod = createModule(ctx, "tests/editor/resources/spec_tests.zig", &.{
+        import("editor_resources", editor_resource_mod),
+        import("utils", modules.utils),
+    }, true);
+    const editor_resource_tests = addTestArtifact(ctx, editor_resource_spec_mod);
+    const run_editor_resource_tests = b.addRunArtifact(editor_resource_tests);
+    cache_test_step.dependOn(&run_editor_resource_tests.step);
     const progress_spec_mod = createModule(ctx, "tests/utils/progress/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);

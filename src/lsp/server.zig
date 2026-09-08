@@ -128,6 +128,34 @@ const Server = struct {
         self.clearGeneratedEdit();
     }
 
+    fn releaseUnusedEditorResources(self: *Server) void {
+        const clients = &self.editor_snapshot_cache.clients;
+        var index: usize = 0;
+        while (index < self.editor_responses.items.items.len) {
+            if (clients.hasEntry(self.editor_responses.items.items[index].entry_path)) {
+                index += 1;
+            } else {
+                self.editor_responses.removeAt(self.allocator, index);
+            }
+        }
+        if (self.analysis) |*snapshot| {
+            if (!clients.hasEntry(snapshot.project.entry_path)) {
+                if (snapshot.layout_output) |*output| {
+                    if (output.editor) |*editor| editor.deinit();
+                    output.editor = null;
+                }
+            }
+        }
+    }
+
+    fn pruneRenderCache(self: *Server) void {
+        const snapshot = if (self.analysis) |*value| value else return;
+        utils.render_cache.pruneConfigured(self.io, self.allocator, snapshot.project.cache) catch |err| switch (err) {
+            error.Canceled => {},
+            else => std.log.warn("failed to prune render cache: {s}", .{@errorName(err)}),
+        };
+    }
+
     fn rebuild(
         self: *Server,
         changed_path: []const u8,
@@ -480,6 +508,7 @@ const Server = struct {
                 .lsp = if (config) |cfg| cfg.lsp else .{},
                 .wysiwyg = if (config) |cfg| cfg.wysiwyg else .{},
                 .page_guide = if (config) |cfg| cfg.page_guide else .{},
+                .cache = if (config) |cfg| cfg.cache else .{},
             },
             .layout_hook = if (include_layout) .{
                 .context = &layout_context,
@@ -1174,6 +1203,13 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         const result = try feature_editor.snapshotResult(&ctx, params);
         defer server.allocator.free(result);
         try server.respondResult(id, result);
+        server.releaseUnusedEditorResources();
+        server.pruneRenderCache();
+        return;
+    }
+    if (std.mem.eql(u8, method, "ss/editorResources")) {
+        try feature_editor.observeResources(server.allocator, &server.editor_snapshot_cache, params);
+        server.pruneRenderCache();
         return;
     }
     if (std.mem.eql(u8, method, "ss/editorClose")) {
@@ -1181,7 +1217,10 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         defer if (doc_path) |path| server.allocator.free(path);
         if (doc_path) |path| {
             if (server.wysiwyg_paths.fetchRemove(path)) |entry| server.allocator.free(entry.key);
+            server.editor_snapshot_cache.clients.close(path);
         }
+        server.releaseUnusedEditorResources();
+        server.pruneRenderCache();
         return;
     }
     if (std.mem.eql(u8, method, "ss/layoutEdit")) {

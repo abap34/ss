@@ -39,7 +39,7 @@ pub fn translateRebuilt(
         allocator,
         state,
         generation,
-        previous_editor.model.snapshot_id,
+        previous_editor,
         collected.translations,
         conflicts_json,
     );
@@ -123,7 +123,7 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
         ctx.allocator,
         state,
         generation,
-        previous_editor.model.snapshot_id,
+        previous_editor,
         collected.translations,
         conflicts_json,
     ) catch |err| {

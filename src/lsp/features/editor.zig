@@ -28,7 +28,7 @@ pub fn snapshotResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         if (snapshot.layout_output) |*layout| {
             if (layout.editor) |*editor| {
                 if (editor.model.display_fingerprint != null) {
-                    try ctx.responses.store(ctx.allocator, snapshot, editor.json);
+                    try ctx.responses.storeEditor(ctx.allocator, snapshot, editor);
                 }
                 const base_snapshot_id = baseSnapshotId(params);
                 const result = if (base_snapshot_id.len != 0 and displayMatches(ctx.snapshot_cache, &editor.model, base_snapshot_id))
@@ -36,17 +36,41 @@ pub fn snapshotResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
                 else
                     try ctx.allocator.dupe(u8, editor.json);
                 errdefer ctx.allocator.free(result);
+                if (doc_path) |path| try ctx.snapshot_cache.clients.deliver(path, snapshot.project.entry_path, editor.model.snapshot_id, editor.resources);
                 return result;
             }
         }
     }
-    if (try ctx.responses.cloneForEntry(ctx.allocator, snapshot.project.entry_path)) |cached| {
-        defer ctx.allocator.free(cached);
-        return try staleSnapshotWithErrors(ctx, snapshot.project.entry_path, cached);
+    if (ctx.responses.getForEntry(snapshot.project.entry_path)) |cached| {
+        const result = try staleSnapshotWithErrors(ctx, snapshot.project.entry_path, cached.json);
+        errdefer ctx.allocator.free(result);
+        if (doc_path) |path| if (cached.snapshot_id) |snapshot_id| {
+            try ctx.snapshot_cache.clients.deliver(path, snapshot.project.entry_path, snapshot_id, cached.resources);
+        };
+        return result;
     }
     const empty = try editor_snapshot.emptyJson(ctx.allocator);
     defer ctx.allocator.free(empty);
     return try staleSnapshotWithErrors(ctx, snapshot.project.entry_path, empty);
+}
+
+pub fn observeResources(allocator: std.mem.Allocator, cache: *editor_snapshot.Cache, params: ?protocol.JsonValue) !void {
+    const value = params orelse return;
+    const object = switch (value) {
+        .object => |*item| item,
+        else => return,
+    };
+    const observed = protocol.stringField(object, "observedSnapshotId") orelse return;
+    const retained = object.get("retainedSnapshotIds") orelse return;
+    if (retained != .array or retained.array.items.len > 32) return;
+    var ids: [32][]const u8 = undefined;
+    for (retained.array.items, 0..) |item, index| {
+        if (item != .string) return;
+        ids[index] = item.string;
+    }
+    const path = try protocol.docPathFromParams(allocator, params) orelse return;
+    defer allocator.free(path);
+    cache.clients.observe(path, observed, ids[0..retained.array.items.len]);
 }
 
 fn baseSnapshotId(params: ?protocol.JsonValue) []const u8 {

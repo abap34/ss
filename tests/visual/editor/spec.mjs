@@ -1841,6 +1841,11 @@ async function exerciseDeferredSnapshotDuringDrag(browser, baseUrl, initial) {
       globalThis.__messages?.some((message) => message.type === "ready")
     );
     await postSnapshot(page, 1, initial, 1);
+    assert.deepEqual(await lastMessage(page, "snapshotResources"), {
+      type: "snapshotResources",
+      observedSnapshotId: initial.snapshot_id,
+      retainedSnapshotIds: [initial.snapshot_id],
+    });
     const target = page.locator(
       '.page-shell[data-page-id="11"] .object-hit[data-object-id="101"]',
     );
@@ -1894,6 +1899,11 @@ async function exerciseDeferredSnapshotDuringDrag(browser, baseUrl, initial) {
       "latest-deferred-patch",
     );
     await postSnapshot(page, 3, latestPatch, 1);
+    assert.deepEqual(await lastMessage(page, "snapshotResources"), {
+      type: "snapshotResources",
+      observedSnapshotId: latestPatch.snapshot_id,
+      retainedSnapshotIds: [initial.snapshot_id, latestPatch.snapshot_id],
+    });
     await page.waitForTimeout(50);
     assert.equal(
       await page.locator(
@@ -1933,6 +1943,11 @@ async function exerciseDeferredSnapshotDuringDrag(browser, baseUrl, initial) {
     );
     assert.equal(await messageCount(page, "refreshFull"), refreshCount,
       "a chained deferred patch requested an unnecessary full snapshot");
+    assert.deepEqual(await lastMessage(page, "snapshotResources"), {
+      type: "snapshotResources",
+      observedSnapshotId: latestPatch.snapshot_id,
+      retainedSnapshotIds: [latestPatch.snapshot_id],
+    });
     const retainedAfterDrag = await preview.boundingBox();
     assert(
       Math.abs(retainedAfterDrag.x - dragged.x) < 1 &&
@@ -1980,6 +1995,11 @@ async function exerciseDeferredSnapshotDuringDrag(browser, baseUrl, initial) {
       "deferred-after-full-display",
     );
     await postSnapshot(page, 6, afterFull, 1);
+    assert.deepEqual(await lastMessage(page, "snapshotResources"), {
+      type: "snapshotResources",
+      observedSnapshotId: afterFull.snapshot_id,
+      retainedSnapshotIds: [latestPatch.snapshot_id, afterFull.snapshot_id],
+    });
     await page.waitForTimeout(50);
     assert.equal(await page.locator("[data-deferred-snapshot]").count(), 0,
       "a full display was rendered before panning ended");
@@ -1995,6 +2015,11 @@ async function exerciseDeferredSnapshotDuringDrag(browser, baseUrl, initial) {
     });
     assert.equal(await messageCount(page, "refreshFull"), refreshCount,
       "a patch after a deferred full display lost its new display base");
+    assert.deepEqual(await lastMessage(page, "snapshotResources"), {
+      type: "snapshotResources",
+      observedSnapshotId: afterFull.snapshot_id,
+      retainedSnapshotIds: [afterFull.snapshot_id],
+    });
   } finally {
     await page.close();
   }

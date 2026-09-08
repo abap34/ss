@@ -9,6 +9,7 @@ const json = utils.json;
 const assets = @import("assets.zig");
 const binding_names = @import("names.zig");
 const editor_edit = @import("edit.zig");
+const resource_clients = @import("resource_clients.zig");
 
 pub const Cache = struct {
     allocator: std.mem.Allocator,
@@ -16,6 +17,7 @@ pub const Cache = struct {
     assets: assets.Cache,
     displays: std.AutoHashMap(render.Fingerprint, []u8),
     snapshot_displays: std.StringHashMap(render.Fingerprint),
+    clients: resource_clients.Clients,
     display_bytes: usize = 0,
 
     const max_displays = 4;
@@ -29,10 +31,12 @@ pub const Cache = struct {
             .assets = assets.Cache.init(allocator, io),
             .displays = std.AutoHashMap(render.Fingerprint, []u8).init(allocator),
             .snapshot_displays = std.StringHashMap(render.Fingerprint).init(allocator),
+            .clients = resource_clients.Clients.init(allocator),
         };
     }
 
     pub fn deinit(self: *Cache) void {
+        self.clients.deinit();
         self.clearSnapshotDisplays();
         self.snapshot_displays.deinit();
         self.clearDisplays();
@@ -218,8 +222,15 @@ pub const Model = struct {
 pub const Output = struct {
     json: []u8,
     model: Model,
+    resources: ?*utils.render_cache.PublishedLease = null,
+
+    pub fn releaseResources(self: *Output) void {
+        if (self.resources) |lease| lease.deinit();
+        self.resources = null;
+    }
 
     pub fn deinit(self: *Output) void {
+        self.releaseResources();
         self.model.allocator.free(self.json);
         self.model.deinit();
         self.json = &.{};
@@ -273,6 +284,7 @@ pub fn build(
     };
     var output = try buildFromDisplayJson(allocator, state, generation, display_json, null, display_key, layout_json);
     errdefer output.deinit();
+    output.resources = try published_assets.retainResources(cache.allocator, io);
     try cache.rememberDisplay(output.model.snapshot_id, display_key);
     return output;
 }
@@ -281,13 +293,16 @@ pub fn buildTranslationPatch(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     generation: u64,
-    base_snapshot_id: []const u8,
+    previous: *const Output,
     translations: []const Translation,
     layout_json: []const u8,
 ) !Output {
+    const base_snapshot_id = previous.model.snapshot_id;
     const display_json = try translationPatchJson(allocator, base_snapshot_id, translations);
     defer allocator.free(display_json);
-    return try buildFromDisplayJson(allocator, state, generation, display_json, base_snapshot_id, null, layout_json);
+    var output = try buildFromDisplayJson(allocator, state, generation, display_json, base_snapshot_id, null, layout_json);
+    output.resources = if (previous.resources) |lease| lease.retain() else null;
+    return output;
 }
 
 pub fn rebaseUnchangedDisplayJson(

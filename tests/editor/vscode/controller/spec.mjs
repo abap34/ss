@@ -77,6 +77,7 @@ await testShapeBoundsEditForwardsPageBounds();
 await testComponentWidthEditReachesTheWebview();
 await testComponentDeletionReachesTheWebview();
 await testIconCatalogAndInsertionReachTheWebview();
+await testResourceAcknowledgementsReachTheServer();
 setProjectSettingsProvider(undefined);
 
 async function testOpenResolvesConfiguredEntryWithoutSsDocument() {
@@ -784,6 +785,7 @@ automatic = false
     const document = { uri, languageId: "ss-slide", version: 1 };
     mock.workspace.textDocuments.push(document);
     const requests = [];
+    const notifications = [];
     const messages = [];
     const session = {
       document,
@@ -878,7 +880,7 @@ automatic = false
         if (method === "ss/editorSnapshot") return session.snapshotResponse();
         throw new Error(`unexpected request ${method}`);
       },
-      sendNotification() {},
+      sendNotification(method, params) { notifications.push({ method, params }); },
     };
     const controller = new EditorController(
       { extensionUri: mock.Uri.file(fixture) },
@@ -897,6 +899,7 @@ automatic = false
       session,
       requests,
       messages,
+      notifications,
       change() {
         document.version += 1;
         mock.change(document);
@@ -906,6 +909,29 @@ automatic = false
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }
+}
+
+async function testResourceAcknowledgementsReachTheServer() {
+  await withManualSession(async ({ controller, session, requests, notifications }) => {
+    const message = {
+      type: "snapshotResources",
+      observedSnapshotId: "deferred",
+      retainedSnapshotIds: ["initial", "deferred"],
+    };
+    await controller.handleMessage(session, message);
+    assert.deepEqual(notifications, [{
+      method: "ss/editorResources",
+      params: {
+        textDocument: { uri: session.document.uri.toString() },
+        observedSnapshotId: "deferred",
+        retainedSnapshotIds: ["initial", "deferred"],
+      },
+    }]);
+    assert.equal(requests.length, 0);
+    session.disposed = true;
+    await controller.handleMessage(session, message);
+    assert.equal(notifications.length, 1);
+  });
 }
 
 function translationMessage(requestId) {

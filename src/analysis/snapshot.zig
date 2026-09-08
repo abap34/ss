@@ -127,6 +127,7 @@ pub const ProjectFacts = struct {
     lsp: project.LspConfig = .{},
     wysiwyg: project.WysiwygConfig = .{},
     page_guide: project.PageGuideConfig = .{},
+    cache: utils.render_cache.Config = .{},
 
     pub fn deinit(self: *ProjectFacts, allocator: std.mem.Allocator) void {
         allocator.free(self.entry_path);
@@ -143,6 +144,7 @@ pub const ProjectOptions = struct {
     lsp: project.LspConfig = .{},
     wysiwyg: project.WysiwygConfig = .{},
     page_guide: project.PageGuideConfig = .{},
+    cache: utils.render_cache.Config = .{},
 };
 
 pub const ModuleFact = struct {
@@ -852,6 +854,7 @@ fn initProjectFacts(
         .lsp = options.lsp,
         .wysiwyg = options.wysiwyg,
         .page_guide = options.page_guide,
+        .cache = options.cache,
     };
     errdefer facts.deinit(allocator);
     facts.entry_path = try allocator.dupe(u8, entry_path);

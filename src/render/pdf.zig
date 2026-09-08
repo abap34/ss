@@ -8,10 +8,10 @@ const Allocator = std.mem.Allocator;
 var temporary_counter: usize = 0;
 
 pub const cache_version = "ss-pdf-render-ir-v2";
-const output_manifest_version = "ss-pdf-output-manifest-v3";
+const output_manifest_version = utils.render_cache.PdfReference.version;
 const document_digest_version = "ss-pdf-document-pages-v3";
 const cache_seal_version = "ss-pdf-cache-seal-v1";
-const output_manifest_read_limit = 2 * 1024 * 1024;
+const output_manifest_read_limit = utils.render_cache.PdfReference.read_limit;
 const max_replacement_pages = 8;
 const cache_checksum_size = std.crypto.hash.sha2.Sha256.digest_length;
 
@@ -1022,12 +1022,7 @@ fn readOutputManifest(allocator: Allocator, io: std.Io, path: []const u8) !?Outp
     };
     defer allocator.free(text);
     var lines = std.mem.splitScalar(u8, text, '\n');
-    if (!std.mem.eql(u8, lines.next() orelse return error.InvalidOutputManifest, output_manifest_version)) {
-        return error.InvalidOutputManifest;
-    }
-    const document_line = lines.next() orelse return error.InvalidOutputManifest;
-    if (!std.mem.startsWith(u8, document_line, "document\t")) return error.InvalidOutputManifest;
-    const document_digest = try parseDigest(document_line["document\t".len..]);
+    const document_digest = try utils.render_cache.PdfReference.document(&lines);
     const assembly_line = lines.next() orelse return error.InvalidOutputManifest;
     if (!std.mem.startsWith(u8, assembly_line, "assembly\t")) return error.InvalidOutputManifest;
     const assembly = try parseAssembly(assembly_line["assembly\t".len..]);

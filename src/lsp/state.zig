@@ -3,6 +3,7 @@ const analysis_snapshot = @import("../analysis/snapshot.zig");
 const module_loader = @import("../modules/loader.zig");
 const project = @import("project");
 const utils = @import("utils");
+const editor_snapshot = @import("../editor/snapshot.zig");
 
 const protocol = @import("protocol.zig");
 
@@ -313,6 +314,8 @@ pub const CachedResponse = struct {
     entry_path: []u8,
     generation: u64,
     json: []u8,
+    snapshot_id: ?[]u8 = null,
+    resources: ?*utils.render_cache.PublishedLease = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -330,6 +333,8 @@ pub const CachedResponse = struct {
     }
 
     pub fn deinit(self: *CachedResponse, allocator: std.mem.Allocator) void {
+        if (self.snapshot_id) |value| allocator.free(value);
+        if (self.resources) |lease| lease.deinit();
         allocator.free(self.entry_path);
         allocator.free(self.json);
         self.* = .{ .entry_path = &.{}, .generation = 0, .json = &.{} };
@@ -402,6 +407,30 @@ pub const ResponseStore = struct {
             if (response.matchesEntry(entry_path)) return try response.cloneJson(allocator);
         }
         return null;
+    }
+
+    pub fn getForEntry(self: *ResponseStore, entry_path: []const u8) ?*CachedResponse {
+        for (self.items.items) |*response| if (response.matchesEntry(entry_path)) return response;
+        return null;
+    }
+
+    pub fn storeEditor(self: *ResponseStore, allocator: std.mem.Allocator, snapshot: *const AnalysisSnapshot, editor: *const editor_snapshot.Output) !void {
+        if (editor.json.len > max_bytes) return;
+        const snapshot_id = try allocator.dupe(u8, editor.model.snapshot_id);
+        errdefer allocator.free(snapshot_id);
+        try self.store(allocator, snapshot, editor.json);
+        const response = self.getForEntry(snapshot.project.entry_path).?;
+        if (response.snapshot_id) |value| allocator.free(value);
+        response.snapshot_id = snapshot_id;
+        const retained = if (editor.resources) |lease| lease.retain() else null;
+        if (response.resources) |lease| lease.deinit();
+        response.resources = retained;
+    }
+
+    pub fn removeAt(self: *ResponseStore, allocator: std.mem.Allocator, index: usize) void {
+        var removed = self.items.swapRemove(index);
+        self.total_bytes -= removed.json.len;
+        removed.deinit(allocator);
     }
 
     fn clear(self: *ResponseStore, allocator: std.mem.Allocator) void {

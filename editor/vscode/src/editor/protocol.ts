@@ -456,6 +456,11 @@ type ComponentWidthEditMessage = {
 export type WebviewMessage =
   | { type: "ready" }
   | { type: "refreshFull" }
+  | {
+    type: "snapshotResources";
+    observedSnapshotId: string;
+    retainedSnapshotIds: string[];
+  }
   | { type: "revealSource"; path: string; start: number; end: number }
   | {
     type: "translate";

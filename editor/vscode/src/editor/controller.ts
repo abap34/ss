@@ -34,7 +34,7 @@ import { ViewResources } from "./view";
 type ClientProvider = () => LanguageClient | undefined;
 type SourceEditMessage = Exclude<
   WebviewMessage,
-  { type: "ready" | "refreshFull" | "revealSource" | "queryIcons" }
+  { type: "ready" | "refreshFull" | "snapshotResources" | "revealSource" | "queryIcons" }
 >;
 
 const immediateRefreshDelayMs = 0;
@@ -261,6 +261,16 @@ export class EditorController implements vscode.Disposable {
     if (message.type === "refreshFull") {
       session.snapshotId = undefined;
       this.schedule(session, immediateRefreshDelayMs);
+      return;
+    }
+    if (message.type === "snapshotResources") {
+      if (!session.disposed) {
+        await this.clientProvider()?.sendNotification("ss/editorResources", {
+          textDocument: { uri: session.document.uri.toString() },
+          observedSnapshotId: message.observedSnapshotId,
+          retainedSnapshotIds: message.retainedSnapshotIds,
+        });
+      }
       return;
     }
     if (message.type === "revealSource") {
