@@ -140,7 +140,9 @@ static gchar *ss_font_config_path(FcConfig *config, const char *path) {
     return g_build_filename((const char *)sysroot, path, NULL);
 }
 
-static int ss_checksum_font_set(GChecksum *checksum, FcConfig *config, FcFontSet *font_set, const char *name) {
+#include "font_inputs.h"
+
+static int ss_checksum_font_set(GChecksum *checksum, FcConfig *config, FcFontSet *font_set, const char *name, SsFontInputs *inputs, enum SsFontInputList list) {
     ss_checksum_string(checksum, name);
     const int count = font_set != NULL ? font_set->nfont : 0;
     ss_checksum_bytes(checksum, &count, sizeof(count));
@@ -151,6 +153,7 @@ static int ss_checksum_font_set(GChecksum *checksum, FcConfig *config, FcFontSet
         ss_checksum_string(checksum, (const char *)path);
         int face_index = 0;
         if (FcPatternGetInteger(pattern, FC_INDEX, 0, &face_index) != FcResultMatch) face_index = 0;
+        ss_font_inputs_name(inputs, list, (const char *)path, face_index);
         ss_checksum_bytes(checksum, &face_index, sizeof(face_index));
         if (path != NULL) {
             gchar *resolved_path = ss_font_config_path(config, (const char *)path);
@@ -161,13 +164,14 @@ static int ss_checksum_font_set(GChecksum *checksum, FcConfig *config, FcFontSet
                 return 1;
             }
             ss_checksum_stat(checksum, &metadata);
+            ss_font_inputs_file(inputs, resolved_path, &metadata);
             g_free(resolved_path);
         }
     }
     return 0;
 }
 
-static int ss_checksum_path_list(GChecksum *checksum, FcConfig *config, FcStrList *paths, const char *name) {
+static int ss_checksum_path_list(GChecksum *checksum, FcConfig *config, FcStrList *paths, const char *name, SsFontInputs *inputs, enum SsFontInputList list) {
     ss_checksum_string(checksum, name);
     if (paths == NULL) {
         const int count = 0;
@@ -178,6 +182,7 @@ static int ss_checksum_path_list(GChecksum *checksum, FcConfig *config, FcStrLis
     FcChar8 *path = NULL;
     while ((path = FcStrListNext(paths)) != NULL) {
         count++;
+        ss_font_inputs_name(inputs, list, (const char *)path, 0);
         ss_checksum_string(checksum, (const char *)path);
         gchar *resolved_path = ss_font_config_path(config, (const char *)path);
         if (resolved_path == NULL) {
@@ -189,11 +194,13 @@ static int ss_checksum_path_list(GChecksum *checksum, FcConfig *config, FcStrLis
             const unsigned char present = 0;
             ss_checksum_bytes(checksum, &present, sizeof(present));
             const int missing = errno == ENOENT || errno == ENOTDIR;
+            if (missing) ss_font_inputs_file(inputs, resolved_path, NULL);
             g_free(resolved_path);
             if (missing) continue;
             FcStrListDone(paths);
             return 1;
         }
+        ss_font_inputs_file(inputs, resolved_path, &metadata);
         g_free(resolved_path);
         const unsigned char present = 1;
         ss_checksum_bytes(checksum, &present, sizeof(present));
@@ -299,10 +306,29 @@ static int ss_compute_font_environment_for_config_locked(
     }
 
     ss_checksum_string(checksum, (const char *)FcConfigGetSysRoot(config));
+    GChecksum *context_checksum = g_checksum_copy(checksum);
+    if (context_checksum == NULL) {
+        FcConfigDestroy(config);
+        g_checksum_free(checksum);
+        return 1;
+    }
+    unsigned char context[SS_FONT_ENVIRONMENT_ID_SIZE];
+    gsize context_length = sizeof(context);
+    g_checksum_get_digest(context_checksum, context, &context_length);
+    g_checksum_free(context_checksum);
+    if (ss_font_inputs_match(config, context)) {
+        memcpy(output, ss_cached_font_inputs.digest, sizeof(ss_cached_font_inputs.digest));
+        FcConfigDestroy(config);
+        g_checksum_free(checksum);
+        return 0;
+    }
+    SsFontInputs inputs;
+    ss_font_inputs_init(&inputs, config, context);
     FcStrList *files = FcConfigGetConfigFiles(config);
     if (files != NULL) {
         FcChar8 *path = NULL;
         while ((path = FcStrListNext(files)) != NULL) {
+            ss_font_inputs_name(&inputs, SS_FONT_CONFIG_FILES, (const char *)path, 0);
             ss_checksum_string(checksum, (const char *)path);
             gchar *resolved_path = ss_font_config_path(config, (const char *)path);
             GStatBuf before;
@@ -312,6 +338,7 @@ static int ss_compute_font_environment_for_config_locked(
                 break;
             }
             ss_checksum_stat(checksum, &before);
+            ss_font_inputs_file(&inputs, resolved_path, &before);
             if (S_ISREG(before.st_mode)) {
                 gchar *contents = NULL;
                 gsize length = 0;
@@ -337,11 +364,12 @@ static int ss_compute_font_environment_for_config_locked(
         }
         FcStrListDone(files);
     }
-    if (!failed && ss_checksum_path_list(checksum, config, FcConfigGetFontDirs(config), "font-directories") != 0) failed = 1;
-    if (!failed && ss_checksum_font_set(checksum, config, FcConfigGetFonts(config, FcSetSystem), "system-fonts") != 0) failed = 1;
-    if (!failed && ss_checksum_font_set(checksum, config, FcConfigGetFonts(config, FcSetApplication), "application-fonts") != 0) failed = 1;
+    if (!failed && ss_checksum_path_list(checksum, config, FcConfigGetFontDirs(config), "font-directories", &inputs, SS_FONT_DIRECTORIES) != 0) failed = 1;
+    if (!failed && ss_checksum_font_set(checksum, config, FcConfigGetFonts(config, FcSetSystem), "system-fonts", &inputs, SS_FONT_SYSTEM_FACES) != 0) failed = 1;
+    if (!failed && ss_checksum_font_set(checksum, config, FcConfigGetFonts(config, FcSetApplication), "application-fonts", &inputs, SS_FONT_APPLICATION_FACES) != 0) failed = 1;
     if (!failed && FcConfigUptoDate(config) != FcTrue) failed = 1;
     if (failed) {
+        ss_font_inputs_clear(&inputs);
         FcConfigDestroy(config);
         g_checksum_free(checksum);
         return 1;
@@ -351,7 +379,17 @@ static int ss_compute_font_environment_for_config_locked(
     g_checksum_get_digest(checksum, output, &digest_length);
     FcConfigDestroy(config);
     g_checksum_free(checksum);
-    if (digest_length != SS_FONT_ENVIRONMENT_ID_SIZE) return 1;
+    if (digest_length != SS_FONT_ENVIRONMENT_ID_SIZE) {
+        ss_font_inputs_clear(&inputs);
+        return 1;
+    }
+    if (inputs.cacheable) {
+        memcpy(inputs.digest, output, sizeof(inputs.digest));
+        ss_font_inputs_clear(&ss_cached_font_inputs);
+        ss_cached_font_inputs = inputs;
+    } else {
+        ss_font_inputs_clear(&inputs);
+    }
     return 0;
 }
 

@@ -936,6 +936,15 @@ fn addRenderTests(
     const run_render_compile_spec_tests = b.addRunArtifact(render_compile_spec_tests);
     test_step.dependOn(&run_render_compile_spec_tests.step);
     addFocusedTestStep(b, "test-render-compile", "Run focused render compiler tests", &run_render_compile_spec_tests.step);
+    const font_environment_spec_mod = createModule(ctx, "tests/render/font_environment/spec_tests.zig", &.{
+        import("pdf_ffi", modules.pdf_ffi),
+        import("render_text", modules.render_text),
+    }, true);
+    addNativePdfHeadersAndLibraries(b, font_environment_spec_mod);
+    const font_environment_spec_tests = addTestArtifact(ctx, font_environment_spec_mod);
+    const run_font_environment_spec_tests = b.addRunArtifact(font_environment_spec_tests);
+    test_step.dependOn(&run_font_environment_spec_tests.step);
+    addFocusedTestStep(b, "test-font-environment", "Run isolated font environment invalidation tests", &run_font_environment_spec_tests.step);
     const highlight_cache_spec_mod = createModule(ctx, "tests/render/highlight/cache/spec_tests.zig", &.{
         import("render_compile", render_compile_mod),
         import("utils", modules.utils),
