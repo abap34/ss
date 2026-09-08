@@ -629,7 +629,7 @@ fn hashOptionalString(hasher: *std.hash.Wyhash, value: ?[]const u8) void {
     if (value) |text| hashString(hasher, text);
 }
 
-fn hashString(hasher: *std.hash.Wyhash, value: []const u8) void {
+pub fn hashString(hasher: *std.hash.Wyhash, value: []const u8) void {
     hashUsize(hasher, value.len);
     hasher.update(value);
 }
@@ -639,7 +639,7 @@ fn hashBool(hasher: *std.hash.Wyhash, value: bool) void {
     hasher.update(&.{byte});
 }
 
-fn hashUsize(hasher: *std.hash.Wyhash, value: usize) void {
+pub fn hashUsize(hasher: *std.hash.Wyhash, value: usize) void {
     hashU64(hasher, @intCast(value));
 }
 

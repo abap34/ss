@@ -609,6 +609,15 @@ fn sameFile(left: std.Io.File.Stat, right: std.Io.File.Stat) bool {
         left.ctime.nanoseconds == right.ctime.nanoseconds;
 }
 
+/// Read owned resource data without adding it to an IR document.
+pub fn readResource(allocator: std.mem.Allocator, io: std.Io, kind: render.ResourceKind, path: []const u8, cache: ?*SourceCache) !render.Resource {
+    var identity: FileIdentity = undefined;
+    return if (cache) |source_cache|
+        source_cache.resource(allocator, kind, path, &identity)
+    else
+        loadStableResource(allocator, io, kind, path, &identity);
+}
+
 fn loadStableResource(
     allocator: std.mem.Allocator,
     io: std.Io,

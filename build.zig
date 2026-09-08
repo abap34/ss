@@ -995,6 +995,22 @@ fn addRenderTests(
     const run_render_compile_spec_tests = b.addRunArtifact(render_compile_spec_tests);
     test_step.dependOn(&run_render_compile_spec_tests.step);
     addFocusedTestStep(b, "test-render-compile", "Run focused render compiler tests", &run_render_compile_spec_tests.step);
+    const artifacts_mod = createModule(ctx, "src/render/compile/artifacts.zig", &.{
+        import("core", modules.core),
+        import("pdf_ffi", modules.pdf_ffi),
+        import("render", modules.render),
+        import("render_resources", modules.render_resources),
+        import("utils", modules.utils),
+    }, null);
+    artifacts_mod.addOptions("build_options", build_options);
+    const artifacts_spec_mod = createModule(ctx, "tests/render/artifacts/spec_tests.zig", &.{
+        import("artifacts", artifacts_mod),
+        import("render_resources", modules.render_resources),
+    }, null);
+    const artifacts_tests = addQpdfTestArtifact(ctx, artifacts_spec_mod);
+    const run_artifacts_tests = b.addRunArtifact(artifacts_tests);
+    test_step.dependOn(&run_artifacts_tests.step);
+    addFocusedTestStep(b, "test-render-artifacts", "Run focused artifact production tests", &run_artifacts_tests.step);
     const paragraph_spec_mod = createModule(ctx, "tests/render/paragraph/spec_tests.zig", &.{
         import("pdf_ffi", modules.pdf_ffi),
         import("render_text", modules.render_text),
