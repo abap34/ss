@@ -84,6 +84,7 @@ test "module loader spec: diagnostics free partial allocations" {
             "ParseFailed",
             "ParseFailed: invalid source",
             null,
+            null,
         ) catch |err| {
             try testing.expectEqual(error.OutOfMemory, err);
             continue;
@@ -110,6 +111,7 @@ test "module loader spec: import failure spans preserve allocation failures" {
         .@"error",
         "ParseFailed",
         "ParseFailed: invalid source",
+        null,
         null,
     );
 

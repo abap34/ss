@@ -539,7 +539,7 @@ pub const AnalysisSnapshot = struct {
                 result.editor,
                 result.conflicts_json,
             );
-            try self.diagnostics.addDocumentStateFrom(&inputs.state, inputs.diagnostic_count);
+            try diagnostics.addDocumentStateFrom(&self.diagnostics, &inputs.state, inputs.diagnostic_count);
             if (retain_state) {
                 self.retained_layout_state = .{ .state = inputs.state, .reuse_inputs = reuse_inputs };
                 reuse_inputs = null;
@@ -558,7 +558,7 @@ pub const AnalysisSnapshot = struct {
                 }
             },
             else => {
-                try self.diagnostics.addDocumentStateFrom(&inputs.state, inputs.diagnostic_count);
+                try diagnostics.addDocumentStateFrom(&self.diagnostics, &inputs.state, inputs.diagnostic_count);
                 if (!self.diagnostics.hasErrors()) {
                     try addBuildFailureDiagnostic(&self.diagnostics, self.project.entry_path, inputs.state.projectSource(), err, null);
                 }
@@ -664,7 +664,7 @@ fn buildWithSyntax(
         defer allocator.free(entry_source);
         if (err == error.Canceled) return err;
         if (err != error.DiagnosticsFailed and err != error.UnknownImport and !module_loader.isImportReadFailure(err)) return err;
-        try diagnostic_bag.addSyntaxHoles(entry_path, entry_source, parse_holes);
+        try diagnostics.addSyntaxHoles(&diagnostic_bag, entry_path, entry_source, parse_holes);
         try addLoadDiagnostics(&diagnostic_bag, &load_diagnostics);
         if (err == error.DiagnosticsFailed) {
             if (load_diagnostics.items.items.len != 0) {
@@ -741,13 +741,13 @@ fn buildWithSyntax(
     defer if (execution_graph) |*graph| graph.deinit();
     try options.checkCanceled();
     if (analysis_failed) {
-        try diagnostic_bag.addDocumentStateFrom(&state, 0);
+        try diagnostics.addDocumentStateFrom(&diagnostic_bag, &state, 0);
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     }
     const declaration_index = state.declaration_index;
     try hole_facts.populateExpectedTypes(allocator, &state, declaration_index, &parse_holes);
     try options.checkCanceled();
-    try diagnostic_bag.addDocumentStateFrom(&state, 0);
+    try diagnostics.addDocumentStateFrom(&diagnostic_bag, &state, 0);
     var reuse_inputs: ?ReuseInputs = null;
     defer if (reuse_inputs) |*value| value.deinit(allocator);
     const analyzed_diagnostic_count = state.diagnostics.items.len;
@@ -765,7 +765,7 @@ fn buildWithSyntax(
                         result.editor,
                         result.conflicts_json,
                     );
-                    try diagnostic_bag.addDocumentStateFrom(&state, analyzed_diagnostic_count);
+                    try diagnostics.addDocumentStateFrom(&diagnostic_bag, &state, analyzed_diagnostic_count);
                 } else |err| switch (err) {
                     error.Canceled => return error.Canceled,
                     error.ConstraintConflict,
@@ -779,7 +779,7 @@ fn buildWithSyntax(
                         }
                     },
                     else => {
-                        try diagnostic_bag.addDocumentStateFrom(&state, analyzed_diagnostic_count);
+                        try diagnostics.addDocumentStateFrom(&diagnostic_bag, &state, analyzed_diagnostic_count);
                         if (!diagnostic_bag.hasErrors()) {
                             try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), err, null);
                         }
@@ -860,9 +860,7 @@ fn initProjectFacts(
 }
 
 fn addLoadDiagnostics(bag: *diagnostics.DiagnosticBag, load_diagnostics: *const module_loader.LoadDiagnostics) !void {
-    for (load_diagnostics.items.items) |item| {
-        try bag.add(item.path, item.source, item.severity, item.code, item.message, item.span, null);
-    }
+    try bag.appendFrom(load_diagnostics);
 }
 
 fn addBuildDiagnostic(

@@ -145,62 +145,8 @@ pub const ModuleGraph = struct {
     }
 };
 
-pub const LoadDiagnostic = struct {
-    path: []u8,
-    source: []u8,
-    severity: core.DiagnosticSeverity,
-    code: []u8,
-    message: []u8,
-    span: ?source.ByteSpan,
-
-    pub fn deinit(self: *LoadDiagnostic, allocator: std.mem.Allocator) void {
-        allocator.free(self.path);
-        allocator.free(self.source);
-        allocator.free(self.code);
-        allocator.free(self.message);
-    }
-};
-
-pub const LoadDiagnostics = struct {
-    allocator: std.mem.Allocator,
-    items: std.ArrayList(LoadDiagnostic),
-
-    pub fn init(allocator: std.mem.Allocator) LoadDiagnostics {
-        return .{ .allocator = allocator, .items = .empty };
-    }
-
-    pub fn deinit(self: *LoadDiagnostics) void {
-        for (self.items.items) |*item| item.deinit(self.allocator);
-        self.items.deinit(self.allocator);
-    }
-
-    pub fn add(
-        self: *LoadDiagnostics,
-        path: []const u8,
-        text: []const u8,
-        severity: core.DiagnosticSeverity,
-        code: []const u8,
-        message: []const u8,
-        span: ?source.ByteSpan,
-    ) !void {
-        const owned_path = try self.allocator.dupe(u8, path);
-        errdefer self.allocator.free(owned_path);
-        const owned_text = try self.allocator.dupe(u8, text);
-        errdefer self.allocator.free(owned_text);
-        const owned_code = try self.allocator.dupe(u8, code);
-        errdefer self.allocator.free(owned_code);
-        const owned_message = try self.allocator.dupe(u8, message);
-        errdefer self.allocator.free(owned_message);
-        try self.items.append(self.allocator, .{
-            .path = owned_path,
-            .source = owned_text,
-            .severity = severity,
-            .code = owned_code,
-            .message = owned_message,
-            .span = span,
-        });
-    }
-};
+pub const LoadDiagnostic = @import("diagnostic").Diagnostic;
+pub const LoadDiagnostics = @import("diagnostic").Bag;
 
 pub const LoadOptions = struct {
     overlay: ?*const SourceOverlay = null,
@@ -484,7 +430,7 @@ const Builder = struct {
         span: ?source.ByteSpan,
     ) !void {
         if (self.diagnostics) |diagnostics| {
-            try diagnostics.add(path, text, severity, code, message, span);
+            try diagnostics.add(path, text, severity, code, message, span, null);
         }
     }
 
@@ -501,6 +447,9 @@ const Builder = struct {
     }
 
     fn addParseHoleDiagnostics(self: *Builder, path: []const u8, text: []const u8, hole_diagnostics: []const syntax_hole.Diagnostic) !void {
+        const diagnostics = self.diagnostics orelse return;
+        if (hole_diagnostics.len == 0) return;
+        const source_id = try diagnostics.registerSource(path, text);
         for (hole_diagnostics) |diagnostic| {
             const expected = diagnostic.expected orelse "syntax";
             const found = diagnostic.found orelse "unknown";
@@ -510,10 +459,10 @@ const Builder = struct {
                 .{ expected, found },
             );
             defer self.allocator.free(message);
-            try self.addDiagnostic(path, text, .@"error", @errorName(diagnostic.err), message, .{
+            try diagnostics.addAt(source_id, .@"error", @errorName(diagnostic.err), message, .{
                 .start = diagnostic.span.start,
                 .end = diagnostic.span.end,
-            });
+            }, null);
         }
     }
 

@@ -83,14 +83,14 @@ pub const DiagnosticSet = struct {
     }
 
     pub fn addAnalysisBag(self: *DiagnosticSet, bag: *const analysis_diagnostics.DiagnosticBag) !void {
-        var indexes = std.StringHashMap(source.LineIndex).init(self.allocator);
+        var indexes = std.AutoHashMap(analysis_diagnostics.SourceId, source.LineIndex).init(self.allocator);
         defer {
             var values = indexes.valueIterator();
             while (values.next()) |index| index.deinit(self.allocator);
             indexes.deinit();
         }
         for (bag.items.items) |item| {
-            const entry = try indexes.getOrPut(item.path);
+            const entry = try indexes.getOrPut(item.source_id);
             if (!entry.found_existing) {
                 entry.value_ptr.* = .empty;
                 entry.value_ptr.* = try source.LineIndex.init(self.allocator, item.source);

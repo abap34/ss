@@ -23,6 +23,7 @@ const BuildContext = struct {
 const ProjectModules = struct {
     utils: *Module,
     model: *Module,
+    diagnostic: *Module,
     language_type: *Module,
     ast: *Module,
     stdlib_assets: *Module,
@@ -312,6 +313,11 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         import("model", model_mod),
         import("language_type", language_type_mod),
     }, null);
+    const diagnostic_mod = createModule(ctx, "src/diagnostics.zig", &.{
+        import("model", model_mod),
+        import("ast", ast_mod),
+        import("utils", utils_mod),
+    }, null);
     const stdlib_assets_mod = createModule(ctx, "stdlib/embed.zig", &.{}, null);
     const fontawesome_assets_mod = createModule(ctx, "third_party/fontawesome-free/embed.zig", &.{}, null);
     const pdfjs_assets_mod = createModule(ctx, "third_party/pdfjs/embed.zig", &.{}, null);
@@ -381,6 +387,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     return .{
         .utils = utils_mod,
         .model = model_mod,
+        .diagnostic = diagnostic_mod,
         .language_type = language_type_mod,
         .ast = ast_mod,
         .stdlib_assets = stdlib_assets_mod,
@@ -1087,6 +1094,7 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
         import("project", modules.project),
         import("ast", modules.ast),
         import("model", modules.model),
+        import("diagnostic", modules.diagnostic),
         import("language_type", modules.language_type),
         import("stdlib_assets", modules.stdlib_assets),
         import("fontawesome_assets", modules.fontawesome_assets),

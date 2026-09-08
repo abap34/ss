@@ -82,10 +82,7 @@ fn canRebaseGeneratedSource(
         break;
     }
     if (!found_snapshot_module) return false;
-    for (snapshot.diagnostics.items.items) |diagnostic| {
-        if (!std.mem.eql(u8, diagnostic.path, path)) continue;
-        if (!std.mem.eql(u8, diagnostic.source, generated.base_source)) return false;
-    }
+    if (!snapshot.diagnostics.sourcesMatch(path, generated.base_source)) return false;
 
     return true;
 }
@@ -107,10 +104,7 @@ pub fn rebaseSnapshotSource(snapshot: *AnalysisSnapshot, path: []const u8, sourc
         @memcpy(module.source, source);
         break;
     }
-    for (snapshot.diagnostics.items.items) |*diagnostic| {
-        if (!std.mem.eql(u8, diagnostic.path, path)) continue;
-        @memcpy(diagnostic.source, source);
-    }
+    snapshot.diagnostics.rebaseSource(path, source);
 }
 
 fn constraintEql(left: core.Constraint, right: core.Constraint) bool {
