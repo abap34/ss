@@ -517,9 +517,13 @@ fn addTestStep(
         "Run focused document state tests",
         &run_document_state_spec_tests.step,
     );
-    addModuleTest(ctx, test_step, "tests/core/markdown/spec_tests.zig", &.{
+    const markdown_spec_mod = createModule(ctx, "tests/core/markdown/spec_tests.zig", &.{
         import("core", modules.core),
     }, true);
+    const markdown_spec_tests = addTestArtifact(ctx, markdown_spec_mod);
+    const run_markdown_spec_tests = b.addRunArtifact(markdown_spec_tests);
+    test_step.dependOn(&run_markdown_spec_tests.step);
+    addFocusedTestStep(b, "test-core-markdown", "Run focused Markdown parsing tests", &run_markdown_spec_tests.step);
     const value_text_spec_mod = createModule(ctx, "tests/core/value_text/spec_tests.zig", &.{
         import("core", modules.core),
         import("ast", modules.ast),

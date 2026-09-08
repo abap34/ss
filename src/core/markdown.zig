@@ -179,6 +179,7 @@ const ParserState = struct {
     image: ?ImageState = null,
     source: []const u8 = "",
     source_offset: usize = 0,
+    failure: ?anyerror = null,
 
     fn arenaAllocator(self: *ParserState) Allocator {
         return self.doc.allocator();
@@ -343,6 +344,7 @@ pub fn parseMarkdownContent(
 
     const result = c.md_parse(@ptrCast(content.ptr), @intCast(content.len), &parser, &state);
     if (state.link_url) |url| state.arenaAllocator().free(url);
+    if (state.failure) |err| return err;
     if (result != 0) return error.MarkdownParseFailed;
     return doc;
 }
@@ -449,6 +451,8 @@ fn parseInlineLineAt(allocator: Allocator, line_text: []const u8, source_offset:
 
     const result = c.md_parse(@ptrCast(line_text.ptr), @intCast(line_text.len), &parser, &state);
     if (state.link_url) |url| allocator.free(url);
+    if (state.image) |image| allocator.free(image.src);
+    if (state.failure) |err| return err;
     if (result != 0) return error.MarkdownParseFailed;
     return line;
 }
@@ -467,7 +471,13 @@ const InlineParserState = struct {
     image: ?ImageState = null,
     source: []const u8 = "",
     source_offset: usize = 0,
+    failure: ?anyerror = null,
 };
+
+fn callbackFailure(state: anytype, err: anyerror) c_int {
+    if (state.failure == null) state.failure = err;
+    return 1;
+}
 
 fn inlineBlockNoop(
     block_type: c.MD_BLOCKTYPE,
@@ -490,65 +500,65 @@ fn enterBlock(
         return 0;
     }
     switch (block_type) {
-        c.MD_BLOCK_P => state.startParagraph() catch return 1,
+        c.MD_BLOCK_P => state.startParagraph() catch |err| return callbackFailure(state, err),
         c.MD_BLOCK_H => {
             const heading_detail: *const c.MD_BLOCK_H_DETAIL = @ptrCast(@alignCast(detail orelse return 1));
-            state.startHeading(@intCast(heading_detail.level)) catch return 1;
+            state.startHeading(@intCast(heading_detail.level)) catch |err| return callbackFailure(state, err);
         },
         c.MD_BLOCK_CODE => {
-            state.endParagraph() catch return 1;
-            const block = state.newBlock(.code_block) catch return 1;
+            state.endParagraph() catch |err| return callbackFailure(state, err);
+            const block = state.newBlock(.code_block) catch |err| return callbackFailure(state, err);
             if (detail) |ptr| {
                 const code_detail: *const c.MD_BLOCK_CODE_DETAIL = @ptrCast(@alignCast(ptr));
                 if (code_detail.lang.size > 0) {
-                    block.language = duplicateAttribute(state.arenaAllocator(), code_detail.lang) catch return 1;
+                    block.language = duplicateAttribute(state.arenaAllocator(), code_detail.lang) catch |err| return callbackFailure(state, err);
                 } else if (code_detail.info.size > 0) {
-                    block.language = duplicateAttribute(state.arenaAllocator(), code_detail.info) catch return 1;
+                    block.language = duplicateAttribute(state.arenaAllocator(), code_detail.info) catch |err| return callbackFailure(state, err);
                 }
             }
-            state.appendBlock(block) catch return 1;
+            state.appendBlock(block) catch |err| return callbackFailure(state, err);
             state.current_paragraph = &block.paragraph.?;
             state.current_line = .{};
         },
         c.MD_BLOCK_QUOTE => {
-            state.endParagraph() catch return 1;
-            const block = state.newBlock(.block_quote) catch return 1;
-            state.appendBlock(block) catch return 1;
-            state.containers.append(state.temp_allocator, &block.quote.?.blocks) catch return 1;
+            state.endParagraph() catch |err| return callbackFailure(state, err);
+            const block = state.newBlock(.block_quote) catch |err| return callbackFailure(state, err);
+            state.appendBlock(block) catch |err| return callbackFailure(state, err);
+            state.containers.append(state.temp_allocator, &block.quote.?.blocks) catch |err| return callbackFailure(state, err);
         },
         c.MD_BLOCK_UL => {
-            state.endParagraph() catch return 1;
-            const block = state.newBlock(.bullet_list) catch return 1;
+            state.endParagraph() catch |err| return callbackFailure(state, err);
+            const block = state.newBlock(.bullet_list) catch |err| return callbackFailure(state, err);
             trySetTightProperty(block, detail);
-            state.appendBlock(block) catch return 1;
-            state.lists.append(state.temp_allocator, &block.list.?) catch return 1;
+            state.appendBlock(block) catch |err| return callbackFailure(state, err);
+            state.lists.append(state.temp_allocator, &block.list.?) catch |err| return callbackFailure(state, err);
         },
         c.MD_BLOCK_OL => {
-            state.endParagraph() catch return 1;
-            const block = state.newBlock(.ordered_list) catch return 1;
+            state.endParagraph() catch |err| return callbackFailure(state, err);
+            const block = state.newBlock(.ordered_list) catch |err| return callbackFailure(state, err);
             if (detail) |ptr| {
                 const list_detail: *const c.MD_BLOCK_OL_DETAIL = @ptrCast(@alignCast(ptr));
                 block.list.?.start = list_detail.start;
             }
-            state.appendBlock(block) catch return 1;
-            state.lists.append(state.temp_allocator, &block.list.?) catch return 1;
+            state.appendBlock(block) catch |err| return callbackFailure(state, err);
+            state.lists.append(state.temp_allocator, &block.list.?) catch |err| return callbackFailure(state, err);
         },
         c.MD_BLOCK_LI => {
-            state.endParagraph() catch return 1;
+            state.endParagraph() catch |err| return callbackFailure(state, err);
             if (state.lists.items.len == 0) return 1;
-            const item = state.newListItem() catch return 1;
+            const item = state.newListItem() catch |err| return callbackFailure(state, err);
             const list = state.lists.items[state.lists.items.len - 1];
-            list.items.append(state.arenaAllocator(), item) catch return 1;
-            state.containers.append(state.temp_allocator, &item.blocks) catch return 1;
+            list.items.append(state.arenaAllocator(), item) catch |err| return callbackFailure(state, err);
+            state.containers.append(state.temp_allocator, &item.blocks) catch |err| return callbackFailure(state, err);
         },
         c.MD_BLOCK_TABLE => {
-            state.endParagraph() catch return 1;
-            const block = state.newBlock(.table) catch return 1;
+            state.endParagraph() catch |err| return callbackFailure(state, err);
+            const block = state.newBlock(.table) catch |err| return callbackFailure(state, err);
             if (detail) |ptr| {
                 const table_detail: *const c.MD_BLOCK_TABLE_DETAIL = @ptrCast(@alignCast(ptr));
                 block.table.?.columns = @intCast(table_detail.col_count);
             }
-            state.appendBlock(block) catch return 1;
+            state.appendBlock(block) catch |err| return callbackFailure(state, err);
             state.current_table = &block.table.?;
             state.current_table_header = false;
         },
@@ -560,14 +570,14 @@ fn enterBlock(
         },
         c.MD_BLOCK_TR => {
             const table = state.current_table orelse return 1;
-            const row = state.newTableRow(state.current_table_header) catch return 1;
-            table.rows.append(state.arenaAllocator(), row) catch return 1;
+            const row = state.newTableRow(state.current_table_header) catch |err| return callbackFailure(state, err);
+            table.rows.append(state.arenaAllocator(), row) catch |err| return callbackFailure(state, err);
             state.current_row = row;
         },
         c.MD_BLOCK_TH, c.MD_BLOCK_TD => {
             const row = state.current_row orelse return 1;
-            const cell = state.newTableCell(tableCellAlign(detail)) catch return 1;
-            row.cells.append(state.arenaAllocator(), cell) catch return 1;
+            const cell = state.newTableCell(tableCellAlign(detail)) catch |err| return callbackFailure(state, err);
+            row.cells.append(state.arenaAllocator(), cell) catch |err| return callbackFailure(state, err);
             state.current_cell = cell;
             state.current_line = .{};
         },
@@ -587,21 +597,21 @@ fn leaveBlock(
         return 0;
     }
     switch (block_type) {
-        c.MD_BLOCK_P, c.MD_BLOCK_H, c.MD_BLOCK_CODE => state.endParagraph() catch return 1,
+        c.MD_BLOCK_P, c.MD_BLOCK_H, c.MD_BLOCK_CODE => state.endParagraph() catch |err| return callbackFailure(state, err),
         c.MD_BLOCK_QUOTE => {
-            state.endParagraph() catch return 1;
+            state.endParagraph() catch |err| return callbackFailure(state, err);
             if (state.containers.items.len > 1) _ = state.containers.pop();
         },
         c.MD_BLOCK_UL, c.MD_BLOCK_OL => {
             if (state.lists.items.len > 0) _ = state.lists.pop();
         },
         c.MD_BLOCK_LI => {
-            state.endParagraph() catch return 1;
+            state.endParagraph() catch |err| return callbackFailure(state, err);
             if (state.containers.items.len > 1) _ = state.containers.pop();
         },
-        c.MD_BLOCK_TH, c.MD_BLOCK_TD => state.endTableCell() catch return 1,
+        c.MD_BLOCK_TH, c.MD_BLOCK_TD => state.endTableCell() catch |err| return callbackFailure(state, err),
         c.MD_BLOCK_TR => {
-            state.endTableCell() catch return 1;
+            state.endTableCell() catch |err| return callbackFailure(state, err);
             state.current_row = null;
         },
         c.MD_BLOCK_THEAD, c.MD_BLOCK_TBODY => {
@@ -624,7 +634,7 @@ fn inlineEnterSpan(
     userdata: ?*anyopaque,
 ) callconv(.c) c_int {
     const state = getInlineState(userdata) orelse return 1;
-    handleEnterSpan(InlineParserState, state, span_type, detail) catch return 1;
+    handleEnterSpan(InlineParserState, state, span_type, detail) catch |err| return callbackFailure(state, err);
     return 0;
 }
 
@@ -634,7 +644,7 @@ fn enterSpan(
     userdata: ?*anyopaque,
 ) callconv(.c) c_int {
     const state = getState(userdata) orelse return 1;
-    handleEnterSpan(ParserState, state, span_type, detail) catch return 1;
+    handleEnterSpan(ParserState, state, span_type, detail) catch |err| return callbackFailure(state, err);
     return 0;
 }
 
@@ -645,7 +655,7 @@ fn inlineLeaveSpan(
 ) callconv(.c) c_int {
     _ = detail;
     const state = getInlineState(userdata) orelse return 1;
-    handleLeaveSpan(InlineParserState, state, span_type, state.runs) catch return 1;
+    handleLeaveSpan(InlineParserState, state, span_type, state.runs) catch |err| return callbackFailure(state, err);
     return 0;
 }
 
@@ -656,7 +666,7 @@ fn leaveSpan(
 ) callconv(.c) c_int {
     _ = detail;
     const state = getState(userdata) orelse return 1;
-    handleLeaveSpan(ParserState, state, span_type, &state.current_line.runs) catch return 1;
+    handleLeaveSpan(ParserState, state, span_type, &state.current_line.runs) catch |err| return callbackFailure(state, err);
     return 0;
 }
 
@@ -746,7 +756,7 @@ fn inlineTextCallback(
     userdata: ?*anyopaque,
 ) callconv(.c) c_int {
     const state = getInlineState(userdata) orelse return 1;
-    appendTextRun(InlineParserState, state, state.runs, text_type, text_ptr, size) catch return 1;
+    appendTextRun(InlineParserState, state, state.runs, text_type, text_ptr, size) catch |err| return callbackFailure(state, err);
     return 0;
 }
 
@@ -759,22 +769,22 @@ fn textCallback(
     const state = getState(userdata) orelse return 1;
     if (state.current_cell != null) {
         if (text_type == c.MD_TEXT_BR) {
-            state.flushCurrentTableLine(false) catch return 1;
+            state.flushCurrentTableLine(false) catch |err| return callbackFailure(state, err);
             return 0;
         }
-        appendTextRun(ParserState, state, &state.current_line.runs, text_type, text_ptr, size) catch return 1;
+        appendTextRun(ParserState, state, &state.current_line.runs, text_type, text_ptr, size) catch |err| return callbackFailure(state, err);
         return 0;
     }
     switch (text_type) {
         c.MD_TEXT_BR => {
-            state.ensureParagraph() catch return 1;
-            state.flushCurrentLine(false) catch return 1;
+            state.ensureParagraph() catch |err| return callbackFailure(state, err);
+            state.flushCurrentLine(false) catch |err| return callbackFailure(state, err);
             return 0;
         },
         else => {},
     }
-    state.ensureParagraph() catch return 1;
-    appendTextRun(ParserState, state, &state.current_line.runs, text_type, text_ptr, size) catch return 1;
+    state.ensureParagraph() catch |err| return callbackFailure(state, err);
+    appendTextRun(ParserState, state, &state.current_line.runs, text_type, text_ptr, size) catch |err| return callbackFailure(state, err);
     return 0;
 }
 
@@ -811,6 +821,7 @@ fn appendTextRun(
         .strikethrough = state.strikethrough_depth > 0,
         .underline = state.underline_depth > 0,
     };
+    errdefer run.deinit(alloc);
     if (run.kind == .link and state.link_url != null) {
         run.url = try alloc.dupe(u8, state.link_url.?);
     }
@@ -843,7 +854,9 @@ fn sourceSpanForText(
 fn appendIconRun(comptime T: type, state: *T, runs: *std.ArrayList(Run), src: []const u8) !void {
     const alloc = allocatorForState(T, state);
     const src_copy = try alloc.dupe(u8, src);
+    errdefer alloc.free(src_copy);
     const text_copy = try alloc.dupe(u8, "");
+    errdefer alloc.free(text_copy);
     try runs.append(alloc, .{
         .kind = .icon,
         .text = text_copy,

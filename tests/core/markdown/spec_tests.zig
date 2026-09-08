@@ -229,3 +229,39 @@ test "core markdown spec: html blocks do not suppress markdown parsing" {
     }
     try testing.expect(saw_bold);
 }
+
+fn parseInlineWithAllocator(allocator: std.mem.Allocator) !void {
+    var layout = try markdown.parseTextLayoutContent(allocator, "[link](https://example.com) ![icon](fa:star) **bold** _underlined_ ~~deleted~~ $x$");
+    defer layout.deinit(allocator);
+    try testing.expect(layout.lines.items.len > 0);
+    try testing.expect(layout.lines.items[0].runs.items.len > 0);
+}
+
+test "inline Markdown preserves callback errors and releases partial runs" {
+    try testing.checkAllAllocationFailures(testing.allocator, parseInlineWithAllocator, .{});
+}
+
+fn parseBlocksWithAllocator(allocator: std.mem.Allocator) !void {
+    var doc = try markdown.parseMarkdownContent(allocator,
+        \\# Heading
+        \\Paragraph [link](https://example.com) ![icon](fa:star).
+        \\> Quote with **bold** and $x$.
+        \\>
+        \\> - One
+        \\> - Two
+        \\1. Ordered
+        \\2. Items
+        \\~~~zig
+        \\const n = 1;
+        \\~~~
+        \\| Left | Right |
+        \\| :--- | ---: |
+        \\| A | B |
+    );
+    defer doc.deinit();
+    try testing.expect(doc.blocks.items.len > 0);
+}
+
+test "block Markdown preserves callback errors across allocation failures" {
+    try testing.checkAllAllocationFailures(testing.allocator, parseBlocksWithAllocator, .{});
+}
