@@ -316,6 +316,50 @@ test "measurement cache observes the inline math engine with an empty preamble" 
     try testing.expectEqual(fresh.cache_key, changed.cache_key);
 }
 
+test "measurement and page caches observe transitive TeX inputs" {
+    if (!try latexEngineAvailable(.pdflatex)) return error.SkipZigTest;
+    const root = ".ss-cache/test-measure-latex-inputs";
+    const input_path = root ++ "/fragment.tex";
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = input_path, .data = "\\rule{12pt}{10pt}" });
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("measurement-inputs");
+    const object_id = try state.makeObject(page_id, "inline math", null, .text, .text, "$\\input{" ++ input_path ++ "}$");
+    const object = state.getNode(object_id) orelse return error.MissingTestObject;
+    object.frame = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{}, null, font_environment);
+    defer {
+        scope.measurement_cache_dirty = false;
+        scope.deinit();
+    }
+    scope.persistent_measurements.clearRetainingCapacity();
+    const provider = scope.provider();
+    const initial = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    const warm = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    try testing.expectEqual(initial.cache_key, warm.cache_key);
+    var page_cache = render_compile.PageCache.init(testing.allocator, testing.io);
+    defer page_cache.deinit();
+    var initial_ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1, .page_cache = &page_cache });
+    defer initial_ir.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), page_cache.entries.count());
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = input_path, .data = "\\rule{44pt}{10pt}" });
+    const changed = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    try testing.expect(initial.cache_key != changed.cache_key);
+    try testing.expect(changed.width > initial.width * 2);
+    var changed_ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1, .page_cache = &page_cache });
+    defer changed_ir.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), page_cache.entries.count());
+    scope.run_measurements.clearRetainingCapacity();
+    const fresh = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    try testing.expectEqual(changed.width, fresh.width);
+    try testing.expectEqual(changed.cache_key, fresh.cache_key);
+}
+
 test "render compiler rejects unavailable PDF pages" {
     const root = ".ss-cache/test-render-invalid-pdf-page";
     const pdf_path = root ++ "/page.pdf";

@@ -83,6 +83,7 @@ pub const Fingerprint = struct {
     /// Retain the source generation inspected before compilation and the inputs
     /// observed before use. Changes made during compilation remain detectable.
     pub fn withObservedInputs(self: Fingerprint, inputs: *utils.FileInputs, output_path: ?[]const u8) ?u64 {
+        if (!inputs.observations_complete) return null;
         var hash = self.sources;
         for (inputs.items()) |input| {
             if (output_path) |output| if (std.mem.eql(u8, output, input.path)) continue;

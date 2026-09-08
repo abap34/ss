@@ -3,6 +3,9 @@ const core = @import("core");
 const pdf_ffi = @import("pdf_ffi");
 const render_resources = @import("render_resources");
 const syntax_highlight = @import("syntax_highlight.zig");
+const latex_inputs = @import("latex_inputs.zig");
+const utils = @import("utils");
+const cache_versions = @import("cache_versions.zig");
 
 const c = pdf_ffi.c;
 const Color = core.render_policy.Color;
@@ -14,6 +17,7 @@ pub const Context = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     asset_base_dir: []const u8,
+    cache_dir: []const u8 = ".ss-cache/render/artifacts/native",
     resource_cache: ?*render_resources.SourceCache = null,
     font_environment: [c.SS_FONT_ENVIRONMENT_ID_SIZE]u8 = @splat(0),
 };
@@ -27,6 +31,7 @@ pub const Command = struct {
     latex_preamble: []const LatexPreambleEntry,
     latex_engine: core.render_env.LatexEngine,
     latex_kind: []const u8,
+    asset_deps: []const core.prepared.AssetDependency = &.{},
 };
 
 const File = struct {
@@ -103,6 +108,7 @@ pub fn renderPageKey(
             .latex_preamble = command.latex_preamble,
             .latex_engine = command.latex_engine,
             .latex_kind = @tagName(command.latex_kind),
+            .asset_deps = command.asset_deps,
         });
     }
     return hasher.final();
@@ -126,6 +132,9 @@ pub fn latexArtifactKey(
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, cache_version);
     hashString(&hasher, "latex");
+    const base = try utils.fs.absolutePath(ctx.io, ctx.allocator, ctx.asset_base_dir);
+    defer ctx.allocator.free(base);
+    hashString(&hasher, base);
     hashString(&hasher, @tagName(engine));
     hashString(&hasher, kind);
     hashString(&hasher, source);
@@ -142,6 +151,25 @@ fn hashCommand(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.
         hashString(hasher, @tagName(command.latex_engine));
         try hashLatexPreamble(ctx, files, hasher, command.latex_preamble);
     }
+    for (command.asset_deps) |dependency| {
+        switch (dependency.kind) {
+            .inline_math, .display_math, .latex_body => try hashLatexInputs(ctx, files, hasher, dependency.source, command.latex_preamble, command.latex_engine, switch (dependency.kind) {
+                .inline_math => "inline_math",
+                .display_math => "display_math",
+                .latex_body => "body",
+                else => unreachable,
+            }),
+            .vector_pdf, .raster_asset => {
+                const path = try resolveAssetPath(ctx, dependency.source);
+                defer ctx.allocator.free(path);
+                try hashAssetFile(ctx, files, hasher, path);
+            },
+            .icon => hashString(hasher, core.fontawesome.cache_namespace),
+        }
+    }
+    if (command.render.kind == .latex and command.asset_deps.len == 0) {
+        try hashLatexInputs(ctx, files, hasher, command.content, command.latex_preamble, command.latex_engine, command.latex_kind);
+    }
     hashResolvedRender(hasher, command.render);
     switch (command.render.kind) {
         .latex => hashString(hasher, command.latex_kind),
@@ -155,6 +183,32 @@ fn hashCommand(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.
             }
         },
         else => {},
+    }
+}
+
+pub fn latexReferencePath(ctx: Context, source: []const u8, preamble: []const LatexPreambleEntry, engine: core.render_env.LatexEngine, kind: []const u8) ![]u8 {
+    const key = try latexArtifactKey(ctx, cache_versions.native_artifacts, source, preamble, engine, kind);
+    return std.fmt.allocPrint(ctx.allocator, "{s}/latex-{x}.ref", .{ ctx.cache_dir, key });
+}
+
+fn hashLatexInputs(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.Wyhash, source: []const u8, preamble: []const LatexPreambleEntry, engine: core.render_env.LatexEngine, kind: []const u8) !void {
+    const path = try latexReferencePath(ctx, source, preamble, engine, kind);
+    defer ctx.allocator.free(path);
+    const contents = utils.fs.readFileAllocLimited(ctx.io, ctx.allocator, path, .limited(utils.render_cache.LatexReference.read_limit)) catch |err| switch (err) {
+        error.OutOfMemory, error.Canceled => return err,
+        else => return hashBool(hasher, false),
+    };
+    defer ctx.allocator.free(contents);
+    const reference = utils.render_cache.LatexReference.parse(contents) catch return hashBool(hasher, false);
+    var manifest = latex_inputs.parse(ctx.allocator, reference.dependencies) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return hashBool(hasher, false),
+    };
+    defer manifest.deinit();
+    hashBool(hasher, true);
+    for (manifest.value.inputs) |input| {
+        const current = try fileFingerprint(ctx, files, input.path);
+        latex_inputs.hashInput(hasher, input.path, .{ .present = current.present, .digest = current.digest });
     }
 }
 

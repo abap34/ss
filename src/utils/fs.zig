@@ -6,6 +6,13 @@ pub const ImageDimensions = struct {
     height: f32,
 };
 
+pub fn absolutePath(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(path)) return std.fs.path.resolve(allocator, &.{path});
+    const cwd = try std.process.currentPathAlloc(io, allocator);
+    defer allocator.free(cwd);
+    return std.fs.path.resolve(allocator, &.{ cwd, path });
+}
+
 pub fn readFileAlloc(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return readFileAllocLimited(io, allocator, path, .unlimited);
 }

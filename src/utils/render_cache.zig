@@ -149,7 +149,7 @@ fn groupArtifacts(io: std.Io, allocator: std.mem.Allocator, root_path: []const u
         if (!std.mem.endsWith(u8, entry.path, ".ref")) continue;
         const full_path = try std.fs.path.join(allocator, &.{ root_path, entry.path });
         defer allocator.free(full_path);
-        const contents = fs.readFileAllocLimited(io, allocator, full_path, .limited(4096)) catch |err| switch (err) {
+        const contents = fs.readFileAllocLimited(io, allocator, full_path, .limited(LatexReference.read_limit)) catch |err| switch (err) {
             error.FileNotFound, error.StreamTooLong => continue,
             else => return err,
         };

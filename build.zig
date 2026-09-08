@@ -805,6 +805,14 @@ fn addTestStep(
     watch_inputs_spec.stdio = .inherit;
     test_step.dependOn(&watch_inputs_spec.step);
     addFocusedTestStep(b, "test-watch-inputs", "Run focused observed watch input tests", &watch_inputs_spec.step);
+    const watch_latex_spec = b.addSystemCommand(&.{"node"});
+    watch_latex_spec.step.dependOn(&ctx.dependency_checks.node.step);
+    watch_latex_spec.addFileArg(b.path("tests/runtime/watch/latex/spec.mjs"));
+    watch_latex_spec.addFileArg(exe.getEmittedBin());
+    watch_latex_spec.setCwd(b.path("."));
+    watch_latex_spec.stdio = .inherit;
+    test_step.dependOn(&watch_latex_spec.step);
+    addFocusedTestStep(b, "test-watch-latex", "Run focused TeX dependency and watch recovery tests", &watch_latex_spec.step);
     const watch_configuration_spec = b.addSystemCommand(&.{"node"});
     watch_configuration_spec.step.dependOn(&ctx.dependency_checks.node.step);
     watch_configuration_spec.addFileArg(b.path("tests/runtime/watch/configuration/spec.mjs"));
@@ -865,6 +873,19 @@ fn addRenderTests(
     const run_render_latex_spec_tests = b.addRunArtifact(render_latex_spec_tests);
     test_step.dependOn(&run_render_latex_spec_tests.step);
     addFocusedTestStep(b, "test-render-latex", "Run focused LaTeX document tests", &run_render_latex_spec_tests.step);
+    const latex_inputs_mod = createModule(ctx, "src/render/compile/latex_inputs.zig", &.{
+        import("utils", modules.utils),
+        import("render_resources", modules.render_resources),
+    }, null);
+    const latex_inputs_spec_mod = createModule(ctx, "tests/render/latex/inputs/spec_tests.zig", &.{
+        import("latex_inputs", latex_inputs_mod),
+        import("utils", modules.utils),
+        import("render_resources", modules.render_resources),
+    }, null);
+    const latex_inputs_tests = addTestArtifact(ctx, latex_inputs_spec_mod);
+    const run_latex_inputs_tests = b.addRunArtifact(latex_inputs_tests);
+    test_step.dependOn(&run_latex_inputs_tests.step);
+    addFocusedTestStep(b, "test-latex-inputs", "Run focused TeX recorder and dependency manifest tests", &run_latex_inputs_tests.step);
     const render_pdf_document_mod = createModule(ctx, "src/render/pdf.zig", &.{
         import("pdf_backend", modules.pdf_backend),
         import("pdf_ffi", modules.pdf_ffi),

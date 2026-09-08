@@ -289,3 +289,15 @@ test "utils fs spec: image dimension reads preserve directory errors" {
 
     try testing.expectError(error.IsDir, utils.fs.readImageDimensions(allocator, path));
 }
+
+test "filesystem: absolute paths resolve relative to the process directory" {
+    const allocator = testing.allocator;
+    const cwd = try std.process.currentPathAlloc(testing.io, allocator);
+    defer allocator.free(cwd);
+    const expected = try std.fs.path.resolve(allocator, &.{ cwd, "resource.tex" });
+    defer allocator.free(expected);
+    const actual = try utils.fs.absolutePath(testing.io, allocator, "./unused/../resource.tex");
+    defer allocator.free(actual);
+    try testing.expectEqualStrings(expected, actual);
+    try testing.expect(std.fs.path.isAbsolute(actual));
+}

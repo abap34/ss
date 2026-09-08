@@ -86,14 +86,14 @@ pub fn hasExternalRenderDependency(
                 if (entry.source == .file) return true;
             }
             switch (object.render.kind) {
-                .raster_asset => return true,
+                .raster_asset, .latex => return true,
                 .vector_asset => {
                     if (core.fontawesome.parseSource(object.content) == null) return true;
                 },
                 else => {},
             }
             for (object.asset_deps) |dependency| switch (dependency.kind) {
-                .vector_pdf, .raster_asset => return true,
+                .vector_pdf, .raster_asset, .inline_math, .display_math, .latex_body => return true,
                 else => {},
             };
         }

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { ssBin } from "../harness.mjs";
+import { terminateProcessTree } from "../process.mjs";
 
 export const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
 
@@ -37,10 +38,7 @@ export class WatchProcess {
   }
 
   kill() {
-    if (!this.child.pid) return;
-    try { process.kill(-this.child.pid, "SIGKILL"); } catch (error) {
-      if (error.code !== "ESRCH") throw error;
-    }
+    terminateProcessTree(this.child.pid);
   }
 
   async close() {

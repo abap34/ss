@@ -15,6 +15,7 @@ pub const FileInputs = struct {
     };
 
     observer: ?Observer = null,
+    observations_complete: bool = true,
     allocator: std.mem.Allocator,
     paths: std.StringHashMap(Kind),
     ordered: std.ArrayList(Input) = .empty,
@@ -36,6 +37,7 @@ pub const FileInputs = struct {
         self.paths.clearRetainingCapacity();
         self.ordered.clearRetainingCapacity();
         self.sorted = true;
+        self.observations_complete = true;
     }
 
     pub fn record(self: *FileInputs, base: []const u8, path: []const u8, kind: Kind) !void {

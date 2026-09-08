@@ -148,8 +148,7 @@ fn recordFileInputs(state: *DocumentState, object: *const PreparedObject) !void 
         for (object.latex_preamble) |entry| {
             if (entry.source == .file) try inputs.record(state.asset_base_dir, entry.value, .file);
         }
-        // TeX can read additional files from user preambles and fragment contents.
-        try inputs.record(".", state.asset_base_dir, .directory);
+        // Artifact preparation records the files actually opened by TeX.
     }
 }
 

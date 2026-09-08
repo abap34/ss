@@ -28,3 +28,9 @@ test "render cache reference: malformed geometry and paths are rejected" {
     };
     for (malformed) |contents| try testing.expectError(error.InvalidPdfCache, Reference.parse(contents));
 }
+
+test "render cache reference: dependency metadata does not obscure the PDF group" {
+    const reference = try Reference.parse("0\t10\t20\t0\t20\tbatch.pdf\n{\"version\":1,\"inputs\":[]}\n");
+    try testing.expectEqualStrings("batch.pdf", reference.pdf_name);
+    try testing.expectEqualStrings("{\"version\":1,\"inputs\":[]}", reference.dependencies);
+}
