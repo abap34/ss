@@ -27,7 +27,7 @@ const ExecFlow = union(enum) {
     returned: core.Value,
 };
 
-const EvalContext = enum {
+const EvalScope = enum {
     document,
     page,
 };
@@ -99,32 +99,35 @@ fn deinitValues(allocator: std.mem.Allocator, values: []core.Value) void {
     for (values) |*value| value.deinit(allocator);
 }
 
-threadlocal var active_module_id: core.SourceModuleId = 0;
-threadlocal var active_call_depth: u32 = 0;
-threadlocal var active_declarations: ?*const declarations.DeclarationIndex = null;
-threadlocal var active_name_resolution_cache: ?*analysis_cache.NameResolutionCache = null;
-threadlocal var active_cancellation: ?utils.Cancellation = null;
+const EvalContext = struct {
+    state: *core.DocumentState,
+    functions: *const core.FunctionMap,
+    closures: *ClosureStore,
+    module_id: core.SourceModuleId = 0,
+    call_depth: u32 = 0,
+    declarations: *const declarations.DeclarationIndex,
+    name_resolution_cache: *analysis_cache.NameResolutionCache,
+    cancellation: ?utils.Cancellation,
+};
 
 pub const ExecuteOptions = struct {
     cancellation: ?utils.Cancellation = null,
 };
 
-fn checkCancellation() !void {
-    if (active_cancellation) |cancellation| try cancellation.check();
+fn checkCancellation(evaluation: *EvalContext) !void {
+    if (evaluation.cancellation) |cancellation| try cancellation.check();
 }
 
-fn resolvedFunction(sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedFunction {
-    if (active_name_resolution_cache) |cache| return try cache.resolvedFunction(sema, callee);
-    return sema.resolvedFunction(callee);
+fn resolvedFunction(evaluation: *EvalContext, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedFunction {
+    return evaluation.name_resolution_cache.resolvedFunction(sema, callee);
 }
 
-fn resolvedConst(sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedConst {
-    if (active_name_resolution_cache) |cache| return try cache.resolvedConst(sema, callee);
-    return sema.resolvedConst(callee);
+fn resolvedConst(evaluation: *EvalContext, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedConst {
+    return evaluation.name_resolution_cache.resolvedConst(sema, callee);
 }
 
-fn callDescriptor(sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.CallDescriptor {
-    if (try resolvedFunction(sema, callee)) |function| return .{ .function = function };
+fn callDescriptor(evaluation: *EvalContext, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.CallDescriptor {
+    if (try resolvedFunction(evaluation, sema, callee)) |function| return .{ .function = function };
     if (!callee.isQualified()) {
         if (sema.primitive(callee.name)) |primitive| return .{ .primitive = primitive };
     }
@@ -324,24 +327,21 @@ pub fn executeGraph(
     graph: *const execution.ExecutionGraph,
     options: ExecuteOptions,
 ) !void {
-    const previous_declarations = active_declarations;
-    const previous_name_resolution_cache = active_name_resolution_cache;
-    const previous_cancellation = active_cancellation;
-    active_declarations = graph.declarations;
-    active_cancellation = options.cancellation;
-    defer active_declarations = previous_declarations;
-    defer active_name_resolution_cache = previous_name_resolution_cache;
-    defer active_cancellation = previous_cancellation;
-
-    try checkCancellation();
-
     var name_resolution_cache = analysis_cache.NameResolutionCache.init(allocator);
     defer name_resolution_cache.deinit();
-    try name_resolution_cache.reserve(state);
-    active_name_resolution_cache = &name_resolution_cache;
-
     var closures = ClosureStore.init(allocator);
     defer closures.deinit();
+    var evaluation_context = EvalContext{
+        .state = state,
+        .functions = &state.functions,
+        .closures = &closures,
+        .declarations = graph.declarations,
+        .name_resolution_cache = &name_resolution_cache,
+        .cancellation = options.cancellation,
+    };
+    const evaluation = &evaluation_context;
+    try checkCancellation(evaluation);
+    try name_resolution_cache.reserve(state);
     var document_states = std.AutoHashMap(core.SourceModuleId, DocumentExecutionState).init(allocator);
     defer {
         var iter = document_states.valueIterator();
@@ -357,22 +357,23 @@ pub fn executeGraph(
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordWysiwyg(.execute_units, measure_start);
-        for (graph.order) |unit_index| try executeUnit(state, &state.functions, &closures, &document_states, &page_states, graph.units.items[unit_index]);
+        for (graph.order) |unit_index| try executeUnit(evaluation, &document_states, &page_states, graph.units.items[unit_index]);
     }
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordWysiwyg(.materialize_display, measure_start);
-        try materializeDisplayContent(state, &state.functions, &closures);
+        try materializeDisplayContent(evaluation);
     }
 }
 
-fn materializeDisplayContent(state: *core.DocumentState, functions: *const core.FunctionMap, closures: *ClosureStore) !void {
+fn materializeDisplayContent(evaluation: *EvalContext) !void {
+    const state = evaluation.state;
     var env = std.StringHashMap(core.Value).init(state.allocator);
     defer env.deinit();
 
     var index: usize = 0;
     while (index < state.nodes.items.len) : (index += 1) {
-        try checkCancellation();
+        try checkCancellation(evaluation);
         const node_id = state.nodes.items[index].id;
         const node = state.getNode(node_id) orelse continue;
         if (node.kind != .object) continue;
@@ -384,9 +385,9 @@ fn materializeDisplayContent(state: *core.DocumentState, functions: *const core.
         defer owned_function.deinit(state.allocator);
 
         const page_id = state.parentPageOf(node_id) orelse state.document_id;
-        const context: EvalContext = if (page_id == state.document_id) .document else .page;
+        const scope: EvalScope = if (page_id == state.document_id) .document else .page;
         const origin = node.origin orelse "";
-        const text = evalNodeReprWithFunction(state, page_id, context, &env, functions, closures, origin, node_id, function) catch |err| {
+        const text = evalNodeReprWithFunction(evaluation, page_id, scope, &env, origin, node_id, function) catch |err| {
             if (err == error.Canceled) return err;
             try reportLowerError(state, err, origin);
             return err;
@@ -411,45 +412,43 @@ const DocumentExecutionState = struct {
 const PageExecutionState = DocumentExecutionState;
 
 fn executeUnit(
-    state: *core.DocumentState,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
+    evaluation: *EvalContext,
     document_states: *std.AutoHashMap(core.SourceModuleId, DocumentExecutionState),
     page_states: *std.AutoHashMap(core.NodeId, PageExecutionState),
     unit: execution.ExecutionUnit,
 ) !void {
-    try checkCancellation();
-    const previous_module_id = active_module_id;
-    const previous_call_depth = active_call_depth;
-    active_module_id = unit.module_id;
-    active_call_depth = 0;
-    defer active_module_id = previous_module_id;
-    defer active_call_depth = previous_call_depth;
+    const state = evaluation.state;
+    try checkCancellation(evaluation);
+    const previous_module_id = evaluation.module_id;
+    const previous_call_depth = evaluation.call_depth;
+    evaluation.module_id = unit.module_id;
+    evaluation.call_depth = 0;
+    defer evaluation.module_id = previous_module_id;
+    defer evaluation.call_depth = previous_call_depth;
     switch (unit.kind) {
         .document_statement => |document_statement| {
             const entry = try document_states.getOrPut(unit.module_id);
             if (!entry.found_existing) entry.value_ptr.* = DocumentExecutionState.init(state.allocator);
-            try executeDocumentStatement(state, functions, closures, entry.value_ptr, document_statement.stmt);
+            try executeDocumentStatement(evaluation, entry.value_ptr, document_statement.stmt);
         },
         .page_statement => |page_statement| {
             const entry = try page_states.getOrPut(page_statement.page_id);
             if (!entry.found_existing) entry.value_ptr.* = PageExecutionState.init(state.allocator);
-            try executePageStatement(state, functions, closures, entry.value_ptr, page_statement.page_id, page_statement.stmt);
+            try executePageStatement(evaluation, entry.value_ptr, page_statement.page_id, page_statement.stmt);
         },
     }
 }
 
 fn executeDocumentStatement(
-    state: *core.DocumentState,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
+    evaluation: *EvalContext,
     execution_state: *DocumentExecutionState,
     stmt: Statement,
 ) !void {
+    const state = evaluation.state;
     const error_count = diagnosticErrorCount(state);
-    const flow = executeStatement(state, state.document_id, .document, &execution_state.env, functions, closures, &execution_state.last_code_like, stmt, null) catch |err| {
+    const flow = executeStatement(evaluation, state.document_id, .document, &execution_state.env, &execution_state.last_code_like, stmt, null) catch |err| {
         if (err == error.Canceled) return err;
-        const origin = statementOrigin(state, stmt.span) catch null;
+        const origin = statementOrigin(evaluation, stmt.span) catch null;
         defer if (origin) |text| state.allocator.free(text);
         if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
         return err;
@@ -465,17 +464,16 @@ fn executeDocumentStatement(
 }
 
 fn executePageStatement(
-    state: *core.DocumentState,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
+    evaluation: *EvalContext,
     execution_state: *PageExecutionState,
     page_id: core.NodeId,
     stmt: Statement,
 ) !void {
+    const state = evaluation.state;
     const error_count = diagnosticErrorCount(state);
-    const flow = executeStatement(state, page_id, .page, &execution_state.env, functions, closures, &execution_state.last_code_like, stmt, null) catch |err| {
+    const flow = executeStatement(evaluation, page_id, .page, &execution_state.env, &execution_state.last_code_like, stmt, null) catch |err| {
         if (err == error.Canceled) return err;
-        const origin = statementOrigin(state, stmt.span) catch null;
+        const origin = statementOrigin(evaluation, stmt.span) catch null;
         defer if (origin) |text| state.allocator.free(text);
         if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
         return err;
@@ -499,26 +497,26 @@ fn diagnosticErrorCount(state: *const core.DocumentState) usize {
 }
 
 fn evalExpr(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     expr: Expr,
 ) anyerror!core.Value {
-    try checkCancellation();
+    const state = evaluation.state;
+    const functions = evaluation.functions;
+    try checkCancellation(evaluation);
     return switch (expr) {
         .hole => error.HoleExpression,
         .ident => |ident| blk: {
             const name = ident.name;
             if (env.get(name)) |value| break :blk try value.clone(state.allocator);
-            const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
-            if (try resolvedConst(&sema, ast.CallableName.bare(name))) |resolved| {
-                break :blk try evalConstValue(state, page_id, context, functions, closures, current_origin, resolved);
+            const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
+            if (try resolvedConst(evaluation, &sema, ast.CallableName.bare(name))) |resolved| {
+                break :blk try evalConstValue(evaluation, page_id, scope, current_origin, resolved);
             }
-            if (try resolvedFunction(&sema, ast.CallableName.bare(name))) |resolved| {
+            if (try resolvedFunction(evaluation, &sema, ast.CallableName.bare(name))) |resolved| {
                 const func = resolved.decl;
                 break :blk .{ .function = try eval_functions.functionRefForInModule(state.allocator, resolved.module_id, func) };
             }
@@ -526,7 +524,7 @@ fn evalExpr(
             break :blk error.UnknownIdentifier;
         },
         .string => |literal| blk: {
-            try registerStringLiteralProvenance(state, literal);
+            try registerStringLiteralProvenance(evaluation, literal);
             break :blk .{ .string = literal.text };
         },
         .color => |text| .{ .string = text },
@@ -538,29 +536,30 @@ fn evalExpr(
             .module_id = case.module_id,
             .case_name = case.case_name,
         } },
-        .call => |call| try evalCall(state, page_id, context, env, functions, closures, current_origin, call),
-        .apply => |apply| try evalApply(state, page_id, context, env, functions, closures, current_origin, apply),
-        .lambda => |lambda| try evalLambda(env, closures, lambda),
-        .record => |record| try evalRecord(state, page_id, context, env, functions, closures, current_origin, record),
-        .record_update => |update| try evalRecordUpdate(state, page_id, context, env, functions, closures, current_origin, update),
-        .member => |member| try evalMember(state, page_id, context, env, functions, closures, current_origin, member),
+        .call => |call| try evalCall(evaluation, page_id, scope, env, current_origin, call),
+        .apply => |apply| try evalApply(evaluation, page_id, scope, env, current_origin, apply),
+        .lambda => |lambda| try evalLambda(evaluation, env, lambda),
+        .record => |record| try evalRecord(evaluation, page_id, scope, env, current_origin, record),
+        .record_update => |update| try evalRecordUpdate(evaluation, page_id, scope, env, current_origin, update),
+        .member => |member| try evalMember(evaluation, page_id, scope, env, current_origin, member),
         .optional_check => |check| blk: {
-            var value = try evalExpr(state, page_id, context, env, functions, closures, current_origin, check.target.*);
+            var value = try evalExpr(evaluation, page_id, scope, env, current_origin, check.target.*);
             defer value.deinit(state.allocator);
             break :blk .{ .boolean = value_contracts.runtimeKind(value) != .none };
         },
         .coalesce => |coalesce| blk: {
-            var value = try evalExpr(state, page_id, context, env, functions, closures, current_origin, coalesce.target.*);
+            var value = try evalExpr(evaluation, page_id, scope, env, current_origin, coalesce.target.*);
             if (value_contracts.runtimeKind(value) != .none) break :blk value;
             value.deinit(state.allocator);
-            break :blk try evalExpr(state, page_id, context, env, functions, closures, current_origin, coalesce.fallback.*);
+            break :blk try evalExpr(evaluation, page_id, scope, env, current_origin, coalesce.fallback.*);
         },
     };
 }
 
-fn registerStringLiteralProvenance(state: *core.DocumentState, literal: ast.StringLiteral) !void {
+fn registerStringLiteralProvenance(evaluation: *EvalContext, literal: ast.StringLiteral) !void {
+    const state = evaluation.state;
     const source_span = literal.source_span orelse return;
-    const origin = try originForActiveModuleSpan(state, source_span);
+    const origin = try originForModuleSpan(evaluation, source_span);
     defer state.allocator.free(origin);
     const provenance = [_]core.ContentProvenance{.{
         .content_start = 0,
@@ -571,14 +570,13 @@ fn registerStringLiteralProvenance(state: *core.DocumentState, literal: ast.Stri
 }
 
 fn evalConstValue(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
+    scope: EvalScope,
     current_origin: []const u8,
     resolved: semantic_env.ResolvedConst,
 ) anyerror!core.Value {
+    const state = evaluation.state;
     if (state.const_values.get(resolved.key)) |value| return try value.clone(state.allocator);
     if (state.const_eval_states.get(resolved.key)) |eval_state| {
         if (eval_state == 1) return error.RecursiveConst;
@@ -592,12 +590,12 @@ fn evalConstValue(
     var local_env = std.StringHashMap(core.Value).init(state.allocator);
     defer deinitValueEnv(state.allocator, &local_env);
 
-    const previous_module_id = active_module_id;
-    active_module_id = resolved.module_id;
-    defer active_module_id = previous_module_id;
+    const previous_module_id = evaluation.module_id;
+    evaluation.module_id = resolved.module_id;
+    defer evaluation.module_id = previous_module_id;
 
     const start_node_count = state.nodeCount();
-    var value = try evalExpr(state, page_id, context, &local_env, functions, closures, current_origin, resolved.decl.value);
+    var value = try evalExpr(evaluation, page_id, scope, &local_env, current_origin, resolved.decl.value);
     var value_moved = false;
     errdefer if (!value_moved) value.deinit(state.allocator);
     try value_contracts.ensureValueConformsToType(state, page_id, value, resolved.decl.value_type, current_origin, .UnmatchedReturnType);
@@ -610,22 +608,22 @@ fn evalConstValue(
 }
 
 fn evalMember(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     member: ast.MemberExpr,
 ) !core.Value {
+    const state = evaluation.state;
+    const functions = evaluation.functions;
     if (borrowLocalValue(env, member.target.*)) |target| {
         if (target == .record) {
             const value = target.record.field(member.name) orelse return .{ .none = {} };
             return try value.clone(state.allocator);
         }
     }
-    var target = try evalExpr(state, page_id, context, env, functions, closures, current_origin, member.target.*);
+    var target = try evalExpr(evaluation, page_id, scope, env, current_origin, member.target.*);
     defer target.deinit(state.allocator);
     return evalMemberValue(state, functions, target, member.name);
 }
@@ -686,15 +684,14 @@ fn evalMemberPathPrefix(
 }
 
 fn evalRecord(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     record: ast.RecordExpr,
 ) !core.Value {
+    const state = evaluation.state;
     const resolved = findRecordDecl(state, record.module_id, record.type_name) orelse {
         if (findEnumDecl(state, record.module_id, record.type_name) != null) {
             try reportInvalidRecordLiteral(state, current_origin, record.type_name);
@@ -703,8 +700,8 @@ fn evalRecord(
         try reportNamedResolutionError(state, error.UnknownType, "record type", record.type_name, current_origin);
         return error.UnknownType;
     };
-    const caller_module_id = active_module_id;
-    defer active_module_id = caller_module_id;
+    const caller_module_id = evaluation.module_id;
+    defer evaluation.module_id = caller_module_id;
 
     var value = core.RecordValue.init(resolved.decl.name);
     value.module_id = resolved.module_id;
@@ -712,17 +709,17 @@ fn evalRecord(
 
     var default_env = std.StringHashMap(core.Value).init(state.allocator);
     defer deinitValueEnv(state.allocator, &default_env);
-    active_module_id = resolved.module_id;
+    evaluation.module_id = resolved.module_id;
     for (resolved.decl.fields.items) |field| {
         if (recordDefinesField(record, field.name)) continue;
         const default_expr = field.default_value orelse continue;
-        const field_value = try evalExpr(state, page_id, context, &default_env, functions, closures, current_origin, default_expr.*);
+        const field_value = try evalExpr(evaluation, page_id, scope, &default_env, current_origin, default_expr.*);
         try putRecordFieldValue(state.allocator, &value, field.name, field_value, false);
     }
 
-    active_module_id = caller_module_id;
+    evaluation.module_id = caller_module_id;
     for (record.fields.items) |field| {
-        const field_value = try evalExpr(state, page_id, context, env, functions, closures, current_origin, field.value);
+        const field_value = try evalExpr(evaluation, page_id, scope, env, current_origin, field.value);
         try putRecordFieldValue(state.allocator, &value, field.name, field_value, true);
     }
     return .{ .record = value };
@@ -736,20 +733,19 @@ fn recordDefinesField(record: ast.RecordExpr, name: []const u8) bool {
 }
 
 fn evalRecordDefaults(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
+    scope: EvalScope,
     current_origin: []const u8,
     record_id: core.NominalId,
 ) !core.RecordValue {
+    const state = evaluation.state;
     const resolved = findRecordDecl(state, record_id.module_id, record_id.name) orelse {
         try reportNamedResolutionError(state, error.UnknownType, "record type", record_id.name, current_origin);
         return error.UnknownType;
     };
-    const caller_module_id = active_module_id;
-    defer active_module_id = caller_module_id;
+    const caller_module_id = evaluation.module_id;
+    defer evaluation.module_id = caller_module_id;
 
     var value = core.RecordValue.init(resolved.decl.name);
     value.module_id = resolved.module_id;
@@ -757,26 +753,25 @@ fn evalRecordDefaults(
 
     var default_env = std.StringHashMap(core.Value).init(state.allocator);
     defer deinitValueEnv(state.allocator, &default_env);
-    active_module_id = resolved.module_id;
+    evaluation.module_id = resolved.module_id;
     for (resolved.decl.fields.items) |field| {
         const default_expr = field.default_value orelse continue;
-        const field_value = try evalExpr(state, page_id, context, &default_env, functions, closures, current_origin, default_expr.*);
+        const field_value = try evalExpr(evaluation, page_id, scope, &default_env, current_origin, default_expr.*);
         try putRecordFieldValue(state.allocator, &value, field.name, field_value, false);
     }
     return value;
 }
 
 fn evalRecordUpdate(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     update: ast.RecordUpdateExpr,
 ) !core.Value {
-    var target = try evalExpr(state, page_id, context, env, functions, closures, current_origin, update.target.*);
+    const state = evaluation.state;
+    var target = try evalExpr(evaluation, page_id, scope, env, current_origin, update.target.*);
     errdefer target.deinit(state.allocator);
     if (target != .record) {
         try reportRecordUpdateError(state, current_origin, "InvalidRecordUpdate: with expects a record value", .{});
@@ -784,7 +779,7 @@ fn evalRecordUpdate(
     }
 
     for (update.fields.items) |field| {
-        var field_value = try evalExpr(state, page_id, context, env, functions, closures, current_origin, field.value);
+        var field_value = try evalExpr(evaluation, page_id, scope, env, current_origin, field.value);
         var field_value_moved = false;
         errdefer if (!field_value_moved) field_value.deinit(state.allocator);
         updateRecordFieldPath(state.allocator, &target.record, field.path.items, field_value) catch |err| switch (err) {
@@ -853,16 +848,15 @@ fn putRecordFieldValue(allocator: std.mem.Allocator, record: *core.RecordValue, 
 }
 
 fn materializePropertyRecord(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
+    scope: EvalScope,
     origin: []const u8,
     node: *const core.Node,
     key: []const u8,
     ty: ast.Type,
 ) !core.RecordValue {
+    const state = evaluation.state;
     if (try core.fields.get(state.allocator, state, node, key)) |slot_value| {
         var slot = slot_value;
         defer slot.deinit(state.allocator);
@@ -874,7 +868,7 @@ fn materializePropertyRecord(
         try reportRecordUpdateError(state, origin, "InvalidRecordUpdatePath: ss produced a record type without a resolved declaration while evaluating this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
-    return evalRecordDefaults(state, page_id, context, functions, closures, origin, record_id);
+    return evalRecordDefaults(evaluation, page_id, scope, origin, record_id);
 }
 
 fn cloneTaggedRecordForRuntime(state: *core.DocumentState, record: core.RecordValue) anyerror!core.RecordValue {
@@ -908,33 +902,33 @@ fn cloneTaggedValueForRuntime(state: *core.DocumentState, value: core.Value) any
 }
 
 fn evalCall(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
+    const state = evaluation.state;
+    const functions = evaluation.functions;
     if (!call.callee.isQualified()) {
         if (env.get(call.callee.name)) |value| {
             switch (value) {
                 .function => |func_ref| {
                     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
                     try validateFixedArity(state, call.args.items.len, func_ref.param_count, current_origin);
-                    var args = try evalCallArgs(state, page_id, context, env, functions, closures, current_origin, call.args.items);
+                    var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
                     defer args.deinit(state.allocator);
                     defer deinitValues(state.allocator, args.items);
-                    return try invokeFunctionRef(state, page_id, context, env, functions, closures, func_ref, current_origin, args.items);
+                    return try invokeFunctionRef(evaluation, page_id, scope, env, func_ref, current_origin, args.items);
                 },
                 else => {},
             }
         }
     }
-    const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
-    if (try resolvedConst(&sema, call.callee)) |resolved| {
-        var const_value = try evalConstValue(state, page_id, context, functions, closures, current_origin, resolved);
+    const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
+    if (try resolvedConst(evaluation, &sema, call.callee)) |resolved| {
+        var const_value = try evalConstValue(evaluation, page_id, scope, current_origin, resolved);
         defer const_value.deinit(state.allocator);
         const function = switch (const_value) {
             .function => |function| function,
@@ -943,12 +937,12 @@ fn evalCall(
                 return error.UnknownFunction;
             },
         };
-        var args = try evalCallArgs(state, page_id, context, env, functions, closures, current_origin, call.args.items);
+        var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
         defer args.deinit(state.allocator);
         defer deinitValues(state.allocator, args.items);
-        return try invokeFunctionRef(state, page_id, context, env, functions, closures, function, current_origin, args.items);
+        return try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, args.items);
     }
-    const descriptor = (try callDescriptor(&sema, call.callee)) orelse {
+    const descriptor = (try callDescriptor(evaluation, &sema, call.callee)) orelse {
         try reportUnknownCallable(state, &sema, call.callee, current_origin);
         return error.UnknownFunction;
     };
@@ -956,21 +950,22 @@ fn evalCall(
         .function => |resolved| blk: {
             const func = resolved.decl;
             try eval_functions.requireReturnsValue(func);
-            break :blk try invokeUserFunctionValueInModule(state, page_id, context, env, functions, closures, resolved.module_id, func, current_origin, call);
+            break :blk try invokeUserFunctionValueInModule(evaluation, page_id, scope, env, resolved.module_id, func, current_origin, call);
         },
-        .primitive => |primitive| try evalPrimitiveCall(state, page_id, context, env, functions, closures, current_origin, call, primitive),
+        .primitive => |primitive| try evalPrimitiveCall(evaluation, page_id, scope, env, current_origin, call, primitive),
     };
 }
 
 fn evalLambda(
+    evaluation: *EvalContext,
     env: *std.StringHashMap(core.Value),
-    closures: *ClosureStore,
     lambda: ast.LambdaExpr,
 ) !core.Value {
+    const closures = evaluation.closures;
     const id = try closures.add(lambda, env);
     return .{ .function = .{
         .name = "#lambda",
-        .module_id = active_module_id,
+        .module_id = evaluation.module_id,
         .closure_id = id,
         .param_count = lambda.params.items.len,
         .returns_value = true,
@@ -978,76 +973,72 @@ fn evalLambda(
 }
 
 fn evalApply(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     apply: ast.ApplyExpr,
 ) anyerror!core.Value {
-    var callee = try evalExpr(state, page_id, context, env, functions, closures, current_origin, apply.callee.*);
+    const state = evaluation.state;
+    var callee = try evalExpr(evaluation, page_id, scope, env, current_origin, apply.callee.*);
     defer callee.deinit(state.allocator);
     const function = switch (callee) {
         .function => |function| function,
         else => return error.InvalidValueTag,
     };
-    var args = try evalCallArgs(state, page_id, context, env, functions, closures, current_origin, apply.args.items);
+    var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, apply.args.items);
     defer args.deinit(state.allocator);
     defer deinitValues(state.allocator, args.items);
-    return try invokeFunctionRef(state, page_id, context, env, functions, closures, function, current_origin, args.items);
+    return try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, args.items);
 }
 
 fn evalCallArgs(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     args: []const Expr,
 ) !std.ArrayList(core.Value) {
+    const state = evaluation.state;
     var values = std.ArrayList(core.Value).empty;
     errdefer {
         deinitValues(state.allocator, values.items);
         values.deinit(state.allocator);
     }
     for (args) |arg| {
-        try values.append(state.allocator, try evalExpr(state, page_id, context, env, functions, closures, current_origin, arg));
+        try values.append(state.allocator, try evalExpr(evaluation, page_id, scope, env, current_origin, arg));
     }
     return values;
 }
 
 fn evalNodeRepr(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     object_id: core.NodeId,
 ) ![]const u8 {
+    const state = evaluation.state;
     const node = state.getNode(object_id) orelse return error.UnknownNode;
     const function = node.repr_function orelse return node.content orelse "";
-    return evalNodeReprWithFunction(state, page_id, context, env, functions, closures, current_origin, object_id, function);
+    return evalNodeReprWithFunction(evaluation, page_id, scope, env, current_origin, object_id, function);
 }
 
 fn evalNodeReprWithFunction(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     object_id: core.NodeId,
     function: core.FunctionRef,
 ) ![]const u8 {
+    const state = evaluation.state;
     const args = [_]core.Value{.{ .object = object_id }};
-    var result = try invokeFunctionRef(state, page_id, context, env, functions, closures, function, current_origin, &args);
+    var result = try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, &args);
     defer result.deinit(state.allocator);
     return switch (result) {
         .string => |text| text,
@@ -1056,12 +1047,11 @@ fn evalNodeReprWithFunction(
 }
 
 const BuiltinContext = struct {
+    evaluation: *EvalContext,
     state: *core.DocumentState,
     page_id: core.NodeId,
-    eval_context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
 
     pub fn checkArityRange(self: *const BuiltinContext, actual: usize, min: usize, max: usize) !void {
@@ -1069,7 +1059,7 @@ const BuiltinContext = struct {
     }
 
     pub fn currentPageValue(self: *const BuiltinContext) !core.Value {
-        if (self.eval_context != .page) return error.NoCurrentPage;
+        if (self.scope != .page) return error.NoCurrentPage;
         return .{ .page = self.page_id };
     }
 
@@ -1078,15 +1068,15 @@ const BuiltinContext = struct {
     }
 
     pub fn runSelectCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
-        return try evalSelectCall(self.state, self.page_id, self.eval_context, self.env, self.functions, self.closures, self.current_origin, call);
+        return try evalSelectCall(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call);
     }
 
     pub fn evalExprValue(self: *BuiltinContext, expr: Expr) anyerror!core.Value {
-        return try evalExpr(self.state, self.page_id, self.eval_context, self.env, self.functions, self.closures, self.current_origin, expr);
+        return try evalExpr(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, expr);
     }
 
     pub fn evalStringArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror![]const u8 {
-        return try evalCallStringArg(self.state, self.page_id, self.eval_context, self.env, self.functions, self.closures, self.current_origin, call, index);
+        return try evalCallStringArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
     }
 
     pub fn evalPropertyStringArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror![]const u8 {
@@ -1094,23 +1084,23 @@ const BuiltinContext = struct {
     }
 
     pub fn evalNumberArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!f32 {
-        return try evalCallNumberArg(self.state, self.page_id, self.eval_context, self.env, self.functions, self.closures, self.current_origin, call, index);
+        return try evalCallNumberArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
     }
 
     pub fn evalObjectArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.NodeId {
-        return try evalCallObjectArg(self.state, self.page_id, self.eval_context, self.env, self.functions, self.closures, self.current_origin, call, index);
+        return try evalCallObjectArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
     }
 
     pub fn evalAnchorArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.AnchorValue {
-        return try evalCallAnchorArg(self.state, self.page_id, self.eval_context, self.env, self.functions, self.closures, self.current_origin, call, index);
+        return try evalCallAnchorArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
     }
 
     pub fn evalRoleArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.Role {
-        return try evalCallRoleArg(self.state, self.page_id, self.eval_context, self.env, self.functions, self.closures, self.current_origin, call, index);
+        return try evalCallRoleArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
     }
 
     pub fn evalPayloadArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!names.ParsedPayload {
-        return try evalCallPayloadArg(self.state, self.page_id, self.eval_context, self.env, self.functions, self.closures, self.current_origin, call, index);
+        return try evalCallPayloadArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
     }
 
     pub fn ownString(self: *BuiltinContext, text: []u8) ![]const u8 {
@@ -1221,7 +1211,7 @@ const BuiltinContext = struct {
     }
 
     pub fn invokeCallback(self: *BuiltinContext, function: core.FunctionRef, args: []const core.Value) !core.Value {
-        return try invokeFunctionRef(self.state, self.page_id, self.eval_context, self.env, self.functions, self.closures, function, self.current_origin, args);
+        return try invokeFunctionRef(self.evaluation, self.page_id, self.scope, self.env, function, self.current_origin, args);
     }
 
     pub fn pageIndex(self: *BuiltinContext, page_id: core.NodeId) usize {
@@ -1262,7 +1252,7 @@ const BuiltinContext = struct {
     }
 
     pub fn reprNode(self: *BuiltinContext, object_id: core.NodeId) ![]const u8 {
-        return try evalNodeRepr(self.state, self.page_id, self.eval_context, self.env, self.functions, self.closures, self.current_origin, object_id);
+        return try evalNodeRepr(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, object_id);
     }
 
     pub fn nodeField(self: *BuiltinContext, target: core.Value, key: []const u8) ?core.Value {
@@ -1292,7 +1282,7 @@ const BuiltinContext = struct {
         source: core.AnchorValue,
         offset: f32,
     ) !core.ConstraintSet {
-        return try anchorEqualityConstraintSet(self.state, target, source, offset, self.current_origin);
+        return try anchorEqualityConstraintSet(self.evaluation, target, source, offset, self.current_origin);
     }
 
     pub fn emitDiagnosticReport(self: *BuiltinContext, severity: core.DiagnosticSeverity, message: []const u8) !void {
@@ -1300,7 +1290,7 @@ const BuiltinContext = struct {
     }
 
     pub fn ensurePrimitiveArgType(self: *BuiltinContext, descriptor: registry.PrimitiveDescriptor, index: usize, value: core.Value) !void {
-        const sema = SemanticEnv.init(self.state, active_declarations, self.functions).forModule(active_module_id);
+        const sema = SemanticEnv.init(self.state, self.evaluation.declarations, self.evaluation.functions).forModule(self.evaluation.module_id);
         const expected = sema.primitiveArgType(descriptor, index) orelse return;
         try value_contracts.ensureValueConformsToType(self.state, self.page_id, value, expected, self.current_origin, .UnmatchedArgumentType);
     }
@@ -1311,23 +1301,21 @@ const BuiltinContext = struct {
 };
 
 fn evalPrimitiveCall(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     call: CallExpr,
     descriptor: registry.PrimitiveDescriptor,
 ) anyerror!core.Value {
+    const state = evaluation.state;
     var ctx = BuiltinContext{
+        .evaluation = evaluation,
         .state = state,
         .page_id = page_id,
-        .eval_context = context,
+        .scope = scope,
         .env = env,
-        .functions = functions,
-        .closures = closures,
         .current_origin = current_origin,
     };
     return try builtin.evalCall(&ctx, call, descriptor);
@@ -1477,17 +1465,17 @@ fn openTextFile(path: [*:0]const u8) !std.c.fd_t {
 }
 
 fn evalSelectCall(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
-    const base = try evalExpr(state, page_id, context, env, functions, closures, current_origin, call.args.items[0]);
-    const op_name = try evalCallStringArg(state, page_id, context, env, functions, closures, current_origin, call, 1);
+    const state = evaluation.state;
+    const functions = evaluation.functions;
+    const base = try evalExpr(evaluation, page_id, scope, env, current_origin, call.args.items[0]);
+    const op_name = try evalCallStringArg(evaluation, page_id, scope, env, current_origin, call, 1);
     const sema = SemanticEnv.init(null, null, functions);
     const descriptor = sema.query(op_name) orelse {
         try reportUnknownQuery(state, op_name, current_origin);
@@ -1518,11 +1506,11 @@ fn evalSelectCall(
             return try state.select(state.allocator, base, core.Query.documentPages());
         },
         .page_objects_by_role => {
-            const role = try evalCallRoleArg(state, page_id, context, env, functions, closures, current_origin, call, 2);
+            const role = try evalCallRoleArg(evaluation, page_id, scope, env, current_origin, call, 2);
             return try state.select(state.allocator, base, core.Query.pageObjectsByRole(role));
         },
         .document_objects_by_role => {
-            const role = try evalCallRoleArg(state, page_id, context, env, functions, closures, current_origin, call, 2);
+            const role = try evalCallRoleArg(evaluation, page_id, scope, env, current_origin, call, 2);
             return try state.select(state.allocator, base, core.Query.documentObjectsByRole(role));
         },
     }
@@ -1563,26 +1551,25 @@ fn validateArityRange(state: *core.DocumentState, actual: usize, min: usize, max
 }
 
 fn bindUserFunctionArgs(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     caller_env: *std.StringHashMap(core.Value),
     local_env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
     current_origin: []const u8,
     call: CallExpr,
 ) !void {
+    const state = evaluation.state;
     for (func.params.items, 0..) |param, index| {
         const value = if (index < call.args.items.len) blk: {
-            break :blk try evalExpr(state, page_id, context, caller_env, functions, closures, current_origin, call.args.items[index]);
+            break :blk try evalExpr(evaluation, page_id, scope, caller_env, current_origin, call.args.items[index]);
         } else blk: {
-            const previous_module_id = active_module_id;
-            active_module_id = module_id;
-            defer active_module_id = previous_module_id;
-            break :blk try evalExpr(state, page_id, context, local_env, functions, closures, current_origin, (param.default_value orelse return error.InvalidArity).*);
+            const previous_module_id = evaluation.module_id;
+            evaluation.module_id = module_id;
+            defer evaluation.module_id = previous_module_id;
+            break :blk try evalExpr(evaluation, page_id, scope, local_env, current_origin, (param.default_value orelse return error.InvalidArity).*);
         };
         value_contracts.ensureValueConformsToType(state, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
             var owned = value;
@@ -1594,27 +1581,26 @@ fn bindUserFunctionArgs(
 }
 
 fn bindUserFunctionValueArgs(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     caller_env: *std.StringHashMap(core.Value),
     local_env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
     current_origin: []const u8,
     args: []const core.Value,
 ) !void {
+    const state = evaluation.state;
     try validateUserFunctionArity(state, args.len, func, current_origin);
     for (func.params.items, 0..) |param, index| {
         const value = if (index < args.len) blk: {
             break :blk try args[index].clone(state.allocator);
         } else blk: {
-            const previous_module_id = active_module_id;
-            active_module_id = module_id;
-            defer active_module_id = previous_module_id;
-            break :blk try evalExpr(state, page_id, context, local_env, functions, closures, current_origin, (param.default_value orelse return error.InvalidArity).*);
+            const previous_module_id = evaluation.module_id;
+            evaluation.module_id = module_id;
+            defer evaluation.module_id = previous_module_id;
+            break :blk try evalExpr(evaluation, page_id, scope, local_env, current_origin, (param.default_value orelse return error.InvalidArity).*);
         };
         value_contracts.ensureValueConformsToType(state, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
             var owned = value;
@@ -1657,87 +1643,76 @@ fn resolveValueObjectId(value: core.Value) !core.NodeId {
 }
 
 fn evalCallArg(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
 ) anyerror!core.Value {
-    return try evalExpr(state, page_id, context, env, functions, closures, current_origin, call.args.items[index]);
+    return try evalExpr(evaluation, page_id, scope, env, current_origin, call.args.items[index]);
 }
 
 fn evalCallStringArg(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
 ) anyerror![]const u8 {
-    return try resolveValueString(try evalCallArg(state, page_id, context, env, functions, closures, current_origin, call, index));
+    return try resolveValueString(try evalCallArg(evaluation, page_id, scope, env, current_origin, call, index));
 }
 
 fn evalCallNumberArg(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
 ) anyerror!f32 {
-    return try resolveValueNumber(try evalCallArg(state, page_id, context, env, functions, closures, current_origin, call, index));
+    return try resolveValueNumber(try evalCallArg(evaluation, page_id, scope, env, current_origin, call, index));
 }
 
 fn evalCallObjectArg(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
 ) anyerror!core.NodeId {
-    return try resolveValueObjectId(try evalCallArg(state, page_id, context, env, functions, closures, current_origin, call, index));
+    return try resolveValueObjectId(try evalCallArg(evaluation, page_id, scope, env, current_origin, call, index));
 }
 
 fn evalCallAnchorArg(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
 ) anyerror!core.AnchorValue {
-    return try resolveValueAnchor(try evalCallArg(state, page_id, context, env, functions, closures, current_origin, call, index));
+    return try resolveValueAnchor(try evalCallArg(evaluation, page_id, scope, env, current_origin, call, index));
 }
 
 fn evalCallRoleArg(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
 ) anyerror!core.Role {
-    const role_name = try evalCallStringArg(state, page_id, context, env, functions, closures, current_origin, call, index);
+    const state = evaluation.state;
+    const role_name = try evalCallStringArg(evaluation, page_id, scope, env, current_origin, call, index);
     return names.parseRoleName(role_name) orelse {
         try reportNamedResolutionError(state, error.UnknownRole, "role", role_name, current_origin);
         return error.UnknownRole;
@@ -1745,17 +1720,16 @@ fn evalCallRoleArg(
 }
 
 fn evalCallPayloadArg(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
 ) anyerror!names.ParsedPayload {
-    const payload_name = try evalCallStringArg(state, page_id, context, env, functions, closures, current_origin, call, index);
+    const state = evaluation.state;
+    const payload_name = try evalCallStringArg(evaluation, page_id, scope, env, current_origin, call, index);
     return names.parsePayloadName(payload_name) orelse {
         try reportNamedResolutionError(state, error.UnknownPayloadKind, "payload kind", payload_name, current_origin);
         return error.UnknownPayloadKind;
@@ -1770,12 +1744,13 @@ fn singleConstraintSet(state: *core.DocumentState, constraint: core.Constraint) 
 }
 
 fn anchorEqualityConstraintSet(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     target: core.AnchorValue,
     source: core.AnchorValue,
     offset: f32,
     origin: []const u8,
 ) !core.ConstraintSet {
+    const state = evaluation.state;
     return switch (target) {
         .page => error.PageCannotBeConstraintTarget,
         .node => |node| try singleConstraintSet(state, .{
@@ -1785,7 +1760,7 @@ fn anchorEqualityConstraintSet(
             .offset = offset,
             .origin = origin,
             .role = core.constraintRoleForRelation(node.node_id, node.anchor, source.toConstraintSource()),
-            .scope_depth = active_call_depth,
+            .scope_depth = evaluation.call_depth,
         }),
     };
 }
@@ -1837,16 +1812,16 @@ fn isPropertyTargetValue(value: core.Value) bool {
 }
 
 fn writePropertyPath(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
+    scope: EvalScope,
     origin: []const u8,
     base: core.Value,
     path: []const ast.RecordPathSegment,
     value: core.Value,
 ) !void {
+    const state = evaluation.state;
+    const functions = evaluation.functions;
     if (path.len == 0) return;
     var current = try base.clone(state.allocator);
     defer current.deinit(state.allocator);
@@ -1860,15 +1835,13 @@ fn writePropertyPath(
         path_index += 1;
     }
 
-    try writePropertyPathToTarget(state, page_id, context, functions, closures, origin, current, path[path_index..], value);
+    try writePropertyPathToTarget(evaluation, page_id, scope, origin, current, path[path_index..], value);
 }
 
 fn writePropertyPathToTarget(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
+    scope: EvalScope,
     origin: []const u8,
     target: core.Value,
     path: []const ast.RecordPathSegment,
@@ -1876,13 +1849,13 @@ fn writePropertyPathToTarget(
 ) !void {
     if (path.len == 0) return error.ExpectedObject;
     switch (target) {
-        .document => |id| try writePropertyPathToNode(state, page_id, context, functions, closures, origin, id, path, value),
-        .page => |id| try writePropertyPathToNode(state, page_id, context, functions, closures, origin, id, path, value),
-        .object => |id| try writePropertyPathToNode(state, page_id, context, functions, closures, origin, id, path, value),
+        .document => |id| try writePropertyPathToNode(evaluation, page_id, scope, origin, id, path, value),
+        .page => |id| try writePropertyPathToNode(evaluation, page_id, scope, origin, id, path, value),
+        .object => |id| try writePropertyPathToNode(evaluation, page_id, scope, origin, id, path, value),
         .selection => |selection| {
             if (selection.item_tag != .object) return error.InvalidSelectionItemType;
             for (selection.ids.items) |id| {
-                try writePropertyPathToNode(state, page_id, context, functions, closures, origin, id, path, value);
+                try writePropertyPathToNode(evaluation, page_id, scope, origin, id, path, value);
             }
         },
         else => return error.ExpectedObject,
@@ -1890,16 +1863,16 @@ fn writePropertyPathToTarget(
 }
 
 fn writePropertyPathToNode(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
+    scope: EvalScope,
     origin: []const u8,
     node_id: core.NodeId,
     path: []const ast.RecordPathSegment,
     value: core.Value,
 ) !void {
+    const state = evaluation.state;
+    const functions = evaluation.functions;
     if (path.len == 0) return error.ExpectedObject;
     const property_name = path[0].name;
     if (path.len == 1) {
@@ -1908,14 +1881,14 @@ fn writePropertyPathToNode(
     }
 
     const node = state.getNode(node_id) orelse return error.UnknownNode;
-    const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
+    const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
     const maybe_field = if (core.fields.classId(state, node)) |class_name|
         sema.field(class_name, property_name)
     else
         sema.fieldByName(property_name);
     const field = maybe_field orelse return error.InvalidType;
     if (field.value_type.kind != .record) return error.InvalidValueTag;
-    var record = try materializePropertyRecord(state, page_id, context, functions, closures, origin, node, property_name, field.value_type);
+    var record = try materializePropertyRecord(evaluation, page_id, scope, origin, node, property_name, field.value_type);
     defer record.deinit(state.allocator);
 
     var value_copy = try value.clone(state.allocator);
@@ -1941,22 +1914,22 @@ fn writePropertyPathToNode(
 }
 
 fn executeStatement(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     last_code_like: *?core.NodeId,
     stmt: Statement,
     origin_override: ?[]const u8,
 ) anyerror!ExecFlow {
-    try checkCancellation();
-    const origin = if (origin_override) |override| override else try state.ownString(try statementOrigin(state, stmt.span));
+    const state = evaluation.state;
+    const functions = evaluation.functions;
+    try checkCancellation(evaluation);
+    const origin = if (origin_override) |override| override else try state.ownString(try statementOrigin(evaluation, stmt.span));
     switch (stmt.kind) {
         .hole => return error.HoleStatement,
         .let_binding => |binding| {
-            const value = try evalExpr(state, page_id, context, env, functions, closures, origin, binding.expr);
+            const value = try evalExpr(evaluation, page_id, scope, env, origin, binding.expr);
             if (names.isDiscardBindingName(binding.name)) {
                 defer {
                     var owned = value;
@@ -1965,32 +1938,32 @@ fn executeStatement(
                 try discardStatementValue(state, value);
                 return .none;
             }
-            if (context == .page and active_call_depth == 0) {
-                try addValueObjectSources(state, page_id, active_module_id, binding.name, null, stmt.span, value);
+            if (scope == .page and evaluation.call_depth == 0) {
+                try addValueObjectSources(state, page_id, evaluation.module_id, binding.name, null, stmt.span, value);
             }
             try putEnvValue(state.allocator, env, binding.name, value);
         },
         .return_expr => |expr| {
-            const value = try evalExpr(state, page_id, context, env, functions, closures, origin, expr);
+            const value = try evalExpr(evaluation, page_id, scope, env, origin, expr);
             return .{ .returned = value };
         },
         .return_void => return .{ .returned = .{ .void = {} } },
         .property_set => |property_set| {
             if (property_set.path.items.len == 0) return .none;
-            var base = try evalExpr(state, page_id, context, env, functions, closures, origin, property_set.target);
+            var base = try evalExpr(evaluation, page_id, scope, env, origin, property_set.target);
             defer base.deinit(state.allocator);
-            var value = try evalExpr(state, page_id, context, env, functions, closures, origin, property_set.value);
+            var value = try evalExpr(evaluation, page_id, scope, env, origin, property_set.value);
             defer value.deinit(state.allocator);
-            try writePropertyPath(state, page_id, context, functions, closures, origin, base, property_set.path.items, value);
+            try writePropertyPath(evaluation, page_id, scope, origin, base, property_set.path.items, value);
         },
         .if_stmt => |if_stmt| {
-            const value = try evalExpr(state, page_id, context, env, functions, closures, origin, if_stmt.condition);
+            const value = try evalExpr(evaluation, page_id, scope, env, origin, if_stmt.condition);
             const condition = try resolveValueBoolean(value);
             const branch = if (condition) if_stmt.then_statements.items else if_stmt.else_statements.items;
             var branch_env = try cloneValueEnv(state.allocator, env);
             defer deinitValueEnv(state.allocator, &branch_env);
             for (branch) |nested| {
-                const flow = try executeStatement(state, page_id, context, &branch_env, functions, closures, last_code_like, nested, null);
+                const flow = try executeStatement(evaluation, page_id, scope, &branch_env, last_code_like, nested, null);
                 switch (flow) {
                     .none => {},
                     .returned => return flow,
@@ -2004,7 +1977,7 @@ fn executeStatement(
             else
                 null;
             const offset: f32 = if (decl.offset) |expr| blk: {
-                const value = try evalExpr(state, page_id, context, env, functions, closures, origin, expr);
+                const value = try evalExpr(evaluation, page_id, scope, env, origin, expr);
                 break :blk try resolveValueNumber(value);
             } else 0;
             const role: core.ConstraintRole = if (decl.target_kind == .dimension)
@@ -2020,13 +1993,13 @@ fn executeStatement(
                     resolved_source orelse return error.InvalidConstraint,
                     offset,
                     origin,
-                    active_call_depth,
+                    evaluation.call_depth,
                 ),
                 .update => try state.addConstraintUpdate(
                     target.node_id,
                     target.anchor,
                     role,
-                    active_call_depth,
+                    evaluation.call_depth,
                     resolved_source,
                     offset,
                     origin,
@@ -2036,22 +2009,22 @@ fn executeStatement(
         .expr_stmt => |expr| {
             var value = switch (expr) {
                 .call => |call| blk: {
-                    const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
-                    if ((try resolvedFunction(&sema, call.callee)) != null) {
-                        break :blk try executeCallStatement(state, page_id, context, env, functions, closures, last_code_like, origin, call);
+                    const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
+                    if ((try resolvedFunction(evaluation, &sema, call.callee)) != null) {
+                        break :blk try executeCallStatement(evaluation, page_id, scope, env, last_code_like, origin, call);
                     }
-                    break :blk try evalExpr(state, page_id, context, env, functions, closures, origin, expr);
+                    break :blk try evalExpr(evaluation, page_id, scope, env, origin, expr);
                 },
-                else => try evalExpr(state, page_id, context, env, functions, closures, origin, expr),
+                else => try evalExpr(evaluation, page_id, scope, env, origin, expr),
             };
             defer value.deinit(state.allocator);
             try materializeStatementValue(state, last_code_like, value);
-            if (context == .page and active_call_depth == 0) {
+            if (scope == .page and evaluation.call_depth == 0) {
                 const binding_base = switch (expr) {
                     .call => |call| call.callee.name,
                     else => "",
                 };
-                try addValueObjectSources(state, page_id, active_module_id, "", binding_base, stmt.span, value);
+                try addValueObjectSources(state, page_id, evaluation.module_id, "", binding_base, stmt.span, value);
             }
         },
     }
@@ -2120,36 +2093,36 @@ fn discardStatementValue(state: *core.DocumentState, value: core.Value) !void {
 }
 
 fn executeCallStatement(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     last_code_like: *?core.NodeId,
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
-    const sema = SemanticEnv.init(state, active_declarations, functions).forModule(active_module_id);
-    const resolved = (try resolvedFunction(&sema, call.callee)) orelse {
-        return try evalCall(state, page_id, context, env, functions, closures, current_origin, call);
+    const state = evaluation.state;
+    const functions = evaluation.functions;
+    const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
+    const resolved = (try resolvedFunction(evaluation, &sema, call.callee)) orelse {
+        return try evalCall(evaluation, page_id, scope, env, current_origin, call);
     };
     const func = resolved.decl;
     try validateUserFunctionArity(state, call.args.items.len, func, current_origin);
 
-    const previous_call_depth = active_call_depth;
-    active_call_depth += 1;
-    defer active_call_depth = previous_call_depth;
+    const previous_call_depth = evaluation.call_depth;
+    evaluation.call_depth += 1;
+    defer evaluation.call_depth = previous_call_depth;
 
     var local_env = std.StringHashMap(core.Value).init(state.allocator);
     defer deinitValueEnv(state.allocator, &local_env);
-    try bindUserFunctionArgs(state, page_id, context, env, &local_env, functions, closures, resolved.module_id, func, current_origin, call);
+    try bindUserFunctionArgs(evaluation, page_id, scope, env, &local_env, resolved.module_id, func, current_origin, call);
     const start_node_count = state.nodeCount();
-    const previous_module_id = active_module_id;
-    active_module_id = resolved.module_id;
-    defer active_module_id = previous_module_id;
+    const previous_module_id = evaluation.module_id;
+    evaluation.module_id = resolved.module_id;
+    defer evaluation.module_id = previous_module_id;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(state, page_id, context, &local_env, functions, closures, last_code_like, inner, null);
+        const flow = try executeStatement(evaluation, page_id, scope, &local_env, last_code_like, inner, null);
         switch (flow) {
             .none => {},
             .returned => |value| {
@@ -2180,39 +2153,39 @@ fn executeCallStatement(
 }
 
 fn invokeFunctionRef(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     function: core.FunctionRef,
     current_origin: []const u8,
     args: []const core.Value,
 ) anyerror!core.Value {
+    const state = evaluation.state;
+    const functions = evaluation.functions;
     if (function.closure_id) |closure_id| {
-        return try invokeClosureValues(state, page_id, context, env, functions, closures, function.module_id, closure_id, current_origin, args);
+        return try invokeClosureValues(evaluation, page_id, scope, env, function.module_id, closure_id, current_origin, args);
     }
-    const sema = SemanticEnv.init(state, active_declarations, functions).forModule(function.module_id);
-    const resolved = (try resolvedFunction(&sema, ast.CallableName.bare(function.name))) orelse {
+    const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(function.module_id);
+    const resolved = (try resolvedFunction(evaluation, &sema, ast.CallableName.bare(function.name))) orelse {
         try reportUnknownFunction(state, function.name, current_origin);
         return error.UnknownFunction;
     };
-    return try invokeUserFunctionValues(state, page_id, context, env, functions, closures, resolved.module_id, resolved.decl, current_origin, args);
+    return try invokeUserFunctionValues(evaluation, page_id, scope, env, resolved.module_id, resolved.decl, current_origin, args);
 }
 
 fn invokeClosureValues(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     caller_env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     module_id: core.SourceModuleId,
     closure_id: usize,
     current_origin: []const u8,
     args: []const core.Value,
 ) anyerror!core.Value {
+    const state = evaluation.state;
+    const closures = evaluation.closures;
     _ = caller_env;
     const closure = closures.get(closure_id) orelse {
         try reportUnknownFunction(state, "#lambda", current_origin);
@@ -2220,9 +2193,9 @@ fn invokeClosureValues(
     };
     try validateFixedArity(state, args.len, closure.lambda.params.items.len, current_origin);
 
-    const previous_call_depth = active_call_depth;
-    active_call_depth += 1;
-    defer active_call_depth = previous_call_depth;
+    const previous_call_depth = evaluation.call_depth;
+    evaluation.call_depth += 1;
+    defer evaluation.call_depth = previous_call_depth;
 
     var local_env = try cloneValueEnv(state.allocator, &closure.env);
     defer deinitValueEnv(state.allocator, &local_env);
@@ -2236,60 +2209,57 @@ fn invokeClosureValues(
         try putEnvValue(state.allocator, &local_env, param.name, value);
     }
     const start_node_count = state.nodeCount();
-    const previous_module_id = active_module_id;
-    active_module_id = module_id;
-    defer active_module_id = previous_module_id;
-    const value = try evalExpr(state, page_id, context, &local_env, functions, closures, current_origin, closure.lambda.body.*);
+    const previous_module_id = evaluation.module_id;
+    evaluation.module_id = module_id;
+    defer evaluation.module_id = previous_module_id;
+    const value = try evalExpr(evaluation, page_id, scope, &local_env, current_origin, closure.lambda.body.*);
     try connectReturnedObject(state, value, start_node_count, current_origin);
     return value;
 }
 
 fn invokeUserFunctionValue(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     func: FunctionDecl,
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
-    return invokeUserFunctionValueInModule(state, page_id, context, env, functions, closures, active_module_id, func, current_origin, call);
+    return invokeUserFunctionValueInModule(evaluation, page_id, scope, env, evaluation.module_id, func, current_origin, call);
 }
 
 fn invokeUserFunctionValueInModule(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
+    const state = evaluation.state;
     var func_ref = try eval_functions.functionRefForInModule(state.allocator, module_id, func);
     defer func_ref.deinit(state.allocator);
     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
     try validateUserFunctionArity(state, call.args.items.len, func, current_origin);
 
-    const previous_call_depth = active_call_depth;
-    active_call_depth += 1;
-    defer active_call_depth = previous_call_depth;
+    const previous_call_depth = evaluation.call_depth;
+    evaluation.call_depth += 1;
+    defer evaluation.call_depth = previous_call_depth;
 
     var local_env = std.StringHashMap(core.Value).init(state.allocator);
     defer deinitValueEnv(state.allocator, &local_env);
-    try bindUserFunctionArgs(state, page_id, context, env, &local_env, functions, closures, module_id, func, current_origin, call);
+    try bindUserFunctionArgs(evaluation, page_id, scope, env, &local_env, module_id, func, current_origin, call);
 
     var last_code_like: ?core.NodeId = null;
     const start_node_count = state.nodeCount();
-    const previous_module_id = active_module_id;
-    active_module_id = module_id;
-    defer active_module_id = previous_module_id;
+    const previous_module_id = evaluation.module_id;
+    evaluation.module_id = module_id;
+    defer evaluation.module_id = previous_module_id;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(state, page_id, context, &local_env, functions, closures, &last_code_like, inner, null);
+        const flow = try executeStatement(evaluation, page_id, scope, &local_env, &last_code_like, inner, null);
         switch (flow) {
             .none => {},
             .returned => |value| {
@@ -2304,32 +2274,31 @@ fn invokeUserFunctionValueInModule(
 }
 
 fn invokeUserFunctionValues(
-    state: *core.DocumentState,
+    evaluation: *EvalContext,
     page_id: core.NodeId,
-    context: EvalContext,
+    scope: EvalScope,
     env: *std.StringHashMap(core.Value),
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
     current_origin: []const u8,
     args: []const core.Value,
 ) anyerror!core.Value {
-    const previous_call_depth = active_call_depth;
-    active_call_depth += 1;
-    defer active_call_depth = previous_call_depth;
+    const state = evaluation.state;
+    const previous_call_depth = evaluation.call_depth;
+    evaluation.call_depth += 1;
+    defer evaluation.call_depth = previous_call_depth;
 
     var local_env = std.StringHashMap(core.Value).init(state.allocator);
     defer deinitValueEnv(state.allocator, &local_env);
-    try bindUserFunctionValueArgs(state, page_id, context, env, &local_env, functions, closures, module_id, func, current_origin, args);
+    try bindUserFunctionValueArgs(evaluation, page_id, scope, env, &local_env, module_id, func, current_origin, args);
 
     var last_code_like: ?core.NodeId = null;
     const start_node_count = state.nodeCount();
-    const previous_module_id = active_module_id;
-    active_module_id = module_id;
-    defer active_module_id = previous_module_id;
+    const previous_module_id = evaluation.module_id;
+    evaluation.module_id = module_id;
+    defer evaluation.module_id = previous_module_id;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(state, page_id, context, &local_env, functions, closures, &last_code_like, inner, null);
+        const flow = try executeStatement(evaluation, page_id, scope, &local_env, &last_code_like, inner, null);
         switch (flow) {
             .none => {},
             .returned => |value| {
@@ -2344,8 +2313,9 @@ fn invokeUserFunctionValues(
     return error.FunctionDidNotReturnValue;
 }
 
-fn statementOrigin(state: *core.DocumentState, span: ast.Span) ![]u8 {
-    const path: []const u8 = if (state.moduleById(active_module_id)) |module|
+fn statementOrigin(evaluation: *EvalContext, span: ast.Span) ![]u8 {
+    const state = evaluation.state;
+    const path: []const u8 = if (state.moduleById(evaluation.module_id)) |module|
         module.path orelse module.spec
     else
         "";
@@ -2355,8 +2325,8 @@ fn statementOrigin(state: *core.DocumentState, span: ast.Span) ![]u8 {
     return std.fmt.allocPrint(state.allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
-fn originForActiveModuleSpan(state: *core.DocumentState, span: ast.Span) ![]const u8 {
-    return statementOrigin(state, span);
+fn originForModuleSpan(evaluation: *EvalContext, span: ast.Span) ![]const u8 {
+    return statementOrigin(evaluation, span);
 }
 
 fn resolveAnchorRef(
