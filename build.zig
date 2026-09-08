@@ -1161,6 +1161,12 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
     vscode_tests.stdio = .inherit;
     vscode_tests.step.dependOn(&ctx.dependency_checks.vscode_packages.step);
     test_step.dependOn(&vscode_tests.step);
+
+    const editor_view_tests = b.addSystemCommand(&.{ "node", "tests/editor/vscode/view/spec.mjs" });
+    editor_view_tests.setCwd(b.path("."));
+    editor_view_tests.stdio = .inherit;
+    editor_view_tests.step.dependOn(&ctx.dependency_checks.vscode_packages.step);
+    addFocusedTestStep(b, "test-editor-view", "Run focused editor view resource tests", &editor_view_tests.step);
 }
 
 fn addBuildDependencyDiagnosticTest(ctx: BuildContext) void {

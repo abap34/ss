@@ -36,14 +36,25 @@ export class ViewResources {
     webview: vscode.Webview,
     snapshot: EditorSnapshot,
   ): EditorSnapshot {
-    const copy = structuredClone(snapshot);
-    if (copy.display.schema !== 2) return copy;
-    for (const asset of copy.display.assets) {
-      const uri = webview.asWebviewUri(vscode.Uri.file(asset.path)).toString();
-      copy.display.html = replaceHtmlAsset(copy.display.html, asset.relative_path, uri);
-      copy.display.css = replaceAll(copy.display.css, `url('${asset.relative_path}')`, `url('${uri}')`);
+    const display = snapshot.display;
+    if (display.schema !== 2 || display.assets.length === 0) return snapshot;
+    const references = new Map<string, string>();
+    for (const asset of display.assets) {
+      if (!references.has(asset.relative_path)) {
+        references.set(
+          asset.relative_path,
+          webview.asWebviewUri(vscode.Uri.file(asset.path)).toString(),
+        );
+      }
     }
-    return copy;
+    return {
+      ...snapshot,
+      display: {
+        ...display,
+        html: replaceHtmlAssets(display.html, references),
+        css: replaceCssAssets(display.css, references),
+      },
+    };
   }
 
   html(webview: vscode.Webview): string {
@@ -67,14 +78,22 @@ export class ViewResources {
   }
 }
 
-function replaceHtmlAsset(html: string, path: string, uri: string): string {
-  let result = replaceAll(html, `src="${path}"`, `src="${uri}"`);
-  result = replaceAll(result, `data-pdf-src="${path}"`, `data-pdf-src="${uri}"`);
-  return replaceAll(result, `url('${path}')`, `url('${uri}')`);
+function replaceHtmlAssets(html: string, references: ReadonlyMap<string, string>): string {
+  return html.replace(
+    /\b(src|data-pdf-src)="([^"]*)"|url\('([^']*)'\)/g,
+    (match: string, attribute: string | undefined, attributePath: string | undefined, cssPath: string | undefined) => {
+      const uri = references.get(attributePath ?? cssPath ?? "");
+      if (uri === undefined) return match;
+      return attribute === undefined ? `url('${uri}')` : `${attribute}="${uri}"`;
+    },
+  );
 }
 
-function replaceAll(value: string, source: string, replacement: string): string {
-  return value.split(source).join(replacement);
+function replaceCssAssets(css: string, references: ReadonlyMap<string, string>): string {
+  return css.replace(/url\('([^']*)'\)/g, (match: string, assetPath: string) => {
+    const uri = references.get(assetPath);
+    return uri === undefined ? match : `url('${uri}')`;
+  });
 }
 
 function randomNonce(): string {
