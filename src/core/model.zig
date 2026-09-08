@@ -353,6 +353,7 @@ pub const Node = struct {
     fields: std.ArrayList(Field) = .empty,
     render_env: std.ArrayList(RenderEnvEntry) = .empty,
     frame: Frame = .{},
+    layout_measurement: ?LayoutMeasurement = null,
 
     pub fn deinit(self: *Node, allocator: Allocator) void {
         for (self.fields.items) |*field| field.deinit(allocator);
@@ -382,11 +383,8 @@ pub const LayoutMeasurementMode = enum {
     width_constrained,
 };
 
-pub const LayoutMeasurement = struct {
-    width: f32,
-    height: f32,
-    cache_key: ?u64 = null,
-};
+pub const LayoutMeasurement = @import("layout_measurement.zig").Measurement;
+pub const LayoutBounds = @import("layout_measurement.zig").Bounds;
 
 pub const LayoutMeasurementProvider = struct {
     context: *anyopaque,

@@ -20,10 +20,7 @@ const OverflowDiagnostic = struct {
     overflow_bottom: f32,
 };
 
-const FrameRequirement = struct {
-    width: f32,
-    height: f32,
-};
+const FrameRequirement = model.LayoutMeasurement;
 
 const FixedAxes = struct {
     horizontal: bool,
@@ -57,6 +54,7 @@ fn collectPageDiagnosticsWithCache(state: anytype, page_id: NodeId, child_ids: [
         }
 
         const requirement = try frameRequirement(state, node, measurement_cache);
+        node.layout_measurement = requirement;
         if (pageVisualFrame(state, node, requirement)) |visual| {
             const visual_top = visual.y + visual.height;
             const visual_bottom = visual.y;
@@ -137,10 +135,7 @@ fn frameRequirement(state: anytype, node: *const Node, measurement_cache: ?*metr
     if (measurement_cache) |cache| {
         if (try metrics.frameConstrainedMeasurementCached(state, node, cache)) |measured| {
             if (measured.width > 0 and measured.height > 0) {
-                return .{
-                    .width = measured.width,
-                    .height = measured.height,
-                };
+                return measured;
             }
         }
     }
@@ -193,7 +188,7 @@ fn axisFrameFixedByUserConstraints(state: anytype, node_id: NodeId, axis: Axis) 
 fn pageVisualFrame(state: anytype, node: *const Node, requirement: ?FrameRequirement) ?VisualFrame {
     const render = render_policy.resolve(state, node);
     var visual: ?VisualFrame = if (hasFrameInk(render))
-        frameToVisual(node.frame)
+        frameToVisual(model.LayoutBounds.expandFrame(node.frame, render.chrome.pad_x, render.chrome.pad_y, if (requirement) |measured| measured.ink_bounds else null))
     else
         null;
 
@@ -218,6 +213,10 @@ fn contentVisualFrame(state: anytype, node: *const Node, render: render_policy.R
         .chrome_only => null,
         else => frameToVisual(node.frame),
     };
+    if (measured.ink_bounds) |ink| {
+        if (ink.width <= 0 or ink.height <= 0) return null;
+        return frameToVisual(ink.inFrame(node.frame));
+    }
     const content_frame = metrics.contentFrame(state, node);
     const content_width = @max(@as(f32, 1.0), measured.width - 2.0 * metrics.chromePadX(state, node));
     const content_height = @max(@as(f32, 1.0), measured.height - 2.0 * metrics.chromePadY(state, node));

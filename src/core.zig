@@ -46,6 +46,7 @@ pub const ConstraintFailure = model.ConstraintFailure;
 pub const ConstraintPropagation = model.ConstraintPropagation;
 pub const LayoutMeasurementMode = model.LayoutMeasurementMode;
 pub const LayoutMeasurement = model.LayoutMeasurement;
+pub const LayoutBounds = model.LayoutBounds;
 pub const LayoutMeasurementProvider = model.LayoutMeasurementProvider;
 pub const Query = model.Query;
 pub const roleEq = model.roleEq;

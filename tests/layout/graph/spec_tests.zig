@@ -1296,6 +1296,47 @@ const FakeMeasurementContext = struct {
     last_constrained_width: f32 = 0,
 };
 
+const InkMeasurement = struct {
+    ink: model.LayoutBounds,
+
+    fn measure(context: *anyopaque, _: *anyopaque, _: *const model.Node, width: f32, _: model.LayoutMeasurementMode) !?model.LayoutMeasurement {
+        const self: *InkMeasurement = @ptrCast(@alignCast(context));
+        return .{ .width = 10, .height = 36, .ink_bounds = self.ink, .first_baseline = 26, .measured_width = width };
+    }
+};
+
+test "layout diagnostics preserve the direction of ink outside the page" {
+    const cases = [_]struct { left: f32, ink: model.LayoutBounds, overflow_left: f32 = 0, overflow_right: f32 = 0, overflow_top: f32 = 0 }{
+        .{ .left = 0, .ink = .{ .x = -5, .y = 5, .width = 13, .height = 24 }, .overflow_left = 5 },
+        .{ .left = 1270, .ink = .{ .x = -2, .y = 5, .width = 15, .height = 24 }, .overflow_right = 3 },
+        .{ .left = 60, .ink = .{ .x = 0, .y = -0.5, .width = 10, .height = 24 }, .overflow_top = 0.5 },
+    };
+    for (cases) |case| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        const page = try state.addPage("Ink overflow");
+        const object = try state.makeObject(page, "text", null, .text, .text, "j");
+        try state.addAnchorConstraint(object, .left, .{ .page = .left }, case.left, "left");
+        try state.addAnchorConstraint(object, .top, .{ .page = .top }, 0, "top");
+        var measurement = InkMeasurement{ .ink = case.ink };
+        try solveDocumentStateWithOptions(&state, null, .{ .measurement_provider = .{ .context = &measurement, .measure = InkMeasurement.measure } });
+        const retained = state.getNode(object).?.layout_measurement.?;
+        try testing.expectEqualDeep(case.ink, retained.ink_bounds.?);
+        try testing.expectEqual(@as(f32, 26), retained.first_baseline.?);
+        var found = false;
+        for (state.diagnostics.items) |diagnostic| {
+            if (diagnostic.node_id != object or diagnostic.data != .page_overflow) continue;
+            const data = diagnostic.data.page_overflow;
+            try expectFloat(case.overflow_left, data.overflow_left);
+            try expectFloat(case.overflow_right, data.overflow_right);
+            try expectFloat(case.overflow_top, data.overflow_top);
+            try expectFloat(0, data.overflow_bottom);
+            found = true;
+        }
+        try testing.expect(found);
+    }
+}
+
 fn fakeLayoutMeasurement(
     context: *anyopaque,
     state_ptr: *anyopaque,

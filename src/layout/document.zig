@@ -16,6 +16,7 @@ pub const Defaults = struct {
 pub const ObjectFrame = struct {
     node_id: model.NodeId,
     frame: model.Frame,
+    measurement: ?model.LayoutMeasurement = null,
 };
 
 pub const Page = struct {

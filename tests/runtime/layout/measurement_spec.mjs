@@ -9,6 +9,7 @@ const pdflatexAvailable = await commandAvailable("pdflatex");
 
 await testNaturalTitleWidthDoesNotSelfWrap();
 await testTableHeightUsesFinalWidthWithWrappingDisabled();
+await testPageOverflowUsesInkOrigins();
 await testCheckReportsRasterMeasurementFailure();
 await testCheckReportsUnknownStandaloneIcon();
 await testPanelHeightUsesRenderedIconMeasurement();
@@ -60,6 +61,31 @@ async function testTableHeightUsesFinalWidthWithWrappingDisabled() {
     assert(table.height > 150, `The table retained its natural-width height: ${frameSummary(table)}`);
     const after = followers[index];
     assert(close(after.y + after.height, table.y - 20), `The following object overlapped its table: ${frameSummary(after)}`);
+  }
+  await runSs(["render", "--quiet", fixture, path.join(output, "fixture.pdf")], root);
+}
+
+async function testPageOverflowUsesInkOrigins() {
+  const output = path.join(root, ".ss-cache", "tests", "layout-ink-bounds");
+  await mkdir(output, { recursive: true });
+  const fixture = path.join(root, "tests", "fixtures", "layout", "ink-bounds", "slide.ss");
+  await runSs(["check", "--quiet", fixture], root);
+  const dumps = [];
+  for (const generation of ["first", "warm"]) {
+    const dumpPath = path.join(output, `${generation}.json`);
+    await runSs(["dump", "--quiet", fixture, dumpPath], root);
+    dumps.push(JSON.parse(await readFile(dumpPath, "utf8")));
+  }
+  const nodes = dumps[0].nodes.filter((node) => node.content === "j" || node.content === "f");
+  assert(nodes.length === 3, "Ink fixture omitted its text objects");
+  for (const [index, node] of nodes.entries()) {
+    const diagnostic = dumps[0].diagnostics.find((item) => item.node_id === node.id && item.code === "PageOverflow");
+    assert(diagnostic, `Missing ink overflow for object ${node.id}`);
+    const side = index === 1 ? "overflow_right" : "overflow_left";
+    assert(diagnostic[side] > 0, `Wrong ink overflow direction: ${JSON.stringify(diagnostic)}`);
+    assert(node.measurement.first_baseline > 0, "The solved object lost its baseline");
+    const warm = dumps[1].nodes.find((candidate) => candidate.id === node.id);
+    assert(JSON.stringify(node.measurement) === JSON.stringify(warm.measurement), "Persistent measurement changed the geometry");
   }
   await runSs(["render", "--quiet", fixture, path.join(output, "fixture.pdf")], root);
 }

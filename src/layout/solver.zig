@@ -155,7 +155,9 @@ pub fn applyPage(state: anytype, page: *const document.Page) !void {
         if (state.getNode(entry.node_id) == null) return error.UnknownNode;
     }
     for (page.object_frames) |entry| {
-        state.getNode(entry.node_id).?.frame = entry.frame;
+        const node = state.getNode(entry.node_id).?;
+        node.frame = entry.frame;
+        node.layout_measurement = entry.measurement;
     }
     state.fallback_constraints.deinit(state.allocator);
     state.fallback_constraints = constraints;
@@ -381,6 +383,7 @@ pub fn applyDocument(state: anytype, results: *const document.Document) !void {
         for (page.object_frames) |entry| {
             const node = state.getNode(entry.node_id) orelse return error.UnknownNode;
             node.frame = entry.frame;
+            node.layout_measurement = entry.measurement;
         }
     }
 }
@@ -505,6 +508,7 @@ fn collectPage(
         try frames.append(state.allocator, .{
             .node_id = child_id,
             .frame = node.frame,
+            .measurement = node.layout_measurement,
         });
     }
     for (state.diagnostics.items[diagnostic_start..]) |diagnostic| {
@@ -567,6 +571,7 @@ fn initializePageObjectMeasurements(state: anytype, page_graph: *const graph.Pag
         try graph.checkCancellation(options);
         const node = state.getNode(node_id) orelse return error.UnknownNode;
         if (node.kind != .object) continue;
+        node.layout_measurement = null;
         node.frame.x = 0;
         node.frame.y = 0;
         node.frame.x_set = false;

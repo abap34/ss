@@ -71,8 +71,37 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.Docu
     try item.floatField("y", node.frame.y, "{d:.1}");
     try item.floatField("width", node.frame.width, "{d:.1}");
     try item.floatField("height", node.frame.height, "{d:.1}");
+    if (node.layout_measurement) |measured| {
+        var measurement = try item.objectField("measurement");
+        try writeMeasurementBounds(&measurement, "logical_bounds", measured.logicalBounds());
+        if (measured.ink_bounds) |ink| {
+            try writeMeasurementBounds(&measurement, "ink_bounds", ink);
+        } else {
+            try measurement.nullField("ink_bounds");
+        }
+        if (measured.first_baseline) |baseline| {
+            try measurement.floatField("first_baseline", baseline, "{d}");
+        } else {
+            try measurement.nullField("first_baseline");
+        }
+        if (measured.measured_width) |width| {
+            try measurement.floatField("measured_width", width, "{d}");
+        } else {
+            try measurement.nullField("measured_width");
+        }
+        try measurement.end();
+    }
     try writeRender(&item, render);
     try item.end();
+}
+
+fn writeMeasurementBounds(parent: *json.Object, key: []const u8, bounds: core.LayoutBounds) !void {
+    var object = try parent.objectField(key);
+    try object.floatField("x", bounds.x, "{d}");
+    try object.floatField("y", bounds.y, "{d}");
+    try object.floatField("width", bounds.width, "{d}");
+    try object.floatField("height", bounds.height, "{d}");
+    try object.end();
 }
 
 fn writeFields(allocator: std.mem.Allocator, object: *json.Object, fields: anytype) !void {

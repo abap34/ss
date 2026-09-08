@@ -10,6 +10,117 @@ const render_text = @import("render_text");
 
 const testing = std.testing;
 
+test "final-width measurements retain ink origins and baselines through the file cache" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("measurement-geometry");
+    const object_id = try state.makeObject(page_id, "italic", null, .text, .text, "j");
+    const object = state.getNode(object_id).?;
+    object.frame = .{ .x = 0, .y = 684, .width = 47.995, .height = 36 };
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    const text = &prepared.pages[0].objects[0].render.text.?;
+    text.font.family = "DejaVu Serif";
+    text.font.style = .italic;
+    text.font_size = 24;
+    text.line_height = 36;
+    const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+
+    const measured = blk: {
+        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{}, null, font_environment);
+        defer scope.deinit();
+        scope.persistent_measurements.clearRetainingCapacity();
+        const provider = scope.provider();
+        break :blk (try provider.measure(provider.context, &state, object, object.frame.width, .width_constrained)).?;
+    };
+    try testing.expect(measured.ink_bounds.?.x < 0);
+    try testing.expectEqual(@as(f32, 36), measured.logicalBounds().height);
+    try testing.expect(measured.first_baseline.? > 0);
+    try testing.expectEqual(object.frame.width, measured.measured_width.?);
+
+    var warm_scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{}, null, font_environment);
+    defer warm_scope.deinit();
+    const persisted = warm_scope.persistent_measurements.get(measured.cache_key.?) orelse return error.MissingPersistedMeasurement;
+    try testing.expectEqualDeep(measured, persisted);
+    const provider = warm_scope.provider();
+    const warm = (try provider.measure(provider.context, &state, object, object.frame.width, .width_constrained)).?;
+    try testing.expectEqualDeep(measured, warm);
+
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1 });
+    defer ir.deinit(testing.allocator);
+    var ink: ?render.Rect = null;
+    var first_baseline: ?f64 = null;
+    for (ir.pages[0].items.items) |item| {
+        if (item.header().node_id != object_id) continue;
+        const bounds = item.header().ink_bounds;
+        if (bounds.width > 0 and bounds.height > 0) ink = if (ink) |current| current.unioned(bounds) else bounds;
+        if (item == .text and first_baseline == null) first_baseline = item.text.baselineY();
+    }
+    const expected = measured.ink_bounds.?;
+    try testing.expectApproxEqAbs(@as(f64, expected.x), ink.?.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, expected.y), ink.?.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, expected.width), ink.?.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, expected.height), ink.?.height, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, measured.first_baseline.?), first_baseline.?, 0.001);
+}
+
+test "code measurement includes empty logical lines and keeps its ink offset" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("code-geometry");
+    const object_id = try state.makeObject(page_id, "code", null, .source, .code, "j\n\nj");
+    try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "code" });
+    const object = state.getNode(object_id).?;
+    object.frame = .{ .width = 240, .height = 108 };
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    const text = &prepared.pages[0].objects[0].render.text.?;
+    text.code_font.family = "DejaVu Serif";
+    text.code_font.style = .italic;
+    text.font_size = 24;
+    text.line_height = 36;
+    const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{}, null, font_environment);
+    defer {
+        scope.measurement_cache_dirty = false;
+        scope.deinit();
+    }
+    const provider = scope.provider();
+    const measured = (try provider.measure(provider.context, &state, object, object.frame.width, .width_constrained)).?;
+    try testing.expectEqual(@as(f32, 108), measured.height);
+    try testing.expect(measured.ink_bounds.?.x < 0);
+    try testing.expect(measured.ink_bounds.?.y > 0);
+    try testing.expect(measured.first_baseline.? > 0 and measured.first_baseline.? < 36);
+}
+
+test "natural measurement includes tables beside ordinary paragraphs" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("mixed-block-geometry");
+    const object_id = try state.makeObject(page_id, "mixed blocks", null, .text, .text, "Introduction\n\n| column | value |\n| --- | --- |\n| first | second |");
+    var text_style = core.RecordValue.init("TextStyle");
+    defer text_style.deinit(testing.allocator);
+    try text_style.fields.append(testing.allocator, .{
+        .name = "parse",
+        .value = .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } },
+        .explicit = true,
+    });
+    try state.setNodeFieldValue(object_id, "text", .{ .record = text_style });
+    const object = state.getNode(object_id).?;
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    try testing.expect(prepared.pages[0].objects[0].markdownDocument() != null);
+    const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{}, null, font_environment);
+    defer {
+        scope.measurement_cache_dirty = false;
+        scope.deinit();
+    }
+    const provider = scope.provider();
+    const measured = (try provider.measure(provider.context, &state, object, 620, .natural)).?;
+    try testing.expectApproxEqAbs(@as(f32, 620), measured.width, 0.01);
+}
+
 const FakeCompiler = struct {
     prepare_count: usize = 0,
     page_count: usize = 0,

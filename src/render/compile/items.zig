@@ -15,6 +15,7 @@ const fingerprint = @import("fingerprint.zig");
 const latex_document = @import("latex.zig");
 const latex_inputs = @import("latex_inputs.zig");
 const cache_versions = @import("cache_versions.zig");
+const measurement_record = @import("measurement_record.zig");
 const page_cache = @import("page_cache.zig");
 const external_process = @import("external_process.zig");
 const syntax_highlight = @import("syntax_highlight.zig");
@@ -56,7 +57,7 @@ const NativePdfError = error{
 pub const native_artifact_cache_version = cache_versions.native_artifacts;
 const render_page_cache_version = cache_versions.render_page;
 const layout_measurement_cache_version = cache_versions.layout_measurement;
-const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
+const layout_measurement_cache_file_format = "ss-layout-measurements-v2";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
 const command_failure_output_limit: usize = 1600;
 const warm_render_job_cap: usize = 4;
@@ -109,6 +110,7 @@ const DrawContext = struct {
 
 const MeasurementBounds = struct {
     ink: ?render_ir.Rect = null,
+    first_baseline: ?f32 = null,
 
     fn include(self: *MeasurementBounds, rect: render_ir.Rect) void {
         if (rect.width <= 0 or rect.height <= 0) return;
@@ -509,6 +511,7 @@ pub const LayoutMeasurementScope = struct {
             // Persist the result only under its completed dependency key.
             if (commandUsesLatex(command)) cache_key = try self.measurementKey(state.allocator, command, width, mode);
             value.cache_key = cache_key;
+            value.measured_width = width;
             try self.storeMeasurement(cache_key, value.*);
         }
         return measured;
@@ -594,8 +597,8 @@ pub const LayoutMeasurementScope = struct {
         var iterator = self.run_measurements.iterator();
         while (iterator.next()) |entry| {
             const measurement = entry.value_ptr.*;
-            if (!(measurement.width > 0) or !(measurement.height > 0)) continue;
-            try out.print(self.allocator, "{x}\t{d:.6}\t{d:.6}\n", .{ entry.key_ptr.*, measurement.width, measurement.height });
+            if (!measurement.isValid()) continue;
+            try measurement_record.append(self.allocator, &out, entry.key_ptr.*, measurement);
         }
         try std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = tmp, .data = out.items, .flags = .{ .truncate = true } });
         try renameReplacing(&self.ctx, tmp, self.measurement_cache_path);
@@ -685,19 +688,8 @@ fn readPersistedMeasurements(
     while (lines.next()) |raw_line| {
         const line = std.mem.trim(u8, raw_line, " \t\r\n");
         if (line.len == 0) continue;
-        var fields = std.mem.tokenizeAny(u8, line, " \t");
-        const key_text = fields.next() orelse continue;
-        const width_text = fields.next() orelse continue;
-        const height_text = fields.next() orelse continue;
-        const key = std.fmt.parseUnsigned(u64, key_text, 16) catch continue;
-        const width = std.fmt.parseFloat(f32, width_text) catch continue;
-        const height = std.fmt.parseFloat(f32, height_text) catch continue;
-        if (!(width > 0) or !(height > 0)) continue;
-        try target.put(key, .{
-            .width = width,
-            .height = height,
-            .cache_key = key,
-        });
+        const record = measurement_record.parse(line) orelse continue;
+        try target.put(record.cache_key.?, record);
     }
 }
 
@@ -2173,25 +2165,10 @@ fn measuredObjectCommandVisualFrame(ctx: *DrawContext, command: *const ObjectCom
 }
 
 fn expandFrameToMeasuredInk(frame: Frame, render: ResolvedRender, maybe_ink: ?Frame) Frame {
-    const current_content = contentFrameForRender(frame, render);
-    var content_left = current_content.x;
-    var content_right = current_content.x + current_content.width;
-    var content_bottom = current_content.y;
-    var content_top = current_content.y + current_content.height;
-    if (maybe_ink) |ink| {
-        content_left = @min(content_left, ink.x);
-        content_right = @max(content_right, ink.x + ink.width);
-        content_bottom = @min(content_bottom, ink.y);
-        content_top = @max(content_top, ink.y + ink.height);
-    }
-    return .{
-        .x = content_left - render.chrome.pad_x,
-        .y = content_bottom - render.chrome.pad_y,
-        .width = @max(content_right - content_left, 1) + render.chrome.pad_x * 2,
-        .height = @max(content_top - content_bottom, 1) + render.chrome.pad_y * 2,
-        .x_set = frame.x_set,
-        .y_set = frame.y_set,
-    };
+    return core.LayoutBounds.expandFrame(frame, render.chrome.pad_x, render.chrome.pad_y, if (maybe_ink) |ink|
+        inkBoundsFromFrame(ink, frame.x, frame.y + frame.height)
+    else
+        null);
 }
 
 const MeasurementScope = struct {
@@ -2383,7 +2360,7 @@ fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectComman
         ),
         .vector_path, .connector, .chrome_only => unreachable,
     };
-    return expandContentMeasurement(render, content_measure);
+    return expandContentMeasurement(render, frame, content_frame, content_measure);
 }
 
 fn measureFrameIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, frame: Frame) !core.LayoutMeasurement {
@@ -2400,22 +2377,32 @@ fn measureFrameIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, frame
         else => unreachable,
     }
     if (try measurement.inkFrame()) |ink| {
-        return .{ .width = @max(ink.width, frame.width), .height = @max(ink.height, frame.height) };
+        return .{
+            .width = @max(ink.width, frame.width),
+            .height = @max(ink.height, frame.height),
+            .ink_bounds = inkBoundsFromFrame(ink, frame.x, frame.y + frame.height),
+        };
     }
-    return .{ .width = frame.width, .height = frame.height };
+    return .{ .width = frame.width, .height = frame.height, .ink_bounds = .{} };
 }
 
-fn expandContentMeasurement(render: ResolvedRender, content: core.LayoutMeasurement) core.LayoutMeasurement {
-    return .{
-        .width = @max(content.width + render.chrome.pad_x * 2, 1),
-        .height = @max(content.height + render.chrome.pad_y * 2, 1),
-    };
+fn expandContentMeasurement(render: ResolvedRender, frame: Frame, content_frame: Frame, content: core.LayoutMeasurement) core.LayoutMeasurement {
+    var result = content;
+    result.width = @max(content.width + render.chrome.pad_x * 2, 1);
+    result.height = @max(content.height + render.chrome.pad_y * 2, 1);
+    const top_inset = frame.height - content_frame.y - content_frame.height;
+    if (result.ink_bounds) |*ink| {
+        ink.x += render.chrome.pad_x;
+        ink.y += top_inset;
+    }
+    if (result.first_baseline) |*baseline| baseline.* += top_inset;
+    return result;
 }
 
 fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32, text: TextPaint, mode: core.LayoutMeasurementMode) !core.LayoutMeasurement {
     const baseline_bl = Defaults.height * 0.5;
     return switch (command.parse_mode) {
-        .none => .{ .width = 1, .height = 1 },
+        .none => .{ .width = 1, .height = 1, .ink_bounds = .{} },
         .block => blk: {
             var owned_doc: ?MarkdownDocument = null;
             defer if (owned_doc) |*doc| doc.deinit();
@@ -2436,13 +2423,7 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
                 try lineBaselineFromTop(ctx, first_text.font, first_text.font_size, first_text.line_height),
                 first_text.line_height,
             );
-            if (mode == .natural) {
-                if (try markdownBlocksNaturalInlineAdvance(ctx, doc.blocks.items, text, 0)) |natural_width| {
-                    measured.width = @max(measured.width, natural_width, 1);
-                }
-            } else {
-                measured.width = @max(try markdownBlocksConstrainedLogicalWidth(ctx, doc.blocks.items, text, 0, width), 1);
-            }
+            measured.width = @max(try markdownBlocksConstrainedLogicalWidth(ctx, doc.blocks.items, text, 0, width), 1);
             break :blk measured;
         },
         .@"inline" => blk: {
@@ -2465,13 +2446,7 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
                 try lineBaselineFromTop(ctx, inline_text.font, inline_text.font_size, inline_text.line_height),
                 inline_text.line_height,
             );
-            if (mode == .natural) {
-                if (try inlineLinesNaturalAdvance(ctx, layout.lines.items, inline_text)) |natural_width| {
-                    measured.width = @max(measured.width, natural_width, 1);
-                }
-            } else {
-                measured.width = @max(try inlineLinesConstrainedLogicalWidth(ctx, layout.lines.items, inline_text, width, inline_text.wrap), 1);
-            }
+            measured.width = @max(try inlineLinesConstrainedLogicalWidth(ctx, layout.lines.items, inline_text, width, inline_text.wrap), 1);
             break :blk measured;
         },
     };
@@ -2483,17 +2458,36 @@ fn measureCodeIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
     defer measurement.deinit();
     const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = Defaults.height };
     try drawCodeBlock(ctx, frame, command.content, text, command.render.code);
+    const logical_height = @as(f32, @floatFromInt(@max(utils.source.lineCount(command.content), 1))) * text.line_height;
+    const baseline = if (measurement.bounds.first_baseline) |value| value else try lineBaselineFromTop(ctx, text.code_font, text.font_size, text.line_height);
     if (try measurement.inkFrame()) |ink| {
-        return .{ .width = @max(ink.width, 1), .height = @max(ink.height, text.line_height) };
+        return .{
+            .width = @max(ink.x + ink.width, 1),
+            .height = logical_height,
+            .ink_bounds = inkBoundsFromFrame(ink, 0, Defaults.height),
+            .first_baseline = baseline,
+        };
     }
-    return .{ .width = 1, .height = text.line_height };
+    return .{ .width = 1, .height = logical_height, .ink_bounds = .{}, .first_baseline = baseline };
 }
 
 fn measureLatexIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32, height: f32) !core.LayoutMeasurement {
     const latex = try renderLatexToPdf(ctx, command.content, command.latex_preamble, command.latex_engine, command.latex_kind);
     defer ctx.allocator.free(latex.path);
     const fitted = fitLatexSize(latex.width, latex.height, @max(width, 1), @max(height, 1), try requiredLatexPaint(command));
-    return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
+    const paint = try requiredLatexPaint(command);
+    const ink = core.LayoutBounds{
+        .x = alignedX(0, width, fitted.width, paint.horizontal_align),
+        .y = height - fitted.height - @max((height - fitted.height) / 2, 0),
+        .width = fitted.width,
+        .height = fitted.height,
+    };
+    return .{
+        .width = @max(fitted.width, 1),
+        .height = @max(fitted.height, 1),
+        .ink_bounds = ink,
+        .first_baseline = ink.y + fitted.height - latex.baseline_from_bottom * fitted.height / @max(latex.height, 1),
+    };
 }
 
 fn measureAssetIntrinsic(
@@ -2505,8 +2499,8 @@ fn measureAssetIntrinsic(
 ) !core.LayoutMeasurement {
     if (core.fontawesome.parseSource(command.content)) |spec| {
         if (!core.fontawesome.contains(spec)) return NativePdfError.InvalidFontAwesomeIcon;
-        if (mode == .natural) return .{ .width = 72, .height = 72 };
-        return .{ .width = @max(width, 1), .height = @max(height, 1) };
+        const size = if (mode == .natural) Size{ .width = 72, .height = 72 } else Size{ .width = @max(width, 1), .height = @max(height, 1) };
+        return .{ .width = size.width, .height = size.height, .ink_bounds = .{ .width = size.width, .height = size.height } };
     }
     const source = try resolveAssetPath(ctx, command.content);
     defer ctx.allocator.free(source);
@@ -2521,24 +2515,30 @@ fn measureAssetIntrinsic(
         natural = try rasterAssetSize(ctx, source);
     }
     const scaled = scaledAssetSize(natural, command.render.asset);
-    return .{ .width = @max(scaled.width, 1), .height = @max(scaled.height, 1) };
+    return .{
+        .width = @max(scaled.width, 1),
+        .height = @max(scaled.height, 1),
+        .ink_bounds = .{ .width = scaled.width, .height = scaled.height },
+    };
 }
 
 fn measurementFromInk(measurement: *MeasurementScope, baseline_bl: f32, next_bl: f32, baseline_from_top: f32, line_height: f32) !core.LayoutMeasurement {
     const content_top_bl = baseline_bl + baseline_from_top;
-    var left: f32 = 0;
-    var right: f32 = 1;
-    var top_overhang: f32 = 0;
-    var bottom_depth = @max(baseline_bl - next_bl, line_height);
-    if (try measurement.inkFrame()) |ink| {
-        left = @min(left, ink.x);
-        right = @max(right, ink.x + ink.width);
-        top_overhang = @max(@as(f32, 0), ink.y + ink.height - content_top_bl);
-        bottom_depth = @max(bottom_depth, content_top_bl - ink.y);
-    }
+    const ink = if (try measurement.inkFrame()) |frame| inkBoundsFromFrame(frame, 0, content_top_bl) else core.LayoutBounds{};
     return .{
-        .width = @max(right - left, 1),
-        .height = @max(top_overhang + bottom_depth, line_height),
+        .width = @max(ink.x + ink.width, 1),
+        .height = @max(baseline_bl - next_bl, line_height),
+        .ink_bounds = ink,
+        .first_baseline = if (measurement.bounds.first_baseline) |baseline| baseline - (Defaults.height - content_top_bl) else baseline_from_top,
+    };
+}
+
+fn inkBoundsFromFrame(ink: Frame, left: f32, top_bl: f32) core.LayoutBounds {
+    return .{
+        .x = ink.x - left,
+        .y = top_bl - ink.y - ink.height,
+        .width = ink.width,
+        .height = ink.height,
     };
 }
 
@@ -3494,63 +3494,6 @@ fn drawInlineLinesAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f3
     return cursor_bl;
 }
 
-fn markdownBlocksNaturalInlineAdvance(ctx: *DrawContext, blocks: []const *Block, text: TextPaint, list_depth: usize) !?f32 {
-    var max_width: f32 = 0;
-    var found = false;
-    for (blocks) |block| {
-        switch (block.kind) {
-            .paragraph, .heading => {
-                if (block.paragraph) |paragraph| {
-                    if (try inlineLinesNaturalAdvance(ctx, paragraph.lines.items, markdownBlockText(text, block))) |width| {
-                        max_width = @max(max_width, width);
-                        found = true;
-                    }
-                }
-            },
-            .bullet_list, .ordered_list => {
-                const list = block.list orelse continue;
-                const list_inset: f32 = if (list_depth == 0) @max(text.markdown_list_inset, 0) else @max(text.markdown_list_indent, 0);
-                for (list.items.items, 0..) |item, item_index| {
-                    const marker = try listMarker(ctx.allocator, block.kind, list_depth, list.start + item_index);
-                    defer ctx.allocator.free(marker);
-                    const marker_width = try measureText(ctx, marker, text.font, text.font_size);
-                    const marker_gap = @max(@as(f32, 8.0), text.font_size * 0.35);
-                    const content_width = (try markdownBlocksNaturalInlineAdvance(ctx, item.blocks.items, text, list_depth + 1)) orelse 0;
-                    max_width = @max(max_width, list_inset + marker_width + marker_gap + content_width);
-                    found = true;
-                }
-            },
-            .block_quote => {
-                const quote = block.quote orelse continue;
-                const quote_text = markdownQuoteText(text);
-                if (try markdownBlocksNaturalInlineAdvance(ctx, quote.blocks.items, quote_text, list_depth)) |width| {
-                    max_width = @max(max_width, text.markdown_quote.inset + text.markdown_quote.pad_x * 2 + width);
-                    found = true;
-                }
-            },
-            .code_block, .table => {},
-        }
-    }
-    if (!found) return null;
-    return max_width;
-}
-
-fn inlineLinesNaturalAdvance(ctx: *DrawContext, lines: []const Line, text: TextPaint) !?f32 {
-    var max_width: f32 = 0;
-    var found = false;
-    for (lines) |line| {
-        if (lineContainsDisplayMath(line)) continue;
-        var atoms = std.ArrayList(Atom).empty;
-        defer atoms.deinit(ctx.allocator);
-        defer freeAtoms(ctx.allocator, atoms.items);
-        try layoutAtoms(ctx, line, text, &atoms);
-        max_width = @max(max_width, atomLineAdvance(atoms.items, atomPaint(text)));
-        found = true;
-    }
-    if (!found) return null;
-    return max_width;
-}
-
 fn markdownBlocksConstrainedLogicalWidth(ctx: *DrawContext, blocks: []const *Block, text: TextPaint, list_depth: usize, width: f32) anyerror!f32 {
     var max_width: f32 = 0;
     for (blocks) |block| {
@@ -3691,6 +3634,7 @@ fn inlineRunSliceConstrainedLogicalWidth(ctx: *DrawContext, runs: []const Run, t
 }
 
 fn atomLinesLogicalWidth(atoms: []const Atom, paint: AtomPaint, width: f32, wrap: bool, preserve_leading_space: bool) f32 {
+    if (!wrap) return atomLineAdvance(atoms, paint);
     var cursor = wrap_layout.Cursor{ .preserve_leading_space = preserve_leading_space };
     var max_width: f32 = 0;
     var line_width: f32 = 0;
@@ -4100,6 +4044,9 @@ fn drawAtomsWithOptions(
     }
 
     var line_bl = baseline_bl - @max(lines.items[0].ascent - default_ascent, 0);
+    if (ctx.measurement_bounds) |bounds| {
+        if (bounds.first_baseline == null) bounds.first_baseline = toTopY(line_bl);
+    }
     for (lines.items, 0..) |line, line_index| {
         if (line_index > 0) {
             const previous = lines.items[line_index - 1];
