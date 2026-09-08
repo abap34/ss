@@ -2,6 +2,21 @@ const std = @import("std");
 
 const Step = std.Build.Step;
 
+pub fn requiresNativePdf(b: *std.Build, root: *std.Build.Module) bool {
+    var modules: std.AutoArrayHashMapUnmanaged(*std.Build.Module, void) = .empty;
+    defer modules.deinit(b.allocator);
+    modules.put(b.allocator, root, {}) catch @panic("OOM");
+    var index: usize = 0;
+    while (index < modules.count()) : (index += 1) {
+        const module = modules.keys()[index];
+        for (module.link_objects.items) |object| {
+            if (object == .system_lib and std.mem.eql(u8, object.system_lib.name, "ss-pdf")) return true;
+        }
+        for (module.import_table.values()) |dependency| modules.put(b.allocator, dependency, {}) catch @panic("OOM");
+    }
+    return false;
+}
+
 pub const Checks = struct {
     executable: *Step.Compile,
     native_pdf: *Step.Run,

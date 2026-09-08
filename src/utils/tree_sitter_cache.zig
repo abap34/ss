@@ -30,6 +30,48 @@ pub const PruneResult = struct {
     removed_source_dirs: usize = 0,
 };
 
+pub const Lease = struct {
+    io: std.Io,
+    guard: std.Io.File,
+
+    pub fn acquire(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8) !Lease {
+        return .{ .io = io, .guard = try openGuard(io, allocator, root_path, .shared, false) };
+    }
+
+    pub fn deinit(self: *Lease) void {
+        self.guard.close(self.io);
+    }
+};
+
+fn openGuard(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    lock: std.Io.File.Lock,
+    nonblocking: bool,
+) !std.Io.File {
+    const normalized_root = try std.fs.path.resolve(allocator, &.{root_path});
+    defer allocator.free(normalized_root);
+    // Keep the lock outside the removable tree so every process locks the same file.
+    const guard_path = try std.fmt.allocPrint(allocator, "{s}.lock", .{normalized_root});
+    defer allocator.free(guard_path);
+    const cwd = std.Io.Dir.cwd();
+    if (std.fs.path.dirname(guard_path)) |parent| try cwd.createDirPath(io, parent);
+    return cwd.createFile(io, guard_path, .{
+        .read = true,
+        .truncate = false,
+        .lock = lock,
+        .lock_nonblocking = nonblocking,
+    });
+}
+
+fn deletionGuard(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8) !std.Io.File {
+    return openGuard(io, allocator, root_path, .exclusive, true) catch |err| switch (err) {
+        error.WouldBlock => error.ActiveTreeSitterCacheLease,
+        else => err,
+    };
+}
+
 pub fn stats(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8) !Stats {
     return fs.directoryStats(io, allocator, root_path);
 }
@@ -60,7 +102,9 @@ pub fn pathExists(allocator: std.mem.Allocator, path: []const u8) bool {
     return std.c.access(zpath.ptr, std.c.F_OK) == 0;
 }
 
-pub fn clear(io: std.Io, root_path: []const u8) !void {
+pub fn clear(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8) !void {
+    const guard = try deletionGuard(io, allocator, root_path);
+    defer guard.close(io);
     std.Io.Dir.cwd().deleteTree(io, root_path) catch |err| {
         if (err == error.FileNotFound) return;
         return err;
@@ -73,6 +117,8 @@ pub fn prune(
     root_path: []const u8,
     current_manifest_hash: []const u8,
 ) !PruneResult {
+    const guard = try deletionGuard(io, allocator, root_path);
+    defer guard.close(io);
     const bundles_path = try std.fs.path.join(allocator, &.{ root_path, "bundles" });
     defer allocator.free(bundles_path);
 

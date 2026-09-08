@@ -1,3 +1,4 @@
+pub const tree_sitter_abi = @import("tree_sitter_abi");
 const model = @import("model");
 
 pub const Allocator = model.Allocator;

@@ -211,8 +211,8 @@ const language_definitions = [_]LanguageDefinition{
     },
 };
 
-pub const tree_sitter_language_version: u32 = build_options.tree_sitter_language_version;
-pub const tree_sitter_min_compatible_language_version: u32 = build_options.tree_sitter_min_compatible_language_version;
+pub const tree_sitter_language_version: u32 = @import("core").tree_sitter_abi.TREE_SITTER_LANGUAGE_VERSION;
+pub const tree_sitter_min_compatible_language_version: u32 = @import("core").tree_sitter_abi.TREE_SITTER_MIN_COMPATIBLE_LANGUAGE_VERSION;
 
 pub const Span = @import("highlight_spans.zig").Span;
 

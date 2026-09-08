@@ -1266,7 +1266,7 @@ fn runTreeSitterCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []c
         .stats => try printTreeSitterCacheStats(io, allocator, cache_root),
         .clear => {
             const before = try utils.tree_sitter_cache.stats(io, allocator, cache_root);
-            try utils.tree_sitter_cache.clear(io, cache_root);
+            try utils.tree_sitter_cache.clear(io, allocator, cache_root);
             std.debug.print("cleared tree-sitter cache: {s}\n", .{cache_root});
             std.debug.print("removed: ", .{});
             printByteSize(before.bytes);
