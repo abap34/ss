@@ -1011,6 +1011,25 @@ fn addRenderTests(
     const run_artifacts_tests = b.addRunArtifact(artifacts_tests);
     test_step.dependOn(&run_artifacts_tests.step);
     addFocusedTestStep(b, "test-render-artifacts", "Run focused artifact production tests", &run_artifacts_tests.step);
+    const table_mod = createModule(ctx, "src/render/compile/table.zig", &.{
+        import("core", modules.core),
+        import("pdf_ffi", modules.pdf_ffi),
+        import("render", modules.render),
+        import("render_resources", modules.render_resources),
+        import("render_text", modules.render_text),
+        import("render_emitter", modules.render_emitter),
+        import("utils", modules.utils),
+    }, null);
+    table_mod.addOptions("build_options", build_options);
+    const table_spec_mod = createModule(ctx, "tests/render/table/spec_tests.zig", &.{
+        import("table_layout", table_mod),
+        import("core", modules.core),
+        import("render_text", modules.render_text),
+    }, null);
+    const table_tests = addQpdfTestArtifact(ctx, table_spec_mod);
+    const run_table_tests = b.addRunArtifact(table_tests);
+    test_step.dependOn(&run_table_tests.step);
+    addFocusedTestStep(b, "test-render-table", "Run focused retained table layout tests", &run_table_tests.step);
     const paragraph_spec_mod = createModule(ctx, "tests/render/paragraph/spec_tests.zig", &.{
         import("pdf_ffi", modules.pdf_ffi),
         import("render_text", modules.render_text),

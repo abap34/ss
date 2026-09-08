@@ -12,6 +12,17 @@ const render_compile = @import("../compile.zig");
 const fingerprint = @import("fingerprint.zig");
 const latex_document = @import("latex.zig");
 const artifacts = @import("artifacts.zig");
+const inline_layout = @import("inline.zig");
+const table_layout = @import("table.zig");
+const InlineSpan = inline_layout.InlineSpan;
+const ParagraphPaint = inline_layout.ParagraphPaint;
+const PreparedParagraph = inline_layout.PreparedParagraph;
+const paragraphPaint = inline_layout.paragraphPaint;
+const deinitInlineSpans = inline_layout.deinitInlineSpans;
+const displayMathSource = inline_layout.displayMathSource;
+const fitDisplayMathBlockSize = inline_layout.fitDisplayMathBlockSize;
+const spanDecoration = inline_layout.spanDecoration;
+const lineContainsDisplayMath = inline_layout.lineContainsDisplayMath;
 const LatexAsset = artifacts.LatexAsset;
 const hashString = fingerprint.hashString;
 const hashUsize = fingerprint.hashUsize;
@@ -56,7 +67,7 @@ const NativePdfError = error{
 
 pub const native_artifact_cache_version = cache_versions.native_artifacts;
 const render_page_cache_version = cache_versions.render_page;
-const layout_measurement_cache_version = measurement_store.version ++ ":paragraph-v1";
+const layout_measurement_cache_version = measurement_store.version ++ ":table-v1";
 const warm_render_job_cap: usize = 4;
 const cold_render_job_cap: usize = 16;
 const artifact_job_slack: usize = 2;
@@ -104,6 +115,10 @@ const DrawContext = struct {
     latex_engine: LatexEngine = .pdflatex,
     commands: ?[]const ObjectCommand = null,
 };
+
+fn inlineContext(ctx: *const DrawContext) inline_layout.Context {
+    return .{ .assets = artifactContext(ctx), .text_cache = ctx.text_cache, .latex_preamble = ctx.latex_preamble, .latex_engine = ctx.latex_engine };
+}
 
 fn artifactContext(ctx: *const DrawContext) artifacts.Context {
     return .{
@@ -159,46 +174,6 @@ const DestinationAnnotation = struct {
 };
 
 const LatexFragmentKind = latex_document.FragmentKind;
-
-const InlineContent = union(enum) {
-    text,
-    latex: struct {
-        path: []const u8,
-        page_index: usize,
-    },
-    icon: struct { path: []const u8 },
-
-    fn deinit(self: *InlineContent, allocator: Allocator) void {
-        switch (self.*) {
-            .text => {},
-            .latex => |latex| allocator.free(latex.path),
-            .icon => |icon| allocator.free(icon.path),
-        }
-    }
-};
-
-const InlineSpan = struct {
-    content: InlineContent = .text,
-    text: []const u8,
-    font: FontFace,
-    color: Color,
-    width: f32 = 0,
-    height: f32 = 0,
-    baseline_from_bottom: f32 = 0,
-    content_range: ?ContentRange = null,
-    strikethrough: bool = false,
-    underline: bool = false,
-    underline_paint: core.render_policy.MarkdownUnderlinePaint = .{},
-    link_url: ?[]const u8 = null,
-};
-
-const ParagraphPaint = struct {
-    font: FontFace,
-    font_size: f32,
-    line_height: f32,
-    emoji_spacing: f32,
-    inline_math_spacing: f32,
-};
 
 const PreloadTask = union(enum) {
     latex: LatexPreload,
@@ -3020,73 +2995,41 @@ fn markdownCodeBlockContent(allocator: Allocator, block: *const Block) ![]u8 {
 
 fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint) !f32 {
     const table = block.table orelse return baseline_bl;
-    const columns = core.markdown.tableColumnCount(table);
-    const border_width = if (text.markdown_table_border != null and text.markdown_table_line_width > 0) text.markdown_table_line_width else 0;
-    const stroke_inset = border_width * 0.5;
-    const table_x = x + stroke_inset;
-    const table_width = @max(width - border_width, 1);
-    const column_width = table_width / @as(f32, @floatFromInt(columns));
+    var layout = try table_layout.prepare(inlineContext(ctx), table, text, width);
+    defer layout.deinit(ctx.allocator);
     const baseline_from_top = try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height);
-    var cursor_top_bl = baseline_bl + baseline_from_top - stroke_inset;
+    const table_top_bl = baseline_bl + baseline_from_top - layout.border_width * 0.5;
+    const table_x = x + layout.border_width * 0.5;
     var body_row_index: usize = 0;
-
-    for (table.rows.items) |row| {
-        const content_width = @max(column_width - text.markdown_table_cell_pad_x * 2, 1);
-        var row_top_overhang: f32 = 0;
-        var row_bottom_depth: f32 = text.line_height;
-        for (row.cells.items) |cell| {
-            var cell_text = text;
-            cell_text.font = if (row.header) text.bold_font else text.font;
-            const measured = try measureInlineLinesInkBlock(ctx, cell.lines.items, cell_text, content_width);
-            row_top_overhang = @max(row_top_overhang, measured.top_overhang);
-            row_bottom_depth = @max(row_bottom_depth, measured.bottom_depth);
-        }
-        const row_height = row_top_overhang + row_bottom_depth + text.markdown_table_cell_pad_y * 2;
-        const row_bottom = cursor_top_bl - row_height;
-        const fill = if (row.header)
-            text.markdown_table_header_fill
-        else if (text.markdown_table_alt_row_fill != null and body_row_index % 2 == 1)
-            text.markdown_table_alt_row_fill
-        else
-            null;
+    for (layout.rows) |*row| {
+        const fill = if (row.header) text.markdown_table_header_fill else if (text.markdown_table_alt_row_fill != null and body_row_index % 2 == 1) text.markdown_table_alt_row_fill else null;
         if (!row.header) body_row_index += 1;
-
-        for (0..columns) |column_index| {
-            const cell_x = table_x + @as(f32, @floatFromInt(column_index)) * column_width;
-            const cell_frame = Frame{ .x = cell_x, .y = row_bottom, .width = column_width, .height = row_height };
-            try drawRoundedRect(ctx, cell_frame, 0, fill, text.markdown_table_border, text.markdown_table_line_width);
-
-            if (column_index < row.cells.items.len) {
-                const cell = row.cells.items[column_index];
-                var cell_text = text;
-                cell_text.font = if (row.header) text.bold_font else text.font;
-                var line_bl = cursor_top_bl - text.markdown_table_cell_pad_y - row_top_overhang - baseline_from_top;
-                for (cell.lines.items) |line| {
-                    const one_line = [_]Line{line};
-                    line_bl = try drawInlineLinesAligned(
-                        ctx,
-                        cell_x + text.markdown_table_cell_pad_x,
-                        line_bl,
-                        content_width,
-                        one_line[0..],
-                        cell_text,
-                        true,
-                        tableCellHorizontalAlign(cell.alignment),
-                    );
-                }
+        for (0..layout.columns) |column_index| {
+            const cell_x = table_x + @as(f32, @floatFromInt(column_index)) * layout.column_width;
+            try drawRoundedRect(ctx, .{ .x = cell_x, .y = table_top_bl - row.top - row.height, .width = layout.column_width, .height = row.height }, 0, fill, text.markdown_table_border, text.markdown_table_line_width);
+            if (column_index < row.cells.len) {
+                const cell = &row.cells[column_index];
+                try drawPreparedInlineBlock(ctx, cell_x + text.markdown_table_cell_pad_x, table_top_bl - row.content_top, layout.content_width, &cell.content, cell.alignment);
             }
         }
-        cursor_top_bl = row_bottom;
     }
-    return cursor_top_bl - baseline_from_top;
+    return table_top_bl - layout.height - baseline_from_top;
 }
 
-fn tableCellHorizontalAlign(alignment: core.markdown.Align) HorizontalAlign {
-    return switch (alignment) {
-        .default, .left => .left,
-        .center => .center,
-        .right => .right,
-    };
+fn drawPreparedInlineBlock(ctx: *DrawContext, x: f32, top_bl: f32, width: f32, block: *inline_layout.PreparedBlock, alignment: HorizontalAlign) !void {
+    for (block.segments) |*segment| {
+        try std.Io.checkCancel(ctx.io);
+        switch (segment.content) {
+            .paragraph => |*paragraph| {
+                const baseline = top_bl - segment.top - @as(f32, @floatCast(paragraph.prepared.layout.default_ascent));
+                _ = try drawPreparedParagraph(ctx, x, baseline, width, paragraph.spans, block.paint, &paragraph.prepared, alignment);
+            },
+            .display_math => |math| {
+                const frame = Frame{ .x = alignedX(x, width, math.size.width, alignment), .y = top_bl - segment.top - math.size.height, .width = math.size.width, .height = math.size.height };
+                try placeLatexPdf(ctx, frame, math.asset.path, math.asset.page_index);
+            },
+        }
+    }
 }
 
 fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool) !f32 {
@@ -3099,25 +3042,8 @@ fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line
         var spans = std.ArrayList(InlineSpan).empty;
         defer spans.deinit(ctx.allocator);
         defer deinitInlineSpans(ctx.allocator, spans.items);
-        try prepareLineSpans(ctx, line, text, &spans);
+        try inline_layout.prepareLineSpans(inlineContext(ctx), line, text, &spans);
         cursor_bl = try drawParagraph(ctx, x, cursor_bl, width, spans.items, paragraphPaint(text), wrap);
-    }
-    if (lines.len == 0) cursor_bl -= text.line_height;
-    return cursor_bl;
-}
-
-fn drawInlineLinesAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool, horizontal_align: HorizontalAlign) !f32 {
-    var cursor_bl = baseline_bl;
-    for (lines) |line| {
-        if (lineContainsDisplayMath(line)) {
-            cursor_bl = try drawLineWithDisplayMathAligned(ctx, x, cursor_bl, width, line, text, wrap, horizontal_align);
-            continue;
-        }
-        var spans = std.ArrayList(InlineSpan).empty;
-        defer spans.deinit(ctx.allocator);
-        defer deinitInlineSpans(ctx.allocator, spans.items);
-        try prepareLineSpans(ctx, line, text, &spans);
-        cursor_bl = try drawParagraphAligned(ctx, x, cursor_bl, width, spans.items, paragraphPaint(text), wrap, horizontal_align);
     }
     if (lines.len == 0) cursor_bl -= text.line_height;
     return cursor_bl;
@@ -3187,21 +3113,9 @@ fn markdownCodeBlockConstrainedLogicalWidth(ctx: *DrawContext, block: *const Blo
 
 fn markdownTableConstrainedLogicalWidth(ctx: *DrawContext, block: *const Block, text: TextPaint, width: f32) !f32 {
     const table = block.table orelse return 0;
-    const columns = core.markdown.tableColumnCount(table);
-    const border_width = if (text.markdown_table_border != null and text.markdown_table_line_width > 0) text.markdown_table_line_width else 0;
-    const table_width = @max(width - border_width, 1);
-    const column_width = table_width / @as(f32, @floatFromInt(columns));
-    const content_width = @max(column_width - text.markdown_table_cell_pad_x * 2, 1);
-    var required_column_width = column_width;
-    for (table.rows.items) |row| {
-        for (row.cells.items) |cell| {
-            var cell_text = text;
-            cell_text.font = if (row.header) text.bold_font else text.font;
-            const cell_content_width = try inlineLinesConstrainedLogicalWidth(ctx, cell.lines.items, cell_text, content_width, true);
-            required_column_width = @max(required_column_width, cell_content_width + text.markdown_table_cell_pad_x * 2);
-        }
-    }
-    return required_column_width * @as(f32, @floatFromInt(columns)) + border_width;
+    var layout = try table_layout.prepare(inlineContext(ctx), table, text, width);
+    defer layout.deinit(ctx.allocator);
+    return layout.logical_width;
 }
 
 fn inlineLinesConstrainedLogicalWidth(ctx: *DrawContext, lines: []const Line, text: TextPaint, width: f32, wrap: bool) !f32 {
@@ -3217,7 +3131,7 @@ fn inlineLineConstrainedLogicalWidth(ctx: *DrawContext, line: Line, text: TextPa
         var spans = std.ArrayList(InlineSpan).empty;
         defer spans.deinit(ctx.allocator);
         defer deinitInlineSpans(ctx.allocator, spans.items);
-        try prepareLineSpans(ctx, line, text, &spans);
+        try inline_layout.prepareLineSpans(inlineContext(ctx), line, text, &spans);
         return paragraphLogicalWidth(ctx, spans.items, paragraphPaint(text), width, wrap);
     }
 
@@ -3258,76 +3172,18 @@ fn inlineRunSliceConstrainedLogicalWidth(ctx: *DrawContext, runs: []const Run, t
     var spans = std.ArrayList(InlineSpan).empty;
     defer spans.deinit(ctx.allocator);
     defer deinitInlineSpans(ctx.allocator, spans.items);
-    try prepareRunSpans(ctx, runs, text, &spans);
+    try inline_layout.prepareRunSpans(inlineContext(ctx), runs, text, &spans);
     return paragraphLogicalWidth(ctx, spans.items, paragraphPaint(text), width, wrap);
 }
 
 fn paragraphLogicalWidth(ctx: *DrawContext, spans: []const InlineSpan, paint: ParagraphPaint, width: f32, wrap: bool) !f32 {
-    var prepared = try prepareParagraph(ctx, spans, paint, width, wrap);
+    var prepared = try inline_layout.prepareParagraph(inlineContext(ctx), spans, paint, width, wrap);
     defer prepared.deinit(ctx.allocator);
     return @floatCast(prepared.layout.native.logical_bounds.width);
 }
 
-const InlineInkBlock = struct {
-    top_overhang: f32,
-    bottom_depth: f32,
-};
-
-fn measureInlineLinesInkBlock(ctx: *DrawContext, lines: []const Line, text: TextPaint, width: f32) !InlineInkBlock {
-    const baseline_bl = Defaults.height * 0.5;
-    const content_top_bl = baseline_bl + try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height);
-    var measurement = MeasurementScope.init(ctx);
-    try measurement.begin();
-    defer measurement.deinit();
-
-    const next_bl = try drawInlineLines(ctx, 0, baseline_bl, width, lines, text, true);
-    var top_overhang: f32 = 0;
-    var bottom_depth = @max(baseline_bl - next_bl, text.line_height);
-    if (try measurement.inkFrame()) |ink| {
-        top_overhang = @max(@as(f32, 0), ink.y + ink.height - content_top_bl);
-        bottom_depth = @max(bottom_depth, content_top_bl - ink.y);
-    }
-    return .{
-        .top_overhang = top_overhang,
-        .bottom_depth = @max(bottom_depth, text.line_height),
-    };
-}
-
-fn prepareLineSpans(ctx: *DrawContext, line: Line, text: TextPaint, spans: *std.ArrayList(InlineSpan)) !void {
-    try prepareRunSpans(ctx, line.runs.items, text, spans);
-}
-
-fn prepareRunSpans(ctx: *DrawContext, runs: []const Run, text: TextPaint, spans: *std.ArrayList(InlineSpan)) !void {
-    try spans.ensureUnusedCapacity(ctx.allocator, runs.len);
-
-    for (runs) |run| {
-        switch (run.kind) {
-            .math, .display_math => {
-                try appendMathSpan(ctx, spans, run.text, text, if (run.kind == .display_math) .display_math else .inline_math);
-            },
-            .icon => if (run.icon) |source| try appendIconSpan(ctx, spans, source, text),
-            .bold => try appendTextSpan(ctx, spans, run.text, text.bold_font, text.markdown_bold_color orelse text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
-            .italic => try appendTextSpan(ctx, spans, run.text, text.italic_font, text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
-            .code => try appendTextSpan(ctx, spans, run.text, text.code_font, text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
-            .link => try appendTextSpan(ctx, spans, run.text, text.font, text.link_color, run.url, run.strikethrough, true, .{}, .{ .start = run.source_start, .end = run.source_end }),
-            .text => try appendTextSpan(ctx, spans, run.text, text.font, text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
-        }
-    }
-}
-
-fn lineContainsDisplayMath(line: Line) bool {
-    for (line.runs.items) |run| {
-        if (run.kind == .display_math) return true;
-    }
-    return false;
-}
-
 fn drawLineWithDisplayMath(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line: Line, text: TextPaint, wrap: bool) !f32 {
     return drawLineWithDisplayMathWithAlign(ctx, x, baseline_bl, width, line, text, wrap, .left, text.math_align);
-}
-
-fn drawLineWithDisplayMathAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line: Line, text: TextPaint, wrap: bool, horizontal_align: HorizontalAlign) !f32 {
-    return drawLineWithDisplayMathWithAlign(ctx, x, baseline_bl, width, line, text, wrap, horizontal_align, horizontal_align);
 }
 
 fn drawLineWithDisplayMathWithAlign(
@@ -3375,7 +3231,7 @@ fn drawInlineRunSliceAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width:
     var spans = std.ArrayList(InlineSpan).empty;
     defer spans.deinit(ctx.allocator);
     defer deinitInlineSpans(ctx.allocator, spans.items);
-    try prepareRunSpans(ctx, runs, text, &spans);
+    try inline_layout.prepareRunSpans(inlineContext(ctx), runs, text, &spans);
     if (spans.items.len == 0) return baseline_bl;
     return try drawParagraphAligned(ctx, x, baseline_bl, width, spans.items, paragraphPaint(text), wrap, horizontal_align);
 }
@@ -3401,96 +3257,6 @@ fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, widt
     return block_bottom - baseline_from_top;
 }
 
-fn displayMathSource(allocator: Allocator, runs: []const Run) ![]const u8 {
-    var joined = std.ArrayList(u8).empty;
-    defer joined.deinit(allocator);
-    for (runs) |run| {
-        try joined.appendSlice(allocator, run.text);
-    }
-    const trimmed = std.mem.trim(u8, joined.items, " \t\r\n");
-    return allocator.dupe(u8, trimmed);
-}
-
-fn fitDisplayMathBlockSize(source_width: f32, source_height: f32, max_width: f32, text: TextPaint) Size {
-    if (source_width <= 0 or source_height <= 0) return .{ .width = @max(max_width, 1), .height = @max(text.line_height, 1) };
-    const target_height = @max(text.line_height, text.font_size * text.display_math_height_factor);
-    const scale = @min(max_width / source_width, target_height / source_height);
-    return .{ .width = @max(source_width * scale, 1), .height = @max(source_height * scale, 1) };
-}
-
-fn deinitInlineSpans(allocator: Allocator, spans: []InlineSpan) void {
-    for (spans) |*span| span.content.deinit(allocator);
-}
-
-fn appendTextSpan(
-    ctx: *DrawContext,
-    spans: *std.ArrayList(InlineSpan),
-    value: []const u8,
-    font: FontFace,
-    color: Color,
-    link_url: ?[]const u8,
-    strikethrough: bool,
-    underline: bool,
-    underline_paint: core.render_policy.MarkdownUnderlinePaint,
-    content_range: ?ContentRange,
-) !void {
-    if (value.len == 0) return;
-    try spans.append(ctx.allocator, .{
-        .text = value,
-        .font = font,
-        .color = color,
-        .strikethrough = strikethrough,
-        .underline = underline,
-        .underline_paint = underline_paint,
-        .link_url = link_url,
-        .content_range = content_range,
-    });
-}
-
-fn appendMathSpan(ctx: *DrawContext, spans: *std.ArrayList(InlineSpan), value: []const u8, text: TextPaint, kind: LatexFragmentKind) !void {
-    const target_height = @max(text.font_size * text.inline_math_height_factor, 1);
-    const asset = try artifacts.renderLatexToPdf(artifactContext(ctx), value, ctx.latex_preamble, ctx.latex_engine, kind);
-    errdefer ctx.allocator.free(asset.path);
-    const scale = if (asset.reference_height > 0) target_height / asset.reference_height else 1;
-    try spans.append(ctx.allocator, .{
-        .content = .{ .latex = .{ .path = asset.path, .page_index = asset.page_index } },
-        .text = value,
-        .font = text.font,
-        .color = text.color,
-        .width = @max(asset.width * scale, 1),
-        .height = @max(asset.height * scale, 1),
-        .baseline_from_bottom = asset.baseline_from_bottom * scale,
-    });
-}
-
-fn appendIconSpan(ctx: *DrawContext, spans: *std.ArrayList(InlineSpan), source: []const u8, text: TextPaint) !void {
-    const svg = try artifacts.renderIconToSvg(artifactContext(ctx), source);
-    errdefer ctx.allocator.free(svg.path);
-    const target_height = @max(text.font_size, 1);
-    const scale = if (svg.height > 0) target_height / svg.height else 1;
-    const font_metrics = try text_measure.lineMetrics(ctx.allocator, text.font, text.font_size);
-    const font_height = font_metrics.ascent + font_metrics.descent;
-    try spans.append(ctx.allocator, .{
-        .content = .{ .icon = .{ .path = svg.path } },
-        .text = source,
-        .font = text.font,
-        .color = text.link_color,
-        .width = @max(svg.width * scale, 1),
-        .height = target_height,
-        .baseline_from_bottom = target_height * font_metrics.descent / font_height,
-    });
-}
-
-fn paragraphPaint(text: TextPaint) ParagraphPaint {
-    return .{
-        .font = text.font,
-        .font_size = text.font_size,
-        .line_height = text.line_height,
-        .emoji_spacing = text.emoji_spacing,
-        .inline_math_spacing = text.inline_math_spacing,
-    };
-}
-
 fn drawParagraph(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, spans: []InlineSpan, paint: ParagraphPaint, wrap: bool) !f32 {
     return (try drawParagraphWithAlignment(ctx, x, baseline_bl, width, spans, paint, wrap, .left)).next_baseline;
 }
@@ -3511,8 +3277,12 @@ fn drawParagraphWithAlignment(
     wrap: bool,
     horizontal_align: HorizontalAlign,
 ) !ParagraphPlacement {
-    var prepared = try prepareParagraph(ctx, spans, paint, width, wrap);
+    var prepared = try inline_layout.prepareParagraph(inlineContext(ctx), spans, paint, width, wrap);
     defer prepared.deinit(ctx.allocator);
+    return drawPreparedParagraph(ctx, x, baseline_bl, width, spans, paint, &prepared, horizontal_align);
+}
+
+fn drawPreparedParagraph(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, spans: []InlineSpan, paint: ParagraphPaint, prepared: *const PreparedParagraph, horizontal_align: HorizontalAlign) !ParagraphPlacement {
     const layout = prepared.layout;
     const top_y = toTopY(baseline_bl) - layout.default_ascent;
     if (ctx.measurement_bounds) |bounds| {
@@ -3522,20 +3292,9 @@ fn drawParagraphWithAlignment(
         try std.Io.checkCancel(ctx.io);
         const line_x = alignedX(x, width, @floatCast(line.logical_bounds.width), horizontal_align);
         for (line.run_start..line.run_start + line.run_count) |run_index| {
-            const run = layout.native.runs[run_index];
-            var start = run.cluster_start;
-            const end = start + run.cluster_count;
-            while (start < end) {
-                const span_index = prepared.spanAt(layout.native.clusters[start].source_start);
-                var next = start + 1;
-                const span_end = if (span_index + 1 < prepared.starts.len) prepared.starts[span_index + 1] else layout.source.len;
-                // A cluster crossing a paint boundary takes the paint of its first logical character.
-                while (next < end) : (next += 1) {
-                    const offset = layout.native.clusters[next].source_start;
-                    if (offset < prepared.starts[span_index] or offset >= span_end) break;
-                }
-                try drawParagraphFragment(ctx, layout, run_index, start, next, &spans[span_index], prepared.starts[span_index], line_x, top_y, paint);
-                start = next;
+            var fragments = inline_layout.Fragments.init(prepared, run_index);
+            while (fragments.next()) |fragment| {
+                try drawParagraphFragment(ctx, layout, run_index, fragment.start, fragment.end, &spans[fragment.span_index], prepared.starts[fragment.span_index], line_x, top_y, paint);
             }
         }
     }
@@ -3563,68 +3322,6 @@ fn drawParagraphWithAlignment(
     return .{ .next_baseline = @floatCast(Defaults.height - top_y - layout.native.logical_bounds.height - layout.default_ascent), .logical_width = @floatCast(layout.native.logical_bounds.width) };
 }
 
-const PreparedParagraph = struct {
-    layout: *render_text.paragraph.Layout,
-    starts: []usize,
-
-    fn deinit(self: *PreparedParagraph, allocator: Allocator) void {
-        self.layout.release();
-        allocator.free(self.starts);
-    }
-
-    fn spanAt(self: PreparedParagraph, offset: usize) usize {
-        var low: usize = 0;
-        var high = self.starts.len;
-        while (low < high) {
-            const middle = low + (high - low) / 2;
-            if (self.starts[middle] <= offset) low = middle + 1 else high = middle;
-        }
-        return low - 1;
-    }
-};
-
-fn prepareParagraph(ctx: *DrawContext, spans: []const InlineSpan, paint: ParagraphPaint, width: f32, wrap: bool) !PreparedParagraph {
-    var source = std.ArrayList(u8).empty;
-    defer source.deinit(ctx.allocator);
-    var styles = std.ArrayList(render_text.paragraph.Style).empty;
-    defer styles.deinit(ctx.allocator);
-    var objects = std.ArrayList(render_text.paragraph.Object).empty;
-    defer objects.deinit(ctx.allocator);
-    const starts = try ctx.allocator.alloc(usize, spans.len);
-    errdefer ctx.allocator.free(starts);
-    for (spans, starts) |span, *start| {
-        start.* = source.items.len;
-        switch (span.content) {
-            .text => {
-                try source.appendSlice(ctx.allocator, span.text);
-                try styles.append(ctx.allocator, .{ .start = start.*, .end = source.items.len, .font = span.font });
-            },
-            .latex, .icon => {
-                try source.appendSlice(ctx.allocator, "\u{fffc}");
-                try objects.append(ctx.allocator, .{
-                    .source_start = start.*,
-                    .width = span.width,
-                    .height = span.height,
-                    .baseline_from_bottom = span.baseline_from_bottom,
-                    .spacing = if (span.content == .latex) paint.font_size * paint.inline_math_spacing else 0,
-                });
-            },
-        }
-    }
-    const layout = try render_text.shapeParagraph(ctx.allocator, ctx.io, .{
-        .source = source.items,
-        .font = paint.font,
-        .font_size = paint.font_size,
-        .line_height = paint.line_height,
-        .width = width,
-        .wrap = wrap,
-        .emoji_spacing = paint.font_size * paint.emoji_spacing,
-        .styles = styles.items,
-        .objects = objects.items,
-    }, ctx.text_cache);
-    return .{ .layout = layout, .starts = starts };
-}
-
 fn drawParagraphFragment(ctx: *DrawContext, layout: *const render_text.paragraph.Layout, run_index: usize, start: usize, end: usize, span: *InlineSpan, span_start: usize, line_x: f32, top_y: f64, paint: ParagraphPaint) !void {
     const run = layout.native.runs[run_index];
     const clusters = layout.native.clusters[start..end];
@@ -3635,9 +3332,7 @@ fn drawParagraphFragment(ctx: *DrawContext, layout: *const render_text.paragraph
     const advance = last.x + last.advance_x - first.x;
     const decoration = spanDecoration(span);
     if (ctx.measurement_bounds) |bounds| {
-        for (clusters) |cluster| bounds.include(.{ .x = line_x + cluster.ink_bounds.x, .y = top_y + cluster.ink_bounds.y, .width = cluster.ink_bounds.width, .height = cluster.ink_bounds.height });
-        if (decoration.strikethrough) if (render_emitter.decorationBounds(x, baseline_y, advance, run.strikethrough_position, run.strikethrough_thickness, null, 0, 1)) |rect| bounds.include(rect);
-        if (decoration.underline) if (render_emitter.decorationBounds(x, baseline_y, advance, run.underline_position, run.underline_thickness, decoration.underline_width, decoration.underline_offset, decoration.underline_opacity)) |rect| bounds.include(rect);
+        if (inline_layout.fragmentInk(layout, run_index, start, end, decoration)) |ink| bounds.include(.{ .x = line_x + ink.x, .y = top_y + ink.y, .width = ink.width, .height = ink.height });
         if (!ctx.capture_measurement_content) return;
     }
     const emitter = activeEmitter(ctx);
@@ -3663,20 +3358,6 @@ fn drawParagraphFragment(ctx: *DrawContext, layout: *const render_text.paragraph
     }
     owns_fragment = false;
     try emitter.textLayoutBaseline(ctx.allocator, x, baseline_y, @max(advance, 1), fragment, paint.font_size, span.color, decoration);
-}
-
-fn spanDecoration(span: *const InlineSpan) render_emitter.TextDecoration {
-    const dash = span.underline_paint.dash;
-    return .{
-        .strikethrough = span.strikethrough,
-        .underline = span.underline,
-        .underline_color = span.underline_paint.color,
-        .underline_opacity = span.underline_paint.opacity,
-        .underline_width = if (span.underline_paint.width) |value| @as(f64, value) else null,
-        .underline_offset = span.underline_paint.offset,
-        .underline_dash_on = if (dash) |value| value.on else 0,
-        .underline_dash_off = if (dash) |value| value.off else 0,
-    };
 }
 
 fn drawCodeTextAtTop(
@@ -3710,7 +3391,7 @@ fn drawPlainTextAtTopWithOptions(
     var spans = std.ArrayList(InlineSpan).empty;
     defer spans.deinit(ctx.allocator);
     defer deinitInlineSpans(ctx.allocator, spans.items);
-    try appendTextSpan(ctx, &spans, content, font, color, null, false, false, .{}, null);
+    try inline_layout.appendTextSpan(inlineContext(ctx), &spans, content, font, color, null, false, false, .{}, null);
     const paint = ParagraphPaint{
         .font = font,
         .font_size = font_size,
@@ -3797,7 +3478,7 @@ fn drawHighlightedCodeLine(
     var pos = line_start;
     while (highlighted.next(pos, line_end)) |segment| {
         const color = if (segment.role) |role| colorForHighlightRole(code, role) else code.plain;
-        try appendTextSpan(ctx, &spans, content[segment.start..segment.end], font, color, null, false, false, .{}, .{ .start = segment.start, .end = segment.end });
+        try inline_layout.appendTextSpan(inlineContext(ctx), &spans, content[segment.start..segment.end], font, color, null, false, false, .{}, .{ .start = segment.start, .end = segment.end });
         pos = segment.end;
     }
     try drawCodeSpans(ctx, x, y_top, width, spans.items, font, font_size, line_height, emoji_spacing);
@@ -3891,7 +3572,7 @@ fn drawCodeLine(
             index = @min(index + (std.unicode.utf8ByteSequenceLength(byte) catch 1), line.len);
             break :blk code.plain;
         };
-        try appendTextSpan(ctx, &spans, line[start..index], font, color, null, false, false, .{}, .{ .start = start, .end = index });
+        try inline_layout.appendTextSpan(inlineContext(ctx), &spans, line[start..index], font, color, null, false, false, .{}, .{ .start = start, .end = index });
     }
     try drawCodeSpans(ctx, x, y_top, width, spans.items, font, font_size, line_height, emoji_spacing);
 }

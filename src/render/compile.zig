@@ -8,6 +8,8 @@ const text_compile = @import("render_text");
 const semantics = @import("compile/semantics.zig");
 const syntax_highlight = @import("compile/syntax_highlight.zig");
 
+pub const table = @import("compile/table.zig");
+
 pub const FontEnvironmentToken = text_compile.FontEnvironment;
 
 pub const Options = struct {

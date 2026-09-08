@@ -2025,3 +2025,72 @@ test "inline math shares measured paragraph baselines with bidirectional text" {
     try testing.expectApproxEqAbs(@as(f64, expected.width), ink.?.width, 0.001);
     try testing.expectApproxEqAbs(@as(f64, expected.height), ink.?.height, 0.001);
 }
+
+test "retained table geometry matches emitted rows and text baselines" {
+    try verifyTableGeometry("| Left | Right |\n| :--- | ---: |\n| _j_ | Several words wrap inside a narrow cell |\n| ![star](fa:star) | last |");
+}
+
+test "retained table geometry includes inline and display math when TeX is available" {
+    if (!try latexEngineAvailable(.pdflatex)) return error.SkipZigTest;
+    try verifyTableGeometry("| Text | Math |\n| --- | ---: |\n| before $x$ after | $$x^2 + y^2$$ |\n| last | row |");
+}
+
+fn verifyTableGeometry(source: []const u8) !void {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("retained-table");
+    const object_id = try state.makeObject(page_id, "table", null, .text, .text, source);
+    var text_style = core.RecordValue.init("TextStyle");
+    defer text_style.deinit(testing.allocator);
+    try text_style.fields.append(testing.allocator, .{ .name = "parse", .value = .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } }, .explicit = true });
+    try state.setNodeFieldValue(object_id, "text", .{ .record = text_style });
+    const object = state.getNode(object_id).?;
+    object.frame = .{ .x = 0, .y = 360, .width = 280, .height = 360 };
+    var pages = try core.prepared.prepare(testing.allocator, &state);
+    defer pages.deinit(testing.allocator);
+    const prepared = &pages.pages[0].objects[0];
+    const text = &prepared.render.text.?;
+    text.font.family = "DejaVu Serif";
+    text.bold_font.family = "DejaVu Serif";
+    text.italic_font.family = "DejaVu Serif";
+    text.font_size = 24;
+    text.line_height = 24;
+    text.markdown_table_border = .{ .r = 0, .g = 0, .b = 0 };
+    text.markdown_table_line_width = 2;
+    text.markdown_table_cell_pad_x = 5;
+    text.markdown_table_cell_pad_y = 7;
+    const environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &pages);
+    var cache = render_text.Cache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    var table = try render_compile.table.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/render/artifacts/native" }, .text_cache = &cache, .latex_preamble = prepared.latex_preamble, .latex_engine = prepared.latex_engine }, prepared.markdownDocument().?.blocks.items[0].table.?, text.*, object.frame.width);
+    defer table.deinit(testing.allocator);
+    const shaped = cache.paragraphs.entries.count();
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, .{ .jobs = 1, .text_cache = &cache, .font_environment = environment });
+    defer ir.deinit(testing.allocator);
+    try testing.expectEqual(shaped, cache.paragraphs.entries.count());
+    var rectangles: usize = 0;
+    var text_count: usize = 0;
+    var table_top: f64 = 0;
+    for (ir.pages[0].items.items) |item| {
+        if (item.header().node_id != object_id) continue;
+        if (item == .rounded_rect) {
+            const rect = item.rounded_rect.rect;
+            const row = table.rows[rectangles / table.columns];
+            if (rectangles == 0) table_top = rect.y;
+            try testing.expectApproxEqAbs(table_top + row.top, rect.y, 0.001);
+            try testing.expectApproxEqAbs(@as(f64, row.height), rect.height, 0.001);
+            try testing.expectApproxEqAbs(@as(f64, table.column_width), rect.width, 0.001);
+            rectangles += 1;
+        } else if (item == .text) {
+            if (text_count == 0) {
+                const row = table.rows[0];
+                const segment = row.cells[0].content.segments[0];
+                const native = segment.content.paragraph.prepared.layout.native;
+                try testing.expectApproxEqAbs(table_top + row.content_top + segment.top + native.lines[0].baseline_y, item.text.baselineY(), 0.001);
+            }
+            text_count += 1;
+        }
+    }
+    try testing.expectEqual(table.rows.len * table.columns, rectangles);
+    try testing.expect(text_count > 0);
+}
