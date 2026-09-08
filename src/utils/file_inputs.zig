@@ -1,10 +1,20 @@
 const std = @import("std");
 
 pub const Kind = enum { file, directory };
-pub const Input = struct { path: []const u8, kind: Kind };
+pub const Input = struct {
+    path: []const u8,
+    kind: Kind,
+    observation: ?u64 = null,
+};
 
 // Evaluation and page preparation record inputs before parallel rendering starts.
 pub const FileInputs = struct {
+    pub const Observer = struct {
+        context: *anyopaque,
+        capture: *const fn (*anyopaque, []const u8, Kind) anyerror!u64,
+    };
+
+    observer: ?Observer = null,
     allocator: std.mem.Allocator,
     paths: std.StringHashMap(Kind),
     ordered: std.ArrayList(Input) = .empty,
@@ -35,9 +45,10 @@ pub const FileInputs = struct {
             self.allocator.free(resolved);
             return;
         }
+        const observation = if (self.observer) |observer| try observer.capture(observer.context, resolved, kind) else null;
         try self.ordered.ensureUnusedCapacity(self.allocator, 1);
         try self.paths.put(resolved, kind);
-        self.ordered.appendAssumeCapacity(.{ .path = resolved, .kind = kind });
+        self.ordered.appendAssumeCapacity(.{ .path = resolved, .kind = kind, .observation = observation });
         self.sorted = false;
     }
 

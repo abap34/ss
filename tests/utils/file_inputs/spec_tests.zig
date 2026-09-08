@@ -33,3 +33,44 @@ fn recordInputs(allocator: std.mem.Allocator) !void {
     }
     try testing.expectEqual(@as(usize, 20), inputs.items().len);
 }
+
+test "file inputs: each unique path retains its first observation" {
+    const Counter = struct {
+        value: u64 = 0,
+
+        fn capture(context: *anyopaque, path: []const u8, _: @import("utils").file_inputs.Kind) !u64 {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            try testing.expect(std.fs.path.isAbsolute(path));
+            self.value += 1;
+            return self.value;
+        }
+    };
+    var counter = Counter{};
+    var inputs = FileInputs.init(testing.allocator);
+    defer inputs.deinit();
+    inputs.observer = .{ .context = &counter, .capture = Counter.capture };
+    try inputs.record("/project", "first.data", .file);
+    try inputs.record("/project", "./first.data", .file);
+    try inputs.record("/project", "second.data", .file);
+    const recorded = inputs.items();
+    try testing.expectEqual(@as(usize, 2), recorded.len);
+    try testing.expectEqual(@as(u64, 1), recorded[0].observation.?);
+    try testing.expectEqual(@as(u64, 2), recorded[1].observation.?);
+    inputs.clear();
+    try inputs.record("/project", "first.data", .file);
+    try testing.expectEqual(@as(u64, 3), inputs.items()[0].observation.?);
+}
+
+test "file inputs: failed observations leave no partial path" {
+    var context: u8 = 0;
+    var inputs = FileInputs.init(testing.allocator);
+    defer inputs.deinit();
+    inputs.observer = .{ .context = &context, .capture = struct {
+        fn capture(_: *anyopaque, _: []const u8, _: @import("utils").file_inputs.Kind) !u64 {
+            return error.Canceled;
+        }
+    }.capture };
+    try testing.expectError(error.Canceled, inputs.record("/project", "first.data", .file));
+    try testing.expectEqual(@as(usize, 0), inputs.paths.count());
+    try testing.expectEqual(@as(usize, 0), inputs.items().len);
+}

@@ -791,6 +791,7 @@ fn addTestStep(
     addNativePdfHeadersAndLibraries(b, watch_mod);
     const watch_spec_mod = createModule(ctx, "tests/watch/fingerprint/spec_tests.zig", &.{
         import("watch", watch_mod),
+        import("utils", modules.utils),
     }, true);
     const watch_spec_tests = addTestArtifact(ctx, watch_spec_mod);
     const run_watch_spec_tests = b.addRunArtifact(watch_spec_tests);

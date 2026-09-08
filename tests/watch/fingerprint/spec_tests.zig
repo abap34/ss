@@ -230,7 +230,57 @@ fn inspectWithCache(allocator: std.mem.Allocator, options: watch.Options, cache:
     var inspection = try watch.inspectFingerprintWithCache(testing.io, arena.allocator(), options, cache);
     defer inspection.deinit(arena.allocator());
     return switch (inspection) {
-        .value => |value| value,
+        .value => |value| value.complete,
         .failure => |failure| failure.cause,
     };
+}
+
+test "watch spec: rebasing observed inputs preserves changes made during compilation" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const relative_root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(relative_root);
+    const root = try std.fs.path.resolve(allocator, &.{relative_root});
+    defer allocator.free(root);
+    const source = try std.fs.path.join(allocator, &.{ root, "main.ss" });
+    defer allocator.free(source);
+    const dependency = try std.fs.path.join(allocator, &.{ root, "input.data" });
+    defer allocator.free(dependency);
+    const output = try std.fs.path.join(allocator, &.{ root, "output.pdf" });
+    defer allocator.free(output);
+    try writeSource(source, "page main\nend\n");
+    try writeSource(dependency, "first");
+    var inputs = @import("utils").FileInputs.init(allocator);
+    defer inputs.deinit();
+    const options = watch.Options{ .input_path = source, .asset_base_dir = root, .file_inputs = &inputs, .output_path = output };
+    var observer = watch.InputObserver{ .io = testing.io, .allocator = allocator, .options = options };
+    inputs.observer = observer.observer();
+    var inspection = try watch.inspectFingerprint(testing.io, allocator, options);
+    defer inspection.deinit(allocator);
+    const before = switch (inspection) {
+        .value => |value| value,
+        .failure => return error.UnexpectedInspectionFailure,
+    };
+    try inputs.record(root, "input.data", .file);
+    const baseline = before.withObservedInputs(&inputs, output).?;
+    try testing.expectEqual(baseline, try watch.fingerprint(testing.io, allocator, options));
+
+    // This is the interval after reading a new dependency and before returning
+    // the compilation result to the watch loop.
+    try writeSource(dependency, "changed during compilation");
+    try inputs.record(root, "input.data", .file);
+    try testing.expectEqual(baseline, before.withObservedInputs(&inputs, output).?);
+    try testing.expect(baseline != try watch.fingerprint(testing.io, allocator, options));
+
+    inputs.clear();
+    try inputs.record(root, "input.data", .file);
+    const current = before.withObservedInputs(&inputs, output).?;
+    try testing.expectEqual(current, try watch.fingerprint(testing.io, allocator, options));
+    try inputs.record(root, "output.pdf", .file);
+    try writeSource(output, "generated output");
+    try testing.expectEqual(current, before.withObservedInputs(&inputs, output).?);
+    try testing.expectEqual(current, try watch.fingerprint(testing.io, allocator, options));
+    try writeSource(source, "page changed\nend\n");
+    try testing.expect(current != try watch.fingerprint(testing.io, allocator, options));
 }

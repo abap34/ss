@@ -28,6 +28,7 @@ try {
   await watch.waitFor(() => checks() >= 1, "initial check");
   await settle();
   const initialChecks = checks();
+  assert.equal(initialChecks, 1, `Newly observed inputs caused an extra initial check:\n${watch.log}`);
   await writeFile(path.join(project, "unrelated.ss"), "page unused\nend\n");
   await writeFile(path.join(project, "unrelated.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>');
   await settle();
@@ -37,10 +38,12 @@ try {
   await watch.waitFor(() => checks() > initialChecks, "changed external input");
   await settle();
   const firstChecks = checks();
+  assert.equal(firstChecks, initialChecks + 1, `One input update caused extra checks:\n${watch.log}`);
   await writeFile(source, deck("second"));
   await watch.waitFor(() => checks() > firstChecks, "replacement dependency");
   await settle();
   const replacementChecks = checks();
+  assert.equal(replacementChecks, firstChecks + 1, `Replacing a dependency caused extra checks:\n${watch.log}`);
   await writeFile(first, "No longer referenced");
   await settle();
   assert.equal(checks(), replacementChecks, `An obsolete dependency caused a new check:\n${watch.log}`);
@@ -61,6 +64,7 @@ try {
   await watch.waitFor(() => checks() > beforeDiagram, "prepared image dependency");
   await settle();
   const beforeImageChange = checks();
+  assert.equal(beforeImageChange, beforeDiagram + 1, `A new image dependency caused extra checks:\n${watch.log}`);
   await writeFile(diagram, svg("blue"));
   await watch.waitFor(() => checks() > beforeImageChange, "changed prepared image");
   console.log("Watch inputs: unused files, external reads, prepared images, replacement and recovery passed");

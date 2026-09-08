@@ -76,8 +76,47 @@ pub const FingerprintFailure = struct {
     }
 };
 
+pub const Fingerprint = struct {
+    sources: u64,
+    complete: u64,
+
+    /// Retain the source generation inspected before compilation and the inputs
+    /// observed before use. Changes made during compilation remain detectable.
+    pub fn withObservedInputs(self: Fingerprint, inputs: *utils.FileInputs, output_path: ?[]const u8) ?u64 {
+        var hash = self.sources;
+        for (inputs.items()) |input| {
+            if (output_path) |output| if (std.mem.eql(u8, output, input.path)) continue;
+            mixBytes(&hash, input.path);
+            mixValue(u64, &hash, input.observation orelse return null);
+        }
+        return hash;
+    }
+};
+
+pub const InputObserver = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    options: Options,
+
+    pub fn observer(self: *InputObserver) utils.FileInputs.Observer {
+        return .{ .context = self, .capture = capture };
+    }
+
+    fn capture(context: *anyopaque, path: []const u8, kind: utils.file_inputs.Kind) !u64 {
+        const self: *InputObserver = @ptrCast(@alignCast(context));
+        var failure = FingerprintContext{ .allocator = self.allocator };
+        defer failure.deinit();
+        return inputFingerprint(self.io, self.allocator, self.options, path, kind, &failure) catch |err| {
+            if (err == error.OutOfMemory or err == error.Canceled) return err;
+            var hash: u64 = 14695981039346656037;
+            mixBytes(&hash, @errorName(err));
+            return hash;
+        };
+    }
+};
+
 pub const FingerprintInspection = union(enum) {
-    value: u64,
+    value: Fingerprint,
     failure: FingerprintFailure,
 
     pub fn deinit(self: *FingerprintInspection, allocator: std.mem.Allocator) void {
@@ -152,7 +191,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, initial_options
     defer embedded_cache.deinit();
 
     std.debug.print("watch: {s} {s} every {d}ms\n", .{ @tagName(mode), options.input_path, interval_ms });
-    _ = runOnce(io, allocator, mode, options, &embedded_cache);
+    runOnce(io, allocator, mode, options, &embedded_cache, &last_fingerprint);
 
     while (true) {
         _ = inspection_arena.reset(.retain_capacity);
@@ -191,10 +230,10 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, initial_options
                 continue;
             },
         };
-        if (next_fingerprint == last_fingerprint) continue;
+        if (next_fingerprint.complete == last_fingerprint.complete) continue;
         last_fingerprint = next_fingerprint;
         std.debug.print("watch: change detected\n", .{});
-        _ = runOnce(io, allocator, mode, options, &embedded_cache);
+        runOnce(io, allocator, mode, options, &embedded_cache, &last_fingerprint);
     }
 }
 
@@ -263,15 +302,21 @@ fn fingerprintTargetLabel(target: FingerprintTarget) []const u8 {
     };
 }
 
-fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options: Options, embedded_cache: *module_loader.EmbeddedSyntaxCache) bool {
+fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options: Options, embedded_cache: *module_loader.EmbeddedSyntaxCache, baseline: *Fingerprint) void {
     var arena = std.heap.ArenaAllocator.init(backing_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
+    var observer = InputObserver{ .io = io, .allocator = allocator, .options = options };
     var inputs = utils.FileInputs.init(backing_allocator);
+    inputs.observer = observer.observer();
     defer inputs.deinit();
     var completed = false;
     defer if (options.file_inputs) |destination| {
-        if (completed or inputs.paths.count() != 0) std.mem.swap(utils.FileInputs, destination, &inputs);
+        if (completed or inputs.paths.count() != 0) {
+            inputs.observer = null;
+            std.mem.swap(utils.FileInputs, destination, &inputs);
+            baseline.complete = baseline.withObservedInputs(destination, options.output_path) orelse baseline.complete;
+        }
     };
     switch (mode) {
         .check => {
@@ -283,13 +328,13 @@ fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options
                 .file_inputs = &inputs,
             }, null) catch |err| {
                 reportRunError("check", err);
-                return false;
+                return;
             };
         },
         .render => {
             const output_path = options.output_path orelse {
                 std.debug.print("watch: render requires an output path\n", .{});
-                return false;
+                return;
             };
             var progress = if (options.quiet)
                 utils.progress.Progress.disabled(app.render_progress_steps)
@@ -321,12 +366,11 @@ fn runOnce(io: std.Io, backing_allocator: std.mem.Allocator, mode: Mode, options
                 }, &progress),
             }) catch |err| {
                 reportRunError("render", err);
-                return false;
+                return;
             };
         },
     }
     completed = true;
-    return true;
 }
 
 fn reportRunError(label: []const u8, err: anyerror) void {
@@ -340,7 +384,7 @@ pub fn fingerprint(io: std.Io, allocator: std.mem.Allocator, options: Options) !
     var inspection = try inspectFingerprint(io, allocator, options);
     defer inspection.deinit(allocator);
     switch (inspection) {
-        .value => |value| return value,
+        .value => |value| return value.complete,
         .failure => |failure| return failure.cause,
     }
 }
@@ -369,7 +413,7 @@ fn fingerprintImpl(
     options: Options,
     context: *FingerprintContext,
     imports: *ImportCache,
-) !u64 {
+) !Fingerprint {
     var hash: u64 = 14695981039346656037;
     mixBytes(&hash, options.input_path);
     if (options.project_file) |project_file| {
@@ -379,20 +423,27 @@ fn fingerprintImpl(
     try mixHighlightLanguageStats(io, &hash, options.highlight_languages, context);
     try mixModuleDependencyStats(io, allocator, &hash, options, context, imports);
     var base = utils.fs.openDir(io, options.asset_base_dir, .{}) catch |err| {
-        if (err == error.FileNotFound) return hash;
+        if (err == error.FileNotFound) return .{ .sources = hash, .complete = hash };
         try context.record(.asset_base, options.asset_base_dir, err);
         return err;
     };
     base.close(io);
+    const sources = hash;
     if (options.file_inputs) |inputs| {
         for (inputs.items()) |input| {
             if (isOutputPath(allocator, options, input.path)) continue;
             mixBytes(&hash, input.path);
-            switch (input.kind) {
-                .file => _ = try mixStatFile(io, &hash, input.path, .asset_path, context),
-                .directory => try mixAssetDirectory(io, allocator, &hash, options, input.path, context),
-            }
+            mixValue(u64, &hash, try inputFingerprint(io, allocator, options, input.path, input.kind, context));
         }
+    }
+    return .{ .sources = sources, .complete = hash };
+}
+
+fn inputFingerprint(io: std.Io, allocator: std.mem.Allocator, options: Options, path: []const u8, kind: utils.file_inputs.Kind, context: *FingerprintContext) !u64 {
+    var hash: u64 = 14695981039346656037;
+    switch (kind) {
+        .file => _ = try mixStatFile(io, &hash, path, .asset_path, context),
+        .directory => try mixAssetDirectory(io, allocator, &hash, options, path, context),
     }
     return hash;
 }
