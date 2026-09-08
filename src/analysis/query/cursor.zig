@@ -97,6 +97,10 @@ pub fn sourceNameAt(budget: ?QueryBudget, program: *const ast.Module, offset: us
             .text = import_decl.spec,
             .kind = .import_spec,
         };
+        for (import_decl.mode.selected) |item| {
+            if (expired(budget)) return null;
+            if (spanContainsOffset(item.span, offset)) return .{ .text = item.name, .kind = .identifier };
+        }
         if (import_decl.alias_span) |alias_span| {
             if (spanContainsOffset(alias_span, offset)) return .{
                 .text = import_decl.mode.alias orelse "",

@@ -1,3 +1,5 @@
+const std = @import("std");
+const ast = @import("ast");
 const core = @import("core");
 
 pub const Name = struct {
@@ -7,7 +9,16 @@ pub const Name = struct {
 
 pub const OpenImport = struct {
     unqualified: bool,
+    selected: []const ast.ImportDecl.SelectedName = &.{},
     module_id: ?core.SourceModuleId,
+
+    fn selects(self: OpenImport, name: []const u8, resolver: anytype) bool {
+        for (self.selected) |item| {
+            if (!shouldContinue(resolver)) return false;
+            if (std.mem.eql(u8, item.name, name)) return true;
+        }
+        return false;
+    }
 };
 
 pub fn Resolution(comptime Resolved: type) type {
@@ -22,22 +33,16 @@ const ModuleVisitStack = struct {
     items: [256]core.SourceModuleId = undefined,
     len: usize = 0,
 
-    fn contains(self: *const ModuleVisitStack, module_id: core.SourceModuleId) bool {
-        for (self.items[0..self.len]) |item| {
-            if (item == module_id) return true;
-        }
-        return false;
-    }
-
     fn push(self: *ModuleVisitStack, module_id: core.SourceModuleId) bool {
-        if (self.contains(module_id) or self.len >= self.items.len) return false;
+        for (self.items[0..self.len]) |item| if (item == module_id) return false;
+        if (self.len >= self.items.len) return false;
         self.items[self.len] = module_id;
         self.len += 1;
         return true;
     }
 
     fn pop(self: *ModuleVisitStack) void {
-        if (self.len > 0) self.len -= 1;
+        self.len -= 1;
     }
 };
 
@@ -45,34 +50,20 @@ pub fn resolve(comptime Resolved: type, resolver: anytype, current_module_id: co
     if (!shouldContinue(resolver)) return .unknown;
     if (name.qualifier) |alias| {
         const module_id = resolver.resolveAlias(current_module_id, alias) orelse return .{ .unknown_alias = alias };
-        return if (resolver.findInModule(module_id, name.name)) |resolved|
-            .{ .found = resolved }
-        else
-            .unknown;
+        return resolveExport(Resolved, resolver, module_id, name.name);
     }
 
-    if (resolver.findInModule(current_module_id, name.name)) |resolved| return .{ .found = resolved };
-
-    switch (resolveExplicitOpen(Resolved, resolver, current_module_id, name.name)) {
+    var stack = ModuleVisitStack{};
+    switch (resolveInModule(Resolved, resolver, current_module_id, name.name, .open, &stack)) {
         .found => |resolved| return .{ .found = resolved },
         else => {},
     }
-    switch (resolveImplicitOpen(Resolved, resolver, current_module_id, name.name)) {
-        .found => |resolved| return .{ .found = resolved },
-        else => return .unknown,
-    }
-}
-
-fn resolveExplicitOpen(comptime Resolved: type, resolver: anytype, module_id: core.SourceModuleId, name: []const u8) Resolution(Resolved) {
-    var index = resolver.explicitImportCount(module_id);
+    var index = resolver.implicitImportCount(current_module_id);
     while (index > 0) {
         if (!shouldContinue(resolver)) return .unknown;
         index -= 1;
-        const import_info = resolver.explicitImport(module_id, index) orelse continue;
-        if (!import_info.unqualified) continue;
-        const imported_id = import_info.module_id orelse continue;
-        var stack = ModuleVisitStack{};
-        switch (resolveOpenInModule(Resolved, resolver, imported_id, name, &stack)) {
+        const imported_id = resolver.implicitImport(current_module_id, index) orelse continue;
+        switch (resolveInModule(Resolved, resolver, imported_id, name.name, .open, &stack)) {
             .found => |resolved| return .{ .found = resolved },
             else => {},
         }
@@ -80,42 +71,50 @@ fn resolveExplicitOpen(comptime Resolved: type, resolver: anytype, module_id: co
     return .unknown;
 }
 
-fn resolveImplicitOpen(comptime Resolved: type, resolver: anytype, module_id: core.SourceModuleId, name: []const u8) Resolution(Resolved) {
-    var index = resolver.implicitImportCount(module_id);
-    while (index > 0) {
-        if (!shouldContinue(resolver)) return .unknown;
-        index -= 1;
-        const imported_id = resolver.implicitImport(module_id, index) orelse continue;
-        var stack = ModuleVisitStack{};
-        switch (resolveOpenInModule(Resolved, resolver, imported_id, name, &stack)) {
-            .found => |resolved| return .{ .found = resolved },
-            else => {},
-        }
-    }
-    return .unknown;
+/// A module exports its declarations and explicitly selected imported names.
+/// Resolution returns the original declaration, including its defining module.
+pub fn resolveExport(comptime Resolved: type, resolver: anytype, module_id: core.SourceModuleId, name: []const u8) Resolution(Resolved) {
+    var stack = ModuleVisitStack{};
+    return resolveInModule(Resolved, resolver, module_id, name, .exports, &stack);
 }
 
-fn resolveOpenInModule(
+const Visibility = enum { exports, open };
+
+fn resolveInModule(
     comptime Resolved: type,
     resolver: anytype,
     module_id: core.SourceModuleId,
     name: []const u8,
+    visibility: Visibility,
     stack: *ModuleVisitStack,
 ) Resolution(Resolved) {
-    if (!shouldContinue(resolver)) return .unknown;
-    if (!stack.push(module_id)) return .unknown;
+    if (!shouldContinue(resolver) or !stack.push(module_id)) return .unknown;
     defer stack.pop();
-
     if (resolver.findInModule(module_id, name)) |resolved| return .{ .found = resolved };
 
+    // Selected imports create local bindings, ahead of names from open imports.
     var index = resolver.explicitImportCount(module_id);
+    while (index > 0) {
+        if (!shouldContinue(resolver)) return .unknown;
+        index -= 1;
+        const import_info = resolver.explicitImport(module_id, index) orelse continue;
+        if (!import_info.selects(name, resolver)) continue;
+        const imported_id = import_info.module_id orelse continue;
+        switch (resolveInModule(Resolved, resolver, imported_id, name, .exports, stack)) {
+            .found => |resolved| return .{ .found = resolved },
+            else => {},
+        }
+    }
+    if (visibility == .exports) return .unknown;
+
+    index = resolver.explicitImportCount(module_id);
     while (index > 0) {
         if (!shouldContinue(resolver)) return .unknown;
         index -= 1;
         const import_info = resolver.explicitImport(module_id, index) orelse continue;
         if (!import_info.unqualified) continue;
         const imported_id = import_info.module_id orelse continue;
-        switch (resolveOpenInModule(Resolved, resolver, imported_id, name, stack)) {
+        switch (resolveInModule(Resolved, resolver, imported_id, name, .open, stack)) {
             .found => |resolved| return .{ .found = resolved },
             else => {},
         }

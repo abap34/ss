@@ -1922,3 +1922,40 @@ test "syntax spec: recovering parse keeps type expression holes" {
     try testing.expectEqual(Type.Kind.hole, object_field.value_type.kind);
     try testing.expectEqual(@as(ast.HoleId, 4), object_field.value_type.hole_id.?);
 }
+
+test "syntax spec: selected imports retain names and spans through cloning" {
+    const source_text =
+        \\import "dep" as {
+        \\  Item, make, make!, // placement is selected explicitly
+        \\}
+    ;
+    var program = try syntax.parseWithSourceName(testing.allocator, source_text, "selected.ss");
+    defer program.deinit(testing.allocator);
+    const mode = program.imports.items[0].mode;
+    try expectImportMode(program.imports.items[0], null, false);
+    try testing.expectEqual(@as(usize, 3), mode.selected.len);
+    for (mode.selected, [_][]const u8{ "Item", "make", "make!" }) |item, expected| {
+        try testing.expectEqualStrings(expected, item.name);
+        try expectSpanText(source_text, item.span, expected);
+    }
+    try testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&program});
+    var cloned = try program.clone(testing.allocator);
+    defer cloned.deinit(testing.allocator);
+    const cloned_names = cloned.imports.items[0].mode.selected;
+    try testing.expect(mode.selected.ptr != cloned_names.ptr);
+    for (mode.selected, cloned_names) |original, copy| {
+        try testing.expect(original.name.ptr != copy.name.ptr);
+        try testing.expectEqualStrings(original.name, copy.name);
+    }
+    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
+    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{source_text});
+}
+
+test "syntax spec: malformed selected imports release ownership" {
+    try expectParseErrorWithoutLeaks(error.ExpectedIdentifier, "import dep as {}\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedComma, "import dep as { first second }\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedComma, "import dep as { first\n");
+    try expectParseErrorWithoutLeaks(error.DuplicateImportedName, "import dep as { first, first }\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedComma, "import dep as { alias::first }\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedIdentifier, "import dep as { first,, second }\n");
+}

@@ -169,6 +169,7 @@ fn analyzeDocumentStateSemantics(
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.semantics_types, measure_start);
+        try semantics.checkSelectedImports(allocator, state, &sema);
         try semantics.checkTypeDeclarations(allocator, state);
     }
     {

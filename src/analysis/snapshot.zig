@@ -169,8 +169,9 @@ pub const ScopeFact = struct {
 pub const ImportFact = struct {
     spec: []u8,
     spec_span: ast.Span,
-    alias: ?[]u8 = null,
+    alias: ?[]const u8 = null,
     unqualified: bool = false,
+    selected: []const ast.ImportDecl.SelectedName = &.{},
     alias_span: ?ast.Span = null,
     module_id: ?core.SourceModuleId = null,
 };
@@ -313,6 +314,8 @@ pub const LayoutOutput = struct {
     }
 };
 
+const DeclarationLookup = std.HashMapUnmanaged(core.FunctionKey, usize, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
+
 pub const AnalysisSnapshot = struct {
     builtin_module_id: ?core.SourceModuleId = null,
     syntax_storage: ?SyntaxStorage = null,
@@ -326,6 +329,9 @@ pub const AnalysisSnapshot = struct {
     definitions: []core.Definition = &.{},
     type_definitions: []TypeDefinition = &.{},
     value_bindings: []ValueBinding = &.{},
+    value_binding_index: DeclarationLookup = .empty,
+    value_definition_index: DeclarationLookup = .empty,
+    type_definition_index: DeclarationLookup = .empty,
     variable_bindings: []VariableBinding = &.{},
     role_bindings: []RoleBinding = &.{},
     classes: []ClassFact = &.{},
@@ -370,7 +376,37 @@ pub const AnalysisSnapshot = struct {
         snapshot.records = try collectRecords(allocator, declaration_index.records.items);
         snapshot.record_fields = try collectRecordFields(allocator, type_storage, declaration_index.record_fields.items);
         snapshot.enum_cases = try collectEnumCases(allocator, declaration_index.types.items);
+        try snapshot.indexDeclarations();
         return snapshot;
+    }
+
+    fn indexDeclarations(self: *AnalysisSnapshot) !void {
+        for (self.value_bindings, 0..) |binding, index| {
+            const module_id = binding.module_id orelse continue;
+            const entry = try self.value_binding_index.getOrPut(self.allocator, core.functionKey(module_id, binding.name));
+            if (!entry.found_existing) entry.value_ptr.* = index;
+        }
+        for (self.definitions, 0..) |definition, index| {
+            if (definition.kind == .variable) continue;
+            const entry = try self.value_definition_index.getOrPut(self.allocator, core.functionKey(definition.module_id, definition.name));
+            if (!entry.found_existing) entry.value_ptr.* = index;
+        }
+        for (self.type_definitions, 0..) |definition, index| {
+            const entry = try self.type_definition_index.getOrPut(self.allocator, core.functionKey(definition.module_id, definition.name));
+            if (!entry.found_existing) entry.value_ptr.* = index;
+        }
+    }
+
+    pub fn valueBindingInModule(self: *const AnalysisSnapshot, module_id: core.SourceModuleId, name: []const u8) ?ValueBinding {
+        return self.value_bindings[self.value_binding_index.get(core.functionKey(module_id, name)) orelse return null];
+    }
+
+    pub fn valueDefinitionInModule(self: *const AnalysisSnapshot, module_id: core.SourceModuleId, name: []const u8) ?core.Definition {
+        return self.definitions[self.value_definition_index.get(core.functionKey(module_id, name)) orelse return null];
+    }
+
+    pub fn typeDefinitionInModule(self: *const AnalysisSnapshot, module_id: core.SourceModuleId, name: []const u8) ?TypeDefinition {
+        return self.type_definitions[self.type_definition_index.get(core.functionKey(module_id, name)) orelse return null];
     }
 
     pub fn fromDiagnostics(
@@ -423,6 +459,9 @@ pub const AnalysisSnapshot = struct {
         self.allocator.free(self.definitions);
         for (self.type_definitions) |definition| self.allocator.free(definition.name);
         self.allocator.free(self.type_definitions);
+        self.value_binding_index.deinit(self.allocator);
+        self.value_definition_index.deinit(self.allocator);
+        self.type_definition_index.deinit(self.allocator);
         deinitValueBindings(self.allocator, self.value_bindings);
         deinitVariableBindings(self.allocator, self.variable_bindings);
         deinitRoleBindings(self.allocator, self.role_bindings);
@@ -1071,29 +1110,36 @@ fn deinitScopeItems(allocator: std.mem.Allocator, scopes: []ScopeFact) void {
     for (scopes) |scope| allocator.free(scope.name);
 }
 
-fn deinitImports(allocator: std.mem.Allocator, imports: []ImportFact) void {
+fn deinitImportItems(allocator: std.mem.Allocator, imports: []const ImportFact) void {
     for (imports) |import_fact| {
         allocator.free(import_fact.spec);
-        if (import_fact.alias) |alias| allocator.free(alias);
+        var mode = ast.ImportDecl.Mode{ .alias = import_fact.alias, .selected = import_fact.selected };
+        mode.deinit(allocator);
     }
+}
+
+fn deinitImports(allocator: std.mem.Allocator, imports: []ImportFact) void {
+    deinitImportItems(allocator, imports);
     allocator.free(imports);
 }
 
 fn cloneImports(allocator: std.mem.Allocator, module: core.SourceModule) ![]ImportFact {
     var out = std.ArrayList(ImportFact).empty;
     errdefer {
-        for (out.items) |import_fact| {
-            allocator.free(import_fact.spec);
-            if (import_fact.alias) |alias| allocator.free(alias);
-        }
+        deinitImportItems(allocator, out.items);
         out.deinit(allocator);
     }
+    try out.ensureTotalCapacity(allocator, module.syntax.imports.items.len);
     for (module.syntax.imports.items, 0..) |import_decl, import_index| {
-        try out.append(allocator, .{
-            .spec = try allocator.dupe(u8, import_decl.spec),
+        const spec = try allocator.dupe(u8, import_decl.spec);
+        errdefer allocator.free(spec);
+        const mode = try import_decl.mode.clone(allocator);
+        out.appendAssumeCapacity(.{
+            .spec = spec,
             .spec_span = import_decl.spec_span,
-            .alias = if (import_decl.mode.alias) |alias| try allocator.dupe(u8, alias) else null,
-            .unqualified = import_decl.mode.unqualified,
+            .alias = mode.alias,
+            .unqualified = mode.unqualified,
+            .selected = mode.selected,
             .alias_span = import_decl.alias_span,
             .module_id = if (import_index < module.resolved_import_ids.items.len) module.resolved_import_ids.items[import_index] else null,
         });

@@ -21,6 +21,26 @@ pub fn moduleIdForContext(snapshot: anytype, context: *const context_query.Conte
     return null;
 }
 
+pub const SelectedBinding = struct {
+    module_id: core.SourceModuleId,
+    name: []const u8,
+};
+
+pub fn selectedBindingAt(snapshot: anytype, context: *const context_query.Context, request_path: []const u8) ?SelectedBinding {
+    const module = snapshot.moduleForPath(request_path) orelse return null;
+    for (module.imports) |import_fact| {
+        if (context.expired()) return null;
+        for (import_fact.selected) |item| {
+            if (context.expired()) return null;
+            if (spanContainsOffset(item.span, context.offset)) return .{
+                .module_id = import_fact.module_id orelse return null,
+                .name = item.name,
+            };
+        }
+    }
+    return null;
+}
+
 fn spanContainsOffset(span: ast.Span, offset: usize) bool {
     return offset >= span.start and offset <= span.end;
 }

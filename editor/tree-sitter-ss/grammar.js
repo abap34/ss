@@ -40,8 +40,16 @@ module.exports = grammar({
     import_declaration: $ => seq(
       "import",
       field("spec", choice($.string, $.import_spec, $.identifier)),
-      optional(seq("as", field("alias", choice($.identifier, "*")))),
+      optional(seq("as", choice(field("alias", choice($.identifier, "*")), $.selected_imports))),
       $._terminator,
+    ),
+
+    selected_imports: $ => seq(
+      "{",
+      repeat($._terminator),
+      commaSepNewline($, $.bare_callable_identifier),
+      repeat($._terminator),
+      "}",
     ),
 
     const_declaration: $ => seq(

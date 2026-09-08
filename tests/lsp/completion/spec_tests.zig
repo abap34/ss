@@ -924,8 +924,13 @@ test "analysis queries: fact lookup and import traversal honor cancellation" {
 
     const ImportView = struct {
         value_bindings: []const snapshot_api.ValueBinding = &.{},
+
         imports: []const snapshot_api.ImportFact,
         visits: *usize,
+
+        pub fn valueBindingInModule(_: @This(), _: compiler.core.SourceModuleId, _: []const u8) ?snapshot_api.ValueBinding {
+            return null;
+        }
 
         const Module = struct {
             imports: []const snapshot_api.ImportFact,
@@ -948,4 +953,79 @@ test "analysis queries: fact lookup and import traversal honor cancellation" {
     try testing.expect(cancellation.checks >= cancellation.limit);
     try testing.expect(cancellation.checks <= cancellation.limit + 8);
     try testing.expect(visits < cancellation.limit);
+}
+
+test "selected imports: queries retain canonical declarations and export visibility" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const root = ".ss-cache/query-export-fixture";
+    const path = root ++ "/main.ss";
+    const source =
+        \\import "facade" as facade
+        \\import "facade" as { make, Item }
+        \\page main
+        \\  let value = facade::make()
+        \\  let field = value.value
+        \\end
+    ;
+    const facade_source = "import impl as { make, Item }\n";
+    const impl_source =
+        \\record Item { value: Number = 12 }
+        \\record Hidden { private: Number = 0 }
+        \\const secret: Number = 99
+        \\fn make(item: Item = Item {}) -> Item
+        \\  return item
+        \\end
+        \\fn hidden() -> Number
+        \\  return secret
+        \\end
+    ;
+    var sources = snapshot_api.SourceSet.init(allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    try sources.put(root ++ "/facade.ss", facade_source);
+    try sources.put(root ++ "/impl.ss", impl_source);
+    var snapshot = try snapshot_api.build(allocator, &sources, path, root, .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    const module = snapshot.moduleForPath(path) orelse return error.MissingModule;
+    const impl = snapshot.moduleForPath(root ++ "/impl.ss") orelse return error.MissingModule;
+    const binding = resolve_query.valueBinding(null, &snapshot, module.id, "make", "facade", .function) orelse return error.MissingFunction;
+    try testing.expectEqual(impl.id, binding.module_id);
+    const direct_binding = resolve_query.exportedValueBinding(null, &snapshot, impl.id, "make", .function) orelse return error.MissingFunction;
+    try testing.expectEqualStrings(direct_binding.signature, binding.signature);
+    try testing.expect(resolve_query.valueBinding(null, &snapshot, module.id, "hidden", "facade", .function) == null);
+    try testing.expect(resolve_query.valueBinding(null, &snapshot, module.id, "secret", null, .constant) == null);
+    const type_definition = resolve_query.typeDefinition(null, &snapshot, module.id, "Item", "facade") orelse return error.MissingType;
+    try testing.expectEqual(impl.id, type_definition.module_id);
+    {
+        var result = try snapshot_api.completeAt(allocator, &snapshot, .{ .path = path, .source = source, .offset = offsetAfter(source, "facade::") }, .{ .budget_ms = 100 });
+        defer result.deinit(allocator);
+        try expectHas(result, "make");
+        try expectHas(result, "Item");
+        try expectMissing(result, "Hidden");
+        try expectMissing(result, "hidden");
+        try expectMissing(result, "secret");
+    }
+    {
+        var result = try snapshot_api.completeAt(allocator, &snapshot, .{ .path = path, .source = source, .offset = offsetAfter(source, "page main\n") }, .{ .budget_ms = 100 });
+        defer result.deinit(allocator);
+        try expectHas(result, "make");
+        try expectHas(result, "Item");
+        try expectMissing(result, "Hidden");
+        try expectMissing(result, "hidden");
+        try expectMissing(result, "secret");
+    }
+    inline for (.{ "as { make", "make, Item", "facade::make", "value.value" }) |needle| {
+        const targets = try snapshot_api.definitionAt(allocator, &snapshot, .{ .path = path, .source = source, .offset = offsetAfter(source, needle) - 1 }, .{ .budget_ms = 100 });
+        defer allocator.free(targets);
+        try testing.expectEqual(@as(usize, 1), targets.len);
+        try testing.expect(std.mem.endsWith(u8, targets[0].path orelse "", "impl.ss"));
+    }
+    {
+        var hover = (try snapshot_api.hoverAt(allocator, &snapshot, .{ .path = path, .source = source, .offset = offsetAfter(source, "as { make") - 1 }, .{ .budget_ms = 100 })) orelse return error.MissingHover;
+        defer hover.deinit(allocator);
+        try testing.expect(std.mem.indexOf(u8, hover.markdown, binding.signature) != null);
+    }
 }

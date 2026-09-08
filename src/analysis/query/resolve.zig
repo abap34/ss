@@ -33,6 +33,7 @@ fn isIdentifier(name: []const u8) bool {
 
 pub const TypeDefinition = struct {
     name: []const u8,
+    kind: type_resolution.BindingKind,
     module_id: core.SourceModuleId,
     line: usize,
     column: usize,
@@ -355,18 +356,13 @@ pub fn aliasTarget(budget: ?QueryBudget, snapshot: anytype, module_id: core.Sour
 
 fn valueBindingInModule(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, name: []const u8, kind: core.DefinitionKind) ?ValueBinding {
     if (expired(budget)) return null;
-    for (snapshot.value_bindings) |binding| {
-        if (expired(budget)) return null;
-        switch (kind) {
-            .function => if (binding.kind != .function) continue,
-            .constant => if (binding.kind != .constant) continue,
-            .variable => return null,
-        }
-        if ((binding.module_id orelse continue) != module_id) continue;
-        if (!std.mem.eql(u8, binding.name, name)) continue;
-        return valueBindingFromSnapshot(binding);
+    const binding = snapshot.valueBindingInModule(module_id, name) orelse return null;
+    switch (kind) {
+        .function => if (binding.kind != .function) return null,
+        .constant => if (binding.kind != .constant) return null,
+        .variable => return null,
     }
-    return null;
+    return valueBindingFromSnapshot(binding);
 }
 
 fn valueBindingFromSnapshot(binding: anytype) ValueBinding {
@@ -387,35 +383,52 @@ fn valueBindingFromSnapshot(binding: anytype) ValueBinding {
 
 fn definitionInModule(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, name: []const u8, kind: core.DefinitionKind) ?core.Definition {
     if (expired(budget)) return null;
-    for (snapshot.definitions) |definition_item| {
-        if (expired(budget)) return null;
-        if (definition_item.kind != kind) continue;
-        if (definition_item.module_id != module_id) continue;
-        if (!std.mem.eql(u8, definition_item.name, name)) continue;
-        return definition_item;
-    }
-    return null;
+    const definition = snapshot.valueDefinitionInModule(module_id, name) orelse return null;
+    return if (definition.kind == kind) definition else null;
 }
 
 fn typeDefinitionInModule(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, kind: anytype, name: []const u8) ?TypeDefinition {
     if (expired(budget)) return null;
-    for (snapshot.type_definitions) |item| {
-        if (expired(budget)) return null;
-        if (item.kind != kind) continue;
-        if (item.module_id != module_id) continue;
-        if (!std.mem.eql(u8, item.name, name)) continue;
-        return resolvedTypeDefinition(item);
-    }
-    return null;
+    const definition = snapshot.typeDefinitionInModule(module_id, name) orelse return null;
+    return if (definition.kind == kind) resolvedTypeDefinition(definition) else null;
 }
 
 fn resolvedTypeDefinition(item: anytype) TypeDefinition {
     return .{
         .name = item.name,
+        .kind = switch (item.kind) {
+            .record => .record,
+            .object => .object,
+            .enum_type => .enum_type,
+        },
         .module_id = item.module_id,
         .line = item.line,
         .column = item.column,
         .length = item.length,
+    };
+}
+
+pub fn exportedDefinition(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, name: []const u8, kind: core.DefinitionKind) ?core.Definition {
+    const Resolver = DefinitionResolver(@TypeOf(snapshot));
+    return switch (name_resolution.resolveExport(core.Definition, Resolver{ .budget = budget, .snapshot = snapshot, .kind = kind }, module_id, name)) {
+        .found => |item| item,
+        else => null,
+    };
+}
+
+pub fn exportedTypeDefinition(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, name: []const u8) ?TypeDefinition {
+    const Resolver = TypeResolver(@TypeOf(snapshot));
+    return switch (name_resolution.resolveExport(type_resolution.Binding(TypeDefinition), Resolver{ .budget = budget, .snapshot = snapshot }, module_id, name)) {
+        .found => |item| item.target,
+        else => null,
+    };
+}
+
+pub fn exportedValueBinding(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, name: []const u8, kind: core.DefinitionKind) ?ValueBinding {
+    const Resolver = ValueBindingResolver(@TypeOf(snapshot));
+    return switch (name_resolution.resolveExport(ValueBinding, Resolver{ .budget = budget, .snapshot = snapshot, .kind = kind }, module_id, name)) {
+        .found => |item| item,
+        else => null,
     };
 }
 
@@ -437,7 +450,7 @@ const SnapshotImports = struct {
         const module = resolver.snapshot.moduleById(module_id) orelse return null;
         if (index >= module.imports.len) return null;
         const import_info = module.imports[index];
-        return .{ .unqualified = import_info.unqualified, .module_id = import_info.module_id };
+        return .{ .unqualified = import_info.unqualified, .selected = import_info.selected, .module_id = import_info.module_id };
     }
 
     pub fn implicitImportCount(resolver: anytype, module_id: core.SourceModuleId) usize {

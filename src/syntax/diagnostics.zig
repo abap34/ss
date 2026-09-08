@@ -17,6 +17,8 @@ pub fn expected(err: anyerror) ?[]const u8 {
         error.ReservedIdentifier => "non-keyword identifier",
         error.InvalidImportSpec => "import path without a file extension",
         error.InvalidImportAlias => "valid import alias; use 'as name' or 'as *'",
+        error.DuplicateImportedName => "distinct names in a selected import",
+        error.ExpectedComma => "comma between imported names",
         error.ImportMustBeAtTop => "import before other top-level items",
         error.ExpectedKeyword => "keyword",
         error.ExpectedChar => "punctuation",

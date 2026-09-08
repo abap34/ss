@@ -171,11 +171,9 @@ const Parser = struct {
             var spec_moved = false;
             errdefer if (!spec_moved) self.allocator.free(spec.text);
             try self.validateImportSpec(spec.text);
-            const mode = try self.parseImportMode(spec.text);
-            var alias_moved = false;
-            errdefer if (!alias_moved) {
-                if (mode.mode.alias) |alias| self.allocator.free(alias);
-            };
+            var mode = try self.parseImportMode(spec.text);
+            var mode_moved = false;
+            errdefer if (!mode_moved) mode.mode.deinit(self.allocator);
             try self.consumeStatementTerminator();
             const import_index = module.imports.items.len;
             try module.imports.append(self.allocator, .{
@@ -186,7 +184,7 @@ const Parser = struct {
                 .span = .{ .start = item_start, .end = self.pos },
             });
             spec_moved = true;
-            alias_moved = true;
+            mode_moved = true;
             try module.top_level_items.append(self.allocator, .{ .import = import_index });
         } else if (try self.consumeKeyword("fn")) {
             imports_allowed.* = false;
@@ -1148,6 +1146,10 @@ const Parser = struct {
                 self.pos += 1;
                 return .{ .mode = .{ .unqualified = true } };
             }
+            if (!self.eof() and self.source[self.pos] == '{') {
+                self.pos += 1;
+                return .{ .mode = .{ .selected = try self.parseSelectedImportNames() } };
+            }
             const alias_start = self.pos;
             const alias = try self.parseIdentifier();
             return .{
@@ -1156,6 +1158,39 @@ const Parser = struct {
             };
         }
         return .{ .mode = .{ .alias = try self.defaultImportAlias(spec), .unqualified = true } };
+    }
+
+    fn parseSelectedImportNames(self: *Parser) ![]const ast.ImportDecl.SelectedName {
+        var selected = std.ArrayList(ast.ImportDecl.SelectedName).empty;
+        var seen = std.StringHashMap(void).init(self.allocator);
+        defer seen.deinit();
+        errdefer {
+            for (selected.items) |item| self.allocator.free(item.name);
+            selected.deinit(self.allocator);
+        }
+        while (true) {
+            try self.checkCanceled();
+            const item = try self.parseCallableDeclNameWithSpan();
+            var moved = false;
+            errdefer if (!moved) self.allocator.free(item.text);
+            const entry = try seen.getOrPut(item.text);
+            if (entry.found_existing) return self.failAt(item.span.start, error.DuplicateImportedName);
+            try selected.append(self.allocator, .{ .name = item.text, .span = item.span });
+            moved = true;
+            source.skipTriviaFrom(self.source, &self.pos);
+            if (!self.eof() and self.source[self.pos] == '}') {
+                self.pos += 1;
+                break;
+            }
+            if (self.eof() or self.source[self.pos] != ',') return self.fail(error.ExpectedComma);
+            self.pos += 1;
+            source.skipTriviaFrom(self.source, &self.pos);
+            if (!self.eof() and self.source[self.pos] == '}') {
+                self.pos += 1;
+                break;
+            }
+        }
+        return selected.toOwnedSlice(self.allocator);
     }
 
     fn validateImportSpec(self: *Parser, spec: []const u8) !void {

@@ -57,11 +57,11 @@ fn completeRegular(allocator: std.mem.Allocator, snapshot: anytype, req: types.S
 
     for (language_names.keywordLabels()) |keyword| try builder.add(.{ .label = keyword, .kind = .keyword, .detail = "keyword" });
     try appendImportAsCompletions(&builder, req.source, req.offset);
-    try appendVisibleValues(&builder, snapshot, req.path);
+    try appendVisibleDeclarations(&builder, snapshot, req.path, .value);
     if (snapshot.moduleForPath(req.path)) |module| {
         try appendVisibleVariables(&builder, snapshot, module.id, req.offset);
     }
-    try appendTypeNameCompletions(&builder, snapshot, program, req.source);
+    try appendTypeNameCompletions(&builder, snapshot, program, req);
     for (snapshot.role_bindings) |role| {
         try builder.add(.{ .label = role.name, .kind = .role, .detail = role.type_label });
     }
@@ -115,7 +115,8 @@ fn completeModuleAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: 
 
     const module = snapshot.moduleForPath(req.path) orelse return try builder.finish();
     const module_id = resolve_query.aliasTarget(budget, snapshot, module.id, alias) orelse return try builder.finish();
-    try appendModuleValues(&builder, snapshot, module_id);
+    try appendModuleDeclarations(&builder, snapshot, module_id, .value);
+    try appendModuleDeclarations(&builder, snapshot, module_id, .type);
     return try builder.finish();
 }
 
@@ -143,45 +144,41 @@ fn completeRecordUpdateAt(allocator: std.mem.Allocator, snapshot: anytype, req: 
     return try builder.finish();
 }
 
-fn appendVisibleValues(builder: *CandidateBuilder, snapshot: anytype, path: []const u8) !void {
+const DeclarationNamespace = enum { value, type };
+
+fn appendVisibleDeclarations(builder: *CandidateBuilder, snapshot: anytype, path: []const u8, namespace: DeclarationNamespace) !void {
     try builder.checkBudget();
     if (snapshot.moduleForPath(path)) |module| {
         var visiting = std.AutoHashMap(core.SourceModuleId, void).init(builder.allocator);
         defer visiting.deinit();
-        try appendOpenValues(builder, snapshot, module.id, &visiting);
-
+        try appendOpenDeclarations(builder, snapshot, module.id, &visiting, namespace);
         var implicit_index = module.implicit_import_ids.len;
         while (implicit_index > 0) {
             try builder.checkBudget();
             implicit_index -= 1;
-            try appendOpenValues(builder, snapshot, module.implicit_import_ids[implicit_index], &visiting);
+            try appendOpenDeclarations(builder, snapshot, module.implicit_import_ids[implicit_index], &visiting, namespace);
         }
-    } else {
+    }
+    if (namespace == .value) {
         for (snapshot.value_bindings) |binding| {
             try builder.checkBudget();
-            if (binding.module_id != null) continue;
+            if (!binding.primitive) continue;
             try appendValueBinding(builder, binding);
         }
-        return;
-    }
-
-    for (snapshot.value_bindings) |binding| {
-        try builder.checkBudget();
-        if (!binding.primitive) continue;
-        try appendValueBinding(builder, binding);
     }
 }
 
-fn appendOpenValues(
+fn appendOpenDeclarations(
     builder: *CandidateBuilder,
     snapshot: anytype,
     module_id: core.SourceModuleId,
     visiting: *std.AutoHashMap(core.SourceModuleId, void),
+    namespace: DeclarationNamespace,
 ) !void {
     try builder.checkBudget();
     if (visiting.contains(module_id)) return;
     try visiting.put(module_id, {});
-    try appendModuleValues(builder, snapshot, module_id);
+    try appendModuleDeclarations(builder, snapshot, module_id, namespace);
     const module = snapshot.moduleById(module_id) orelse return;
     var index = module.imports.len;
     while (index > 0) {
@@ -190,35 +187,61 @@ fn appendOpenValues(
         const import_info = module.imports[index];
         if (!import_info.unqualified) continue;
         const imported_id = import_info.module_id orelse continue;
-        try appendOpenValues(builder, snapshot, imported_id, visiting);
+        try appendOpenDeclarations(builder, snapshot, imported_id, visiting, namespace);
     }
 }
 
-fn appendModuleValues(builder: *CandidateBuilder, snapshot: anytype, module_id: core.SourceModuleId) !void {
+fn appendModuleDeclarations(builder: *CandidateBuilder, snapshot: anytype, module_id: core.SourceModuleId, namespace: DeclarationNamespace) !void {
     try builder.checkBudget();
-    for (snapshot.value_bindings) |binding| {
-        try builder.checkBudget();
-        if ((binding.module_id orelse continue) != module_id) continue;
-        try appendValueBinding(builder, binding);
+    switch (namespace) {
+        .value => for (snapshot.value_bindings) |binding| {
+            try builder.checkBudget();
+            if ((binding.module_id orelse continue) != module_id) continue;
+            try appendValueBinding(builder, binding);
+        },
+        .type => for (snapshot.type_definitions) |definition| {
+            try builder.checkBudget();
+            if (definition.module_id != module_id) continue;
+            try appendTypeDefinition(builder, definition);
+        },
     }
+    const module = snapshot.moduleById(module_id) orelse return;
+    var index = module.imports.len;
+    while (index > 0) {
+        try builder.checkBudget();
+        index -= 1;
+        const import_info = module.imports[index];
+        const imported_id = import_info.module_id orelse continue;
+        for (import_info.selected) |item| {
+            try builder.checkBudget();
+            switch (namespace) {
+                .value => inline for (.{ core.DefinitionKind.function, core.DefinitionKind.constant }) |kind| {
+                    if (resolve_query.exportedValueBinding(builder.budget, snapshot, imported_id, item.name, kind)) |binding| try appendValueBinding(builder, binding);
+                },
+                .type => if (resolve_query.exportedTypeDefinition(builder.budget, snapshot, imported_id, item.name)) |definition| {
+                    try appendTypeDefinition(builder, definition);
+                },
+            }
+        }
+    }
+}
+
+fn appendTypeDefinition(builder: *CandidateBuilder, definition: anytype) !void {
+    try builder.add(.{
+        .label = definition.name,
+        .kind = if (definition.kind == .object) .class else .type_decl,
+        .detail = if (definition.kind == .record) "record" else if (definition.kind == .object) null else "type",
+    });
 }
 
 fn appendValueBinding(builder: *CandidateBuilder, binding: anytype) !void {
     try builder.checkBudget();
-    switch (binding.kind) {
-        .function => try builder.add(.{
-            .label = binding.name,
-            .kind = .function,
-            .detail = binding.signature,
-            .documentation = binding.documentation,
-        }),
-        .constant => try builder.add(.{
-            .label = binding.name,
-            .kind = .variable,
-            .detail = binding.signature,
-            .documentation = binding.documentation,
-        }),
-    }
+    try builder.add(.{
+        .label = binding.name,
+        .kind = if (binding.kind == .function) .function else .variable,
+        .detail = binding.signature,
+        .documentation = binding.documentation,
+    });
 }
 
 fn appendVisibleVariables(builder: *CandidateBuilder, snapshot: anytype, module_id: core.SourceModuleId, offset: usize) !void {
@@ -235,28 +258,14 @@ fn appendVisibleVariables(builder: *CandidateBuilder, snapshot: anytype, module_
     }
 }
 
-fn appendTypeNameCompletions(builder: *CandidateBuilder, snapshot: anytype, program: ?*const ast.Module, source: []const u8) !void {
+fn appendTypeNameCompletions(builder: *CandidateBuilder, snapshot: anytype, program: ?*const ast.Module, req: types.SourceRequest) !void {
     try builder.checkBudget();
     for (type_resolution.builtinTypes()) |builtin| {
         try builder.checkBudget();
         try builder.add(.{ .label = builtin.name, .kind = .type_decl, .detail = "builtin type" });
     }
-    try appendParsedTypeNameCompletions(builder, program, source);
-    for (snapshot.type_definitions) |definition| {
-        try builder.checkBudget();
-        try builder.add(.{
-            .label = definition.name,
-            .kind = switch (definition.kind) {
-                .object => .class,
-                .record, .enum_type => .type_decl,
-            },
-            .detail = switch (definition.kind) {
-                .record => "record",
-                .object => null,
-                .enum_type => "type",
-            },
-        });
-    }
+    try appendParsedTypeNameCompletions(builder, program, req.source);
+    try appendVisibleDeclarations(builder, snapshot, req.path, .type);
 }
 
 fn appendParsedTypeNameCompletions(builder: *CandidateBuilder, program: ?*const ast.Module, source: []const u8) !void {

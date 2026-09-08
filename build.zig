@@ -668,6 +668,13 @@ fn addTestStep(
     const run_stdlib_cache_spec_tests = b.addRunArtifact(stdlib_cache_spec_tests);
     test_step.dependOn(&run_stdlib_cache_spec_tests.step);
     addFocusedTestStep(b, "test-stdlib-cache", "Run focused standard-library cache tests", &run_stdlib_cache_spec_tests.step);
+    const module_exports_spec_mod = createModule(ctx, "tests/modules/exports/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    const module_exports_spec_tests = addTestArtifact(ctx, module_exports_spec_mod);
+    const run_module_exports_spec_tests = b.addRunArtifact(module_exports_spec_tests);
+    test_step.dependOn(&run_module_exports_spec_tests.step);
+    addFocusedTestStep(b, "test-module-exports", "Run focused selected import and re-export tests", &run_module_exports_spec_tests.step);
     const module_loader_spec_mod = createModule(ctx, "tests/modules/loader/spec_tests.zig", &.{
         import("compiler", compiler_mod),
         import("utils", modules.utils),

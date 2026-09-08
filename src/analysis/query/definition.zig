@@ -52,6 +52,18 @@ fn appendResolvedTarget(
     context: *const context_query.Context,
     req: types.SourceRequest,
 ) !bool {
+    if (import_query.selectedBindingAt(snapshot, context, req.path)) |selected| {
+        inline for (.{ core.DefinitionKind.function, core.DefinitionKind.constant }) |kind| {
+            if (resolve_query.exportedDefinition(context.budget, snapshot, selected.module_id, selected.name, kind)) |definition| {
+                try out.append(allocator, definitionTarget(snapshot, definition, req.path));
+                return true;
+            }
+        }
+        if (resolve_query.exportedTypeDefinition(context.budget, snapshot, selected.module_id, selected.name)) |definition| {
+            try out.append(allocator, typeDefinitionTarget(snapshot, definition, req.path));
+        }
+        return true;
+    }
     if (context.isImportAlias()) return false;
     if (context.isQualifiedCallableQualifier()) return false;
     if (context.importSpecAtOffset()) return false;

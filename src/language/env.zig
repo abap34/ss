@@ -96,6 +96,12 @@ pub const SemanticEnv = struct {
         });
     }
 
+    pub fn hasModuleExport(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) bool {
+        if (name_resolution.resolveExport(ResolvedFunction, FunctionResolver{ .env = self }, module_id, name) == .found) return true;
+        if (name_resolution.resolveExport(ResolvedConst, ConstResolver{ .env = self }, module_id, name) == .found) return true;
+        return name_resolution.resolveExport(type_resolution.Binding(void), TypeResolver{ .env = self }, module_id, name) == .found;
+    }
+
     pub fn hasFunction(self: *const SemanticEnv, name: []const u8) bool {
         return self.function(name) != null;
     }
@@ -273,6 +279,7 @@ pub const SemanticEnv = struct {
         const import_decl = module.syntax.imports.items[index];
         return .{
             .unqualified = import_decl.mode.unqualified,
+            .selected = import_decl.mode.selected,
             .module_id = if (index < module.resolved_import_ids.items.len) module.resolved_import_ids.items[index] else null,
         };
     }

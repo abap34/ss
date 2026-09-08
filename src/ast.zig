@@ -24,10 +24,7 @@ pub const Module = struct {
     }
 
     pub fn deinit(self: *Module, allocator: Allocator) void {
-        for (self.imports.items) |import_decl| {
-            allocator.free(import_decl.spec);
-            if (import_decl.mode.alias) |alias| allocator.free(alias);
-        }
+        for (self.imports.items) |*import_decl| import_decl.deinit(allocator);
         self.imports.deinit(allocator);
         self.top_level_items.deinit(allocator);
         for (self.types.items) |*type_decl| type_decl.deinit(allocator);
@@ -84,9 +81,39 @@ pub const TopLevelItem = union(enum) {
 };
 
 pub const ImportDecl = struct {
+    pub const SelectedName = struct {
+        name: []const u8,
+        span: Span,
+    };
+
     pub const Mode = struct {
         alias: ?[]const u8 = null,
         unqualified: bool = false,
+        selected: []const SelectedName = &.{},
+
+        pub fn deinit(self: *Mode, allocator: Allocator) void {
+            if (self.alias) |alias| allocator.free(alias);
+            for (self.selected) |item| allocator.free(item.name);
+            allocator.free(self.selected);
+        }
+
+        pub fn clone(self: Mode, allocator: Allocator) !Mode {
+            var result = Mode{ .unqualified = self.unqualified };
+            errdefer result.deinit(allocator);
+            result.alias = if (self.alias) |alias| try allocator.dupe(u8, alias) else null;
+            var selected = std.ArrayList(SelectedName).empty;
+            errdefer {
+                for (selected.items) |item| allocator.free(item.name);
+                selected.deinit(allocator);
+            }
+            try selected.ensureTotalCapacity(allocator, self.selected.len);
+            for (self.selected) |item| selected.appendAssumeCapacity(.{
+                .name = try allocator.dupe(u8, item.name),
+                .span = item.span,
+            });
+            result.selected = try selected.toOwnedSlice(allocator);
+            return result;
+        }
     };
 
     spec: []const u8,
@@ -95,16 +122,18 @@ pub const ImportDecl = struct {
     alias_span: ?Span = null,
     span: Span,
 
+    pub fn deinit(self: *ImportDecl, allocator: Allocator) void {
+        allocator.free(self.spec);
+        self.mode.deinit(allocator);
+    }
+
     pub fn clone(self: ImportDecl, allocator: Allocator) !ImportDecl {
         const spec = try allocator.dupe(u8, self.spec);
         errdefer allocator.free(spec);
         return .{
             .spec = spec,
             .spec_span = self.spec_span,
-            .mode = .{
-                .alias = if (self.mode.alias) |alias| try allocator.dupe(u8, alias) else null,
-                .unqualified = self.mode.unqualified,
-            },
+            .mode = try self.mode.clone(allocator),
             .alias_span = self.alias_span,
             .span = self.span,
         };

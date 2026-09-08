@@ -69,3 +69,29 @@ end
           (type_identifier))))
     (return_statement
       (identifier))))
+
+================================================================================
+Selected imports with explicit placement names
+================================================================================
+
+import std:core/objects as { body_obj, body_obj! }
+import "library" as {
+  Item,
+  make, make!, // retained declaration names
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    (import_spec)
+    (selected_imports
+      (bare_callable_identifier (identifier))
+      (bare_callable_identifier (identifier))))
+  (import_declaration
+    (string)
+    (selected_imports
+      (bare_callable_identifier (identifier))
+      (bare_callable_identifier (identifier))
+      (bare_callable_identifier (identifier))
+      (comment))))

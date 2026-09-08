@@ -1,4 +1,5 @@
 const std = @import("std");
+const core = @import("core");
 
 const context_query = @import("context.zig");
 const import_query = @import("imports.zig");
@@ -30,6 +31,18 @@ pub fn at(
 fn resolveHover(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, context: *const context_query.Context, budget: types.QueryBudget) !?types.HoverInfo {
     if (try importHoverMarkdown(allocator, snapshot, context, req.path)) |markdown| {
         return .{ .markdown = markdown };
+    }
+
+    if (import_query.selectedBindingAt(snapshot, context, req.path)) |selected| {
+        inline for (.{ core.DefinitionKind.function, core.DefinitionKind.constant }) |kind| {
+            if (resolve_query.exportedValueBinding(budget, snapshot, selected.module_id, selected.name, kind)) |binding| return .{
+                .markdown = try std.fmt.allocPrint(allocator, "```ss\n{s}\n```\n{s}", .{ binding.signature, binding.documentation }),
+            };
+        }
+        if (resolve_query.exportedTypeDefinition(budget, snapshot, selected.module_id, selected.name) != null) return .{
+            .markdown = try std.fmt.allocPrint(allocator, "```ss\ntype {s}\n```", .{selected.name}),
+        };
+        return null;
     }
 
     if (context.expired()) return null;

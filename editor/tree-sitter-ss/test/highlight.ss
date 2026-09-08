@@ -1,5 +1,7 @@
 import std:themes/default
 import std:themes/default as *
+import std:core/objects as { body_obj, body_obj! }
+import std:themes/base as { ThemeOptions }
 
 @render("text")
 fn/! label(text_value: String) -> Object

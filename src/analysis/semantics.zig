@@ -31,6 +31,26 @@ fn appendConstDeclarations(
     }
 }
 
+pub fn checkSelectedImports(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
+    var invalid = false;
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
+        for (module.syntax.imports.items, 0..) |import_decl, index| {
+            const imported_id = if (index < module.resolved_import_ids.items.len) module.resolved_import_ids.items[index] else null;
+            for (import_decl.mode.selected) |item| {
+                if (imported_id) |id| if (sema.hasModuleExport(id, item.name)) continue;
+                const origin = try checker.sourceOrigin(allocator, checker.originPathForModule(module), item.span);
+                defer allocator.free(origin);
+                try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "UnknownImportedName: module '{s}' does not export '{s}'", .{ import_decl.spec, item.name }) },
+                });
+                invalid = true;
+            }
+        }
+    }
+    if (invalid) return error.DiagnosticsFailed;
+}
+
 pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
     for (state.module_order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;

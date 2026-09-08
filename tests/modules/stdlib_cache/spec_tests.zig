@@ -15,13 +15,13 @@ test "embedded syntax cache returns independent module trees" {
     defer second.deinit();
     try testing.expectEqual(parsed_after_first, cache.parsedModuleCount());
 
-    const first_prelude = moduleBySpec(&first, "std:core/prelude") orelse return error.MissingPrelude;
-    const second_prelude = moduleBySpec(&second, "std:core/prelude") orelse return error.MissingPrelude;
-    try testing.expect(first_prelude.syntax.functions.items.len != 0);
-    try testing.expectEqual(first_prelude.syntax.functions.items.len, second_prelude.syntax.functions.items.len);
+    const first_objects = moduleBySpec(&first, "std:core/objects") orelse return error.MissingObjects;
+    const second_objects = moduleBySpec(&second, "std:core/objects") orelse return error.MissingObjects;
+    try testing.expect(first_objects.syntax.functions.items.len != 0);
+    try testing.expectEqual(first_objects.syntax.functions.items.len, second_objects.syntax.functions.items.len);
 
-    const first_name = @constCast(first_prelude.syntax.functions.items[0].name);
-    const second_name = second_prelude.syntax.functions.items[0].name;
+    const first_name = @constCast(first_objects.syntax.functions.items[0].name);
+    const second_name = second_objects.syntax.functions.items[0].name;
     try testing.expect(first_name.ptr != second_name.ptr);
     const expected_first_byte = second_name[0];
     first_name[0] = if (expected_first_byte == 'x') 'y' else 'x';
@@ -30,8 +30,8 @@ test "embedded syntax cache returns independent module trees" {
     var third = try loadGraph(&cache);
     defer third.deinit();
     try testing.expectEqual(parsed_after_first, cache.parsedModuleCount());
-    const third_prelude = moduleBySpec(&third, "std:core/prelude") orelse return error.MissingPrelude;
-    try testing.expectEqualStrings(second_name, third_prelude.syntax.functions.items[0].name);
+    const third_objects = moduleBySpec(&third, "std:core/objects") orelse return error.MissingObjects;
+    try testing.expectEqualStrings(second_name, third_objects.syntax.functions.items[0].name);
 }
 
 fn loadGraph(cache: *compiler.module_loader.EmbeddedSyntaxCache) !compiler.module_loader.ModuleGraph {
