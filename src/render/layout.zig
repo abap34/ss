@@ -9,6 +9,7 @@ const measurements = @import("render_measurements");
 
 pub const FontEnvironmentToken = compiler.FontEnvironmentToken;
 pub const HighlightCache = compiler.HighlightCache;
+pub const TextCache = @import("render_text").Cache;
 
 pub const Options = struct {
     page_id: ?core.NodeId = null,
@@ -17,6 +18,7 @@ pub const Options = struct {
     jobs: ?usize = null,
     highlight_languages: []const utils.highlight.Language = &.{},
     highlight_cache: ?*compiler.HighlightCache = null,
+    text_cache: ?*TextCache = null,
     cancellation: ?utils.Cancellation = null,
     resource_cache: ?*render_resources.SourceCache = null,
     font_environment: ?compiler.FontEnvironmentToken = null,
@@ -103,6 +105,7 @@ pub fn solvePreparedPages(
             .resource_cache = options.resource_cache,
             .highlight_languages = options.highlight_languages,
             .highlight_cache = options.highlight_cache,
+            .text_cache = options.text_cache,
             .font_environment = font_environment,
             .retained_measurements = options.retained_measurements,
         },

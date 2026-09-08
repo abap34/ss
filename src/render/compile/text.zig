@@ -4,6 +4,7 @@ const c = @import("pdf_ffi").c;
 const render = @import("render");
 const resources_compile = @import("render_resources");
 const utils = @import("utils");
+pub const paragraph = @import("paragraph.zig");
 
 const Allocator = std.mem.Allocator;
 const TextRange = @TypeOf(@as(render.TextLine, undefined).source);
@@ -227,6 +228,7 @@ pub const Cache = struct {
     lock: std.Io.RwLock = .init,
     document_lock: std.Io.Mutex = .init,
     shapes: ShapeMap,
+    paragraphs: paragraph.Cache,
     access_clock: std.atomic.Value(u64) = .init(0),
     shape_bytes: usize = 0,
     dirty: bool = false,
@@ -241,12 +243,14 @@ pub const Cache = struct {
             .allocator = allocator,
             .io = io,
             .shapes = ShapeMap.init(allocator),
+            .paragraphs = paragraph.Cache.init(allocator, io),
         };
     }
 
     pub fn deinit(self: *Cache) void {
         self.clear();
         self.shapes.deinit();
+        self.paragraphs.deinit();
         self.* = undefined;
     }
 
@@ -1502,4 +1506,92 @@ fn fontStretch(value: c_int) core.font.Stretch {
 
 fn nativeRect(value: c.SsPdfInkExtents) render.Rect {
     return .{ .x = value.x, .y = value.y, .width = value.width, .height = value.height };
+}
+
+pub fn shapeParagraph(allocator: Allocator, io: std.Io, request: paragraph.Request, cache: ?*Cache) !*paragraph.Layout {
+    const environment = if (cache) |retained| retained.currentEnvironment() orelse try fontEnvironmentSnapshot() else try fontEnvironmentSnapshot();
+    if (cache) |retained| return retained.paragraphs.get(request, environment);
+    const profile_start = utils.measure_profile.start();
+    defer utils.measure_profile.recordTextShape(false, profile_start);
+    return paragraph.shape(allocator, io, request, environment);
+}
+
+/// Copies a visual cluster interval without repeating itemization or shaping.
+pub fn paragraphFragment(
+    allocator: Allocator,
+    io: std.Io,
+    resources: *resources_compile.Builder,
+    fonts: *render.FontBuilder,
+    layout: *const paragraph.Layout,
+    run_index: usize,
+    cluster_start: usize,
+    cluster_end: usize,
+    requested_font: core.font.Face,
+    font_size: f64,
+    failure: ?*ShapeFailure,
+) !render.TextLayout {
+    try std.Io.checkCancel(io);
+    const native_run = layout.native.runs[run_index];
+    const clusters = layout.native.clusters[cluster_start..cluster_end];
+    std.debug.assert(clusters.len > 0 and cluster_start >= native_run.cluster_start and cluster_end <= native_run.cluster_start + native_run.cluster_count);
+    const first = clusters[0];
+    const last = clusters[clusters.len - 1];
+    const source_start = @min(first.source_start, last.source_start);
+    const source_end = @max(first.source_end, last.source_end);
+    const glyph_start = first.glyph_start;
+    const glyph_end = last.glyph_start + last.glyph_count;
+    const x = native_run.x + first.x;
+    var visible_ink: ?c.SsPdfInkExtents = null;
+    for (clusters) |cluster| {
+        const bounds = cluster.ink_bounds;
+        if (bounds.width <= 0 or bounds.height <= 0) continue;
+        visible_ink = if (visible_ink) |previous| paragraph.unionBounds(previous, bounds) else bounds;
+    }
+    var ink = visible_ink orelse std.mem.zeroes(c.SsPdfInkExtents);
+    ink.x -= x;
+    ink.y -= native_run.baseline_y;
+    var run = native_run;
+    run.source_start = 0;
+    run.source_end = source_end - source_start;
+    run.glyph_start = 0;
+    run.glyph_count = glyph_end - glyph_start;
+    run.cluster_start = 0;
+    run.cluster_count = clusters.len;
+    run.x = 0;
+    run.baseline_y = 0;
+    run.advance = last.x + last.advance_x - first.x;
+    var line = c.SsTextLine{
+        .source_start = 0,
+        .source_end = source_end - source_start,
+        .run_start = 0,
+        .run_count = 1,
+        .baseline_y = 0,
+        .logical_bounds = .{ .x = 0, .y = -run.ascent, .width = run.advance, .height = run.ascent + run.descent },
+        .ink_bounds = ink,
+    };
+    var view = layout.native;
+    view.lines = @ptrCast(&line);
+    view.line_count = 1;
+    view.runs = @ptrCast(&run);
+    view.run_count = 1;
+    view.clusters = @constCast(clusters.ptr);
+    view.cluster_count = clusters.len;
+    view.glyphs = layout.native.glyphs + glyph_start;
+    view.glyph_count = glyph_end - glyph_start;
+    view.logical_bounds = line.logical_bounds;
+    view.ink_bounds = ink;
+    const result = try copy(allocator, io, resources, fonts, layout.source[source_start..source_end], requested_font, font_size, view, failure);
+    for (result.clusters) |*cluster| {
+        cluster.source.start -= @intCast(source_start);
+        cluster.source.end -= @intCast(source_start);
+        cluster.glyph_range.start -= @intCast(glyph_start);
+        cluster.glyph_range.end -= @intCast(glyph_start);
+        cluster.x -= first.x;
+        cluster.baseline_y = 0;
+        cluster.logical_bounds.x -= x;
+        cluster.logical_bounds.y -= native_run.baseline_y;
+        cluster.ink_bounds.x -= x;
+        cluster.ink_bounds.y -= native_run.baseline_y;
+    }
+    return result;
 }

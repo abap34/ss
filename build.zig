@@ -856,10 +856,6 @@ fn addTestStep(
     test_step.dependOn(&run_file_inputs_tests.step);
     addFocusedTestStep(b, "test-file-inputs", "Run focused filesystem input ownership tests", &run_file_inputs_tests.step);
     addRenderTests(ctx, modules, build_options, test_step);
-    const render_wrap_mod = createModule(ctx, "src/render/text/wrap.zig", &.{}, null);
-    addModuleTest(ctx, test_step, "tests/render/wrap/spec_tests.zig", &.{
-        import("render_wrap", render_wrap_mod),
-    }, null);
 
     const binding_types_mod = createModule(ctx, "tests/compiler/bindings/spec_tests.zig", &.{
         import("compiler", compiler_mod),
@@ -999,6 +995,14 @@ fn addRenderTests(
     const run_render_compile_spec_tests = b.addRunArtifact(render_compile_spec_tests);
     test_step.dependOn(&run_render_compile_spec_tests.step);
     addFocusedTestStep(b, "test-render-compile", "Run focused render compiler tests", &run_render_compile_spec_tests.step);
+    const paragraph_spec_mod = createModule(ctx, "tests/render/paragraph/spec_tests.zig", &.{
+        import("pdf_ffi", modules.pdf_ffi),
+        import("render_text", modules.render_text),
+    }, true);
+    const paragraph_spec_tests = addTestArtifact(ctx, paragraph_spec_mod);
+    const run_paragraph_spec_tests = b.addRunArtifact(paragraph_spec_tests);
+    test_step.dependOn(&run_paragraph_spec_tests.step);
+    addFocusedTestStep(b, "test-render-paragraph", "Run focused attributed paragraph layout tests", &run_paragraph_spec_tests.step);
     const measurement_store_spec_mod = createModule(ctx, "tests/render/measurement_store/spec_tests.zig", &.{
         import("core", modules.core),
         import("render_measurements", modules.render_measurements),

@@ -2,8 +2,6 @@ const std = @import("std");
 const core = @import("core");
 const utils = @import("utils");
 
-const text_tokenize = core.text_tokenize;
-const wrap_layout = core.render_wrap;
 const json = utils.json;
 const render_emitter = @import("render_emitter");
 const c = @import("pdf_ffi").c;
@@ -56,7 +54,7 @@ const NativePdfError = error{
 
 pub const native_artifact_cache_version = cache_versions.native_artifacts;
 const render_page_cache_version = cache_versions.render_page;
-const layout_measurement_cache_version = measurement_store.version;
+const layout_measurement_cache_version = measurement_store.version ++ ":paragraph-v1";
 const command_failure_output_limit: usize = 1600;
 const warm_render_job_cap: usize = 4;
 const cold_render_job_cap: usize = 16;
@@ -149,58 +147,44 @@ const DestinationAnnotation = struct {
 
 const LatexFragmentKind = latex_document.FragmentKind;
 
-const AtomContent = union(enum) {
-    text: ?render_ir.TextLayout,
+const InlineContent = union(enum) {
+    text,
     latex: struct {
         path: []const u8,
         page_index: usize,
     },
     icon: struct { path: []const u8 },
 
-    fn deinit(self: *AtomContent, allocator: Allocator) void {
+    fn deinit(self: *InlineContent, allocator: Allocator) void {
         switch (self.*) {
-            .text => |*maybe_layout| if (maybe_layout.*) |*layout| layout.deinit(allocator),
+            .text => {},
             .latex => |latex| allocator.free(latex.path),
             .icon => |icon| allocator.free(icon.path),
         }
     }
 };
 
-const Atom = struct {
-    content: AtomContent = .{ .text = null },
+const InlineSpan = struct {
+    content: InlineContent = .text,
     text: []const u8,
     font: FontFace,
     color: Color,
-    width: f32,
+    width: f32 = 0,
     height: f32 = 0,
     baseline_from_bottom: f32 = 0,
-    is_space: bool,
-    is_emoji: bool = false,
+    content_range: ?ContentRange = null,
     strikethrough: bool = false,
     underline: bool = false,
     underline_paint: core.render_policy.MarkdownUnderlinePaint = .{},
     link_url: ?[]const u8 = null,
 };
 
-const AtomPaint = struct {
+const ParagraphPaint = struct {
     font: FontFace,
     font_size: f32,
     line_height: f32,
     emoji_spacing: f32,
     inline_math_spacing: f32,
-};
-
-const AtomPosition = struct {
-    index: usize,
-    offset: f32,
-};
-
-const AtomVisualLine = struct {
-    start: usize,
-    end: usize,
-    width: f32,
-    ascent: f32 = 0,
-    descent: f32 = 0,
 };
 
 const SvgAsset = struct {
@@ -369,12 +353,14 @@ pub const LayoutMeasurementScope = struct {
     measurements: *measurement_store.Store,
     owns_measurements: bool,
     ctx: DrawContext,
+    local_text_cache: render_text.Cache,
     local_highlight_cache: syntax_highlight.Cache,
     local_resource_cache: render_resources.SourceCache,
     prepared_objects: std.AutoHashMap(core.NodeId, *const core.prepared.PreparedObject),
     font_environment: render_text.FontEnvironment,
 
     pub const InitOptions = struct {
+        text_cache: ?*render_text.Cache = null,
         resource_cache: ?*render_resources.SourceCache = null,
         highlight_languages: []const utils.highlight.Language = &.{},
         highlight_cache: ?*syntax_highlight.Cache = null,
@@ -423,9 +409,11 @@ pub const LayoutMeasurementScope = struct {
                 .asset_base_dir = if (state.asset_base_dir.len == 0) "." else state.asset_base_dir,
                 .cache_dir = asset_cache_dir,
                 .highlight_languages = options.highlight_languages,
+                .text_cache = options.text_cache,
                 .highlight_cache = options.highlight_cache,
                 .resource_cache = options.resource_cache,
             },
+            .local_text_cache = render_text.Cache.init(std.heap.smp_allocator, io),
             .local_highlight_cache = syntax_highlight.Cache.init(std.heap.smp_allocator, io),
             .local_resource_cache = render_resources.SourceCache.init(std.heap.smp_allocator, io),
             .prepared_objects = prepared_objects,
@@ -435,6 +423,7 @@ pub const LayoutMeasurementScope = struct {
 
     pub fn deinit(self: *LayoutMeasurementScope) void {
         self.measurements.flush() catch {};
+        self.local_text_cache.deinit();
         self.local_highlight_cache.deinit();
         self.local_resource_cache.deinit();
         self.prepared_objects.deinit();
@@ -483,6 +472,7 @@ pub const LayoutMeasurementScope = struct {
         measurement_ctx.allocator = state.allocator;
         measurement_ctx.resource_cache = self.ctx.resource_cache orelse &self.local_resource_cache;
         measurement_ctx.highlight_cache = self.ctx.highlight_cache orelse &self.local_highlight_cache;
+        measurement_ctx.text_cache = self.ctx.text_cache orelse &self.local_text_cache;
         measurement_ctx.command_failure = &target;
         var cache_key = self.measurementKey(state.allocator, command, width, mode) catch |err| {
             if (err == error.Canceled) return error.Canceled;
@@ -3345,11 +3335,11 @@ fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line
             cursor_bl = try drawLineWithDisplayMath(ctx, x, cursor_bl, width, line, text, wrap);
             continue;
         }
-        var atoms = std.ArrayList(Atom).empty;
-        defer atoms.deinit(ctx.allocator);
-        defer freeAtoms(ctx.allocator, atoms.items);
-        try layoutAtoms(ctx, line, text, &atoms);
-        cursor_bl = try drawAtoms(ctx, x, cursor_bl, width, atoms.items, atomPaint(text), wrap);
+        var spans = std.ArrayList(InlineSpan).empty;
+        defer spans.deinit(ctx.allocator);
+        defer deinitInlineSpans(ctx.allocator, spans.items);
+        try prepareLineSpans(ctx, line, text, &spans);
+        cursor_bl = try drawParagraph(ctx, x, cursor_bl, width, spans.items, paragraphPaint(text), wrap);
     }
     if (lines.len == 0) cursor_bl -= text.line_height;
     return cursor_bl;
@@ -3362,11 +3352,11 @@ fn drawInlineLinesAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f3
             cursor_bl = try drawLineWithDisplayMathAligned(ctx, x, cursor_bl, width, line, text, wrap, horizontal_align);
             continue;
         }
-        var atoms = std.ArrayList(Atom).empty;
-        defer atoms.deinit(ctx.allocator);
-        defer freeAtoms(ctx.allocator, atoms.items);
-        try layoutAtoms(ctx, line, text, &atoms);
-        cursor_bl = try drawAtomsAligned(ctx, x, cursor_bl, width, atoms.items, atomPaint(text), wrap, horizontal_align);
+        var spans = std.ArrayList(InlineSpan).empty;
+        defer spans.deinit(ctx.allocator);
+        defer deinitInlineSpans(ctx.allocator, spans.items);
+        try prepareLineSpans(ctx, line, text, &spans);
+        cursor_bl = try drawParagraphAligned(ctx, x, cursor_bl, width, spans.items, paragraphPaint(text), wrap, horizontal_align);
     }
     if (lines.len == 0) cursor_bl -= text.line_height;
     return cursor_bl;
@@ -3463,11 +3453,11 @@ fn inlineLinesConstrainedLogicalWidth(ctx: *DrawContext, lines: []const Line, te
 
 fn inlineLineConstrainedLogicalWidth(ctx: *DrawContext, line: Line, text: TextPaint, width: f32, wrap: bool) !f32 {
     if (!lineContainsDisplayMath(line)) {
-        var atoms = std.ArrayList(Atom).empty;
-        defer atoms.deinit(ctx.allocator);
-        defer freeAtoms(ctx.allocator, atoms.items);
-        try layoutAtoms(ctx, line, text, &atoms);
-        return atomLinesLogicalWidth(atoms.items, atomPaint(text), width, wrap, false);
+        var spans = std.ArrayList(InlineSpan).empty;
+        defer spans.deinit(ctx.allocator);
+        defer deinitInlineSpans(ctx.allocator, spans.items);
+        try prepareLineSpans(ctx, line, text, &spans);
+        return paragraphLogicalWidth(ctx, spans.items, paragraphPaint(text), width, wrap);
     }
 
     const runs = line.runs.items;
@@ -3504,33 +3494,17 @@ fn inlineLineConstrainedLogicalWidth(ctx: *DrawContext, line: Line, text: TextPa
 }
 
 fn inlineRunSliceConstrainedLogicalWidth(ctx: *DrawContext, runs: []const Run, text: TextPaint, width: f32, wrap: bool) !f32 {
-    var atoms = std.ArrayList(Atom).empty;
-    defer atoms.deinit(ctx.allocator);
-    defer freeAtoms(ctx.allocator, atoms.items);
-    try layoutRunAtoms(ctx, runs, text, &atoms);
-    return atomLinesLogicalWidth(atoms.items, atomPaint(text), width, wrap, false);
+    var spans = std.ArrayList(InlineSpan).empty;
+    defer spans.deinit(ctx.allocator);
+    defer deinitInlineSpans(ctx.allocator, spans.items);
+    try prepareRunSpans(ctx, runs, text, &spans);
+    return paragraphLogicalWidth(ctx, spans.items, paragraphPaint(text), width, wrap);
 }
 
-fn atomLinesLogicalWidth(atoms: []const Atom, paint: AtomPaint, width: f32, wrap: bool, preserve_leading_space: bool) f32 {
-    if (!wrap) return atomLineAdvance(atoms, paint);
-    var cursor = wrap_layout.Cursor{ .preserve_leading_space = preserve_leading_space };
-    var max_width: f32 = 0;
-    var line_width: f32 = 0;
-    for (atoms, 0..) |_, index| {
-        const measured_atom = measuredWrapAtom(atoms, index, paint);
-        switch (cursor.next(measured_atom, width, wrap)) {
-            .skip => continue,
-            .break_then_draw => {
-                max_width = @max(max_width, line_width);
-                line_width = 0;
-            },
-            .draw => {},
-        }
-        const atom_right = cursor.offset + measured_atom.width;
-        cursor.advance(measured_atom.advance);
-        line_width = @max(line_width, atom_right);
-    }
-    return @max(max_width, line_width);
+fn paragraphLogicalWidth(ctx: *DrawContext, spans: []const InlineSpan, paint: ParagraphPaint, width: f32, wrap: bool) !f32 {
+    var prepared = try prepareParagraph(ctx, spans, paint, width, wrap);
+    defer prepared.deinit(ctx.allocator);
+    return @floatCast(prepared.layout.native.logical_bounds.width);
 }
 
 const InlineInkBlock = struct {
@@ -3558,69 +3532,26 @@ fn measureInlineLinesInkBlock(ctx: *DrawContext, lines: []const Line, text: Text
     };
 }
 
-fn layoutAtoms(ctx: *DrawContext, line: Line, text: TextPaint, atoms: *std.ArrayList(Atom)) !void {
-    try layoutRunAtoms(ctx, line.runs.items, text, atoms);
+fn prepareLineSpans(ctx: *DrawContext, line: Line, text: TextPaint, spans: *std.ArrayList(InlineSpan)) !void {
+    try prepareRunSpans(ctx, line.runs.items, text, spans);
 }
 
-fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, atoms: *std.ArrayList(Atom)) !void {
-    var atom_count = atoms.items.len;
-    for (runs) |run| {
-        atom_count += switch (run.kind) {
-            .math, .display_math => 1,
-            .icon => @intFromBool(run.icon != null),
-            .bold, .italic, .code, .link, .text => countTextTokens(run.text),
-        };
-    }
-    try atoms.ensureTotalCapacity(ctx.allocator, atom_count);
+fn prepareRunSpans(ctx: *DrawContext, runs: []const Run, text: TextPaint, spans: *std.ArrayList(InlineSpan)) !void {
+    try spans.ensureUnusedCapacity(ctx.allocator, runs.len);
 
     for (runs) |run| {
         switch (run.kind) {
             .math, .display_math => {
-                try appendMathAtom(ctx, atoms, run.text, text, if (run.kind == .display_math) .display_math else .inline_math);
+                try appendMathSpan(ctx, spans, run.text, text, if (run.kind == .display_math) .display_math else .inline_math);
             },
-            .icon => if (run.icon) |source| try appendIconAtom(ctx, atoms, source, text),
-            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.markdown_bold_color orelse text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
-            .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
-            .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
-            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url, run.strikethrough, true, .{}, .{ .start = run.source_start, .end = run.source_end }),
-            .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
+            .icon => if (run.icon) |source| try appendIconSpan(ctx, spans, source, text),
+            .bold => try appendTextSpan(ctx, spans, run.text, text.bold_font, text.markdown_bold_color orelse text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
+            .italic => try appendTextSpan(ctx, spans, run.text, text.italic_font, text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
+            .code => try appendTextSpan(ctx, spans, run.text, text.code_font, text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
+            .link => try appendTextSpan(ctx, spans, run.text, text.font, text.link_color, run.url, run.strikethrough, true, .{}, .{ .start = run.source_start, .end = run.source_end }),
+            .text => try appendTextSpan(ctx, spans, run.text, text.font, text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
         }
     }
-}
-
-fn countTextTokens(value: []const u8) usize {
-    var count: usize = 0;
-    var tokenizer = text_tokenize.Tokenizer.init(value);
-    while (tokenizer.next() != null) count += 1;
-    return count;
-}
-
-fn subsliceOffset(value: []const u8, subslice: []const u8) ?usize {
-    const value_start = @intFromPtr(value.ptr);
-    const subslice_start = @intFromPtr(subslice.ptr);
-    if (subslice_start < value_start) return null;
-    const offset = subslice_start - value_start;
-    if (offset > value.len or subslice.len > value.len - offset) return null;
-    return offset;
-}
-
-fn recordTextFailureRange(
-    failure: *CommandFailure,
-    content_range: ?ContentRange,
-    value: []const u8,
-    token: []const u8,
-) void {
-    const run_range = content_range orelse return;
-    const synthetic_font = if (failure.text_failure.synthetic_font) |*detail| detail else {
-        failure.recordContentRange(run_range.start, run_range.end);
-        return;
-    };
-    const token_offset = subsliceOffset(value, token) orelse {
-        failure.recordContentRange(run_range.start, run_range.end);
-        return;
-    };
-    const resolved = synthetic_font.contentRange(run_range, token_offset);
-    failure.recordContentRange(resolved.start, resolved.end);
 }
 
 fn lineContainsDisplayMath(line: Line) bool {
@@ -3680,12 +3611,12 @@ fn drawLineWithDisplayMathWithAlign(
 }
 
 fn drawInlineRunSliceAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, runs: []const Run, text: TextPaint, wrap: bool, horizontal_align: HorizontalAlign) !f32 {
-    var atoms = std.ArrayList(Atom).empty;
-    defer atoms.deinit(ctx.allocator);
-    defer freeAtoms(ctx.allocator, atoms.items);
-    try layoutRunAtoms(ctx, runs, text, &atoms);
-    if (atoms.items.len == 0) return baseline_bl;
-    return try drawAtomsAligned(ctx, x, baseline_bl, width, atoms.items, atomPaint(text), wrap, horizontal_align);
+    var spans = std.ArrayList(InlineSpan).empty;
+    defer spans.deinit(ctx.allocator);
+    defer deinitInlineSpans(ctx.allocator, spans.items);
+    try prepareRunSpans(ctx, runs, text, &spans);
+    if (spans.items.len == 0) return baseline_bl;
+    return try drawParagraphAligned(ctx, x, baseline_bl, width, spans.items, paragraphPaint(text), wrap, horizontal_align);
 }
 
 fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, horizontal_align: HorizontalAlign) !f32 {
@@ -3726,101 +3657,41 @@ fn fitDisplayMathBlockSize(source_width: f32, source_height: f32, max_width: f32
     return .{ .width = @max(source_width * scale, 1), .height = @max(source_height * scale, 1) };
 }
 
-fn freeAtoms(allocator: Allocator, atoms: []Atom) void {
-    for (atoms) |*atom| atom.content.deinit(allocator);
+fn deinitInlineSpans(allocator: Allocator, spans: []InlineSpan) void {
+    for (spans) |*span| span.content.deinit(allocator);
 }
 
-fn appendTextAtoms(
+fn appendTextSpan(
     ctx: *DrawContext,
-    atoms: *std.ArrayList(Atom),
+    spans: *std.ArrayList(InlineSpan),
     value: []const u8,
     font: FontFace,
     color: Color,
-    font_size: f32,
     link_url: ?[]const u8,
     strikethrough: bool,
     underline: bool,
     underline_paint: core.render_policy.MarkdownUnderlinePaint,
     content_range: ?ContentRange,
 ) !void {
-    var tokenizer = text_tokenize.Tokenizer.init(value);
-    while (tokenizer.next()) |token| {
-        const is_emoji = text_tokenize.isEmojiToken(token);
-        var shaped_layout: ?render_ir.TextLayout = null;
-        errdefer if (shaped_layout) |*layout| layout.deinit(ctx.allocator);
-        const width = if (ctx.capture_measurement_content or ctx.measurement_bounds == null) blk: {
-            const emitter = activeEmitter(ctx);
-            const had_synthetic_font = if (emitter.text_failure) |failure|
-                failure.synthetic_font != null
-            else
-                false;
-            const shape_result = if (emitter.text_failure) |failure|
-                render_text.shapeWithFailure(
-                    ctx.allocator,
-                    ctx.io,
-                    emitter.resources,
-                    emitter.fonts,
-                    token,
-                    font,
-                    font_size,
-                    0,
-                    false,
-                    emitter.text_cache,
-                    failure,
-                )
-            else
-                render_text.shape(
-                    ctx.allocator,
-                    ctx.io,
-                    emitter.resources,
-                    emitter.fonts,
-                    token,
-                    font,
-                    font_size,
-                    0,
-                    false,
-                    emitter.text_cache,
-                );
-            shaped_layout = try shape_result;
-            if (!had_synthetic_font) {
-                if (ctx.command_failure) |failure| {
-                    if (failure.text_failure.synthetic_font != null) {
-                        recordTextFailureRange(failure, content_range, value, token);
-                    }
-                }
-            }
-            const layout = &shaped_layout.?;
-            const logical_width: f32 = @floatCast(layout.logical_bounds.width);
-            if (!is_emoji) break :blk logical_width;
-            const ink_right: f32 = @floatCast(layout.ink_bounds.x + layout.ink_bounds.width);
-            break :blk @max(logical_width, ink_right);
-        } else if (is_emoji)
-            try measureTextVisualWidth(ctx, token, font, font_size)
-        else
-            try measureText(ctx, token, font, font_size);
-        try atoms.append(ctx.allocator, .{
-            .content = .{ .text = shaped_layout },
-            .text = token,
-            .font = font,
-            .color = color,
-            .width = width,
-            .is_space = text_tokenize.isWhitespace(token),
-            .is_emoji = is_emoji,
-            .strikethrough = strikethrough,
-            .underline = underline,
-            .underline_paint = underline_paint,
-            .link_url = link_url,
-        });
-        shaped_layout = null;
-    }
+    if (value.len == 0) return;
+    try spans.append(ctx.allocator, .{
+        .text = value,
+        .font = font,
+        .color = color,
+        .strikethrough = strikethrough,
+        .underline = underline,
+        .underline_paint = underline_paint,
+        .link_url = link_url,
+        .content_range = content_range,
+    });
 }
 
-fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, text: TextPaint, kind: LatexFragmentKind) !void {
+fn appendMathSpan(ctx: *DrawContext, spans: *std.ArrayList(InlineSpan), value: []const u8, text: TextPaint, kind: LatexFragmentKind) !void {
     const target_height = @max(text.font_size * text.inline_math_height_factor, 1);
     const asset = try renderLatexToPdf(ctx, value, ctx.latex_preamble, ctx.latex_engine, kind);
     errdefer ctx.allocator.free(asset.path);
     const scale = if (asset.reference_height > 0) target_height / asset.reference_height else 1;
-    try atoms.append(ctx.allocator, .{
+    try spans.append(ctx.allocator, .{
         .content = .{ .latex = .{ .path = asset.path, .page_index = asset.page_index } },
         .text = value,
         .font = text.font,
@@ -3828,18 +3699,17 @@ fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const
         .width = @max(asset.width * scale, 1),
         .height = @max(asset.height * scale, 1),
         .baseline_from_bottom = asset.baseline_from_bottom * scale,
-        .is_space = false,
     });
 }
 
-fn appendIconAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), source: []const u8, text: TextPaint) !void {
+fn appendIconSpan(ctx: *DrawContext, spans: *std.ArrayList(InlineSpan), source: []const u8, text: TextPaint) !void {
     const svg = try renderIconToSvg(ctx, source);
     errdefer ctx.allocator.free(svg.path);
     const target_height = @max(text.font_size, 1);
     const scale = if (svg.height > 0) target_height / svg.height else 1;
     const font_metrics = try text_measure.lineMetrics(ctx.allocator, text.font, text.font_size);
     const font_height = font_metrics.ascent + font_metrics.descent;
-    try atoms.append(ctx.allocator, .{
+    try spans.append(ctx.allocator, .{
         .content = .{ .icon = .{ .path = svg.path } },
         .text = source,
         .font = text.font,
@@ -3847,11 +3717,10 @@ fn appendIconAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), source: []cons
         .width = @max(svg.width * scale, 1),
         .height = target_height,
         .baseline_from_bottom = target_height * font_metrics.descent / font_height,
-        .is_space = false,
     });
 }
 
-fn atomPaint(text: TextPaint) AtomPaint {
+fn paragraphPaint(text: TextPaint) ParagraphPaint {
     return .{
         .font = text.font,
         .font_size = text.font_size,
@@ -3861,157 +3730,192 @@ fn atomPaint(text: TextPaint) AtomPaint {
     };
 }
 
-fn drawAtoms(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, atoms: []Atom, paint: AtomPaint, wrap: bool) !f32 {
-    return drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms, paint, wrap, false, .left);
+fn drawParagraph(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, spans: []InlineSpan, paint: ParagraphPaint, wrap: bool) !f32 {
+    return (try drawParagraphWithAlignment(ctx, x, baseline_bl, width, spans, paint, wrap, .left)).next_baseline;
 }
 
-fn drawAtomsAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, atoms: []Atom, paint: AtomPaint, wrap: bool, horizontal_align: HorizontalAlign) !f32 {
-    return drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms, paint, wrap, false, horizontal_align);
+fn drawParagraphAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, spans: []InlineSpan, paint: ParagraphPaint, wrap: bool, horizontal_align: HorizontalAlign) !f32 {
+    return (try drawParagraphWithAlignment(ctx, x, baseline_bl, width, spans, paint, wrap, horizontal_align)).next_baseline;
 }
 
-fn drawAtomsWithOptions(
+const ParagraphPlacement = struct { next_baseline: f32, logical_width: f32 };
+
+fn drawParagraphWithAlignment(
     ctx: *DrawContext,
     x: f32,
     baseline_bl: f32,
     width: f32,
-    atoms: []Atom,
-    paint: AtomPaint,
+    spans: []InlineSpan,
+    paint: ParagraphPaint,
     wrap: bool,
-    preserve_leading_space: bool,
     horizontal_align: HorizontalAlign,
-) !f32 {
-    var positions = std.ArrayList(AtomPosition).empty;
-    defer positions.deinit(ctx.allocator);
-    try positions.ensureTotalCapacity(ctx.allocator, atoms.len);
-    var lines = std.ArrayList(AtomVisualLine).empty;
-    defer lines.deinit(ctx.allocator);
-    try lines.ensureTotalCapacity(ctx.allocator, atoms.len);
-
-    var cursor = wrap_layout.Cursor{ .preserve_leading_space = preserve_leading_space };
-    var line_start: usize = 0;
-    var line_width: f32 = 0;
-    for (atoms, 0..) |_, index| {
-        const measured_atom = measuredWrapAtom(atoms, index, paint);
-        switch (cursor.next(measured_atom, width, wrap)) {
-            .skip => continue,
-            .break_then_draw => {
-                try appendAtomVisualLine(ctx.allocator, &lines, line_start, positions.items.len, line_width);
-                line_start = positions.items.len;
-                line_width = 0;
-            },
-            .draw => {},
-        }
-        const atom_right = cursor.offset + measured_atom.width;
-        try positions.append(ctx.allocator, .{ .index = index, .offset = cursor.offset });
-        cursor.advance(measured_atom.advance);
-        line_width = @max(line_width, atom_right);
-    }
-    try appendAtomVisualLine(ctx.allocator, &lines, line_start, positions.items.len, line_width);
-
-    if (lines.items.len == 0) return baseline_bl - paint.line_height;
-    const default_ascent = try lineBaselineFromTop(ctx, paint.font, paint.font_size, paint.line_height);
-    const default_descent = @max(paint.line_height - default_ascent, 0);
-    for (lines.items) |*line| {
-        line.ascent = default_ascent;
-        line.descent = default_descent;
-        for (positions.items[line.start..line.end]) |position| {
-            const extents = atomVerticalExtents(&atoms[position.index], default_ascent, default_descent);
-            line.ascent = @max(line.ascent, extents.ascent);
-            line.descent = @max(line.descent, extents.descent);
-        }
-    }
-
-    var line_bl = baseline_bl - @max(lines.items[0].ascent - default_ascent, 0);
+) !ParagraphPlacement {
+    var prepared = try prepareParagraph(ctx, spans, paint, width, wrap);
+    defer prepared.deinit(ctx.allocator);
+    const layout = prepared.layout;
+    const top_y = toTopY(baseline_bl) - layout.default_ascent;
     if (ctx.measurement_bounds) |bounds| {
-        if (bounds.first_baseline == null) bounds.first_baseline = toTopY(line_bl);
+        if (bounds.first_baseline == null and layout.native.line_count > 0) bounds.first_baseline = @floatCast(top_y + layout.native.lines[0].baseline_y);
     }
-    for (lines.items, 0..) |line, line_index| {
-        if (line_index > 0) {
-            const previous = lines.items[line_index - 1];
-            line_bl -= @max(paint.line_height, previous.descent + line.ascent);
-        }
-        const line_x = alignedX(x, width, line.width, horizontal_align);
-        for (positions.items[line.start..line.end]) |position| {
-            try drawPositionedAtom(ctx, &atoms[position.index], line_x + position.offset, line_bl, paint);
+    for (layout.native.lines[0..layout.native.line_count]) |line| {
+        try std.Io.checkCancel(ctx.io);
+        const line_x = alignedX(x, width, @floatCast(line.logical_bounds.width), horizontal_align);
+        for (line.run_start..line.run_start + line.run_count) |run_index| {
+            const run = layout.native.runs[run_index];
+            var start = run.cluster_start;
+            const end = start + run.cluster_count;
+            while (start < end) {
+                const span_index = prepared.spanAt(layout.native.clusters[start].source_start);
+                var next = start + 1;
+                const span_end = if (span_index + 1 < prepared.starts.len) prepared.starts[span_index + 1] else layout.source.len;
+                // A cluster crossing a paint boundary takes the paint of its first logical character.
+                while (next < end) : (next += 1) {
+                    const offset = layout.native.clusters[next].source_start;
+                    if (offset < prepared.starts[span_index] or offset >= span_end) break;
+                }
+                try drawParagraphFragment(ctx, layout, run_index, start, next, &spans[span_index], prepared.starts[span_index], line_x, top_y, paint);
+                start = next;
+            }
         }
     }
-    const last = lines.items[lines.items.len - 1];
-    return line_bl - @max(paint.line_height, last.descent + default_ascent);
-}
-
-fn appendAtomVisualLine(allocator: Allocator, lines: *std.ArrayList(AtomVisualLine), start: usize, end: usize, width: f32) !void {
-    if (start == end) return;
-    try lines.append(allocator, .{
-        .start = start,
-        .end = end,
-        .width = width,
-    });
-}
-
-const AtomVerticalExtents = struct {
-    ascent: f32,
-    descent: f32,
-};
-
-fn atomVerticalExtents(atom: *const Atom, default_ascent: f32, default_descent: f32) AtomVerticalExtents {
-    return switch (atom.content) {
-        .text => .{ .ascent = default_ascent, .descent = default_descent },
-        .latex, .icon => .{
-            .ascent = @max(atom.height - atom.baseline_from_bottom, 0),
-            .descent = @max(atom.baseline_from_bottom, 0),
-        },
-    };
-}
-
-fn drawPositionedAtom(ctx: *DrawContext, atom: *Atom, x: f32, baseline_bl: f32, paint: AtomPaint) !void {
-    switch (atom.content) {
-        .text => {
-            const y_top = baselineTop(baseline_bl, paint.font_size);
-            if (atom.link_url) |url| {
-                try drawLinkedRawText(ctx, x, y_top, @max(atom.width, 1), paint.line_height, atom, paint, url);
-            } else {
-                try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
+    var object_index: usize = 0;
+    for (spans) |*span| switch (span.content) {
+        .text => {},
+        .latex, .icon => {
+            const position = layout.objects[object_index];
+            object_index += 1;
+            const line = layout.native.lines[position.line_index];
+            const line_x = alignedX(x, width, @floatCast(line.logical_bounds.width), horizontal_align);
+            const frame = Frame{
+                .x = line_x + @as(f32, @floatCast(position.x)),
+                .y = Defaults.height - @as(f32, @floatCast(top_y + position.baseline_y)) - span.baseline_from_bottom,
+                .width = span.width,
+                .height = span.height,
+            };
+            switch (span.content) {
+                .latex => |latex| try placeLatexPdf(ctx, frame, latex.path, latex.page_index),
+                .icon => |icon| try drawSvgFrameTinted(ctx, frame, icon.path, span.color),
+                .text => unreachable,
             }
         },
-        .latex => |latex| {
-            const frame = Frame{ .x = x, .y = baseline_bl - atom.baseline_from_bottom, .width = atom.width, .height = atom.height };
-            try placeLatexPdf(ctx, frame, latex.path, latex.page_index);
-        },
-        .icon => |icon| {
-            const frame = Frame{ .x = x, .y = baseline_bl - atom.baseline_from_bottom, .width = atom.width, .height = atom.height };
-            try drawSvgFrameTinted(ctx, frame, icon.path, atom.color);
-        },
+    };
+    return .{ .next_baseline = @floatCast(Defaults.height - top_y - layout.native.logical_bounds.height - layout.default_ascent), .logical_width = @floatCast(layout.native.logical_bounds.width) };
+}
+
+const PreparedParagraph = struct {
+    layout: *render_text.paragraph.Layout,
+    starts: []usize,
+
+    fn deinit(self: *PreparedParagraph, allocator: Allocator) void {
+        self.layout.release();
+        allocator.free(self.starts);
     }
+
+    fn spanAt(self: PreparedParagraph, offset: usize) usize {
+        var low: usize = 0;
+        var high = self.starts.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            if (self.starts[middle] <= offset) low = middle + 1 else high = middle;
+        }
+        return low - 1;
+    }
+};
+
+fn prepareParagraph(ctx: *DrawContext, spans: []const InlineSpan, paint: ParagraphPaint, width: f32, wrap: bool) !PreparedParagraph {
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(ctx.allocator);
+    var styles = std.ArrayList(render_text.paragraph.Style).empty;
+    defer styles.deinit(ctx.allocator);
+    var objects = std.ArrayList(render_text.paragraph.Object).empty;
+    defer objects.deinit(ctx.allocator);
+    const starts = try ctx.allocator.alloc(usize, spans.len);
+    errdefer ctx.allocator.free(starts);
+    for (spans, starts) |span, *start| {
+        start.* = source.items.len;
+        switch (span.content) {
+            .text => {
+                try source.appendSlice(ctx.allocator, span.text);
+                try styles.append(ctx.allocator, .{ .start = start.*, .end = source.items.len, .font = span.font });
+            },
+            .latex, .icon => {
+                try source.appendSlice(ctx.allocator, "\u{fffc}");
+                try objects.append(ctx.allocator, .{
+                    .source_start = start.*,
+                    .width = span.width,
+                    .height = span.height,
+                    .baseline_from_bottom = span.baseline_from_bottom,
+                    .spacing = if (span.content == .latex) paint.font_size * paint.inline_math_spacing else 0,
+                });
+            },
+        }
+    }
+    const layout = try render_text.shapeParagraph(ctx.allocator, ctx.io, .{
+        .source = source.items,
+        .font = paint.font,
+        .font_size = paint.font_size,
+        .line_height = paint.line_height,
+        .width = width,
+        .wrap = wrap,
+        .emoji_spacing = paint.font_size * paint.emoji_spacing,
+        .styles = styles.items,
+        .objects = objects.items,
+    }, ctx.text_cache);
+    return .{ .layout = layout, .starts = starts };
 }
 
-fn measuredWrapAtom(atoms: []const Atom, index: usize, paint: AtomPaint) wrap_layout.Atom {
-    const atom = atoms[index];
+fn drawParagraphFragment(ctx: *DrawContext, layout: *const render_text.paragraph.Layout, run_index: usize, start: usize, end: usize, span: *InlineSpan, span_start: usize, line_x: f32, top_y: f64, paint: ParagraphPaint) !void {
+    const run = layout.native.runs[run_index];
+    const clusters = layout.native.clusters[start..end];
+    const first = clusters[0];
+    const last = clusters[clusters.len - 1];
+    const x = line_x + run.x + first.x;
+    const baseline_y = top_y + run.baseline_y;
+    const advance = last.x + last.advance_x - first.x;
+    const decoration = spanDecoration(span);
+    if (ctx.measurement_bounds) |bounds| {
+        for (clusters) |cluster| bounds.include(.{ .x = line_x + cluster.ink_bounds.x, .y = top_y + cluster.ink_bounds.y, .width = cluster.ink_bounds.width, .height = cluster.ink_bounds.height });
+        if (decoration.strikethrough) if (render_emitter.decorationBounds(x, baseline_y, advance, run.strikethrough_position, run.strikethrough_thickness, null, 0, 1)) |rect| bounds.include(rect);
+        if (decoration.underline) if (render_emitter.decorationBounds(x, baseline_y, advance, run.underline_position, run.underline_thickness, decoration.underline_width, decoration.underline_offset, decoration.underline_opacity)) |rect| bounds.include(rect);
+        if (!ctx.capture_measurement_content) return;
+    }
+    const emitter = activeEmitter(ctx);
+    const had_synthetic_font = if (emitter.text_failure) |failure| failure.synthetic_font != null else false;
+    var fragment = try render_text.paragraphFragment(ctx.allocator, ctx.io, emitter.resources, emitter.fonts, layout, run_index, start, end, span.font, paint.font_size, emitter.text_failure);
+    var owns_fragment = true;
+    errdefer if (owns_fragment) fragment.deinit(ctx.allocator);
+    if (!had_synthetic_font) if (ctx.command_failure) |failure| if (failure.text_failure.synthetic_font) |*synthetic| {
+        if (span.content_range) |content_range| {
+            const offset = @min(first.source_start, last.source_start) - span_start;
+            const resolved = synthetic.contentRange(content_range, offset);
+            failure.recordContentRange(resolved.start, resolved.end);
+        }
+    };
+    if (span.link_url) |url| {
+        const target = if (isInternalLink(url)) url[1..] else url;
+        if (target.len > 0) {
+            const links = ctx.link_annotations orelse return error.MissingRenderAnnotationSink;
+            const owned_target = try ctx.allocator.dupe(u8, target);
+            errdefer ctx.allocator.free(owned_target);
+            try links.append(ctx.allocator, .{ .kind = if (isInternalLink(url)) .dest else .uri, .target = owned_target, .x = @floatCast(x), .y = @floatCast(baseline_y - paint.font_size), .width = @floatCast(@max(advance, 1)), .height = paint.line_height });
+        }
+    }
+    owns_fragment = false;
+    try emitter.textLayoutBaseline(ctx.allocator, x, baseline_y, @max(advance, 1), fragment, paint.font_size, span.color, decoration);
+}
+
+fn spanDecoration(span: *const InlineSpan) render_emitter.TextDecoration {
+    const dash = span.underline_paint.dash;
     return .{
-        .width = atom.width,
-        .advance = atomAdvance(atoms, index, paint),
-        .is_space = atom.is_space,
+        .strikethrough = span.strikethrough,
+        .underline = span.underline,
+        .underline_color = span.underline_paint.color,
+        .underline_opacity = span.underline_paint.opacity,
+        .underline_width = if (span.underline_paint.width) |value| @as(f64, value) else null,
+        .underline_offset = span.underline_paint.offset,
+        .underline_dash_on = if (dash) |value| value.on else 0,
+        .underline_dash_off = if (dash) |value| value.off else 0,
     };
-}
-
-fn atomLineAdvance(atoms: []const Atom, paint: AtomPaint) f32 {
-    var width: f32 = 0;
-    for (atoms, 0..) |_, index| width += atomAdvance(atoms, index, paint);
-    return width;
-}
-
-fn atomAdvance(atoms: []const Atom, index: usize, paint: AtomPaint) f32 {
-    const atom = atoms[index];
-    return switch (atom.content) {
-        .text => atom.width + atomSpacingAfter(atoms, index, paint),
-        .latex => atom.width + paint.font_size * paint.inline_math_spacing,
-        .icon => atom.width,
-    };
-}
-
-fn atomSpacingAfter(atoms: []const Atom, index: usize, paint: AtomPaint) f32 {
-    if (index + 1 >= atoms.len) return 0;
-    if (!atoms[index].is_emoji or atoms[index + 1].is_space) return 0;
-    return paint.font_size * paint.emoji_spacing;
 }
 
 fn drawCodeTextAtTop(
@@ -4026,7 +3930,7 @@ fn drawCodeTextAtTop(
     color: Color,
     emoji_spacing: f32,
 ) !f32 {
-    return drawPlainTextAtTopWithOptions(ctx, x, y_top, width, line_height, content, font, font_size, color, false, emoji_spacing, true);
+    return drawPlainTextAtTopWithOptions(ctx, x, y_top, width, line_height, content, font, font_size, color, false, emoji_spacing);
 }
 
 fn drawPlainTextAtTopWithOptions(
@@ -4041,13 +3945,12 @@ fn drawPlainTextAtTopWithOptions(
     color: Color,
     wrap: bool,
     emoji_spacing: f32,
-    preserve_leading_space: bool,
 ) !f32 {
-    var atoms = std.ArrayList(Atom).empty;
-    defer atoms.deinit(ctx.allocator);
-    defer freeAtoms(ctx.allocator, atoms.items);
-    try appendTextAtoms(ctx, &atoms, content, font, color, font_size, null, false, false, .{}, null);
-    const paint = AtomPaint{
+    var spans = std.ArrayList(InlineSpan).empty;
+    defer spans.deinit(ctx.allocator);
+    defer deinitInlineSpans(ctx.allocator, spans.items);
+    try appendTextSpan(ctx, &spans, content, font, color, null, false, false, .{}, null);
+    const paint = ParagraphPaint{
         .font = font,
         .font_size = font_size,
         .line_height = line_height,
@@ -4055,8 +3958,8 @@ fn drawPlainTextAtTopWithOptions(
         .inline_math_spacing = 0,
     };
     const baseline_bl = Defaults.height - (y_top + font_size);
-    _ = try drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms.items, paint, wrap, preserve_leading_space, .left);
-    return atomLineAdvance(atoms.items, paint);
+    const placed = try drawParagraphWithAlignment(ctx, x, baseline_bl, width, spans.items, paint, wrap, .left);
+    return placed.logical_width;
 }
 
 fn drawTreeSitterCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: TextPaint, code: CodePaint, font_size: f32, line_height: f32) !void {
@@ -4127,14 +4030,16 @@ fn drawHighlightedCodeLine(
     code: CodePaint,
     emoji_spacing: f32,
 ) !void {
-    var cursor_x = x;
+    var spans = std.ArrayList(InlineSpan).empty;
+    defer spans.deinit(ctx.allocator);
+    defer deinitInlineSpans(ctx.allocator, spans.items);
     var pos = line_start;
-    _ = width;
     while (highlighted.next(pos, line_end)) |segment| {
         const color = if (segment.role) |role| colorForHighlightRole(code, role) else code.plain;
-        try drawCodeSegment(ctx, &cursor_x, y_top, content[segment.start..segment.end], font, font_size, line_height, color, emoji_spacing);
+        try appendTextSpan(ctx, &spans, content[segment.start..segment.end], font, color, null, false, false, .{}, .{ .start = segment.start, .end = segment.end });
         pos = segment.end;
     }
+    try drawCodeSpans(ctx, x, y_top, width, spans.items, font, font_size, line_height, emoji_spacing);
 }
 
 fn recordSyntaxHighlightFailure(ctx: *DrawContext, failure: syntax_highlight.Failure) !void {
@@ -4204,36 +4109,34 @@ fn drawCodeLine(
         return;
     }
 
-    var cursor_x = x;
+    var spans = std.ArrayList(InlineSpan).empty;
+    defer spans.deinit(ctx.allocator);
+    defer deinitInlineSpans(ctx.allocator, spans.items);
     var index: usize = 0;
     while (index < line.len) {
         const start = index;
         const byte = line[index];
-        if (byte == '#') {
-            try drawCodeSegment(ctx, &cursor_x, y_top, line[start..], font, font_size, line_height, code.comment, emoji_spacing);
-            break;
-        }
-        if (byte == '"' or byte == '\'') {
+        const color = if (byte == '#') blk: {
+            index = line.len;
+            break :blk code.comment;
+        } else if (byte == '"' or byte == '\'') blk: {
             index = utils.source.skipQuotedString(line, index, line.len, byte);
-            try drawCodeSegment(ctx, &cursor_x, y_top, line[start..index], font, font_size, line_height, code.string, emoji_spacing);
-            continue;
-        }
-        if (utils.source.isIdentifierStart(byte)) {
+            break :blk code.string;
+        } else if (utils.source.isIdentifierStart(byte)) blk: {
             index += 1;
             while (index < line.len and utils.source.isIdentifierContinue(line[index])) index += 1;
-            const segment = line[start..index];
-            try drawCodeSegment(ctx, &cursor_x, y_top, segment, font, font_size, line_height, if (isPythonKeyword(segment)) code.keyword else code.plain, emoji_spacing);
-            continue;
-        }
-        index += text_tokenize.utf8ByteSequenceLength(byte);
-        try drawCodeSegment(ctx, &cursor_x, y_top, line[start..@min(index, line.len)], font, font_size, line_height, code.plain, emoji_spacing);
+            break :blk if (isPythonKeyword(line[start..index])) code.keyword else code.plain;
+        } else blk: {
+            index = @min(index + (std.unicode.utf8ByteSequenceLength(byte) catch 1), line.len);
+            break :blk code.plain;
+        };
+        try appendTextSpan(ctx, &spans, line[start..index], font, color, null, false, false, .{}, .{ .start = start, .end = index });
     }
+    try drawCodeSpans(ctx, x, y_top, width, spans.items, font, font_size, line_height, emoji_spacing);
 }
 
-fn drawCodeSegment(ctx: *DrawContext, cursor_x: *f32, y_top: f32, segment: []const u8, font: FontFace, font_size: f32, line_height: f32, color: Color, emoji_spacing: f32) !void {
-    if (segment.len == 0) return;
-    const segment_width = try drawCodeTextAtTop(ctx, cursor_x.*, y_top, 1, line_height, segment, font, font_size, color, emoji_spacing);
-    cursor_x.* += segment_width;
+fn drawCodeSpans(ctx: *DrawContext, x: f32, y_top: f32, width: f32, spans: []InlineSpan, font: FontFace, font_size: f32, line_height: f32, emoji_spacing: f32) !void {
+    _ = try drawParagraphWithAlignment(ctx, x, Defaults.height - y_top - font_size, width, spans, .{ .font = font, .font_size = font_size, .line_height = line_height, .emoji_spacing = emoji_spacing, .inline_math_spacing = 0 }, false, .left);
 }
 
 fn isPythonKeyword(segment: []const u8) bool {
@@ -4367,86 +4270,12 @@ fn drawRawText(
     try activeEmitter(ctx).textBaseline(ctx.allocator, x, baseline_y, width, content, font, font_size, color, wrap, decoration);
 }
 
-fn drawAtomRawText(ctx: *DrawContext, x: f32, y_top: f32, width: f32, atom: *Atom, paint: AtomPaint, wrap: bool) !void {
-    const dash = atom.underline_paint.dash;
-    const decoration = render_emitter.TextDecoration{
-        .strikethrough = atom.strikethrough,
-        .underline = atom.underline,
-        .underline_color = atom.underline_paint.color,
-        .underline_opacity = atom.underline_paint.opacity,
-        .underline_width = if (atom.underline_paint.width) |value| @as(f64, value) else null,
-        .underline_offset = atom.underline_paint.offset,
-        .underline_dash_on = if (dash) |value| value.on else 0,
-        .underline_dash_off = if (dash) |value| value.off else 0,
-    };
-    if (atom.content.text) |layout| {
-        atom.content.text = null;
-        try activeEmitter(ctx).textLayoutBaseline(
-            ctx.allocator,
-            x,
-            y_top + paint.font_size,
-            width,
-            layout,
-            paint.font_size,
-            atom.color,
-            decoration,
-        );
-        return;
-    }
-    try drawRawText(ctx, x, y_top, width, atom.text, atom.font, paint.font_size, atom.color, wrap, .{
-        .strikethrough = decoration.strikethrough,
-        .underline = decoration.underline,
-        .underline_color = decoration.underline_color,
-        .underline_opacity = decoration.underline_opacity,
-        .underline_width = decoration.underline_width,
-        .underline_offset = decoration.underline_offset,
-        .underline_dash_on = decoration.underline_dash_on,
-        .underline_dash_off = decoration.underline_dash_off,
-    });
-}
-
-fn drawLinkedRawText(
-    ctx: *DrawContext,
-    x: f32,
-    y_top: f32,
-    link_width: f32,
-    height: f32,
-    atom: *Atom,
-    paint: AtomPaint,
-    url: []const u8,
-) !void {
-    const target = if (isInternalLink(url)) url[1..] else url;
-    if (target.len == 0) {
-        try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
-        return;
-    }
-
-    const kind: LinkAnnotation.Kind = if (isInternalLink(url)) .dest else .uri;
-    const resolved_width = @max(link_width, 1);
-    const links = ctx.link_annotations orelse return error.MissingRenderAnnotationSink;
-    const owned_target = try ctx.allocator.dupe(u8, target);
-    errdefer ctx.allocator.free(owned_target);
-    try links.append(ctx.allocator, .{
-        .kind = kind,
-        .target = owned_target,
-        .x = x,
-        .y = y_top,
-        .width = resolved_width,
-        .height = height,
-    });
-    try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
-}
-
 fn isInternalLink(url: []const u8) bool {
     return url.len > 1 and url[0] == '#';
 }
 
 fn measureText(ctx: *DrawContext, content: []const u8, font: FontFace, font_size: f32) !f32 {
     return text_measure.advanceWidth(ctx.allocator, content, font, font_size);
-}
-
-fn measureTextVisualWidth(ctx: *DrawContext, content: []const u8, font: FontFace, font_size: f32) !f32 {
-    return text_measure.visualWidth(ctx.allocator, content, font, font_size);
 }
 
 fn lineBaselineFromTop(ctx: *DrawContext, font: FontFace, font_size: f32, line_height: f32) !f32 {

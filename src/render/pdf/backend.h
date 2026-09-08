@@ -162,6 +162,45 @@ typedef struct SsTextShape {
     SsFontEnvironment environment;
 } SsTextShape;
 
+typedef struct SsParagraphStyle {
+    size_t source_start;
+    size_t source_end;
+    const char *font_family;
+    int font_weight;
+    int font_style;
+    int font_stretch;
+    double letter_spacing;
+} SsParagraphStyle;
+
+typedef struct SsParagraphObject {
+    size_t source_start;
+    double width;
+    double height;
+    double baseline_from_bottom;
+    double spacing;
+} SsParagraphObject;
+
+typedef struct SsParagraphOptions {
+    const char *font_family;
+    int font_weight;
+    int font_style;
+    int font_stretch;
+    double font_size;
+    double width;
+    int wrap;
+    double emoji_spacing;
+    const SsParagraphStyle *styles;
+    size_t style_count;
+    const SsParagraphObject *objects;
+    size_t object_count;
+} SsParagraphOptions;
+
+typedef struct SsInlinePosition {
+    size_t line_index;
+    double x;
+    double baseline_y;
+} SsInlinePosition;
+
 typedef struct SsTextMeasurement {
     SsPdfInkExtents logical_bounds;
     SsPdfInkExtents ink_bounds;
@@ -377,6 +416,12 @@ int ss_text_shape(
     SsTextShape *shape
 );
 void ss_text_shape_free(SsTextShape *shape);
+int ss_text_shape_paragraph(
+    const char *text,
+    const SsParagraphOptions *options,
+    SsTextShape *shape,
+    SsInlinePosition *positions
+);
 int ss_raster_size(const char *path, double *width, double *height);
 int ss_raster_metadata_bytes(const unsigned char *bytes, size_t length, SsRasterMetadata *metadata);
 int ss_pdf_draw_raster(SsPdf *pdf, const char *path, double x, double y, double width, double height);

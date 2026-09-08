@@ -1667,10 +1667,11 @@ static PangoFontDescription *ss_real_fallback_description(
     return fallback;
 }
 
-static int ss_layout_replace_synthetic_fonts(
+static int ss_layout_replace_synthetic_fonts_for_paragraph(
     PangoLayout *layout,
     const char *text,
-    const PangoFontDescription *requested
+    const PangoFontDescription *requested,
+    const SsParagraphOptions *paragraph
 ) {
     if (layout == NULL || text == NULL || requested == NULL) return 0;
     PangoAttrList *attributes = NULL;
@@ -1685,13 +1686,33 @@ static int ss_layout_replace_synthetic_fonts(
             PangoItem *item = glyph_item->item;
             if (!ss_font_uses_synthesis(item->analysis.font)) continue;
             if (item->offset < 0 || item->length <= 0) continue;
+            PangoFontDescription *styled = NULL;
+            if (paragraph != NULL) {
+                size_t low = 0;
+                size_t high = paragraph->style_count;
+                while (low < high) {
+                    const size_t middle = low + (high - low) / 2;
+                    if (paragraph->styles[middle].source_end <= (size_t)item->offset) low = middle + 1;
+                    else high = middle;
+                }
+                if (low < paragraph->style_count) {
+                    const SsParagraphStyle *style = &paragraph->styles[low];
+                    if (style->source_start <= (size_t)item->offset && style->font_family != NULL) {
+                        styled = ss_font_description(style->font_family, style->font_weight, style->font_style, style->font_stretch, paragraph->font_size);
+                    }
+                }
+            }
             PangoFontDescription *fallback = ss_real_fallback_description(
-                requested,
+                styled != NULL ? styled : requested,
                 text + item->offset,
                 (size_t)item->length
             );
+            if (styled != NULL) pango_font_description_free(styled);
             if (fallback == NULL) continue;
-            if (attributes == NULL) attributes = pango_attr_list_new();
+            if (attributes == NULL) {
+                PangoAttrList *existing = pango_layout_get_attributes(layout);
+                attributes = existing != NULL ? pango_attr_list_copy(existing) : pango_attr_list_new();
+            }
             if (attributes == NULL) {
                 pango_font_description_free(fallback);
                 continue;
@@ -1701,7 +1722,7 @@ static int ss_layout_replace_synthetic_fonts(
             if (attribute == NULL) continue;
             attribute->start_index = (guint)item->offset;
             attribute->end_index = (guint)(item->offset + item->length);
-            pango_attr_list_insert(attributes, attribute);
+            pango_attr_list_change(attributes, attribute);
             replacements++;
         }
     }
@@ -1710,6 +1731,14 @@ static int ss_layout_replace_synthetic_fonts(
         pango_attr_list_unref(attributes);
     }
     return replacements;
+}
+
+static int ss_layout_replace_synthetic_fonts(
+    PangoLayout *layout,
+    const char *text,
+    const PangoFontDescription *requested
+) {
+    return ss_layout_replace_synthetic_fonts_for_paragraph(layout, text, requested, NULL);
 }
 
 static double ss_math_constant_ratio(hb_font_t *font, hb_ot_math_constant_t constant, double font_size) {
@@ -1826,7 +1855,175 @@ int ss_text_measure_layout(
     return 0;
 }
 
-int ss_text_shape(
+static int ss_paragraph_units_valid(double value) {
+    return isfinite(value) && value * PANGO_SCALE >= G_MININT && value * PANGO_SCALE <= G_MAXINT;
+}
+
+static int ss_paragraph_options_valid(const char *text, const SsParagraphOptions *options, SsInlinePosition *positions) {
+    if (text == NULL || options == NULL || !g_utf8_validate(text, -1, NULL)) return 0;
+    const size_t length = strlen(text);
+    if (length > G_MAXINT || options->font_size <= 0 || !ss_paragraph_units_valid(options->font_size) ||
+        !ss_paragraph_units_valid(options->width) || !ss_paragraph_units_valid(options->emoji_spacing)) return 0;
+    if ((options->style_count != 0 && options->styles == NULL) ||
+        (options->object_count != 0 && (options->objects == NULL || positions == NULL))) return 0;
+    size_t previous_end = 0;
+    for (size_t index = 0; index < options->style_count; index++) {
+        const SsParagraphStyle *style = &options->styles[index];
+        if (style->source_start < previous_end || style->source_start > style->source_end || style->source_end > length ||
+            !ss_paragraph_units_valid(style->letter_spacing)) return 0;
+        if ((style->source_start < length && (((unsigned char)text[style->source_start] & 0xc0) == 0x80)) ||
+            (style->source_end < length && (((unsigned char)text[style->source_end] & 0xc0) == 0x80))) return 0;
+        previous_end = style->source_end;
+    }
+    previous_end = 0;
+    for (size_t index = 0; index < options->object_count; index++) {
+        const SsParagraphObject *object = &options->objects[index];
+        if (object->source_start < previous_end || object->source_start > length || length - object->source_start < 3 ||
+            memcmp(text + object->source_start, "\xef\xbf\xbc", 3) != 0 || object->width <= 0 || object->height <= 0 || object->spacing < 0 ||
+            !ss_paragraph_units_valid(object->width + object->spacing) || !ss_paragraph_units_valid(object->height) ||
+            !ss_paragraph_units_valid(object->baseline_from_bottom - object->height)) return 0;
+        previous_end = object->source_start + 3;
+    }
+    return 1;
+}
+
+typedef struct SsParagraphAttribute {
+    PangoAttribute *attribute;
+    guint order;
+} SsParagraphAttribute;
+
+typedef struct SsParagraphAttributes {
+    GArray *values;
+    PangoAttribute *last_font;
+    PangoAttribute *last_spacing;
+    PangoAttribute *last_shape;
+} SsParagraphAttributes;
+
+static void ss_paragraph_add_attribute(SsParagraphAttributes *attributes, PangoAttribute *attribute, size_t start, size_t end) {
+    attribute->start_index = (guint)start;
+    attribute->end_index = (guint)end;
+    PangoAttribute **previous = NULL;
+    switch (attribute->klass->type) {
+        case PANGO_ATTR_FONT_DESC: previous = &attributes->last_font; break;
+        case PANGO_ATTR_LETTER_SPACING: previous = &attributes->last_spacing; break;
+        case PANGO_ATTR_SHAPE: previous = &attributes->last_shape; break;
+        default: break;
+    }
+    if (previous != NULL && *previous != NULL && (*previous)->end_index == start && pango_attribute_equal(*previous, attribute)) {
+        (*previous)->end_index = (guint)end;
+        pango_attribute_destroy(attribute);
+        return;
+    }
+    SsParagraphAttribute entry = {attribute, attributes->values->len};
+    g_array_append_val(attributes->values, entry);
+    if (previous != NULL) *previous = attribute;
+}
+
+static void ss_paragraph_attributes_free(SsParagraphAttributes *attributes, int destroy_attributes) {
+    if (destroy_attributes) {
+        for (guint index = 0; index < attributes->values->len; index++) {
+            pango_attribute_destroy(g_array_index(attributes->values, SsParagraphAttribute, index).attribute);
+        }
+    }
+    g_array_free(attributes->values, TRUE);
+}
+
+static gint ss_paragraph_attribute_compare(gconstpointer first_ptr, gconstpointer second_ptr) {
+    const SsParagraphAttribute *first = first_ptr;
+    const SsParagraphAttribute *second = second_ptr;
+    const guint left = first->attribute->start_index;
+    const guint right = second->attribute->start_index;
+    if (left != right) return left < right ? -1 : 1;
+    return first->order < second->order ? -1 : first->order > second->order;
+}
+
+static PangoAttrList *ss_paragraph_attributes(const char *text, const SsParagraphOptions *options, const PangoFontDescription *default_font) {
+    SsParagraphAttributes pending = {0};
+    pending.values = g_array_new(FALSE, FALSE, sizeof(SsParagraphAttribute));
+    if (pending.values == NULL) return NULL;
+    for (size_t index = 0; index < options->style_count; index++) {
+        const SsParagraphStyle *style = &options->styles[index];
+        if (style->source_start == style->source_end) continue;
+        if (style->font_family != NULL) {
+            PangoFontDescription *description = ss_font_description(style->font_family, style->font_weight, style->font_style, style->font_stretch, options->font_size);
+            if (description == NULL) {
+                ss_paragraph_attributes_free(&pending, TRUE);
+                return NULL;
+            }
+            if (!pango_font_description_equal(description, default_font)) {
+                PangoAttribute *attribute = pango_attr_font_desc_new(description);
+                ss_paragraph_add_attribute(&pending, attribute, style->source_start, style->source_end);
+            }
+            pango_font_description_free(description);
+        }
+        if (style->letter_spacing != 0) {
+            ss_paragraph_add_attribute(&pending, pango_attr_letter_spacing_new((int)(style->letter_spacing * PANGO_SCALE)), style->source_start, style->source_end);
+        }
+    }
+    if (options->emoji_spacing != 0) {
+        const glong count = g_utf8_strlen(text, -1);
+        if (count >= G_MAXINT) {
+            ss_paragraph_attributes_free(&pending, TRUE);
+            return NULL;
+        }
+        PangoLogAttr *boundaries = g_try_new0(PangoLogAttr, count + 1);
+        if (boundaries == NULL) {
+            ss_paragraph_attributes_free(&pending, TRUE);
+            return NULL;
+        }
+        pango_get_log_attrs(text, -1, -1, pango_language_get_default(), boundaries, (int)count + 1);
+        const char *start = text;
+        const char *cursor = text;
+        for (glong index = 0; index <= count; index++) {
+            if (index != 0 && boundaries[index].is_cursor_position) {
+                const gunichar first = g_utf8_get_char(start);
+                // Preserve the existing symbol-spacing policy; Pango supplies every grapheme boundary.
+                const int emoji = (first >= 0x1f000 && first <= 0x1faff) || (first >= 0x2600 && first <= 0x27bf);
+                if (emoji && index < count && !boundaries[index].is_white) {
+                    ss_paragraph_add_attribute(&pending, pango_attr_letter_spacing_new((int)(options->emoji_spacing * PANGO_SCALE)), (size_t)(start - text), (size_t)(cursor - text));
+                }
+                start = cursor;
+            }
+            if (index < count) cursor = g_utf8_next_char(cursor);
+        }
+        g_free(boundaries);
+    }
+    for (size_t index = 0; index < options->object_count; index++) {
+        const SsParagraphObject *object = &options->objects[index];
+        PangoRectangle ink = {
+            .x = (int)(object->spacing * 0.5 * PANGO_SCALE),
+            .y = (int)((object->baseline_from_bottom - object->height) * PANGO_SCALE),
+            .width = (int)(object->width * PANGO_SCALE),
+            .height = (int)(object->height * PANGO_SCALE),
+        };
+        PangoRectangle logical = ink;
+        logical.x = 0;
+        logical.width = (int)((object->width + object->spacing) * PANGO_SCALE);
+        ss_paragraph_add_attribute(&pending, pango_attr_shape_new(&ink, &logical), object->source_start, object->source_start + 3);
+    }
+    PangoAttrList *attributes = pango_attr_list_new();
+    if (attributes == NULL) {
+        ss_paragraph_attributes_free(&pending, TRUE);
+        return NULL;
+    }
+    g_array_sort(pending.values, ss_paragraph_attribute_compare);
+    for (guint index = 0; index < pending.values->len; index++) {
+        pango_attr_list_insert(attributes, g_array_index(pending.values, SsParagraphAttribute, index).attribute);
+    }
+    ss_paragraph_attributes_free(&pending, FALSE);
+    return attributes;
+}
+
+static int ss_paragraph_shape_item(PangoGlyphItem *item) {
+    if (item == NULL || item->item == NULL) return 0;
+    for (GSList *entry = item->item->analysis.extra_attrs; entry != NULL; entry = entry->next) {
+        const PangoAttribute *attribute = (const PangoAttribute *)entry->data;
+        if (attribute != NULL && attribute->klass->type == PANGO_ATTR_SHAPE) return 1;
+    }
+    return 0;
+}
+
+static int ss_text_shape_with_paragraph(
     const char *text,
     const char *font_family,
     int font_weight,
@@ -1835,7 +2032,9 @@ int ss_text_shape(
     double font_size,
     double width,
     int wrap,
-    SsTextShape *shape
+    SsTextShape *shape,
+    const SsParagraphOptions *paragraph,
+    SsInlinePosition *positions
 ) {
     if (text == NULL || shape == NULL || font_size <= 0) return 1;
     memset(shape, 0, sizeof(*shape));
@@ -1867,11 +2066,23 @@ int ss_text_shape(
     pango_layout_set_text(layout, valid_text, -1);
     if (wrap && width > 0) {
         pango_layout_set_width(layout, (int)(width * PANGO_SCALE));
-        pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+        pango_layout_set_wrap(layout, paragraph != NULL ? PANGO_WRAP_WORD : PANGO_WRAP_WORD_CHAR);
     } else {
         pango_layout_set_width(layout, -1);
     }
-    ss_layout_replace_synthetic_fonts(layout, valid_text, description);
+    if (paragraph != NULL) {
+        PangoAttrList *attributes = ss_paragraph_attributes(valid_text, paragraph, description);
+        if (attributes == NULL) {
+            g_free(valid_text);
+            pango_font_description_free(description);
+            g_object_unref(layout);
+            g_rw_lock_reader_unlock(&ss_font_config_lock);
+            return 1;
+        }
+        pango_layout_set_attributes(layout, attributes);
+        pango_attr_list_unref(attributes);
+    }
+    ss_layout_replace_synthetic_fonts_for_paragraph(layout, valid_text, description, paragraph);
     pango_font_description_free(description);
 
     const int line_count = pango_layout_get_line_count(layout);
@@ -1883,7 +2094,7 @@ int ss_text_shape(
         if (line == NULL) continue;
         for (GSList *entry = line->runs; entry != NULL; entry = entry->next) {
             PangoGlyphItem *item = (PangoGlyphItem *)entry->data;
-            if (item == NULL || item->glyphs == NULL) continue;
+            if (item == NULL || item->glyphs == NULL || (paragraph != NULL && ss_paragraph_shape_item(item))) continue;
             run_count++;
             glyph_count += (size_t)item->glyphs->num_glyphs;
             for (int glyph_index = 0; glyph_index < item->glyphs->num_glyphs; glyph_index++) {
@@ -1945,6 +2156,10 @@ int ss_text_shape(
                 if (glyph_item == NULL || glyph_item->item == NULL || glyph_item->glyphs == NULL) continue;
                 PangoItem *item = glyph_item->item;
                 PangoGlyphString *glyphs = glyph_item->glyphs;
+                if (paragraph != NULL && ss_paragraph_shape_item(glyph_item)) {
+                    visual_x += ((double)pango_glyph_string_get_width(glyphs)) / PANGO_SCALE;
+                    continue;
+                }
                 SsTextRun *run = &shape->runs[next_run++];
                 run->source_start = (size_t)item->offset;
                 run->source_end = (size_t)(item->offset + item->length);
@@ -2047,11 +2262,62 @@ int ss_text_shape(
         output_line->run_count = next_run - output_line->run_start;
         if (line_index + 1 < line_count) pango_layout_iter_next_line(iterator);
     }
+    if (paragraph != NULL) {
+        for (size_t index = 0; index < paragraph->object_count; index++) {
+            const SsParagraphObject *object = &paragraph->objects[index];
+            PangoRectangle rect = {0};
+            int line_index = 0;
+            int offset = 0;
+            pango_layout_index_to_pos(layout, (int)object->source_start, &rect);
+            pango_layout_index_to_line_x(layout, (int)object->source_start, FALSE, &line_index, &offset);
+            if (line_index < 0 || (size_t)line_index >= shape->line_count) {
+                pango_layout_iter_free(iterator);
+                g_free(valid_text);
+                g_object_unref(layout);
+                g_rw_lock_reader_unlock(&ss_font_config_lock);
+                ss_text_shape_free(shape);
+                return 1;
+            }
+            positions[index].line_index = (size_t)line_index;
+            positions[index].x = fmin((double)rect.x, (double)rect.x + rect.width) / PANGO_SCALE
+                - shape->lines[line_index].logical_bounds.x + object->spacing * 0.5;
+            positions[index].baseline_y = shape->lines[line_index].baseline_y;
+        }
+    }
     pango_layout_iter_free(iterator);
     g_free(valid_text);
     g_object_unref(layout);
     g_rw_lock_reader_unlock(&ss_font_config_lock);
     return 0;
+}
+
+int ss_text_shape(
+    const char *text,
+    const char *font_family,
+    int font_weight,
+    int font_style,
+    int font_stretch,
+    double font_size,
+    double width,
+    int wrap,
+    SsTextShape *shape
+) {
+    return ss_text_shape_with_paragraph(text, font_family, font_weight, font_style, font_stretch,
+        font_size, width, wrap, shape, NULL, NULL);
+}
+
+int ss_text_shape_paragraph(
+    const char *text,
+    const SsParagraphOptions *options,
+    SsTextShape *shape,
+    SsInlinePosition *positions
+) {
+    if (shape == NULL) return 1;
+    memset(shape, 0, sizeof(*shape));
+    if (!ss_paragraph_options_valid(text, options, positions)) return 1;
+    return ss_text_shape_with_paragraph(text, options->font_family, options->font_weight,
+        options->font_style, options->font_stretch, options->font_size, options->width,
+        options->wrap, shape, options, positions);
 }
 
 double ss_text_measure_text(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {

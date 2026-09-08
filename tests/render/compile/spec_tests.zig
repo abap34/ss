@@ -296,7 +296,7 @@ test "captured measurement items keep page order and annotations" {
         try testing.expectEqual(@as(u32, @intCast(index)), header.paint_index);
         try testing.expectEqual((@as(u64, 1) << 32) | @as(u64, @intCast(index)), header.item_id);
     }
-    try testing.expectEqual(@as(usize, 3), page.links.items.len);
+    try testing.expectEqual(@as(usize, 1), page.links.items.len);
     for (page.links.items) |link| {
         try testing.expectEqualStrings("https://example.com", link.target);
     }
@@ -1893,4 +1893,135 @@ test "font diagnostics identify prior failures by cause code" {
     var cloned = try state.diagnostics.items[0].clone(testing.allocator);
     defer cloned.deinit(testing.allocator);
     try testing.expectEqualStrings("FontSetupFailed", cloned.data.render_failed.cause_code.?);
+}
+
+test "paragraph measurement and emission retain the same final-width glyph layout" {
+    const examples = [_][]const u8{
+        "one **two** three four five six",
+        "a\u{a0}b e\u{301} \u{304b}\u{3099} \u{3042}\u{3044}\u{3001}\u{3046}",
+        "left \u{633}\u{644}[\u{627}\u{645}](https://example.com) right",
+        "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467} joined",
+    };
+    for (examples) |content| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        const page_id = try state.addPage("paragraph");
+        const object_id = try state.makeObject(page_id, "paragraph", null, .text, .text, content);
+        const object = state.getNode(object_id).?;
+        object.frame = .{ .x = 0, .y = 0, .width = 100, .height = 720 };
+        var prepared = try core.prepared.prepare(testing.allocator, &state);
+        defer prepared.deinit(testing.allocator);
+        const paint = &prepared.pages[0].objects[0].render.text.?;
+        paint.font.family = "DejaVu Sans";
+        paint.bold_font.family = "DejaVu Sans";
+        paint.font_size = 24;
+        paint.line_height = 36;
+        paint.wrap = true;
+        var cache = render_text.Cache.init(testing.allocator, testing.io);
+        defer cache.deinit();
+        const environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = environment, .text_cache = &cache });
+        defer scope.deinit();
+        scope.measurements.persistent.clearRetainingCapacity();
+        const provider = scope.provider();
+        const measured = (try provider.measure(provider.context, &state, object, 100, .width_constrained)).?;
+        try testing.expect(cache.paragraphs.entries.count() > 0);
+        const retained_count = cache.paragraphs.entries.count();
+        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1, .text_cache = &cache, .font_environment = environment });
+        defer ir.deinit(testing.allocator);
+        try ir.validate();
+        try testing.expectEqual(retained_count, cache.paragraphs.entries.count());
+        var ink: ?render.Rect = null;
+        var baseline: ?f64 = null;
+        for (ir.pages[0].items.items) |item| {
+            if (item.header().node_id != object_id) continue;
+            const bounds = item.header().ink_bounds;
+            if (bounds.width > 0 and bounds.height > 0) ink = if (ink) |previous| previous.unioned(bounds) else bounds;
+            if (item == .text and baseline == null) baseline = item.text.baselineY();
+        }
+        const expected = measured.ink_bounds.?;
+        try testing.expectApproxEqAbs(@as(f64, expected.x), ink.?.x, 0.001);
+        try testing.expectApproxEqAbs(@as(f64, expected.y), ink.?.y, 0.001);
+        try testing.expectApproxEqAbs(@as(f64, expected.width), ink.?.width, 0.001);
+        try testing.expectApproxEqAbs(@as(f64, expected.height), ink.?.height, 0.001);
+        try testing.expectApproxEqAbs(@as(f64, measured.first_baseline.?), baseline.?, 0.001);
+    }
+}
+
+test "paint boundaries preserve contextual glyphs and visual positions" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("contextual");
+    for ([_][]const u8{ "\u{633}\u{644}\u{627}\u{645}", "\u{633}\u{644}[\u{627}\u{645}](https://example.com)" }) |content| {
+        const object_id = try state.makeObject(page_id, "contextual", null, .text, .text, content);
+        state.getNode(object_id).?.frame = .{ .width = 500, .height = 720 };
+    }
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    for (prepared.pages[0].objects) |*object| {
+        object.render.text.?.font.family = "DejaVu Sans";
+        object.render.text.?.font_size = 24;
+    }
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1 });
+    defer ir.deinit(testing.allocator);
+    try ir.validate();
+    const PositionedGlyph = struct { id: u32, x: f64, y: f64, advance: f64 };
+    var plain = std.ArrayList(PositionedGlyph).empty;
+    defer plain.deinit(testing.allocator);
+    var styled = std.ArrayList(PositionedGlyph).empty;
+    defer styled.deinit(testing.allocator);
+    const first_node = prepared.pages[0].objects[0].node_id;
+    for (ir.pages[0].items.items) |item| {
+        if (item != .text) continue;
+        const target = if (item.header().node_id == first_node) &plain else &styled;
+        for (item.text.layout.runs) |run| {
+            var x = item.text.x + run.x;
+            for (item.text.layout.glyphs[run.glyph_range.start..run.glyph_range.end]) |glyph| {
+                try target.append(testing.allocator, .{ .id = glyph.id, .x = x + glyph.offset_x, .y = item.text.baselineY() + glyph.offset_y, .advance = glyph.advance_x });
+                x += glyph.advance_x;
+            }
+        }
+    }
+    try testing.expectEqual(@as(usize, 3), plain.items.len);
+    try testing.expectEqualDeep(plain.items, styled.items);
+}
+
+test "inline math shares measured paragraph baselines with bidirectional text" {
+    if (!try latexEngineAvailable(.pdflatex)) return error.SkipZigTest;
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("inline-math");
+    const object_id = try state.makeObject(page_id, "inline-math", null, .text, .text, "\u{633}\u{644}\u{627}\u{645} $x^2$ \u{633}\u{644}\u{627}\u{645}");
+    const object = state.getNode(object_id).?;
+    object.frame = .{ .width = 250, .height = 720 };
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    prepared.pages[0].objects[0].render.text.?.font.family = "DejaVu Sans";
+    var cache = render_text.Cache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    const environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = environment, .text_cache = &cache });
+    defer scope.deinit();
+    scope.measurements.persistent.clearRetainingCapacity();
+    const provider = scope.provider();
+    const measured = (try provider.measure(provider.context, &state, object, object.frame.width, .width_constrained)).?;
+    const retained_count = cache.paragraphs.entries.count();
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1, .text_cache = &cache, .font_environment = environment });
+    defer ir.deinit(testing.allocator);
+    try ir.validate();
+    try testing.expectEqual(retained_count, cache.paragraphs.entries.count());
+    var ink: ?render.Rect = null;
+    var math_count: usize = 0;
+    for (ir.pages[0].items.items) |item| {
+        if (item.header().node_id != object_id) continue;
+        if (item == .latex) math_count += 1;
+        const bounds = item.header().ink_bounds;
+        if (bounds.width > 0 and bounds.height > 0) ink = if (ink) |previous| previous.unioned(bounds) else bounds;
+    }
+    try testing.expectEqual(@as(usize, 1), math_count);
+    const expected = measured.ink_bounds.?;
+    try testing.expectApproxEqAbs(@as(f64, expected.x), ink.?.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, expected.y), ink.?.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, expected.width), ink.?.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, expected.height), ink.?.height, 0.001);
 }

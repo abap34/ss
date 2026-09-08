@@ -298,9 +298,12 @@ fn compileRendering(
         }
         return err;
     };
+    var text_cache = render_text.Cache.init(std.heap.smp_allocator, io);
+    defer text_cache.deinit();
+    text_cache.restore(options.cache_dir);
     var highlight_cache = render_compile.HighlightCache.init(std.heap.smp_allocator, io);
     defer highlight_cache.deinit();
-    var layouts = pipeline.solveLayouts(io, &analyzed.state, &pages, progress, source.layout_jobs, options.highlight_languages, font_environment, &highlight_cache) catch |err| {
+    var layouts = pipeline.solveLayouts(io, &analyzed.state, &pages, progress, source.layout_jobs, options.highlight_languages, font_environment, &highlight_cache, &text_cache) catch |err| {
         app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, diagnostics_json_path) catch {};
         return err;
     };
@@ -317,9 +320,6 @@ fn compileRendering(
     progress.begin("Compile rendering");
     errdefer progress.abort();
     const diagnostic_start = state.diagnostics.items.len;
-    var text_cache = render_text.Cache.init(std.heap.smp_allocator, io);
-    defer text_cache.deinit();
-    text_cache.restore(options.cache_dir);
     const ir_allocator = std.heap.smp_allocator;
     var ir = render_compile.compilePrepared(ir_allocator, io, &state, &pages, .{
         .jobs = options.jobs,

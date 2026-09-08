@@ -389,6 +389,7 @@ const Server = struct {
             .io = self.io,
             .resource_cache = &self.render_resource_cache,
             .highlight_cache = &self.highlight_cache,
+            .text_cache = &self.text_shape_cache,
             .cancellation = .{ .context = self, .is_canceled = analysisCanceled },
         }, snapshot, path, &pending.edit, self.documents.generation)) return false;
         self.analysis_revision = self.active_revision;
@@ -724,6 +725,7 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
         .highlight_languages = hook.highlight_languages,
         .resource_cache = &hook.server.render_resource_cache,
         .highlight_cache = &hook.server.highlight_cache,
+        .text_cache = &hook.server.text_shape_cache,
         .cancellation = .{
             .context = hook.server,
             .is_canceled = analysisCanceled,
@@ -731,7 +733,7 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     });
     utils.measure_profile.recordWysiwyg(.evaluate_solve, layout_start);
     var prepared_owned = true;
-    defer if (prepared_owned) prepared.pages.deinit(state.allocator);
+    defer if (prepared_owned) prepared.deinit(state.allocator);
     try hook.server.checkCanceled();
     const conflicts_json = try core.layout.conflicts.toJson(state.allocator, state);
     errdefer state.allocator.free(conflicts_json);

@@ -84,6 +84,8 @@ pub fn compile(
     pages: *const core.prepared.PreparedPages,
     options: Options,
 ) !render.Ir {
+    var local_text_cache = text_compile.Cache.init(std.heap.smp_allocator, io);
+    defer local_text_cache.deinit();
     var local_highlight_cache = HighlightCache.init(std.heap.smp_allocator, io);
     defer local_highlight_cache.deinit();
     var local_resource_cache = resource_compile.SourceCache.init(std.heap.smp_allocator, io);
@@ -93,7 +95,7 @@ pub fn compile(
         .cache_dir = options.cache_dir,
         .highlight_languages = options.highlight_languages,
         .resource_cache = options.resource_cache orelse &local_resource_cache,
-        .text_cache = options.text_cache,
+        .text_cache = options.text_cache orelse &local_text_cache,
         .highlight_cache = options.highlight_cache orelse &local_highlight_cache,
         .page_cache = options.page_cache,
         .font_environment = options.font_environment,

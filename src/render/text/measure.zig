@@ -193,3 +193,50 @@ fn nativeBounds(value: c.SsPdfInkExtents) Bounds {
         .height = @floatCast(value.height),
     };
 }
+
+pub const ParagraphStyle = struct {
+    start: usize,
+    end: usize,
+    font: font_model.Face,
+};
+
+pub const ParagraphMeasurement = struct {
+    width: f32,
+    line_count: usize,
+};
+
+pub fn paragraph(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, font_size: f32, width: f32, wrap: bool, emoji_spacing: f32, styles: []const ParagraphStyle) !ParagraphMeasurement {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const scratch = arena.allocator();
+    const source = try scratch.dupeZ(u8, text);
+    const family = try scratch.dupeZ(u8, font.family);
+    const native_styles = try scratch.alloc(c.SsParagraphStyle, styles.len);
+    for (styles, native_styles) |style, *native| native.* = .{
+        .source_start = style.start,
+        .source_end = style.end,
+        .font_family = (try scratch.dupeZ(u8, style.font.family)).ptr,
+        .font_weight = @intCast(style.font.weight),
+        .font_style = font_model.styleCode(style.font.style),
+        .font_stretch = font_model.stretchCode(style.font.stretch),
+        .letter_spacing = 0,
+    };
+    const options = c.SsParagraphOptions{
+        .font_family = family.ptr,
+        .font_weight = @intCast(font.weight),
+        .font_style = font_model.styleCode(font.style),
+        .font_stretch = font_model.stretchCode(font.stretch),
+        .font_size = font_size,
+        .width = width,
+        .wrap = @intFromBool(wrap),
+        .emoji_spacing = emoji_spacing,
+        .styles = native_styles.ptr,
+        .style_count = native_styles.len,
+        .objects = null,
+        .object_count = 0,
+    };
+    var native = std.mem.zeroes(c.SsTextShape);
+    if (c.ss_text_shape_paragraph(source.ptr, &options, &native, null) != 0) return error.PangoCreateFailed;
+    defer c.ss_text_shape_free(&native);
+    return .{ .width = @floatCast(native.logical_bounds.width), .line_count = native.line_count };
+}

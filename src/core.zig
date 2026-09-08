@@ -82,8 +82,6 @@ pub const markdown = @import("core/markdown.zig");
 pub const prepared = @import("core/prepared.zig");
 pub const constraint_updates = @import("core/constraint_updates.zig");
 pub const value_text = @import("core/value_text.zig");
-pub const text_tokenize = @import("core/text_tokenize.zig");
 pub const render_text_measure = @import("render/text/measure.zig");
-pub const render_wrap = @import("render/text/wrap.zig");
 
 pub const declarations = @import("core/declarations.zig");

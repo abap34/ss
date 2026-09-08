@@ -5,8 +5,6 @@ const font_model = @import("../core/font.zig");
 const markdown = @import("../core/markdown.zig");
 const render_policy = @import("../core/render_policy.zig");
 const text_measure = @import("../render/text/measure.zig");
-const text_tokenize = @import("../core/text_tokenize.zig");
-const wrap_layout = @import("../render/text/wrap.zig");
 const style_defaults = @import("style.zig");
 const utils = @import("utils");
 const source = utils.source;
@@ -16,120 +14,37 @@ const Defaults = @import("document.zig").Defaults;
 const LayoutStyle = model.TextStyle;
 const TextPaint = render_policy.TextPaint;
 
-const MeasurementKind = enum {
-    advance,
-    visual,
-};
-
-const MeasurementKey = struct {
-    kind: MeasurementKind,
-    text: []const u8,
-    family: []const u8,
-    weight: u16,
-    style: font_model.Style,
-    stretch: font_model.Stretch,
-    font_size_bits: u32,
-};
-
-const MeasurementKeyContext = struct {
-    pub fn hash(_: MeasurementKeyContext, key: MeasurementKey) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        std.hash.autoHash(&hasher, @intFromEnum(key.kind));
-        std.hash.autoHash(&hasher, key.weight);
-        std.hash.autoHash(&hasher, @intFromEnum(key.style));
-        std.hash.autoHash(&hasher, @intFromEnum(key.stretch));
-        std.hash.autoHash(&hasher, key.font_size_bits);
-        hasher.update(key.family);
-        hasher.update(key.text);
-        return hasher.final();
-    }
-
-    pub fn eql(_: MeasurementKeyContext, left: MeasurementKey, right: MeasurementKey) bool {
-        return left.kind == right.kind and
-            left.weight == right.weight and
-            left.style == right.style and
-            left.stretch == right.stretch and
-            left.font_size_bits == right.font_size_bits and
-            std.mem.eql(u8, left.family, right.family) and
-            std.mem.eql(u8, left.text, right.text);
-    }
-};
-
-const MeasurementMap = std.HashMap(MeasurementKey, f32, MeasurementKeyContext, std.hash_map.default_max_load_percentage);
-
 pub const MeasurementCache = struct {
     allocator: std.mem.Allocator,
-    values: MeasurementMap,
+    values: std.AutoHashMap([32]u8, text_measure.ParagraphMeasurement),
     render_provider: ?model.LayoutMeasurementProvider = null,
 
     pub fn init(allocator: std.mem.Allocator) MeasurementCache {
         return .{
             .allocator = allocator,
-            .values = MeasurementMap.init(allocator),
+            .values = std.AutoHashMap([32]u8, text_measure.ParagraphMeasurement).init(allocator),
         };
     }
 
     pub fn initWithRenderProvider(allocator: std.mem.Allocator, provider: ?model.LayoutMeasurementProvider) MeasurementCache {
         return .{
             .allocator = allocator,
-            .values = MeasurementMap.init(allocator),
+            .values = std.AutoHashMap([32]u8, text_measure.ParagraphMeasurement).init(allocator),
             .render_provider = provider,
         };
     }
 
     pub fn deinit(self: *MeasurementCache) void {
-        var keys = self.values.keyIterator();
-        while (keys.next()) |key| {
-            self.allocator.free(key.text);
-            self.allocator.free(key.family);
-        }
         self.values.deinit();
     }
 
-    fn advanceWidth(self: *MeasurementCache, text: []const u8, font: font_model.Face, font_size: f32) !f32 {
-        return try self.measure(.advance, text, font, font_size);
-    }
-
-    fn visualWidth(self: *MeasurementCache, text: []const u8, font: font_model.Face, font_size: f32) !f32 {
-        return try self.measure(.visual, text, font, font_size);
-    }
-
-    fn measure(self: *MeasurementCache, kind: MeasurementKind, text: []const u8, font: font_model.Face, font_size: f32) !f32 {
-        if (text.len == 0) return 0;
-        const profile_start = utils.measure_profile.start();
-        var profile_hit = false;
-        defer utils.measure_profile.recordText(profileTextKind(kind), profile_hit, profile_start);
-
-        const lookup = measurementKey(kind, text, font, font_size);
-        if (self.values.get(lookup)) |cached| {
-            profile_hit = true;
-            return cached;
-        }
-
-        const measured = switch (kind) {
-            .advance => try text_measure.advanceWidth(self.allocator, text, font, font_size),
-            .visual => try text_measure.visualWidth(self.allocator, text, font, font_size),
-        };
-
-        const owned_text = self.allocator.dupe(u8, text) catch return measured;
-        const owned_family = self.allocator.dupe(u8, font.family) catch {
-            self.allocator.free(owned_text);
-            return measured;
-        };
-        const owned_key = MeasurementKey{
-            .kind = kind,
-            .text = owned_text,
-            .family = owned_family,
-            .weight = font.weight,
-            .style = font.style,
-            .stretch = font.stretch,
-            .font_size_bits = @bitCast(font_size),
-        };
-        self.values.putNoClobber(owned_key, measured) catch {
-            self.allocator.free(owned_text);
-            self.allocator.free(owned_family);
-            return measured;
-        };
+    fn paragraph(self: *MeasurementCache, text: []const u8, font: font_model.Face, font_size: f32, width: f32, wrap: bool, emoji_spacing: f32, styles: []const text_measure.ParagraphStyle) !text_measure.ParagraphMeasurement {
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        std.hash.autoHashStrat(&hash, .{ text, font, @as(u32, @bitCast(font_size)), @as(u32, @bitCast(width)), wrap, @as(u32, @bitCast(emoji_spacing)), styles }, .Deep);
+        const key = hash.finalResult();
+        if (self.values.get(key)) |cached| return cached;
+        const measured = try text_measure.paragraph(self.allocator, text, font, font_size, width, wrap, emoji_spacing, styles);
+        if (self.values.count() < 4096) try self.values.put(key, measured);
         return measured;
     }
 
@@ -139,25 +54,6 @@ pub const MeasurementCache = struct {
         return try provider.measure(provider.context, state_ptr, node, width, mode);
     }
 };
-
-fn profileTextKind(kind: MeasurementKind) utils.measure_profile.TextKind {
-    return switch (kind) {
-        .advance => .advance,
-        .visual => .visual,
-    };
-}
-
-fn measurementKey(kind: MeasurementKind, text: []const u8, font: font_model.Face, font_size: f32) MeasurementKey {
-    return .{
-        .kind = kind,
-        .text = text,
-        .family = font.family,
-        .weight = font.weight,
-        .style = font.style,
-        .stretch = font.stretch,
-        .font_size_bits = @bitCast(font_size),
-    };
-}
 
 fn styleForNode(state: anytype, node: *const Node) LayoutStyle {
     return style_defaults.styleForNode(state, node);
@@ -685,30 +581,30 @@ fn plainTextFaceForNode(state: anytype, node: *const Node, faces: font_model.Tex
 
 fn markdownRunSliceVisualLineCount(state: anytype, cache: ?*MeasurementCache, style: TextPaint, runs: []const markdown.Run, max_width: f32) usize {
     if (runs.len == 0) return 0;
-    var atoms = std.ArrayList(MeasuredAtom).empty;
-    defer atoms.deinit(state.allocator);
-    appendMarkdownRunSliceMeasuredAtoms(state, cache, style, runs, &atoms) catch return 1;
-    return measuredAtomVisualLineCount(atoms.items, max_width, textEmojiSpacing(style));
+    const measured = measureMarkdownParagraph(cache, state.allocator, style, runs, max_width, true) catch return 1;
+    return measured.line_count;
 }
 
 fn markdownRunSliceDrawExtent(state: anytype, cache: ?*MeasurementCache, style: TextPaint, runs: []const markdown.Run) ?f32 {
-    var atoms = std.ArrayList(MeasuredAtom).empty;
-    defer atoms.deinit(state.allocator);
-    appendMarkdownRunSliceMeasuredAtoms(state, cache, style, runs, &atoms) catch return null;
-    return measuredAtomLineExtent(atoms.items, textEmojiSpacing(style));
+    const measured = measureMarkdownParagraph(cache, state.allocator, style, runs, 0, false) catch return null;
+    return measured.width;
 }
 
-fn appendMarkdownRunSliceMeasuredAtoms(state: anytype, cache: ?*MeasurementCache, style: TextPaint, runs: []const markdown.Run, atoms: *std.ArrayList(MeasuredAtom)) !void {
+fn measureMarkdownParagraph(cache: ?*MeasurementCache, allocator: std.mem.Allocator, style: TextPaint, runs: []const markdown.Run, width: f32, wrap: bool) !text_measure.ParagraphMeasurement {
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(allocator);
+    var styles = std.ArrayList(text_measure.ParagraphStyle).empty;
+    defer styles.deinit(allocator);
     const fonts = textFaces(style);
-    for (runs) |run| {
-        switch (run.kind) {
-            .icon, .math, .display_math => return error.RenderArtifactMeasuredAtDraw,
-            else => {
-                const font = fontForRun(fonts, run.kind);
-                try appendMeasuredTextAtoms(cache, state.allocator, atoms, run.text, font, style);
-            },
-        }
-    }
+    for (runs) |run| switch (run.kind) {
+        .icon, .math, .display_math => return error.RenderArtifactMeasuredAtDraw,
+        else => {
+            const start = text.items.len;
+            try text.appendSlice(allocator, run.text);
+            try styles.append(allocator, .{ .start = start, .end = text.items.len, .font = fontForRun(fonts, run.kind) });
+        },
+    };
+    return measureParagraph(cache, allocator, text.items, style.font, style.font_size, width, wrap, textEmojiSpacing(style), styles.items);
 }
 
 fn textFaces(style: TextPaint) font_model.TextFaces {
@@ -721,60 +617,8 @@ fn textFaces(style: TextPaint) font_model.TextFaces {
 }
 
 fn measuredWrappedTextLineCount(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextPaint, max_width: f32, emoji_spacing: f32) usize {
-    var atoms = std.ArrayList(MeasuredAtom).empty;
-    defer atoms.deinit(allocator);
-    appendMeasuredTextAtoms(cache, allocator, &atoms, text, font, style) catch return 1;
-    return measuredAtomVisualLineCount(atoms.items, max_width, emoji_spacing);
-}
-
-fn measuredAtomVisualLineCount(atoms: []const MeasuredAtom, max_width: f32, emoji_spacing: f32) usize {
-    if (atoms.len == 0) return 1;
-    var lines: usize = 1;
-    var cursor = wrap_layout.Cursor{};
-    var saw_atom = false;
-    for (atoms, 0..) |measured_atom, index| {
-        const width = measured_atom.width;
-        const wrap_atom = wrap_layout.Atom{
-            .width = width,
-            .advance = width + measuredAtomSpacingAfter(atoms, index, emoji_spacing),
-            .is_space = measured_atom.is_space,
-        };
-        applyMeasuredAtom(&cursor, wrap_atom, max_width, &lines, &saw_atom);
-    }
-    return if (saw_atom) lines else 1;
-}
-
-const MeasuredAtom = struct {
-    width: f32,
-    is_space: bool,
-    is_emoji: bool,
-};
-
-fn appendMeasuredTextAtoms(cache: ?*MeasurementCache, allocator: std.mem.Allocator, atoms: *std.ArrayList(MeasuredAtom), text: []const u8, font: font_model.Face, style: TextPaint) !void {
-    var tokenizer = text_tokenize.Tokenizer.init(text);
-    while (tokenizer.next()) |token| {
-        const is_emoji = text_tokenize.isEmojiToken(token);
-        const measured_width = if (is_emoji)
-            measuredTextVisualWidth(cache, allocator, token, font, style)
-        else
-            measuredTextWidth(cache, allocator, token, font, style);
-        const width = measured_width;
-        try atoms.append(allocator, .{
-            .width = width,
-            .is_space = text_tokenize.isWhitespace(token),
-            .is_emoji = is_emoji,
-        });
-    }
-}
-
-fn applyMeasuredAtom(cursor: *wrap_layout.Cursor, atom: wrap_layout.Atom, max_width: f32, lines: *usize, saw_atom: *bool) void {
-    switch (cursor.next(atom, max_width, true)) {
-        .skip => return,
-        .break_then_draw => lines.* += 1,
-        .draw => {},
-    }
-    cursor.advance(atom.advance);
-    saw_atom.* = true;
+    const measured = measureParagraph(cache, allocator, text, font, style.font_size, max_width, true, emoji_spacing, &.{}) catch return 1;
+    return measured.line_count;
 }
 
 fn fontForRun(fonts: font_model.TextFaces, kind: markdown.RunKind) font_model.Face {
@@ -786,45 +630,15 @@ fn fontForRun(fonts: font_model.TextFaces, kind: markdown.RunKind) font_model.Fa
     };
 }
 
-fn measuredTextWidth(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextPaint) f32 {
-    const measured = if (cache) |measurements|
-        measurements.advanceWidth(text, font, style.font_size) catch 0
-    else
-        text_measure.advanceWidth(allocator, text, font, style.font_size) catch 0;
-    return if (measured > 0) measured else 0;
-}
-
-fn measuredTextVisualWidth(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextPaint) f32 {
-    const measured = if (cache) |measurements|
-        measurements.visualWidth(text, font, style.font_size) catch 0
-    else
-        text_measure.visualWidth(allocator, text, font, style.font_size) catch 0;
-    return if (measured > 0) measured else 0;
-}
-
 fn measuredTextDrawExtent(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextPaint, emoji_spacing: f32) f32 {
-    var atoms = std.ArrayList(MeasuredAtom).empty;
-    defer atoms.deinit(allocator);
-    appendMeasuredTextAtoms(cache, allocator, &atoms, text, font, style) catch return 0;
-    return measuredAtomLineExtent(atoms.items, emoji_spacing);
-}
-
-fn measuredAtomLineExtent(atoms: []const MeasuredAtom, emoji_spacing: f32) f32 {
-    var advance: f32 = 0;
-    var extent: f32 = 0;
-    for (atoms, 0..) |atom, index| {
-        extent = @max(extent, advance + atom.width);
-        advance += atom.width + measuredAtomSpacingAfter(atoms, index, emoji_spacing);
-    }
-    return extent;
-}
-
-fn measuredAtomSpacingAfter(atoms: []const MeasuredAtom, index: usize, emoji_spacing: f32) f32 {
-    if (index + 1 >= atoms.len) return 0;
-    if (!atoms[index].is_emoji or atoms[index + 1].is_space) return 0;
-    return emoji_spacing;
+    const measured = measureParagraph(cache, allocator, text, font, style.font_size, 0, false, emoji_spacing, &.{}) catch return 0;
+    return measured.width;
 }
 
 fn textEmojiSpacing(style: TextPaint) f32 {
     return style.font_size * style.emoji_spacing;
+}
+
+fn measureParagraph(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, font_size: f32, width: f32, wrap: bool, emoji_spacing: f32, styles: []const text_measure.ParagraphStyle) !text_measure.ParagraphMeasurement {
+    return if (cache) |measurements| measurements.paragraph(text, font, font_size, width, wrap, emoji_spacing, styles) else text_measure.paragraph(allocator, text, font, font_size, width, wrap, emoji_spacing, styles);
 }

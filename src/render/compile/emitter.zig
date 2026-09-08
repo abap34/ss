@@ -282,10 +282,9 @@ fn appendDecorationSegment(
     dash_off: f64,
     behind_text: bool,
 ) !void {
-    const thickness = width orelse native_thickness;
-    if (!(advance > 0) or !(thickness > 0) or !(opacity > 0)) return;
-    const native_center_y = baseline_y - position + native_thickness / 2;
-    const center_y = native_center_y + offset;
+    const bounds = decorationBounds(x, baseline_y, advance, position, native_thickness, width, offset, opacity) orelse return;
+    const thickness = bounds.height;
+    const center_y = bounds.y + thickness / 2;
     try segments.append(allocator, .{
         .start = .{ .x = x, .y = center_y },
         .end = .{ .x = x + advance, .y = center_y },
@@ -296,4 +295,10 @@ fn appendDecorationSegment(
         .dash_off = dash_off,
         .behind_text = behind_text,
     });
+}
+
+pub fn decorationBounds(x: f64, baseline_y: f64, advance: f64, position: f64, native_thickness: f64, width: ?f64, offset: f64, opacity: f64) ?render.Rect {
+    const thickness = width orelse native_thickness;
+    if (!(advance > 0) or !(thickness > 0) or !(opacity > 0)) return null;
+    return .{ .x = x, .y = baseline_y - position + native_thickness / 2 + offset - thickness / 2, .width = advance, .height = thickness };
 }

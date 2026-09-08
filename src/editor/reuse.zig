@@ -51,6 +51,7 @@ pub const Context = struct {
     io: std.Io,
     resource_cache: ?*render_resources.SourceCache = null,
     highlight_cache: ?*render_layout.HighlightCache = null,
+    text_cache: ?*render_text.Cache = null,
     cancellation: ?utils.Cancellation = null,
 };
 
@@ -91,6 +92,7 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
         .retained_measurements = &reuse_inputs.measurements,
         .resource_cache = ctx.resource_cache,
         .highlight_cache = ctx.highlight_cache,
+        .text_cache = ctx.text_cache,
         .highlight_languages = snapshot.project.highlight.languages,
         .cancellation = ctx.cancellation,
     }) catch |err| switch (err) {
