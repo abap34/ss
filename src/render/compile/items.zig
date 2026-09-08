@@ -52,8 +52,8 @@ const NativePdfError = error{
 };
 
 pub const native_artifact_cache_version = "ss-native-artifacts-v7";
-const render_page_cache_version = "ss-render-page-v2";
-const layout_measurement_cache_version = "ss-native-layout-measure-v18";
+const render_page_cache_version = "ss-render-page-v3";
+const layout_measurement_cache_version = "ss-native-layout-measure-v19";
 const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
 const command_failure_output_limit: usize = 1600;
@@ -481,6 +481,7 @@ pub const LayoutMeasurementScope = struct {
             native_artifact_cache_version,
             Defaults.width,
             Defaults.height,
+            key_ctx.highlight_languages,
             mode,
             width,
             .{
@@ -492,7 +493,6 @@ pub const LayoutMeasurementScope = struct {
                 .latex_preamble = command.latex_preamble,
                 .latex_engine = command.latex_engine,
                 .latex_kind = @tagName(command.latex_kind),
-                .document_body = command.latex_kind == .body,
             },
         ) catch |err| {
             if (err == error.Canceled) return error.Canceled;

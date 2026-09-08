@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const pdf_ffi = @import("pdf_ffi");
 const render_resources = @import("render_resources");
+const syntax_highlight = @import("syntax_highlight.zig");
 
 const c = pdf_ffi.c;
 const Color = core.render_policy.Color;
@@ -26,7 +27,6 @@ pub const Command = struct {
     latex_preamble: []const LatexPreambleEntry,
     latex_engine: core.render_env.LatexEngine,
     latex_kind: []const u8,
-    document_body: bool,
 };
 
 const File = struct {
@@ -40,6 +40,7 @@ pub fn layoutMeasurementKey(
     native_cache_version: []const u8,
     page_width: f32,
     page_height: f32,
+    highlight_languages: anytype,
     mode: core.LayoutMeasurementMode,
     width: f32,
     command: Command,
@@ -60,6 +61,7 @@ pub fn layoutMeasurementKey(
     hashF32(&hasher, page_height);
     hashString(&hasher, @tagName(mode));
     hashF32(&hasher, width);
+    try hashHighlightLanguages(ctx, &files, &hasher, highlight_languages);
     try hashCommand(ctx, &files, &hasher, command);
     return hasher.final();
 }
@@ -87,17 +89,7 @@ pub fn renderPageKey(
     hashU64(&hasher, page_id);
     hashUsize(&hasher, page_index);
     hashOptionalColor(&hasher, background);
-    hashUsize(&hasher, highlight_languages.len);
-    for (highlight_languages) |language| {
-        hashString(&hasher, language.name);
-        hashString(&hasher, language.parser);
-        hashString(&hasher, language.query);
-        if (!std.mem.startsWith(u8, language.query, "builtin:")) {
-            const fingerprint = try fileFingerprint(ctx, &files, language.query);
-            hashBool(&hasher, fingerprint.present);
-            hashU64(&hasher, fingerprint.digest);
-        }
-    }
+    try hashHighlightLanguages(ctx, &files, &hasher, highlight_languages);
     hashUsize(&hasher, commands.len);
     for (commands) |command| {
         hashU64(&hasher, command.page_id);
@@ -111,7 +103,6 @@ pub fn renderPageKey(
             .latex_preamble = command.latex_preamble,
             .latex_engine = command.latex_engine,
             .latex_kind = @tagName(command.latex_kind),
-            .document_body = command.latex_kind == .body,
         });
     }
     return hasher.final();
@@ -147,9 +138,7 @@ fn hashCommand(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.
     hashString(hasher, command.content);
     hashOptionalString(hasher, command.link_id);
     hashString(hasher, command.parse_mode);
-    if ((command.render.kind == .latex and command.document_body) or
-        (command.render.kind == .text and command.latex_preamble.len != 0))
-    {
+    if (command.render.kind == .latex or command.render.kind == .text) {
         hashString(hasher, @tagName(command.latex_engine));
         try hashLatexPreamble(ctx, files, hasher, command.latex_preamble);
     }
@@ -166,6 +155,23 @@ fn hashCommand(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.
             }
         },
         else => {},
+    }
+}
+
+fn hashHighlightLanguages(ctx: Context, files: *std.StringHashMap(File), hasher: *std.hash.Wyhash, languages: anytype) !void {
+    hashUsize(hasher, languages.len);
+    for (languages) |language| {
+        hashString(hasher, language.name);
+        hashString(hasher, language.parser);
+        hashString(hasher, language.query);
+        if (syntax_highlight.builtinHighlightQueryDigest(language.query)) |digest| {
+            hashBool(hasher, true);
+            hashU64(hasher, digest);
+        } else {
+            const fingerprint = try fileFingerprint(ctx, files, language.query);
+            hashBool(hasher, fingerprint.present);
+            hashU64(hasher, fingerprint.digest);
+        }
     }
 }
 

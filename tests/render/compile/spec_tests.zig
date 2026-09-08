@@ -224,6 +224,98 @@ test "render compiler shares highlight work across objects and compilations" {
     }
 }
 
+test "measurement cache observes changed highlight query contents" {
+    const root = ".ss-cache/test-measure-highlight-inputs";
+    const query_path = root ++ "/query.scm";
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = query_path, .data = "(module) @plain" });
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("measurement-highlight");
+    const object_id = try state.makeObject(page_id, "code", null, .source, .code, "T-T");
+    try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "code" });
+    try state.setNodeFieldValue(object_id, "language", .{ .string = "python" });
+    const object = state.getNode(object_id) orelse return error.MissingTestObject;
+    object.frame = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    prepared.pages[0].objects[0].render.text.?.code_font.family = "DejaVu Serif";
+    const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{.{
+        .name = @constCast("python"),
+        .parser = @constCast("python"),
+        .query = @constCast(query_path),
+    }}, null, font_environment);
+    defer {
+        scope.measurement_cache_dirty = false;
+        scope.deinit();
+    }
+    scope.persistent_measurements.clearRetainingCapacity();
+    const provider = scope.provider();
+    const initial = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    try scope.persistent_measurements.put(initial.cache_key.?, initial);
+    scope.run_measurements.clearRetainingCapacity();
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = query_path, .data = "\"-\" @operator" });
+    const changed = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    scope.run_measurements.clearRetainingCapacity();
+    scope.persistent_measurements.clearRetainingCapacity();
+    const fresh = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    try testing.expect(initial.cache_key != changed.cache_key);
+    try testing.expectEqual(fresh.width, changed.width);
+    try testing.expectEqual(fresh.height, changed.height);
+    try testing.expectEqual(fresh.cache_key, changed.cache_key);
+}
+
+fn latexEngineAvailable(engine: core.render_env.LatexEngine) !bool {
+    const result = std.process.run(testing.allocator, testing.io, .{
+        .argv = &.{ engine.executable(), "--version" },
+        .stdout_limit = .limited(16 * 1024),
+        .stderr_limit = .limited(16 * 1024),
+    }) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer testing.allocator.free(result.stdout);
+    defer testing.allocator.free(result.stderr);
+    return switch (result.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
+
+test "measurement cache observes the inline math engine with an empty preamble" {
+    if (!try latexEngineAvailable(.pdflatex) or !try latexEngineAvailable(.lualatex)) return error.SkipZigTest;
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("measurement-engine");
+    const object_id = try state.makeObject(page_id, "inline math", null, .text, .text, "$\\ifdefined\\directlua\\rule{36pt}{10pt}\\else\\rule{12pt}{10pt}\\fi$");
+    const object = state.getNode(object_id) orelse return error.MissingTestObject;
+    object.frame = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), prepared.pages[0].objects[0].latex_preamble.len);
+    const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{}, null, font_environment);
+    defer {
+        scope.measurement_cache_dirty = false;
+        scope.deinit();
+    }
+    scope.persistent_measurements.clearRetainingCapacity();
+    const provider = scope.provider();
+    const initial = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    prepared.pages[0].objects[0].latex_engine = .lualatex;
+    const changed = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    scope.run_measurements.clearRetainingCapacity();
+    scope.persistent_measurements.clearRetainingCapacity();
+    const fresh = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    try testing.expect(initial.cache_key != changed.cache_key);
+    try testing.expect(fresh.width > initial.width * 2);
+    try testing.expectEqual(fresh.width, changed.width);
+    try testing.expectEqual(fresh.height, changed.height);
+    try testing.expectEqual(fresh.cache_key, changed.cache_key);
+}
+
 test "render compiler rejects unavailable PDF pages" {
     const root = ".ss-cache/test-render-invalid-pdf-page";
     const pdf_path = root ++ "/page.pdf";

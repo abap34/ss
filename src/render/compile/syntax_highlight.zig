@@ -578,6 +578,22 @@ fn builtinHighlightQuery(query: []const u8) ?[]const u8 {
     return null;
 }
 
+const builtin_query_digests = blk: {
+    @setEvalBranchQuota(2_000_000);
+    var digests: [language_definitions.len]u64 = undefined;
+    for (language_definitions, 0..) |definition, index| {
+        digests[index] = std.hash.Wyhash.hash(0, definition.query_source);
+    }
+    break :blk digests;
+};
+
+pub fn builtinHighlightQueryDigest(query: []const u8) ?u64 {
+    for (language_definitions, builtin_query_digests) |definition, digest| {
+        if (std.mem.eql(u8, query, definition.query_name)) return digest;
+    }
+    return null;
+}
+
 fn loadTreeSitterLanguage(configured: *const utils.highlight.Language) !HighlightLanguageHandle {
     if (builtinTreeSitterLanguage(configured.parser)) |language| {
         return .{ .language = language };
