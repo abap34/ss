@@ -169,7 +169,7 @@ fn analyzeDocumentStateSemantics(
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.semantics_types, measure_start);
-        try semantics.checkSelectedImports(allocator, state, &sema);
+        try semantics.checkSelectedImports(state, &sema);
         try semantics.checkTypeDeclarations(allocator, state);
     }
     {
@@ -254,9 +254,8 @@ fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, state: *core.Docu
                 .variable_scope_displays = &scope_displays,
                 .pages_scope_displays = &scope_displays,
             });
-            errdefer state.allocator.free(message);
-            const origin = try queryOrigin(allocator, module, query.span);
-            defer allocator.free(origin);
+            const origin = core.SourceOrigin.at(checker.originPathForModule(module), query.span);
+
             try state.addValidationDiagnostic(.warning, null, null, origin, .{
                 .user_report = .{ .code = "UserReport", .message = message },
             });
@@ -339,14 +338,6 @@ fn updateDependencyQueryTarget(
     }
 }
 
-fn queryOrigin(allocator: std.mem.Allocator, module: *const core.SourceModule, span: ast.Span) ![]const u8 {
-    const origin_path = checker.originPathForModule(module);
-    if (origin_path.len != 0) {
-        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ origin_path, span.start, span.end });
-    }
-    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
-}
-
 fn checkPlacementEffectDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
     var analyzer = PlacementEffectAnalyzer.init(allocator, sema);
     defer analyzer.deinit();
@@ -356,8 +347,8 @@ fn checkPlacementEffectDeclarations(allocator: std.mem.Allocator, state: *core.D
         if (dependencies.callableNamePlacesObjects(func.name)) continue;
         const module_id = entry.key_ptr.module_id;
         if (!try analyzer.functionBody(entry.key_ptr.*, module_id, func)) continue;
-        const origin = try functionOrigin(allocator, state, module_id, func.name);
-        defer allocator.free(origin);
+        const origin = state.sourceOrigin(module_id, func.span);
+
         try state.addValidationDiagnostic(.@"error", null, null, origin, .{
             .user_report = .{ .code = "PlacementEffect", .message = try std.fmt.allocPrint(state.allocator, "function '{s}' calls a placing operation and must end with '!'", .{func.name}) },
         });
@@ -576,25 +567,6 @@ const PlacementEffectAnalyzer = struct {
     }
 };
 
-fn functionOrigin(
-    allocator: std.mem.Allocator,
-    state: *const core.DocumentState,
-    module_id: core.SourceModuleId,
-    function_name: []const u8,
-) ![]const u8 {
-    const module = state.moduleById(module_id);
-    const path = if (module) |m| m.path orelse m.spec else "";
-    if (module) |m| {
-        for (m.syntax.functions.items) |func| {
-            if (!std.mem.eql(u8, func.name, function_name)) continue;
-            if (path.len == 0) return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ func.span.start, func.span.end });
-            return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ path, func.span.start, func.span.end });
-        }
-    }
-    if (path.len == 0) return std.fmt.allocPrint(allocator, "function:{s}", .{function_name});
-    return std.fmt.allocPrint(allocator, "path:{s}", .{path});
-}
-
 pub fn buildDocumentState(
     allocator: std.mem.Allocator,
     input_path: []const u8,
@@ -664,8 +636,8 @@ pub fn buildDocumentStateWithOptions(
 fn addParseHoleDiagnostics(state: *core.DocumentState, holes: syntax_hole.Result) !void {
     const origin_path = state.projectPath();
     for (holes.diagnostics) |diagnostic| {
-        const origin = try checker.sourceOrigin(state.allocator, origin_path, diagnostic.span);
-        defer state.allocator.free(origin);
+        const origin = core.SourceOrigin.at(origin_path, diagnostic.span);
+
         var message_buf: [256]u8 = undefined;
         const message_text = utils.err.parseDiagnosticMessage(&message_buf, diagnostic);
         try state.addValidationDiagnostic(.@"error", null, null, origin, .{

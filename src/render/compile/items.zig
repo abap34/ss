@@ -256,7 +256,7 @@ const VectorPdfPreload = struct {
 const RenderDiagnosticTarget = struct {
     page_id: ?core.NodeId = null,
     node_id: ?core.NodeId = null,
-    origin: ?[]const u8 = null,
+    origin: ?core.SourceOrigin = null,
     payload_kind: ?core.PayloadKind = null,
     content_provenance: []const core.ContentProvenance = &.{},
     content_start: ?usize = null,
@@ -308,7 +308,7 @@ const ObjectCommand = struct {
     latex_preamble: []const LatexPreambleEntry,
     latex_engine: LatexEngine,
     latex_kind: LatexFragmentKind = .body,
-    origin: ?[]const u8 = null,
+    origin: ?core.SourceOrigin = null,
     payload_kind: ?core.PayloadKind = null,
 
     fn deinit(_: *ObjectCommand, _: Allocator) void {}
@@ -1188,8 +1188,7 @@ fn addTargetedRenderDiagnostic(
             if (detail.content_end) |end| resolved_target = targetWithContentSpan(resolved_target, start, end);
         }
     }
-    var origin = try preloadTaskDiagnosticOrigin(state, resolved_target);
-    defer origin.deinit(state.allocator);
+    const origin = preloadTaskDiagnosticOrigin(resolved_target);
     var detail_buffer: [512]u8 = undefined;
     const recorded_message = if (failure) |value| value.message else null;
     const font_diagnostic = render_text.diagnosticForError(err);
@@ -1197,7 +1196,7 @@ fn addTargetedRenderDiagnostic(
         (if (font_diagnostic) |report| report.message else null) orelse
         renderFailureDiagnosticMessage(&detail_buffer, err);
     const reason = try std.fmt.allocPrint(state.allocator, "{s}: {s}", .{ label, detail });
-    try state.addRenderDiagnostic(.@"error", resolved_target.page_id, resolved_target.node_id, origin.text, .{
+    try state.addRenderDiagnostic(.@"error", resolved_target.page_id, resolved_target.node_id, origin, .{
         .render_failed = .{
             .reason = reason,
             .cause_code = if (font_diagnostic) |report| report.code else @errorName(err),
@@ -1210,7 +1209,7 @@ pub fn addFontFaceSubstitutionWarning(
     state: *core.DocumentState,
     page_id: ?core.NodeId,
     node_id: ?core.NodeId,
-    origin: ?[]const u8,
+    origin: ?core.SourceOrigin,
     failure: ?*const render_text.SyntheticFontFailure,
 ) !void {
     var message_buffer: [1024]u8 = undefined;
@@ -1253,46 +1252,13 @@ fn renderFailureDiagnosticMessage(buffer: []u8, err: anyerror) []const u8 {
     };
 }
 
-const DiagnosticOrigin = struct {
-    text: ?[]const u8,
-    owned: bool = false,
-
-    fn deinit(self: *DiagnosticOrigin, allocator: Allocator) void {
-        if (self.owned) {
-            if (self.text) |text| allocator.free(text);
-        }
-    }
-};
-
-fn preloadTaskDiagnosticOrigin(state: *core.DocumentState, target: RenderDiagnosticTarget) !DiagnosticOrigin {
+fn preloadTaskDiagnosticOrigin(target: RenderDiagnosticTarget) ?core.SourceOrigin {
     if (target.content_start) |start| {
         if (target.content_end) |end| {
-            if (try originForContentSpan(state.allocator, target.content_provenance, start, end)) |origin| {
-                return .{ .text = origin, .owned = true };
-            }
+            if (core.ContentProvenance.originForSpan(target.content_provenance, start, end)) |origin| return origin;
         }
     }
-    return .{ .text = target.origin };
-}
-
-fn originForContentSpan(
-    allocator: Allocator,
-    entries: []const core.ContentProvenance,
-    content_start: usize,
-    content_end: usize,
-) !?[]const u8 {
-    const normalized_end = @max(content_end, content_start);
-    for (entries) |entry| {
-        if (content_start < entry.content_start or normalized_end > entry.content_end) continue;
-        const located = utils.err.parseLocatedOrigin(entry.origin) orelse continue;
-        const start = located.span.start + (content_start - entry.content_start);
-        const end = located.span.start + (normalized_end - entry.content_start);
-        if (located.path) |path| {
-            return try std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ path, start, end });
-        }
-        return try std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ start, end });
-    }
-    return null;
+    return target.origin;
 }
 
 fn addObjectCommandDiagnostic(state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, failure: ?*const CommandFailure) !void {
@@ -1304,10 +1270,9 @@ fn addObjectFontSubstitutionWarning(state: *core.DocumentState, command: *const 
     if (failure.content_start) |start| {
         if (failure.content_end) |end| target = targetWithContentSpan(target, start, end);
     }
-    var origin = try preloadTaskDiagnosticOrigin(state, target);
-    defer origin.deinit(state.allocator);
+    const origin = preloadTaskDiagnosticOrigin(target);
     const synthetic_font = if (failure.text_failure.synthetic_font) |*detail| detail else null;
-    try addFontFaceSubstitutionWarning(state, target.page_id, target.node_id, origin.text, synthetic_font);
+    try addFontFaceSubstitutionWarning(state, target.page_id, target.node_id, origin, synthetic_font);
 }
 
 fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, failure: ?*const CommandFailure) !void {

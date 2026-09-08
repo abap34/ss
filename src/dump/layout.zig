@@ -1,7 +1,8 @@
 const std = @import("std");
 const core = @import("core");
 
-const json = @import("utils").json;
+const utils = @import("utils");
+const json = utils.json;
 
 pub fn writePageOrderField(root: *json.Object, page_order: []const core.NodeId) !void {
     var array = try root.arrayField("page_order");
@@ -68,7 +69,7 @@ pub fn writeConstraintUpdatesField(root: *json.Object, updates: []const core.Con
         try item.enumTagField("role", update.role);
         try item.intField("scope_depth", update.scope_depth);
         try item.boolField("active", update.active);
-        try item.optionalStringField("origin", update.origin);
+        try utils.err.writeOriginField(&item, "origin", update.origin);
         if (update.replacement) |replacement| {
             var relation = try item.objectField("replacement");
             try writeConstraintFields(&relation, replacement, "target_node", "source_node", "node");
@@ -103,7 +104,7 @@ fn writeConstraintFields(
         },
     }
     try item.floatField("offset", constraint.offset, "{d:.1}");
-    try item.optionalStringField("origin", constraint.origin);
+    try utils.err.writeOriginField(item, "origin", constraint.origin);
     try item.enumTagField("role", constraint.role);
     try item.intField("scope_depth", constraint.scope_depth);
     try item.boolField("from_update", constraint.from_update);

@@ -169,7 +169,7 @@ test "document state spec: page flow records placement roots without flattening 
 
     try state.placeObjectOnPage(page, group);
     try state.placeOverlayObjectOnPage(page, overlay);
-    try state.connectGeneratedReturnObjects(overlay, state.nodeCount(), "overlay-return");
+    try state.connectGeneratedReturnObjects(overlay, state.nodeCount(), .{ .label = "overlay-return" });
 
     const flow_roots = state.flowRootsOf(page);
     try testing.expectEqualSlices(core.NodeId, &.{group}, flow_roots);
@@ -188,7 +188,7 @@ test "document state spec: page-local validation reports cross-page constraints"
     const target = try state.makeObject(first, "target", null, .text, .text, "Target");
     const source = try state.makeObject(second, "source", null, .text, .text, "Source");
 
-    try state.addAnchorConstraint(target, .top, .{ .node = .{ .node_id = source, .anchor = .top } }, 0, "cross-page");
+    try state.addAnchorConstraint(target, .top, .{ .node = .{ .node_id = source, .anchor = .top } }, 0, .{ .label = "cross-page" });
     try state.validatePageLocalLayout();
 
     try expectDiagnosticCode(&state, "CrossPageConstraint:");
@@ -202,7 +202,7 @@ test "document state spec: page-local validation reports unowned layout objects"
     const placed = try state.makeObject(page, "placed", null, .text, .text, "Placed");
     const helper = try state.createObjectWithOrigin("helper", null, .text, .text, "Helper", null);
 
-    try state.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = helper, .anchor = .top } }, 0, "unowned");
+    try state.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = helper, .anchor = .top } }, 0, .{ .label = "unowned" });
     try state.validatePageLocalLayout();
 
     try expectDiagnosticCode(&state, "UnownedLayoutObject:");
@@ -214,9 +214,9 @@ test "document state spec: position updates replace deeper constraints across an
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "item", null, .text, .text, "Item");
-    try state.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, "component-center", 1);
-    try state.addAnchorConstraintAtScope(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, "component-width", 1);
-    try state.addConstraintUpdate(object, .left, .position, 0, .{ .page = .left }, 80, "page-left");
+    try state.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
+    try state.addAnchorConstraintAtScope(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, .{ .label = "component-width" }, 1);
+    try state.addConstraintUpdate(object, .left, .position, 0, .{ .page = .left }, 80, .{ .label = "page-left" });
 
     try core.constraint_updates.resolve(&state);
 
@@ -235,23 +235,23 @@ test "document state spec: group position updates replace external placement of 
     const page = try state.addPage("Page");
     const title = try state.makeObject(page, "title", null, .text, .text, "Title");
     const rule = try state.makeObject(page, "rule", null, .text, .text, "");
-    const inner = try state.makeGroupWithOrigin(page, true, &.{ title, rule }, "inner-group");
-    const root = try state.makeGroupWithOrigin(page, true, &.{inner}, "root-group");
+    const inner = try state.makeGroupWithOrigin(page, true, &.{ title, rule }, .{ .label = "inner-group" });
+    const root = try state.makeGroupWithOrigin(page, true, &.{inner}, .{ .label = "root-group" });
 
-    try state.addAnchorConstraintAtScope(title, .left, .{ .page = .left }, 72, "component-left", 1);
-    try state.addAnchorConstraintAtScope(title, .top, .{ .page = .top }, -100, "component-top", 1);
-    try state.addAnchorConstraintAtScope(title, .right, .{ .node = .{ .node_id = title, .anchor = .left } }, 240, "component-width", 1);
-    try state.addAnchorConstraintAtScope(rule, .left, .{ .node = .{ .node_id = title, .anchor = .left } }, 0, "component-align", 1);
-    try state.addAnchorConstraintAtScope(rule, .top, .{ .node = .{ .node_id = title, .anchor = .bottom } }, -30, "component-rule", 1);
-    try state.addConstraintUpdate(root, .left, .position, 0, .{ .page = .left }, 180, "caller-left");
-    try state.addConstraintUpdate(root, .top, .position, 0, .{ .page = .top }, -140, "caller-top");
+    try state.addAnchorConstraintAtScope(title, .left, .{ .page = .left }, 72, .{ .label = "component-left" }, 1);
+    try state.addAnchorConstraintAtScope(title, .top, .{ .page = .top }, -100, .{ .label = "component-top" }, 1);
+    try state.addAnchorConstraintAtScope(title, .right, .{ .node = .{ .node_id = title, .anchor = .left } }, 240, .{ .label = "component-width" }, 1);
+    try state.addAnchorConstraintAtScope(rule, .left, .{ .node = .{ .node_id = title, .anchor = .left } }, 0, .{ .label = "component-align" }, 1);
+    try state.addAnchorConstraintAtScope(rule, .top, .{ .node = .{ .node_id = title, .anchor = .bottom } }, -30, .{ .label = "component-rule" }, 1);
+    try state.addConstraintUpdate(root, .left, .position, 0, .{ .page = .left }, 180, .{ .label = "caller-left" });
+    try state.addConstraintUpdate(root, .top, .position, 0, .{ .page = .top }, -140, .{ .label = "caller-top" });
 
     try core.constraint_updates.resolve(&state);
 
     try testing.expectEqual(@as(usize, 5), state.constraints.items.len);
     try testing.expectEqual(@as(usize, 2), state.overridden_constraints.items.len);
-    try testing.expectEqualStrings("component-left", state.overridden_constraints.items[0].origin.?);
-    try testing.expectEqualStrings("component-top", state.overridden_constraints.items[1].origin.?);
+    try testing.expectEqualStrings("component-left", state.overridden_constraints.items[0].origin.?.label.?);
+    try testing.expectEqualStrings("component-top", state.overridden_constraints.items[1].origin.?.label.?);
     try expectConstraint(&state, title, .right, .size, false);
     try expectConstraint(&state, rule, .left, .position, false);
     try expectConstraint(&state, rule, .top, .position, false);
@@ -265,9 +265,9 @@ test "document state spec: overlapping group and descendant updates use scope an
 
     const first_page = try later_descendant.addPage("Page");
     const first_child = try later_descendant.makeObject(first_page, "child", null, .text, .text, "Child");
-    const first_group = try later_descendant.makeGroupWithOrigin(first_page, true, &.{first_child}, "group");
-    try later_descendant.addConstraintUpdate(first_group, .left, .position, 0, .{ .page = .left }, 100, "group-first");
-    try later_descendant.addConstraintUpdate(first_child, .left, .position, 0, .{ .page = .left }, 160, "child-last");
+    const first_group = try later_descendant.makeGroupWithOrigin(first_page, true, &.{first_child}, .{ .label = "group" });
+    try later_descendant.addConstraintUpdate(first_group, .left, .position, 0, .{ .page = .left }, 100, .{ .label = "group-first" });
+    try later_descendant.addConstraintUpdate(first_child, .left, .position, 0, .{ .page = .left }, 160, .{ .label = "child-last" });
 
     try core.constraint_updates.resolve(&later_descendant);
 
@@ -282,9 +282,9 @@ test "document state spec: overlapping group and descendant updates use scope an
 
     const second_page = try shallower_group.addPage("Page");
     const second_child = try shallower_group.makeObject(second_page, "child", null, .text, .text, "Child");
-    const second_group = try shallower_group.makeGroupWithOrigin(second_page, true, &.{second_child}, "group");
-    try shallower_group.addConstraintUpdate(second_group, .left, .position, 0, .{ .page = .left }, 100, "caller-group");
-    try shallower_group.addConstraintUpdate(second_child, .left, .position, 1, .{ .page = .left }, 160, "component-child");
+    const second_group = try shallower_group.makeGroupWithOrigin(second_page, true, &.{second_child}, .{ .label = "group" });
+    try shallower_group.addConstraintUpdate(second_group, .left, .position, 0, .{ .page = .left }, 100, .{ .label = "caller-group" });
+    try shallower_group.addConstraintUpdate(second_child, .left, .position, 1, .{ .page = .left }, 160, .{ .label = "component-child" });
 
     try core.constraint_updates.resolve(&shallower_group);
 
@@ -301,8 +301,8 @@ test "document state spec: size updates preserve position constraints" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "item", null, .text, .text, "Item");
-    try state.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, "component-center", 1);
-    try state.addAnchorConstraintAtScope(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, "component-width", 1);
+    try state.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
+    try state.addAnchorConstraintAtScope(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, .{ .label = "component-width" }, 1);
     try state.addConstraintUpdate(
         object,
         .right,
@@ -310,7 +310,7 @@ test "document state spec: size updates preserve position constraints" {
         0,
         .{ .node = .{ .node_id = object, .anchor = .left } },
         320,
-        "page-width",
+        .{ .label = "page-width" },
     );
 
     try core.constraint_updates.resolve(&state);
@@ -330,8 +330,8 @@ test "document state spec: pure updates suppress inherited constraints without a
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "item", null, .text, .text, "Item");
-    try state.addAnchorConstraintAtScope(object, .top, .{ .page = .top }, -40, "component-top", 1);
-    try state.addConstraintUpdate(object, .top, .position, 0, null, 0, "page-top");
+    try state.addAnchorConstraintAtScope(object, .top, .{ .page = .top }, -40, .{ .label = "component-top" }, 1);
+    try state.addConstraintUpdate(object, .top, .position, 0, null, 0, .{ .label = "page-top" });
 
     try core.constraint_updates.resolve(&state);
 
@@ -348,8 +348,8 @@ test "document state spec: suppressed cross-page constraints are not diagnosed" 
     const second = try state.addPage("Second");
     const target = try state.makeObject(first, "target", null, .text, .text, "Target");
     const source = try state.makeObject(second, "source", null, .text, .text, "Source");
-    try state.addAnchorConstraintAtScope(target, .left, .{ .node = .{ .node_id = source, .anchor = .left } }, 0, "component-left", 1);
-    try state.addConstraintUpdate(target, .left, .position, 0, null, 0, "page-left");
+    try state.addAnchorConstraintAtScope(target, .left, .{ .node = .{ .node_id = source, .anchor = .left } }, 0, .{ .label = "component-left" }, 1);
+    try state.addConstraintUpdate(target, .left, .position, 0, null, 0, .{ .label = "page-left" });
 
     try core.constraint_updates.resolve(&state);
     try state.validatePageLocalLayout();
@@ -368,9 +368,9 @@ test "document state spec: caller updates have authority over deeper updates" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "item", null, .text, .text, "Item");
-    try state.addConstraintUpdate(object, .left, .position, 2, .{ .page = .left }, 20, "nested-left");
-    try state.addConstraintUpdate(object, .right, .position, 0, .{ .page = .right }, -60, "page-right");
-    try state.addConstraintUpdate(object, .center_x, .position, 1, .{ .page = .center_x }, 10, "component-center");
+    try state.addConstraintUpdate(object, .left, .position, 2, .{ .page = .left }, 20, .{ .label = "nested-left" });
+    try state.addConstraintUpdate(object, .right, .position, 0, .{ .page = .right }, -60, .{ .label = "page-right" });
+    try state.addConstraintUpdate(object, .center_x, .position, 1, .{ .page = .center_x }, 10, .{ .label = "component-center" });
 
     try core.constraint_updates.resolve(&state);
 
@@ -389,9 +389,9 @@ test "document state spec: later updates replace earlier updates in the same sco
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "item", null, .text, .text, "Item");
-    try state.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, "component-center", 1);
-    try state.addConstraintUpdate(object, .left, .position, 0, null, 0, "first");
-    try state.addConstraintUpdate(object, .right, .position, 0, .{ .page = .right }, -40, "second");
+    try state.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
+    try state.addConstraintUpdate(object, .left, .position, 0, null, 0, .{ .label = "first" });
+    try state.addConstraintUpdate(object, .right, .position, 0, .{ .page = .right }, -40, .{ .label = "second" });
 
     try core.constraint_updates.resolve(&state);
 
@@ -409,9 +409,9 @@ test "document state spec: later pure updates suppress earlier replacements" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "item", null, .text, .text, "Item");
-    try state.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, "component-center", 1);
-    try state.addConstraintUpdate(object, .left, .position, 0, .{ .page = .left }, 40, "first");
-    try state.addConstraintUpdate(object, .right, .position, 0, null, 0, "second");
+    try state.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
+    try state.addConstraintUpdate(object, .left, .position, 0, .{ .page = .left }, 40, .{ .label = "first" });
+    try state.addConstraintUpdate(object, .right, .position, 0, null, 0, .{ .label = "second" });
 
     try core.constraint_updates.resolve(&state);
 
@@ -468,8 +468,8 @@ test "document state spec: layout results collect solved page frames" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "Hello");
-    try state.addAnchorConstraint(object, .left, .{ .page = .left }, 40, "body-left");
-    try state.addAnchorConstraint(object, .top, .{ .page = .top }, -80, "body-top");
+    try state.addAnchorConstraint(object, .left, .{ .page = .left }, 40, .{ .label = "body-left" });
+    try state.addAnchorConstraint(object, .top, .{ .page = .top }, -80, .{ .label = "body-top" });
 
     var results = try core.layout.solveDocument(&state, null, .{});
     defer results.deinit(testing.allocator);
@@ -489,8 +489,8 @@ test "document state spec: layout results own page diagnostics" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "Hello");
-    try state.addAnchorConstraint(object, .left, .{ .page = .left }, -40, "body-left");
-    try state.addAnchorConstraint(object, .top, .{ .page = .top }, -80, "body-top");
+    try state.addAnchorConstraint(object, .left, .{ .page = .left }, -40, .{ .label = "body-left" });
+    try state.addAnchorConstraint(object, .top, .{ .page = .top }, -80, .{ .label = "body-top" });
 
     var results = try core.layout.solveDocument(&state, null, .{});
     defer results.deinit(testing.allocator);
@@ -505,17 +505,17 @@ test "document state spec: identical validation user reports are deduplicated" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
-    try addValidationUserReport(&state, "path:theme.ss:bytes:10-20", "UnknownRecordField: missing field");
-    try addValidationUserReport(&state, "path:theme.ss:bytes:10-20", "UnknownRecordField: missing field");
-    try addValidationUserReport(&state, "path:theme.ss:bytes:30-40", "UnknownRecordField: missing field");
-    try addValidationUserReport(&state, "path:theme.ss:bytes:10-20", "UnknownRecordField: different field");
+    try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 10, .end = 20 } }, "UnknownRecordField: missing field");
+    try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 10, .end = 20 } }, "UnknownRecordField: missing field");
+    try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 30, .end = 40 } }, "UnknownRecordField: missing field");
+    try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 10, .end = 20 } }, "UnknownRecordField: different field");
 
     try testing.expectEqual(@as(usize, 4), state.diagnostics.items.len);
     state.deduplicateValidationUserReports();
     try testing.expectEqual(@as(usize, 3), state.diagnostics.items.len);
-    try testing.expectEqualStrings("path:theme.ss:bytes:10-20", state.diagnostics.items[0].origin.?);
-    try testing.expectEqualStrings("path:theme.ss:bytes:30-40", state.diagnostics.items[1].origin.?);
-    try testing.expectEqualStrings("path:theme.ss:bytes:10-20", state.diagnostics.items[2].origin.?);
+    try testing.expect(state.diagnostics.items[0].origin.?.eql(core.SourceOrigin.at("theme.ss", .{ .start = 10, .end = 20 })));
+    try testing.expect(state.diagnostics.items[1].origin.?.eql(core.SourceOrigin.at("theme.ss", .{ .start = 30, .end = 40 })));
+    try testing.expect(state.diagnostics.items[2].origin.?.eql(core.SourceOrigin.at("theme.ss", .{ .start = 10, .end = 20 })));
     try testing.expectEqualStrings("UnknownRecordField: missing field", state.diagnostics.items[0].data.user_report.message);
     try testing.expectEqualStrings("UnknownRecordField: missing field", state.diagnostics.items[1].data.user_report.message);
     try testing.expectEqualStrings("UnknownRecordField: different field", state.diagnostics.items[2].data.user_report.message);
@@ -538,7 +538,7 @@ test "document state spec: node fields reject duplicate keys" {
     try testing.expectEqualStrings("black", state.getNodeField(object, "stroke").?.string);
 }
 
-fn addValidationUserReport(state: *core.DocumentState, origin: []const u8, message: []const u8) !void {
+fn addValidationUserReport(state: *core.DocumentState, origin: core.SourceOrigin, message: []const u8) !void {
     const owned_message = try testing.allocator.dupe(u8, message);
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .code = "UserReport", .message = owned_message },
@@ -686,7 +686,7 @@ test "diagnostic codes survive rewording cloning and duplicate detection" {
         .{ .code = "UserReport", .message = "ExampleCode: user-authored text" },
     };
     for (cases) |case| {
-        try state.addValidationDiagnostic(.@"error", null, null, "origin", .{
+        try state.addValidationDiagnostic(.@"error", null, null, .{ .label = "origin" }, .{
             .user_report = .{ .code = case.code, .message = try testing.allocator.dupe(u8, case.message) },
         });
     }
@@ -701,5 +701,79 @@ test "diagnostic codes survive rewording cloning and duplicate detection" {
         testing.allocator.free(diagnostic.data.user_report.message);
         diagnostic.data.user_report.message = reworded;
         try testing.expectEqualStrings(case.code, diagnostic.code());
+    }
+}
+
+fn cloneSourceOrigins(allocator: std.mem.Allocator) !void {
+    const origin: core.SourceOrigin = .{
+        .path = "directory:bytes:12-34/slide.ss",
+        .span = .{ .start = 7, .end = 13 },
+        .label = "path:label:bytes:0-1",
+    };
+    const copied = try origin.clone(allocator);
+    defer copied.deinit(allocator);
+    try testing.expect(origin.eql(copied));
+    try testing.expect(origin.path.?.ptr != copied.path.?.ptr);
+    try testing.expect(origin.label.?.ptr != copied.label.?.ptr);
+    try testing.expectEqual(origin.span.?, copied.location().?.span);
+    try testing.expect(!origin.eql(.{ .label = origin.path, .span = origin.span }));
+
+    const provenance = core.ContentProvenance{ .content_start = 4, .content_end = 10, .origin = origin };
+    var shifted = try provenance.cloneWithOffset(allocator, 20);
+    defer shifted.deinit(allocator);
+    const resolved = core.ContentProvenance.originForSpan(&.{shifted}, 25, 29).?;
+    try testing.expect(resolved.eql(origin.withSpan(.{ .start = 8, .end = 12 })));
+    try testing.expectEqual(@as(?core.SourceOrigin, null), core.ContentProvenance.originForSpan(&.{shifted}, 23, 25));
+    try testing.expectEqual(@as(?core.SourceOrigin, null), core.ContentProvenance.originForSpan(&.{shifted}, 29, 31));
+
+    const borrowed = core.Diagnostic{
+        .phase = .validation,
+        .severity = .@"error",
+        .origin = resolved,
+        .data = .{ .user_report = .{ .code = "Example", .message = "body" } },
+    };
+    var diagnostic = try borrowed.clone(allocator);
+    defer diagnostic.deinit(allocator);
+    try testing.expect(diagnostic.origin.?.eql(resolved));
+
+    const utils = @import("utils");
+    var buffer = std.ArrayList(u8).empty;
+    defer buffer.deinit(allocator);
+    var object = try utils.json.Object.beginBuffer(allocator, &buffer);
+    try utils.err.writeOriginField(&object, "origin", diagnostic.origin);
+    try object.end();
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, buffer.items, .{});
+    defer parsed.deinit();
+    const fields = parsed.value.object.get("origin").?.object;
+    try testing.expectEqualStrings(origin.path.?, fields.get("path").?.string);
+    try testing.expectEqualStrings(origin.label.?, fields.get("label").?.string);
+    try testing.expectEqual(@as(i64, 8), fields.get("start").?.integer);
+    try testing.expectEqual(@as(i64, 12), fields.get("end").?.integer);
+}
+
+test "structured origins preserve paths labels spans and independent ownership" {
+    try testing.checkAllAllocationFailures(testing.allocator, cloneSourceOrigins, .{});
+}
+
+test "diagnostic constructors release message ownership when origin cloning fails" {
+    for ([_]core.DiagnosticPhase{ .validation, .render, .layout }) |phase| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        const origin = core.SourceOrigin.at("origin.ss", .{ .start = 1, .end = 4 });
+        state.getNode(state.document_id).?.origin = origin;
+        const data: core.Diagnostic.Data = .{
+            .user_report = .{ .code = "Example", .message = try testing.allocator.dupe(u8, "owned before origin cloning") },
+        };
+        var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+        const original_allocator = state.allocator;
+        state.allocator = failing.allocator();
+        defer state.allocator = original_allocator;
+        const result = switch (phase) {
+            .validation => state.addValidationDiagnostic(.@"error", null, null, origin, data),
+            .render => state.addRenderDiagnostic(.@"error", null, null, origin, data),
+            .layout => state.addLayoutError(state.document_id, state.document_id, data),
+        };
+        try testing.expectError(error.OutOfMemory, result);
+        try testing.expectEqual(@as(usize, 0), state.diagnostics.items.len);
     }
 }

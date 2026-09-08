@@ -1420,7 +1420,7 @@ fn appendDerivedLine(state: anytype, workspace: *graph.AxisWorkspace, trace: *gr
 
 fn constraintOriginLabel(allocator: std.mem.Allocator, state: anytype, constraint: Constraint) ![]const u8 {
     const origin_text = constraint.origin orelse return allocator.dupe(u8, "fallback");
-    const located = utils.err.parseLocatedOrigin(origin_text) orelse return allocator.dupe(u8, "unknown");
+    const located = origin_text.location() orelse return allocator.dupe(u8, "unknown");
     var path = state.projectPath();
     var source = state.projectModule().line_index;
     if (located.path) |origin_path| {

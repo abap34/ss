@@ -216,7 +216,7 @@ fn constraintFailureText(failure: core.ConstraintFailure) []const u8 {
     };
 }
 
-fn constraintFailureOrigin(failure: core.ConstraintFailure) ?[]const u8 {
+fn constraintFailureOrigin(failure: core.ConstraintFailure) ?core.SourceOrigin {
     if (failure.constraint.origin) |origin| return origin;
     if (failure.existing_constraint) |constraint| return constraint.origin;
     return null;
@@ -228,12 +228,12 @@ const ConstraintFailureLocation = struct {
     span: ?source.ByteSpan,
 };
 
-fn constraintFailureLocation(state: *core.DocumentState, origin: ?[]const u8) ConstraintFailureLocation {
+fn constraintFailureLocation(state: *core.DocumentState, origin: ?core.SourceOrigin) ConstraintFailureLocation {
     var report_path = state.projectPath();
     var report_source = state.projectSource();
     var span: ?source.ByteSpan = null;
     if (origin) |origin_text| {
-        if (utils.err.parseLocatedOrigin(origin_text)) |located| {
+        if (origin_text.location()) |located| {
             span = located.span;
             if (located.path) |origin_path| {
                 if (state.moduleByPathOrSpec(origin_path)) |module| {

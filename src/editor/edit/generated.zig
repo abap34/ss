@@ -62,17 +62,17 @@ pub const Edit = struct {
         var replacements = std.ArrayList(Replacement).empty;
         errdefer {
             for (replacements.items) |replacement| {
-                if (replacement.expected.origin) |origin| allocator.free(origin);
+                if (replacement.expected.origin) |origin| origin.deinit(allocator);
             }
             replacements.deinit(allocator);
         }
         for (edit.replacements) |replacement| {
             var owned = replacement;
             owned.expected.origin = if (replacement.expected.origin) |origin|
-                try allocator.dupe(u8, origin)
+                try origin.clone(allocator)
             else
                 null;
-            errdefer if (owned.expected.origin) |origin| allocator.free(origin);
+            errdefer if (owned.expected.origin) |origin| origin.deinit(allocator);
             try replacements.append(allocator, owned);
         }
         return .{
@@ -95,7 +95,7 @@ pub const Edit = struct {
         allocator.free(self.source);
         allocator.free(self.base_snapshot_id);
         for (self.replacements) |replacement| {
-            if (replacement.expected.origin) |origin| allocator.free(origin);
+            if (replacement.expected.origin) |origin| origin.deinit(allocator);
         }
         allocator.free(self.replacements);
         self.* = undefined;

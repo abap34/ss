@@ -31,7 +31,7 @@ fn appendConstDeclarations(
     }
 }
 
-pub fn checkSelectedImports(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
+pub fn checkSelectedImports(state: *core.DocumentState, sema: *const SemanticEnv) !void {
     var invalid = false;
     for (state.module_order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
@@ -39,8 +39,8 @@ pub fn checkSelectedImports(allocator: std.mem.Allocator, state: *core.DocumentS
             const imported_id = if (index < module.resolved_import_ids.items.len) module.resolved_import_ids.items[index] else null;
             for (import_decl.mode.selected) |item| {
                 if (imported_id) |id| if (sema.hasModuleExport(id, item.name)) continue;
-                const origin = try checker.sourceOrigin(allocator, checker.originPathForModule(module), item.span);
-                defer allocator.free(origin);
+                const origin = core.SourceOrigin.at(checker.originPathForModule(module), item.span);
+
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
                     .user_report = .{ .code = "UnknownImportedName", .message = try std.fmt.allocPrint(state.allocator, "module '{s}' does not export '{s}'", .{ import_decl.spec, item.name }) },
                 });
@@ -60,16 +60,16 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
 
         for (module.syntax.objects.items) |object_decl| {
             if (isBuiltinTypeName(object_decl.name)) {
-                const origin = try checker.sourceOrigin(allocator, origin_path, object_decl.span);
-                defer allocator.free(origin);
+                const origin = core.SourceOrigin.at(origin_path, object_decl.span);
+
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
                     .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "type '{s}' conflicts with a built-in type", .{object_decl.name}) },
                 });
                 return error.UnknownType;
             }
             if (names.get(object_decl.name)) |existing_kind| {
-                const origin = try checker.sourceOrigin(allocator, origin_path, object_decl.span);
-                defer allocator.free(origin);
+                const origin = core.SourceOrigin.at(origin_path, object_decl.span);
+
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
                     .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "{s} type '{s}' is already defined in this module", .{ existing_kind, object_decl.name }) },
                 });
@@ -80,16 +80,16 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
 
         for (module.syntax.records.items) |record_decl| {
             if (isBuiltinTypeName(record_decl.name)) {
-                const origin = try checker.sourceOrigin(allocator, origin_path, record_decl.span);
-                defer allocator.free(origin);
+                const origin = core.SourceOrigin.at(origin_path, record_decl.span);
+
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
                     .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "type '{s}' conflicts with a built-in type", .{record_decl.name}) },
                 });
                 return error.UnknownType;
             }
             if (names.get(record_decl.name)) |existing_kind| {
-                const origin = try checker.sourceOrigin(allocator, origin_path, record_decl.span);
-                defer allocator.free(origin);
+                const origin = core.SourceOrigin.at(origin_path, record_decl.span);
+
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
                     .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "{s} type '{s}' is already defined in this module", .{ existing_kind, record_decl.name }) },
                 });
@@ -100,16 +100,16 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
 
         for (module.syntax.types.items) |decl| {
             if (isBuiltinTypeName(decl.name)) {
-                const origin = try checker.sourceOrigin(allocator, origin_path, decl.span);
-                defer allocator.free(origin);
+                const origin = core.SourceOrigin.at(origin_path, decl.span);
+
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
                     .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "type '{s}' conflicts with a built-in type", .{decl.name}) },
                 });
                 return error.UnknownType;
             }
             if (names.get(decl.name)) |existing_kind| {
-                const origin = try checker.sourceOrigin(allocator, origin_path, decl.span);
-                defer allocator.free(origin);
+                const origin = core.SourceOrigin.at(origin_path, decl.span);
+
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
                     .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "{s} type '{s}' is already defined in this module", .{ existing_kind, decl.name }) },
                 });
@@ -117,8 +117,8 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
             }
             try names.put(decl.name, "enum");
             if (try type_defs.duplicateEnumCase(allocator, decl.cases.items)) |case_name| {
-                const origin = try checker.sourceOrigin(allocator, origin_path, decl.span);
-                defer allocator.free(origin);
+                const origin = core.SourceOrigin.at(origin_path, decl.span);
+
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
                     .user_report = .{ .code = "DuplicateEnumCase", .message = try std.fmt.allocPrint(state.allocator, "enum '{s}' already has case '{s}'", .{ decl.name, case_name }) },
                 });
@@ -171,8 +171,8 @@ pub fn checkTypeAnnotations(
         }
 
         for (module.syntax.functions.items) |func| {
-            const origin = try checker.sourceOrigin(allocator, origin_path, func.span);
-            defer allocator.free(origin);
+            const origin = core.SourceOrigin.at(origin_path, func.span);
+
             for (func.params.items) |param| {
                 const diagnostic_count = state.diagnostics.items.len;
                 checkTypeAnnotation(state, sema, module_id, param.ty, origin) catch |err| {
@@ -195,8 +195,8 @@ pub fn checkTypeAnnotations(
         }
 
         for (module.syntax.constants.items) |constant_decl| {
-            const origin = try checker.sourceOrigin(allocator, origin_path, constant_decl.span);
-            defer allocator.free(origin);
+            const origin = core.SourceOrigin.at(origin_path, constant_decl.span);
+
             const type_diagnostic_count = state.diagnostics.items.len;
             checkTypeAnnotation(state, sema, module_id, constant_decl.value_type, origin) catch |err| {
                 try continueAfterDiagnostic(state, type_diagnostic_count, err);
@@ -237,8 +237,8 @@ fn checkFieldTypeAnnotation(
     origin_path: []const u8,
     field: ast.ObjectFieldDecl,
 ) !void {
-    const origin = try checker.sourceOrigin(allocator, origin_path, field.span);
-    defer allocator.free(origin);
+    const origin = core.SourceOrigin.at(origin_path, field.span);
+
     var had_diagnostics = false;
     const type_diagnostic_count = state.diagnostics.items.len;
     checkTypeAnnotation(state, sema, module_id, field.value_type, origin) catch |err| {
@@ -841,8 +841,8 @@ fn checkStatementTypeAnnotations(
     switch (stmt.kind) {
         .hole => {},
         .let_binding => |binding| {
-            const origin = try checker.sourceOrigin(allocator, origin_path, stmt.span);
-            defer allocator.free(origin);
+            const origin = core.SourceOrigin.at(origin_path, stmt.span);
+
             var had_diagnostics = false;
             if (binding.type_annotation) |annotation| {
                 const diagnostic_count = state.diagnostics.items.len;
@@ -924,8 +924,8 @@ fn checkExprTypeAnnotations(
             if (had_diagnostics) return error.DiagnosticsFailed;
         },
         .lambda => |lambda| {
-            const origin = try checker.sourceOrigin(allocator, origin_path, lambda.span);
-            defer allocator.free(origin);
+            const origin = core.SourceOrigin.at(origin_path, lambda.span);
+
             var had_diagnostics = false;
             for (lambda.params.items) |param| {
                 const diagnostic_count = state.diagnostics.items.len;
@@ -978,7 +978,7 @@ fn checkTypeAnnotation(
     sema: *const SemanticEnv,
     module_id: core.SourceModuleId,
     ty: ast.Type,
-    origin: []const u8,
+    origin: core.SourceOrigin,
 ) !void {
     if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none or ty.kind == .hole) return;
     if (ty.kind == .optional) {
@@ -1016,7 +1016,7 @@ fn checkTypeAnnotation(
     }
 }
 
-fn reportUnknownType(state: *core.DocumentState, origin: []const u8, type_name: []const u8) !void {
+fn reportUnknownType(state: *core.DocumentState, origin: core.SourceOrigin, type_name: []const u8) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .code = "UnknownType", .message = try std.fmt.allocPrint(state.allocator, "unknown type: {s}", .{type_name}) },
     });
@@ -1034,8 +1034,8 @@ pub fn checkDuplicateValueDeclarations(
         const origin_path = checker.originPathForModule(module);
         for (module.syntax.functions.items) |func| {
             if (names.contains(func.name)) {
-                const origin = try checker.sourceOrigin(allocator, origin_path, func.span);
-                defer allocator.free(origin);
+                const origin = core.SourceOrigin.at(origin_path, func.span);
+
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
                     .user_report = .{ .code = "DuplicateFunction", .message = try std.fmt.allocPrint(state.allocator, "function '{s}' is already defined in this module", .{func.name}) },
                 });
@@ -1045,8 +1045,8 @@ pub fn checkDuplicateValueDeclarations(
         }
         for (module.syntax.constants.items) |constant_decl| {
             if (names.contains(constant_decl.name)) {
-                const origin = try checker.sourceOrigin(allocator, origin_path, constant_decl.span);
-                defer allocator.free(origin);
+                const origin = core.SourceOrigin.at(origin_path, constant_decl.span);
+
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
                     .user_report = .{ .code = "DuplicateValue", .message = try std.fmt.allocPrint(state.allocator, "value '{s}' is already defined in this module", .{constant_decl.name}) },
                 });

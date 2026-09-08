@@ -144,7 +144,7 @@ pub fn ensureType(
     allocator: std.mem.Allocator,
     actual: TypeInfo,
     expected: Type,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     code: core.TypeMismatchCode,
 ) !void {
     return ensureTypeWithHoles(state, allocator, actual, expected, origin, code, null);
@@ -155,7 +155,7 @@ pub fn ensureTypeWithHoles(
     allocator: std.mem.Allocator,
     actual: TypeInfo,
     expected: Type,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     code: core.TypeMismatchCode,
     holes: ?*syntax_hole.Result,
 ) !void {

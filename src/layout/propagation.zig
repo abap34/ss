@@ -95,7 +95,7 @@ pub fn nonConvergenceError(state: anytype, workspace: *const graph.AxisWorkspace
             .severity = .@"error",
             .page_id = workspace.graph.page_id,
             .node_id = if (pending) |constraint| constraint.target_node else null,
-            .origin = if (origin) |value| state.allocator.dupe(u8, value) catch |err| return err else null,
+            .origin = if (origin) |value| value.clone(state.allocator) catch |err| return err else null,
             .data = .{ .layout_nonconvergence = .{
                 .axis = workspace.axis,
                 .stage = stage,

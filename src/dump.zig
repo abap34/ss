@@ -57,7 +57,7 @@ fn writeDiagnostic(diagnostics: *json.Array, diagnostic: core.Diagnostic) !void 
     try item.enumTagField("severity", diagnostic.severity);
     try item.optionalIntField("page_id", diagnostic.page_id);
     try item.optionalIntField("node_id", diagnostic.node_id);
-    try item.optionalStringField("origin", diagnostic.origin);
+    try utils.err.writeOriginField(&item, "origin", diagnostic.origin);
     switch (diagnostic.data) {
         .user_report => |data| {
             try item.stringField("message", data.message);

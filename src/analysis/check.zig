@@ -219,14 +219,7 @@ pub fn originPathForModule(module: *const core.SourceModule) []const u8 {
     return module.path orelse module.spec;
 }
 
-pub fn sourceOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: ast.Span) ![]const u8 {
-    if (origin_path.len != 0) {
-        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ origin_path, span.start, span.end });
-    }
-    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
-}
-
-fn addUserReport(state: ?*core.DocumentState, origin: []const u8, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
+fn addUserReport(state: ?*core.DocumentState, origin: core.SourceOrigin, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const sink = state orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
     try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
@@ -239,7 +232,7 @@ pub fn continueAfterDiagnostic(state: *const core.DocumentState, diagnostic_coun
     return err;
 }
 
-fn rejectDuplicateBinding(state: ?*core.DocumentState, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
+fn rejectDuplicateBinding(state: ?*core.DocumentState, env: *const TypeEnv, name: []const u8, origin: core.SourceOrigin) !void {
     if (!env.contains(name)) return;
     try addUserReport(state, origin, "DuplicateBinding", "binding '{s}' is already defined in this scope", .{name});
     return error.DuplicateBinding;
@@ -257,8 +250,8 @@ pub fn checkPageNamesUnique(
         const origin_path = originPathForModule(module);
         for (module.syntax.pages.items) |page| {
             if (pages.contains(page.name)) {
-                const origin = try sourceOrigin(allocator, origin_path, page.span);
-                defer allocator.free(origin);
+                const origin = core.SourceOrigin.at(origin_path, page.span);
+
                 try addUserReport(state, origin, "DuplicatePage", "page '{s}' is already defined", .{page.name});
                 return error.DuplicatePage;
             }
@@ -278,8 +271,8 @@ pub fn checkFunction(
     var env = TypeEnv.init(allocator);
     defer env.deinit();
 
-    const func_origin = try sourceOrigin(allocator, origin_path, func.span);
-    defer allocator.free(func_origin);
+    const func_origin = core.SourceOrigin.at(origin_path, func.span);
+
     for (func.params.items) |param| {
         try rejectDuplicateBinding(state, &env, param.name, func_origin);
         if (param.default_value) |default_value| {
@@ -310,8 +303,7 @@ pub fn checkConst(
     origin_path: []const u8,
     constant_decl: ast.ConstDecl,
 ) !void {
-    const origin = try sourceOrigin(allocator, origin_path, constant_decl.span);
-    defer allocator.free(origin);
+    const origin = core.SourceOrigin.at(origin_path, constant_decl.span);
 
     var env = TypeEnv.init(allocator);
     defer env.deinit();
@@ -397,8 +389,8 @@ fn checkTopLevelStatement(
     page_context: *PageContextRequirement,
     stmt: ast.Statement,
 ) !void {
-    const origin = try sourceOrigin(allocator, origin_path, stmt.span);
-    defer allocator.free(origin);
+    const origin = core.SourceOrigin.at(origin_path, stmt.span);
+
     switch (stmt.kind) {
         .hole => return,
         .let_binding => |binding| {
@@ -472,7 +464,7 @@ fn recordBindingType(state: *core.DocumentState, module_id: core.SourceModuleId,
     });
 }
 
-fn rejectVoidValue(state: *core.DocumentState, info: semantic_types.TypeInfo, origin: []const u8) !void {
+fn rejectVoidValue(state: *core.DocumentState, info: semantic_types.TypeInfo, origin: core.SourceOrigin) !void {
     if (info.hole != null) return;
     if (info.ty.kind != .void) return;
     try addUserReport(state, origin, "VoidValue", "void results can only be used as statements", .{});
@@ -484,7 +476,7 @@ fn checkedLetBindingInfo(
     state: *core.DocumentState,
     binding: anytype,
     inferred: semantic_types.TypeInfo,
-    origin: []const u8,
+    origin: core.SourceOrigin,
 ) !semantic_types.TypeInfo {
     const annotation = binding.type_annotation orelse return inferred;
     try ensureType(state, allocator, inferred, annotation, origin, .UnmatchedReturnType);
@@ -494,7 +486,7 @@ fn checkedLetBindingInfo(
 fn rejectPageOnlyExpr(
     state: *core.DocumentState,
     context: StatementContext,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     page_context: *PageContextRequirement,
     scope: *const NameScope,
     expr: ast.Expr,
@@ -511,7 +503,7 @@ fn validateAnchorRef(
     state: *core.DocumentState,
     sema: *const SemanticEnv,
     env: *TypeEnv,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     anchor_ref: ast.AnchorRef,
     is_target: bool,
 ) !void {
@@ -539,7 +531,7 @@ fn resolveAnchorPathInfo(
     state: *core.DocumentState,
     sema: *const SemanticEnv,
     env: *TypeEnv,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     path: []const u8,
 ) !semantic_types.TypeInfo {
     var iter = std.mem.splitScalar(u8, path, '.');
@@ -584,8 +576,8 @@ fn checkStatement(
     result_type: Type,
     stmt: ast.Statement,
 ) !void {
-    const origin = try sourceOrigin(allocator, origin_path, stmt.span);
-    defer allocator.free(origin);
+    const origin = core.SourceOrigin.at(origin_path, stmt.span);
+
     switch (stmt.kind) {
         .hole => return,
         .let_binding => |binding| {

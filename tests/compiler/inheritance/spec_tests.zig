@@ -37,12 +37,11 @@ fn expectCycle(source: []const u8, members: []const []const u8) !void {
     for (members) |name| {
         for (state.projectModule().syntax.objects.items) |decl| {
             if (!std.mem.eql(u8, name, decl.name)) continue;
-            const expected_origin = try std.fmt.allocPrint(testing.allocator, "path:inheritance-spec.ss:bytes:{d}-{d}", .{ decl.span.start, decl.span.end });
-            defer testing.allocator.free(expected_origin);
+            const expected_origin = core.SourceOrigin.at("inheritance-spec.ss", decl.span);
             var found = false;
             for (state.diagnostics.items) |diagnostic| {
                 if (diagnostic.origin) |origin| {
-                    if (std.mem.eql(u8, origin, expected_origin)) found = true;
+                    if (origin.eql(expected_origin)) found = true;
                 }
             }
             try testing.expect(found);

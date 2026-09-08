@@ -456,11 +456,11 @@ test "layout graph spec: page graph indexes direct page children and filters axi
     const page = try state.addPage("Page");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
-    _ = try state.makeGroupWithOrigin(page, true, &.{ a, b }, "group");
+    _ = try state.makeGroupWithOrigin(page, true, &.{ a, b }, .{ .label = "group" });
 
-    try state.addAnchorConstraint(a, .left, .{ .page = .left }, 10, "a-left");
-    try state.addAnchorConstraint(a, .top, .{ .page = .top }, -10, "a-top");
-    try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 20, "b-left");
+    try state.addAnchorConstraint(a, .left, .{ .page = .left }, 10, .{ .label = "a-left" });
+    try state.addAnchorConstraint(a, .top, .{ .page = .top }, -10, .{ .label = "a-top" });
+    try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 20, .{ .label = "b-left" });
 
     var page_graph = try initPageGraph(&state, page);
     defer page_graph.deinit();
@@ -488,8 +488,8 @@ test "layout graph spec: implicit constraint objects stay page local" {
     const placed = try state.makeObject(first_page, "placed", null, .text, .text, "placed");
     const helper = try state.createObjectWithOrigin("helper", null, .text, .text, "helper", null);
     const foreign = try state.makeObject(second_page, "foreign", null, .text, .text, "foreign");
-    try state.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = helper, .anchor = .top } }, 10, "helper-top");
-    try state.addAnchorConstraint(placed, .left, .{ .node = .{ .node_id = foreign, .anchor = .left } }, 20, "foreign-left");
+    try state.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = helper, .anchor = .top } }, 10, .{ .label = "helper-top" });
+    try state.addAnchorConstraint(placed, .left, .{ .node = .{ .node_id = foreign, .anchor = .left } }, 20, .{ .label = "foreign-left" });
 
     var first_graph = try initPageGraph(&state, first_page);
     defer first_graph.deinit();
@@ -510,7 +510,7 @@ test "layout graph spec: constraint classification names layout dependency roles
     const page = try state.addPage("Page");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
-    const group_id = try state.makeGroupWithOrigin(page, true, &.{ a, b }, "group");
+    const group_id = try state.makeGroupWithOrigin(page, true, &.{ a, b }, .{ .label = "group" });
 
     var page_graph = try initPageGraph(&state, page);
     defer page_graph.deinit();
@@ -582,7 +582,7 @@ test "layout graph spec: axis workspaces seed known frames only without target c
 
     state.getNode(unconstrained).?.frame = .{ .x = 10, .y = 20, .width = 30, .height = 40, .x_set = true, .y_set = true };
     state.getNode(constrained).?.frame = .{ .x = 100, .y = 200, .width = 50, .height = 60, .x_set = true, .y_set = true };
-    try state.addAnchorConstraint(constrained, .left, .{ .page = .left }, 15, "fixed-left");
+    try state.addAnchorConstraint(constrained, .left, .{ .page = .left }, 15, .{ .label = "fixed-left" });
 
     var page_graph = try initPageGraph(&state, page);
     defer page_graph.deinit();
@@ -612,9 +612,9 @@ test "axis propagation completes long dependency chains in either constraint ord
         for (&nodes) |*node| node.* = try state.makeObject(page, "cell", null, .text, .text, "x");
         for (1..count) |position| {
             const index = if (reversed) count - position else position;
-            try state.addAnchorConstraint(nodes[index], .left, .{ .node = .{ .node_id = nodes[index - 1], .anchor = .right } }, 1, "chain");
+            try state.addAnchorConstraint(nodes[index], .left, .{ .node = .{ .node_id = nodes[index - 1], .anchor = .right } }, 1, .{ .label = "chain" });
         }
-        try state.addAnchorConstraint(nodes[0], .left, .{ .page = .left }, 0, "start");
+        try state.addAnchorConstraint(nodes[0], .left, .{ .page = .left }, 0, .{ .label = "start" });
         var page_graph = try initPageGraph(&state, page);
         defer page_graph.deinit();
         var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .horizontal);
@@ -641,8 +641,8 @@ test "axis propagation resolves deep groups in either node order" {
     const page = try state.addPage("Deep groups");
     const leaf = try state.makeObject(page, "leaf", null, .text, .text, "x");
     var outer = leaf;
-    for (0..128) |_| outer = try state.makeGroupWithOrigin(page, true, &.{outer}, "group");
-    try state.addAnchorConstraint(outer, .left, .{ .page = .left }, 100, "outer-left");
+    for (0..128) |_| outer = try state.makeGroupWithOrigin(page, true, &.{outer}, .{ .label = "group" });
+    try state.addAnchorConstraint(outer, .left, .{ .page = .left }, 100, .{ .label = "outer-left" });
     var inputs = try core.layout.partition.Document.init(testing.allocator, &state);
     defer inputs.deinit(testing.allocator);
     for (0..2) |_| {
@@ -671,10 +671,10 @@ test "layout exhaustion survives isolated jobs and cannot be applied" {
             for (0..2) |_| {
                 const page = try state.addPage("Unconverged group");
                 const child = try state.makeObject(page, "child", null, .text, .text, "x");
-                const group = try state.makeGroupWithOrigin(page, true, &.{child}, "group");
-                try state.addAnchorConstraint(child, .left, .{ .page = .left }, 0, "child-left");
-                try state.addAnchorConstraint(child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 10, "child-width");
-                try state.addAnchorConstraint(group, .left, .{ .node = .{ .node_id = child, .anchor = .right } }, 10, "group-after-child");
+                const group = try state.makeGroupWithOrigin(page, true, &.{child}, .{ .label = "group" });
+                try state.addAnchorConstraint(child, .left, .{ .page = .left }, 0, .{ .label = "child-left" });
+                try state.addAnchorConstraint(child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 10, .{ .label = "child-width" });
+                try state.addAnchorConstraint(group, .left, .{ .node = .{ .node_id = child, .anchor = .right } }, 10, .{ .label = "group-after-child" });
             }
             const options = graph.SolveOptions{ .jobs = jobs, .record_diagnostics = record_diagnostics };
             var result = try solver.solveDocument(&state, null, options);
@@ -690,7 +690,7 @@ test "layout exhaustion survives isolated jobs and cannot be applied" {
                     try testing.expectEqual(model.DiagnosticSeverity.@"error", diagnostic.severity);
                     try testing.expectEqual(model.LayoutConvergenceStage.group_constraints, diagnostic.data.layout_nonconvergence.stage);
                     try testing.expectEqual(diagnostic.data.layout_nonconvergence.limit, diagnostic.data.layout_nonconvergence.iterations);
-                    try testing.expectEqualStrings("group-after-child", diagnostic.origin.?);
+                    try testing.expectEqualStrings("group-after-child", diagnostic.origin.?.label.?);
                     try testing.expect(diagnostic.data.layout_nonconvergence.constraint != null);
                     const message = try utils.err.formatContextDiagnostic(testing.allocator, diagnostic);
                     defer testing.allocator.free(message);
@@ -710,7 +710,7 @@ test "layout solver: final validation rejects unsatisfied hard constraints" {
 
     const self_page = try self_conflict.addPage("Page");
     const object = try self_conflict.makeObject(self_page, "body", null, .text, .text, "A");
-    try self_conflict.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 100, "self-top");
+    try self_conflict.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 100, .{ .label = "self-top" });
     try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&self_conflict));
 
     var cycle = try initEmptyDocumentState();
@@ -719,8 +719,8 @@ test "layout solver: final validation rejects unsatisfied hard constraints" {
     const cycle_page = try cycle.addPage("Page");
     const a = try cycle.makeObject(cycle_page, "a", null, .text, .text, "A");
     const b = try cycle.makeObject(cycle_page, "b", null, .text, .text, "B");
-    try cycle.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 10, "a-top");
-    try cycle.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 10, "b-top");
+    try cycle.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 10, .{ .label = "a-top" });
+    try cycle.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 10, .{ .label = "b-top" });
     try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&cycle));
 }
 
@@ -731,8 +731,8 @@ test "layout solver: consistent constraint cycles are fixed by fallback placemen
     const page = try state.addPage("Page");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
-    try state.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, "a-top");
-    try state.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 0, "b-top");
+    try state.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, .{ .label = "a-top" });
+    try state.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 0, .{ .label = "b-top" });
 
     try finalizeDocumentState(&state);
 
@@ -750,7 +750,7 @@ test "layout solver: tautological self-anchor constraints do not block fallback 
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "A");
-    try state.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 0, "self-top");
+    try state.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 0, .{ .label = "self-top" });
 
     try finalizeDocumentState(&state);
 
@@ -767,12 +767,12 @@ test "layout solver: vertical fallback tries alternate roots in incomplete compo
     const page = try state.addPage("Page");
     const panel = try state.makeObject(page, "panel", null, .text, .text, "");
     const body = try state.makeObject(page, "body", null, .text, .text, "content");
-    try state.addAnchorConstraint(panel, .left, .{ .page = .left }, 52, "panel-left");
-    try state.addAnchorConstraint(panel, .right, .{ .page = .right }, -52, "panel-right");
-    try state.addAnchorConstraint(body, .left, .{ .page = .left }, 72, "body-left");
-    try state.addAnchorConstraint(body, .right, .{ .page = .right }, -72, "body-right");
-    try state.addAnchorConstraint(panel, .top, .{ .node = .{ .node_id = body, .anchor = .top } }, 16, "panel-top");
-    try state.addAnchorConstraint(panel, .bottom, .{ .node = .{ .node_id = body, .anchor = .bottom } }, -16, "panel-bottom");
+    try state.addAnchorConstraint(panel, .left, .{ .page = .left }, 52, .{ .label = "panel-left" });
+    try state.addAnchorConstraint(panel, .right, .{ .page = .right }, -52, .{ .label = "panel-right" });
+    try state.addAnchorConstraint(body, .left, .{ .page = .left }, 72, .{ .label = "body-left" });
+    try state.addAnchorConstraint(body, .right, .{ .page = .right }, -72, .{ .label = "body-right" });
+    try state.addAnchorConstraint(panel, .top, .{ .node = .{ .node_id = body, .anchor = .top } }, 16, .{ .label = "panel-top" });
+    try state.addAnchorConstraint(panel, .bottom, .{ .node = .{ .node_id = body, .anchor = .bottom } }, -16, .{ .label = "panel-bottom" });
 
     try finalizeDocumentState(&state);
 
@@ -792,7 +792,7 @@ test "layout solver: constraint-referenced objects participate in fallback place
     const page = try state.addPage("Page");
     const placed = try state.makeObject(page, "placed", null, .text, .text, "placed");
     const referenced = try state.makeObject(page, "referenced", null, .text, .text, "referenced");
-    try state.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = referenced, .anchor = .top } }, 10, "placed-top");
+    try state.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = referenced, .anchor = .top } }, 10, .{ .label = "placed-top" });
 
     try finalizeDocumentState(&state);
 
@@ -810,8 +810,8 @@ test "layout solver: size-only constraints still receive fallback placement" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "content");
-    try state.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, "object-width");
-    try state.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 96, "object-height");
+    try state.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, .{ .label = "object-width" });
+    try state.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 96, .{ .label = "object-height" });
 
     try finalizeDocumentState(&state);
 
@@ -831,10 +831,10 @@ test "layout solver: page-dependent group children receive local vertical fallba
     const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
     const title = try state.makeObject(page, "title", null, .text, .text, "Title");
     const body = try state.makeObject(page, "body", null, .text, .text, "Body");
-    _ = try state.makeGroupWithOrigin(page, true, &.{ ruler, title }, "head");
+    _ = try state.makeGroupWithOrigin(page, true, &.{ ruler, title }, .{ .label = "head" });
     try setLayoutLineHeight(&state, ruler, "4");
     try setLayoutSpacingAfter(&state, ruler, "12");
-    try state.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
+    try state.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, .{ .label = "rule-top" });
 
     try finalizeDocumentState(&state);
 
@@ -856,7 +856,7 @@ test "layout solver: an independently positioned overlay does not affect page fl
     const baseline_page = try baseline.addPage("Page");
     const baseline_title = try baseline.createObjectWithOrigin("title", null, .text, .text, "Title", null);
     const baseline_rule = try baseline.createObjectWithOrigin("rule", null, .text, .text, "", null);
-    const baseline_head = try baseline.createGroupWithOrigin(&.{ baseline_title, baseline_rule }, "head");
+    const baseline_head = try baseline.createGroupWithOrigin(&.{ baseline_title, baseline_rule }, .{ .label = "head" });
     const baseline_body = try baseline.createObjectWithOrigin("body", null, .text, .text, "Body", null);
     try baseline.placeObjectOnPage(baseline_page, baseline_head);
     try baseline.placeObjectOnPage(baseline_page, baseline_body);
@@ -864,8 +864,8 @@ test "layout solver: an independently positioned overlay does not affect page fl
     try setLayoutLineHeight(&baseline, baseline_rule, "2");
     try setLayoutSpacingAfter(&baseline, baseline_rule, "48");
     try setLayoutLineHeight(&baseline, baseline_body, "70");
-    try baseline.addAnchorConstraint(baseline_title, .top, .{ .page = .top }, -56, "title-top");
-    try baseline.addAnchorConstraint(baseline_rule, .top, .{ .node = .{ .node_id = baseline_title, .anchor = .bottom } }, -14, "rule-below-title");
+    try baseline.addAnchorConstraint(baseline_title, .top, .{ .page = .top }, -56, .{ .label = "title-top" });
+    try baseline.addAnchorConstraint(baseline_rule, .top, .{ .node = .{ .node_id = baseline_title, .anchor = .bottom } }, -14, .{ .label = "rule-below-title" });
     try solveDocumentState(&baseline);
 
     var decorated = try initEmptyDocumentState();
@@ -876,11 +876,11 @@ test "layout solver: an independently positioned overlay does not affect page fl
     try decorated.placeOverlayObjectOnPage(decorated_page, page_number);
     try setLayoutLineHeight(&decorated, page_number, "16");
     try setLayoutSpacingAfter(&decorated, page_number, "0");
-    try decorated.addAnchorConstraint(page_number, .bottom, .{ .page = .bottom }, 20, "pageno-bottom");
+    try decorated.addAnchorConstraint(page_number, .bottom, .{ .page = .bottom }, 20, .{ .label = "pageno-bottom" });
 
     const decorated_title = try decorated.createObjectWithOrigin("title", null, .text, .text, "Title", null);
     const decorated_rule = try decorated.createObjectWithOrigin("rule", null, .text, .text, "", null);
-    const decorated_head = try decorated.createGroupWithOrigin(&.{ decorated_title, decorated_rule }, "head");
+    const decorated_head = try decorated.createGroupWithOrigin(&.{ decorated_title, decorated_rule }, .{ .label = "head" });
     const decorated_body = try decorated.createObjectWithOrigin("body", null, .text, .text, "Body", null);
     try decorated.placeObjectOnPage(decorated_page, decorated_head);
     try decorated.placeObjectOnPage(decorated_page, decorated_body);
@@ -888,8 +888,8 @@ test "layout solver: an independently positioned overlay does not affect page fl
     try setLayoutLineHeight(&decorated, decorated_rule, "2");
     try setLayoutSpacingAfter(&decorated, decorated_rule, "48");
     try setLayoutLineHeight(&decorated, decorated_body, "70");
-    try decorated.addAnchorConstraint(decorated_title, .top, .{ .page = .top }, -56, "title-top");
-    try decorated.addAnchorConstraint(decorated_rule, .top, .{ .node = .{ .node_id = decorated_title, .anchor = .bottom } }, -14, "rule-below-title");
+    try decorated.addAnchorConstraint(decorated_title, .top, .{ .page = .top }, -56, .{ .label = "title-top" });
+    try decorated.addAnchorConstraint(decorated_rule, .top, .{ .node = .{ .node_id = decorated_title, .anchor = .bottom } }, -14, .{ .label = "rule-below-title" });
     try solveDocumentState(&decorated);
 
     try testing.expectEqualSlices(model.NodeId, &.{ decorated_head, decorated_body }, decorated.flowRootsOf(decorated_page));
@@ -907,10 +907,10 @@ test "layout solver: page-dependent group children before fixed anchors receive 
     const page = try state.addPage("Page");
     const title = try state.makeObject(page, "title", null, .text, .text, "Title");
     const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
-    _ = try state.makeGroupWithOrigin(page, true, &.{ title, ruler }, "head");
+    _ = try state.makeGroupWithOrigin(page, true, &.{ title, ruler }, .{ .label = "head" });
     try setLayoutSpacingAfter(&state, title, "12");
     try setLayoutLineHeight(&state, ruler, "4");
-    try state.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
+    try state.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, .{ .label = "rule-top" });
 
     try finalizeDocumentState(&state);
 
@@ -930,12 +930,12 @@ test "layout solver: page-dependent vertical cycles receive fallback placement" 
     const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
     const first = try state.makeObject(page, "first", null, .text, .text, "A");
     const second = try state.makeObject(page, "second", null, .text, .text, "B");
-    _ = try state.makeGroupWithOrigin(page, true, &.{ ruler, first, second }, "head");
+    _ = try state.makeGroupWithOrigin(page, true, &.{ ruler, first, second }, .{ .label = "head" });
     try setLayoutLineHeight(&state, ruler, "4");
     try setLayoutSpacingAfter(&state, ruler, "12");
-    try state.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
-    try state.addAnchorConstraint(first, .top, .{ .node = .{ .node_id = second, .anchor = .top } }, 0, "first-cycle");
-    try state.addAnchorConstraint(second, .top, .{ .node = .{ .node_id = first, .anchor = .top } }, 0, "second-cycle");
+    try state.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, .{ .label = "rule-top" });
+    try state.addAnchorConstraint(first, .top, .{ .node = .{ .node_id = second, .anchor = .top } }, 0, .{ .label = "first-cycle" });
+    try state.addAnchorConstraint(second, .top, .{ .node = .{ .node_id = first, .anchor = .top } }, 0, .{ .label = "second-cycle" });
 
     try finalizeDocumentState(&state);
 
@@ -957,11 +957,11 @@ test "layout solver: page-dependent horizontal cycles receive fallback placement
     const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
     const first = try state.makeObject(page, "first", null, .text, .text, "A");
     const second = try state.makeObject(page, "second", null, .text, .text, "B");
-    _ = try state.makeGroupWithOrigin(page, true, &.{ ruler, first, second }, "head");
+    _ = try state.makeGroupWithOrigin(page, true, &.{ ruler, first, second }, .{ .label = "head" });
     try setLayoutLineHeight(&state, ruler, "4");
-    try state.addAnchorConstraint(ruler, .left, .{ .page = .left }, 100, "rule-left");
-    try state.addAnchorConstraint(first, .left, .{ .node = .{ .node_id = second, .anchor = .left } }, 0, "first-cycle");
-    try state.addAnchorConstraint(second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, "second-cycle");
+    try state.addAnchorConstraint(ruler, .left, .{ .page = .left }, 100, .{ .label = "rule-left" });
+    try state.addAnchorConstraint(first, .left, .{ .node = .{ .node_id = second, .anchor = .left } }, 0, .{ .label = "first-cycle" });
+    try state.addAnchorConstraint(second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, .{ .label = "second-cycle" });
 
     try finalizeDocumentState(&state);
 
@@ -983,11 +983,11 @@ test "layout solver: centered page-dependent group children receive local vertic
     const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
     const title = try state.makeObject(page, "title", null, .text, .text, "Title");
     const body = try state.makeObject(page, "body", null, .text, .text, "Body");
-    _ = try state.makeGroupWithOrigin(page, true, &.{ ruler, title }, "head");
+    _ = try state.makeGroupWithOrigin(page, true, &.{ ruler, title }, .{ .label = "head" });
     try setLayoutLineHeight(&state, ruler, "4");
     try setLayoutSpacingAfter(&state, ruler, "12");
     try setLayoutLineHeight(&state, body, "500");
-    try state.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
+    try state.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, .{ .label = "rule-top" });
 
     try finalizeDocumentState(&state);
 
@@ -1009,8 +1009,8 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
     const stacked_page = try stacked.addPage("Page");
     const first = try stacked.makeObject(stacked_page, "first", null, .text, .text, "A");
     const second = try stacked.makeObject(stacked_page, "second", null, .text, .text, "B");
-    _ = try stacked.makeGroupWithOrigin(stacked_page, true, &.{ first, second }, "group");
-    try stacked.addAnchorConstraint(second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, "same-left");
+    _ = try stacked.makeGroupWithOrigin(stacked_page, true, &.{ first, second }, .{ .label = "group" });
+    try stacked.addAnchorConstraint(second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, .{ .label = "same-left" });
 
     try solveDocumentState(&stacked);
 
@@ -1025,8 +1025,8 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
     const row_page = try row.addPage("Page");
     const left = try row.makeObject(row_page, "left", null, .text, .text, "A");
     const right = try row.makeObject(row_page, "right", null, .text, .text, "B");
-    try row.addAnchorConstraint(right, .left, .{ .node = .{ .node_id = left, .anchor = .right } }, 30, "right-of-left");
-    try row.addAnchorConstraint(right, .center_y, .{ .node = .{ .node_id = left, .anchor = .center_y } }, 0, "same-center-y");
+    try row.addAnchorConstraint(right, .left, .{ .node = .{ .node_id = left, .anchor = .right } }, 30, .{ .label = "right-of-left" });
+    try row.addAnchorConstraint(right, .center_y, .{ .node = .{ .node_id = left, .anchor = .center_y } }, 0, .{ .label = "same-center-y" });
 
     try solveDocumentState(&row);
 
@@ -1042,7 +1042,7 @@ test "layout solver: horizontal fallback seeds unconstrained peer anchors" {
     const page = try state.addPage("Page");
     const title = try state.makeObject(page, "title", null, .text, .text, "Title");
     const byline = try state.makeObject(page, "byline", null, .text, .text, "Byline");
-    try state.addAnchorConstraint(title, .left, .{ .node = .{ .node_id = byline, .anchor = .left } }, 0, "same-left");
+    try state.addAnchorConstraint(title, .left, .{ .node = .{ .node_id = byline, .anchor = .left } }, 0, .{ .label = "same-left" });
 
     try finalizeDocumentState(&state);
 
@@ -1059,8 +1059,8 @@ test "layout solver: same-target peer equalities form one fallback unit" {
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
     const c = try state.makeObject(page, "c", null, .text, .text, "C");
-    try state.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, "a-is-b");
-    try state.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = c, .anchor = .top } }, 0, "a-is-c");
+    try state.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, .{ .label = "a-is-b" });
+    try state.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = c, .anchor = .top } }, 0, .{ .label = "a-is-c" });
 
     try finalizeDocumentState(&state);
 
@@ -1080,8 +1080,8 @@ test "layout solver: chained peer equalities form one fallback unit" {
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
     const c = try state.makeObject(page, "c", null, .text, .text, "C");
-    try state.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, "a-is-b");
-    try state.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = c, .anchor = .top } }, 0, "b-is-c");
+    try state.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, .{ .label = "a-is-b" });
+    try state.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = c, .anchor = .top } }, 0, .{ .label = "b-is-c" });
 
     try finalizeDocumentState(&state);
 
@@ -1100,9 +1100,9 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     const forward_page = try forward.addPage("Page");
     const forward_a = try forward.makeObject(forward_page, "a", null, .text, .text, "A");
     const forward_b = try forward.makeObject(forward_page, "b", null, .text, .text, "B");
-    try forward.addAnchorConstraint(forward_a, .top, .{ .page = .top }, -100, "a-top");
-    try forward.addAnchorConstraint(forward_b, .top, .{ .page = .top }, -200, "b-top");
-    try forward.addAnchorConstraint(forward_a, .top, .{ .node = .{ .node_id = forward_b, .anchor = .top } }, 0, "a-is-b");
+    try forward.addAnchorConstraint(forward_a, .top, .{ .page = .top }, -100, .{ .label = "a-top" });
+    try forward.addAnchorConstraint(forward_b, .top, .{ .page = .top }, -200, .{ .label = "b-top" });
+    try forward.addAnchorConstraint(forward_a, .top, .{ .node = .{ .node_id = forward_b, .anchor = .top } }, 0, .{ .label = "a-is-b" });
     try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&forward));
 
     var reverse = try initEmptyDocumentState();
@@ -1111,9 +1111,9 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     const reverse_page = try reverse.addPage("Page");
     const reverse_a = try reverse.makeObject(reverse_page, "a", null, .text, .text, "A");
     const reverse_b = try reverse.makeObject(reverse_page, "b", null, .text, .text, "B");
-    try reverse.addAnchorConstraint(reverse_a, .top, .{ .page = .top }, -100, "a-top");
-    try reverse.addAnchorConstraint(reverse_b, .top, .{ .page = .top }, -200, "b-top");
-    try reverse.addAnchorConstraint(reverse_b, .top, .{ .node = .{ .node_id = reverse_a, .anchor = .top } }, 0, "b-is-a");
+    try reverse.addAnchorConstraint(reverse_a, .top, .{ .page = .top }, -100, .{ .label = "a-top" });
+    try reverse.addAnchorConstraint(reverse_b, .top, .{ .page = .top }, -200, .{ .label = "b-top" });
+    try reverse.addAnchorConstraint(reverse_b, .top, .{ .node = .{ .node_id = reverse_a, .anchor = .top } }, 0, .{ .label = "b-is-a" });
     try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&reverse));
 
     var chain = try initEmptyDocumentState();
@@ -1123,10 +1123,10 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     const chain_a = try chain.makeObject(chain_page, "a", null, .text, .text, "A");
     const chain_b = try chain.makeObject(chain_page, "b", null, .text, .text, "B");
     const chain_c = try chain.makeObject(chain_page, "c", null, .text, .text, "C");
-    try chain.addAnchorConstraint(chain_a, .top, .{ .page = .top }, -100, "a-top");
-    try chain.addAnchorConstraint(chain_c, .top, .{ .page = .top }, -200, "c-top");
-    try chain.addAnchorConstraint(chain_a, .top, .{ .node = .{ .node_id = chain_b, .anchor = .top } }, 0, "a-is-b");
-    try chain.addAnchorConstraint(chain_b, .top, .{ .node = .{ .node_id = chain_c, .anchor = .top } }, 0, "b-is-c");
+    try chain.addAnchorConstraint(chain_a, .top, .{ .page = .top }, -100, .{ .label = "a-top" });
+    try chain.addAnchorConstraint(chain_c, .top, .{ .page = .top }, -200, .{ .label = "c-top" });
+    try chain.addAnchorConstraint(chain_a, .top, .{ .node = .{ .node_id = chain_b, .anchor = .top } }, 0, .{ .label = "a-is-b" });
+    try chain.addAnchorConstraint(chain_b, .top, .{ .node = .{ .node_id = chain_c, .anchor = .top } }, 0, .{ .label = "b-is-c" });
     try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&chain));
 }
 
@@ -1137,8 +1137,8 @@ test "layout solver: horizontal fallback does not seed inconsistent hard cycles"
     const page = try state.addPage("Page");
     const a = try state.makeObject(page, "a", null, .text, .text, "aa");
     const b = try state.makeObject(page, "b", null, .text, .text, "bb");
-    try state.addAnchorConstraint(a, .left, .{ .node = .{ .node_id = b, .anchor = .left } }, 100, "a-left");
-    try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .left } }, 200, "b-left");
+    try state.addAnchorConstraint(a, .left, .{ .node = .{ .node_id = b, .anchor = .left } }, 100, .{ .label = "a-left" });
+    try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .left } }, 200, .{ .label = "b-left" });
 
     try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&state));
 }
@@ -1153,10 +1153,10 @@ test "layout solver: constrained group source forms one fallback unit" {
     const left_title = try state.makeObject(page, "left-title", null, .text, .text, "Left");
     const left_body = try state.makeObject(page, "left-body", null, .text, .text, "Body");
     const right = try state.makeObject(page, "right", null, .text, .text, "Right");
-    const left_group = try state.makeGroupWithOrigin(state.document_id, false, &.{ left_title, left_body }, "left-group");
+    const left_group = try state.makeGroupWithOrigin(state.document_id, false, &.{ left_title, left_body }, .{ .label = "left-group" });
 
-    try state.addAnchorConstraint(right, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, "right-of-group");
-    try state.addAnchorConstraint(right, .center_y, .{ .node = .{ .node_id = left_group, .anchor = .center_y } }, 0, "align-group-center");
+    try state.addAnchorConstraint(right, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, .{ .label = "right-of-group" });
+    try state.addAnchorConstraint(right, .center_y, .{ .node = .{ .node_id = left_group, .anchor = .center_y } }, 0, .{ .label = "align-group-center" });
 
     try finalizeDocumentState(&state);
 
@@ -1184,8 +1184,8 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
     const left_body = try state.makeObject(page, "left-body", null, .text, .text, "Body");
     const right_title = try state.makeObject(page, "right-title", null, .text, .text, "Right");
     const right_body = try state.makeObject(page, "right-body", null, .text, .text, "Body");
-    const left_group = try state.makeGroupWithOrigin(state.document_id, false, &.{ left_title, left_body }, "left-group");
-    const right_group = try state.makeGroupWithOrigin(state.document_id, false, &.{ right_title, right_body }, "right-group");
+    const left_group = try state.makeGroupWithOrigin(state.document_id, false, &.{ left_title, left_body }, .{ .label = "left-group" });
+    const right_group = try state.makeGroupWithOrigin(state.document_id, false, &.{ right_title, right_body }, .{ .label = "right-group" });
 
     try setLayoutLineHeight(&state, left_title, "40");
     try setLayoutLineHeight(&state, left_body, "200");
@@ -1196,8 +1196,8 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
     try setLayoutSpacingAfter(&state, left_body, "0");
     try setLayoutSpacingAfter(&state, right_body, "0");
 
-    try state.addAnchorConstraint(right_group, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, "right-of-left-group");
-    try state.addAnchorConstraint(right_group, .center_y, .{ .node = .{ .node_id = left_group, .anchor = .center_y } }, 0, "align-group-centers");
+    try state.addAnchorConstraint(right_group, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, .{ .label = "right-of-left-group" });
+    try state.addAnchorConstraint(right_group, .center_y, .{ .node = .{ .node_id = left_group, .anchor = .center_y } }, 0, .{ .label = "align-group-centers" });
 
     try finalizeDocumentState(&state);
 
@@ -1225,7 +1225,7 @@ test "layout solver: centered vflow clamps below fixed top components only when 
     try setLayoutLineHeight(&state, header, "44");
     try setLayoutSpacingAfter(&state, header, "40");
     try setLayoutLineHeight(&state, body, "580");
-    try state.addAnchorConstraint(header, .top, .{ .page = .top }, -56, "header-top");
+    try state.addAnchorConstraint(header, .top, .{ .page = .top }, -56, .{ .label = "header-top" });
 
     try solveDocumentState(&state);
 
@@ -1256,7 +1256,7 @@ test "layout solver: document centered vflow is not shadowed by page default pol
     try setLayoutSpacingAfter(&state, title, "42");
     try setLayoutLineHeight(&state, subtitle, "37");
     try setLayoutSpacingAfter(&state, subtitle, "0");
-    try state.addAnchorConstraint(pageno, .bottom, .{ .page = .bottom }, 20, "pageno-bottom");
+    try state.addAnchorConstraint(pageno, .bottom, .{ .page = .bottom }, 20, .{ .label = "pageno-bottom" });
 
     try solveDocumentState(&state);
 
@@ -1280,17 +1280,17 @@ test "layout solver: centered vflow preserves page center for side-by-side rows"
     const rule = try state.makeObject(page, "rule", null, .text, .text, "");
     const body = try state.makeObject(page, "body", null, .text, .text, "Body");
     const pipe_child = try state.makeObject(page, "pipe", null, .text, .text, "Pipe");
-    const pipe = try state.makeGroupWithOrigin(page, true, &.{pipe_child}, "pipe-group");
+    const pipe = try state.makeGroupWithOrigin(page, true, &.{pipe_child}, .{ .label = "pipe-group" });
 
     try setLayoutLineHeight(&state, title, "44");
     try setLayoutLineHeight(&state, rule, "4");
     try setLayoutSpacingAfter(&state, rule, "48");
     try setLayoutLineHeight(&state, body, "360");
     try setLayoutLineHeight(&state, pipe_child, "360");
-    try state.addAnchorConstraint(title, .top, .{ .page = .top }, -56, "title-top");
-    try state.addAnchorConstraint(rule, .top, .{ .node = .{ .node_id = title, .anchor = .bottom } }, -14, "rule-below-title");
-    try state.addAnchorConstraint(pipe, .right, .{ .page = .right }, -100, "pipe-right");
-    try state.addAnchorConstraint(pipe, .top, .{ .node = .{ .node_id = body, .anchor = .top } }, 0, "align-row-top");
+    try state.addAnchorConstraint(title, .top, .{ .page = .top }, -56, .{ .label = "title-top" });
+    try state.addAnchorConstraint(rule, .top, .{ .node = .{ .node_id = title, .anchor = .bottom } }, -14, .{ .label = "rule-below-title" });
+    try state.addAnchorConstraint(pipe, .right, .{ .page = .right }, -100, .{ .label = "pipe-right" });
+    try state.addAnchorConstraint(pipe, .top, .{ .node = .{ .node_id = body, .anchor = .top } }, 0, .{ .label = "align-row-top" });
 
     try solveDocumentState(&state);
 
@@ -1308,8 +1308,8 @@ test "layout solver: explicit anchor conflicts and negative frame sizes are reje
 
     const conflict_page = try conflict.addPage("Page");
     const conflict_object = try conflict.makeObject(conflict_page, "body", null, .text, .text, "A");
-    try conflict.addAnchorConstraint(conflict_object, .left, .{ .page = .left }, 100, "left-a");
-    try conflict.addAnchorConstraint(conflict_object, .left, .{ .page = .left }, 120, "left-b");
+    try conflict.addAnchorConstraint(conflict_object, .left, .{ .page = .left }, 100, .{ .label = "left-a" });
+    try conflict.addAnchorConstraint(conflict_object, .left, .{ .page = .left }, 120, .{ .label = "left-b" });
     try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&conflict));
 
     var negative = try initEmptyDocumentState();
@@ -1317,7 +1317,7 @@ test "layout solver: explicit anchor conflicts and negative frame sizes are reje
 
     const negative_page = try negative.addPage("Page");
     const negative_object = try negative.makeObject(negative_page, "body", null, .text, .text, "A");
-    try negative.addAnchorConstraint(negative_object, .left, .{ .node = .{ .node_id = negative_object, .anchor = .right } }, 10, "negative-width");
+    try negative.addAnchorConstraint(negative_object, .left, .{ .node = .{ .node_id = negative_object, .anchor = .right } }, 10, .{ .label = "negative-width" });
     try testing.expectError(error.NegativeFrameSize, finalizeDocumentState(&negative));
 }
 
@@ -1328,11 +1328,11 @@ test "layout solver: group width propagation must preserve child hard widths" {
     const page = try state.addPage("Page");
     const child = try state.makeObject(page, "body", null, .text, .text, "this text can be wrapped");
     try setLayoutWrap(&state, child, "on");
-    const group = try state.makeGroupWithOrigin(page, true, &.{child}, "group");
+    const group = try state.makeGroupWithOrigin(page, true, &.{child}, .{ .label = "group" });
 
-    try state.addAnchorConstraint(child, .left, .{ .page = .left }, 100, "child-left");
-    try state.addAnchorConstraint(child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 700, "child-width");
-    try state.addAnchorConstraint(group, .right, .{ .node = .{ .node_id = group, .anchor = .left } }, 600, "group-width");
+    try state.addAnchorConstraint(child, .left, .{ .page = .left }, 100, .{ .label = "child-left" });
+    try state.addAnchorConstraint(child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 700, .{ .label = "child-width" });
+    try state.addAnchorConstraint(group, .right, .{ .node = .{ .node_id = group, .anchor = .left } }, 600, .{ .label = "group-width" });
 
     try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&state));
 }
@@ -1353,8 +1353,8 @@ test "layout solver: wrapped width cap propagates through dependent anchors" {
     const follower = try state.makeObject(page, "follower", null, .text, .text, "B");
     try setLayoutWrap(&state, wrapped, "on");
 
-    try state.addAnchorConstraint(wrapped, .left, .{ .page = .left }, 1100, "wrapped-left");
-    try state.addAnchorConstraint(follower, .left, .{ .node = .{ .node_id = wrapped, .anchor = .right } }, 20, "follower-left");
+    try state.addAnchorConstraint(wrapped, .left, .{ .page = .left }, 1100, .{ .label = "wrapped-left" });
+    try state.addAnchorConstraint(follower, .left, .{ .node = .{ .node_id = wrapped, .anchor = .right } }, 20, .{ .label = "follower-left" });
 
     try solveDocumentState(&state);
 
@@ -1380,8 +1380,8 @@ test "layout solver: vertical axis observes width-dependent wrapped height" {
         "this sentence should wrap into multiple lines once the horizontal solver caps its width",
     );
     try setLayoutWrap(&state, wrapped, "on");
-    try state.addAnchorConstraint(wrapped, .left, .{ .page = .left }, 1100, "wrapped-left");
-    try state.addAnchorConstraint(wrapped, .bottom, .{ .page = .bottom }, 40, "wrapped-bottom");
+    try state.addAnchorConstraint(wrapped, .left, .{ .page = .left }, 1100, .{ .label = "wrapped-left" });
+    try state.addAnchorConstraint(wrapped, .bottom, .{ .page = .bottom }, 40, .{ .label = "wrapped-bottom" });
 
     try solveDocumentState(&state);
 
@@ -1418,8 +1418,8 @@ test "layout diagnostics preserve the direction of ink outside the page" {
         defer state.deinit();
         const page = try state.addPage("Ink overflow");
         const object = try state.makeObject(page, "text", null, .text, .text, "j");
-        try state.addAnchorConstraint(object, .left, .{ .page = .left }, case.left, "left");
-        try state.addAnchorConstraint(object, .top, .{ .page = .top }, 0, "top");
+        try state.addAnchorConstraint(object, .left, .{ .page = .left }, case.left, .{ .label = "left" });
+        try state.addAnchorConstraint(object, .top, .{ .page = .top }, 0, .{ .label = "top" });
         var measurement = InkMeasurement{ .ink = case.ink };
         try solveDocumentStateWithOptions(&state, null, .{ .measurement_provider = .{ .context = &measurement, .measure = InkMeasurement.measure } });
         const retained = state.getNode(object).?.layout_measurement.?;
@@ -1650,13 +1650,13 @@ test "layout solver runs page jobs with configured job count" {
 
     const first_page = try state.addPage("First");
     const first = try state.makeObject(first_page, "first", null, .text, .text, "First");
-    try state.addAnchorConstraint(first, .left, .{ .page = .left }, 40, "first-left");
-    try state.addAnchorConstraint(first, .top, .{ .page = .top }, -80, "first-top");
+    try state.addAnchorConstraint(first, .left, .{ .page = .left }, 40, .{ .label = "first-left" });
+    try state.addAnchorConstraint(first, .top, .{ .page = .top }, -80, .{ .label = "first-top" });
 
     const second_page = try state.addPage("Second");
     const second = try state.makeObject(second_page, "second", null, .text, .text, "Second");
-    try state.addAnchorConstraint(second, .left, .{ .page = .left }, 80, "second-left");
-    try state.addAnchorConstraint(second, .top, .{ .page = .top }, -120, "second-top");
+    try state.addAnchorConstraint(second, .left, .{ .page = .left }, 80, .{ .label = "second-left" });
+    try state.addAnchorConstraint(second, .top, .{ .page = .top }, -120, .{ .label = "second-top" });
 
     var counter = LayoutProgressCounter{};
     var results = try solver.solveDocument(&state, null, .{
@@ -1693,13 +1693,13 @@ test "layout solver cooperatively cancels parallel page jobs" {
 
     const first_page = try state.addPage("First");
     const first = try state.makeObject(first_page, "first", null, .text, .text, "First");
-    try state.addAnchorConstraint(first, .left, .{ .page = .left }, 40, "first-left");
-    try state.addAnchorConstraint(first, .top, .{ .page = .top }, -80, "first-top");
+    try state.addAnchorConstraint(first, .left, .{ .page = .left }, 40, .{ .label = "first-left" });
+    try state.addAnchorConstraint(first, .top, .{ .page = .top }, -80, .{ .label = "first-top" });
 
     const second_page = try state.addPage("Second");
     const second = try state.makeObject(second_page, "second", null, .text, .text, "Second");
-    try state.addAnchorConstraint(second, .left, .{ .page = .left }, 80, "second-left");
-    try state.addAnchorConstraint(second, .top, .{ .page = .top }, -120, "second-top");
+    try state.addAnchorConstraint(second, .left, .{ .page = .left }, 80, .{ .label = "second-left" });
+    try state.addAnchorConstraint(second, .top, .{ .page = .top }, -120, .{ .label = "second-top" });
 
     var counter = LayoutCancellationCounter{ .cancel_after = 30 };
     try testing.expectError(error.Canceled, solver.solveDocument(&state, null, .{
@@ -1861,14 +1861,14 @@ test "layout solver: group chrome padding expands tight group bounds" {
 
     const page = try state.addPage("Page");
     const child = try state.makeObject(page, "child", null, .text, .text, "Hello");
-    const group = try state.makeGroupWithOrigin(page, true, &.{child}, "group");
+    const group = try state.makeGroupWithOrigin(page, true, &.{child}, .{ .label = "group" });
     try setChromePadX(&state, group, "12");
     try setChromePadY(&state, group, "8");
 
-    try state.addAnchorConstraint(child, .left, .{ .page = .left }, 100, "child-left");
-    try state.addAnchorConstraint(child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 200, "child-width");
-    try state.addAnchorConstraint(child, .bottom, .{ .page = .bottom }, 100, "child-bottom");
-    try state.addAnchorConstraint(child, .top, .{ .node = .{ .node_id = child, .anchor = .bottom } }, 40, "child-height");
+    try state.addAnchorConstraint(child, .left, .{ .page = .left }, 100, .{ .label = "child-left" });
+    try state.addAnchorConstraint(child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 200, .{ .label = "child-width" });
+    try state.addAnchorConstraint(child, .bottom, .{ .page = .bottom }, 100, .{ .label = "child-bottom" });
+    try state.addAnchorConstraint(child, .top, .{ .node = .{ .node_id = child, .anchor = .bottom } }, 40, .{ .label = "child-height" });
 
     try solveDocumentState(&state);
 
@@ -1893,11 +1893,11 @@ test "layout solver: target group width leaves room for chrome padding" {
         "this sentence is intentionally long enough to wrap when the group width is constrained",
     );
     try setLayoutWrap(&state, child, "on");
-    const group = try state.makeGroupWithOrigin(page, true, &.{child}, "group");
+    const group = try state.makeGroupWithOrigin(page, true, &.{child}, .{ .label = "group" });
     try setChromePadX(&state, group, "10");
 
-    try state.addAnchorConstraint(group, .left, .{ .page = .left }, 100, "group-left");
-    try state.addAnchorConstraint(group, .right, .{ .node = .{ .node_id = group, .anchor = .left } }, 220, "group-width");
+    try state.addAnchorConstraint(group, .left, .{ .page = .left }, 100, .{ .label = "group-left" });
+    try state.addAnchorConstraint(group, .right, .{ .node = .{ .node_id = group, .anchor = .left } }, 220, .{ .label = "group-width" });
 
     try solveDocumentState(&state);
 
@@ -1915,10 +1915,10 @@ test "layout diagnostics: fixed-height object reports frame too small" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "short-box", null, .text, .text, "line one\nline two");
-    try state.addAnchorConstraint(object, .left, .{ .page = .left }, 20, "left");
-    try state.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 200, "width");
-    try state.addAnchorConstraint(object, .bottom, .{ .page = .bottom }, 20, "bottom");
-    try state.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 20, "height");
+    try state.addAnchorConstraint(object, .left, .{ .page = .left }, 20, .{ .label = "left" });
+    try state.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 200, .{ .label = "width" });
+    try state.addAnchorConstraint(object, .bottom, .{ .page = .bottom }, 20, .{ .label = "bottom" });
+    try state.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 20, .{ .label = "height" });
 
     try solveDocumentState(&state);
 
@@ -1958,10 +1958,10 @@ test "layout diagnostics: one-pixel text reports frame too small" {
     try setTextSize(&state, object, "1");
     try setTextLineHeight(&state, object, "1");
     try setLayoutWrap(&state, object, "on");
-    try state.addAnchorConstraint(object, .left, .{ .page = .left }, 20, "left");
-    try state.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 1, "width");
-    try state.addAnchorConstraint(object, .bottom, .{ .page = .bottom }, 20, "bottom");
-    try state.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 1, "height");
+    try state.addAnchorConstraint(object, .left, .{ .page = .left }, 20, .{ .label = "left" });
+    try state.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 1, .{ .label = "width" });
+    try state.addAnchorConstraint(object, .bottom, .{ .page = .bottom }, 20, .{ .label = "bottom" });
+    try state.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 1, .{ .label = "height" });
 
     try solveDocumentState(&state);
 
@@ -2355,10 +2355,10 @@ fn expectHeightAtFinalWidth(width: f32, wrap: []const u8) !void {
     const object = try state.makeObject(page, "body", null, .text, .text, "width-dependent content");
     const follower = try state.makeObject(page, "following", null, .text, .text, "following content");
     try setLayoutWrap(&state, object, wrap);
-    try state.addAnchorConstraint(object, .left, .{ .page = .left }, 0, "body-left");
-    try state.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, width, "body-width");
-    try state.addAnchorConstraint(object, .top, .{ .page = .top }, -100, "body-top");
-    try state.addAnchorConstraint(follower, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, -10, "following-top");
+    try state.addAnchorConstraint(object, .left, .{ .page = .left }, 0, .{ .label = "body-left" });
+    try state.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, width, .{ .label = "body-width" });
+    try state.addAnchorConstraint(object, .top, .{ .page = .top }, -100, .{ .label = "body-top" });
+    try state.addAnchorConstraint(follower, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, -10, .{ .label = "following-top" });
     var measurement = WidthSensitiveMeasurement{ .target = object };
     try solveDocumentStateWithOptions(&state, null, .{ .measurement_provider = .{ .context = &measurement, .measure = WidthSensitiveMeasurement.measure } });
     const frame = state.getNode(object).?.frame;

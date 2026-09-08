@@ -1,3 +1,4 @@
+const model = @import("model");
 const std = @import("std");
 const json = @import("json.zig");
 const source = @import("source.zig");
@@ -50,10 +51,7 @@ pub fn setColorMode(mode: ColorMode) void {
     color_mode = mode;
 }
 
-pub const LocatedOrigin = struct {
-    path: ?[]const u8,
-    span: source.ByteSpan,
-};
+pub const LocatedOrigin = model.SourceOrigin.Location;
 
 pub const SourceReport = struct {
     path: []const u8 = "",
@@ -65,33 +63,20 @@ pub const SourceReport = struct {
     context_lines: usize = 2,
 };
 
-pub fn parseByteOrigin(origin: []const u8) ?source.ByteSpan {
-    if (!std.mem.startsWith(u8, origin, "bytes:")) return null;
-    const payload = origin["bytes:".len..];
-    const dash = std.mem.indexOfScalar(u8, payload, '-') orelse return null;
-    const start = std.fmt.parseInt(usize, payload[0..dash], 10) catch return null;
-    const end = std.fmt.parseInt(usize, payload[dash + 1 ..], 10) catch return null;
-    return .{ .start = start, .end = end };
+pub fn spanFromOrigin(origin: ?model.SourceOrigin) ?source.ByteSpan {
+    return if (origin) |value| value.span else null;
 }
 
-pub fn parseLocatedOrigin(origin: []const u8) ?LocatedOrigin {
-    if (parseByteOrigin(origin)) |span| {
-        return .{ .path = null, .span = span };
+pub fn writeOriginField(object: *json.Object, key: []const u8, origin: ?model.SourceOrigin) !void {
+    const value = origin orelse return object.nullField(key);
+    var child = try object.objectField(key);
+    try child.optionalStringField("path", value.path);
+    try child.optionalStringField("label", value.label);
+    if (value.span) |span| {
+        try child.intField("start", span.start);
+        try child.intField("end", span.end);
     }
-    if (!std.mem.startsWith(u8, origin, "path:")) return null;
-    const marker = std.mem.lastIndexOf(u8, origin, ":bytes:") orelse return null;
-    const bytes_text = origin[marker + 1 ..];
-    const span = parseByteOrigin(bytes_text) orelse return null;
-    return .{
-        .path = origin["path:".len..marker],
-        .span = span,
-    };
-}
-
-pub fn spanFromOrigin(origin: ?[]const u8) ?source.ByteSpan {
-    const text = origin orelse return null;
-    const located = parseLocatedOrigin(text) orelse return null;
-    return located.span;
+    try child.end();
 }
 
 pub fn print(report: SourceReport) void {
@@ -127,7 +112,7 @@ pub fn printNote(message: []const u8) void {
     std.debug.print("  note: {s}\n", .{message});
 }
 
-pub fn printLabeledOrigin(text: []const u8, label: []const u8, origin: ?[]const u8) void {
+pub fn printLabeledOrigin(text: []const u8, label: []const u8, origin: ?model.SourceOrigin) void {
     if (!shouldPrint(.note)) return;
     const span = spanFromOrigin(origin) orelse return;
     const loc = source.locationAt(text, span.start);
@@ -171,9 +156,9 @@ fn printLocatedOrigin(
     state: anytype,
     severity: Severity,
     message: []const u8,
-    origin: []const u8,
+    origin: model.SourceOrigin,
 ) void {
-    const located = parseLocatedOrigin(origin) orelse return;
+    const located = origin.location() orelse return;
     const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
     print(.{
         .path = resolved.path,
@@ -190,11 +175,11 @@ fn printLabeledLocatedOrigin(
     default_source: []const u8,
     state: anytype,
     label: []const u8,
-    origin: ?[]const u8,
+    origin: ?model.SourceOrigin,
 ) void {
     if (!shouldPrint(.note)) return;
     const origin_text = origin orelse return;
-    const located = parseLocatedOrigin(origin_text) orelse return;
+    const located = origin_text.location() orelse return;
     const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
     const loc = indexedLocation(resolved.source, resolved.line_index, located.span.start);
     printDim();
@@ -360,7 +345,7 @@ fn writeContextDiagnosticJson(
     try item.stringField("code", resolved.code);
     try item.stringField("message", resolved.message);
     try item.stringField("path", resolved.path);
-    try item.optionalStringField("origin", diagnostic.origin);
+    try writeOriginField(&item, "origin", diagnostic.origin);
     try item.optionalIntField("page_id", diagnostic.page_id);
     try item.optionalIntField("node_id", diagnostic.node_id);
     if (resolved.span) |span| {
@@ -389,10 +374,10 @@ fn resolveContextDiagnosticLocation(
     diagnostic: anytype,
 ) struct { path: []const u8, source: []const u8, span: ?source.ByteSpan, line_index: ?source.LineIndex = null } {
     const located = if (diagnostic.origin) |origin|
-        parseLocatedOrigin(origin)
+        origin.location()
     else if (diagnostic.node_id) |node_id| blk: {
         const node = state.getNode(node_id) orelse break :blk null;
-        break :blk if (node.origin) |origin| parseLocatedOrigin(origin) else null;
+        break :blk if (node.origin) |origin| origin.location() else null;
     } else null;
     if (located) |origin| {
         const resolved = sourceForLocatedOrigin(default_path, default_source, state, origin);
@@ -614,10 +599,10 @@ fn printRustLocatedOrigin(
     state: anytype,
     severity: Severity,
     label: []const u8,
-    origin: ?[]const u8,
+    origin: ?model.SourceOrigin,
 ) bool {
     const origin_text = origin orelse return false;
-    const located = parseLocatedOrigin(origin_text) orelse return false;
+    const located = origin_text.location() orelse return false;
     const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
     const loc = indexedLocation(resolved.source, resolved.line_index, located.span.start);
     printDim();
@@ -788,10 +773,10 @@ fn constraintOriginSnippet(
     default_path: []const u8,
     default_source: []const u8,
     state: anytype,
-    maybe_origin: ?[]const u8,
+    maybe_origin: ?model.SourceOrigin,
 ) !?[]const u8 {
     const origin = maybe_origin orelse return null;
-    const located = parseLocatedOrigin(origin) orelse return null;
+    const located = origin.location() orelse return null;
     const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
     if (resolved.source.len == 0) return null;
     const line = if (resolved.line_index) |index| index.lineAt(located.span.start) else source.lineAt(resolved.source, located.span.start);

@@ -12,7 +12,7 @@ const Axis = model.Axis;
 
 const OverflowDiagnostic = struct {
     node_id: NodeId,
-    origin: ?[]const u8,
+    origin: ?model.SourceOrigin,
     policy: OverflowPolicy,
     overflow_left: f32,
     overflow_right: f32,
@@ -317,7 +317,7 @@ fn appendOverflowDiagnostic(
 
 fn sameOriginOrNode(a: OverflowDiagnostic, b: OverflowDiagnostic) bool {
     if (a.origin) |a_origin| {
-        if (b.origin) |b_origin| return std.mem.eql(u8, a_origin, b_origin);
+        if (b.origin) |b_origin| return a_origin.eql(b_origin);
     } else if (b.origin == null) {
         return a.node_id == b.node_id;
     }

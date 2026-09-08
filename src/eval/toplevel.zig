@@ -112,7 +112,7 @@ fn callDescriptor(evaluation: *EvalContext, sema: *const SemanticEnv, callee: as
 
 const LowerDiagnostic = struct {
     err: anyerror,
-    origin: ?[]const u8,
+    origin: ?core.SourceOrigin,
     data: Data,
 
     const Data = union(enum) {
@@ -133,11 +133,11 @@ const LowerDiagnostic = struct {
     };
 };
 
-fn reportUnknownFunction(state: *core.DocumentState, name: []const u8, origin: []const u8) !void {
+fn reportUnknownFunction(state: *core.DocumentState, name: []const u8, origin: core.SourceOrigin) !void {
     try reportNamedResolutionError(state, error.UnknownFunction, "function", name, origin);
 }
 
-fn reportUnknownCallable(state: *core.DocumentState, sema: *const SemanticEnv, callee: ast.CallableName, origin: []const u8) !void {
+fn reportUnknownCallable(state: *core.DocumentState, sema: *const SemanticEnv, callee: ast.CallableName, origin: core.SourceOrigin) !void {
     switch (sema.resolveFunction(callee)) {
         .unknown_alias => |alias| try reportNamedResolutionError(state, error.UnknownFunction, "import alias", alias, origin),
         else => {
@@ -148,15 +148,15 @@ fn reportUnknownCallable(state: *core.DocumentState, sema: *const SemanticEnv, c
     }
 }
 
-fn reportUnknownQuery(state: *core.DocumentState, name: []const u8, origin: []const u8) !void {
+fn reportUnknownQuery(state: *core.DocumentState, name: []const u8, origin: core.SourceOrigin) !void {
     try reportNamedResolutionError(state, error.UnknownQuery, "query", name, origin);
 }
 
-fn reportUnknownIdentifier(state: *core.DocumentState, name: []const u8, origin: []const u8) !void {
+fn reportUnknownIdentifier(state: *core.DocumentState, name: []const u8, origin: core.SourceOrigin) !void {
     try reportNamedResolutionError(state, error.UnknownIdentifier, "identifier", name, origin);
 }
 
-fn reportNamedResolutionError(state: *core.DocumentState, err: anyerror, kind: []const u8, name: []const u8, origin: []const u8) !void {
+fn reportNamedResolutionError(state: *core.DocumentState, err: anyerror, kind: []const u8, name: []const u8, origin: core.SourceOrigin) !void {
     try reportLowerDiagnostic(state, .{
         .err = err,
         .origin = origin,
@@ -164,7 +164,7 @@ fn reportNamedResolutionError(state: *core.DocumentState, err: anyerror, kind: [
     });
 }
 
-fn reportLowerError(state: *core.DocumentState, err: anyerror, origin: ?[]const u8) !void {
+fn reportLowerError(state: *core.DocumentState, err: anyerror, origin: ?core.SourceOrigin) !void {
     try reportLowerDiagnostic(state, .{
         .err = err,
         .origin = origin,
@@ -172,7 +172,7 @@ fn reportLowerError(state: *core.DocumentState, err: anyerror, origin: ?[]const 
     });
 }
 
-fn reportDuplicatePropertyDefinition(state: *core.DocumentState, origin: []const u8, key: []const u8) !void {
+fn reportDuplicatePropertyDefinition(state: *core.DocumentState, origin: core.SourceOrigin, key: []const u8) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
             .code = "DuplicatePropertyDefinition",
@@ -181,19 +181,19 @@ fn reportDuplicatePropertyDefinition(state: *core.DocumentState, origin: []const
     });
 }
 
-fn reportDuplicateContentDefinition(state: *core.DocumentState, origin: []const u8) !void {
+fn reportDuplicateContentDefinition(state: *core.DocumentState, origin: core.SourceOrigin) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .code = "DuplicateContentDefinition", .message = try state.allocator.dupe(u8, "object content is already defined") },
     });
 }
 
-fn reportDuplicateReprDefinition(state: *core.DocumentState, origin: []const u8) !void {
+fn reportDuplicateReprDefinition(state: *core.DocumentState, origin: core.SourceOrigin) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .code = "DuplicateReprDefinition", .message = try state.allocator.dupe(u8, "object repr is already defined") },
     });
 }
 
-fn reportRecordUpdateError(state: *core.DocumentState, origin: []const u8, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
+fn reportRecordUpdateError(state: *core.DocumentState, origin: core.SourceOrigin, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
             .code = code,
@@ -202,7 +202,7 @@ fn reportRecordUpdateError(state: *core.DocumentState, origin: []const u8, code:
     });
 }
 
-fn reportInvalidRecordLiteral(state: *core.DocumentState, origin: []const u8, type_name: []const u8) !void {
+fn reportInvalidRecordLiteral(state: *core.DocumentState, origin: core.SourceOrigin, type_name: []const u8) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
             .code = "InvalidRecordLiteral",
@@ -376,7 +376,7 @@ fn materializeDisplayContent(evaluation: *EvalContext) !void {
 
         const page_id = state.parentPageOf(node_id) orelse state.document_id;
         const scope: EvalScope = if (page_id == state.document_id) .document else .page;
-        const origin = node.origin orelse "";
+        const origin: core.SourceOrigin = node.origin orelse .{};
         const text = evalNodeReprWithFunction(evaluation, page_id, scope, &env, origin, node_id, function) catch |err| {
             if (err == error.Canceled) return err;
             try reportLowerError(state, err, origin);
@@ -438,8 +438,7 @@ fn executeDocumentStatement(
     const error_count = diagnosticErrorCount(state);
     const flow = executeStatement(evaluation, state.document_id, .document, &execution_state.env, &execution_state.last_code_like, stmt, null) catch |err| {
         if (err == error.Canceled) return err;
-        const origin = statementOrigin(evaluation, stmt.span) catch null;
-        defer if (origin) |text| state.allocator.free(text);
+        const origin = state.sourceOrigin(evaluation.module_id, stmt.span);
         if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
         return err;
     };
@@ -463,8 +462,7 @@ fn executePageStatement(
     const error_count = diagnosticErrorCount(state);
     const flow = executeStatement(evaluation, page_id, .page, &execution_state.env, &execution_state.last_code_like, stmt, null) catch |err| {
         if (err == error.Canceled) return err;
-        const origin = statementOrigin(evaluation, stmt.span) catch null;
-        defer if (origin) |text| state.allocator.free(text);
+        const origin = state.sourceOrigin(evaluation.module_id, stmt.span);
         if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
         return err;
     };
@@ -491,7 +489,7 @@ fn evalExpr(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     expr: Expr,
 ) anyerror!core.Value {
     const state = evaluation.state;
@@ -549,8 +547,7 @@ fn evalExpr(
 fn registerStringLiteralProvenance(evaluation: *EvalContext, literal: ast.StringLiteral) !void {
     const state = evaluation.state;
     const source_span = literal.source_span orelse return;
-    const origin = try originForModuleSpan(evaluation, source_span);
-    defer state.allocator.free(origin);
+    const origin = state.sourceOrigin(evaluation.module_id, source_span);
     const provenance = [_]core.ContentProvenance{.{
         .content_start = 0,
         .content_end = literal.text.len,
@@ -563,7 +560,7 @@ fn evalConstValue(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     resolved: semantic_env.ResolvedConst,
 ) anyerror!core.Value {
     const state = evaluation.state;
@@ -602,7 +599,7 @@ fn evalMember(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     member: ast.MemberExpr,
 ) !core.Value {
     const state = evaluation.state;
@@ -678,7 +675,7 @@ fn evalRecord(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     record: ast.RecordExpr,
 ) !core.Value {
     const state = evaluation.state;
@@ -726,7 +723,7 @@ fn evalRecordDefaults(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     record_id: core.NominalId,
 ) !core.RecordValue {
     const state = evaluation.state;
@@ -757,7 +754,7 @@ fn evalRecordUpdate(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     update: ast.RecordUpdateExpr,
 ) !core.Value {
     const state = evaluation.state;
@@ -841,7 +838,7 @@ fn materializePropertyRecord(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     node: *const core.Node,
     key: []const u8,
     ty: ast.Type,
@@ -896,7 +893,7 @@ fn evalCall(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
 ) anyerror!core.Value {
     const state = evaluation.state;
@@ -966,7 +963,7 @@ fn evalApply(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     apply: ast.ApplyExpr,
 ) anyerror!core.Value {
     const state = evaluation.state;
@@ -995,7 +992,7 @@ fn evalArgument(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     expr: Expr,
 ) !Binding {
     try checkCancellation(evaluation);
@@ -1008,7 +1005,7 @@ fn evalCallArgs(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     args: []const Expr,
 ) !CallArguments {
     const state = evaluation.state;
@@ -1026,7 +1023,7 @@ fn evalNodeRepr(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     object_id: core.NodeId,
 ) ![]const u8 {
     const state = evaluation.state;
@@ -1040,7 +1037,7 @@ fn evalNodeReprWithFunction(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     object_id: core.NodeId,
     function: core.FunctionRef,
 ) ![]const u8 {
@@ -1060,7 +1057,7 @@ const BuiltinContext = struct {
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
 
     pub fn checkArityRange(self: *const BuiltinContext, actual: usize, min: usize, max: usize) !void {
         try validateArityRange(self.state, actual, min, max, self.current_origin);
@@ -1318,7 +1315,7 @@ fn evalPrimitiveCall(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
     descriptor: registry.PrimitiveDescriptor,
 ) anyerror!core.Value {
@@ -1337,7 +1334,7 @@ fn evalPrimitiveCall(
 fn emitUserReport(
     state: *core.DocumentState,
     page_id: core.NodeId,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     severity: core.DiagnosticSeverity,
     message: []const u8,
 ) !void {
@@ -1350,13 +1347,12 @@ fn emitUserReport(
     );
 }
 
-fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_id: core.NodeId, origin: []const u8) !void {
+fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_id: core.NodeId, origin: core.SourceOrigin) !void {
     state.has_external_evaluation_inputs = true;
     const node = state.getNode(object_id) orelse return error.UnknownNode;
-    var diagnostic_origin = try assetContentDiagnosticOrigin(state, node, origin);
-    defer diagnostic_origin.deinit(state.allocator);
+    const diagnostic_origin = assetContentDiagnosticOrigin(node, origin);
     if (node.object_kind == null or node.object_kind.? != .asset or node.content == null) {
-        try state.addValidationDiagnostic(.@"error", page_id, object_id, diagnostic_origin.text, .{
+        try state.addValidationDiagnostic(.@"error", page_id, object_id, diagnostic_origin, .{
             .asset_invalid = .{
                 .reason = try state.allocator.dupe(u8, "expected an asset object with a path"),
                 .payload_kind = node.payload_kind,
@@ -1373,7 +1369,7 @@ fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_
     if (!try fs_utils.fileExists(state.allocator, resolved)) {
         const requested_path = try state.allocator.dupe(u8, requested);
         resolved_owned = false;
-        try state.addValidationDiagnostic(.@"error", page_id, object_id, diagnostic_origin.text, .{
+        try state.addValidationDiagnostic(.@"error", page_id, object_id, diagnostic_origin, .{
             .asset_not_found = .{
                 .requested_path = requested_path,
                 .resolved_path = resolved,
@@ -1384,43 +1380,9 @@ fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_
     }
 }
 
-const DiagnosticOrigin = struct {
-    text: ?[]const u8,
-    owned: bool = false,
-
-    fn deinit(self: *DiagnosticOrigin, allocator: std.mem.Allocator) void {
-        if (self.owned) {
-            if (self.text) |text| allocator.free(text);
-        }
-    }
-};
-
-fn assetContentDiagnosticOrigin(state: *core.DocumentState, node: *const core.Node, fallback: []const u8) !DiagnosticOrigin {
-    const content = node.content orelse return .{ .text = fallback };
-    if (try originForContentSpan(state.allocator, node.content_provenance.items, 0, content.len)) |origin| {
-        return .{ .text = origin, .owned = true };
-    }
-    return .{ .text = fallback };
-}
-
-fn originForContentSpan(
-    allocator: std.mem.Allocator,
-    entries: []const core.ContentProvenance,
-    content_start: usize,
-    content_end: usize,
-) !?[]const u8 {
-    const normalized_end = @max(content_end, content_start);
-    for (entries) |entry| {
-        if (content_start < entry.content_start or normalized_end > entry.content_end) continue;
-        const located = utils.err.parseLocatedOrigin(entry.origin) orelse continue;
-        const start = located.span.start + (content_start - entry.content_start);
-        const end = located.span.start + (normalized_end - entry.content_start);
-        if (located.path) |path| {
-            return try std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ path, start, end });
-        }
-        return try std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ start, end });
-    }
-    return null;
+fn assetContentDiagnosticOrigin(node: *const core.Node, fallback: core.SourceOrigin) core.SourceOrigin {
+    const content = node.content orelse return fallback;
+    return core.ContentProvenance.originForSpan(node.content_provenance.items, 0, content.len) orelse fallback;
 }
 
 fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requested: []const u8) ![]const u8 {
@@ -1433,7 +1395,7 @@ fn evalSelectCall(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
 ) anyerror!core.Value {
     const state = evaluation.state;
@@ -1480,7 +1442,7 @@ fn evalSelectCall(
     }
 }
 
-fn validateFixedArity(state: *core.DocumentState, actual: usize, expected: usize, origin: []const u8) !void {
+fn validateFixedArity(state: *core.DocumentState, actual: usize, expected: usize, origin: core.SourceOrigin) !void {
     if (actual != expected) {
         try reportLowerDiagnostic(state, .{
             .err = error.InvalidArity,
@@ -1491,7 +1453,7 @@ fn validateFixedArity(state: *core.DocumentState, actual: usize, expected: usize
     }
 }
 
-fn validateUserFunctionArity(state: *core.DocumentState, actual: usize, func: FunctionDecl, origin: []const u8) !void {
+fn validateUserFunctionArity(state: *core.DocumentState, actual: usize, func: FunctionDecl, origin: core.SourceOrigin) !void {
     const range = eval_functions.arity(func);
     if (actual < range.min or actual > range.max) {
         try reportLowerDiagnostic(state, .{
@@ -1503,7 +1465,7 @@ fn validateUserFunctionArity(state: *core.DocumentState, actual: usize, func: Fu
     }
 }
 
-fn validateArityRange(state: *core.DocumentState, actual: usize, min: usize, max: usize, origin: []const u8) !void {
+fn validateArityRange(state: *core.DocumentState, actual: usize, min: usize, max: usize, origin: core.SourceOrigin) !void {
     if (actual < min or actual > max) {
         try reportLowerDiagnostic(state, .{
             .err = error.InvalidArity,
@@ -1519,7 +1481,7 @@ fn bindFunctionArgument(
     page_id: core.NodeId,
     local_env: *Environment,
     param: ast.ParamDecl,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     binding: Binding,
 ) !void {
     value_contracts.ensureValueConformsToType(state, page_id, binding.value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
@@ -1538,7 +1500,7 @@ fn bindUserFunctionArgs(
     local_env: *Environment,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
 ) !void {
     const state = evaluation.state;
@@ -1563,7 +1525,7 @@ fn bindUserFunctionValueArgs(
     local_env: *Environment,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     args: []const core.Value,
 ) !void {
     const state = evaluation.state;
@@ -1617,7 +1579,7 @@ fn evalCallArg(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
     index: usize,
 ) anyerror!core.Value {
@@ -1629,7 +1591,7 @@ fn evalCallStringArg(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
     index: usize,
 ) anyerror![]const u8 {
@@ -1641,7 +1603,7 @@ fn evalCallNumberArg(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
     index: usize,
 ) anyerror!f32 {
@@ -1653,7 +1615,7 @@ fn evalCallObjectArg(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
     index: usize,
 ) anyerror!core.NodeId {
@@ -1665,7 +1627,7 @@ fn evalCallAnchorArg(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
     index: usize,
 ) anyerror!core.AnchorValue {
@@ -1677,7 +1639,7 @@ fn evalCallRoleArg(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
     index: usize,
 ) anyerror!core.Role {
@@ -1694,7 +1656,7 @@ fn evalCallPayloadArg(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
     index: usize,
 ) anyerror!names.ParsedPayload {
@@ -1718,7 +1680,7 @@ fn anchorEqualityConstraintSet(
     target: core.AnchorValue,
     source: core.AnchorValue,
     offset: f32,
-    origin: []const u8,
+    origin: core.SourceOrigin,
 ) !core.ConstraintSet {
     const state = evaluation.state;
     return switch (target) {
@@ -1745,7 +1707,7 @@ fn writeNodeFieldValue(
     node_id: core.NodeId,
     field_name: []const u8,
     value: core.Value,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     replace_existing: bool,
 ) !void {
     if (value == .none) {
@@ -1785,7 +1747,7 @@ fn writePropertyPath(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     base: core.Value,
     path: []const ast.RecordPathSegment,
     value: core.Value,
@@ -1812,7 +1774,7 @@ fn writePropertyPathToTarget(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     target: core.Value,
     path: []const ast.RecordPathSegment,
     value: core.Value,
@@ -1836,7 +1798,7 @@ fn writePropertyPathToNode(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     node_id: core.NodeId,
     path: []const ast.RecordPathSegment,
     value: core.Value,
@@ -1890,12 +1852,12 @@ fn executeStatement(
     env: *Environment,
     last_code_like: *?core.NodeId,
     stmt: Statement,
-    origin_override: ?[]const u8,
+    origin_override: ?core.SourceOrigin,
 ) anyerror!ExecFlow {
     const state = evaluation.state;
     const functions = evaluation.functions;
     try checkCancellation(evaluation);
-    const origin = if (origin_override) |override| override else try state.ownString(try statementOrigin(evaluation, stmt.span));
+    const origin = origin_override orelse state.sourceOrigin(evaluation.module_id, stmt.span);
     switch (stmt.kind) {
         .hole => return error.HoleStatement,
         .let_binding => |binding| {
@@ -2034,14 +1996,14 @@ fn addValueObjectSources(
     }
 }
 
-fn connectReturnedObject(state: *core.DocumentState, value: core.Value, start_node_count: usize, origin: []const u8) !void {
+fn connectReturnedObject(state: *core.DocumentState, value: core.Value, start_node_count: usize, origin: core.SourceOrigin) !void {
     switch (value) {
         .object => |id| try state.connectGeneratedReturnObjects(id, start_node_count, origin),
         else => {},
     }
 }
 
-fn connectValueObjects(state: *core.DocumentState, value: core.Value, start_node_count: usize, origin: []const u8) !void {
+fn connectValueObjects(state: *core.DocumentState, value: core.Value, start_node_count: usize, origin: core.SourceOrigin) !void {
     switch (value) {
         .object => |id| try state.connectGeneratedReturnObjects(id, start_node_count, origin),
         .record => |record| {
@@ -2068,7 +2030,7 @@ fn executeCallStatement(
     scope: EvalScope,
     env: *Environment,
     last_code_like: *?core.NodeId,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
 ) anyerror!core.Value {
     const state = evaluation.state;
@@ -2128,7 +2090,7 @@ fn invokeFunctionRef(
     scope: EvalScope,
     env: *Environment,
     function: core.FunctionRef,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     args: []const core.Value,
 ) anyerror!core.Value {
     const state = evaluation.state;
@@ -2151,7 +2113,7 @@ fn invokeClosureValues(
     caller_env: *Environment,
     module_id: core.SourceModuleId,
     closure_id: usize,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     args: []const core.Value,
 ) anyerror!core.Value {
     const state = evaluation.state;
@@ -2190,7 +2152,7 @@ fn invokeUserFunctionValue(
     scope: EvalScope,
     env: *Environment,
     func: FunctionDecl,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
 ) anyerror!core.Value {
     return invokeUserFunctionValueInModule(evaluation, page_id, scope, env, evaluation.module_id, func, current_origin, call);
@@ -2203,7 +2165,7 @@ fn invokeUserFunctionValueInModule(
     env: *Environment,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     call: CallExpr,
 ) anyerror!core.Value {
     const state = evaluation.state;
@@ -2247,7 +2209,7 @@ fn invokeUserFunctionValues(
     env: *Environment,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     args: []const core.Value,
 ) anyerror!core.Value {
     const state = evaluation.state;
@@ -2280,26 +2242,10 @@ fn invokeUserFunctionValues(
     return error.FunctionDidNotReturnValue;
 }
 
-fn statementOrigin(evaluation: *EvalContext, span: ast.Span) ![]u8 {
-    const state = evaluation.state;
-    const path: []const u8 = if (state.moduleById(evaluation.module_id)) |module|
-        module.path orelse module.spec
-    else
-        "";
-    if (path.len != 0) {
-        return std.fmt.allocPrint(state.allocator, "path:{s}:bytes:{d}-{d}", .{ path, span.start, span.end });
-    }
-    return std.fmt.allocPrint(state.allocator, "bytes:{d}-{d}", .{ span.start, span.end });
-}
-
-fn originForModuleSpan(evaluation: *EvalContext, span: ast.Span) ![]const u8 {
-    return statementOrigin(evaluation, span);
-}
-
 fn resolveAnchorRef(
     state: *core.DocumentState,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     anchor_ref: AnchorRef,
     comptime is_target: bool,
 ) !if (is_target) ResolvedTarget else core.ConstraintSource {
@@ -2323,7 +2269,7 @@ fn resolveAnchorRef(
 fn resolveAnchorPathValue(
     state: *core.DocumentState,
     env: *Environment,
-    current_origin: []const u8,
+    current_origin: core.SourceOrigin,
     path: []const u8,
 ) !core.Value {
     var iter = std.mem.splitScalar(u8, path, '.');

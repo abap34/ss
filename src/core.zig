@@ -3,6 +3,8 @@ const model = @import("model");
 
 pub const Allocator = model.Allocator;
 pub const NodeId = model.NodeId;
+pub const SourceOrigin = model.SourceOrigin;
+pub const SourceSpan = model.SourceSpan;
 pub const NominalId = model.NominalId;
 pub const NodeKind = model.NodeKind;
 pub const Field = model.Field;

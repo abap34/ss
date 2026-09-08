@@ -5,7 +5,7 @@ const testing = std.testing;
 fn replacement(start: usize, end: usize) generated.Replacement {
     return .{
         .index = 0,
-        .expected = .{ .target_node = 2, .target_anchor = .left, .source = .{ .page = .left }, .offset = 10, .origin = "generated origin" },
+        .expected = .{ .target_node = 2, .target_anchor = .left, .source = .{ .page = .left }, .offset = 10, .origin = .{ .label = "generated origin" } },
         .offset_span = .{ .start = start, .end = end },
         .literal_scale = 1,
         .new_offset = 20,
@@ -68,8 +68,8 @@ fn cloneAndRelease(allocator: std.mem.Allocator) !void {
     try testing.expect(cloned.base_snapshot_id.ptr != edits.base_snapshot_id.ptr);
     try testing.expect(cloned.replacements.ptr != edits.replacements.ptr);
     for (cloned.replacements, edits.replacements) |owned, borrowed| {
-        try testing.expectEqualStrings(borrowed.expected.origin.?, owned.expected.origin.?);
-        try testing.expect(borrowed.expected.origin.?.ptr != owned.expected.origin.?.ptr);
+        try testing.expectEqualStrings(borrowed.expected.origin.?.label.?, owned.expected.origin.?.label.?);
+        try testing.expect(borrowed.expected.origin.?.label.?.ptr != owned.expected.origin.?.label.?.ptr);
     }
 }
 

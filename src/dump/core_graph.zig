@@ -1,7 +1,8 @@
 const std = @import("std");
 const core = @import("core");
 
-const json = @import("utils").json;
+const utils = @import("utils");
+const json = utils.json;
 
 pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, state: *core.DocumentState) !void {
     var nodes = try root.arrayField("nodes");
@@ -66,7 +67,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.Docu
     defer render_env.deinit(allocator);
     try writeRenderEnv(&item, render_env);
     try item.optionalIntField("page_index", node.page_index);
-    try item.optionalStringField("origin", node.origin);
+    try utils.err.writeOriginField(&item, "origin", node.origin);
     try item.floatField("x", node.frame.x, "{d:.1}");
     try item.floatField("y", node.frame.y, "{d:.1}");
     try item.floatField("width", node.frame.width, "{d:.1}");

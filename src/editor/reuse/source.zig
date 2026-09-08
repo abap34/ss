@@ -112,7 +112,7 @@ fn constraintEql(left: core.Constraint, right: core.Constraint) bool {
         left.target_anchor == right.target_anchor and
         constraintSourceEql(left.source, right.source) and
         left.offset == right.offset and
-        optionalStringEql(left.origin, right.origin) and
+        core.SourceOrigin.optionalEql(left.origin, right.origin) and
         left.role == right.role and
         left.scope_depth == right.scope_depth and
         left.from_update == right.from_update;

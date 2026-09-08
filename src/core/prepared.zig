@@ -18,7 +18,7 @@ pub const PreparedObject = struct {
     asset_deps: []AssetDependency = &.{},
     latex_preamble: []const render_env.LatexPreambleEntry,
     latex_engine: render_env.LatexEngine,
-    origin: ?[]const u8,
+    origin: ?model.SourceOrigin,
     payload_kind: ?model.PayloadKind,
     attached: bool,
 

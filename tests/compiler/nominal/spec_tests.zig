@@ -33,7 +33,7 @@ fn exerciseWithOptions(source: []const u8, first: []const u8, second: []const u8
     var state = try compiler.analysis.buildDocumentStateWithOptions(allocator, path, root, &source_buf, &syntax, &modules, .{});
     defer state.deinit();
     errdefer for (state.diagnostics.items) |diagnostic| {
-        if (diagnostic.data == .user_report) std.debug.print("{s}: {s}\n", .{ diagnostic.origin orelse "", diagnostic.data.user_report.message });
+        if (diagnostic.data == .user_report) std.debug.print("{f}: {s}\n", .{ diagnostic.origin orelse core.SourceOrigin{}, diagnostic.data.user_report.message });
     };
     if (options.diagnostic) |expected| {
         compiler.analysis.analyzeDocumentState(allocator, &state) catch {};

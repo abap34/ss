@@ -55,7 +55,7 @@ fn validationUserReportsMatch(left: Diagnostic, right: Diagnostic) bool {
     {
         return false;
     }
-    if (!std.mem.eql(u8, left.origin.?, right.origin.?)) return false;
+    if (!left.origin.?.eql(right.origin.?)) return false;
     if (!std.mem.eql(u8, left.code(), right.code())) return false;
     const left_message = switch (left.data) {
         .user_report => |data| data.message,
@@ -553,6 +553,20 @@ pub const DocumentState = struct {
         return self.projectModule().path orelse "";
     }
 
+    pub fn sourceOrigin(self: *const DocumentState, module_id: SourceModuleId, span: model.SourceSpan) model.SourceOrigin {
+        const module = self.moduleById(module_id);
+        const path = if (module) |value| value.path orelse value.spec else "";
+        return model.SourceOrigin.at(path, span);
+    }
+
+    fn copyOrigin(self: *DocumentState, origin: model.SourceOrigin) !model.SourceOrigin {
+        return .{
+            .path = try self.copyOptionalString(origin.path),
+            .span = origin.span,
+            .label = try self.copyOptionalString(origin.label),
+        };
+    }
+
     pub fn projectSource(self: *const DocumentState) []const u8 {
         return self.projectModule().source;
     }
@@ -692,7 +706,7 @@ pub const DocumentState = struct {
         object_kind: ObjectKind,
         payload_kind: PayloadKind,
         content: ?[]const u8,
-        origin: ?[]const u8,
+        origin: ?model.SourceOrigin,
     ) !NodeId {
         return self.makeNodeWithOrigin(page_id, true, .object, name, role, object_kind, payload_kind, content, origin);
     }
@@ -704,7 +718,7 @@ pub const DocumentState = struct {
         object_kind: ObjectKind,
         payload_kind: PayloadKind,
         content: ?[]const u8,
-        origin: ?[]const u8,
+        origin: ?model.SourceOrigin,
     ) !NodeId {
         return self.makeNodeWithOrigin(self.document_id, false, .object, name, role, object_kind, payload_kind, content, origin);
     }
@@ -714,7 +728,7 @@ pub const DocumentState = struct {
         page_id: NodeId,
         attached: bool,
         children: []const NodeId,
-        origin: ?[]const u8,
+        origin: ?model.SourceOrigin,
     ) !NodeId {
         const group_id = try self.makeNodeWithOrigin(
             page_id,
@@ -736,7 +750,7 @@ pub const DocumentState = struct {
     pub fn createGroupWithOrigin(
         self: *DocumentState,
         children: []const NodeId,
-        origin: ?[]const u8,
+        origin: ?model.SourceOrigin,
     ) !NodeId {
         return try self.makeGroupWithOrigin(self.document_id, false, children, origin);
     }
@@ -785,7 +799,7 @@ pub const DocumentState = struct {
         for (children) |child_id| try self.discardObjectSubtreeInner(child_id, visited);
     }
 
-    pub fn connectGeneratedReturnObjects(self: *DocumentState, return_id: NodeId, start_index: usize, origin: ?[]const u8) !void {
+    pub fn connectGeneratedReturnObjects(self: *DocumentState, return_id: NodeId, start_index: usize, origin: ?model.SourceOrigin) !void {
         const return_node = self.getNode(return_id) orelse return error.UnknownNode;
         if (return_node.kind != .object) return;
 
@@ -826,13 +840,13 @@ pub const DocumentState = struct {
         if (page_id) |page| try self.attachObjectSubtreeToPage(page, return_id);
     }
 
-    fn setGeneratedNodeOrigin(self: *DocumentState, node_id: NodeId, start_index: usize, origin: []const u8) !void {
+    fn setGeneratedNodeOrigin(self: *DocumentState, node_id: NodeId, start_index: usize, origin: model.SourceOrigin) !void {
         if (node_id == 0) return;
         const node_index: usize = @intCast(node_id - 1);
         if (node_index < start_index or node_index >= self.nodes.items.len) return;
         const node = &self.nodes.items[node_index];
         if (node.id != node_id) return;
-        node.origin = try self.copyString(origin);
+        node.origin = try self.copyOrigin(origin);
     }
 
     fn appendConnectedCandidates(
@@ -996,13 +1010,13 @@ pub const DocumentState = struct {
         object_kind: ObjectKind,
         payload_kind: PayloadKind,
         content: ?[]const u8,
-        origin: ?[]const u8,
+        origin: ?model.SourceOrigin,
     ) !NodeId {
         const obj_id = try self.freshId();
         const owned_name = try self.copyString(name);
         const owned_role = try self.copyOptionalString(role);
         const owned_content = try self.copyOptionalString(content);
-        const owned_origin = try self.copyOptionalString(origin);
+        const owned_origin = if (origin) |value| try self.copyOrigin(value) else null;
         var content_provenance = if (content) |value|
             try self.cloneProvenanceList(self.stringProvenance(value))
         else
@@ -1044,7 +1058,7 @@ pub const DocumentState = struct {
         target_anchor: Anchor,
         source: ConstraintSource,
         offset: f32,
-        origin: ?[]const u8,
+        origin: ?model.SourceOrigin,
     ) !void {
         try self.addAnchorConstraintAtScope(target_node, target_anchor, source, offset, origin, 0);
     }
@@ -1055,7 +1069,7 @@ pub const DocumentState = struct {
         target_anchor: Anchor,
         source: ConstraintSource,
         offset: f32,
-        origin: ?[]const u8,
+        origin: ?model.SourceOrigin,
         scope_depth: u32,
     ) !void {
         const constraint = Constraint{
@@ -1078,7 +1092,7 @@ pub const DocumentState = struct {
         scope_depth: u32,
         replacement_source: ?ConstraintSource,
         replacement_offset: f32,
-        origin: ?[]const u8,
+        origin: ?model.SourceOrigin,
     ) !void {
         try self.constraint_updates.append(self.allocator, .{
             .target_node = target_node,
@@ -1261,10 +1275,11 @@ pub const DocumentState = struct {
             .severity = severity,
             .page_id = page_id,
             .node_id = node_id,
-            .origin = if (origin) |value| try self.allocator.dupe(u8, value) else null,
+            .origin = null,
             .data = data,
         };
         errdefer diagnostic.deinit(self.allocator);
+        if (origin) |value| diagnostic.origin = try value.clone(self.allocator);
         try self.addDiagnostic(diagnostic);
     }
 
@@ -1281,7 +1296,7 @@ pub const DocumentState = struct {
         severity: DiagnosticSeverity,
         page_id: ?NodeId,
         node_id: ?NodeId,
-        origin: ?[]const u8,
+        origin: ?model.SourceOrigin,
         data: Diagnostic.Data,
     ) !void {
         var diagnostic = Diagnostic{
@@ -1293,7 +1308,7 @@ pub const DocumentState = struct {
             .data = data,
         };
         errdefer diagnostic.deinit(self.allocator);
-        if (origin) |value| diagnostic.origin = try self.allocator.dupe(u8, value);
+        if (origin) |value| diagnostic.origin = try value.clone(self.allocator);
         try self.addDiagnostic(diagnostic);
     }
 
@@ -1322,7 +1337,7 @@ pub const DocumentState = struct {
         severity: DiagnosticSeverity,
         page_id: ?NodeId,
         node_id: ?NodeId,
-        origin: ?[]const u8,
+        origin: ?model.SourceOrigin,
         data: Diagnostic.Data,
     ) !void {
         var diagnostic = Diagnostic{
@@ -1330,10 +1345,11 @@ pub const DocumentState = struct {
             .severity = severity,
             .page_id = page_id,
             .node_id = node_id,
-            .origin = if (origin) |value| try self.allocator.dupe(u8, value) else null,
+            .origin = null,
             .data = data,
         };
         errdefer diagnostic.deinit(self.allocator);
+        if (origin) |value| diagnostic.origin = try value.clone(self.allocator);
         try self.addDiagnostic(diagnostic);
     }
 
@@ -1461,7 +1477,7 @@ pub const DocumentState = struct {
         }
     }
 
-    fn addConstraintEndpointOwnershipDiagnostic(self: *DocumentState, node_id: NodeId, role: []const u8, origin: ?[]const u8) !void {
+    fn addConstraintEndpointOwnershipDiagnostic(self: *DocumentState, node_id: NodeId, role: []const u8, origin: ?model.SourceOrigin) !void {
         if (self.layoutPageOfConstraintEndpoint(node_id) != null) return;
         const ownership = self.directPageOwnershipInfo(node_id);
         if (ownership.count > 1) return;
@@ -1479,7 +1495,7 @@ pub const DocumentState = struct {
         });
     }
 
-    fn hasUnownedLayoutObjectDiagnostic(self: *DocumentState, node_id: NodeId, origin: ?[]const u8) bool {
+    fn hasUnownedLayoutObjectDiagnostic(self: *DocumentState, node_id: NodeId, origin: ?model.SourceOrigin) bool {
         for (self.diagnostics.items) |diagnostic| {
             if (diagnostic.phase != .validation or diagnostic.node_id != node_id) continue;
             switch (diagnostic.data) {
@@ -1487,7 +1503,7 @@ pub const DocumentState = struct {
                     if (!std.mem.eql(u8, data.code, "UnownedLayoutObject")) continue;
                     if (origin == null) return true;
                     if (diagnostic.origin == null) continue;
-                    if (std.mem.eql(u8, origin.?, diagnostic.origin.?)) return true;
+                    if (origin.?.eql(diagnostic.origin.?)) return true;
                 },
                 else => {},
             }
@@ -1503,7 +1519,7 @@ pub const DocumentState = struct {
                     if (!std.mem.eql(u8, data.code, "CrossPageConstraint")) continue;
                     if (constraint.origin == null and diagnostic.origin == null) return true;
                     if (constraint.origin == null or diagnostic.origin == null) continue;
-                    if (std.mem.eql(u8, constraint.origin.?, diagnostic.origin.?)) return true;
+                    if (constraint.origin.?.eql(diagnostic.origin.?)) return true;
                 },
                 else => {},
             }
@@ -1860,9 +1876,7 @@ fn constraintEq(a: Constraint, b: Constraint) bool {
     if (a.target_anchor != b.target_anchor) return false;
     if (a.offset != b.offset) return false;
     if (!constraintSourceEq(a.source, b.source)) return false;
-    const a_origin = a.origin orelse "";
-    const b_origin = b.origin orelse "";
-    return std.mem.eql(u8, a_origin, b_origin);
+    return model.SourceOrigin.optionalEql(a.origin, b.origin);
 }
 
 fn constraintSourceEq(a: ConstraintSource, b: ConstraintSource) bool {

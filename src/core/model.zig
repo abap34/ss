@@ -6,6 +6,9 @@ pub const PathCommand = path_model.Command;
 pub const PathPoint = path_model.Point;
 pub const PathCubic = path_model.Cubic;
 
+pub const SourceOrigin = @import("source_origin.zig").Origin;
+pub const SourceSpan = @import("source_origin.zig").Span;
+
 pub const Allocator = std.mem.Allocator;
 pub const NodeId = u32;
 
@@ -39,17 +42,17 @@ pub const Field = struct {
 pub const ContentProvenance = struct {
     content_start: usize,
     content_end: usize,
-    origin: []const u8,
+    origin: SourceOrigin,
 
     pub fn deinit(self: *ContentProvenance, allocator: Allocator) void {
-        allocator.free(self.origin);
+        self.origin.deinit(allocator);
     }
 
     pub fn clone(self: ContentProvenance, allocator: Allocator) !ContentProvenance {
         return .{
             .content_start = self.content_start,
             .content_end = self.content_end,
-            .origin = try allocator.dupe(u8, self.origin),
+            .origin = try self.origin.clone(allocator),
         };
     }
 
@@ -57,8 +60,20 @@ pub const ContentProvenance = struct {
         return .{
             .content_start = self.content_start + offset,
             .content_end = self.content_end + offset,
-            .origin = try allocator.dupe(u8, self.origin),
+            .origin = try self.origin.clone(allocator),
         };
+    }
+
+    pub fn originForSpan(entries: []const ContentProvenance, content_start: usize, content_end: usize) ?SourceOrigin {
+        const normalized_end = @max(content_end, content_start);
+        for (entries) |entry| {
+            if (content_start < entry.content_start or normalized_end > entry.content_end) continue;
+            const source_span = entry.origin.span orelse continue;
+            const start = std.math.add(usize, source_span.start, content_start - entry.content_start) catch return null;
+            const end = std.math.add(usize, source_span.start, normalized_end - entry.content_start) catch return null;
+            return entry.origin.withSpan(.{ .start = start, .end = end });
+        }
+        return null;
     }
 };
 
@@ -122,7 +137,7 @@ pub const Constraint = struct {
     target_anchor: Anchor,
     source: ConstraintSource,
     offset: f32,
-    origin: ?[]const u8 = null,
+    origin: ?SourceOrigin = null,
     role: ConstraintRole = .position,
     scope_depth: u32 = 0,
     from_update: bool = false,
@@ -134,7 +149,7 @@ pub const ConstraintUpdate = struct {
     role: ConstraintRole,
     scope_depth: u32,
     replacement: ?Constraint = null,
-    origin: ?[]const u8 = null,
+    origin: ?SourceOrigin = null,
     active: bool = false,
 };
 
@@ -349,7 +364,7 @@ pub const Node = struct {
     display_content_provenance: std.ArrayList(ContentProvenance) = .empty,
     repr_function: ?FunctionRef = null,
     page_index: ?usize = null,
-    origin: ?[]const u8 = null,
+    origin: ?SourceOrigin = null,
     fields: std.ArrayList(Field) = .empty,
     render_env: std.ArrayList(RenderEnvEntry) = .empty,
     frame: Frame = .{},
@@ -655,7 +670,7 @@ pub const Diagnostic = struct {
     severity: DiagnosticSeverity,
     page_id: ?NodeId = null,
     node_id: ?NodeId = null,
-    origin: ?[]const u8 = null,
+    origin: ?SourceOrigin = null,
     data: Data,
 
     pub const Data = union(enum) {
@@ -724,7 +739,7 @@ pub const Diagnostic = struct {
     }
 
     pub fn deinit(self: *Diagnostic, allocator: Allocator) void {
-        if (self.origin) |origin| allocator.free(origin);
+        if (self.origin) |origin| origin.deinit(allocator);
         switch (self.data) {
             .user_report => |data| allocator.free(data.message),
             .asset_not_found => |data| {
@@ -743,10 +758,10 @@ pub const Diagnostic = struct {
             .severity = self.severity,
             .page_id = self.page_id,
             .node_id = self.node_id,
-            .origin = if (self.origin) |origin| try allocator.dupe(u8, origin) else null,
+            .origin = if (self.origin) |origin| try origin.clone(allocator) else null,
             .data = undefined,
         };
-        errdefer if (cloned.origin) |origin| allocator.free(origin);
+        errdefer if (cloned.origin) |origin| origin.deinit(allocator);
         cloned.data = try cloneDiagnosticData(allocator, self.data);
         return cloned;
     }

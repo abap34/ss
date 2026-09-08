@@ -466,7 +466,9 @@ pub fn expectOverlayDiagnostic(
 
     for (state.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
-        if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
+        const origin_text = try std.fmt.allocPrint(allocator, "{f}", .{origin});
+        defer allocator.free(origin_text);
+        if (std.mem.indexOf(u8, origin_text, expected_origin) == null) continue;
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
@@ -502,7 +504,9 @@ pub fn expectDiagnosticWithOverlays(
 
     for (state.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
-        if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
+        const origin_text = try std.fmt.allocPrint(allocator, "{f}", .{origin});
+        defer allocator.free(origin_text);
+        if (std.mem.indexOf(u8, origin_text, expected_origin) == null) continue;
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
@@ -571,7 +575,9 @@ pub fn expectDiagnostic(
 
     for (state.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
-        if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
+        const origin_text = try std.fmt.allocPrint(allocator, "{f}", .{origin});
+        defer allocator.free(origin_text);
+        if (std.mem.indexOf(u8, origin_text, expected_origin) == null) continue;
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
@@ -645,7 +651,9 @@ pub fn expectLoweredDiagnosticWithOrigin(
 
     for (state.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
-        if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
+        const origin_text = try std.fmt.allocPrint(allocator, "{f}", .{origin});
+        defer allocator.free(origin_text);
+        if (std.mem.indexOf(u8, origin_text, expected_origin) == null) continue;
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;

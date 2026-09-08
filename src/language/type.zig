@@ -1,10 +1,7 @@
 const std = @import("std");
 const model = @import("model");
 
-pub const SourceSpan = struct {
-    start: usize,
-    end: usize,
-};
+pub const SourceSpan = model.SourceSpan;
 
 pub const Type = struct {
     kind: Kind,

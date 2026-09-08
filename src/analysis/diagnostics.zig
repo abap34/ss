@@ -47,10 +47,10 @@ fn diagnosticLocation(state: *core.DocumentState, diagnostic: core.Diagnostic) D
     var report_path = state.projectPath();
     var report_source = state.projectSource();
     const located = if (diagnostic.origin) |origin|
-        utils.err.parseLocatedOrigin(origin)
+        origin.location()
     else if (diagnostic.node_id) |node_id| blk: {
         const node = state.getNode(node_id) orelse break :blk null;
-        break :blk if (node.origin) |origin| utils.err.parseLocatedOrigin(origin) else null;
+        break :blk if (node.origin) |origin| origin.location() else null;
     } else null;
     const span = if (located) |origin| blk: {
         if (origin.path) |origin_path| {

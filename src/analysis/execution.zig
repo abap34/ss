@@ -579,18 +579,11 @@ fn executionUnitSource(unit: ExecutionUnit) []const u8 {
 }
 
 fn addUnitErrorDiagnostic(state: *core.DocumentState, unit: ExecutionUnit, code: []const u8, message: []const u8) !void {
-    const origin = try unitOrigin(state.allocator, unit);
-    defer state.allocator.free(origin);
+    const origin = core.SourceOrigin.at(unit.path, unit.span);
+
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .code = code, .message = try state.allocator.dupe(u8, message) },
     });
-}
-
-fn unitOrigin(allocator: std.mem.Allocator, unit: ExecutionUnit) ![]const u8 {
-    if (unit.path.len != 0) {
-        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ unit.path, unit.span.start, unit.span.end });
-    }
-    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ unit.span.start, unit.span.end });
 }
 
 fn analysisDiagnostic(err: anyerror) struct { code: []const u8, message: []const u8 } {

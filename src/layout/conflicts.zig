@@ -57,7 +57,7 @@ pub const Relation = struct {
     role: model.ConstraintRole,
     scope_depth: u32,
     from_update: bool,
-    origin: ?[]u8,
+    origin: ?model.SourceOrigin,
     location: ?Location,
     syntax: ?ConstraintSyntax,
 };
@@ -194,8 +194,8 @@ fn initRelation(
     constraint_index: ?usize,
     constraint: Constraint,
 ) !Relation {
-    const origin = if (constraint.origin) |value| try allocator.dupe(u8, value) else null;
-    errdefer if (origin) |value| allocator.free(value);
+    const origin = if (constraint.origin) |value| try value.clone(allocator) else null;
+    errdefer if (origin) |value| value.deinit(allocator);
     const located = try cloneLocation(allocator, state, constraint.origin);
     errdefer if (located) |location| allocator.free(location.path);
     return .{
@@ -220,13 +220,13 @@ fn deinitRelationItems(allocator: std.mem.Allocator, relations: []Relation) void
 }
 
 fn deinitRelation(allocator: std.mem.Allocator, relation: Relation) void {
-    if (relation.origin) |origin| allocator.free(origin);
+    if (relation.origin) |origin| origin.deinit(allocator);
     if (relation.location) |location| allocator.free(location.path);
 }
 
-fn cloneLocation(allocator: std.mem.Allocator, state: anytype, origin: ?[]const u8) !?Location {
+fn cloneLocation(allocator: std.mem.Allocator, state: anytype, origin: ?model.SourceOrigin) !?Location {
     const origin_text = origin orelse return null;
-    const located = utils.err.parseLocatedOrigin(origin_text) orelse return null;
+    const located = origin_text.location() orelse return null;
     const module = if (located.path) |origin_path| state.moduleByPathOrSpec(origin_path) else state.projectModule();
     const path = if (module) |value|
         value.path orelse value.spec
@@ -239,8 +239,8 @@ fn cloneLocation(allocator: std.mem.Allocator, state: anytype, origin: ?[]const 
     };
 }
 
-fn constraintSourceSyntax(state: anytype, origin: ?[]const u8) ?ConstraintSyntax {
-    const located = utils.err.parseLocatedOrigin(origin orelse return null) orelse return null;
+fn constraintSourceSyntax(state: anytype, origin: ?model.SourceOrigin) ?ConstraintSyntax {
+    const located = (origin orelse return null).location() orelse return null;
     const module = if (located.path) |origin_path|
         state.moduleByPathOrSpec(origin_path) orelse return null
     else
@@ -390,7 +390,7 @@ fn appendRelation(relations: *json.Array, state: anytype, index: usize, kind: []
 fn appendConstraintObject(object: *json.Object, field_name: []const u8, state: anytype, constraint: Constraint) !void {
     var child = try object.objectField(field_name);
     try child.optionalIntField("index", constraintIndex(state, constraint));
-    try child.optionalStringField("origin", constraint.origin);
+    try utils.err.writeOriginField(&child, "origin", constraint.origin);
     try appendOriginObject(&child, "location", state, constraint.origin);
     try child.enumTagField("axis", graph.anchorAxis(constraint.target_anchor));
     try child.enumTagField("role", constraint.role);
@@ -479,12 +479,12 @@ fn appendSourceEndpoint(object: *json.Object, state: anytype, source: Constraint
     }
 }
 
-fn appendOriginObject(object: *json.Object, field_name: []const u8, state: anytype, origin: ?[]const u8) !void {
+fn appendOriginObject(object: *json.Object, field_name: []const u8, state: anytype, origin: ?model.SourceOrigin) !void {
     const origin_text = origin orelse {
         try object.nullField(field_name);
         return;
     };
-    const located = utils.err.parseLocatedOrigin(origin_text) orelse {
+    const located = origin_text.location() orelse {
         try object.nullField(field_name);
         return;
     };
@@ -529,9 +529,7 @@ fn constraintsSame(a: Constraint, b: Constraint) bool {
     if (a.target_node != b.target_node) return false;
     if (a.target_anchor != b.target_anchor) return false;
     if (!graph.approxEq(a.offset, b.offset)) return false;
-    const a_origin = a.origin orelse "";
-    const b_origin = b.origin orelse "";
-    if (!std.mem.eql(u8, a_origin, b_origin)) return false;
+    if (!model.SourceOrigin.optionalEql(a.origin, b.origin)) return false;
     return switch (a.source) {
         .page => |a_anchor| switch (b.source) {
             .page => |b_anchor| a_anchor == b_anchor,

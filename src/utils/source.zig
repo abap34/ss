@@ -1,9 +1,6 @@
 const std = @import("std");
 
-pub const ByteSpan = struct {
-    start: usize,
-    end: usize,
-};
+pub const ByteSpan = @import("model").SourceSpan;
 
 pub const Location = struct {
     line: usize,

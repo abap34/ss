@@ -525,11 +525,10 @@ const Analyzer = struct {
 
     fn reportRecursiveActivation(self: *Analyzer, activation: Activation) !void {
         if (activation.owner) |func| {
-            try reportRecursiveFunction(self.allocator, self.state, activation.module_id, func);
+            try reportRecursiveFunction(self.state, activation.module_id, func);
             return;
         }
-        const origin = try activationOrigin(self.allocator, self.state, activation);
-        defer if (origin) |text| self.allocator.free(text);
+        const origin = activationOrigin(self.state, activation);
         try self.state.addValidationDiagnostic(.@"error", null, null, origin, .{
             .user_report = .{ .code = "RecursiveFunction", .message = try self.allocator.dupe(u8, "recursive function value application") },
         });
@@ -548,33 +547,21 @@ pub fn checkFunctionCallGraph(
     try analyzer.checkAll();
 }
 
-fn reportRecursiveFunction(allocator: std.mem.Allocator, state: *core.DocumentState, module_id: core.SourceModuleId, func: ast.FunctionDecl) !void {
-    const origin = try functionOrigin(allocator, state, module_id, func);
+fn reportRecursiveFunction(state: *core.DocumentState, module_id: core.SourceModuleId, func: ast.FunctionDecl) !void {
+    const origin = state.sourceOrigin(module_id, func.span);
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .recursive_function = .{ .function_name = func.name },
     });
 }
 
-fn activationOrigin(allocator: std.mem.Allocator, state: *const core.DocumentState, activation: Activation) !?[]const u8 {
+fn activationOrigin(state: *const core.DocumentState, activation: Activation) ?core.SourceOrigin {
     return switch (activation.label) {
         .function => |key| if (state.functions.get(key)) |func|
-            try originForModuleSpan(allocator, state, key.module_id, func.span)
+            state.sourceOrigin(key.module_id, func.span)
         else
             null,
-        .lambda => |span| try originForModuleSpan(allocator, state, activation.module_id, span),
+        .lambda => |span| state.sourceOrigin(activation.module_id, span),
     };
-}
-
-fn functionOrigin(allocator: std.mem.Allocator, state: *const core.DocumentState, module_id: core.SourceModuleId, func: ast.FunctionDecl) ![]const u8 {
-    return originForModuleSpan(allocator, state, module_id, func.span);
-}
-
-fn originForModuleSpan(allocator: std.mem.Allocator, state: *const core.DocumentState, module_id: core.SourceModuleId, span: ast.Span) ![]const u8 {
-    if (state.moduleById(module_id)) |module| {
-        const path = module.path orelse module.spec;
-        if (path.len != 0) return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ path, span.start, span.end });
-    }
-    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
 fn functionKeyLessThan(left: core.FunctionKey, right: core.FunctionKey) bool {

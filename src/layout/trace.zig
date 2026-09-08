@@ -437,7 +437,7 @@ fn affectedAnchor(message: TraceMessage) model.Anchor {
 }
 
 fn appendConstraint(object: *json.Object, state: anytype, constraint: Constraint) !void {
-    try object.optionalStringField("origin", constraint.origin);
+    try utils.err.writeOriginField(object, "origin", constraint.origin);
     try object.stringField("target_anchor", anchorName(constraint.target_anchor));
     try object.floatField("offset", constraint.offset, "{d:.4}");
 

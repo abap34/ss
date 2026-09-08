@@ -27,7 +27,7 @@ pub fn ensureValueType(
     page_id: ?core.NodeId,
     value: core.Value,
     expected: core.ValueTag,
-    origin: []const u8,
+    origin: core.SourceOrigin,
 ) !void {
     return ensureValueTypeWithCode(state, page_id, value, expected, origin, .UnmatchedArgumentType);
 }
@@ -37,7 +37,7 @@ pub fn ensureValueTypeWithCode(
     page_id: ?core.NodeId,
     value: core.Value,
     expected: core.ValueTag,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     code: core.TypeMismatchCode,
 ) !void {
     const actual = runtimeKind(value);
@@ -54,7 +54,7 @@ pub fn ensureValueConformsToType(
     page_id: ?core.NodeId,
     value: core.Value,
     expected: ast.Type,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     code: core.TypeMismatchCode,
 ) !void {
     if (valueConformsToType(state, value, expected)) return;

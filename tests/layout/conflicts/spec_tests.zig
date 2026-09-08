@@ -51,7 +51,7 @@ fn addFixture(state: *core.DocumentState) !Fixture {
         .left,
         .{ .page = .left },
         12,
-        "bytes:0-0",
+        .{ .span = .{ .start = 0, .end = 0 } },
     );
 
     state.getNode(first_page).?.frame = .{ .width = 640, .height = 360 };

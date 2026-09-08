@@ -304,8 +304,8 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
 }
 
 fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: std.Build.LazyPath, build_options: *Step.Options, tree_sitter: TreeSitterBundle) ProjectModules {
-    const utils_mod = createModule(ctx, "src/utils/root.zig", &.{}, null);
     const model_mod = createModule(ctx, "src/core/model.zig", &.{}, null);
+    const utils_mod = createModule(ctx, "src/utils/root.zig", &.{import("model", model_mod)}, null);
     const language_type_mod = createModule(ctx, "src/language/type.zig", &.{
         import("model", model_mod),
     }, null);

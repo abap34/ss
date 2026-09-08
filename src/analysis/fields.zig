@@ -31,11 +31,11 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, state: *core.Docume
         }
         for (module.syntax.objects.items) |object_decl| {
             try checkObjectDeclaration(allocator, state, &module_sema, origin_path, object_decl);
-            try checkRolesUnique(allocator, state, origin_path, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
+            try checkRolesUnique(state, origin_path, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
         }
         for (module.syntax.object_extensions.items) |extension| {
             try checkObjectExtension(allocator, state, &module_sema, origin_path, extension);
-            try checkRolesUnique(allocator, state, origin_path, &roles, extension.target, extension.roles.items, extension.span);
+            try checkRolesUnique(state, origin_path, &roles, extension.target, extension.roles.items, extension.span);
         }
     }
 }
@@ -61,8 +61,8 @@ fn checkObjectInheritance(allocator: std.mem.Allocator, state: *core.DocumentSta
                     for (path.items[cycle_start..]) |member| {
                         const class = index.classes.items[member];
                         const module = state.moduleById(class.module_id) orelse continue;
-                        const origin = try statementOrigin(allocator, originPathForModule(module), class.span);
-                        defer allocator.free(origin);
+                        const origin = core.SourceOrigin.at(originPathForModule(module), class.span);
+
                         try addUserReport(state, origin, "ObjectInheritanceCycle", "object class '{s}' inherits from '{s}' in a cycle", .{ class.name, class.base.?.name });
                     }
                     return error.InvalidType;
@@ -87,8 +87,8 @@ fn checkRecordNamesUnique(
     defer names.deinit();
     for (records) |record_decl| {
         if (names.contains(record_decl.name)) {
-            const origin = try statementOrigin(allocator, origin_path, record_decl.span);
-            defer allocator.free(origin);
+            const origin = core.SourceOrigin.at(origin_path, record_decl.span);
+
             try addUserReport(state, origin, "DuplicateRecordType", "record type '{s}' is already defined in this module", .{record_decl.name});
             return error.InvalidType;
         }
@@ -116,8 +116,8 @@ fn checkObjectNamesUnique(
     defer names.deinit();
     for (objects) |object_decl| {
         if (names.contains(object_decl.name)) {
-            const origin = try statementOrigin(allocator, origin_path, object_decl.span);
-            defer allocator.free(origin);
+            const origin = core.SourceOrigin.at(origin_path, object_decl.span);
+
             try addUserReport(state, origin, "DuplicateObjectClass", "object class '{s}' is already defined in this module", .{object_decl.name});
             return error.InvalidType;
         }
@@ -132,8 +132,8 @@ fn checkObjectDeclaration(
     origin_path: []const u8,
     object_decl: ast.ObjectDecl,
 ) !void {
-    const origin = try statementOrigin(allocator, origin_path, object_decl.span);
-    defer allocator.free(origin);
+    const origin = core.SourceOrigin.at(origin_path, object_decl.span);
+
     if (object_decl.base) |base| {
         if (object_decl.base_module_id == null) {
             try addUserReport(state, origin, "InvalidObjectDeclaration", "unknown base object class: {s}", .{base});
@@ -150,8 +150,8 @@ fn checkObjectExtension(
     origin_path: []const u8,
     extension: ast.ObjectExtensionDecl,
 ) !void {
-    const origin = try statementOrigin(allocator, origin_path, extension.span);
-    defer allocator.free(origin);
+    const origin = core.SourceOrigin.at(origin_path, extension.span);
+
     if (extension.target_module_id == null) {
         try addUserReport(state, origin, "InvalidObjectExtension", "unknown object class: {s}", .{extension.target});
         return error.InvalidType;
@@ -173,8 +173,8 @@ fn checkObjectFields(
     fields: []const ast.ObjectFieldDecl,
 ) !void {
     for (fields) |field| {
-        const origin = try statementOrigin(allocator, origin_path, field.span);
-        defer allocator.free(origin);
+        const origin = core.SourceOrigin.at(origin_path, field.span);
+
         const field_type = field.value_type;
         if (field_type.kind == .hole) continue;
         if (field.default_value) |default_value| {
@@ -187,7 +187,7 @@ fn checkFieldDefault(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     sema: *const SemanticEnv,
-    origin: []const u8,
+    origin: core.SourceOrigin,
     ty: ast.Type,
     default_value: ast.Expr,
     default_property_value: ?[]const u8,
@@ -225,7 +225,6 @@ fn fieldTypeLabel(allocator: std.mem.Allocator, ty: ast.Type) ![]const u8 {
 }
 
 fn checkRolesUnique(
-    allocator: std.mem.Allocator,
     state: *core.DocumentState,
     origin_path: []const u8,
     roles: *std.StringHashMap([]const u8),
@@ -235,8 +234,8 @@ fn checkRolesUnique(
 ) !void {
     for (role_names) |role_name| {
         if (roles.get(role_name)) |existing_class| {
-            const origin = try statementOrigin(allocator, origin_path, span);
-            defer allocator.free(origin);
+            const origin = core.SourceOrigin.at(origin_path, span);
+
             try addUserReport(
                 state,
                 origin,
@@ -250,7 +249,7 @@ fn checkRolesUnique(
     }
 }
 
-fn addUserReport(state: *core.DocumentState, origin: []const u8, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
+fn addUserReport(state: *core.DocumentState, origin: core.SourceOrigin, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const message = try std.fmt.allocPrint(state.allocator, fmt, args);
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .code = code, .message = message },
@@ -259,11 +258,4 @@ fn addUserReport(state: *core.DocumentState, origin: []const u8, code: []const u
 
 fn originPathForModule(module: *const core.SourceModule) []const u8 {
     return module.path orelse module.spec;
-}
-
-fn statementOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: ast.Span) ![]const u8 {
-    if (origin_path.len != 0) {
-        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ origin_path, span.start, span.end });
-    }
-    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
