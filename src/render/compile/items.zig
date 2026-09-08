@@ -15,7 +15,7 @@ const fingerprint = @import("fingerprint.zig");
 const latex_document = @import("latex.zig");
 const latex_inputs = @import("latex_inputs.zig");
 const cache_versions = @import("cache_versions.zig");
-const measurement_record = @import("measurement_record.zig");
+const measurement_store = @import("render_measurements");
 const page_cache = @import("page_cache.zig");
 const external_process = @import("external_process.zig");
 const syntax_highlight = @import("syntax_highlight.zig");
@@ -56,9 +56,7 @@ const NativePdfError = error{
 
 pub const native_artifact_cache_version = cache_versions.native_artifacts;
 const render_page_cache_version = cache_versions.render_page;
-const layout_measurement_cache_version = cache_versions.layout_measurement;
-const layout_measurement_cache_file_format = "ss-layout-measurements-v2";
-const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
+const layout_measurement_cache_version = measurement_store.version;
 const command_failure_output_limit: usize = 1600;
 const warm_render_job_cap: usize = 4;
 const cold_render_job_cap: usize = 16;
@@ -368,81 +366,82 @@ pub const LayoutMeasurementScope = struct {
     allocator: Allocator,
     io: std.Io,
     asset_cache_dir: []const u8,
-    measurement_cache_dir: []const u8,
-    measurement_cache_path: []const u8,
+    measurements: *measurement_store.Store,
+    owns_measurements: bool,
     ctx: DrawContext,
     local_highlight_cache: syntax_highlight.Cache,
     local_resource_cache: render_resources.SourceCache,
     prepared_objects: std.AutoHashMap(core.NodeId, *const core.prepared.PreparedObject),
-    cache_mutex: std.Io.Mutex = std.Io.Mutex.init,
-    persistent_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
-    run_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
     font_environment: render_text.FontEnvironment,
-    measurement_cache_dirty: bool = false,
+
+    pub const InitOptions = struct {
+        resource_cache: ?*render_resources.SourceCache = null,
+        highlight_languages: []const utils.highlight.Language = &.{},
+        highlight_cache: ?*syntax_highlight.Cache = null,
+        font_environment: render_text.FontEnvironment,
+        retained_measurements: ?*?measurement_store.Store = null,
+    };
 
     pub fn init(
         allocator: Allocator,
         io: std.Io,
         state: *core.DocumentState,
         pages: *const core.prepared.PreparedPages,
-        resource_cache: ?*render_resources.SourceCache,
-        highlight_languages: []const utils.highlight.Language,
-        highlight_cache: ?*syntax_highlight.Cache,
-        font_environment: render_text.FontEnvironment,
+        options: InitOptions,
     ) !LayoutMeasurementScope {
         const default_options: Options = .{};
         const cache_dir = default_options.cache_dir;
-        try render_text.validateFontEnvironment(font_environment);
+        try render_text.validateFontEnvironment(options.font_environment);
         try createRenderCacheDirectory(io, state, cache_dir);
         const asset_cache_dir = try std.fs.path.join(allocator, &.{ cache_dir, "artifacts", "native" });
         errdefer allocator.free(asset_cache_dir);
         try createRenderCacheDirectory(io, state, asset_cache_dir);
         const measurement_cache_dir = try std.fs.path.join(allocator, &.{ asset_cache_dir, "measurements" });
-        errdefer allocator.free(measurement_cache_dir);
+        defer allocator.free(measurement_cache_dir);
         try createRenderCacheDirectory(io, state, measurement_cache_dir);
-        const measurement_cache_path = try std.fs.path.join(allocator, &.{ measurement_cache_dir, "measurements.tsv" });
-        errdefer allocator.free(measurement_cache_path);
-
-        var persistent_measurements = std.AutoHashMap(u64, core.LayoutMeasurement).init(allocator);
-        errdefer persistent_measurements.deinit();
-        try readPersistedMeasurements(allocator, io, measurement_cache_path, &persistent_measurements);
-
         var prepared_objects = try buildPreparedObjectLookup(allocator, pages);
         errdefer prepared_objects.deinit();
+        const measurements = if (options.retained_measurements) |retained| blk: {
+            if (retained.* == null) retained.* = try measurement_store.Store.init(allocator, io, measurement_cache_dir);
+            break :blk &retained.*.?;
+        } else blk: {
+            const owned = try allocator.create(measurement_store.Store);
+            errdefer allocator.destroy(owned);
+            owned.* = try measurement_store.Store.init(allocator, io, measurement_cache_dir);
+            break :blk owned;
+        };
 
         return .{
             .allocator = allocator,
             .io = io,
             .asset_cache_dir = asset_cache_dir,
-            .measurement_cache_dir = measurement_cache_dir,
-            .measurement_cache_path = measurement_cache_path,
+            .measurements = measurements,
+            .owns_measurements = options.retained_measurements == null,
             .ctx = .{
                 .allocator = allocator,
                 .io = io,
                 .asset_base_dir = if (state.asset_base_dir.len == 0) "." else state.asset_base_dir,
                 .cache_dir = asset_cache_dir,
-                .highlight_languages = highlight_languages,
-                .highlight_cache = highlight_cache,
-                .resource_cache = resource_cache,
+                .highlight_languages = options.highlight_languages,
+                .highlight_cache = options.highlight_cache,
+                .resource_cache = options.resource_cache,
             },
             .local_highlight_cache = syntax_highlight.Cache.init(std.heap.smp_allocator, io),
             .local_resource_cache = render_resources.SourceCache.init(std.heap.smp_allocator, io),
             .prepared_objects = prepared_objects,
-            .persistent_measurements = persistent_measurements,
-            .run_measurements = std.AutoHashMap(u64, core.LayoutMeasurement).init(allocator),
-            .font_environment = font_environment,
+            .font_environment = options.font_environment,
         };
     }
 
     pub fn deinit(self: *LayoutMeasurementScope) void {
-        self.flushMeasurementCache() catch {};
+        self.measurements.flush() catch {};
         self.local_highlight_cache.deinit();
         self.local_resource_cache.deinit();
         self.prepared_objects.deinit();
-        self.persistent_measurements.deinit();
-        self.run_measurements.deinit();
-        self.allocator.free(self.measurement_cache_path);
-        self.allocator.free(self.measurement_cache_dir);
+        if (self.owns_measurements) {
+            self.measurements.deinit();
+            self.allocator.destroy(self.measurements);
+        }
         self.allocator.free(self.asset_cache_dir);
     }
 
@@ -493,9 +492,7 @@ pub const LayoutMeasurementScope = struct {
         };
         utils.measure_profile.recordLayoutMeasurementCacheKey(profile_cache_key);
 
-        if (try self.cachedMeasurement(cache_key, true)) |cached| return cached;
-
-        if (try self.cachedMeasurement(cache_key, false)) |cached| return cached;
+        if (try self.measurements.get(cache_key)) |cached| return cached;
 
         try render_text.validateFontEnvironment(self.font_environment);
         const profile_intrinsic = utils.measure_profile.start();
@@ -512,7 +509,7 @@ pub const LayoutMeasurementScope = struct {
             if (commandUsesLatex(command)) cache_key = try self.measurementKey(state.allocator, command, width, mode);
             value.cache_key = cache_key;
             value.measured_width = width;
-            try self.storeMeasurement(cache_key, value.*);
+            try self.measurements.put(cache_key, value.*);
         }
         return measured;
     }
@@ -546,63 +543,6 @@ pub const LayoutMeasurementScope = struct {
                 .asset_deps = command.asset_deps,
             },
         );
-    }
-
-    fn cachedMeasurement(self: *LayoutMeasurementScope, cache_key: u64, record_miss: bool) !?core.LayoutMeasurement {
-        const profile_lock = utils.measure_profile.start();
-        self.cache_mutex.lockUncancelable(self.io);
-        utils.measure_profile.recordLayoutMeasurementLockWait(profile_lock);
-        defer self.cache_mutex.unlock(self.io);
-
-        const profile_memory_cache = utils.measure_profile.start();
-        if (self.run_measurements.get(cache_key)) |cached| {
-            utils.measure_profile.recordLayoutMeasurementCache(.memory_hit, profile_memory_cache);
-            return cached;
-        }
-
-        const profile_persistent_cache = utils.measure_profile.start();
-        if (self.persistent_measurements.get(cache_key)) |cached| {
-            utils.measure_profile.recordLayoutMeasurementCache(.file_hit, profile_persistent_cache);
-            try self.run_measurements.put(cache_key, cached);
-            return cached;
-        }
-        if (record_miss) {
-            utils.measure_profile.recordLayoutMeasurementCache(.file_miss, profile_persistent_cache);
-        }
-        return null;
-    }
-
-    fn storeMeasurement(self: *LayoutMeasurementScope, cache_key: u64, measurement: core.LayoutMeasurement) !void {
-        const profile_lock = utils.measure_profile.start();
-        self.cache_mutex.lockUncancelable(self.io);
-        utils.measure_profile.recordLayoutMeasurementLockWait(profile_lock);
-        defer self.cache_mutex.unlock(self.io);
-
-        try self.run_measurements.put(cache_key, measurement);
-        self.measurement_cache_dirty = true;
-    }
-
-    fn flushMeasurementCache(self: *LayoutMeasurementScope) !void {
-        if (!self.measurement_cache_dirty or self.run_measurements.count() == 0) return;
-        const profile_write = utils.measure_profile.start();
-        defer utils.measure_profile.recordLayoutMeasurementCache(.write, profile_write);
-
-        const tmp = try tempCachePath(&self.ctx, self.measurement_cache_path, "tsv");
-        defer self.allocator.free(tmp);
-        errdefer deleteFileIfExists(&self.ctx, tmp);
-
-        var out = std.ArrayList(u8).empty;
-        defer out.deinit(self.allocator);
-        try out.print(self.allocator, "{s}\t{s}\n", .{ layout_measurement_cache_file_format, layout_measurement_cache_version });
-        var iterator = self.run_measurements.iterator();
-        while (iterator.next()) |entry| {
-            const measurement = entry.value_ptr.*;
-            if (!measurement.isValid()) continue;
-            try measurement_record.append(self.allocator, &out, entry.key_ptr.*, measurement);
-        }
-        try std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = tmp, .data = out.items, .flags = .{ .truncate = true } });
-        try renameReplacing(&self.ctx, tmp, self.measurement_cache_path);
-        self.measurement_cache_dirty = false;
     }
 
     fn objectCommandForNode(self: *LayoutMeasurementScope, _: Allocator, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !ObjectCommand {
@@ -670,35 +610,6 @@ fn buildPreparedObjectLookup(
         }
     }
     return lookup;
-}
-
-fn readPersistedMeasurements(
-    allocator: Allocator,
-    io: std.Io,
-    path: []const u8,
-    target: *std.AutoHashMap(u64, core.LayoutMeasurement),
-) !void {
-    const text = utils.fs.readFileAllocLimited(io, allocator, path, .limited(layout_measurement_cache_read_limit)) catch return;
-    defer allocator.free(text);
-
-    var lines = std.mem.splitScalar(u8, text, '\n');
-    const header = std.mem.trim(u8, lines.next() orelse return, " \t\r\n");
-    if (!measurementCacheHeaderMatches(header)) return;
-
-    while (lines.next()) |raw_line| {
-        const line = std.mem.trim(u8, raw_line, " \t\r\n");
-        if (line.len == 0) continue;
-        const record = measurement_record.parse(line) orelse continue;
-        try target.put(record.cache_key.?, record);
-    }
-}
-
-fn measurementCacheHeaderMatches(header: []const u8) bool {
-    var fields = std.mem.tokenizeAny(u8, header, " \t");
-    const format = fields.next() orelse return false;
-    const version = fields.next() orelse return false;
-    return std.mem.eql(u8, format, layout_measurement_cache_file_format) and
-        std.mem.eql(u8, version, layout_measurement_cache_version);
 }
 
 pub fn preloadPreparedPageArtifacts(

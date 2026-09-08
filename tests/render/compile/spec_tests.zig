@@ -27,9 +27,9 @@ test "final-width measurements retain ink origins and baselines through the file
     const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
 
     const measured = blk: {
-        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{}, null, font_environment);
+        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
         defer scope.deinit();
-        scope.persistent_measurements.clearRetainingCapacity();
+        scope.measurements.persistent.clearRetainingCapacity();
         const provider = scope.provider();
         break :blk (try provider.measure(provider.context, &state, object, object.frame.width, .width_constrained)).?;
     };
@@ -38,9 +38,9 @@ test "final-width measurements retain ink origins and baselines through the file
     try testing.expect(measured.first_baseline.? > 0);
     try testing.expectEqual(object.frame.width, measured.measured_width.?);
 
-    var warm_scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{}, null, font_environment);
+    var warm_scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
     defer warm_scope.deinit();
-    const persisted = warm_scope.persistent_measurements.get(measured.cache_key.?) orelse return error.MissingPersistedMeasurement;
+    const persisted = warm_scope.measurements.persistent.get(measured.cache_key.?) orelse return error.MissingPersistedMeasurement;
     try testing.expectEqualDeep(measured, persisted);
     const provider = warm_scope.provider();
     const warm = (try provider.measure(provider.context, &state, object, object.frame.width, .width_constrained)).?;
@@ -80,9 +80,9 @@ test "code measurement includes empty logical lines and keeps its ink offset" {
     text.font_size = 24;
     text.line_height = 36;
     const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
-    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{}, null, font_environment);
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
     defer {
-        scope.measurement_cache_dirty = false;
+        scope.measurements.dirty = false;
         scope.deinit();
     }
     const provider = scope.provider();
@@ -111,9 +111,9 @@ test "natural measurement includes tables beside ordinary paragraphs" {
     defer prepared.deinit(testing.allocator);
     try testing.expect(prepared.pages[0].objects[0].markdownDocument() != null);
     const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
-    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{}, null, font_environment);
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
     defer {
-        scope.measurement_cache_dirty = false;
+        scope.measurements.dirty = false;
         scope.deinit();
     }
     const provider = scope.provider();
@@ -353,24 +353,27 @@ test "measurement cache observes changed highlight query contents" {
     defer prepared.deinit(testing.allocator);
     prepared.pages[0].objects[0].render.text.?.code_font.family = "DejaVu Serif";
     const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
-    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{.{
-        .name = @constCast("python"),
-        .parser = @constCast("python"),
-        .query = @constCast(query_path),
-    }}, null, font_environment);
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{
+        .highlight_languages = &.{.{
+            .name = @constCast("python"),
+            .parser = @constCast("python"),
+            .query = @constCast(query_path),
+        }},
+        .font_environment = font_environment,
+    });
     defer {
-        scope.measurement_cache_dirty = false;
+        scope.measurements.dirty = false;
         scope.deinit();
     }
-    scope.persistent_measurements.clearRetainingCapacity();
+    scope.measurements.persistent.clearRetainingCapacity();
     const provider = scope.provider();
     const initial = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
-    try scope.persistent_measurements.put(initial.cache_key.?, initial);
-    scope.run_measurements.clearRetainingCapacity();
+    try scope.measurements.persistent.put(initial.cache_key.?, initial);
+    scope.measurements.clearMemory();
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = query_path, .data = "\"-\" @operator" });
     const changed = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
-    scope.run_measurements.clearRetainingCapacity();
-    scope.persistent_measurements.clearRetainingCapacity();
+    scope.measurements.clearMemory();
+    scope.measurements.persistent.clearRetainingCapacity();
     const fresh = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
     try testing.expect(initial.cache_key != changed.cache_key);
     try testing.expectEqual(fresh.width, changed.width);
@@ -407,18 +410,18 @@ test "measurement cache observes the inline math engine with an empty preamble" 
     defer prepared.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), prepared.pages[0].objects[0].latex_preamble.len);
     const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
-    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{}, null, font_environment);
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
     defer {
-        scope.measurement_cache_dirty = false;
+        scope.measurements.dirty = false;
         scope.deinit();
     }
-    scope.persistent_measurements.clearRetainingCapacity();
+    scope.measurements.persistent.clearRetainingCapacity();
     const provider = scope.provider();
     const initial = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
     prepared.pages[0].objects[0].latex_engine = .lualatex;
     const changed = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
-    scope.run_measurements.clearRetainingCapacity();
-    scope.persistent_measurements.clearRetainingCapacity();
+    scope.measurements.clearMemory();
+    scope.measurements.persistent.clearRetainingCapacity();
     const fresh = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
     try testing.expect(initial.cache_key != changed.cache_key);
     try testing.expect(fresh.width > initial.width * 2);
@@ -443,12 +446,12 @@ test "measurement and page caches observe transitive TeX inputs" {
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
-    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, null, &.{}, null, font_environment);
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
     defer {
-        scope.measurement_cache_dirty = false;
+        scope.measurements.dirty = false;
         scope.deinit();
     }
-    scope.persistent_measurements.clearRetainingCapacity();
+    scope.measurements.persistent.clearRetainingCapacity();
     const provider = scope.provider();
     const initial = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
     const warm = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
@@ -465,7 +468,7 @@ test "measurement and page caches observe transitive TeX inputs" {
     var changed_ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1, .page_cache = &page_cache });
     defer changed_ir.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 2), page_cache.entries.count());
-    scope.run_measurements.clearRetainingCapacity();
+    scope.measurements.clearMemory();
     const fresh = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
     try testing.expectEqual(changed.width, fresh.width);
     try testing.expectEqual(changed.cache_key, fresh.cache_key);
@@ -1750,10 +1753,7 @@ test "document font environment rejects changes between layout and compilation" 
             testing.io,
             &state,
             &prepared_pages,
-            null,
-            &.{},
-            null,
-            font_environment,
+            .{ .font_environment = font_environment },
         ),
     );
     try testing.expectError(

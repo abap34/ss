@@ -88,6 +88,7 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     var results = render_layout.solvePreparedPages(ctx.io, state, pages, .{
         .page_id = generated.page_id,
         .font_environment = reuse_inputs.font_environment,
+        .retained_measurements = &reuse_inputs.measurements,
         .resource_cache = ctx.resource_cache,
         .highlight_cache = ctx.highlight_cache,
         .highlight_languages = snapshot.project.highlight.languages,

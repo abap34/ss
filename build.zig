@@ -33,6 +33,7 @@ const ProjectModules = struct {
     core: *Module,
     render: *Module,
     render_resources: *Module,
+    render_measurements: *Module,
     pdf_ffi: *Module,
     render_text: *Module,
     render_emitter: *Module,
@@ -348,6 +349,10 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     const render_mod = createModule(ctx, "src/render/ir.zig", &.{
         import("core", core_mod),
     }, null);
+    const render_measurements_mod = createModule(ctx, "src/render/compile/measurement_store.zig", &.{
+        import("core", core_mod),
+        import("utils", utils_mod),
+    }, null);
     const pdf_ffi_mod = createModule(ctx, "src/render/pdf/ffi.zig", &.{}, true);
     addNativePdfHeadersAndLibraries(ctx.b, pdf_ffi_mod);
     const render_resources_mod = createModule(ctx, "src/render/compile/resources.zig", &.{
@@ -386,6 +391,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .core = core_mod,
         .render = render_mod,
         .render_resources = render_resources_mod,
+        .render_measurements = render_measurements_mod,
         .pdf_ffi = pdf_ffi_mod,
         .render_text = render_text_mod,
         .render_emitter = render_emitter_mod,
@@ -953,6 +959,7 @@ fn addRenderTests(
         import("render", modules.render),
         import("render_emitter", modules.render_emitter),
         import("render_resources", modules.render_resources),
+        import("render_measurements", modules.render_measurements),
         import("render_text", modules.render_text),
         import("utils", modules.utils),
     }, null);
@@ -971,6 +978,14 @@ fn addRenderTests(
     const run_render_compile_spec_tests = b.addRunArtifact(render_compile_spec_tests);
     test_step.dependOn(&run_render_compile_spec_tests.step);
     addFocusedTestStep(b, "test-render-compile", "Run focused render compiler tests", &run_render_compile_spec_tests.step);
+    const measurement_store_spec_mod = createModule(ctx, "tests/render/measurement_store/spec_tests.zig", &.{
+        import("core", modules.core),
+        import("render_measurements", modules.render_measurements),
+    }, null);
+    const measurement_store_tests = addTestArtifact(ctx, measurement_store_spec_mod);
+    const run_measurement_store_tests = b.addRunArtifact(measurement_store_tests);
+    test_step.dependOn(&run_measurement_store_tests.step);
+    addFocusedTestStep(b, "test-render-measurements", "Run focused measurement storage tests", &run_measurement_store_tests.step);
     const font_environment_spec_mod = createModule(ctx, "tests/render/font_environment/spec_tests.zig", &.{
         import("pdf_ffi", modules.pdf_ffi),
         import("render_text", modules.render_text),
@@ -1075,6 +1090,7 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
         import("html_embeds", modules.html_embeds),
         import("render", modules.render),
         import("render_resources", modules.render_resources),
+        import("render_measurements", modules.render_measurements),
         import("pdf_ffi", modules.pdf_ffi),
         import("render_text", modules.render_text),
         import("render_emitter", modules.render_emitter),

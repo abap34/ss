@@ -5,6 +5,7 @@ const lowering = @import("../lowering.zig");
 const compiler = @import("compile.zig");
 const render_resources = @import("render_resources");
 const execution = @import("../analysis/execution.zig");
+const measurements = @import("render_measurements");
 
 pub const FontEnvironmentToken = compiler.FontEnvironmentToken;
 pub const HighlightCache = compiler.HighlightCache;
@@ -20,6 +21,7 @@ pub const Options = struct {
     resource_cache: ?*render_resources.SourceCache = null,
     font_environment: ?compiler.FontEnvironmentToken = null,
     trace_failure: ?*core.layout.graph.TraceFailure = null,
+    retained_measurements: ?*?measurements.Store = null,
 
     fn checkCanceled(self: Options) !void {
         if (self.cancellation) |cancellation| try cancellation.check();
@@ -51,6 +53,9 @@ pub fn evaluateAndSolvePreparedPages(
     };
     var solve_options = options;
     solve_options.font_environment = font_environment;
+    var retained_measurements: ?measurements.Store = null;
+    errdefer if (retained_measurements) |*store| store.deinit();
+    solve_options.retained_measurements = &retained_measurements;
     const solve_start = utils.measure_profile.start();
     var results = try solvePreparedPages(io, state, &pages, solve_options);
     utils.measure_profile.recordWysiwyg(.solve, solve_start);
@@ -59,6 +64,7 @@ pub fn evaluateAndSolvePreparedPages(
     return .{
         .pages = pages,
         .font_environment = font_environment,
+        .measurements = retained_measurements,
     };
 }
 
@@ -93,10 +99,13 @@ pub fn solvePreparedPages(
         io,
         state,
         pages,
-        options.resource_cache,
-        options.highlight_languages,
-        options.highlight_cache,
-        font_environment,
+        .{
+            .resource_cache = options.resource_cache,
+            .highlight_languages = options.highlight_languages,
+            .highlight_cache = options.highlight_cache,
+            .font_environment = font_environment,
+            .retained_measurements = options.retained_measurements,
+        },
     ) catch |err| {
         _ = try compiler.addFontEnvironmentDiagnostic(state, err);
         return err;
