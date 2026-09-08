@@ -3,6 +3,96 @@ const utils = @import("utils");
 
 const testing = std.testing;
 
+const ReadCancellation = struct {
+    checks: usize = 0,
+    cancel_at: usize,
+
+    fn canceled(context: *const anyopaque) bool {
+        const self: *ReadCancellation = @ptrCast(@alignCast(@constCast(context)));
+        self.checks += 1;
+        return self.checks >= self.cancel_at;
+    }
+};
+
+fn canceledRead(_: ?*anyopaque, _: std.Io.File, _: []const []u8, _: u64) std.Io.File.ReadPositionalError!usize {
+    return error.Canceled;
+}
+
+test "utils fs: bounded reads enforce limits and release canceled results" {
+    const root = ".ss-cache/test-fs-bounded-read";
+    const path = root ++ "/input.txt";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "contents" });
+    const contents = try utils.fs.readFileAllocLimited(testing.io, testing.allocator, path, .limited(9));
+    defer testing.allocator.free(contents);
+    try testing.expectEqualStrings("contents", contents);
+    try testing.expectError(error.StreamTooLong, utils.fs.readFileAllocLimited(testing.io, testing.allocator, path, .limited(8)));
+    for ([_]usize{ 1, 2 }) |cancel_at| {
+        var counter = ReadCancellation{ .cancel_at = cancel_at };
+        try testing.expectError(error.Canceled, utils.fs.readFileAllocWithOptions(testing.io, testing.allocator, path, .{
+            .limit = .limited(9),
+            .cancellation = .{ .context = &counter, .is_canceled = ReadCancellation.canceled },
+        }));
+        try testing.expectEqual(cancel_at, counter.checks);
+    }
+    var vtable = testing.io.vtable.*;
+    vtable.fileReadPositional = canceledRead;
+    const io = std.Io{ .userdata = testing.io.userdata, .vtable = &vtable };
+    try testing.expectError(error.Canceled, utils.fs.readFileAllocLimited(io, testing.allocator, path, .limited(9)));
+}
+
+const FileVisitor = struct {
+    files: usize = 0,
+    bytes: u64 = 0,
+
+    pub fn visit(self: *FileVisitor, path: []const u8, stat: std.Io.File.Stat) !void {
+        try testing.expect(!std.fs.path.isAbsolute(path));
+        self.files += 1;
+        self.bytes += stat.size;
+    }
+};
+
+test "utils fs: shared directory traversal counts nested files and skips directory symlinks" {
+    const root = ".ss-cache/test-fs-directory-stats";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root ++ "/nested/deep");
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = root ++ "/a", .data = "abc" });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = root ++ "/nested/deep/b", .data = "defgh" });
+    if (@import("builtin").os.tag != .windows) {
+        try std.Io.Dir.cwd().symLink(testing.io, "nested", root ++ "/alias", .{ .is_directory = true });
+        try std.Io.Dir.cwd().symLink(testing.io, "missing", root ++ "/broken", .{});
+    }
+    var visitor = FileVisitor{};
+    const stats = try utils.fs.walkFiles(testing.io, testing.allocator, root, &visitor);
+    try testing.expectEqual(@as(usize, 2), stats.files);
+    try testing.expectEqual(@as(usize, 2), stats.directories);
+    try testing.expectEqual(@as(u64, 8), stats.bytes);
+    try testing.expectEqual(stats.files, visitor.files);
+    try testing.expectEqual(stats.bytes, visitor.bytes);
+    try testing.expectEqualDeep(stats, try utils.fs.directoryStats(testing.io, testing.allocator, root));
+    try testing.expectEqualDeep(stats, try utils.tree_sitter_cache.stats(testing.io, testing.allocator, root));
+    try testing.expectEqualDeep(utils.fs.DirectoryStats{}, try utils.fs.directoryStats(testing.io, testing.allocator, root ++ "/missing"));
+}
+
+fn canceledStat(_: ?*anyopaque, _: std.Io.Dir, _: []const u8, _: std.Io.Dir.StatFileOptions) std.Io.Dir.StatFileError!std.Io.File.Stat {
+    return error.Canceled;
+}
+
+test "utils fs: directory traversal propagates cancellation during leaf inspection" {
+    const root = ".ss-cache/test-fs-directory-cancellation";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = root ++ "/a", .data = "a" });
+    var vtable = testing.io.vtable.*;
+    vtable.dirStatFile = canceledStat;
+    const io = std.Io{ .userdata = testing.io.userdata, .vtable = &vtable };
+    try testing.expectError(error.Canceled, utils.fs.directoryStats(io, testing.allocator, root));
+}
+
 fn writeTmpFile(allocator: std.mem.Allocator, tmp: std.testing.TmpDir, name: []const u8, data: []const u8) ![]const u8 {
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path[0..], name });
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = data, .flags = .{ .truncate = true } });

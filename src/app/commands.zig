@@ -89,7 +89,7 @@ pub fn writeLayoutTraceJson(io: std.Io, allocator: std.mem.Allocator, request: t
     var analyzed = try pipeline.analyzeFile(io, allocator, request, progress, .evaluation);
     defer analyzed.deinit();
     try app_output.validateOutputPathAgainstSources(io, allocator, &analyzed.state, output_path, .layout_trace);
-    try pipeline.evaluateDocument(&analyzed.state, analyzed.executionGraph(), progress);
+    try pipeline.evaluateDocument(io, &analyzed.state, analyzed.executionGraph(), progress);
     var pages = try pipeline.preparePages(&analyzed.state, progress);
     defer pages.deinit(analyzed.state.allocator);
     var trace_failure = core.layout.graph.TraceFailure{};
@@ -127,7 +127,7 @@ fn layoutConflictReportJsonWithProtectedOutput(
     if (protected_output_path) |path| {
         try app_output.validateOutputPathAgainstSources(io, allocator, &analyzed.state, path, .layout_conflict_report);
     }
-    try pipeline.evaluateDocument(&analyzed.state, analyzed.executionGraph(), progress);
+    try pipeline.evaluateDocument(io, &analyzed.state, analyzed.executionGraph(), progress);
     var pages = try pipeline.preparePages(&analyzed.state, progress);
     defer pages.deinit(analyzed.state.allocator);
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
@@ -284,7 +284,7 @@ fn compileRendering(
     if (diagnostics_json_path) |path| {
         try app_output.validateOutputPathAgainstSources(io, allocator, &analyzed.state, path, .diagnostics_json);
     }
-    try pipeline.evaluateDocument(&analyzed.state, analyzed.executionGraph(), progress);
+    try pipeline.evaluateDocument(io, &analyzed.state, analyzed.executionGraph(), progress);
     var pages = try pipeline.preparePages(&analyzed.state, progress);
     const prepared_allocator = analyzed.state.allocator;
     var pages_errdefer_active = true;

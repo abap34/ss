@@ -100,6 +100,7 @@ fn deinitValues(allocator: std.mem.Allocator, values: []core.Value) void {
 }
 
 const EvalContext = struct {
+    io: std.Io,
     state: *core.DocumentState,
     functions: *const core.FunctionMap,
     closures: *ClosureStore,
@@ -111,6 +112,7 @@ const EvalContext = struct {
 };
 
 pub const ExecuteOptions = struct {
+    io: std.Io,
     cancellation: ?utils.Cancellation = null,
 };
 
@@ -332,6 +334,7 @@ pub fn executeGraph(
     var closures = ClosureStore.init(allocator);
     defer closures.deinit();
     var evaluation_context = EvalContext{
+        .io = options.io,
         .state = state,
         .functions = &state.functions,
         .closures = &closures,
@@ -1117,10 +1120,15 @@ const BuiltinContext = struct {
         const resolved = try resolveAssetPath(self.state.allocator, self.state.asset_base_dir, requested);
         defer self.state.allocator.free(resolved);
 
-        const bytes = readTextFileAlloc(self.state.allocator, resolved) catch |err| {
+        const bytes = utils.fs.readFileAllocWithOptions(self.evaluation.io, self.state.allocator, resolved, .{
+            // Reader limits exclude the boundary; readlines allows this exact size.
+            .limit = .limited(MAX_READLINES_BYTES + 1),
+            .cancellation = self.evaluation.cancellation,
+        }) catch |err| {
+            if (err == error.Canceled or err == error.OutOfMemory) return err;
             var reason_buf: [320]u8 = undefined;
             const reason = switch (err) {
-                error.FileTooLarge => std.fmt.bufPrint(
+                error.StreamTooLong => std.fmt.bufPrint(
                     &reason_buf,
                     "the file exceeds the {d}-byte readlines limit",
                     .{MAX_READLINES_BYTES},
@@ -1413,55 +1421,6 @@ fn originForContentSpan(
 fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requested: []const u8) ![]const u8 {
     if (std.fs.path.isAbsolute(requested)) return allocator.dupe(u8, requested);
     return std.fs.path.join(allocator, &.{ base_dir, requested });
-}
-
-fn readTextFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const zpath = try allocator.dupeZ(u8, path);
-    defer allocator.free(zpath);
-
-    const fd = try openTextFile(zpath.ptr);
-    defer _ = std.c.close(fd);
-
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-
-    var buf: [8192]u8 = undefined;
-    while (true) {
-        const read_len = std.c.read(fd, &buf, buf.len);
-        switch (std.posix.errno(read_len)) {
-            .SUCCESS => {},
-            .INTR => continue,
-            .ISDIR => return error.IsDir,
-            .IO => return error.InputOutput,
-            else => |err| return std.posix.unexpectedErrno(err),
-        }
-        if (read_len == 0) break;
-        const count: usize = @intCast(read_len);
-        if (out.items.len + count > MAX_READLINES_BYTES) return error.FileTooLarge;
-        try out.appendSlice(allocator, buf[0..count]);
-    }
-
-    return try out.toOwnedSlice(allocator);
-}
-
-fn openTextFile(path: [*:0]const u8) !std.c.fd_t {
-    while (true) {
-        const fd = std.c.open(path, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
-        switch (std.posix.errno(fd)) {
-            .SUCCESS => return fd,
-            .INTR => continue,
-            .ACCES, .PERM => return error.AccessDenied,
-            .NOENT => return error.FileNotFound,
-            .NOTDIR => return error.NotDir,
-            .ISDIR => return error.IsDir,
-            .LOOP => return error.SymLinkLoop,
-            .NAMETOOLONG => return error.NameTooLong,
-            .MFILE => return error.ProcessFdQuotaExceeded,
-            .NFILE => return error.SystemFdQuotaExceeded,
-            .IO => return error.InputOutput,
-            else => |err| return std.posix.unexpectedErrno(err),
-        }
-    }
 }
 
 fn evalSelectCall(

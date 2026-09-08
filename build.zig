@@ -583,9 +583,13 @@ fn addTestStep(
         "Run focused layout conflict report tests",
         &run_layout_conflicts_spec_tests.step,
     );
-    addModuleTest(ctx, test_step, "tests/utils/fs/spec_tests.zig", &.{
+    const fs_spec_mod = createModule(ctx, "tests/utils/fs/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);
+    const fs_spec_tests = addTestArtifact(ctx, fs_spec_mod);
+    const run_fs_spec_tests = b.addRunArtifact(fs_spec_tests);
+    test_step.dependOn(&run_fs_spec_tests.step);
+    addFocusedTestStep(b, "test-fs", "Run focused filesystem I/O tests", &run_fs_spec_tests.step);
     addModuleTest(ctx, test_step, "tests/utils/json/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);

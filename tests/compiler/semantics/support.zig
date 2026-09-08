@@ -34,11 +34,11 @@ pub const VariableObjectClassExpectation = struct {
     object_class: ?[]const u8,
 };
 
-fn analyzeAndFinalizeDocumentState(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+fn analyzeAndFinalizeDocumentState(io: std.Io, allocator: std.mem.Allocator, state: *core.DocumentState) !void {
     var execution_graph = (try analysis.analyzeDocumentStateWithMode(allocator, state, .evaluation)).?;
     defer execution_graph.deinit();
     if (utils.err.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
-    try lowering.evaluateDocument(state, &execution_graph, .{});
+    try lowering.evaluateDocument(state, &execution_graph, .{ .io = io });
     if (utils.err.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
     try solveDocumentAndDiscard(state);
     if (utils.err.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
@@ -59,7 +59,7 @@ pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, s
     var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
     defer state.deinit();
 
-    try analyzeAndFinalizeDocumentState(allocator, &state);
+    try analyzeAndFinalizeDocumentState(io, allocator, &state);
 }
 
 pub fn buildSourceWithOverlay(
@@ -96,7 +96,7 @@ pub fn buildSourceWithOverlays(
     var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
     defer state.deinit();
 
-    try analyzeAndFinalizeDocumentState(allocator, &state);
+    try analyzeAndFinalizeDocumentState(io, allocator, &state);
 }
 
 pub fn expectObjectContent(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8, expected: []const u8) !void {
@@ -520,7 +520,7 @@ fn buildFinalizedDocumentState(io: std.Io, allocator: std.mem.Allocator, path: [
     var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
     errdefer state.deinit();
 
-    try analyzeAndFinalizeDocumentState(allocator, &state);
+    try analyzeAndFinalizeDocumentState(io, allocator, &state);
     return state;
 }
 
@@ -546,7 +546,7 @@ fn buildFinalizedDocumentStateWithOverlays(
     var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{});
     errdefer state.deinit();
 
-    try analyzeAndFinalizeDocumentState(allocator, &state);
+    try analyzeAndFinalizeDocumentState(io, allocator, &state);
     return state;
 }
 
@@ -599,7 +599,7 @@ pub fn expectLoweringErrorDiagnostic(
     defer if (execution_graph) |*graph| graph.deinit();
     if (!utils.err.hasDocumentStateErrors(&state)) {
         if (execution_graph) |*graph| {
-            lowering.evaluateDocument(&state, graph, .{}) catch {};
+            lowering.evaluateDocument(&state, graph, .{ .io = io }) catch {};
             if (!utils.err.hasDocumentStateErrors(&state)) {
                 solveDocumentAndDiscard(&state) catch {};
             }

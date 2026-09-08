@@ -46,7 +46,7 @@ fn evaluatedDocument() !struct { state: core.DocumentState, graph: compiler.anal
     errdefer state.deinit();
     var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
     errdefer graph.deinit();
-    try compiler.lowering.evaluateDocument(&state, &graph, .{});
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
     return .{ .state = state, .graph = graph };
 }
 

@@ -45,10 +45,10 @@ fn exerciseWithOptions(source: []const u8, first: []const u8, second: []const u8
     var graph = (try compiler.analysis.analyzeDocumentStateWithMode(allocator, &state, .evaluation)).?;
     defer graph.deinit();
     if (options.evaluation_error) |expected| {
-        try testing.expectError(expected, compiler.lowering.evaluateDocument(&state, &graph, .{}));
+        try testing.expectError(expected, compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io }));
         return;
     }
-    try compiler.lowering.evaluateDocument(&state, &graph, .{});
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
     if (options.verify) |verify| try verify(&state);
     for (state.diagnostics.items) |diagnostic| {
         if (diagnostic.severity == .@"error") return error.UnexpectedDiagnostic;

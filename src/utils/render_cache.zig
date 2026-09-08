@@ -20,11 +20,7 @@ pub const Config = struct {
     }
 };
 
-pub const Stats = struct {
-    files: usize = 0,
-    directories: usize = 0,
-    bytes: u64 = 0,
-};
+pub const Stats = fs.DirectoryStats;
 
 const FileEntry = struct {
     path: []u8,
@@ -66,30 +62,7 @@ pub fn clear(io: std.Io) !void {
 }
 
 pub fn stats(io: std.Io, allocator: std.mem.Allocator) !Stats {
-    var dir = fs.openDir(io, path, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound) return .{};
-        return err;
-    };
-    defer dir.close(io);
-
-    var result = Stats{};
-    var walker = try dir.walkSelectively(allocator);
-    defer walker.deinit();
-
-    while (try walker.next(io)) |entry| {
-        if (entry.kind == .directory) {
-            result.directories += 1;
-            try walker.enter(io, entry);
-            continue;
-        }
-
-        const file_stat = entry.dir.statFile(io, entry.basename, .{}) catch continue;
-        if (file_stat.kind == .directory) continue;
-        result.files += 1;
-        result.bytes += file_stat.size;
-    }
-
-    return result;
+    return fs.directoryStats(io, allocator, path);
 }
 
 pub fn pruneConfigured(io: std.Io, allocator: std.mem.Allocator, config: Config) !void {
@@ -205,39 +178,25 @@ fn deleteArtifact(io: std.Io, allocator: std.mem.Allocator, root_path: []const u
 }
 
 fn collectFiles(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8, files: *std.ArrayList(FileEntry)) !Stats {
-    var dir = fs.openDir(io, root_path, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound) return .{};
-        return err;
-    };
-    defer dir.close(io);
+    var collector = FileCollector{ .allocator = allocator, .files = files };
+    return fs.walkFiles(io, allocator, root_path, &collector);
+}
 
-    var result = Stats{};
-    var walker = try dir.walkSelectively(allocator);
-    defer walker.deinit();
+const FileCollector = struct {
+    allocator: std.mem.Allocator,
+    files: *std.ArrayList(FileEntry),
 
-    while (try walker.next(io)) |entry| {
-        if (entry.kind == .directory) {
-            result.directories += 1;
-            try walker.enter(io, entry);
-            continue;
-        }
-
-        const file_stat = entry.dir.statFile(io, entry.basename, .{}) catch continue;
-        if (file_stat.kind == .directory) continue;
-        result.files += 1;
-        result.bytes += file_stat.size;
-        const owned_path = try allocator.dupe(u8, entry.path);
-        errdefer allocator.free(owned_path);
-        try files.append(allocator, .{
+    pub fn visit(self: *FileCollector, relative_path: []const u8, stat: std.Io.File.Stat) !void {
+        const owned_path = try self.allocator.dupe(u8, relative_path);
+        errdefer self.allocator.free(owned_path);
+        try self.files.append(self.allocator, .{
             .path = owned_path,
-            .size = file_stat.size,
-            .mtime_ns = file_stat.mtime.nanoseconds,
-            .group = files.items.len,
+            .size = stat.size,
+            .mtime_ns = stat.mtime.nanoseconds,
+            .group = self.files.items.len,
         });
     }
-
-    return result;
-}
+};
 
 const GroupOrder = struct {
     files: []const FileEntry,

@@ -22,11 +22,7 @@ fn homeDir(name: [*:0]const u8) ?[]const u8 {
     return if (value.len == 0) null else value;
 }
 
-pub const Stats = struct {
-    files: usize = 0,
-    directories: usize = 0,
-    bytes: u64 = 0,
-};
+pub const Stats = fs.DirectoryStats;
 
 pub const PruneResult = struct {
     removed_bundles: usize = 0,
@@ -35,30 +31,7 @@ pub const PruneResult = struct {
 };
 
 pub fn stats(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8) !Stats {
-    var dir = fs.openDir(io, root_path, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound) return .{};
-        return err;
-    };
-    defer dir.close(io);
-
-    var result = Stats{};
-    var walker = try dir.walkSelectively(allocator);
-    defer walker.deinit();
-
-    while (try walker.next(io)) |entry| {
-        if (entry.kind == .directory) {
-            result.directories += 1;
-            try walker.enter(io, entry);
-            continue;
-        }
-
-        const file_stat = entry.dir.statFile(io, entry.basename, .{}) catch continue;
-        if (file_stat.kind == .directory) continue;
-        result.files += 1;
-        result.bytes += file_stat.size;
-    }
-
-    return result;
+    return fs.directoryStats(io, allocator, root_path);
 }
 
 pub fn bundleCount(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8) !usize {

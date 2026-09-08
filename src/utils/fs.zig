@@ -1,4 +1,5 @@
 const std = @import("std");
+const Cancellation = @import("cancellation.zig").Cancellation;
 
 pub const ImageDimensions = struct {
     width: f32,
@@ -15,8 +16,64 @@ pub fn readFileAllocLimited(
     path: []const u8,
     limit: std.Io.Limit,
 ) ![]u8 {
-    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, limit) catch |err|
+    return readFileAllocWithOptions(io, allocator, path, .{ .limit = limit });
+}
+
+pub const ReadOptions = struct {
+    limit: std.Io.Limit = .unlimited,
+    cancellation: ?Cancellation = null,
+};
+
+pub fn readFileAllocWithOptions(io: std.Io, allocator: std.mem.Allocator, path: []const u8, options: ReadOptions) ![]u8 {
+    if (options.cancellation) |cancellation| try cancellation.check();
+    // std.Io carries cancellation through the read itself. The explicit token
+    // also rejects a result canceled before or during the read.
+    const contents = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, options.limit) catch |err|
         return normalizePathError(io, path, err);
+    errdefer allocator.free(contents);
+    if (options.cancellation) |cancellation| try cancellation.check();
+    return contents;
+}
+
+pub const DirectoryStats = struct {
+    files: usize = 0,
+    directories: usize = 0,
+    bytes: u64 = 0,
+};
+
+pub fn directoryStats(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !DirectoryStats {
+    return walkFiles(io, allocator, path, struct {
+        pub fn visit(_: @This(), _: []const u8, _: std.Io.File.Stat) !void {}
+    }{});
+}
+
+// Visitor paths are relative to the root and borrowed until the next visit.
+// Directory symlinks are not traversed; unavailable leaf entries are skipped.
+pub fn walkFiles(io: std.Io, allocator: std.mem.Allocator, path: []const u8, visitor: anytype) !DirectoryStats {
+    var dir = openDir(io, path, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return .{},
+        else => return err,
+    };
+    defer dir.close(io);
+    var result = DirectoryStats{};
+    var walker = try dir.walkSelectively(allocator);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if (entry.kind == .directory) {
+            result.directories += 1;
+            try walker.enter(io, entry);
+            continue;
+        }
+        const stat = entry.dir.statFile(io, entry.basename, .{}) catch |err| switch (err) {
+            error.Canceled => return err,
+            else => continue,
+        };
+        if (stat.kind == .directory) continue;
+        result.files += 1;
+        result.bytes += stat.size;
+        try visitor.visit(entry.path, stat);
+    }
+    return result;
 }
 
 pub fn statFile(io: std.Io, path: []const u8) !std.Io.Dir.Stat {

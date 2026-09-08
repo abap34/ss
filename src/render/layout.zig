@@ -36,7 +36,7 @@ pub fn evaluateAndSolvePreparedPages(
 ) !EvaluatedPreparedPages {
     try options.checkCanceled();
     const evaluate_start = utils.measure_profile.start();
-    try lowering.evaluateDocument(state, graph, .{ .cancellation = options.cancellation });
+    try lowering.evaluateDocument(state, graph, .{ .io = io, .cancellation = options.cancellation });
     utils.measure_profile.recordWysiwyg(.evaluate, evaluate_start);
     try options.checkCanceled();
     const prepare_start = utils.measure_profile.start();

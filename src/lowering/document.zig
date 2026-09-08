@@ -5,6 +5,7 @@ const eval_toplevel = @import("../eval/toplevel.zig");
 const execution = @import("../analysis/execution.zig");
 
 pub const EvaluateOptions = struct {
+    io: std.Io,
     cancellation: ?utils.Cancellation = null,
 
     fn checkCanceled(self: EvaluateOptions) !void {
@@ -19,6 +20,7 @@ pub fn evaluateDocument(
 ) !void {
     try options.checkCanceled();
     try eval_toplevel.executeGraph(state.allocator, state, graph, .{
+        .io = options.io,
         .cancellation = options.cancellation,
     });
     try options.checkCanceled();

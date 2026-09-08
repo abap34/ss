@@ -41,7 +41,7 @@ pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.Source
     defer render_cache_lease.deinit();
     var analyzed = try analyzeFile(io, allocator, request, progress, .evaluation);
     errdefer analyzed.deinit();
-    try evaluateDocument(&analyzed.state, analyzed.executionGraph(), progress);
+    try evaluateDocument(io, &analyzed.state, analyzed.executionGraph(), progress);
     var pages = try preparePages(&analyzed.state, progress);
     const state_allocator = analyzed.state.allocator;
     defer pages.deinit(state_allocator);
@@ -161,10 +161,10 @@ pub fn analyzeFile(
     return .{ .state = state, .execution_graph = execution_graph };
 }
 
-pub fn evaluateDocument(state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph, progress: ?*Progress) !void {
+pub fn evaluateDocument(io: std.Io, state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph, progress: ?*Progress) !void {
     if (progress) |p| p.begin("Evaluate document");
     errdefer if (progress) |p| p.abort();
-    lowering.evaluateDocument(state, graph, .{}) catch |err| {
+    lowering.evaluateDocument(state, graph, .{ .io = io }) catch |err| {
         if (progress) |p| p.abort();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
