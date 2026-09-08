@@ -1875,6 +1875,7 @@ fn buildRenderPage(
         .cache_dir = parent_ctx.cache_dir,
         .highlight_languages = parent_ctx.highlight_languages,
         .text_cache = parent_ctx.text_cache,
+        .highlight_cache = parent_ctx.highlight_cache,
         .resource_cache = parent_ctx.resource_cache,
         .command_failure = parent_ctx.command_failure,
         .synthetic_font_detected = parent_ctx.synthetic_font_detected,

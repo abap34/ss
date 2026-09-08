@@ -191,6 +191,39 @@ test "captured measurement items keep page order and annotations" {
     }
 }
 
+test "render compiler shares highlight work across objects and compilations" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("highlight");
+    for (0..2) |index| {
+        const object_id = try state.makeObject(page_id, "code", null, .text, .text, "def hello():\n  return 1\n");
+        try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "code" });
+        try state.setNodeFieldValue(object_id, "language", .{ .string = "python" });
+        const object = state.getNode(object_id) orelse return error.MissingTestObject;
+        object.frame = .{ .x = 40, .y = 60 + @as(f32, @floatFromInt(index)) * 160, .width = 400, .height = 120 };
+    }
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    var cache = render_compile.HighlightCache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+
+    for (0..2) |_| {
+        var result = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{
+            .jobs = 1,
+            .highlight_cache = &cache,
+            .highlight_languages = &.{.{
+                .name = @constCast("python"),
+                .parser = @constCast("python"),
+                .query = @constCast("builtin:python"),
+            }},
+        });
+        defer result.deinit(testing.allocator);
+        try testing.expect(result.pages[0].items.items.len > 2);
+        try testing.expectEqual(@as(usize, 1), cache.stats().query_compilations);
+        try testing.expectEqual(@as(usize, 1), cache.stats().content_analyses);
+    }
+}
+
 test "render compiler rejects unavailable PDF pages" {
     const root = ".ss-cache/test-render-invalid-pdf-page";
     const pdf_path = root ++ "/page.pdf";
