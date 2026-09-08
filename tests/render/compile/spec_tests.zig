@@ -1472,6 +1472,7 @@ test "document font environment rejects changes between layout and compilation" 
             &prepared_pages,
             null,
             &.{},
+            null,
             font_environment,
         ),
     );

@@ -90,6 +90,7 @@ const DrawContext = struct {
     cache_dir: []const u8,
     highlight_languages: []const utils.highlight.Language,
     text_cache: ?*render_text.Cache = null,
+    highlight_cache: ?*syntax_highlight.Cache = null,
     resource_cache: ?*render_resources.SourceCache = null,
     command_failure: ?*CommandFailure = null,
     synthetic_font_detected: ?*bool = null,
@@ -356,6 +357,7 @@ pub const LayoutMeasurementScope = struct {
     measurement_cache_dir: []const u8,
     measurement_cache_path: []const u8,
     ctx: DrawContext,
+    local_highlight_cache: syntax_highlight.Cache,
     prepared_objects: std.AutoHashMap(core.NodeId, *const core.prepared.PreparedObject),
     cache_mutex: std.Io.Mutex = std.Io.Mutex.init,
     persistent_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
@@ -370,6 +372,7 @@ pub const LayoutMeasurementScope = struct {
         pages: *const core.prepared.PreparedPages,
         resource_cache: ?*render_resources.SourceCache,
         highlight_languages: []const utils.highlight.Language,
+        highlight_cache: ?*syntax_highlight.Cache,
         font_environment: render_text.FontEnvironment,
     ) !LayoutMeasurementScope {
         const default_options: Options = .{};
@@ -404,8 +407,10 @@ pub const LayoutMeasurementScope = struct {
                 .asset_base_dir = if (state.asset_base_dir.len == 0) "." else state.asset_base_dir,
                 .cache_dir = asset_cache_dir,
                 .highlight_languages = highlight_languages,
+                .highlight_cache = highlight_cache,
                 .resource_cache = resource_cache,
             },
+            .local_highlight_cache = syntax_highlight.Cache.init(std.heap.smp_allocator, io),
             .prepared_objects = prepared_objects,
             .persistent_measurements = persistent_measurements,
             .run_measurements = std.AutoHashMap(u64, core.LayoutMeasurement).init(allocator),
@@ -415,6 +420,7 @@ pub const LayoutMeasurementScope = struct {
 
     pub fn deinit(self: *LayoutMeasurementScope) void {
         self.flushMeasurementCache() catch {};
+        self.local_highlight_cache.deinit();
         self.prepared_objects.deinit();
         self.persistent_measurements.deinit();
         self.run_measurements.deinit();
@@ -461,6 +467,7 @@ pub const LayoutMeasurementScope = struct {
         defer target.deinit();
         var measurement_ctx = self.ctx;
         measurement_ctx.allocator = state.allocator;
+        measurement_ctx.highlight_cache = self.ctx.highlight_cache orelse &self.local_highlight_cache;
         measurement_ctx.command_failure = &target;
         const cache_key = fingerprint.layoutMeasurementKey(
             .{
@@ -806,6 +813,7 @@ pub const Compiler = struct {
             .cache_dir = asset_cache_dir,
             .highlight_languages = self.options.highlight_languages,
             .text_cache = self.options.text_cache,
+            .highlight_cache = self.options.highlight_cache,
             .resource_cache = self.options.resource_cache,
             .synthetic_font_detected = &synthetic_font_detected,
         };
@@ -4144,22 +4152,16 @@ fn drawHighlightedCodeLines(
         return;
     };
 
+    var local_cache = syntax_highlight.Cache.init(std.heap.smp_allocator, ctx.io);
+    defer local_cache.deinit();
+    const cache = ctx.highlight_cache orelse &local_cache;
     var failure: syntax_highlight.Failure = .none;
-    var spans = syntax_highlight.collectSpans(
-        ctx.allocator,
-        ctx.io,
-        ctx.highlight_languages,
-        language,
-        content,
-        &failure,
-    ) catch |err| {
+    var highlighted_content = cache.highlight(ctx.highlight_languages, language, content, &failure) catch |err| {
         try recordSyntaxHighlightFailure(ctx, failure);
         return err;
     };
-    defer spans.deinit(ctx.allocator);
-    const segments = try highlight_spans.compile(ctx.allocator, spans.items, content.len);
-    defer ctx.allocator.free(segments);
-    var highlighted = highlight_spans.Cursor{ .segments = segments };
+    defer highlighted_content.deinit();
+    var highlighted = highlight_spans.Cursor{ .segments = highlighted_content.segments() };
 
     var cursor_bl = first_baseline_bl;
     var lines = utils.source.lineIterator(content);

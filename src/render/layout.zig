@@ -7,12 +7,14 @@ const render_resources = @import("render_resources");
 const execution = @import("../analysis/execution.zig");
 
 pub const FontEnvironmentToken = compiler.FontEnvironmentToken;
+pub const HighlightCache = compiler.HighlightCache;
 
 pub const Options = struct {
     trace_path: ?[]const u8 = null,
     progress: ?core.layout.graph.LayoutProgress = null,
     jobs: ?usize = null,
     highlight_languages: []const utils.highlight.Language = &.{},
+    highlight_cache: ?*compiler.HighlightCache = null,
     cancellation: ?utils.Cancellation = null,
     resource_cache: ?*render_resources.SourceCache = null,
     font_environment: ?compiler.FontEnvironmentToken = null,
@@ -95,6 +97,7 @@ pub fn solvePreparedPages(
         pages,
         options.resource_cache,
         options.highlight_languages,
+        options.highlight_cache,
         font_environment,
     ) catch |err| {
         _ = try compiler.addFontEnvironmentDiagnostic(state, err);

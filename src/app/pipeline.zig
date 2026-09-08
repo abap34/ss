@@ -45,7 +45,7 @@ pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.Source
     var pages = try preparePages(&analyzed.state, progress);
     const state_allocator = analyzed.state.allocator;
     defer pages.deinit(state_allocator);
-    var layouts = try solveLayouts(io, &analyzed.state, &pages, progress, request.layout_jobs, request.highlight_languages, null);
+    var layouts = try solveLayouts(io, &analyzed.state, &pages, progress, request.layout_jobs, request.highlight_languages, null, null);
     defer layouts.deinit(state_allocator);
     return analyzed.takeState();
 }
@@ -221,6 +221,7 @@ pub fn solveLayouts(
     jobs: ?usize,
     highlight_languages: []const utils.highlight.Language,
     font_environment: ?render_layout.FontEnvironmentToken,
+    highlight_cache: ?*render_layout.HighlightCache,
 ) !core.layout.Document {
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
@@ -230,6 +231,7 @@ pub fn solveLayouts(
         .progress = layout_progress,
         .jobs = jobs,
         .highlight_languages = highlight_languages,
+        .highlight_cache = highlight_cache,
         .font_environment = font_environment,
     }) catch |err| {
         if (progress) |p| p.abort();

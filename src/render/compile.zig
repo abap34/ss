@@ -16,6 +16,7 @@ pub const Options = struct {
     highlight_languages: []const utils.highlight.Language = &.{},
     resource_cache: ?*resource_compile.SourceCache = null,
     text_cache: ?*text_compile.Cache = null,
+    highlight_cache: ?*syntax_highlight.Cache = null,
     page_cache: ?*items.PageCache = null,
     font_environment: ?FontEnvironmentToken = null,
     thread_safe_allocator: bool = false,
@@ -23,6 +24,8 @@ pub const Options = struct {
 
 pub const Progress = items.Progress;
 pub const PageCache = items.PageCache;
+pub const HighlightCache = syntax_highlight.Cache;
+pub const HighlightFailure = syntax_highlight.Failure;
 pub const LayoutMeasurementScope = items.LayoutMeasurementScope;
 pub const TreeSitterHealthItem = syntax_highlight.TreeSitterHealthItem;
 pub const TreeSitterHealthReport = syntax_highlight.TreeSitterHealthReport;
@@ -80,12 +83,15 @@ pub fn compile(
     pages: *const core.prepared.PreparedPages,
     options: Options,
 ) !render.Ir {
+    var local_highlight_cache = HighlightCache.init(std.heap.smp_allocator, io);
+    defer local_highlight_cache.deinit();
     var item_compiler = items.Compiler{ .io = io, .options = .{
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
         .highlight_languages = options.highlight_languages,
         .resource_cache = options.resource_cache,
         .text_cache = options.text_cache,
+        .highlight_cache = options.highlight_cache orelse &local_highlight_cache,
         .page_cache = options.page_cache,
         .font_environment = options.font_environment,
         .thread_safe_allocator = options.thread_safe_allocator,
@@ -130,12 +136,15 @@ pub fn compilePrepared(
         _ = try addFontEnvironmentDiagnostic(state, err);
         return err;
     };
+    var local_highlight_cache = HighlightCache.init(std.heap.smp_allocator, io);
+    defer local_highlight_cache.deinit();
     var item_compiler = items.Compiler{ .io = io, .options = .{
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
         .highlight_languages = options.highlight_languages,
         .resource_cache = options.resource_cache,
         .text_cache = options.text_cache,
+        .highlight_cache = options.highlight_cache orelse &local_highlight_cache,
         .page_cache = options.page_cache,
         .thread_safe_allocator = options.thread_safe_allocator,
     }, .font_environment = font_environment };

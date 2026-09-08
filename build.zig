@@ -936,6 +936,14 @@ fn addRenderTests(
     const run_render_compile_spec_tests = b.addRunArtifact(render_compile_spec_tests);
     test_step.dependOn(&run_render_compile_spec_tests.step);
     addFocusedTestStep(b, "test-render-compile", "Run focused render compiler tests", &run_render_compile_spec_tests.step);
+    const highlight_cache_spec_mod = createModule(ctx, "tests/render/highlight/cache/spec_tests.zig", &.{
+        import("render_compile", render_compile_mod),
+        import("utils", modules.utils),
+    }, null);
+    const highlight_cache_spec_tests = addTestArtifact(ctx, highlight_cache_spec_mod);
+    const run_highlight_cache_spec_tests = b.addRunArtifact(highlight_cache_spec_tests);
+    test_step.dependOn(&run_highlight_cache_spec_tests.step);
+    addFocusedTestStep(b, "test-highlight-cache", "Run focused highlight query and content cache tests", &run_highlight_cache_spec_tests.step);
 }
 
 fn addFocusedTestStep(b: *std.Build, name: []const u8, description: []const u8, dependency: *Step) void {

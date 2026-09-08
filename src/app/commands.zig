@@ -298,7 +298,9 @@ fn compileRendering(
         }
         return err;
     };
-    var layouts = pipeline.solveLayouts(io, &analyzed.state, &pages, progress, source.layout_jobs, options.highlight_languages, font_environment) catch |err| {
+    var highlight_cache = render_compile.HighlightCache.init(std.heap.smp_allocator, io);
+    defer highlight_cache.deinit();
+    var layouts = pipeline.solveLayouts(io, &analyzed.state, &pages, progress, source.layout_jobs, options.highlight_languages, font_environment, &highlight_cache) catch |err| {
         app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, diagnostics_json_path) catch {};
         return err;
     };
@@ -324,6 +326,7 @@ fn compileRendering(
         .cache_dir = options.cache_dir,
         .highlight_languages = options.highlight_languages,
         .text_cache = &text_cache,
+        .highlight_cache = &highlight_cache,
         .font_environment = font_environment,
         .thread_safe_allocator = true,
     }) catch |err| {

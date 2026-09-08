@@ -127,6 +127,7 @@ const Server = struct {
     render_resource_cache: render_resources.SourceCache,
     text_shape_cache: render_text.Cache,
     render_page_cache: render_compiler.PageCache,
+    highlight_cache: render_compiler.HighlightCache,
     editor_snapshot_cache: editor_snapshot.Cache,
     analysis: ?AnalysisSnapshot = null,
     analysis_revision: u64 = 0,
@@ -155,6 +156,7 @@ const Server = struct {
             .render_resource_cache = render_resources.SourceCache.init(allocator, io),
             .text_shape_cache = render_text.Cache.init(allocator, io),
             .render_page_cache = render_compiler.PageCache.init(allocator, io),
+            .highlight_cache = render_compiler.HighlightCache.init(allocator, io),
             .editor_snapshot_cache = editor_snapshot.Cache.init(allocator, io),
             .published_diagnostic_uris = std.StringHashMap(void).init(allocator),
             .wysiwyg_paths = std.StringHashMap(void).init(allocator),
@@ -168,6 +170,7 @@ const Server = struct {
         self.render_resource_cache.deinit();
         self.text_shape_cache.deinit();
         self.render_page_cache.deinit();
+        self.highlight_cache.deinit();
         self.editor_snapshot_cache.deinit();
         self.layout_responses.deinit(self.allocator);
         self.editor_responses.deinit(self.allocator);
@@ -483,6 +486,7 @@ const Server = struct {
         discard_retained_state = true;
         var results = render_layout.solvePreparedPages(self.io, state, &pages, .{
             .resource_cache = &self.render_resource_cache,
+            .highlight_cache = &self.highlight_cache,
             .highlight_languages = snapshot.project.highlight.languages,
             .cancellation = .{
                 .context = self,
@@ -863,7 +867,9 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     defer render_cache_lease.deinit();
     const layout_start = utils.measure_profile.start();
     var prepared = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph, .{
+        .highlight_languages = hook.highlight_languages,
         .resource_cache = &hook.server.render_resource_cache,
+        .highlight_cache = &hook.server.highlight_cache,
         .cancellation = .{
             .context = hook.server,
             .is_canceled = analysisCanceled,
@@ -916,6 +922,7 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
         .jobs = 1,
         .highlight_languages = hook.highlight_languages,
         .resource_cache = &hook.server.render_resource_cache,
+        .highlight_cache = &hook.server.highlight_cache,
         .text_cache = &hook.server.text_shape_cache,
         .page_cache = &hook.server.render_page_cache,
         .font_environment = prepared.font_environment,
