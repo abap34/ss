@@ -214,11 +214,7 @@ const language_definitions = [_]LanguageDefinition{
 pub const tree_sitter_language_version: u32 = build_options.tree_sitter_language_version;
 pub const tree_sitter_min_compatible_language_version: u32 = build_options.tree_sitter_min_compatible_language_version;
 
-pub const Span = struct {
-    start: usize,
-    end: usize,
-    role: utils.highlight.CaptureRole,
-};
+pub const Span = @import("highlight_spans.zig").Span;
 
 pub const Failure = union(enum) {
     none,
@@ -380,25 +376,6 @@ pub fn collectSpans(
 
     std.mem.sort(Span, spans.items, {}, spanLessThan);
     return spans;
-}
-
-pub fn nextBoundary(spans: []const Span, pos: usize, line_end: usize) usize {
-    var next = line_end;
-    for (spans) |span| {
-        if (span.end <= pos or span.start >= line_end) continue;
-        if (span.start > pos) next = @min(next, span.start);
-        if (span.start <= pos and span.end > pos) next = @min(next, span.end);
-    }
-    return next;
-}
-
-pub fn roleAt(spans: []const Span, start: usize, end: usize) ?utils.highlight.CaptureRole {
-    var best: ?Span = null;
-    for (spans) |span| {
-        if (span.start > start or span.end < end) continue;
-        if (best == null or spanMoreSpecific(span, best.?)) best = span;
-    }
-    return if (best) |span| span.role else null;
 }
 
 pub fn treeSitterHealthReport(
@@ -655,11 +632,4 @@ fn spanLessThan(_: void, lhs: Span, rhs: Span) bool {
     const lhs_len = lhs.end - lhs.start;
     const rhs_len = rhs.end - rhs.start;
     return lhs_len < rhs_len;
-}
-
-fn spanMoreSpecific(candidate: Span, current: Span) bool {
-    const candidate_len = candidate.end - candidate.start;
-    const current_len = current.end - current.start;
-    if (candidate_len != current_len) return candidate_len < current_len;
-    return candidate.start >= current.start;
 }

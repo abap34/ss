@@ -16,6 +16,7 @@ const latex_document = @import("latex.zig");
 const page_cache = @import("page_cache.zig");
 const external_process = @import("external_process.zig");
 const syntax_highlight = @import("syntax_highlight.zig");
+const highlight_spans = @import("highlight_spans.zig");
 const text_measure = core.render_text_measure;
 
 const Allocator = std.mem.Allocator;
@@ -4156,6 +4157,9 @@ fn drawHighlightedCodeLines(
         return err;
     };
     defer spans.deinit(ctx.allocator);
+    const segments = try highlight_spans.compile(ctx.allocator, spans.items, content.len);
+    defer ctx.allocator.free(segments);
+    var highlighted = highlight_spans.Cursor{ .segments = segments };
 
     var cursor_bl = first_baseline_bl;
     var lines = utils.source.lineIterator(content);
@@ -4164,7 +4168,7 @@ fn drawHighlightedCodeLines(
         if (trim_trailing_empty_line and line.len == 0 and line_view.raw_end == content.len and content.len > 0 and content[content.len - 1] == '\n') break;
         const line_start = line_view.span.start;
         const line_end = line_view.span.end;
-        try drawHighlightedCodeLine(ctx, x, baselineTop(cursor_bl, font_size), width, content, line_start, line_end, spans.items, font, font_size, line_height, code, emoji_spacing);
+        try drawHighlightedCodeLine(ctx, x, baselineTop(cursor_bl, font_size), width, content, line_start, line_end, &highlighted, font, font_size, line_height, code, emoji_spacing);
         cursor_bl -= line_height;
     }
 }
@@ -4177,7 +4181,7 @@ fn drawHighlightedCodeLine(
     content: []const u8,
     line_start: usize,
     line_end: usize,
-    spans: []const syntax_highlight.Span,
+    highlighted: *highlight_spans.Cursor,
     font: FontFace,
     font_size: f32,
     line_height: f32,
@@ -4187,12 +4191,10 @@ fn drawHighlightedCodeLine(
     var cursor_x = x;
     var pos = line_start;
     _ = width;
-    while (pos < line_end) {
-        var next = syntax_highlight.nextBoundary(spans, pos, line_end);
-        if (next <= pos) next = @min(pos + 1, line_end);
-        const color = if (syntax_highlight.roleAt(spans, pos, next)) |role| colorForHighlightRole(code, role) else code.plain;
-        try drawCodeSegment(ctx, &cursor_x, y_top, content[pos..next], font, font_size, line_height, color, emoji_spacing);
-        pos = next;
+    while (highlighted.next(pos, line_end)) |segment| {
+        const color = if (segment.role) |role| colorForHighlightRole(code, role) else code.plain;
+        try drawCodeSegment(ctx, &cursor_x, y_top, content[segment.start..segment.end], font, font_size, line_height, color, emoji_spacing);
+        pos = segment.end;
     }
 }
 

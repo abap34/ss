@@ -583,6 +583,17 @@ fn addTestStep(
         "Run focused layout conflict report tests",
         &run_layout_conflicts_spec_tests.step,
     );
+    const highlight_spans_mod = createModule(ctx, "src/render/compile/highlight_spans.zig", &.{
+        import("utils", modules.utils),
+    }, null);
+    const highlight_spans_spec_mod = createModule(ctx, "tests/render/highlight/spans/spec_tests.zig", &.{
+        import("highlight_spans", highlight_spans_mod),
+        import("utils", modules.utils),
+    }, null);
+    const highlight_spans_spec_tests = addTestArtifact(ctx, highlight_spans_spec_mod);
+    const run_highlight_spans_spec_tests = b.addRunArtifact(highlight_spans_spec_tests);
+    test_step.dependOn(&run_highlight_spans_spec_tests.step);
+    addFocusedTestStep(b, "test-highlight-spans", "Run focused highlight boundary traversal tests", &run_highlight_spans_spec_tests.step);
     const fs_spec_mod = createModule(ctx, "tests/utils/fs/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);
