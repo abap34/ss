@@ -215,8 +215,8 @@ function acceptSnapshot(message) {
   }
   navigation.reconcile(state.snapshot);
   objectLocks.reconcile(state.snapshot);
-  const shapeOutcome = shape.reconcile(state.snapshot);
-  const iconOutcome = icon.reconcile(state.snapshot);
+  const shapeOutcome = shape.reconcile(state.snapshot, message.documentVersion);
+  const iconOutcome = icon.reconcile(state.snapshot, message.documentVersion);
   const deletionOutcome = componentDeletion.reconcile(
     state.snapshot,
     message.documentVersion,

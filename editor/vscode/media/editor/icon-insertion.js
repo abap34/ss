@@ -1,4 +1,4 @@
-import { combineFailureMessages } from "./diagnostics.js";
+import { EditQueue } from "./edit-queue.js";
 import { editingTargetByBinding } from "./editing-target.js";
 
 export const iconCatalogPolicy = Object.freeze({
@@ -10,6 +10,7 @@ export const iconCatalogPolicy = Object.freeze({
 
 export const defaultIconColor = "#374151";
 
+/** @type {import("./edit-types.js").IconDraft} */
 export const defaultIconDraft = {
   source: null,
   name: null,
@@ -19,22 +20,41 @@ export const defaultIconDraft = {
 };
 
 export class IconController {
+  /** @param {import("./edit-types.js").IconState} state
+   * @param {import("./edit-types.js").EditActions} actions */
   constructor(state, actions) {
     this.state = state;
     this.actions = actions;
     this.nextRequestId = 1;
     this.latestCatalogRequestId = 0;
     this.latestCatalogAppend = false;
+    /** @type {ReturnType<typeof setTimeout> | null} */
     this.catalogTimer = null;
+    /** @type {ReturnType<typeof setTimeout> | null} */
     this.catalogRequestTimer = null;
-    this.pending = null;
-    this.followups = [];
+    /** @type {EditQueue<import("./edit-types.js").IconIntent, import("./edit-types.js").Applied>} */
+    this.edits = new EditQueue({
+      snapshot: () => this.state.snapshot,
+      post: actions.post,
+      render: actions.render,
+      nextRequestId: () => this.nextRequestId++,
+      rebase: (snapshot, intent) => snapshot.page_editing?.some((target) =>
+        target.page_id === intent.preview.pageId && target.insert_icons
+      ) ? null : {
+        status: "failed",
+        message: "The target page no longer supports icon insertion.",
+      },
+      applied: (snapshot, intent, version) => this.selectApplied(snapshot, intent, version),
+      discard: () => this.finishInsertionTool(),
+      failureMessage: "The icon could not be inserted.",
+    });
   }
 
   isBusy() {
-    return this.pending != null || this.followups.length > 0;
+    return this.edits.isBusy();
   }
 
+  /** @param {number | null} pageId */
   supportsInsertion(pageId) {
     return Boolean(
       this.state.snapshot && this.state.iconDraft.source &&
@@ -44,10 +64,12 @@ export class IconController {
     );
   }
 
+  /** @param {number | null} pageId */
   canInsert(pageId) {
     return this.supportsInsertion(pageId);
   }
 
+  /** @param {boolean} open */
   setPickerOpen(open) {
     if (this.state.iconPickerOpen === open) return;
     this.state.iconPickerOpen = open;
@@ -55,6 +77,7 @@ export class IconController {
     this.actions.render();
   }
 
+  /** @param {string} query */
   setQuery(query) {
     this.state.iconQuery = query;
     this.state.iconCatalog = null;
@@ -65,6 +88,7 @@ export class IconController {
     }, iconCatalogPolicy.searchDebounceMs);
   }
 
+  /** @param {import("../../src/editor/protocol.js").IconStyle} style */
   setStyle(style) {
     if (this.state.iconStyle === style) return;
     this.state.iconStyle = style;
@@ -73,6 +97,7 @@ export class IconController {
     this.actions.render();
   }
 
+  /** @param {string} category */
   setCategory(category) {
     if (this.state.iconCategory === category) return;
     this.state.iconCategory = category;
@@ -106,6 +131,7 @@ export class IconController {
     }, iconCatalogPolicy.requestTimeoutMs);
   }
 
+  /** @param {Extract<import("../../src/editor/protocol.js").HostMessage, {type: "iconCatalog" | "iconCatalogError"}>} message */
   acceptCatalog(message) {
     if (message.requestId !== this.latestCatalogRequestId) return null;
     if (this.catalogRequestTimer != null) clearTimeout(this.catalogRequestTimer);
@@ -133,6 +159,7 @@ export class IconController {
     return null;
   }
 
+  /** @param {number} requestId */
   expireCatalogRequest(requestId) {
     if (requestId !== this.latestCatalogRequestId ||
         !this.state.iconCatalogPending) return false;
@@ -160,6 +187,7 @@ export class IconController {
     return true;
   }
 
+  /** @param {import("../../src/editor/protocol.js").IconCatalogEntry} entry */
   select(entry) {
     if (!this.state.snapshot) return false;
     this.state.iconDraft = {
@@ -176,26 +204,29 @@ export class IconController {
     return true;
   }
 
+  /** @param {string} color */
   setColor(color) {
     this.state.iconDraft = { ...this.state.iconDraft, color };
     this.actions.render();
   }
 
+  /** @param {number} pageId
+   * @param {{bounds: import("../../src/editor/protocol.js").Rect}} geometry */
   insert(pageId, geometry) {
-    if (!this.canInsert(pageId)) return false;
-    const requestId = this.nextRequestId++;
+    const snapshot = this.state.snapshot;
+    const source = this.state.iconDraft.source;
+    if (!snapshot || !source || !this.canInsert(pageId)) return false;
+    /** @type {import("./edit-types.js").IconRequest} */
     const message = {
       type: "insertIcon",
-      requestId,
-      snapshotId: this.state.snapshot.snapshot_id,
+      requestId: 0,
+      snapshotId: snapshot.snapshot_id,
       pageId,
-      source: this.state.iconDraft.source,
+      source,
       bounds: { ...geometry.bounds },
       color: this.state.iconDraft.color,
     };
-    return this.startOrQueue({
-      requestId,
-      snapshotId: message.snapshotId,
+    return this.edits.enqueue({
       message,
       selection: null,
       preview: {
@@ -208,72 +239,22 @@ export class IconController {
     });
   }
 
-  startOrQueue(intent) {
-    if (this.pending) {
-      intent.phase = "queued";
-      this.followups.push(intent);
-      this.actions.render();
-      return true;
-    }
-    intent.phase = this.state.snapshot.stale ? "queued" : "requested";
-    this.pending = intent;
-    if (intent.phase === "requested") this.actions.post(intent.message);
-    this.actions.render();
-    return true;
-  }
-
+  /** @param {Extract<import("../../src/editor/protocol.js").HostMessage, {type: "iconEditResult"}>} message */
   acceptResult(message) {
-    if (!this.pending || message.requestId !== this.pending.requestId) return null;
-    if (message.status === "applied") {
-      this.pending.phase = "applied";
-      if (message.selection) this.pending.selection = message.selection;
-      return null;
-    }
-    if (message.status === "stale") {
-      this.pending.phase = "queued";
-      return null;
-    }
-    this.pending = null;
-    this.finishInsertionTool();
-    const queuedFailure = this.promoteFollowup(this.state.snapshot);
-    this.actions.render();
-    return {
-      status: "failed",
-      message: combineFailureMessages(
-        message.message || "The icon could not be inserted.",
-        queuedFailure?.message,
-      ),
-    };
+    return this.edits.acceptResult(message);
   }
 
-  reconcile(snapshot) {
-    const pending = this.pending;
-    if (!pending) return null;
-    if (pending.phase === "queued") {
-      if (snapshot.stale) return null;
-      const editable = snapshot.page_editing?.some((target) =>
-        target.page_id === pending.preview.pageId && target.insert_icons
-      );
-      if (!editable) {
-        this.pending = null;
-        this.finishInsertionTool();
-        const queuedFailure = this.promoteFollowup(snapshot);
-        return {
-          status: "failed",
-          message: combineFailureMessages(
-            "The target page no longer supports icon insertion.",
-            queuedFailure?.message,
-          ),
-        };
-      }
-      pending.snapshotId = snapshot.snapshot_id;
-      pending.message.snapshotId = snapshot.snapshot_id;
-      pending.phase = "requested";
-      this.actions.post(pending.message);
-      return null;
-    }
-    if (pending.phase !== "applied" ||
-        snapshot.snapshot_id === pending.snapshotId) return null;
+  /** @param {import("./edit-types.js").Snapshot} snapshot
+   * @param {number} [documentVersion] */
+  reconcile(snapshot, documentVersion) {
+    return this.edits.reconcile(snapshot, documentVersion);
+  }
+
+  /** @param {import("./edit-types.js").Snapshot} snapshot
+   * @param {import("./edit-types.js").IconIntent} pending
+   * @param {number} [documentVersion]
+   * @returns {import("./edit-types.js").Applied | import("./edit-types.js").Failure | null} */
+  selectApplied(snapshot, pending, documentVersion) {
     const selection = pending.selection;
     const target = selection
       ? editingTargetByBinding(
@@ -282,86 +263,50 @@ export class IconController {
         selection.binding,
       )
       : null;
-    if (selection && !target) return null;
-    const selectInsertedTarget = this.followups.length === 0 &&
+    if (selection && !target) {
+      if (documentVersion != null ||
+          !snapshot.layout.pages.some((page) => page.id === selection.pageId)) {
+        return { status: "failed", message: "The inserted icon is no longer present in the rebuilt page." };
+      }
+      return null;
+    }
+    const selectInsertedTarget = this.edits.followups.length === 0 &&
       this.state.shapeTool === "icon";
-    this.pending = null;
-    this.finishInsertionTool();
     if (target && selectInsertedTarget) {
       this.actions.selectObject(target.node_id, target.page_id, false);
     }
-    const queuedFailure = this.promoteFollowup(snapshot);
-    if (queuedFailure) return queuedFailure;
     return { status: "applied" };
   }
 
   cancel() {
-    const queuedInsertion = this.followups.findLastIndex((intent) =>
-      intent.phase === "queued"
-    );
-    if (queuedInsertion >= 0) {
-      this.followups.splice(queuedInsertion, 1);
-      this.actions.render();
-      return true;
-    }
-    if (this.pending?.phase === "queued") {
-      this.pending = null;
-      this.finishInsertionTool();
-      this.actions.render();
-      return true;
-    }
+    if (this.edits.cancelNewestQueued(() => true)) return true;
     if (this.state.shapeTool !== "icon") return false;
     this.state.shapeTool = "select";
     this.actions.render();
     return true;
   }
 
+  /** @param {number} pageId */
   pendingInsertion(pageId) {
     return this.pendingInsertions(pageId)[0] || null;
   }
 
+  /** @param {number} pageId */
   pendingInsertions(pageId) {
-    return [this.pending, ...this.followups]
+    return this.edits.intents()
       .filter((intent) => intent?.preview.pageId === pageId)
       .map((intent) => intent.preview);
   }
 
   finishInsertionTool() {
-    if (this.followups.length === 0 && this.state.shapeTool === "icon") {
+    if (this.edits.followups.length === 0 && this.state.shapeTool === "icon") {
       this.state.shapeTool = "select";
     }
   }
 
-  promoteFollowup(snapshot) {
-    if (this.pending || this.followups.length === 0) return null;
-    let firstFailure = null;
-    while (!this.pending && this.followups.length > 0) {
-      const next = this.followups.shift();
-      this.pending = next;
-      if (snapshot?.stale) {
-        next.phase = "queued";
-        return firstFailure;
-      }
-      const editable = snapshot?.page_editing?.some((target) =>
-        target.page_id === next.preview.pageId && target.insert_icons
-      );
-      if (!editable) {
-        this.pending = null;
-        firstFailure ??= {
-          status: "failed",
-          message: "The target page no longer supports icon insertion.",
-        };
-        continue;
-      }
-      next.snapshotId = snapshot.snapshot_id;
-      next.message.snapshotId = snapshot.snapshot_id;
-      next.phase = "requested";
-      this.actions.post(next.message);
-    }
-    return firstFailure;
-  }
 }
 
+/** @param {Pick<Element, "scrollHeight" | "scrollTop" | "clientHeight"> | null} scroller */
 export function shouldLoadMoreIcons(scroller) {
   if (!scroller) return false;
   const remaining = scroller.scrollHeight - scroller.scrollTop -

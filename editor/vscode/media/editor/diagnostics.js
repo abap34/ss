@@ -1,5 +1,6 @@
 const visibleDiagnosticLimit = 4;
 
+/** @param {import("../../src/editor/protocol.js").EditorSnapshot | null} snapshot */
 export function buildFailureMessage(snapshot) {
   if (!snapshot?.stale) return null;
   const diagnostics = snapshot.build_diagnostics || [];
@@ -18,19 +19,22 @@ export function buildFailureMessage(snapshot) {
   return lines.join("\n");
 }
 
+/** @param {Array<{status: string, message?: string} | null | undefined>} outcomes */
 export function reconciliationFailureMessage(outcomes) {
   const messages = outcomes
     .filter((outcome) => outcome?.status === "failed")
-    .map((outcome) => outcome.message ||
+    .map((outcome) => outcome?.message ||
       "The pending source edit could not be reconciled with the rebuilt preview.");
   return combineFailureMessages(...messages);
 }
 
+/** @param {...(string | null | undefined)} messages */
 export function combineFailureMessages(...messages) {
   const unique = [...new Set(messages.filter(Boolean))];
   return unique.length > 0 ? unique.join("\n") : null;
 }
 
+/** @param {import("../../src/editor/protocol.js").BuildDiagnostic} diagnostic */
 function formatDiagnostic(diagnostic) {
   const location = diagnosticLocation(diagnostic);
   const code = diagnostic.code ? ` [${diagnostic.code}]` : "";
@@ -40,6 +44,7 @@ function formatDiagnostic(diagnostic) {
   return `${location}${code} ${message}`;
 }
 
+/** @param {import("../../src/editor/protocol.js").BuildDiagnostic} diagnostic */
 function diagnosticLocation(diagnostic) {
   const file = fileLabel(diagnostic.uri);
   const start = diagnostic.range?.start;
@@ -51,6 +56,7 @@ function diagnosticLocation(diagnostic) {
   return `${file}:${line}${column}`;
 }
 
+/** @param {string} uri */
 function fileLabel(uri) {
   if (!uri) return "document";
   try {

@@ -55,12 +55,14 @@ const pdfRuntimeOptions = {
 };
 
 function typecheck() {
-  childProcess.execFileSync(process.execPath, [
-    require.resolve("typescript/bin/tsc"),
-    "-p",
-    root,
-    "--noEmit",
-  ], { stdio: "inherit" });
+  for (const config of ["tsconfig.json", "tsconfig.webview.json"]) {
+    childProcess.execFileSync(process.execPath, [
+      require.resolve("typescript/bin/tsc"),
+      "-p",
+      path.join(root, config),
+      "--noEmit",
+    ], { stdio: "inherit" });
+  }
 }
 
 function copySchemaAssets() {

@@ -340,7 +340,7 @@ assert.equal(shape.editStyle(queuedStyleTarget, {
 }), true);
 assert.equal(messages.length, messageCountBeforeQueuedStyle,
   "style changes from a stale preview were sent before rebuilding");
-assert.equal(shape.followups.length, 0,
+assert.equal(shape.edits.followups.length, 0,
   "unsent style changes were split into sequential source edits");
 assert.equal(shape.styleTarget(rectangleTarget.node_id)?.fill.color, "#0f172a");
 assert.equal(shape.styleTarget(rectangleTarget.node_id)?.stroke.color, "#334155");
