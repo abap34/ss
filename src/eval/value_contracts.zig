@@ -67,9 +67,10 @@ pub fn ensureValueConformsToType(
     } else {
         try state.addValidationDiagnostic(.@"error", page_id, null, origin, .{
             .user_report = .{
+                .code = "TypeMismatch",
                 .message = try std.fmt.allocPrint(
                     state.allocator,
-                    "TypeMismatch: expected {s}, got {s}",
+                    "expected {s}, got {s}",
                     .{ expectedRuntimeLabel(expected), @tagName(actual) },
                 ),
             },

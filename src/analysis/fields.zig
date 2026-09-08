@@ -63,7 +63,7 @@ fn checkObjectInheritance(allocator: std.mem.Allocator, state: *core.DocumentSta
                         const module = state.moduleById(class.module_id) orelse continue;
                         const origin = try statementOrigin(allocator, originPathForModule(module), class.span);
                         defer allocator.free(origin);
-                        try addUserReport(state, origin, "ObjectInheritanceCycle: object class '{s}' inherits from '{s}' in a cycle", .{ class.name, class.base.?.name });
+                        try addUserReport(state, origin, "ObjectInheritanceCycle", "object class '{s}' inherits from '{s}' in a cycle", .{ class.name, class.base.?.name });
                     }
                     return error.InvalidType;
                 },
@@ -89,7 +89,7 @@ fn checkRecordNamesUnique(
         if (names.contains(record_decl.name)) {
             const origin = try statementOrigin(allocator, origin_path, record_decl.span);
             defer allocator.free(origin);
-            try addUserReport(state, origin, "DuplicateRecordType: record type '{s}' is already defined in this module", .{record_decl.name});
+            try addUserReport(state, origin, "DuplicateRecordType", "record type '{s}' is already defined in this module", .{record_decl.name});
             return error.InvalidType;
         }
         try names.put(record_decl.name, {});
@@ -118,7 +118,7 @@ fn checkObjectNamesUnique(
         if (names.contains(object_decl.name)) {
             const origin = try statementOrigin(allocator, origin_path, object_decl.span);
             defer allocator.free(origin);
-            try addUserReport(state, origin, "DuplicateObjectClass: object class '{s}' is already defined in this module", .{object_decl.name});
+            try addUserReport(state, origin, "DuplicateObjectClass", "object class '{s}' is already defined in this module", .{object_decl.name});
             return error.InvalidType;
         }
         try names.put(object_decl.name, {});
@@ -136,7 +136,7 @@ fn checkObjectDeclaration(
     defer allocator.free(origin);
     if (object_decl.base) |base| {
         if (object_decl.base_module_id == null) {
-            try addUserReport(state, origin, "InvalidObjectDeclaration: unknown base object class: {s}", .{base});
+            try addUserReport(state, origin, "InvalidObjectDeclaration", "unknown base object class: {s}", .{base});
             return error.InvalidType;
         }
     }
@@ -153,12 +153,12 @@ fn checkObjectExtension(
     const origin = try statementOrigin(allocator, origin_path, extension.span);
     defer allocator.free(origin);
     if (extension.target_module_id == null) {
-        try addUserReport(state, origin, "InvalidObjectExtension: unknown object class: {s}", .{extension.target});
+        try addUserReport(state, origin, "InvalidObjectExtension", "unknown object class: {s}", .{extension.target});
         return error.InvalidType;
     }
     if (extension.implements) |implements| {
         if (extension.implements_module_id == null) {
-            try addUserReport(state, origin, "InvalidObjectExtension: unknown protocol: {s}", .{implements});
+            try addUserReport(state, origin, "InvalidObjectExtension", "unknown protocol: {s}", .{implements});
             return error.InvalidType;
         }
     }
@@ -202,7 +202,7 @@ fn checkFieldDefault(
     if (fieldDefaultHasStaticPropertyValue(default_value, default_property_value) and fieldDefaultTypeAccepts(ty, actual.ty, default_value)) return;
     const label = try fieldTypeLabel(allocator, ty);
     defer allocator.free(label);
-    try addUserReport(state, origin, "InvalidFieldDefault: default value does not match field type {s}", .{label});
+    try addUserReport(state, origin, "InvalidFieldDefault", "default value does not match field type {s}", .{label});
     return error.InvalidType;
 }
 
@@ -240,7 +240,8 @@ fn checkRolesUnique(
             try addUserReport(
                 state,
                 origin,
-                "DuplicateRole: role '{s}' is already provided by {s}",
+                "DuplicateRole",
+                "role '{s}' is already provided by {s}",
                 .{ role_name, existing_class },
             );
             return error.InvalidType;
@@ -249,10 +250,10 @@ fn checkRolesUnique(
     }
 }
 
-fn addUserReport(state: *core.DocumentState, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
+fn addUserReport(state: *core.DocumentState, origin: []const u8, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const message = try std.fmt.allocPrint(state.allocator, fmt, args);
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .message = message },
+        .user_report = .{ .code = code, .message = message },
     });
 }
 

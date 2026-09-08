@@ -226,11 +226,11 @@ pub fn sourceOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span:
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
-fn addUserReport(state: ?*core.DocumentState, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
+fn addUserReport(state: ?*core.DocumentState, origin: []const u8, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const sink = state orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
     try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .message = message },
+        .user_report = .{ .code = code, .message = message },
     });
 }
 
@@ -241,7 +241,7 @@ pub fn continueAfterDiagnostic(state: *const core.DocumentState, diagnostic_coun
 
 fn rejectDuplicateBinding(state: ?*core.DocumentState, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
     if (!env.contains(name)) return;
-    try addUserReport(state, origin, "DuplicateBinding: binding '{s}' is already defined in this scope", .{name});
+    try addUserReport(state, origin, "DuplicateBinding", "binding '{s}' is already defined in this scope", .{name});
     return error.DuplicateBinding;
 }
 
@@ -259,7 +259,7 @@ pub fn checkPageNamesUnique(
             if (pages.contains(page.name)) {
                 const origin = try sourceOrigin(allocator, origin_path, page.span);
                 defer allocator.free(origin);
-                try addUserReport(state, origin, "DuplicatePage: page '{s}' is already defined", .{page.name});
+                try addUserReport(state, origin, "DuplicatePage", "page '{s}' is already defined", .{page.name});
                 return error.DuplicatePage;
             }
             try pages.put(page.name, {});
@@ -414,11 +414,11 @@ fn checkTopLevelStatement(
             try scope.put(binding.name);
         },
         .return_expr => {
-            try addUserReport(state, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
+            try addUserReport(state, origin, "ReturnOutsideFunction", "return is only valid inside a function", .{});
             return error.ReturnOutsideFunction;
         },
         .return_void => {
-            try addUserReport(state, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
+            try addUserReport(state, origin, "ReturnOutsideFunction", "return is only valid inside a function", .{});
             return error.ReturnOutsideFunction;
         },
         .property_set => |property_set| {
@@ -451,7 +451,7 @@ fn checkTopLevelStatement(
         },
         .constrain => |decl| {
             if (context != .page) {
-                try addUserReport(state, origin, "NoCurrentPage: constraints are only valid inside a page block", .{});
+                try addUserReport(state, origin, "NoCurrentPage", "constraints are only valid inside a page block", .{});
                 return error.NoCurrentPage;
             }
             try validateAnchorRef(allocator, state, sema, env, origin, decl.target, true);
@@ -475,7 +475,7 @@ fn recordBindingType(state: *core.DocumentState, module_id: core.SourceModuleId,
 fn rejectVoidValue(state: *core.DocumentState, info: semantic_types.TypeInfo, origin: []const u8) !void {
     if (info.hole != null) return;
     if (info.ty.kind != .void) return;
-    try addUserReport(state, origin, "VoidValue: void results can only be used as statements", .{});
+    try addUserReport(state, origin, "VoidValue", "void results can only be used as statements", .{});
     return error.InvalidType;
 }
 
@@ -501,7 +501,7 @@ fn rejectPageOnlyExpr(
 ) !void {
     if (context == .page) return;
     if (try page_context.exprRequirement(scope, expr)) |requirement| {
-        try addUserReport(state, origin, "NoCurrentPage: '{s}' is only valid inside a page block", .{requirement.displayName()});
+        try addUserReport(state, origin, "NoCurrentPage", "'{s}' is only valid inside a page block", .{requirement.displayName()});
         return error.NoCurrentPage;
     }
 }
@@ -517,7 +517,7 @@ fn validateAnchorRef(
 ) !void {
     switch (anchor_ref.kind) {
         .page => if (is_target) {
-            try addUserReport(state, origin, "PageCannotBeConstraintTarget: page anchors cannot be constraint targets", .{});
+            try addUserReport(state, origin, "PageCannotBeConstraintTarget", "page anchors cannot be constraint targets", .{});
             return error.PageCannotBeConstraintTarget;
         },
         .node => {
@@ -545,21 +545,21 @@ fn resolveAnchorPathInfo(
     var iter = std.mem.splitScalar(u8, path, '.');
     const first = iter.next() orelse return error.UnknownIdentifier;
     var info = env.get(first) orelse {
-        try addUserReport(state, origin, "UnknownIdentifier: unknown constraint object '{s}'", .{first});
+        try addUserReport(state, origin, "UnknownIdentifier", "unknown constraint object '{s}'", .{first});
         return error.UnknownIdentifier;
     };
     while (iter.next()) |field_name| {
         if (info.hole != null) return info;
         if (info.ty.kind != .record) {
-            try addUserReport(state, origin, "InvalidConstraintObject: anchor path '{s}' does not resolve through a record", .{path});
+            try addUserReport(state, origin, "InvalidConstraintObject", "anchor path '{s}' does not resolve through a record", .{path});
             return error.InvalidType;
         }
         const record_id = info.ty.nominalId() orelse {
-            try addUserReport(state, origin, "InvalidRecordType: ss produced a record type without a resolved declaration; report this as an ss bug with the source file", .{});
+            try addUserReport(state, origin, "InvalidRecordType", "ss produced a record type without a resolved declaration; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
         const field = sema.recordField(record_id, field_name) orelse {
-            try addUserReport(state, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_id.name, field_name });
+            try addUserReport(state, origin, "UnknownRecordField", "record type '{s}' has no field '{s}'", .{ record_id.name, field_name });
             return error.InvalidType;
         };
         info = infoFromType(field.value_type);

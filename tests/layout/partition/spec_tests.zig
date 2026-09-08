@@ -164,8 +164,8 @@ test "layout partition: implicit groups retain page ownership and foreign endpoi
     var unowned = false;
     for (state.diagnostics.items) |diagnostic| switch (diagnostic.data) {
         .user_report => |report| {
-            cross_page = cross_page or std.mem.startsWith(u8, report.message, "CrossPageConstraint:");
-            unowned = unowned or std.mem.startsWith(u8, report.message, "UnownedLayoutObject:");
+            cross_page = cross_page or std.mem.eql(u8, report.code, "CrossPageConstraint");
+            unowned = unowned or std.mem.eql(u8, report.code, "UnownedLayoutObject");
         },
         else => {},
     };

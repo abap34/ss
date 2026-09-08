@@ -16,7 +16,7 @@ pub fn addSyntaxHoles(bag: *DiagnosticBag, path: []const u8, text: []const u8, h
     for (holes.diagnostics) |diagnostic| {
         var message_buf: [256]u8 = undefined;
         const message = utils.err.formatParseDiagnostic(&message_buf, diagnostic);
-        try bag.addAt(source_id, .@"error", @errorName(diagnostic.err), message, .{
+        try bag.addAt(source_id, .@"error", utils.err.parseDiagnosticCode(diagnostic.err), message, .{
             .start = diagnostic.span.start,
             .end = diagnostic.span.end,
         }, diagnostic.caused_by);
@@ -33,7 +33,7 @@ pub fn addDocumentStateFrom(bag: *DiagnosticBag, state: *core.DocumentState, sta
         const location = diagnosticLocation(state, diagnostic);
         const entry = try source_ids.getOrPut(location.path);
         if (!entry.found_existing) entry.value_ptr.* = try bag.registerSource(location.path, location.source);
-        try bag.addAt(entry.value_ptr.*, diagnostic.severity, diagnosticCode(diagnostic), message, location.span, null);
+        try bag.addAt(entry.value_ptr.*, diagnostic.severity, diagnostic.code(), message, location.span, null);
     }
 }
 
@@ -64,18 +64,4 @@ fn diagnosticLocation(state: *core.DocumentState, diagnostic: core.Diagnostic) D
         break :blk origin.span;
     } else null;
     return .{ .path = report_path, .source = report_source, .span = span };
-}
-
-fn diagnosticCode(diagnostic: core.Diagnostic) []const u8 {
-    return switch (diagnostic.data) {
-        .user_report => |data| utils.err.userReportDiagnosticCode(data.message),
-        .asset_not_found => "AssetNotFound",
-        .asset_invalid => "InvalidAsset",
-        .render_failed => "RenderFailed",
-        .type_mismatch => |data| @tagName(data.code),
-        .recursive_function => "RecursiveFunction",
-        .page_overflow => "PageOverflow",
-        .content_overflow => "FrameTooSmall",
-        .layout_nonconvergence => "LayoutDidNotConverge",
-    };
 }

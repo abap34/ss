@@ -31,12 +31,7 @@ fn expectCycle(source: []const u8, members: []const []const u8) !void {
 
     var cycle_diagnostics: usize = 0;
     for (state.diagnostics.items) |diagnostic| {
-        const message = switch (diagnostic.data) {
-            .user_report => |report| report.message,
-            else => continue,
-        };
-        if (!std.mem.startsWith(u8, message, "ObjectInheritanceCycle:")) continue;
-        cycle_diagnostics += 1;
+        if (std.mem.eql(u8, diagnostic.code(), "ObjectInheritanceCycle")) cycle_diagnostics += 1;
     }
     try testing.expectEqual(members.len, cycle_diagnostics);
     for (members) |name| {

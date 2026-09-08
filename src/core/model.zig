@@ -660,6 +660,8 @@ pub const Diagnostic = struct {
 
     pub const Data = union(enum) {
         user_report: struct {
+            /// Diagnostic codes borrow static storage, such as literals or @errorName.
+            code: []const u8,
             message: []const u8,
         },
         asset_not_found: struct {
@@ -673,6 +675,7 @@ pub const Diagnostic = struct {
         },
         render_failed: struct {
             reason: []const u8,
+            cause_code: ?[]const u8 = null,
             payload_kind: ?PayloadKind = null,
         },
         type_mismatch: struct {
@@ -706,6 +709,20 @@ pub const Diagnostic = struct {
         },
     };
 
+    pub fn code(self: Diagnostic) []const u8 {
+        return switch (self.data) {
+            .user_report => |data| data.code,
+            .asset_not_found => "AssetNotFound",
+            .asset_invalid => "InvalidAsset",
+            .render_failed => "RenderFailed",
+            .type_mismatch => |data| @tagName(data.code),
+            .recursive_function => "RecursiveFunction",
+            .page_overflow => "PageOverflow",
+            .content_overflow => "FrameTooSmall",
+            .layout_nonconvergence => "LayoutDidNotConverge",
+        };
+    }
+
     pub fn deinit(self: *Diagnostic, allocator: Allocator) void {
         if (self.origin) |origin| allocator.free(origin);
         switch (self.data) {
@@ -738,7 +755,7 @@ pub const Diagnostic = struct {
 fn cloneDiagnosticData(allocator: Allocator, data: Diagnostic.Data) !Diagnostic.Data {
     return switch (data) {
         .user_report => |value| .{
-            .user_report = .{ .message = try allocator.dupe(u8, value.message) },
+            .user_report = .{ .code = value.code, .message = try allocator.dupe(u8, value.message) },
         },
         .asset_not_found => |value| blk: {
             const requested_path = try allocator.dupe(u8, value.requested_path);
@@ -762,6 +779,7 @@ fn cloneDiagnosticData(allocator: Allocator, data: Diagnostic.Data) !Diagnostic.
             .render_failed = .{
                 .reason = try allocator.dupe(u8, value.reason),
                 .payload_kind = value.payload_kind,
+                .cause_code = value.cause_code,
             },
         },
         .type_mismatch => |value| .{ .type_mismatch = value },

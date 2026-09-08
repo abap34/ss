@@ -104,7 +104,8 @@ pub const ExecutionGraph = struct {
         var cycle_hint: ?usize = null;
         graph.order = scheduleFromEdges(allocator, graph.units.items, graph.edges.items, &cycle_hint) catch |err| {
             if (err == error.ExecutionDependencyCycle and graph.units.items.len != 0) {
-                try addUnitErrorDiagnostic(diagnostic_state, graph.units.items[cycle_hint orelse 0], analysisErrorMessage(err));
+                const diagnostic = analysisDiagnostic(err);
+                try addUnitErrorDiagnostic(diagnostic_state, graph.units.items[cycle_hint orelse 0], diagnostic.code, diagnostic.message);
             }
             return err;
         };
@@ -263,19 +264,19 @@ const GraphBuilder = struct {
 fn validateExecutionUnits(state: *core.DocumentState, units: []const ExecutionUnit) !void {
     for (units) |unit| {
         if (unit.summary.invalid_selection_mutation) |invalid| {
-            const message = "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated";
-            try addUnitErrorDiagnostic(state, unit, message);
+            const message = "primitive callbacks must not add objects or pages to the selection being iterated";
+            try addUnitErrorDiagnostic(state, unit, "InvalidSelectionMutation", message);
             _ = invalid;
             return error.InvalidSelectionMutation;
         }
         if (unit.summary.reads_layout and unit.summary.writes_layout_input) {
-            const message = "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once";
-            try addUnitErrorDiagnostic(state, unit, message);
+            const message = "layout reads cannot feed object creation, content, properties, or constraints because layout is solved once";
+            try addUnitErrorDiagnostic(state, unit, "LayoutDependencyCycle", message);
             return error.LayoutDependencyCycle;
         }
         if (unit.summary.reads_layout) {
-            const message = "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet";
-            try addUnitErrorDiagnostic(state, unit, message);
+            const message = "layout-reading scheduled computations are not implemented yet";
+            try addUnitErrorDiagnostic(state, unit, "PostLayoutComputationUnsupported", message);
             return error.PostLayoutComputationUnsupported;
         }
     }
@@ -577,11 +578,11 @@ fn executionUnitSource(unit: ExecutionUnit) []const u8 {
     return std.mem.trim(u8, unit.source[unit.span.start..unit.span.end], " \t\r\n");
 }
 
-fn addUnitErrorDiagnostic(state: *core.DocumentState, unit: ExecutionUnit, message: []const u8) !void {
+fn addUnitErrorDiagnostic(state: *core.DocumentState, unit: ExecutionUnit, code: []const u8, message: []const u8) !void {
     const origin = try unitOrigin(state.allocator, unit);
     defer state.allocator.free(origin);
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .message = try state.allocator.dupe(u8, message) },
+        .user_report = .{ .code = code, .message = try state.allocator.dupe(u8, message) },
     });
 }
 
@@ -592,12 +593,12 @@ fn unitOrigin(allocator: std.mem.Allocator, unit: ExecutionUnit) ![]const u8 {
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ unit.span.start, unit.span.end });
 }
 
-fn analysisErrorMessage(err: anyerror) []const u8 {
+fn analysisDiagnostic(err: anyerror) struct { code: []const u8, message: []const u8 } {
     return switch (err) {
-        error.InvalidSelectionMutation => "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated",
-        error.LayoutDependencyCycle => "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once",
-        error.PostLayoutComputationUnsupported => "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet",
-        error.ExecutionDependencyCycle => "ExecutionDependencyCycle: document evaluation dependencies contain a cycle",
-        else => "ScheduleAnalysisFailed: scheduled unit analysis failed",
+        error.InvalidSelectionMutation => .{ .code = "InvalidSelectionMutation", .message = "primitive callbacks must not add objects or pages to the selection being iterated" },
+        error.LayoutDependencyCycle => .{ .code = "LayoutDependencyCycle", .message = "layout reads cannot feed object creation, content, properties, or constraints because layout is solved once" },
+        error.PostLayoutComputationUnsupported => .{ .code = "PostLayoutComputationUnsupported", .message = "layout-reading scheduled computations are not implemented yet" },
+        error.ExecutionDependencyCycle => .{ .code = "ExecutionDependencyCycle", .message = "document evaluation dependencies contain a cycle" },
+        else => .{ .code = "ScheduleAnalysisFailed", .message = "scheduled unit analysis failed" },
     };
 }

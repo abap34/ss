@@ -356,7 +356,7 @@ test "document state spec: suppressed cross-page constraints are not diagnosed" 
 
     for (state.diagnostics.items) |diagnostic| {
         switch (diagnostic.data) {
-            .user_report => |data| try testing.expect(!std.mem.startsWith(u8, data.message, "CrossPageConstraint:")),
+            .user_report => |data| try testing.expect(!std.mem.eql(u8, data.code, "CrossPageConstraint")),
             else => {},
         }
     }
@@ -541,7 +541,7 @@ test "document state spec: node fields reject duplicate keys" {
 fn addValidationUserReport(state: *core.DocumentState, origin: []const u8, message: []const u8) !void {
     const owned_message = try testing.allocator.dupe(u8, message);
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .message = owned_message },
+        .user_report = .{ .code = "UserReport", .message = owned_message },
     });
 }
 
@@ -549,7 +549,7 @@ fn expectDiagnosticCode(state: *core.DocumentState, code: []const u8) !void {
     for (state.diagnostics.items) |diagnostic| {
         switch (diagnostic.data) {
             .user_report => |data| {
-                if (std.mem.startsWith(u8, data.message, code)) return;
+                if (std.mem.eql(u8, data.code, std.mem.trimEnd(u8, code, ":"))) return;
             },
             else => {},
         }
@@ -675,4 +675,31 @@ test "document state spec: LaTeX render environment resolves preamble and engine
     var document_env = try core.render_env.resolveForNode(testing.allocator, &state, document);
     defer document_env.deinit(testing.allocator);
     try testing.expectEqual(core.render_env.LatexEngine.lualatex, document_env.latex_engine);
+}
+
+test "diagnostic codes survive rewording cloning and duplicate detection" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const cases = [_]struct { code: []const u8, message: []const u8 }{
+        .{ .code = "ExampleCode", .message = "the same wording" },
+        .{ .code = "OtherCode", .message = "the same wording" },
+        .{ .code = "UserReport", .message = "ExampleCode: user-authored text" },
+    };
+    for (cases) |case| {
+        try state.addValidationDiagnostic(.@"error", null, null, "origin", .{
+            .user_report = .{ .code = case.code, .message = try testing.allocator.dupe(u8, case.message) },
+        });
+    }
+    state.deduplicateValidationUserReports();
+    try testing.expectEqual(cases.len, state.diagnostics.items.len);
+    for (state.diagnostics.items, cases) |*diagnostic, case| {
+        try testing.expectEqualStrings(case.code, diagnostic.code());
+        var cloned = try diagnostic.clone(testing.allocator);
+        defer cloned.deinit(testing.allocator);
+        try testing.expectEqualStrings(case.code, cloned.code());
+        const reworded = try testing.allocator.dupe(u8, "reworded: text");
+        testing.allocator.free(diagnostic.data.user_report.message);
+        diagnostic.data.user_report.message = reworded;
+        try testing.expectEqualStrings(case.code, diagnostic.code());
+    }
 }

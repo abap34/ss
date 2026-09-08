@@ -52,6 +52,7 @@ fn writeDiagnosticsField(root: *json.Object, diagnostics: []const core.Diagnosti
 
 fn writeDiagnostic(diagnostics: *json.Array, diagnostic: core.Diagnostic) !void {
     var item = try diagnostics.objectItem();
+    try item.stringField("code", diagnostic.code());
     try item.enumTagField("phase", diagnostic.phase);
     try item.enumTagField("severity", diagnostic.severity);
     try item.optionalIntField("page_id", diagnostic.page_id);
@@ -59,43 +60,36 @@ fn writeDiagnostic(diagnostics: *json.Array, diagnostic: core.Diagnostic) !void 
     try item.optionalStringField("origin", diagnostic.origin);
     switch (diagnostic.data) {
         .user_report => |data| {
-            try item.stringField("code", utils.err.userReportDiagnosticCode(data.message));
             try item.stringField("message", data.message);
         },
         .asset_not_found => |data| {
-            try item.stringField("code", "AssetNotFound");
             try item.stringField("requested_path", data.requested_path);
             try item.stringField("resolved_path", data.resolved_path);
             try item.optionalEnumTagField("payload_kind", data.payload_kind);
         },
         .asset_invalid => |data| {
-            try item.stringField("code", "InvalidAsset");
             try item.stringField("reason", data.reason);
             try item.optionalEnumTagField("payload_kind", data.payload_kind);
         },
         .render_failed => |data| {
-            try item.stringField("code", "RenderFailed");
             try item.stringField("reason", data.reason);
+            try item.optionalStringField("cause_code", data.cause_code);
             try item.optionalEnumTagField("payload_kind", data.payload_kind);
         },
         .type_mismatch => |data| {
-            try item.stringField("code", @tagName(data.code));
             try item.stringField("expected", @tagName(data.expected));
             try item.stringField("actual", @tagName(data.actual));
         },
         .recursive_function => |data| {
-            try item.stringField("code", "RecursiveFunction");
             try item.stringField("function_name", data.function_name);
         },
         .page_overflow => |data| {
-            try item.stringField("code", "PageOverflow");
             try item.floatField("overflow_left", data.overflow_left, "{d:.1}");
             try item.floatField("overflow_right", data.overflow_right, "{d:.1}");
             try item.floatField("overflow_top", data.overflow_top, "{d:.1}");
             try item.floatField("overflow_bottom", data.overflow_bottom, "{d:.1}");
         },
         .content_overflow => |data| {
-            try item.stringField("code", "FrameTooSmall");
             try item.floatField("required_width", data.required_width, "{d:.1}");
             try item.floatField("frame_width", data.frame_width, "{d:.1}");
             try item.floatField("overflow_width", data.overflow_width, "{d:.1}");
@@ -104,7 +98,6 @@ fn writeDiagnostic(diagnostics: *json.Array, diagnostic: core.Diagnostic) !void 
             try item.floatField("overflow_height", data.overflow_height, "{d:.1}");
         },
         .layout_nonconvergence => |data| {
-            try item.stringField("code", "LayoutDidNotConverge");
             try item.enumTagField("axis", data.axis);
             try item.enumTagField("stage", data.stage);
             try item.intField("iterations", data.iterations);

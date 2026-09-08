@@ -38,7 +38,7 @@ fn exerciseWithOptions(source: []const u8, first: []const u8, second: []const u8
     if (options.diagnostic) |expected| {
         compiler.analysis.analyzeDocumentState(allocator, &state) catch {};
         for (state.diagnostics.items) |diagnostic| {
-            if (diagnostic.data == .user_report and std.mem.startsWith(u8, diagnostic.data.user_report.message, expected)) return;
+            if (diagnostic.data == .user_report and std.mem.eql(u8, diagnostic.code(), std.mem.trimEnd(u8, expected, ":"))) return;
         }
         return error.ExpectedDiagnostic;
     }

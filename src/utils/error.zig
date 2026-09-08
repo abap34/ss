@@ -340,7 +340,7 @@ fn resolveContextDiagnostic(
             .warning => .warning,
             .@"error" => .@"error",
         },
-        .code = irDiagnosticCode(diagnostic),
+        .code = diagnostic.code(),
         .message = message,
         .path = location.path,
         .source = location.source,
@@ -401,36 +401,12 @@ fn resolveContextDiagnosticLocation(
     return .{ .path = default_path, .source = default_source, .span = null };
 }
 
-fn irDiagnosticCode(diagnostic: anytype) []const u8 {
-    return switch (diagnostic.data) {
-        .user_report => |data| userReportDiagnosticCode(data.message),
-        .asset_not_found => "AssetNotFound",
-        .asset_invalid => "InvalidAsset",
-        .render_failed => "RenderFailed",
-        .type_mismatch => |data| @tagName(data.code),
-        .recursive_function => "RecursiveFunction",
-        .page_overflow => "PageOverflow",
-        .content_overflow => "FrameTooSmall",
-        .layout_nonconvergence => "LayoutDidNotConverge",
-    };
-}
-
 fn fallbackContextDiagnosticMessage(buf: []u8, diagnostic: anytype) []const u8 {
     return std.fmt.bufPrint(
         buf,
         "DiagnosticResolutionFailed: could not resolve {s} diagnostic",
         .{@tagName(diagnostic.phase)},
     ) catch "DiagnosticResolutionFailed: could not resolve diagnostic";
-}
-
-pub fn userReportDiagnosticCode(message: []const u8) []const u8 {
-    const colon = std.mem.indexOfScalar(u8, message, ':') orelse return "UserReport";
-    const code = message[0..colon];
-    if (code.len == 0) return "UserReport";
-    for (code) |byte| {
-        if (!std.ascii.isAlphanumeric(byte) and byte != '_') return "UserReport";
-    }
-    return code;
 }
 
 pub fn hasDocumentStateErrors(state: anytype) bool {
@@ -1057,17 +1033,23 @@ pub fn isExpectedCliError(err: anyerror) bool {
 }
 
 pub fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
+    var message_buf: [512]u8 = undefined;
+    const message = parseDiagnosticMessage(&message_buf, diagnostic);
+    return std.fmt.bufPrint(buf, "{s}: {s}", .{ parseDiagnosticCode(diagnostic.err), message }) catch parseDiagnosticCode(diagnostic.err);
+}
+
+pub fn parseDiagnosticMessage(buf: []u8, diagnostic: anytype) []const u8 {
     return switch (diagnostic.err) {
-        error.UnterminatedString => "UnterminatedString: unterminated string",
-        error.UnknownAnchor => "UnknownAnchor: unknown anchor name",
-        error.AssignmentRequiresLet => "AssignmentRequiresLet: plain assignment statements are not supported; use 'let name = expr'",
-        error.BindRemoved => "BindRemoved: 'bind' has been removed; use lexical 'let' bindings and ordinary expression statements",
-        error.ZeroArgCallRequiresParens => "ZeroArgCallRequiresParens: a bare name is not a statement; use parentheses for a zero-argument call, or pass the value to a placing function such as 'text!(name)'",
-        error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page dimensions cannot be constraint targets; constrain an object dimension to a page anchor instead",
+        error.UnterminatedString => "unterminated string",
+        error.UnknownAnchor => "unknown anchor name",
+        error.AssignmentRequiresLet => "plain assignment statements are not supported; use 'let name = expr'",
+        error.BindRemoved => "'bind' has been removed; use lexical 'let' bindings and ordinary expression statements",
+        error.ZeroArgCallRequiresParens => "a bare name is not a statement; use parentheses for a zero-argument call, or pass the value to a placing function such as 'text!(name)'",
+        error.PageCannotBeConstraintTarget => "page dimensions cannot be constraint targets; constrain an object dimension to a page anchor instead",
         else => blk: {
             const expected = diagnostic.expected orelse @errorName(diagnostic.err);
             const found = diagnostic.found orelse "unknown token";
-            break :blk std.fmt.bufPrint(buf, "{s}: expected {s}, found {s}", .{ parseDiagnosticCode(diagnostic.err), expected, found }) catch @errorName(diagnostic.err);
+            break :blk std.fmt.bufPrint(buf, "expected {s}, found {s}", .{ expected, found }) catch @errorName(diagnostic.err);
         },
     };
 }
@@ -1081,7 +1063,7 @@ pub fn formatParseFailureWithoutDiagnostic(buf: []u8, err: anyerror) []const u8 
     ) catch "ParseFailed: parser failed without a source diagnostic";
 }
 
-fn parseDiagnosticCode(err: anyerror) []const u8 {
+pub fn parseDiagnosticCode(err: anyerror) []const u8 {
     return switch (err) {
         error.ExpectedString => "ExpectedString",
         error.ExpectedIdentifier => "ExpectedIdentifier",
@@ -1104,7 +1086,10 @@ fn parseDiagnosticCode(err: anyerror) []const u8 {
 
 pub fn formatContextDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]const u8 {
     return switch (diagnostic.data) {
-        .user_report => |data| allocator.dupe(u8, data.message),
+        .user_report => |data| if (std.mem.eql(u8, data.code, "UserReport"))
+            allocator.dupe(u8, data.message)
+        else
+            std.fmt.allocPrint(allocator, "{s}: {s}", .{ data.code, data.message }),
         .asset_not_found => |data| std.fmt.allocPrint(
             allocator,
             "AssetNotFound: {s} (resolved to {s})",

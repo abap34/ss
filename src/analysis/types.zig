@@ -173,9 +173,9 @@ pub fn ensureTypeWithHoles(
         defer allocator.free(actual_label);
         const expected_label = try typeLabelAlloc(allocator, expected);
         defer allocator.free(expected_label);
-        const message = try std.fmt.allocPrint(sink.allocator, "TypeMismatch: expected {s}, got {s}", .{ expected_label, actual_label });
+        const message = try std.fmt.allocPrint(sink.allocator, "expected {s}, got {s}", .{ expected_label, actual_label });
         try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .message = message },
+            .user_report = .{ .code = "TypeMismatch", .message = message },
         });
     }
     return error.InvalidType;

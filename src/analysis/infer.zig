@@ -32,11 +32,11 @@ const InferenceOptions = struct {
     validate_contracts: bool = true,
 };
 
-fn addUserReport(state: ?*core.DocumentState, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
+fn addUserReport(state: ?*core.DocumentState, origin: []const u8, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const sink = state orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
     try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .message = message },
+        .user_report = .{ .code = code, .message = message },
     });
 }
 
@@ -54,18 +54,19 @@ fn addUserReportAtSpan(
     state: ?*core.DocumentState,
     origin: []const u8,
     span: ?ast.Span,
+    code: []const u8,
     comptime fmt: []const u8,
     args: anytype,
 ) !void {
-    if (state == null or span == null) return addUserReport(state, origin, fmt, args);
+    if (state == null or span == null) return addUserReport(state, origin, code, fmt, args);
     const precise_origin = try diagnosticOriginForSpan(allocator, origin, span.?);
     defer allocator.free(precise_origin);
-    return addUserReport(state, precise_origin, fmt, args);
+    return addUserReport(state, precise_origin, code, fmt, args);
 }
 
 fn rejectDuplicateBinding(state: ?*core.DocumentState, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
     if (!env.contains(name)) return;
-    try addUserReport(state, origin, "DuplicateBinding: binding '{s}' is already defined in this scope", .{name});
+    try addUserReport(state, origin, "DuplicateBinding", "binding '{s}' is already defined in this scope", .{name});
     return error.DuplicateBinding;
 }
 
@@ -193,7 +194,7 @@ fn exprInfoWithOptions(
                 info.function_labels = try singleFunctionLabel(allocator, func.name);
                 break :blk info;
             }
-            try addUserReportAtSpan(allocator, state, origin, ident.name_span, "UnknownIdentifier: unknown identifier: {s}", .{name});
+            try addUserReportAtSpan(allocator, state, origin, ident.name_span, "UnknownIdentifier", "unknown identifier: {s}", .{name});
             return error.UnknownIdentifier;
         },
         .call => |call| try inferCallInfo(allocator, state, sema, env, call, origin, options),
@@ -218,22 +219,22 @@ fn inferRecordInfo(
 ) !TypeInfo {
     const record_decl = sema.record(record.module_id, record.type_name) orelse {
         if (sema.enumExists(record.module_id, record.type_name)) {
-            try addUserReportAtSpan(allocator, state, origin, record.type_name_span, "InvalidRecordLiteral: {s} is an enum type, not a record; use {s}.<case>", .{ record.type_name, record.type_name });
+            try addUserReportAtSpan(allocator, state, origin, record.type_name_span, "InvalidRecordLiteral", "{s} is an enum type, not a record; use {s}.<case>", .{ record.type_name, record.type_name });
             return error.InvalidType;
         }
-        try addUserReportAtSpan(allocator, state, origin, record.type_name_span, "UnknownRecordType: unknown record type: {s}", .{record.type_name});
+        try addUserReportAtSpan(allocator, state, origin, record.type_name_span, "UnknownRecordType", "unknown record type: {s}", .{record.type_name});
         return error.InvalidType;
     };
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     for (record.fields.items) |field_expr| {
         if (seen.contains(field_expr.name)) {
-            try addUserReportAtSpan(allocator, state, origin, field_expr.name_span, "DuplicateRecordField: field '{s}' is already set in {s}", .{ field_expr.name, record.type_name });
+            try addUserReportAtSpan(allocator, state, origin, field_expr.name_span, "DuplicateRecordField", "field '{s}' is already set in {s}", .{ field_expr.name, record.type_name });
             return error.InvalidType;
         }
         try seen.put(field_expr.name, {});
         const field = sema.recordField(.{ .module_id = record_decl.module_id, .name = record_decl.name }, field_expr.name) orelse {
-            try addUserReportAtSpan(allocator, state, origin, field_expr.name_span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record.type_name, field_expr.name });
+            try addUserReportAtSpan(allocator, state, origin, field_expr.name_span, "UnknownRecordField", "record type '{s}' has no field '{s}'", .{ record.type_name, field_expr.name });
             return error.InvalidType;
         };
         const expected = field.value_type;
@@ -257,11 +258,11 @@ fn inferRecordUpdateInfo(
     if (target_info.ty.kind != .record) {
         const actual = try typeInfoLabelAlloc(allocator, target_info);
         defer allocator.free(actual);
-        try addUserReport(state, origin, "InvalidRecordUpdate: with expects a record value, got {s}", .{actual});
+        try addUserReport(state, origin, "InvalidRecordUpdate", "with expects a record value, got {s}", .{actual});
         return error.InvalidType;
     }
     const record_id = target_info.ty.nominalId() orelse {
-        try addUserReport(state, origin, "InvalidRecordUpdate: ss produced a record type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
+        try addUserReport(state, origin, "InvalidRecordUpdate", "ss produced a record type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
 
@@ -285,7 +286,7 @@ fn rejectOverlappingRecordUpdateFields(
             defer allocator.free(left_text);
             const right_text = try ast.formatRecordPath(allocator, right.path.items);
             defer allocator.free(right_text);
-            try addUserReportAtSpan(allocator, state, origin, right.path_span, "OverlappingRecordUpdate: update path '{s}' overlaps '{s}'", .{ left_text, right_text });
+            try addUserReportAtSpan(allocator, state, origin, right.path_span, "OverlappingRecordUpdate", "update path '{s}' overlaps '{s}'", .{ left_text, right_text });
             return error.InvalidType;
         }
     }
@@ -305,7 +306,7 @@ fn inferRecordUpdateField(
     for (update_field.path.items, 0..) |segment, index| {
         if (segment.name_hole != null) return;
         const field = sema.recordField(current_record_id, segment.name) orelse {
-            try addUserReportAtSpan(allocator, state, origin, segment.span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_id.name, segment.name });
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "UnknownRecordField", "record type '{s}' has no field '{s}'", .{ current_record_id.name, segment.name });
             return error.InvalidType;
         };
         const field_type = field.value_type;
@@ -320,11 +321,11 @@ fn inferRecordUpdateField(
             defer allocator.free(path);
             const label = try typeLabelAlloc(allocator, field_type);
             defer allocator.free(label);
-            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path, label });
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath", "field '{s}' is {s}, not a record", .{ path, label });
             return error.InvalidType;
         }
         current_record_id = field_type.nominalId() orelse {
-            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: ss produced a record type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath", "ss produced a record type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
     }
@@ -344,7 +345,7 @@ fn inferMemberInfo(
         const enum_name = member.target.ident.name;
         if (env.get(enum_name) == null and sema.function(enum_name) == null) {
             if (sema.enumExists(null, enum_name)) {
-                try addUserReportAtSpan(allocator, state, origin, member.name_span, "UnknownEnumCase: enum '{s}' has no case '{s}'", .{ enum_name, member.name });
+                try addUserReportAtSpan(allocator, state, origin, member.name_span, "UnknownEnumCase", "enum '{s}' has no case '{s}'", .{ enum_name, member.name });
                 return error.InvalidType;
             }
         }
@@ -366,18 +367,18 @@ fn inferMemberInfoFromTargetInfo(
 ) !TypeInfo {
     if (target_info.ty.kind == .optional) {
         const child = target_info.ty.optional_child orelse {
-            try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidOptionalType: ss produced an optional type without its child; report this as an ss bug with the source file", .{});
+            try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidOptionalType", "ss produced an optional type without its child; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
         if (child.kind == .record) return inferOptionalRecordMemberInfo(allocator, state, sema, child.*, member_name, member_span, origin);
     }
     if (target_info.ty.kind == .record) {
         const record_id = target_info.ty.nominalId() orelse {
-            try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidRecordType: ss produced a record type without a resolved declaration; report this as an ss bug with the source file", .{});
+            try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidRecordType", "ss produced a record type without a resolved declaration; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
         const field = sema.recordField(record_id, member_name) orelse {
-            try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_id.name, member_name });
+            try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownRecordField", "record type '{s}' has no field '{s}'", .{ record_id.name, member_name });
             return error.InvalidType;
         };
         const field_type = field.value_type;
@@ -386,12 +387,12 @@ fn inferMemberInfoFromTargetInfo(
         return infoFromType(result_type);
     }
     if (!isPropertyTarget(target_info)) {
-        try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidProperty: member target must be Document, Page, Object, or Selection<Object>", .{});
+        try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidProperty", "member target must be Document, Page, Object, or Selection<Object>", .{});
         return error.InvalidType;
     }
     if (std.mem.eql(u8, member_name, "content")) return infoFromType(Type.string);
     const field = lookupFieldForTarget(sema, target_info, member_name) orelse {
-        try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownField: unknown field: {s}", .{member_name});
+        try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownField", "unknown field: {s}", .{member_name});
         return error.InvalidType;
     };
     const field_type = field.value_type;
@@ -410,11 +411,11 @@ fn inferOptionalRecordMemberInfo(
     origin: []const u8,
 ) !TypeInfo {
     const record_id = record_type.nominalId() orelse {
-        try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidRecordType: ss produced a record type without a resolved declaration; report this as an ss bug with the source file", .{});
+        try addUserReportAtSpan(allocator, state, origin, member_span, "InvalidRecordType", "ss produced a record type without a resolved declaration; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
     const field = sema.recordField(record_id, member_name) orelse {
-        try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_id.name, member_name });
+        try addUserReportAtSpan(allocator, state, origin, member_span, "UnknownRecordField", "record type '{s}' has no field '{s}'", .{ record_id.name, member_name });
         return error.InvalidType;
     };
     const field_type = field.value_type;
@@ -435,7 +436,7 @@ fn inferOptionalCheckInfo(
     const target_info = try exprInfoWithOptions(allocator, state, sema, env, target, origin, options);
     if (target_info.hole != null) return target_info;
     if (target_info.ty.kind != .optional) {
-        try addUserReport(state, origin, "TypeMismatch: '?' expects an optional value", .{});
+        try addUserReport(state, origin, "TypeMismatch", "'?' expects an optional value", .{});
         return error.InvalidType;
     }
     return infoFromType(Type.boolean);
@@ -453,11 +454,11 @@ fn inferCoalesceInfo(
     const target_info = try exprInfoWithOptions(allocator, state, sema, env, coalesce.target.*, origin, options);
     if (target_info.hole != null) return target_info;
     if (target_info.ty.kind != .optional) {
-        try addUserReport(state, origin, "TypeMismatch: '??' expects an optional value", .{});
+        try addUserReport(state, origin, "TypeMismatch", "'??' expects an optional value", .{});
         return error.InvalidType;
     }
     const child = target_info.ty.optional_child orelse {
-        try addUserReport(state, origin, "TypeMismatch: invalid optional type", .{});
+        try addUserReport(state, origin, "TypeMismatch", "invalid optional type", .{});
         return error.InvalidType;
     };
     const fallback_info = try exprInfoWithOptions(allocator, state, sema, env, coalesce.fallback.*, origin, options);
@@ -497,7 +498,7 @@ fn inferLambdaInfo(
     const body_info = try exprInfoWithOptions(allocator, state, sema, &local_env, lambda.body.*, origin, options);
     if (body_info.hole != null) return body_info;
     if (body_info.ty.kind == .void) {
-        try addUserReport(state, origin, "VoidValue: lambda bodies must produce a value", .{});
+        try addUserReport(state, origin, "VoidValue", "lambda bodies must produce a value", .{});
         return error.InvalidType;
     }
     var info = infoFromType(try Type.functionType(allocator, param_types, body_info.ty));
@@ -528,7 +529,7 @@ fn inferCallInfo(
         if (const_info.ty.kind == .function and const_info.ty.fn_result != null) {
             return try inferFunctionValueCallInfo(allocator, state, sema, env, const_info, call.args.items, origin, options);
         }
-        try addUserReportAtSpan(allocator, state, origin, preferredDiagnosticSpan(call.callee.name_span, call.callee.span), "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.callee.name});
+        try addUserReportAtSpan(allocator, state, origin, preferredDiagnosticSpan(call.callee.name_span, call.callee.span), "UnknownFunction", "constants are values; use '{s}' without parentheses", .{call.callee.name});
         return error.UnknownFunction;
     }
     const descriptor = sema.callCallee(call.callee) orelse {
@@ -552,11 +553,11 @@ fn reportCallResolutionFailure(
     origin: []const u8,
 ) !void {
     switch (sema.resolveFunction(callee)) {
-        .unknown_alias => |alias| try addUserReportAtSpan(allocator, state, origin, preferredDiagnosticSpan(callee.qualifier_span, callee.span), "UnknownModuleAlias: unknown import alias: {s}", .{alias}),
+        .unknown_alias => |alias| try addUserReportAtSpan(allocator, state, origin, preferredDiagnosticSpan(callee.qualifier_span, callee.span), "UnknownModuleAlias", "unknown import alias: {s}", .{alias}),
         else => {
             const name = try callee.displayAlloc(allocator);
             defer allocator.free(name);
-            try addUserReportAtSpan(allocator, state, origin, preferredDiagnosticSpan(callee.name_span, callee.span), "UnknownFunction: unknown function: {s}", .{name});
+            try addUserReportAtSpan(allocator, state, origin, preferredDiagnosticSpan(callee.name_span, callee.span), "UnknownFunction", "unknown function: {s}", .{name});
         },
     }
 }
@@ -589,12 +590,12 @@ fn inferFunctionValueCallInfo(
     if (callee_info.ty.kind != .function or callee_info.ty.fn_result == null) {
         const actual_label = try typeInfoLabelAlloc(allocator, callee_info);
         defer allocator.free(actual_label);
-        try addUserReport(state, origin, "TypeMismatch: expected Function, got {s}", .{actual_label});
+        try addUserReport(state, origin, "TypeMismatch", "expected Function, got {s}", .{actual_label});
         return error.InvalidType;
     }
     if (args.len != callee_info.ty.fn_params.len) {
         if (firstHoleInArgs(args)) |hole_id| return infoFromHole(hole_id);
-        try addUserReport(state, origin, "InvalidArity: expected {d}, got {d}", .{ callee_info.ty.fn_params.len, args.len });
+        try addUserReport(state, origin, "InvalidArity", "expected {d}, got {d}", .{ callee_info.ty.fn_params.len, args.len });
         return error.InvalidArity;
     }
     for (args, 0..) |arg, index| {
@@ -620,9 +621,9 @@ fn inferUserCallInfo(
     if (call.args.items.len < min_arity or call.args.items.len > max_arity) {
         if (firstHoleInArgs(call.args.items)) |hole_id| return infoFromHole(hole_id);
         if (min_arity == max_arity) {
-            try addUserReport(state, origin, "InvalidArity: expected {d}, got {d}", .{ max_arity, call.args.items.len });
+            try addUserReport(state, origin, "InvalidArity", "expected {d}, got {d}", .{ max_arity, call.args.items.len });
         } else {
-            try addUserReport(state, origin, "InvalidArity: expected {d}..{d}, got {d}", .{ min_arity, max_arity, call.args.items.len });
+            try addUserReport(state, origin, "InvalidArity", "expected {d}..{d}, got {d}", .{ min_arity, max_arity, call.args.items.len });
         }
         return error.InvalidArity;
     }
@@ -652,9 +653,9 @@ fn inferPrimitiveCallInfo(
     if (call.args.items.len < descriptor.min_arity or call.args.items.len > descriptor.max_arity) {
         if (firstHoleInArgs(call.args.items)) |hole_id| return infoFromHole(hole_id);
         if (descriptor.min_arity == descriptor.max_arity) {
-            try addUserReport(state, origin, "InvalidArity: expected {d}, got {d}", .{ descriptor.min_arity, call.args.items.len });
+            try addUserReport(state, origin, "InvalidArity", "expected {d}, got {d}", .{ descriptor.min_arity, call.args.items.len });
         } else {
-            try addUserReport(state, origin, "InvalidArity: expected {d}..{d}, got {d}", .{ descriptor.min_arity, descriptor.max_arity, call.args.items.len });
+            try addUserReport(state, origin, "InvalidArity", "expected {d}..{d}, got {d}", .{ descriptor.min_arity, descriptor.max_arity, call.args.items.len });
         }
         return error.InvalidArity;
     }
@@ -691,14 +692,14 @@ fn validateKnownPropertyKeyCall(
         .string => |literal| literal.text,
         .hole => return,
         else => {
-            try addUserReport(state, origin, "InvalidProperty: property key must be a known field literal", .{});
+            try addUserReport(state, origin, "InvalidProperty", "property key must be a known field literal", .{});
             return error.InvalidType;
         },
     };
     const target_info = try exprInfoWithOptions(state.allocator, state, sema, env, call.args.items[0], origin, options);
     if (target_info.hole != null) return;
     if (lookupFieldForTarget(sema, target_info, key) == null) {
-        try addUserReport(state, origin, "UnknownField: unknown field: {s}", .{key});
+        try addUserReport(state, origin, "UnknownField", "unknown field: {s}", .{key});
         return error.InvalidType;
     }
 }
@@ -718,11 +719,11 @@ fn validateSetReprCall(
     if (object_info.hole != null) return;
     if (callback_info.hole != null) return;
     if (callback_info.ty.kind != .function or callback_info.ty.fn_result == null) {
-        try addUserReport(state, origin, "InvalidCallback: set_repr expects Object -> String", .{});
+        try addUserReport(state, origin, "InvalidCallback", "set_repr expects Object -> String", .{});
         return error.InvalidType;
     }
     if (callback_info.ty.fn_params.len != 1) {
-        try addUserReport(state, origin, "InvalidCallback: set_repr callback receives 1 argument, but its function type has {d}", .{callback_info.ty.fn_params.len});
+        try addUserReport(state, origin, "InvalidCallback", "set_repr callback receives 1 argument, but its function type has {d}", .{callback_info.ty.fn_params.len});
         return error.InvalidArity;
     }
     const object_arg_type = if (object_info.ty.kind == .object and object_info.object_class != null)
@@ -977,13 +978,13 @@ fn validateCallbackShape(
     if (callback_info.hole != null) return;
     if (selection_info.hole != null) return;
     if (callback_info.ty.kind != .function or callback_info.ty.fn_result == null) {
-        try addUserReport(state, origin, "InvalidCallback: callback must have a function type", .{});
+        try addUserReport(state, origin, "InvalidCallback", "callback must have a function type", .{});
         return error.InvalidType;
     }
     const extra_count = if (call.args.items.len > function_arg_index + 1) call.args.items.len - function_arg_index - 1 else 0;
     const expected_arg_count = supplied_arg_count + extra_count;
     if (expected_arg_count != callback_info.ty.fn_params.len) {
-        try addUserReport(state, origin, "InvalidCallback: callback receives {d} arguments here, but its function type has {d}", .{
+        try addUserReport(state, origin, "InvalidCallback", "callback receives {d} arguments here, but its function type has {d}", .{
             expected_arg_count,
             callback_info.ty.fn_params.len,
         });
@@ -1046,7 +1047,8 @@ fn inferSelectionAlgebraInfo(
         try addUserReport(
             state,
             origin,
-            "InvalidSelectionAlgebra: cannot combine {s} and {s}",
+            "InvalidSelectionAlgebra",
+            "cannot combine {s} and {s}",
             .{ left_label, right_label },
         );
         return error.InvalidType;
@@ -1073,11 +1075,11 @@ fn inferSelectCallInfo(
     if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
     const query_name = resolveStringLiteral(env, call.args.items[1]) orelse return infoFromType(Type.selection(.any));
     const query = sema.query(query_name) orelse {
-        try addUserReport(state, origin, "UnknownQuery: unknown query: {s}", .{query_name});
+        try addUserReport(state, origin, "UnknownQuery", "unknown query: {s}", .{query_name});
         return error.UnknownQuery;
     };
     if (call.args.items.len != query.arity) {
-        try addUserReport(state, origin, "InvalidArity: query {s} expects {d} arguments, got {d}", .{ query_name, query.arity, call.args.items.len });
+        try addUserReport(state, origin, "InvalidArity", "query {s} expects {d} arguments, got {d}", .{ query_name, query.arity, call.args.items.len });
         return error.InvalidArity;
     }
     const base = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[0], origin, options);
@@ -1134,7 +1136,7 @@ fn validateSetPropCall(
         .string => |literal| literal.text,
         .hole => return,
         else => {
-            try addUserReport(state, origin, "InvalidProperty: property key must be a known field literal", .{});
+            try addUserReport(state, origin, "InvalidProperty", "property key must be a known field literal", .{});
             return error.InvalidType;
         },
     };
@@ -1146,7 +1148,8 @@ fn validateSetPropCall(
         try addUserReport(
             state,
             origin,
-            "InvalidProperty: set_prop target must be Document, Page, Object, or Selection<Object>; got {s}",
+            "InvalidProperty",
+            "set_prop target must be Document, Page, Object, or Selection<Object>; got {s}",
             .{actual_label},
         );
         return error.InvalidType;
@@ -1155,7 +1158,7 @@ fn validateSetPropCall(
     const value_info = try exprInfoWithOptions(state.allocator, state, sema, env, call.args.items[2], origin, options);
     if (value_info.hole != null) return;
     if (value_info.ty.kind == .function) {
-        try addUserReport(state, origin, "InvalidProperty: function values cannot be stored as properties", .{});
+        try addUserReport(state, origin, "InvalidProperty", "function values cannot be stored as properties", .{});
         return error.InvalidType;
     }
     if (lookupFieldForTarget(sema, target_info, key)) |field| {
@@ -1163,7 +1166,7 @@ fn validateSetPropCall(
         return;
     }
 
-    try addUserReport(state, origin, "UnknownField: unknown field: {s}", .{key});
+    try addUserReport(state, origin, "UnknownField", "unknown field: {s}", .{key});
     return error.InvalidType;
 }
 
@@ -1184,7 +1187,8 @@ fn validateExtendRenderEnvCall(
         try addUserReport(
             state,
             origin,
-            "InvalidRenderEnv: extend_render_env target must be Document, Page, Object, or Selection<Object>; got {s}",
+            "InvalidRenderEnv",
+            "extend_render_env target must be Document, Page, Object, or Selection<Object>; got {s}",
             .{actual_label},
         );
         return error.InvalidType;
@@ -1196,7 +1200,7 @@ fn validateExtendRenderEnvCall(
         if (!std.mem.eql(u8, literal, core.render_env.OpAdd) and
             !std.mem.eql(u8, literal, core.render_env.OpSet))
         {
-            try addUserReport(state, origin, "InvalidRenderEnv: unsupported render environment op: {s}", .{literal});
+            try addUserReport(state, origin, "InvalidRenderEnv", "unsupported render environment op: {s}", .{literal});
             return error.InvalidType;
         }
     }
@@ -1205,18 +1209,18 @@ fn validateExtendRenderEnvCall(
             !std.mem.eql(u8, literal, core.render_env.KeyLatexPreambleFile) and
             !std.mem.eql(u8, literal, core.render_env.KeyLatexEngine))
         {
-            try addUserReport(state, origin, "InvalidRenderEnv: unsupported render environment key: {s}", .{literal});
+            try addUserReport(state, origin, "InvalidRenderEnv", "unsupported render environment key: {s}", .{literal});
             return error.InvalidType;
         }
     }
     if (op != null and key != null and !core.render_env.isSupported(op.?, key.?)) {
-        try addUserReport(state, origin, "InvalidRenderEnv: unsupported render environment operation", .{});
+        try addUserReport(state, origin, "InvalidRenderEnv", "unsupported render environment operation", .{});
         return error.InvalidType;
     }
     if (key != null and core.render_env.isLatexPreambleFileKey(key.?)) {
         if (resolveStringLiteral(env, call.args.items[3])) |path| {
             if (!core.render_env.isValidLatexPreambleFilePath(path)) {
-                try addUserReport(state, origin, "InvalidRenderEnv: empty LaTeX preamble file path", .{});
+                try addUserReport(state, origin, "InvalidRenderEnv", "empty LaTeX preamble file path", .{});
                 return error.InvalidType;
             }
         }
@@ -1224,7 +1228,7 @@ fn validateExtendRenderEnvCall(
     if (key != null and core.render_env.isLatexEngineKey(key.?)) {
         if (resolveStringLiteral(env, call.args.items[3])) |engine| {
             if (!core.render_env.isValidLatexEngine(engine)) {
-                try addUserReport(state, origin, "InvalidRenderEnv: LaTeX engine must be pdflatex or lualatex", .{});
+                try addUserReport(state, origin, "InvalidRenderEnv", "LaTeX engine must be pdflatex or lualatex", .{});
                 return error.InvalidType;
             }
         }
@@ -1285,7 +1289,8 @@ fn validateExpectedFieldValueAtSpan(
             state,
             origin,
             span,
-            "InvalidFieldValue: field '{s}' expects {s}, got {s}",
+            "InvalidFieldValue",
+            "field '{s}' expects {s}, got {s}",
             .{ key, expected_label, actual_label },
         );
         return error.InvalidType;
@@ -1353,7 +1358,7 @@ fn validatePropertySetPath(
             try validateNestedPropertySetPath(allocator, sink, sema, path, field.value_type, value_info, origin);
             return;
         }
-        try addUserReportAtSpan(allocator, state, origin, first.span, "UnknownField: unknown field: {s}", .{first.name});
+        try addUserReportAtSpan(allocator, state, origin, first.span, "UnknownField", "unknown field: {s}", .{first.name});
         return error.InvalidType;
     }
 }
@@ -1397,7 +1402,7 @@ fn validateMemberTargetPropertySetPath(
     if (current_info.hole != null) return;
     const actual_label = try typeInfoLabelAlloc(allocator, current_info);
     defer allocator.free(actual_label);
-    try addUserReportAtSpan(allocator, state, origin, path[path.len - 1].span, "InvalidProperty: property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
+    try addUserReportAtSpan(allocator, state, origin, path[path.len - 1].span, "InvalidProperty", "property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
     return error.InvalidType;
 }
 
@@ -1415,17 +1420,17 @@ fn validateNestedPropertySetPath(
         defer allocator.free(path_text);
         const label = try typeLabelAlloc(allocator, root_type);
         defer allocator.free(label);
-        try addUserReportAtSpan(allocator, state, origin, path[0].span, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
+        try addUserReportAtSpan(allocator, state, origin, path[0].span, "InvalidRecordUpdatePath", "field '{s}' is {s}, not a record", .{ path_text, label });
         return error.InvalidType;
     }
     var current_record_id = root_type.nominalId() orelse {
-        try addUserReportAtSpan(allocator, state, origin, path[0].span, "InvalidRecordUpdatePath: ss produced a record type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
+        try addUserReportAtSpan(allocator, state, origin, path[0].span, "InvalidRecordUpdatePath", "ss produced a record type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
     for (path[1..], 1..) |segment, index| {
         if (segment.name_hole != null) return;
         const field = sema.recordField(current_record_id, segment.name) orelse {
-            try addUserReportAtSpan(allocator, state, origin, segment.span, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_id.name, segment.name });
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "UnknownRecordField", "record type '{s}' has no field '{s}'", .{ current_record_id.name, segment.name });
             return error.InvalidType;
         };
         if (index + 1 == path.len) {
@@ -1439,11 +1444,11 @@ fn validateNestedPropertySetPath(
             defer allocator.free(path_text);
             const label = try typeLabelAlloc(allocator, field.value_type);
             defer allocator.free(label);
-            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath", "field '{s}' is {s}, not a record", .{ path_text, label });
             return error.InvalidType;
         }
         current_record_id = field.value_type.nominalId() orelse {
-            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath: ss produced a record type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
+            try addUserReportAtSpan(allocator, state, origin, segment.span, "InvalidRecordUpdatePath", "ss produced a record type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
     }

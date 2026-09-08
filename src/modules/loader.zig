@@ -440,7 +440,7 @@ const Builder = struct {
             error_report.formatParseDiagnostic(&message_buf, diag)
         else
             error_report.formatParseFailureWithoutDiagnostic(&message_buf, err);
-        try self.addDiagnostic(path, text, .@"error", @errorName(err), message, if (diagnostic) |diag| .{ .start = diag.span.start, .end = diag.span.end } else null);
+        try self.addDiagnostic(path, text, .@"error", error_report.parseDiagnosticCode(err), message, if (diagnostic) |diag| .{ .start = diag.span.start, .end = diag.span.end } else null);
         if (self.print_diagnostics) {
             error_report.printParseError(path, text, err, diagnostic);
         }
@@ -451,15 +451,9 @@ const Builder = struct {
         if (hole_diagnostics.len == 0) return;
         const source_id = try diagnostics.registerSource(path, text);
         for (hole_diagnostics) |diagnostic| {
-            const expected = diagnostic.expected orelse "syntax";
-            const found = diagnostic.found orelse "unknown";
-            const message = try std.fmt.allocPrint(
-                self.allocator,
-                "ParseHole: expected {s}, found {s}",
-                .{ expected, found },
-            );
-            defer self.allocator.free(message);
-            try diagnostics.addAt(source_id, .@"error", @errorName(diagnostic.err), message, .{
+            var message_buf: [256]u8 = undefined;
+            const message = error_report.formatParseDiagnostic(&message_buf, diagnostic);
+            try diagnostics.addAt(source_id, .@"error", error_report.parseDiagnosticCode(diagnostic.err), message, .{
                 .start = diagnostic.span.start,
                 .end = diagnostic.span.end,
             }, null);

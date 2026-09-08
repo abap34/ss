@@ -175,26 +175,28 @@ fn reportLowerError(state: *core.DocumentState, err: anyerror, origin: ?[]const 
 fn reportDuplicatePropertyDefinition(state: *core.DocumentState, origin: []const u8, key: []const u8) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
-            .message = try std.fmt.allocPrint(state.allocator, "DuplicatePropertyDefinition: property '{s}' is already defined on this target", .{key}),
+            .code = "DuplicatePropertyDefinition",
+            .message = try std.fmt.allocPrint(state.allocator, "property '{s}' is already defined on this target", .{key}),
         },
     });
 }
 
 fn reportDuplicateContentDefinition(state: *core.DocumentState, origin: []const u8) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .message = try state.allocator.dupe(u8, "DuplicateContentDefinition: object content is already defined") },
+        .user_report = .{ .code = "DuplicateContentDefinition", .message = try state.allocator.dupe(u8, "object content is already defined") },
     });
 }
 
 fn reportDuplicateReprDefinition(state: *core.DocumentState, origin: []const u8) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .message = try state.allocator.dupe(u8, "DuplicateReprDefinition: object repr is already defined") },
+        .user_report = .{ .code = "DuplicateReprDefinition", .message = try state.allocator.dupe(u8, "object repr is already defined") },
     });
 }
 
-fn reportRecordUpdateError(state: *core.DocumentState, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
+fn reportRecordUpdateError(state: *core.DocumentState, origin: []const u8, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
+            .code = code,
             .message = try std.fmt.allocPrint(state.allocator, fmt, args),
         },
     });
@@ -203,7 +205,8 @@ fn reportRecordUpdateError(state: *core.DocumentState, origin: []const u8, compt
 fn reportInvalidRecordLiteral(state: *core.DocumentState, origin: []const u8, type_name: []const u8) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
-            .message = try std.fmt.allocPrint(state.allocator, "InvalidRecordLiteral: {s} is an enum type, not a record; use {s}.<case>", .{ type_name, type_name }),
+            .code = "InvalidRecordLiteral",
+            .message = try std.fmt.allocPrint(state.allocator, "{s} is an enum type, not a record; use {s}.<case>", .{ type_name, type_name }),
         },
     });
 }
@@ -212,21 +215,30 @@ fn reportLowerDiagnostic(state: *core.DocumentState, diagnostic: LowerDiagnostic
     var message_buf: [256]u8 = undefined;
     const message = formatLowerDiagnostic(&message_buf, diagnostic);
     try state.addValidationDiagnostic(.@"error", null, null, diagnostic.origin, .{
-        .user_report = .{ .message = try state.allocator.dupe(u8, message) },
+        .user_report = .{ .code = lowerDiagnosticCode(diagnostic), .message = try state.allocator.dupe(u8, message) },
     });
 }
 
 fn formatLowerDiagnostic(buf: []u8, diagnostic: LowerDiagnostic) []const u8 {
     return switch (diagnostic.data) {
-        .unknown_name => |data| std.fmt.bufPrint(buf, "{s}: unknown {s}: {s}", .{ unknownNameCode(data.kind), data.kind, data.name }) catch "UnknownName: unknown name",
+        .unknown_name => |data| std.fmt.bufPrint(buf, "unknown {s}: {s}", .{ data.kind, data.name }) catch "unknown name",
         .invalid_arity => |data| blk: {
             if (data.min == data.max) {
-                break :blk std.fmt.bufPrint(buf, "InvalidArity: expected {d}, got {d}", .{ data.min, data.actual }) catch formatGenericLowerDiagnostic(buf, diagnostic.err);
+                break :blk std.fmt.bufPrint(buf, "expected {d}, got {d}", .{ data.min, data.actual }) catch formatGenericLowerDiagnostic(buf, diagnostic.err);
             }
-            break :blk std.fmt.bufPrint(buf, "InvalidArity: expected {d}..{d}, got {d}", .{ data.min, data.max, data.actual }) catch formatGenericLowerDiagnostic(buf, diagnostic.err);
+            break :blk std.fmt.bufPrint(buf, "expected {d}..{d}, got {d}", .{ data.min, data.max, data.actual }) catch formatGenericLowerDiagnostic(buf, diagnostic.err);
         },
-        .invalid_value_tag => |data| std.fmt.bufPrint(buf, "InvalidValueTag: expected {s}, got {s}", .{ @tagName(data.expected), @tagName(data.actual) }) catch formatGenericLowerDiagnostic(buf, diagnostic.err),
+        .invalid_value_tag => |data| std.fmt.bufPrint(buf, "expected {s}, got {s}", .{ @tagName(data.expected), @tagName(data.actual) }) catch formatGenericLowerDiagnostic(buf, diagnostic.err),
         .generic => formatGenericLowerDiagnostic(buf, diagnostic.err),
+    };
+}
+
+fn lowerDiagnosticCode(diagnostic: LowerDiagnostic) []const u8 {
+    return switch (diagnostic.data) {
+        .unknown_name => |data| unknownNameCode(data.kind),
+        .invalid_arity => "InvalidArity",
+        .invalid_value_tag => "InvalidValueTag",
+        .generic => if (lowerErrorMessage(diagnostic.err) != null) @errorName(diagnostic.err) else "LoweringFailed",
     };
 }
 
@@ -247,52 +259,52 @@ fn formatGenericLowerDiagnostic(buf: []u8, err: anyerror) []const u8 {
     var reason_buf: [256]u8 = undefined;
     return std.fmt.bufPrint(
         buf,
-        "LoweringFailed: document evaluation could not finish: {s}",
+        "document evaluation could not finish: {s}",
         .{utils.err.formatErrorReason(&reason_buf, err)},
-    ) catch "LoweringFailed: document evaluation could not finish; please report this as an ss bug";
+    ) catch "document evaluation could not finish; please report this as an ss bug";
 }
 
 fn lowerErrorMessage(err: anyerror) ?[]const u8 {
     return switch (err) {
-        error.ReturnOutsideFunction => "ReturnOutsideFunction: return is only valid inside a function",
-        error.InvalidLibraryModule => "InvalidLibraryModule: imported modules must contain functions, constants, and imports only",
-        error.FunctionDoesNotReturnValue => "FunctionDoesNotReturnValue: function used as a value does not return anything",
-        error.InvalidArity => "InvalidArity: wrong number of arguments",
-        error.InvalidValueTag => "InvalidValueTag: value has the wrong semantic kind",
-        error.RecursiveFunction => "RecursiveFunction: recursive functions are not allowed",
-        error.RecursiveConst => "RecursiveConst: recursive constants are not allowed",
-        error.EmptySelection => "EmptySelection: selection is empty",
-        error.InvalidSelectionItemType => "InvalidSelectionItemType: selection item kinds do not match",
-        error.InvalidSelectionMutation => "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated",
-        error.LayoutDependencyCycle => "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once",
-        error.PostLayoutComputationUnsupported => "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet",
-        error.ExecutionDependencyCycle => "ExecutionDependencyCycle: document evaluation dependencies contain a cycle",
-        error.DuplicateContentDefinition => "DuplicateContentDefinition: object content is already defined",
-        error.DuplicatePropertyDefinition => "DuplicatePropertyDefinition: property is already defined on this target",
-        error.DuplicateReprDefinition => "DuplicateReprDefinition: object repr is already defined",
-        error.ExpectedSelection => "ExpectedSelection: expected a selection value",
-        error.ExpectedConstraintSet => "ExpectedConstraintSet: expected a constraint set",
-        error.ExpectedStringArgument => "ExpectedStringArgument: expected a string argument",
-        error.ExpectedNumberArgument => "ExpectedNumberArgument: expected a number argument",
-        error.ExpectedPathCommand => "ExpectedPathCommand: expected a PathCommand argument",
-        error.InvalidPathArity => "InvalidPathArity: path expects between 1 and 255 commands",
-        error.InvalidPathCommandOrder => "InvalidPathCommandOrder: drawing commands require an open subpath",
-        error.InvalidPathVerb => "InvalidPathVerb: unknown path command verb",
-        error.MissingPathCommandField => "MissingPathCommandField: path command field is missing",
-        error.InvalidPathCommandField => "InvalidPathCommandField: path command field has the wrong type",
-        error.NonFinitePathCoordinate => "NonFinitePathCoordinate: path coordinates must be finite",
-        error.InvalidArcRadius => "InvalidArcRadius: arc radii must not be negative",
-        error.ExpectedAnchor => "ExpectedAnchor: expected an anchor argument",
-        error.ExpectedObject => "ExpectedObject: expected an object argument",
-        error.NoCurrentPage => "NoCurrentPage: this operation is only valid inside a page block",
-        error.NoPreviousPage => "NoPreviousPage: the current page is the first page and has no previous page",
-        error.MissingParentPage => "MissingParentPage: the object is not attached to a page; place it before requesting its page",
-        error.UnknownAnchor => "UnknownAnchor: unknown anchor",
-        error.UnknownRole => "UnknownRole: unknown role",
-        error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
-        error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page anchors cannot be constraint targets",
-        error.UnsupportedDocumentEvaluationPrimitive => "UnsupportedDocumentEvaluationPrimitive: this operation is not valid during document evaluation",
-        error.FunctionDidNotReturnValue => "FunctionDidNotReturnValue: function did not return a value",
+        error.ReturnOutsideFunction => "return is only valid inside a function",
+        error.InvalidLibraryModule => "imported modules must contain functions, constants, and imports only",
+        error.FunctionDoesNotReturnValue => "function used as a value does not return anything",
+        error.InvalidArity => "wrong number of arguments",
+        error.InvalidValueTag => "value has the wrong semantic kind",
+        error.RecursiveFunction => "recursive functions are not allowed",
+        error.RecursiveConst => "recursive constants are not allowed",
+        error.EmptySelection => "selection is empty",
+        error.InvalidSelectionItemType => "selection item kinds do not match",
+        error.InvalidSelectionMutation => "primitive callbacks must not add objects or pages to the selection being iterated",
+        error.LayoutDependencyCycle => "layout reads cannot feed object creation, content, properties, or constraints because layout is solved once",
+        error.PostLayoutComputationUnsupported => "layout-reading scheduled computations are not implemented yet",
+        error.ExecutionDependencyCycle => "document evaluation dependencies contain a cycle",
+        error.DuplicateContentDefinition => "object content is already defined",
+        error.DuplicatePropertyDefinition => "property is already defined on this target",
+        error.DuplicateReprDefinition => "object repr is already defined",
+        error.ExpectedSelection => "expected a selection value",
+        error.ExpectedConstraintSet => "expected a constraint set",
+        error.ExpectedStringArgument => "expected a string argument",
+        error.ExpectedNumberArgument => "expected a number argument",
+        error.ExpectedPathCommand => "expected a PathCommand argument",
+        error.InvalidPathArity => "path expects between 1 and 255 commands",
+        error.InvalidPathCommandOrder => "drawing commands require an open subpath",
+        error.InvalidPathVerb => "unknown path command verb",
+        error.MissingPathCommandField => "path command field is missing",
+        error.InvalidPathCommandField => "path command field has the wrong type",
+        error.NonFinitePathCoordinate => "path coordinates must be finite",
+        error.InvalidArcRadius => "arc radii must not be negative",
+        error.ExpectedAnchor => "expected an anchor argument",
+        error.ExpectedObject => "expected an object argument",
+        error.NoCurrentPage => "this operation is only valid inside a page block",
+        error.NoPreviousPage => "the current page is the first page and has no previous page",
+        error.MissingParentPage => "the object is not attached to a page; place it before requesting its page",
+        error.UnknownAnchor => "unknown anchor",
+        error.UnknownRole => "unknown role",
+        error.UnknownPayloadKind => "unknown payload kind",
+        error.PageCannotBeConstraintTarget => "page anchors cannot be constraint targets",
+        error.UnsupportedDocumentEvaluationPrimitive => "this operation is not valid during document evaluation",
+        error.FunctionDidNotReturnValue => "function did not return a value",
         else => null,
     };
 }
@@ -752,7 +764,7 @@ fn evalRecordUpdate(
     var target = try evalExpr(evaluation, page_id, scope, env, current_origin, update.target.*);
     errdefer target.deinit(state.allocator);
     if (target != .record) {
-        try reportRecordUpdateError(state, current_origin, "InvalidRecordUpdate: with expects a record value", .{});
+        try reportRecordUpdateError(state, current_origin, "InvalidRecordUpdate", "with expects a record value", .{});
         return error.InvalidValueTag;
     }
 
@@ -764,13 +776,13 @@ fn evalRecordUpdate(
             error.InvalidValueTag => {
                 const path = try ast.formatRecordPath(state.allocator, field.path.items);
                 defer state.allocator.free(path);
-                try reportRecordUpdateError(state, current_origin, "InvalidRecordUpdatePath: '{s}' does not resolve to a nested record", .{path});
+                try reportRecordUpdateError(state, current_origin, "InvalidRecordUpdatePath", "'{s}' does not resolve to a nested record", .{path});
                 return err;
             },
             error.UnknownRecordField => {
                 const path = try ast.formatRecordPath(state.allocator, field.path.items);
                 defer state.allocator.free(path);
-                try reportRecordUpdateError(state, current_origin, "MissingRecordField: record update path '{s}' is not present at runtime", .{path});
+                try reportRecordUpdateError(state, current_origin, "MissingRecordField", "record update path '{s}' is not present at runtime", .{path});
                 return err;
             },
             else => return err,
@@ -843,7 +855,7 @@ fn materializePropertyRecord(
         return try slot.value.record.clone(state.allocator);
     }
     const record_id = ty.nominalId() orelse {
-        try reportRecordUpdateError(state, origin, "InvalidRecordUpdatePath: ss produced a record type without a resolved declaration while evaluating this update; report this as an ss bug with the source file", .{});
+        try reportRecordUpdateError(state, origin, "InvalidRecordUpdatePath", "ss produced a record type without a resolved declaration while evaluating this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
     return evalRecordDefaults(evaluation, page_id, scope, origin, record_id);
@@ -1334,7 +1346,7 @@ fn emitUserReport(
         page_id,
         null,
         origin,
-        .{ .user_report = .{ .message = try state.allocator.dupe(u8, message) } },
+        .{ .user_report = .{ .code = "UserReport", .message = try state.allocator.dupe(u8, message) } },
     );
 }
 
@@ -1856,13 +1868,13 @@ fn writePropertyPathToNode(
         error.InvalidValueTag => {
             const path_text = try ast.formatRecordPath(state.allocator, path);
             defer state.allocator.free(path_text);
-            try reportRecordUpdateError(state, origin, "InvalidRecordUpdatePath: '{s}' does not resolve to a nested record", .{path_text});
+            try reportRecordUpdateError(state, origin, "InvalidRecordUpdatePath", "'{s}' does not resolve to a nested record", .{path_text});
             return err;
         },
         error.UnknownRecordField => {
             const path_text = try ast.formatRecordPath(state.allocator, path);
             defer state.allocator.free(path_text);
-            try reportRecordUpdateError(state, origin, "MissingRecordField: record update path '{s}' is not present at runtime", .{path_text});
+            try reportRecordUpdateError(state, origin, "MissingRecordField", "record update path '{s}' is not present at runtime", .{path_text});
             return err;
         },
         else => return err,

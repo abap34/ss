@@ -258,7 +258,7 @@ fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, state: *core.Docu
             const origin = try queryOrigin(allocator, module, query.span);
             defer allocator.free(origin);
             try state.addValidationDiagnostic(.warning, null, null, origin, .{
-                .user_report = .{ .message = message },
+                .user_report = .{ .code = "UserReport", .message = message },
             });
         }
     }
@@ -359,7 +359,7 @@ fn checkPlacementEffectDeclarations(allocator: std.mem.Allocator, state: *core.D
         const origin = try functionOrigin(allocator, state, module_id, func.name);
         defer allocator.free(origin);
         try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "PlacementEffect: function '{s}' calls a placing operation and must end with '!'", .{func.name}) },
+            .user_report = .{ .code = "PlacementEffect", .message = try std.fmt.allocPrint(state.allocator, "function '{s}' calls a placing operation and must end with '!'", .{func.name}) },
         });
         return error.DiagnosticsFailed;
     }
@@ -667,9 +667,9 @@ fn addParseHoleDiagnostics(state: *core.DocumentState, holes: syntax_hole.Result
         const origin = try checker.sourceOrigin(state.allocator, origin_path, diagnostic.span);
         defer state.allocator.free(origin);
         var message_buf: [256]u8 = undefined;
-        const message_text = utils.err.formatParseDiagnostic(&message_buf, diagnostic);
+        const message_text = utils.err.parseDiagnosticMessage(&message_buf, diagnostic);
         try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .message = try state.allocator.dupe(u8, message_text) },
+            .user_report = .{ .code = utils.err.parseDiagnosticCode(diagnostic.err), .message = try state.allocator.dupe(u8, message_text) },
         });
     }
 }

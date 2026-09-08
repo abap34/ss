@@ -628,7 +628,7 @@ fn buildWithSyntax(
             utils.err.formatParseDiagnostic(&message_buf, diag)
         else
             utils.err.formatParseFailureWithoutDiagnostic(&message_buf, err);
-        try diagnostic_bag.add(entry_path, entry_source, .@"error", @errorName(err), message, if (diagnostic) |diag| .{
+        try diagnostic_bag.add(entry_path, entry_source, .@"error", utils.err.parseDiagnosticCode(err), message, if (diagnostic) |diag| .{
             .start = diag.span.start,
             .end = diag.span.end,
         } else null, null);

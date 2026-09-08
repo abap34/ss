@@ -56,6 +56,7 @@ fn validationUserReportsMatch(left: Diagnostic, right: Diagnostic) bool {
         return false;
     }
     if (!std.mem.eql(u8, left.origin.?, right.origin.?)) return false;
+    if (!std.mem.eql(u8, left.code(), right.code())) return false;
     const left_message = switch (left.data) {
         .user_report => |data| data.message,
         else => return false,
@@ -1351,15 +1352,15 @@ pub const DocumentState = struct {
             const ownership = self.directPageOwnershipInfo(node.id);
             if (ownership.count > 1) {
                 const role = node.role orelse node.name;
-                const message = try std.fmt.allocPrint(self.allocator, "PageOwnershipConflict: object '{s}' belongs to multiple pages", .{role});
+                const message = try std.fmt.allocPrint(self.allocator, "object '{s}' belongs to multiple pages", .{role});
                 try self.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
-                    .user_report = .{ .message = message },
+                    .user_report = .{ .code = "PageOwnershipConflict", .message = message },
                 });
             } else if (node.attached and ownership.count == 0) {
                 const role = node.role orelse node.name;
-                const message = try std.fmt.allocPrint(self.allocator, "PageOwnershipConflict: attached object '{s}' is not contained by a page", .{role});
+                const message = try std.fmt.allocPrint(self.allocator, "attached object '{s}' is not contained by a page", .{role});
                 try self.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
-                    .user_report = .{ .message = message },
+                    .user_report = .{ .code = "PageOwnershipConflict", .message = message },
                 });
             }
         }
@@ -1375,9 +1376,9 @@ pub const DocumentState = struct {
             if (try self.hasUnplacedObjectParent(node.id)) continue;
             if (self.isConstraintReferencedGroupWithAttachedDescendant(node.id)) continue;
             const role = node.role orelse node.name;
-            const message = try std.fmt.allocPrint(self.allocator, "UnplacedObject: object '{s}' was generated but not placed", .{role});
+            const message = try std.fmt.allocPrint(self.allocator, "object '{s}' was generated but not placed", .{role});
             try self.addValidationDiagnostic(severity, null, node.id, node.origin, .{
-                .user_report = .{ .message = message },
+                .user_report = .{ .code = "UnplacedObject", .message = message },
             });
         }
     }
@@ -1444,11 +1445,11 @@ pub const DocumentState = struct {
         const target_role = if (target_node) |node| node.role orelse node.name else "unknown";
         const message = try std.fmt.allocPrint(
             self.allocator,
-            "CrossPageConstraint: constraint target object '{s}' belongs to page {d}, but source object belongs to page {d}",
+            "constraint target object '{s}' belongs to page {d}, but source object belongs to page {d}",
             .{ target_role, self.pageIndexOf(target_page), self.pageIndexOf(source_page) },
         );
         try self.addValidationDiagnostic(.@"error", target_page, constraint.target_node, constraint.origin, .{
-            .user_report = .{ .message = message },
+            .user_report = .{ .code = "CrossPageConstraint", .message = message },
         });
     }
 
@@ -1470,11 +1471,11 @@ pub const DocumentState = struct {
         const node_role = node.role orelse node.name;
         const message = try std.fmt.allocPrint(
             self.allocator,
-            "UnownedLayoutObject: constraint {s} object '{s}' does not belong to a page",
+            "constraint {s} object '{s}' does not belong to a page",
             .{ role, node_role },
         );
         try self.addValidationDiagnostic(.@"error", null, node_id, origin orelse node.origin, .{
-            .user_report = .{ .message = message },
+            .user_report = .{ .code = "UnownedLayoutObject", .message = message },
         });
     }
 
@@ -1483,7 +1484,7 @@ pub const DocumentState = struct {
             if (diagnostic.phase != .validation or diagnostic.node_id != node_id) continue;
             switch (diagnostic.data) {
                 .user_report => |data| {
-                    if (!std.mem.startsWith(u8, data.message, "UnownedLayoutObject:")) continue;
+                    if (!std.mem.eql(u8, data.code, "UnownedLayoutObject")) continue;
                     if (origin == null) return true;
                     if (diagnostic.origin == null) continue;
                     if (std.mem.eql(u8, origin.?, diagnostic.origin.?)) return true;
@@ -1499,7 +1500,7 @@ pub const DocumentState = struct {
             if (diagnostic.phase != .validation or diagnostic.node_id != constraint.target_node) continue;
             switch (diagnostic.data) {
                 .user_report => |data| {
-                    if (!std.mem.startsWith(u8, data.message, "CrossPageConstraint:")) continue;
+                    if (!std.mem.eql(u8, data.code, "CrossPageConstraint")) continue;
                     if (constraint.origin == null and diagnostic.origin == null) return true;
                     if (constraint.origin == null or diagnostic.origin == null) continue;
                     if (std.mem.eql(u8, constraint.origin.?, diagnostic.origin.?)) return true;

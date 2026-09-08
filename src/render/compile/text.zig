@@ -123,19 +123,19 @@ pub fn formatSyntheticFontWarning(buffer: []u8, failure: *const SyntheticFontFai
     if (uses_fallback and selected_name.len != 0) {
         return std.fmt.bufPrint(
             buffer,
-            "FontFaceSubstituted: font '{s}' at weight {d} and style {s} resolved to synthesized {s} using fallback font '{s}'; rendering will continue, but appearance may vary by output target",
+            "font '{s}' at weight {d} and style {s} resolved to synthesized {s} using fallback font '{s}'; rendering will continue, but appearance may vary by output target",
             .{ requested_family, failure.requested.weight, @tagName(failure.requested.style), synthesis, selected_name },
         ) catch genericSyntheticFontWarning();
     }
     return std.fmt.bufPrint(
         buffer,
-        "FontFaceSubstituted: font '{s}' at weight {d} and style {s} resolved to synthesized {s}; rendering will continue, but appearance may vary by output target",
+        "font '{s}' at weight {d} and style {s} resolved to synthesized {s}; rendering will continue, but appearance may vary by output target",
         .{ requested_family, failure.requested.weight, @tagName(failure.requested.style), synthesis },
     ) catch genericSyntheticFontWarning();
 }
 
 pub fn genericSyntheticFontWarning() []const u8 {
-    return "FontFaceSubstituted: the local font system synthesized a font face; rendering will continue, but appearance may vary by output target";
+    return "the local font system synthesized a font face; rendering will continue, but appearance may vary by output target";
 }
 
 const CacheKey = struct {
@@ -1119,11 +1119,11 @@ pub fn fontEnvironmentRefresh() !FontEnvironment {
     return environment;
 }
 
-pub fn diagnosticMessageForError(err: anyerror) ?[]const u8 {
+pub fn diagnosticForError(err: anyerror) ?struct { code: []const u8, message: []const u8 } {
     return switch (err) {
-        error.FontEnvironmentRefreshFailed => "FontSetupFailed: ss could not initialize or refresh Pango's Fontconfig backend. Run 'fc-list'. If it fails, repair Fontconfig or unset invalid FONTCONFIG_FILE and FONTCONFIG_PATH values. If it succeeds, verify that Pango includes its Fontconfig/FreeType backend and that ss, Pango, and Fontconfig come from the same package source. On Homebrew systems, run 'brew reinstall pango fontconfig', then rebuild or reinstall ss against those libraries",
-        error.PangoCreateFailed => "TextLayoutUnavailable: Pango could not initialize or produce usable text layout data; verify that Pango and Fontconfig are installed, confirm that 'fc-list' succeeds, and check FONTCONFIG_FILE and FONTCONFIG_PATH",
-        error.FontEnvironmentChanged => "FontEnvironmentChanged: the system font catalog changed while the document was being processed; retry after font installation or font-cache updates finish",
+        error.FontEnvironmentRefreshFailed => .{ .code = "FontSetupFailed", .message = "ss could not initialize or refresh Pango's Fontconfig backend. Run 'fc-list'. If it fails, repair Fontconfig or unset invalid FONTCONFIG_FILE and FONTCONFIG_PATH values. If it succeeds, verify that Pango includes its Fontconfig/FreeType backend and that ss, Pango, and Fontconfig come from the same package source. On Homebrew systems, run 'brew reinstall pango fontconfig', then rebuild or reinstall ss against those libraries" },
+        error.PangoCreateFailed => .{ .code = "TextLayoutUnavailable", .message = "Pango could not initialize or produce usable text layout data; verify that Pango and Fontconfig are installed, confirm that 'fc-list' succeeds, and check FONTCONFIG_FILE and FONTCONFIG_PATH" },
+        error.FontEnvironmentChanged => .{ .code = "FontEnvironmentChanged", .message = "the system font catalog changed while the document was being processed; retry after font installation or font-cache updates finish" },
         else => null,
     };
 }

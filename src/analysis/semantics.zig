@@ -42,7 +42,7 @@ pub fn checkSelectedImports(allocator: std.mem.Allocator, state: *core.DocumentS
                 const origin = try checker.sourceOrigin(allocator, checker.originPathForModule(module), item.span);
                 defer allocator.free(origin);
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "UnknownImportedName: module '{s}' does not export '{s}'", .{ import_decl.spec, item.name }) },
+                    .user_report = .{ .code = "UnknownImportedName", .message = try std.fmt.allocPrint(state.allocator, "module '{s}' does not export '{s}'", .{ import_decl.spec, item.name }) },
                 });
                 invalid = true;
             }
@@ -63,7 +63,7 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
                 const origin = try checker.sourceOrigin(allocator, origin_path, object_decl.span);
                 defer allocator.free(origin);
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateType: type '{s}' conflicts with a built-in type", .{object_decl.name}) },
+                    .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "type '{s}' conflicts with a built-in type", .{object_decl.name}) },
                 });
                 return error.UnknownType;
             }
@@ -71,7 +71,7 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
                 const origin = try checker.sourceOrigin(allocator, origin_path, object_decl.span);
                 defer allocator.free(origin);
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateType: {s} type '{s}' is already defined in this module", .{ existing_kind, object_decl.name }) },
+                    .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "{s} type '{s}' is already defined in this module", .{ existing_kind, object_decl.name }) },
                 });
                 return error.UnknownType;
             }
@@ -83,7 +83,7 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
                 const origin = try checker.sourceOrigin(allocator, origin_path, record_decl.span);
                 defer allocator.free(origin);
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateType: type '{s}' conflicts with a built-in type", .{record_decl.name}) },
+                    .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "type '{s}' conflicts with a built-in type", .{record_decl.name}) },
                 });
                 return error.UnknownType;
             }
@@ -91,7 +91,7 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
                 const origin = try checker.sourceOrigin(allocator, origin_path, record_decl.span);
                 defer allocator.free(origin);
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateType: {s} type '{s}' is already defined in this module", .{ existing_kind, record_decl.name }) },
+                    .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "{s} type '{s}' is already defined in this module", .{ existing_kind, record_decl.name }) },
                 });
                 return error.UnknownType;
             }
@@ -103,7 +103,7 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
                 const origin = try checker.sourceOrigin(allocator, origin_path, decl.span);
                 defer allocator.free(origin);
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateType: type '{s}' conflicts with a built-in type", .{decl.name}) },
+                    .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "type '{s}' conflicts with a built-in type", .{decl.name}) },
                 });
                 return error.UnknownType;
             }
@@ -111,7 +111,7 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
                 const origin = try checker.sourceOrigin(allocator, origin_path, decl.span);
                 defer allocator.free(origin);
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateType: {s} type '{s}' is already defined in this module", .{ existing_kind, decl.name }) },
+                    .user_report = .{ .code = "DuplicateType", .message = try std.fmt.allocPrint(state.allocator, "{s} type '{s}' is already defined in this module", .{ existing_kind, decl.name }) },
                 });
                 return error.UnknownType;
             }
@@ -120,7 +120,7 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
                 const origin = try checker.sourceOrigin(allocator, origin_path, decl.span);
                 defer allocator.free(origin);
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateEnumCase: enum '{s}' already has case '{s}'", .{ decl.name, case_name }) },
+                    .user_report = .{ .code = "DuplicateEnumCase", .message = try std.fmt.allocPrint(state.allocator, "enum '{s}' already has case '{s}'", .{ decl.name, case_name }) },
                 });
                 return error.UnknownType;
             }
@@ -1018,7 +1018,7 @@ fn checkTypeAnnotation(
 
 fn reportUnknownType(state: *core.DocumentState, origin: []const u8, type_name: []const u8) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "UnknownType: unknown type: {s}", .{type_name}) },
+        .user_report = .{ .code = "UnknownType", .message = try std.fmt.allocPrint(state.allocator, "unknown type: {s}", .{type_name}) },
     });
     return error.UnknownType;
 }
@@ -1037,7 +1037,7 @@ pub fn checkDuplicateValueDeclarations(
                 const origin = try checker.sourceOrigin(allocator, origin_path, func.span);
                 defer allocator.free(origin);
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateFunction: function '{s}' is already defined in this module", .{func.name}) },
+                    .user_report = .{ .code = "DuplicateFunction", .message = try std.fmt.allocPrint(state.allocator, "function '{s}' is already defined in this module", .{func.name}) },
                 });
                 return error.DiagnosticsFailed;
             }
@@ -1048,7 +1048,7 @@ pub fn checkDuplicateValueDeclarations(
                 const origin = try checker.sourceOrigin(allocator, origin_path, constant_decl.span);
                 defer allocator.free(origin);
                 try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateValue: value '{s}' is already defined in this module", .{constant_decl.name}) },
+                    .user_report = .{ .code = "DuplicateValue", .message = try std.fmt.allocPrint(state.allocator, "value '{s}' is already defined in this module", .{constant_decl.name}) },
                 });
                 return error.DiagnosticsFailed;
             }

@@ -531,7 +531,7 @@ const Analyzer = struct {
         const origin = try activationOrigin(self.allocator, self.state, activation);
         defer if (origin) |text| self.allocator.free(text);
         try self.state.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .message = try self.allocator.dupe(u8, "RecursiveFunction: recursive function value application") },
+            .user_report = .{ .code = "RecursiveFunction", .message = try self.allocator.dupe(u8, "recursive function value application") },
         });
     }
 };

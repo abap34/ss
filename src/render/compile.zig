@@ -41,18 +41,19 @@ pub const validateFontEnvironment = text_compile.validateFontEnvironment;
 pub const refreshAndValidateFontEnvironment = text_compile.refreshAndValidateFontEnvironment;
 
 pub fn addFontEnvironmentDiagnostic(state: *core.DocumentState, err: anyerror) !bool {
-    const message = text_compile.diagnosticMessageForError(err) orelse return false;
+    const report = text_compile.diagnosticForError(err) orelse return false;
+    const message = report.message;
     for (state.diagnostics.items) |diagnostic| {
-        const existing_message = switch (diagnostic.data) {
-            .user_report => |data| data.message,
-            .render_failed => |data| data.reason,
+        const existing_code = switch (diagnostic.data) {
+            .user_report => |data| data.code,
+            .render_failed => |data| data.cause_code orelse continue,
             else => continue,
         };
-        if (std.mem.indexOf(u8, existing_message, message) != null) return true;
+        if (std.mem.eql(u8, existing_code, report.code)) return true;
     }
     const owned_message = try state.allocator.dupe(u8, message);
     try state.addRenderDiagnostic(.@"error", null, null, null, .{
-        .user_report = .{ .message = owned_message },
+        .user_report = .{ .code = report.code, .message = owned_message },
     });
     return true;
 }

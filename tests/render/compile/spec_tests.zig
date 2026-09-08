@@ -863,7 +863,7 @@ test "synthetic font faces produce non-fatal deduplicated warnings" {
         try testing.expectEqual(@as(usize, 125), content_range.end);
         var message_buffer: [1024]u8 = undefined;
         const message = render_text.formatSyntheticFontWarning(&message_buffer, detail);
-        try testing.expect(std.mem.startsWith(u8, message, "FontFaceSubstituted: font 'Helvetica' at weight 700 and style normal"));
+        try testing.expect(std.mem.startsWith(u8, message, "font 'Helvetica' at weight 700 and style normal"));
         try testing.expect(std.mem.indexOf(u8, message, case.synthesis) != null);
         try testing.expect(std.mem.indexOf(u8, message, "using fallback font 'HiraginoSans-W3'") != null);
         try testing.expect(std.mem.indexOf(u8, message, "rendering will continue") != null);
@@ -1782,7 +1782,7 @@ test "document font environment rejects changes between layout and compilation" 
             .user_report => |data| data.message,
             else => return error.ExpectedFontEnvironmentDiagnostic,
         };
-        try testing.expect(std.mem.startsWith(u8, message, "FontEnvironmentChanged:"));
+        try testing.expectEqualStrings("FontEnvironmentChanged", diagnostic.code());
         try testing.expect(std.mem.indexOf(u8, message, "retry after font installation or font-cache updates finish") != null);
     }
 }
@@ -1797,7 +1797,7 @@ test "font environment refresh failures produce actionable diagnostics" {
         .user_report => |data| data.message,
         else => return error.ExpectedFontEnvironmentDiagnostic,
     };
-    try testing.expect(std.mem.startsWith(u8, message, "FontSetupFailed:"));
+    try testing.expectEqualStrings("FontSetupFailed", state.diagnostics.items[0].code());
     try testing.expect(std.mem.indexOf(u8, message, "fc-list") != null);
     try testing.expect(std.mem.indexOf(u8, message, "FONTCONFIG_FILE") != null);
     try testing.expect(std.mem.indexOf(u8, message, "FontEnvironmentRefreshFailed") == null);
@@ -1811,7 +1811,7 @@ test "font environment refresh failures produce actionable diagnostics" {
         .user_report => |data| data.message,
         else => return error.ExpectedFontEnvironmentDiagnostic,
     };
-    try testing.expect(std.mem.startsWith(u8, pango_message, "TextLayoutUnavailable:"));
+    try testing.expectEqualStrings("TextLayoutUnavailable", state.diagnostics.items[1].code());
     try testing.expect(std.mem.indexOf(u8, pango_message, "text layout data") != null);
     try testing.expect(std.mem.indexOf(u8, pango_message, "PangoCreateFailed") == null);
 
@@ -1877,4 +1877,20 @@ test "preload cache scan reports the LaTeX preamble path" {
     try testing.expect(std.mem.indexOf(u8, message, "LaTeX preamble") != null);
     try testing.expect(std.mem.indexOf(u8, message, preamble_path) != null);
     try testing.expect(std.mem.indexOf(u8, message, "could not be read") != null);
+}
+
+test "font diagnostics identify prior failures by cause code" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    try state.addRenderDiagnostic(.@"error", null, null, null, .{
+        .render_failed = .{
+            .cause_code = "FontSetupFailed",
+            .reason = try testing.allocator.dupe(u8, "a differently worded explanation"),
+        },
+    });
+    try testing.expect(try render_compile.addFontEnvironmentDiagnostic(&state, error.FontEnvironmentRefreshFailed));
+    try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
+    var cloned = try state.diagnostics.items[0].clone(testing.allocator);
+    defer cloned.deinit(testing.allocator);
+    try testing.expectEqualStrings("FontSetupFailed", cloned.data.render_failed.cause_code.?);
 }

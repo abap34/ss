@@ -679,11 +679,11 @@ fn createRenderCacheDirectory(io: std.Io, state: *core.DocumentState, path: []co
         var reason_buf: [256]u8 = undefined;
         const message = try std.fmt.allocPrint(
             state.allocator,
-            "RenderCacheAccessFailed: could not create render cache directory '{s}': {s}; remove a conflicting file or fix its permissions",
+            "could not create render cache directory '{s}': {s}; remove a conflicting file or fix its permissions",
             .{ path, utils.err.formatErrorReason(&reason_buf, err) },
         );
         try state.addRenderDiagnostic(.@"error", null, null, null, .{
-            .user_report = .{ .message = message },
+            .user_report = .{ .code = "RenderCacheAccessFailed", .message = message },
         });
         return err;
     };
@@ -1192,13 +1192,15 @@ fn addTargetedRenderDiagnostic(
     defer origin.deinit(state.allocator);
     var detail_buffer: [512]u8 = undefined;
     const recorded_message = if (failure) |value| value.message else null;
+    const font_diagnostic = render_text.diagnosticForError(err);
     const detail = recorded_message orelse
-        render_text.diagnosticMessageForError(err) orelse
+        (if (font_diagnostic) |report| report.message else null) orelse
         renderFailureDiagnosticMessage(&detail_buffer, err);
     const reason = try std.fmt.allocPrint(state.allocator, "{s}: {s}", .{ label, detail });
     try state.addRenderDiagnostic(.@"error", resolved_target.page_id, resolved_target.node_id, origin.text, .{
         .render_failed = .{
             .reason = reason,
+            .cause_code = if (font_diagnostic) |report| report.code else @errorName(err),
             .payload_kind = resolved_target.payload_kind,
         },
     });
@@ -1219,14 +1221,14 @@ pub fn addFontFaceSubstitutionWarning(
     for (state.diagnostics.items) |diagnostic| {
         if (diagnostic.phase != .render or diagnostic.severity != .warning) continue;
         const existing = switch (diagnostic.data) {
-            .user_report => |report| report.message,
+            .user_report => |report| if (std.mem.eql(u8, report.code, "FontFaceSubstituted")) report.message else continue,
             else => continue,
         };
         if (std.mem.eql(u8, existing, message)) return;
     }
     const owned_message = try state.allocator.dupe(u8, message);
     try state.addRenderDiagnostic(.warning, page_id, node_id, origin, .{
-        .user_report = .{ .message = owned_message },
+        .user_report = .{ .code = "FontFaceSubstituted", .message = owned_message },
     });
 }
 
@@ -1952,7 +1954,7 @@ fn drawObjectCommandIntoIrWithDiagnostic(
     defer ctx.command_failure = previous_failure;
 
     drawObjectCommandIntoIr(ctx, command) catch |err| {
-        if (err == error.Canceled or render_text.diagnosticMessageForError(err) != null) return err;
+        if (err == error.Canceled or render_text.diagnosticForError(err) != null) return err;
         compiler.diagnostic_mutex.lockUncancelable(compiler.io);
         defer compiler.diagnostic_mutex.unlock(compiler.io);
         try addObjectCommandDiagnostic(state, command, err, &failure);
