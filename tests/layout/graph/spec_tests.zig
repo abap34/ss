@@ -2191,3 +2191,45 @@ fn inspectIndexedPageGraph(allocator: std.mem.Allocator, state: *core.DocumentSt
     defer subgraph.deinit();
     try testing.expectEqualSlices(usize, &.{ 3, 0, 1, 4, 2 }, subgraph.indexes.items);
 }
+
+const WidthSensitiveMeasurement = struct {
+    target: model.NodeId,
+    last_width: f32 = 0,
+
+    fn measure(context: *anyopaque, _: *anyopaque, node: *const model.Node, width: f32, mode: model.LayoutMeasurementMode) !?model.LayoutMeasurement {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        if (node.id != self.target) return null;
+        if (mode == .natural) return .{ .width = 48, .height = 36 };
+        self.last_width = width;
+        return .{ .width = width, .height = if (width < 48) @as(f32, 72) else 36 };
+    }
+};
+
+fn expectHeightAtFinalWidth(width: f32, wrap: []const u8) !void {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Final width");
+    const object = try state.makeObject(page, "body", null, .text, .text, "width-dependent content");
+    const follower = try state.makeObject(page, "following", null, .text, .text, "following content");
+    try setLayoutWrap(&state, object, wrap);
+    try state.addAnchorConstraint(object, .left, .{ .page = .left }, 0, "body-left");
+    try state.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, width, "body-width");
+    try state.addAnchorConstraint(object, .top, .{ .page = .top }, -100, "body-top");
+    try state.addAnchorConstraint(follower, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, -10, "following-top");
+    var measurement = WidthSensitiveMeasurement{ .target = object };
+    try solveDocumentStateWithOptions(&state, null, .{ .measurement_provider = .{ .context = &measurement, .measure = WidthSensitiveMeasurement.measure } });
+    const frame = state.getNode(object).?.frame;
+    try testing.expectEqual(width, frame.width);
+    try testing.expectEqual(width, measurement.last_width);
+    try expectFloat(72, frame.height);
+    const next = state.getNode(follower).?.frame;
+    try expectFloat(core.layout.Defaults.height - 100 - 72 - 10, next.y + next.height);
+}
+
+test "layout solver: subpixel width changes invalidate height before vertical solving" {
+    try expectHeightAtFinalWidth(47.995, "on");
+}
+
+test "layout solver: width-dependent height is independent of the outer wrap policy" {
+    try expectHeightAtFinalWidth(24, "off");
+}

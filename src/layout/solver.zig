@@ -583,7 +583,9 @@ fn applySolvedHorizontalFrames(state: anytype, workspace: *const graph.AxisWorks
         const old_width = node.frame.width;
         const solved_width = h_state.size orelse old_width;
         node.frame.width = solved_width;
-        if (metrics.shouldWrapNode(state, node) and @abs(solved_width - old_width) > ConstraintTolerance) {
+        // Height may change discontinuously at any width, including content
+        // such as tables whose cells wrap independently of the outer policy.
+        if (solved_width != old_width) {
             node.frame.height = try metrics.intrinsicHeightCached(state, node, measurement_cache);
         }
         node.frame.x_set = false;

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { assert, ssBin } from "../harness.mjs";
+import { assert, root, ssBin } from "../harness.mjs";
 
 const pdflatexAvailable = await commandAvailable("pdflatex");
 
 await testNaturalTitleWidthDoesNotSelfWrap();
+await testTableHeightUsesFinalWidthWithWrappingDisabled();
 await testCheckReportsRasterMeasurementFailure();
 await testCheckReportsUnknownStandaloneIcon();
 await testPanelHeightUsesRenderedIconMeasurement();
@@ -40,6 +41,27 @@ end
   } finally {
     await rm(project, { recursive: true, force: true });
   }
+}
+
+async function testTableHeightUsesFinalWidthWithWrappingDisabled() {
+  const output = path.join(root, ".ss-cache", "tests", "layout-final-width");
+  await mkdir(output, { recursive: true });
+  const fixture = path.join(root, "tests", "fixtures", "layout", "final-width", "slide.ss");
+  const dumpPath = path.join(output, "dump.json");
+  await runSs(["check", "--quiet", fixture], root);
+  await runSs(["dump", "--quiet", fixture, dumpPath], root);
+  const dump = JSON.parse(await readFile(dumpPath, "utf8"));
+  const tables = dump.nodes.filter((node) => node.content?.startsWith("| content | value |"));
+  const followers = dump.nodes.filter((node) => node.content === "After table");
+  assert(tables.length === 2 && followers.length === 2, "Final-width fixture omitted its tables or followers");
+  assert(close(tables[0].height, tables[1].height), `Outer wrapping changed table height: ${frameSummary(tables[0])} / ${frameSummary(tables[1])}`);
+  for (const [index, table] of tables.entries()) {
+    assert(close(table.width, 220), `Unexpected final table width: ${frameSummary(table)}`);
+    assert(table.height > 150, `The table retained its natural-width height: ${frameSummary(table)}`);
+    const after = followers[index];
+    assert(close(after.y + after.height, table.y - 20), `The following object overlapped its table: ${frameSummary(after)}`);
+  }
+  await runSs(["render", "--quiet", fixture, path.join(output, "fixture.pdf")], root);
 }
 
 async function testPanelHeightUsesRenderedIconMeasurement() {
