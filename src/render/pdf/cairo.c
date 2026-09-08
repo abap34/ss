@@ -1998,13 +1998,14 @@ int ss_text_shape(
                 }
                 run->advance = advance;
                 double cluster_x = 0;
-                int cluster_glyph_start = 0;
-                while (cluster_glyph_start < glyphs->num_glyphs) {
-                    const int source_start = glyphs->log_clusters[cluster_glyph_start];
-                    int cluster_glyph_end = cluster_glyph_start + 1;
-                    while (cluster_glyph_end < glyphs->num_glyphs && glyphs->log_clusters[cluster_glyph_end] == source_start) {
-                        cluster_glyph_end++;
-                    }
+                const int right_to_left = item->analysis.level & 1;
+                PangoGlyphItemIter cluster_iterator;
+                gboolean have_cluster = right_to_left
+                    ? pango_glyph_item_iter_init_end(&cluster_iterator, glyph_item, valid_text)
+                    : pango_glyph_item_iter_init_start(&cluster_iterator, glyph_item, valid_text);
+                while (have_cluster) {
+                    const int cluster_glyph_start = right_to_left ? cluster_iterator.end_glyph + 1 : cluster_iterator.start_glyph;
+                    const int cluster_glyph_end = right_to_left ? cluster_iterator.start_glyph + 1 : cluster_iterator.end_glyph;
                     double cluster_advance = 0;
                     for (int cluster_glyph = cluster_glyph_start; cluster_glyph < cluster_glyph_end; cluster_glyph++) {
                         cluster_advance += ((double)glyphs->glyphs[cluster_glyph].geometry.width) / PANGO_SCALE;
@@ -2020,8 +2021,8 @@ int ss_text_shape(
                         &cluster_logical
                     );
                     SsTextCluster *cluster = &shape->clusters[next_cluster++];
-                    cluster->source_start = (size_t)(item->offset + source_start);
-                    cluster->source_end = run->source_end;
+                    cluster->source_start = (size_t)cluster_iterator.start_index;
+                    cluster->source_end = (size_t)cluster_iterator.end_index;
                     cluster->glyph_start = run->glyph_start + (size_t)cluster_glyph_start;
                     cluster->glyph_count = (size_t)(cluster_glyph_end - cluster_glyph_start);
                     cluster->x = cluster_x;
@@ -2035,18 +2036,11 @@ int ss_text_shape(
                     cluster->ink_bounds.x += run->x + cluster_x;
                     cluster->ink_bounds.y += run->baseline_y;
                     cluster_x += cluster_advance;
-                    cluster_glyph_start = cluster_glyph_end;
+                    have_cluster = right_to_left
+                        ? pango_glyph_item_iter_prev_cluster(&cluster_iterator)
+                        : pango_glyph_item_iter_next_cluster(&cluster_iterator);
                 }
                 run->cluster_count = next_cluster - run->cluster_start;
-                for (size_t cluster_index = run->cluster_start; cluster_index < next_cluster; cluster_index++) {
-                    for (size_t candidate_index = run->cluster_start; candidate_index < next_cluster; candidate_index++) {
-                        const size_t candidate_start = shape->clusters[candidate_index].source_start;
-                        if (candidate_start > shape->clusters[cluster_index].source_start &&
-                            candidate_start < shape->clusters[cluster_index].source_end) {
-                            shape->clusters[cluster_index].source_end = candidate_start;
-                        }
-                    }
-                }
                 visual_x += advance;
             }
         }

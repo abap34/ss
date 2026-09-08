@@ -32,6 +32,7 @@ pub const Cluster = struct {
 };
 
 pub const Run = struct {
+    // Clusters follow visual glyph order. Their adjacent source intervals follow direction.
     source: Range,
     glyph_range: Range,
     cluster_range: Range,

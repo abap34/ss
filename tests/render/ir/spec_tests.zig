@@ -562,6 +562,49 @@ test "render IR validates resolved fonts and bidirectional text partitions" {
     layout.runs[0].cluster_range.start += 1;
     try testing.expectError(error.InvalidItemGeometry, ir.validate());
     layout.runs[0].cluster_range.start = run_cluster_start;
+
+    for (layout.runs) |run| {
+        const clusters = layout.clusters[run.cluster_range.start..run.cluster_range.end];
+        if (clusters.len < 2) continue;
+        const saved_source = clusters[1].source;
+        clusters[1].source = clusters[0].source;
+        try testing.expectError(error.InvalidItemGeometry, ir.validate());
+        clusters[1].source = saved_source;
+        const saved_glyphs = clusters[1].glyph_range;
+        clusters[1].glyph_range = clusters[0].glyph_range;
+        try testing.expectError(error.InvalidItemGeometry, ir.validate());
+        clusters[1].glyph_range = saved_glyphs;
+    }
+    try ir.validate();
+}
+
+test "render IR preserves source coverage for long paragraphs and complex scripts" {
+    for ([_][]const u8{
+        "a b c " ** 4096,
+        "e\u{301} a\u{308} \u{304b}\u{3099} office",
+        "\u{627}\u{644}\u{639}\u{631}\u{628}\u{64a}\u{629} 123 \u{5e9}\u{5dc}\u{5d5}\u{5dd}",
+        "\u{915}\u{94d}\u{937}\u{93f} \u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}",
+    }) |source_text| {
+        const pages = try testing.allocator.alloc(render_ir.Page, 1);
+        pages[0] = .{ .page_id = 1, .index = 0, .width = 1280, .height = 720 };
+        var ir = render_ir.Ir{ .pages = pages };
+        defer ir.deinit(testing.allocator);
+        try addDocumentSemantics(&ir);
+        var resources = render_resources.Builder{};
+        defer resources.deinit(testing.allocator);
+        var fonts = render_ir.FontBuilder{};
+        defer fonts.deinit(testing.allocator);
+        try render_support.appendText(testing.allocator, testing.io, &pages[0], &resources, &fonts, 1, 0, 30, 1000000, source_text, .{ .family = "Sans", .weight = 400, .style = .normal, .stretch = .normal }, 24, .{ .r = 0, .g = 0, .b = 0 });
+        const catalogs = try render_support.takeCatalogs(testing.allocator, &resources, &fonts);
+        ir.resources = catalogs.resources;
+        ir.fonts = catalogs.fonts;
+        try ir.validate();
+        const layout = pages[0].items.items[0].text.layout;
+        try testing.expectEqualStrings(source_text, layout.source_text);
+        var bytes: usize = 0;
+        for (layout.clusters) |cluster| bytes += cluster.source.end - cluster.source.start;
+        try testing.expectEqual(source_text.len, bytes);
+    }
 }
 
 test "font instances use content-derived identities and deterministic catalog order" {

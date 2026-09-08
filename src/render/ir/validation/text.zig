@@ -26,21 +26,24 @@ pub fn layout(ir: anytype, value: anytype) !void {
         if (ir.fonts.find(run.font_instance) == null) return error.MissingFont;
         if (!std.unicode.utf8ValidateSlice(run.language)) return error.InvalidItemGeometry;
         if ((run.direction == .right_to_left) != (run.bidi_level & 1 == 1)) return error.InvalidItemGeometry;
-        var source_bytes: usize = 0;
-        var glyph_count: usize = 0;
+        var source_boundary = if (run.direction == .left_to_right) run.source.start else run.source.end;
+        var glyph_boundary = run.glyph_range.start;
         const run_clusters = value.clusters[run.cluster_range.start..run.cluster_range.end];
-        for (run_clusters, 0..) |cluster, cluster_index| {
+        for (run_clusters) |cluster| {
             if (cluster.source.start < run.source.start or cluster.source.end > run.source.end) return error.InvalidItemGeometry;
-            if (cluster.glyph_range.start < run.glyph_range.start or cluster.glyph_range.end > run.glyph_range.end) return error.InvalidItemGeometry;
-            source_bytes += cluster.source.end - cluster.source.start;
-            glyph_count += cluster.glyph_range.end - cluster.glyph_range.start;
-            for (run_clusters[0..cluster_index]) |previous| {
-                if (overlaps(cluster.source, previous.source) or overlaps(cluster.glyph_range, previous.glyph_range)) {
-                    return error.InvalidItemGeometry;
-                }
+            if (cluster.source.start > cluster.source.end or cluster.glyph_range.start > cluster.glyph_range.end) return error.InvalidItemGeometry;
+            if (cluster.glyph_range.start != glyph_boundary or cluster.glyph_range.end > run.glyph_range.end) return error.InvalidItemGeometry;
+            glyph_boundary = cluster.glyph_range.end;
+            if (run.direction == .left_to_right) {
+                if (cluster.source.start != source_boundary) return error.InvalidItemGeometry;
+                source_boundary = cluster.source.end;
+            } else {
+                if (cluster.source.end != source_boundary) return error.InvalidItemGeometry;
+                source_boundary = cluster.source.start;
             }
         }
-        if (source_bytes != run.source.end - run.source.start or glyph_count != run.glyph_range.end - run.glyph_range.start) {
+        const source_end = if (run.direction == .left_to_right) run.source.end else run.source.start;
+        if (source_boundary != source_end or glyph_boundary != run.glyph_range.end) {
             return error.InvalidItemGeometry;
         }
     }
@@ -56,8 +59,4 @@ pub fn layout(ir: anytype, value: anytype) !void {
         if (!std.math.isFinite(glyph.offset_x) or !std.math.isFinite(glyph.offset_y) or
             !std.math.isFinite(glyph.advance_x) or !std.math.isFinite(glyph.advance_y)) return error.InvalidItemGeometry;
     }
-}
-
-fn overlaps(lhs: anytype, rhs: anytype) bool {
-    return lhs.start < rhs.end and rhs.start < lhs.end;
 }
