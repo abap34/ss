@@ -602,6 +602,108 @@ test "layout graph spec: axis workspaces seed known frames only without target c
     try testing.expect(fixed_state.size == null);
 }
 
+test "axis propagation completes long dependency chains in either constraint order" {
+    const count = 1100;
+    for ([_]bool{ false, true }) |reversed| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        const page = try state.addPage("Long chain");
+        var nodes: [count]model.NodeId = undefined;
+        for (&nodes) |*node| node.* = try state.makeObject(page, "cell", null, .text, .text, "x");
+        for (1..count) |position| {
+            const index = if (reversed) count - position else position;
+            try state.addAnchorConstraint(nodes[index], .left, .{ .node = .{ .node_id = nodes[index - 1], .anchor = .right } }, 1, "chain");
+        }
+        try state.addAnchorConstraint(nodes[0], .left, .{ .page = .left }, 0, "start");
+        var page_graph = try initPageGraph(&state, page);
+        defer page_graph.deinit();
+        var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .horizontal);
+        defer workspace.deinit();
+        for (workspace.states) |*axis_state| axis_state.size = 10;
+        _ = try solver.runPageAxisPass(&state, &workspace, .{});
+        for (nodes, 0..) |node, index| {
+            const placed = workspace.stateOfConst(node).?;
+            try testing.expect(placed.start != null and placed.end != null);
+            try expectFloat(@as(f32, @floatFromInt(index * 11)), placed.start.?);
+            try expectFloat(@as(f32, @floatFromInt(index * 11 + 10)), placed.end.?);
+        }
+        try testing.expectEqual(@as(usize, 0), state.constraint_failures.items.len);
+        var cancellation = LayoutCancellationCounter{ .cancel_after = 20 };
+        try testing.expectError(error.Canceled, solver.runPageAxisPass(&state, &workspace, .{
+            .cancellation = .{ .context = &cancellation, .is_canceled = cancelLayoutAfterCheck },
+        }));
+    }
+}
+
+test "axis propagation resolves deep groups in either node order" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Deep groups");
+    const leaf = try state.makeObject(page, "leaf", null, .text, .text, "x");
+    var outer = leaf;
+    for (0..128) |_| outer = try state.makeGroupWithOrigin(page, true, &.{outer}, "group");
+    try state.addAnchorConstraint(outer, .left, .{ .page = .left }, 100, "outer-left");
+    var inputs = try core.layout.partition.Document.init(testing.allocator, &state);
+    defer inputs.deinit(testing.allocator);
+    for (0..2) |_| {
+        var page_graph = try graph.PageLayoutGraph.init(testing.allocator, &state, inputs.pages[0]);
+        defer page_graph.deinit();
+        var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .horizontal);
+        defer workspace.deinit();
+        workspace.stateOf(leaf).?.* = .{ .start = 10, .size = 20 };
+        _ = try solver.runPageAxisPass(&state, &workspace, .{});
+        for (workspace.states) |placed| {
+            try testing.expect(placed.start != null and placed.end != null);
+            try expectFloat(100, placed.start.?);
+            try expectFloat(120, placed.end.?);
+        }
+        try testing.expect(!(try solver.runPageAxisPass(&state, &workspace, .{})));
+        std.mem.reverse(model.NodeId, inputs.pages[0].node_ids);
+    }
+    try testing.expectEqual(@as(usize, 0), state.constraint_failures.items.len);
+}
+
+test "layout exhaustion survives isolated jobs and cannot be applied" {
+    for ([_]usize{ 1, 2 }) |jobs| {
+        for ([_]bool{ false, true }) |record_diagnostics| {
+            var state = try initEmptyDocumentState();
+            defer state.deinit();
+            for (0..2) |_| {
+                const page = try state.addPage("Unconverged group");
+                const child = try state.makeObject(page, "child", null, .text, .text, "x");
+                const group = try state.makeGroupWithOrigin(page, true, &.{child}, "group");
+                try state.addAnchorConstraint(child, .left, .{ .page = .left }, 0, "child-left");
+                try state.addAnchorConstraint(child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 10, "child-width");
+                try state.addAnchorConstraint(group, .left, .{ .node = .{ .node_id = child, .anchor = .right } }, 10, "group-after-child");
+            }
+            const options = graph.SolveOptions{ .jobs = jobs, .record_diagnostics = record_diagnostics };
+            var result = try solver.solveDocument(&state, null, options);
+            defer result.deinit(testing.allocator);
+            for (result.pages) |*page| {
+                try testing.expect(!page.converged);
+                try testing.expectError(error.LayoutDidNotConverge, solver.applyPage(&state, page));
+                try testing.expectEqual(@as(usize, 0), page.constraint_failures.len);
+                try testing.expectEqual(@as(usize, if (record_diagnostics) 1 else 0), page.diagnostics.len);
+                if (record_diagnostics) {
+                    const diagnostic = page.diagnostics[0];
+                    try testing.expectEqual(page.page_id, diagnostic.page_id.?);
+                    try testing.expectEqual(model.DiagnosticSeverity.@"error", diagnostic.severity);
+                    try testing.expectEqual(model.LayoutConvergenceStage.group_constraints, diagnostic.data.layout_nonconvergence.stage);
+                    try testing.expectEqual(diagnostic.data.layout_nonconvergence.limit, diagnostic.data.layout_nonconvergence.iterations);
+                    try testing.expectEqualStrings("group-after-child", diagnostic.origin.?);
+                    try testing.expect(diagnostic.data.layout_nonconvergence.constraint != null);
+                    const message = try utils.err.formatContextDiagnostic(testing.allocator, diagnostic);
+                    defer testing.allocator.free(message);
+                    try testing.expect(std.mem.indexOf(u8, message, "LayoutDidNotConverge: horizontal axis stopped during group_constraints") != null);
+                }
+            }
+            try testing.expectError(error.LayoutDidNotConverge, solver.applyDocument(&state, &result));
+            try testing.expectError(error.LayoutDidNotConverge, state.finalizeDocument(null, options));
+            try testing.expectEqual(@as(usize, if (record_diagnostics) 2 else 0), state.diagnostics.items.len);
+        }
+    }
+}
+
 test "layout solver: final validation rejects unsatisfied hard constraints" {
     var self_conflict = try initEmptyDocumentState();
     defer self_conflict.deinit();

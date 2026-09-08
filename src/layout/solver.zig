@@ -6,6 +6,7 @@ const fallback = @import("fallback.zig");
 const graph = @import("graph.zig");
 const partition = @import("partition.zig");
 const groups = @import("groups.zig");
+const axis_propagation = @import("propagation.zig");
 const metrics = @import("metrics.zig");
 const style_defaults = @import("style.zig");
 const layout_trace = @import("trace.zig");
@@ -87,7 +88,12 @@ const PageJob = struct {
         try graph.checkCancellation(options);
         var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(state.allocator, options.measurement_provider);
         defer measurement_cache.deinit();
-        var result = try solvePageLayout(state, self.page, self.page_index, &measurement_cache, trace_session, options);
+        const diagnostic_start = state.diagnostics.items.len;
+        const failure_start = state.constraint_failures.items.len;
+        var result = solvePageLayout(state, self.page, self.page_index, &measurement_cache, trace_session, options) catch |err| switch (err) {
+            error.LayoutDidNotConverge => try self.unconvergedPage(state, diagnostic_start, failure_start, options),
+            else => return err,
+        };
         errdefer result.deinit(state.allocator);
         try graph.checkCancellation(options);
         return result;
@@ -114,10 +120,19 @@ const PageJob = struct {
         var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(local_context.allocator, local_options.measurement_provider);
         defer measurement_cache.deinit();
         var trace_session = layout_trace.Session{};
-        var result = try solvePageLayout(&local_context, self.page, self.page_index, &measurement_cache, &trace_session, local_options);
+        var result = solvePageLayout(&local_context, self.page, self.page_index, &measurement_cache, &trace_session, local_options) catch |err| switch (err) {
+            error.LayoutDidNotConverge => try self.unconvergedPage(&local_context, 0, 0, local_options),
+            else => return err,
+        };
         defer result.deinit(local_context.allocator);
         try graph.checkCancellation(options);
         return try clonePage(allocator, &result);
+    }
+
+    fn unconvergedPage(self: PageJob, state: anytype, diagnostic_start: usize, failure_start: usize, options: SolveOptions) !document.Page {
+        var result = try collectPage(state, self.page.page_id, self.page_index, self.page.node_ids, &.{}, &.{}, diagnostic_start, failure_start, options);
+        result.converged = false;
+        return result;
     }
 };
 
@@ -137,6 +152,7 @@ pub fn solvePage(state: anytype, inputs: partition.Page, page_index: usize, trac
 }
 
 pub fn applyPage(state: anytype, page: *const document.Page) !void {
+    if (!page.converged) return error.LayoutDidNotConverge;
     var constraints = std.ArrayList(Constraint).empty;
     errdefer constraints.deinit(state.allocator);
     try constraints.ensureTotalCapacity(state.allocator, state.fallback_constraints.items.len + page.fallback_constraints.len);
@@ -353,6 +369,7 @@ fn clonePage(allocator: std.mem.Allocator, result: *const document.Page) !docume
     return .{
         .page_id = result.page_id,
         .index = result.index,
+        .converged = result.converged,
         .object_frames = object_frames,
         .fallback_constraints = fallback_constraints,
         .diagnostics = diagnostics_slice,
@@ -377,6 +394,9 @@ fn mergePageLayoutIssues(state: anytype, result: *const document.Page) !void {
 }
 
 pub fn applyDocument(state: anytype, results: *const document.Document) !void {
+    for (results.pages) |page| {
+        if (!page.converged) return error.LayoutDidNotConverge;
+    }
     state.fallback_constraints.clearRetainingCapacity();
     for (results.pages) |page| {
         try state.fallback_constraints.appendSlice(state.allocator, page.fallback_constraints);
@@ -419,7 +439,7 @@ fn solvePageLayout(
     try solvePageAxis(state, &horizontal, trace_session, options);
     try graph.checkCancellation(options);
 
-    var horizontal_fallback = try fallback.buildHorizontalConstraints(state, &horizontal);
+    var horizontal_fallback = try fallback.buildHorizontalConstraints(state, &horizontal, options);
     defer horizontal_fallback.deinit(state.allocator);
     trace_session.recordDefaultConstraints(state.allocator, &horizontal, horizontal_fallback.items);
     horizontal.soft_constraints = horizontal_fallback.items;
@@ -441,7 +461,7 @@ fn solvePageLayout(
 
     try solvePageAxis(state, &vertical, trace_session, options);
     try graph.checkCancellation(options);
-    var vertical_fallback = try fallback.buildVerticalConstraints(state, &vertical);
+    var vertical_fallback = try fallback.buildVerticalConstraints(state, &vertical, options);
     defer vertical_fallback.deinit(state.allocator);
     trace_session.recordDefaultConstraints(state.allocator, &vertical, vertical_fallback.items);
     vertical.soft_constraints = vertical_fallback.items;
@@ -603,27 +623,30 @@ fn applySolvedHorizontalFrames(state: anytype, workspace: *const graph.AxisWorks
 
 fn settleHorizontalAxis(state: anytype, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !void {
     var pass: usize = 0;
-    while (pass < 8) : (pass += 1) {
+    const limit = axis_propagation.groupIterationLimit(workspace.states.len);
+    while (pass < limit) : (pass += 1) {
         try graph.checkCancellation(options);
         var changed = try finalizeHorizontalGroupStates(state, workspace, options);
         changed = (try runPageAxisPassWithTrace(state, workspace, trace_session, options)) or changed;
-        if (!changed) break;
+        if (!changed) return;
     }
+    return axis_propagation.nonConvergenceError(state, workspace, options, .horizontal_groups, pass, limit, null);
 }
 
 fn finalizeHorizontalGroupStates(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
     var any_changed = false;
     var pass: usize = 0;
-    while (pass < 8) : (pass += 1) {
+    const limit = axis_propagation.groupIterationLimit(workspace.states.len);
+    while (pass < limit) : (pass += 1) {
         try graph.checkCancellation(options);
         var changed = false;
         changed = (try capDefaultWrappedHorizontalWidths(state, workspace, options)) or changed;
-        changed = (try groups.applyTargetConstraints(state, workspace, options)) or changed;
+        changed = (try groups.applyTargetConstraints(state, workspace, options)).changed or changed;
         changed = (try groups.updateAxisStates(state, workspace)) or changed;
         any_changed = changed or any_changed;
-        if (!changed) break;
+        if (!changed) return any_changed;
     }
-    return any_changed;
+    return axis_propagation.nonConvergenceError(state, workspace, options, .horizontal_groups, pass, limit, null);
 }
 
 fn capDefaultWrappedHorizontalWidths(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
@@ -684,47 +707,45 @@ fn runPageAxisPassWithTrace(state: anytype, workspace: *graph.AxisWorkspace, tra
     const run_id = if (trace_enabled) trace_session.nextRunId() else 0;
     if (trace_enabled) trace_session.axisPassBegin(state.allocator, state, workspace, run_id);
 
+    var queue = try axis_propagation.Queue.init(state.allocator, state, workspace);
+    defer queue.deinit();
+    const group_limit = axis_propagation.groupIterationLimit(workspace.states.len);
+    const work_limit = 64 * (workspace.states.len + workspace.hard_constraints.len + workspace.soft_constraints.len + 1);
     var pass: usize = 0;
     var iteration_count: usize = 0;
     var converged = false;
     var any_changed = false;
-    while (pass < 32) : (pass += 1) {
+    var last_constraint: ?Constraint = null;
+    while (pass < group_limit) : (pass += 1) {
         try graph.checkCancellation(options);
         iteration_count = pass + 1;
         var changed = false;
-        var local_pass: usize = 0;
         var local_iterations: usize = 0;
-        while (local_pass < 32) : (local_pass += 1) {
+        queue.seed();
+        while (queue.pop()) |index| {
             try graph.checkCancellation(options);
             local_iterations += 1;
-            var local_changed = false;
-
-            for (workspace.states, 0..) |*axis_state, index| {
-                try graph.checkCancellation(options);
-                local_changed = (try reconcileAxisStateLocalized(state, workspace, index, axis_state, options)) or local_changed;
+            if (local_iterations > work_limit) {
+                if (trace_enabled) trace_session.axisPassEnd(state.allocator, state, run_id, workspace, iteration_count, false);
+                return axis_propagation.nonConvergenceError(state, workspace, options, .constraint_propagation, local_iterations, work_limit, last_constraint);
             }
-
-            for (workspace.hard_constraints) |constraint| {
+            changed = (try reconcileAxisStateLocalized(state, workspace, index, &workspace.states[index], options)) or changed;
+            for (queue.constraints.forNode(index)) |constraint_index| {
                 try graph.checkCancellation(options);
-                if (groups.constraintTargetsGroup(state, constraint)) continue;
-                if (groups.constraintUsesGroupSource(state, constraint)) continue;
-                local_changed = (try applyAxisConstraint(state, workspace, constraint, false, trace_session, options)) or local_changed;
+                const entry = axis_propagation.Queue.constraintAt(workspace, constraint_index);
+                if (try applyAxisConstraint(state, workspace, entry.constraint, entry.soft, trace_session, options)) {
+                    queue.notify(workspace, entry.constraint);
+                    last_constraint = entry.constraint;
+                    changed = true;
+                }
             }
-
-            for (workspace.soft_constraints) |constraint| {
-                try graph.checkCancellation(options);
-                if (groups.constraintTargetsGroup(state, constraint)) continue;
-                if (groups.constraintUsesGroupSource(state, constraint)) continue;
-                local_changed = (try applyAxisConstraint(state, workspace, constraint, true, trace_session, options)) or local_changed;
-            }
-
-            changed = local_changed or changed;
-            if (!local_changed) break;
         }
 
         const group_bounds_changed = try groups.updateAxisStates(state, workspace);
         changed = group_bounds_changed or changed;
-        const group_targets_changed = try groups.applyTargetConstraints(state, workspace, options);
+        const group_targets = try groups.applyTargetConstraints(state, workspace, options);
+        const group_targets_changed = group_targets.changed;
+        if (group_targets.constraint) |constraint| last_constraint = constraint;
         changed = group_targets_changed or changed;
 
         var group_sources_changed = false;
@@ -732,6 +753,7 @@ fn runPageAxisPassWithTrace(state: anytype, workspace: *graph.AxisWorkspace, tra
             try graph.checkCancellation(options);
             if (!groups.constraintUsesGroupSource(state, constraint)) continue;
             const applied = try applyAxisConstraint(state, workspace, constraint, false, trace_session, options);
+            if (applied) last_constraint = constraint;
             group_sources_changed = applied or group_sources_changed;
             changed = applied or changed;
         }
@@ -741,6 +763,7 @@ fn runPageAxisPassWithTrace(state: anytype, workspace: *graph.AxisWorkspace, tra
             try graph.checkCancellation(options);
             if (!groups.constraintUsesGroupSource(state, constraint)) continue;
             const applied = try applyAxisConstraint(state, workspace, constraint, true, trace_session, options);
+            if (applied) last_constraint = constraint;
             soft_group_sources_changed = applied or soft_group_sources_changed;
             changed = applied or changed;
         }
@@ -769,6 +792,7 @@ fn runPageAxisPassWithTrace(state: anytype, workspace: *graph.AxisWorkspace, tra
     }
 
     if (trace_enabled) trace_session.axisPassEnd(state.allocator, state, run_id, workspace, iteration_count, converged);
+    if (!converged) return axis_propagation.nonConvergenceError(state, workspace, options, .group_constraints, iteration_count, group_limit, last_constraint);
     return any_changed;
 }
 

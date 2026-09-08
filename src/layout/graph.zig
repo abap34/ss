@@ -200,13 +200,13 @@ pub const PropagationTracker = struct {
     }
 };
 
-const NodeAdjacency = struct {
+pub const NodeAdjacency = struct {
     starts: []usize = &.{},
     values: []usize = &.{},
 
-    const Edge = struct { node: usize, value: usize };
+    pub const Edge = struct { node: usize, value: usize };
 
-    fn init(allocator: std.mem.Allocator, node_count: usize, edges: []const Edge) !NodeAdjacency {
+    pub fn init(allocator: std.mem.Allocator, node_count: usize, edges: []const Edge) !NodeAdjacency {
         const starts = try allocator.alloc(usize, node_count + 1);
         errdefer allocator.free(starts);
         @memset(starts, 0);
@@ -223,15 +223,44 @@ const NodeAdjacency = struct {
         return .{ .starts = starts, .values = values };
     }
 
-    fn deinit(self: *NodeAdjacency, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *NodeAdjacency, allocator: std.mem.Allocator) void {
         allocator.free(self.starts);
         allocator.free(self.values);
     }
 
-    fn forNode(self: *const NodeAdjacency, node_index: usize) []const usize {
+    pub fn forNode(self: *const NodeAdjacency, node_index: usize) []const usize {
         return self.values[self.starts[node_index]..self.starts[node_index + 1]];
     }
 };
+
+fn orderGroups(allocator: std.mem.Allocator, state: anytype, child_ids: []const NodeId, index_by_node: *const std.AutoHashMap(NodeId, usize), parents: *const NodeAdjacency) ![]usize {
+    const remaining = try allocator.alloc(usize, child_ids.len);
+    defer allocator.free(remaining);
+    @memset(remaining, 0);
+    var order = std.ArrayList(usize).empty;
+    errdefer order.deinit(allocator);
+    var group_count: usize = 0;
+    for (child_ids, 0..) |id, index| {
+        const node = state.getNode(id) orelse return error.UnknownNode;
+        if (!isGroupNode(node)) continue;
+        group_count += 1;
+        for (state.childrenOf(id) orelse &.{}) |child_id| {
+            if (!index_by_node.contains(child_id)) continue;
+            const child = state.getNode(child_id) orelse return error.UnknownNode;
+            if (isGroupNode(child)) remaining[index] += 1;
+        }
+        if (remaining[index] == 0) try order.append(allocator, index);
+    }
+    var cursor: usize = 0;
+    while (cursor < order.items.len) : (cursor += 1) {
+        for (parents.forNode(order.items[cursor])) |parent| {
+            remaining[parent] -= 1;
+            if (remaining[parent] == 0) try order.append(allocator, parent);
+        }
+    }
+    if (order.items.len != group_count) return error.CyclicGroupContainment;
+    return order.toOwnedSlice(allocator);
+}
 
 pub const PageLayoutGraph = struct {
     allocator: std.mem.Allocator,
@@ -245,6 +274,8 @@ pub const PageLayoutGraph = struct {
     index_by_node: std.AutoHashMap(NodeId, usize),
     target_constraints: NodeAdjacency,
     parent_groups: NodeAdjacency,
+    /// Child groups precede their parents, independently of declaration order.
+    group_order: []usize,
     has_horizontal_target_constraint: []bool,
     has_vertical_target_constraint: []bool,
     horizontal_target_anchor_mask: []u8,
@@ -329,6 +360,8 @@ pub const PageLayoutGraph = struct {
         }
         var parent_groups = try NodeAdjacency.init(allocator, child_ids.len, edges.items);
         errdefer parent_groups.deinit(allocator);
+        const group_order = try orderGroups(allocator, state, child_ids, &index_by_node, &parent_groups);
+        errdefer allocator.free(group_order);
         const horizontal_constraints = try horizontal_constraint_list.toOwnedSlice(allocator);
         errdefer allocator.free(horizontal_constraints);
         const vertical_constraints = try vertical_constraint_list.toOwnedSlice(allocator);
@@ -346,6 +379,7 @@ pub const PageLayoutGraph = struct {
             .index_by_node = index_by_node,
             .target_constraints = target_constraints,
             .parent_groups = parent_groups,
+            .group_order = group_order,
             .has_horizontal_target_constraint = has_horizontal_target_constraint,
             .has_vertical_target_constraint = has_vertical_target_constraint,
             .horizontal_target_anchor_mask = horizontal_target_anchor_mask,
@@ -356,6 +390,7 @@ pub const PageLayoutGraph = struct {
     pub fn deinit(self: *PageLayoutGraph) void {
         self.target_constraints.deinit(self.allocator);
         self.parent_groups.deinit(self.allocator);
+        self.allocator.free(self.group_order);
         self.index_by_node.deinit();
         self.allocator.free(self.child_ids);
         self.allocator.free(self.flow_root_ids);

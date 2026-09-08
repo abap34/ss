@@ -643,6 +643,13 @@ pub const DiagnosticSeverity = enum {
     @"error",
 };
 
+pub const LayoutConvergenceStage = enum {
+    constraint_propagation,
+    group_constraints,
+    horizontal_groups,
+    fallback_centering,
+};
+
 pub const Diagnostic = struct {
     phase: DiagnosticPhase,
     severity: DiagnosticSeverity,
@@ -689,6 +696,13 @@ pub const Diagnostic = struct {
             required_height: f32,
             frame_height: f32,
             overflow_height: f32,
+        },
+        layout_nonconvergence: struct {
+            axis: Axis,
+            stage: LayoutConvergenceStage,
+            iterations: usize,
+            limit: usize,
+            constraint: ?Constraint = null,
         },
     };
 
@@ -754,6 +768,7 @@ fn cloneDiagnosticData(allocator: Allocator, data: Diagnostic.Data) !Diagnostic.
         .recursive_function => |value| .{ .recursive_function = value },
         .page_overflow => |value| .{ .page_overflow = value },
         .content_overflow => |value| .{ .content_overflow = value },
+        .layout_nonconvergence => |value| .{ .layout_nonconvergence = value },
     };
 }
 

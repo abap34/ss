@@ -103,6 +103,13 @@ fn writeDiagnostic(diagnostics: *json.Array, diagnostic: core.Diagnostic) !void 
             try item.floatField("frame_height", data.frame_height, "{d:.1}");
             try item.floatField("overflow_height", data.overflow_height, "{d:.1}");
         },
+        .layout_nonconvergence => |data| {
+            try item.stringField("code", "LayoutDidNotConverge");
+            try item.enumTagField("axis", data.axis);
+            try item.enumTagField("stage", data.stage);
+            try item.intField("iterations", data.iterations);
+            try item.intField("limit", data.limit);
+        },
     }
     try item.end();
 }

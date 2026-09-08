@@ -172,5 +172,6 @@ fn diagnosticCode(diagnostic: core.Diagnostic) []const u8 {
         .recursive_function => "RecursiveFunction",
         .page_overflow => "PageOverflow",
         .content_overflow => "FrameTooSmall",
+        .layout_nonconvergence => "LayoutDidNotConverge",
     };
 }

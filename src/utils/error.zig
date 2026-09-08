@@ -411,6 +411,7 @@ fn irDiagnosticCode(diagnostic: anytype) []const u8 {
         .recursive_function => "RecursiveFunction",
         .page_overflow => "PageOverflow",
         .content_overflow => "FrameTooSmall",
+        .layout_nonconvergence => "LayoutDidNotConverge",
     };
 }
 
@@ -1122,6 +1123,11 @@ pub fn formatContextDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype
             .{data.function_name},
         ),
         .page_overflow => |data| formatPageOverflowDiagnostic(allocator, data),
+        .layout_nonconvergence => |data| std.fmt.allocPrint(
+            allocator,
+            "LayoutDidNotConverge: {s} axis stopped during {s} after {d} iterations (limit {d})",
+            .{ @tagName(data.axis), @tagName(data.stage), data.iterations, data.limit },
+        ),
         .content_overflow => |data| std.fmt.allocPrint(
             allocator,
             "FrameTooSmall: frame is fixed by constraints but needs width={d:.1}, height={d:.1}; frame width={d:.1}, height={d:.1}; short by width={d:.1}, height={d:.1}",

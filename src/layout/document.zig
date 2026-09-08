@@ -22,6 +22,7 @@ pub const ObjectFrame = struct {
 pub const Page = struct {
     page_id: model.NodeId,
     index: usize,
+    converged: bool = true,
     object_frames: []ObjectFrame,
     fallback_constraints: []model.Constraint = &.{},
     diagnostics: []model.Diagnostic = &.{},

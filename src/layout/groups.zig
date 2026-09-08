@@ -97,9 +97,8 @@ fn groupAxisPadding(state: anytype, workspace: *const graph.AxisWorkspace, node_
 
 pub fn updateAxisStates(state: anytype, workspace: *graph.AxisWorkspace) !bool {
     var changed = false;
-    for (workspace.graph.child_ids, 0..) |node_id, index| {
-        const node = state.getNode(node_id) orelse return error.UnknownNode;
-        if (!isGroupNode(node)) continue;
+    for (workspace.graph.group_order) |index| {
+        const node_id = workspace.nodeAt(index);
         if (workspace.graph.hasTargetConstraint(state, node_id, workspace.axis, workspace.soft_constraints)) continue;
         const tight = try computeTightGroupAxisState(state, workspace, node_id);
         if (tight.start == null or tight.end == null) {
@@ -225,15 +224,22 @@ pub fn translateSubtree(
     return try workspace.graph.translateSubgraph(workspace, state, group_id, delta);
 }
 
+pub const TargetUpdate = struct {
+    changed: bool = false,
+    constraint: ?Constraint = null,
+};
+
 pub fn applyTargetConstraints(
     state: anytype,
     workspace: *graph.AxisWorkspace,
     options: graph.SolveOptions,
-) !bool {
-    var changed = false;
-    for (workspace.graph.child_ids, 0..) |group_id, group_index| {
-        const group_node = state.getNode(group_id) orelse return error.UnknownNode;
-        if (!isGroupNode(group_node)) continue;
+) !TargetUpdate {
+    var update = TargetUpdate{};
+    var remaining = workspace.graph.group_order.len;
+    while (remaining > 0) {
+        remaining -= 1;
+        const group_index = workspace.graph.group_order[remaining];
+        const group_id = workspace.nodeAt(group_index);
         if (!workspace.graph.hasTargetConstraint(state, group_id, workspace.axis, workspace.soft_constraints)) continue;
 
         const base = try computeTightGroupAxisState(state, workspace, group_id);
@@ -277,11 +283,15 @@ pub fn applyTargetConstraints(
         };
 
         const delta = if (temp.start != null and base.start != null) temp.start.? - base.start.? else 0;
-        changed = shiftAxisState(&workspace.states[group_index], delta) or changed;
-        changed = (try translateSubtree(state, workspace, group_id, delta)) or changed;
+        const previous = workspace.states[group_index];
+        const subtree_changed = try translateSubtree(state, workspace, group_id, delta);
         workspace.states[group_index] = temp;
+        if (subtree_changed or !axisStatesEq(previous, temp)) {
+            update.changed = true;
+            update.constraint = last_constraint;
+        }
     }
-    return changed;
+    return update;
 }
 
 pub fn constraintUsesGroupSource(state: anytype, constraint: Constraint) bool {

@@ -1780,6 +1780,12 @@ pub const DocumentState = struct {
             results.deinit(self.allocator);
             return err;
         };
+        for (results.pages) |page| {
+            if (!page.converged) {
+                results.deinit(self.allocator);
+                return error.LayoutDidNotConverge;
+            }
+        }
         try layout.applyDocument(self, &results);
         return results;
     }

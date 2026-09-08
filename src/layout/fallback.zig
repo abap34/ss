@@ -4,6 +4,7 @@ const fields = @import("../core/fields.zig");
 const graph = @import("graph.zig");
 const groups = @import("groups.zig");
 const solver = @import("solver.zig");
+const propagation = @import("propagation.zig");
 const style_defaults = @import("style.zig");
 
 const NodeId = model.NodeId;
@@ -18,7 +19,7 @@ const VerticalFallbackPolicy = enum {
     center_stack,
 };
 
-pub fn buildHorizontalConstraints(state: anytype, workspace: *const graph.AxisWorkspace) !std.ArrayList(Constraint) {
+pub fn buildHorizontalConstraints(state: anytype, workspace: *const graph.AxisWorkspace, options: graph.SolveOptions) !std.ArrayList(Constraint) {
     var constraints = std.ArrayList(Constraint).empty;
     if (workspace.graph.len() == 0) return constraints;
 
@@ -27,7 +28,7 @@ pub fn buildHorizontalConstraints(state: anytype, workspace: *const graph.AxisWo
     defer components.deinit();
     for (components.rootIndexes()) |root| {
         if (components.isPageDependent(root)) continue;
-        const placement_index = if (try computeHorizontalComponentUnit(state, workspace, &components, root)) |unit|
+        const placement_index = if (try computeHorizontalComponentUnit(state, workspace, &components, root, options)) |unit|
             unit.placement_index
         else
             components.axisFallbackRootIndex(state, root) orelse continue;
@@ -45,6 +46,13 @@ pub fn buildHorizontalConstraints(state: anytype, workspace: *const graph.AxisWo
     return constraints;
 }
 
+fn probeOptions(options: graph.SolveOptions) graph.SolveOptions {
+    var probe = options;
+    probe.record_diagnostics = false;
+    probe.record_propagation = false;
+    return probe;
+}
+
 const HorizontalComponentUnit = struct {
     placement_index: usize,
 };
@@ -54,6 +62,7 @@ fn computeHorizontalComponentUnit(
     workspace: *const graph.AxisWorkspace,
     components: *const graph.ComponentSet,
     component_root: usize,
+    options: graph.SolveOptions,
 ) !?HorizontalComponentUnit {
     const seed_index = components.axisFallbackRootIndex(state, component_root) orelse return null;
 
@@ -63,7 +72,10 @@ fn computeHorizontalComponentUnit(
     _ = graph.setAxisAnchor(&temp[seed_index], .left, 0, null) catch return null;
 
     var temp_workspace = graph.AxisWorkspace.borrow(workspace, temp, &.{});
-    _ = try solver.runPageAxisPass(state, &temp_workspace, .{ .record_diagnostics = false });
+    _ = solver.runPageAxisPass(state, &temp_workspace, probeOptions(options)) catch |err| switch (err) {
+        error.LayoutDidNotConverge => return null,
+        else => return err,
+    };
 
     var leftmost_index: ?usize = null;
     var leftmost_start: f32 = 0;
@@ -78,7 +90,7 @@ fn computeHorizontalComponentUnit(
         }
     }
 
-    const placement_index = leftPredecessorGroupIndex(state, workspace, components, component_root, leftmost_index orelse return null);
+    const placement_index = leftPredecessorGroupIndex(state, workspace, components, component_root, leftmost_index orelse return null) orelse return null;
     return .{ .placement_index = placement_index };
 }
 
@@ -88,12 +100,13 @@ fn leftPredecessorGroupIndex(
     components: *const graph.ComponentSet,
     component_root: usize,
     initial_index: usize,
-) usize {
+) ?usize {
     var current = initial_index;
     var pass: usize = 0;
-    while (pass < 8) : (pass += 1) {
+    while (pass < workspace.states.len) : (pass += 1) {
         var changed = false;
-        for (workspace.hard_constraints) |constraint| {
+        for (workspace.graph.targetConstraintIndexes(workspace.nodeAt(current))) |constraint_index| {
+            const constraint = workspace.graph.constraints[constraint_index];
             if (graph.anchorAxis(constraint.target_anchor) != .horizontal) continue;
             if (constraint.target_anchor != .left) continue;
             const target_index = workspace.indexOf(constraint.target_node) orelse continue;
@@ -115,15 +128,17 @@ fn leftPredecessorGroupIndex(
             changed = true;
             break;
         }
-        if (!changed) break;
+        if (!changed) return current;
     }
-    return current;
+    // A repeated predecessor has no leftmost member. Let the component seed
+    // and final hard-constraint validation handle the cycle.
+    return null;
 }
 
-pub fn buildVerticalConstraints(state: anytype, workspace: *const graph.AxisWorkspace) !std.ArrayList(Constraint) {
+pub fn buildVerticalConstraints(state: anytype, workspace: *const graph.AxisWorkspace, options: graph.SolveOptions) !std.ArrayList(Constraint) {
     return switch (verticalFallbackPolicy(state, workspace.graph.page_id)) {
-        .top_flow => buildTopFlowVerticalFallbackConstraints(state, workspace),
-        .center_stack => buildCenterStackVerticalFallbackConstraints(state, workspace),
+        .top_flow => buildTopFlowVerticalFallbackConstraints(state, workspace, options),
+        .center_stack => buildCenterStackVerticalFallbackConstraints(state, workspace, options),
     };
 }
 
@@ -137,7 +152,7 @@ fn verticalFallbackPolicy(state: anytype, page_id: NodeId) VerticalFallbackPolic
     return .top_flow;
 }
 
-fn buildTopFlowVerticalFallbackConstraints(state: anytype, workspace: *const graph.AxisWorkspace) !std.ArrayList(Constraint) {
+fn buildTopFlowVerticalFallbackConstraints(state: anytype, workspace: *const graph.AxisWorkspace, options: graph.SolveOptions) !std.ArrayList(Constraint) {
     var constraints = std.ArrayList(Constraint).empty;
     if (workspace.graph.len() == 0) return constraints;
 
@@ -146,7 +161,7 @@ fn buildTopFlowVerticalFallbackConstraints(state: anytype, workspace: *const gra
     defer initial_components.deinit();
 
     try appendPageDependentLocalVerticalFallbackConstraints(state, workspace, &initial_components, &constraints);
-    var seeded = try seededWorkspaceWithSoftConstraints(state, workspace, constraints.items);
+    var seeded = try seededWorkspaceWithSoftConstraints(state, workspace, constraints.items, options);
     defer seeded.deinit();
 
     var components = try seeded.workspace.dependencyComponents(allocator, state, verticalComponentPolicy());
@@ -158,7 +173,7 @@ fn buildTopFlowVerticalFallbackConstraints(state: anytype, workspace: *const gra
 
     var units = std.ArrayList(VerticalComponentUnit).empty;
     defer units.deinit(allocator);
-    try collectVerticalComponentUnits(state, &seeded.workspace, &components, local_tops, .top_flow, &units);
+    try collectVerticalComponentUnits(state, &seeded.workspace, &components, local_tops, .top_flow, &units, options);
 
     const seen = try allocator.alloc(bool, seeded.workspace.graph.len());
     defer allocator.free(seen);
@@ -206,7 +221,7 @@ const VerticalComponentUnit = struct {
     spacing_after: f32,
 };
 
-fn buildCenterStackVerticalFallbackConstraints(state: anytype, workspace: *const graph.AxisWorkspace) !std.ArrayList(Constraint) {
+fn buildCenterStackVerticalFallbackConstraints(state: anytype, workspace: *const graph.AxisWorkspace, options: graph.SolveOptions) !std.ArrayList(Constraint) {
     var constraints = std.ArrayList(Constraint).empty;
     if (workspace.graph.len() == 0) return constraints;
 
@@ -215,7 +230,7 @@ fn buildCenterStackVerticalFallbackConstraints(state: anytype, workspace: *const
     defer initial_components.deinit();
 
     try appendPageDependentLocalVerticalFallbackConstraints(state, workspace, &initial_components, &constraints);
-    var seeded = try seededWorkspaceWithSoftConstraints(state, workspace, constraints.items);
+    var seeded = try seededWorkspaceWithSoftConstraints(state, workspace, constraints.items, options);
     defer seeded.deinit();
 
     var components = try seeded.workspace.dependencyComponents(allocator, state, verticalComponentPolicy());
@@ -227,7 +242,7 @@ fn buildCenterStackVerticalFallbackConstraints(state: anytype, workspace: *const
 
     var units = std.ArrayList(VerticalComponentUnit).empty;
     defer units.deinit(allocator);
-    try collectVerticalComponentUnits(state, &seeded.workspace, &components, local_tops, .center_stack, &units);
+    try collectVerticalComponentUnits(state, &seeded.workspace, &components, local_tops, .center_stack, &units, options);
 
     var total_height: f32 = 0;
     for (units.items, 0..) |unit, index| {
@@ -275,13 +290,14 @@ fn seededWorkspaceWithSoftConstraints(
     state: anytype,
     workspace: *const graph.AxisWorkspace,
     constraints: []const Constraint,
+    options: graph.SolveOptions,
 ) !SeededAxisWorkspace {
     const states = try state.allocator.alloc(AxisState, workspace.states.len);
     errdefer state.allocator.free(states);
     @memcpy(states, workspace.states);
 
     var seeded = graph.AxisWorkspace.borrow(workspace, states, constraints);
-    _ = try solver.runPageAxisPass(state, &seeded, .{ .record_diagnostics = false });
+    _ = try solver.runPageAxisPass(state, &seeded, options);
     return .{
         .allocator = state.allocator,
         .states = states,
@@ -384,6 +400,7 @@ fn collectVerticalComponentUnits(
     local_tops: []?f32,
     policy: VerticalFallbackPolicy,
     units: *std.ArrayList(VerticalComponentUnit),
+    options: graph.SolveOptions,
 ) !void {
     var seen = try state.allocator.alloc(bool, workspace.graph.len());
     defer state.allocator.free(seen);
@@ -396,7 +413,7 @@ fn collectVerticalComponentUnits(
         seen[root] = true;
         if (components.isPageDependent(root)) continue;
 
-        const unit = try computeVerticalComponentUnit(state, workspace, components, root, local_tops, policy) orelse continue;
+        const unit = try computeVerticalComponentUnit(state, workspace, components, root, local_tops, policy, options) orelse continue;
         try units.append(state.allocator, unit);
     }
 }
@@ -471,10 +488,11 @@ fn computeVerticalComponentUnit(
     component_root: usize,
     local_tops: []?f32,
     policy: VerticalFallbackPolicy,
+    options: graph.SolveOptions,
 ) !?VerticalComponentUnit {
     const root_index = components.fallbackRootIndex(state, component_root) orelse return null;
 
-    if (try computeVerticalComponentUnitFromRoot(state, workspace, components, component_root, local_tops, policy, root_index)) |unit| {
+    if (try computeVerticalComponentUnitFromRoot(state, workspace, components, component_root, local_tops, policy, root_index, options)) |unit| {
         return unit;
     }
 
@@ -483,7 +501,7 @@ fn computeVerticalComponentUnit(
         if (!components.contains(component_root, candidate_index)) continue;
         const node = state.getNode(child_id) orelse return error.UnknownNode;
         if (groups.isGroupNode(node)) continue;
-        if (try computeVerticalComponentUnitFromRoot(state, workspace, components, component_root, local_tops, policy, candidate_index)) |unit| {
+        if (try computeVerticalComponentUnitFromRoot(state, workspace, components, component_root, local_tops, policy, candidate_index, options)) |unit| {
             return unit;
         }
     }
@@ -499,6 +517,7 @@ fn computeVerticalComponentUnitFromRoot(
     local_tops: []?f32,
     policy: VerticalFallbackPolicy,
     root_index: usize,
+    options: graph.SolveOptions,
 ) !?VerticalComponentUnit {
     clearComponentLocalTops(components, component_root, local_tops);
 
@@ -510,9 +529,12 @@ fn computeVerticalComponentUnitFromRoot(
     var local_fallback = try buildComponentLocalTopFlowConstraints(state, workspace, components, component_root, root_index);
     defer local_fallback.deinit(state.allocator);
     var temp_workspace = graph.AxisWorkspace.borrow(workspace, temp, local_fallback.items);
-    _ = try solver.runPageAxisPass(state, &temp_workspace, .{ .record_diagnostics = false });
+    _ = solver.runPageAxisPass(state, &temp_workspace, probeOptions(options)) catch |err| switch (err) {
+        error.LayoutDidNotConverge => return null,
+        else => return err,
+    };
     if (policy == .center_stack) {
-        try centerDirectChildGroupsInComponent(state, &temp_workspace, components, component_root);
+        try centerDirectChildGroupsInComponent(state, &temp_workspace, components, component_root, options);
     }
 
     var local_bottom: ?f32 = null;
@@ -558,16 +580,18 @@ fn centerDirectChildGroupsInComponent(
     workspace: *graph.AxisWorkspace,
     components: *const graph.ComponentSet,
     component_root: usize,
+    options: graph.SolveOptions,
 ) !void {
     var pass: usize = 0;
-    while (pass < 8) : (pass += 1) {
+    const limit = propagation.groupIterationLimit(workspace.states.len);
+    while (pass < limit) : (pass += 1) {
+        try graph.checkCancellation(options);
         var changed = false;
         changed = (try groups.updateAxisStates(state, workspace)) or changed;
 
-        for (workspace.graph.child_ids, 0..) |group_id, group_index| {
+        for (workspace.graph.group_order) |group_index| {
+            const group_id = workspace.nodeAt(group_index);
             if (!components.contains(component_root, group_index)) continue;
-            const group_node = state.getNode(group_id) orelse return error.UnknownNode;
-            if (!groups.isGroupNode(group_node)) continue;
             const group_state = workspace.states[group_index];
             const group_center = group_state.center orelse continue;
             const children = state.childrenOf(group_id) orelse continue;
@@ -585,8 +609,9 @@ fn centerDirectChildGroupsInComponent(
             }
         }
 
-        if (!changed) break;
+        if (!changed) return;
     }
+    return propagation.nonConvergenceError(state, workspace, options, .fallback_centering, pass, limit, null);
 }
 
 fn buildComponentLocalTopFlowConstraints(
