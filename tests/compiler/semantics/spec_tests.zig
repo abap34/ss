@@ -3927,6 +3927,69 @@ test "compiler semantics: callbacks keep their defining module scope" {
     try expectFixtureObjectContent("functions/module-callback", "module");
 }
 
+test "compiler semantics: closures returned through branch scopes own captured records" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\record Box {
+        \\  value: Number = 7
+        \\}
+        \\fn make() -> Number -> Box
+        \\  let original = Box {}
+        \\  if true
+        \\    let captured = original with { value = 11 }
+        \\    return (amount: Number) |-> captured with { value = captured.value + amount }
+        \\  end
+        \\  return (amount: Number) |-> original with { value = amount }
+        \\end
+        \\page ok
+        \\  let callback = make()
+        \\  let first = callback(2)
+        \\  let second = callback(4)
+        \\  text(str(first.value) ++ ":" ++ str(second.value))
+        \\end
+    , "13:15");
+}
+
+test "compiler semantics: borrowed arguments and defaults preserve record updates" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\record Box {
+        \\  value: Number = 7
+        \\}
+        \\fn update(original: Box, same: Box = original) -> Box
+        \\  return same with { value = 9 }
+        \\end
+        \\page ok
+        \\  let original = Box {}
+        \\  let direct = update(original)
+        \\  let callback = (input: Box) |-> update(input)
+        \\  let indirect = callback(original)
+        \\  text(str(original.value) ++ ":" ++ str(direct.value) ++ ":" ++ str(indirect.value))
+        \\end
+    , "7:9:9");
+}
+
+test "compiler semantics: nested captured frames survive growth of the closure store" {
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(std.testing.allocator);
+    try source.appendSlice(std.testing.allocator,
+        \\import std:themes/default as *
+        \\fn make(seed: Number) -> Number -> Number -> Number
+        \\  return (left: Number) |-> (right: Number) |-> seed + left + right
+        \\end
+        \\page ok
+        \\  let saved = make(3)(4)
+        \\
+    );
+    for (0..64) |index| {
+        const statement = try std.fmt.allocPrint(std.testing.allocator, "  let unused{d} = make({d})({d})\n", .{ index, index, index });
+        defer std.testing.allocator.free(statement);
+        try source.appendSlice(std.testing.allocator, statement);
+    }
+    try source.appendSlice(std.testing.allocator, "  text(str(saved(5)))\nend\n");
+    try expectObjectContent(source.items, "12");
+}
+
 test "compiler semantics: function values use ordinary application" {
     try expectObjectContent(
         \\import std:themes/default as *

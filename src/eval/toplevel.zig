@@ -13,6 +13,10 @@ const registry = @import("../language/registry.zig");
 const analysis_cache = @import("../analysis/cache.zig");
 const execution = @import("../analysis/execution.zig");
 const value_contracts = @import("value_contracts.zig");
+const environment = @import("environment.zig");
+const Environment = environment.Environment;
+const Binding = environment.Binding;
+const CaptureIndex = @import("../analysis/captures.zig").Index;
 
 const FunctionDecl = ast.FunctionDecl;
 const Statement = ast.Statement;
@@ -34,10 +38,10 @@ const EvalScope = enum {
 
 const Closure = struct {
     lambda: ast.LambdaExpr,
-    env: std.StringHashMap(core.Value),
+    env: Environment,
 
-    fn deinit(self: *Closure, allocator: std.mem.Allocator) void {
-        deinitValueEnv(allocator, &self.env);
+    fn deinit(self: *Closure) void {
+        self.env.deinit();
     }
 };
 
@@ -50,54 +54,23 @@ const ClosureStore = struct {
     }
 
     fn deinit(self: *ClosureStore) void {
-        for (self.items.items) |*closure| closure.deinit(self.allocator);
+        for (self.items.items) |*closure| closure.deinit();
         self.items.deinit(self.allocator);
     }
 
-    fn add(self: *ClosureStore, lambda: ast.LambdaExpr, env: *const std.StringHashMap(core.Value)) !usize {
+    fn add(self: *ClosureStore, lambda: ast.LambdaExpr, env: *const Environment, names_to_capture: []const []const u8) !usize {
+        var captured = try Environment.capture(self.allocator, env, names_to_capture);
+        errdefer captured.deinit();
         const id = self.items.items.len;
-        try self.items.append(self.allocator, .{
-            .lambda = lambda,
-            .env = try cloneValueEnv(self.allocator, env),
-        });
+        try self.items.append(self.allocator, .{ .lambda = lambda, .env = captured });
         return id;
     }
 
-    fn get(self: *ClosureStore, id: usize) ?*Closure {
+    fn get(self: *ClosureStore, id: usize) ?Closure {
         if (id >= self.items.items.len) return null;
-        return &self.items.items[id];
+        return self.items.items[id];
     }
 };
-
-fn deinitValueEnv(allocator: std.mem.Allocator, env: *std.StringHashMap(core.Value)) void {
-    var iterator = env.valueIterator();
-    while (iterator.next()) |value| value.deinit(allocator);
-    env.deinit();
-}
-
-fn cloneValueEnv(allocator: std.mem.Allocator, source: *const std.StringHashMap(core.Value)) !std.StringHashMap(core.Value) {
-    var out = std.StringHashMap(core.Value).init(allocator);
-    errdefer deinitValueEnv(allocator, &out);
-    var iterator = source.iterator();
-    while (iterator.next()) |entry| {
-        try out.put(entry.key_ptr.*, try entry.value_ptr.clone(allocator));
-    }
-    return out;
-}
-
-fn putEnvValue(allocator: std.mem.Allocator, env: *std.StringHashMap(core.Value), name: []const u8, value: core.Value) !void {
-    var owned = value;
-    errdefer owned.deinit(allocator);
-    const gop = try env.getOrPut(name);
-    if (gop.found_existing) {
-        gop.value_ptr.deinit(allocator);
-    }
-    gop.value_ptr.* = owned;
-}
-
-fn deinitValues(allocator: std.mem.Allocator, values: []core.Value) void {
-    for (values) |*value| value.deinit(allocator);
-}
 
 const EvalContext = struct {
     io: std.Io,
@@ -107,6 +80,7 @@ const EvalContext = struct {
     module_id: core.SourceModuleId = 0,
     call_depth: u32 = 0,
     declarations: *const declarations.DeclarationIndex,
+    captures: *const CaptureIndex,
     name_resolution_cache: *analysis_cache.NameResolutionCache,
     cancellation: ?utils.Cancellation,
 };
@@ -339,6 +313,7 @@ pub fn executeGraph(
         .functions = &state.functions,
         .closures = &closures,
         .declarations = graph.declarations,
+        .captures = &graph.captures,
         .name_resolution_cache = &name_resolution_cache,
         .cancellation = options.cancellation,
     };
@@ -348,13 +323,13 @@ pub fn executeGraph(
     var document_states = std.AutoHashMap(core.SourceModuleId, DocumentExecutionState).init(allocator);
     defer {
         var iter = document_states.valueIterator();
-        while (iter.next()) |execution_state| execution_state.deinit(allocator);
+        while (iter.next()) |execution_state| execution_state.deinit();
         document_states.deinit();
     }
     var page_states = std.AutoHashMap(core.NodeId, PageExecutionState).init(allocator);
     defer {
         var iter = page_states.valueIterator();
-        while (iter.next()) |execution_state| execution_state.deinit(allocator);
+        while (iter.next()) |execution_state| execution_state.deinit();
         page_states.deinit();
     }
     {
@@ -371,7 +346,7 @@ pub fn executeGraph(
 
 fn materializeDisplayContent(evaluation: *EvalContext) !void {
     const state = evaluation.state;
-    var env = std.StringHashMap(core.Value).init(state.allocator);
+    var env = Environment.init(state.allocator);
     defer env.deinit();
 
     var index: usize = 0;
@@ -400,15 +375,15 @@ fn materializeDisplayContent(evaluation: *EvalContext) !void {
 }
 
 const DocumentExecutionState = struct {
-    env: std.StringHashMap(core.Value),
+    env: Environment,
     last_code_like: ?core.NodeId = null,
 
     fn init(allocator: std.mem.Allocator) DocumentExecutionState {
-        return .{ .env = std.StringHashMap(core.Value).init(allocator) };
+        return .{ .env = Environment.init(allocator) };
     }
 
-    fn deinit(self: *DocumentExecutionState, allocator: std.mem.Allocator) void {
-        deinitValueEnv(allocator, &self.env);
+    fn deinit(self: *DocumentExecutionState) void {
+        self.env.deinit();
     }
 };
 
@@ -503,7 +478,7 @@ fn evalExpr(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     expr: Expr,
 ) anyerror!core.Value {
@@ -590,8 +565,8 @@ fn evalConstValue(
         if (!state_committed) _ = state.const_eval_states.remove(resolved.key);
     }
 
-    var local_env = std.StringHashMap(core.Value).init(state.allocator);
-    defer deinitValueEnv(state.allocator, &local_env);
+    var local_env = Environment.init(state.allocator);
+    defer local_env.deinit();
 
     const previous_module_id = evaluation.module_id;
     evaluation.module_id = resolved.module_id;
@@ -614,7 +589,7 @@ fn evalMember(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     member: ast.MemberExpr,
 ) !core.Value {
@@ -631,7 +606,7 @@ fn evalMember(
     return evalMemberValue(state, functions, target, member.name);
 }
 
-fn borrowLocalValue(env: *const std.StringHashMap(core.Value), expr: Expr) ?core.Value {
+fn borrowLocalValue(env: *const Environment, expr: Expr) ?core.Value {
     return switch (expr) {
         .ident => |ident| if (env.get(ident.name)) |value| value else null,
         .member => |member| blk: {
@@ -690,7 +665,7 @@ fn evalRecord(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     record: ast.RecordExpr,
 ) !core.Value {
@@ -710,8 +685,8 @@ fn evalRecord(
     value.module_id = resolved.module_id;
     errdefer value.deinit(state.allocator);
 
-    var default_env = std.StringHashMap(core.Value).init(state.allocator);
-    defer deinitValueEnv(state.allocator, &default_env);
+    var default_env = Environment.init(state.allocator);
+    defer default_env.deinit();
     evaluation.module_id = resolved.module_id;
     for (resolved.decl.fields.items) |field| {
         if (recordDefinesField(record, field.name)) continue;
@@ -754,8 +729,8 @@ fn evalRecordDefaults(
     value.module_id = resolved.module_id;
     errdefer value.deinit(state.allocator);
 
-    var default_env = std.StringHashMap(core.Value).init(state.allocator);
-    defer deinitValueEnv(state.allocator, &default_env);
+    var default_env = Environment.init(state.allocator);
+    defer default_env.deinit();
     evaluation.module_id = resolved.module_id;
     for (resolved.decl.fields.items) |field| {
         const default_expr = field.default_value orelse continue;
@@ -769,7 +744,7 @@ fn evalRecordUpdate(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     update: ast.RecordUpdateExpr,
 ) !core.Value {
@@ -908,7 +883,7 @@ fn evalCall(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
@@ -921,9 +896,8 @@ fn evalCall(
                     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
                     try validateFixedArity(state, call.args.items.len, func_ref.param_count, current_origin);
                     var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
-                    defer args.deinit(state.allocator);
-                    defer deinitValues(state.allocator, args.items);
-                    return try invokeFunctionRef(evaluation, page_id, scope, env, func_ref, current_origin, args.items);
+                    defer deinitCallArgs(state.allocator, &args);
+                    return try invokeFunctionRef(evaluation, page_id, scope, env, func_ref, current_origin, args.items(.value));
                 },
                 else => {},
             }
@@ -941,9 +915,8 @@ fn evalCall(
             },
         };
         var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
-        defer args.deinit(state.allocator);
-        defer deinitValues(state.allocator, args.items);
-        return try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, args.items);
+        defer deinitCallArgs(state.allocator, &args);
+        return try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, args.items(.value));
     }
     const descriptor = (try callDescriptor(evaluation, &sema, call.callee)) orelse {
         try reportUnknownCallable(state, &sema, call.callee, current_origin);
@@ -961,11 +934,12 @@ fn evalCall(
 
 fn evalLambda(
     evaluation: *EvalContext,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     lambda: ast.LambdaExpr,
 ) !core.Value {
     const closures = evaluation.closures;
-    const id = try closures.add(lambda, env);
+    const free_names = evaluation.captures.names(lambda) orelse return error.MissingLambdaCaptures;
+    const id = try closures.add(lambda, env, free_names);
     return .{ .function = .{
         .name = "#lambda",
         .module_id = evaluation.module_id,
@@ -979,7 +953,7 @@ fn evalApply(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     apply: ast.ApplyExpr,
 ) anyerror!core.Value {
@@ -991,27 +965,46 @@ fn evalApply(
         else => return error.InvalidValueTag,
     };
     var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, apply.args.items);
-    defer args.deinit(state.allocator);
-    defer deinitValues(state.allocator, args.items);
-    return try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, args.items);
+    defer deinitCallArgs(state.allocator, &args);
+    return try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, args.items(.value));
+}
+
+const CallArguments = std.MultiArrayList(Binding);
+
+fn deinitCallArgs(allocator: std.mem.Allocator, args: *CallArguments) void {
+    for (args.items(.value), args.items(.owned)) |*value, owned| {
+        if (owned) value.deinit(allocator);
+    }
+    args.deinit(allocator);
+}
+
+fn evalArgument(
+    evaluation: *EvalContext,
+    page_id: core.NodeId,
+    scope: EvalScope,
+    env: *Environment,
+    current_origin: []const u8,
+    expr: Expr,
+) !Binding {
+    try checkCancellation(evaluation);
+    if (borrowLocalValue(env, expr)) |value| return .{ .value = value, .owned = false };
+    return .{ .value = try evalExpr(evaluation, page_id, scope, env, current_origin, expr), .owned = true };
 }
 
 fn evalCallArgs(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     args: []const Expr,
-) !std.ArrayList(core.Value) {
+) !CallArguments {
     const state = evaluation.state;
-    var values = std.ArrayList(core.Value).empty;
-    errdefer {
-        deinitValues(state.allocator, values.items);
-        values.deinit(state.allocator);
-    }
+    var values = CallArguments{};
+    errdefer deinitCallArgs(state.allocator, &values);
+    try values.ensureTotalCapacity(state.allocator, args.len);
     for (args) |arg| {
-        try values.append(state.allocator, try evalExpr(evaluation, page_id, scope, env, current_origin, arg));
+        values.appendAssumeCapacity(try evalArgument(evaluation, page_id, scope, env, current_origin, arg));
     }
     return values;
 }
@@ -1020,7 +1013,7 @@ fn evalNodeRepr(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     object_id: core.NodeId,
 ) ![]const u8 {
@@ -1034,7 +1027,7 @@ fn evalNodeReprWithFunction(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     object_id: core.NodeId,
     function: core.FunctionRef,
@@ -1054,7 +1047,7 @@ const BuiltinContext = struct {
     state: *core.DocumentState,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
 
     pub fn checkArityRange(self: *const BuiltinContext, actual: usize, min: usize, max: usize) !void {
@@ -1312,7 +1305,7 @@ fn evalPrimitiveCall(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     call: CallExpr,
     descriptor: registry.PrimitiveDescriptor,
@@ -1427,7 +1420,7 @@ fn evalSelectCall(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
@@ -1509,12 +1502,28 @@ fn validateArityRange(state: *core.DocumentState, actual: usize, min: usize, max
     }
 }
 
+fn bindFunctionArgument(
+    state: *core.DocumentState,
+    page_id: core.NodeId,
+    local_env: *Environment,
+    param: ast.ParamDecl,
+    current_origin: []const u8,
+    binding: Binding,
+) !void {
+    value_contracts.ensureValueConformsToType(state, page_id, binding.value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
+        var owned = binding;
+        owned.deinit(state.allocator);
+        return err;
+    };
+    try local_env.put(param.name, binding);
+}
+
 fn bindUserFunctionArgs(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    caller_env: *std.StringHashMap(core.Value),
-    local_env: *std.StringHashMap(core.Value),
+    caller_env: *Environment,
+    local_env: *Environment,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
     current_origin: []const u8,
@@ -1522,20 +1531,15 @@ fn bindUserFunctionArgs(
 ) !void {
     const state = evaluation.state;
     for (func.params.items, 0..) |param, index| {
-        const value = if (index < call.args.items.len) blk: {
-            break :blk try evalExpr(evaluation, page_id, scope, caller_env, current_origin, call.args.items[index]);
+        const binding = if (index < call.args.items.len) blk: {
+            break :blk try evalArgument(evaluation, page_id, scope, caller_env, current_origin, call.args.items[index]);
         } else blk: {
             const previous_module_id = evaluation.module_id;
             evaluation.module_id = module_id;
             defer evaluation.module_id = previous_module_id;
-            break :blk try evalExpr(evaluation, page_id, scope, local_env, current_origin, (param.default_value orelse return error.InvalidArity).*);
+            break :blk try evalArgument(evaluation, page_id, scope, local_env, current_origin, (param.default_value orelse return error.InvalidArity).*);
         };
-        value_contracts.ensureValueConformsToType(state, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
-            var owned = value;
-            owned.deinit(state.allocator);
-            return err;
-        };
-        try putEnvValue(state.allocator, local_env, param.name, value);
+        try bindFunctionArgument(state, page_id, local_env, param, current_origin, binding);
     }
 }
 
@@ -1543,8 +1547,8 @@ fn bindUserFunctionValueArgs(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    caller_env: *std.StringHashMap(core.Value),
-    local_env: *std.StringHashMap(core.Value),
+    caller_env: *Environment,
+    local_env: *Environment,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
     current_origin: []const u8,
@@ -1553,20 +1557,15 @@ fn bindUserFunctionValueArgs(
     const state = evaluation.state;
     try validateUserFunctionArity(state, args.len, func, current_origin);
     for (func.params.items, 0..) |param, index| {
-        const value = if (index < args.len) blk: {
-            break :blk try args[index].clone(state.allocator);
-        } else blk: {
+        const binding: Binding = if (index < args.len)
+            .{ .value = args[index], .owned = false }
+        else blk: {
             const previous_module_id = evaluation.module_id;
             evaluation.module_id = module_id;
             defer evaluation.module_id = previous_module_id;
-            break :blk try evalExpr(evaluation, page_id, scope, local_env, current_origin, (param.default_value orelse return error.InvalidArity).*);
+            break :blk try evalArgument(evaluation, page_id, scope, local_env, current_origin, (param.default_value orelse return error.InvalidArity).*);
         };
-        value_contracts.ensureValueConformsToType(state, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
-            var owned = value;
-            owned.deinit(state.allocator);
-            return err;
-        };
-        try putEnvValue(state.allocator, local_env, param.name, value);
+        try bindFunctionArgument(state, page_id, local_env, param, current_origin, binding);
     }
     _ = caller_env;
 }
@@ -1605,7 +1604,7 @@ fn evalCallArg(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1617,7 +1616,7 @@ fn evalCallStringArg(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1629,7 +1628,7 @@ fn evalCallNumberArg(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1641,7 +1640,7 @@ fn evalCallObjectArg(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1653,7 +1652,7 @@ fn evalCallAnchorArg(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1665,7 +1664,7 @@ fn evalCallRoleArg(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1682,7 +1681,7 @@ fn evalCallPayloadArg(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1876,7 +1875,7 @@ fn executeStatement(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     last_code_like: *?core.NodeId,
     stmt: Statement,
     origin_override: ?[]const u8,
@@ -1900,7 +1899,7 @@ fn executeStatement(
             if (scope == .page and evaluation.call_depth == 0) {
                 try addValueObjectSources(state, page_id, evaluation.module_id, binding.name, null, stmt.span, value);
             }
-            try putEnvValue(state.allocator, env, binding.name, value);
+            try env.putOwned(binding.name, value);
         },
         .return_expr => |expr| {
             const value = try evalExpr(evaluation, page_id, scope, env, origin, expr);
@@ -1919,8 +1918,8 @@ fn executeStatement(
             const value = try evalExpr(evaluation, page_id, scope, env, origin, if_stmt.condition);
             const condition = try resolveValueBoolean(value);
             const branch = if (condition) if_stmt.then_statements.items else if_stmt.else_statements.items;
-            var branch_env = try cloneValueEnv(state.allocator, env);
-            defer deinitValueEnv(state.allocator, &branch_env);
+            var branch_env = Environment.child(state.allocator, env);
+            defer branch_env.deinit();
             for (branch) |nested| {
                 const flow = try executeStatement(evaluation, page_id, scope, &branch_env, last_code_like, nested, null);
                 switch (flow) {
@@ -2055,7 +2054,7 @@ fn executeCallStatement(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     last_code_like: *?core.NodeId,
     current_origin: []const u8,
     call: CallExpr,
@@ -2073,8 +2072,8 @@ fn executeCallStatement(
     evaluation.call_depth += 1;
     defer evaluation.call_depth = previous_call_depth;
 
-    var local_env = std.StringHashMap(core.Value).init(state.allocator);
-    defer deinitValueEnv(state.allocator, &local_env);
+    var local_env = Environment.init(state.allocator);
+    defer local_env.deinit();
     try bindUserFunctionArgs(evaluation, page_id, scope, env, &local_env, resolved.module_id, func, current_origin, call);
     const start_node_count = state.nodeCount();
     const previous_module_id = evaluation.module_id;
@@ -2115,7 +2114,7 @@ fn invokeFunctionRef(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     function: core.FunctionRef,
     current_origin: []const u8,
     args: []const core.Value,
@@ -2137,7 +2136,7 @@ fn invokeClosureValues(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    caller_env: *std.StringHashMap(core.Value),
+    caller_env: *Environment,
     module_id: core.SourceModuleId,
     closure_id: usize,
     current_origin: []const u8,
@@ -2156,16 +2155,13 @@ fn invokeClosureValues(
     evaluation.call_depth += 1;
     defer evaluation.call_depth = previous_call_depth;
 
-    var local_env = try cloneValueEnv(state.allocator, &closure.env);
-    defer deinitValueEnv(state.allocator, &local_env);
+    // This local copy keeps the parent frame stable if a nested lambda grows the store.
+    var local_env = Environment.child(state.allocator, &closure.env);
+    defer local_env.deinit();
     for (closure.lambda.params.items, 0..) |param, index| {
-        const value = try args[index].clone(state.allocator);
-        value_contracts.ensureValueConformsToType(state, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
-            var owned = value;
-            owned.deinit(state.allocator);
-            return err;
-        };
-        try putEnvValue(state.allocator, &local_env, param.name, value);
+        const value = args[index];
+        try value_contracts.ensureValueConformsToType(state, page_id, value, param.ty, current_origin, .UnmatchedArgumentType);
+        try local_env.putBorrowed(param.name, value);
     }
     const start_node_count = state.nodeCount();
     const previous_module_id = evaluation.module_id;
@@ -2180,7 +2176,7 @@ fn invokeUserFunctionValue(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     func: FunctionDecl,
     current_origin: []const u8,
     call: CallExpr,
@@ -2192,7 +2188,7 @@ fn invokeUserFunctionValueInModule(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
     current_origin: []const u8,
@@ -2208,8 +2204,8 @@ fn invokeUserFunctionValueInModule(
     evaluation.call_depth += 1;
     defer evaluation.call_depth = previous_call_depth;
 
-    var local_env = std.StringHashMap(core.Value).init(state.allocator);
-    defer deinitValueEnv(state.allocator, &local_env);
+    var local_env = Environment.init(state.allocator);
+    defer local_env.deinit();
     try bindUserFunctionArgs(evaluation, page_id, scope, env, &local_env, module_id, func, current_origin, call);
 
     var last_code_like: ?core.NodeId = null;
@@ -2236,7 +2232,7 @@ fn invokeUserFunctionValues(
     evaluation: *EvalContext,
     page_id: core.NodeId,
     scope: EvalScope,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     module_id: core.SourceModuleId,
     func: FunctionDecl,
     current_origin: []const u8,
@@ -2247,8 +2243,8 @@ fn invokeUserFunctionValues(
     evaluation.call_depth += 1;
     defer evaluation.call_depth = previous_call_depth;
 
-    var local_env = std.StringHashMap(core.Value).init(state.allocator);
-    defer deinitValueEnv(state.allocator, &local_env);
+    var local_env = Environment.init(state.allocator);
+    defer local_env.deinit();
     try bindUserFunctionValueArgs(evaluation, page_id, scope, env, &local_env, module_id, func, current_origin, args);
 
     var last_code_like: ?core.NodeId = null;
@@ -2290,7 +2286,7 @@ fn originForModuleSpan(evaluation: *EvalContext, span: ast.Span) ![]const u8 {
 
 fn resolveAnchorRef(
     state: *core.DocumentState,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     anchor_ref: AnchorRef,
     comptime is_target: bool,
@@ -2314,7 +2310,7 @@ fn resolveAnchorRef(
 
 fn resolveAnchorPathValue(
     state: *core.DocumentState,
-    env: *std.StringHashMap(core.Value),
+    env: *Environment,
     current_origin: []const u8,
     path: []const u8,
 ) !core.Value {

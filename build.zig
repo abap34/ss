@@ -697,6 +697,20 @@ fn addTestStep(
     const run_return_facts_tests = b.addRunArtifact(return_facts_tests);
     test_step.dependOn(&run_return_facts_tests.step);
     addFocusedTestStep(b, "test-return-facts", "Run focused argument-sensitive return inference tests", &run_return_facts_tests.step);
+    const captures_spec_mod = createModule(ctx, "tests/analysis/captures/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    const captures_spec_tests = addTestArtifact(ctx, captures_spec_mod);
+    const run_captures_spec_tests = b.addRunArtifact(captures_spec_tests);
+    test_step.dependOn(&run_captures_spec_tests.step);
+    addFocusedTestStep(b, "test-captures", "Run focused lambda capture analysis tests", &run_captures_spec_tests.step);
+    const environment_spec_mod = createModule(ctx, "tests/eval/environment/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    const environment_spec_tests = addTestArtifact(ctx, environment_spec_mod);
+    const run_environment_spec_tests = b.addRunArtifact(environment_spec_tests);
+    test_step.dependOn(&run_environment_spec_tests.step);
+    addFocusedTestStep(b, "test-eval-environment", "Run focused evaluation environment tests", &run_environment_spec_tests.step);
     const resources_spec_mod = createModule(ctx, "tests/analysis/resources/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);

@@ -4,6 +4,7 @@ const core = @import("core");
 const utils = @import("utils");
 
 const dependencies = @import("dependencies.zig");
+const captures = @import("captures.zig");
 const resource_index = @import("resource_index.zig");
 const semantic_env = @import("../language/env.zig");
 const declarations = @import("../language/declarations.zig");
@@ -54,6 +55,7 @@ pub const ExecutionGraph = struct {
     allocator: std.mem.Allocator,
     // Borrowed from the document whose source generation defines this graph.
     declarations: *const declarations.DeclarationIndex,
+    captures: captures.Index,
     units: std.ArrayList(ExecutionUnit),
     edges: std.ArrayList(DependencyEdge),
     order: []usize,
@@ -68,11 +70,16 @@ pub const ExecutionGraph = struct {
         var graph = ExecutionGraph{
             .allocator = allocator,
             .declarations = declaration_index,
+            .captures = captures.Index.init(allocator),
             .units = .empty,
             .edges = .empty,
             .order = &.{},
         };
         errdefer graph.deinit();
+
+        if (options.page_id_mode == .create) {
+            for (state.modules.items) |module| try graph.captures.collectModule(module.syntax);
+        }
 
         var collected_modules = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
         defer collected_modules.deinit();
@@ -105,6 +112,7 @@ pub const ExecutionGraph = struct {
     }
 
     pub fn deinit(self: *ExecutionGraph) void {
+        self.captures.deinit();
         self.allocator.free(self.order);
         self.edges.deinit(self.allocator);
         for (self.units.items) |*unit| unit.deinit();
