@@ -4,6 +4,100 @@ const utils = @import("utils");
 
 const testing = std.testing;
 
+test "project spec: TOML strings, dotted keys, inline tables, and integer bases normalize equally" {
+    const inputs = [_][]const u8{
+        "project.entry = 'slides/main.ss'\neditor.lsp.debounce = 0x19\ncli.jobs = 0b110\n",
+        "[\"project\"]\n\"entry\" = \"slides/\\u006dain.ss\"\n[editor.lsp]\ndebounce = +2_5\n[cli]\njobs = 0o6\n",
+        "project = { entry = '''slides/main.ss''' }\neditor = { lsp = { debounce = 25 } }\ncli = { jobs = 6 }\n",
+        "[project]\nentry = \"\"\"\nslides/\\\n   main.ss\"\"\"\n[editor.lsp]\ndebounce = 25\n[cli]\njobs = 6\n",
+    };
+    for (inputs) |input| {
+        var config = try project.parseSource(testing.allocator, "/tmp/deck/ss.toml", input);
+        defer config.deinit(testing.allocator);
+        try testing.expectEqualStrings("/tmp/deck/slides/main.ss", config.entry);
+        try testing.expectEqual(@as(u64, 25), config.lsp.debounce_ms);
+        try testing.expectEqual(@as(?usize, 6), config.cli.jobs);
+    }
+    var config = try project.parseSource(
+        testing.allocator,
+        "/tmp/deck/ss.toml",
+        "project.entry = 'slides/#main.ss' # comment\nhighlight.languages.\"custom.python\" = { parser = 'python', query = 'queries/#highlight.scm' }\n",
+    );
+    defer config.deinit(testing.allocator);
+    try testing.expectEqualStrings("/tmp/deck/slides/#main.ss", config.entry);
+    const language = utils.highlight.findLanguage(config.highlight.languages, "custom.python").?;
+    try testing.expectEqualStrings("/tmp/deck/queries/#highlight.scm", language.query);
+}
+
+test "project spec: malformed TOML is rejected before configuration interpretation" {
+    const inputs = [_][]const u8{
+        "project.entry = 'a.ss'\nproject.entry = 'b.ss'\n",
+        "[project]\nentry = 'a.ss'\n[project]\nasset_base_dir = '.'\n",
+        "project = { entry = 'a.ss', entry = 'b.ss' }\n",
+        "project.entry = 'a.ss' trailing\n",
+        "project.entry = \"bad\\q.ss\"\n",
+        "project.entry = 'unterminated\n",
+        "project.entry = 'a.ss'\ncli.jobs = 01\n",
+        "project.entry = 'a.ss'\ncli.jobs = 9223372036854775808\n",
+        "project.entry = 'a.ss'\neditor.lsp.enabled = True\n",
+        "project.entry = 'a.ss'\nunused = [1,,2]\n",
+        "project.entry = 'a.ss'\nunused = 2023-02-30\n",
+        "project.entry = 'a.ss'\n# invalid UTF-8: \xff\n",
+        "project.entry = 'a.ss'\x00\n",
+        "project.entry = 'a.ss'\nμ = 'value'\n",
+    };
+    for (inputs) |input| try testing.expectError(error.InvalidToml, project.parseSource(testing.allocator, "/tmp/deck/ss.toml", input));
+    try expectConfigSpanText(inputs[0], error.InvalidToml, "project.entry = 'b.ss'");
+}
+
+test "project spec: settings reject incorrect TOML types and unsupported fields" {
+    const cases = [_]struct { suffix: []const u8, err: anyerror }{
+        .{ .suffix = "editor.lsp.enabled = 'false'", .err = error.InvalidEditorSetting },
+        .{ .suffix = "editor.lsp.debounce = 1.0", .err = error.InvalidEditorSetting },
+        .{ .suffix = "editor.lsp.debounce = -1", .err = error.InvalidEditorSetting },
+        .{ .suffix = "editor.lsp.debounce = 2147483648", .err = error.InvalidEditorSetting },
+        .{ .suffix = "editor.wysiwyg.max_wait = 0.5", .err = error.InvalidEditorSetting },
+        .{ .suffix = "editor.wysiwyg.refresh.automatic = 0", .err = error.InvalidEditorSetting },
+        .{ .suffix = "editor.page_guide = false", .err = error.InvalidConfigTable },
+        .{ .suffix = "editor.lsp.completions = false", .err = error.UnknownConfigKey },
+        .{ .suffix = "unknown.value = true", .err = error.UnknownConfigKey },
+        .{ .suffix = "cli.diagnostic_level = false", .err = error.InvalidDiagnosticLevel },
+        .{ .suffix = "cli.jobs = 1.0", .err = error.InvalidCliJobs },
+        .{ .suffix = "cache.max_size_mib = 17592186044416", .err = error.InvalidCacheMaxSize },
+    };
+    for (cases) |case| {
+        const input = try std.fmt.allocPrint(testing.allocator, "project.entry = 'a.ss'\n{s}\n", .{case.suffix});
+        defer testing.allocator.free(input);
+        try testing.expectError(case.err, project.parseSource(testing.allocator, "/tmp/deck/ss.toml", input));
+        try expectConfigSpanText(input, case.err, case.suffix);
+    }
+    try testing.expectError(error.InvalidProjectPath, project.parseSource(testing.allocator, "/tmp/deck/ss.toml", "project.entry = 3\n"));
+    try testing.expectError(error.InvalidProjectPath, project.parseSource(testing.allocator, "/tmp/deck/ss.toml", "project.entry = ''\n"));
+    try testing.expectError(error.InvalidProjectPath, project.parseSource(testing.allocator, "/tmp/deck/ss.toml", "project.entry = \"a\\u0000.ss\"\n"));
+}
+
+test "project spec: parsed configuration owns decoded strings across allocation failures" {
+    try testing.checkAllAllocationFailures(testing.allocator, parseOwnedConfiguration, .{});
+}
+
+fn parseOwnedConfiguration(allocator: std.mem.Allocator) !void {
+    const text = try allocator.dupe(
+        u8,
+        "project.entry = \"slides/\\u006dain.ss\"\nhighlight.languages.example = { parser = 'python', query = 'queries/highlights.scm' }\n",
+    );
+    var text_owned = true;
+    defer if (text_owned) allocator.free(text);
+    var config = try project.parseSource(allocator, "/tmp/deck/ss.toml", text);
+    defer config.deinit(allocator);
+    allocator.free(text);
+    text_owned = false;
+    try testing.expectEqualStrings("/tmp/deck/slides/main.ss", config.entry);
+    var cloned_highlight = try config.highlight.clone(allocator);
+    defer cloned_highlight.deinit(allocator);
+    const language = utils.highlight.findLanguage(config.highlight.languages, "example").?;
+    try testing.expectEqualStrings("/tmp/deck/queries/highlights.scm", language.query);
+}
+
 test "project spec: configuration discovery paths include missing nearer candidates" {
     const paths = try project.configurationPaths(testing.allocator, "/tmp/ss-watch/deck/slide.ss", null);
     defer {
@@ -59,9 +153,6 @@ test "project spec: entry resolves relative to ss.toml and asset base defaults t
 
 test "project spec: explicit asset_base_dir resolves relative to ss.toml" {
     var cfg = try project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml",
-        \\[other]
-        \\entry = "ignored.ss"
-        \\
         \\[project]
         \\entry = "slides/main.ss"
         \\asset_base_dir = "assets"

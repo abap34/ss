@@ -1,7 +1,7 @@
 const std = @import("std");
 const build_options = @import("build_options");
 
-const project = @import("../project.zig");
+const project = @import("project");
 const utils = @import("utils");
 
 /// Resolve a `std:` module spec to its source file on disk, so editors can

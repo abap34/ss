@@ -12,11 +12,7 @@ pub const Language = struct {
     }
 
     pub fn clone(self: Language, allocator: std.mem.Allocator) !Language {
-        return .{
-            .name = try allocator.dupe(u8, self.name),
-            .parser = try allocator.dupe(u8, self.parser),
-            .query = try allocator.dupe(u8, self.query),
-        };
+        return cloneLanguage(allocator, self);
     }
 };
 
@@ -34,8 +30,9 @@ pub const Config = struct {
             for (languages.items) |*language| language.deinit(allocator);
             languages.deinit(allocator);
         }
+        try languages.ensureTotalCapacityPrecise(allocator, self.languages.len);
         for (self.languages) |language| {
-            try languages.append(allocator, try language.clone(allocator));
+            languages.appendAssumeCapacity(try language.clone(allocator));
         }
         return .{ .languages = try languages.toOwnedSlice(allocator) };
     }
@@ -151,21 +148,22 @@ pub fn configWithDefaults(allocator: std.mem.Allocator, additions: []const Langu
         for (languages.items) |*language| language.deinit(allocator);
         languages.deinit(allocator);
     }
+    try languages.ensureTotalCapacityPrecise(allocator, builtin_languages.len + additions.len);
 
     for (builtin_languages) |language| {
-        try languages.append(allocator, try cloneBuiltinLanguage(allocator, language));
+        languages.appendAssumeCapacity(try cloneLanguage(allocator, language));
     }
     for (additions) |language| {
         if (isBuiltinLanguageName(language.name)) return error.BuiltinHighlightLanguageReserved;
         if (languageIndex(languages.items, language.name) != null) return error.DuplicateHighlightLanguage;
         if (!isBuiltinParserName(language.parser)) return error.UnknownHighlightParser;
-        try languages.append(allocator, try language.clone(allocator));
+        languages.appendAssumeCapacity(try language.clone(allocator));
     }
 
     return .{ .languages = try languages.toOwnedSlice(allocator) };
 }
 
-fn cloneBuiltinLanguage(allocator: std.mem.Allocator, language: BuiltinLanguage) !Language {
+fn cloneLanguage(allocator: std.mem.Allocator, language: anytype) !Language {
     const name = try allocator.dupe(u8, language.name);
     errdefer allocator.free(name);
     const parser = try allocator.dupe(u8, language.parser);

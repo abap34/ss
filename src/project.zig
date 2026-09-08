@@ -4,6 +4,9 @@ const utils = @import("utils");
 const highlight = utils.highlight;
 const source = utils.source;
 const error_report = utils.err;
+pub const toml = @import("project/toml.zig");
+pub const ConfigDiagnostic = toml.Diagnostic;
+pub const max_editor_delay_ms = std.math.maxInt(i32);
 
 pub const Config = struct {
     path: []u8,
@@ -200,6 +203,11 @@ pub fn configurationPaths(allocator: std.mem.Allocator, input_path: ?[]const u8,
 
 pub fn isConfigError(err: anyerror) bool {
     return switch (err) {
+        error.InvalidToml,
+        error.UnknownConfigKey,
+        error.InvalidConfigTable,
+        error.InvalidProjectPath,
+        error.InvalidEditorSetting,
         error.MissingProjectEntry,
         error.UnknownHighlightLanguageField,
         error.BuiltinHighlightLanguageReserved,
@@ -219,6 +227,11 @@ pub fn isConfigError(err: anyerror) bool {
 
 pub fn configErrorMessage(err: anyerror) ?[]const u8 {
     return switch (err) {
+        error.InvalidToml => "InvalidToml: use valid TOML 1.1, including quoted strings and unique keys and tables",
+        error.UnknownConfigKey => "UnknownConfigKey: remove or correct the unsupported configuration key",
+        error.InvalidConfigTable => "InvalidConfigTable: this configuration section must be a TOML table",
+        error.InvalidProjectPath => "InvalidProjectPath: use a string path without NUL characters and a non-empty project entry",
+        error.InvalidEditorSetting => "InvalidEditorSetting: use booleans for switches and integers from 0 to 2147483647 for millisecond delays",
         error.MissingProjectEntry => "MissingProjectEntry: add or set 'entry = \"path/to/slides.ss\"' under [project] using a quoted path",
         error.UnknownHighlightLanguageField => "UnknownHighlightLanguageField: remove the unsupported key from the highlight language section",
         error.BuiltinHighlightLanguageReserved => "BuiltinHighlightLanguageReserved: rename the custom language because its name is reserved by a built-in language",
@@ -257,11 +270,27 @@ pub fn loadFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Con
 }
 
 pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, text: []const u8) !Config {
+    return parseSourceWithDiagnostic(allocator, path, text, null);
+}
+
+pub fn parseSourceWithDiagnostic(allocator: std.mem.Allocator, path: []const u8, text: []const u8, diagnostic: ?*ConfigDiagnostic) !Config {
+    var document = try toml.Document.parse(text, diagnostic);
+    defer document.deinit();
+    const root = document.root();
+    try document.keys(root, &.{ "project", "cli", "cache", "editor", "highlight" }, error.UnknownConfigKey);
+    const project_table = try document.table(root, "project");
+    try document.keys(project_table, &.{ "entry", "asset_base_dir" }, error.UnknownConfigKey);
+    const raw_entry = try document.string(project_table, "entry", error.InvalidProjectPath) orelse
+        return document.fail(project_table, error.MissingProjectEntry);
+    const raw_asset_base = try document.string(project_table, "asset_base_dir", error.InvalidProjectPath);
+    if (raw_entry.len == 0 or std.mem.indexOfScalar(u8, raw_entry, 0) != null)
+        return document.fail(toml.get(project_table, "entry"), error.InvalidProjectPath);
+    if (raw_asset_base) |value| {
+        if (std.mem.indexOfScalar(u8, value, 0) != null)
+            return document.fail(toml.get(project_table, "asset_base_dir"), error.InvalidProjectPath);
+    }
     const dir = try dirnameAlloc(allocator, path);
     errdefer allocator.free(dir);
-
-    const raw_entry = parseString(text, "project", "entry") orelse return error.MissingProjectEntry;
-    const raw_asset_base = parseString(text, "project", "asset_base_dir");
     const entry = try resolveAgainst(allocator, dir, raw_entry);
     errdefer allocator.free(entry);
     const asset_base_dir = if (raw_asset_base) |value|
@@ -270,21 +299,26 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, text: []const
         try dirnameAlloc(allocator, entry);
     errdefer allocator.free(asset_base_dir);
 
-    var parsed_highlight = try parseHighlightConfig(allocator, dir, text);
+    const editor = try document.table(root, "editor");
+    try document.keys(editor, &.{ "lsp", "wysiwyg", "page_guide" }, error.UnknownConfigKey);
+    const lsp_config = try parseFlatSettings(LspConfig, &document, try document.table(editor, "lsp"));
+    const wysiwyg_config = try parseWysiwygConfig(&document, try document.table(editor, "wysiwyg"));
+    const page_guide_config = try parseFlatSettings(PageGuideConfig, &document, try document.table(editor, "page_guide"));
+    const cli_config = try parseCliConfig(&document, try document.table(root, "cli"));
+    const cache_config = try parseCacheConfig(&document, try document.table(root, "cache"));
+    var parsed_highlight = try parseHighlightConfig(allocator, dir, &document);
     defer parsed_highlight.deinit(allocator);
     var highlight_config = try highlight.configWithDefaults(allocator, parsed_highlight.languages);
     errdefer highlight_config.deinit(allocator);
-    const cli_config = try parseCliConfig(text);
-    const cache_config = try parseCacheConfig(text);
 
     return .{
         .path = try allocator.dupe(u8, path),
         .dir = dir,
         .entry = entry,
         .asset_base_dir = asset_base_dir,
-        .lsp = parseLspConfig(text),
-        .wysiwyg = parseWysiwygConfig(text),
-        .page_guide = parsePageGuideConfig(text),
+        .lsp = lsp_config,
+        .wysiwyg = wysiwyg_config,
+        .page_guide = page_guide_config,
         .highlight = highlight_config,
         .cli = cli_config,
         .cache = cache_config,
@@ -292,377 +326,118 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, text: []const
 }
 
 pub fn configErrorSpan(text: []const u8, err: anyerror) ?source.ByteSpan {
-    return switch (err) {
-        error.MissingProjectEntry => tomlKeySpan(text, "project", "entry") orelse tomlSectionSpan(text, "project"),
-        error.UnknownHighlightLanguageField,
-        error.BuiltinHighlightLanguageReserved,
-        error.MissingHighlightParser,
-        error.MissingHighlightQuery,
-        error.UnknownHighlightParser,
-        error.DuplicateHighlightLanguage,
-        => highlightConfigErrorSpan(text, err),
-        error.InvalidDiagnosticLevel => tomlKeySpan(text, "cli", "diagnostic_level") orelse tomlSectionSpan(text, "cli"),
-        error.InvalidCliJobs => tomlKeySpan(text, "cli", "jobs") orelse tomlSectionSpan(text, "cli"),
-        error.InvalidCacheAutomaticPruning => tomlKeySpan(text, "cache", "automatic_pruning") orelse tomlSectionSpan(text, "cache"),
-        error.InvalidCacheMaxSize => tomlKeySpan(text, "cache", "max_size_mib") orelse tomlSectionSpan(text, "cache"),
-        error.InvalidCachePruneInterval => tomlKeySpan(text, "cache", "prune_interval_seconds") orelse tomlSectionSpan(text, "cache"),
-        else => null,
-    };
+    return configErrorDiagnostic(text, err).span;
 }
 
-pub fn tomlSectionSpan(text: []const u8, section_name: []const u8) ?source.ByteSpan {
-    return tomlSpan(text, .{ .section = section_name });
+pub fn configErrorDiagnostic(text: []const u8, err: anyerror) ConfigDiagnostic {
+    var diagnostic = ConfigDiagnostic{};
+    var config = parseSourceWithDiagnostic(std.heap.page_allocator, "/ss.toml", text, &diagnostic) catch |actual| return if (actual == err) diagnostic else .{};
+    config.deinit(std.heap.page_allocator);
+    return .{};
 }
 
 pub fn tomlKeySpan(text: []const u8, section_name: []const u8, key: []const u8) ?source.ByteSpan {
-    return tomlSpan(text, .{ .section = section_name, .key = key });
+    var document = toml.Document.parse(text, null) catch return null;
+    defer document.deinit();
+    var table = document.root();
+    var names = std.mem.splitScalar(u8, section_name, '.');
+    while (names.next()) |name| table = toml.get(table, name);
+    return document.span(toml.get(table, key));
 }
 
-fn parseLspConfig(text: []const u8) LspConfig {
-    return .{
-        .enabled = parseBool(text, "editor.lsp", "enabled", true),
-        .debounce_ms = parseU64(text, "editor.lsp", "debounce", 120),
-        .diagnostics = parseBool(text, "editor.lsp", "diagnostics", true),
-        .completion = parseBool(text, "editor.lsp", "completion", true),
-        .hover = parseBool(text, "editor.lsp", "hover", true),
-        .definition = parseBool(text, "editor.lsp", "definition", true),
-        .document_symbols = parseBool(text, "editor.lsp", "document_symbols", true),
-        .folding_ranges = parseBool(text, "editor.lsp", "folding_ranges", true),
-        .semantic_tokens = parseBool(text, "editor.lsp", "semantic_tokens", true),
-        .colors = parseBool(text, "editor.lsp", "colors", true),
+fn settingKey(comptime field: []const u8) []const u8 {
+    return if (std.mem.endsWith(u8, field, "_ms")) field[0 .. field.len - 3] else field;
+}
+
+fn parseFlatSettings(comptime T: type, document: *const toml.Document, table: toml.Value) !T {
+    const fields = std.meta.fields(T);
+    const keys = comptime blk: {
+        var names: [fields.len][]const u8 = undefined;
+        for (fields, 0..) |field, i| names[i] = settingKey(field.name);
+        break :blk names;
     };
+    try document.keys(table, &keys, error.UnknownConfigKey);
+    var result = T{};
+    inline for (fields) |field| {
+        const key = comptime settingKey(field.name);
+        @field(result, field.name) = switch (field.type) {
+            bool => try document.boolean(table, key, @field(result, field.name), error.InvalidEditorSetting),
+            u64 => (try document.integer(table, key, @field(result, field.name), 0, max_editor_delay_ms, error.InvalidEditorSetting)).?,
+            else => @compileError("Unsupported project setting type"),
+        };
+    }
+    return result;
 }
 
-fn parseWysiwygConfig(text: []const u8) WysiwygConfig {
-    return .{
-        .enabled = parseBool(text, "editor.wysiwyg", "enabled", true),
-        .debounce_ms = parseU64(text, "editor.wysiwyg", "debounce", 140),
-        .max_wait_ms = parseU64(text, "editor.wysiwyg", "max_wait", 700),
-        .refresh_automatically = parseBool(text, "editor.wysiwyg.refresh", "automatic", true),
-        .refresh_on_dependency_change = parseBool(text, "editor.wysiwyg.refresh", "dependency", true),
-    };
+fn parseWysiwygConfig(document: *const toml.Document, table: toml.Value) !WysiwygConfig {
+    try document.keys(table, &.{ "enabled", "debounce", "max_wait", "refresh" }, error.UnknownConfigKey);
+    const refresh = try document.table(table, "refresh");
+    try document.keys(refresh, &.{ "automatic", "dependency" }, error.UnknownConfigKey);
+    var config = WysiwygConfig{};
+    config.enabled = try document.boolean(table, "enabled", config.enabled, error.InvalidEditorSetting);
+    config.debounce_ms = (try document.integer(table, "debounce", config.debounce_ms, 0, max_editor_delay_ms, error.InvalidEditorSetting)).?;
+    config.max_wait_ms = (try document.integer(table, "max_wait", config.max_wait_ms, 0, max_editor_delay_ms, error.InvalidEditorSetting)).?;
+    config.refresh_automatically = try document.boolean(refresh, "automatic", config.refresh_automatically, error.InvalidEditorSetting);
+    config.refresh_on_dependency_change = try document.boolean(refresh, "dependency", config.refresh_on_dependency_change, error.InvalidEditorSetting);
+    return config;
 }
 
-fn parsePageGuideConfig(text: []const u8) PageGuideConfig {
-    return .{
-        .enabled = parseBool(text, "editor.page_guide", "enabled", true),
-        .body_background = parseBool(text, "editor.page_guide", "body_background", true),
-        .boundary = parseBool(text, "editor.page_guide", "boundary", true),
-        .boundary_background = parseBool(text, "editor.page_guide", "boundary_background", true),
-        .gutter_icon = parseBool(text, "editor.page_guide", "gutter_icon", true),
-        .overview_ruler = parseBool(text, "editor.page_guide", "overview_ruler", true),
-    };
-}
-
-fn parseCliConfig(text: []const u8) !CliConfig {
+fn parseCliConfig(document: *const toml.Document, table: toml.Value) !CliConfig {
+    try document.keys(table, &.{ "diagnostic_level", "jobs" }, error.UnknownConfigKey);
     var config = CliConfig{};
-    if (parseString(text, "cli", "diagnostic_level")) |value| {
-        config.diagnostic_level = error_report.parseDiagnosticLevel(value) orelse return error.InvalidDiagnosticLevel;
+    if (try document.string(table, "diagnostic_level", error.InvalidDiagnosticLevel)) |value| {
+        config.diagnostic_level = error_report.parseDiagnosticLevel(value) orelse
+            return document.fail(toml.get(table, "diagnostic_level"), error.InvalidDiagnosticLevel);
     }
-    if (parseValue(text, "cli", "jobs")) |value| {
-        const jobs = std.fmt.parseUnsigned(usize, value, 10) catch return error.InvalidCliJobs;
-        if (jobs == 0) return error.InvalidCliJobs;
-        config.jobs = jobs;
-    }
+    if (try document.integer(table, "jobs", null, 1, std.math.maxInt(usize), error.InvalidCliJobs)) |value| config.jobs = @intCast(value);
     return config;
 }
 
-fn parseCacheConfig(text: []const u8) !utils.render_cache.Config {
+fn parseCacheConfig(document: *const toml.Document, table: toml.Value) !utils.render_cache.Config {
+    try document.keys(table, &.{ "automatic_pruning", "max_size_mib", "prune_interval_seconds" }, error.UnknownConfigKey);
     var config = utils.render_cache.Config{};
-    if (parseValue(text, "cache", "automatic_pruning")) |value| {
-        if (std.mem.eql(u8, value, "true")) {
-            config.automatic_pruning = true;
-        } else if (std.mem.eql(u8, value, "false")) {
-            config.automatic_pruning = false;
-        } else {
-            return error.InvalidCacheAutomaticPruning;
-        }
-    }
-    if (parseValue(text, "cache", "max_size_mib")) |value| {
-        config.max_size_mib = std.fmt.parseUnsigned(u64, value, 10) catch return error.InvalidCacheMaxSize;
-        if (config.max_size_mib == 0) return error.InvalidCacheMaxSize;
-        _ = config.maxBytes() catch return error.InvalidCacheMaxSize;
-    }
-    if (parseValue(text, "cache", "prune_interval_seconds")) |value| {
-        config.prune_interval_seconds = std.fmt.parseUnsigned(u64, value, 10) catch return error.InvalidCachePruneInterval;
-    }
+    config.automatic_pruning = try document.boolean(table, "automatic_pruning", config.automatic_pruning, error.InvalidCacheAutomaticPruning);
+    config.max_size_mib = (try document.integer(table, "max_size_mib", config.max_size_mib, 1, std.math.maxInt(u64) / (1024 * 1024), error.InvalidCacheMaxSize)).?;
+    config.prune_interval_seconds = (try document.integer(table, "prune_interval_seconds", config.prune_interval_seconds, 0, std.math.maxInt(u64), error.InvalidCachePruneInterval)).?;
     return config;
 }
 
-fn parseHighlightConfig(allocator: std.mem.Allocator, project_dir: []const u8, text: []const u8) !highlight.Config {
+fn parseHighlightConfig(allocator: std.mem.Allocator, project_dir: []const u8, document: *const toml.Document) !highlight.Config {
+    const table = try document.table(document.root(), "highlight");
+    try document.keys(table, &.{"languages"}, error.UnknownConfigKey);
+    const languages_table = try document.table(table, "languages");
     var languages = std.ArrayList(highlight.Language).empty;
     errdefer {
         for (languages.items) |*language| language.deinit(allocator);
         languages.deinit(allocator);
     }
-
-    var current: ?HighlightLanguageBuilder = null;
-    var lines = source.lineIterator(text);
-    while (lines.next()) |line_view| {
-        const line_raw = line_view.text(text);
-        const comment_start = tomlCommentStart(line_raw);
-        const line = std.mem.trim(u8, line_raw[0..comment_start], " \t\r");
-        if (line.len == 0) continue;
-
-        if (line[0] == '[') {
-            try finishHighlightLanguage(allocator, project_dir, &languages, &current);
-            current = null;
-            if (highlightLanguageSectionName(line)) |name| {
-                current = .{ .name = name };
-            }
-            continue;
-        }
-
-        if (current) |*builder| {
-            const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
-            const key = std.mem.trim(u8, line[0..eq], " \t");
-            const value = parseTomlStringValue(std.mem.trim(u8, line[eq + 1 ..], " \t")) orelse continue;
-            if (std.mem.eql(u8, key, "parser")) {
-                builder.parser = value;
-            } else if (std.mem.eql(u8, key, "query")) {
-                builder.query = value;
-            } else {
-                return error.UnknownHighlightLanguageField;
-            }
-        }
+    var names = std.StringHashMap(void).init(allocator);
+    defer names.deinit();
+    for (0..toml.tableSize(languages_table)) |i| {
+        const name = toml.keyAt(languages_table, i);
+        const language_table = try document.table(languages_table, name);
+        try document.keys(language_table, &.{ "parser", "query" }, error.UnknownHighlightLanguageField);
+        if (highlight.isBuiltinLanguageName(name)) return document.fail(language_table, error.BuiltinHighlightLanguageReserved);
+        const parser = try document.string(language_table, "parser", error.MissingHighlightParser) orelse
+            return document.fail(language_table, error.MissingHighlightParser);
+        if (!highlight.isBuiltinParserName(parser)) return document.fail(toml.get(language_table, "parser"), error.UnknownHighlightParser);
+        const query = try document.string(language_table, "query", error.MissingHighlightQuery) orelse
+            return document.fail(language_table, error.MissingHighlightQuery);
+        if (std.mem.indexOfScalar(u8, query, 0) != null) return document.fail(toml.get(language_table, "query"), error.MissingHighlightQuery);
+        const owned_name = try std.ascii.allocLowerString(allocator, name);
+        errdefer allocator.free(owned_name);
+        const found = try names.getOrPut(owned_name);
+        if (found.found_existing) return document.fail(language_table, error.DuplicateHighlightLanguage);
+        const owned_parser = try allocator.dupe(u8, parser);
+        errdefer allocator.free(owned_parser);
+        const owned_query = if (std.mem.startsWith(u8, query, "builtin:"))
+            try allocator.dupe(u8, query)
+        else
+            try resolveAgainst(allocator, project_dir, query);
+        errdefer allocator.free(owned_query);
+        try languages.append(allocator, .{ .name = owned_name, .parser = owned_parser, .query = owned_query });
     }
-    try finishHighlightLanguage(allocator, project_dir, &languages, &current);
-
     return .{ .languages = try languages.toOwnedSlice(allocator) };
-}
-
-const HighlightLanguageBuilder = struct {
-    name: []const u8,
-    parser: ?[]const u8 = null,
-    query: ?[]const u8 = null,
-};
-
-const HighlightSpanBuilder = struct {
-    name: []const u8,
-    section_span: source.ByteSpan,
-    parser: ?[]const u8 = null,
-    parser_span: ?source.ByteSpan = null,
-    query: ?[]const u8 = null,
-};
-
-fn highlightConfigErrorSpan(text: []const u8, err: anyerror) ?source.ByteSpan {
-    var current: ?HighlightSpanBuilder = null;
-    var lines = source.lineIterator(text);
-    while (lines.next()) |line_view| {
-        const line_start = line_view.span.start;
-        const line_end = line_view.span.end;
-        const comment_start = line_start + tomlCommentStart(text[line_start..line_end]);
-        const bounds = source.trimInlineSpaceSpan(text, .{ .start = line_start, .end = comment_start });
-        const line = text[bounds.start..bounds.end];
-
-        if (line.len != 0 and line[0] == '[') {
-            if (finishHighlightSpan(text, current, err)) |span| return span;
-            current = null;
-            if (highlightLanguageSectionName(line)) |name| {
-                current = .{
-                    .name = name,
-                    .section_span = .{ .start = bounds.start, .end = bounds.end },
-                };
-            }
-        } else if (current) |*builder| {
-            const eq = std.mem.indexOfScalar(u8, line, '=') orelse {
-                continue;
-            };
-            const key_bounds = source.trimInlineSpaceSpan(text, .{ .start = bounds.start, .end = bounds.start + eq });
-            const key = text[key_bounds.start..key_bounds.end];
-            const value = parseTomlStringValue(std.mem.trim(u8, line[eq + 1 ..], " \t")) orelse {
-                continue;
-            };
-            if (std.mem.eql(u8, key, "parser")) {
-                builder.parser = value;
-                builder.parser_span = .{ .start = bounds.start, .end = bounds.end };
-            } else if (std.mem.eql(u8, key, "query")) {
-                builder.query = value;
-            } else if (err == error.UnknownHighlightLanguageField) {
-                return .{ .start = bounds.start, .end = bounds.end };
-            }
-        }
-    }
-    return finishHighlightSpan(text, current, err);
-}
-
-fn finishHighlightSpan(
-    text: []const u8,
-    current: ?HighlightSpanBuilder,
-    err: anyerror,
-) ?source.ByteSpan {
-    const builder = current orelse return null;
-    if (highlight.isBuiltinLanguageName(builder.name)) {
-        return if (err == error.BuiltinHighlightLanguageReserved) builder.section_span else null;
-    }
-    if (builder.parser == null) {
-        return if (err == error.MissingHighlightParser) builder.section_span else null;
-    }
-    if (!highlight.isBuiltinParserName(builder.parser.?)) {
-        return if (err == error.UnknownHighlightParser) builder.parser_span orelse builder.section_span else null;
-    }
-    if (builder.query == null) {
-        return if (err == error.MissingHighlightQuery) builder.section_span else null;
-    }
-    if (hasPreviousHighlightLanguage(text, builder.name, builder.section_span.start)) {
-        return if (err == error.DuplicateHighlightLanguage) builder.section_span else null;
-    }
-    return null;
-}
-
-fn hasPreviousHighlightLanguage(text: []const u8, name: []const u8, before: usize) bool {
-    var lines = source.lineIterator(text);
-    while (lines.next()) |line_view| {
-        const line_start = line_view.span.start;
-        if (line_start >= before) break;
-        const line_end = line_view.span.end;
-        const comment_start = line_start + tomlCommentStart(text[line_start..line_end]);
-        const bounds = source.trimInlineSpaceSpan(text, .{ .start = line_start, .end = comment_start });
-        const line = text[bounds.start..bounds.end];
-        if (line.len != 0 and line[0] == '[') {
-            if (highlightLanguageSectionName(line)) |found| {
-                if (std.ascii.eqlIgnoreCase(found, name)) return true;
-            }
-        }
-    }
-    return false;
-}
-
-fn finishHighlightLanguage(
-    allocator: std.mem.Allocator,
-    project_dir: []const u8,
-    languages: *std.ArrayList(highlight.Language),
-    current: *?HighlightLanguageBuilder,
-) !void {
-    const builder = current.* orelse return;
-    current.* = null;
-    if (highlight.isBuiltinLanguageName(builder.name)) return error.BuiltinHighlightLanguageReserved;
-    const parser = builder.parser orelse return error.MissingHighlightParser;
-    if (!highlight.isBuiltinParserName(parser)) return error.UnknownHighlightParser;
-    const query = builder.query orelse return error.MissingHighlightQuery;
-    for (languages.items) |language| {
-        if (std.ascii.eqlIgnoreCase(language.name, builder.name)) return error.DuplicateHighlightLanguage;
-    }
-
-    var language = highlight.Language{
-        .name = try allocator.dupe(u8, builder.name),
-        .parser = try allocator.dupe(u8, parser),
-        .query = try resolveHighlightValue(allocator, project_dir, query),
-    };
-    errdefer language.deinit(allocator);
-    try languages.append(allocator, language);
-}
-
-fn resolveHighlightValue(allocator: std.mem.Allocator, project_dir: []const u8, value: []const u8) ![]u8 {
-    if (std.mem.startsWith(u8, value, "builtin:")) return allocator.dupe(u8, value);
-    return resolveAgainst(allocator, project_dir, value);
-}
-
-fn highlightLanguageSectionName(line: []const u8) ?[]const u8 {
-    if (line.len < 2 or line[0] != '[' or line[line.len - 1] != ']') return null;
-    const section = line[1 .. line.len - 1];
-    const prefix = "highlight.languages.";
-    if (!std.mem.startsWith(u8, section, prefix)) return null;
-    const name = section[prefix.len..];
-    if (name.len == 0) return null;
-    return name;
-}
-
-fn parseTomlStringValue(value: []const u8) ?[]const u8 {
-    if (value.len < 2 or value[0] != '"' or value[value.len - 1] != '"') return null;
-    return value[1 .. value.len - 1];
-}
-
-fn parseBool(text: []const u8, section: []const u8, key: []const u8, default: bool) bool {
-    const value = parseValue(text, section, key) orelse return default;
-    if (std.mem.eql(u8, value, "true")) return true;
-    if (std.mem.eql(u8, value, "false")) return false;
-    return default;
-}
-
-fn parseU64(text: []const u8, section: []const u8, key: []const u8, default: u64) u64 {
-    const value = parseValue(text, section, key) orelse return default;
-    return std.fmt.parseUnsigned(u64, value, 10) catch default;
-}
-
-fn parseString(text: []const u8, section: []const u8, key: []const u8) ?[]const u8 {
-    const value = parseValue(text, section, key) orelse return null;
-    if (value.len < 2 or value[0] != '"' or value[value.len - 1] != '"') return null;
-    return value[1 .. value.len - 1];
-}
-
-fn parseValue(text: []const u8, section: []const u8, key: []const u8) ?[]const u8 {
-    var in_target_section = false;
-    var lines = source.lineIterator(text);
-    while (lines.next()) |line_view| {
-        const line_raw = line_view.text(text);
-        const comment_start = tomlCommentStart(line_raw);
-        const line = std.mem.trim(u8, line_raw[0..comment_start], " \t\r");
-        if (line.len == 0) continue;
-        if (line[0] == '[') {
-            in_target_section = sectionHeaderMatches(line, section);
-            continue;
-        }
-        if (!in_target_section) continue;
-        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
-        const name = std.mem.trim(u8, line[0..eq], " \t");
-        if (!std.mem.eql(u8, name, key)) continue;
-        return std.mem.trim(u8, line[eq + 1 ..], " \t");
-    }
-    return null;
-}
-
-const TomlSpanQuery = struct {
-    section: ?[]const u8 = null,
-    key: ?[]const u8 = null,
-};
-
-fn tomlSpan(text: []const u8, query: TomlSpanQuery) ?source.ByteSpan {
-    var in_target_section = false;
-    var lines = source.lineIterator(text);
-    while (lines.next()) |line_view| {
-        const line_start = line_view.span.start;
-        const line_end = line_view.span.end;
-        const comment_start = line_start + tomlCommentStart(text[line_start..line_end]);
-        const bounds = source.trimInlineSpaceSpan(text, .{ .start = line_start, .end = comment_start });
-        const line = text[bounds.start..bounds.end];
-
-        if (line.len != 0 and line[0] == '[') {
-            in_target_section = if (query.section) |section| sectionHeaderMatches(line, section) else false;
-            if (in_target_section and query.key == null) return .{ .start = bounds.start, .end = bounds.end };
-        } else if (in_target_section) {
-            if (query.key) |wanted_key| {
-                const eq = std.mem.indexOfScalar(u8, line, '=') orelse {
-                    continue;
-                };
-                const key_bounds = source.trimInlineSpaceSpan(text, .{ .start = bounds.start, .end = bounds.start + eq });
-                const key_text = text[key_bounds.start..key_bounds.end];
-                if (std.mem.eql(u8, key_text, wanted_key)) return .{ .start = bounds.start, .end = bounds.end };
-            }
-        }
-    }
-    return null;
-}
-
-fn sectionHeaderMatches(line: []const u8, section: []const u8) bool {
-    if (line.len != section.len + 2) return false;
-    if (line[0] != '[' or line[line.len - 1] != ']') return false;
-    return std.mem.eql(u8, line[1 .. line.len - 1], section);
-}
-
-fn tomlCommentStart(line: []const u8) usize {
-    var index: usize = 0;
-    while (index < line.len) {
-        const byte = line[index];
-        if (byte == '"') {
-            index = source.skipDoubleQuotedString(line, index, line.len);
-            continue;
-        } else if (byte == '#') {
-            return index;
-        }
-        index += 1;
-    }
-    return line.len;
 }
 
 fn resolveAgainst(allocator: std.mem.Allocator, base: []const u8, path: []const u8) ![]u8 {

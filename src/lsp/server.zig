@@ -9,7 +9,7 @@ const editor_snapshot = @import("../editor/snapshot.zig");
 const editor_reuse = @import("../editor/reuse.zig");
 const analysis = @import("../analysis.zig");
 const module_loader = @import("../modules/loader.zig");
-const project = @import("../project.zig");
+const project = @import("project");
 const utils = @import("utils");
 const lsp_diagnostics = @import("diagnostics.zig");
 const protocol = @import("protocol.zig");
@@ -536,9 +536,11 @@ const Server = struct {
             };
             break :blk owned_source orelse "";
         };
-        var message_buf: [320]u8 = undefined;
-        const message = project.configErrorMessage(err) orelse utils.err.formatBuildFailure(&message_buf, err);
-        try diagnostics.add(path, text, .@"error", @errorName(err), message, project.configErrorSpan(text, err));
+        var message_buf: [512]u8 = undefined;
+        const diagnostic = project.configErrorDiagnostic(text, err);
+        const explanation = project.configErrorMessage(err) orelse utils.err.formatBuildFailure(&message_buf, err);
+        const message = if (diagnostic.message().len == 0) explanation else try std.fmt.bufPrint(&message_buf, "{s}: {s}", .{ explanation, diagnostic.message() });
+        try diagnostics.add(path, text, .@"error", @errorName(err), message, diagnostic.span);
     }
 
     fn clearChangedDocumentDiagnostics(self: *Server, uri: []const u8) !void {

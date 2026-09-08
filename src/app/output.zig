@@ -2,7 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const render = @import("render");
 const pdf = @import("../render/pdf.zig");
-const project = @import("../project.zig");
+const project = @import("project");
 const utils = @import("utils");
 
 const app_progress = @import("progress.zig");

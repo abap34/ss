@@ -1,0 +1,10 @@
+Upstream: https://github.com/cktan/tomlc17
+Revision: 64a063b8636a4b48d142f978270f5e53e605e240
+Sources: src/tomlc17.c, src/tomlc17.h, LICENSE
+License: MIT
+Local changes: use standard offsetof in page_create instead of accessing a
+member through a null pointer, which fails undefined-behavior checks.
+Restore ASCII bare keys as required by the released TOML 1.1 grammar.
+Upstream df7ecd4 enabled draft Unicode bare keys and skipped the standard
+invalid/key/special-character test. The vendored parser runs that test.
+Specification: https://github.com/toml-lang/toml/blob/1.1.0/toml.abnf

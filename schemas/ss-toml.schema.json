@@ -15,6 +15,7 @@
       "properties": {
         "entry": {
           "type": "string",
+          "minLength": 1,
           "description": "Slide entry file resolved relative to ss.toml."
         },
         "asset_base_dir": {
@@ -83,6 +84,7 @@
               "type": "integer",
               "minimum": 0,
               "default": 120,
+              "maximum": 2147483647,
               "description": "Debounce time for language server project analysis in milliseconds."
             },
             "diagnostics": {
@@ -141,12 +143,14 @@
               "type": "integer",
               "minimum": 0,
               "default": 140,
+              "maximum": 2147483647,
               "description": "Debounce time for WYSIWYG updates in milliseconds."
             },
             "max_wait": {
               "type": "integer",
               "minimum": 0,
               "default": 700,
+              "maximum": 2147483647,
               "description": "Maximum time before a pending WYSIWYG update starts, even while edits continue, in milliseconds."
             },
             "refresh": {

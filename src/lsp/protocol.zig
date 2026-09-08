@@ -1,5 +1,5 @@
 const std = @import("std");
-const project = @import("../project.zig");
+const project = @import("project");
 const utils = @import("utils");
 
 const source = utils.source;

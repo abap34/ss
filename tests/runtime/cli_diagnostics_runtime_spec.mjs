@@ -381,7 +381,7 @@ async function testDoctorDiscoveredConfigFailureReportsPath() {
     const output = combinedOutput(result);
     assert(result.code !== 0, "doctor --strict should fail for a malformed discovered project config");
     assert(output.includes(`fail project configuration ${configPath}:`), `doctor discovered-config diagnostic omitted its path:\n${output}`);
-    assert(output.includes("MissingProjectEntry:"), `doctor discovered-config diagnostic omitted its cause:\n${output}`);
+    assert(output.includes("InvalidToml:"), `doctor discovered-config diagnostic omitted its cause:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -423,9 +423,9 @@ async function testMalformedProjectEntryIsActionable() {
     const result = await runSs(["check", "--project", project], project);
     const output = combinedOutput(result);
     assert(result.code !== 0, "check should reject an unquoted project entry");
-    assert(output.includes("MissingProjectEntry:"), `malformed project entry omitted its diagnostic code:\n${output}`);
-    assert(output.includes("add or set"), `malformed project entry incorrectly assumed the key was absent:\n${output}`);
-    assert(output.includes("using a quoted path"), `malformed project entry omitted corrective guidance:\n${output}`);
+    assert(output.includes("InvalidToml:"), `malformed project entry omitted its diagnostic code:\n${output}`);
+    assert(output.includes("(line 2)"), `malformed project entry omitted the parser location:\n${output}`);
+    assert(output.includes("quoted strings"), `malformed project entry omitted corrective guidance:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

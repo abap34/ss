@@ -1,7 +1,7 @@
 const std = @import("std");
 const analysis_snapshot = @import("../analysis/snapshot.zig");
 const module_loader = @import("../modules/loader.zig");
-const project = @import("../project.zig");
+const project = @import("project");
 const utils = @import("utils");
 
 const protocol = @import("protocol.zig");

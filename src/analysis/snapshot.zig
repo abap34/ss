@@ -3,7 +3,7 @@ const ast = @import("ast");
 const core = @import("core");
 const editor_snapshot = @import("../editor/snapshot.zig");
 const ReuseInputs = @import("../render/layout/inputs.zig").Inputs;
-const project = @import("../project.zig");
+const project = @import("project");
 
 const diagnostics = @import("diagnostics.zig");
 const hole_facts = @import("hole_facts.zig");

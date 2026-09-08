@@ -3,7 +3,7 @@ const app = @import("app.zig");
 const build_options = @import("build_options");
 const utils = @import("utils");
 const watcher = @import("watch.zig");
-const project = @import("project.zig");
+const project = @import("project");
 const lsp = @import("lsp.zig");
 const pdf = @import("render/pdf.zig");
 const render_compiler = @import("render/compile.zig");
@@ -916,13 +916,16 @@ fn printProjectConfigErrorForOptions(
     defer allocator.free(config_path);
     const source = utils.fs.readFileAlloc(io, allocator, config_path) catch return false;
     defer allocator.free(source);
-    const message = project.configErrorMessage(err) orelse return false;
+    const explanation = project.configErrorMessage(err) orelse return false;
+    const diagnostic = project.configErrorDiagnostic(source, err);
+    var message_buffer: [512]u8 = undefined;
+    const message = if (diagnostic.message().len == 0) explanation else try std.fmt.bufPrint(&message_buffer, "{s}: {s}", .{ explanation, diagnostic.message() });
     error_report.print(.{
         .path = config_path,
         .source = source,
         .severity = .@"error",
         .message = message,
-        .span = project.configErrorSpan(source, err),
+        .span = diagnostic.span,
     });
     return true;
 }

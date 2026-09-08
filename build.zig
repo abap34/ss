@@ -358,6 +358,11 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     const project_mod = createModule(ctx, "src/project.zig", &.{
         import("utils", utils_mod),
     }, true);
+    project_mod.addIncludePath(ctx.b.path("third_party/tomlc17"));
+    project_mod.addCSourceFile(.{
+        .file = ctx.b.path("third_party/tomlc17/tomlc17.c"),
+        .flags = &.{"-std=c17"},
+    });
     const core_mod = createModule(ctx, "src/core.zig", &.{
         import("utils", utils_mod),
         import("ast", ast_mod),
@@ -1039,6 +1044,7 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
     return createModule(ctx, root_source_file, &.{
         import("core", modules.core),
         import("utils", modules.utils),
+        import("project", modules.project),
         import("ast", modules.ast),
         import("model", modules.model),
         import("language_type", modules.language_type),
