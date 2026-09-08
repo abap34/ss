@@ -615,12 +615,10 @@ fn/! code_file(path_value: String, language_name: String = "plain", theme: Theme
 end
 
 fn toc(title_text: String, theme: Theme = current_theme()) -> Object
-  let title = objects::lab_obj(title_text)
-  base::apply_text_block_style(title, theme.toc.title)
-  let list = generated::toc_obj()
-  base::apply_text_block_style(list, theme.toc.body)
-  let chrome = components::panel()
-  chrome.chrome = theme.toc.chrome
+  let parts = base::toc_parts(title_text, theme.toc)
+  let title = parts.title
+  let list = parts.list
+  let chrome = parts.chrome
   ~ list.top == title.bottom - 34
   layout::surround(chrome, list, theme.toc.chrome.pad_x, theme.toc.chrome.pad_y)
   return group(title, chrome, list)
@@ -633,13 +631,11 @@ fn toc!(title_text: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! cover(title_text: String, subtitle_text: String, author_name: String, theme: Theme = current_theme()) -> Object
-  let title = objects::title_obj(title_text)
-  let subtitle = objects::sub_obj(subtitle_text)
-  let author = objects::by_obj(author_name)
+  let parts = base::cover_parts(title_text, subtitle_text, author_name, theme.cover)
+  let title = parts.title
+  let subtitle = parts.subtitle
+  let author = parts.author
   let accent = components::rule()
-  base::apply_text_block_style(title, theme.cover.title)
-  base::apply_text_block_style(subtitle, theme.cover.subtitle)
-  base::apply_text_block_style(author, theme.cover.author)
   base::apply_rule_block_style(accent, theme.cover.accent)
 
   ~ title.left == page.left + 72

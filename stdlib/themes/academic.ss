@@ -218,12 +218,10 @@ fn/! code_file(path_value: String, language_name: String = "plain", theme: theme
 end
 
 fn toc(title_text: String, theme: theme_base::Theme = current_theme()) -> Object
-  let title = objects::lab_obj(title_text)
-  theme_base::apply_text_block_style(title, theme.toc.title)
-  let list = generated::toc_obj()
-  theme_base::apply_text_block_style(list, theme.toc.body)
-  let chrome = components::panel()
-  chrome.chrome = theme.toc.chrome
+  let parts = theme_base::toc_parts(title_text, theme.toc)
+  let title = parts.title
+  let list = parts.list
+  let chrome = parts.chrome
   ~ title.left == page.left + 30
   ~ title.top == page.top - 30
   ~ list.top == title.bottom - 35
@@ -238,13 +236,11 @@ fn toc!(title_text: String, theme: theme_base::Theme = current_theme()) -> Objec
 end
 
 fn/! cover(title_text: String, subtitle_text: String, author_name: String, date: String = "", theme: theme_base::Theme = current_theme()) -> Object
-  let title = objects::title_obj(title_text)
-  let subtitle = objects::sub_obj(subtitle_text)
-  let author = objects::by_obj(author_name)
+  let parts = theme_base::cover_parts(title_text, subtitle_text, author_name, theme.cover)
+  let title = parts.title
+  let subtitle = parts.subtitle
+  let author = parts.author
   let date_text = objects::by_obj(date)
-  theme_base::apply_text_block_style(title, theme.cover.title)
-  theme_base::apply_text_block_style(subtitle, theme.cover.subtitle)
-  theme_base::apply_text_block_style(author, theme.cover.author)
   theme_base::apply_text_block_style(date_text, theme.cover.date)
 
   ~ title.left == page.left + 72

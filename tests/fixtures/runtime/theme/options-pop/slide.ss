@@ -1,7 +1,8 @@
 import std:themes/pop as *
+import std:themes/base as theme_base
 
 document
-  theme!(default_theme(ThemeOptions {
+  theme!(default_theme(theme_base::ThemeOptions {
     font_family = "Pop Sans"
     code_font_family = "Pop Mono"
     text_color = c"#203850"

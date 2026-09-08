@@ -1,6 +1,7 @@
 import std:core/classes
 import std:core/components as components
 import std:core/generated as generated
+import std:core/objects as objects
 
 record TextBlockStyle {
   text: TextStyle = TextStyle {}
@@ -51,6 +52,18 @@ record CoverStyle {
   author: TextBlockStyle = TextBlockStyle {}
   date: TextBlockStyle = TextBlockStyle {}
   accent: RuleBlockStyle = RuleBlockStyle {}
+}
+
+record CoverParts {
+  title: Object
+  subtitle: Object
+  author: Object
+}
+
+record TocParts {
+  title: Object
+  list: Object
+  chrome: Object
 }
 
 record GeneratedStyle {
@@ -164,6 +177,26 @@ end
 
 fn byline_with_style(text_value: String, style: TextBlockStyle) -> Object
   return apply_text_block_style(components::byline(text_value), style)
+end
+
+fn cover_parts(title_text: String, subtitle_text: String, author_name: String, style: CoverStyle) -> CoverParts
+  let title = objects::title_obj(title_text)
+  let subtitle = objects::sub_obj(subtitle_text)
+  let author = objects::by_obj(author_name)
+  apply_text_block_style(title, style.title)
+  apply_text_block_style(subtitle, style.subtitle)
+  apply_text_block_style(author, style.author)
+  return CoverParts { title = title subtitle = subtitle author = author }
+end
+
+fn toc_parts(title_text: String, style: TocStyle) -> TocParts
+  let title = objects::lab_obj(title_text)
+  apply_text_block_style(title, style.title)
+  let list = generated::toc_obj()
+  apply_text_block_style(list, style.body)
+  let chrome = components::panel()
+  chrome.chrome = style.chrome
+  return TocParts { title = title list = list chrome = chrome }
 end
 
 fn label_with_style(text_value: String, style: TextBlockStyle) -> Object

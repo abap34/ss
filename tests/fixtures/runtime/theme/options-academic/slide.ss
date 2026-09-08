@@ -1,7 +1,8 @@
 import std:themes/academic as *
+import std:themes/base as theme_base
 
 document
-  theme!(default_theme(ThemeOptions {
+  theme!(default_theme(theme_base::ThemeOptions {
     font_family = "Academic Sans"
     code_font_family = "Academic Mono"
     text_color = c"#183048"

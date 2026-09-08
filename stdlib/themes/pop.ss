@@ -264,12 +264,10 @@ fn watermark!(text_value: String, theme: theme_base::Theme = current_theme()) ->
 end
 
 fn toc(title_text: String, theme: theme_base::Theme = current_theme()) -> Object
-  let title = objects::txt_obj(title_text, "label")
-  theme_base::apply_text_block_style(title, theme.toc.title)
-  let list = generated::toc_obj()
-  theme_base::apply_text_block_style(list, theme.toc.body)
-  let chrome = components::panel()
-  chrome.chrome = theme.toc.chrome
+  let parts = theme_base::toc_parts(title_text, theme.toc)
+  let title = parts.title
+  let list = parts.list
+  let chrome = parts.chrome
   ~ title.left == page.left + 72
   ~ title.top == page.top - 98
   ~ list.top == title.bottom - 46
@@ -284,12 +282,10 @@ fn toc!(title_text: String, theme: theme_base::Theme = current_theme()) -> Objec
 end
 
 fn/! cover(title_text: String, subtitle_text: String, author_name: String, theme: theme_base::Theme = current_theme()) -> Object
-  let title = objects::txt_obj(title_text, "title")
-  let subtitle = objects::txt_obj(subtitle_text, "subtitle")
-  let author = objects::txt_obj(author_name, "byline")
-  theme_base::apply_text_block_style(title, theme.cover.title)
-  theme_base::apply_text_block_style(subtitle, theme.cover.subtitle)
-  theme_base::apply_text_block_style(author, theme.cover.author)
+  let parts = theme_base::cover_parts(title_text, subtitle_text, author_name, theme.cover)
+  let title = parts.title
+  let subtitle = parts.subtitle
+  let author = parts.author
 
   ~ title.left == page.left + 72
   ~ title.top == page.top - 152
