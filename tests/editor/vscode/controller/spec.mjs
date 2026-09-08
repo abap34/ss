@@ -17,9 +17,12 @@ const esbuild = require(
 const mock = vscodeMock();
 globalThis.__ssVscodeMock = mock;
 const output = await esbuild.build({
-  entryPoints: [
-    path.join(root, "editor", "vscode", "src", "editor", "controller.ts"),
-  ],
+  stdin: {
+    contents: `export { EditorController } from './editor/vscode/src/editor/controller';
+      export { setProjectSettingsProvider } from './editor/vscode/src/projectConfig';`,
+    resolveDir: root,
+    loader: "ts",
+  },
   bundle: true,
   write: false,
   format: "esm",
@@ -55,12 +58,13 @@ const output = await esbuild.build({
   }],
 });
 const source = output.outputFiles[0].text;
-const { EditorController } = await import(
+const { EditorController, setProjectSettingsProvider } = await import(
   `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
 );
 
 await testOpenResolvesConfiguredEntryWithoutSsDocument();
 await testDisposingSessionCancelsSourceEditRequest();
+await testPendingOpenDoesNotSurviveDisposal();
 await testOpeningManualPreviewBuildsInitialSnapshot();
 await testManualPositionEditRequestsReconciliation();
 await testNewSourceEditReschedulesReconciliation();
@@ -73,6 +77,7 @@ await testShapeBoundsEditForwardsPageBounds();
 await testComponentWidthEditReachesTheWebview();
 await testComponentDeletionReachesTheWebview();
 await testIconCatalogAndInsertionReachTheWebview();
+setProjectSettingsProvider(undefined);
 
 async function testOpenResolvesConfiguredEntryWithoutSsDocument() {
   const fixture = await mkdtemp(path.join(os.tmpdir(), "ss-editor-open-entry-"));
@@ -86,6 +91,7 @@ entry = "deck/slides.ss"
     await writeFile(slide, "page demo\nend\n", "utf8");
 
     mock.reset();
+    configureSettings(slide);
     mock.workspace.workspaceFolders.push({ uri: mock.Uri.file(fixture) });
     const controller = new EditorController(
       { extensionUri: mock.Uri.file(fixture) },
@@ -93,7 +99,7 @@ entry = "deck/slides.ss"
       () => undefined,
     );
 
-    controller.open(undefined);
+    await controller.open(undefined);
     await waitFor(() => controller.sessions.size === 1);
     const session = controller.sessions.values().next().value;
     assert.equal(session.document.uri.fsPath, slide);
@@ -117,6 +123,7 @@ entry = "slide.ss"
     await writeFile(slide, "page demo\nend\n", "utf8");
 
     mock.reset();
+    configureSettings(slide);
     const uri = mock.Uri.file(slide);
     const document = { uri, languageId: "ss-slide", version: 1 };
     mock.workspace.textDocuments.push(document);
@@ -143,7 +150,7 @@ entry = "slide.ss"
       { appendLine() {} },
       () => client,
     );
-    controller.open(document);
+    await controller.open(document);
     const session = controller.sessions.get(uri.toString());
     assert(session, "opening the editor did not create a disposable session");
 
@@ -772,6 +779,7 @@ automatic = false
     await writeFile(slide, "page demo\nend\n", "utf8");
 
     mock.reset();
+    configureSettings(slide, true);
     const uri = mock.Uri.file(slide);
     const document = { uri, languageId: "ss-slide", version: 1 };
     mock.workspace.textDocuments.push(document);
@@ -779,6 +787,7 @@ automatic = false
     const messages = [];
     const session = {
       document,
+      settings: settingsResponse(slide, true).settings.wysiwyg,
       panel: {
         active: true,
         webview: {
@@ -1100,4 +1109,39 @@ function vscodeMock() {
       for (const listener of [...workspaceListeners]) listener({ added: [], removed: [] });
     },
   };
+}
+
+function configureSettings(entryPath, manual = false) {
+  setProjectSettingsProvider(async () => settingsResponse(entryPath, manual));
+}
+
+function settingsResponse(entryPath, manual = false) {
+  return {
+    schema: 1,
+    entryPath,
+    settings: {
+      lsp: { enabled: true, debounceMs: 120, diagnostics: true, completion: true, hover: true, definition: true, documentSymbols: true, foldingRanges: true, semanticTokens: true, colors: true },
+      wysiwyg: { enabled: true, debounceMs: manual ? 0 : 140, maxWaitMs: manual ? 0 : 700, refreshAutomatically: !manual, refreshOnDependencyChange: true },
+      pageGuide: { enabled: true, bodyBackground: true, boundary: true, boundaryBackground: true, gutterIcon: true, overviewRuler: true },
+    },
+  };
+}
+
+async function testPendingOpenDoesNotSurviveDisposal() {
+  mock.reset();
+  let release;
+  const entryPath = path.join(os.tmpdir(), "ss-pending-settings", "slide.ss");
+  setProjectSettingsProvider(() => new Promise((resolve) => { release = resolve; }));
+  const controller = new EditorController(
+    { extensionUri: mock.Uri.file(os.tmpdir()) },
+    { appendLine() {} },
+    () => undefined,
+  );
+  const pending = controller.open({ uri: mock.Uri.file(entryPath), languageId: "ss-slide", version: 1 });
+  controller.dispose();
+  release(settingsResponse(entryPath));
+  await pending;
+  assert.equal(controller.sessions.size, 0);
+  assert.equal(mock.panels.length, 0, "late settings created a panel after controller disposal");
+  setProjectSettingsProvider(undefined);
 }

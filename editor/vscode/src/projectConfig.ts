@@ -1,5 +1,3 @@
-import * as fs from "fs";
-import * as path from "path";
 import * as vscode from "vscode";
 import { LoadedProject, ProjectSettingsCache } from "./projectConfig/cache";
 
@@ -39,67 +37,78 @@ export interface PageGuideSettings {
   overviewRuler: boolean;
 }
 
-const defaultSettings: ProjectSettings = freezeSettings({
-  lsp: {
-    enabled: true,
-    debounceMs: 120,
-    diagnostics: true,
-    completion: true,
-    hover: true,
-    definition: true,
-    documentSymbols: true,
-    foldingRanges: true,
-    semanticTokens: true,
-    colors: true,
-  },
-  wysiwyg: {
-    enabled: true,
-    debounceMs: 140,
-    maxWaitMs: 700,
-    refreshAutomatically: true,
-    refreshOnDependencyChange: true,
-  },
-  pageGuide: {
-    enabled: true,
-    bodyBackground: true,
-    boundary: true,
-    boundaryBackground: true,
-    gutterIcon: true,
-    overviewRuler: true,
-  },
-});
+export interface ProjectSettingsResponse {
+  readonly schema: 1;
+  readonly entryPath: string | null;
+  readonly settings: ProjectSettings;
+  readonly error?: { readonly code: string; readonly message: string };
+}
 
-const cache = new ProjectSettingsCache(loadProject, { settings: defaultSettings });
+export type ProjectSettingsProvider = (projectFile: string | undefined) => Promise<ProjectSettingsResponse>;
+
+let cache: ProjectSettingsCache | undefined;
+let changeSubscription: vscode.Disposable | undefined;
+let reportError: (message: string) => void = () => {};
+const listeners = new Set<(files: readonly string[]) => void>();
 
 export function initializeProjectSettings(): vscode.Disposable {
-  return cache.start();
+  return { dispose: () => {
+    setProjectSettingsProvider(undefined);
+    listeners.clear();
+  } };
 }
 
-export function onDidChangeProjectSettings(listener: () => void): vscode.Disposable {
-  return cache.onDidChange(listener);
+export function setProjectSettingsProvider(
+  provider: ProjectSettingsProvider | undefined,
+  log: (message: string) => void = () => {},
+): void {
+  changeSubscription?.dispose();
+  cache?.dispose();
+  reportError = log;
+  cache = provider ? new ProjectSettingsCache(async (projectFile) => {
+    const response = await provider(projectFile);
+    if (response.schema !== 1) throw new Error("Unsupported project settings response");
+    if (response.error) log(`${projectFile ?? "ss.toml"}: ${response.error.message}`);
+    return {
+      settings: freezeSettings(response.settings),
+      entry: response.entryPath ? vscode.Uri.file(response.entryPath) : undefined,
+    };
+  }).start() : undefined;
+  changeSubscription = cache?.onDidChange(notify);
+  notify();
 }
 
-export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
-  return cache.get(uri).settings;
+export function onDidChangeProjectSettings(listener: (files: readonly string[]) => void): vscode.Disposable {
+  listeners.add(listener);
+  return { dispose: () => { listeners.delete(listener); } };
 }
 
-export function projectEntryUri(uri: vscode.Uri | undefined): vscode.Uri | undefined {
-  return cache.get(uri).entry;
+export async function projectSettings(uri: vscode.Uri | undefined): Promise<ProjectSettings | undefined> {
+  return (await loadProject(uri))?.settings;
 }
 
-function loadProject(projectFile: string): LoadedProject {
-  let source: string;
-  try {
-    source = fs.readFileSync(projectFile, "utf8");
-  } catch {
-    return { settings: defaultSettings };
+export async function projectEntryUri(uri: vscode.Uri | undefined): Promise<vscode.Uri | undefined> {
+  return (await loadProject(uri))?.entry;
+}
+
+async function loadProject(uri: vscode.Uri | undefined): Promise<LoadedProject | undefined> {
+  for (;;) {
+    const active = cache;
+    if (!active) return undefined;
+    try {
+      const result = await active.get(uri);
+      if (active === cache) return result;
+    } catch (error) {
+      if (active === cache) {
+        reportError(`Project settings could not be loaded: ${String(error)}`);
+        return undefined;
+      }
+    }
   }
-  const table = parseTomlSubset(source);
-  const entry = stringValue(table, "project", "entry");
-  return {
-    settings: settingsFromTable(table),
-    entry: entry ? vscode.Uri.file(path.resolve(path.dirname(projectFile), entry)) : undefined,
-  };
+}
+
+function notify(files: readonly string[] = []): void {
+  for (const listener of [...listeners]) listener(files);
 }
 
 function freezeSettings(settings: ProjectSettings): ProjectSettings {
@@ -107,110 +116,4 @@ function freezeSettings(settings: ProjectSettings): ProjectSettings {
   Object.freeze(settings.wysiwyg);
   Object.freeze(settings.pageGuide);
   return Object.freeze(settings);
-}
-
-function settingsFromTable(table: TomlSubset): ProjectSettings {
-  return freezeSettings({
-    lsp: {
-      enabled: boolValue(table, "editor.lsp", "enabled", defaultSettings.lsp.enabled),
-      debounceMs: numberValue(table, "editor.lsp", "debounce", defaultSettings.lsp.debounceMs, 0),
-      diagnostics: boolValue(table, "editor.lsp", "diagnostics", defaultSettings.lsp.diagnostics),
-      completion: boolValue(table, "editor.lsp", "completion", defaultSettings.lsp.completion),
-      hover: boolValue(table, "editor.lsp", "hover", defaultSettings.lsp.hover),
-      definition: boolValue(table, "editor.lsp", "definition", defaultSettings.lsp.definition),
-      documentSymbols: boolValue(table, "editor.lsp", "document_symbols", defaultSettings.lsp.documentSymbols),
-      foldingRanges: boolValue(table, "editor.lsp", "folding_ranges", defaultSettings.lsp.foldingRanges),
-      semanticTokens: boolValue(table, "editor.lsp", "semantic_tokens", defaultSettings.lsp.semanticTokens),
-      colors: boolValue(table, "editor.lsp", "colors", defaultSettings.lsp.colors),
-    },
-    wysiwyg: {
-      enabled: boolValue(table, "editor.wysiwyg", "enabled", defaultSettings.wysiwyg.enabled),
-      debounceMs: numberValue(table, "editor.wysiwyg", "debounce", defaultSettings.wysiwyg.debounceMs, 0),
-      maxWaitMs: numberValue(table, "editor.wysiwyg", "max_wait", defaultSettings.wysiwyg.maxWaitMs, 0),
-      refreshAutomatically: boolValue(table, "editor.wysiwyg.refresh", "automatic", defaultSettings.wysiwyg.refreshAutomatically),
-      refreshOnDependencyChange: boolValue(table, "editor.wysiwyg.refresh", "dependency", defaultSettings.wysiwyg.refreshOnDependencyChange),
-    },
-    pageGuide: {
-      enabled: boolValue(table, "editor.page_guide", "enabled", defaultSettings.pageGuide.enabled),
-      bodyBackground: boolValue(table, "editor.page_guide", "body_background", defaultSettings.pageGuide.bodyBackground),
-      boundary: boolValue(table, "editor.page_guide", "boundary", defaultSettings.pageGuide.boundary),
-      boundaryBackground: boolValue(table, "editor.page_guide", "boundary_background", defaultSettings.pageGuide.boundaryBackground),
-      gutterIcon: boolValue(table, "editor.page_guide", "gutter_icon", defaultSettings.pageGuide.gutterIcon),
-      overviewRuler: boolValue(table, "editor.page_guide", "overview_ruler", defaultSettings.pageGuide.overviewRuler),
-    },
-  });
-}
-
-type TomlSubset = Map<string, Map<string, string>>;
-
-function parseTomlSubset(source: string): TomlSubset {
-  const table: TomlSubset = new Map();
-  let section = "";
-  for (const rawLine of source.split(/\r?\n/)) {
-    const line = stripComment(rawLine).trim();
-    if (!line) {
-      continue;
-    }
-    const sectionMatch = /^\[([A-Za-z0-9_.-]+)\]$/.exec(line);
-    if (sectionMatch) {
-      section = sectionMatch[1];
-      continue;
-    }
-    const eq = line.indexOf("=");
-    if (eq < 0 || !section) {
-      continue;
-    }
-    const key = line.slice(0, eq).trim();
-    const value = line.slice(eq + 1).trim();
-    const fields = table.get(section) ?? new Map<string, string>();
-    fields.set(key, value);
-    table.set(section, fields);
-  }
-  return table;
-}
-
-function stripComment(line: string): string {
-  let inString = false;
-  let escaped = false;
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === "\"") {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === "\"") {
-      inString = true;
-    } else if (char === "#") {
-      return line.slice(0, index);
-    }
-  }
-  return line;
-}
-
-function rawValue(table: TomlSubset, section: string, key: string): string | undefined {
-  return table.get(section)?.get(key);
-}
-
-function boolValue(table: TomlSubset, section: string, key: string, fallback: boolean): boolean {
-  const value = rawValue(table, section, key);
-  return value === "true" ? true : value === "false" ? false : fallback;
-}
-
-function stringValue(table: TomlSubset, section: string, key: string): string | undefined {
-  const value = rawValue(table, section, key);
-  if (!value || value.length < 2 || value[0] !== '"' || value[value.length - 1] !== '"') {
-    return undefined;
-  }
-  return value.slice(1, -1);
-}
-
-function numberValue(table: TomlSubset, section: string, key: string, fallback: number, minimum: number): number {
-  const parsed = Number(rawValue(table, section, key));
-  return Number.isFinite(parsed) ? Math.max(minimum, parsed) : fallback;
 }

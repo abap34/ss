@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { LanguageClient, LanguageClientOptions, Middleware, ServerOptions, Trace } from "vscode-languageclient/node";
 import { PageGuideDecorations } from "./pageGuide";
-import { initializeProjectSettings, projectSettings } from "./projectConfig";
+import { initializeProjectSettings, onDidChangeProjectSettings, projectSettings, ProjectSettingsResponse, setProjectSettingsProvider } from "./projectConfig";
 import { EditorController } from "./editor/controller";
 
 let client: LanguageClient | undefined;
@@ -13,16 +13,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(initializeProjectSettings());
   const output = vscode.window.createOutputChannel("ss");
   outputChannel = output;
+  context.subscriptions.push(onDidChangeProjectSettings((files) => {
+    if (files.length === 0 || !client?.isRunning()) return;
+    void client.sendNotification("workspace/didChangeWatchedFiles", {
+      changes: files.map((file) => ({ uri: vscode.Uri.file(file).toString(), type: 2 })),
+    }).catch((error) => output.appendLine(`Project settings notification failed: ${String(error)}`));
+  }));
   pageGuide = new PageGuideDecorations();
   editorController = new EditorController(context, output, () => client);
 
   context.subscriptions.push(output, pageGuide, editorController);
-  context.subscriptions.push(vscode.commands.registerCommand("ss.editor.open", () => {
-    editorController?.open(vscode.window.activeTextEditor?.document);
-  }));
-  context.subscriptions.push(vscode.commands.registerCommand("ss.editor.build", () => {
-    editorController?.build(vscode.window.activeTextEditor?.document);
-  }));
+  context.subscriptions.push(vscode.commands.registerCommand("ss.editor.open", () =>
+    editorController?.open(vscode.window.activeTextEditor?.document)
+  ));
+  context.subscriptions.push(vscode.commands.registerCommand("ss.editor.build", () =>
+    editorController?.build(vscode.window.activeTextEditor?.document)
+  ));
   context.subscriptions.push(vscode.commands.registerCommand("ss.checkCurrentFile", async () => {
     const document = vscode.window.activeTextEditor?.document;
     if (document?.languageId !== "ss-slide") {
@@ -59,13 +65,18 @@ async function restartLanguageClient(context: vscode.ExtensionContext): Promise<
   const active = createLanguageClient(outputChannel);
   client = active;
   context.subscriptions.push(active);
-  await active.start();
-  editorController?.refreshOpenDocuments(0);
+  const ready = active.start();
+  setProjectSettingsProvider(async (projectFile) => {
+    await ready;
+    return active.sendRequest<ProjectSettingsResponse>("ss/projectSettings", { projectFile });
+  }, (message) => outputChannel?.appendLine(message));
+  await ready;
 }
 
 async function stopLanguageClient(): Promise<void> {
   const active = client;
   client = undefined;
+  setProjectSettingsProvider(undefined);
   if (active) {
     await active.stop();
   }
@@ -105,28 +116,24 @@ function applyTraceSetting(active: LanguageClient): void {
 
 function createMiddleware(): Middleware {
   return {
-    handleDiagnostics: (uri, diagnostics, next) => {
-      const settings = projectSettings(uri).lsp;
-      next(uri, settings.enabled && settings.diagnostics ? diagnostics : []);
-    },
-    provideCompletionItem: (document, position, context, token, next) =>
-      featureEnabled(document, "completion") ? next(document, position, context, token) : undefined,
-    provideHover: (document, position, token, next) =>
-      featureEnabled(document, "hover") ? next(document, position, token) : null,
-    provideDefinition: (document, position, token, next) =>
-      featureEnabled(document, "definition") ? next(document, position, token) : null,
-    provideDocumentSymbols: (document, token, next) =>
-      featureEnabled(document, "documentSymbols") ? next(document, token) : [],
-    provideFoldingRanges: (document, context, token, next) =>
-      featureEnabled(document, "foldingRanges") ? next(document, context, token) : [],
-    provideDocumentSemanticTokens: (document, token, next) =>
-      featureEnabled(document, "semanticTokens") ? next(document, token) : undefined,
-    provideDocumentSemanticTokensEdits: (document, previousResultId, token, next) =>
-      featureEnabled(document, "semanticTokens") ? next(document, previousResultId, token) : undefined,
-    provideDocumentColors: (document, token, next) =>
-      featureEnabled(document, "colors") ? next(document, token) : [],
-    provideColorPresentations: (color, context, token, next) =>
-      featureEnabled(context.document, "colors") ? next(color, context, token) : [],
+    provideCompletionItem: async (document, position, context, token, next) =>
+      (await featureEnabled(document, "completion", token)) ? next(document, position, context, token) : undefined,
+    provideHover: async (document, position, token, next) =>
+      (await featureEnabled(document, "hover", token)) ? next(document, position, token) : null,
+    provideDefinition: async (document, position, token, next) =>
+      (await featureEnabled(document, "definition", token)) ? next(document, position, token) : null,
+    provideDocumentSymbols: async (document, token, next) =>
+      (await featureEnabled(document, "documentSymbols", token)) ? next(document, token) : [],
+    provideFoldingRanges: async (document, context, token, next) =>
+      (await featureEnabled(document, "foldingRanges", token)) ? next(document, context, token) : [],
+    provideDocumentSemanticTokens: async (document, token, next) =>
+      (await featureEnabled(document, "semanticTokens", token)) ? next(document, token) : undefined,
+    provideDocumentSemanticTokensEdits: async (document, previousResultId, token, next) =>
+      (await featureEnabled(document, "semanticTokens", token)) ? next(document, previousResultId, token) : undefined,
+    provideDocumentColors: async (document, token, next) =>
+      (await featureEnabled(document, "colors", token)) ? next(document, token) : [],
+    provideColorPresentations: async (color, context, token, next) =>
+      (await featureEnabled(context.document, "colors", token)) ? next(color, context, token) : [],
   };
 }
 
@@ -139,7 +146,7 @@ type LspFeatureName =
   "semanticTokens" |
   "colors";
 
-function featureEnabled(document: vscode.TextDocument, feature: LspFeatureName): boolean {
-  const settings = projectSettings(document.uri).lsp;
-  return settings.enabled && settings[feature];
+async function featureEnabled(document: vscode.TextDocument, feature: LspFeatureName, token: vscode.CancellationToken): Promise<boolean> {
+  const settings = (await projectSettings(document.uri))?.lsp;
+  return !token.isCancellationRequested && Boolean(settings?.enabled && settings[feature]);
 }

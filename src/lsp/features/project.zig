@@ -1,4 +1,6 @@
 const std = @import("std");
+const project_config = @import("project");
+const utils = @import("utils");
 
 const analysis_snapshot = @import("../../analysis/snapshot.zig");
 const protocol = @import("../protocol.zig");
@@ -24,6 +26,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
 
 pub fn json(allocator: std.mem.Allocator, project: ?*const ProjectFacts) ![]const u8 {
     var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
     try out.append(allocator, '{');
     if (project) |facts| {
         try out.appendSlice(allocator, "\"entryPath\":");
@@ -36,54 +39,101 @@ pub fn json(allocator: std.mem.Allocator, project: ?*const ProjectFacts) ![]cons
             try protocol.appendJsonString(allocator, &out, path);
         }
         try out.append(allocator, ']');
-        try appendSettings(allocator, &out, facts);
+        try out.appendSlice(allocator, ",\"settings\":");
+        try appendSettings(allocator, &out, facts.lsp, facts.wysiwyg, facts.page_guide);
     }
     try out.append(allocator, '}');
     return out.toOwnedSlice(allocator);
 }
 
-fn appendSettings(allocator: std.mem.Allocator, out: *std.ArrayList(u8), facts: *const ProjectFacts) !void {
-    try out.appendSlice(allocator, ",\"lsp\":{");
-    try appendBoolField(allocator, out, "enabled", facts.lsp.enabled, true);
-    try appendIntField(allocator, out, "debounce", facts.lsp.debounce_ms, false);
-    try appendBoolField(allocator, out, "diagnostics", facts.lsp.diagnostics, false);
-    try appendBoolField(allocator, out, "completion", facts.lsp.completion, false);
-    try appendBoolField(allocator, out, "hover", facts.lsp.hover, false);
-    try appendBoolField(allocator, out, "definition", facts.lsp.definition, false);
-    try appendBoolField(allocator, out, "documentSymbols", facts.lsp.document_symbols, false);
-    try appendBoolField(allocator, out, "foldingRanges", facts.lsp.folding_ranges, false);
-    try appendBoolField(allocator, out, "semanticTokens", facts.lsp.semantic_tokens, false);
-    try appendBoolField(allocator, out, "colors", facts.lsp.colors, false);
+pub fn settingsResult(allocator: std.mem.Allocator, io: std.Io, params: ?protocol.JsonValue) ![]const u8 {
+    var project_file: ?[]const u8 = null;
+    if (params) |value| {
+        if (value != .object) return error.InvalidParams;
+        if (value.object.get("projectFile")) |field| {
+            if (field != .null) {
+                if (field != .string or !std.fs.path.isAbsolute(field.string) or
+                    std.mem.indexOfScalar(u8, field.string, 0) != null) return error.InvalidParams;
+                project_file = field.string;
+            }
+        }
+    }
+    var config: ?project_config.Config = null;
+    defer if (config) |*value| value.deinit(allocator);
+    var failure: ?anyerror = null;
+    if (project_file) |path| {
+        config = project_config.loadFile(allocator, io, path) catch |err| switch (err) {
+            error.OutOfMemory, error.Canceled => return err,
+            else => blk: {
+                failure = err;
+                break :blk null;
+            },
+        };
+    }
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "{\"schema\":1,\"entryPath\":");
+    if (config) |value| try protocol.appendJsonString(allocator, &out, value.entry) else try out.appendSlice(allocator, "null");
+    try out.appendSlice(allocator, ",\"settings\":");
+    try appendSettings(
+        allocator,
+        &out,
+        if (config) |value| value.lsp else .{},
+        if (config) |value| value.wysiwyg else .{},
+        if (config) |value| value.page_guide else .{},
+    );
+    if (failure) |err| {
+        var reason: [256]u8 = undefined;
+        try out.appendSlice(allocator, ",\"error\":{\"code\":");
+        try protocol.appendJsonString(allocator, &out, @errorName(err));
+        try out.appendSlice(allocator, ",\"message\":");
+        try protocol.appendJsonString(allocator, &out, project_config.configErrorMessage(err) orelse utils.err.formatErrorReason(&reason, err));
+        try out.append(allocator, '}');
+    }
     try out.append(allocator, '}');
+    return out.toOwnedSlice(allocator);
+}
 
-    try out.appendSlice(allocator, ",\"wysiwyg\":{");
-    try appendBoolField(allocator, out, "enabled", facts.wysiwyg.enabled, true);
-    try appendIntField(allocator, out, "debounce", facts.wysiwyg.debounce_ms, false);
-    try appendIntField(allocator, out, "maxWait", facts.wysiwyg.max_wait_ms, false);
-    try appendBoolField(allocator, out, "refreshAutomatically", facts.wysiwyg.refresh_automatically, false);
-    try appendBoolField(allocator, out, "refreshOnDependencyChange", facts.wysiwyg.refresh_on_dependency_change, false);
-    try out.append(allocator, '}');
-
-    try out.appendSlice(allocator, ",\"pageGuide\":{");
-    try appendBoolField(allocator, out, "enabled", facts.page_guide.enabled, true);
-    try appendBoolField(allocator, out, "bodyBackground", facts.page_guide.body_background, false);
-    try appendBoolField(allocator, out, "boundary", facts.page_guide.boundary, false);
-    try appendBoolField(allocator, out, "boundaryBackground", facts.page_guide.boundary_background, false);
-    try appendBoolField(allocator, out, "gutterIcon", facts.page_guide.gutter_icon, false);
-    try appendBoolField(allocator, out, "overviewRuler", facts.page_guide.overview_ruler, false);
+fn appendSettings(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    lsp: project_config.LspConfig,
+    wysiwyg: project_config.WysiwygConfig,
+    page_guide: project_config.PageGuideConfig,
+) !void {
+    try out.appendSlice(allocator, "{\"lsp\":");
+    try appendSettingsGroup(allocator, out, lsp);
+    try out.appendSlice(allocator, ",\"wysiwyg\":");
+    try appendSettingsGroup(allocator, out, wysiwyg);
+    try out.appendSlice(allocator, ",\"pageGuide\":");
+    try appendSettingsGroup(allocator, out, page_guide);
     try out.append(allocator, '}');
 }
 
-fn appendBoolField(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, value: bool, first: bool) !void {
-    if (!first) try out.append(allocator, ',');
-    try protocol.appendJsonString(allocator, out, name);
-    try out.append(allocator, ':');
-    try protocol.appendBool(allocator, out, value);
-}
-
-fn appendIntField(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, value: anytype, first: bool) !void {
-    if (!first) try out.append(allocator, ',');
-    try protocol.appendJsonString(allocator, out, name);
-    try out.append(allocator, ':');
-    try protocol.appendInt(allocator, out, value);
+fn appendSettingsGroup(allocator: std.mem.Allocator, out: *std.ArrayList(u8), settings: anytype) !void {
+    try out.append(allocator, '{');
+    inline for (std.meta.fields(@TypeOf(settings)), 0..) |field, i| {
+        if (i != 0) try out.append(allocator, ',');
+        const name = comptime blk: {
+            var key_name: []const u8 = "";
+            var uppercase = false;
+            for (field.name) |byte| {
+                if (byte == '_') {
+                    uppercase = true;
+                } else {
+                    key_name = key_name ++ [_]u8{if (uppercase) std.ascii.toUpper(byte) else byte};
+                    uppercase = false;
+                }
+            }
+            break :blk key_name;
+        };
+        try protocol.appendJsonString(allocator, out, name);
+        try out.append(allocator, ':');
+        switch (field.type) {
+            bool => try protocol.appendBool(allocator, out, @field(settings, field.name)),
+            u64 => try protocol.appendInt(allocator, out, @field(settings, field.name)),
+            else => @compileError("Unsupported project setting type"),
+        }
+    }
+    try out.append(allocator, '}');
 }

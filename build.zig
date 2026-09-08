@@ -650,6 +650,14 @@ fn addTestStep(
     const run_project_spec_tests = b.addRunArtifact(project_spec_tests);
     test_step.dependOn(&run_project_spec_tests.step);
     addFocusedTestStep(b, "test-project", "Run focused project configuration tests", &run_project_spec_tests.step);
+    const project_settings_spec = b.addSystemCommand(&.{"node"});
+    project_settings_spec.step.dependOn(&ctx.dependency_checks.node.step);
+    project_settings_spec.addFileArg(b.path("tests/runtime/lsp/project_settings/spec.mjs"));
+    project_settings_spec.addFileArg(exe.getEmittedBin());
+    project_settings_spec.setCwd(b.path("."));
+    project_settings_spec.stdio = .inherit;
+    test_step.dependOn(&project_settings_spec.step);
+    addFocusedTestStep(b, "test-project-settings", "Run normalized project settings protocol tests", &project_settings_spec.step);
     const app_output_app_mod = createCommonModule(ctx, "src/app.zig", modules, true);
     app_output_app_mod.addOptions("build_options", build_options);
     const app_output_spec_mod = createModule(ctx, "tests/app/output/spec_tests.zig", &.{

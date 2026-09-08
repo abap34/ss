@@ -1105,6 +1105,12 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         try server.respondResult(id, result);
         return;
     }
+    if (std.mem.eql(u8, method, "ss/projectSettings")) {
+        const result = try feature_project.settingsResult(server.allocator, server.io, params);
+        defer server.allocator.free(result);
+        try server.respondResult(id, result);
+        return;
+    }
     if (std.mem.eql(u8, method, "ss/projectInfo")) {
         var provider = analysisProvider(server);
         var ctx = feature_project.Context{

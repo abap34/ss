@@ -71,10 +71,10 @@ export class PageGuideDecorations implements vscode.Disposable {
   private startDecorations: vscode.TextEditorDecorationType[] = [];
   private endDecorations: vscode.TextEditorDecorationType[] = [];
   private decorationSignature = "";
+  private disposed = false;
+  private readonly refreshes = new WeakMap<vscode.TextEditor, number>();
 
   constructor() {
-    this.rebuildDecorations(projectSettings(undefined).pageGuide);
-
     this.disposables.push(
       vscode.workspace.onDidChangeTextDocument((event) => this.refreshDocument(event.document)),
       vscode.workspace.onDidSaveTextDocument((document) => this.refreshDocument(document)),
@@ -87,6 +87,7 @@ export class PageGuideDecorations implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.disposeDecorations();
     for (const disposable of this.disposables) {
       disposable.dispose();
@@ -160,13 +161,22 @@ export class PageGuideDecorations implements vscode.Disposable {
     }
   }
 
-  private refreshEditor(editor: vscode.TextEditor | undefined): void {
-    if (!editor) {
+  private async refreshEditor(editor: vscode.TextEditor | undefined): Promise<void> {
+    if (!editor || this.disposed) return;
+    const revision = (this.refreshes.get(editor) ?? 0) + 1;
+    this.refreshes.set(editor, revision);
+    if (editor.document.languageId !== "ss-slide") {
+      this.clearEditor(editor);
       return;
     }
-    const settings = projectSettings(editor.document.uri).pageGuide;
+    const settings = (await projectSettings(editor.document.uri))?.pageGuide;
+    if (this.disposed || this.refreshes.get(editor) !== revision) return;
+    if (!settings) {
+      this.clearEditor(editor);
+      return;
+    }
     this.rebuildDecorations(settings);
-    if (editor.document.languageId !== "ss-slide" || !settings.enabled) {
+    if (!settings.enabled) {
       this.clearEditor(editor);
       return;
     }
@@ -180,10 +190,8 @@ export class PageGuideDecorations implements vscode.Disposable {
   }
 
   private clearEditor(editor: vscode.TextEditor): void {
-    for (let index = 0; index < pagePalette.length; index += 1) {
-      editor.setDecorations(this.bodyDecorations[index], []);
-      editor.setDecorations(this.startDecorations[index], []);
-      editor.setDecorations(this.endDecorations[index], []);
+    for (const decoration of [...this.bodyDecorations, ...this.startDecorations, ...this.endDecorations]) {
+      editor.setDecorations(decoration, []);
     }
   }
 }

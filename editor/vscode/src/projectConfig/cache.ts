@@ -9,9 +9,10 @@ export interface LoadedProject {
 }
 
 type Lookup = {
+  invalidated: boolean;
   projectFile?: string;
   directories: string[];
-  value: LoadedProject;
+  value: Promise<LoadedProject>;
 };
 
 type DirectoryWatch = {
@@ -21,16 +22,17 @@ type DirectoryWatch = {
 
 export class ProjectSettingsCache implements vscode.Disposable {
   private readonly lookups = new Map<string, Lookup>();
-  private readonly projects = new Map<string, { references: number; value: LoadedProject }>();
+  private readonly projects = new Map<string, { references: number; value: Promise<LoadedProject> }>();
   private readonly watches = new Map<string, DirectoryWatch>();
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = new Set<(files: readonly string[]) => void>();
   private workspaceSubscription?: vscode.Disposable;
   private readonly maxLookups = 128;
   private readonly maxWatches = 256;
+  private defaults?: Promise<LoadedProject>;
+  private disposed = false;
 
   constructor(
-    private readonly load: (projectFile: string) => LoadedProject,
-    private readonly defaults: LoadedProject,
+    private readonly load: (projectFile: string | undefined) => Promise<LoadedProject>,
   ) {}
 
   start(): this {
@@ -41,24 +43,42 @@ export class ProjectSettingsCache implements vscode.Disposable {
     return this;
   }
 
-  onDidChange(listener: () => void): vscode.Disposable {
+  onDidChange(listener: (files: readonly string[]) => void): vscode.Disposable {
     this.start();
     this.listeners.add(listener);
     return { dispose: () => { this.listeners.delete(listener); } };
   }
 
-  get(uri: vscode.Uri | undefined): LoadedProject {
+  async get(uri: vscode.Uri | undefined): Promise<LoadedProject> {
+    for (;;) {
+      if (this.disposed) throw new Error("Project settings cache was disposed");
+      const lookup = this.lookup(uri);
+      try {
+        const value = await lookup.value;
+        if (this.disposed) throw new Error("Project settings cache was disposed");
+        if (!lookup.invalidated) return value;
+      } catch (error) {
+        if (this.disposed || !lookup.invalidated) throw error;
+      }
+    }
+  }
+
+  private defaultValue(): Promise<LoadedProject> {
+    return this.defaults ??= this.load(undefined);
+  }
+
+  private lookup(uri: vscode.Uri | undefined): Lookup {
     this.start();
     const directory = uri?.scheme === "file"
       ? path.dirname(uri.fsPath)
       : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!directory) return this.defaults;
+    if (!directory) return { invalidated: false, directories: [], value: this.defaultValue() };
     const key = path.resolve(directory);
     const cached = this.lookups.get(key);
     if (cached) {
       this.lookups.delete(key);
       this.lookups.set(key, cached);
-      return cached.value;
+      return cached;
     }
 
     const directories: string[] = [];
@@ -78,13 +98,15 @@ export class ProjectSettingsCache implements vscode.Disposable {
       current = parent;
     }
     // An unusually deep path is resolved without retaining unobserved configuration.
-    if (directories.length > this.maxWatches) return projectFile ? this.load(projectFile) : this.defaults;
+    if (directories.length > this.maxWatches) {
+      return { invalidated: false, directories: [], projectFile, value: projectFile ? this.load(projectFile) : this.defaultValue() };
+    }
     while (this.lookups.size >= this.maxLookups ||
       this.watches.size + directories.filter((item) => !this.watches.has(item)).length > this.maxWatches) {
       this.remove(this.lookups.keys().next().value!);
     }
 
-    let value = this.defaults;
+    let value: Promise<LoadedProject>;
     if (projectFile) {
       let project = this.projects.get(projectFile);
       if (!project) {
@@ -93,9 +115,12 @@ export class ProjectSettingsCache implements vscode.Disposable {
       }
       project.references++;
       value = project.value;
+    } else {
+      value = this.defaultValue();
     }
     const retainedDirectories: string[] = [];
-    this.lookups.set(key, { projectFile, directories: retainedDirectories, value });
+    const lookup = { invalidated: false, projectFile, directories: retainedDirectories, value };
+    this.lookups.set(key, lookup);
     try {
       for (const item of directories) {
         this.retainWatch(item);
@@ -105,7 +130,7 @@ export class ProjectSettingsCache implements vscode.Disposable {
       // A lookup without complete observation is returned without being retained.
       this.remove(key);
     }
-    return value;
+    return lookup;
   }
 
   private retainWatch(directory: string): void {
@@ -123,12 +148,14 @@ export class ProjectSettingsCache implements vscode.Disposable {
       const affectedDirectory = path.basename(changedPath).toLowerCase() === "ss.toml" ? directory : changedPath;
       if (affectedDirectory !== directory && !this.watches.has(affectedDirectory)) return;
       let changed = false;
+      const files = new Set<string>([path.join(affectedDirectory, "ss.toml")]);
       for (const [key, lookup] of [...this.lookups]) {
         if (!lookup.directories.includes(affectedDirectory)) continue;
-        this.remove(key);
+        if (lookup.projectFile) files.add(lookup.projectFile);
+        this.remove(key, true);
         changed = true;
       }
-      if (changed) this.notify();
+      if (changed) this.notify([...files]);
     };
     const disposables: vscode.Disposable[] = [watcher];
     try {
@@ -142,9 +169,10 @@ export class ProjectSettingsCache implements vscode.Disposable {
     this.watches.set(directory, { references: 1, disposables });
   }
 
-  private remove(key: string): void {
+  private remove(key: string, invalidate = false): void {
     const lookup = this.lookups.get(key);
     if (!lookup) return;
+    if (invalidate) lookup.invalidated = true;
     this.lookups.delete(key);
     if (lookup.projectFile) {
       const project = this.projects.get(lookup.projectFile)!;
@@ -159,14 +187,15 @@ export class ProjectSettingsCache implements vscode.Disposable {
   }
 
   private clear(): void {
-    for (const key of [...this.lookups.keys()]) this.remove(key);
+    for (const key of [...this.lookups.keys()]) this.remove(key, true);
   }
 
-  private notify(): void {
-    for (const listener of [...this.listeners]) listener();
+  private notify(files: readonly string[] = []): void {
+    for (const listener of [...this.listeners]) listener(files);
   }
 
   dispose(): void {
+    this.disposed = true;
     this.listeners.clear();
     this.clear();
     this.workspaceSubscription?.dispose();

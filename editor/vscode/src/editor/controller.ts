@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { LanguageClient } from "vscode-languageclient/node";
-import { onDidChangeProjectSettings, projectEntryUri, projectSettings } from "../projectConfig";
+import { onDidChangeProjectSettings, projectEntryUri, projectSettings, WysiwygSettings } from "../projectConfig";
 import {
   ComponentDeleteResult,
   EditorSnapshot,
@@ -77,6 +77,7 @@ interface SourceEditMessages {
 }
 
 interface Session {
+  settings?: WysiwygSettings;
   document: vscode.TextDocument;
   panel: vscode.WebviewPanel;
   ready: boolean;
@@ -98,6 +99,7 @@ export class EditorController implements vscode.Disposable {
   private readonly sessions = new Map<string, Session>();
   private readonly disposables: vscode.Disposable[] = [];
   private readonly view: ViewResources;
+  private disposed = false;
 
   constructor(
     context: vscode.ExtensionContext,
@@ -119,6 +121,7 @@ export class EditorController implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const session of [...this.sessions.values()]) {
       session.disposed = true;
       if (session.timer) clearTimeout(session.timer);
@@ -130,16 +133,17 @@ export class EditorController implements vscode.Disposable {
     for (const disposable of this.disposables) disposable.dispose();
   }
 
-  open(document: vscode.TextDocument | undefined): void {
+  async open(document: vscode.TextDocument | undefined): Promise<void> {
     if (!document || !isSsDocument(document)) {
-      void this.openProjectEntry(document?.uri);
+      await this.openProjectEntry(document?.uri);
       return;
     }
-    this.openDocument(document);
+    await this.openDocument(document);
   }
 
   private async openProjectEntry(contextUri: vscode.Uri | undefined): Promise<void> {
-    const entryUri = projectEntryUri(contextUri);
+    const entryUri = await projectEntryUri(contextUri);
+    if (this.disposed) return;
     if (!entryUri) {
       await vscode.window.showWarningMessage(
         "No ss.toml [project].entry was found for the current workspace.",
@@ -162,11 +166,13 @@ export class EditorController implements vscode.Disposable {
       );
       return;
     }
-    this.openDocument(document);
+    await this.openDocument(document);
   }
 
-  private openDocument(document: vscode.TextDocument): void {
-    if (!projectSettings(document.uri).wysiwyg.enabled) {
+  private async openDocument(document: vscode.TextDocument): Promise<void> {
+    const settings = (await projectSettings(document.uri))?.wysiwyg;
+    if (!settings || this.disposed) return;
+    if (!settings.enabled) {
       void vscode.window.showWarningMessage(
         "The WYSIWYG editor is disabled by ss.toml [editor.wysiwyg].enabled.",
       );
@@ -191,6 +197,7 @@ export class EditorController implements vscode.Disposable {
     );
     const session: Session = {
       document,
+      settings,
       panel,
       ready: false,
       sourceEditQueue: Promise.resolve(),
@@ -218,11 +225,7 @@ export class EditorController implements vscode.Disposable {
     );
   }
 
-  refreshOpenDocuments(delayMs = 0): void {
-    this.refreshAll(delayMs);
-  }
-
-  build(document: vscode.TextDocument | undefined): boolean {
+  async build(document: vscode.TextDocument | undefined): Promise<boolean> {
     let session = [...this.sessions.values()].find((candidate) =>
       candidate.panel.active
     );
@@ -239,7 +242,7 @@ export class EditorController implements vscode.Disposable {
       this.requestBuild(session);
       return true;
     }
-    this.open(document);
+    await this.open(document);
     if (!document) return false;
     session = this.sessions.get(document.uri.toString());
     if (!session) return false;
@@ -660,7 +663,8 @@ export class EditorController implements vscode.Disposable {
     if (uri.scheme !== "file" || path.extname(uri.fsPath) !== ".ss") return;
     const changedPath = normalizePath(uri.fsPath);
     for (const session of this.sessions.values()) {
-      const settings = projectSettings(session.document.uri).wysiwyg;
+      const settings = session.settings;
+      if (!settings || session.disposed) continue;
       const direct = session.document.uri.toString() === uri.toString();
       const dependency = session.dependencyPaths.has(changedPath) &&
         settings.refreshOnDependencyChange;
@@ -674,19 +678,25 @@ export class EditorController implements vscode.Disposable {
     }
   }
 
-  private refreshAll(delayMs: number): void {
-    for (const session of this.sessions.values()) {
-      this.scheduleAutomatic(session, delayMs);
+  private async refreshAll(delayMs: number): Promise<void> {
+    const sessions = [...this.sessions.values()];
+    for (const session of sessions) {
+      session.settings = undefined;
+      this.invalidateRefresh(session);
     }
+    await Promise.all(sessions.map(async (session) => {
+      const settings = (await projectSettings(session.document.uri))?.wysiwyg;
+      if (!settings || session.disposed) return;
+      session.settings = settings;
+      this.scheduleAutomatic(session, delayMs);
+    }));
   }
 
-  private scheduleAutomatic(
-    session: Session,
-    delayMs: number,
-    maxWaitMs = delayMs,
-  ): void {
+  private scheduleAutomatic(session: Session, delayMs: number, maxWaitMs = delayMs): void {
+    const settings = session.settings;
+    if (!settings) return;
     if (shouldScheduleRefresh(
-      projectSettings(session.document.uri).wysiwyg.refreshAutomatically,
+      settings.refreshAutomatically,
       session.editorReconciliationPending,
     )) {
       this.schedule(session, delayMs, maxWaitMs);
@@ -709,13 +719,17 @@ export class EditorController implements vscode.Disposable {
     session.timer = undefined;
     session.pendingRefreshSinceMs = undefined;
     session.refreshPending = false;
-    session.serial += 1;
-    session.requestCancellation?.cancel();
+    this.invalidateRefresh(session);
     void this.post(session, {
       type: "buildStatus",
       revision: session.serial,
       status: "manual",
     });
+  }
+
+  private invalidateRefresh(session: Session): void {
+    session.serial += 1;
+    session.requestCancellation?.cancel();
   }
 
   private requestBuild(session: Session): void {
@@ -739,11 +753,8 @@ export class EditorController implements vscode.Disposable {
     if (session.disposed) return;
     if (session.requestRunning) {
       session.refreshPending = true;
-      session.requestCancellation?.cancel();
     }
-    // Invalidate an in-flight response as soon as an edit is observed, not
-    // after the debounce timer expires.
-    session.serial += 1;
+    this.invalidateRefresh(session);
     void this.post(session, {
       type: "buildStatus",
       revision: session.serial,
