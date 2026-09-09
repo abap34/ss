@@ -6,15 +6,23 @@ pub const Face = struct {
 };
 
 pub fn extractFace(allocator: std.mem.Allocator, source: []const u8, face_index: u32) !Face {
+    // Fontconfig/FreeType pack a variable font's selected named instance into
+    // the upper 16 bits of the face index (bit 16 and above hold
+    // instance + 1), while only the lower 16 bits address a face in the
+    // sfnt/TTC directory. Callers that resolve fonts through fontconfig
+    // (e.g. Pango, used by the PDF backend) may hand us such a packed index
+    // for an ordinary variable font, which is not a font collection at all.
+    // Extracting the raw face bytes only needs the directory-relative part.
+    const directory_face_index: u16 = @truncate(face_index & 0xffff);
     if (!std.mem.startsWith(u8, source, "ttcf")) {
-        if (face_index != 0) return error.InvalidFontFaceIndex;
+        if (directory_face_index != 0) return error.InvalidFontFaceIndex;
         try checkEmbeddingPermission(source, 0);
         return try extractDirectory(allocator, source, 0);
     }
     if (source.len < 12) return error.InvalidFontCollection;
     const count = try readU32(source, 8);
-    if (face_index >= count) return error.InvalidFontFaceIndex;
-    const directory_offset = try readU32(source, 12 + @as(usize, face_index) * 4);
+    if (directory_face_index >= count) return error.InvalidFontFaceIndex;
+    const directory_offset = try readU32(source, 12 + @as(usize, directory_face_index) * 4);
     try checkEmbeddingPermission(source, directory_offset);
     return try extractDirectory(allocator, source, directory_offset);
 }

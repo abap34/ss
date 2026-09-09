@@ -735,6 +735,14 @@ fn addRenderTests(
     const run_render_html_spec_tests = b.addRunArtifact(render_html_spec_tests);
     test_step.dependOn(&run_render_html_spec_tests.step);
     addFocusedTestStep(b, "test-render-html", "Run focused HTML renderer tests", &run_render_html_spec_tests.step);
+    const render_html_font_mod = createModule(ctx, "src/render/html/font.zig", &.{}, null);
+    const render_html_font_spec_mod = createModule(ctx, "tests/render/html/font_spec_tests.zig", &.{
+        import("render_html_font", render_html_font_mod),
+    }, null);
+    const render_html_font_spec_tests = addTestArtifact(ctx, render_html_font_spec_mod);
+    const run_render_html_font_spec_tests = b.addRunArtifact(render_html_font_spec_tests);
+    test_step.dependOn(&run_render_html_font_spec_tests.step);
+    addFocusedTestStep(b, "test-render-html-font", "Run focused HTML font extraction tests", &run_render_html_font_spec_tests.step);
     const render_compile_mod = createModule(ctx, "src/render/compile.zig", &.{
         import("core", modules.core),
         import("pdf_ffi", modules.pdf_ffi),
