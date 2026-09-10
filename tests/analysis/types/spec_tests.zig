@@ -18,7 +18,7 @@ test "analysis type spec: hole type blocks assignability without becoming any" {
     defer testing.allocator.free(label);
     try testing.expectEqualStrings("HoleType", label);
 
-    try analysis_types.ensureType(null, testing.allocator, hole_info, Type.string, "", .UnmatchedArgumentType);
+    try analysis_types.ensureType(null, testing.allocator, hole_info, Type.string, .{}, .UnmatchedArgumentType);
 }
 
 test "analysis type spec: syntax type holes are not accepted as any" {
@@ -51,7 +51,7 @@ test "analysis type spec: blocked hole records expected type when a table is pro
     defer holes.deinit(testing.allocator);
 
     const hole_info = analysis_types.infoFromHole(0);
-    try analysis_types.ensureTypeWithHoles(null, testing.allocator, hole_info, Type.color, "", .UnmatchedArgumentType, &holes);
+    try analysis_types.ensureTypeWithHoles(null, testing.allocator, hole_info, Type.color, .{}, .UnmatchedArgumentType, &holes);
     try testing.expect(holes.holes[0].expected_type != null);
     try testing.expectEqual(Type.Kind.color, holes.holes[0].expected_type.?.kind);
 }
@@ -62,6 +62,6 @@ test "analysis type spec: known type mismatch remains a mismatch" {
     try testing.expectEqual(analysis_types.Assignability.mismatch, analysis_types.assignability(number_info, Type.string));
     try testing.expectError(
         error.InvalidType,
-        analysis_types.ensureType(null, testing.allocator, number_info, Type.string, "", core.TypeMismatchCode.UnmatchedArgumentType),
+        analysis_types.ensureType(null, testing.allocator, number_info, Type.string, .{}, core.TypeMismatchCode.UnmatchedArgumentType),
     );
 }

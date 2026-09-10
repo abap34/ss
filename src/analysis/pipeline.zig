@@ -257,7 +257,7 @@ fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, state: *core.Docu
             const origin = core.SourceOrigin.at(checker.originPathForModule(module), query.span);
 
             try state.addValidationDiagnostic(.warning, null, null, origin, .{
-                .user_report = .{ .code = "UserReport", .message = message },
+                .user_report = .{ .code = "DependencyQuery", .message = message },
             });
         }
     }

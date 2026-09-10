@@ -43,7 +43,7 @@ const Analysis = struct {
         var sema = compiler.semantic_env.SemanticEnv.init(null, null, &self.functions);
         sema.module_id = module_id;
         const expr = self.syntax.document_statements.items[index].kind.let_binding.expr;
-        return infer.exprInfoWithContext(&self.context, self.allocator, null, &sema, &env, expr, "");
+        return infer.exprInfoWithContext(&self.context, self.allocator, null, &sema, &env, expr, .{});
     }
 };
 
