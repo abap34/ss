@@ -145,12 +145,23 @@ async function itemRegions(page, pageBox, targetWidth, targetHeight) {
   const scaleY = targetHeight / pageBox.height;
   return await page.locator(":scope > .ss-item").evaluateAll((items, geometry) =>
     items.map((item) => {
-      const box = item.getBoundingClientRect();
       let kind = "other";
       if (item.classList.contains("ss-line")) kind = "line";
       else if (item.classList.contains("ss-latex")) kind = "latex";
       else if (item.classList.contains("ss-pdf")) kind = "pdf";
       else if (item.classList.contains("ss-text")) kind = "text";
+      const boxes = [item.getBoundingClientRect()];
+      // Text items are positioned at a baseline; their runs can paint above
+      // the item's own box. Compare the whole item, including those runs.
+      if (kind === "text") {
+        for (const run of item.querySelectorAll(".ss-text-run")) boxes.push(run.getBoundingClientRect());
+      }
+      const box = {
+        x: Math.min(...boxes.map((bounds) => bounds.x)),
+        y: Math.min(...boxes.map((bounds) => bounds.y)),
+        right: Math.max(...boxes.map((bounds) => bounds.right)),
+        bottom: Math.max(...boxes.map((bounds) => bounds.bottom)),
+      };
       return {
         id: item.dataset.ssItemId || "unknown",
         kind,
