@@ -281,11 +281,11 @@ render_workspace="$cache_dir/render-workspace"
 rm -rf "$render_workspace"
 mkdir -p "$render_workspace/slides" "$render_workspace/.ss-cache"
 cat > "$render_workspace/slides/release-check.ss" <<'SS'
-import std:themes/default
+import std:themes/default as *
 
 page release_check
-cover("Release check", "release binary CLI", "local")
-pageno()
+cover!("Release check", "release binary CLI", "local")
+pageno!()
 end
 SS
 
