@@ -1234,8 +1234,19 @@ fn runProjectCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []cons
         return;
     }
     if (args.len < 1) return failUsage("missing project cache command", .{});
-    if (args.len == 1 and std.mem.eql(u8, args[0], "clear")) {
-        utils.render_cache.clear(io, allocator) catch |err| switch (err) {
+    if (std.mem.eql(u8, args[0], "clear")) {
+        var options: utils.render_cache.ClearOptions = .{};
+        for (args[1..]) |arg| {
+            if (isHelpArg(arg)) {
+                _ = cli_help.command(.stdout, "cache");
+                return;
+            }
+            if (!std.mem.eql(u8, arg, "--force")) {
+                return failUsage("unexpected argument after cache project clear: {s}", .{arg});
+            }
+            options.force = true;
+        }
+        utils.render_cache.clear(io, allocator, options) catch |err| switch (err) {
             error.ActiveRenderCacheLease => return failCli("project render cache is currently in use", .{}),
             else => return err,
         };

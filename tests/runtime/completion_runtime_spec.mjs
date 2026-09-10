@@ -1,9 +1,12 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { assert, root, ssBin } from "./harness.mjs";
+
+const execFileAsync = promisify(execFile);
 
 await testCompletionPrintsScriptWithoutInstalling();
 await testBashCompletionInstallsWithYes();
@@ -19,10 +22,12 @@ async function testCompletionPrintsScriptWithoutInstalling() {
     assert(result.code === 0, `completion --print failed:\n${combined(result)}`);
     assert(result.stdout.includes("# ss bash completion"), `bash script was not printed:\n${combined(result)}`);
     assertRenderFormatCompletion(result.stdout, "bash");
+    await assertCacheForceCompletion(result.stdout, "bash", home);
     for (const shell of ["zsh", "fish"]) {
       const printed = await runCompletion(["completion", shell, "--print"], home, { XDG_DATA_HOME: xdgData });
       assert(printed.code === 0, `${shell} completion --print failed:\n${combined(printed)}`);
       assertRenderFormatCompletion(printed.stdout, shell);
+      await assertCacheForceCompletion(printed.stdout, shell, home);
     }
     assert(!(await exists(path.join(xdgData, "bash-completion", "completions", "ss"))), "--print should not install completion files");
   } finally {
@@ -33,6 +38,39 @@ async function testCompletionPrintsScriptWithoutInstalling() {
 function assertRenderFormatCompletion(script, shell) {
   assert(script.includes("--format") || script.includes("-l format"), `${shell} completion omitted --format`);
   assert(script.includes("pdf html"), `${shell} completion omitted PDF and HTML format values`);
+}
+
+async function assertCacheForceCompletion(script, shell, home) {
+  const scriptPath = path.join(home, `completion.${shell}`);
+  await writeFile(scriptPath, script);
+  const args = shell === "bash" ? ["-c", `
+    source "$1" || exit 1
+    COMP_WORDS=(ss cache project clear --f)
+    COMP_CWORD=4
+    _ss
+    [[ "\${COMPREPLY[*]}" == "--force" ]] || exit 1
+    COMP_WORDS=(ss cache project stats --f)
+    _ss
+    [[ \${#COMPREPLY[@]} -eq 0 ]] || exit 1
+    COMP_WORDS=(ss cache tree-sitter clear --f)
+    _ss
+    [[ \${#COMPREPLY[@]} -eq 0 ]] || exit 1
+  `, "--", scriptPath] : shell === "fish" ? ["--no-config", "-c", `
+    source $argv[1]; or exit 1
+    string match -q -- '--force*' (complete --do-complete 'ss cache project clear --f'); or exit 1
+    for line in 'ss cache project stats --f' 'ss cache tree-sitter clear --f'
+      if string match -q -- '--force*' (complete --do-complete $line)
+        exit 1
+      end
+    end
+  `, "--", scriptPath] : ["-n", scriptPath];
+  try {
+    await execFileAsync(shell, args, { timeout: 10_000 });
+    console.log(`${shell} cache force completion ${shell === "zsh" ? "syntax" : "behavior"} passed`);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    console.log(`${shell} completion execution skipped: shell unavailable`);
+  }
 }
 
 async function testBashCompletionInstallsWithYes() {

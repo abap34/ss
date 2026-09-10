@@ -404,6 +404,13 @@ ss stores generated render artifacts under `.ss-cache/render`. Converted assets
 and math images live under `artifacts/`; the renderer keeps only the latest page
 generation for each deck under `decks/`.
 
+`ss cache project clear` refuses to clear a cache that is being used by rendering
+or whose resources are still held by WYSIWYG. Use `ss cache project clear --force`
+to wait for active rendering to finish and delete the entire disk cache, including
+resources held by an open WYSIWYG panel. The panel may need rebuilding or reopening
+afterward. In-memory caches are unaffected. Both commands operate on
+`.ss-cache/render` in the current working directory.
+
 Parallel page processing can be configured per invocation with `--jobs N` or
 per project in `ss.toml`:
 

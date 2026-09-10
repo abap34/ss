@@ -52,15 +52,22 @@ pub const Lease = struct {
     }
 };
 
-pub fn clear(io: std.Io, allocator: std.mem.Allocator) !void {
-    const guard = cache_guard.open(io, .exclusive, true) catch |err| switch (err) {
+pub const ClearOptions = struct {
+    force: bool = false,
+};
+
+pub fn clear(io: std.Io, allocator: std.mem.Allocator, options: ClearOptions) !void {
+    // Forced clearing still waits for active cache readers and writers to finish.
+    const guard = cache_guard.open(io, .exclusive, !options.force) catch |err| switch (err) {
         error.WouldBlock => return error.ActiveRenderCacheLease,
         else => return err,
     };
     defer guard.close(io);
-    var protection = try published.collect(io, allocator);
-    defer protection.deinit();
-    if (protection.active) return error.ActiveRenderCacheLease;
+    if (!options.force) {
+        var protection = try published.collect(io, allocator);
+        defer protection.deinit();
+        if (protection.active) return error.ActiveRenderCacheLease;
+    }
     std.Io.Dir.cwd().deleteTree(io, path) catch |err| {
         if (err == error.FileNotFound) return;
         return err;

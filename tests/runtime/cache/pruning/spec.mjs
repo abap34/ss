@@ -7,11 +7,13 @@ import { root, ssBin, withLspClient } from "../../harness.mjs";
 
 const scratch = path.join(root, ".ss-cache", "tests", "cache-pruning");
 await mkdir(scratch, { recursive: true });
+await testClearArguments();
 await testActiveLease();
+await testActiveLease(true);
 await testReferenceGroups();
 await testPdfAndEditorNamespaces();
 await testPublishedEditorResources();
-console.log("Cache pruning: active leases, PDF groups, and editor resource lifetimes passed");
+console.log("Cache clearing and pruning: forced clearing, active leases, PDF groups, and editor resource lifetimes passed");
 
 async function createProject() {
   const project = await mkdtemp(path.join(scratch, "project-"));
@@ -31,10 +33,36 @@ async function render(project, name = "slide.ss", extra = {}) {
   return run(["render", "--quiet", name, `${name}.pdf`], project, extra);
 }
 
-async function testActiveLease() {
+async function testClearArguments() {
+  const project = await createProject();
+  const cache = path.join(project, ".ss-cache", "render");
+  try {
+    for (const args of [
+      ["clear", "--unknown"],
+      ["clear", "--force", "unexpected"],
+      ["stats", "--force"],
+    ]) {
+      const result = await run(["cache", "project", ...args], project, { allowFailure: true });
+      assert.notEqual(result.code, 0);
+      await stat(cache);
+    }
+    const help = await run(["cache", "project", "clear", "--force", "--help"], project);
+    await stat(cache);
+    assert.equal(help.code, 0);
+    await run(["cache", "project", "clear"], project);
+    await missing(cache);
+    await run(["cache", "project", "clear", "--force"], project);
+    await missing(cache);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testActiveLease(force = false) {
   const project = await createProject();
   const release = path.join(project, "release");
   let active;
+  let forcedClear;
   try {
     const fakeBin = path.join(project, "bin");
     await mkdir(fakeBin);
@@ -59,16 +87,33 @@ async function testActiveLease() {
     const clear = await run(["cache", "project", "clear"], project, { allowFailure: true });
     assert.notEqual(clear.code, 0);
     assert.match(clear.stderr, /project render cache is currently in use/);
+    const guard = path.join(project, ".ss-cache", "render.lock");
+    const guardBefore = await stat(guard);
+    if (force) {
+      forcedClear = run(["cache", "project", "clear", "--force"], project);
+      const state = await Promise.race([
+        forcedClear.then(() => "completed", () => "failed"),
+        new Promise((resolve) => setTimeout(() => resolve("waiting"), 250)),
+      ]);
+      assert.equal(state, "waiting", "forced clearing must wait for the active renderer");
+      await stat(old);
+    }
     await writeFile(release, "");
     const failed = await active;
     assert.notEqual(failed.code, 0);
     active = null;
+    if (force) {
+      await forcedClear;
+      await missing(path.join(project, ".ss-cache", "render"));
+      assert.equal((await stat(guard)).ino, guardBefore.ino, "clearing must preserve the shared lock file");
+    }
     await render(project);
     await missing(old);
     await stat(path.join(artifacts(project), ".prune-stamp"));
   } finally {
     await writeFile(release, "").catch(() => {});
     await active?.catch(() => {});
+    await forcedClear?.catch(() => {});
     await rm(project, { recursive: true, force: true });
   }
 }
@@ -223,6 +268,25 @@ async function testPublishedEditorResources() {
       await client.request("ss/projectInfo", { textDocument: { uri } });
       await run(["cache", "project", "clear"], project);
       await missing(asset(stale));
+
+      client.changeDocument({ uri, text: source(0), version: 9 });
+      const displayed = await request();
+      await observe(displayed, [displayed]);
+      await stat(asset(displayed));
+      const blockedAgain = await run(["cache", "project", "clear"], project, { allowFailure: true });
+      assert.notEqual(blockedAgain.code, 0);
+      assert.match(blockedAgain.stderr, /project render cache is currently in use/);
+      await run(["cache", "project", "clear", "--force"], project);
+      await missing(path.join(project, ".ss-cache", "render"));
+      // The LSP stays alive; reopening publishes the resources again from retained state.
+      client.notify("ss/editorClose", { textDocument: { uri } });
+      await client.request("ss/projectInfo", { textDocument: { uri } });
+      const afterForce = await request();
+      assert.equal(asset(afterForce), asset(displayed));
+      await stat(asset(afterForce));
+      const protectedAgain = await run(["cache", "project", "clear"], project, { allowFailure: true });
+      assert.notEqual(protectedAgain.code, 0);
+      assert.match(protectedAgain.stderr, /project render cache is currently in use/);
     });
   } finally {
     await rm(project, { recursive: true, force: true });
