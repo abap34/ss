@@ -1,6 +1,7 @@
 src/**
 scripts/**
-*.ts
-tsconfig.json
+**/*.ts
+tsconfig*.json
+media/editor/package.json
 out/**/*.map
 node_modules/**

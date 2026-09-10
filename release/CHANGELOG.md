@@ -4,8 +4,64 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-10
+
+### Added
+
+- Added a VS Code WYSIWYG editor with source-backed dragging, resizing,
+  deletion, object locking, page navigation, and shape, line, and icon insertion.
+- Added standalone HTML slide output with page navigation and shared PDF/HTML
+  rendering semantics.
+- Added manual WYSIWYG build controls, cancellation, build duration reporting,
+  and diagnostics while retaining editor state across rebuilds.
+- Added extensible vector shapes, line endpoint markers and elbow routes,
+  styled Markdown block quotes, and configurable Markdown underlines.
+- Added shell completion installation for Bash, Zsh, and Fish, configurable
+  parallel jobs, render cache pruning settings, and measurement profiling.
+- Added `ss cache project clear --force` to wait for active rendering and clear
+  disk resources retained by WYSIWYG without resetting in-memory caches.
+- Added Nix packaging for supported macOS and Linux architectures.
+
+### Changed
+
+- Unified mathematical and raw TeX rendering through local LaTeX. Replace
+  `math`, `mathtex`, and `tex` constructors with `latex`, `MathStyle` with
+  `LatexStyle`, and `tex_engine` / `tex_preamble` helpers with their `latex_*`
+  equivalents, including page-level helpers. The configured `pdflatex` or
+  `lualatex` executable must be available for LaTeX content.
+- Simplified theme customization with `ThemeOptions` and structured overrides.
+- Added typed object fields and nested property assignment, and separated
+  overlay placement from page flow.
+- Reused compiler analysis, prepared pages, shaped text, rendering resources,
+  and unchanged PDF pages to reduce repeated work during editing and rendering.
+- Reloaded project configuration and tracked observed source, asset, and TeX
+  inputs in watch mode and rendering caches.
+- Moved PDF composition into libqpdf and native asset rendering. Builds now
+  require GdkPixbuf, a C++20 compiler, and libqpdf 11.2 or newer and earlier than
+  13.0. MD4C sources are bundled in source releases.
+
+### Fixed
+
+- Updated VS Code runtime and packaging dependencies to address reported
+  security advisories, including brace-expansion denial of service.
+- Preserved WYSIWYG source edits, selection, navigation, and resource lifetimes
+  across asynchronous requests, failed builds, and incremental updates.
+- Corrected wrapped text height, ink bounds, baselines, attributed paragraphs,
+  Markdown tables, and layout constraint propagation and exhaustion reporting.
+- Preserved PDF text selection, links, named destinations, and annotations
+  during composition and page cache reuse.
+- Improved CLI and editor diagnostics with explicit codes, structured source
+  origins, and actionable filesystem, project, rendering, and external-tool
+  errors.
+- Preserved module and object type identity across analysis and evaluation,
+  rejected cyclic object inheritance, and improved completion recovery.
+- Fixed HTML variable-font face handling and synthetic font fallback reporting.
+- Protected active render and editor resources during cache clearing and
+  pruning, and bounded retained cache storage by resource lifetimes.
+
 ### Removed
 
+- Removed LSP inlay hints and the previous structured math renderer.
 - Stopped publishing new Docker render images and removed the Docker-backed
   render GitHub Action.
 
