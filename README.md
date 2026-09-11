@@ -50,7 +50,6 @@ component in terms of another.
 Everyone has, at some point, edited a program on page 1 and forgotten to update the same program on page 2.
 That should have just been a global constant!
 
-
 Also, just to add, "slide theme" is just a library of functions.
 
 ### 2. Document-Wide Computation Can Be Expressed Inside the Language
@@ -127,7 +126,6 @@ precisely, you can use WYSIWYG editor that is integrated with the language.
     <img src="assets/wysiwyg.png" alt="wysiwyg editor" width="1080" />
 </figure>
 
-
 You can adjust the position of objects by dragging them in the editor, and ss will generate the corresponding constraints
 in the source code. This allows you to use the editor for layout while still keeping the source code as the single source of truth (SSoT).
 
@@ -195,38 +193,8 @@ end
 Then run:
 
 ```sh
-ss render --project . --output deck.pdf
+ss render --project .
 ```
-
-`entry` is required. `asset_base_dir` defaults to the entry file's parent
-directory when omitted.
-
-Common fonts and colors can be applied across a theme without repeating every
-component path:
-
-```ss
-document
-theme!(default_theme(ThemeOptions {
-  font_family = "M PLUS 1p"
-  code_font_family = "JuliaMono"
-  text_color = c"#000009"
-  accent_color = c"#4682b4"
-  muted_color = c"#808080"
-}) with {
-  head.gap = 4
-})
-end
-```
-
-`ThemeOptions` is resolved while `default_theme` constructs the theme. The
-resulting `Theme` remains open to precise `with` overrides. The default theme
-uses `head.title`, `head.rule`, and `head.gap` for its page heading.
-`accent_color` applies to links, bold text, page headings,
-and cover accents; `muted_color` applies to notes, citations, and generated
-page text.
-
-The JSON Schema for `ss.toml` lives at [src/project/ss-toml.schema.json](src/project/ss-toml.schema.json). TOML
-language servers such as Taplo can use it for completion and validation.
 
 ## Installation
 
@@ -266,18 +234,6 @@ nix run github:abap34/ss -- --help
 The flake supports `aarch64-darwin`, `aarch64-linux`, and `x86_64-linux`.
 Intel macOS (`x86_64-darwin`) is not supported.
 
-The Nix package includes the native build and runtime libraries. Raw LaTeX
-math rendering still requires `pdflatex` or `lualatex` to be available on
-`PATH`.
-
-For development, enter the included development shell with:
-
-```sh
-nix develop
-```
-
-The development shell provides Zig, ZLS, Node.js, Python, and the native build
-dependencies.
 
 ### Build From Source
 
@@ -350,26 +306,19 @@ above must succeed before building ss.
 
 ## Usage
 
-### Commands
+### Common Commands
 
-| Command                                   | Purpose                                                          |
+| Command | Purpose |
 | ----------------------------------------- | ---------------------------------------------------------------- |
-| `ss help`                                 | Show help.                                                       |
-| `ss check [input.ss]`                     | Analyze a deck and report diagnostics.                           |
-| `ss dump [input.ss] [output.json]`        | Write compiler/IR metadata for tooling and debugging.            |
-| `ss render [input.ss] [output.pdf]`       | Render a PDF.                                                    |
-| `ss init [dir]`                           | Create an `ss.toml` and starter slide deck.                      |
-| `ss doctor`                               | Check project discovery, render tools, and tree-sitter health.   |
-| `ss debug schedule [input.ss]`            | Write the inferred dependency graph and execution order as JSON. |
-| `ss debug layout-trace [input.ss]`        | Write the layout solver trace as JSON.                           |
-| `ss lsp`                                  | Run the stdio language server.                                   |
-| `ss watch check [input.ss]`               | Re-run checks as project files change.                           |
-| `ss watch render [input.ss] [output.pdf]` | Re-render a PDF as project files change.                         |
-| `ss cache project stats`                  | Show project render cache file count, directory count, and size. |
-| `ss cache project clear`                  | Clear the project render cache under `.ss-cache/render`.         |
-| `ss cache tree-sitter stats`              | Show shared tree-sitter cache bundle count and size.             |
-| `ss cache tree-sitter prune`              | Remove stale tree-sitter bundles and unfinished build dirs.      |
-| `ss cache tree-sitter clear`              | Clear the shared tree-sitter cache.                              |
+| `ss help` | Show help. |
+| `ss render [input.ss] [output.pdf]` | Render a PDF. |
+| `ss init [dir]` | Create an `ss.toml` and starter slide deck. |
+| `ss doctor` | Check project discovery, render tools, and tree-sitter health. |
+| `ss debug schedule [input.ss]` | Write the inferred dependency graph and execution order as JSON. |
+| `ss debug layout-trace [input.ss]` | Write the layout solver trace as JSON. |
+| `ss lsp` | Run the stdio language server. |
+| `ss watch render [input.ss] [output.pdf]` | Re-render a PDF as project files change. |
+
 
 Examples:
 
