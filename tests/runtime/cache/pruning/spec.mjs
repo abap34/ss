@@ -19,8 +19,8 @@ async function createProject() {
   const project = await mkdtemp(path.join(scratch, "project-"));
   await writeFile(path.join(project, "ss.toml"),
     '[project]\nentry = "slide.ss"\n[cache]\nmax_size_mib = 1\nprune_interval_seconds = 0\n');
-  await writeFile(path.join(project, "slide.ss"),
-    'import std:themes/default as *\npage main\ntext!("Cache pruning")\nend\n');
+  // Keep the 1 MiB eviction budget independent of the installed fonts.
+  await writeFile(path.join(project, "slide.ss"), 'page main\nend\n');
   await mkdir(artifacts(project), { recursive: true });
   return project;
 }
