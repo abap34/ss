@@ -4,6 +4,20 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-11
+
+### Changed
+
+- Moved the project schema, layout trace viewer, and maintenance scripts
+  alongside the components they support, and updated their references.
+
+### Fixed
+
+- Added the missing `qpdf` command to VS Code extension release validation,
+  fixing the dependency failure that blocked v0.8.0 extension publication.
+- Made cache pruning tests independent of installed font sizes, fixing
+  environment-dependent CI failures.
+
 ## [0.8.0] - 2026-09-10
 
 ### Added
