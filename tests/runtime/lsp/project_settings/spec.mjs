@@ -11,7 +11,7 @@ try {
   const projectFile = path.join(fixture, "ss.toml");
   const slide = path.join(fixture, "main.ss");
   await writeFile(slide, "page example\nend\n");
-  const schema = JSON.parse(await readFile(path.join(root, "schemas/ss-toml.schema.json"), "utf8"));
+  const schema = JSON.parse(await readFile(path.join(root, "src/project/ss-toml.schema.json"), "utf8"));
   await withLspClient({ cwd: fixture }, async (client) => {
     await client.initialize();
     const defaults = await client.request("ss/projectSettings", {});

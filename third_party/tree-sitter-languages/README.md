@@ -12,13 +12,13 @@ Run this command to refresh tracked queries and licenses from the pinned
 commits:
 
 ```sh
-node scripts/update-tree-sitter-languages.mjs
+node third_party/tree-sitter-languages/tools/update.mjs
 ```
 
 Run this command to advance every bundled parser to the current upstream HEAD:
 
 ```sh
-node scripts/update-tree-sitter-languages.mjs --latest
+node third_party/tree-sitter-languages/tools/update.mjs --latest
 ```
 
 The `--latest` form also synchronizes the Nix flake inputs and lock file. It

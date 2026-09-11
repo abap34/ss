@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
+const repoRoot = path.resolve(scriptDir, "..", "..", "..");
 const trackedRoot = path.join(repoRoot, "third_party", "tree-sitter-languages");
 const manifestPath = path.join(trackedRoot, "manifest.json");
 const readmePath = path.join(trackedRoot, "README.md");
@@ -118,7 +118,7 @@ async function checkReadme(manifest) {
   const expected = renderReadme(manifest);
   const actual = await fs.readFile(readmePath, "utf8");
   if (actual !== expected) {
-    throw new Error("third_party/tree-sitter-languages/README.md is out of sync; run scripts/update-tree-sitter-languages.mjs");
+    throw new Error("third_party/tree-sitter-languages/README.md is out of sync; run third_party/tree-sitter-languages/tools/update.mjs");
   }
 }
 
@@ -291,13 +291,13 @@ Run this command to refresh tracked queries and licenses from the pinned
 commits:
 
 \`\`\`sh
-node scripts/update-tree-sitter-languages.mjs
+node third_party/tree-sitter-languages/tools/update.mjs
 \`\`\`
 
 Run this command to advance every bundled parser to the current upstream HEAD:
 
 \`\`\`sh
-node scripts/update-tree-sitter-languages.mjs --latest
+node third_party/tree-sitter-languages/tools/update.mjs --latest
 \`\`\`
 
 The \`--latest\` form also synchronizes the Nix flake inputs and lock file. It

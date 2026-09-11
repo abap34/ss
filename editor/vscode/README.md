@@ -59,13 +59,13 @@ overview_ruler = true
 ```
 
 The repository ships a JSON Schema for `ss.toml` at
-`schemas/ss-toml.schema.json`. TOML language servers such as Taplo can use it
+`src/project/ss-toml.schema.json`. TOML language servers such as Taplo can use it
 for completion and validation. In a deck repository, add a Taplo rule like:
 
 ```toml
 [[rule]]
 include = ["**/ss.toml"]
-schema.path = "schemas/ss-toml.schema.json"
+schema.path = "src/project/ss-toml.schema.json"
 ```
 
 ## If `.ss` Opens As Scheme

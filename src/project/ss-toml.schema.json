@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-04/schema#",
-  "$id": "https://raw.githubusercontent.com/abap34/ss/main/schemas/ss-toml.schema.json",
+  "$id": "https://raw.githubusercontent.com/abap34/ss/main/src/project/ss-toml.schema.json",
   "title": "ss project configuration",
   "description": "Configuration schema for ss.toml.",
   "type": "object",

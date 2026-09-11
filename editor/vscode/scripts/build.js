@@ -70,7 +70,7 @@ function copySchemaAssets() {
   fs.rmSync(targetRoot, { recursive: true, force: true });
   fs.mkdirSync(targetRoot, { recursive: true });
   fs.copyFileSync(
-    path.join(repoRoot, "schemas", "ss-toml.schema.json"),
+    path.join(repoRoot, "src", "project", "ss-toml.schema.json"),
     path.join(targetRoot, "ss-toml.schema.json"),
   );
 }

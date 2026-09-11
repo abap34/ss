@@ -159,7 +159,7 @@ inside the language itself. More unique features will continue to arrive.
 Create an `ss.toml` at the root of your slide project:
 
 ```toml
-#:schema https://raw.githubusercontent.com/abap34/ss/main/schemas/ss-toml.schema.json
+#:schema https://raw.githubusercontent.com/abap34/ss/main/src/project/ss-toml.schema.json
 
 [project]
 entry = "slide.ss"
@@ -225,7 +225,7 @@ uses `head.title`, `head.rule`, and `head.gap` for its page heading.
 and cover accents; `muted_color` applies to notes, citations, and generated
 page text.
 
-The JSON Schema for `ss.toml` lives at [schemas/ss-toml.schema.json](schemas/ss-toml.schema.json). TOML
+The JSON Schema for `ss.toml` lives at [src/project/ss-toml.schema.json](src/project/ss-toml.schema.json). TOML
 language servers such as Taplo can use it for completion and validation.
 
 ## Installation

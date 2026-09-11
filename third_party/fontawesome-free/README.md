@@ -21,7 +21,7 @@ finer semantic filters without duplicating icon geometry or depending on a
 network request during a normal build or at runtime.
 
 CI installs PyYAML and runs
-`python scripts/update-fontawesome-categories.py --check`. The script derives
+`python third_party/fontawesome-free/tools/update-categories.py --check`. The script derives
 the version from all three sprites, downloads the official YAML for that exact
 version, regenerates the Zig catalog, and verifies that it matches the checked-in
 file. Run the script without `--check` when refreshing the dependency.

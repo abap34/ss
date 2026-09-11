@@ -30,8 +30,8 @@ jobs:
       - name: Build static site
         run: |
           mkdir -p _site
-          cp tools/layout-trace-viewer.html _site/index.html
-          cp tools/layout-trace-viewer.html _site/layout-trace-viewer.html
+          cp src/layout/trace-viewer.html _site/index.html
+          cp src/layout/trace-viewer.html _site/layout-trace-viewer.html
 
       - name: Upload static files
         uses: actions/upload-pages-artifact@v5
