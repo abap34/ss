@@ -610,6 +610,66 @@ test "render PDF spec: qpdf merge creates link annotations and destinations" {
     try expectInternalDestination(json);
 }
 
+test "render PDF spec: qpdf merge encodes Unicode URI actions as ASCII" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const source_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/source.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(source_path);
+    const source_z = try allocator.dupeZ(u8, source_path);
+    defer allocator.free(source_z);
+    const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/uri.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(output_path);
+    const output_z = try allocator.dupeZ(u8, output_path);
+    defer allocator.free(output_z);
+    const qdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/uri.qdf.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(qdf_path);
+    try writeQpdfTestLayer(allocator, source_path, "URI encoding", null);
+
+    const cases = [_]struct { target: [:0]const u8, expected: []const u8 }{
+        .{
+            .target = "https://example.com/日本語?q=東京#段落",
+            .expected = "https://example.com/%E6%97%A5%E6%9C%AC%E8%AA%9E?q=%E6%9D%B1%E4%BA%AC#%E6%AE%B5%E8%90%BD",
+        },
+        .{
+            .target = "https://example.com/%E6%97%A5%E6%9C%AC%E8%AA%9E?q=a%20b&lang=ja",
+            .expected = "https://example.com/%E6%97%A5%E6%9C%AC%E8%AA%9E?q=a%20b&lang=ja",
+        },
+        .{
+            .target = "https://example.com/café/資料 1",
+            .expected = "https://example.com/caf%C3%A9/%E8%B3%87%E6%96%99%201",
+        },
+        .{
+            .target = "https://example.com/𠮷田",
+            .expected = "https://example.com/%F0%A0%AE%B7%E7%94%B0",
+        },
+    };
+    var links: [cases.len]c.SsQpdfLink = undefined;
+    for (cases, &links) |case, *link| link.* = .{
+        .page_index = 0,
+        .kind = c.SS_QPDF_LINK_URI,
+        .target = case.target.ptr,
+        .x = 20,
+        .y = 20,
+        .width = 120,
+        .height = 24,
+    };
+    const inputs = [_][*c]const u8{source_z.ptr};
+    try testing.expectEqual(
+        @as(c_int, 0),
+        c.ss_qpdf_merge(output_z.ptr, inputs[0..].ptr, inputs.len, 1, &links, links.len, null, 0),
+    );
+    // JSON decodes PDF text strings and can hide an incorrect UTF-16 URI.
+    // Inspect the serialized URI actions, as PDF viewers consume them.
+    const qdf = try qpdfQdf(allocator, testing.io, output_path, qdf_path);
+    defer allocator.free(qdf);
+    for (cases) |case| {
+        const expected = try std.fmt.allocPrint(allocator, "/URI ({s})", .{case.expected});
+        defer allocator.free(expected);
+        try expectContains(qdf, expected);
+    }
+}
+
 test "render PDF spec: qpdf merge rejects unsafe link annotations" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

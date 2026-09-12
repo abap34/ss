@@ -17,6 +17,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -330,6 +331,26 @@ static void ss_qpdf_append_annotation(
     annotations.appendItem(destination.makeIndirectObject(annotation));
 }
 
+static std::string ss_qpdf_encode_uri(std::string const& value) {
+    // URI actions contain ASCII, not PDF text strings. Encode UTF-8 bytes while
+    // preserving URI delimiters and existing percent escapes.
+    constexpr std::string_view punctuation = "-._~:/?#[]@!$&'()*+,;=%";
+    constexpr char hex[] = "0123456789ABCDEF";
+    std::string result;
+    result.reserve(value.size());
+    for (unsigned char byte: value) {
+        if ((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+            (byte >= '0' && byte <= '9') || punctuation.find(byte) != std::string_view::npos) {
+            result.push_back(static_cast<char>(byte));
+        } else {
+            result.push_back('%');
+            result.push_back(hex[byte >> 4]);
+            result.push_back(hex[byte & 0xf]);
+        }
+    }
+    return result;
+}
+
 static void ss_qpdf_add_links(
     QPDF& destination,
     std::vector<QPDFPageObjectHelper>& pages,
@@ -373,7 +394,7 @@ static void ss_qpdf_add_links(
             auto action = QPDFObjectHandle::newDictionary();
             action.replaceKey("/Type", QPDFObjectHandle::newName("/Action"));
             action.replaceKey("/S", QPDFObjectHandle::newName("/URI"));
-            action.replaceKey("/URI", QPDFObjectHandle::newUnicodeString(target));
+            action.replaceKey("/URI", QPDFObjectHandle::newString(ss_qpdf_encode_uri(target)));
             annotation.replaceKey("/A", action);
         } else if (link.kind == SS_QPDF_LINK_DESTINATION) {
             annotation.replaceKey("/Dest", QPDFObjectHandle::newUnicodeString(target));

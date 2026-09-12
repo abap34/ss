@@ -9,7 +9,7 @@ var temporary_counter: usize = 0;
 
 pub const cache_version = "ss-pdf-render-ir-v2";
 const output_manifest_version = utils.render_cache.PdfReference.version;
-const document_digest_version = "ss-pdf-document-pages-v3";
+const document_digest_version = "ss-pdf-document-pages-v4";
 const cache_seal_version = "ss-pdf-cache-seal-v1";
 const output_manifest_read_limit = utils.render_cache.PdfReference.read_limit;
 const max_replacement_pages = 8;
