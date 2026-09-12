@@ -16,6 +16,18 @@ testHorizontalConstraintGeometry();
 testVerticalConstraintGeometry();
 await testCompletionDefaults();
 await testManualBuildCommand();
+await testLineCommentSyntax();
+
+async function testLineCommentSyntax() {
+  const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
+  const comments = grammar.repository.comments.patterns.map((pattern) => new RegExp(pattern.match));
+  for (const line of [";; comment", "# comment", "value ;; comment", "value # comment"]) {
+    assert(comments.some((pattern) => pattern.test(line)), `comment was not highlighted: ${line}`);
+  }
+  for (const line of ["// code", "a // b", "https://example.com"]) {
+    assert(comments.every((pattern) => !pattern.test(line)), `double slash was highlighted as a comment: ${line}`);
+  }
+}
 
 function testHorizontalConstraintGeometry() {
   const source = geometry.anchorSegment(

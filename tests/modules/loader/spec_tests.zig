@@ -37,7 +37,7 @@ fn transferModuleOwnership(allocator: std.mem.Allocator) !void {
     try testing.expectEqual(@as(usize, 17), destination.items.len);
     for (destination.items, 0..) |module, id| {
         try testing.expectEqual(@as(compiler.core.SourceModuleId, @intCast(id)), module.id);
-        try testing.expectEqualStrings("// owned source\n", module.source);
+        try testing.expectEqualStrings(";; owned source\n", module.source);
     }
     try graph.moveModulesTo(&destination);
     try testing.expectEqual(@as(usize, 17), destination.items.len);
@@ -46,7 +46,7 @@ fn transferModuleOwnership(allocator: std.mem.Allocator) !void {
 fn appendOwnedModule(allocator: std.mem.Allocator, modules: *std.ArrayList(compiler.core.SourceModule), id: compiler.core.SourceModuleId) !void {
     const spec = try std.fmt.allocPrint(allocator, "module-{d}", .{id});
     errdefer allocator.free(spec);
-    const source = try allocator.dupe(u8, "// owned source\n");
+    const source = try allocator.dupe(u8, ";; owned source\n");
     errdefer allocator.free(source);
     const line_index = try @import("utils").source.LineIndex.init(allocator, source);
     errdefer line_index.deinit(allocator);

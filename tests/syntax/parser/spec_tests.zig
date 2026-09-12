@@ -240,11 +240,56 @@ fn expectSpanText(source: []const u8, span: ast.Span, expected: []const u8) !voi
     try testing.expectEqualStrings(expected, source[span.start..span.end]);
 }
 
+test "syntax spec: line comment helpers recognize only semicolons and hash" {
+    const source = @import("utils").source;
+    try testing.expectEqual(@as(?usize, 2), source.lineCommentMarkerLength(";; comment", 0));
+    try testing.expectEqual(@as(?usize, 1), source.lineCommentMarkerLength("# comment", 0));
+    try testing.expectEqual(@as(?usize, null), source.lineCommentMarkerLength("// code", 0));
+    try testing.expectEqualStrings("a // b ", source.stripLineComment("a // b ;; comment"));
+    try testing.expectEqualStrings("a // b ", source.stripLineComment("a // b # comment"));
+    try testing.expectEqualStrings("\"https://example.com/a//b;;#\" ", source.stripLineComment("\"https://example.com/a//b;;#\" ;; comment"));
+    const text = " ;; first\n # second\n // code";
+    var pos: usize = 0;
+    source.skipTriviaFrom(text, &pos);
+    try testing.expectEqualStrings("// code", text[pos..]);
+}
+
+test "syntax spec: double slash comments are rejected in code" {
+    try expectParseErrorWithoutLeaks(error.ExpectedKeyword, "// removed comment\n");
+    for ([_][]const u8{
+        "page Example\n  // removed comment\nend\n",
+        "page Example\n  let value = 1; // removed comment\nend\n",
+    }) |text| {
+        try expectParseErrorWithoutLeaks(error.ExpectedIdentifier, text);
+    }
+}
+
+test "syntax spec: double slashes remain text and single slash remains division" {
+    var parsed = try parse(
+        \\page Example
+        \\  text("https://example.com/a//b")
+        \\  text // line body
+        \\  text """
+        \\// multiline body
+        \\"""
+        \\  let quotient = 8 / 2
+        \\end
+    );
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    try testing.expectEqual(@as(usize, 4), statements.len);
+    const expected = [_][]const u8{ "https://example.com/a//b", "// line body", "// multiline body" };
+    for (expected, 0..) |text, index| {
+        const call = try expectCall(statements[index].kind.expr_stmt, "text", 1);
+        try expectString(call.args.items[0], text);
+    }
+}
+
 test "syntax spec: imports and pages preserve source order" {
     const source_text =
-        \\// Leading trivia is not part of the AST.
+        \\;; Leading trivia is not part of the AST.
         \\import core
-        \\import "themes/default"; // comments may follow terminators
+        \\import "themes/default"; # comments may follow terminators
         \\
         \\document
         \\  let deck_title = "Intro"
@@ -1478,8 +1523,9 @@ test "syntax spec: chevron blocks scan complete lines for terminators" {
         \\  code <<
         \\first
         \\  >> remains content
+        \\  >> // also remains content
         \\second
-        \\  >> // terminator comment
+        \\  >> ;; terminator comment
         \\end
         \\
     ;
@@ -1489,7 +1535,7 @@ test "syntax spec: chevron blocks scan complete lines for terminators" {
     const call = try expectCall(parsed.module.pages.items[0].statements.items[0].kind.expr_stmt, "code", 1);
     switch (call.args.items[0]) {
         .string => |literal| {
-            try testing.expectEqualStrings("first\n  >> remains content\nsecond", literal.text);
+            try testing.expectEqualStrings("first\n  >> remains content\n  >> // also remains content\nsecond", literal.text);
             const span = literal.source_span orelse return error.ExpectedStringSourceSpan;
             try testing.expectEqualStrings(literal.text, source[span.start..span.end]);
         },
@@ -1926,7 +1972,7 @@ test "syntax spec: recovering parse keeps type expression holes" {
 test "syntax spec: selected imports retain names and spans through cloning" {
     const source_text =
         \\import "dep" as {
-        \\  Item, make, make!, // placement is selected explicitly
+        \\  Item, make, make!, ;; placement is selected explicitly
         \\}
     ;
     var program = try syntax.parseWithSourceName(testing.allocator, source_text, "selected.ss");

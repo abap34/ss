@@ -244,6 +244,22 @@ try {
   const guide = new config.PageGuideDecorations();
   await guide.refreshEditor(editor);
   assert.ok(paints.some((ranges) => ranges.length > 0), "loaded settings did not paint page guides");
+  for (const marker of [";;", "#", "//"]) {
+    const lines = ["page example", `end ${marker} trailing text`];
+    editor.document.lineCount = lines.length;
+    editor.document.lineAt = (index) => ({ text: lines[index], range: { line: index } });
+    paints.length = 0;
+    await guide.refreshEditor(editor);
+    assert.equal(paints.some((ranges) => ranges.length > 0), marker !== "//", `page guide treated ${marker} incorrectly`);
+  }
+  for (const marker of [";;", "#"]) {
+    const lines = ["page example", "text <<", ">> // body text", "end", `>> ${marker} terminator`, "end"];
+    editor.document.lineCount = lines.length;
+    editor.document.lineAt = (index) => ({ text: lines[index], range: { line: index } });
+    paints.length = 0;
+    await guide.refreshEditor(editor);
+    assert.ok(paints.some((ranges) => ranges.some((range) => range.line === 5)), "double slash prematurely terminated the page guide's block string");
+  }
   paints.length = 0;
   config.setProjectSettingsProvider(async () => {
     const disabled = source("/guide/slide.ss", 140);

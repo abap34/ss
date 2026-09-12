@@ -281,7 +281,7 @@ module.exports = grammar({
     line_text: _ => token.immediate(/[ \t][^\n]+/),
     number: _ => /\d+(\.\d+)?/,
     boolean: _ => choice("true", "false"),
-    comment: _ => token(choice(/;;[^\n]*/, /\/\/[^\n]*/, /#[^\n]*/)),
+    comment: _ => token(choice(/;;[^\n]*/, /#[^\n]*/)),
     _terminator: _ => /\n+/,
   },
 });

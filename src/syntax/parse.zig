@@ -2350,9 +2350,6 @@ const Parser = struct {
         if (probe + 2 <= raw_line_end and std.mem.eql(u8, self.source[probe .. probe + 2], ";;")) {
             return true;
         }
-        if (probe + 2 <= raw_line_end and std.mem.eql(u8, self.source[probe .. probe + 2], "//")) {
-            return true;
-        }
         if (probe < raw_line_end and self.source[probe] == '#') {
             return true;
         }

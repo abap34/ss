@@ -22,7 +22,7 @@
       "patterns": [
         {
           "name": "comment.line.double-semicolon.ss",
-          "match": "(?:;;|//|#).*$"
+          "match": "(?:;;|#).*$"
         }
       ]
     },

@@ -374,7 +374,6 @@ pub fn lineCommentMarkerLength(source: []const u8, pos: usize) ?usize {
     if (pos >= source.len) return null;
     if (source[pos] == '#') return 1;
     if (pos + 1 >= source.len) return null;
-    if (source[pos] == '/' and source[pos + 1] == '/') return 2;
     if (source[pos] == ';' and source[pos + 1] == ';') return 2;
     return null;
 }

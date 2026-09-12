@@ -77,7 +77,7 @@ Selected imports with explicit placement names
 import std:core/objects as { body_obj, body_obj! }
 import "library" as {
   Item,
-  make, make!, // retained declaration names
+  make, make!, ;; retained declaration names
 }
 
 --------------------------------------------------------------------------------

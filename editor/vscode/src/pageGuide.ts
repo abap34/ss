@@ -262,7 +262,7 @@ function pageRange(document: vscode.TextDocument, startLine: number, endLine: nu
 
 function codeTextForBlockScan(lineText: string, state: ScanState): string {
   if (state.inChevronBlock) {
-    if (/^\s*>>\s*(?:(?:;;|\/\/|#).*)?$/.test(lineText)) {
+    if (/^\s*>>\s*(?:(?:;;|#).*)?$/.test(lineText)) {
       state.inChevronBlock = false;
     }
     return "";
@@ -292,7 +292,7 @@ function codeTextForBlockScan(lineText: string, state: ScanState): string {
       state.inChevronBlock = true;
       break;
     }
-    if (lineText.startsWith(";;", index) || lineText.startsWith("//", index) || lineText[index] === "#") {
+    if (lineText.startsWith(";;", index) || lineText[index] === "#") {
       break;
     }
     if (lineText[index] === "\"") {
