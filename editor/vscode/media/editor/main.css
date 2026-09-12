@@ -1922,8 +1922,7 @@ button {
   height: var(--page-height);
   margin-top: calc(var(--page-height) / -2);
   margin-left: calc(var(--page-width) / -2);
-  transform: translate(0, 0) scale(1);
-  will-change: transform;
+  transform: translate(0, 0);
 }
 .presentation-page-surface {
   position: relative;

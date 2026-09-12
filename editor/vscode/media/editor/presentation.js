@@ -19,6 +19,7 @@ export class PresentationController {
     this.actions = actions;
     this.scale = minimumScale;
     this.pan = { x: 0, y: 0 };
+    this.fit = null;
     this.dragPan = null;
     this.touches = new Map();
     this.touchPan = null;
@@ -161,12 +162,8 @@ export class PresentationController {
     });
 
     if (page) {
-      const { width, height, scale } = fitDimensions(page, viewportSize());
+      this.fit = fitDimensions(page, viewportSize());
       const pageBox = element("div", "presentation-page");
-      pageBox.style.setProperty("--page-width", `${width}px`);
-      pageBox.style.setProperty("--page-height", `${height}px`);
-      pageBox.style.setProperty("--preview-scale", String(scale));
-      pageBox.style.transformOrigin = "50% 50%";
       const surface = element("div", "presentation-page-surface");
       surface.append(renderPage(this.state.snapshot, page.id));
       const ink = svgElement("svg", "presentation-ink-layer");
@@ -181,6 +178,7 @@ export class PresentationController {
       this.inkSvg = ink;
       this.applyTransform();
     } else {
+      this.fit = null;
       this.pageEl = null;
       this.inkSvg = null;
     }
@@ -258,10 +256,8 @@ export class PresentationController {
       candidate.id === this.state.presentation.pageId
     );
     if (!page) return;
-    const { width, height, scale } = fitDimensions(page, viewportSize());
-    this.pageEl.style.setProperty("--page-width", `${width}px`);
-    this.pageEl.style.setProperty("--page-height", `${height}px`);
-    this.pageEl.style.setProperty("--preview-scale", String(scale));
+    this.fit = fitDimensions(page, viewportSize());
+    this.applyTransform();
   }
 
   handleKeydown(event) {
@@ -428,20 +424,43 @@ export class PresentationController {
   }
 
   zoomAt(clientX, clientY, factor) {
-    if (!this.pageEl) return;
+    if (!this.pageEl || !this.fit) return;
+    const nextScale = clamp(this.scale * factor, minimumScale, maximumScale);
+    if (nextScale === this.scale) return;
     const rect = this.pageEl.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-    const originX = clamp(((clientX - rect.left) / rect.width) * 100, 0, 100);
-    const originY = clamp(((clientY - rect.top) / rect.height) * 100, 0, 100);
-    this.pageEl.style.transformOrigin = `${originX}% ${originY}%`;
-    this.scale = clamp(this.scale * factor, minimumScale, maximumScale);
+    if (rect.width > 0 && rect.height > 0) {
+      // Recompute pan so the point under the cursor stays under the cursor
+      // as the box grows/shrinks to its new (real, laid-out) size — see
+      // applyTransform() for why this must be a real size change rather
+      // than an extra transform: scale().
+      const fractionX = (clientX - rect.left) / rect.width;
+      const fractionY = (clientY - rect.top) / rect.height;
+      const viewport = viewportSize();
+      const nextWidth = this.fit.width * nextScale;
+      const nextHeight = this.fit.height * nextScale;
+      this.pan = {
+        x: clientX - viewport.width / 2 + nextWidth * (0.5 - fractionX),
+        y: clientY - viewport.height / 2 + nextHeight * (0.5 - fractionY),
+      };
+    }
+    this.scale = nextScale;
     this.applyTransform();
   }
 
   applyTransform() {
-    if (!this.pageEl) return;
-    this.pageEl.style.transform =
-      `translate(${this.pan.x}px, ${this.pan.y}px) scale(${this.scale})`;
+    if (!this.pageEl || !this.fit) return;
+    // Zoom is expressed as a real box resize (--page-width/--page-height,
+    // which the shared page CSS turns into an actual --preview-scale
+    // content transform), not an extra transform: scale() on this element.
+    // A plain CSS scale would just stretch an already-rasterized layer —
+    // blurry text/vectors, and stale-resolution embedded PDF/LaTeX canvases,
+    // since their ResizeObserver-driven re-render never fires for a pure
+    // transform. Only panning is a transform here, and it has no scale
+    // component, so it stays pixel-exact at any zoom level.
+    this.pageEl.style.setProperty("--page-width", `${this.fit.width * this.scale}px`);
+    this.pageEl.style.setProperty("--page-height", `${this.fit.height * this.scale}px`);
+    this.pageEl.style.setProperty("--preview-scale", String(this.fit.scale * this.scale));
+    this.pageEl.style.transform = `translate(${this.pan.x}px, ${this.pan.y}px)`;
   }
 
   beginStroke(event) {
