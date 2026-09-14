@@ -127,3 +127,29 @@ test "layout conflict report releases every partial allocation" {
         .{&state},
     );
 }
+
+test "layout conflict report shows resolved alignment only as fallback" {
+    var state = try initDocumentState(testing.allocator);
+    defer state.deinit();
+    const fixture = try addFixture(&state);
+    const candidate = core.Constraint{
+        .target_node = fixture.first_object,
+        .target_anchor = .top,
+        .source = .{ .page = .top },
+        .offset = 0,
+        .default_alignment = true,
+    };
+    try state.constraints.append(testing.allocator, candidate);
+    var resolved = candidate;
+    resolved.target_anchor = .center_y;
+    resolved.source = .{ .page = .center_y };
+    try state.fallback_constraints.append(testing.allocator, resolved);
+
+    var report = try core.layout.conflicts.Report.init(testing.allocator, &state);
+    defer report.deinit();
+    try testing.expectEqual(@as(usize, 2), report.relations.len);
+    try testing.expectEqual(core.layout.conflicts.RelationKind.explicit, report.relations[0].kind);
+    try testing.expectEqual(core.layout.conflicts.RelationKind.fallback, report.relations[1].kind);
+    try testing.expectEqual(core.Anchor.center_y, report.relations[1].target_anchor);
+    try testing.expect(report.relations[1].constraint_index == null);
+}

@@ -1246,6 +1246,7 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         "tests/runtime/editor/relations/spec.mjs",
         "tests/runtime/editor/shapes/spec.mjs",
         "tests/runtime/editor/spec.mjs",
+        "tests/runtime/layout/composition/spec.mjs",
         "tests/runtime/layout/frame_too_small_spec.mjs",
         "tests/runtime/layout/measurement_spec.mjs",
         "tests/runtime/layout/text-wrapping/spec.mjs",
@@ -1280,6 +1281,9 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         node_spec.setCwd(b.path("."));
         node_spec.stdio = .inherit;
         test_step.dependOn(&node_spec.step);
+        if (std.mem.eql(u8, path, "tests/runtime/layout/composition/spec.mjs")) {
+            addFocusedTestStep(b, "test-layout-composition", "Run focused layout composition semantics tests", &node_spec.step);
+        }
     }
 
     const vscode_tests = b.addSystemCommand(&.{ "npm", "test" });

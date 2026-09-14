@@ -49,6 +49,16 @@ const ModuleVisitStack = struct {
 pub fn resolve(comptime Resolved: type, resolver: anytype, current_module_id: core.SourceModuleId, name: Name) Resolution(Resolved) {
     if (!shouldContinue(resolver)) return .unknown;
     if (name.qualifier) |alias| {
+        // Syntax elaboration uses a module spec that cannot be written as an
+        // import alias. Resolve its own declaration without consulting imports.
+        if (std.mem.startsWith(u8, alias, "std:")) {
+            if (@hasDecl(@TypeOf(resolver), "resolveModuleSpec")) {
+                const module_id = resolver.resolveModuleSpec(alias) orelse return .unknown;
+                const resolved = resolver.findInModule(module_id, name.name) orelse return .unknown;
+                return .{ .found = resolved };
+            }
+            return .unknown;
+        }
         const module_id = resolver.resolveAlias(current_module_id, alias) orelse return .{ .unknown_alias = alias };
         return resolveExport(Resolved, resolver, module_id, name.name);
     }

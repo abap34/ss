@@ -45,6 +45,19 @@ pub const Document = struct {
             }
         }
 
+        // A referenced group needs the bounds of its entire subtree, including
+        // unattached inner groups. Unreferenced groups remain outside the graph.
+        for (builders, 0..) |*builder, page_index| {
+            var cursor: usize = 0;
+            while (cursor < builder.node_ids.items.len) : (cursor += 1) {
+                const children = state.childrenOf(builder.node_ids.items[cursor]) orelse continue;
+                for (children) |child_id| {
+                    const child_page = try pageIndexForNode(state, &page_indexes, &owners, child_id) orelse continue;
+                    if (child_page == page_index) try builder.addNode(allocator, child_id);
+                }
+            }
+        }
+
         var result = Document{ .pages = try allocator.alloc(Page, builders.len) };
         for (result.pages, state.page_order.items) |*page, page_id| page.* = .{ .page_id = page_id };
         errdefer result.deinit(allocator);

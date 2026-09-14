@@ -674,6 +674,7 @@ type Group = object {
   base = Flow
   roles = ["group"]
 
+  align_children_y: Bool = false
   render_kind: RenderKind = RenderKind.chrome_only
   layout: LayoutStyle = LayoutStyle {
     font_size = 4

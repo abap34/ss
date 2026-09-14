@@ -1193,7 +1193,7 @@ const BuiltinContext = struct {
     }
 
     pub fn setNodeFieldValue(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: core.Value) !void {
-        self.state.setNodeFieldValue(object_id, key, value) catch |err| switch (err) {
+        self.state.setNodeFieldValueWithOrigin(object_id, key, value, self.evaluation.call_depth, self.current_origin) catch |err| switch (err) {
             error.DuplicatePropertyDefinition => {
                 try reportDuplicatePropertyDefinition(self.state, self.current_origin, key);
                 return err;
@@ -1708,6 +1708,7 @@ fn writeNodeFieldValue(
     field_name: []const u8,
     value: core.Value,
     origin: core.SourceOrigin,
+    scope_depth: u32,
     replace_existing: bool,
 ) !void {
     if (value == .none) {
@@ -1727,7 +1728,7 @@ fn writeNodeFieldValue(
         return;
     }
     if (replace_existing) try state.unsetNodeField(node_id, field_name);
-    state.setNodeFieldValue(node_id, field_name, value) catch |err| switch (err) {
+    state.setNodeFieldValueWithOrigin(node_id, field_name, value, scope_depth, origin) catch |err| switch (err) {
         error.DuplicatePropertyDefinition => {
             try reportDuplicatePropertyDefinition(state, origin, field_name);
             return err;
@@ -1808,7 +1809,7 @@ fn writePropertyPathToNode(
     if (path.len == 0) return error.ExpectedObject;
     const property_name = path[0].name;
     if (path.len == 1) {
-        try writeNodeFieldValue(state, node_id, property_name, value, origin, false);
+        try writeNodeFieldValue(state, node_id, property_name, value, origin, evaluation.call_depth, false);
         return;
     }
 
@@ -1842,7 +1843,7 @@ fn writePropertyPathToNode(
         else => return err,
     };
     value_moved = true;
-    try writeNodeFieldValue(state, node_id, property_name, .{ .record = record }, origin, true);
+    try writeNodeFieldValue(state, node_id, property_name, .{ .record = record }, origin, evaluation.call_depth, true);
 }
 
 fn executeStatement(
@@ -2041,6 +2042,7 @@ fn executeCallStatement(
     };
     const func = resolved.decl;
     try validateUserFunctionArity(state, call.args.items.len, func, current_origin);
+    const body_origin = elaboratedCallOrigin(evaluation, call);
 
     const previous_call_depth = evaluation.call_depth;
     evaluation.call_depth += 1;
@@ -2054,7 +2056,7 @@ fn executeCallStatement(
     evaluation.module_id = resolved.module_id;
     defer evaluation.module_id = previous_module_id;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(evaluation, page_id, scope, &local_env, last_code_like, inner, null);
+        const flow = try executeStatement(evaluation, page_id, scope, &local_env, last_code_like, inner, body_origin);
         switch (flow) {
             .none => {},
             .returned => |value| {
@@ -2070,7 +2072,7 @@ fn executeCallStatement(
                         owned.deinit(state.allocator);
                         return err;
                     };
-                    connectValueObjects(state, value, start_node_count, current_origin) catch |err| {
+                    connectValueObjects(state, value, start_node_count, body_origin orelse current_origin) catch |err| {
                         var owned = value;
                         owned.deinit(state.allocator);
                         return err;
@@ -2173,6 +2175,7 @@ fn invokeUserFunctionValueInModule(
     defer func_ref.deinit(state.allocator);
     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
     try validateUserFunctionArity(state, call.args.items.len, func, current_origin);
+    const body_origin = elaboratedCallOrigin(evaluation, call);
 
     const previous_call_depth = evaluation.call_depth;
     evaluation.call_depth += 1;
@@ -2188,18 +2191,24 @@ fn invokeUserFunctionValueInModule(
     evaluation.module_id = module_id;
     defer evaluation.module_id = previous_module_id;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(evaluation, page_id, scope, &local_env, &last_code_like, inner, null);
+        const flow = try executeStatement(evaluation, page_id, scope, &local_env, &last_code_like, inner, body_origin);
         switch (flow) {
             .none => {},
             .returned => |value| {
                 try value_contracts.ensureValueConformsToType(state, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
-                try connectReturnedObject(state, value, start_node_count, current_origin);
+                try connectReturnedObject(state, value, start_node_count, body_origin orelse current_origin);
                 return value;
             },
         }
     }
 
     return error.FunctionDidNotReturnValue;
+}
+
+fn elaboratedCallOrigin(evaluation: *EvalContext, call: CallExpr) ?core.SourceOrigin {
+    const qualifier = call.callee.qualifier orelse return null;
+    if (!std.mem.startsWith(u8, qualifier, "std:")) return null;
+    return evaluation.state.sourceOrigin(evaluation.module_id, call.callee.name_span orelse return null);
 }
 
 fn invokeUserFunctionValues(

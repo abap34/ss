@@ -24,6 +24,8 @@ pub fn evaluateDocument(
         .cancellation = options.cancellation,
     });
     try options.checkCanceled();
+    try state.collectDefaultAlignments();
+    try options.checkCanceled();
     try core.constraint_updates.resolve(state);
     try options.checkCanceled();
     try state.validatePageLocalLayout();

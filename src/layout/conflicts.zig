@@ -102,6 +102,7 @@ pub const Report = struct {
         errdefer relations.deinit(allocator);
         errdefer deinitRelationItems(allocator, relations.items);
         for (state.constraints.items, 0..) |constraint, constraint_index| {
+            if (constraint.default_alignment) continue;
             try appendRelationModel(allocator, &relations, state, .explicit, constraint_index, constraint);
         }
         for (state.fallback_constraints.items) |constraint| {

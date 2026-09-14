@@ -79,12 +79,36 @@ test "syntax scanner: double slashes do not hide code or terminate block strings
     ;
     try expectTokens(text, &.{
         .{ .kind = .identifier, .text = "a", .line = 0 },
+        .{ .kind = .operator, .text = "//", .line = 0 },
         .{ .kind = .identifier, .text = "b", .line = 0 },
         .{ .kind = .identifier, .text = "c", .line = 1 },
+        .{ .kind = .operator, .text = "//", .line = 1 },
         .{ .kind = .identifier, .text = "d", .line = 1 },
         .{ .kind = .identifier, .text = "code", .line = 2 },
         .{ .kind = .identifier, .text = "visible", .line = 6 },
     });
+}
+
+test "syntax scanner: composition operators are complete semantic tokens" {
+    const text = "left||middle //right ;; ignored || //\ntext(\"a || b // c\")";
+    try expectTokens(text, &.{
+        .{ .kind = .identifier, .text = "left", .line = 0 },
+        .{ .kind = .operator, .text = "||", .line = 0 },
+        .{ .kind = .identifier, .text = "middle", .line = 0 },
+        .{ .kind = .operator, .text = "//", .line = 0 },
+        .{ .kind = .identifier, .text = "right", .line = 0 },
+        .{ .kind = .identifier, .text = "text", .line = 1 },
+        .{ .kind = .string, .text = "\"a || b // c\"", .line = 1 },
+    });
+    const semantic_tokens = try scanner.semanticTokens(testing.allocator, text);
+    defer testing.allocator.free(semantic_tokens);
+    var operator_count: usize = 0;
+    for (semantic_tokens) |token| {
+        if (token.kind != .operator) continue;
+        operator_count += 1;
+        try testing.expectEqual(@as(usize, 2), token.token.span.end - token.token.span.start);
+    }
+    try testing.expectEqual(@as(usize, 2), operator_count);
 }
 
 test "syntax scanner: classifies semantic tokens without LSP logic" {

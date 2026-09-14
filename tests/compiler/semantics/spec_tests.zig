@@ -455,6 +455,25 @@ fn expectObjectState(source: []const u8, expected: compiler_semantics.ObjectStat
     try compiler_semantics.expectObjectState(testing.io, allocator, path, source, expected);
 }
 
+test "compiler semantics: composition type diagnostics identify the operand" {
+    const source =
+        \\page example
+        \\  let a = text!("A")
+        \\  a || (a // 123)
+        \\end
+        \\
+    ;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    const start = std.mem.indexOf(u8, source, "123").?;
+    const expected_origin = try std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ start, start + 3 });
+    try compiler_semantics.expectDiagnostic(testing.io, allocator, path, source, expected_origin, "TypeMismatch");
+}
+
 test "compiler semantics: imported function return inference diagnostics keep callee origin" {
     try expectOverlayDiagnostic(
         \\import "lib/bad"

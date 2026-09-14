@@ -115,7 +115,8 @@ fn constraintEql(left: core.Constraint, right: core.Constraint) bool {
         core.SourceOrigin.optionalEql(left.origin, right.origin) and
         left.role == right.role and
         left.scope_depth == right.scope_depth and
-        left.from_update == right.from_update;
+        left.from_update == right.from_update and
+        left.default_alignment == right.default_alignment;
 }
 
 fn canSyncConstraintUpdate(

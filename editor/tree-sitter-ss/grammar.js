@@ -5,6 +5,7 @@ const PREC = {
   add: 5,
   concat: 4,
   compare: 3,
+  composition: 2,
 };
 
 module.exports = grammar({
@@ -172,10 +173,28 @@ module.exports = grammar({
     ),
 
     block_call_statement: $ => prec(PREC.call + 1, seq(field("function", $.callable_identifier), field("text", $.block_text), optional($._terminator))),
-    line_call_statement: $ => prec(PREC.call + 1, seq(field("function", $.callable_identifier), field("text", $.line_text), $._terminator)),
+    line_call_statement: $ => choice(
+      prec(PREC.call + 1, seq(field("function", $.callable_identifier), field("text", $.line_text), $._terminator)),
+      prec(PREC.call + 2, seq(
+        field("function", alias($._bang_line_callable, $.callable_identifier)),
+        field("text", alias($._bang_line_text, $.line_text)),
+        $._terminator,
+      )),
+    ),
+    _bang_line_callable: $ => choice(
+      alias($._bang_bare_callable, $.bare_callable_identifier),
+      alias($._bang_qualified_callable, $.qualified_callable_identifier),
+    ),
+    _bang_bare_callable: $ => seq($.identifier, "!"),
+    _bang_qualified_callable: $ => seq(
+      field("module", $.identifier),
+      "::",
+      field("name", alias($._bang_bare_callable, $.bare_callable_identifier)),
+    ),
     expression_statement: $ => seq($._expression, $._terminator),
 
     _expression: $ => choice(
+      $.composition_expression,
       $.binary_expression,
       $.unary_expression,
       $.lambda_expression,
@@ -201,6 +220,15 @@ module.exports = grammar({
       prec.left(PREC.concat, seq($._expression, "++", $._expression)),
     ),
 
+    // Retain mixed chains while editing so the compiler can diagnose the
+    // missing parentheses without losing syntax highlighting for either side.
+    composition_expression: $ => prec.left(PREC.composition, seq(
+      field("left", $._expression),
+      field("operator", choice("||", "//")),
+      repeat($._terminator),
+      field("right", $._expression),
+    )),
+
     unary_expression: $ => prec(PREC.unary, seq(choice("-", "!"), $._expression)),
     text_call_expression: $ => prec(PREC.call, seq(
       field("function", $.callable_identifier),
@@ -219,10 +247,14 @@ module.exports = grammar({
       ".",
       field("member", $.identifier),
     )),
-    property_default_expression: $ => prec.right(PREC.compare, seq(field("property", $.member_expression), "??", field("default", $._expression))),
+    property_default_expression: $ => prec.right(PREC.compare, seq(
+      field("property", choice($.identifier, $.member_expression, $.call_expression, $.parenthesized_expression)),
+      "??",
+      field("default", $._expression),
+    )),
     property_exists_expression: $ => prec(PREC.unary, seq(field("property", $.member_expression), "?")),
     if_expression: $ => seq("if", field("condition", $._expression), "then", field("then", $._expression), "else", field("else", $._expression), "end"),
-    parenthesized_expression: $ => seq("(", $._expression, ")"),
+    parenthesized_expression: $ => seq("(", repeat($._terminator), $._expression, repeat($._terminator), ")"),
     lambda_expression: $ => seq(
       field("parameters", $.lambda_parameters),
       repeat($._terminator),
@@ -278,7 +310,8 @@ module.exports = grammar({
     )),
     color_string: _ => /c"[^"]*"/,
     block_text: _ => token(seq("<<", /([^>]|>[^>])*/, ">>")),
-    line_text: _ => token.immediate(/[ \t][^\n]+/),
+    line_text: _ => token.immediate(/[ \t]+([^ \t|/"(<?\n][^\n]*|\|([^|\n][^\n]*)?|\/([^/\n][^\n]*)?|<([^<\n][^\n]*)?|\?([^?\n][^\n]*)?)/),
+    _bang_line_text: _ => token.immediate(/[ \t]+([^ \t"(<\n][^\n]*|<([^<\n][^\n]*)?)/),
     number: _ => /\d+(\.\d+)?/,
     boolean: _ => choice("true", "false"),
     comment: _ => token(choice(/;;[^\n]*/, /#[^\n]*/)),

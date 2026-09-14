@@ -1,0 +1,335 @@
+================================================================================
+Layout composition expressions and homogeneous chains
+================================================================================
+
+page Composition
+  a || b
+  b // c
+  let row = a || b || c
+  let column = a // b // c
+  let nested = a || (b // c)
+  let reverse = (a || b) // c
+  place!(a || (b // c))
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    (identifier)
+    (expression_statement
+      (composition_expression
+        (identifier)
+        (identifier)))
+    (expression_statement
+      (composition_expression
+        (identifier)
+        (identifier)))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (composition_expression
+          (identifier)
+          (identifier))
+        (identifier)))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (composition_expression
+          (identifier)
+          (identifier))
+        (identifier)))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (identifier)
+        (parenthesized_expression
+          (composition_expression
+            (identifier)
+            (identifier)))))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (parenthesized_expression
+          (composition_expression
+            (identifier)
+            (identifier)))
+        (identifier)))
+    (expression_statement
+      (call_expression
+        (callable_identifier
+          (bare_callable_identifier
+            (identifier)))
+        (composition_expression
+          (identifier)
+          (parenthesized_expression
+            (composition_expression
+              (identifier)
+              (identifier))))))))
+
+================================================================================
+Layout composition continuation and ordinary operator precedence
+================================================================================
+
+page Continued
+  let nested = a ||
+    (
+      b //
+      c
+    )
+  a || ;; Keep the operand on the next line.
+    b
+  let precedence = a + b || c * d
+  let concat = a ++ b // c ++ d
+  let division = a / b // c / d
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (composition_expression
+        (identifier)
+        (parenthesized_expression
+          (composition_expression
+            (identifier)
+            (identifier)))))
+    (expression_statement
+      (composition_expression
+        (identifier)
+        (comment)
+        (identifier)))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (binary_expression
+          (identifier)
+          (identifier))
+        (binary_expression
+          (identifier)
+          (identifier))))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (binary_expression
+          (identifier)
+          (identifier))
+        (binary_expression
+          (identifier)
+          (identifier))))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (binary_expression
+          (identifier)
+          (identifier))
+        (binary_expression
+          (identifier)
+          (identifier))))))
+
+================================================================================
+Layout symbols in strings and text bodies
+================================================================================
+
+page Text
+  let literal = "a || b // c"
+  let triple = """
+a || b // c
+"""
+  text! a || b // c
+  text! <<
+a || b // c
+>>
+  text("left") || text("right")
+  text "left" || text("right")
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (string))
+    (let_statement
+      (identifier)
+      (string))
+    (line_call_statement
+      (callable_identifier
+        (bare_callable_identifier
+          (identifier)))
+      (line_text))
+    (block_call_statement
+      (callable_identifier
+        (bare_callable_identifier
+          (identifier)))
+      (block_text))
+    (expression_statement
+      (composition_expression
+        (call_expression
+          (callable_identifier
+            (bare_callable_identifier
+              (identifier)))
+          (string))
+        (call_expression
+          (callable_identifier
+            (bare_callable_identifier
+              (identifier)))
+          (string))))
+    (expression_statement
+      (composition_expression
+        (text_call_expression
+          (callable_identifier
+            (bare_callable_identifier
+              (identifier)))
+          (string))
+        (call_expression
+          (callable_identifier
+            (bare_callable_identifier
+              (identifier)))
+          (string))))))
+
+================================================================================
+Composition and optional defaults preserve operand boundaries
+================================================================================
+
+page Defaults
+  let left = maybe ?? a || b
+  let right = a || maybe ?? b
+  let grouped = maybe ?? (a || b)
+  let called = get() ?? a // b
+  let parenthesized = (maybe) ?? a || b
+  maybe ?? a || b
+  a.child || b
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (composition_expression
+        (property_default_expression
+          (identifier)
+          (identifier))
+        (identifier)))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (identifier)
+        (property_default_expression
+          (identifier)
+          (identifier))))
+    (let_statement
+      (identifier)
+      (property_default_expression
+        (identifier)
+        (parenthesized_expression
+          (composition_expression
+            (identifier)
+            (identifier)))))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (property_default_expression
+          (call_expression
+            (callable_identifier
+              (bare_callable_identifier
+                (identifier))))
+          (identifier))
+        (identifier)))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (property_default_expression
+          (parenthesized_expression
+            (identifier))
+          (identifier))
+        (identifier)))
+    (expression_statement
+      (composition_expression
+        (property_default_expression
+          (identifier)
+          (identifier))
+        (identifier)))
+    (expression_statement
+      (composition_expression
+        (member_expression
+          (identifier)
+          (identifier))
+        (identifier)))))
+
+================================================================================
+Line text keeps punctuation and bang-call bodies
+================================================================================
+
+page Text
+  text! || symbol
+  text! // symbol
+  theme::text! ?? symbol
+  text! ... continuation
+  text! ? question
+  text! with explanation
+  text ... continuation
+  text ? question
+  text with explanation
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    (identifier)
+    (line_call_statement
+      (callable_identifier
+        (bare_callable_identifier
+          (identifier)))
+      (line_text))
+    (line_call_statement
+      (callable_identifier
+        (bare_callable_identifier
+          (identifier)))
+      (line_text))
+    (line_call_statement
+      (callable_identifier
+        (qualified_callable_identifier
+          (identifier)
+          (bare_callable_identifier
+            (identifier))))
+      (line_text))
+    (line_call_statement
+      (callable_identifier
+        (bare_callable_identifier
+          (identifier)))
+      (line_text))
+    (line_call_statement
+      (callable_identifier
+        (bare_callable_identifier
+          (identifier)))
+      (line_text))
+    (line_call_statement
+      (callable_identifier
+        (bare_callable_identifier
+          (identifier)))
+      (line_text))
+    (line_call_statement
+      (callable_identifier
+        (bare_callable_identifier
+          (identifier)))
+      (line_text))
+    (line_call_statement
+      (callable_identifier
+        (bare_callable_identifier
+          (identifier)))
+      (line_text))
+    (line_call_statement
+      (callable_identifier
+        (bare_callable_identifier
+          (identifier)))
+      (line_text))))

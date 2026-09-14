@@ -119,11 +119,16 @@ fn applyGroupTargetConstraintSlice(
     used: *bool,
     last_constraint: *?Constraint,
     constraints: []const Constraint,
+    is_soft: bool,
     options: graph.SolveOptions,
 ) !void {
     for (constraints) |constraint| {
         if (constraint.target_node != group_id) continue;
         if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) continue;
+        // A hard position and the tight child bounds determine the translated
+        // group. Fallback must neither replace that position nor resize the
+        // group by supplying a different anchor on the same axis.
+        if (is_soft and (temp.start != null or temp.end != null or temp.center != null)) continue;
         used.* = true;
         last_constraint.* = constraint;
 
@@ -131,7 +136,7 @@ fn applyGroupTargetConstraintSlice(
             .none => {},
             .tautology => continue,
             .conflict => {
-                if (options.record_diagnostics) {
+                if (!is_soft and options.record_diagnostics) {
                     try state.noteConstraintFailureDetailed(
                         workspace.graph.page_id,
                         constraint,
@@ -147,7 +152,7 @@ fn applyGroupTargetConstraintSlice(
             },
             .size => |size| {
                 if (size < -graph.ConstraintTolerance) {
-                    if (options.record_diagnostics) {
+                    if (!is_soft and options.record_diagnostics) {
                         try state.noteConstraintFailureDetailed(
                             workspace.graph.page_id,
                             constraint,
@@ -162,7 +167,7 @@ fn applyGroupTargetConstraintSlice(
                     continue;
                 }
                 _ = graph.setAxisSize(temp, size, constraint) catch |err| {
-                    if (options.record_diagnostics) {
+                    if (!is_soft and options.record_diagnostics) {
                         const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_frame_size;
                         try state.noteConstraintFailureDetailed(
                             workspace.graph.page_id,
@@ -194,7 +199,7 @@ fn applyGroupTargetConstraintSlice(
         if (source_value == null) continue;
 
         _ = graph.setAxisAnchor(temp, constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
-            if (options.record_diagnostics) {
+            if (!is_soft and options.record_diagnostics) {
                 const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_frame_size;
                 try state.noteConstraintFailureDetailed(
                     workspace.graph.page_id,
@@ -248,8 +253,8 @@ pub fn applyTargetConstraints(
         var temp = AxisState{};
         var used = false;
         var last_constraint: ?Constraint = null;
-        try applyGroupTargetConstraintSlice(state, workspace, group_id, base, &temp, &used, &last_constraint, workspace.hard_constraints, options);
-        try applyGroupTargetConstraintSlice(state, workspace, group_id, base, &temp, &used, &last_constraint, workspace.soft_constraints, options);
+        try applyGroupTargetConstraintSlice(state, workspace, group_id, base, &temp, &used, &last_constraint, workspace.hard_constraints, false, options);
+        try applyGroupTargetConstraintSlice(state, workspace, group_id, base, &temp, &used, &last_constraint, workspace.soft_constraints, true, options);
         if (!used) continue;
 
         if (temp.start == null and temp.end == null and temp.center == null and temp.size == null) {

@@ -849,6 +849,79 @@ test "layout solver: page-dependent group children receive local vertical fallba
     try testing.expect(!state.hasConstraintFailures());
 }
 
+test "layout solver: fallback does not conflict with a nested group target" {
+    for ([_]bool{ false, true }) |place_outer| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        const page = try state.addPage("Nested group");
+        const a = try state.createObjectWithOrigin("a", null, .text, .text, "A", null);
+        const b = try state.createObjectWithOrigin("b", null, .text, .text, "B", null);
+        const c = try state.createObjectWithOrigin("c", null, .text, .text, "C", null);
+        const inner = try state.createGroupWithOrigin(&.{ b, c }, null);
+        const outer = try state.createGroupWithOrigin(&.{ a, inner }, null);
+        if (place_outer) {
+            try state.placeObjectOnPage(page, outer);
+        } else {
+            for ([_]model.NodeId{ a, b, c }) |node_id| try state.placeObjectOnPage(page, node_id);
+        }
+        for ([_]model.NodeId{ a, b, c }, [_]f32{ 120, 180, 90 }, [_]f32{ 80, 60, 50 }) |node_id, width, height| {
+            try state.addAnchorConstraint(node_id, .right, .{ .node = .{ .node_id = node_id, .anchor = .left } }, width, null);
+            try state.addAnchorConstraint(node_id, .top, .{ .node = .{ .node_id = node_id, .anchor = .bottom } }, height, null);
+        }
+        try state.addAnchorConstraint(a, .left, .{ .page = .left }, 80, null);
+        try state.addAnchorConstraint(a, .top, .{ .page = .top }, -80, null);
+        try state.addAnchorConstraint(c, .left, .{ .node = .{ .node_id = b, .anchor = .left } }, 0, null);
+        try state.addAnchorConstraint(c, .top, .{ .node = .{ .node_id = b, .anchor = .bottom } }, -32, null);
+        try state.addAnchorConstraint(inner, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
+        try state.addAnchorConstraint(inner, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 0, null);
+
+        try solveDocumentState(&state);
+
+        try testing.expect(!state.hasConstraintFailures());
+        const a_frame = state.getNode(a).?.frame;
+        const b_frame = state.getNode(b).?.frame;
+        const c_frame = state.getNode(c).?.frame;
+        try expectFloat(80, a_frame.x);
+        try expectFloat(core.layout.Defaults.height - 80, graph.anchorValue(a_frame, .top));
+        try expectFloat(a_frame.x + a_frame.width + 32, b_frame.x);
+        try expectFloat(graph.anchorValue(a_frame, .top), graph.anchorValue(b_frame, .top));
+        try expectFloat(b_frame.x, c_frame.x);
+        try expectFloat(b_frame.y - 32, graph.anchorValue(c_frame, .top));
+        try expectFloat(142, state.getNode(inner).?.frame.height);
+    }
+}
+
+test "layout groups: soft positions preserve hard anchors and tight sizes" {
+    for ([_]model.Anchor{ .top, .bottom, .center_y }) |hard_anchor| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        const page = try state.addPage("Group fallback");
+        const child = try state.makeObject(page, "body", null, .text, .text, "A");
+        const group = try state.makeGroupWithOrigin(page, true, &.{child}, null);
+        try state.addAnchorConstraint(group, hard_anchor, .{ .page = .bottom }, 400, null);
+        var page_graph = try initPageGraph(&state, page);
+        defer page_graph.deinit();
+        var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .vertical);
+        defer workspace.deinit();
+        workspace.stateOf(child).?.* = .{ .start = 0, .end = 80, .center = 40, .size = 80 };
+        workspace.soft_constraints = &.{.{
+            .target_node = group,
+            .target_anchor = .top,
+            .source = .{ .page = .bottom },
+            .offset = 300,
+        }};
+
+        _ = try core.layout.groups.applyTargetConstraints(&state, &workspace, .{});
+
+        try testing.expect(!state.hasConstraintFailures());
+        const group_state = workspace.stateOfConst(group).?.*;
+        try expectFloat(400, graph.axisAnchorValue(group_state, hard_anchor).?);
+        try expectFloat(80, group_state.size.?);
+        try expectFloat(group_state.start.?, workspace.stateOfConst(child).?.start.?);
+        try expectFloat(group_state.end.?, workspace.stateOfConst(child).?.end.?);
+    }
+}
+
 test "layout solver: an independently positioned overlay does not affect page flow" {
     var baseline = try initEmptyDocumentState();
     defer baseline.deinit();
@@ -1033,6 +1106,251 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
     const left_node = row.getNode(left).?;
     const right_node = row.getNode(right).?;
     try expectFloat(left_node.frame.y + left_node.frame.height / 2, right_node.frame.y + right_node.frame.height / 2);
+}
+
+fn addDefaultAlignment(state: *core.DocumentState, target: model.NodeId, source: model.NodeId) !void {
+    try state.addAnchorConstraint(target, .top, .{ .node = .{ .node_id = source, .anchor = .top } }, 0, null);
+    state.constraints.items[state.constraints.items.len - 1].default_alignment = true;
+}
+
+fn addFixedSize(state: *core.DocumentState, node_id: model.NodeId, width: f32, height: f32) !void {
+    try state.addAnchorConstraint(node_id, .right, .{ .node = .{ .node_id = node_id, .anchor = .left } }, width, null);
+    try state.addAnchorConstraint(node_id, .top, .{ .node = .{ .node_id = node_id, .anchor = .bottom } }, height, null);
+}
+
+test "layout solver: row defaults follow effective page policy independently of declaration order" {
+    const cases = [_]struct { document: []const u8, page: ?[]const u8, anchor: model.Anchor }{
+        .{ .document = "top", .page = null, .anchor = .top },
+        .{ .document = "top_flow", .page = null, .anchor = .top },
+        .{ .document = "center", .page = null, .anchor = .center_y },
+        .{ .document = "center_stack", .page = null, .anchor = .center_y },
+        .{ .document = "center", .page = "top", .anchor = .top },
+        .{ .document = "top", .page = "center", .anchor = .center_y },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |reverse| {
+            var state = try initEmptyDocumentState();
+            defer state.deinit();
+            const page = try state.addPage("Row policy");
+            try setLayoutPolicy(&state, state.document_id, case.document);
+            if (case.page) |policy| try setLayoutPolicy(&state, page, policy);
+            const first = try state.makeObject(page, "first", null, .text, .text, "A");
+            const second = try state.makeObject(page, "second", null, .text, .text, "B");
+            const a = if (reverse) second else first;
+            const b = if (reverse) first else second;
+            try addFixedSize(&state, a, 120, 80);
+            try addFixedSize(&state, b, 180, 160);
+            try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
+            try addDefaultAlignment(&state, b, a);
+
+            try solveDocumentState(&state);
+
+            try testing.expect(!state.hasConstraintFailures());
+            const a_frame = state.getNode(a).?.frame;
+            const b_frame = state.getNode(b).?.frame;
+            try testing.expect(a_frame.y_set and b_frame.y_set);
+            try expectFloat(80, a_frame.height);
+            try expectFloat(160, b_frame.height);
+            try expectFloat(graph.anchorValue(a_frame, case.anchor), graph.anchorValue(b_frame, case.anchor));
+        }
+    }
+}
+
+test "layout solver: explicit target anchors override row defaults without reverse alignment" {
+    for ([_]model.Anchor{ .top, .bottom, .center_y }) |anchor| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        const page = try state.addPage("Explicit target");
+        const a = try state.makeObject(page, "a", null, .text, .text, "A");
+        const b = try state.makeObject(page, "b", null, .text, .text, "B");
+        try addFixedSize(&state, a, 120, 80);
+        try addFixedSize(&state, b, 180, 160);
+        try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
+        try addDefaultAlignment(&state, b, a);
+        try state.addAnchorConstraint(b, anchor, .{ .page = .bottom }, 300, null);
+
+        try solveDocumentState(&state);
+
+        try testing.expect(!state.hasConstraintFailures());
+        const a_frame = state.getNode(a).?.frame;
+        const b_frame = state.getNode(b).?.frame;
+        try expectFloat(300, graph.anchorValue(b_frame, anchor));
+        try expectFloat(core.layout.Defaults.flow_top, graph.anchorValue(a_frame, .top));
+    }
+}
+
+test "layout solver: row defaults align nested column bounds with fixed or flowing sources" {
+    for ([_][]const u8{ "top", "center" }) |policy| {
+        for ([_]bool{ false, true }) |place_outer| {
+            for ([_]bool{ false, true }) |anchor_source| {
+                var state = try initEmptyDocumentState();
+                defer state.deinit();
+                const page = try state.addPage("Nested default alignment");
+                try setLayoutPolicy(&state, state.document_id, policy);
+                const a = try state.createObjectWithOrigin("a", null, .text, .text, "A", null);
+                const b = try state.createObjectWithOrigin("b", null, .text, .text, "B", null);
+                const c = try state.createObjectWithOrigin("c", null, .text, .text, "C", null);
+                const inner = try state.createGroupWithOrigin(&.{ b, c }, null);
+                const outer = try state.createGroupWithOrigin(&.{ a, inner }, null);
+                if (place_outer) {
+                    try state.placeObjectOnPage(page, outer);
+                } else {
+                    for ([_]model.NodeId{ b, c, a }) |node_id| try state.placeObjectOnPage(page, node_id);
+                }
+                try addFixedSize(&state, a, 120, 80);
+                try addFixedSize(&state, b, 180, 60);
+                try addFixedSize(&state, c, 90, 50);
+                if (anchor_source) try state.addAnchorConstraint(a, .top, .{ .page = .top }, -80, null);
+                try state.addAnchorConstraint(c, .left, .{ .node = .{ .node_id = b, .anchor = .left } }, 0, null);
+                try state.addAnchorConstraint(c, .top, .{ .node = .{ .node_id = b, .anchor = .bottom } }, -32, null);
+                try state.addAnchorConstraint(inner, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
+                try addDefaultAlignment(&state, inner, a);
+
+                try solveDocumentState(&state);
+
+                try testing.expect(!state.hasConstraintFailures());
+                const a_frame = state.getNode(a).?.frame;
+                const b_frame = state.getNode(b).?.frame;
+                const c_frame = state.getNode(c).?.frame;
+                const inner_frame = state.getNode(inner).?.frame;
+                const anchor: model.Anchor = if (std.mem.eql(u8, policy, "center")) .center_y else .top;
+                try testing.expect(a_frame.y_set and b_frame.y_set and c_frame.y_set);
+                try expectFloat(graph.anchorValue(a_frame, anchor), graph.anchorValue(inner_frame, anchor));
+                if (!anchor_source and anchor == .center_y) try expectFloat(core.layout.Defaults.height / 2, graph.anchorValue(inner_frame, .center_y));
+                try expectFloat(142, inner_frame.height);
+                try expectFloat(60, b_frame.height);
+                try expectFloat(50, c_frame.height);
+                try expectFloat(b_frame.y - 32, graph.anchorValue(c_frame, .top));
+            }
+        }
+    }
+}
+
+test "layout solver: row defaults do not translate explicitly positioned group descendants" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Positioned column");
+    const a = try state.makeObject(page, "a", null, .text, .text, "A");
+    const b = try state.makeObject(page, "b", null, .text, .text, "B");
+    const c = try state.makeObject(page, "c", null, .text, .text, "C");
+    const column = try state.createGroupWithOrigin(&.{ b, c }, null);
+    try addFixedSize(&state, a, 120, 80);
+    try addFixedSize(&state, b, 180, 60);
+    try addFixedSize(&state, c, 90, 50);
+    try state.addAnchorConstraint(b, .top, .{ .page = .bottom }, 300, null);
+    try state.addAnchorConstraint(c, .top, .{ .node = .{ .node_id = b, .anchor = .bottom } }, -32, null);
+    try state.addAnchorConstraint(column, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
+    try addDefaultAlignment(&state, column, a);
+
+    try solveDocumentState(&state);
+
+    try testing.expect(!state.hasConstraintFailures());
+    try expectFloat(300, graph.anchorValue(state.getNode(b).?.frame, .top));
+    try expectFloat(158, state.getNode(c).?.frame.y);
+    try expectFloat(core.layout.Defaults.flow_top, graph.anchorValue(state.getNode(a).?.frame, .top));
+}
+
+test "layout graph: row defaults choose the first eligible target candidate and reject dependency cycles" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Default selection");
+    const a = try state.makeObject(page, "a", null, .text, .text, "A");
+    const b = try state.makeObject(page, "b", null, .text, .text, "B");
+    const c = try state.makeObject(page, "c", null, .text, .text, "C");
+    const d = try state.makeObject(page, "d", null, .text, .text, "D");
+    try addDefaultAlignment(&state, b, a);
+    try addDefaultAlignment(&state, b, c);
+    try addDefaultAlignment(&state, a, b);
+    try addDefaultAlignment(&state, c, c);
+    try addDefaultAlignment(&state, c, a);
+    try state.addAnchorConstraint(d, .top, .{ .node = .{ .node_id = c, .anchor = .bottom } }, -32, null);
+    try addDefaultAlignment(&state, c, d);
+    var page_graph = try initPageGraph(&state, page);
+    defer page_graph.deinit();
+    try testing.expectEqual(@as(usize, 1), page_graph.constraints.len);
+    try testing.expectEqual(@as(usize, 6), page_graph.default_alignment_constraints.len);
+    try testing.expectEqual(@as(usize, 0), page_graph.targetConstraintIndexes(b).len);
+    try testing.expect(!page_graph.hasTargetConstraint(&state, b, .vertical, &.{}));
+    var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .vertical);
+    defer workspace.deinit();
+    var defaults = try core.layout.fallback.buildDefaultAlignmentConstraints(&state, &workspace);
+    defer defaults.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), defaults.items.len);
+    try testing.expectEqual(b, defaults.items[0].target_node);
+    try testing.expectEqual(a, defaults.items[0].source.node.node_id);
+    try testing.expectEqual(c, defaults.items[1].target_node);
+    try testing.expectEqual(a, defaults.items[1].source.node.node_id);
+}
+
+test "layout solver: positioned ancestors preserve internal defaults but exclude external alignment" {
+    for ([_]bool{ false, true }) |source_inside| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        const page = try state.addPage("Positioned ancestor");
+        const a = try state.makeObject(page, "a", null, .text, .text, "A");
+        const b = try state.makeObject(page, "b", null, .text, .text, "B");
+        const group = try state.makeGroupWithOrigin(page, true, if (source_inside) &.{ a, b } else &.{b}, null);
+        try addFixedSize(&state, a, 120, 80);
+        try addFixedSize(&state, b, 180, 160);
+        try state.addAnchorConstraint(group, .top, .{ .page = .bottom }, 500, null);
+        try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
+        try addDefaultAlignment(&state, b, a);
+
+        try solveDocumentState(&state);
+
+        try testing.expect(!state.hasConstraintFailures());
+        try expectFloat(500, graph.anchorValue(state.getNode(b).?.frame, .top));
+        if (source_inside) try expectFloat(500, graph.anchorValue(state.getNode(a).?.frame, .top));
+    }
+}
+
+test "layout graph: row defaults reject a cycle through an explicit vertical relation" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Hard dependency cycle");
+    const a = try state.makeObject(page, "a", null, .text, .text, "A");
+    const b = try state.makeObject(page, "b", null, .text, .text, "B");
+    try state.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .bottom } }, -32, null);
+    try addDefaultAlignment(&state, b, a);
+    var page_graph = try initPageGraph(&state, page);
+    defer page_graph.deinit();
+    var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .vertical);
+    defer workspace.deinit();
+    var defaults = try core.layout.fallback.buildDefaultAlignmentConstraints(&state, &workspace);
+    defer defaults.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), defaults.items.len);
+
+    try solveDocumentState(&state);
+    try testing.expect(!state.hasConstraintFailures());
+    try expectFloat(state.getNode(b).?.frame.y - 32, graph.anchorValue(state.getNode(a).?.frame, .top));
+}
+
+test "layout graph: row defaults reject cycles through ancestor group translation" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Group translation cycle");
+    const a = try state.makeObject(page, "a", null, .text, .text, "A");
+    const b = try state.makeObject(page, "b", null, .text, .text, "B");
+    const c = try state.makeObject(page, "c", null, .text, .text, "C");
+    const group = try state.makeGroupWithOrigin(page, true, &.{ b, c }, null);
+    try addFixedSize(&state, a, 120, 80);
+    try addFixedSize(&state, b, 180, 60);
+    try addFixedSize(&state, c, 90, 50);
+    try state.addAnchorConstraint(c, .top, .{ .node = .{ .node_id = b, .anchor = .bottom } }, -32, null);
+    try addDefaultAlignment(&state, group, a);
+    try addDefaultAlignment(&state, a, c);
+    var page_graph = try initPageGraph(&state, page);
+    defer page_graph.deinit();
+    var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .vertical);
+    defer workspace.deinit();
+    var defaults = try core.layout.fallback.buildDefaultAlignmentConstraints(&state, &workspace);
+    defer defaults.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), defaults.items.len);
+    try testing.expectEqual(group, defaults.items[0].target_node);
+
+    try solveDocumentState(&state);
+    try testing.expect(!state.hasConstraintFailures());
+    try expectFloat(graph.anchorValue(state.getNode(a).?.frame, .top), graph.anchorValue(state.getNode(group).?.frame, .top));
 }
 
 test "layout solver: horizontal fallback seeds unconstrained peer anchors" {
@@ -2309,6 +2627,7 @@ test "layout graph: adjacency preserves shared parents and component order acros
     try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 30, null);
     try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 40, null);
     try state.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 0, null);
+    try addDefaultAlignment(&state, c, b);
     var inputs = try core.layout.partition.Document.init(testing.allocator, &state);
     defer inputs.deinit(testing.allocator);
     try inspectIndexedPageGraph(testing.allocator, &state, inputs.pages[0], b, outer);
@@ -2318,6 +2637,7 @@ test "layout graph: adjacency preserves shared parents and component order acros
 fn inspectIndexedPageGraph(allocator: std.mem.Allocator, state: *core.DocumentState, inputs: core.layout.partition.Page, target: model.NodeId, outer: model.NodeId) !void {
     var page_graph = try graph.PageLayoutGraph.init(allocator, state, inputs);
     defer page_graph.deinit();
+    try testing.expectEqual(@as(usize, 1), page_graph.default_alignment_constraints.len);
     try testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, page_graph.targetConstraintIndexes(target));
     try testing.expectEqualSlices(usize, &.{ 3, 4 }, page_graph.parentGroupIndexes(target));
     try testing.expectEqual(@as(f32, 30), page_graph.constraintTargetingAnchor(target, .left).?.offset);

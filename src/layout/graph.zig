@@ -271,6 +271,7 @@ pub const PageLayoutGraph = struct {
     constraints: []Constraint,
     horizontal_constraints: []Constraint,
     vertical_constraints: []Constraint,
+    default_alignment_constraints: []Constraint,
     index_by_node: std.AutoHashMap(NodeId, usize),
     target_constraints: NodeAdjacency,
     parent_groups: NodeAdjacency,
@@ -314,9 +315,15 @@ pub const PageLayoutGraph = struct {
         errdefer horizontal_constraint_list.deinit(allocator);
         var vertical_constraint_list = std.ArrayList(Constraint).empty;
         errdefer vertical_constraint_list.deinit(allocator);
+        var default_alignment_list = std.ArrayList(Constraint).empty;
+        errdefer default_alignment_list.deinit(allocator);
         for (page.constraint_indexes) |constraint_index| {
             const constraint = state.constraints.items[constraint_index];
             const target_index = index_by_node.get(constraint.target_node) orelse continue;
+            if (constraint.default_alignment) {
+                try default_alignment_list.append(allocator, constraint);
+                continue;
+            }
             try constraint_list.append(allocator, constraint);
             const axis = anchorAxis(constraint.target_anchor);
             switch (axis) {
@@ -366,6 +373,8 @@ pub const PageLayoutGraph = struct {
         errdefer allocator.free(horizontal_constraints);
         const vertical_constraints = try vertical_constraint_list.toOwnedSlice(allocator);
         errdefer allocator.free(vertical_constraints);
+        const default_alignment_constraints = try default_alignment_list.toOwnedSlice(allocator);
+        errdefer allocator.free(default_alignment_constraints);
 
         return .{
             .allocator = allocator,
@@ -376,6 +385,7 @@ pub const PageLayoutGraph = struct {
             .constraints = constraints,
             .horizontal_constraints = horizontal_constraints,
             .vertical_constraints = vertical_constraints,
+            .default_alignment_constraints = default_alignment_constraints,
             .index_by_node = index_by_node,
             .target_constraints = target_constraints,
             .parent_groups = parent_groups,
@@ -398,6 +408,7 @@ pub const PageLayoutGraph = struct {
         self.allocator.free(self.constraints);
         self.allocator.free(self.horizontal_constraints);
         self.allocator.free(self.vertical_constraints);
+        self.allocator.free(self.default_alignment_constraints);
         self.allocator.free(self.has_horizontal_target_constraint);
         self.allocator.free(self.has_vertical_target_constraint);
         self.allocator.free(self.horizontal_target_anchor_mask);

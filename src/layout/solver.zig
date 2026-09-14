@@ -461,6 +461,9 @@ fn solvePageLayout(
 
     try solvePageAxis(state, &vertical, trace_session, options);
     try graph.checkCancellation(options);
+    var default_alignments = try fallback.buildDefaultAlignmentConstraints(state, &vertical);
+    defer default_alignments.deinit(state.allocator);
+    vertical.soft_constraints = default_alignments.items;
     var vertical_fallback = try fallback.buildVerticalConstraints(state, &vertical, options);
     defer vertical_fallback.deinit(state.allocator);
     trace_session.recordDefaultConstraints(state.allocator, &vertical, vertical_fallback.items);
@@ -955,7 +958,8 @@ fn applyAxisConstraint(
     }
 
     if (is_soft and graph.axisAnchorValue(workspace.states[target_index], constraint.target_anchor) != null) {
-        return false;
+        const existing = graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor);
+        if (!constraint.default_alignment or existing == null or !constraintsSame(existing.?, constraint)) return false;
     }
 
     const source_value = try graph.constraintSourceValue(state, workspace, constraint.source);

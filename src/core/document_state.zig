@@ -261,6 +261,7 @@ pub const DocumentState = struct {
     page_overlay_roots: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
     direct_page_ownership: std.ArrayList(PageOwnershipInfo),
     constraints: std.ArrayList(Constraint),
+    default_alignments_collected: bool = false,
     fallback_constraints: std.ArrayList(Constraint),
     constraint_updates: std.ArrayList(ConstraintUpdate),
     overridden_constraints: std.ArrayList(Constraint),
@@ -908,16 +909,70 @@ pub const DocumentState = struct {
     }
 
     pub fn setNodeFieldValue(self: *DocumentState, node_id: NodeId, key: []const u8, value: Value) !void {
+        return self.setNodeFieldValueWithOrigin(node_id, key, value, 0, null);
+    }
+
+    pub fn setNodeFieldValueWithOrigin(
+        self: *DocumentState,
+        node_id: NodeId,
+        key: []const u8,
+        value: Value,
+        scope_depth: u32,
+        origin: ?model.SourceOrigin,
+    ) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         for (node.fields.items) |field| {
             if (std.mem.eql(u8, field.key, key)) {
                 return error.DuplicatePropertyDefinition;
             }
         }
+        const owned_key = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(owned_key);
+        var owned_value = try value.clone(self.allocator);
+        errdefer owned_value.deinit(self.allocator);
         try node.fields.append(self.allocator, .{
-            .key = try self.allocator.dupe(u8, key),
-            .value = try value.clone(self.allocator),
+            .key = owned_key,
+            .value = owned_value,
+            .scope_depth = scope_depth,
+            .origin = origin,
         });
+    }
+
+    /// Materialize final group fields once, after evaluation and before
+    /// constraint-update normalization. Repeated calls do not recreate masked
+    /// candidates. Anchor selection is deferred to the page layout policy.
+    pub fn collectDefaultAlignments(self: *DocumentState) !void {
+        if (self.default_alignments_collected) return;
+        var candidates = std.ArrayList(Constraint).empty;
+        defer candidates.deinit(self.allocator);
+        for (self.nodes.items) |node| {
+            if (node.kind != .object or node.discarded or !roleEq(node.role, GroupRole)) continue;
+            for (node.fields.items) |field| {
+                if (!std.mem.eql(u8, field.key, "align_children_y")) continue;
+                if (field.value != .boolean or !field.value.boolean) break;
+                const children = self.childrenOf(node.id) orelse break;
+                var previous: ?NodeId = null;
+                for (children) |child_id| {
+                    const child = self.getNode(child_id) orelse continue;
+                    if (child.kind != .object or child.discarded) continue;
+                    if (previous) |source_id| {
+                        try candidates.append(self.allocator, .{
+                            .target_node = child_id,
+                            .target_anchor = .top,
+                            .source = .{ .node = .{ .node_id = source_id, .anchor = .top } },
+                            .offset = 0,
+                            .origin = field.origin,
+                            .scope_depth = field.scope_depth,
+                            .default_alignment = true,
+                        });
+                    }
+                    previous = child_id;
+                }
+                break;
+            }
+        }
+        try self.constraints.appendSlice(self.allocator, candidates.items);
+        self.default_alignments_collected = true;
     }
 
     pub fn unsetNodeField(self: *DocumentState, node_id: NodeId, key: []const u8) !void {
@@ -1390,7 +1445,7 @@ pub const DocumentState = struct {
         for (self.nodes.items) |node| {
             if (node.kind != .object or node.attached or node.discarded) continue;
             if (try self.hasUnplacedObjectParent(node.id)) continue;
-            if (self.isConstraintReferencedGroupWithAttachedDescendant(node.id)) continue;
+            if (self.layoutPageOf(node.id) != null) continue;
             const role = node.role orelse node.name;
             const message = try std.fmt.allocPrint(self.allocator, "object '{s}' was generated but not placed", .{role});
             try self.addValidationDiagnostic(severity, null, node.id, node.origin, .{
@@ -1407,38 +1462,34 @@ pub const DocumentState = struct {
     }
 
     pub fn layoutPageOf(self: *DocumentState, node_id: NodeId) ?NodeId {
-        return self.layoutPageOfReference(node_id, false);
+        return self.layoutPageOfReference(node_id, self.nodes.items.len);
     }
 
     pub fn layoutPageOfConstraintEndpoint(self: *DocumentState, node_id: NodeId) ?NodeId {
-        return self.layoutPageOfReference(node_id, true);
+        return self.layoutPageOfReference(node_id, self.nodes.items.len);
     }
 
-    fn layoutPageOfReference(self: *DocumentState, node_id: NodeId, referenced: bool) ?NodeId {
+    fn layoutPageOfReference(self: *DocumentState, node_id: NodeId, remaining_nodes: usize) ?NodeId {
+        if (remaining_nodes == 0) return null;
         const direct = self.directPageOwnershipInfo(node_id);
         if (direct.count == 1) return direct.first;
         if (direct.count > 1) return null;
         const node = self.getNode(node_id) orelse return null;
         if (!roleEq(node.role, GroupRole)) return null;
-        if (!referenced and !self.constraintReferencesNode(node_id)) return null;
-        if (!self.hasAttachedDescendant(node_id)) return null;
-        return self.uniqueAttachedDescendantPage(node_id);
+        // A group can describe the bounds of already placed children without
+        // itself becoming a drawing object or a page placement root.
+        return self.uniqueAttachedDescendantPage(node_id, remaining_nodes - 1);
     }
 
-    fn uniqueAttachedDescendantPage(self: *DocumentState, node_id: NodeId) ?NodeId {
+    fn uniqueAttachedDescendantPage(self: *DocumentState, node_id: NodeId, remaining_nodes: usize) ?NodeId {
         var result: ?NodeId = null;
         const children = self.childrenOf(node_id) orelse return null;
         for (children) |child_id| {
             const child = self.getNode(child_id) orelse continue;
             if (child.kind != .object or child.discarded) continue;
-            const direct = self.directPageOwnershipInfo(child_id);
-            const candidate = if (direct.count == 1)
-                direct.first
-            else if (direct.count == 0)
-                self.uniqueAttachedDescendantPage(child_id)
-            else
-                null;
-            const page_id = candidate orelse continue;
+            // Unknown ownership must propagate: a partially placed or
+            // cross-page subtree cannot acquire a page from another sibling.
+            const page_id = self.layoutPageOfReference(child_id, remaining_nodes) orelse return null;
             if (result) |existing| {
                 if (existing != page_id) return null;
             } else {
@@ -1535,34 +1586,6 @@ pub const DocumentState = struct {
                 const parent = self.getNode(entry.key_ptr.*) orelse continue;
                 if (parent.kind == .object and !parent.attached and !parent.discarded) return true;
             }
-        }
-        return false;
-    }
-
-    fn isConstraintReferencedGroupWithAttachedDescendant(self: *DocumentState, node_id: NodeId) bool {
-        const node = self.getNode(node_id) orelse return false;
-        if (!roleEq(node.role, GroupRole)) return false;
-        if (!self.constraintReferencesNode(node_id)) return false;
-        return self.hasAttachedDescendant(node_id);
-    }
-
-    fn constraintReferencesNode(self: *DocumentState, node_id: NodeId) bool {
-        for (self.constraints.items) |constraint| {
-            if (constraint.target_node == node_id) return true;
-            switch (constraint.source) {
-                .page => {},
-                .node => |source| if (source.node_id == node_id) return true,
-            }
-        }
-        return false;
-    }
-
-    fn hasAttachedDescendant(self: *DocumentState, node_id: NodeId) bool {
-        const children = self.childrenOf(node_id) orelse return false;
-        for (children) |child_id| {
-            const child = self.getNode(child_id) orelse continue;
-            if (child.attached) return true;
-            if (self.hasAttachedDescendant(child_id)) return true;
         }
         return false;
     }
@@ -1875,6 +1898,7 @@ fn constraintEq(a: Constraint, b: Constraint) bool {
     if (a.target_node != b.target_node) return false;
     if (a.target_anchor != b.target_anchor) return false;
     if (a.offset != b.offset) return false;
+    if (a.default_alignment != b.default_alignment) return false;
     if (!constraintSourceEq(a.source, b.source)) return false;
     return model.SourceOrigin.optionalEql(a.origin, b.origin);
 }

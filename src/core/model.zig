@@ -32,6 +32,9 @@ pub const ConnectorRole: Role = "connector";
 pub const Field = struct {
     key: []const u8,
     value: Value,
+    scope_depth: u32 = 0,
+    // Source strings are borrowed from the document, as in Node.origin.
+    origin: ?SourceOrigin = null,
 
     pub fn deinit(self: *Field, allocator: Allocator) void {
         allocator.free(self.key);
@@ -141,6 +144,7 @@ pub const Constraint = struct {
     role: ConstraintRole = .position,
     scope_depth: u32 = 0,
     from_update: bool = false,
+    default_alignment: bool = false,
 };
 
 pub const ConstraintUpdate = struct {

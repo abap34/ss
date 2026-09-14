@@ -2,6 +2,8 @@ import std:core/classes
 import std:core/layout
 import std:core/components
 import std:core/layout as {
+  hjoin,
+  vjoin,
   vflow,
   vflow_doc,
   cols2_parts,

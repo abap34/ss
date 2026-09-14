@@ -619,9 +619,15 @@ fn inferUserCallInfo(
     defer allocator.free(actual_arguments);
     for (call.args.items, 0..) |arg, index| {
         const param = func.params.items[index];
-        const actual = try exprInfoWithOptions(allocator, state, caller_sema, env, arg, origin, options);
+        const arg_origin = if (call.callee.qualifier != null and
+            std.mem.startsWith(u8, call.callee.qualifier.?, "std:") and
+            origin.span != null and index < call.arg_spans.items.len)
+            origin.withSpan(call.arg_spans.items[index])
+        else
+            origin;
+        const actual = try exprInfoWithOptions(allocator, state, caller_sema, env, arg, arg_origin, options);
         if (needs_facts) actual_arguments[index] = actual;
-        try ensureType(state, allocator, actual, param.ty, origin, .UnmatchedArgumentType);
+        try ensureType(state, allocator, actual, param.ty, arg_origin, .UnmatchedArgumentType);
     }
     if (!needs_facts) return infoFromType(func.result_type);
     return try inferUserFunctionReturnInfo(allocator, state, callee_sema, func, actual_arguments, origin, options);

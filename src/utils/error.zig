@@ -973,6 +973,7 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.AssignmentRequiresLet,
         error.BindRemoved,
         error.ZeroArgCallRequiresParens,
+        error.MixedCompositionDirections,
         error.ExpectedReturn,
         error.UnterminatedString,
         error.UnknownAnchor,
@@ -1030,6 +1031,7 @@ pub fn parseDiagnosticMessage(buf: []u8, diagnostic: anytype) []const u8 {
         error.AssignmentRequiresLet => "plain assignment statements are not supported; use 'let name = expr'",
         error.BindRemoved => "'bind' has been removed; use lexical 'let' bindings and ordinary expression statements",
         error.ZeroArgCallRequiresParens => "a bare name is not a statement; use parentheses for a zero-argument call, or pass the value to a placing function such as 'text!(name)'",
+        error.MixedCompositionDirections => "mixed '||' and '//' compositions require parentheses; write 'a || (b // c)' or '(a || b) // c'",
         error.PageCannotBeConstraintTarget => "page dimensions cannot be constraint targets; constrain an object dimension to a page anchor instead",
         else => blk: {
             const expected = diagnostic.expected orelse @errorName(diagnostic.err);

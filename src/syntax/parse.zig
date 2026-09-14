@@ -1376,35 +1376,20 @@ const Parser = struct {
     }
 
     fn parseCallSugarStatement(self: *Parser, start: usize) !Statement {
+        if (!self.eof() and !source.isIdentifierStart(self.source[self.pos])) {
+            return self.parseExpressionStatement(start);
+        }
         var name = try self.parseCallableName();
         var name_owned = true;
         errdefer if (name_owned) name.deinit(self.allocator);
+        const name_end = self.pos;
         source.skipInlineSpaces(self.source, &self.pos);
 
-        if (!self.eof() and self.source[self.pos] == '(') {
+        if (self.startsExpressionAfterName(name, name_end)) {
+            name.deinit(self.allocator);
             name_owned = false;
-            var call = try self.parseCallAfterName(name);
-            errdefer call.deinit(self.allocator);
-            try self.consumeStatementTerminator();
-            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
-        }
-
-        if (source.startsWithAt(self.source, self.pos, "<<")) {
-            const text = try self.parseChevronBlockStringLiteral();
-            name_owned = false;
-            var call = try self.makeUnaryStringCall(name, text);
-            errdefer call.deinit(self.allocator);
-            try self.consumeStatementTerminator();
-            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
-        }
-
-        if (!self.eof() and (self.source[self.pos] == '"' or source.startsWithAt(self.source, self.pos, "\"\"\""))) {
-            const text = try self.parseStringLiteral();
-            name_owned = false;
-            var call = try self.makeUnaryStringCall(name, text);
-            errdefer call.deinit(self.allocator);
-            try self.consumeStatementTerminator();
-            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
+            self.pos = start;
+            return self.parseExpressionStatement(start);
         }
 
         if (self.atStatementBoundary()) return self.failSpan(.{ .start = start, .end = start + name.name.len }, error.ZeroArgCallRequiresParens);
@@ -1417,9 +1402,113 @@ const Parser = struct {
         return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
     }
 
+    fn startsExpressionAfterName(self: *const Parser, name: ast.CallableName, name_end: usize) bool {
+        if (self.pos >= self.source.len) return false;
+        if (self.source[self.pos] == '(' or self.source[self.pos] == '"' or
+            source.startsWithAt(self.source, self.pos, "<<")) return true;
+        // A bang callable cannot be a bare operand. Its remaining line is
+        // therefore still a text argument, including leading operator marks.
+        if (std.mem.endsWith(u8, name.name, "!")) return false;
+        if (self.peekCompositionOperator() != null or source.startsWithAt(self.source, self.pos, "??")) return true;
+        // Keep spaced punctuation in line text. A member or optional operand
+        // can use adjacent punctuation, parentheses, or a lexical binding.
+        if (self.pos != name_end) return false;
+        return switch (self.source[self.pos]) {
+            '.', '?', '{' => true,
+            else => false,
+        };
+    }
+
+    fn parseExpressionStatement(self: *Parser, start: usize) !Statement {
+        var expr = try self.parseExpr();
+        errdefer expr.deinit(self.allocator);
+        try self.consumeStatementTerminator();
+        return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = expr } };
+    }
+
     fn parseExpr(self: *Parser) anyerror!Expr {
         try self.checkCanceled();
+        return self.parseCompositionExpr();
+    }
+
+    const CompositionOperator = enum { horizontal, vertical };
+
+    fn peekCompositionOperator(self: *const Parser) ?CompositionOperator {
+        if (source.startsWithAt(self.source, self.pos, "||")) return .horizontal;
+        if (source.startsWithAt(self.source, self.pos, "//")) return .vertical;
+        return null;
+    }
+
+    fn parseCompositionExpr(self: *Parser) anyerror!Expr {
+        source.skipInlineSpaces(self.source, &self.pos);
+        const left_start = self.pos;
+        var left = try self.parseConcatExpr();
+        errdefer left.deinit(self.allocator);
+        var direction: ?CompositionOperator = null;
+        while (true) {
+            source.skipInlineSpaces(self.source, &self.pos);
+            const operator = self.peekCompositionOperator() orelse return left;
+            const operator_span = ast.Span{ .start = self.pos, .end = self.pos + 2 };
+            if (direction != null and direction.? != operator) {
+                return self.failSpan(operator_span, error.MixedCompositionDirections);
+            }
+            direction = operator;
+            const left_span = self.trimExpressionSpan(left_start, self.pos);
+            self.pos += 2;
+            source.skipTriviaFrom(self.source, &self.pos);
+            const right_start = self.pos;
+            var right = try self.parseCompositionOperand();
+            errdefer right.deinit(self.allocator);
+            left = try self.makeCompositionCall(operator, operator_span, left, left_span, right, self.trimExpressionSpan(right_start, self.pos));
+        }
+    }
+
+    fn parseCompositionOperand(self: *Parser) !Expr {
+        if (self.eof() or self.source[self.pos] == ';' or self.source[self.pos] == ',' or
+            self.source[self.pos] == ')' or self.source[self.pos] == '}' or
+            self.source[self.pos] == '~' or self.startsReservedKeyword())
+        {
+            if (self.recovering) return self.makeHoleExpr(.expr, .expression, pointSpan(self.pos), error.ExpectedExpression, diagnostics.foundToken(self.source, self.pos));
+            return self.fail(error.ExpectedExpression);
+        }
         return self.parseConcatExpr();
+    }
+
+    fn startsReservedKeyword(self: *const Parser) bool {
+        var end = self.pos;
+        if (!scanner.scanIdentifier(self.source, &end)) return false;
+        return scanner.isKeyword(self.source[self.pos..end]);
+    }
+
+    fn trimExpressionSpan(self: *const Parser, start: usize, end: usize) ast.Span {
+        var trimmed_end = end;
+        while (trimmed_end > start and source.isInlineSpace(self.source[trimmed_end - 1])) trimmed_end -= 1;
+        return .{ .start = start, .end = trimmed_end };
+    }
+
+    fn makeCompositionCall(self: *Parser, operator: CompositionOperator, operator_span: ast.Span, left: Expr, left_span: ast.Span, right: Expr, right_span: ast.Span) !Expr {
+        const qualifier = try self.allocator.dupe(u8, "std:core/layout");
+        errdefer self.allocator.free(qualifier);
+        const name = try self.allocator.dupe(u8, if (operator == .horizontal) "hjoin" else "vjoin");
+        errdefer self.allocator.free(name);
+        var args = std.ArrayList(Expr).empty;
+        errdefer args.deinit(self.allocator);
+        var arg_spans = std.ArrayList(ast.Span).empty;
+        errdefer arg_spans.deinit(self.allocator);
+        try args.ensureTotalCapacity(self.allocator, 2);
+        try arg_spans.appendSlice(self.allocator, &.{ left_span, right_span });
+        args.appendAssumeCapacity(left);
+        args.appendAssumeCapacity(right);
+        return .{ .call = .{
+            .callee = .{
+                .qualifier = qualifier,
+                .name = name,
+                .name_span = operator_span,
+                .span = operator_span,
+            },
+            .args = args,
+            .arg_spans = arg_spans,
+        } };
     }
 
     fn parseConcatExpr(self: *Parser) anyerror!Expr {
@@ -1457,6 +1546,7 @@ const Parser = struct {
         while (true) {
             source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof()) return left;
+            if (source.startsWithAt(self.source, self.pos, "//")) return left;
             const op = self.source[self.pos];
             if (op != '*' and op != '/') return left;
             self.pos += 1;
@@ -1496,7 +1586,7 @@ const Parser = struct {
             }
             if (source.startsWithAt(self.source, self.pos, "??")) {
                 self.pos += 2;
-                var fallback = try self.parseExpr();
+                var fallback = try self.parseConcatExpr();
                 errdefer fallback.deinit(self.allocator);
                 expr = try self.makeCoalesceExpr(expr, fallback);
                 return expr;
@@ -1697,6 +1787,7 @@ const Parser = struct {
         if (!self.eof() and self.source[self.pos] == '(') {
             if (self.startsLambdaExpr()) return try self.parseLambdaExpr();
             self.pos += 1;
+            source.skipTriviaFrom(self.source, &self.pos);
             var expr = try self.parseExpr();
             errdefer expr.deinit(self.allocator);
             try self.expectChar(')');
@@ -2012,6 +2103,10 @@ const Parser = struct {
             return null;
         };
         errdefer target.deinit(self.allocator);
+        const spaced_member_candidate = switch (target) {
+            .ident => |ident| if (ident.name_span) |span| self.pos > span.end else false,
+            else => false,
+        };
 
         while (true) {
             source.skipInlineSpaces(self.source, &self.pos);
@@ -2019,6 +2114,15 @@ const Parser = struct {
                 target.deinit(self.allocator);
                 self.pos = saved;
                 return null;
+            }
+            if (spaced_member_candidate) {
+                var probe = self.pos + 1;
+                source.skipInlineSpaces(self.source, &probe);
+                if (!scanner.scanIdentifier(self.source, &probe)) {
+                    target.deinit(self.allocator);
+                    self.pos = saved;
+                    return null;
+                }
             }
             self.pos += 1;
             source.skipInlineSpaces(self.source, &self.pos);

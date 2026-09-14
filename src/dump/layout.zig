@@ -108,4 +108,5 @@ fn writeConstraintFields(
     try item.enumTagField("role", constraint.role);
     try item.intField("scope_depth", constraint.scope_depth);
     try item.boolField("from_update", constraint.from_update);
+    try item.boolField("default_alignment", constraint.default_alignment);
 }

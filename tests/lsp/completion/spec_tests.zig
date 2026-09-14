@@ -7,6 +7,57 @@ const type_resolution = compiler.language.type_resolution;
 
 const testing = std.testing;
 
+test "analysis completion: composition references retain fixed stdlib types and definitions" {
+    var case = try CompletionCase.init(
+        \\import std:core/objects as layout
+        \\const hjoin: Number = 9
+        \\fn vjoin(a: Object, b: Object) -> Number
+        \\  return 1
+        \\end
+        \\page main
+        \\  let a = text!("A")
+        \\  let b = text!("B")
+        \\  let hjoin = (left: Object, right: Object) |-> 1
+        \\  let combined = a || b
+        \\  let label = (a || b).content
+        \\end
+    );
+    defer case.deinit();
+
+    const snapshot = try case.snapshotFor(case.source);
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
+    for ([_][]const u8{ "hjoin", "vjoin" }) |name| {
+        const binding = resolve_query.valueBinding(null, snapshot, module.id, name, "std:core/layout", .function) orelse return error.ExpectedFunction;
+        try testing.expect(binding.module_id != module.id);
+        try testing.expectEqual(.object, binding.value_type.kind);
+        const definition = resolve_query.valueDefinition(null, snapshot, module.id, name, "std:core/layout", .function) orelse return error.ExpectedDefinition;
+        try testing.expectEqual(binding.module_id.?, definition.module_id);
+        try testing.expectEqualStrings("std:core/layout", snapshot.moduleById(definition.module_id).?.spec);
+        try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, name, "std:core/layout", .constant) == null);
+    }
+    const constant = resolve_query.valueBinding(null, snapshot, module.id, "hjoin", null, .constant) orelse return error.ExpectedConstant;
+    try testing.expectEqual(module.id, constant.module_id);
+    try testing.expectEqual(.number, constant.value_type.kind);
+    const explicit_function = resolve_query.valueBinding(null, snapshot, module.id, "vjoin", null, .function) orelse return error.ExpectedFunction;
+    try testing.expectEqual(module.id, explicit_function.module_id);
+    try testing.expectEqual(.number, explicit_function.value_type.kind);
+    try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, "hjoin", "layout", .function) == null);
+    try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, "hjoin", "std:core/missing", .function) == null);
+    const expired_budget = query_types.QueryBudget.start(.{ .budget_ms = 0 });
+    try testing.expect(resolve_query.valueBinding(expired_budget, snapshot, module.id, "hjoin", "std:core/layout", .function) == null);
+
+    var result = try snapshot_api.completeAt(case.allocator, snapshot, .{
+        .path = case.path,
+        .source = case.source,
+        .offset = offsetAfter(case.source, "(a || b)."),
+    }, .{ .budget_ms = 100 });
+    defer result.deinit(case.allocator);
+    try expectHas(result, "content");
+    try expectHas(result, "layout");
+    try expectOnlyKind(result, .property);
+}
+
 test "analysis completion: dot module and normal positions keep candidate kinds separate" {
     var case = try CompletionCase.init(
         \\import std:themes/default

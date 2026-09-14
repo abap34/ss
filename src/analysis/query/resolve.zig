@@ -441,6 +441,21 @@ const SnapshotImports = struct {
         return aliasTarget(resolver.budget, resolver.snapshot, module_id, alias);
     }
 
+    pub fn resolveModuleSpec(resolver: anytype, spec: []const u8) ?core.SourceModuleId {
+        if (resolver.kind != .function) return null;
+        const Snapshot = switch (@typeInfo(@TypeOf(resolver.snapshot))) {
+            .pointer => |pointer| pointer.child,
+            else => @TypeOf(resolver.snapshot),
+        };
+        if (@hasField(Snapshot, "modules")) {
+            for (resolver.snapshot.modules) |module| {
+                if (expired(resolver.budget)) return null;
+                if (std.mem.eql(u8, module.spec, spec)) return module.id;
+            }
+        }
+        return null;
+    }
+
     pub fn explicitImportCount(resolver: anytype, module_id: core.SourceModuleId) usize {
         const module = resolver.snapshot.moduleById(module_id) orelse return 0;
         return module.imports.len;
@@ -473,6 +488,7 @@ fn DefinitionResolver(comptime SnapshotPtr: type) type {
 
         pub const shouldContinue = SnapshotImports.shouldContinue;
         pub const resolveAlias = SnapshotImports.resolveAlias;
+        pub const resolveModuleSpec = SnapshotImports.resolveModuleSpec;
         pub const explicitImportCount = SnapshotImports.explicitImportCount;
         pub const explicitImport = SnapshotImports.explicitImport;
         pub const implicitImportCount = SnapshotImports.implicitImportCount;
@@ -492,6 +508,7 @@ fn ValueBindingResolver(comptime SnapshotPtr: type) type {
 
         pub const shouldContinue = SnapshotImports.shouldContinue;
         pub const resolveAlias = SnapshotImports.resolveAlias;
+        pub const resolveModuleSpec = SnapshotImports.resolveModuleSpec;
         pub const explicitImportCount = SnapshotImports.explicitImportCount;
         pub const explicitImport = SnapshotImports.explicitImport;
         pub const implicitImportCount = SnapshotImports.implicitImportCount;

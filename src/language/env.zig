@@ -301,6 +301,12 @@ pub const SemanticEnv = struct {
 const FunctionResolver = struct {
     env: *const SemanticEnv,
 
+    pub fn resolveModuleSpec(self: FunctionResolver, spec: []const u8) ?core.SourceModuleId {
+        const state = self.env.state orelse return null;
+        const module = state.moduleByPathOrSpec(spec) orelse return null;
+        return module.id;
+    }
+
     pub fn resolveAlias(self: FunctionResolver, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
         return self.env.resolveAliasInModule(module_id, alias);
     }

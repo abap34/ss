@@ -17,6 +17,31 @@ testVerticalConstraintGeometry();
 await testCompletionDefaults();
 await testManualBuildCommand();
 await testLineCommentSyntax();
+await testCompositionOperatorSyntax();
+
+async function testCompositionOperatorSyntax() {
+  const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
+  const operator = new RegExp(grammar.repository.operators.patterns[0].match, "g");
+  for (const [source, expected] of [
+    ["a || (b // c)", ["||", "//"]],
+    ["a || b || c", ["||", "||"]],
+    ["a // b // c", ["//", "//"]],
+    ["a / 2", ["/"]],
+    ["(a: Object) |-> a", [":", "|->"]],
+  ]) {
+    assert(JSON.stringify(source.match(operator)) === JSON.stringify(expected), `operator tokens differ: ${source}`);
+  }
+
+  const includes = grammar.patterns.map((pattern) => pattern.include);
+  for (const literal of ["#block-string", "#triple-string", "#double-string"]) {
+    assert(includes.indexOf(literal) < includes.indexOf("#operators"), `${literal} must protect composition characters`);
+  }
+
+  for (const queryPath of ["editor/tree-sitter-ss/queries/highlights.scm", "editor/zed/languages/ss/highlights.scm"]) {
+    const query = await readFile(path.join(root, queryPath), "utf8");
+    assert(query.includes('"||"') && query.includes('"//"'), `composition highlighting is missing: ${queryPath}`);
+  }
+}
 
 async function testLineCommentSyntax() {
   const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));

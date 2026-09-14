@@ -37,6 +37,7 @@ const CountedDocument = struct {
     }
 
     pub fn childrenOf(self: *CountedDocument, page_id: core.NodeId) ?[]const core.NodeId {
+        if (page_id >= 100000) return null;
         const start = (page_id - 1) * 2;
         return self.nodes.items[start .. start + 2];
     }
@@ -171,6 +172,87 @@ test "layout partition: implicit groups retain page ownership and foreign endpoi
     };
     try testing.expect(cross_page);
     try testing.expect(unowned);
+}
+
+test "layout partition: unreferenced inferred groups do not change the solved graph" {
+    var state = try emptyState();
+    defer state.deinit();
+    const page = try state.addPage("page");
+    const first = try state.createObjectWithOrigin("first", null, .text, .text, "First", null);
+    const shared = try state.createObjectWithOrigin("shared", null, .text, .text, "Shared", null);
+    const last = try state.createObjectWithOrigin("last", null, .text, .text, "Last", null);
+    for ([_]core.NodeId{ first, shared, last }) |id| try state.placeObjectOnPage(page, id);
+    const left = try state.createGroupWithOrigin(&.{ first, shared }, null);
+    const right = try state.createGroupWithOrigin(&.{ shared, last }, null);
+    const outer = try state.createGroupWithOrigin(&.{ left, right }, null);
+
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), prepared.layout.pages.len);
+    try testing.expectEqualSlices(core.NodeId, &.{ first, shared, last }, prepared.layout.pages[0].node_ids);
+    try testing.expectEqual(@as(usize, 0), prepared.layout.pages[0].constraint_indexes.len);
+    try testing.expectEqualSlices(core.NodeId, &.{ first, shared, last }, state.flowRootsOf(page));
+    try testing.expectEqual(@as(usize, 3), prepared.pages[0].objects.len);
+
+    var graph = try core.layout.graph.PageLayoutGraph.init(testing.allocator, &state, prepared.layout.pages[0]);
+    defer graph.deinit();
+    for ([_]core.NodeId{ left, right, outer }) |id| {
+        try testing.expect(graph.indexOf(id) == null);
+        try testing.expectEqual(page, state.layoutPageOf(id).?);
+        try testing.expectEqual(@as(?core.NodeId, null), state.parentPageOf(id));
+        try testing.expect(!state.getNode(id).?.attached);
+    }
+}
+
+test "layout partition: referenced groups include nested bounding groups but not unrelated groups" {
+    var state = try emptyState();
+    defer state.deinit();
+    const page = try state.addPage("page");
+    const first = try state.makeObject(page, "first", null, .text, .text, "First");
+    const second = try state.makeObject(page, "second", null, .text, .text, "Second");
+    const third = try state.makeObject(page, "third", null, .text, .text, "Third");
+    const after = try state.makeObject(page, "after", null, .text, .text, "After");
+    const inner = try state.createGroupWithOrigin(&.{ first, second }, null);
+    const outer = try state.createGroupWithOrigin(&.{ inner, third }, null);
+    const unrelated = try state.createGroupWithOrigin(&.{ first, third }, null);
+    try state.addAnchorConstraint(after, .left, .{ .node = .{ .node_id = outer, .anchor = .right } }, 16, null);
+
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    try testing.expectEqualSlices(core.NodeId, &.{ first, second, third, after, outer, inner }, prepared.layout.pages[0].node_ids);
+    try testing.expectEqual(@as(usize, 1), prepared.layout.pages[0].constraint_indexes.len);
+    try testing.expectEqual(@as(usize, 6), prepared.pages[0].objects.len);
+    for (prepared.pages[0].objects[4..]) |object| try testing.expect(!object.attached);
+    var graph = try core.layout.graph.PageLayoutGraph.init(testing.allocator, &state, prepared.layout.pages[0]);
+    defer graph.deinit();
+    try testing.expect(graph.indexOf(outer) != null);
+    try testing.expect(graph.indexOf(inner) != null);
+    try testing.expect(graph.indexOf(unrelated) == null);
+}
+
+test "layout partition: empty partial and cross-page groups are excluded" {
+    var state = try emptyState();
+    defer state.deinit();
+    const first_page = try state.addPage("first");
+    const second_page = try state.addPage("second");
+    const first = try state.makeObject(first_page, "first", null, .text, .text, "First");
+    const second = try state.makeObject(second_page, "second", null, .text, .text, "Second");
+    const unplaced = try state.createObjectWithOrigin("unplaced", null, .text, .text, "Unplaced", null);
+    const empty = try state.createGroupWithOrigin(&.{}, null);
+    const partial = try state.createGroupWithOrigin(&.{ first, unplaced }, null);
+    const mixed = try state.createGroupWithOrigin(&.{ first, second }, null);
+    const outer = try state.createGroupWithOrigin(&.{ first, mixed }, null);
+    for ([_]core.NodeId{ empty, partial, mixed, outer }) |id| {
+        try state.addAnchorConstraint(id, .left, .{ .page = .left }, 40, null);
+    }
+    const discarded = try state.createGroupWithOrigin(&.{first}, null);
+    state.getNode(discarded).?.discarded = true;
+
+    var inputs = try partition.Document.init(testing.allocator, &state);
+    defer inputs.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), inputs.pages.len);
+    try testing.expectEqualSlices(core.NodeId, &.{first}, inputs.pages[0].node_ids);
+    try testing.expectEqualSlices(core.NodeId, &.{second}, inputs.pages[1].node_ids);
 }
 
 test "layout partition: prepared graphs read updated offsets without repeating partition work" {

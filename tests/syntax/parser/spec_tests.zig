@@ -268,7 +268,7 @@ test "syntax spec: double slashes remain text and single slash remains division"
     var parsed = try parse(
         \\page Example
         \\  text("https://example.com/a//b")
-        \\  text // line body
+        \\  text line // body
         \\  text """
         \\// multiline body
         \\"""
@@ -278,7 +278,7 @@ test "syntax spec: double slashes remain text and single slash remains division"
     defer parsed.deinit();
     const statements = parsed.module.pages.items[0].statements.items;
     try testing.expectEqual(@as(usize, 4), statements.len);
-    const expected = [_][]const u8{ "https://example.com/a//b", "// line body", "// multiline body" };
+    const expected = [_][]const u8{ "https://example.com/a//b", "line // body", "// multiline body" };
     for (expected, 0..) |text, index| {
         const call = try expectCall(statements[index].kind.expr_stmt, "text", 1);
         try expectString(call.args.items[0], text);
@@ -1460,6 +1460,343 @@ test "syntax spec: expression parsing lowers operators to named primitive calls"
     const flag = program.pages.items[0].statements.items[2].kind.let_binding.expr;
     const logical_not = try expectCall(flag, "not", 1);
     try expectBoolean(logical_not.args.items[0], false);
+}
+
+fn expectComposition(expr: ast.Expr, name: []const u8) !ast.CallExpr {
+    const call = try expectCall(expr, name, 2);
+    try testing.expectEqualStrings("std:core/layout", call.callee.qualifier.?);
+    try testing.expect(call.callee.qualifier_span == null);
+    try testing.expectEqual(@as(usize, 2), call.arg_spans.items.len);
+    return call;
+}
+
+test "syntax spec: composition lowers to fixed stdlib calls and associates left" {
+    var parsed = try parse(
+        \\page Composition
+        \\  let horizontal = a || b || c
+        \\  let vertical = a // b // c
+        \\  let compact = a||b
+        \\end
+    );
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    for ([_][]const u8{ "hjoin", "vjoin" }, 0..) |name, index| {
+        const outer = try expectComposition(statements[index].kind.let_binding.expr, name);
+        const inner = try expectComposition(outer.args.items[0], name);
+        try expectIdent(inner.args.items[0], "a");
+        try expectIdent(inner.args.items[1], "b");
+        try expectIdent(outer.args.items[1], "c");
+    }
+    _ = try expectComposition(statements[2].kind.let_binding.expr, "hjoin");
+}
+
+test "syntax spec: parentheses preserve mixed and same direction compositions" {
+    var parsed = try parse(
+        \\page Composition
+        \\  let nested = a || (b // c)
+        \\  let divided = (a || b) // (c || d)
+        \\  let right_nested = a || (b || c)
+        \\end
+    );
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    const nested = try expectComposition(statements[0].kind.let_binding.expr, "hjoin");
+    try expectIdent(nested.args.items[0], "a");
+    _ = try expectComposition(nested.args.items[1], "vjoin");
+    const divided = try expectComposition(statements[1].kind.let_binding.expr, "vjoin");
+    _ = try expectComposition(divided.args.items[0], "hjoin");
+    _ = try expectComposition(divided.args.items[1], "hjoin");
+    const right_nested = try expectComposition(statements[2].kind.let_binding.expr, "hjoin");
+    try expectIdent(right_nested.args.items[0], "a");
+    _ = try expectComposition(right_nested.args.items[1], "hjoin");
+}
+
+test "syntax spec: composition binds less tightly than existing expression operators" {
+    var parsed = try parse(
+        \\page Composition
+        \\  let arithmetic = 1 + 2 * -3 // 8 / 2
+        \\  let concatenated = "a" ++ "b" || "c"
+        \\  let fallback = optional ?? a || b ?? c
+        \\  let checked = a? || !b
+        \\end
+    );
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    const arithmetic = try expectComposition(statements[0].kind.let_binding.expr, "vjoin");
+    const add = try expectCall(arithmetic.args.items[0], "add", 2);
+    _ = try expectCall(add.args.items[1], "mul", 2);
+    const div = try expectCall(arithmetic.args.items[1], "div", 2);
+    try expectNumber(div.args.items[0], 8);
+    try expectNumber(div.args.items[1], 2);
+    const concatenated = try expectComposition(statements[1].kind.let_binding.expr, "hjoin");
+    _ = try expectCall(concatenated.args.items[0], "concat", 2);
+    const fallback = try expectComposition(statements[2].kind.let_binding.expr, "hjoin");
+    try expectIdent(fallback.args.items[0].coalesce.target.*, "optional");
+    try expectIdent(fallback.args.items[0].coalesce.fallback.*, "a");
+    try expectIdent(fallback.args.items[1].coalesce.target.*, "b");
+    try expectIdent(fallback.args.items[1].coalesce.fallback.*, "c");
+    const checked = try expectComposition(statements[3].kind.let_binding.expr, "hjoin");
+    try expectIdent(checked.args.items[0].optional_check.target.*, "a");
+    _ = try expectCall(checked.args.items[1], "not", 1);
+}
+
+test "syntax spec: composition expression statements coexist with call and line text sugar" {
+    var parsed = try parse(
+        \\page Composition
+        \\  a || b
+        \\  (a || b) // c
+        \\  text("x") || image("y")
+        \\  text "x" || image "y"
+        \\  parts.left || parts.right
+        \\  place!(a || (b // c))
+        \\  text foo || bar // baz
+        \\  text - bullet
+        \\  text "literal"
+        \\  1 || 2
+        \\end
+    );
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    try testing.expectEqual(@as(usize, 10), statements.len);
+    _ = try expectComposition(statements[0].kind.expr_stmt, "hjoin");
+    _ = try expectComposition(statements[1].kind.expr_stmt, "vjoin");
+    for (statements[2..4]) |statement| {
+        const composition = try expectComposition(statement.kind.expr_stmt, "hjoin");
+        const text_call = try expectCall(composition.args.items[0], "text", 1);
+        const image_call = try expectCall(composition.args.items[1], "image", 1);
+        try expectString(text_call.args.items[0], "x");
+        try expectString(image_call.args.items[0], "y");
+    }
+    const members = try expectComposition(statements[4].kind.expr_stmt, "hjoin");
+    _ = try expectMember(members.args.items[0], "left");
+    _ = try expectMember(members.args.items[1], "right");
+    const placing = try expectCall(statements[5].kind.expr_stmt, "place!", 1);
+    _ = try expectComposition(placing.args.items[0], "hjoin");
+    for ([_][]const u8{ "foo || bar // baz", "- bullet", "literal" }, 6..) |expected, index| {
+        const text_call = try expectCall(statements[index].kind.expr_stmt, "text", 1);
+        try expectString(text_call.args.items[0], expected);
+    }
+    _ = try expectComposition(statements[9].kind.expr_stmt, "hjoin");
+}
+
+test "syntax spec: composition continues only after the operator across trivia" {
+    var parsed = try parse(
+        \\page Composition
+        \\  let nested = a || ;; next operand
+        \\    # explanation
+        \\    (
+        \\      b //
+        \\      c
+        \\    )
+        \\  let next = d
+        \\end
+    );
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    try testing.expectEqual(@as(usize, 2), statements.len);
+    const nested = try expectComposition(statements[0].kind.let_binding.expr, "hjoin");
+    _ = try expectComposition(nested.args.items[1], "vjoin");
+    try expectIdent(statements[1].kind.let_binding.expr, "d");
+
+    try expectParseErrorWithoutLeaks(error.ExpectedIdentifier, "page Bad\n  let value = a\n    || b\nend\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedChar, "page Bad\n  let value = (a\n    || b)\nend\n");
+}
+
+test "syntax spec: composition preserves punctuation in line text arguments" {
+    const source_text =
+        \\page LineText
+        \\  text! ...
+        \\  text! ? question
+        \\  text! with explanation
+        \\  text! // raw vertical marks
+        \\  text! || raw horizontal marks
+        \\  text! ?? question
+        \\  text! { explanation
+        \\  theme::text! ...
+        \\  text ...
+        \\  text ? question
+        \\  text with explanation
+        \\  text { explanation
+        \\  text . dot
+        \\  a ?? b || c
+        \\  parts.left || b
+        \\  (parts . left) || b
+        \\  a? || b
+        \\  text! "A" || text!("B")
+        \\end
+    ;
+    var parsed = try parse(source_text);
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    try testing.expectEqual(@as(usize, 18), statements.len);
+    const expected_text = [_][]const u8{
+        "...",              "? question",    "with explanation", "// raw vertical marks", "|| raw horizontal marks",
+        "?? question",      "{ explanation", "...",              "...",                   "? question",
+        "with explanation", "{ explanation", ". dot",
+    };
+    for (expected_text, 0..) |expected, index| {
+        const call = try expectCall(statements[index].kind.expr_stmt, if (index < 8) "text!" else "text", 1);
+        try expectString(call.args.items[0], expected);
+    }
+    const fallback = try expectComposition(statements[13].kind.expr_stmt, "hjoin");
+    try expectIdent(fallback.args.items[0].coalesce.target.*, "a");
+    try expectIdent(fallback.args.items[0].coalesce.fallback.*, "b");
+    for (statements[14..16]) |statement| {
+        const composition = try expectComposition(statement.kind.expr_stmt, "hjoin");
+        _ = try expectMember(composition.args.items[0], "left");
+    }
+    const checked = try expectComposition(statements[16].kind.expr_stmt, "hjoin");
+    try expectIdent(checked.args.items[0].optional_check.target.*, "a");
+    const placed = try expectComposition(statements[17].kind.expr_stmt, "hjoin");
+    for (placed.args.items) |operand| _ = try expectCall(operand, "text!", 1);
+    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
+}
+
+test "syntax spec: mixed composition diagnostics point to the second direction" {
+    for ([_][]const u8{
+        "page Bad\n  a || b // c\nend\n",
+        "page Bad\n  a // b || c\nend\n",
+        "page Bad\n  let value = a || b ?? c // d\nend\n",
+        "page Bad\n  let value = a || b || c // d\nend\n",
+    }) |source_text| {
+        const first_horizontal = std.mem.indexOf(u8, source_text, "||").?;
+        const first_vertical = std.mem.indexOf(u8, source_text, "//").?;
+        const second_direction = @max(first_horizontal, first_vertical);
+        try expectParseErrorSpan(error.MixedCompositionDirections, source_text, second_direction, second_direction + 2);
+        try expectParseErrorWithoutLeaks(error.MixedCompositionDirections, source_text);
+    }
+}
+
+test "syntax spec: missing composition operands report expression errors without leaks" {
+    for ([_][]const u8{
+        "page Bad\n  a ||\nend\n",
+        "page Bad\n  let value = a //;\nend\n",
+        "page Bad\n  let value = place!(a ||)\nend\n",
+        "page Bad\n  let value = f(a //, b)\nend\n",
+        "page Bad\n  let value = a ||",
+    }) |source_text| try expectParseErrorWithoutLeaks(error.ExpectedExpression, source_text);
+}
+
+test "syntax spec: composition preserves operator and operand source spans" {
+    const source_text = "page Span\n  let layout = a || (b // c) || d\nend\n";
+    var parsed = try parse(source_text);
+    defer parsed.deinit();
+    const outer = try expectComposition(parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr, "hjoin");
+    try expectSpanText(source_text, outer.callee.name_span.?, "||");
+    try expectSpanText(source_text, outer.callee.span.?, "||");
+    try expectSpanText(source_text, outer.arg_spans.items[0], "a || (b // c)");
+    try expectSpanText(source_text, outer.arg_spans.items[1], "d");
+    const horizontal = try expectComposition(outer.args.items[0], "hjoin");
+    try expectSpanText(source_text, horizontal.arg_spans.items[0], "a");
+    try expectSpanText(source_text, horizontal.arg_spans.items[1], "(b // c)");
+    const vertical = try expectComposition(horizontal.args.items[1], "vjoin");
+    try expectSpanText(source_text, vertical.callee.name_span.?, "//");
+    try expectSpanText(source_text, vertical.arg_spans.items[0], "b");
+    try expectSpanText(source_text, vertical.arg_spans.items[1], "c");
+}
+
+test "syntax spec: raw strings preserve composition markers" {
+    var parsed = try parse(
+        \\page Text
+        \\  text "a || b // c"
+        \\  text """
+        \\a || b // c
+        \\"""
+        \\  text <<
+        \\a || b // c
+        \\>>
+        \\end
+    );
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    try testing.expectEqual(@as(usize, 3), statements.len);
+    for (statements) |statement| {
+        const call = try expectCall(statement.kind.expr_stmt, "text", 1);
+        try expectString(call.args.items[0], "a || b // c");
+    }
+}
+
+test "syntax spec: recovering composition retains missing operands and following bindings" {
+    var parsed = try parseRecovering(
+        \\page Recover
+        \\  a ||
+        \\  let ok = 1
+        \\  let incomplete = place!(b //)
+        \\  let after = 2
+        \\end
+    );
+    defer parsed.deinit();
+    const statements = parsed.result.module.pages.items[0].statements.items;
+    try testing.expectEqual(@as(usize, 4), statements.len);
+    const horizontal = try expectComposition(statements[0].kind.expr_stmt, "hjoin");
+    try testing.expect(horizontal.args.items[1] == .hole);
+    try testing.expectEqualStrings("ok", statements[1].kind.let_binding.name);
+    const placing = try expectCall(statements[2].kind.let_binding.expr, "place!", 1);
+    const vertical = try expectComposition(placing.args.items[0], "vjoin");
+    try testing.expect(vertical.args.items[1] == .hole);
+    try testing.expectEqualStrings("after", statements[3].kind.let_binding.name);
+    try testing.expectEqual(@as(usize, 2), parsed.result.holes.holes.len);
+    for (parsed.result.holes.diagnostics) |diagnostic| try testing.expectEqual(error.ExpectedExpression, diagnostic.err);
+}
+
+test "syntax spec: recovering mixed compositions preserves subsequent statements" {
+    var parsed = try parseRecovering("page Recover\n  a || b // c\n  let ok = 1\nend\n");
+    defer parsed.deinit();
+    const statements = parsed.result.module.pages.items[0].statements.items;
+    try testing.expectEqual(@as(usize, 2), statements.len);
+    try testing.expect(statements[0].kind == .hole);
+    try testing.expectEqualStrings("ok", statements[1].kind.let_binding.name);
+    try testing.expectEqual(error.MixedCompositionDirections, parsed.result.holes.diagnostics[0].err);
+}
+
+test "syntax spec: missing composition operands preserve conditional and constraint statements" {
+    const source_text =
+        \\page Recover
+        \\  a ||
+        \\  if true
+        \\    let inside = 1
+        \\  end
+        \\  b //
+        \\  ~ a.left == page.left + 80
+        \\  c ||
+        \\  ~!~ a.top == page.top - 80
+        \\  let after = 2
+        \\end
+        \\page Next
+        \\end
+    ;
+    var parsed = try parseRecovering(source_text);
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 2), parsed.result.module.pages.items.len);
+    const statements = parsed.result.module.pages.items[0].statements.items;
+    try testing.expectEqual(@as(usize, 7), statements.len);
+    for ([_]usize{ 0, 2, 4 }, [_][]const u8{ "hjoin", "vjoin", "hjoin" }) |index, name| {
+        const composition = try expectComposition(statements[index].kind.expr_stmt, name);
+        try testing.expect(composition.args.items[1] == .hole);
+    }
+    const conditional = statements[1].kind.if_stmt;
+    try testing.expectEqual(@as(usize, 1), conditional.then_statements.items.len);
+    try testing.expectEqualStrings("inside", conditional.then_statements.items[0].kind.let_binding.name);
+    try testing.expect(statements[3].kind == .constrain);
+    try testing.expect(statements[5].kind == .constrain);
+    try testing.expectEqualStrings("after", statements[6].kind.let_binding.name);
+    try testing.expectEqual(@as(usize, 3), parsed.result.holes.holes.len);
+    for (parsed.result.holes.diagnostics) |diagnostic| try testing.expectEqual(error.ExpectedExpression, diagnostic.err);
+    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{source_text});
+    for ([_][]const u8{
+        "page Bad\n a ||\n if true\n end\nend\n",
+        "page Bad\n a ||\n ~ a.left == page.left\nend\n",
+        "page Bad\n a ||\n for\nend\n",
+    }) |invalid| try expectParseErrorWithoutLeaks(error.ExpectedExpression, invalid);
+}
+
+test "syntax spec: composition parsing and cloning survive every allocation failure" {
+    const source_text = "page Composition\n  a || (b // c) || text(\"d\")\nend\n";
+    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
+    var parsed = try parse(source_text);
+    defer parsed.deinit();
+    try testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
+    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{"page Recover\n  a ||\n  let ok = 1\nend\n"});
 }
 
 test "syntax spec: quoted strings keep backslashes literally" {

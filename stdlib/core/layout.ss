@@ -1,5 +1,18 @@
 import std:core/classes
 
+fn hjoin(a: Object, b: Object, gap: Number = 32) -> Object
+  ~ b.left == a.right + gap
+  let result = group(a, b)
+  set_prop(result, "align_children_y", true)
+  return result
+end
+
+fn vjoin(a: Object, b: Object, gap: Number = 32) -> Object
+  ~ b.left == a.left
+  ~ b.top == a.bottom - gap
+  return group(a, b)
+end
+
 record Cols {
   left: Number = 96
   right: Number = 96

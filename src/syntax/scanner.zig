@@ -261,6 +261,8 @@ fn operatorEnd(text: []const u8, start: usize, line_end: usize) ?usize {
         "->",
         "??",
         "++",
+        "||",
+        "//",
         "::",
         "==",
     };
