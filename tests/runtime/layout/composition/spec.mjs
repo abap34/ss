@@ -57,6 +57,7 @@ console.log(`layout composition: ${caseCount} cases passed`);
 async function testNestedPlacedObjects() {
   const { dump, source } = await dumpSource("placed", `${prelude}
 page placed
+vflow(LayoutPolicy.top)
 ${boxes}
 place!(a)
 place!(b)
@@ -82,6 +83,7 @@ end
 async function testNestedUnplacedObjectsAndOrdinaryGroup() {
   const { dump } = await dumpSource("unplaced-then-placed", `${prelude}
 page placed
+vflow(LayoutPolicy.top)
 ${boxes}
 let combined = a || (b // c)
 place!(combined)
@@ -198,6 +200,7 @@ end
 async function testNestedOrdinaryGroupBounds() {
   const { dump } = await dumpSource("nested-ordinary-group-bounds", `${prelude}
 page nested_group
+vflow(LayoutPolicy.top)
 ${boxes}
 let d = box("D", 100, 180)
 let e = box("E", 50, 40)
@@ -286,6 +289,7 @@ end
 async function testSharedObjects() {
   const { dump } = await dumpSource("shared", `${prelude}
 page shared
+vflow(LayoutPolicy.top)
 ${boxes}
 place!(a)
 place!(b)
@@ -329,6 +333,7 @@ async function testExplicitGap() {
   const { dump } = await dumpSource("explicit-gap", `import std:core/layout as joins
 ${prelude}
 page gaps
+vflow(LayoutPolicy.top)
 ${boxes}
 place!(joins::hjoin(a, joins::vjoin(b, c, 12), 48))
 ${anchor}
@@ -340,6 +345,7 @@ end
 async function testInferredGroupConstraintUpdate() {
   const { dump } = await dumpSource("inferred-group-update", `${prelude}
 page update_group
+vflow(LayoutPolicy.top)
 let a = place!(box("A", 120, 80))
 let b = place!(box("B", 180, 60))
 ~ a.left == page.left + 80
@@ -414,6 +420,7 @@ async function testImportedFunctionComposition() {
   const { dump } = await dumpSource("imported-composition", `import ./component as component
 ${prelude}
 page imported
+vflow(LayoutPolicy.top)
 ${boxes}
 place!(component::combine(a, b, c))
 ${anchor}
@@ -535,6 +542,8 @@ async function testHorizontalPolicyVariants() {
 
 async function testHorizontalPolicyInheritance() {
   for (const [documentPolicy, pagePolicy, centered] of [
+    [undefined, undefined, true],
+    ["top", undefined, false],
     ["center", undefined, true],
     ["center", "top", false],
     ["top", "center", true],

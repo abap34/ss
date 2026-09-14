@@ -273,7 +273,7 @@ record AssetStyle {
 }
 
 type Doc = object {
-  layout_v: LayoutPolicy = LayoutPolicy.top_flow
+  layout_v: LayoutPolicy = LayoutPolicy.center
   layout_v_center_offset: Number = 0
   background_fill: Color? = none
   pageno_fmt: String? = none
