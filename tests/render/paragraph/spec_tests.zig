@@ -67,6 +67,43 @@ test "paragraph wrapping respects nonbreaking spaces and grapheme boundaries" {
     for (result.lines[0..result.line_count]) |line| try testing.expect(line.source_start != 6);
 }
 
+test "text width conversion preserves line breaks within one Pango rounding cell" {
+    // Pango geometry uses 1/1024 point units. Widths in the same rounding
+    // cell must produce the same lines after floating-point layout arithmetic.
+    const unit: f64 = 1.0 / 1024.0;
+    for ([_][:0]const u8{ "表示がすっきり整う", "silver green violet" }) |source| {
+        for ([_]f64{ 24, 28, 31.25 }) |font_size| {
+            var options = defaults(1000);
+            options.font_size = font_size;
+            var natural = try shape(source, &options, null);
+            defer c.ss_text_shape_free(&natural);
+            try testing.expectEqual(@as(usize, 1), natural.line_count);
+
+            for ([_]f64{ -0.25, 0, 0.25, -1 }) |offset| {
+                options.width = natural.logical_bounds.width + offset * unit;
+                const fits = offset > -0.5;
+                var paragraph = try shape(source, &options, null);
+                defer c.ss_text_shape_free(&paragraph);
+                try testing.expectEqual(fits, paragraph.line_count == 1);
+
+                var plain = std.mem.zeroes(c.SsTextShape);
+                try testing.expectEqual(@as(c_int, 0), c.ss_text_shape(source.ptr, options.font_family, options.font_weight, options.font_style, options.font_stretch, font_size, options.width, 1, &plain));
+                defer c.ss_text_shape_free(&plain);
+                try testing.expectEqual(fits, plain.line_count == 1);
+
+                var measured = std.mem.zeroes(c.SsTextMeasurement);
+                try testing.expectEqual(@as(c_int, 0), c.ss_text_measure_layout(source.ptr, options.font_family, options.font_weight, options.font_style, options.font_stretch, font_size, options.width, 1, &measured));
+                try testing.expectEqual(plain.logical_bounds.height, measured.logical_bounds.height);
+                if (fits) {
+                    try testing.expectEqual(source.len, paragraph.lines[0].source_end);
+                    try testing.expectEqual(natural.logical_bounds.width, paragraph.logical_bounds.width);
+                    try testing.expectEqual(natural.logical_bounds.height, measured.logical_bounds.height);
+                }
+            }
+        }
+    }
+}
+
 test "paragraph inline objects participate in line geometry and bidirectional placement" {
     for ([_]struct { source: [:0]const u8, offset: usize }{
         .{ .source = "A \u{fffc} B", .offset = 2 },

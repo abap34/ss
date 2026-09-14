@@ -1248,6 +1248,7 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         "tests/runtime/editor/spec.mjs",
         "tests/runtime/layout/frame_too_small_spec.mjs",
         "tests/runtime/layout/measurement_spec.mjs",
+        "tests/runtime/layout/text-wrapping/spec.mjs",
         "tests/runtime/layout/vflow/policy_spec.mjs",
         "tests/runtime/lsp/cancellation/spec.mjs",
         "tests/runtime/lsp/diagnostics/spec.mjs",

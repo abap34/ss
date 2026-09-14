@@ -1835,7 +1835,10 @@ int ss_text_measure_layout(
     }
     pango_layout_set_text(layout, valid_text, -1);
     if (wrap && width > 0) {
-        pango_layout_set_width(layout, (int)(width * PANGO_SCALE));
+        // Match Pango's nearest-unit conversion. Truncation can discard a
+        // whole unit after floating-point inset arithmetic and wrap a line
+        // that fits at its measured logical width.
+        pango_layout_set_width(layout, pango_units_from_double(width));
         pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
     } else {
         pango_layout_set_width(layout, -1);
@@ -2065,7 +2068,7 @@ static int ss_text_shape_with_paragraph(
     }
     pango_layout_set_text(layout, valid_text, -1);
     if (wrap && width > 0) {
-        pango_layout_set_width(layout, (int)(width * PANGO_SCALE));
+        pango_layout_set_width(layout, pango_units_from_double(width));
         pango_layout_set_wrap(layout, paragraph != NULL ? PANGO_WRAP_WORD : PANGO_WRAP_WORD_CHAR);
     } else {
         pango_layout_set_width(layout, -1);

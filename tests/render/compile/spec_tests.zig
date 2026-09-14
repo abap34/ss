@@ -739,7 +739,7 @@ test "text layout append failure consumes one shared reference" {
 
 test "text shape cache persists across compiler processes and rejects corrupt data" {
     const root = ".ss-cache/test-render-persistent-text-shapes";
-    const cache_path = root ++ "/text-shapes-v4/shapes.bin";
+    const cache_path = root ++ "/text-shapes-v5/shapes.bin";
     std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
 

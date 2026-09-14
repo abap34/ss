@@ -2,7 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const utils = @import("utils");
 const record = @import("measurement_record.zig");
-pub const version = "ss-native-layout-measure-v21";
+pub const version = "ss-native-layout-measure-v22";
 
 const format = "ss-layout-measurements-v2";
 const read_limit = 16 * 1024 * 1024;
