@@ -177,17 +177,17 @@
     "tree-sitter-json": {
       "flake": false,
       "locked": {
-        "lastModified": 1757907923,
-        "narHash": "sha256-cUjbN+e8UtoLRm8ZnxG7iRGD5YIc032RbHBIlmV8aLc=",
+        "lastModified": 1786963180,
+        "narHash": "sha256-gK4suNfS1Olq3pONPSH+Uyn820ru5TQqgl5q3wN/ADU=",
         "owner": "tree-sitter",
         "repo": "tree-sitter-json",
-        "rev": "001c28d7a29832b06b0e831ec77845553c89b56d",
+        "rev": "254c42a6476413b776221e03982ac8ae159eeb72",
         "type": "github"
       },
       "original": {
         "owner": "tree-sitter",
         "repo": "tree-sitter-json",
-        "rev": "001c28d7a29832b06b0e831ec77845553c89b56d",
+        "rev": "254c42a6476413b776221e03982ac8ae159eeb72",
         "type": "github"
       }
     },

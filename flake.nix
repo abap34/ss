@@ -41,7 +41,7 @@
       flake = false;
     };
     tree-sitter-json = {
-      url = "github:tree-sitter/tree-sitter-json/001c28d7a29832b06b0e831ec77845553c89b56d";
+      url = "github:tree-sitter/tree-sitter-json/254c42a6476413b776221e03982ac8ae159eeb72";
       flake = false;
     };
     tree-sitter-julia = {
