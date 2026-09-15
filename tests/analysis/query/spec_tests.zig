@@ -2,9 +2,14 @@ const std = @import("std");
 const analysis = @import("analysis");
 const testing = std.testing;
 
+comptime {
+    _ = @import("fallback_spec_tests.zig");
+}
+
 test "analysis query spec: zero millisecond budget is already expired" {
     const budget = analysis.query.types.QueryBudget.start(.{ .budget_ms = 0 });
     try testing.expect(budget.expired());
+    try testing.expect(!budget.canceled());
 }
 
 test "analysis query spec: positive budget is available at query start" {
@@ -22,6 +27,27 @@ test "analysis query spec: cancellation expires an active budget" {
         },
     });
     try testing.expect(budget.expired());
+    try testing.expect(budget.canceled());
+}
+
+test "analysis query spec: all query stages share the same deadline" {
+    var now: i128 = 10 * std.time.ns_per_s;
+    const budget = analysis.query.types.QueryBudget.start(.{
+        .budget_ms = 2,
+        .clock = .{ .context = &now, .now_ns = testNow },
+    });
+    const nested = budget;
+    now += std.time.ns_per_ms;
+    try testing.expect(!nested.expired());
+    now += std.time.ns_per_ms;
+    try testing.expect(nested.expired());
+    try testing.expect(budget.expired());
+    try testing.expect(!budget.canceled());
+}
+
+fn testNow(context: *const anyopaque) i128 {
+    const now: *const i128 = @ptrCast(@alignCast(context));
+    return now.*;
 }
 
 test "analysis query spec: expired structural parse budget keeps callable target" {

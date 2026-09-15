@@ -8,6 +8,7 @@ const import_query = @import("imports.zig");
 const resolve_query = @import("resolve.zig");
 const types = @import("types.zig");
 const utils = @import("utils");
+const fallback = @import("fallback.zig");
 
 pub fn at(
     allocator: std.mem.Allocator,
@@ -16,20 +17,21 @@ pub fn at(
     opts: types.QueryOptions,
 ) ![]types.DefinitionTarget {
     const budget = types.QueryBudget.start(opts);
-    if (budget.expired()) return allocator.alloc(types.DefinitionTarget, 0);
+    if (budget.expired()) return fallback.definition(allocator, snapshot, req, opts);
     var context = context_query.Context.initFromSnapshot(allocator, snapshot, req, budget) catch |err| switch (err) {
-        error.NoQueryTarget => return allocator.alloc(types.DefinitionTarget, 0),
+        error.NoQueryTarget => return if (budget.expired()) fallback.definition(allocator, snapshot, req, opts) else allocator.alloc(types.DefinitionTarget, 0),
         else => return err,
     };
     defer context.deinit(allocator);
-    if (context.expired()) return allocator.alloc(types.DefinitionTarget, 0);
+    if (context.expired()) return fallback.definition(allocator, snapshot, req, opts);
 
     var out = std.ArrayList(types.DefinitionTarget).empty;
     defer out.deinit(allocator);
     if (!try appendImportTarget(allocator, &out, snapshot, &context, req.path) and !context.expired()) {
         _ = try appendResolvedTarget(allocator, &out, snapshot, &context, req);
     }
-    if (context.expired()) return allocator.alloc(types.DefinitionTarget, 0);
+    if (budget.canceled()) return allocator.alloc(types.DefinitionTarget, 0);
+    if (budget.expired()) return fallback.definition(allocator, snapshot, req, opts);
     return out.toOwnedSlice(allocator);
 }
 

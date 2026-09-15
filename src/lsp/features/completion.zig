@@ -12,20 +12,17 @@ pub const Context = struct {
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(ctx.allocator);
     var position = try lsp_state.requestPosition(ctx.allocator, ctx.documents, params);
     defer if (position) |*pos| pos.deinit(ctx.allocator);
-    var builder = try begin(ctx.allocator, &out);
-    defer builder.deinit();
     if (position) |*pos| {
         var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
         defer if (owned_snapshot) |*snapshot| snapshot.deinit();
-        const snapshot = try ctx.provider.forDocument(pos.doc_path, &owned_snapshot) orelse return finish(ctx.allocator, &out);
-        if (!lsp_state.featureEnabledForAnalysis(snapshot, .completion)) return finish(ctx.allocator, &out);
+        const snapshot = try ctx.provider.forDocument(pos.doc_path, &owned_snapshot) orelse return emptyJson(ctx.allocator);
+        if (!lsp_state.featureEnabledForAnalysis(snapshot, .completion)) return emptyJson(ctx.allocator);
         var completion_result = try analysis_snapshot.completeAt(ctx.allocator, snapshot, .{
             .path = pos.doc_path,
             .source = pos.source,
+            .line_index = ctx.documents.indexForPath(pos.doc_path),
             .offset = pos.offset,
             .source_version = snapshot.generation,
         }, .{
@@ -33,9 +30,23 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
             .cancellation = ctx.provider.cancellation,
         });
         defer completion_result.deinit(ctx.allocator);
-        for (completion_result.items) |item| try builder.addCandidate(item);
+        return json(ctx.allocator, completion_result);
     }
-    return finish(ctx.allocator, &out);
+    return emptyJson(ctx.allocator);
+}
+
+pub fn json(allocator: std.mem.Allocator, completion: analysis_snapshot.CompletionResult) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, if (completion.is_incomplete)
+        "{\"isIncomplete\":true,\"items\":["
+    else
+        "{\"isIncomplete\":false,\"items\":[");
+    var builder = Builder.init(allocator, &out);
+    defer builder.deinit();
+    for (completion.items) |item| try builder.addCandidate(item);
+    try out.appendSlice(allocator, "]}");
+    return out.toOwnedSlice(allocator);
 }
 
 pub const Builder = struct {
@@ -83,16 +94,6 @@ pub const Builder = struct {
 
 pub fn emptyJson(allocator: std.mem.Allocator) ![]const u8 {
     return allocator.dupe(u8, "{\"isIncomplete\":false,\"items\":[]}");
-}
-
-pub fn begin(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !Builder {
-    try out.appendSlice(allocator, "{\"isIncomplete\":false,\"items\":[");
-    return Builder.init(allocator, out);
-}
-
-pub fn finish(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) ![]const u8 {
-    try out.appendSlice(allocator, "]}");
-    return out.toOwnedSlice(allocator);
 }
 
 fn kind(completion_kind: analysis_snapshot.CompletionKind) usize {

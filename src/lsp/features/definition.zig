@@ -23,6 +23,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     const targets = try analysis_snapshot.definitionAt(ctx.allocator, snapshot, .{
         .path = position.doc_path,
         .source = position.source,
+        .line_index = ctx.documents.indexForPath(position.doc_path),
         .offset = position.offset,
         .source_version = snapshot.generation,
     }, .{

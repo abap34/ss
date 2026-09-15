@@ -461,6 +461,7 @@ fn addTestStep(
     }, true);
     const analysis_query_spec_mod = createModule(ctx, "tests/analysis/query/spec_tests.zig", &.{
         import("analysis", analysis_mod),
+        import("utils", modules.utils),
     }, true);
     const analysis_query_spec_tests = addTestArtifact(ctx, analysis_query_spec_mod);
     const run_analysis_query_spec_tests = b.addRunArtifact(analysis_query_spec_tests);
@@ -767,7 +768,16 @@ fn addTestStep(
     const completion_spec_tests = addTestArtifact(ctx, completion_spec_mod);
     const run_completion_spec_tests = b.addRunArtifact(completion_spec_tests);
     test_step.dependOn(&run_completion_spec_tests.step);
-    addFocusedTestStep(b, "test-completion", "Run focused analysis completion tests", &run_completion_spec_tests.step);
+    const completion_step = b.step("test-completion", "Run focused analysis and LSP completion tests");
+    completion_step.dependOn(&run_completion_spec_tests.step);
+    const completion_api = createCommonModule(ctx, "src/lsp.zig", modules, true);
+    const completion_response_mod = createModule(ctx, "tests/lsp/completion/response_spec_tests.zig", &.{
+        import("lsp", completion_api),
+    }, true);
+    const completion_response_tests = addTestArtifact(ctx, completion_response_mod);
+    const run_completion_response_tests = b.addRunArtifact(completion_response_tests);
+    test_step.dependOn(&run_completion_response_tests.step);
+    completion_step.dependOn(&run_completion_response_tests.step);
     const source_index_mod = createModule(ctx, "tests/utils/source/index_spec_tests.zig", &.{
         import("utils", modules.utils),
     }, null);

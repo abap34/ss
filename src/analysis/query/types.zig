@@ -6,6 +6,7 @@ pub const SourceRequest = struct {
     source_version: u64 = 0,
     offset: usize,
     source: []const u8,
+    line_index: ?utils.source.LineIndex = null,
 };
 
 pub const QueryOptions = struct {
@@ -13,25 +14,42 @@ pub const QueryOptions = struct {
     allow_stale: bool = true,
     require_layout: bool = false,
     cancellation: ?utils.Cancellation = null,
+    clock: ?Clock = null,
+};
+
+pub const Clock = struct {
+    context: *const anyopaque,
+    now_ns: *const fn (*const anyopaque) i128,
+
+    fn now(self: Clock) i128 {
+        return self.now_ns(self.context);
+    }
 };
 
 pub const QueryBudget = struct {
     start_ns: i128,
     budget_ns: i128,
     cancellation: ?utils.Cancellation = null,
+    clock: ?Clock = null,
 
     pub fn start(opts: QueryOptions) QueryBudget {
         return .{
-            .start_ns = monotonicNowNs(),
+            .start_ns = if (opts.clock) |clock| clock.now() else monotonicNowNs(),
             .budget_ns = @as(i128, opts.budget_ms) * std.time.ns_per_ms,
             .cancellation = opts.cancellation,
+            .clock = opts.clock,
         };
     }
 
     pub fn expired(self: QueryBudget) bool {
-        if (self.cancellation) |token| if (token.canceled()) return true;
+        if (self.canceled()) return true;
         if (self.budget_ns <= 0) return true;
-        return monotonicNowNs() - self.start_ns >= self.budget_ns;
+        const now = if (self.clock) |clock| clock.now() else monotonicNowNs();
+        return now - self.start_ns >= self.budget_ns;
+    }
+
+    pub fn canceled(self: QueryBudget) bool {
+        return if (self.cancellation) |token| token.canceled() else false;
     }
 };
 
@@ -55,6 +73,7 @@ pub const CompletionCandidate = struct {
 
 pub const CompletionResult = struct {
     items: []CompletionCandidate,
+    is_incomplete: bool = false,
 
     pub fn deinit(self: *CompletionResult, allocator: std.mem.Allocator) void {
         allocator.free(self.items);

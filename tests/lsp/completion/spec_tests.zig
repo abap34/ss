@@ -7,6 +7,157 @@ const type_resolution = compiler.language.type_resolution;
 
 const testing = std.testing;
 
+const DeadlineClock = struct {
+    calls: usize = 0,
+    expire_at: usize = std.math.maxInt(usize),
+
+    fn now(context: *const anyopaque) i128 {
+        const self: *DeadlineClock = @ptrCast(@alignCast(@constCast(context)));
+        self.calls += 1;
+        return if (self.calls >= self.expire_at) std.time.ns_per_s else 0;
+    }
+
+    fn options(self: *DeadlineClock) query_types.QueryOptions {
+        return .{ .budget_ms = 100, .clock = .{ .context = self, .now_ns = now } };
+    }
+};
+
+const DeadlineAfterTarget = struct {
+    clock: *DeadlineClock,
+    allocations: *testing.FailingAllocator,
+    cancel: bool,
+    triggered: bool = false,
+
+    fn canceled(context: *const anyopaque) bool {
+        const self: *DeadlineAfterTarget = @ptrCast(@alignCast(@constCast(context)));
+        // The context owns one name allocation; the next allocation holds targets.
+        if (self.allocations.alloc_index < 2) return false;
+        self.triggered = true;
+        self.clock.expire_at = self.clock.calls + 1;
+        return self.cancel;
+    }
+};
+
+test "analysis queries: every deadline selects the independent lexical completion" {
+    var case = try CompletionCase.init(
+        \\import std:themes/default
+        \\record Label {
+        \\  title: String,
+        \\  subtitle: String,
+        \\  body: String
+        \\}
+        \\page main
+        \\  let value = Label { title = "Title", subtitle = "Subtitle", body = "Body" }
+        \\  let copy = value with { title = "Changed" }
+        \\  let t = text!("Body")
+        \\  default::h1("Title")
+        \\  t.text.size = 20
+        \\end
+    );
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    for ([_][]const u8{ "page main\n", "default::", "t.", "with { " }) |needle| {
+        const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, needle) };
+        var clock = DeadlineClock{};
+        var full = try snapshot_api.completeAt(testing.allocator, snapshot, req, clock.options());
+        defer full.deinit(testing.allocator);
+        try testing.expect(!full.is_incomplete);
+        try testing.expect(full.items.len > 1);
+        const steps = clock.calls;
+        clock = .{};
+        var fast_options = clock.options();
+        fast_options.budget_ms = 0;
+        var fast = try snapshot_api.completeAt(testing.allocator, snapshot, req, fast_options);
+        defer fast.deinit(testing.allocator);
+        try testing.expect(fast.items.len > 0);
+        // Expiration before parsing and during traversal both select the same
+        // separate analysis, rather than whichever candidates were accumulated.
+        for (1..33) |part| {
+            clock = .{ .expire_at = 2 + (steps - 2) * part / 32 };
+            var partial = try snapshot_api.completeAt(testing.allocator, snapshot, req, clock.options());
+            defer partial.deinit(testing.allocator);
+            try testing.expect(partial.is_incomplete);
+            try expectUnique(partial);
+            try testing.expectEqual(fast.items.len, partial.items.len);
+            for (partial.items, fast.items) |item, expected| {
+                try testing.expectEqualStrings(expected.label, item.label);
+                try testing.expectEqual(expected.kind, item.kind);
+            }
+            try testing.expect(clock.calls <= clock.expire_at + compiler.analysis.query.fallback.Limits.facts + 32);
+        }
+    }
+}
+
+test "analysis queries: zero budget marks completion as incomplete" {
+    var case = try CompletionCase.init("page main\nend\n");
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    var result = try snapshot_api.completeAt(testing.allocator, snapshot, .{
+        .path = case.path,
+        .source = case.source,
+        .offset = 0,
+    }, .{ .budget_ms = 0 });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result.is_incomplete);
+    try expectHas(result, "page");
+}
+
+test "analysis queries: hover switches to shallow types when documentation exceeds the deadline" {
+    var case = try CompletionCase.init(
+        \\fn local(value: Number) -> Number
+        \\  return value
+        \\end
+        \\page main
+        \\  let result = local(1)
+        \\end
+    );
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    // A large doc comment makes the signature-only stage observable.
+    for (snapshot.value_bindings) |*binding| {
+        if (!std.mem.eql(u8, binding.name, "local")) continue;
+        case.allocator.free(binding.documentation);
+        binding.documentation = try case.allocator.dupe(u8, "Long documentation.\n" ** 1024);
+    }
+    const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, "local(1") - 3 };
+    var clock = DeadlineClock{};
+    var full = (try snapshot_api.hoverAt(testing.allocator, snapshot, req, clock.options())) orelse return error.ExpectedHover;
+    defer full.deinit(testing.allocator);
+    try testing.expect(std.mem.indexOf(u8, full.markdown, "Long documentation.") != null);
+    clock = .{ .expire_at = clock.calls - 1 };
+    var brief = (try snapshot_api.hoverAt(testing.allocator, snapshot, req, clock.options())) orelse return error.ExpectedHover;
+    defer brief.deinit(testing.allocator);
+    try testing.expectEqualStrings("```ss\n(local: Any)\n```", brief.markdown);
+    try testing.expect(std.mem.indexOf(u8, brief.markdown, "Long documentation.") == null);
+    try testing.expect(std.mem.endsWith(u8, brief.markdown, "```"));
+}
+
+test "analysis queries: definition fallback still honors cancellation" {
+    var case = try CompletionCase.init("page main\n  let value = 1\n  let copy = value\nend\n");
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, "copy = val") };
+    var clock = DeadlineClock{};
+    const full = try snapshot_api.definitionAt(testing.allocator, snapshot, req, clock.options());
+    defer testing.allocator.free(full);
+    try testing.expectEqual(@as(usize, 1), full.len);
+    for ([_]bool{ false, true }) |cancel| {
+        clock = .{};
+        var allocations = testing.FailingAllocator.init(testing.allocator, .{});
+        var deadline = DeadlineAfterTarget{ .clock = &clock, .allocations = &allocations, .cancel = cancel };
+        var options = clock.options();
+        options.cancellation = .{ .context = &deadline, .is_canceled = DeadlineAfterTarget.canceled };
+        const result = try snapshot_api.definitionAt(allocations.allocator(), snapshot, req, options);
+        defer allocations.allocator().free(result);
+        try testing.expect(deadline.triggered);
+        if (cancel) {
+            try testing.expectEqual(@as(usize, 0), result.len);
+        } else {
+            try testing.expectEqualDeep(full, result);
+        }
+    }
+}
+
 test "analysis completion: composition references retain fixed stdlib types and definitions" {
     var case = try CompletionCase.init(
         \\import std:core/objects as layout

@@ -7,6 +7,7 @@ const type_resolution = @import("../../language/type_resolution.zig");
 const resolve_query = @import("resolve.zig");
 const cursor = @import("cursor.zig");
 const source_query = @import("source.zig");
+const fallback = @import("fallback.zig");
 const types = @import("types.zig");
 const utils = @import("utils");
 const QueryBudget = types.QueryBudget;
@@ -27,45 +28,45 @@ pub fn at(
     opts: types.QueryOptions,
 ) !Result {
     const budget = types.QueryBudget.start(opts);
-    if (budget.expired()) return emptyResult(allocator);
+    var builder = CandidateBuilder.init(allocator, budget);
+    defer builder.deinit();
+    if (budget.expired()) return fallback.complete(allocator, snapshot, req, opts);
     var parsed = try source_query.ParsedSource.init(allocator, snapshot, req, budget);
     defer parsed.deinit(allocator);
-    if (budget.expired()) return emptyResult(allocator);
-    return complete(allocator, snapshot, req, parsed.module(), budget) catch |err| switch (err) {
-        error.QueryExpired => emptyResult(allocator),
-        else => err,
+    if (budget.expired()) return fallback.complete(allocator, snapshot, req, opts);
+    complete(&builder, snapshot, req, parsed.module()) catch |err| switch (err) {
+        error.QueryExpired => return fallback.complete(allocator, snapshot, req, opts),
+        else => return err,
     };
+    if (budget.expired()) return fallback.complete(allocator, snapshot, req, opts);
+    return builder.finish(false);
 }
 
-fn complete(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, parsed_module: ?*const ast.Module, budget: QueryBudget) !Result {
-    if (try completeRecordUpdateAt(allocator, snapshot, req, parsed_module, budget)) |result| return result;
-    if (budget.expired()) return error.QueryExpired;
-    if (try completeModuleAccessAt(allocator, snapshot, req, parsed_module, budget)) |result| return result;
-    if (budget.expired()) return error.QueryExpired;
-    if (try completeMemberAccessAt(allocator, snapshot, req, parsed_module, budget)) |result| return result;
-    if (budget.expired()) return error.QueryExpired;
-    return completeRegular(allocator, snapshot, req, parsed_module, budget);
+fn complete(builder: *CandidateBuilder, snapshot: anytype, req: types.SourceRequest, parsed_module: ?*const ast.Module) !void {
+    if (try completeRecordUpdateAt(builder, snapshot, req, parsed_module)) return;
+    try builder.checkBudget();
+    if (try completeModuleAccessAt(builder, snapshot, req, parsed_module)) return;
+    try builder.checkBudget();
+    if (try completeMemberAccessAt(builder, snapshot, req, parsed_module)) return;
+    try builder.checkBudget();
+    try completeRegular(builder, snapshot, req, parsed_module);
 }
 
 fn emptyResult(allocator: std.mem.Allocator) !Result {
     return .{ .items = try allocator.alloc(Candidate, 0) };
 }
 
-fn completeRegular(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module, budget: QueryBudget) !Result {
-    var builder = CandidateBuilder.init(allocator, budget);
-    defer builder.deinit();
-
+fn completeRegular(builder: *CandidateBuilder, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !void {
     for (language_names.keywordLabels()) |keyword| try builder.add(.{ .label = keyword, .kind = .keyword, .detail = "keyword" });
-    try appendImportAsCompletions(&builder, req.source, req.offset);
-    try appendVisibleDeclarations(&builder, snapshot, req.path, .value);
+    try appendImportAsCompletions(builder, req.source, req.offset);
     if (snapshot.moduleForPath(req.path)) |module| {
-        try appendVisibleVariables(&builder, snapshot, module.id, req.offset);
+        try appendVisibleVariables(builder, snapshot, module.id, req.offset);
     }
-    try appendTypeNameCompletions(&builder, snapshot, program, req);
+    try appendVisibleDeclarations(builder, snapshot, req.path, .value);
+    try appendTypeNameCompletions(builder, snapshot, program, req);
     for (snapshot.role_bindings) |role| {
         try builder.add(.{ .label = role.name, .kind = .role, .detail = role.type_label });
     }
-    return builder.finish();
 }
 
 const CandidateBuilder = struct {
@@ -99,49 +100,49 @@ const CandidateBuilder = struct {
         try self.items.append(self.allocator, candidate);
     }
 
-    fn finish(self: *CandidateBuilder) !Result {
-        try self.checkBudget();
-        return .{ .items = try self.items.toOwnedSlice(self.allocator) };
+    fn finish(self: *CandidateBuilder, is_incomplete: bool) !Result {
+        if (self.budget.canceled()) return emptyResult(self.allocator);
+        return .{
+            .items = try self.items.toOwnedSlice(self.allocator),
+            .is_incomplete = is_incomplete,
+        };
     }
 };
 
-fn completeModuleAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module, budget: QueryBudget) !?Result {
-    const parsed = program orelse return null;
-    const callable = cursor.callableAt(budget, parsed, req.offset) orelse return null;
-    if (callable.role != .name) return null;
-    const alias = callable.callee.qualifier orelse return null;
-    var builder = CandidateBuilder.init(allocator, budget);
-    defer builder.deinit();
+fn completeModuleAccessAt(builder: *CandidateBuilder, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !bool {
+    const budget = builder.budget;
+    const parsed = program orelse return false;
+    const callable = cursor.callableAt(budget, parsed, req.offset) orelse return false;
+    if (callable.role != .name) return false;
+    const alias = callable.callee.qualifier orelse return false;
 
-    const module = snapshot.moduleForPath(req.path) orelse return try builder.finish();
-    const module_id = resolve_query.aliasTarget(budget, snapshot, module.id, alias) orelse return try builder.finish();
-    try appendModuleDeclarations(&builder, snapshot, module_id, .value);
-    try appendModuleDeclarations(&builder, snapshot, module_id, .type);
-    return try builder.finish();
+    const module = snapshot.moduleForPath(req.path) orelse return true;
+    const module_id = resolve_query.aliasTarget(budget, snapshot, module.id, alias) orelse return true;
+    try appendModuleDeclarations(builder, snapshot, module_id, .value);
+    try appendModuleDeclarations(builder, snapshot, module_id, .type);
+    return true;
 }
 
-fn completeMemberAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module, budget: QueryBudget) !?Result {
-    const parsed = program orelse return null;
-    const member = cursor.memberAt(budget, parsed, req.offset) orelse return null;
-    var builder = CandidateBuilder.init(allocator, budget);
-    defer builder.deinit();
+fn completeMemberAccessAt(builder: *CandidateBuilder, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !bool {
+    const budget = builder.budget;
+    const parsed = program orelse return false;
+    const member = cursor.memberAt(budget, parsed, req.offset) orelse return false;
     if (enumTypeForExpr(budget, snapshot, req, member.target)) |enum_type| {
-        try appendEnumCases(&builder, snapshot, enum_type);
+        try appendEnumCases(builder, snapshot, enum_type);
     } else if (propertyTargetForExpr(budget, snapshot, req, parsed, member.target, 0)) |target| {
-        try appendProperties(&builder, snapshot, target);
+        try appendProperties(builder, snapshot, target);
     }
-    return try builder.finish();
+    return true;
 }
 
-fn completeRecordUpdateAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module, budget: QueryBudget) !?Result {
-    const parsed = program orelse return null;
-    const target = cursor.recordUpdateCompletionAt(budget, parsed, req.offset) orelse return null;
-    const base_record_name = recordIdForCompletionExpr(budget, snapshot, req, parsed, target.target, 0) orelse return null;
-    const record_name = resolve_query.recordIdAfterPath(budget, snapshot, base_record_name, target.path_prefix) orelse return null;
-    var builder = CandidateBuilder.init(allocator, budget);
-    defer builder.deinit();
-    try appendProperties(&builder, snapshot, .{ .record = record_name });
-    return try builder.finish();
+fn completeRecordUpdateAt(builder: *CandidateBuilder, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !bool {
+    const budget = builder.budget;
+    const parsed = program orelse return false;
+    const target = cursor.recordUpdateCompletionAt(budget, parsed, req.offset) orelse return false;
+    const base_record_name = recordIdForCompletionExpr(budget, snapshot, req, parsed, target.target, 0) orelse return false;
+    const record_name = resolve_query.recordIdAfterPath(budget, snapshot, base_record_name, target.path_prefix) orelse return false;
+    try appendProperties(builder, snapshot, .{ .record = record_name });
+    return true;
 }
 
 const DeclarationNamespace = enum { value, type };
