@@ -845,7 +845,7 @@ test "layout solver: page-dependent group children receive local vertical fallba
     try testing.expect(title_node.frame.y_set);
     try testing.expect(body_node.frame.y_set);
     try expectFloat(graph.anchorValue(ruler_node.frame, .bottom) - 12, graph.anchorValue(title_node.frame, .top));
-    try expectFloat(graph.anchorValue(title_node.frame, .bottom) - core.layout.styleForNode(&state, title_node).spacing_after, graph.anchorValue(body_node.frame, .top));
+    try expectFloat(core.layout.Defaults.flow_top, graph.anchorValue(body_node.frame, .top));
     try testing.expect(!state.hasConstraintFailures());
 }
 
@@ -922,7 +922,7 @@ test "layout groups: soft positions preserve hard anchors and tight sizes" {
     }
 }
 
-test "layout solver: an independently positioned overlay does not affect page flow" {
+test "layout solver: a page-positioned object does not affect page flow" {
     var baseline = try initEmptyDocumentState();
     defer baseline.deinit();
 
@@ -946,7 +946,7 @@ test "layout solver: an independently positioned overlay does not affect page fl
 
     const decorated_page = try decorated.addPage("Page");
     const page_number = try decorated.createObjectWithOrigin("pageno", null, .text, .text, "1", null);
-    try decorated.placeOverlayObjectOnPage(decorated_page, page_number);
+    try decorated.placeObjectOnPage(decorated_page, page_number);
     try setLayoutLineHeight(&decorated, page_number, "16");
     try setLayoutSpacingAfter(&decorated, page_number, "0");
     try decorated.addAnchorConstraint(page_number, .bottom, .{ .page = .bottom }, 20, .{ .label = "pageno-bottom" });
@@ -965,12 +965,64 @@ test "layout solver: an independently positioned overlay does not affect page fl
     try decorated.addAnchorConstraint(decorated_rule, .top, .{ .node = .{ .node_id = decorated_title, .anchor = .bottom } }, -14, .{ .label = "rule-below-title" });
     try solveDocumentState(&decorated);
 
-    try testing.expectEqualSlices(model.NodeId, &.{ decorated_head, decorated_body }, decorated.flowRootsOf(decorated_page));
+    try testing.expectEqualSlices(model.NodeId, &.{ page_number, decorated_head, decorated_body }, decorated.placementRootsOf(decorated_page));
     try expectFrame(baseline.getNode(baseline_title).?.frame, decorated.getNode(decorated_title).?.frame);
     try expectFrame(baseline.getNode(baseline_rule).?.frame, decorated.getNode(decorated_rule).?.frame);
     try expectFrame(baseline.getNode(baseline_body).?.frame, decorated.getNode(decorated_body).?.frame);
     try expectFloat(20, graph.anchorValue(decorated.getNode(page_number).?.frame, .bottom));
     try testing.expect(!decorated.hasConstraintFailures());
+}
+
+test "layout solver: page-positioned components leave unrelated vertical flow unchanged" {
+    for ([_][]const u8{ "top_flow", "center" }) |policy| {
+        for ([_]bool{ false, true }) |anchor_group| {
+            for ([_]bool{ false, true }) |place_fixed_first| {
+                var state = try initEmptyDocumentState();
+                defer state.deinit();
+                const page = try state.addPage("Page anchors");
+                try setLayoutPolicy(&state, page, policy);
+
+                const heading = try state.createObjectWithOrigin("heading", null, .text, .text, "Heading", null);
+                const note = try state.createObjectWithOrigin("note", null, .text, .text, "Note", null);
+                const fixed = try state.createGroupWithOrigin(&.{ heading, note }, null);
+                const first = try state.createObjectWithOrigin("body", null, .text, .text, "First", null);
+                const second = try state.createObjectWithOrigin("body", null, .text, .text, "Second", null);
+                if (place_fixed_first) try state.placeObjectOnPage(page, fixed);
+                try state.placeObjectOnPage(page, first);
+                try state.placeObjectOnPage(page, second);
+                if (!place_fixed_first) try state.placeObjectOnPage(page, fixed);
+
+                try setLayoutLineHeight(&state, heading, "40");
+                try setLayoutLineHeight(&state, note, "30");
+                try setLayoutSpacingAfter(&state, note, "120");
+                try setLayoutLineHeight(&state, first, "80");
+                try setLayoutSpacingAfter(&state, first, "24");
+                try setLayoutLineHeight(&state, second, "60");
+                try setLayoutSpacingAfter(&state, second, "0");
+                try state.addAnchorConstraint(if (anchor_group) fixed else heading, .top, .{ .page = .bottom }, 400, null);
+                try state.addAnchorConstraint(note, .top, .{ .node = .{ .node_id = heading, .anchor = .bottom } }, -16, null);
+                // Horizontal page anchors leave vertical flow available.
+                try state.addAnchorConstraint(first, .left, .{ .page = .left }, 180, null);
+                try state.addAnchorConstraint(second, .right, .{ .page = .right }, -180, null);
+
+                try solveDocumentState(&state);
+
+                try testing.expect(!state.hasConstraintFailures());
+                const first_frame = state.getNode(first).?.frame;
+                const second_frame = state.getNode(second).?.frame;
+                const expected_top = if (std.mem.eql(u8, policy, "center"))
+                    (core.layout.Defaults.height + 80 + 24 + 60) / 2
+                else
+                    core.layout.Defaults.flow_top;
+                try expectFloat(expected_top, graph.anchorValue(first_frame, .top));
+                try expectFloat(expected_top - 80 - 24, graph.anchorValue(second_frame, .top));
+                try expectFloat(180, graph.anchorValue(first_frame, .left));
+                try expectFloat(core.layout.Defaults.width - 180, graph.anchorValue(second_frame, .right));
+                try expectFloat(400, graph.anchorValue(state.getNode(heading).?.frame, .top));
+                try expectFloat(344, graph.anchorValue(state.getNode(note).?.frame, .top));
+            }
+        }
+    }
 }
 
 test "layout solver: page-dependent group children before fixed anchors receive fallback" {
@@ -1071,7 +1123,7 @@ test "layout solver: centered page-dependent group children receive local vertic
     try testing.expect(title_node.frame.y_set);
     try testing.expect(body_node.frame.y_set);
     try expectFloat(graph.anchorValue(ruler_node.frame, .bottom) - 12, graph.anchorValue(title_node.frame, .top));
-    try expectFloat(graph.anchorValue(title_node.frame, .bottom) - core.layout.styleForNode(&state, title_node).spacing_after, graph.anchorValue(body_node.frame, .top));
+    try expectFloat(core.layout.Defaults.height / 2, graph.anchorValue(body_node.frame, .center_y));
     try testing.expect(!state.hasConstraintFailures());
 }
 
@@ -1530,7 +1582,7 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
     try expectFloat(core.layout.Defaults.height / 2, (row_top + row_bottom) / 2);
 }
 
-test "layout solver: centered vflow clamps below fixed top components only when needed" {
+test "layout solver: centered vflow ignores the space occupied by fixed top components" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -1547,12 +1599,10 @@ test "layout solver: centered vflow clamps below fixed top components only when 
 
     try solveDocumentState(&state);
 
-    const header_node = state.getNode(header).?;
     const body_node = state.getNode(body).?;
-    const header_bottom = header_node.frame.y;
-    const body_top = body_node.frame.y + body_node.frame.height;
-    const header_spacing = core.layout.styleForNode(&state, header_node).spacing_after;
-    try expectFloat(header_bottom - header_spacing, body_top);
+    try expectFloat(core.layout.Defaults.height / 2, graph.anchorValue(body_node.frame, .center_y));
+    try expectFloat(core.layout.Defaults.height - 56, graph.anchorValue(state.getNode(header).?.frame, .top));
+    try testing.expect(!state.hasConstraintFailures());
 }
 
 test "layout solver: document centered vflow is not shadowed by page default policy" {
@@ -1564,7 +1614,7 @@ test "layout solver: document centered vflow is not shadowed by page default pol
 
     const page = try state.addPage("Page");
     const pageno = try state.createObjectWithOrigin("pageno", null, .text, .text, "1", null);
-    try state.placeOverlayObjectOnPage(page, pageno);
+    try state.placeObjectOnPage(page, pageno);
     const title = try state.makeObject(page, "title", null, .text, .text, "Title");
     const subtitle = try state.makeObject(page, "subtitle", null, .text, .text, "Subtitle");
 

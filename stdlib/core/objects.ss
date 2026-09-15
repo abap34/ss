@@ -8,10 +8,6 @@ fn place!(obj: Object) -> Object
   return place_on!(pagectx(), obj)
 end
 
-fn place_overlay!(obj: Object) -> Object
-  return place_overlay_on!(pagectx(), obj)
-end
-
 fn/! txt_obj(text_value: String, role_name: String) -> Object
   return obj(text_value, role_name, "text")
 end

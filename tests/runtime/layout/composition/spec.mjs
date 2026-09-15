@@ -69,7 +69,7 @@ end
   assertNestedFrames(dump);
   assertNoDiagnostic(dump, "UnplacedObject");
   assert(groupNodes(dump).length === 0, "composition implicitly attached a group");
-  const roots = dump.flow_roots.flatMap((entry) => entry.roots);
+  const roots = dump.placement_roots.flatMap((entry) => entry.roots);
   assert(roots.length === 3, `composition changed existing placement roots: ${roots}`);
   const b = node(dump, "B");
   const c = node(dump, "C");
@@ -94,7 +94,7 @@ end
   assertNoDiagnostic(dump, "UnplacedObject");
   const groups = groupNodes(dump);
   assert(groups.length === 2, `expected two ordinary groups, got ${groups.length}`);
-  const rootId = dump.flow_roots.flatMap((entry) => entry.roots);
+  const rootId = dump.placement_roots.flatMap((entry) => entry.roots);
   assert(rootId.length === 1, `placing the returned group should add one placement root: ${rootId}`);
   const outer = groups.find((item) => item.id === rootId[0]);
   assert(outer, "composition did not return an ordinary group Object");
@@ -369,7 +369,7 @@ end
   assert(relation(dump.constraints, b, "left", a, "right", gap), "group update removed an internal horizontal constraint");
   assert(relation(dump.constraints, b, "top", a, "top", 0)?.default_alignment, "group update removed internal default alignment");
   assert(groupNodes(dump).length === 0, "updating an inferred group implicitly attached it");
-  const roots = dump.flow_roots.flatMap((entry) => entry.roots);
+  const roots = dump.placement_roots.flatMap((entry) => entry.roots);
   assert(JSON.stringify(roots) === JSON.stringify([a.id, b.id]), `updating an inferred group changed page placement roots: ${roots}`);
   const updates = dump.constraint_updates.filter((item) => item.active);
   assert(updates.length === 2 && updates[0].target_node === updates[1].target_node, "the two updates did not target the same inferred group");
@@ -390,7 +390,7 @@ end
   for (const label of ["A", "B", "C"]) {
     assert(dump.nodes.filter((item) => item.content === label).length === 1, `operand ${label} was evaluated more than once`);
   }
-  const placementOrder = dump.flow_roots.flatMap((entry) => entry.roots).map((id) => dump.nodes.find((item) => item.id === id)?.content);
+  const placementOrder = dump.placement_roots.flatMap((entry) => entry.roots).map((id) => dump.nodes.find((item) => item.id === id)?.content);
   assert(JSON.stringify(placementOrder) === JSON.stringify(["A", "B", "C"]), `operands were not evaluated exactly once from left to right: ${JSON.stringify(placementOrder)}`);
 }
 
@@ -536,7 +536,7 @@ async function testHorizontalPolicyVariants() {
     const { dump } = await dumpSource(`policy-${policy}`, policyPairSource({ pagePolicy: policy }));
     assertHorizontalPolicy(dump, policy.startsWith("center"));
     assert(groupNodes(dump).length === 0, "policy alignment placed an inferred group");
-    assert(dump.flow_roots.flatMap((entry) => entry.roots).length === 2, "policy alignment changed placement roots");
+    assert(dump.placement_roots.flatMap((entry) => entry.roots).length === 2, "policy alignment changed placement roots");
   }
 }
 
@@ -577,7 +577,7 @@ end
       assertClose(item.width, width, "nested policy changed width");
       assertClose(item.height, height, "nested policy changed height");
     }
-    const roots = dump.flow_roots.flatMap((entry) => entry.roots);
+    const roots = dump.placement_roots.flatMap((entry) => entry.roots);
     assert(roots.length === (placement === "children" ? 3 : 1), "nested policy changed placement roots");
     assert(groupNodes(dump).length === (placement === "children" ? 0 : 2), "nested policy changed group attachment");
     assertNoDiagnostic(dump, "UnplacedObject");
@@ -596,7 +596,7 @@ place_on!(destination, combined)
 end
 `);
   assertHorizontalPolicy(dump, true);
-  assert(dump.flow_roots.flatMap((entry) => entry.roots).length === 1, "deferred policy changed explicit group placement");
+  assert(dump.placement_roots.flatMap((entry) => entry.roots).length === 1, "deferred policy changed explicit group placement");
 }
 
 async function testExplicitVerticalPositionPriority() {

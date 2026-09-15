@@ -173,7 +173,7 @@ test "document state spec: a group of placed objects infers layout ownership wit
     try testing.expectEqual(page, state.layoutPageOfConstraintEndpoint(group).?);
     try testing.expectEqual(@as(?core.NodeId, null), state.parentPageOf(group));
     try testing.expect(!state.getNode(group).?.attached);
-    try testing.expectEqualSlices(core.NodeId, &.{ first, second }, state.flowRootsOf(page));
+    try testing.expectEqualSlices(core.NodeId, &.{ first, second }, state.placementRootsOf(page));
     try testing.expectEqualSlices(core.NodeId, &.{ first, second }, state.childrenOf(page).?);
     try testing.expectEqualSlices(core.NodeId, &.{ first, second }, state.childrenOf(group).?);
 
@@ -290,7 +290,7 @@ test "document state spec: cyclic group containment cannot infer page ownership"
     try testing.expectEqual(page, state.layoutPageOf(child).?);
 }
 
-test "document state spec: page flow records placement roots without flattening groups or overlays" {
+test "document state spec: page placement records roots without flattening groups or duplicating objects" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
@@ -298,18 +298,18 @@ test "document state spec: page flow records placement roots without flattening 
     const first_child = try state.createObjectWithOrigin("first", null, .text, .text, "First", null);
     const second_child = try state.createObjectWithOrigin("second", null, .text, .text, "Second", null);
     const group = try state.createGroupWithOrigin(&.{ first_child, second_child }, null);
-    const overlay = try state.createObjectWithOrigin("overlay", null, .text, .text, "Overlay", null);
+    const label = try state.createObjectWithOrigin("label", null, .text, .text, "Label", null);
 
     try state.placeObjectOnPage(page, group);
-    try state.placeOverlayObjectOnPage(page, overlay);
-    try state.connectGeneratedReturnObjects(overlay, state.nodeCount(), .{ .label = "overlay-return" });
+    try state.placeObjectOnPage(page, label);
+    try state.placeObjectOnPage(page, label);
+    try state.connectGeneratedReturnObjects(label, state.nodeCount(), .{ .label = "label-return" });
 
-    const flow_roots = state.flowRootsOf(page);
-    try testing.expectEqualSlices(core.NodeId, &.{group}, flow_roots);
-    try testing.expectEqualSlices(core.NodeId, &.{overlay}, state.overlayRootsOf(page));
+    const placement_roots = state.placementRootsOf(page);
+    try testing.expectEqualSlices(core.NodeId, &.{ group, label }, placement_roots);
 
     const page_objects = state.childrenOf(page).?;
-    try testing.expectEqualSlices(core.NodeId, &.{ group, first_child, second_child, overlay }, page_objects);
+    try testing.expectEqualSlices(core.NodeId, &.{ group, first_child, second_child, label }, page_objects);
 }
 
 test "document state spec: page-local validation reports cross-page constraints" {

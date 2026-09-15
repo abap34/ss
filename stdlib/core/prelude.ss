@@ -14,7 +14,6 @@ import std:core/objects as {
   obj,
   obj!,
   place!,
-  place_overlay!,
   txt_obj,
   txt_obj!,
   title_obj,

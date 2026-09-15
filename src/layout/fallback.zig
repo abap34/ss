@@ -332,31 +332,21 @@ fn buildTopFlowVerticalFallbackConstraints(state: anytype, workspace: *const gra
 
     var current_source: ConstraintSource = .{ .page = .top };
     var current_offset: f32 = Defaults.flow_top - Defaults.height;
-    var current_top_value: f32 = Defaults.flow_top;
 
-    for (seeded.workspace.graph.flow_root_ids) |flow_root_id| {
-        const index = seeded.workspace.indexOf(flow_root_id) orelse continue;
+    for (seeded.workspace.graph.placement_root_ids) |placement_root_id| {
+        const index = seeded.workspace.indexOf(placement_root_id) orelse continue;
         const root = components.findConst(index);
         if (seen[root]) continue;
         seen[root] = true;
 
-        if (components.isPageDependent(root)) {
-            const bounds = try componentVerticalBounds(state, &seeded.workspace, &components, root) orelse continue;
-            const next_top = bounds.bottom - bounds.spacing_after;
-            if (next_top < current_top_value) {
-                current_source = .{ .node = .{ .node_id = seeded.workspace.nodeAt(bounds.bottom_index), .anchor = .bottom } };
-                current_offset = -bounds.spacing_after;
-                current_top_value = next_top;
-            }
-            continue;
-        }
+        // Components positioned from the page do not reserve space in page flow.
+        if (components.isPageDependent(root)) continue;
 
         const unit = findVerticalComponentUnit(units.items, root) orelse continue;
         try appendVerticalComponentPlacementConstraints(allocator, &constraints, &seeded.workspace, &components, local_tops, root, current_source, current_offset, unit.local_top);
 
         current_source = .{ .node = .{ .node_id = seeded.workspace.nodeAt(unit.bottom_index), .anchor = .bottom } };
         current_offset = -unit.spacing_after;
-        current_top_value = current_top_value - unit.height - unit.spacing_after;
     }
 
     try appendAbsoluteFallbackConstraints(state, &seeded.workspace, &constraints);
@@ -403,8 +393,7 @@ fn buildCenterStackVerticalFallbackConstraints(state: anytype, workspace: *const
         if (index != units.items.len - 1) total_height += unit.spacing_after;
     }
 
-    const band = try centerStackAvailableBand(state, &seeded.workspace, &components);
-    var current_top = centerStackTopWithinBand(band, total_height, verticalCenterOffset(state, workspace.graph.page_id));
+    var current_top = centerStackTop(total_height, verticalCenterOffset(state, workspace.graph.page_id));
     for (units.items) |unit| {
         try appendVerticalComponentPlacementConstraints(
             allocator,
@@ -423,11 +412,6 @@ fn buildCenterStackVerticalFallbackConstraints(state: anytype, workspace: *const
 
     return constraints;
 }
-
-const VerticalBand = struct {
-    bottom: f32,
-    top: f32,
-};
 
 const SeededAxisWorkspace = struct {
     allocator: std.mem.Allocator,
@@ -458,85 +442,10 @@ fn seededWorkspaceWithSoftConstraints(
     };
 }
 
-fn centerStackTopWithinBand(band: VerticalBand, total_height: f32, center_offset: f32) f32 {
-    var top = Defaults.height / 2 - center_offset + total_height / 2;
-    if (band.top <= band.bottom) return top;
-
-    const band_height = band.top - band.bottom;
-    if (band_height < total_height) return band.top;
-
-    if (top > band.top) top = band.top;
-    if (top - total_height < band.bottom) top = band.bottom + total_height;
-    return top;
-}
-
-fn centerStackAvailableBand(
-    state: anytype,
-    workspace: *const graph.AxisWorkspace,
-    components: *const graph.ComponentSet,
-) !VerticalBand {
-    var band = VerticalBand{ .bottom = 0, .top = Defaults.height };
-    var seen = try state.allocator.alloc(bool, workspace.graph.len());
-    defer state.allocator.free(seen);
-    @memset(seen, false);
-
-    for (workspace.graph.flow_root_ids) |flow_root_id| {
-        const index = workspace.indexOf(flow_root_id) orelse continue;
-        const root = components.findConst(index);
-        if (seen[root]) continue;
-        seen[root] = true;
-        if (!components.isPageDependent(root)) continue;
-
-        const bounds = try componentVerticalBounds(state, workspace, components, root) orelse continue;
-        const center = (bounds.bottom + bounds.top) / 2;
-        if (center >= Defaults.height / 2) {
-            band.top = @min(band.top, bounds.bottom - bounds.spacing_after);
-        } else {
-            band.bottom = @max(band.bottom, bounds.top + bounds.spacing_after);
-        }
-    }
-
-    if (band.top <= band.bottom) return .{ .bottom = 0, .top = Defaults.height };
-    return band;
-}
-
-const ComponentVerticalBounds = struct {
-    bottom: f32,
-    top: f32,
-    bottom_index: usize,
-    spacing_after: f32,
-};
-
-fn componentVerticalBounds(
-    state: anytype,
-    workspace: *const graph.AxisWorkspace,
-    components: *const graph.ComponentSet,
-    component_root: usize,
-) !?ComponentVerticalBounds {
-    var bottom: ?f32 = null;
-    var top: ?f32 = null;
-    var bottom_index: ?usize = null;
-
-    for (workspace.graph.child_ids, workspace.states, 0..) |child_id, axis_state, index| {
-        if (!components.contains(component_root, index)) continue;
-        const node = state.getNode(child_id) orelse return error.UnknownNode;
-        if (groups.isGroupNode(node)) continue;
-        const node_bottom = axis_state.start orelse continue;
-        const node_top = axis_state.end orelse continue;
-        if (bottom == null or node_bottom < bottom.?) {
-            bottom = node_bottom;
-            bottom_index = index;
-        }
-        if (top == null or node_top > top.?) top = node_top;
-    }
-
-    const spacing_node = state.getNode(workspace.nodeAt(bottom_index orelse return null)) orelse return error.UnknownNode;
-    return .{
-        .bottom = bottom orelse return null,
-        .top = top orelse return null,
-        .bottom_index = bottom_index orelse return null,
-        .spacing_after = style_defaults.styleForNode(state, spacing_node).spacing_after,
-    };
+fn centerStackTop(total_height: f32, center_offset: f32) f32 {
+    if (total_height > Defaults.height) return Defaults.height;
+    const top = Defaults.height / 2 - center_offset + total_height / 2;
+    return std.math.clamp(top, total_height, Defaults.height);
 }
 
 fn verticalComponentPolicy() graph.ComponentPolicy {
@@ -559,8 +468,8 @@ fn collectVerticalComponentUnits(
     defer state.allocator.free(seen);
     @memset(seen, false);
 
-    for (workspace.graph.flow_root_ids) |flow_root_id| {
-        const index = workspace.indexOf(flow_root_id) orelse continue;
+    for (workspace.graph.placement_root_ids) |placement_root_id| {
+        const index = workspace.indexOf(placement_root_id) orelse continue;
         const root = components.findConst(index);
         if (seen[root]) continue;
         seen[root] = true;

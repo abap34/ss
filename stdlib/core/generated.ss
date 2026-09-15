@@ -91,7 +91,7 @@ fn mk_pagenos!(doc: Document, format: String?, decorate: Object -> Object = styl
 end
 
 fn mk_pageno!(page_value: Page, doc: Document, format: String?, decorate: Object -> Object = style_pageno) -> Page
-  let page_no = place_overlay_on!(page_value, new("", "pageno", "text"))
+  let page_no = place_on!(page_value, new("", "pageno", "text"))
   decorate(page_no)
   position_pageno(page_no)
   set_pageno(page_no, doc, format)
@@ -144,7 +144,7 @@ fn mk_footers!(doc: Document, text_value: String, decorate: Object -> Object = s
 end
 
 fn mk_footer!(page_value: Page, text_value: String, decorate: Object -> Object = style_footer) -> Page
-  let footer = place_overlay_on!(page_value, new(text_value, "footer", "text"))
+  let footer = place_on!(page_value, new(text_value, "footer", "text"))
   decorate(footer)
   ~ footer.left == page.left + 72
   ~ footer.bottom == page.bottom + 20
@@ -159,7 +159,7 @@ fn mk_logos!(doc: Document, path_value: String, scale: Number) -> Void
 end
 
 fn mk_logo!(page_value: Page, path_value: String, scale: Number) -> Page
-  let logo = place_overlay_on!(page_value, new(path_value, "logo", "image_ref"))
+  let logo = place_on!(page_value, new(path_value, "logo", "image_ref"))
   logo.render_kind = RenderKind.raster_asset
   logo.asset.scale = scale
   logo.layout.wrap = WrapMode.off
@@ -194,7 +194,7 @@ fn mk_marks!(doc: Document, text_value: String, decorate: Object -> Object = sty
 end
 
 fn mk_mark!(page_value: Page, text_value: String, decorate: Object -> Object = style_watermark) -> Page
-  let mark = place_overlay_on!(page_value, new(text_value, "watermark", "text"))
+  let mark = place_on!(page_value, new(text_value, "watermark", "text"))
   decorate(mark)
   ~ mark.width == 800
   ~ mark.height == 90

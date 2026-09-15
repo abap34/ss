@@ -242,12 +242,9 @@ pub const Session = struct {
         try object.floatField("page_height", Defaults.height, "{d:.4}");
         try object.intField("nodes", workspace.states.len);
         try object.intField("soft_constraints", workspace.soft_constraints.len);
-        var flow_roots = try object.arrayField("flow_roots");
-        for (workspace.graph.flow_root_ids) |node_id| try flow_roots.intItem(node_id);
-        try flow_roots.end();
-        var overlay_roots = try object.arrayField("overlay_roots");
-        for (workspace.graph.overlay_root_ids) |node_id| try overlay_roots.intItem(node_id);
-        try overlay_roots.end();
+        var placement_roots = try object.arrayField("placement_roots");
+        for (workspace.graph.placement_root_ids) |node_id| try placement_roots.intItem(node_id);
+        try placement_roots.end();
         try object.optionalIntField("pass", event.pass);
         try object.optionalIntField("local_iterations", event.local_iterations);
         try object.optionalBoolField("changed", event.changed);

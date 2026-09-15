@@ -191,7 +191,7 @@ test "layout partition: unreferenced inferred groups do not change the solved gr
     try testing.expectEqual(@as(usize, 1), prepared.layout.pages.len);
     try testing.expectEqualSlices(core.NodeId, &.{ first, shared, last }, prepared.layout.pages[0].node_ids);
     try testing.expectEqual(@as(usize, 0), prepared.layout.pages[0].constraint_indexes.len);
-    try testing.expectEqualSlices(core.NodeId, &.{ first, shared, last }, state.flowRootsOf(page));
+    try testing.expectEqualSlices(core.NodeId, &.{ first, shared, last }, state.placementRootsOf(page));
     try testing.expectEqual(@as(usize, 3), prepared.pages[0].objects.len);
 
     var graph = try core.layout.graph.PageLayoutGraph.init(testing.allocator, &state, prepared.layout.pages[0]);

@@ -236,11 +236,6 @@ const PageOwnershipInfo = struct {
     count: usize = 0,
 };
 
-const PagePlacementMode = enum {
-    flow,
-    overlay,
-};
-
 pub const DocumentState = struct {
     allocator: Allocator,
     asset_base_dir: []u8,
@@ -257,8 +252,7 @@ pub const DocumentState = struct {
     nodes: std.ArrayList(Node),
     page_order: std.ArrayList(NodeId),
     contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
-    page_flow_roots: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
-    page_overlay_roots: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
+    page_placement_roots: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
     direct_page_ownership: std.ArrayList(PageOwnershipInfo),
     constraints: std.ArrayList(Constraint),
     default_alignments_collected: bool = false,
@@ -308,8 +302,7 @@ pub const DocumentState = struct {
             .nodes = .empty,
             .page_order = .empty,
             .contains = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
-            .page_flow_roots = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
-            .page_overlay_roots = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
+            .page_placement_roots = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .direct_page_ownership = .empty,
             .constraints = .empty,
             .fallback_constraints = .empty,
@@ -397,8 +390,7 @@ pub const DocumentState = struct {
         self.definitions.deinit(self.allocator);
         self.binding_types.deinit();
         self.contains.deinit();
-        self.page_flow_roots.deinit();
-        self.page_overlay_roots.deinit();
+        self.page_placement_roots.deinit();
         self.direct_page_ownership.deinit(self.allocator);
         for (self.nodes.items) |*node| node.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
@@ -444,16 +436,11 @@ pub const DocumentState = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.contains.deinit();
-        var flow_it = self.page_flow_roots.iterator();
-        while (flow_it.next()) |entry| {
+        var placement_it = self.page_placement_roots.iterator();
+        while (placement_it.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
         }
-        self.page_flow_roots.deinit();
-        var overlay_it = self.page_overlay_roots.iterator();
-        while (overlay_it.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.page_overlay_roots.deinit();
+        self.page_placement_roots.deinit();
         self.direct_page_ownership.deinit(self.allocator);
         for (self.nodes.items) |*node| {
             node.deinit(self.allocator);
@@ -645,30 +632,13 @@ pub const DocumentState = struct {
         ownership.count += 1;
     }
 
-    fn setPagePlacementRoot(self: *DocumentState, page_id: NodeId, object_id: NodeId, mode: PagePlacementMode) !void {
-        switch (mode) {
-            .flow => removePagePlacementRoot(&self.page_overlay_roots, page_id, object_id),
-            .overlay => removePagePlacementRoot(&self.page_flow_roots, page_id, object_id),
-        }
-        const roots = switch (mode) {
-            .flow => &self.page_flow_roots,
-            .overlay => &self.page_overlay_roots,
-        };
-        const gop = try roots.getOrPut(page_id);
+    fn addPagePlacementRoot(self: *DocumentState, page_id: NodeId, object_id: NodeId) !void {
+        const gop = try self.page_placement_roots.getOrPut(page_id);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         for (gop.value_ptr.items) |existing| {
             if (existing == object_id) return;
         }
         try gop.value_ptr.append(self.allocator, object_id);
-    }
-
-    fn removePagePlacementRoot(roots: *std.AutoHashMap(NodeId, std.ArrayList(NodeId)), page_id: NodeId, object_id: NodeId) void {
-        const page_roots = roots.getPtr(page_id) orelse return;
-        for (page_roots.items, 0..) |existing, index| {
-            if (existing != object_id) continue;
-            _ = page_roots.orderedRemove(index);
-            return;
-        }
     }
 
     pub fn addPage(self: *DocumentState, name: []const u8) !NodeId {
@@ -757,12 +727,7 @@ pub const DocumentState = struct {
     }
 
     pub fn placeObjectOnPage(self: *DocumentState, page_id: NodeId, object_id: NodeId) !void {
-        try self.setPagePlacementRoot(page_id, object_id, .flow);
-        try self.attachObjectSubtreeToPage(page_id, object_id);
-    }
-
-    pub fn placeOverlayObjectOnPage(self: *DocumentState, page_id: NodeId, object_id: NodeId) !void {
-        try self.setPagePlacementRoot(page_id, object_id, .overlay);
+        try self.addPagePlacementRoot(page_id, object_id);
         try self.attachObjectSubtreeToPage(page_id, object_id);
     }
 
@@ -1096,7 +1061,7 @@ pub const DocumentState = struct {
         content_provenance_transferred = true;
         if (attached) {
             try self.addContainment(page_id, obj_id);
-            if (kind == .object) try self.setPagePlacementRoot(page_id, obj_id, .flow);
+            if (kind == .object) try self.addPagePlacementRoot(page_id, obj_id);
         }
         return obj_id;
     }
@@ -1608,13 +1573,8 @@ pub const DocumentState = struct {
         return children.items;
     }
 
-    pub fn flowRootsOf(self: *DocumentState, page_id: NodeId) []const NodeId {
-        const roots = self.page_flow_roots.get(page_id) orelse return &.{};
-        return roots.items;
-    }
-
-    pub fn overlayRootsOf(self: *DocumentState, page_id: NodeId) []const NodeId {
-        const roots = self.page_overlay_roots.get(page_id) orelse return &.{};
+    pub fn placementRootsOf(self: *DocumentState, page_id: NodeId) []const NodeId {
+        const roots = self.page_placement_roots.get(page_id) orelse return &.{};
         return roots.items;
     }
 

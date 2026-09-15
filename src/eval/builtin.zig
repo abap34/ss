@@ -385,12 +385,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             try ctx.placeObjectOnPage(page_id, object_id);
             break :blk .{ .object = object_id };
         },
-        .place_overlay_on => blk: {
-            const page_id = try evalPageArg(ctx, call, 0);
-            const object_id = try ctx.evalObjectArg(call, 1);
-            try ctx.placeOverlayObjectOnPage(page_id, object_id);
-            break :blk .{ .object = object_id };
-        },
         .set_prop => blk: {
             var target = try ctx.evalExprValue(call.args.items[0]);
             const key = try ctx.evalStringArg(call, 1);

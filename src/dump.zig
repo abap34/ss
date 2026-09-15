@@ -32,8 +32,7 @@ pub fn toOwnedString(allocator: std.mem.Allocator, state: *core.DocumentState) !
     try dump_layout.writePageOrderField(&root, state.page_order.items);
     try dump_core_graph.writeNodesField(allocator, &root, state);
     try dump_layout.writeContainsField(&root, &state.contains);
-    try dump_layout.writePlacementRootsField(&root, "flow_roots", &state.page_flow_roots);
-    try dump_layout.writePlacementRootsField(&root, "overlay_roots", &state.page_overlay_roots);
+    try dump_layout.writePlacementRootsField(&root, "placement_roots", &state.page_placement_roots);
     try dump_layout.writeConstraintsField(&root, state.constraints.items);
     try dump_layout.writeConstraintUpdatesField(&root, state.constraint_updates.items);
     try dump_layout.writeOverriddenConstraintsField(&root, state.overridden_constraints.items);
