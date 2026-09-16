@@ -236,6 +236,14 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
     const parity_step = b.step("test-render-parity", "Compare PDF and HTML pixels locally");
     parity_step.dependOn(&parity.step);
 
+    const practical = b.addSystemCommand(&.{ "node", "tests/visual/render/spec.mjs", "--practical" });
+    practical.step.dependOn(&ctx.dependency_checks.node.step);
+    practical.step.dependOn(&ctx.dependency_checks.visual_test_packages.step);
+    practical.addFileArg(driver.getEmittedBin());
+    practical.setCwd(b.path("."));
+    practical.stdio = .inherit;
+    addFocusedTestStep(b, "test-layout-practical-visual", "Compare PDF and HTML for synthetic practical layouts", &practical.step);
+
     const navigation = b.addSystemCommand(&.{ "node", "tests/visual/render/navigation/spec.mjs" });
     navigation.step.dependOn(&ctx.dependency_checks.node.step);
     navigation.step.dependOn(&ctx.dependency_checks.visual_test_packages.step);
@@ -1265,6 +1273,7 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         "tests/runtime/layout/measurement_spec.mjs",
         "tests/runtime/layout/text-wrapping/spec.mjs",
         "tests/runtime/layout/vflow/policy_spec.mjs",
+        "tests/runtime/layout/practical/spec.mjs",
         "tests/runtime/lsp/cancellation/spec.mjs",
         "tests/runtime/lsp/diagnostics/spec.mjs",
         "tests/runtime/lsp/generated_edit/spec.mjs",
@@ -1297,6 +1306,9 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         test_step.dependOn(&node_spec.step);
         if (std.mem.eql(u8, path, "tests/runtime/layout/composition/spec.mjs")) {
             addFocusedTestStep(b, "test-layout-composition", "Run focused layout composition semantics tests", &node_spec.step);
+        }
+        if (std.mem.eql(u8, path, "tests/runtime/layout/practical/spec.mjs")) {
+            addFocusedTestStep(b, "test-layout-practical", "Check synthetic practical layouts and editor updates", &node_spec.step);
         }
     }
 

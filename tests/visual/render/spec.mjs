@@ -14,9 +14,10 @@ import { inspectStandaloneNavigation } from "./navigation/spec.mjs";
 const exec = promisify(execFile);
 const testRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repository = path.resolve(testRoot, "../..");
-const output = path.join(repository, ".ss-cache/render-parity");
+const practicalOnly = process.argv.includes("--practical");
+const output = path.join(repository, practicalOnly ? ".ss-cache/render-layout-practical" : ".ss-cache/render-parity");
 const driver = path.resolve(repository, process.argv.slice(2).find((argument) => !argument.startsWith("--")) ?? "zig-out/bin/ss-render-parity-driver");
-const full = process.argv.includes("--full");
+const full = process.argv.includes("--full") && !practicalOnly;
 const textBaselineTolerance = 0.03;
 const pdfViewerReadyTimeoutMs = 120_000;
 const pdfViewerThresholds = Object.freeze({
@@ -40,7 +41,15 @@ await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await preparePdfViewer(output, repository);
 
-const fixtures = [
+const practicalFixture = {
+  name: "practical-layout",
+  source: path.join(repository, "tests/fixtures/layout/practical/slide.ss"),
+  // PDF.js and Chromium rasterize fractional text baselines and thin borders
+  // differently. Allow one device pixel (0.5 pt), retaining the error limits,
+  // per-item comparisons, and the 0.03-point HTML/IR baseline check.
+  pageThresholds: { ...defaultThresholds, spatialTolerance: 1 },
+};
+const fixtures = practicalOnly ? [practicalFixture] : [
   { name: "basic", source: path.join(repository, "tests/fixtures/project-basic/slide.ss") },
   { name: "fonts", source: path.join(repository, "tests/fixtures/render/parity/text/fonts.ss") },
   {
@@ -53,6 +62,7 @@ const fixtures = [
   { name: "geometry", source: path.join(repository, "tests/fixtures/render/parity/geometry/slide.ss") },
   { name: "images", source: await prepareGeneratedFixture("images", "asset.png", rasterAsset()) },
   { name: "navigation", source: path.join(repository, "tests/fixtures/render/parity/navigation/slide.ss") },
+  practicalFixture,
 ];
 if (full) {
   fixtures.push({ name: "vector", source: path.join(repository, "tests/fixtures/render/parity/vector/slide.ss") });
@@ -114,9 +124,11 @@ await withBrowser(output, async (browser, baseUrl) => {
     }
   }
 
-  await inspectStandaloneNavigation(browser, baseUrl);
-  await inspectTextBaselineDetection(browser, baseUrl);
-  await inspectMarkdownHeadingStyles(browser, baseUrl);
+  if (!practicalOnly) {
+    await inspectStandaloneNavigation(browser, baseUrl);
+    await inspectTextBaselineDetection(browser, baseUrl);
+    await inspectMarkdownHeadingStyles(browser, baseUrl);
+  }
 
   if (full) {
     await inspectNormalHtml(browser, baseUrl);
@@ -126,7 +138,7 @@ await withBrowser(output, async (browser, baseUrl) => {
   }
 
   const baselinePath = process.env.SS_RENDER_BASELINE_PDF;
-  if (baselinePath) {
+  if (baselinePath && !practicalOnly) {
     await cp(path.resolve(baselinePath), path.join(output, "baseline.pdf"));
     const baseline = await capturePdfPages(browser, baseUrl, "baseline.pdf");
     const current = await capturePdfPages(browser, baseUrl, "basic.pdf");
