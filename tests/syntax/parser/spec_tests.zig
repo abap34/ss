@@ -7,6 +7,7 @@ const testing = std.testing;
 
 comptime {
     _ = @import("formatting/spec_tests.zig");
+    _ = @import("grammar/spec_tests.zig");
 }
 
 const ParsedModule = struct {
