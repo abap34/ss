@@ -120,7 +120,7 @@ pub fn translationPatchPreservesRenderedOutput(
         return false;
     }
 
-    for (state.nodes.items) |*node| {
+    for (state.graph.nodes.items) |*node| {
         if (node.kind != .object or !node.attached or node.discarded) continue;
         const render = core.render_policy.resolve(state, node);
         if (render.kind != .connector and render.connector == null) continue;

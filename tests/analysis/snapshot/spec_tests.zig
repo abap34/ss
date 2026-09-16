@@ -136,7 +136,7 @@ fn releasePreparedLayoutInputs(allocator: std.mem.Allocator, retain_state: bool)
     } else {
         // Canceled layout work releases its prepared inputs while the caller still owns the state.
         output.deinit(allocator);
-        try testing.expect(state.getNode(state.page_order.items[0]) != null);
+        try testing.expect(state.getNode(state.graph.page_order.items[0]) != null);
     }
 }
 

@@ -19,7 +19,7 @@ pub fn writeFunctionsField(allocator: std.mem.Allocator, root: *json.Object, sta
     try functions.end();
 
     var constants = try root.arrayField("constants");
-    var const_iterator = state.constants.iterator();
+    var const_iterator = state.constants.declarations.iterator();
     while (const_iterator.next()) |entry| {
         try writeUserConst(allocator, &constants, state, entry.value_ptr.name, entry.value_ptr.*, entry.key_ptr.module_id);
     }
@@ -31,7 +31,7 @@ fn userValueNameExists(state: *const core.DocumentState, name: []const u8) bool 
     while (iterator.next()) |entry| {
         if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
     }
-    var const_iterator = state.constants.iterator();
+    var const_iterator = state.constants.declarations.iterator();
     while (const_iterator.next()) |entry| {
         if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
     }

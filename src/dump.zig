@@ -17,10 +17,10 @@ pub fn toOwnedString(allocator: std.mem.Allocator, state: *core.DocumentState) !
     try root.intField("context_version", 1);
     try root.stringField("stage", "finalized_context");
     try root.stringField("project_path", state.projectPath());
-    try root.intField("projectModuleId", state.project_module_id);
+    try root.intField("projectModuleId", state.modules.project_id);
     try root.stringField("asset_base_dir", state.asset_base_dir);
 
-    try dump_source.writeModulesField(allocator, &root, state.modules.items);
+    try dump_source.writeModulesField(allocator, &root, state.modules.entries.items);
 
     try dump_calls.writeFunctionsField(allocator, &root, state);
     try dump_editor.writeVariablesField(allocator, &root, state);
@@ -28,15 +28,15 @@ pub fn toOwnedString(allocator: std.mem.Allocator, state: *core.DocumentState) !
     try dump_calls.writeQueryContractsField(allocator, &root);
     try dump_editor.writeDefinitionsField(&root, state);
 
-    try root.intField("document_id", state.document_id);
-    try dump_layout.writePageOrderField(&root, state.page_order.items);
+    try root.intField("document_id", state.graph.document_id);
+    try dump_layout.writePageOrderField(&root, state.graph.page_order.items);
     try dump_core_graph.writeNodesField(allocator, &root, state);
-    try dump_layout.writeContainsField(&root, &state.contains);
-    try dump_layout.writePlacementRootsField(&root, "placement_roots", &state.page_placement_roots);
-    try dump_layout.writeConstraintsField(&root, state.constraints.items);
-    try dump_layout.writeConstraintUpdatesField(&root, state.constraint_updates.items);
-    try dump_layout.writeOverriddenConstraintsField(&root, state.overridden_constraints.items);
-    try writeDiagnosticsField(&root, state.diagnostics.items);
+    try dump_layout.writeContainsField(&root, &state.graph.contains);
+    try dump_layout.writePlacementRootsField(&root, "placement_roots", &state.graph.page_placement_roots);
+    try dump_layout.writeConstraintsField(&root, state.constraints.active.items);
+    try dump_layout.writeConstraintUpdatesField(&root, state.constraints.updates.items);
+    try dump_layout.writeOverriddenConstraintsField(&root, state.constraints.overridden.items);
+    try writeDiagnosticsField(&root, state.diagnostics.entries.items);
 
     try root.end();
     try json.appendNewline(&buffer, allocator);

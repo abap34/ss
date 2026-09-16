@@ -424,7 +424,7 @@ fn sourcePathsJson(allocator: std.mem.Allocator, state: *const core.DocumentStat
     defer seen.deinit();
     try paths.stringItem(state.projectPath());
     try seen.put(state.projectPath(), {});
-    for (state.modules.items) |module| {
+    for (state.modules.entries.items) |module| {
         const path = module.path orelse continue;
         if (seen.contains(path)) continue;
         try paths.stringItem(path);
@@ -488,7 +488,7 @@ fn outlineJson(allocator: std.mem.Allocator, state: *core.DocumentState) ![]u8 {
     var items = try json.Array.beginBuffer(allocator, &buffer);
     var seen = std.AutoHashMap(core.NodeId, void).init(allocator);
     defer seen.deinit();
-    for (state.page_order.items) |page_id| {
+    for (state.graph.page_order.items) |page_id| {
         const page = state.getNode(page_id) orelse continue;
         var page_item = try items.objectItem();
         try page_item.intField("id", page.id);
@@ -929,7 +929,7 @@ fn colorHex(allocator: std.mem.Allocator, text: []const u8) !?[]u8 {
 }
 
 fn moduleForPath(state: *const core.DocumentState, path: []const u8) ?*const core.SourceModule {
-    for (state.modules.items) |*module| {
+    for (state.modules.entries.items) |*module| {
         const module_path = module.path orelse continue;
         if (std.mem.eql(u8, module_path, path)) return module;
     }
@@ -956,7 +956,7 @@ fn collectPageEditingTargets(allocator: std.mem.Allocator, state: *const core.Do
         deinitPageEditingTargets(allocator, targets.items);
         targets.deinit(allocator);
     }
-    for (state.page_sources.items) |page_source| {
+    for (state.source_map.pages.items) |page_source| {
         const module = state.moduleById(page_source.module_id) orelse continue;
         if (module.path == null) continue;
         const page_decl = sourcePage(module, page_source) orelse continue;
@@ -987,18 +987,18 @@ fn collectEditingTargets(allocator: std.mem.Allocator, state: *core.DocumentStat
     }
     var seen = std.AutoHashMap(core.NodeId, void).init(allocator);
     defer seen.deinit();
-    for (state.page_sources.items) |page_source| {
+    for (state.source_map.pages.items) |page_source| {
         const module = state.moduleById(page_source.module_id) orelse continue;
         if (module.path == null) continue;
         const page_decl = sourcePage(module, page_source) orelse continue;
         var names = try binding_names.Generator.initForModule(allocator, state, module.id, page_decl);
         defer names.deinit();
 
-        for (state.object_sources.items) |object_source| {
+        for (state.source_map.objects.items) |object_source| {
             if (object_source.module_id != module.id or object_source.page_id != page_source.page_id or seen.contains(object_source.node_id)) continue;
             if (state.parentPageOf(object_source.node_id) != object_source.page_id) continue;
             const statement = topLevelSourceStatement(page_decl, object_source) orelse continue;
-            const page_index = pageOrderIndex(state.page_order.items, object_source.page_id) orelse continue;
+            const page_index = pageOrderIndex(state.graph.page_order.items, object_source.page_id) orelse continue;
             const node = state.getNode(object_source.node_id) orelse continue;
             if (node.kind != .object) continue;
 

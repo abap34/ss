@@ -16,7 +16,7 @@ pub fn populateExpectedTypes(
     holes: *syntax_hole.Result,
 ) !void {
     const sema = SemanticEnv.init(state, declaration_index, &state.functions);
-    for (state.modules.items) |module| {
+    for (state.modules.entries.items) |module| {
         var module_sema = sema.forModule(module.id);
         try moduleExpectedTypes(allocator, &module_sema, module.syntax, holes);
     }

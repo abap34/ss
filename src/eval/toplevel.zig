@@ -363,9 +363,9 @@ fn materializeDisplayContent(evaluation: *EvalContext) !void {
     defer env.deinit();
 
     var index: usize = 0;
-    while (index < state.nodes.items.len) : (index += 1) {
+    while (index < state.graph.nodes.items.len) : (index += 1) {
         try checkCancellation(evaluation);
-        const node_id = state.nodes.items[index].id;
+        const node_id = state.graph.nodes.items[index].id;
         const node = state.getNode(node_id) orelse continue;
         if (node.kind != .object) continue;
         const function = if (node.repr_function) |repr_function|
@@ -375,8 +375,8 @@ fn materializeDisplayContent(evaluation: *EvalContext) !void {
         var owned_function = function;
         defer owned_function.deinit(state.allocator);
 
-        const page_id = state.parentPageOf(node_id) orelse state.document_id;
-        const scope: EvalScope = if (page_id == state.document_id) .document else .page;
+        const page_id = state.parentPageOf(node_id) orelse state.graph.document_id;
+        const scope: EvalScope = if (page_id == state.graph.document_id) .document else .page;
         const origin: core.SourceOrigin = node.origin orelse .{};
         const text = evalNodeReprWithFunction(evaluation, page_id, scope, &env, origin, node_id, function) catch |err| {
             if (err == error.Canceled) return err;
@@ -437,7 +437,7 @@ fn executeDocumentStatement(
 ) !void {
     const state = evaluation.state;
     const error_count = diagnosticErrorCount(state);
-    const flow = executeStatement(evaluation, state.document_id, .document, &execution_state.env, &execution_state.last_code_like, stmt, null) catch |err| {
+    const flow = executeStatement(evaluation, state.graph.document_id, .document, &execution_state.env, &execution_state.last_code_like, stmt, null) catch |err| {
         if (err == error.Canceled) return err;
         const origin = state.sourceOrigin(evaluation.module_id, stmt.span);
         if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
@@ -479,7 +479,7 @@ fn executePageStatement(
 
 fn diagnosticErrorCount(state: *const core.DocumentState) usize {
     var count: usize = 0;
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         if (diagnostic.severity == .@"error") count += 1;
     }
     return count;
@@ -565,14 +565,14 @@ fn evalConstValue(
     resolved: semantic_env.ResolvedConst,
 ) anyerror!core.Value {
     const state = evaluation.state;
-    if (state.const_values.get(resolved.key)) |value| return try value.clone(state.allocator);
-    if (state.const_eval_states.get(resolved.key)) |eval_state| {
+    if (state.constants.values.get(resolved.key)) |value| return try value.clone(state.allocator);
+    if (state.constants.eval_states.get(resolved.key)) |eval_state| {
         if (eval_state == 1) return error.RecursiveConst;
     }
-    try state.const_eval_states.put(resolved.key, 1);
+    try state.constants.eval_states.put(resolved.key, 1);
     var state_committed = false;
     errdefer {
-        if (!state_committed) _ = state.const_eval_states.remove(resolved.key);
+        if (!state_committed) _ = state.constants.eval_states.remove(resolved.key);
     }
 
     var local_env = Environment.init(state.allocator);
@@ -588,11 +588,11 @@ fn evalConstValue(
     errdefer if (!value_moved) value.deinit(state.allocator);
     try value_contracts.ensureValueConformsToType(state, page_id, value, resolved.decl.value_type, current_origin, .UnmatchedReturnType);
     try connectValueObjects(state, value, start_node_count, current_origin);
-    try state.const_values.put(resolved.key, value);
+    try state.constants.values.put(resolved.key, value);
     value_moved = true;
-    try state.const_eval_states.put(resolved.key, 2);
+    try state.constants.eval_states.put(resolved.key, 2);
     state_committed = true;
-    return try state.const_values.get(resolved.key).?.clone(state.allocator);
+    return try state.constants.values.get(resolved.key).?.clone(state.allocator);
 }
 
 fn evalMember(
@@ -1070,7 +1070,7 @@ const BuiltinContext = struct {
     }
 
     pub fn currentDocumentValue(self: *const BuiltinContext) core.Value {
-        return .{ .document = self.state.document_id };
+        return .{ .document = self.state.graph.document_id };
     }
 
     pub fn runSelectCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
@@ -1917,7 +1917,8 @@ fn executeStatement(
             else
                 .position;
             switch (decl.action) {
-                .add => try state.addAnchorConstraintAtScope(
+                .add => try state.constraints.addAnchorAtScope(
+                    state.allocator,
                     target.node_id,
                     target.anchor,
                     resolved_source orelse return error.InvalidConstraint,
@@ -1925,7 +1926,8 @@ fn executeStatement(
                     origin,
                     evaluation.call_depth,
                 ),
-                .update => try state.addConstraintUpdate(
+                .update => try state.constraints.addUpdate(
+                    state.allocator,
                     target.node_id,
                     target.anchor,
                     role,
@@ -1963,7 +1965,7 @@ fn executeStatement(
 
 fn materializeStatementValue(state: *core.DocumentState, last_code_like: *?core.NodeId, value: core.Value) !void {
     switch (value) {
-        .constraints => |constraints| try state.addConstraintSet(constraints),
+        .constraints => |constraints| try state.constraints.addSet(state.allocator, constraints),
         .object => |id| last_code_like.* = id,
         else => {},
     }

@@ -1156,7 +1156,7 @@ pub fn addFontFaceSubstitutionWarning(
         render_text.formatSyntheticFontWarning(&message_buffer, detail)
     else
         render_text.genericSyntheticFontWarning();
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         if (diagnostic.phase != .render or diagnostic.severity != .warning) continue;
         const existing = switch (diagnostic.data) {
             .user_report => |report| if (std.mem.eql(u8, report.code, "FontFaceSubstituted")) report.message else continue,

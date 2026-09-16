@@ -80,7 +80,7 @@ pub fn resolveForNode(allocator: std.mem.Allocator, state: anytype, node: *const
     var env = Resolved.init();
     errdefer env.deinit(allocator);
 
-    if (state.getNode(state.document_id)) |document| {
+    if (state.getNode(state.graph.document_id)) |document| {
         try applyNode(allocator, &env, document);
     }
 

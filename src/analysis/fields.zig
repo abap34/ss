@@ -14,7 +14,7 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, state: *core.Docume
     var roles = std.StringHashMap([]const u8).init(allocator);
     defer roles.deinit();
 
-    for (state.module_order.items) |module_id| {
+    for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         const origin_path = originPathForModule(module);
         try checkObjectNamesUnique(allocator, state, origin_path, module.syntax.objects.items);
@@ -22,7 +22,7 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, state: *core.Docume
     }
     try checkObjectInheritance(allocator, state, sema);
 
-    for (state.module_order.items) |module_id| {
+    for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         const origin_path = originPathForModule(module);
         const module_sema = sema.forModule(module_id);

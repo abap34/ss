@@ -297,7 +297,7 @@ fn appendAlignmentDependency(workspace: *const graph.AxisWorkspace, dependencies
 fn verticalFallbackPolicy(state: anytype, page_id: NodeId) VerticalFallbackPolicy {
     const page = state.getNode(page_id) orelse return .top_flow;
     const value = fields.readExplicit(page, "layout_v", &.{}, .text) orelse blk: {
-        const document = state.getNode(state.document_id) orelse return .top_flow;
+        const document = state.getNode(state.graph.document_id) orelse return .top_flow;
         break :blk fields.read(state.allocator, state, document, "layout_v", &.{}, .text) orelse return .top_flow;
     };
     if (std.mem.eql(u8, value, "center") or std.mem.eql(u8, value, "center_stack")) return .center_stack;
@@ -542,7 +542,7 @@ fn findVerticalComponentUnit(units: []const VerticalComponentUnit, component_roo
 fn verticalCenterOffset(state: anytype, page_id: NodeId) f32 {
     const page = state.getNode(page_id) orelse return 0;
     if (fields.readExplicit(page, "layout_v_center_offset", &.{}, .number)) |value| return value;
-    const document = state.getNode(state.document_id) orelse return 0;
+    const document = state.getNode(state.graph.document_id) orelse return 0;
     return style_defaults.parseNodeFloatProperty(state, document, "layout_v_center_offset") orelse 0;
 }
 

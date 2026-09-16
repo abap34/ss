@@ -262,7 +262,7 @@ pub const SemanticEnv = struct {
     fn findConstInModule(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ResolvedConst {
         const state = self.state orelse return null;
         const key = core.constKey(module_id, name);
-        const constant_decl = state.constants.get(key) orelse return null;
+        const constant_decl = state.constants.declarations.get(key) orelse return null;
         return .{ .key = key, .module_id = module_id, .decl = constant_decl };
     }
 

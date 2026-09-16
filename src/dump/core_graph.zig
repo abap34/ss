@@ -6,7 +6,7 @@ const json = utils.json;
 
 pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, state: *core.DocumentState) !void {
     var nodes = try root.arrayField("nodes");
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind == .object and !node.attached) continue;
         try writeNode(allocator, &nodes, state, node);
     }

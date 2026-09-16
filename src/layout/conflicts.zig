@@ -74,7 +74,7 @@ pub const Report = struct {
     pub fn init(allocator: std.mem.Allocator, state: anytype) !Report {
         var pages = std.ArrayList(Page).empty;
         errdefer pages.deinit(allocator);
-        for (state.page_order.items) |page_id| {
+        for (state.graph.page_order.items) |page_id| {
             const page = state.getNode(page_id) orelse continue;
             try pages.append(allocator, .{
                 .id = page.id,
@@ -85,7 +85,7 @@ pub const Report = struct {
 
         var objects = std.ArrayList(Object).empty;
         errdefer objects.deinit(allocator);
-        for (state.nodes.items) |node| {
+        for (state.graph.nodes.items) |node| {
             if (node.kind != .object) continue;
             const page_id = state.parentPageOf(node.id) orelse continue;
             try objects.append(allocator, .{
@@ -101,11 +101,11 @@ pub const Report = struct {
         var relations = std.ArrayList(Relation).empty;
         errdefer relations.deinit(allocator);
         errdefer deinitRelationItems(allocator, relations.items);
-        for (state.constraints.items, 0..) |constraint, constraint_index| {
+        for (state.constraints.active.items, 0..) |constraint, constraint_index| {
             if (constraint.default_alignment) continue;
             try appendRelationModel(allocator, &relations, state, .explicit, constraint_index, constraint);
         }
-        for (state.fallback_constraints.items) |constraint| {
+        for (state.constraints.fallback.items) |constraint| {
             try appendRelationModel(allocator, &relations, state, .fallback, null, constraint);
         }
 
@@ -140,7 +140,7 @@ pub const Report = struct {
             .pages = owned_pages,
             .objects = owned_objects,
             .relations = owned_relations,
-            .failure_count = state.constraint_failures.items.len,
+            .failure_count = state.diagnostics.constraint_failures.items.len,
             .page_index_by_id = page_index_by_id,
             .object_index_by_id = object_index_by_id,
         };
@@ -298,7 +298,7 @@ pub fn toJson(allocator: std.mem.Allocator, state: anytype) ![]u8 {
     try root.stringField("entry_path", state.projectPath());
 
     var pages = try root.arrayField("pages");
-    for (state.page_order.items, 0..) |page_id, index| {
+    for (state.graph.page_order.items, 0..) |page_id, index| {
         const page = state.getNode(page_id) orelse continue;
         var item = try pages.objectItem();
         try item.intField("id", page.id);
@@ -312,7 +312,7 @@ pub fn toJson(allocator: std.mem.Allocator, state: anytype) ![]u8 {
     try pages.end();
 
     var objects = try root.arrayField("objects");
-    for (state.nodes.items) |*node| {
+    for (state.graph.nodes.items) |*node| {
         if (node.kind != .object) continue;
         const page_id = state.parentPageOf(node.id) orelse continue;
         var item = try objects.objectItem();
@@ -331,16 +331,16 @@ pub fn toJson(allocator: std.mem.Allocator, state: anytype) ![]u8 {
     try objects.end();
 
     var relations = try root.arrayField("relations");
-    for (state.constraints.items, 0..) |constraint, index| {
+    for (state.constraints.active.items, 0..) |constraint, index| {
         try appendRelation(&relations, state, index, "explicit", constraint);
     }
-    for (state.fallback_constraints.items, 0..) |constraint, index| {
-        try appendRelation(&relations, state, state.constraints.items.len + index, "fallback", constraint);
+    for (state.constraints.fallback.items, 0..) |constraint, index| {
+        try appendRelation(&relations, state, state.constraints.active.items.len + index, "fallback", constraint);
     }
     try relations.end();
 
     var failures = try root.arrayField("failures");
-    for (state.constraint_failures.items, 0..) |failure, index| {
+    for (state.diagnostics.constraint_failures.items, 0..) |failure, index| {
         var item = try failures.objectItem();
         try item.intField("index", index);
         try item.stringField("code", failureCode(failure.kind));
@@ -520,7 +520,7 @@ fn nodeLabel(state: anytype, node_id: NodeId) []const u8 {
 }
 
 fn constraintIndex(state: anytype, needle: Constraint) ?usize {
-    for (state.constraints.items, 0..) |constraint, index| {
+    for (state.constraints.active.items, 0..) |constraint, index| {
         if (constraintsSame(constraint, needle)) return index;
     }
     return null;

@@ -16,7 +16,7 @@ pub const Generator = struct {
         state: *const core.DocumentState,
         page: *const ast.PageDecl,
     ) !Generator {
-        return initForModule(allocator, state, state.project_module_id, page);
+        return initForModule(allocator, state, state.modules.project_id, page);
     }
 
     pub fn initForModule(

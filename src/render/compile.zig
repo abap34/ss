@@ -45,7 +45,7 @@ pub const refreshAndValidateFontEnvironment = text_compile.refreshAndValidateFon
 pub fn addFontEnvironmentDiagnostic(state: *core.DocumentState, err: anyerror) !bool {
     const report = text_compile.diagnosticForError(err) orelse return false;
     const message = report.message;
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         const existing_code = switch (diagnostic.data) {
             .user_report => |data| data.code,
             .render_failed => |data| data.cause_code orelse continue,
@@ -364,7 +364,7 @@ fn finishDocument(
     const sources_start = utils.measure_profile.start();
     var source_ranges = std.AutoHashMap(core.NodeId, render.SourceRange).init(allocator);
     defer source_ranges.deinit();
-    for (state.object_sources.items) |source| {
+    for (state.source_map.objects.items) |source| {
         const entry = try source_ranges.getOrPut(source.node_id);
         if (!entry.found_existing) entry.value_ptr.* = .{
             .module_id = source.module_id,

@@ -4,6 +4,10 @@ const layout = @import("../layout/root.zig");
 const ast = @import("ast");
 const value_text = @import("value_text.zig");
 const declarations = @import("declarations.zig");
+const utils = @import("utils");
+const group_composition = @import("group_composition.zig");
+const DocumentConstraints = @import("constraints.zig").DocumentConstraints;
+const DocumentDiagnostics = @import("diagnostics.zig").DocumentDiagnostics;
 
 const Allocator = model.Allocator;
 const NodeId = model.NodeId;
@@ -12,27 +16,17 @@ const NodeKind = model.NodeKind;
 const Role = model.Role;
 const ObjectKind = model.ObjectKind;
 const PayloadKind = model.PayloadKind;
-const Anchor = model.Anchor;
 const Constraint = model.Constraint;
-const ConstraintSet = model.ConstraintSet;
-const ConstraintRole = model.ConstraintRole;
-const ConstraintUpdate = model.ConstraintUpdate;
 const ContentProvenance = model.ContentProvenance;
-const ConstraintSource = model.ConstraintSource;
 const Selection = model.Selection;
 const SelectionItemTag = model.SelectionItemTag;
 const ValueTag = model.ValueTag;
 const Value = model.Value;
-const Axis = model.Axis;
 const FunctionRef = model.FunctionRef;
 const Query = model.Query;
 
 const Diagnostic = model.Diagnostic;
-const DiagnosticPhase = model.DiagnosticPhase;
 const DiagnosticSeverity = model.DiagnosticSeverity;
-const ConstraintFailure = model.ConstraintFailure;
-const ConstraintFailureKind = model.ConstraintFailureKind;
-const ConstraintFailureReason = model.ConstraintFailureReason;
 const GroupRole = model.GroupRole;
 const roleEq = model.roleEq;
 const nodeField = model.nodeField;
@@ -43,30 +37,6 @@ const DefaultValueKey = struct {
     pointer: usize,
     length: usize,
 };
-
-fn validationUserReportsMatch(left: Diagnostic, right: Diagnostic) bool {
-    if (left.phase != .validation or
-        right.phase != .validation or
-        left.severity != right.severity or
-        left.page_id != right.page_id or
-        left.node_id != right.node_id or
-        left.origin == null or
-        right.origin == null)
-    {
-        return false;
-    }
-    if (!left.origin.?.eql(right.origin.?)) return false;
-    if (!std.mem.eql(u8, left.code(), right.code())) return false;
-    const left_message = switch (left.data) {
-        .user_report => |data| data.message,
-        else => return false,
-    };
-    const right_message = switch (right.data) {
-        .user_report => |data| data.message,
-        else => return false,
-    };
-    return std.mem.eql(u8, left_message, right_message);
-}
 
 const DefaultValueCache = struct {
     allocator: Allocator,
@@ -157,7 +127,7 @@ pub const SourceModule = struct {
     spec: []u8,
     path: ?[]u8,
     source: []u8,
-    line_index: @import("utils").source.LineIndex,
+    line_index: utils.source.LineIndex,
     syntax: ast.Module,
     implicit_import_ids: std.ArrayList(SourceModuleId),
     resolved_import_ids: std.ArrayList(SourceModuleId),
@@ -236,42 +206,133 @@ const PageOwnershipInfo = struct {
     count: usize = 0,
 };
 
+pub const DocumentModules = struct {
+    entries: std.ArrayList(SourceModule) = .empty,
+    order: std.ArrayList(SourceModuleId) = .empty,
+    project_id: SourceModuleId = 0,
+
+    fn deinit(self: *DocumentModules, allocator: Allocator) void {
+        for (self.entries.items) |*module| module.deinit(allocator);
+        self.entries.deinit(allocator);
+        self.order.deinit(allocator);
+    }
+};
+
+pub const DocumentConstants = struct {
+    declarations: ConstMap,
+    values: ConstValueMap,
+    eval_states: ConstEvalStateMap,
+
+    fn init(allocator: Allocator) DocumentConstants {
+        return .{
+            .declarations = ConstMap.init(allocator),
+            .values = ConstValueMap.init(allocator),
+            .eval_states = ConstEvalStateMap.init(allocator),
+        };
+    }
+
+    fn deinit(self: *DocumentConstants, allocator: Allocator) void {
+        self.declarations.deinit();
+        var iterator = self.values.valueIterator();
+        while (iterator.next()) |value| value.deinit(allocator);
+        self.values.deinit();
+        self.eval_states.deinit();
+    }
+};
+
+pub const DocumentGraph = struct {
+    nodes: std.ArrayList(Node) = .empty,
+    page_order: std.ArrayList(NodeId) = .empty,
+    contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
+    page_placement_roots: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
+    direct_page_ownership: std.ArrayList(PageOwnershipInfo) = .empty,
+    next_id: NodeId = 1,
+    document_id: NodeId = 0,
+
+    fn init(allocator: Allocator) DocumentGraph {
+        return .{
+            .contains = .init(allocator),
+            .page_placement_roots = .init(allocator),
+        };
+    }
+
+    fn deinit(self: *DocumentGraph, allocator: Allocator) void {
+        var children = self.contains.valueIterator();
+        while (children.next()) |ids| ids.deinit(allocator);
+        self.contains.deinit();
+        var roots = self.page_placement_roots.valueIterator();
+        while (roots.next()) |ids| ids.deinit(allocator);
+        self.page_placement_roots.deinit();
+        self.direct_page_ownership.deinit(allocator);
+        for (self.nodes.items) |*node| node.deinit(allocator);
+        self.nodes.deinit(allocator);
+        self.page_order.deinit(allocator);
+    }
+};
+
+pub const DocumentSourceMap = struct {
+    objects: std.ArrayList(ObjectSource) = .empty,
+    pages: std.ArrayList(PageSource) = .empty,
+    definitions: std.ArrayList(Definition) = .empty,
+    binding_types: std.AutoHashMap(BindingLocation, BindingType),
+
+    fn init(allocator: Allocator) DocumentSourceMap {
+        return .{ .binding_types = .init(allocator) };
+    }
+
+    fn deinit(self: *DocumentSourceMap, allocator: Allocator) void {
+        self.objects.deinit(allocator);
+        self.pages.deinit(allocator);
+        for (self.definitions.items) |definition| {
+            allocator.free(definition.name);
+            if (definition.file) |file| allocator.free(file);
+            if (definition.scope_name) |scope_name| allocator.free(scope_name);
+        }
+        self.definitions.deinit(allocator);
+        self.binding_types.deinit();
+    }
+};
+
+pub const DocumentRuntime = struct {
+    strings: std.ArrayList([]u8) = .empty,
+    string_provenance: std.AutoHashMap(usize, std.ArrayList(ContentProvenance)),
+    default_values: *DefaultValueCache,
+
+    fn init(allocator: Allocator) !DocumentRuntime {
+        return .{
+            .string_provenance = .init(allocator),
+            .default_values = try DefaultValueCache.create(allocator),
+        };
+    }
+
+    fn deinit(self: *DocumentRuntime, allocator: Allocator) void {
+        var iterator = self.string_provenance.valueIterator();
+        while (iterator.next()) |entries| {
+            for (entries.items) |*entry| entry.deinit(allocator);
+            entries.deinit(allocator);
+        }
+        self.string_provenance.deinit();
+        self.default_values.destroy();
+        for (self.strings.items) |text| allocator.free(text);
+        self.strings.deinit(allocator);
+    }
+};
+
 pub const DocumentState = struct {
     allocator: Allocator,
     asset_base_dir: []u8,
-    modules: std.ArrayList(SourceModule),
-    module_order: std.ArrayList(SourceModuleId),
+    modules: DocumentModules,
     declaration_index: *declarations.DeclarationIndex,
-    project_module_id: SourceModuleId,
-    constants: ConstMap,
-    const_values: ConstValueMap,
-    const_eval_states: ConstEvalStateMap,
+    constants: DocumentConstants,
     functions: FunctionMap,
-    definitions: std.ArrayList(Definition),
-    binding_types: std.AutoHashMap(BindingLocation, BindingType),
-    nodes: std.ArrayList(Node),
-    page_order: std.ArrayList(NodeId),
-    contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
-    page_placement_roots: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
-    direct_page_ownership: std.ArrayList(PageOwnershipInfo),
-    constraints: std.ArrayList(Constraint),
-    default_alignments_collected: bool = false,
-    fallback_constraints: std.ArrayList(Constraint),
-    constraint_updates: std.ArrayList(ConstraintUpdate),
-    overridden_constraints: std.ArrayList(Constraint),
-    object_sources: std.ArrayList(ObjectSource),
-    page_sources: std.ArrayList(PageSource),
-    diagnostics: std.ArrayList(Diagnostic),
-    last_constraint_failure: ?ConstraintFailure,
-    constraint_failures: std.ArrayList(ConstraintFailure),
-    runtime_strings: std.ArrayList([]u8),
-    string_provenance: std.AutoHashMap(usize, std.ArrayList(ContentProvenance)),
-    default_values: *DefaultValueCache,
+    graph: DocumentGraph,
+    constraints: DocumentConstraints,
+    source_map: DocumentSourceMap,
+    diagnostics: DocumentDiagnostics,
+    runtime: DocumentRuntime,
     has_external_evaluation_inputs: bool,
     // Borrowed observer owned by the host build request.
-    file_inputs: ?*@import("utils").FileInputs = null,
-    next_id: NodeId,
-    document_id: NodeId,
+    file_inputs: ?*utils.FileInputs = null,
 
     pub fn init(
         allocator: Allocator,
@@ -281,7 +342,7 @@ pub const DocumentState = struct {
         project_syntax: ast.Module,
     ) !DocumentState {
         const declaration_index = try allocator.create(declarations.DeclarationIndex);
-        const default_values = DefaultValueCache.create(allocator) catch |err| {
+        const runtime = DocumentRuntime.init(allocator) catch |err| {
             allocator.destroy(declaration_index);
             return err;
         };
@@ -289,36 +350,16 @@ pub const DocumentState = struct {
         var state = DocumentState{
             .allocator = allocator,
             .asset_base_dir = asset_base_dir,
-            .modules = .empty,
-            .module_order = .empty,
+            .modules = .{},
             .declaration_index = declaration_index,
-            .project_module_id = 0,
-            .constants = ConstMap.init(allocator),
-            .const_values = ConstValueMap.init(allocator),
-            .const_eval_states = ConstEvalStateMap.init(allocator),
+            .constants = .init(allocator),
             .functions = FunctionMap.init(allocator),
-            .definitions = .empty,
-            .binding_types = .init(allocator),
-            .nodes = .empty,
-            .page_order = .empty,
-            .contains = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
-            .page_placement_roots = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
-            .direct_page_ownership = .empty,
-            .constraints = .empty,
-            .fallback_constraints = .empty,
-            .constraint_updates = .empty,
-            .overridden_constraints = .empty,
-            .object_sources = .empty,
-            .page_sources = .empty,
-            .diagnostics = .empty,
-            .last_constraint_failure = null,
-            .constraint_failures = .empty,
-            .runtime_strings = .empty,
-            .string_provenance = std.AutoHashMap(usize, std.ArrayList(ContentProvenance)).init(allocator),
-            .default_values = default_values,
+            .graph = .init(allocator),
+            .constraints = .{},
+            .source_map = .init(allocator),
+            .diagnostics = .{},
+            .runtime = runtime,
             .has_external_evaluation_inputs = false,
-            .next_id = 1,
-            .document_id = 0,
         };
         errdefer state.deinitPartial();
 
@@ -326,17 +367,17 @@ pub const DocumentState = struct {
         errdefer allocator.free(project_spec);
 
         const doc_id = try state.freshId();
-        try state.nodes.append(allocator, .{
+        try state.graph.nodes.append(allocator, .{
             .id = doc_id,
             .kind = .document,
             .name = "document",
             .attached = true,
         });
-        state.document_id = doc_id;
+        state.graph.document_id = doc_id;
 
-        const line_index = try @import("utils").source.LineIndex.init(allocator, project_source);
+        const line_index = try utils.source.LineIndex.init(allocator, project_source);
         errdefer line_index.deinit(allocator);
-        try state.modules.append(allocator, .{
+        try state.modules.entries.append(allocator, .{
             .id = 0,
             .kind = .project,
             .spec = project_spec,
@@ -356,11 +397,11 @@ pub const DocumentState = struct {
         const location = span orelse return;
         const module = self.moduleById(module_id) orelse return;
         if (module.path == null) return;
-        try self.binding_types.put(.{ .module_id = module_id, .offset = location.start }, value);
+        try self.source_map.binding_types.put(.{ .module_id = module_id, .offset = location.start }, value);
     }
 
     pub fn bindingTypeAt(self: *const DocumentState, module_id: SourceModuleId, offset: usize) ?BindingType {
-        return self.binding_types.get(.{ .module_id = module_id, .offset = offset });
+        return self.source_map.binding_types.get(.{ .module_id = module_id, .offset = offset });
     }
 
     pub fn builtinClass(self: *const DocumentState, name: []const u8) ?model.NominalId {
@@ -371,111 +412,40 @@ pub const DocumentState = struct {
         const next = try declarations.build(self.allocator, self);
         self.declaration_index.deinit();
         self.declaration_index.* = next;
-        self.default_values.clear();
+        self.runtime.default_values.clear();
     }
 
     fn deinitPartial(self: *DocumentState) void {
         self.declaration_index.deinit();
         self.allocator.destroy(self.declaration_index);
-        self.modules.deinit(self.allocator);
-        self.module_order.deinit(self.allocator);
-        self.constants.deinit();
-        {
-            var iterator = self.const_values.valueIterator();
-            while (iterator.next()) |value| value.deinit(self.allocator);
-        }
-        self.const_values.deinit();
-        self.const_eval_states.deinit();
+        self.modules.entries.deinit(self.allocator);
+        self.modules.order.deinit(self.allocator);
+        self.constants.deinit(self.allocator);
         self.functions.deinit();
-        self.definitions.deinit(self.allocator);
-        self.binding_types.deinit();
-        self.contains.deinit();
-        self.page_placement_roots.deinit();
-        self.direct_page_ownership.deinit(self.allocator);
-        for (self.nodes.items) |*node| node.deinit(self.allocator);
-        self.nodes.deinit(self.allocator);
-        self.page_order.deinit(self.allocator);
+        self.graph.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
-        self.fallback_constraints.deinit(self.allocator);
-        self.constraint_updates.deinit(self.allocator);
-        self.overridden_constraints.deinit(self.allocator);
-        self.object_sources.deinit(self.allocator);
-        self.page_sources.deinit(self.allocator);
+        self.source_map.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
-        self.clearConstraintFailures();
-        self.constraint_failures.deinit(self.allocator);
-        self.deinitStringProvenance();
-        self.deinitDefaultValues();
-        self.runtime_strings.deinit(self.allocator);
+        self.runtime.deinit(self.allocator);
     }
 
     pub fn deinit(self: *DocumentState) void {
         self.declaration_index.deinit();
         self.allocator.destroy(self.declaration_index);
-        for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);
-        self.module_order.deinit(self.allocator);
-        self.constants.deinit();
-        {
-            var iterator = self.const_values.valueIterator();
-            while (iterator.next()) |value| value.deinit(self.allocator);
-        }
-        self.const_values.deinit();
-        self.const_eval_states.deinit();
+        self.constants.deinit(self.allocator);
         self.functions.deinit();
-        for (self.definitions.items) |definition| {
-            self.allocator.free(definition.name);
-            if (definition.file) |file| self.allocator.free(file);
-            if (definition.scope_name) |scope_name| self.allocator.free(scope_name);
-        }
-        self.definitions.deinit(self.allocator);
-        self.binding_types.deinit();
-        self.allocator.free(self.asset_base_dir);
-        var it = self.contains.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.contains.deinit();
-        var placement_it = self.page_placement_roots.iterator();
-        while (placement_it.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.page_placement_roots.deinit();
-        self.direct_page_ownership.deinit(self.allocator);
-        for (self.nodes.items) |*node| {
-            node.deinit(self.allocator);
-        }
-        self.nodes.deinit(self.allocator);
-        self.page_order.deinit(self.allocator);
+        self.graph.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
-        self.fallback_constraints.deinit(self.allocator);
-        self.constraint_updates.deinit(self.allocator);
-        self.overridden_constraints.deinit(self.allocator);
-        self.object_sources.deinit(self.allocator);
-        self.page_sources.deinit(self.allocator);
-        self.clearDiagnostics();
+        self.source_map.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
-        self.clearConstraintFailures();
-        self.constraint_failures.deinit(self.allocator);
-        self.deinitStringProvenance();
-        self.deinitDefaultValues();
-        for (self.runtime_strings.items) |text| self.allocator.free(text);
-        self.runtime_strings.deinit(self.allocator);
-    }
-
-    fn deinitStringProvenance(self: *DocumentState) void {
-        var iterator = self.string_provenance.valueIterator();
-        while (iterator.next()) |entries| self.deinitProvenanceList(entries);
-        self.string_provenance.deinit();
-    }
-
-    fn deinitDefaultValues(self: *DocumentState) void {
-        self.default_values.destroy();
+        self.runtime.deinit(self.allocator);
+        self.allocator.free(self.asset_base_dir);
     }
 
     pub fn cachedFieldDefault(self: *DocumentState, text: []const u8, value_type: ast.Type) !Value {
         std.debug.assert(value_text.typedPropertyValueOwnsTaggedText(value_type));
-        return self.default_values.getOrParse(text, value_type);
+        return self.runtime.default_values.getOrParse(text, value_type);
     }
 
     fn stringKey(text: []const u8) usize {
@@ -500,29 +470,29 @@ pub const DocumentState = struct {
         if (text.len == 0 or entries.len == 0) return;
         var cloned = try self.cloneProvenanceList(entries);
         errdefer self.deinitProvenanceList(&cloned);
-        const gop = try self.string_provenance.getOrPut(stringKey(text));
+        const gop = try self.runtime.string_provenance.getOrPut(stringKey(text));
         if (gop.found_existing) self.deinitProvenanceList(gop.value_ptr);
         gop.value_ptr.* = cloned;
     }
 
     pub fn stringProvenance(self: *const DocumentState, text: []const u8) []const ContentProvenance {
         if (text.len == 0) return &.{};
-        const entries = self.string_provenance.get(stringKey(text)) orelse return &.{};
+        const entries = self.runtime.string_provenance.get(stringKey(text)) orelse return &.{};
         return entries.items;
     }
 
     pub fn ownString(self: *DocumentState, text: []u8) ![]const u8 {
         errdefer self.allocator.free(text);
-        try self.runtime_strings.append(self.allocator, text);
+        try self.runtime.strings.append(self.allocator, text);
         return text;
     }
 
     pub fn ownStringWithProvenance(self: *DocumentState, text: []u8, entries: []const ContentProvenance) ![]const u8 {
         errdefer self.allocator.free(text);
-        try self.runtime_strings.append(self.allocator, text);
+        try self.runtime.strings.append(self.allocator, text);
         var appended = true;
         errdefer {
-            if (appended) _ = self.runtime_strings.pop();
+            if (appended) _ = self.runtime.strings.pop();
         }
         try self.setStringProvenance(text, entries);
         appended = false;
@@ -564,22 +534,22 @@ pub const DocumentState = struct {
     }
 
     pub fn projectModule(self: *const DocumentState) *const SourceModule {
-        return self.moduleById(self.project_module_id).?;
+        return self.moduleById(self.modules.project_id).?;
     }
 
     pub fn moduleById(self: *const DocumentState, id: SourceModuleId) ?*const SourceModule {
         const index: usize = @intCast(id);
-        if (index < self.modules.items.len and self.modules.items[index].id == id) {
-            return &self.modules.items[index];
+        if (index < self.modules.entries.items.len and self.modules.entries.items[index].id == id) {
+            return &self.modules.entries.items[index];
         }
-        for (self.modules.items) |*module| {
+        for (self.modules.entries.items) |*module| {
             if (module.id == id) return module;
         }
         return null;
     }
 
     pub fn moduleByPathOrSpec(self: *const DocumentState, key: []const u8) ?*const SourceModule {
-        for (self.modules.items) |*module| {
+        for (self.modules.entries.items) |*module| {
             if (module.path) |module_path| {
                 if (std.mem.eql(u8, module_path, key)) return module;
             }
@@ -589,34 +559,34 @@ pub const DocumentState = struct {
     }
 
     pub fn projectModuleMutable(self: *DocumentState) *SourceModule {
-        return self.moduleByIdMutable(self.project_module_id).?;
+        return self.moduleByIdMutable(self.modules.project_id).?;
     }
 
     pub fn moduleByIdMutable(self: *DocumentState, id: SourceModuleId) ?*SourceModule {
         const index: usize = @intCast(id);
-        if (index < self.modules.items.len and self.modules.items[index].id == id) {
-            return &self.modules.items[index];
+        if (index < self.modules.entries.items.len and self.modules.entries.items[index].id == id) {
+            return &self.modules.entries.items[index];
         }
-        for (self.modules.items) |*module| {
+        for (self.modules.entries.items) |*module| {
             if (module.id == id) return module;
         }
         return null;
     }
 
     fn freshId(self: *DocumentState) !NodeId {
-        const id = self.next_id;
-        try self.direct_page_ownership.append(self.allocator, .{});
-        self.next_id += 1;
+        const id = self.graph.next_id;
+        try self.graph.direct_page_ownership.append(self.allocator, .{});
+        self.graph.next_id += 1;
         return id;
     }
 
     pub fn nodeCount(self: *const DocumentState) usize {
-        return self.nodes.items.len;
+        return self.graph.nodes.items.len;
     }
 
     pub fn addContainment(self: *DocumentState, parent: NodeId, child: NodeId) !void {
         const parent_is_page = if (self.getNode(parent)) |node| node.kind == .page else false;
-        const gop = try self.contains.getOrPut(parent);
+        const gop = try self.graph.contains.getOrPut(parent);
         if (!gop.found_existing) {
             gop.value_ptr.* = .empty;
         }
@@ -626,14 +596,14 @@ pub const DocumentState = struct {
         try gop.value_ptr.append(self.allocator, child);
         if (!parent_is_page or child == 0) return;
         const child_index: usize = @intCast(child - 1);
-        if (child_index >= self.direct_page_ownership.items.len) return;
-        const ownership = &self.direct_page_ownership.items[child_index];
+        if (child_index >= self.graph.direct_page_ownership.items.len) return;
+        const ownership = &self.graph.direct_page_ownership.items[child_index];
         if (ownership.first == null) ownership.first = parent;
         ownership.count += 1;
     }
 
     fn addPagePlacementRoot(self: *DocumentState, page_id: NodeId, object_id: NodeId) !void {
-        const gop = try self.page_placement_roots.getOrPut(page_id);
+        const gop = try self.graph.page_placement_roots.getOrPut(page_id);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         for (gop.value_ptr.items) |existing| {
             if (existing == object_id) return;
@@ -643,17 +613,17 @@ pub const DocumentState = struct {
 
     pub fn addPage(self: *DocumentState, name: []const u8) !NodeId {
         const page_id = try self.freshId();
-        const index = self.page_order.items.len + 1;
+        const index = self.graph.page_order.items.len + 1;
         const owned_name = try self.copyString(name);
-        try self.nodes.append(self.allocator, .{
+        try self.graph.nodes.append(self.allocator, .{
             .id = page_id,
             .kind = .page,
             .name = owned_name,
             .attached = true,
             .page_index = index,
         });
-        try self.page_order.append(self.allocator, page_id);
-        try self.addContainment(self.document_id, page_id);
+        try self.graph.page_order.append(self.allocator, page_id);
+        try self.addContainment(self.graph.document_id, page_id);
         return page_id;
     }
 
@@ -666,20 +636,7 @@ pub const DocumentState = struct {
         payload_kind: PayloadKind,
         content: ?[]const u8,
     ) !NodeId {
-        return self.makeObjectWithOrigin(page_id, name, role, object_kind, payload_kind, content, null);
-    }
-
-    pub fn makeObjectWithOrigin(
-        self: *DocumentState,
-        page_id: NodeId,
-        name: []const u8,
-        role: ?Role,
-        object_kind: ObjectKind,
-        payload_kind: PayloadKind,
-        content: ?[]const u8,
-        origin: ?model.SourceOrigin,
-    ) !NodeId {
-        return self.makeNodeWithOrigin(page_id, true, .object, name, role, object_kind, payload_kind, content, origin);
+        return self.makeNodeWithOrigin(page_id, true, .object, name, role, object_kind, payload_kind, content, null);
     }
 
     pub fn createObjectWithOrigin(
@@ -691,7 +648,7 @@ pub const DocumentState = struct {
         content: ?[]const u8,
         origin: ?model.SourceOrigin,
     ) !NodeId {
-        return self.makeNodeWithOrigin(self.document_id, false, .object, name, role, object_kind, payload_kind, content, origin);
+        return self.makeNodeWithOrigin(self.graph.document_id, false, .object, name, role, object_kind, payload_kind, content, origin);
     }
 
     pub fn makeGroupWithOrigin(
@@ -723,7 +680,7 @@ pub const DocumentState = struct {
         children: []const NodeId,
         origin: ?model.SourceOrigin,
     ) !NodeId {
-        return try self.makeGroupWithOrigin(self.document_id, false, children, origin);
+        return try self.makeGroupWithOrigin(self.graph.document_id, false, children, origin);
     }
 
     pub fn placeObjectOnPage(self: *DocumentState, page_id: NodeId, object_id: NodeId) !void {
@@ -772,8 +729,8 @@ pub const DocumentState = struct {
         var candidates = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer candidates.deinit();
         try candidates.put(return_id, {});
-        if (start_index < self.nodes.items.len) {
-            for (self.nodes.items[start_index..]) |node| {
+        if (start_index < self.graph.nodes.items.len) {
+            for (self.graph.nodes.items[start_index..]) |node| {
                 if (node.kind != .object or node.attached or node.discarded) continue;
                 try candidates.put(node.id, {});
             }
@@ -809,8 +766,8 @@ pub const DocumentState = struct {
     fn setGeneratedNodeOrigin(self: *DocumentState, node_id: NodeId, start_index: usize, origin: model.SourceOrigin) !void {
         if (node_id == 0) return;
         const node_index: usize = @intCast(node_id - 1);
-        if (node_index < start_index or node_index >= self.nodes.items.len) return;
-        const node = &self.nodes.items[node_index];
+        if (node_index < start_index or node_index >= self.graph.nodes.items.len) return;
+        const node = &self.graph.nodes.items[node_index];
         if (node.id != node_id) return;
         node.origin = try self.copyOrigin(origin);
     }
@@ -822,7 +779,7 @@ pub const DocumentState = struct {
         queue: *std.ArrayList(NodeId),
         current: NodeId,
     ) !void {
-        var containment = self.contains.iterator();
+        var containment = self.graph.contains.iterator();
         while (containment.next()) |entry| {
             const parent_id = entry.key_ptr.*;
             for (entry.value_ptr.items) |child_id| {
@@ -830,7 +787,7 @@ pub const DocumentState = struct {
                 if (child_id == current) try self.appendCandidate(candidates, seen, queue, parent_id);
             }
         }
-        for (self.constraints.items) |constraint| {
+        for (self.constraints.active.items) |constraint| {
             if (constraint.target_node == current) {
                 switch (constraint.source) {
                     .page => {},
@@ -907,12 +864,12 @@ pub const DocumentState = struct {
     /// constraint-update normalization. Repeated calls do not recreate masked
     /// candidates. Anchor selection is deferred to the page layout policy.
     pub fn collectDefaultAlignments(self: *DocumentState) !void {
-        if (self.default_alignments_collected) return;
+        if (self.constraints.default_alignments_collected) return;
         var candidates = std.ArrayList(Constraint).empty;
         defer candidates.deinit(self.allocator);
-        for (self.nodes.items) |node| {
+        for (self.graph.nodes.items) |node| {
             if (node.kind != .object or node.discarded or !roleEq(node.role, GroupRole)) continue;
-            @import("group_composition.zig").collect(self, &node, &candidates) catch |err| {
+            group_composition.collect(self, &node, &candidates) catch |err| {
                 if (err != error.InvalidGroupSplit) return err;
                 try self.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
                     .user_report = .{
@@ -946,8 +903,8 @@ pub const DocumentState = struct {
                 break;
             }
         }
-        try self.constraints.appendSlice(self.allocator, candidates.items);
-        self.default_alignments_collected = true;
+        try self.constraints.active.appendSlice(self.allocator, candidates.items);
+        self.constraints.default_alignments_collected = true;
     }
 
     pub fn unsetNodeField(self: *DocumentState, node_id: NodeId, key: []const u8) !void {
@@ -1056,7 +1013,7 @@ pub const DocumentState = struct {
             if (!content_provenance_transferred) self.deinitProvenanceList(&content_provenance);
         }
         if (owned_content) |value| try self.setStringProvenance(value, content_provenance.items);
-        try self.nodes.append(self.allocator, .{
+        try self.graph.nodes.append(self.allocator, .{
             .id = obj_id,
             .kind = kind,
             .name = owned_name,
@@ -1076,73 +1033,6 @@ pub const DocumentState = struct {
         return obj_id;
     }
 
-    pub fn addConstraint(self: *DocumentState, expr: []const u8) !void {
-        _ = self;
-        _ = expr;
-        return error.StringConstraintsRemoved;
-    }
-
-    pub fn addAnchorConstraint(
-        self: *DocumentState,
-        target_node: NodeId,
-        target_anchor: Anchor,
-        source: ConstraintSource,
-        offset: f32,
-        origin: ?model.SourceOrigin,
-    ) !void {
-        try self.addAnchorConstraintAtScope(target_node, target_anchor, source, offset, origin, 0);
-    }
-
-    pub fn addAnchorConstraintAtScope(
-        self: *DocumentState,
-        target_node: NodeId,
-        target_anchor: Anchor,
-        source: ConstraintSource,
-        offset: f32,
-        origin: ?model.SourceOrigin,
-        scope_depth: u32,
-    ) !void {
-        const constraint = Constraint{
-            .target_node = target_node,
-            .target_anchor = target_anchor,
-            .source = source,
-            .offset = offset,
-            .origin = origin,
-            .role = model.constraintRoleForRelation(target_node, target_anchor, source),
-            .scope_depth = scope_depth,
-        };
-        try self.constraints.append(self.allocator, constraint);
-    }
-
-    pub fn addConstraintUpdate(
-        self: *DocumentState,
-        target_node: NodeId,
-        target_anchor: Anchor,
-        role: ConstraintRole,
-        scope_depth: u32,
-        replacement_source: ?ConstraintSource,
-        replacement_offset: f32,
-        origin: ?model.SourceOrigin,
-    ) !void {
-        try self.constraint_updates.append(self.allocator, .{
-            .target_node = target_node,
-            .target_anchor = target_anchor,
-            .role = role,
-            .scope_depth = scope_depth,
-            .replacement = if (replacement_source) |source| .{
-                .target_node = target_node,
-                .target_anchor = target_anchor,
-                .source = source,
-                .offset = replacement_offset,
-                .origin = origin,
-                .role = role,
-                .scope_depth = scope_depth,
-                .from_update = true,
-            } else null,
-            .origin = origin,
-        });
-    }
-
     pub fn addObjectSource(
         self: *DocumentState,
         node_id: NodeId,
@@ -1152,7 +1042,7 @@ pub const DocumentState = struct {
         binding_base: ?[]const u8,
         span: ast.Span,
     ) !void {
-        try self.object_sources.append(self.allocator, .{
+        try self.source_map.objects.append(self.allocator, .{
             .node_id = node_id,
             .page_id = page_id,
             .module_id = module_id,
@@ -1170,129 +1060,13 @@ pub const DocumentState = struct {
         path: []const u8,
         span: ast.Span,
     ) !void {
-        try self.page_sources.append(self.allocator, .{
+        try self.source_map.pages.append(self.allocator, .{
             .page_id = page_id,
             .module_id = module_id,
             .path = try self.copyString(path),
             .span_start = span.start,
             .span_end = span.end,
         });
-    }
-
-    pub fn addConstraintSet(self: *DocumentState, constraints: ConstraintSet) !void {
-        try self.constraints.appendSlice(self.allocator, constraints.items.items);
-    }
-
-    pub fn noteConstraintFailure(self: *DocumentState, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) !void {
-        try self.noteConstraintFailureDetailed(
-            page_id,
-            constraint,
-            existing_constraint,
-            kind,
-            defaultConstraintFailureReason(kind),
-            null,
-            null,
-            null,
-        );
-    }
-
-    pub fn noteConstraintFailureDetailed(
-        self: *DocumentState,
-        page_id: NodeId,
-        constraint: Constraint,
-        existing_constraint: ?Constraint,
-        kind: ConstraintFailureKind,
-        reason: ConstraintFailureReason,
-        axis: ?Axis,
-        actual: ?f32,
-        expected: ?f32,
-    ) !void {
-        try self.noteConstraintFailureDetailedWithPropagation(
-            page_id,
-            constraint,
-            existing_constraint,
-            kind,
-            reason,
-            axis,
-            actual,
-            expected,
-            null,
-        );
-    }
-
-    pub fn noteConstraintFailureDetailedWithPropagation(
-        self: *DocumentState,
-        page_id: NodeId,
-        constraint: Constraint,
-        existing_constraint: ?Constraint,
-        kind: ConstraintFailureKind,
-        reason: ConstraintFailureReason,
-        axis: ?Axis,
-        actual: ?f32,
-        expected: ?f32,
-        propagation: ?model.ConstraintPropagation,
-    ) !void {
-        var failure: ConstraintFailure = .{
-            .kind = kind,
-            .reason = reason,
-            .page_id = page_id,
-            .axis = axis orelse layout.anchorAxis(constraint.target_anchor),
-            .constraint = constraint,
-            .existing_constraint = existing_constraint,
-            .actual = actual,
-            .expected = expected,
-            .propagation = propagation,
-        };
-        for (self.constraint_failures.items) |*existing| {
-            if (constraintFailureSame(existing.*, failure) or constraintFailureSameTarget(existing.*, failure)) {
-                if (constraintFailureDetailScore(failure) > constraintFailureDetailScore(existing.*)) {
-                    existing.deinit(self.allocator);
-                    existing.* = failure;
-                    self.last_constraint_failure = existing.*;
-                } else {
-                    self.last_constraint_failure = existing.*;
-                    failure.deinit(self.allocator);
-                }
-                return;
-            }
-        }
-        self.constraint_failures.append(self.allocator, failure) catch |err| {
-            failure.deinit(self.allocator);
-            return err;
-        };
-        self.last_constraint_failure = self.constraint_failures.items[self.constraint_failures.items.len - 1];
-    }
-
-    pub fn hasConstraintFailures(self: *const DocumentState) bool {
-        return self.constraint_failures.items.len > 0;
-    }
-
-    pub fn clearConstraintFailures(self: *DocumentState) void {
-        for (self.constraint_failures.items) |*failure| failure.deinit(self.allocator);
-        self.constraint_failures.clearRetainingCapacity();
-        self.last_constraint_failure = null;
-    }
-
-    pub fn clearDiagnostics(self: *DocumentState) void {
-        for (self.diagnostics.items) |*diagnostic| diagnostic.deinit(self.allocator);
-        self.diagnostics.clearRetainingCapacity();
-    }
-
-    pub fn clearDiagnosticsForPhase(self: *DocumentState, phase: DiagnosticPhase) void {
-        var write_index: usize = 0;
-        for (self.diagnostics.items) |*diagnostic| {
-            if (diagnostic.phase == phase) {
-                diagnostic.deinit(self.allocator);
-                continue;
-            }
-            self.diagnostics.items[write_index] = diagnostic.*;
-            write_index += 1;
-        }
-        self.diagnostics.items.len = write_index;
-    }
-
-    pub fn addDiagnostic(self: *DocumentState, diagnostic: Diagnostic) !void {
-        try self.diagnostics.append(self.allocator, diagnostic);
     }
 
     fn addLayoutDiagnostic(self: *DocumentState, severity: DiagnosticSeverity, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
@@ -1310,7 +1084,7 @@ pub const DocumentState = struct {
         };
         errdefer diagnostic.deinit(self.allocator);
         if (origin) |value| diagnostic.origin = try value.clone(self.allocator);
-        try self.addDiagnostic(diagnostic);
+        try self.diagnostics.addDiagnostic(self.allocator, diagnostic);
     }
 
     pub fn addLayoutWarning(self: *DocumentState, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
@@ -1339,27 +1113,7 @@ pub const DocumentState = struct {
         };
         errdefer diagnostic.deinit(self.allocator);
         if (origin) |value| diagnostic.origin = try value.clone(self.allocator);
-        try self.addDiagnostic(diagnostic);
-    }
-
-    pub fn deduplicateValidationUserReports(self: *DocumentState) void {
-        var write_index: usize = 0;
-        for (self.diagnostics.items) |*diagnostic| {
-            var duplicate = false;
-            for (self.diagnostics.items[0..write_index]) |existing| {
-                if (validationUserReportsMatch(existing, diagnostic.*)) {
-                    duplicate = true;
-                    break;
-                }
-            }
-            if (duplicate) {
-                diagnostic.deinit(self.allocator);
-                continue;
-            }
-            self.diagnostics.items[write_index] = diagnostic.*;
-            write_index += 1;
-        }
-        self.diagnostics.items.len = write_index;
+        try self.diagnostics.addDiagnostic(self.allocator, diagnostic);
     }
 
     pub fn addRenderDiagnostic(
@@ -1380,20 +1134,20 @@ pub const DocumentState = struct {
         };
         errdefer diagnostic.deinit(self.allocator);
         if (origin) |value| diagnostic.origin = try value.clone(self.allocator);
-        try self.addDiagnostic(diagnostic);
+        try self.diagnostics.addDiagnostic(self.allocator, diagnostic);
     }
 
     pub fn validatePageLocalLayout(self: *DocumentState) !void {
         try self.addPageOwnershipDiagnostics();
         try self.addUnplacedObjectDiagnostics(.warning);
-        for (self.constraints.items) |constraint| {
+        for (self.constraints.active.items) |constraint| {
             try self.addConstraintEndpointOwnershipDiagnostics(constraint);
             try self.addCrossPageConstraintDiagnosticIfKnown(constraint);
         }
     }
 
     fn addPageOwnershipDiagnostics(self: *DocumentState) !void {
-        for (self.nodes.items) |node| {
+        for (self.graph.nodes.items) |node| {
             if (node.kind != .object or node.discarded) continue;
             const ownership = self.directPageOwnershipInfo(node.id);
             if (ownership.count > 1) {
@@ -1412,12 +1166,8 @@ pub const DocumentState = struct {
         }
     }
 
-    pub fn addUnplacedObjectWarnings(self: *DocumentState) !void {
-        try self.addUnplacedObjectDiagnostics(.warning);
-    }
-
     fn addUnplacedObjectDiagnostics(self: *DocumentState, severity: DiagnosticSeverity) !void {
-        for (self.nodes.items) |node| {
+        for (self.graph.nodes.items) |node| {
             if (node.kind != .object or node.attached or node.discarded) continue;
             if (try self.hasUnplacedObjectParent(node.id)) continue;
             if (self.layoutPageOf(node.id) != null) continue;
@@ -1432,16 +1182,12 @@ pub const DocumentState = struct {
     fn directPageOwnershipInfo(self: *DocumentState, child_id: NodeId) PageOwnershipInfo {
         if (child_id == 0) return .{};
         const child_index: usize = @intCast(child_id - 1);
-        if (child_index >= self.direct_page_ownership.items.len) return .{};
-        return self.direct_page_ownership.items[child_index];
+        if (child_index >= self.graph.direct_page_ownership.items.len) return .{};
+        return self.graph.direct_page_ownership.items[child_index];
     }
 
     pub fn layoutPageOf(self: *DocumentState, node_id: NodeId) ?NodeId {
-        return self.layoutPageOfReference(node_id, self.nodes.items.len);
-    }
-
-    pub fn layoutPageOfConstraintEndpoint(self: *DocumentState, node_id: NodeId) ?NodeId {
-        return self.layoutPageOfReference(node_id, self.nodes.items.len);
+        return self.layoutPageOfReference(node_id, self.graph.nodes.items.len);
     }
 
     fn layoutPageOfReference(self: *DocumentState, node_id: NodeId, remaining_nodes: usize) ?NodeId {
@@ -1475,10 +1221,10 @@ pub const DocumentState = struct {
     }
 
     fn addCrossPageConstraintDiagnosticIfKnown(self: *DocumentState, constraint: Constraint) !void {
-        const target_page = self.layoutPageOfConstraintEndpoint(constraint.target_node) orelse return;
+        const target_page = self.layoutPageOf(constraint.target_node) orelse return;
         const source_page = switch (constraint.source) {
             .page => target_page,
-            .node => |source| self.layoutPageOfConstraintEndpoint(source.node_id) orelse return,
+            .node => |source| self.layoutPageOf(source.node_id) orelse return,
         };
         if (target_page == source_page) return;
         if (self.hasCrossPageConstraintDiagnostic(constraint)) return;
@@ -1504,7 +1250,7 @@ pub const DocumentState = struct {
     }
 
     fn addConstraintEndpointOwnershipDiagnostic(self: *DocumentState, node_id: NodeId, role: []const u8, origin: ?model.SourceOrigin) !void {
-        if (self.layoutPageOfConstraintEndpoint(node_id) != null) return;
+        if (self.layoutPageOf(node_id) != null) return;
         const ownership = self.directPageOwnershipInfo(node_id);
         if (ownership.count > 1) return;
         const node = self.getNode(node_id) orelse return;
@@ -1522,7 +1268,7 @@ pub const DocumentState = struct {
     }
 
     fn hasUnownedLayoutObjectDiagnostic(self: *DocumentState, node_id: NodeId, origin: ?model.SourceOrigin) bool {
-        for (self.diagnostics.items) |diagnostic| {
+        for (self.diagnostics.entries.items) |diagnostic| {
             if (diagnostic.phase != .validation or diagnostic.node_id != node_id) continue;
             switch (diagnostic.data) {
                 .user_report => |data| {
@@ -1538,7 +1284,7 @@ pub const DocumentState = struct {
     }
 
     fn hasCrossPageConstraintDiagnostic(self: *DocumentState, constraint: Constraint) bool {
-        for (self.diagnostics.items) |diagnostic| {
+        for (self.diagnostics.entries.items) |diagnostic| {
             if (diagnostic.phase != .validation or diagnostic.node_id != constraint.target_node) continue;
             switch (diagnostic.data) {
                 .user_report => |data| {
@@ -1554,7 +1300,7 @@ pub const DocumentState = struct {
     }
 
     fn hasUnplacedObjectParent(self: *DocumentState, child_id: NodeId) !bool {
-        var it = self.contains.iterator();
+        var it = self.graph.contains.iterator();
         while (it.next()) |entry| {
             for (entry.value_ptr.items) |candidate| {
                 if (candidate != child_id) continue;
@@ -1568,23 +1314,23 @@ pub const DocumentState = struct {
     pub fn getNode(self: *DocumentState, id: NodeId) ?*Node {
         if (id != 0) {
             const index: usize = @intCast(id - 1);
-            if (index < self.nodes.items.len and self.nodes.items[index].id == id) {
-                return &self.nodes.items[index];
+            if (index < self.graph.nodes.items.len and self.graph.nodes.items[index].id == id) {
+                return &self.graph.nodes.items[index];
             }
         }
-        for (self.nodes.items) |*node| {
+        for (self.graph.nodes.items) |*node| {
             if (node.id == id) return node;
         }
         return null;
     }
 
     pub fn childrenOf(self: *DocumentState, parent: NodeId) ?[]const NodeId {
-        const children = self.contains.get(parent) orelse return null;
+        const children = self.graph.contains.get(parent) orelse return null;
         return children.items;
     }
 
     pub fn placementRootsOf(self: *DocumentState, page_id: NodeId) []const NodeId {
-        const roots = self.page_placement_roots.get(page_id) orelse return &.{};
+        const roots = self.graph.page_placement_roots.get(page_id) orelse return &.{};
         return roots.items;
     }
 
@@ -1594,7 +1340,7 @@ pub const DocumentState = struct {
     }
 
     pub fn pageCount(self: *DocumentState) usize {
-        return self.page_order.items.len;
+        return self.graph.page_order.items.len;
     }
 
     pub fn parentPageOf(self: *DocumentState, child_id: NodeId) ?NodeId {
@@ -1602,10 +1348,10 @@ pub const DocumentState = struct {
     }
 
     fn previousPageOf(self: *DocumentState, page_id: NodeId) ?NodeId {
-        for (self.page_order.items, 0..) |candidate, index| {
+        for (self.graph.page_order.items, 0..) |candidate, index| {
             if (candidate != page_id) continue;
             if (index == 0) return null;
-            return self.page_order.items[index - 1];
+            return self.graph.page_order.items[index - 1];
         }
         return null;
     }
@@ -1660,7 +1406,7 @@ pub const DocumentState = struct {
         provenance: []const u8,
     ) !Selection {
         var selection = Selection.init(.object, provenance);
-        const children = self.contains.get(page_id) orelse return selection;
+        const children = self.graph.contains.get(page_id) orelse return selection;
         for (children.items) |child_id| {
             const node = self.getNode(child_id) orelse continue;
             if (roleEq(node.role, role)) {
@@ -1677,7 +1423,7 @@ pub const DocumentState = struct {
         provenance: []const u8,
     ) !Selection {
         var selection = Selection.init(.object, provenance);
-        for (self.page_order.items) |page_id| {
+        for (self.graph.page_order.items) |page_id| {
             var page_selection = try self.selectPageObjectsByRole(allocator, page_id, role, provenance);
             defer page_selection.deinit(allocator);
             for (page_selection.ids.items) |id| {
@@ -1689,7 +1435,7 @@ pub const DocumentState = struct {
 
     fn selectDocumentPages(self: *DocumentState, allocator: Allocator, provenance: []const u8) !Selection {
         var selection = Selection.init(.page, provenance);
-        for (self.page_order.items) |page_id| {
+        for (self.graph.page_order.items) |page_id| {
             try selection.ids.append(allocator, page_id);
         }
         return selection;
@@ -1697,7 +1443,7 @@ pub const DocumentState = struct {
 
     fn selectChildren(self: *DocumentState, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
         var selection = Selection.init(.object, provenance);
-        const children = self.contains.get(parent_id) orelse return selection;
+        const children = self.graph.contains.get(parent_id) orelse return selection;
         for (children.items) |child_id| {
             const child = self.getNode(child_id) orelse continue;
             if (child.kind == .object) try selection.ids.append(allocator, child_id);
@@ -1706,7 +1452,7 @@ pub const DocumentState = struct {
     }
 
     fn appendDescendants(self: *DocumentState, allocator: Allocator, parent_id: NodeId, selection: *Selection) !void {
-        const children = self.contains.get(parent_id) orelse return;
+        const children = self.graph.contains.get(parent_id) orelse return;
         for (children.items) |child_id| {
             const child = self.getNode(child_id) orelse continue;
             if (child.kind == .object) try selection.ids.append(allocator, child_id);
@@ -1753,18 +1499,18 @@ pub const DocumentState = struct {
 
     pub fn finalizeDocument(self: *DocumentState, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !layout.Document {
         try layout.graph.checkCancellation(options);
-        self.clearDiagnosticsForPhase(.layout);
-        self.clearConstraintFailures();
+        self.diagnostics.clearDiagnosticsForPhase(self.allocator, .layout);
+        self.diagnostics.clearConstraintFailures(self.allocator);
         var results = try layout.solveDocument(self, trace_path, options);
         layout.graph.checkCancellation(options) catch |err| {
             results.deinit(self.allocator);
             return err;
         };
-        if (self.constraint_failures.items.len > 0) {
-            const first_kind = self.constraint_failures.items[0].kind;
+        if (self.diagnostics.constraint_failures.items.len > 0) {
+            const first_kind = self.diagnostics.constraint_failures.items[0].kind;
             results.deinit(self.allocator);
-            self.clearDiagnosticsForPhase(.layout);
-            self.clearConstraintFailures();
+            self.diagnostics.clearDiagnosticsForPhase(self.allocator, .layout);
+            self.diagnostics.clearConstraintFailures(self.allocator);
             var propagation_options = options;
             propagation_options.record_propagation = true;
             results = try layout.solveDocument(self, trace_path, propagation_options);
@@ -1772,14 +1518,14 @@ pub const DocumentState = struct {
                 results.deinit(self.allocator);
                 return err;
             };
-            if (self.constraint_failures.items.len == 0) {
+            if (self.diagnostics.constraint_failures.items.len == 0) {
                 results.deinit(self.allocator);
                 switch (first_kind) {
                     .conflict => return error.ConstraintConflict,
                     .negative_frame_size => return error.NegativeFrameSize,
                 }
             }
-            const kind = self.constraint_failures.items[0].kind;
+            const kind = self.diagnostics.constraint_failures.items[0].kind;
             results.deinit(self.allocator);
             switch (kind) {
                 .conflict => return error.ConstraintConflict,
@@ -1816,74 +1562,3 @@ pub const DocumentState = struct {
         return layout.shouldWrapNode(self, node);
     }
 };
-
-fn defaultConstraintFailureReason(kind: ConstraintFailureKind) ConstraintFailureReason {
-    return switch (kind) {
-        .conflict => .anchor_value_conflict,
-        .negative_frame_size => .negative_frame_size,
-    };
-}
-
-fn constraintFailureSame(a: ConstraintFailure, b: ConstraintFailure) bool {
-    if (a.kind != b.kind) return false;
-    if (a.page_id != b.page_id) return false;
-    if (constraintFailureConstraintPairSame(a, b)) return true;
-    return false;
-}
-
-fn constraintFailureSameTarget(a: ConstraintFailure, b: ConstraintFailure) bool {
-    if (a.kind != b.kind) return false;
-    if (a.reason != b.reason) return false;
-    if (a.page_id != b.page_id) return false;
-    if (a.axis != b.axis) return false;
-    return a.constraint.target_node == b.constraint.target_node and a.constraint.target_anchor == b.constraint.target_anchor;
-}
-
-fn constraintFailureDetailScore(failure: ConstraintFailure) usize {
-    var score: usize = 0;
-    if (failure.propagation) |propagation| {
-        score += 100;
-        for (propagation.paths) |path| score += path.lines.len;
-        score += propagation.result.len;
-    }
-    if (failure.actual != null) score += 10;
-    if (failure.expected != null) score += 10;
-    if (failure.existing_constraint != null) score += 1;
-    return score;
-}
-
-fn constraintFailureConstraintPairSame(a: ConstraintFailure, b: ConstraintFailure) bool {
-    if (!constraintEq(a.constraint, b.constraint)) {
-        if (a.existing_constraint == null or b.existing_constraint == null) return false;
-        return constraintEq(a.constraint, b.existing_constraint.?) and constraintEq(a.existing_constraint.?, b.constraint);
-    }
-    if ((a.existing_constraint == null) != (b.existing_constraint == null)) return false;
-    if (a.existing_constraint) |existing_a| {
-        if (!constraintEq(existing_a, b.existing_constraint.?)) return false;
-    }
-    return true;
-}
-
-fn constraintEq(a: Constraint, b: Constraint) bool {
-    if (a.target_node != b.target_node) return false;
-    if (a.target_anchor != b.target_anchor) return false;
-    if (a.offset != b.offset) return false;
-    if (a.source_extent_factor != b.source_extent_factor) return false;
-    if (a.default_alignment != b.default_alignment) return false;
-    if (a.group_split != b.group_split) return false;
-    if (!constraintSourceEq(a.source, b.source)) return false;
-    return model.SourceOrigin.optionalEql(a.origin, b.origin);
-}
-
-fn constraintSourceEq(a: ConstraintSource, b: ConstraintSource) bool {
-    return switch (a) {
-        .page => |a_anchor| switch (b) {
-            .page => |b_anchor| a_anchor == b_anchor,
-            .node => false,
-        },
-        .node => |a_node| switch (b) {
-            .page => false,
-            .node => |b_node| a_node.node_id == b_node.node_id and a_node.anchor == b_node.anchor,
-        },
-    };
-}

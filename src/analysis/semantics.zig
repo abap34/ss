@@ -33,7 +33,7 @@ fn appendConstDeclarations(
 
 pub fn checkSelectedImports(state: *core.DocumentState, sema: *const SemanticEnv) !void {
     var invalid = false;
-    for (state.module_order.items) |module_id| {
+    for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         for (module.syntax.imports.items, 0..) |import_decl, index| {
             const imported_id = if (index < module.resolved_import_ids.items.len) module.resolved_import_ids.items[index] else null;
@@ -52,7 +52,7 @@ pub fn checkSelectedImports(state: *core.DocumentState, sema: *const SemanticEnv
 }
 
 pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
-    for (state.module_order.items) |module_id| {
+    for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         const origin_path = checker.originPathForModule(module);
         var names = std.StringHashMap([]const u8).init(allocator);
@@ -138,13 +138,13 @@ pub fn checkTypeAnnotations(
     sema: *const SemanticEnv,
 ) !void {
     var had_diagnostics = false;
-    for (state.module_order.items) |module_id| {
+    for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         const origin_path = checker.originPathForModule(module);
 
         for (module.syntax.records.items) |record_decl| {
             for (record_decl.fields.items) |field| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkFieldTypeAnnotation(allocator, state, sema, module_id, origin_path, field) catch |err| {
                     try checker.continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
@@ -153,7 +153,7 @@ pub fn checkTypeAnnotations(
         }
         for (module.syntax.objects.items) |object_decl| {
             for (object_decl.fields.items) |field| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkFieldTypeAnnotation(allocator, state, sema, module_id, origin_path, field) catch |err| {
                     try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
@@ -162,7 +162,7 @@ pub fn checkTypeAnnotations(
         }
         for (module.syntax.object_extensions.items) |extension| {
             for (extension.fields.items) |field| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkFieldTypeAnnotation(allocator, state, sema, module_id, origin_path, field) catch |err| {
                     try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
@@ -174,20 +174,20 @@ pub fn checkTypeAnnotations(
             const origin = core.SourceOrigin.at(origin_path, func.span);
 
             for (func.params.items) |param| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkTypeAnnotation(state, sema, module_id, param.ty, origin) catch |err| {
                     try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
                 if (param.default_value) |default_value| {
-                    const expr_diagnostic_count = state.diagnostics.items.len;
+                    const expr_diagnostic_count = state.diagnostics.entries.items.len;
                     checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, default_value.*) catch |err| {
                         try continueAfterDiagnostic(state, expr_diagnostic_count, err);
                         had_diagnostics = true;
                     };
                 }
             }
-            const result_diagnostic_count = state.diagnostics.items.len;
+            const result_diagnostic_count = state.diagnostics.entries.items.len;
             checkTypeAnnotation(state, sema, module_id, func.result_type, origin) catch |err| {
                 try continueAfterDiagnostic(state, result_diagnostic_count, err);
                 had_diagnostics = true;
@@ -197,12 +197,12 @@ pub fn checkTypeAnnotations(
         for (module.syntax.constants.items) |constant_decl| {
             const origin = core.SourceOrigin.at(origin_path, constant_decl.span);
 
-            const type_diagnostic_count = state.diagnostics.items.len;
+            const type_diagnostic_count = state.diagnostics.entries.items.len;
             checkTypeAnnotation(state, sema, module_id, constant_decl.value_type, origin) catch |err| {
                 try continueAfterDiagnostic(state, type_diagnostic_count, err);
                 had_diagnostics = true;
             };
-            const expr_diagnostic_count = state.diagnostics.items.len;
+            const expr_diagnostic_count = state.diagnostics.entries.items.len;
             checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, constant_decl.value) catch |err| {
                 try continueAfterDiagnostic(state, expr_diagnostic_count, err);
                 had_diagnostics = true;
@@ -210,7 +210,7 @@ pub fn checkTypeAnnotations(
         }
 
         for (module.syntax.document_statements.items) |stmt| {
-            const diagnostic_count = state.diagnostics.items.len;
+            const diagnostic_count = state.diagnostics.entries.items.len;
             checkStatementTypeAnnotations(allocator, state, sema, module_id, origin_path, stmt) catch |err| {
                 try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
@@ -218,7 +218,7 @@ pub fn checkTypeAnnotations(
         }
         for (module.syntax.pages.items) |page| {
             for (page.statements.items) |stmt| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkStatementTypeAnnotations(allocator, state, sema, module_id, origin_path, stmt) catch |err| {
                     try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
@@ -240,13 +240,13 @@ fn checkFieldTypeAnnotation(
     const origin = core.SourceOrigin.at(origin_path, field.span);
 
     var had_diagnostics = false;
-    const type_diagnostic_count = state.diagnostics.items.len;
+    const type_diagnostic_count = state.diagnostics.entries.items.len;
     checkTypeAnnotation(state, sema, module_id, field.value_type, origin) catch |err| {
         try continueAfterDiagnostic(state, type_diagnostic_count, err);
         had_diagnostics = true;
     };
     if (field.default_value) |default_value| {
-        const expr_diagnostic_count = state.diagnostics.items.len;
+        const expr_diagnostic_count = state.diagnostics.entries.items.len;
         checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, default_value.*) catch |err| {
             try continueAfterDiagnostic(state, expr_diagnostic_count, err);
             had_diagnostics = true;
@@ -260,7 +260,7 @@ pub fn resolveTypeReferences(
     state: *core.DocumentState,
     sema: *const SemanticEnv,
 ) !void {
-    for (state.modules.items) |*module| {
+    for (state.modules.entries.items) |*module| {
         try resolveModuleTypeReferences(allocator, &module.syntax, module.id, sema);
     }
 }
@@ -401,10 +401,10 @@ pub fn resolveEnumCaseExpressionsAndDefaults(
     state: *core.DocumentState,
     sema: *const SemanticEnv,
 ) !void {
-    for (state.modules.items) |*module| {
+    for (state.modules.entries.items) |*module| {
         try resolveModuleEnumCaseExpressions(allocator, module.id, sema, &module.syntax);
     }
-    for (state.modules.items) |*module| {
+    for (state.modules.entries.items) |*module| {
         try resolveModuleFieldDefaults(allocator, module.id, sema, &module.syntax);
     }
 }
@@ -811,10 +811,10 @@ pub fn rebuildConstDeclarations(
     state: *core.DocumentState,
 ) !void {
     _ = allocator;
-    state.constants.clearRetainingCapacity();
-    for (state.module_order.items) |module_id| {
+    state.constants.declarations.clearRetainingCapacity();
+    for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
-        try appendConstDeclarations(&state.constants, module.syntax, module.id);
+        try appendConstDeclarations(&state.constants.declarations, module.syntax, module.id);
     }
 }
 
@@ -824,7 +824,7 @@ pub fn rebuildFunctionDeclarations(
 ) !void {
     _ = allocator;
     state.functions.clearRetainingCapacity();
-    for (state.module_order.items) |module_id| {
+    for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         try appendFunctionDeclarations(&state.functions, module.syntax, module.id);
     }
@@ -845,13 +845,13 @@ fn checkStatementTypeAnnotations(
 
             var had_diagnostics = false;
             if (binding.type_annotation) |annotation| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkTypeAnnotation(state, sema, module_id, annotation, origin) catch |err| {
                     try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
-            const expr_diagnostic_count = state.diagnostics.items.len;
+            const expr_diagnostic_count = state.diagnostics.entries.items.len;
             checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, binding.expr) catch |err| {
                 try continueAfterDiagnostic(state, expr_diagnostic_count, err);
                 had_diagnostics = true;
@@ -868,14 +868,14 @@ fn checkStatementTypeAnnotations(
             try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, if_stmt.condition);
             var had_diagnostics = false;
             for (if_stmt.then_statements.items) |nested| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkStatementTypeAnnotations(allocator, state, sema, module_id, origin_path, nested) catch |err| {
                     try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
             for (if_stmt.else_statements.items) |nested| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkStatementTypeAnnotations(allocator, state, sema, module_id, origin_path, nested) catch |err| {
                     try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
@@ -903,7 +903,7 @@ fn checkExprTypeAnnotations(
         .call => |call| {
             var had_diagnostics = false;
             for (call.args.items) |arg| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, arg) catch |err| {
                     try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
@@ -915,7 +915,7 @@ fn checkExprTypeAnnotations(
             try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, apply.callee.*);
             var had_diagnostics = false;
             for (apply.args.items) |arg| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, arg) catch |err| {
                     try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
@@ -928,13 +928,13 @@ fn checkExprTypeAnnotations(
 
             var had_diagnostics = false;
             for (lambda.params.items) |param| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkTypeAnnotation(state, sema, module_id, param.ty, origin) catch |err| {
                     try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
-            const body_diagnostic_count = state.diagnostics.items.len;
+            const body_diagnostic_count = state.diagnostics.entries.items.len;
             checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, lambda.body.*) catch |err| {
                 try continueAfterDiagnostic(state, body_diagnostic_count, err);
                 had_diagnostics = true;
@@ -944,7 +944,7 @@ fn checkExprTypeAnnotations(
         .record => |record| {
             var had_diagnostics = false;
             for (record.fields.items) |field| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, field.value) catch |err| {
                     try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
@@ -956,7 +956,7 @@ fn checkExprTypeAnnotations(
             try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, update.target.*);
             var had_diagnostics = false;
             for (update.fields.items) |field| {
-                const diagnostic_count = state.diagnostics.items.len;
+                const diagnostic_count = state.diagnostics.entries.items.len;
                 checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, field.value) catch |err| {
                     try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
@@ -999,14 +999,14 @@ fn checkTypeAnnotation(
     if (ty.kind == .function) {
         var had_diagnostics = false;
         for (ty.fn_params) |param| {
-            const diagnostic_count = state.diagnostics.items.len;
+            const diagnostic_count = state.diagnostics.entries.items.len;
             checkTypeAnnotation(state, sema, module_id, param, origin) catch |err| {
                 try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
             };
         }
         if (ty.fn_result) |result| {
-            const diagnostic_count = state.diagnostics.items.len;
+            const diagnostic_count = state.diagnostics.entries.items.len;
             checkTypeAnnotation(state, sema, module_id, result.*, origin) catch |err| {
                 try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
@@ -1027,7 +1027,7 @@ pub fn checkDuplicateValueDeclarations(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
 ) !void {
-    for (state.module_order.items) |module_id| {
+    for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         var names = std.StringHashMap(void).init(allocator);
         defer names.deinit();

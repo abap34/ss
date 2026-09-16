@@ -32,12 +32,12 @@ fn exerciseWithOptions(source: []const u8, first: []const u8, second: []const u8
     defer modules.deinit();
     var state = try compiler.analysis.buildDocumentStateWithOptions(allocator, path, root, &source_buf, &syntax, &modules, .{});
     defer state.deinit();
-    errdefer for (state.diagnostics.items) |diagnostic| {
+    errdefer for (state.diagnostics.entries.items) |diagnostic| {
         if (diagnostic.data == .user_report) std.debug.print("{f}: {s}\n", .{ diagnostic.origin orelse core.SourceOrigin{}, diagnostic.data.user_report.message });
     };
     if (options.diagnostic) |expected| {
         compiler.analysis.analyzeDocumentState(allocator, &state) catch {};
-        for (state.diagnostics.items) |diagnostic| {
+        for (state.diagnostics.entries.items) |diagnostic| {
             if (diagnostic.data == .user_report and std.mem.eql(u8, diagnostic.code(), std.mem.trimEnd(u8, expected, ":"))) return;
         }
         return error.ExpectedDiagnostic;
@@ -50,7 +50,7 @@ fn exerciseWithOptions(source: []const u8, first: []const u8, second: []const u8
     }
     try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
     if (options.verify) |verify| try verify(&state);
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         if (diagnostic.severity == .@"error") return error.UnexpectedDiagnostic;
     }
 }
@@ -345,7 +345,7 @@ test "nominal objects: qualified bases and extensions retain their target module
     , first_object, second_object, .{ .verify = struct {
         fn verify(state: *core.DocumentState) !void {
             var found: usize = 0;
-            for (state.nodes.items) |*node| {
+            for (state.graph.nodes.items) |*node| {
                 const role = node.role orelse continue;
                 if (std.mem.eql(u8, role, "a-box")) {
                     var field = (try core.fields.get(state.allocator, state, node, "amount")).?;

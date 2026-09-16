@@ -27,7 +27,7 @@ pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOpti
     var trace_active = true;
     defer if (trace_active) trace_session.abort(state.allocator);
 
-    for (state.page_order.items) |page_id| {
+    for (state.graph.page_order.items) |page_id| {
         try graph.checkCancellation(options);
         const page = state.getNode(page_id) orelse return error.UnknownNode;
         page.frame = .{
@@ -40,7 +40,7 @@ pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOpti
         };
     }
 
-    const page_count = state.page_order.items.len;
+    const page_count = state.graph.page_order.items.len;
     if (page_count > 0) {
         if (options.progress) |progress| progress.pageStarted(progress.context, 0, page_count);
     }
@@ -54,7 +54,7 @@ pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOpti
     if (page_inputs.len != page_count) return error.InvalidPageLayoutInputs;
     const page_jobs = try state.allocator.alloc(PageJob, page_count);
     defer state.allocator.free(page_jobs);
-    for (state.page_order.items, page_inputs, 0..) |page_id, inputs, page_index| {
+    for (state.graph.page_order.items, page_inputs, 0..) |page_id, inputs, page_index| {
         try graph.checkCancellation(options);
         if (inputs.page_id != page_id) return error.InvalidPageLayoutInputs;
         page_jobs[page_index] = .{
@@ -88,8 +88,8 @@ const PageJob = struct {
         try graph.checkCancellation(options);
         var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(state.allocator, options.measurement_provider);
         defer measurement_cache.deinit();
-        const diagnostic_start = state.diagnostics.items.len;
-        const failure_start = state.constraint_failures.items.len;
+        const diagnostic_start = state.diagnostics.entries.items.len;
+        const failure_start = state.diagnostics.constraint_failures.items.len;
         var result = solvePageLayout(state, self.page, self.page_index, &measurement_cache, trace_session, options) catch |err| switch (err) {
             error.LayoutDidNotConverge => try self.unconvergedPage(state, diagnostic_start, failure_start, options),
             else => return err,
@@ -106,15 +106,8 @@ const PageJob = struct {
 
         var local_context = state.*;
         local_context.allocator = arena.allocator();
-        local_context.diagnostics = .empty;
-        local_context.constraint_failures = .empty;
-        local_context.last_constraint_failure = null;
-        defer {
-            for (local_context.diagnostics.items) |*diagnostic| diagnostic.deinit(local_context.allocator);
-            local_context.diagnostics.deinit(local_context.allocator);
-            for (local_context.constraint_failures.items) |*failure| failure.deinit(local_context.allocator);
-            local_context.constraint_failures.deinit(local_context.allocator);
-        }
+        local_context.diagnostics = .{};
+        defer local_context.diagnostics.deinit(local_context.allocator);
         var local_options = options;
         local_options.progress = null;
         var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(local_context.allocator, local_options.measurement_provider);
@@ -137,7 +130,7 @@ const PageJob = struct {
 };
 
 pub fn solvePage(state: anytype, inputs: partition.Page, page_index: usize, trace_path: ?[]const u8, options: SolveOptions) !document.Page {
-    if (page_index >= state.page_order.items.len or state.page_order.items[page_index] != inputs.page_id) {
+    if (page_index >= state.graph.page_order.items.len or state.graph.page_order.items[page_index] != inputs.page_id) {
         return error.InvalidPageLayoutInputs;
     }
     var trace_session = layout_trace.Session{};
@@ -155,11 +148,11 @@ pub fn applyPage(state: anytype, page: *const document.Page) !void {
     if (!page.converged) return error.LayoutDidNotConverge;
     var constraints = std.ArrayList(Constraint).empty;
     errdefer constraints.deinit(state.allocator);
-    try constraints.ensureTotalCapacity(state.allocator, state.fallback_constraints.items.len + page.fallback_constraints.len);
+    try constraints.ensureTotalCapacity(state.allocator, state.constraints.fallback.items.len + page.fallback_constraints.len);
     var inserted = false;
     const page_index = state.pageIndexOf(page.page_id);
-    for (state.fallback_constraints.items) |constraint| {
-        const owner = state.layoutPageOfConstraintEndpoint(constraint.target_node);
+    for (state.constraints.fallback.items) |constraint| {
+        const owner = state.layoutPageOf(constraint.target_node);
         if (!inserted and owner != null and state.pageIndexOf(owner.?) >= page_index) {
             constraints.appendSliceAssumeCapacity(page.fallback_constraints);
             inserted = true;
@@ -175,8 +168,8 @@ pub fn applyPage(state: anytype, page: *const document.Page) !void {
         node.frame = entry.frame;
         node.layout_measurement = entry.measurement;
     }
-    state.fallback_constraints.deinit(state.allocator);
-    state.fallback_constraints = constraints;
+    state.constraints.fallback.deinit(state.allocator);
+    state.constraints.fallback = constraints;
 }
 
 const PageLayoutJobOutput = struct {
@@ -381,15 +374,12 @@ fn mergePageLayoutIssues(state: anytype, result: *const document.Page) !void {
     for (result.diagnostics) |diagnostic| {
         var cloned = try diagnostic.clone(state.allocator);
         errdefer cloned.deinit(state.allocator);
-        try state.addDiagnostic(cloned);
+        try state.diagnostics.addDiagnostic(state.allocator, cloned);
     }
     for (result.constraint_failures) |failure| {
         var cloned = try failure.clone(state.allocator);
-        var cloned_transferred = false;
-        errdefer if (!cloned_transferred) cloned.deinit(state.allocator);
-        try state.constraint_failures.append(state.allocator, cloned);
-        cloned_transferred = true;
-        state.last_constraint_failure = state.constraint_failures.items[state.constraint_failures.items.len - 1];
+        errdefer cloned.deinit(state.allocator);
+        try state.diagnostics.constraint_failures.append(state.allocator, cloned);
     }
 }
 
@@ -397,9 +387,9 @@ pub fn applyDocument(state: anytype, results: *const document.Document) !void {
     for (results.pages) |page| {
         if (!page.converged) return error.LayoutDidNotConverge;
     }
-    state.fallback_constraints.clearRetainingCapacity();
+    state.constraints.fallback.clearRetainingCapacity();
     for (results.pages) |page| {
-        try state.fallback_constraints.appendSlice(state.allocator, page.fallback_constraints);
+        try state.constraints.fallback.appendSlice(state.allocator, page.fallback_constraints);
         for (page.object_frames) |entry| {
             const node = state.getNode(entry.node_id) orelse return error.UnknownNode;
             node.frame = entry.frame;
@@ -418,7 +408,7 @@ fn solvePageLayout(
 ) !document.Page {
     var has_split = false;
     for (page_inputs.constraint_indexes) |index| {
-        if (state.constraints.items[index].group_split) {
+        if (state.constraints.active.items[index].group_split) {
             has_split = true;
             break;
         }
@@ -445,8 +435,8 @@ fn solvePageLayoutPass(
     measure_only: bool,
 ) !document.Page {
     try graph.checkCancellation(options);
-    const diagnostic_start = state.diagnostics.items.len;
-    const constraint_failure_start = state.constraint_failures.items.len;
+    const diagnostic_start = state.diagnostics.entries.items.len;
+    const constraint_failure_start = state.diagnostics.constraint_failures.items.len;
     const page_id = page_inputs.page_id;
     var page_graph = try graph.PageLayoutGraph.initWithSplitFrames(state.allocator, state, page_inputs, split_frames);
     defer page_graph.deinit();
@@ -564,7 +554,7 @@ fn collectPage(
             .measurement = node.layout_measurement,
         });
     }
-    for (state.diagnostics.items[diagnostic_start..]) |diagnostic| {
+    for (state.diagnostics.entries.items[diagnostic_start..]) |diagnostic| {
         try graph.checkCancellation(options);
         if (diagnostic.page_id != null and diagnostic.page_id.? != page_id) continue;
         var cloned = try diagnostic.clone(state.allocator);
@@ -573,7 +563,7 @@ fn collectPage(
         try diagnostics_out.append(state.allocator, cloned);
         cloned_transferred = true;
     }
-    for (state.constraint_failures.items[constraint_failure_start..]) |failure| {
+    for (state.diagnostics.constraint_failures.items[constraint_failure_start..]) |failure| {
         try graph.checkCancellation(options);
         if (failure.page_id != page_id) continue;
         var cloned = try failure.clone(state.allocator);
@@ -838,7 +828,8 @@ fn reconcileAxisStateLocalized(state: anytype, workspace: *graph.AxisWorkspace, 
                 if (incoming) |c| {
                     const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_frame_size;
                     const propagation = try reconciliationFailurePropagation(state, workspace, index, axis_state, err);
-                    try state.noteConstraintFailureDetailedWithPropagation(
+                    try state.diagnostics.noteConstraintFailureDetailedWithPropagation(
+                        state.allocator,
                         workspace.graph.page_id,
                         c,
                         existing,
@@ -912,7 +903,8 @@ fn applyAxisConstraint(
         .tautology => return false,
         .conflict => {
             if (!is_soft and options.record_diagnostics) {
-                try state.noteConstraintFailureDetailed(
+                try state.diagnostics.noteConstraintFailureDetailed(
+                    state.allocator,
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor),
@@ -930,7 +922,8 @@ fn applyAxisConstraint(
                 if (is_soft) return false;
                 if (options.record_diagnostics) {
                     const propagation = try negativeSizePropagation(state, workspace, target_index, constraint, size);
-                    try state.noteConstraintFailureDetailedWithPropagation(
+                    try state.diagnostics.noteConstraintFailureDetailedWithPropagation(
+                        state.allocator,
                         workspace.graph.page_id,
                         constraint,
                         workspace.states[target_index].size_source,
@@ -950,7 +943,8 @@ fn applyAxisConstraint(
                 if (options.record_diagnostics) {
                     if (err == error.ConstraintConflict) {
                         const propagation = try sizeConflictPropagation(state, workspace, target_index, constraint, workspace.states[target_index].size, size);
-                        try state.noteConstraintFailureDetailedWithPropagation(
+                        try state.diagnostics.noteConstraintFailureDetailedWithPropagation(
+                            state.allocator,
                             workspace.graph.page_id,
                             constraint,
                             workspace.states[target_index].size_source,
@@ -963,7 +957,8 @@ fn applyAxisConstraint(
                         );
                     } else {
                         const propagation = try negativeSizePropagation(state, workspace, target_index, constraint, size);
-                        try state.noteConstraintFailureDetailedWithPropagation(
+                        try state.diagnostics.noteConstraintFailureDetailedWithPropagation(
+                            state.allocator,
                             workspace.graph.page_id,
                             constraint,
                             workspace.states[target_index].size_source,
@@ -1047,7 +1042,8 @@ fn applyAxisConstraint(
         if (options.record_diagnostics) {
             if (err == error.ConstraintConflict) {
                 const propagation = try anchorConflictPropagation(state, workspace, target_index, constraint, target_value);
-                try state.noteConstraintFailureDetailedWithPropagation(
+                try state.diagnostics.noteConstraintFailureDetailedWithPropagation(
+                    state.allocator,
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor),
@@ -1060,7 +1056,8 @@ fn applyAxisConstraint(
                 );
             } else {
                 const propagation = try negativeAnchorPropagation(state, workspace, target_index);
-                try state.noteConstraintFailureDetailedWithPropagation(
+                try state.diagnostics.noteConstraintFailureDetailedWithPropagation(
+                    state.allocator,
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor),
@@ -1163,7 +1160,8 @@ fn applyReverseAxisConstraint(
             const expected = target_value - constraint.offset;
             if (err == error.ConstraintConflict) {
                 const propagation = try reverseAnchorConflictPropagation(state, workspace, source_index, constraint, expected);
-                try state.noteConstraintFailureDetailedWithPropagation(
+                try state.diagnostics.noteConstraintFailureDetailedWithPropagation(
+                    state.allocator,
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[source_index], node_source.anchor),
@@ -1176,7 +1174,8 @@ fn applyReverseAxisConstraint(
                 );
             } else {
                 const propagation = try negativeAnchorPropagation(state, workspace, source_index);
-                try state.noteConstraintFailureDetailedWithPropagation(
+                try state.diagnostics.noteConstraintFailureDetailedWithPropagation(
+                    state.allocator,
                     workspace.graph.page_id,
                     constraint,
                     graph.axisAnchorSource(workspace.states[source_index], node_source.anchor),
@@ -1781,7 +1780,7 @@ fn validatePageConstraints(state: anytype, page_id: NodeId, page_graph: *const g
             .known => |value| value,
             .unknown => {
                 const propagation = if (options.record_propagation) try constraintCyclePropagation(state, page_graph, constraint) else null;
-                try state.noteConstraintFailureDetailedWithPropagation(page_id, constraint, null, .conflict, .constraint_cycle, graph.anchorAxis(constraint.target_anchor), null, null, propagation);
+                try state.diagnostics.noteConstraintFailureDetailedWithPropagation(state.allocator, page_id, constraint, null, .conflict, .constraint_cycle, graph.anchorAxis(constraint.target_anchor), null, null, propagation);
                 continue;
             },
         };
@@ -1790,7 +1789,7 @@ fn validatePageConstraints(state: anytype, page_id: NodeId, page_graph: *const g
             .known => |value| value,
             .unknown => {
                 const propagation = if (options.record_propagation) try constraintCyclePropagation(state, page_graph, constraint) else null;
-                try state.noteConstraintFailureDetailedWithPropagation(page_id, constraint, null, .conflict, .constraint_cycle, graph.anchorAxis(constraint.target_anchor), target_value, null, propagation);
+                try state.diagnostics.noteConstraintFailureDetailedWithPropagation(state.allocator, page_id, constraint, null, .conflict, .constraint_cycle, graph.anchorAxis(constraint.target_anchor), target_value, null, propagation);
                 continue;
             },
         };
@@ -1799,7 +1798,7 @@ fn validatePageConstraints(state: anytype, page_id: NodeId, page_graph: *const g
         if (@abs(target_value - expected) > ConstraintTolerance) {
             const related = validationRelatedConstraint(page_graph, constraint);
             const propagation = if (options.record_propagation) try validationConflictPropagation(state, page_id, page_graph, constraint, related, target_value, expected) else null;
-            try state.noteConstraintFailureDetailedWithPropagation(page_id, constraint, related, .conflict, .anchor_value_conflict, graph.anchorAxis(constraint.target_anchor), target_value, expected, propagation);
+            try state.diagnostics.noteConstraintFailureDetailedWithPropagation(state.allocator, page_id, constraint, related, .conflict, .anchor_value_conflict, graph.anchorAxis(constraint.target_anchor), target_value, expected, propagation);
         }
     }
 }
@@ -1966,7 +1965,7 @@ fn constraintEndpointSame(a: ConstraintEndpoint, b: ConstraintEndpoint) bool {
 }
 
 fn constraintAlreadyFailed(state: anytype, constraint: Constraint) bool {
-    for (state.constraint_failures.items) |failure| {
+    for (state.diagnostics.constraint_failures.items) |failure| {
         if (constraintsSame(failure.constraint, constraint)) return true;
     }
     return false;

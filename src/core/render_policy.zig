@@ -329,7 +329,7 @@ pub fn resolve(state: anytype, node: *const Node) ResolvedRender {
 
 pub fn resolvePageBackground(state: anytype, page: *const Node) ?Color {
     if (parseColorProperty(state, page, "background_fill")) |color| return color;
-    const document = state.getNode(state.document_id) orelse return null;
+    const document = state.getNode(state.graph.document_id) orelse return null;
     return parseColorProperty(state, document, "background_fill");
 }
 
@@ -973,7 +973,7 @@ fn themedRecordColorProperty(state: anytype, node: *const Node, record_key: []co
         }
     }
     if (node.kind == .object or node.kind == .page) {
-        if (state.getNode(state.document_id)) |document| {
+        if (state.getNode(state.graph.document_id)) |document| {
             if (explicitColorProperty(document, theme_key)) |color| return color;
         }
     }
@@ -1017,7 +1017,7 @@ fn inheritedHorizontalAlignProperty(state: anytype, node: *const Node, key: []co
         }
     }
     if (node.kind == .object or node.kind == .page) {
-        if (state.getNode(state.document_id)) |document| {
+        if (state.getNode(state.graph.document_id)) |document| {
             if (explicitHorizontalAlignProperty(document, key)) |value| return value;
         }
     }
@@ -1034,7 +1034,7 @@ fn inheritedPositiveFloatProperty(state: anytype, node: *const Node, key: []cons
         }
     }
     if (node.kind == .object or node.kind == .page) {
-        if (state.getNode(state.document_id)) |document| {
+        if (state.getNode(state.graph.document_id)) |document| {
             if (explicitPositiveFloatProperty(document, key)) |value| return value;
         }
     }
@@ -1097,7 +1097,7 @@ fn themedColorProperty(state: anytype, node: *const Node, key: []const u8, theme
         }
     }
     if (node.kind == .object or node.kind == .page) {
-        if (state.getNode(state.document_id)) |document| {
+        if (state.getNode(state.graph.document_id)) |document| {
             if (explicitColorProperty(document, theme_key)) |color| return color;
         }
     }

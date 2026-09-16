@@ -163,7 +163,7 @@ fn axisFrameFixedByUserConstraints(state: anytype, node_id: NodeId, axis: Axis) 
     var has_end = false;
     var has_center = false;
 
-    for (state.constraints.items) |constraint| {
+    for (state.constraints.active.items) |constraint| {
         if (constraint.target_node != node_id) continue;
         if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
 

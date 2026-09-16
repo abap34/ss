@@ -43,12 +43,12 @@ fn exercise(source: []const u8, first: []const u8, second: []const u8, options: 
     defer modules.deinit();
     var state = try compiler.analysis.buildDocumentStateWithOptions(allocator, path, root, &source_buf, &syntax, &modules, .{});
     defer state.deinit();
-    errdefer for (state.diagnostics.items) |diagnostic| {
+    errdefer for (state.diagnostics.entries.items) |diagnostic| {
         if (diagnostic.data == .user_report) std.debug.print("{f}: {s}\n", .{ diagnostic.origin orelse core.SourceOrigin{}, diagnostic.data.user_report.message });
     };
     if (options.diagnostic) |expected| {
         try testing.expectError(error.DiagnosticsFailed, compiler.analysis.analyzeDocumentState(allocator, &state));
-        for (state.diagnostics.items) |diagnostic| {
+        for (state.diagnostics.entries.items) |diagnostic| {
             if (diagnostic.data == .user_report and std.mem.eql(u8, diagnostic.code(), std.mem.trimEnd(u8, expected, ":"))) return;
         }
         return error.ExpectedDiagnostic;
@@ -73,7 +73,7 @@ fn verifyOriginalDeclarations(state: *core.DocumentState) !void {
     const original_type = sema.resolveTypeNameInContext(0, "a::Item") orelse return error.MissingType;
     const exported_type = sema.resolveTypeNameInContext(0, "b::Item") orelse return error.MissingType;
     try testing.expectEqual(original_type.nominal_module_id, exported_type.nominal_module_id);
-    for (state.nodes.items) |*node| {
+    for (state.graph.nodes.items) |*node| {
         if (node.kind != .object) continue;
         try testing.expectEqualStrings("original", core.nodeDisplayContent(node));
     }
@@ -146,7 +146,7 @@ test "prelude exports use the canonical parameters without forwarding functions"
             try testing.expectEqual(generated.id, function.module_id);
             try testing.expectEqual(@as(usize, 1), function.decl.params.items.len);
             var found_custom = false;
-            for (state.nodes.items) |*node| {
+            for (state.graph.nodes.items) |*node| {
                 if (std.mem.eql(u8, core.nodeDisplayContent(node), "custom")) found_custom = true;
             }
             try testing.expect(found_custom);

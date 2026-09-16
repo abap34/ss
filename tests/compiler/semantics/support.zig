@@ -103,7 +103,7 @@ pub fn expectObjectContent(io: std.Io, allocator: std.mem.Allocator, path: []con
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind == .object) {
             if (std.mem.eql(u8, core.nodeDisplayContent(&node), expected)) return;
         }
@@ -122,7 +122,7 @@ pub fn expectObjectContentWithOverlays(
     var state = try buildFinalizedDocumentStateWithOverlays(io, allocator, path, source, overlays);
     defer state.deinit();
 
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind == .object) {
             if (std.mem.eql(u8, core.nodeDisplayContent(&node), expected)) return;
         }
@@ -134,7 +134,7 @@ pub fn expectObjectProperty(io: std.Io, allocator: std.mem.Allocator, path: []co
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
         for (node.fields.items) |field| {
             if (!std.mem.eql(u8, field.key, key)) continue;
@@ -153,7 +153,7 @@ pub fn expectObjectPropertyMissing(io: std.Io, allocator: std.mem.Allocator, pat
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
         for (node.fields.items) |field| {
             if (std.mem.eql(u8, field.key, key)) return error.ExpectedObjectPropertyAbsent;
@@ -173,7 +173,7 @@ pub fn expectObjectFieldPath(
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
         const root = core.nodeField(&node, root_key) orelse continue;
         const value_at_path = core.fields.pathValue(root, field_path) orelse continue;
@@ -198,7 +198,7 @@ pub fn expectObjectFieldPathNone(
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
         const root = core.nodeField(&node, root_key) orelse continue;
         const value_at_path = core.fields.pathValue(root, field_path) orelse continue;
@@ -220,7 +220,7 @@ pub fn expectObjectFieldPathWithOverlays(
     var state = try buildFinalizedDocumentStateWithOverlays(io, allocator, path, source, overlays);
     defer state.deinit();
 
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
         const root = core.nodeField(&node, root_key) orelse continue;
         const value_at_path = core.fields.pathValue(root, field_path) orelse continue;
@@ -243,7 +243,7 @@ pub fn expectObjectPropertyWithOverlays(
     var state = try buildFinalizedDocumentStateWithOverlays(io, allocator, path, source, overlays);
     defer state.deinit();
 
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
         for (node.fields.items) |field| {
             if (!std.mem.eql(u8, field.key, key)) continue;
@@ -270,7 +270,7 @@ pub fn expectClassDefaultProperty(
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
         const node_role = node.role orelse continue;
         if (!std.mem.eql(u8, node_role, role)) continue;
@@ -304,7 +304,7 @@ pub fn expectBodyTextDefaults(
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
         const role = node.role orelse continue;
         if (!std.mem.eql(u8, role, "body")) continue;
@@ -322,7 +322,7 @@ pub fn expectResolvedCodePaintIsColorful(io: std.Io, allocator: std.mem.Allocato
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
         const role = node.role orelse continue;
         if (!std.mem.eql(u8, role, "code")) continue;
@@ -464,7 +464,7 @@ pub fn expectOverlayDiagnostic(
 
     analysis.analyzeDocumentState(allocator, &state) catch {};
 
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         const origin_text = try std.fmt.allocPrint(allocator, "{f}", .{origin});
         defer allocator.free(origin_text);
@@ -502,7 +502,7 @@ pub fn expectDiagnosticWithOverlays(
 
     analysis.analyzeDocumentState(allocator, &state) catch {};
 
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         const origin_text = try std.fmt.allocPrint(allocator, "{f}", .{origin});
         defer allocator.free(origin_text);
@@ -573,7 +573,7 @@ pub fn expectDiagnostic(
 
     analysis.analyzeDocumentState(allocator, &state) catch {};
 
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         const origin_text = try std.fmt.allocPrint(allocator, "{f}", .{origin});
         defer allocator.free(origin_text);
@@ -612,7 +612,7 @@ pub fn expectLoweringErrorDiagnostic(
         }
     }
 
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
@@ -630,7 +630,7 @@ pub fn expectLoweredDiagnostic(
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
@@ -649,7 +649,7 @@ pub fn expectLoweredDiagnosticWithOrigin(
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         const origin_text = try std.fmt.allocPrint(allocator, "{f}", .{origin});
         defer allocator.free(origin_text);
@@ -671,7 +671,7 @@ pub fn expectNoLoweredDiagnostic(
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, unexpected_message) != null) {
@@ -692,7 +692,7 @@ pub fn expectLoweredDiagnosticCount(
     defer state.deinit();
 
     var count: usize = 0;
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) count += 1;
@@ -711,7 +711,7 @@ pub fn expectObjectState(
     defer state.deinit();
 
     var count: usize = 0;
-    for (state.nodes.items) |node| {
+    for (state.graph.nodes.items) |node| {
         if (node.kind != .object) continue;
         if (expected.role) |role| {
             const node_role = node.role orelse continue;

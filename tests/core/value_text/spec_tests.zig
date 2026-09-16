@@ -25,7 +25,7 @@ test "core value text spec: class record defaults stay alive for the document st
     var state = try initDocumentStateWithTaggedRecordDefault();
     defer state.deinit();
 
-    const document = state.getNode(state.document_id).?;
+    const document = state.getNode(state.graph.document_id).?;
     var first_family: ?[]const u8 = null;
     for (0..16) |_| {
         var slot = (try core.fields.get(testing.allocator, &state, document, "style")).?;
@@ -92,7 +92,7 @@ test "core value text spec: class record defaults are safe under parallel render
 
     var work = ConcurrentDefaultReads{
         .state = &state,
-        .document = state.getNode(state.document_id).?,
+        .document = state.getNode(state.graph.document_id).?,
     };
     var threads: [ConcurrentDefaultReads.thread_count]std.Thread = undefined;
     var started: usize = 0;
@@ -140,7 +140,7 @@ fn initDocumentStateWithTaggedRecordDefault() !core.DocumentState {
     var state = try core.DocumentState.init(allocator, asset_base_dir, project_path, project_source, program);
     program = ast.Module.init();
     errdefer state.deinit();
-    try state.module_order.append(allocator, state.project_module_id);
+    try state.modules.order.append(allocator, state.modules.project_id);
     return state;
 }
 

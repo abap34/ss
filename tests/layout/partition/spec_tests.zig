@@ -6,20 +6,24 @@ const partition = core.layout.partition;
 
 const CountedDocument = struct {
     allocator: std.mem.Allocator,
-    page_order: std.ArrayList(core.NodeId) = .empty,
-    nodes: std.ArrayList(core.NodeId) = .empty,
-    constraints: std.ArrayList(core.Constraint) = .empty,
+    graph: struct {
+        page_order: std.ArrayList(core.NodeId) = .empty,
+        nodes: std.ArrayList(core.NodeId) = .empty,
+    } = .{},
+    constraints: struct {
+        active: std.ArrayList(core.Constraint) = .empty,
+    } = .{},
     owner_queries: usize = 0,
 
     fn init(allocator: std.mem.Allocator, page_count: usize) !CountedDocument {
         var self = CountedDocument{ .allocator = allocator };
         errdefer self.deinit();
         for (0..page_count) |index| {
-            try self.page_order.append(allocator, @intCast(index + 1));
+            try self.graph.page_order.append(allocator, @intCast(index + 1));
             const first: core.NodeId = @intCast(100000 + index * 2);
-            try self.nodes.appendSlice(allocator, &.{ first, first + 1 });
+            try self.graph.nodes.appendSlice(allocator, &.{ first, first + 1 });
             for (0..4) |offset| {
-                try self.constraints.append(allocator, .{
+                try self.constraints.active.append(allocator, .{
                     .target_node = first,
                     .target_anchor = .left,
                     .source = .{ .node = .{ .node_id = first + 1, .anchor = .right } },
@@ -31,18 +35,18 @@ const CountedDocument = struct {
     }
 
     fn deinit(self: *CountedDocument) void {
-        self.page_order.deinit(self.allocator);
-        self.nodes.deinit(self.allocator);
-        self.constraints.deinit(self.allocator);
+        self.graph.page_order.deinit(self.allocator);
+        self.graph.nodes.deinit(self.allocator);
+        self.constraints.active.deinit(self.allocator);
     }
 
     pub fn childrenOf(self: *CountedDocument, page_id: core.NodeId) ?[]const core.NodeId {
         if (page_id >= 100000) return null;
         const start = (page_id - 1) * 2;
-        return self.nodes.items[start .. start + 2];
+        return self.graph.nodes.items[start .. start + 2];
     }
 
-    pub fn layoutPageOfConstraintEndpoint(self: *CountedDocument, node_id: core.NodeId) ?core.NodeId {
+    pub fn layoutPageOf(self: *CountedDocument, node_id: core.NodeId) ?core.NodeId {
         self.owner_queries += 1;
         return (node_id - 100000) / 2 + 1;
     }
@@ -56,7 +60,7 @@ fn partitionCountedDocument(allocator: std.mem.Allocator, page_count: usize) !vo
     try testing.expectEqual(page_count, result.pages.len);
     try testing.expectEqual(page_count * 2, state.owner_queries);
     for (result.pages, 0..) |page, index| {
-        try testing.expectEqualSlices(core.NodeId, state.nodes.items[index * 2 .. index * 2 + 2], page.node_ids);
+        try testing.expectEqualSlices(core.NodeId, state.graph.nodes.items[index * 2 .. index * 2 + 2], page.node_ids);
         try testing.expectEqual(@as(usize, 4), page.constraint_indexes.len);
         for (page.constraint_indexes, 0..) |constraint_index, position| {
             try testing.expectEqual(index * 4 + position, constraint_index);
@@ -102,7 +106,7 @@ test "layout partition: solving one page preserves other frames and fallback ord
         const page = try state.addPage("page");
         node.* = try state.makeObject(page, "body", null, .text, .text, "body");
         _ = try state.makeObject(page, "next", null, .text, .text, "next");
-        try state.addAnchorConstraint(node.*, .left, .{ .page = .left }, 60, null);
+        try state.constraints.addAnchor(state.allocator, node.*, .left, .{ .page = .left }, 60, null);
     }
     var measured = MeasuredPages{};
     const options = core.layout.graph.SolveOptions{ .measurement_provider = .{
@@ -116,7 +120,7 @@ test "layout partition: solving one page preserves other frames and fallback ord
     const last = state.getNode(nodes[2]).?.frame;
     var inputs = try partition.Document.init(testing.allocator, &state);
     defer inputs.deinit(testing.allocator);
-    state.constraints.items[1].offset = 80;
+    state.constraints.active.items[1].offset = 80;
     measured.mask = 0;
     var selected = try core.layout.solver.solvePage(&state, inputs.pages[1], 1, null, options);
     defer selected.deinit(testing.allocator);
@@ -125,12 +129,12 @@ test "layout partition: solving one page preserves other frames and fallback ord
     try testing.expectEqualDeep(first, state.getNode(nodes[0]).?.frame);
     try testing.expectEqualDeep(last, state.getNode(nodes[2]).?.frame);
     try testing.expectApproxEqAbs(@as(f32, 80), state.getNode(nodes[1]).?.frame.x, core.layout.graph.ConstraintTolerance);
-    const fallbacks = try testing.allocator.dupe(core.Constraint, state.fallback_constraints.items);
+    const fallbacks = try testing.allocator.dupe(core.Constraint, state.constraints.fallback.items);
     defer testing.allocator.free(fallbacks);
     var full = try state.finalizeDocument(null, options);
     defer full.deinit(testing.allocator);
     try testing.expectEqualDeep(full.pages[1].object_frames, selected.object_frames);
-    try testing.expectEqualDeep(fallbacks, state.fallback_constraints.items);
+    try testing.expectEqualDeep(fallbacks, state.constraints.fallback.items);
     try testing.expectError(error.InvalidPageLayoutInputs, core.layout.solver.solvePage(&state, inputs.pages[1], 0, null, options));
 }
 
@@ -144,9 +148,9 @@ test "layout partition: implicit groups retain page ownership and foreign endpoi
     const foreign = try state.makeObject(second, "foreign", null, .text, .text, "foreign");
     const unused = try state.createObjectWithOrigin("unused", null, .text, .text, "unused", null);
     const group = try state.createGroupWithOrigin(&.{ a, b }, null);
-    try state.addAnchorConstraint(group, .left, .{ .page = .left }, 10, null);
-    try state.addAnchorConstraint(a, .left, .{ .node = .{ .node_id = foreign, .anchor = .left } }, 20, null);
-    try state.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = unused, .anchor = .left } }, 30, null);
+    try state.constraints.addAnchor(state.allocator, group, .left, .{ .page = .left }, 10, null);
+    try state.constraints.addAnchor(state.allocator, a, .left, .{ .node = .{ .node_id = foreign, .anchor = .left } }, 20, null);
+    try state.constraints.addAnchor(state.allocator, b, .left, .{ .node = .{ .node_id = unused, .anchor = .left } }, 30, null);
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 2), prepared.layout.pages.len);
@@ -163,7 +167,7 @@ test "layout partition: implicit groups retain page ownership and foreign endpoi
     try state.validatePageLocalLayout();
     var cross_page = false;
     var unowned = false;
-    for (state.diagnostics.items) |diagnostic| switch (diagnostic.data) {
+    for (state.diagnostics.entries.items) |diagnostic| switch (diagnostic.data) {
         .user_report => |report| {
             cross_page = cross_page or std.mem.eql(u8, report.code, "CrossPageConstraint");
             unowned = unowned or std.mem.eql(u8, report.code, "UnownedLayoutObject");
@@ -215,7 +219,7 @@ test "layout partition: referenced groups include nested bounding groups but not
     const inner = try state.createGroupWithOrigin(&.{ first, second }, null);
     const outer = try state.createGroupWithOrigin(&.{ inner, third }, null);
     const unrelated = try state.createGroupWithOrigin(&.{ first, third }, null);
-    try state.addAnchorConstraint(after, .left, .{ .node = .{ .node_id = outer, .anchor = .right } }, 16, null);
+    try state.constraints.addAnchor(state.allocator, after, .left, .{ .node = .{ .node_id = outer, .anchor = .right } }, 16, null);
 
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
@@ -243,7 +247,7 @@ test "layout partition: empty partial and cross-page groups are excluded" {
     const mixed = try state.createGroupWithOrigin(&.{ first, second }, null);
     const outer = try state.createGroupWithOrigin(&.{ first, mixed }, null);
     for ([_]core.NodeId{ empty, partial, mixed, outer }) |id| {
-        try state.addAnchorConstraint(id, .left, .{ .page = .left }, 40, null);
+        try state.constraints.addAnchor(state.allocator, id, .left, .{ .page = .left }, 40, null);
     }
     const discarded = try state.createGroupWithOrigin(&.{first}, null);
     state.getNode(discarded).?.discarded = true;
@@ -260,10 +264,10 @@ test "layout partition: prepared graphs read updated offsets without repeating p
     defer state.deinit();
     const page = try state.addPage("page");
     const object = try state.makeObject(page, "object", null, .text, .text, "body");
-    try state.addAnchorConstraint(object, .left, .{ .page = .left }, 10, null);
+    try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, 10, null);
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
-    state.constraints.items[0].offset = 45;
+    state.constraints.active.items[0].offset = 45;
     var graph = try core.layout.graph.PageLayoutGraph.init(testing.allocator, &state, prepared.layout.pages[0]);
     defer graph.deinit();
     try testing.expectEqual(@as(f32, 45), graph.constraints[0].offset);

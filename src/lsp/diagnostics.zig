@@ -117,12 +117,8 @@ pub const DiagnosticSet = struct {
 
     pub fn addConstraintFailure(self: *DiagnosticSet, state: *core.DocumentState, err: anyerror) !void {
         if (err == error.Canceled) return err;
-        if (state.constraint_failures.items.len > 0) {
-            try self.addConstraintFailureItem(state, state.constraint_failures.items[0]);
-            return;
-        }
-        if (state.last_constraint_failure) |failure| {
-            try self.addConstraintFailureItem(state, failure);
+        if (state.diagnostics.constraint_failures.items.len > 0) {
+            try self.addConstraintFailureItem(state, state.diagnostics.constraint_failures.items[0]);
             return;
         }
 

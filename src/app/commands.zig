@@ -319,7 +319,7 @@ fn compileRendering(
 
     progress.begin("Compile rendering");
     errdefer progress.abort();
-    const diagnostic_start = state.diagnostics.items.len;
+    const diagnostic_start = state.diagnostics.entries.items.len;
     const ir_allocator = std.heap.smp_allocator;
     var ir = render_compile.compilePrepared(ir_allocator, io, &state, &pages, .{
         .jobs = options.jobs,

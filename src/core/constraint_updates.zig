@@ -28,20 +28,20 @@ const GroupPositionMask = struct {
 };
 
 pub fn resolve(state: *document_state.DocumentState) !void {
-    state.overridden_constraints.clearRetainingCapacity();
-    for (state.constraint_updates.items) |*update| update.active = false;
-    if (state.constraint_updates.items.len == 0) return;
+    state.constraints.overridden.clearRetainingCapacity();
+    for (state.constraints.updates.items) |*update| update.active = false;
+    if (state.constraints.updates.items.len == 0) return;
 
     var winners = WinnerMap.init(state.allocator);
     defer winners.deinit();
-    try winners.ensureTotalCapacity(@intCast(state.constraint_updates.items.len));
-    for (state.constraint_updates.items, 0..) |update, index| {
+    try winners.ensureTotalCapacity(@intCast(state.constraints.updates.items.len));
+    for (state.constraints.updates.items, 0..) |update, index| {
         const result = winners.getOrPutAssumeCapacity(Slot.init(update.target_node, update.target_anchor, update.role));
-        if (!result.found_existing or update.scope_depth <= state.constraint_updates.items[result.value_ptr.*].scope_depth) {
+        if (!result.found_existing or update.scope_depth <= state.constraints.updates.items[result.value_ptr.*].scope_depth) {
             result.value_ptr.* = index;
         }
     }
-    for (state.constraint_updates.items, 0..) |*update, index| {
+    for (state.constraints.updates.items, 0..) |*update, index| {
         update.active = winners.get(Slot.init(update.target_node, update.target_anchor, update.role)) == index;
     }
 
@@ -50,7 +50,7 @@ pub fn resolve(state: *document_state.DocumentState) !void {
         for (group_masks.items) |*mask| mask.deinit();
         group_masks.deinit(state.allocator);
     }
-    for (state.constraint_updates.items, 0..) |update, index| {
+    for (state.constraints.updates.items, 0..) |update, index| {
         if (!update.active or update.role != .position) continue;
         const node = state.getNode(update.target_node) orelse continue;
         if (!model.roleEq(node.role, model.GroupRole)) continue;
@@ -63,27 +63,27 @@ pub fn resolve(state: *document_state.DocumentState) !void {
             .nodes = nodes,
         });
     }
-    try resolveOverlappingUpdates(state.constraint_updates.items, group_masks.items, state.allocator);
+    try resolveOverlappingUpdates(state.constraints.updates.items, group_masks.items, state.allocator);
 
     var active_constraints = std.ArrayList(model.Constraint).empty;
     errdefer active_constraints.deinit(state.allocator);
-    for (state.constraints.items) |constraint| {
-        if (isMaskedByWinner(state.constraint_updates.items, &winners, group_masks.items, constraint)) {
-            try state.overridden_constraints.append(state.allocator, constraint);
+    for (state.constraints.active.items) |constraint| {
+        if (isMaskedByWinner(state.constraints.updates.items, &winners, group_masks.items, constraint)) {
+            try state.constraints.overridden.append(state.allocator, constraint);
         } else {
             try active_constraints.append(state.allocator, constraint);
         }
     }
-    for (state.constraint_updates.items) |update| {
+    for (state.constraints.updates.items) |update| {
         const replacement = update.replacement orelse continue;
         if (update.active) {
             try active_constraints.append(state.allocator, replacement);
         } else {
-            try state.overridden_constraints.append(state.allocator, replacement);
+            try state.constraints.overridden.append(state.allocator, replacement);
         }
     }
-    state.constraints.deinit(state.allocator);
-    state.constraints = active_constraints;
+    state.constraints.active.deinit(state.allocator);
+    state.constraints.active = active_constraints;
 }
 
 fn isMaskedByWinner(

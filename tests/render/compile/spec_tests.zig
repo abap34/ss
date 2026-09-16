@@ -873,15 +873,15 @@ test "synthetic font faces produce non-fatal deduplicated warnings" {
             var state = try initEmptyDocumentState();
             defer state.deinit();
             try render_compile.addFontFaceSubstitutionWarning(&state, null, null, null, detail);
-            try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
-            try testing.expectEqual(core.DiagnosticSeverity.warning, state.diagnostics.items[0].severity);
-            const diagnostic_message = switch (state.diagnostics.items[0].data) {
+            try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
+            try testing.expectEqual(core.DiagnosticSeverity.warning, state.diagnostics.entries.items[0].severity);
+            const diagnostic_message = switch (state.diagnostics.entries.items[0].data) {
                 .user_report => |data| data.message,
                 else => return error.ExpectedFontFaceSubstitutionWarning,
             };
             try testing.expectEqualStrings(message, diagnostic_message);
             try render_compile.addFontFaceSubstitutionWarning(&state, null, null, null, detail);
-            try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
+            try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
         }
     }
 
@@ -1776,8 +1776,8 @@ test "document font environment rejects changes between layout and compilation" 
             .{ .font_environment = font_environment },
         ),
     );
-    try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
-    for (state.diagnostics.items) |diagnostic| {
+    try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
+    for (state.diagnostics.entries.items) |diagnostic| {
         const message = switch (diagnostic.data) {
             .user_report => |data| data.message,
             else => return error.ExpectedFontEnvironmentDiagnostic,
@@ -1792,31 +1792,31 @@ test "font environment refresh failures produce actionable diagnostics" {
     defer state.deinit();
 
     try testing.expect(try render_compile.addFontEnvironmentDiagnostic(&state, error.FontEnvironmentRefreshFailed));
-    try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
-    const message = switch (state.diagnostics.items[0].data) {
+    try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
+    const message = switch (state.diagnostics.entries.items[0].data) {
         .user_report => |data| data.message,
         else => return error.ExpectedFontEnvironmentDiagnostic,
     };
-    try testing.expectEqualStrings("FontSetupFailed", state.diagnostics.items[0].code());
+    try testing.expectEqualStrings("FontSetupFailed", state.diagnostics.entries.items[0].code());
     try testing.expect(std.mem.indexOf(u8, message, "fc-list") != null);
     try testing.expect(std.mem.indexOf(u8, message, "FONTCONFIG_FILE") != null);
     try testing.expect(std.mem.indexOf(u8, message, "FontEnvironmentRefreshFailed") == null);
 
     try testing.expect(try render_compile.addFontEnvironmentDiagnostic(&state, error.FontEnvironmentRefreshFailed));
-    try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
+    try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
 
     try testing.expect(try render_compile.addFontEnvironmentDiagnostic(&state, error.PangoCreateFailed));
-    try testing.expectEqual(@as(usize, 2), state.diagnostics.items.len);
-    const pango_message = switch (state.diagnostics.items[1].data) {
+    try testing.expectEqual(@as(usize, 2), state.diagnostics.entries.items.len);
+    const pango_message = switch (state.diagnostics.entries.items[1].data) {
         .user_report => |data| data.message,
         else => return error.ExpectedFontEnvironmentDiagnostic,
     };
-    try testing.expectEqualStrings("TextLayoutUnavailable", state.diagnostics.items[1].code());
+    try testing.expectEqualStrings("TextLayoutUnavailable", state.diagnostics.entries.items[1].code());
     try testing.expect(std.mem.indexOf(u8, pango_message, "text layout data") != null);
     try testing.expect(std.mem.indexOf(u8, pango_message, "PangoCreateFailed") == null);
 
     try testing.expect(!(try render_compile.addFontEnvironmentDiagnostic(&state, error.IntentionalCompileFailure)));
-    try testing.expectEqual(@as(usize, 2), state.diagnostics.items.len);
+    try testing.expectEqual(@as(usize, 2), state.diagnostics.entries.items.len);
 }
 
 test "preload cache scan reports the LaTeX preamble path" {
@@ -1869,8 +1869,8 @@ test "preload cache scan reports the LaTeX preamble path" {
         failed = true;
     };
     try testing.expect(failed);
-    try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
-    const message = switch (state.diagnostics.items[0].data) {
+    try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
+    const message = switch (state.diagnostics.entries.items[0].data) {
         .render_failed => |data| data.reason,
         else => return error.ExpectedRenderFailureDiagnostic,
     };
@@ -1889,8 +1889,8 @@ test "font diagnostics identify prior failures by cause code" {
         },
     });
     try testing.expect(try render_compile.addFontEnvironmentDiagnostic(&state, error.FontEnvironmentRefreshFailed));
-    try testing.expectEqual(@as(usize, 1), state.diagnostics.items.len);
-    var cloned = try state.diagnostics.items[0].clone(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
+    var cloned = try state.diagnostics.entries.items[0].clone(testing.allocator);
     defer cloned.deinit(testing.allocator);
     try testing.expectEqualStrings("FontSetupFailed", cloned.data.render_failed.cause_code.?);
 }

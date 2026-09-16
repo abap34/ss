@@ -46,7 +46,8 @@ fn addFixture(state: *core.DocumentState) !Fixture {
         .text,
         "second",
     );
-    try state.addAnchorConstraint(
+    try state.constraints.addAnchor(
+        state.allocator,
         first_object,
         .left,
         .{ .page = .left },
@@ -81,7 +82,7 @@ fn initAndDeinitReport(allocator: std.mem.Allocator, state: *core.DocumentState)
     var report = try core.layout.conflicts.Report.init(allocator, state);
     defer report.deinit();
 
-    try testing.expectEqual(state.page_order.items.len, report.page_index_by_id.count());
+    try testing.expectEqual(state.graph.page_order.items.len, report.page_index_by_id.count());
     try testing.expectEqual(@as(usize, 2), report.object_index_by_id.count());
     try testing.expectEqual(@as(usize, 1), report.relations.len);
 }
@@ -139,11 +140,11 @@ test "layout conflict report shows resolved alignment only as fallback" {
         .offset = 0,
         .default_alignment = true,
     };
-    try state.constraints.append(testing.allocator, candidate);
+    try state.constraints.active.append(testing.allocator, candidate);
     var resolved = candidate;
     resolved.target_anchor = .center_y;
     resolved.source = .{ .page = .center_y };
-    try state.fallback_constraints.append(testing.allocator, resolved);
+    try state.constraints.fallback.append(testing.allocator, resolved);
 
     var report = try core.layout.conflicts.Report.init(testing.allocator, &state);
     defer report.deinit();

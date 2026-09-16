@@ -30,7 +30,7 @@ fn expectCycle(source: []const u8, members: []const []const u8) !void {
     try testing.expectError(error.InvalidType, compiler.analysis.analyzeDocumentState(testing.allocator, &state));
 
     var cycle_diagnostics: usize = 0;
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         if (std.mem.eql(u8, diagnostic.code(), "ObjectInheritanceCycle")) cycle_diagnostics += 1;
     }
     try testing.expectEqual(members.len, cycle_diagnostics);
@@ -39,7 +39,7 @@ fn expectCycle(source: []const u8, members: []const []const u8) !void {
             if (!std.mem.eql(u8, name, decl.name)) continue;
             const expected_origin = core.SourceOrigin.at("inheritance-spec.ss", decl.span);
             var found = false;
-            for (state.diagnostics.items) |diagnostic| {
+            for (state.diagnostics.entries.items) |diagnostic| {
                 if (diagnostic.origin) |origin| {
                     if (origin.eql(expected_origin)) found = true;
                 }

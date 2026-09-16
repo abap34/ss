@@ -217,8 +217,8 @@ pub fn printDocumentStateDiagnostics(path: []const u8, text: []const u8, state: 
 }
 
 pub fn printDocumentStateDiagnosticsFrom(path: []const u8, text: []const u8, state: anytype, start: usize) void {
-    const first = @min(start, state.diagnostics.items.len);
-    for (state.diagnostics.items[first..]) |diagnostic| {
+    const first = @min(start, state.diagnostics.entries.items.len);
+    for (state.diagnostics.entries.items[first..]) |diagnostic| {
         var resolved = resolveContextDiagnostic(state.allocator, path, text, state, diagnostic) catch {
             var message_buf: [128]u8 = undefined;
             print(.{
@@ -278,7 +278,7 @@ pub fn irDiagnosticsJson(
     try root.intField("schema", 1);
     try root.stringField("kind", "ss-diagnostics");
     var diagnostics = try root.arrayField("diagnostics");
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         if (options.phase) |phase| {
             if (!std.mem.eql(u8, @tagName(diagnostic.phase), phase)) continue;
         }
@@ -395,7 +395,7 @@ fn fallbackContextDiagnosticMessage(buf: []u8, diagnostic: anytype) []const u8 {
 }
 
 pub fn hasDocumentStateErrors(state: anytype) bool {
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         if (diagnostic.severity == .@"error") return true;
     }
     return false;
@@ -532,7 +532,7 @@ pub fn printConstraintFailure(
     err: anyerror,
 ) void {
     if (!shouldPrint(.@"error")) return;
-    if (state.constraint_failures.items.len == 0 and state.last_constraint_failure == null) {
+    if (state.diagnostics.constraint_failures.items.len == 0) {
         var message_buf: [320]u8 = undefined;
         var reason_buf: [256]u8 = undefined;
         const reason = switch (err) {
@@ -554,8 +554,8 @@ pub fn printConstraintFailure(
         return;
     }
 
-    const failures = state.constraint_failures.items;
-    const count = if (failures.len > 0) failures.len else 1;
+    const failures = state.diagnostics.constraint_failures.items;
+    const count = failures.len;
     if (count > 1) {
         printColor(.@"error");
         std.debug.print("error: {d} layout constraint failures\n", .{count});
@@ -565,16 +565,11 @@ pub fn printConstraintFailure(
         printReset();
     }
 
-    if (failures.len > 0) {
-        const limit = @min(failures.len, 3);
-        for (failures[0..limit], 0..) |failure, index| {
-            if (index != 0 or count > 1) std.debug.print("\n", .{});
-            printConstraintFailureItem(path, text, state, failure);
-        }
-        return;
+    const limit = @min(failures.len, 3);
+    for (failures[0..limit], 0..) |failure, index| {
+        if (index != 0 or count > 1) std.debug.print("\n", .{});
+        printConstraintFailureItem(path, text, state, failure);
     }
-
-    printConstraintFailureItem(path, text, state, state.last_constraint_failure.?);
 }
 
 fn printConstraintFailureItem(path: []const u8, text: []const u8, state: anytype, failure: anytype) void {
@@ -723,7 +718,7 @@ fn printAxisFrameConstraints(
     heading: []const u8,
 ) void {
     var printed_heading = false;
-    for (state.constraints.items) |constraint| {
+    for (state.constraints.active.items) |constraint| {
         if (constraint.target_node != node_id) continue;
         if (anchorIsHorizontal(constraint.target_anchor) != horizontal) continue;
         if (!printed_heading) {

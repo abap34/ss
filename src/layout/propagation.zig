@@ -108,7 +108,7 @@ pub fn nonConvergenceError(state: anytype, workspace: *const graph.AxisWorkspace
                 } else null,
             } },
         };
-        state.addDiagnostic(diagnostic) catch |err| {
+        state.diagnostics.addDiagnostic(state.allocator, diagnostic) catch |err| {
             diagnostic.deinit(state.allocator);
             return err;
         };

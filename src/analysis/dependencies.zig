@@ -544,7 +544,7 @@ pub const RunCache = struct {
 
     pub fn reserve(self: *RunCache, state: *const core.DocumentState) !void {
         try self.name_resolution.reserve(state);
-        try self.summaries.ensureTotalCapacity(@intCast((state.functions.count() * 8) + (state.constants.count() * 2)));
+        try self.summaries.ensureTotalCapacity(@intCast((state.functions.count() * 8) + (state.constants.declarations.count() * 2)));
     }
 
     pub fn resolvedFunction(self: *RunCache, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedFunction {

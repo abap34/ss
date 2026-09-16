@@ -141,7 +141,7 @@ const Analyzer = struct {
     }
 
     fn checkAll(self: *Analyzer) !void {
-        var const_it = self.state.constants.iterator();
+        var const_it = self.state.constants.declarations.iterator();
         while (const_it.next()) |entry| {
             var labels = try self.constLabels(.{
                 .key = entry.key_ptr.*,
@@ -161,7 +161,7 @@ const Analyzer = struct {
     }
 
     fn checkRoots(self: *Analyzer) !void {
-        for (self.state.module_order.items) |module_id| {
+        for (self.state.modules.order.items) |module_id| {
             const module = self.state.moduleById(module_id) orelse continue;
             const previous = self.sema;
             self.sema = self.sema.forModule(module_id);

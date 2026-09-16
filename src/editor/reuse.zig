@@ -81,7 +81,7 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     utils.measure_profile.recordGeneratedEdit(.prepare, prepare_start);
 
     for (generated.replacements) |replacement| {
-        state.constraints.items[replacement.index].offset = replacement.new_offset;
+        state.constraints.active.items[replacement.index].offset = replacement.new_offset;
         source.syncConstraintUpdate(state, replacement);
     }
     discard_retained_state = true;

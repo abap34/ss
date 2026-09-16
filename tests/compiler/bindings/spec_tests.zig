@@ -15,7 +15,7 @@ fn document(allocator: std.mem.Allocator, source: []const u8) !core.DocumentStat
 }
 
 fn expectType(state: *const core.DocumentState, name: []const u8, scope: []const u8, expected: compiler.language.Type) !void {
-    for (state.definitions.items) |definition| {
+    for (state.source_map.definitions.items) |definition| {
         if (definition.kind != .variable or !std.mem.eql(u8, definition.name, name)) continue;
         if (!std.mem.eql(u8, definition.scope_name orelse "", scope)) continue;
         const info = state.bindingTypeAt(definition.module_id, definition.span_start) orelse return error.MissingBindingType;

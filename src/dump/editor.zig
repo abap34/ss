@@ -5,7 +5,7 @@ const json = @import("utils").json;
 
 pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, state: *const core.DocumentState) !void {
     var variables = try root.arrayField("variables");
-    for (state.definitions.items) |definition| {
+    for (state.source_map.definitions.items) |definition| {
         if (definition.kind != .variable) continue;
         const info = state.bindingTypeAt(definition.module_id, definition.span_start) orelse continue;
         var item = try variables.objectItem();
@@ -29,7 +29,7 @@ pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, sta
 
 pub fn writeDefinitionsField(root: *json.Object, state: *core.DocumentState) !void {
     var definitions = try root.arrayField("definitions");
-    for (state.definitions.items) |definition| {
+    for (state.source_map.definitions.items) |definition| {
         var item = try definitions.objectItem();
         try item.stringField("name", definition.name);
         try item.enumTagField("kind", definition.kind);

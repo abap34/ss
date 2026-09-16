@@ -24,10 +24,10 @@ pub fn addSyntaxHoles(bag: *DiagnosticBag, path: []const u8, text: []const u8, h
 }
 
 pub fn addDocumentStateFrom(bag: *DiagnosticBag, state: *core.DocumentState, start_index: usize) !void {
-    std.debug.assert(start_index <= state.diagnostics.items.len);
+    std.debug.assert(start_index <= state.diagnostics.entries.items.len);
     var source_ids = std.StringHashMap(shared.SourceId).init(bag.allocator);
     defer source_ids.deinit();
-    for (state.diagnostics.items[start_index..]) |diagnostic| {
+    for (state.diagnostics.entries.items[start_index..]) |diagnostic| {
         const message = try utils.err.formatContextDiagnostic(bag.allocator, diagnostic);
         defer bag.allocator.free(message);
         const location = diagnosticLocation(state, diagnostic);

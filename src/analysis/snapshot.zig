@@ -363,10 +363,10 @@ pub const AnalysisSnapshot = struct {
 
         snapshot.builtin_module_id = declaration_index.builtin_module_id;
         snapshot.diagnostics.sortByPath();
-        snapshot.modules = try cloneModules(allocator, state.modules.items);
-        snapshot.module_order = try allocator.dupe(core.SourceModuleId, state.module_order.items);
+        snapshot.modules = try cloneModules(allocator, state.modules.entries.items);
+        snapshot.module_order = try allocator.dupe(core.SourceModuleId, state.modules.order.items);
         snapshot.holes = if (holes) |hole_table| try cloneHoles(allocator, hole_table.holes) else &.{};
-        snapshot.definitions = try cloneDefinitions(allocator, state.definitions.items);
+        snapshot.definitions = try cloneDefinitions(allocator, state.source_map.definitions.items);
         snapshot.type_definitions = try collectTypeDefinitions(allocator, state);
         snapshot.type_storage = TypeStorage.init(allocator);
         const type_storage = &snapshot.type_storage.?;
@@ -730,11 +730,11 @@ fn buildWithSyntax(
     defer if (state_owned) state.deinit();
     try options.checkCanceled();
 
-    const diagnostic_count_before_analysis = state.diagnostics.items.len;
+    const diagnostic_count_before_analysis = state.diagnostics.entries.items.len;
     var analysis_failed = false;
     var execution_graph = analysis_pipeline.analyzeDocumentStateWithMode(allocator, &state, .evaluation) catch |err| blk: {
         if (err == error.Canceled) return err;
-        if (err != error.DiagnosticsFailed and state.diagnostics.items.len == diagnostic_count_before_analysis) {
+        if (err != error.DiagnosticsFailed and state.diagnostics.entries.items.len == diagnostic_count_before_analysis) {
             try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), err, null);
             analysis_failed = true;
         }
@@ -752,7 +752,7 @@ fn buildWithSyntax(
     try diagnostics.addDocumentStateFrom(&diagnostic_bag, &state, 0);
     var reuse_inputs: ?ReuseInputs = null;
     defer if (reuse_inputs) |*value| value.deinit(allocator);
-    const analyzed_diagnostic_count = state.diagnostics.items.len;
+    const analyzed_diagnostic_count = state.diagnostics.entries.items.len;
     try options.checkCanceled();
     if (!diagnostic_bag.hasErrors()) {
         if (options.layout_hook) |hook| {
@@ -909,7 +909,7 @@ fn collectModulePaths(allocator: std.mem.Allocator, state: *const core.DocumentS
         for (out.items) |path| allocator.free(path);
         out.deinit(allocator);
     }
-    for (state.modules.items) |module| {
+    for (state.modules.entries.items) |module| {
         const module_path = module.path orelse continue;
         if (seen.contains(module_path)) continue;
         try seen.put(module_path, {});
@@ -1154,7 +1154,7 @@ fn collectTypeDefinitions(allocator: std.mem.Allocator, state: *const core.Docum
         for (out.items) |definition| allocator.free(definition.name);
         out.deinit(allocator);
     }
-    for (state.module_order.items) |module_id| {
+    for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         for (module.syntax.records.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .record, decl.name, decl.name_span);
         for (module.syntax.objects.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .object, decl.name, decl.name_span);
@@ -1228,7 +1228,7 @@ fn collectValueBindings(allocator: std.mem.Allocator, type_storage: *TypeStorage
             .documentation = try allocator.dupe(u8, ""),
         });
     }
-    var constant_iterator = state.constants.iterator();
+    var constant_iterator = state.constants.declarations.iterator();
     while (constant_iterator.next()) |entry| {
         const constant_decl = entry.value_ptr.*;
         const retained_type = try type_storage.retain(constant_decl.value_type);
@@ -1268,7 +1268,7 @@ fn valueNameExists(state: *const core.DocumentState, name: []const u8) bool {
     while (function_iterator.next()) |entry| {
         if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
     }
-    var constant_iterator = state.constants.iterator();
+    var constant_iterator = state.constants.declarations.iterator();
     while (constant_iterator.next()) |entry| {
         if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
     }
@@ -1285,7 +1285,7 @@ fn collectVariableBindings(
         deinitVariableBindingItems(allocator, out.items);
         out.deinit(allocator);
     }
-    for (state.definitions.items) |definition| {
+    for (state.source_map.definitions.items) |definition| {
         if (definition.kind != .variable) continue;
         const info = state.bindingTypeAt(definition.module_id, definition.span_start) orelse continue;
         const retained_type = try type_storage.retain(info.ty);

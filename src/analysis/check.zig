@@ -228,7 +228,7 @@ fn addUserReport(state: ?*core.DocumentState, origin: core.SourceOrigin, code: [
 }
 
 pub fn continueAfterDiagnostic(state: *const core.DocumentState, diagnostic_count_before: usize, err: anyerror) !void {
-    if (state.diagnostics.items.len > diagnostic_count_before) return;
+    if (state.diagnostics.entries.items.len > diagnostic_count_before) return;
     return err;
 }
 
@@ -245,7 +245,7 @@ pub fn checkPageNamesUnique(
     var pages = std.StringHashMap(void).init(allocator);
     defer pages.deinit();
 
-    for (state.module_order.items) |module_id| {
+    for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         const origin_path = originPathForModule(module);
         for (module.syntax.pages.items) |page| {
@@ -286,7 +286,7 @@ pub fn checkFunction(
 
     var had_diagnostics = false;
     for (func.statements.items) |stmt| {
-        const diagnostic_count = state.diagnostics.items.len;
+        const diagnostic_count = state.diagnostics.entries.items.len;
         checkStatement(inference_context, allocator, state, sema, origin_path, &env, func.result_type, stmt) catch |err| {
             try continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
@@ -314,14 +314,14 @@ pub fn checkConst(
 
     var had_diagnostics = false;
     {
-        const diagnostic_count = state.diagnostics.items.len;
+        const diagnostic_count = state.diagnostics.entries.items.len;
         rejectPageOnlyExpr(state, .document, origin, &page_context, &scope, constant_decl.value) catch |err| {
             try continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
         };
     }
     {
-        const diagnostic_count = state.diagnostics.items.len;
+        const diagnostic_count = state.diagnostics.entries.items.len;
         const actual = inferExprInfo(inference_context, allocator, state, sema, &env, constant_decl.value, origin) catch |err| {
             try continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
@@ -353,7 +353,7 @@ pub fn checkPageStatements(
         var scope = NameScope.init(allocator);
         defer scope.deinit();
         for (program.document_statements.items) |stmt| {
-            const diagnostic_count = state.diagnostics.items.len;
+            const diagnostic_count = state.diagnostics.entries.items.len;
             checkTopLevelStatement(inference_context, allocator, state, sema, origin_path, .document, &env, &scope, &page_context, stmt) catch |err| {
                 try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
@@ -367,7 +367,7 @@ pub fn checkPageStatements(
         defer scope.deinit();
 
         for (page.statements.items) |stmt| {
-            const diagnostic_count = state.diagnostics.items.len;
+            const diagnostic_count = state.diagnostics.entries.items.len;
             checkTopLevelStatement(inference_context, allocator, state, sema, origin_path, .page, &env, &scope, &page_context, stmt) catch |err| {
                 try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;

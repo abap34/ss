@@ -78,7 +78,7 @@ pub const ExecutionGraph = struct {
         errdefer graph.deinit();
 
         if (options.page_id_mode == .create) {
-            for (state.modules.items) |module| try graph.captures.collectModule(module.syntax);
+            for (state.modules.entries.items) |module| try graph.captures.collectModule(module.syntax);
         }
 
         var collected_modules = std.AutoHashMap(core.SourceModuleId, void).init(allocator);

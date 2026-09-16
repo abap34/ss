@@ -7,12 +7,12 @@ const analysis_scope = @import("scope.zig");
 const utils = @import("utils");
 
 pub fn populateDocumentStateAnalysis(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
-    state.binding_types.clearRetainingCapacity();
-    for (state.modules.items) |module| {
+    state.source_map.binding_types.clearRetainingCapacity();
+    for (state.modules.entries.items) |module| {
         if (module.kind == .project) continue;
-        try collectDefinitionsFromModule(allocator, state, module.line_index, module.syntax, module.id, module.path, module.path != null, &state.definitions);
+        try collectDefinitionsFromModule(allocator, state, module.line_index, module.syntax, module.id, module.path, module.path != null, &state.source_map.definitions);
     }
-    try collectDefinitionsFromModule(allocator, state, state.projectModule().line_index, state.projectSyntax(), state.project_module_id, null, true, &state.definitions);
+    try collectDefinitionsFromModule(allocator, state, state.projectModule().line_index, state.projectSyntax(), state.modules.project_id, null, true, &state.source_map.definitions);
 }
 
 fn collectDefinitionsFromModule(

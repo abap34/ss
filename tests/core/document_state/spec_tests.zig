@@ -1,11 +1,15 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
+const utils = @import("utils");
 
 const testing = std.testing;
 
 fn initEmptyDocumentState() !core.DocumentState {
-    const allocator = testing.allocator;
+    return initEmptyDocumentStateWithAllocator(testing.allocator);
+}
+
+fn initEmptyDocumentStateWithAllocator(allocator: std.mem.Allocator) !core.DocumentState {
     const asset_base_dir = try allocator.dupe(u8, ".");
     errdefer allocator.free(asset_base_dir);
     const project_path = try allocator.dupe(u8, "unit-test.ss");
@@ -15,14 +19,23 @@ fn initEmptyDocumentState() !core.DocumentState {
     return try core.DocumentState.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
 }
 
+test "document state spec: initialization preserves ownership on allocation failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var state = try initEmptyDocumentStateWithAllocator(allocator);
+            defer state.deinit();
+        }
+    }.run, .{});
+}
+
 fn appendSparseSourceModule(state: *core.DocumentState, id: core.SourceModuleId) !void {
     const spec = try testing.allocator.dupe(u8, "sparse-module");
     errdefer testing.allocator.free(spec);
     const source = try testing.allocator.dupe(u8, "");
     errdefer testing.allocator.free(source);
-    const line_index = try @import("utils").source.LineIndex.init(testing.allocator, source);
+    const line_index = try utils.source.LineIndex.init(testing.allocator, source);
     errdefer line_index.deinit(testing.allocator);
-    try state.modules.append(testing.allocator, .{
+    try state.modules.entries.append(testing.allocator, .{
         .id = id,
         .kind = .library,
         .spec = spec,
@@ -42,7 +55,7 @@ fn expectConstraint(
     role: core.ConstraintRole,
     from_update: bool,
 ) !void {
-    for (state.constraints.items) |constraint| {
+    for (state.constraints.active.items) |constraint| {
         if (constraint.target_node != target_node or constraint.target_anchor != target_anchor) continue;
         if (constraint.role != role or constraint.from_update != from_update) continue;
         return;
@@ -54,7 +67,7 @@ test "document state spec: module lookup supports indexed and sparse identifiers
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
-    try testing.expectEqual(state.project_module_id, state.moduleById(state.project_module_id).?.id);
+    try testing.expectEqual(state.modules.project_id, state.moduleById(state.modules.project_id).?.id);
 
     const sparse_id: core.SourceModuleId = 7;
     try appendSparseSourceModule(&state, sparse_id);
@@ -70,21 +83,18 @@ test "document state spec: constraint failure recording preserves allocation fai
     defer state.deinit();
 
     var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
-    const original_allocator = state.allocator;
-    state.allocator = failing.allocator();
-    defer state.allocator = original_allocator;
 
     const constraint = core.Constraint{
-        .target_node = state.document_id,
+        .target_node = state.graph.document_id,
         .target_anchor = .left,
         .source = .{ .page = .left },
         .offset = 0,
     };
     try testing.expectError(
         error.OutOfMemory,
-        state.noteConstraintFailure(state.document_id, constraint, null, .conflict),
+        state.diagnostics.noteConstraintFailureDetailed(failing.allocator(), state.graph.document_id, constraint, null, .conflict, .anchor_value_conflict, null, null, null),
     );
-    try testing.expect(!state.hasConstraintFailures());
+    try testing.expect(!state.diagnostics.hasConstraintFailures());
 }
 
 test "document state spec: pages are ordered document children with one-based page indexes" {
@@ -95,12 +105,12 @@ test "document state spec: pages are ordered document children with one-based pa
     const second = try state.addPage("Second");
 
     try testing.expectEqual(@as(usize, 2), state.pageCount());
-    try testing.expectEqual(first, state.page_order.items[0]);
-    try testing.expectEqual(second, state.page_order.items[1]);
+    try testing.expectEqual(first, state.graph.page_order.items[0]);
+    try testing.expectEqual(second, state.graph.page_order.items[1]);
     try testing.expectEqual(@as(usize, 1), state.pageIndexOf(first));
     try testing.expectEqual(@as(usize, 2), state.pageIndexOf(second));
 
-    const document_children = state.childrenOf(state.document_id).?;
+    const document_children = state.childrenOf(state.graph.document_id).?;
     try testing.expectEqual(@as(usize, 2), document_children.len);
     try testing.expectEqual(first, document_children[0]);
     try testing.expectEqual(second, document_children[1]);
@@ -168,9 +178,8 @@ test "document state spec: a group of placed objects infers layout ownership wit
     try state.placeObjectOnPage(page, second);
     const group = try state.createGroupWithOrigin(&.{ first, second }, null);
 
-    try testing.expectEqual(@as(usize, 0), state.constraints.items.len);
+    try testing.expectEqual(@as(usize, 0), state.constraints.active.items.len);
     try testing.expectEqual(page, state.layoutPageOf(group).?);
-    try testing.expectEqual(page, state.layoutPageOfConstraintEndpoint(group).?);
     try testing.expectEqual(@as(?core.NodeId, null), state.parentPageOf(group));
     try testing.expect(!state.getNode(group).?.attached);
     try testing.expectEqualSlices(core.NodeId, &.{ first, second }, state.placementRootsOf(page));
@@ -178,7 +187,7 @@ test "document state spec: a group of placed objects infers layout ownership wit
     try testing.expectEqualSlices(core.NodeId, &.{ first, second }, state.childrenOf(group).?);
 
     try state.validatePageLocalLayout();
-    try testing.expectEqual(@as(usize, 0), state.diagnostics.items.len);
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
 }
 
 test "document state spec: nested groups can share placed children without changing ownership" {
@@ -203,7 +212,7 @@ test "document state spec: nested groups can share placed children without chang
     try testing.expectEqualSlices(core.NodeId, &.{ first, shared }, state.childrenOf(left).?);
     try testing.expectEqualSlices(core.NodeId, &.{ shared, last }, state.childrenOf(right).?);
     try state.validatePageLocalLayout();
-    try testing.expectEqual(@as(usize, 0), state.diagnostics.items.len);
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
 }
 
 test "document state spec: group inference requires every live child to have a page" {
@@ -219,7 +228,6 @@ test "document state spec: group inference requires every live child to have a p
 
     for ([_]core.NodeId{ partial, outer, empty }) |group| {
         try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(group));
-        try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOfConstraintEndpoint(group));
         try testing.expectEqual(@as(?core.NodeId, null), state.parentPageOf(group));
         try testing.expect(!state.getNode(group).?.attached);
     }
@@ -245,7 +253,7 @@ test "document state spec: discarded children do not prevent group page inferenc
     try testing.expectEqual(page, state.layoutPageOf(group).?);
     try testing.expect(!state.getNode(group).?.attached);
     try state.validatePageLocalLayout();
-    try testing.expectEqual(@as(usize, 0), state.diagnostics.items.len);
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
 }
 
 test "document state spec: ambiguous nested groups cannot inherit a sibling page" {
@@ -262,7 +270,6 @@ test "document state spec: ambiguous nested groups cannot inherit a sibling page
 
     for ([_]core.NodeId{ mixed, before, after }) |group| {
         try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(group));
-        try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOfConstraintEndpoint(group));
     }
 
     const duplicate = try state.makeObject(first_page, "duplicate", null, .text, .text, "Duplicate");
@@ -286,7 +293,6 @@ test "document state spec: cyclic group containment cannot infer page ownership"
 
     try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(first));
     try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(second));
-    try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOfConstraintEndpoint(second));
     try testing.expectEqual(page, state.layoutPageOf(child).?);
 }
 
@@ -321,7 +327,7 @@ test "document state spec: page-local validation reports cross-page constraints"
     const target = try state.makeObject(first, "target", null, .text, .text, "Target");
     const source = try state.makeObject(second, "source", null, .text, .text, "Source");
 
-    try state.addAnchorConstraint(target, .top, .{ .node = .{ .node_id = source, .anchor = .top } }, 0, .{ .label = "cross-page" });
+    try state.constraints.addAnchor(state.allocator, target, .top, .{ .node = .{ .node_id = source, .anchor = .top } }, 0, .{ .label = "cross-page" });
     try state.validatePageLocalLayout();
 
     try expectDiagnosticCode(&state, "CrossPageConstraint:");
@@ -335,7 +341,7 @@ test "document state spec: page-local validation reports unowned layout objects"
     const placed = try state.makeObject(page, "placed", null, .text, .text, "Placed");
     const helper = try state.createObjectWithOrigin("helper", null, .text, .text, "Helper", null);
 
-    try state.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = helper, .anchor = .top } }, 0, .{ .label = "unowned" });
+    try state.constraints.addAnchor(state.allocator, placed, .top, .{ .node = .{ .node_id = helper, .anchor = .top } }, 0, .{ .label = "unowned" });
     try state.validatePageLocalLayout();
 
     try expectDiagnosticCode(&state, "UnownedLayoutObject:");
@@ -347,18 +353,18 @@ test "document state spec: position updates replace deeper constraints across an
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "item", null, .text, .text, "Item");
-    try state.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
-    try state.addAnchorConstraintAtScope(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, .{ .label = "component-width" }, 1);
-    try state.addConstraintUpdate(object, .left, .position, 0, .{ .page = .left }, 80, .{ .label = "page-left" });
+    try state.constraints.addAnchorAtScope(state.allocator, object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
+    try state.constraints.addAnchorAtScope(state.allocator, object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, .{ .label = "component-width" }, 1);
+    try state.constraints.addUpdate(state.allocator, object, .left, .position, 0, .{ .page = .left }, 80, .{ .label = "page-left" });
 
     try core.constraint_updates.resolve(&state);
 
-    try testing.expectEqual(@as(usize, 2), state.constraints.items.len);
-    try testing.expectEqual(@as(usize, 1), state.overridden_constraints.items.len);
-    try testing.expectEqual(core.Anchor.center_x, state.overridden_constraints.items[0].target_anchor);
-    try testing.expectEqual(core.ConstraintRole.size, state.constraints.items[0].role);
-    try testing.expectEqual(core.Anchor.left, state.constraints.items[1].target_anchor);
-    try testing.expect(state.constraints.items[1].from_update);
+    try testing.expectEqual(@as(usize, 2), state.constraints.active.items.len);
+    try testing.expectEqual(@as(usize, 1), state.constraints.overridden.items.len);
+    try testing.expectEqual(core.Anchor.center_x, state.constraints.overridden.items[0].target_anchor);
+    try testing.expectEqual(core.ConstraintRole.size, state.constraints.active.items[0].role);
+    try testing.expectEqual(core.Anchor.left, state.constraints.active.items[1].target_anchor);
+    try testing.expect(state.constraints.active.items[1].from_update);
 }
 
 test "document state spec: group position updates replace external placement of descendants" {
@@ -371,20 +377,20 @@ test "document state spec: group position updates replace external placement of 
     const inner = try state.makeGroupWithOrigin(page, true, &.{ title, rule }, .{ .label = "inner-group" });
     const root = try state.makeGroupWithOrigin(page, true, &.{inner}, .{ .label = "root-group" });
 
-    try state.addAnchorConstraintAtScope(title, .left, .{ .page = .left }, 72, .{ .label = "component-left" }, 1);
-    try state.addAnchorConstraintAtScope(title, .top, .{ .page = .top }, -100, .{ .label = "component-top" }, 1);
-    try state.addAnchorConstraintAtScope(title, .right, .{ .node = .{ .node_id = title, .anchor = .left } }, 240, .{ .label = "component-width" }, 1);
-    try state.addAnchorConstraintAtScope(rule, .left, .{ .node = .{ .node_id = title, .anchor = .left } }, 0, .{ .label = "component-align" }, 1);
-    try state.addAnchorConstraintAtScope(rule, .top, .{ .node = .{ .node_id = title, .anchor = .bottom } }, -30, .{ .label = "component-rule" }, 1);
-    try state.addConstraintUpdate(root, .left, .position, 0, .{ .page = .left }, 180, .{ .label = "caller-left" });
-    try state.addConstraintUpdate(root, .top, .position, 0, .{ .page = .top }, -140, .{ .label = "caller-top" });
+    try state.constraints.addAnchorAtScope(state.allocator, title, .left, .{ .page = .left }, 72, .{ .label = "component-left" }, 1);
+    try state.constraints.addAnchorAtScope(state.allocator, title, .top, .{ .page = .top }, -100, .{ .label = "component-top" }, 1);
+    try state.constraints.addAnchorAtScope(state.allocator, title, .right, .{ .node = .{ .node_id = title, .anchor = .left } }, 240, .{ .label = "component-width" }, 1);
+    try state.constraints.addAnchorAtScope(state.allocator, rule, .left, .{ .node = .{ .node_id = title, .anchor = .left } }, 0, .{ .label = "component-align" }, 1);
+    try state.constraints.addAnchorAtScope(state.allocator, rule, .top, .{ .node = .{ .node_id = title, .anchor = .bottom } }, -30, .{ .label = "component-rule" }, 1);
+    try state.constraints.addUpdate(state.allocator, root, .left, .position, 0, .{ .page = .left }, 180, .{ .label = "caller-left" });
+    try state.constraints.addUpdate(state.allocator, root, .top, .position, 0, .{ .page = .top }, -140, .{ .label = "caller-top" });
 
     try core.constraint_updates.resolve(&state);
 
-    try testing.expectEqual(@as(usize, 5), state.constraints.items.len);
-    try testing.expectEqual(@as(usize, 2), state.overridden_constraints.items.len);
-    try testing.expectEqualStrings("component-left", state.overridden_constraints.items[0].origin.?.label.?);
-    try testing.expectEqualStrings("component-top", state.overridden_constraints.items[1].origin.?.label.?);
+    try testing.expectEqual(@as(usize, 5), state.constraints.active.items.len);
+    try testing.expectEqual(@as(usize, 2), state.constraints.overridden.items.len);
+    try testing.expectEqualStrings("component-left", state.constraints.overridden.items[0].origin.?.label.?);
+    try testing.expectEqualStrings("component-top", state.constraints.overridden.items[1].origin.?.label.?);
     try expectConstraint(&state, title, .right, .size, false);
     try expectConstraint(&state, rule, .left, .position, false);
     try expectConstraint(&state, rule, .top, .position, false);
@@ -399,16 +405,16 @@ test "document state spec: overlapping group and descendant updates use scope an
     const first_page = try later_descendant.addPage("Page");
     const first_child = try later_descendant.makeObject(first_page, "child", null, .text, .text, "Child");
     const first_group = try later_descendant.makeGroupWithOrigin(first_page, true, &.{first_child}, .{ .label = "group" });
-    try later_descendant.addConstraintUpdate(first_group, .left, .position, 0, .{ .page = .left }, 100, .{ .label = "group-first" });
-    try later_descendant.addConstraintUpdate(first_child, .left, .position, 0, .{ .page = .left }, 160, .{ .label = "child-last" });
+    try later_descendant.constraints.addUpdate(later_descendant.allocator, first_group, .left, .position, 0, .{ .page = .left }, 100, .{ .label = "group-first" });
+    try later_descendant.constraints.addUpdate(later_descendant.allocator, first_child, .left, .position, 0, .{ .page = .left }, 160, .{ .label = "child-last" });
 
     try core.constraint_updates.resolve(&later_descendant);
 
-    try testing.expect(!later_descendant.constraint_updates.items[0].active);
-    try testing.expect(later_descendant.constraint_updates.items[1].active);
-    try testing.expectEqual(@as(usize, 1), later_descendant.constraints.items.len);
-    try testing.expectEqual(first_child, later_descendant.constraints.items[0].target_node);
-    try testing.expectEqual(@as(usize, 1), later_descendant.overridden_constraints.items.len);
+    try testing.expect(!later_descendant.constraints.updates.items[0].active);
+    try testing.expect(later_descendant.constraints.updates.items[1].active);
+    try testing.expectEqual(@as(usize, 1), later_descendant.constraints.active.items.len);
+    try testing.expectEqual(first_child, later_descendant.constraints.active.items[0].target_node);
+    try testing.expectEqual(@as(usize, 1), later_descendant.constraints.overridden.items.len);
 
     var shallower_group = try initEmptyDocumentState();
     defer shallower_group.deinit();
@@ -416,16 +422,16 @@ test "document state spec: overlapping group and descendant updates use scope an
     const second_page = try shallower_group.addPage("Page");
     const second_child = try shallower_group.makeObject(second_page, "child", null, .text, .text, "Child");
     const second_group = try shallower_group.makeGroupWithOrigin(second_page, true, &.{second_child}, .{ .label = "group" });
-    try shallower_group.addConstraintUpdate(second_group, .left, .position, 0, .{ .page = .left }, 100, .{ .label = "caller-group" });
-    try shallower_group.addConstraintUpdate(second_child, .left, .position, 1, .{ .page = .left }, 160, .{ .label = "component-child" });
+    try shallower_group.constraints.addUpdate(shallower_group.allocator, second_group, .left, .position, 0, .{ .page = .left }, 100, .{ .label = "caller-group" });
+    try shallower_group.constraints.addUpdate(shallower_group.allocator, second_child, .left, .position, 1, .{ .page = .left }, 160, .{ .label = "component-child" });
 
     try core.constraint_updates.resolve(&shallower_group);
 
-    try testing.expect(shallower_group.constraint_updates.items[0].active);
-    try testing.expect(!shallower_group.constraint_updates.items[1].active);
-    try testing.expectEqual(@as(usize, 1), shallower_group.constraints.items.len);
-    try testing.expectEqual(second_group, shallower_group.constraints.items[0].target_node);
-    try testing.expectEqual(@as(usize, 1), shallower_group.overridden_constraints.items.len);
+    try testing.expect(shallower_group.constraints.updates.items[0].active);
+    try testing.expect(!shallower_group.constraints.updates.items[1].active);
+    try testing.expectEqual(@as(usize, 1), shallower_group.constraints.active.items.len);
+    try testing.expectEqual(second_group, shallower_group.constraints.active.items[0].target_node);
+    try testing.expectEqual(@as(usize, 1), shallower_group.constraints.overridden.items.len);
 }
 
 test "document state spec: size updates preserve position constraints" {
@@ -434,9 +440,10 @@ test "document state spec: size updates preserve position constraints" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "item", null, .text, .text, "Item");
-    try state.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
-    try state.addAnchorConstraintAtScope(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, .{ .label = "component-width" }, 1);
-    try state.addConstraintUpdate(
+    try state.constraints.addAnchorAtScope(state.allocator, object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
+    try state.constraints.addAnchorAtScope(state.allocator, object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, .{ .label = "component-width" }, 1);
+    try state.constraints.addUpdate(
+        state.allocator,
         object,
         .right,
         .size,
@@ -448,13 +455,13 @@ test "document state spec: size updates preserve position constraints" {
 
     try core.constraint_updates.resolve(&state);
 
-    try testing.expectEqual(@as(usize, 2), state.constraints.items.len);
-    try testing.expectEqual(core.ConstraintRole.position, state.constraints.items[0].role);
-    try testing.expectEqual(core.ConstraintRole.size, state.constraints.items[1].role);
-    try testing.expectEqual(@as(f32, 320), state.constraints.items[1].offset);
-    try testing.expect(state.constraints.items[1].from_update);
-    try testing.expectEqual(@as(usize, 1), state.overridden_constraints.items.len);
-    try testing.expectEqual(@as(f32, 240), state.overridden_constraints.items[0].offset);
+    try testing.expectEqual(@as(usize, 2), state.constraints.active.items.len);
+    try testing.expectEqual(core.ConstraintRole.position, state.constraints.active.items[0].role);
+    try testing.expectEqual(core.ConstraintRole.size, state.constraints.active.items[1].role);
+    try testing.expectEqual(@as(f32, 320), state.constraints.active.items[1].offset);
+    try testing.expect(state.constraints.active.items[1].from_update);
+    try testing.expectEqual(@as(usize, 1), state.constraints.overridden.items.len);
+    try testing.expectEqual(@as(f32, 240), state.constraints.overridden.items[0].offset);
 }
 
 test "document state spec: pure updates suppress inherited constraints without adding a replacement" {
@@ -463,14 +470,14 @@ test "document state spec: pure updates suppress inherited constraints without a
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "item", null, .text, .text, "Item");
-    try state.addAnchorConstraintAtScope(object, .top, .{ .page = .top }, -40, .{ .label = "component-top" }, 1);
-    try state.addConstraintUpdate(object, .top, .position, 0, null, 0, .{ .label = "page-top" });
+    try state.constraints.addAnchorAtScope(state.allocator, object, .top, .{ .page = .top }, -40, .{ .label = "component-top" }, 1);
+    try state.constraints.addUpdate(state.allocator, object, .top, .position, 0, null, 0, .{ .label = "page-top" });
 
     try core.constraint_updates.resolve(&state);
 
-    try testing.expectEqual(@as(usize, 0), state.constraints.items.len);
-    try testing.expectEqual(@as(usize, 1), state.overridden_constraints.items.len);
-    try testing.expect(state.constraint_updates.items[0].active);
+    try testing.expectEqual(@as(usize, 0), state.constraints.active.items.len);
+    try testing.expectEqual(@as(usize, 1), state.constraints.overridden.items.len);
+    try testing.expect(state.constraints.updates.items[0].active);
 }
 
 test "document state spec: suppressed cross-page constraints are not diagnosed" {
@@ -481,13 +488,13 @@ test "document state spec: suppressed cross-page constraints are not diagnosed" 
     const second = try state.addPage("Second");
     const target = try state.makeObject(first, "target", null, .text, .text, "Target");
     const source = try state.makeObject(second, "source", null, .text, .text, "Source");
-    try state.addAnchorConstraintAtScope(target, .left, .{ .node = .{ .node_id = source, .anchor = .left } }, 0, .{ .label = "component-left" }, 1);
-    try state.addConstraintUpdate(target, .left, .position, 0, null, 0, .{ .label = "page-left" });
+    try state.constraints.addAnchorAtScope(state.allocator, target, .left, .{ .node = .{ .node_id = source, .anchor = .left } }, 0, .{ .label = "component-left" }, 1);
+    try state.constraints.addUpdate(state.allocator, target, .left, .position, 0, null, 0, .{ .label = "page-left" });
 
     try core.constraint_updates.resolve(&state);
     try state.validatePageLocalLayout();
 
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         switch (diagnostic.data) {
             .user_report => |data| try testing.expect(!std.mem.eql(u8, data.code, "CrossPageConstraint")),
             else => {},
@@ -501,19 +508,19 @@ test "document state spec: caller updates have authority over deeper updates" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "item", null, .text, .text, "Item");
-    try state.addConstraintUpdate(object, .left, .position, 2, .{ .page = .left }, 20, .{ .label = "nested-left" });
-    try state.addConstraintUpdate(object, .right, .position, 0, .{ .page = .right }, -60, .{ .label = "page-right" });
-    try state.addConstraintUpdate(object, .center_x, .position, 1, .{ .page = .center_x }, 10, .{ .label = "component-center" });
+    try state.constraints.addUpdate(state.allocator, object, .left, .position, 2, .{ .page = .left }, 20, .{ .label = "nested-left" });
+    try state.constraints.addUpdate(state.allocator, object, .right, .position, 0, .{ .page = .right }, -60, .{ .label = "page-right" });
+    try state.constraints.addUpdate(state.allocator, object, .center_x, .position, 1, .{ .page = .center_x }, 10, .{ .label = "component-center" });
 
     try core.constraint_updates.resolve(&state);
 
-    try testing.expect(!state.constraint_updates.items[0].active);
-    try testing.expect(state.constraint_updates.items[1].active);
-    try testing.expect(!state.constraint_updates.items[2].active);
-    try testing.expectEqual(@as(usize, 1), state.constraints.items.len);
-    try testing.expectEqual(core.Anchor.right, state.constraints.items[0].target_anchor);
-    try testing.expectEqual(@as(f32, -60), state.constraints.items[0].offset);
-    try testing.expectEqual(@as(usize, 2), state.overridden_constraints.items.len);
+    try testing.expect(!state.constraints.updates.items[0].active);
+    try testing.expect(state.constraints.updates.items[1].active);
+    try testing.expect(!state.constraints.updates.items[2].active);
+    try testing.expectEqual(@as(usize, 1), state.constraints.active.items.len);
+    try testing.expectEqual(core.Anchor.right, state.constraints.active.items[0].target_anchor);
+    try testing.expectEqual(@as(f32, -60), state.constraints.active.items[0].offset);
+    try testing.expectEqual(@as(usize, 2), state.constraints.overridden.items.len);
 }
 
 test "document state spec: later updates replace earlier updates in the same scope" {
@@ -522,18 +529,18 @@ test "document state spec: later updates replace earlier updates in the same sco
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "item", null, .text, .text, "Item");
-    try state.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
-    try state.addConstraintUpdate(object, .left, .position, 0, null, 0, .{ .label = "first" });
-    try state.addConstraintUpdate(object, .right, .position, 0, .{ .page = .right }, -40, .{ .label = "second" });
+    try state.constraints.addAnchorAtScope(state.allocator, object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
+    try state.constraints.addUpdate(state.allocator, object, .left, .position, 0, null, 0, .{ .label = "first" });
+    try state.constraints.addUpdate(state.allocator, object, .right, .position, 0, .{ .page = .right }, -40, .{ .label = "second" });
 
     try core.constraint_updates.resolve(&state);
 
-    try testing.expect(!state.constraint_updates.items[0].active);
-    try testing.expect(state.constraint_updates.items[1].active);
-    try testing.expectEqual(@as(usize, 1), state.constraints.items.len);
-    try testing.expectEqual(core.Anchor.right, state.constraints.items[0].target_anchor);
-    try testing.expectEqual(@as(f32, -40), state.constraints.items[0].offset);
-    try testing.expectEqual(@as(usize, 1), state.overridden_constraints.items.len);
+    try testing.expect(!state.constraints.updates.items[0].active);
+    try testing.expect(state.constraints.updates.items[1].active);
+    try testing.expectEqual(@as(usize, 1), state.constraints.active.items.len);
+    try testing.expectEqual(core.Anchor.right, state.constraints.active.items[0].target_anchor);
+    try testing.expectEqual(@as(f32, -40), state.constraints.active.items[0].offset);
+    try testing.expectEqual(@as(usize, 1), state.constraints.overridden.items.len);
 }
 
 test "document state spec: later pure updates suppress earlier replacements" {
@@ -542,17 +549,17 @@ test "document state spec: later pure updates suppress earlier replacements" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "item", null, .text, .text, "Item");
-    try state.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
-    try state.addConstraintUpdate(object, .left, .position, 0, .{ .page = .left }, 40, .{ .label = "first" });
-    try state.addConstraintUpdate(object, .right, .position, 0, null, 0, .{ .label = "second" });
+    try state.constraints.addAnchorAtScope(state.allocator, object, .center_x, .{ .page = .center_x }, 0, .{ .label = "component-center" }, 1);
+    try state.constraints.addUpdate(state.allocator, object, .left, .position, 0, .{ .page = .left }, 40, .{ .label = "first" });
+    try state.constraints.addUpdate(state.allocator, object, .right, .position, 0, null, 0, .{ .label = "second" });
 
     try core.constraint_updates.resolve(&state);
 
-    try testing.expect(!state.constraint_updates.items[0].active);
-    try testing.expect(state.constraint_updates.items[1].active);
-    try testing.expectEqual(@as(usize, 0), state.constraints.items.len);
-    try testing.expectEqual(@as(usize, 2), state.overridden_constraints.items.len);
-    try testing.expect(state.overridden_constraints.items[1].from_update);
+    try testing.expect(!state.constraints.updates.items[0].active);
+    try testing.expect(state.constraints.updates.items[1].active);
+    try testing.expectEqual(@as(usize, 0), state.constraints.active.items.len);
+    try testing.expectEqual(@as(usize, 2), state.constraints.overridden.items.len);
+    try testing.expect(state.constraints.overridden.items[1].from_update);
 }
 
 test "document state spec: prepared pages collect inline math asset dependencies" {
@@ -601,8 +608,8 @@ test "document state spec: layout results collect solved page frames" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "Hello");
-    try state.addAnchorConstraint(object, .left, .{ .page = .left }, 40, .{ .label = "body-left" });
-    try state.addAnchorConstraint(object, .top, .{ .page = .top }, -80, .{ .label = "body-top" });
+    try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, 40, .{ .label = "body-left" });
+    try state.constraints.addAnchor(state.allocator, object, .top, .{ .page = .top }, -80, .{ .label = "body-top" });
 
     var results = try core.layout.solveDocument(&state, null, .{});
     defer results.deinit(testing.allocator);
@@ -622,15 +629,15 @@ test "document state spec: layout results own page diagnostics" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "Hello");
-    try state.addAnchorConstraint(object, .left, .{ .page = .left }, -40, .{ .label = "body-left" });
-    try state.addAnchorConstraint(object, .top, .{ .page = .top }, -80, .{ .label = "body-top" });
+    try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, -40, .{ .label = "body-left" });
+    try state.constraints.addAnchor(state.allocator, object, .top, .{ .page = .top }, -80, .{ .label = "body-top" });
 
     var results = try core.layout.solveDocument(&state, null, .{});
     defer results.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 1), results.pages.len);
     try testing.expect(results.pages[0].diagnostics.len > 0);
-    try testing.expect(state.diagnostics.items.len > 0);
+    try testing.expect(state.diagnostics.entries.items.len > 0);
     try testing.expectEqual(core.DiagnosticPhase.layout, results.pages[0].diagnostics[0].phase);
 }
 
@@ -643,15 +650,15 @@ test "document state spec: identical validation user reports are deduplicated" {
     try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 30, .end = 40 } }, "UnknownRecordField: missing field");
     try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 10, .end = 20 } }, "UnknownRecordField: different field");
 
-    try testing.expectEqual(@as(usize, 4), state.diagnostics.items.len);
-    state.deduplicateValidationUserReports();
-    try testing.expectEqual(@as(usize, 3), state.diagnostics.items.len);
-    try testing.expect(state.diagnostics.items[0].origin.?.eql(core.SourceOrigin.at("theme.ss", .{ .start = 10, .end = 20 })));
-    try testing.expect(state.diagnostics.items[1].origin.?.eql(core.SourceOrigin.at("theme.ss", .{ .start = 30, .end = 40 })));
-    try testing.expect(state.diagnostics.items[2].origin.?.eql(core.SourceOrigin.at("theme.ss", .{ .start = 10, .end = 20 })));
-    try testing.expectEqualStrings("UnknownRecordField: missing field", state.diagnostics.items[0].data.user_report.message);
-    try testing.expectEqualStrings("UnknownRecordField: missing field", state.diagnostics.items[1].data.user_report.message);
-    try testing.expectEqualStrings("UnknownRecordField: different field", state.diagnostics.items[2].data.user_report.message);
+    try testing.expectEqual(@as(usize, 4), state.diagnostics.entries.items.len);
+    state.diagnostics.deduplicateValidationUserReports(state.allocator);
+    try testing.expectEqual(@as(usize, 3), state.diagnostics.entries.items.len);
+    try testing.expect(state.diagnostics.entries.items[0].origin.?.eql(core.SourceOrigin.at("theme.ss", .{ .start = 10, .end = 20 })));
+    try testing.expect(state.diagnostics.entries.items[1].origin.?.eql(core.SourceOrigin.at("theme.ss", .{ .start = 30, .end = 40 })));
+    try testing.expect(state.diagnostics.entries.items[2].origin.?.eql(core.SourceOrigin.at("theme.ss", .{ .start = 10, .end = 20 })));
+    try testing.expectEqualStrings("UnknownRecordField: missing field", state.diagnostics.entries.items[0].data.user_report.message);
+    try testing.expectEqualStrings("UnknownRecordField: missing field", state.diagnostics.entries.items[1].data.user_report.message);
+    try testing.expectEqualStrings("UnknownRecordField: different field", state.diagnostics.entries.items[2].data.user_report.message);
 }
 
 test "document state spec: node fields reject duplicate keys" {
@@ -702,8 +709,8 @@ test "document state spec: default group alignments connect consecutive children
     const node_count = state.nodeCount();
     try state.collectDefaultAlignments();
     try state.collectDefaultAlignments();
-    try testing.expectEqual(@as(usize, 2), state.constraints.items.len);
-    for (state.constraints.items, [_]core.NodeId{ a, b }, [_]core.NodeId{ b, c }) |constraint, source, target| {
+    try testing.expectEqual(@as(usize, 2), state.constraints.active.items.len);
+    for (state.constraints.active.items, [_]core.NodeId{ a, b }, [_]core.NodeId{ b, c }) |constraint, source, target| {
         try testing.expect(constraint.default_alignment);
         try testing.expectEqual(target, constraint.target_node);
         try testing.expectEqual(source, constraint.source.node.node_id);
@@ -742,9 +749,9 @@ test "document state spec: default alignments skip discarded children and inacti
     try state.discardObjectSubtree(discarded);
     try state.setNodeFieldValue(a, "align_children_y", .{ .boolean = true });
     try state.collectDefaultAlignments();
-    try testing.expectEqual(@as(usize, 1), state.constraints.items.len);
-    try testing.expectEqual(a, state.constraints.items[0].source.node.node_id);
-    try testing.expectEqual(b, state.constraints.items[0].target_node);
+    try testing.expectEqual(@as(usize, 1), state.constraints.active.items.len);
+    try testing.expectEqual(a, state.constraints.active.items[0].source.node.node_id);
+    try testing.expectEqual(b, state.constraints.active.items[0].target_node);
 }
 
 test "document state spec: an empty child group remains an ordinary alignment endpoint" {
@@ -757,9 +764,9 @@ test "document state spec: an empty child group remains an ordinary alignment en
     const group = try state.createGroupWithOrigin(&.{ a, empty, b }, null);
     try state.setNodeFieldValue(group, "align_children_y", .{ .boolean = true });
     try state.collectDefaultAlignments();
-    try testing.expectEqual(@as(usize, 2), state.constraints.items.len);
-    try testing.expectEqual(empty, state.constraints.items[0].target_node);
-    try testing.expectEqual(empty, state.constraints.items[1].source.node.node_id);
+    try testing.expectEqual(@as(usize, 2), state.constraints.active.items.len);
+    try testing.expectEqual(empty, state.constraints.active.items[0].target_node);
+    try testing.expectEqual(empty, state.constraints.active.items[1].source.node.node_id);
 }
 
 test "document state spec: updates mask default alignments without recreating candidates" {
@@ -770,15 +777,15 @@ test "document state spec: updates mask default alignments without recreating ca
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
     const group = try state.createGroupWithOrigin(&.{ a, b }, null);
     try state.setNodeFieldValueWithOrigin(group, "align_children_y", .{ .boolean = true }, 2, .{ .label = "group-default" });
-    try state.addAnchorConstraintAtScope(b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null, 2);
-    try state.addConstraintUpdate(b, .center_y, .position, 0, .{ .page = .center_y }, 10, .{ .label = "caller-update" });
+    try state.constraints.addAnchorAtScope(state.allocator, b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null, 2);
+    try state.constraints.addUpdate(state.allocator, b, .center_y, .position, 0, .{ .page = .center_y }, 10, .{ .label = "caller-update" });
     try state.collectDefaultAlignments();
     try core.constraint_updates.resolve(&state);
     try state.collectDefaultAlignments();
-    try testing.expectEqual(@as(usize, 2), state.constraints.items.len);
-    for (state.constraints.items) |constraint| try testing.expect(!constraint.default_alignment);
-    try testing.expectEqual(@as(usize, 1), state.overridden_constraints.items.len);
-    const overridden = state.overridden_constraints.items[0];
+    try testing.expectEqual(@as(usize, 2), state.constraints.active.items.len);
+    for (state.constraints.active.items) |constraint| try testing.expect(!constraint.default_alignment);
+    try testing.expectEqual(@as(usize, 1), state.constraints.overridden.items.len);
+    const overridden = state.constraints.overridden.items[0];
     try testing.expect(overridden.default_alignment);
     try testing.expectEqual(@as(u32, 2), overridden.scope_depth);
     try testing.expectEqualStrings("group-default", overridden.origin.?.label.?);
@@ -802,10 +809,10 @@ test "document state spec: default alignment collection is atomic on allocation 
             break :blk state.collectDefaultAlignments();
         };
         try testing.expectError(error.OutOfMemory, result);
-        try testing.expectEqual(@as(usize, 0), state.constraints.items.len);
-        try testing.expect(!state.default_alignments_collected);
+        try testing.expectEqual(@as(usize, 0), state.constraints.active.items.len);
+        try testing.expect(!state.constraints.default_alignments_collected);
         try state.collectDefaultAlignments();
-        try testing.expectEqual(@as(usize, 1), state.constraints.items.len);
+        try testing.expectEqual(@as(usize, 1), state.constraints.active.items.len);
     }
 }
 
@@ -819,26 +826,26 @@ test "document state spec: group split cuts carry source scope and survive only 
     try state.setNodeFieldValueWithOrigin(group, "split_axis", .{ .string = "horizontal" }, 2, .{ .label = "split" });
     try state.setNodeFieldValue(group, "split_gap", .{ .number = 20 });
     try state.collectDefaultAlignments();
-    try testing.expectEqual(@as(usize, 6), state.constraints.items.len);
-    const cut = state.constraints.items[1];
+    try testing.expectEqual(@as(usize, 6), state.constraints.active.items.len);
+    const cut = state.constraints.active.items[1];
     try testing.expectEqual(core.Anchor.right, cut.target_anchor);
     try testing.expectEqual(core.Anchor.center_x, cut.source.node.anchor);
     try testing.expectEqual(@as(f32, -10), cut.offset);
-    for (state.constraints.items) |constraint| {
+    for (state.constraints.active.items) |constraint| {
         try testing.expect(constraint.group_split);
         try testing.expectEqual(group, constraint.source.node.node_id);
         try testing.expectEqual(@as(u32, 2), constraint.scope_depth);
         try testing.expectEqualStrings("split", constraint.origin.?.label.?);
     }
-    try state.addConstraintUpdate(b, .left, .position, 0, .{ .page = .left }, 200, null);
+    try state.constraints.addUpdate(state.allocator, b, .left, .position, 0, .{ .page = .left }, 200, null);
     try core.constraint_updates.resolve(&state);
     try state.collectDefaultAlignments();
-    try testing.expectEqual(@as(usize, 2), state.overridden_constraints.items.len);
-    for (state.overridden_constraints.items) |constraint| {
+    try testing.expectEqual(@as(usize, 2), state.constraints.overridden.items.len);
+    for (state.constraints.overridden.items) |constraint| {
         try testing.expect(constraint.group_split);
         try testing.expectEqual(b, constraint.target_node);
     }
-    for (state.constraints.items) |constraint| {
+    for (state.constraints.active.items) |constraint| {
         if (constraint.target_node == b and constraint.group_split) try testing.expect(constraint.default_alignment);
     }
 }
@@ -854,18 +861,18 @@ test "document state spec: n-ary cuts preserve fractional extents before update 
     try state.setNodeFieldValueWithOrigin(group, "split_axis", .{ .string = "horizontal" }, 3, .{ .label = "ternary" });
     try state.setNodeFieldValue(group, "split_gap", .{ .number = 30 });
     try state.collectDefaultAlignments();
-    try testing.expectEqual(@as(usize, 9), state.constraints.items.len);
-    const cut = state.constraints.items[1];
+    try testing.expectEqual(@as(usize, 9), state.constraints.active.items.len);
+    const cut = state.constraints.active.items[1];
     try testing.expectEqual(core.Anchor.right, cut.target_anchor);
     try testing.expectEqual(core.Anchor.left, cut.source.node.anchor);
     try testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), cut.source_extent_factor, 0.00001);
     try testing.expectApproxEqAbs(@as(f32, -20), cut.offset, 0.00001);
     try testing.expectEqual(@as(u32, 3), cut.scope_depth);
-    try state.addConstraintUpdate(b, .left, .position, 0, .{ .page = .left }, 200, null);
+    try state.constraints.addUpdate(state.allocator, b, .left, .position, 0, .{ .page = .left }, 200, null);
     try core.constraint_updates.resolve(&state);
     try state.collectDefaultAlignments();
-    try testing.expectEqual(@as(usize, 2), state.overridden_constraints.items.len);
-    for (state.overridden_constraints.items) |constraint| {
+    try testing.expectEqual(@as(usize, 2), state.constraints.overridden.items.len);
+    for (state.constraints.overridden.items) |constraint| {
         try testing.expect(constraint.source_extent_factor != 0);
         try testing.expectEqual(b, constraint.target_node);
     }
@@ -887,10 +894,10 @@ test "document state spec: group split collection is atomic on allocation failur
             break :blk state.collectDefaultAlignments();
         };
         try testing.expectError(error.OutOfMemory, result);
-        try testing.expectEqual(@as(usize, 0), state.constraints.items.len);
-        try testing.expect(!state.default_alignments_collected);
+        try testing.expectEqual(@as(usize, 0), state.constraints.active.items.len);
+        try testing.expect(!state.constraints.default_alignments_collected);
         try state.collectDefaultAlignments();
-        try testing.expectEqual(@as(usize, 6), state.constraints.items.len);
+        try testing.expectEqual(@as(usize, 6), state.constraints.active.items.len);
     }
 }
 
@@ -904,9 +911,9 @@ test "document state spec: invalid split settings report their group origin" {
         try state.setNodeFieldValue(group, "split_axis", .{ .string = "horizontal" });
         try state.setNodeFieldValue(group, "split_gap", .{ .number = gap });
         try testing.expectError(error.InvalidGroupSplit, state.collectDefaultAlignments());
-        try testing.expectEqual(@as(usize, 0), state.constraints.items.len);
-        try testing.expectEqualStrings("InvalidGroupSplit", state.diagnostics.items[0].data.user_report.code);
-        try testing.expectEqualStrings("split", state.diagnostics.items[0].origin.?.label.?);
+        try testing.expectEqual(@as(usize, 0), state.constraints.active.items.len);
+        try testing.expectEqualStrings("InvalidGroupSplit", state.diagnostics.entries.items[0].data.user_report.code);
+        try testing.expectEqualStrings("split", state.diagnostics.entries.items[0].origin.?.label.?);
     }
 }
 
@@ -943,7 +950,7 @@ fn addValidationUserReport(state: *core.DocumentState, origin: core.SourceOrigin
 }
 
 fn expectDiagnosticCode(state: *core.DocumentState, code: []const u8) !void {
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         switch (diagnostic.data) {
             .user_report => |data| {
                 if (std.mem.eql(u8, data.code, std.mem.trimEnd(u8, code, ":"))) return;
@@ -1035,7 +1042,7 @@ fn initDocumentStateWithLayoutClassDefaults() !core.DocumentState {
     var state = try core.DocumentState.init(allocator, asset_base_dir, project_path, project_source, program);
     program = ast.Module.init();
     errdefer state.deinit();
-    try state.module_order.append(allocator, state.project_module_id);
+    try state.modules.order.append(allocator, state.modules.project_id);
     return state;
 }
 
@@ -1050,8 +1057,8 @@ test "document state spec: LaTeX render environment resolves preamble and engine
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "latex", null, .asset, .latex, "$x$");
 
-    try state.extendRenderEnv(state.document_id, core.render_env.OpAdd, core.render_env.KeyLatexPreamble, "doc preamble");
-    try state.extendRenderEnv(state.document_id, core.render_env.OpSet, core.render_env.KeyLatexEngine, "lualatex");
+    try state.extendRenderEnv(state.graph.document_id, core.render_env.OpAdd, core.render_env.KeyLatexPreamble, "doc preamble");
+    try state.extendRenderEnv(state.graph.document_id, core.render_env.OpSet, core.render_env.KeyLatexEngine, "lualatex");
     try state.extendRenderEnv(page, core.render_env.OpAdd, core.render_env.KeyLatexPreambleFile, "page.tex");
     try state.extendRenderEnv(page, core.render_env.OpSet, core.render_env.KeyLatexEngine, "pdflatex");
     try state.extendRenderEnv(object, core.render_env.OpAdd, core.render_env.KeyLatexPreamble, "object preamble");
@@ -1068,7 +1075,7 @@ test "document state spec: LaTeX render environment resolves preamble and engine
     try testing.expectEqualStrings("object preamble", env.latex_preamble.items[2].value);
     try testing.expectEqual(core.render_env.LatexEngine.pdflatex, env.latex_engine);
 
-    const document = state.getNode(state.document_id).?;
+    const document = state.getNode(state.graph.document_id).?;
     var document_env = try core.render_env.resolveForNode(testing.allocator, &state, document);
     defer document_env.deinit(testing.allocator);
     try testing.expectEqual(core.render_env.LatexEngine.lualatex, document_env.latex_engine);
@@ -1087,9 +1094,9 @@ test "diagnostic codes survive rewording cloning and duplicate detection" {
             .user_report = .{ .code = case.code, .message = try testing.allocator.dupe(u8, case.message) },
         });
     }
-    state.deduplicateValidationUserReports();
-    try testing.expectEqual(cases.len, state.diagnostics.items.len);
-    for (state.diagnostics.items, cases) |*diagnostic, case| {
+    state.diagnostics.deduplicateValidationUserReports(state.allocator);
+    try testing.expectEqual(cases.len, state.diagnostics.entries.items.len);
+    for (state.diagnostics.entries.items, cases) |*diagnostic, case| {
         try testing.expectEqualStrings(case.code, diagnostic.code());
         var cloned = try diagnostic.clone(testing.allocator);
         defer cloned.deinit(testing.allocator);
@@ -1133,7 +1140,6 @@ fn cloneSourceOrigins(allocator: std.mem.Allocator) !void {
     defer diagnostic.deinit(allocator);
     try testing.expect(diagnostic.origin.?.eql(resolved));
 
-    const utils = @import("utils");
     var buffer = std.ArrayList(u8).empty;
     defer buffer.deinit(allocator);
     var object = try utils.json.Object.beginBuffer(allocator, &buffer);
@@ -1157,7 +1163,7 @@ test "diagnostic constructors release message ownership when origin cloning fail
         var state = try initEmptyDocumentState();
         defer state.deinit();
         const origin = core.SourceOrigin.at("origin.ss", .{ .start = 1, .end = 4 });
-        state.getNode(state.document_id).?.origin = origin;
+        state.getNode(state.graph.document_id).?.origin = origin;
         const data: core.Diagnostic.Data = .{
             .user_report = .{ .code = "Example", .message = try testing.allocator.dupe(u8, "owned before origin cloning") },
         };
@@ -1168,9 +1174,9 @@ test "diagnostic constructors release message ownership when origin cloning fail
         const result = switch (phase) {
             .validation => state.addValidationDiagnostic(.@"error", null, null, origin, data),
             .render => state.addRenderDiagnostic(.@"error", null, null, origin, data),
-            .layout => state.addLayoutError(state.document_id, state.document_id, data),
+            .layout => state.addLayoutError(state.graph.document_id, state.graph.document_id, data),
         };
         try testing.expectError(error.OutOfMemory, result);
-        try testing.expectEqual(@as(usize, 0), state.diagnostics.items.len);
+        try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
     }
 }

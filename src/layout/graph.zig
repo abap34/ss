@@ -306,7 +306,7 @@ pub const PageLayoutGraph = struct {
         var active = std.ArrayList(Constraint).empty;
         defer active.deinit(allocator);
         for (page.constraint_indexes) |constraint_index| {
-            const constraint = state.constraints.items[constraint_index];
+            const constraint = state.constraints.active.items[constraint_index];
             if (constraint.group_split and split_frames == null) continue;
             try active.append(allocator, constraint);
             if (!constraint.group_split) continue;

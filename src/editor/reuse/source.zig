@@ -29,7 +29,7 @@ pub fn canApply(snapshot: *AnalysisSnapshot, path: []const u8, generated: *const
     if (!canRebaseGeneratedSource(snapshot, state, path, generated)) return false;
     if (hasLayoutDiagnostics(state)) return false;
     for (generated.replacements, 0..) |replacement, replacement_position| {
-        if (replacement.index >= state.constraints.items.len or
+        if (replacement.index >= state.constraints.active.items.len or
             !std.math.isFinite(replacement.new_offset))
         {
             return false;
@@ -37,7 +37,7 @@ pub fn canApply(snapshot: *AnalysisSnapshot, path: []const u8, generated: *const
         for (generated.replacements[0..replacement_position]) |previous| {
             if (previous.index == replacement.index) return false;
         }
-        const constraint = state.constraints.items[replacement.index];
+        const constraint = state.constraints.active.items[replacement.index];
         if (!constraintEql(constraint, replacement.expected) or
             constraint.target_node != generated.node_id or
             constraint.role != .position or
@@ -88,7 +88,7 @@ fn canRebaseGeneratedSource(
 }
 
 pub fn stateModuleForPathMutable(state: *core.DocumentState, path: []const u8) ?*core.SourceModule {
-    for (state.modules.items) |*module| {
+    for (state.modules.entries.items) |*module| {
         if (module.path) |module_path| {
             if (std.mem.eql(u8, module_path, path)) return module;
         }
@@ -127,7 +127,7 @@ fn canSyncConstraintUpdate(
 ) bool {
     if (!replacement.expected.from_update) return true;
     var match_count: usize = 0;
-    for (state.constraint_updates.items) |update| {
+    for (state.constraints.updates.items) |update| {
         if (!update.active) continue;
         const active_replacement = update.replacement orelse continue;
         if (!constraintEql(active_replacement, replacement.expected)) continue;
@@ -141,7 +141,7 @@ pub fn syncConstraintUpdate(
     replacement: generated_edit.Replacement,
 ) void {
     if (!replacement.expected.from_update) return;
-    for (state.constraint_updates.items) |*update| {
+    for (state.constraints.updates.items) |*update| {
         if (!update.active) continue;
         const active_replacement = if (update.replacement) |*value| value else continue;
         if (!constraintEql(active_replacement.*, replacement.expected)) continue;
@@ -185,7 +185,7 @@ fn parseGeneratedNumericOffset(text: []const u8) ?f64 {
 }
 
 pub fn hasLayoutDiagnostics(state: *const core.DocumentState) bool {
-    for (state.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.entries.items) |diagnostic| {
         if (diagnostic.phase == .layout) return true;
     }
     return false;

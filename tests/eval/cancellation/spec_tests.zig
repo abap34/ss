@@ -48,7 +48,7 @@ test "document evaluation cooperatively cancels without adding a diagnostic" {
         \\end
     );
     defer evaluation.deinit();
-    const diagnostic_count = evaluation.state.diagnostics.items.len;
+    const diagnostic_count = evaluation.state.diagnostics.entries.items.len;
     var counter = CancellationCounter{ .cancel_after = 5 };
     try testing.expectError(error.Canceled, compiler.lowering.evaluateDocument(&evaluation.state, &evaluation.graph, .{
         .io = testing.io,
@@ -58,7 +58,7 @@ test "document evaluation cooperatively cancels without adding a diagnostic" {
         },
     }));
     try testing.expect(counter.checks >= counter.cancel_after);
-    try testing.expectEqual(diagnostic_count, evaluation.state.diagnostics.items.len);
+    try testing.expectEqual(diagnostic_count, evaluation.state.diagnostics.entries.items.len);
 }
 
 fn canceledRead(_: ?*anyopaque, _: std.Io.File, _: []const []u8, _: u64) std.Io.File.ReadPositionalError!usize {
@@ -79,13 +79,13 @@ test "document evaluation propagates read cancellation without a readlines diagn
         \\end
     );
     defer evaluation.deinit();
-    const diagnostic_count = evaluation.state.diagnostics.items.len;
+    const diagnostic_count = evaluation.state.diagnostics.entries.items.len;
     var vtable = testing.io.vtable.*;
     vtable.fileReadPositional = canceledRead;
     const io = std.Io{ .userdata = testing.io.userdata, .vtable = &vtable };
     try testing.expectError(error.Canceled, compiler.lowering.evaluateDocument(&evaluation.state, &evaluation.graph, .{ .io = io }));
     try testing.expect(evaluation.state.has_external_evaluation_inputs);
-    try testing.expectEqual(diagnostic_count, evaluation.state.diagnostics.items.len);
+    try testing.expectEqual(diagnostic_count, evaluation.state.diagnostics.entries.items.len);
 }
 
 test "readlines accepts exactly one MiB and diagnoses larger input" {
@@ -107,12 +107,12 @@ test "readlines accepts exactly one MiB and diagnoses larger input" {
             \\end
         );
         defer evaluation.deinit();
-        const diagnostic_count = evaluation.state.diagnostics.items.len;
+        const diagnostic_count = evaluation.state.diagnostics.entries.items.len;
         try compiler.lowering.evaluateDocument(&evaluation.state, &evaluation.graph, .{ .io = testing.io });
         if (length == maximum) {
-            try testing.expectEqual(diagnostic_count, evaluation.state.diagnostics.items.len);
+            try testing.expectEqual(diagnostic_count, evaluation.state.diagnostics.entries.items.len);
         } else {
-            try testing.expect(evaluation.state.diagnostics.items.len > diagnostic_count);
+            try testing.expect(evaluation.state.diagnostics.entries.items.len > diagnostic_count);
         }
     }
 }

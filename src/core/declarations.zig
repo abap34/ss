@@ -212,12 +212,12 @@ pub const DeclarationIndex = struct {
 pub fn build(allocator: std.mem.Allocator, state: anytype) !DeclarationIndex {
     var index = DeclarationIndex.init(allocator);
     errdefer index.deinit();
-    index.builtin_module_id = state.project_module_id;
+    index.builtin_module_id = state.modules.project_id;
 
-    if (state.module_order.items.len == 0) {
-        for (state.modules.items) |*module| try indexModule(&index, module);
+    if (state.modules.order.items.len == 0) {
+        for (state.modules.entries.items) |*module| try indexModule(&index, module);
     } else {
-        for (state.module_order.items) |module_id| {
+        for (state.modules.order.items) |module_id| {
             const module = state.moduleById(module_id) orelse continue;
             try indexModule(&index, module);
         }

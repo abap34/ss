@@ -65,7 +65,7 @@ pub fn validateOutputPathAgainstSources(
     path: []const u8,
     kind: OutputKind,
 ) !void {
-    for (state.modules.items) |module| {
+    for (state.modules.entries.items) |module| {
         const source_path = module.path orelse continue;
         if (!try project.pathsReferToSameFile(allocator, io, path, source_path)) continue;
         const absolute_output = try project.absolutePath(allocator, path);

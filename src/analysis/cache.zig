@@ -55,7 +55,7 @@ pub const NameResolutionCache = struct {
 
     pub fn reserve(self: *NameResolutionCache, state: *const core.DocumentState) !void {
         try self.functions.ensureTotalCapacity(@intCast(state.functions.count() * 2));
-        try self.constants.ensureTotalCapacity(@intCast(state.constants.count() * 2));
+        try self.constants.ensureTotalCapacity(@intCast(state.constants.declarations.count() * 2));
     }
 
     pub fn resolvedFunction(self: *NameResolutionCache, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedFunction {

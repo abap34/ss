@@ -84,7 +84,7 @@ fn checkFunctionDefinitionsWithEnv(
     const bodies_start = utils.measure_profile.start();
     defer utils.measure_profile.recordAnalysis(.semantics_function_bodies, bodies_start);
     var had_diagnostics = false;
-    var const_it = state.constants.iterator();
+    var const_it = state.constants.declarations.iterator();
     while (const_it.next()) |entry| {
         const module_id = entry.key_ptr.module_id;
         const origin_path = blk: {
@@ -92,7 +92,7 @@ fn checkFunctionDefinitionsWithEnv(
             break :blk "";
         };
         const module_sema = sema.forModule(module_id);
-        const diagnostic_count = state.diagnostics.items.len;
+        const diagnostic_count = state.diagnostics.entries.items.len;
         checker.checkConst(inference_context, allocator, state, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
             try checker.continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
@@ -107,7 +107,7 @@ fn checkFunctionDefinitionsWithEnv(
             break :blk "";
         };
         const module_sema = sema.forModule(module_id);
-        const diagnostic_count = state.diagnostics.items.len;
+        const diagnostic_count = state.diagnostics.entries.items.len;
         checker.checkFunction(inference_context, allocator, state, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
             try checker.continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
@@ -120,7 +120,7 @@ pub fn analyzeDocumentState(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
 ) !void {
-    defer state.deduplicateValidationUserReports();
+    defer state.diagnostics.deduplicateValidationUserReports(state.allocator);
     var declaration_index: *const declarations.DeclarationIndex = undefined;
     {
         const measure_start = utils.measure_profile.start();
@@ -139,7 +139,7 @@ pub fn analyzeDocumentStateWithMode(
     state: *core.DocumentState,
     mode: AnalysisMode,
 ) !?execution.ExecutionGraph {
-    defer state.deduplicateValidationUserReports();
+    defer state.diagnostics.deduplicateValidationUserReports(state.allocator);
     var declaration_index: *const declarations.DeclarationIndex = undefined;
     {
         const measure_start = utils.measure_profile.start();
@@ -201,7 +201,7 @@ fn analyzeDocumentStateSemantics(
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.semantics_pages, measure_start);
-        for (state.module_order.items) |module_id| {
+        for (state.modules.order.items) |module_id| {
             const module = state.moduleById(module_id) orelse continue;
             const module_sema = sema.forModule(module_id);
             checker.checkPageStatements(&inference_context, allocator, state, &module_sema, checker.originPathForModule(module), module.syntax) catch |err| {
@@ -231,7 +231,7 @@ const DependencyQueryTarget = struct {
 };
 
 fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
-    for (state.module_order.items) |module_id| {
+    for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         if (std.mem.indexOf(u8, module.source, "^dep?") == null) continue;
         const module_sema = sema.forModule(module_id);
@@ -605,19 +605,19 @@ pub fn buildDocumentStateWithOptions(
         try addParseHoleDiagnostics(&state, holes);
     }
 
-    state.constants = index.constants;
+    state.constants.declarations = index.constants;
     index.constants = core.ConstMap.init(allocator);
     state.functions = index.functions;
     index.functions = core.FunctionMap.init(allocator);
-    state.module_order = index.module_graph.module_order;
+    state.modules.order = index.module_graph.module_order;
     index.module_graph.module_order = .empty;
     state.projectModuleMutable().implicit_import_ids = index.module_graph.project_implicit_import_ids;
     index.module_graph.project_implicit_import_ids = .empty;
     state.projectModuleMutable().resolved_import_ids = index.module_graph.project_import_ids;
     index.module_graph.project_import_ids = .empty;
-    try index.module_graph.moveModulesTo(&state.modules);
-    if (state.module_order.items.len == 0 or state.module_order.items[state.module_order.items.len - 1] != state.project_module_id) {
-        try state.module_order.append(allocator, state.project_module_id);
+    try index.module_graph.moveModulesTo(&state.modules.entries);
+    if (state.modules.order.items.len == 0 or state.modules.order.items[state.modules.order.items.len - 1] != state.modules.project_id) {
+        try state.modules.order.append(allocator, state.modules.project_id);
     }
     try state.rebuildDeclarationIndex();
     {
