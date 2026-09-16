@@ -4,6 +4,8 @@ import std:core/components
 import std:core/layout as {
   hjoin,
   vjoin,
+  hsplit,
+  vsplit,
   vflow,
   vflow_doc,
   cols2_parts,

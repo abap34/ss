@@ -258,6 +258,8 @@ fn operatorEnd(text: []const u8, start: usize, line_end: usize) ?usize {
     const end = @min(line_end, text.len);
     const operators = [_][]const u8{
         "|->",
+        "|=|",
+        "/=/",
         "->",
         "??",
         "++",

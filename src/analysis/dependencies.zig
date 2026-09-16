@@ -1856,8 +1856,10 @@ pub const Analyzer = struct {
             => try summary.addSelectionRead(Resource.makeObjects(literalStringFromArgFacts(arg_facts, 2))),
             .children,
             .descendants,
-            .self_object,
             => try summary.addSelectionRead(Resource.makeObjects(null)),
+            // A singleton snapshots the supplied identity, not a collection.
+            // Its argument dependencies have already been collected.
+            .self_object => {},
             .previous_page,
             .parent_page,
             => try summary.addRead(Resource.makePages(null)),

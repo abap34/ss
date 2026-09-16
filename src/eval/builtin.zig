@@ -362,8 +362,17 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .group => blk: {
             var child_ids = std.ArrayList(core.NodeId).empty;
             defer child_ids.deinit(ctx.state.allocator);
-            for (call.args.items, 0..) |_, index| {
-                try child_ids.append(ctx.state.allocator, try ctx.evalObjectArg(call, index));
+            for (call.args.items) |arg| {
+                var value = try ctx.evalExprValue(arg);
+                defer value.deinit(ctx.state.allocator);
+                switch (value) {
+                    .object => |id| try child_ids.append(ctx.state.allocator, id),
+                    .selection => |selection| {
+                        if (selection.item_tag != .object) return error.InvalidType;
+                        try child_ids.appendSlice(ctx.state.allocator, selection.ids.items);
+                    },
+                    else => return error.InvalidType,
+                }
             }
             break :blk .{ .object = try ctx.makeGroup(child_ids.items) };
         },

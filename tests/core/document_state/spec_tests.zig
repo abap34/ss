@@ -809,6 +809,107 @@ test "document state spec: default alignment collection is atomic on allocation 
     }
 }
 
+test "document state spec: group split cuts carry source scope and survive only unmasked axes" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    const a = try state.makeObject(page, "a", null, .text, .text, "A");
+    const b = try state.makeObject(page, "b", null, .text, .text, "B");
+    const group = try state.createGroupWithOrigin(&.{ a, b }, null);
+    try state.setNodeFieldValueWithOrigin(group, "split_axis", .{ .string = "horizontal" }, 2, .{ .label = "split" });
+    try state.setNodeFieldValue(group, "split_gap", .{ .number = 20 });
+    try state.collectDefaultAlignments();
+    try testing.expectEqual(@as(usize, 6), state.constraints.items.len);
+    const cut = state.constraints.items[1];
+    try testing.expectEqual(core.Anchor.right, cut.target_anchor);
+    try testing.expectEqual(core.Anchor.center_x, cut.source.node.anchor);
+    try testing.expectEqual(@as(f32, -10), cut.offset);
+    for (state.constraints.items) |constraint| {
+        try testing.expect(constraint.group_split);
+        try testing.expectEqual(group, constraint.source.node.node_id);
+        try testing.expectEqual(@as(u32, 2), constraint.scope_depth);
+        try testing.expectEqualStrings("split", constraint.origin.?.label.?);
+    }
+    try state.addConstraintUpdate(b, .left, .position, 0, .{ .page = .left }, 200, null);
+    try core.constraint_updates.resolve(&state);
+    try state.collectDefaultAlignments();
+    try testing.expectEqual(@as(usize, 2), state.overridden_constraints.items.len);
+    for (state.overridden_constraints.items) |constraint| {
+        try testing.expect(constraint.group_split);
+        try testing.expectEqual(b, constraint.target_node);
+    }
+    for (state.constraints.items) |constraint| {
+        if (constraint.target_node == b and constraint.group_split) try testing.expect(constraint.default_alignment);
+    }
+}
+
+test "document state spec: n-ary cuts preserve fractional extents before update normalization" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    const a = try state.makeObject(page, "a", null, .text, .text, "A");
+    const b = try state.makeObject(page, "b", null, .text, .text, "B");
+    const c = try state.makeObject(page, "c", null, .text, .text, "C");
+    const group = try state.createGroupWithOrigin(&.{ a, b, c }, null);
+    try state.setNodeFieldValueWithOrigin(group, "split_axis", .{ .string = "horizontal" }, 3, .{ .label = "ternary" });
+    try state.setNodeFieldValue(group, "split_gap", .{ .number = 30 });
+    try state.collectDefaultAlignments();
+    try testing.expectEqual(@as(usize, 9), state.constraints.items.len);
+    const cut = state.constraints.items[1];
+    try testing.expectEqual(core.Anchor.right, cut.target_anchor);
+    try testing.expectEqual(core.Anchor.left, cut.source.node.anchor);
+    try testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), cut.source_extent_factor, 0.00001);
+    try testing.expectApproxEqAbs(@as(f32, -20), cut.offset, 0.00001);
+    try testing.expectEqual(@as(u32, 3), cut.scope_depth);
+    try state.addConstraintUpdate(b, .left, .position, 0, .{ .page = .left }, 200, null);
+    try core.constraint_updates.resolve(&state);
+    try state.collectDefaultAlignments();
+    try testing.expectEqual(@as(usize, 2), state.overridden_constraints.items.len);
+    for (state.overridden_constraints.items) |constraint| {
+        try testing.expect(constraint.source_extent_factor != 0);
+        try testing.expectEqual(b, constraint.target_node);
+    }
+}
+
+test "document state spec: group split collection is atomic on allocation failure" {
+    for (0..2) |fail_index| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        const page = try state.addPage("Page");
+        const a = try state.makeObject(page, "a", null, .text, .text, "A");
+        const b = try state.makeObject(page, "b", null, .text, .text, "B");
+        const group = try state.createGroupWithOrigin(&.{ a, b }, null);
+        try state.setNodeFieldValue(group, "split_axis", .{ .string = "vertical" });
+        var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        const result = blk: {
+            state.allocator = failing.allocator();
+            defer state.allocator = testing.allocator;
+            break :blk state.collectDefaultAlignments();
+        };
+        try testing.expectError(error.OutOfMemory, result);
+        try testing.expectEqual(@as(usize, 0), state.constraints.items.len);
+        try testing.expect(!state.default_alignments_collected);
+        try state.collectDefaultAlignments();
+        try testing.expectEqual(@as(usize, 6), state.constraints.items.len);
+    }
+}
+
+test "document state spec: invalid split settings report their group origin" {
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |gap| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        const a = try state.createObjectWithOrigin("a", null, .text, .text, "A", null);
+        const b = try state.createObjectWithOrigin("b", null, .text, .text, "B", null);
+        const group = try state.createGroupWithOrigin(&.{ a, b }, .{ .label = "split" });
+        try state.setNodeFieldValue(group, "split_axis", .{ .string = "horizontal" });
+        try state.setNodeFieldValue(group, "split_gap", .{ .number = gap });
+        try testing.expectError(error.InvalidGroupSplit, state.collectDefaultAlignments());
+        try testing.expectEqual(@as(usize, 0), state.constraints.items.len);
+        try testing.expectEqualStrings("InvalidGroupSplit", state.diagnostics.items[0].data.user_report.code);
+        try testing.expectEqualStrings("split", state.diagnostics.items[0].origin.?.label.?);
+    }
+}
+
 test "document state spec: field writes release partial allocations before publication" {
     for (0..3) |fail_index| {
         var state = try initEmptyDocumentState();

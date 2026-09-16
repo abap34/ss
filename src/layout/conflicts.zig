@@ -530,6 +530,7 @@ fn constraintsSame(a: Constraint, b: Constraint) bool {
     if (a.target_node != b.target_node) return false;
     if (a.target_anchor != b.target_anchor) return false;
     if (!graph.approxEq(a.offset, b.offset)) return false;
+    if (a.source_extent_factor != b.source_extent_factor) return false;
     if (!model.SourceOrigin.optionalEql(a.origin, b.origin)) return false;
     return switch (a.source) {
         .page => |a_anchor| switch (b.source) {

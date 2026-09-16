@@ -1,4 +1,5 @@
 type LayoutPolicy = top | top_flow | center | center_stack
+type SplitAxis = none | horizontal | vertical
 type RenderKind = text | code | latex | vector_asset | raster_asset | vector_path | connector | chrome_only
 type LineCap = butt | round | square
 type LineJoin = miter | round | bevel
@@ -675,6 +676,9 @@ type Group = object {
   roles = ["group"]
 
   align_children_y: Bool = false
+  split_axis: SplitAxis = SplitAxis.none
+  join_axis: SplitAxis = SplitAxis.none
+  split_gap: Number = 32
   render_kind: RenderKind = RenderKind.chrome_only
   layout: LayoutStyle = LayoutStyle {
     font_size = 4

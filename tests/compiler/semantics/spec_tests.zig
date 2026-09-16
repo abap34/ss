@@ -1272,6 +1272,22 @@ test "compiler semantics: lambda parameters cannot shadow visible bindings" {
     , "case.ss:bytes:", "DuplicateBinding: binding 'x' is already defined in this scope");
 }
 
+test "compiler semantics: singleton selections do not depend on object collection writes" {
+    try buildSource(
+        \\import std:core/prelude as *
+        \\fn wrap(item: Object) -> Selection<Object>
+        \\  return select(item, "self_object")
+        \\end
+        \\page Singleton
+        \\  let a = text("A")
+        \\  let b = text("B")
+        \\  let items = selection_union(wrap(a), wrap(b))
+        \\  let combined = group(items, text("C"))
+        \\  place!(combined)
+        \\end
+    );
+}
+
 test "compiler semantics: selection values can be reused after lookup" {
     try buildSource(
         \\import std:themes/default as *

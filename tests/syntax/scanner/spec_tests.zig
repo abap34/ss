@@ -111,6 +111,21 @@ test "syntax scanner: composition operators are complete semantic tokens" {
     try testing.expectEqual(@as(usize, 2), operator_count);
 }
 
+test "syntax scanner: equal composition operators use longest complete tokens" {
+    const text = "a|=|b/=/c || d // e";
+    const tokens = try scanner.semanticTokens(testing.allocator, text);
+    defer testing.allocator.free(tokens);
+    var index: usize = 0;
+    const expected = [_][]const u8{ "|=|", "/=/", "||", "//" };
+    for (tokens) |token| {
+        if (token.kind != .operator) continue;
+        try testing.expect(index < expected.len);
+        try testing.expectEqualStrings(expected[index], text[token.token.span.start..token.token.span.end]);
+        index += 1;
+    }
+    try testing.expectEqual(expected.len, index);
+}
+
 test "syntax scanner: classifies semantic tokens without LSP logic" {
     const text =
         \\fn title!(x: String)

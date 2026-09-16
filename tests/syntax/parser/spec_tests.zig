@@ -1799,6 +1799,89 @@ test "syntax spec: composition parsing and cloning survive every allocation fail
     try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{"page Recover\n  a ||\n  let ok = 1\nend\n"});
 }
 
+test "syntax spec: equal composition chains preserve grouping and spans" {
+    const source_text =
+        \\page Equal
+        \\  let flat = a|=|b|=|c
+        \\  let grouped = (a |=| b) |=| c
+        \\  let vertical = a/=/b/=/c
+        \\  let mixed = a |=| (b // c)
+        \\  let division = a / 2 /=/ b / 3
+        \\end
+    ;
+    var parsed = try parse(source_text);
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    for ([_]usize{ 0, 2 }, [_][]const u8{ "hsplit", "vsplit" }) |index, name| {
+        const split = try expectCall(statements[index].kind.let_binding.expr, name, 1);
+        try testing.expectEqualStrings("std:core/layout", split.callee.qualifier.?);
+        try expectSpanText(source_text, split.callee.span.?, if (index == 0) "|=|" else "/=/");
+        const append = try expectComposition(split.args.items[0], "composition_append");
+        const pair = try expectComposition(append.args.items[0], "composition_objects");
+        try expectIdent(pair.args.items[0], "a");
+        try expectIdent(pair.args.items[1], "b");
+        try expectIdent(append.args.items[1], "c");
+        try expectSpanText(source_text, append.arg_spans.items[1], "c");
+    }
+    const grouped = try expectCall(statements[1].kind.let_binding.expr, "hsplit", 1);
+    const pair = try expectComposition(grouped.args.items[0], "composition_objects");
+    _ = try expectCall(pair.args.items[0], "hsplit", 1);
+    const mixed = try expectCall(statements[3].kind.let_binding.expr, "hsplit", 1);
+    const mixed_pair = try expectComposition(mixed.args.items[0], "composition_objects");
+    _ = try expectComposition(mixed_pair.args.items[1], "vjoin");
+    const division = try expectCall(statements[4].kind.let_binding.expr, "vsplit", 1);
+    const divided_pair = try expectComposition(division.args.items[0], "composition_objects");
+    for (divided_pair.args.items) |operand| _ = try expectCall(operand, "div", 2);
+    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
+    try testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
+}
+
+test "syntax spec: equal compositions diagnose mixed operators and recover missing operands" {
+    const operators = [_][]const u8{ "||", "//", "|=|", "/=/" };
+    for (operators) |left| {
+        for (operators) |right| {
+            if (std.mem.eql(u8, left, right)) continue;
+            const source_text = try std.fmt.allocPrint(testing.allocator, "page Bad\n let g = a {s} b {s} c\nend\n", .{ left, right });
+            defer testing.allocator.free(source_text);
+            const position = std.mem.lastIndexOf(u8, source_text, right).?;
+            try expectParseErrorSpan(error.MixedCompositionDirections, source_text, position, position + right.len);
+            try expectParseErrorWithoutLeaks(error.MixedCompositionDirections, source_text);
+        }
+    }
+    const incomplete = "page Recover\n a |=| b |=|\n let ok = 1\n c /=/\nend\n";
+    var parsed = try parseRecovering(incomplete);
+    defer parsed.deinit();
+    const statements = parsed.result.module.pages.items[0].statements.items;
+    try testing.expectEqual(@as(usize, 3), statements.len);
+    const horizontal = try expectCall(statements[0].kind.expr_stmt, "hsplit", 1);
+    const append = try expectComposition(horizontal.args.items[0], "composition_append");
+    try testing.expect(append.args.items[1] == .hole);
+    try testing.expectEqualStrings("ok", statements[1].kind.let_binding.name);
+    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{incomplete});
+}
+
+test "syntax spec: equal operators continue after trivia and remain literal in text" {
+    var parsed = try parse(
+        \\page Text
+        \\  a |=| ;; continue
+        \\    b
+        \\  c /=/
+        \\    d
+        \\  text! |=| raw
+        \\  text! /=/ raw
+        \\  text "a |=| b /=/ c"
+        \\end
+    );
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    _ = try expectCall(statements[0].kind.expr_stmt, "hsplit", 1);
+    _ = try expectCall(statements[1].kind.expr_stmt, "vsplit", 1);
+    for ([_][]const u8{ "|=| raw", "/=/ raw", "a |=| b /=/ c" }, 2..) |value, index| {
+        const call = try expectCall(statements[index].kind.expr_stmt, if (index < 4) "text!" else "text", 1);
+        try expectString(call.args.items[0], value);
+    }
+}
+
 test "syntax spec: quoted strings keep backslashes literally" {
     var parsed = try parse(
         \\page Strings

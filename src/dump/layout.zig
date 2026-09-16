@@ -104,9 +104,11 @@ fn writeConstraintFields(
         },
     }
     try item.floatField("offset", constraint.offset, "{d:.1}");
+    try item.floatField("source_extent_factor", constraint.source_extent_factor, "{d}");
     try utils.err.writeOriginField(item, "origin", constraint.origin);
     try item.enumTagField("role", constraint.role);
     try item.intField("scope_depth", constraint.scope_depth);
     try item.boolField("from_update", constraint.from_update);
     try item.boolField("default_alignment", constraint.default_alignment);
+    try item.boolField("group_split", constraint.group_split);
 }

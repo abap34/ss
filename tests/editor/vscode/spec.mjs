@@ -26,6 +26,9 @@ async function testCompositionOperatorSyntax() {
     ["a || (b // c)", ["||", "//"]],
     ["a || b || c", ["||", "||"]],
     ["a // b // c", ["//", "//"]],
+    ["a|=|b|=|c", ["|=|", "|=|"]],
+    ["a/=/b/=/c", ["/=/", "/=/"]],
+    ["a |=| (b // c)", ["|=|", "//"]],
     ["a / 2", ["/"]],
     ["(a: Object) |-> a", [":", "|->"]],
   ]) {
@@ -40,6 +43,7 @@ async function testCompositionOperatorSyntax() {
   for (const queryPath of ["editor/tree-sitter-ss/queries/highlights.scm", "editor/zed/languages/ss/highlights.scm"]) {
     const query = await readFile(path.join(root, queryPath), "utf8");
     assert(query.includes('"||"') && query.includes('"//"'), `composition highlighting is missing: ${queryPath}`);
+    assert(query.includes('"|=|"') && query.includes('"/=/"'), `equal composition highlighting is missing: ${queryPath}`);
   }
 }
 

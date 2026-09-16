@@ -489,6 +489,14 @@
             "named": false
           },
           {
+            "type": "/=/",
+            "named": false
+          },
+          {
+            "type": "|=|",
+            "named": false
+          },
+          {
             "type": "||",
             "named": false
           }
@@ -3637,6 +3645,10 @@
     "named": false
   },
   {
+    "type": "/=/",
+    "named": false
+  },
+  {
     "type": ":",
     "named": false
   },
@@ -3799,11 +3811,11 @@
   },
   {
     "type": "number",
-    "named": true
+    "named": false
   },
   {
     "type": "number",
-    "named": false
+    "named": true
   },
   {
     "type": "object",
@@ -3871,6 +3883,10 @@
   },
   {
     "type": "|->",
+    "named": false
+  },
+  {
+    "type": "|=|",
     "named": false
   },
   {

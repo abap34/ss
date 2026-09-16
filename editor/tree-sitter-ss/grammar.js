@@ -224,7 +224,7 @@ module.exports = grammar({
     // missing parentheses without losing syntax highlighting for either side.
     composition_expression: $ => prec.left(PREC.composition, seq(
       field("left", $._expression),
-      field("operator", choice("||", "//")),
+      field("operator", choice("||", "//", "|=|", "/=/")),
       repeat($._terminator),
       field("right", $._expression),
     )),
@@ -310,7 +310,7 @@ module.exports = grammar({
     )),
     color_string: _ => /c"[^"]*"/,
     block_text: _ => token(seq("<<", /([^>]|>[^>])*/, ">>")),
-    line_text: _ => token.immediate(/[ \t]+([^ \t|/"(<?\n][^\n]*|\|([^|\n][^\n]*)?|\/([^/\n][^\n]*)?|<([^<\n][^\n]*)?|\?([^?\n][^\n]*)?)/),
+    line_text: _ => token.immediate(/[ \t]+([^ \t|/"(<?\n][^\n]*|\|([^|=\n][^\n]*|=([^|\n][^\n]*)?)?|\/([^/=\n][^\n]*|=([^/\n][^\n]*)?)?|<([^<\n][^\n]*)?|\?([^?\n][^\n]*)?)/),
     _bang_line_text: _ => token.immediate(/[ \t]+([^ \t"(<\n][^\n]*|<([^<\n][^\n]*)?)/),
     number: _ => /\d+(\.\d+)?/,
     boolean: _ => choice("true", "false"),

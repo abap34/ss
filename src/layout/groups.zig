@@ -60,6 +60,15 @@ fn propagateTargetedWidthsWithCache(state: anytype, workspace: *const graph.Axis
 }
 
 fn computeTightGroupAxisState(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) !AxisState {
+    if (workspace.graph.splitFrame(node_id)) |frame| {
+        const start = if (workspace.axis == .horizontal) frame.x else frame.y;
+        const size = if (workspace.axis == .horizontal) frame.width else frame.height;
+        return .{ .start = start, .end = start + size, .center = start + size / 2, .size = size };
+    }
+    return computeChildGroupAxisState(state, workspace, node_id);
+}
+
+fn computeChildGroupAxisState(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) !AxisState {
     const group_children = state.childrenOf(node_id) orelse return .{};
 
     var start: ?f32 = null;
@@ -129,6 +138,7 @@ fn applyGroupTargetConstraintSlice(
         // group. Fallback must neither replace that position nor resize the
         // group by supplying a different anchor on the same axis.
         if (is_soft and (temp.start != null or temp.end != null or temp.center != null)) continue;
+        if (is_soft and hasPositionedAncestor(workspace, group_id)) continue;
         used.* = true;
         last_constraint.* = constraint;
 
@@ -187,13 +197,13 @@ fn applyGroupTargetConstraintSlice(
         }
 
         const source_value = switch (constraint.source) {
-            .page => try graph.constraintSourceValue(state, workspace, constraint.source),
+            .page => try graph.constraintAffineSourceValue(state, workspace, constraint),
             .node => |node_source| blk: {
                 if (node_source.node_id == group_id) {
                     const current = graph.axisAnchorValue(temp.*, node_source.anchor);
                     break :blk if (current != null) current else graph.axisAnchorValue(base, node_source.anchor);
                 }
-                break :blk try graph.constraintSourceValue(state, workspace, constraint.source);
+                break :blk try graph.constraintAffineSourceValue(state, workspace, constraint);
             },
         };
         if (source_value == null) continue;
@@ -287,9 +297,16 @@ pub fn applyTargetConstraints(
             continue;
         };
 
-        const delta = if (temp.start != null and base.start != null) temp.start.? - base.start.? else 0;
         const previous = workspace.states[group_index];
-        const subtree_changed = try translateSubtree(state, workspace, group_id, delta);
+        const split_children = workspace.graph.hasSplitChildren(group_id);
+        const child_bounds = if (!split_children and workspace.graph.splitFrame(group_id) != null)
+            try computeChildGroupAxisState(state, workspace, group_id)
+        else
+            base;
+        const delta = if (temp.start) |start| start - (child_bounds.start orelse start) else 0;
+        // Split children obtain their coordinates from parent anchors. Moving
+        // them here would also move explicit positions and apply the shift twice.
+        const subtree_changed = if (split_children) false else try translateSubtree(state, workspace, group_id, delta);
         workspace.states[group_index] = temp;
         if (subtree_changed or !axisStatesEq(previous, temp)) {
             update.changed = true;
@@ -297,6 +314,21 @@ pub fn applyTargetConstraints(
         }
     }
     return update;
+}
+
+fn hasPositionedAncestor(workspace: *const graph.AxisWorkspace, node_id: NodeId) bool {
+    for (workspace.graph.parentGroupIndexes(node_id)) |index| {
+        const parent_id = workspace.nodeAt(index);
+        if (workspace.states[index].start != null) {
+            for (workspace.graph.targetConstraintIndexes(parent_id)) |constraint_index| {
+                const constraint = workspace.graph.constraints[constraint_index];
+                if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) continue;
+                if (graph.classifySelfConstraint(constraint, workspace.axis) == .none) return true;
+            }
+        }
+        if (hasPositionedAncestor(workspace, parent_id)) return true;
+    }
+    return false;
 }
 
 pub fn constraintUsesGroupSource(state: anytype, constraint: Constraint) bool {

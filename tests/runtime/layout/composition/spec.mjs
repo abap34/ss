@@ -2,7 +2,9 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { assert, root, ssBin } from "../../harness.mjs";
+import { pathToFileURL } from "node:url";
+import { assert, root, ssBin, withLspClient } from "../../harness.mjs";
+import { editorSnapshot } from "../../editor/support.mjs";
 
 const outputRoot = path.join(root, ".ss-cache", "tests", "layout-composition");
 await mkdir(outputRoot, { recursive: true });
@@ -25,33 +27,24 @@ let c = box("C", 90, 50)`;
 const anchor = `~ a.left == page.left + 80
 ~ a.top == page.top - 80`;
 
-await testNestedPlacedObjects();
-await testNestedUnplacedObjectsAndOrdinaryGroup();
-await testIntermediateBinding();
-await testOrdinaryGroupInference();
-await testNestedOrdinaryGroupBounds();
-await testUnplacedComposition();
-await testNaturalWidths();
-await testSameDirectionBinaryGroups();
-await testSharedObjects();
-await testConstraintUpdate();
-await testInferredGroupConstraintUpdate();
-await testExplicitGap();
-await testOperandEvaluation();
-await testFixedStdlibResolution();
-await testImportedFunctionComposition();
-await testInvalidOperands();
-await testConflictsAndMixedDirections();
-await testHorizontalPolicyVariants();
-await testHorizontalPolicyInheritance();
-await testNestedHorizontalPolicy();
-await testPolicyAfterPagePlacement();
-await testExplicitVerticalPositionPriority();
-await testDefaultAlignmentUpdates();
-await testCenteredChainAndVerticalComposition();
-await testOrdinaryGroupPolicyIsolation();
-await testFixedRightDoesNotMoveLeft();
-await testFixture();
+const failures = [];
+for (const test of [
+  testNestedPlacedObjects, testNestedUnplacedObjectsAndOrdinaryGroup,
+  testIntermediateBinding, testOrdinaryGroupInference, testNestedOrdinaryGroupBounds,
+  testUnplacedComposition, testNaturalWidths, testEqualFrames, testEqualChains, testEqualEvaluation, testEqualEditorUpdates, testSameDirectionBinaryGroups,
+  testSharedObjects, testConstraintUpdate, testInferredGroupConstraintUpdate,
+  testExplicitGap, testOperandEvaluation, testFixedStdlibResolution, testImportedFunctionComposition,
+  testInvalidOperands, testConflictsAndMixedDirections, testHorizontalPolicyVariants,
+  testHorizontalPolicyInheritance, testNestedHorizontalPolicy, testPolicyAfterPagePlacement,
+  testExplicitVerticalPositionPriority, testDefaultAlignmentUpdates, testCenteredChainAndVerticalComposition,
+  testOrdinaryGroupPolicyIsolation, testFixedRightDoesNotMoveLeft, testFixture,
+]) {
+  try { await test(); } catch (error) {
+    failures.push(test.name);
+    console.error(`${test.name}: ${error.message}`);
+  }
+}
+assert(failures.length === 0, `failed composition tests: ${failures.join(", ")}`);
 console.log(`layout composition: ${caseCount} cases passed`);
 
 async function testNestedPlacedObjects() {
@@ -257,7 +250,272 @@ end
   const b = node(dump, "a considerably longer line");
   assert(b.width > a.width * 2, `composition equalized intrinsic widths: ${a.width}, ${b.width}`);
   assertClose(b.x, a.x + a.width + gap, "natural horizontal gap");
-  assertClose(top(b), top(a), "natural top alignment");
+  assertClose(centerY(b), centerY(a), "natural center alignment");
+}
+
+async function testEqualFrames() {
+  const leaves = `let a = text("Short")
+let b = text("A longer description with a different natural width")
+let c = text("Third item")`;
+  for (const [name, expression] of [
+    ["horizontal", "a |=| b"], ["vertical", "a /=/ b"],
+    ["nested", "a |=| (b /=/ c)"], ["transposed", "(a |=| b) /=/ c"],
+    ["horizontal-chain", "a |=| b |=| c"], ["vertical-chain", "a /=/ b /=/ c"],
+    ["horizontal-grouped", "(a |=| b) |=| c"], ["vertical-grouped", "a /=/ (b /=/ c)"],
+    ["horizontal-natural-child", "a |=| (b // c)"], ["vertical-natural-child", "(a || b) /=/ c"],
+  ]) {
+    for (const padded of [false, true]) {
+      const { dump } = await dumpSource(`equal-${name}-${padded}`, `${prelude}
+page equal
+vflow(LayoutPolicy.center)
+${leaves}
+let g = ${expression}
+~ g.width == 1000
+~ g.height == 400
+~ g.left == page.left + 100
+~ g.top == page.top - 100
+${padded ? "g.chrome.pad_x = 12\ng.chrome.pad_y = 8" : ""}
+place!(g)
+end
+`);
+      const g = groupNodes(dump).find((item) => dump.placement_roots.some((entry) => entry.roots.includes(item.id)));
+      assertClose(g.x, 100, "outer left");
+      assertClose(top(g), 620, "outer top");
+      assertClose(g.width, 1000, "outer width");
+      assertClose(g.height, 400, "outer height");
+      assertSplitTree(dump, g);
+    }
+  }
+
+  for (const operator of ["|=|", "/=/"]) {
+    const horizontal = operator === "|=|";
+    const baseline = `${prelude}
+page natural
+vflow(LayoutPolicy.top)
+let a = text("Short")
+let b = text("A longer line for natural measurement")
+${horizontal ? "~ b.left == a.right + 32" : "~ b.left == a.left\n~ b.top == a.bottom - 32"}
+let g = group(a, b)
+${horizontal ? 'set_prop(g, "align_children_y", true)' : ""}
+g.chrome.pad_x = 12
+g.chrome.pad_y = 8
+place!(g)
+end
+`;
+    const natural = await dumpSource(`natural-base-${horizontal}`, baseline);
+    const split = await dumpSource(`natural-split-${horizontal}`, baseline.replace("group(a, b)", `a ${operator} b`).replace('set_prop(g, "align_children_y", true)', ""));
+    const before = groupNodes(natural.dump)[0];
+    const after = groupNodes(split.dump)[0];
+    assertClose(after.width, before.width, "implicit outer width changed");
+    assertClose(after.height, before.height, "implicit outer height changed");
+    assertSplitTree(split.dump, after);
+  }
+
+  const { dump } = await dumpSource("equal-edges-wrap", `${prelude}
+page edges
+let a = text("Short")
+let b = text("${"Words need to wrap inside their assigned column. ".repeat(8)}")
+let g = a |=| b
+~ g.left == page.left + 100
+~ g.right == page.left + 900
+~ g.bottom == page.bottom + 100
+~ g.top == page.bottom + 600
+place!(g)
+end
+`);
+  const g = groupNodes(dump)[0];
+  assertClose(g.width, 800, "opposing edges determine outer width");
+  assertClose(g.height, 500, "opposing edges determine outer height");
+  assert(node(dump, "Short").height < dump.nodes.find((item) => item.content?.startsWith("Words need")).height, "text was not measured at the split width");
+  assertSplitTree(dump, g);
+
+  for (const [name, expression, dimensions] of [
+    ["width-conflict", "a |=| b", "~ a.width == 100\n~ b.width == 200"],
+    ["height-conflict", "a /=/ b", "~ a.height == 100\n~ b.height == 200"],
+    ["insufficient-space", "a |=| b", "~ g.width == 20"],
+  ]) {
+    await expectFailure(name, `${prelude}
+page conflict
+let a = text("A")
+let b = text("B")
+let g = ${expression}
+${dimensions}
+place!(g)
+end
+`, name === "insufficient-space" ? "NegativeFrameSize" : "ConstraintConflict");
+  }
+
+  const updated = await dumpSource("equal-horizontal-update", `${prelude}
+page update
+let a = text("A")
+let b = text("B")
+let g = a |=| b
+~ g.width == 800
+~ g.height == 300
+~ g.left == page.left + 80
+~ g.top == page.top - 100
+~!~ b.left == page.left + 900
+place!(g)
+end
+`);
+  const right = node(updated.dump, "B");
+  assertClose(right.x, 900, "position update did not override split constraints");
+  assert(!updated.dump.constraints.some((item) => item.group_split && item.target_node === right.id && ["left", "right"].includes(item.target_anchor)), "removed split constraints were regenerated");
+  assert(updated.dump.overridden_constraints.filter((item) => item.group_split && item.target_node === right.id && ["left", "right"].includes(item.target_anchor)).length === 2, "both split edges must participate in update normalization");
+
+  await expectFailure("negative-split-gap", `${prelude}
+page invalid
+let items = selection_union(select(text("A"), "self_object"), select(text("B"), "self_object"))
+place!(hsplit(items, -1))
+end
+`, "InvalidGroupSplit");
+}
+
+function assertSplitTree(dump, g) {
+  const axis = g.fields.split_axis;
+  if (!axis || axis === "none") return;
+  const children = dump.contains.find((entry) => entry.parent === g.id).children.map((id) => dump.nodes.find((item) => item.id === id));
+  assert(children.length >= 2, "split lost containment");
+  const px = g.render.chrome.pad_x;
+  const py = g.render.chrome.pad_y;
+  const spacing = Number(g.fields.split_gap ?? gap);
+  const horizontal = axis === "horizontal";
+  const extent = ((horizontal ? g.width - 2 * px : g.height - 2 * py) - (children.length - 1) * spacing) / children.length;
+  for (const [index, child] of children.entries()) {
+    assertClose(horizontal ? child.width : child.height, extent, `equal extent ${index}`);
+    assertClose(horizontal ? child.x : top(child), horizontal ? g.x + px + index * (extent + spacing) : top(g) - py - index * (extent + spacing), `cell position ${index}`);
+  }
+  for (const child of children.filter((item) => item.role === "group")) {
+    assertClose(axis === "horizontal" ? child.height : child.width, axis === "horizontal" ? g.height - 2 * py : g.width - 2 * px, "nested group cross-axis extent");
+    assertSplitTree(dump, child);
+  }
+}
+
+async function testEqualChains() {
+  for (const operator of ["|=|", "/=/"]) {
+    for (const count of [3, 4, 5]) {
+      for (const nested of [false, true]) {
+        const operands = Array.from({ length: count }, (_, index) => `text("Item ${index}")`);
+        if (nested) operands[1] = `(text("Nested one") ${operator} text("Nested two") ${operator} text("Nested three"))`;
+        const { dump } = await dumpSource(`equal-chain-${operator === "|=|" ? "h" : "v"}-${count}-${nested}`, `${prelude}
+page chain
+vflow(LayoutPolicy.top)
+let g = ${operands.join(` ${operator} `)}
+g.chrome.pad_x = 11
+g.chrome.pad_y = 7
+~ g.width == 1024
+~ g.height == 640
+~ g.left == page.left + 80
+~ g.top == page.top - 40
+place!(g)
+end
+`);
+        const groups = groupNodes(dump);
+        assert(groups.length === (nested ? 2 : 1), "unparenthesized chain created intermediate groups");
+        const rootId = dump.placement_roots.flatMap((entry) => entry.roots)[0];
+        const g = groups.find((item) => item.id === rootId);
+        const children = dump.contains.find((entry) => entry.parent === rootId).children;
+        assert(children.length === count, "chain changed operand count");
+        assertSplitTree(dump, g);
+        assert(dump.constraints.some((item) => item.group_split && item.source_extent_factor !== 0), "n-ary cut lost its extent factor");
+      }
+    }
+  }
+  const bound = await dumpSource("equal-bound-group", `${prelude}
+page bound
+let left = text("A") |=| text("B")
+let g = left |=| text("C")
+~ g.width == 1000
+place!(g)
+end
+`);
+  assert(groupNodes(bound.dump).length === 2, "bound group was flattened");
+  assert(node(bound.dump, "C").width > node(bound.dump, "A").width * 2, "bound group did not receive one half");
+
+  await expectFailure("equal-duplicate", `${prelude}
+page duplicate
+let a = text("A")
+place!(a |=| a)
+end
+`, "InvalidGroupSplit");
+  await expectFailure("group-page-selection", `${prelude}
+document
+group(select(docctx(), "document_pages"))
+end
+`, "TypeMismatch");
+}
+
+async function testEqualEvaluation() {
+  const { dump } = await dumpSource("equal-evaluation-shadowing", `import std:core/objects as objects
+fn hsplit(items: Selection<Object>) -> Object
+  return new("Wrong hsplit", "body", "text")
+end
+fn vsplit(items: Selection<Object>) -> Object
+  return new("Wrong vsplit", "body", "text")
+end
+fn group(a: Object, b: Object) -> Object
+  return a
+end
+fn composition_objects(a: Object, b: Object) -> Object
+  return a
+end
+fn composition_append(a: Object, b: Object) -> Object
+  return a
+end
+fn mark!(label: String) -> Object
+  return objects::place!(new(label, "body", "text"))
+end
+page evaluation
+let g = mark!("A") |=| (mark!("B") /=/ mark!("C")) |=| mark!("D")
+~ g.width == 1100
+~ g.height == 400
+end
+`);
+  const order = dump.placement_roots.flatMap((entry) => entry.roots).map((id) => dump.nodes.find((item) => item.id === id)?.content);
+  assert(JSON.stringify(order) === JSON.stringify(["A", "B", "C", "D"]), `equal operands evaluated out of order: ${order}`);
+  assert(!dump.nodes.some((item) => item.content?.startsWith("Wrong")), "local function captured equal syntax");
+  assert(groupNodes(dump).length === 0, "equal composition implicitly placed a group");
+  assertClose(node(dump, "A").width, (1100 - 2 * gap) / 3, "equal syntax was shadowed");
+  assertClose(node(dump, "B").height, (400 - gap) / 2, "nested equal syntax was shadowed");
+}
+
+async function testEqualEditorUpdates() {
+  const expressions = ["a || b || c", "a |=| b |=| c", "(a |=| b) |=| c", "a /=/ b /=/ c", "a // b // c", "a |=| b |=| c"];
+  const sources = expressions.map((expression) => `${prelude}
+page editor
+let a = text("Short")
+let b = text("A considerably longer line")
+let c = text("Third")
+let g = ${expression}
+~ g.width == 1000
+~ g.height == 500
+~ g.left == page.left + 80
+~ g.top == page.top - 80
+place!(g)
+end
+`);
+  const expected = [];
+  for (const [index, source] of sources.entries()) expected.push((await dumpSource(`editor-expected-${index}`, source)).dump);
+  const directory = await createCase("editor-updates", sources[0]);
+  const file = path.join(directory, "slide.ss");
+  const uri = pathToFileURL(file).href;
+  await withLspClient({ cwd: directory }, async (client) => {
+    await client.initialize();
+    for (const [index, source] of sources.entries()) {
+      const ready = client.waitForDiagnostics(uri);
+      if (index === 0) client.openDocument({ uri, text: source, version: 1 });
+      else client.changeDocument({ uri, text: source, version: index + 1 });
+      assert((await ready).params.diagnostics.length === 0, `editor diagnostics for ${expressions[index]}`);
+      const snapshot = await editorSnapshot(client, uri);
+      const objects = expected[index].nodes.filter((item) => item.kind === "object");
+      assert(snapshot.layout.objects.length === objects.length, "editor retained stale composition groups");
+      for (const node of objects) {
+        const actual = snapshot.layout.objects.find((item) => item.id === node.id);
+        assert(actual, `editor omitted ${node.id}`);
+        for (const key of ["x", "y", "width", "height"]) assertClose(actual[key], node[key], `editor ${expressions[index]} ${node.id}.${key}`);
+      }
+    }
+  });
 }
 
 async function testSameDirectionBinaryGroups() {
@@ -433,23 +691,25 @@ end
 }
 
 async function testInvalidOperands() {
-  for (const [name, operand] of [
-    ["number", "1"],
-    ["string", '"wrong"'],
-    ["boolean", "true"],
-    ["page", "pagectx()"],
-    ["selection", 'select(pagectx(), "page_objects_by_role", "body")'],
-    ["optional", "maybe()"],
-  ]) {
-    await expectFailure(`invalid-${name}`, `${prelude}
+  for (const operator of ["||", "//", "|=|", "/=/"]) {
+    for (const [name, operand] of [
+      ["number", "1"],
+      ["string", '"wrong"'],
+      ["boolean", "true"],
+      ["page", "pagectx()"],
+      ["selection", 'select(pagectx(), "page_objects_by_role", "body")'],
+      ["optional", "maybe()"],
+    ]) {
+      await expectFailure(`invalid-${operator.replaceAll("/", "v").replaceAll("|", "h")}-${name}`, `${prelude}
 fn maybe() -> Object?
   return none
 end
 page invalid
 let a = text!("A")
-a || ${operand}
+a ${operator} ${operand}
 end
 `, "TypeMismatch");
+    }
   }
 }
 

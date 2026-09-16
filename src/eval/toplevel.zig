@@ -79,6 +79,7 @@ const EvalContext = struct {
     closures: *ClosureStore,
     module_id: core.SourceModuleId = 0,
     call_depth: u32 = 0,
+    elaboration_origin: ?core.SourceOrigin = null,
     declarations: *const declarations.DeclarationIndex,
     captures: *const CaptureIndex,
     name_resolution_cache: *analysis_cache.NameResolutionCache,
@@ -1854,7 +1855,7 @@ fn executeStatement(
     const state = evaluation.state;
     const functions = evaluation.functions;
     try checkCancellation(evaluation);
-    const origin = origin_override orelse state.sourceOrigin(evaluation.module_id, stmt.span);
+    const origin = origin_override orelse evaluation.elaboration_origin orelse state.sourceOrigin(evaluation.module_id, stmt.span);
     switch (stmt.kind) {
         .hole => return error.HoleStatement,
         .let_binding => |binding| {
@@ -2038,7 +2039,7 @@ fn executeCallStatement(
     };
     const func = resolved.decl;
     try validateUserFunctionArity(state, call.args.items.len, func, current_origin);
-    const body_origin = elaboratedCallOrigin(evaluation, call);
+    const body_origin = elaboratedCallOrigin(evaluation, call) orelse evaluation.elaboration_origin;
 
     const previous_call_depth = evaluation.call_depth;
     evaluation.call_depth += 1;
@@ -2047,6 +2048,9 @@ fn executeCallStatement(
     var local_env = Environment.init(state.allocator);
     defer local_env.deinit();
     try bindUserFunctionArgs(evaluation, page_id, scope, env, &local_env, resolved.module_id, func, current_origin, call);
+    const previous_elaboration_origin = evaluation.elaboration_origin;
+    evaluation.elaboration_origin = body_origin;
+    defer evaluation.elaboration_origin = previous_elaboration_origin;
     const start_node_count = state.nodeCount();
     const previous_module_id = evaluation.module_id;
     evaluation.module_id = resolved.module_id;
@@ -2171,7 +2175,7 @@ fn invokeUserFunctionValueInModule(
     defer func_ref.deinit(state.allocator);
     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
     try validateUserFunctionArity(state, call.args.items.len, func, current_origin);
-    const body_origin = elaboratedCallOrigin(evaluation, call);
+    const body_origin = elaboratedCallOrigin(evaluation, call) orelse evaluation.elaboration_origin;
 
     const previous_call_depth = evaluation.call_depth;
     evaluation.call_depth += 1;
@@ -2180,6 +2184,10 @@ fn invokeUserFunctionValueInModule(
     var local_env = Environment.init(state.allocator);
     defer local_env.deinit();
     try bindUserFunctionArgs(evaluation, page_id, scope, env, &local_env, module_id, func, current_origin, call);
+
+    const previous_elaboration_origin = evaluation.elaboration_origin;
+    evaluation.elaboration_origin = body_origin;
+    defer evaluation.elaboration_origin = previous_elaboration_origin;
 
     var last_code_like: ?core.NodeId = null;
     const start_node_count = state.nodeCount();

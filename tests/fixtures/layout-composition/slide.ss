@@ -40,21 +40,22 @@ let explanation = text <<
 The two columns share a vertical center.
 
 - The figure and caption form one column.
-- Object dimensions stay unchanged.
+- Each column receives half the available width.
 - Explicit position constraints take priority.
 >>
-~ explanation.width == 480
 
 let figure = rounded_rectangle(
-  360,
-  210,
+  484,
+  204,
   0.12,
   vector_style(solid_fill(c"#dcfce7"), vector_stroke(c"#16a34a", 2))
 )
 let caption = text("The left column aligns with the center of this figure and caption together.")
-~ caption.width == 360
+~ caption.width == 484
 
-let content = explanation || (figure // caption)
+let content = explanation |=| (figure /=/ caption)
+~ content.width == 1000
+~ content.height == 440
 place!(content)
 ~ content.left == page.left + 110
 ~ content.top == page.top - 190

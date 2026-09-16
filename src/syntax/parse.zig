@@ -1431,9 +1431,20 @@ const Parser = struct {
         return self.parseCompositionExpr();
     }
 
-    const CompositionOperator = enum { horizontal, vertical };
+    const CompositionOperator = enum {
+        horizontal,
+        vertical,
+        equal_horizontal,
+        equal_vertical,
+
+        fn equal(self: CompositionOperator) bool {
+            return self == .equal_horizontal or self == .equal_vertical;
+        }
+    };
 
     fn peekCompositionOperator(self: *const Parser) ?CompositionOperator {
+        if (source.startsWithAt(self.source, self.pos, "|=|")) return .equal_horizontal;
+        if (source.startsWithAt(self.source, self.pos, "/=/")) return .equal_vertical;
         if (source.startsWithAt(self.source, self.pos, "||")) return .horizontal;
         if (source.startsWithAt(self.source, self.pos, "//")) return .vertical;
         return null;
@@ -1445,21 +1456,34 @@ const Parser = struct {
         var left = try self.parseConcatExpr();
         errdefer left.deinit(self.allocator);
         var direction: ?CompositionOperator = null;
+        var first_operator_span: ast.Span = undefined;
         while (true) {
             source.skipInlineSpaces(self.source, &self.pos);
-            const operator = self.peekCompositionOperator() orelse return left;
-            const operator_span = ast.Span{ .start = self.pos, .end = self.pos + 2 };
+            const operator = self.peekCompositionOperator() orelse {
+                if (direction != null and direction.?.equal()) {
+                    left = try self.makeFixedCompositionCall(if (direction.? == .equal_horizontal) "hsplit" else "vsplit", first_operator_span, &.{left}, &.{self.trimExpressionSpan(left_start, self.pos)});
+                }
+                return left;
+            };
+            const operator_span = ast.Span{ .start = self.pos, .end = self.pos + @as(usize, if (operator.equal()) 3 else 2) };
             if (direction != null and direction.? != operator) {
                 return self.failSpan(operator_span, error.MixedCompositionDirections);
             }
+            const first = direction == null;
+            if (first) first_operator_span = operator_span;
             direction = operator;
             const left_span = self.trimExpressionSpan(left_start, self.pos);
-            self.pos += 2;
+            self.pos = operator_span.end;
             source.skipTriviaFrom(self.source, &self.pos);
             const right_start = self.pos;
             var right = try self.parseCompositionOperand();
             errdefer right.deinit(self.allocator);
-            left = try self.makeCompositionCall(operator, operator_span, left, left_span, right, self.trimExpressionSpan(right_start, self.pos));
+            const name = switch (operator) {
+                .horizontal => "hjoin",
+                .vertical => "vjoin",
+                .equal_horizontal, .equal_vertical => if (first) "composition_objects" else "composition_append",
+            };
+            left = try self.makeFixedCompositionCall(name, operator_span, &.{ left, right }, &.{ left_span, self.trimExpressionSpan(right_start, self.pos) });
         }
     }
 
@@ -1486,19 +1510,17 @@ const Parser = struct {
         return .{ .start = start, .end = trimmed_end };
     }
 
-    fn makeCompositionCall(self: *Parser, operator: CompositionOperator, operator_span: ast.Span, left: Expr, left_span: ast.Span, right: Expr, right_span: ast.Span) !Expr {
+    fn makeFixedCompositionCall(self: *Parser, function_name: []const u8, operator_span: ast.Span, operands: []const Expr, spans: []const ast.Span) !Expr {
         const qualifier = try self.allocator.dupe(u8, "std:core/layout");
         errdefer self.allocator.free(qualifier);
-        const name = try self.allocator.dupe(u8, if (operator == .horizontal) "hjoin" else "vjoin");
+        const name = try self.allocator.dupe(u8, function_name);
         errdefer self.allocator.free(name);
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
         var arg_spans = std.ArrayList(ast.Span).empty;
         errdefer arg_spans.deinit(self.allocator);
-        try args.ensureTotalCapacity(self.allocator, 2);
-        try arg_spans.appendSlice(self.allocator, &.{ left_span, right_span });
-        args.appendAssumeCapacity(left);
-        args.appendAssumeCapacity(right);
+        try args.appendSlice(self.allocator, operands);
+        try arg_spans.appendSlice(self.allocator, spans);
         return .{ .call = .{
             .callee = .{
                 .qualifier = qualifier,
@@ -1546,7 +1568,7 @@ const Parser = struct {
         while (true) {
             source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof()) return left;
-            if (source.startsWithAt(self.source, self.pos, "//")) return left;
+            if (source.startsWithAt(self.source, self.pos, "//") or source.startsWithAt(self.source, self.pos, "/=/")) return left;
             const op = self.source[self.pos];
             if (op != '*' and op != '/') return left;
             self.pos += 1;

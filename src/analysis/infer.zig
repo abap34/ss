@@ -656,7 +656,8 @@ fn inferPrimitiveCallInfo(
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
         const actual = try exprInfoWithOptions(allocator, state, sema, env, arg, origin, options);
         if (sema.primitiveArgType(descriptor, index)) |expected| {
-            try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
+            const argument_type = if (descriptor.op == .group and actual.ty.kind == .selection) Type.selection(.object) else expected;
+            try ensureType(state, allocator, actual, argument_type, origin, .UnmatchedArgumentType);
         }
     }
     const info = try primitiveResultTypeInfo(allocator, state, sema, env, call, descriptor, origin, options);

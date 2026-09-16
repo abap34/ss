@@ -1,0 +1,70 @@
+================================================================================
+Equal chains and explicitly nested compositions
+================================================================================
+
+page Equal
+  let row = a|=|b|=|c
+  let column = a/=/b/=/c
+  let nested = a |=| (b // c)
+  let grouped = (a |=| b) |=| c
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (composition_expression
+        (composition_expression (identifier) (identifier))
+        (identifier)))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (composition_expression (identifier) (identifier))
+        (identifier)))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (identifier)
+        (parenthesized_expression
+          (composition_expression (identifier) (identifier)))))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (parenthesized_expression
+          (composition_expression (identifier) (identifier)))
+        (identifier)))))
+
+================================================================================
+Equal composition continuation and division precedence
+================================================================================
+
+page Continued
+  a |=| ;; Continue the operand.
+    b
+  let vertical = a / 2 /=/
+    b / 3
+  text! |=| raw horizontal
+  text! /=/ raw vertical
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    (identifier)
+    (expression_statement
+      (composition_expression (identifier) (comment) (identifier)))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (binary_expression (identifier) (number))
+        (binary_expression (identifier) (number))))
+    (line_call_statement
+      (callable_identifier (bare_callable_identifier (identifier)))
+      (line_text))
+    (line_call_statement
+      (callable_identifier (bare_callable_identifier (identifier)))
+      (line_text))))

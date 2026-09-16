@@ -140,11 +140,15 @@ pub const Constraint = struct {
     target_anchor: Anchor,
     source: ConstraintSource,
     offset: f32,
+    /// Internal affine cut: source anchor + factor * source axis extent.
+    source_extent_factor: f32 = 0,
     origin: ?SourceOrigin = null,
     role: ConstraintRole = .position,
     scope_depth: u32 = 0,
     from_update: bool = false,
     default_alignment: bool = false,
+    /// Applied after natural group measurement; normalized with ordinary updates.
+    group_split: bool = false,
 };
 
 pub const ConstraintUpdate = struct {

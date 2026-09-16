@@ -165,11 +165,14 @@ pub fn buildDefaultAlignmentConstraints(state: anytype, workspace: *const graph.
         var target_subgraph = try workspace.graph.groupSubgraph(state.allocator, state, candidate.target_node);
         defer target_subgraph.deinit();
         try target_subgraph.add(target_index);
-        if (defaultAlignmentTargetIsPositioned(workspace, &target_subgraph)) continue;
-        if (try defaultAlignmentCrossesPositionedAncestor(state, workspace, candidate, &target_subgraph)) continue;
-        if (try defaultAlignmentCreatesCycle(state, workspace, candidate, constraints.items, &target_subgraph)) continue;
+        if (!candidate.group_split) {
+            if (defaultAlignmentTargetIsPositioned(workspace, &target_subgraph)) continue;
+            if (try defaultAlignmentCrossesPositionedAncestor(state, workspace, candidate, &target_subgraph)) continue;
+            if (try defaultAlignmentCreatesCycle(state, workspace, candidate, constraints.items, &target_subgraph)) continue;
+        }
 
         var resolved = candidate;
+        if (candidate.group_split and anchor == .center_y) resolved.offset = 0;
         resolved.target_anchor = anchor;
         switch (resolved.source) {
             .page => resolved.source = .{ .page = anchor },

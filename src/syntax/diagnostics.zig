@@ -13,7 +13,7 @@ pub fn expected(err: anyerror) ?[]const u8 {
         error.ExpectedString => "string or page name",
         error.ExpectedIdentifier => "identifier",
         error.ExpectedExpression => "expression",
-        error.MixedCompositionDirections => "parentheses around mixed '||' and '//' compositions",
+        error.MixedCompositionDirections => "parentheses around mixed '||', '//', '|=|' and '/=/' compositions",
         error.ExpectedMemberName => "member name",
         error.ReservedIdentifier => "non-keyword identifier",
         error.InvalidImportSpec => "import path without a file extension",

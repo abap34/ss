@@ -891,6 +891,32 @@ test "layout solver: fallback does not conflict with a nested group target" {
     }
 }
 
+test "layout graph: affine cuts wait for and use the source axis extent" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Affine cuts");
+    const child = try state.makeObject(page, "body", null, .text, .text, "A");
+    const group = try state.makeGroupWithOrigin(page, true, &.{child}, null);
+    var page_graph = try initPageGraph(&state, page);
+    defer page_graph.deinit();
+    var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .horizontal);
+    defer workspace.deinit();
+    const cut = model.Constraint{
+        .target_node = child,
+        .target_anchor = .right,
+        .source = .{ .node = .{ .node_id = group, .anchor = .left } },
+        .source_extent_factor = 1.0 / 3.0,
+        .offset = -20,
+        .group_split = true,
+    };
+    workspace.stateOf(group).?.* = .{ .start = 100 };
+    try testing.expect((try graph.constraintAffineSourceValue(&state, &workspace, cut)) == null);
+    workspace.stateOf(group).?.size = 900;
+    try expectFloat(400, (try graph.constraintAffineSourceValue(&state, &workspace, cut)).?);
+    workspace.stateOf(group).?.size = 1200;
+    try expectFloat(500, (try graph.constraintAffineSourceValue(&state, &workspace, cut)).?);
+}
+
 test "layout groups: soft positions preserve hard anchors and tight sizes" {
     for ([_]model.Anchor{ .top, .bottom, .center_y }) |hard_anchor| {
         var state = try initEmptyDocumentState();
@@ -2703,6 +2729,49 @@ fn inspectIndexedPageGraph(allocator: std.mem.Allocator, state: *core.DocumentSt
     var subgraph = try page_graph.groupSubgraph(allocator, state, outer);
     defer subgraph.deinit();
     try testing.expectEqualSlices(usize, &.{ 3, 0, 1, 4, 2 }, subgraph.indexes.items);
+}
+
+test "layout graph: split constraints are deferred until measured outer frames are available" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Split");
+    const a = try state.makeObject(page, "a", null, .text, .text, "A");
+    const b = try state.makeObject(page, "b", null, .text, .text, "B");
+    const c = try state.makeObject(page, "c", null, .text, .text, "C");
+    const inner = try state.makeGroupWithOrigin(page, true, &.{ b, c }, null);
+    const outer = try state.makeGroupWithOrigin(page, true, &.{ a, inner }, null);
+    try state.setNodeFieldValue(inner, "split_axis", .{ .string = "vertical" });
+    try state.setNodeFieldValue(outer, "split_axis", .{ .string = "horizontal" });
+    try state.collectDefaultAlignments();
+    var inputs = try core.layout.partition.Document.init(testing.allocator, &state);
+    defer inputs.deinit(testing.allocator);
+    var natural = try graph.PageLayoutGraph.init(testing.allocator, &state, inputs.pages[0]);
+    defer natural.deinit();
+    try testing.expectEqual(@as(usize, 0), natural.constraints.len);
+    try testing.expectEqual(@as(usize, 0), natural.default_alignment_constraints.len);
+    try testing.expect(natural.splitFrame(outer) == null);
+    try inspectSplitGraph(testing.allocator, &state, inputs.pages[0], inner, outer);
+    try testing.checkAllAllocationFailures(testing.allocator, inspectSplitGraph, .{ &state, inputs.pages[0], inner, outer });
+}
+
+fn inspectSplitGraph(allocator: std.mem.Allocator, state: *core.DocumentState, inputs: core.layout.partition.Page, inner: model.NodeId, outer: model.NodeId) !void {
+    const frames = try allocator.alloc(model.Frame, inputs.node_ids.len);
+    defer allocator.free(frames);
+    @memset(frames, .{ .x = 100, .y = 200, .width = 1000, .height = 400 });
+    var split = try graph.PageLayoutGraph.initWithSplitFrames(allocator, state, inputs, frames);
+    defer split.deinit();
+    try testing.expectEqual(@as(f32, 1000), split.splitFrame(outer).?.width);
+    try testing.expect(split.splitFrame(inner) != null);
+    var frozen: usize = 0;
+    for (split.constraints) |constraint| {
+        if (constraint.role != .size) continue;
+        frozen += 1;
+        try testing.expectEqual(outer, constraint.target_node);
+        try testing.expectEqual(outer, constraint.source.node.node_id);
+        try testing.expect(constraint.group_split);
+    }
+    try testing.expectEqual(@as(usize, 2), frozen);
+    try testing.expectEqual(@as(usize, 1), split.default_alignment_constraints.len);
 }
 
 const WidthSensitiveMeasurement = struct {

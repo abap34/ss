@@ -1,16 +1,45 @@
 import std:core/classes
 
 fn hjoin(a: Object, b: Object, gap: Number = 32) -> Object
-  ~ b.left == a.right + gap
-  let result = group(a, b)
-  set_prop(result, "align_children_y", true)
-  return result
+  return compose(composition_objects(a, b), true, false, gap)
 end
 
 fn vjoin(a: Object, b: Object, gap: Number = 32) -> Object
-  ~ b.left == a.left
-  ~ b.top == a.bottom - gap
-  return group(a, b)
+  return compose(composition_objects(a, b), false, false, gap)
+end
+
+fn hsplit(items: Selection<Object>, gap: Number = 32) -> Object
+  return compose(items, true, true, gap)
+end
+
+fn vsplit(items: Selection<Object>, gap: Number = 32) -> Object
+  return compose(items, false, true, gap)
+end
+
+fn composition_objects(a: Object, b: Object) -> Selection<Object>
+  return selection_union(select(a, "self_object"), select(b, "self_object"))
+end
+
+fn composition_append(items: Selection<Object>, child: Object) -> Selection<Object>
+  return selection_union(items, select(child, "self_object"))
+end
+
+fn compose(items: Selection<Object>, horizontal: Bool, equal: Bool, gap: Number) -> Object
+  let result = group(items)
+  set_prop(result, "split_gap", gap)
+  set_prop(result, "align_children_y", horizontal)
+  if horizontal
+    set_prop(result, "join_axis", SplitAxis.horizontal)
+    if equal
+      set_prop(result, "split_axis", SplitAxis.horizontal)
+    end
+  else
+    set_prop(result, "join_axis", SplitAxis.vertical)
+    if equal
+      set_prop(result, "split_axis", SplitAxis.vertical)
+    end
+  end
+  return result
 end
 
 record Cols {

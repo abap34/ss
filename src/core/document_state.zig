@@ -912,6 +912,16 @@ pub const DocumentState = struct {
         defer candidates.deinit(self.allocator);
         for (self.nodes.items) |node| {
             if (node.kind != .object or node.discarded or !roleEq(node.role, GroupRole)) continue;
+            @import("group_composition.zig").collect(self, &node, &candidates) catch |err| {
+                if (err != error.InvalidGroupSplit) return err;
+                try self.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
+                    .user_report = .{
+                        .code = "InvalidGroupSplit",
+                        .message = try self.allocator.dupe(u8, "a split group requires at least two distinct live objects, a horizontal or vertical axis, and finite non-negative spacing and padding"),
+                    },
+                });
+                return err;
+            };
             for (node.fields.items) |field| {
                 if (!std.mem.eql(u8, field.key, "align_children_y")) continue;
                 if (field.value != .boolean or !field.value.boolean) break;
@@ -1858,7 +1868,9 @@ fn constraintEq(a: Constraint, b: Constraint) bool {
     if (a.target_node != b.target_node) return false;
     if (a.target_anchor != b.target_anchor) return false;
     if (a.offset != b.offset) return false;
+    if (a.source_extent_factor != b.source_extent_factor) return false;
     if (a.default_alignment != b.default_alignment) return false;
+    if (a.group_split != b.group_split) return false;
     if (!constraintSourceEq(a.source, b.source)) return false;
     return model.SourceOrigin.optionalEql(a.origin, b.origin);
 }

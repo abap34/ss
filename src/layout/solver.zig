@@ -416,11 +416,39 @@ fn solvePageLayout(
     trace_session: *layout_trace.Session,
     options: SolveOptions,
 ) !document.Page {
+    var has_split = false;
+    for (page_inputs.constraint_indexes) |index| {
+        if (state.constraints.items[index].group_split) {
+            has_split = true;
+            break;
+        }
+    }
+    if (!has_split) return solvePageLayoutPass(state, page_inputs, page_index, measurement_cache, trace_session, options, null, false);
+    var measurement_options = options;
+    measurement_options.record_diagnostics = false;
+    var measured = try solvePageLayoutPass(state, page_inputs, page_index, measurement_cache, trace_session, measurement_options, null, true);
+    defer measured.deinit(state.allocator);
+    const frames = try state.allocator.alloc(model.Frame, page_inputs.node_ids.len);
+    defer state.allocator.free(frames);
+    for (page_inputs.node_ids, frames) |node_id, *frame| frame.* = state.getNode(node_id).?.frame;
+    return solvePageLayoutPass(state, page_inputs, page_index, measurement_cache, trace_session, options, frames, false);
+}
+
+fn solvePageLayoutPass(
+    state: anytype,
+    page_inputs: partition.Page,
+    page_index: usize,
+    measurement_cache: *metrics.MeasurementCache,
+    trace_session: *layout_trace.Session,
+    options: SolveOptions,
+    split_frames: ?[]const model.Frame,
+    measure_only: bool,
+) !document.Page {
     try graph.checkCancellation(options);
     const diagnostic_start = state.diagnostics.items.len;
     const constraint_failure_start = state.constraint_failures.items.len;
     const page_id = page_inputs.page_id;
-    var page_graph = try graph.PageLayoutGraph.init(state.allocator, state, page_inputs);
+    var page_graph = try graph.PageLayoutGraph.initWithSplitFrames(state.allocator, state, page_inputs, split_frames);
     defer page_graph.deinit();
     try graph.checkCancellation(options);
     if (page_graph.len() == 0) return try collectPage(state, page_id, page_index, &.{}, &.{}, &.{}, diagnostic_start, constraint_failure_start, options);
@@ -481,9 +509,11 @@ fn solvePageLayout(
         }
     }
 
-    try validatePageConstraints(state, page_id, &page_graph, options);
-    try graph.checkCancellation(options);
-    try diagnostics.collectPageDiagnosticsCached(state, page_id, page_graph.child_ids, measurement_cache);
+    if (!measure_only) {
+        try validatePageConstraints(state, page_id, &page_graph, options);
+        try graph.checkCancellation(options);
+        try diagnostics.collectPageDiagnosticsCached(state, page_id, page_graph.child_ids, measurement_cache);
+    }
     try graph.checkCancellation(options);
     return try collectPage(
         state,
@@ -849,6 +879,7 @@ fn constraintsSame(a: Constraint, b: Constraint) bool {
     if (a.target_node != b.target_node) return false;
     if (a.target_anchor != b.target_anchor) return false;
     if (a.offset != b.offset) return false;
+    if (a.source_extent_factor != b.source_extent_factor) return false;
     return switch (a.source) {
         .page => |a_anchor| switch (b.source) {
             .page => |b_anchor| a_anchor == b_anchor,
@@ -962,7 +993,7 @@ fn applyAxisConstraint(
         if (!constraint.default_alignment or existing == null or !constraintsSame(existing.?, constraint)) return false;
     }
 
-    const source_value = try graph.constraintSourceValue(state, workspace, constraint.source);
+    const source_value = try graph.constraintAffineSourceValue(state, workspace, constraint);
     if (source_value == null) {
         return try applyReverseAxisConstraint(state, workspace, constraint, is_soft, target_index, trace_session, options);
     }
@@ -1102,6 +1133,9 @@ fn applyReverseAxisConstraint(
 ) !bool {
     try graph.checkCancellation(options);
     if (is_soft) return false;
+
+    // Generated affine cuts are solved from the allocated parent extent.
+    if (constraint.source_extent_factor != 0) return false;
 
     const node_source = switch (constraint.source) {
         .page => return false,
@@ -1348,7 +1382,7 @@ fn appendConstraintLine(state: anytype, trace: *graph.PropagationTrace, constrai
     const source_label = if (reverse)
         try nodeAnchorLabel(state.allocator, state, constraint.target_node, constraint.target_anchor)
     else
-        try constraintSourceLabel(state.allocator, state, constraint.source);
+        try constraintSourceLabel(state.allocator, state, constraint);
     defer state.allocator.free(source_label);
     const offset = if (reverse) -constraint.offset else constraint.offset;
     const source_text = try constraintOriginLabel(state.allocator, state, constraint);
@@ -1473,11 +1507,14 @@ fn reverseTargetLabel(allocator: std.mem.Allocator, state: anytype, constraint: 
     };
 }
 
-fn constraintSourceLabel(allocator: std.mem.Allocator, state: anytype, source: model.ConstraintSource) ![]const u8 {
-    return switch (source) {
+fn constraintSourceLabel(allocator: std.mem.Allocator, state: anytype, constraint: Constraint) ![]const u8 {
+    const label = try switch (constraint.source) {
         .page => |anchor| std.fmt.allocPrint(allocator, "page.{s}", .{@tagName(anchor)}),
         .node => |node_source| nodeAnchorLabel(allocator, state, node_source.node_id, node_source.anchor),
     };
+    if (constraint.source_extent_factor == 0) return label;
+    defer allocator.free(label);
+    return std.fmt.allocPrint(allocator, "{s} + {d} * source.{s}", .{ label, constraint.source_extent_factor, if (graph.anchorAxis(constraint.target_anchor) == .horizontal) "width" else "height" });
 }
 
 fn nodeLabel(state: anytype, node_id: NodeId) []const u8 {
@@ -1749,7 +1786,7 @@ fn validatePageConstraints(state: anytype, page_id: NodeId, page_graph: *const g
             },
         };
 
-        const source_value = switch (try finalConstraintSourceValue(state, page_id, constraint.source)) {
+        const source_value = switch (try finalConstraintSourceValue(state, page_id, constraint)) {
             .known => |value| value,
             .unknown => {
                 const propagation = if (options.record_propagation) try constraintCyclePropagation(state, page_graph, constraint) else null;
@@ -1854,7 +1891,9 @@ fn validationConflictPropagation(
 
 fn finalConstraintTrace(state: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, constraint: Constraint, value: f32, depth: usize) anyerror!graph.PropagationTrace {
     if (depth > page_graph.constraints.len) return finalNodeAnchorTrace(state, constraint.target_node, constraint.target_anchor, value);
-    const source_value = switch (try finalConstraintSourceValue(state, page_id, constraint.source)) {
+    var anchor_constraint = constraint;
+    anchor_constraint.source_extent_factor = 0;
+    const source_value = switch (try finalConstraintSourceValue(state, page_id, anchor_constraint)) {
         .known => |known| known,
         .unknown => value - constraint.offset,
     };
@@ -1901,7 +1940,7 @@ fn appendCycleConstraintLine(state: anytype, trace: *graph.PropagationTrace, con
     const prefix = if (trace.lines.items.len == 0) "" else "→ ";
     const target_label = try nodeAnchorLabel(state.allocator, state, constraint.target_node, constraint.target_anchor);
     defer state.allocator.free(target_label);
-    const source_label = try constraintSourceLabel(state.allocator, state, constraint.source);
+    const source_label = try constraintSourceLabel(state.allocator, state, constraint);
     defer state.allocator.free(source_label);
     const source_text = try constraintOriginLabel(state.allocator, state, constraint);
     const line = std.fmt.allocPrint(
@@ -1949,8 +1988,8 @@ const FinalAnchorValue = union(enum) {
     unknown: void,
 };
 
-fn finalConstraintSourceValue(state: anytype, page_id: NodeId, source: model.ConstraintSource) !FinalAnchorValue {
-    return switch (source) {
+fn finalConstraintSourceValue(state: anytype, page_id: NodeId, constraint: Constraint) !FinalAnchorValue {
+    const value: FinalAnchorValue = switch (constraint.source) {
         .page => |anchor| blk: {
             const page = state.getNode(page_id) orelse return error.UnknownNode;
             if (!graph.anchorKnown(page.frame, anchor)) break :blk .{ .unknown = {} };
@@ -1958,6 +1997,14 @@ fn finalConstraintSourceValue(state: anytype, page_id: NodeId, source: model.Con
         },
         .node => |node_source| try finalNodeAnchorValue(state, node_source.node_id, node_source.anchor),
     };
+    if (constraint.source_extent_factor == 0 or value == .unknown) return value;
+    const id = switch (constraint.source) {
+        .page => page_id,
+        .node => |node| node.node_id,
+    };
+    const node = state.getNode(id) orelse return error.UnknownNode;
+    const extent = if (graph.anchorAxis(constraint.target_anchor) == .horizontal) node.frame.width else node.frame.height;
+    return .{ .known = value.known + constraint.source_extent_factor * extent };
 }
 
 fn finalNodeAnchorValue(state: anytype, node_id: NodeId, anchor: model.Anchor) !FinalAnchorValue {

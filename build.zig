@@ -442,9 +442,13 @@ fn addTestStep(
     const scanner_mod = createModule(ctx, "src/syntax/scanner.zig", &.{
         import("utils", modules.utils),
     }, null);
-    addModuleTest(ctx, test_step, "tests/syntax/scanner/spec_tests.zig", &.{
+    const scanner_spec_mod = createModule(ctx, "tests/syntax/scanner/spec_tests.zig", &.{
         import("scanner", scanner_mod),
     }, null);
+    const scanner_spec_tests = addTestArtifact(ctx, scanner_spec_mod);
+    const run_scanner_spec_tests = b.addRunArtifact(scanner_spec_tests);
+    test_step.dependOn(&run_scanner_spec_tests.step);
+    addFocusedTestStep(b, "test-scanner", "Run focused syntax scanner tests", &run_scanner_spec_tests.step);
     const language_type_spec_mod = createModule(ctx, "tests/language/type/spec_tests.zig", &.{
         import("model", modules.model),
         import("language_type", modules.language_type),
