@@ -67,14 +67,14 @@ test "syntax scanner: tokenizes source words and literals without comments" {
     });
 }
 
-test "syntax scanner: double slashes do not hide code or terminate block strings" {
+test "syntax scanner: double slashes remain operators after block strings" {
     const text =
         \\a//b ;; comment
         \\c // d # comment
         \\code <<
-        \\>> // still block content
+        \\inline >> // still block content
         \\hidden
-        \\>> # terminator comment
+        \\>> // visible # terminator comment
         \\visible
     ;
     try expectTokens(text, &.{
@@ -85,7 +85,25 @@ test "syntax scanner: double slashes do not hide code or terminate block strings
         .{ .kind = .operator, .text = "//", .line = 1 },
         .{ .kind = .identifier, .text = "d", .line = 1 },
         .{ .kind = .identifier, .text = "code", .line = 2 },
+        .{ .kind = .operator, .text = "//", .line = 5 },
+        .{ .kind = .identifier, .text = "visible", .line = 5 },
         .{ .kind = .identifier, .text = "visible", .line = 6 },
+    });
+}
+
+test "syntax scanner: block suffixes and header comments preserve subsequent tokens" {
+    try expectTokens("text << ;; header\ninline >> text\n  >>)|=|text(<< # header\nhidden\n>>)/=/tail\n", &.{
+        .{ .kind = .identifier, .text = "text", .line = 0 },
+        .{ .kind = .operator, .text = "|=|", .line = 2 },
+        .{ .kind = .identifier, .text = "text", .line = 2 },
+        .{ .kind = .operator, .text = "/=/", .line = 4 },
+        .{ .kind = .identifier, .text = "tail", .line = 4 },
+    });
+    try expectTokens("text <<\r\nhidden\r\n\t>>||after\r\nnext", &.{
+        .{ .kind = .identifier, .text = "text", .line = 0 },
+        .{ .kind = .operator, .text = "||", .line = 2 },
+        .{ .kind = .identifier, .text = "after", .line = 2 },
+        .{ .kind = .identifier, .text = "next", .line = 3 },
     });
 }
 

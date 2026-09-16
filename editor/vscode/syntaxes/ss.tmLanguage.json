@@ -30,8 +30,8 @@
       "patterns": [
         {
           "name": "string.unquoted.block.ss",
-          "begin": "<<\\s*$",
-          "end": "^\\s*>>\\s*(?:;;.*)?$",
+          "begin": "<<[ \\t\\r]*(?:(?:;;|#).*)?$",
+          "end": "^[ \\t\\r]*>>",
           "beginCaptures": {
             "0": { "name": "punctuation.definition.string.begin.ss" }
           },

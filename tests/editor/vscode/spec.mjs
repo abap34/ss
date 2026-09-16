@@ -18,6 +18,24 @@ await testCompletionDefaults();
 await testManualBuildCommand();
 await testLineCommentSyntax();
 await testCompositionOperatorSyntax();
+await testBlockStringSyntax();
+
+async function testBlockStringSyntax() {
+  const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
+  const block = grammar.repository["block-string"].patterns[0];
+  const begin = new RegExp(block.begin);
+  const end = new RegExp(block.end);
+  for (const header of ["text <<", "text << ;; header", "text << # header", "text <<\r"]) {
+    assert(begin.test(header), `block header not recognized: ${header}`);
+  }
+  assert(!begin.test("text << content"), "block header accepted inline content");
+  for (const suffix of ["", " || text(\"B\")", ") |=| other", "//other", "/=/ other", " # comment", " ;; comment", "\r"]) {
+    const matched = end.exec(` \t>>${suffix}`);
+    assert(matched?.[0] === " \t>>", `block delimiter consumed its suffix: ${suffix}`);
+  }
+  assert(!end.test("text >> remains content"), "inline chevrons closed the block");
+  assert(!end.test(" > remains content"), "a single chevron closed the block");
+}
 
 async function testCompositionOperatorSyntax() {
   const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));

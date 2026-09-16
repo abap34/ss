@@ -410,6 +410,14 @@ pub fn skipDoubleQuotedString(source: []const u8, start: usize, limit: usize) us
     return skipQuotedString(source, start, limit, '"');
 }
 
+/// The first non-space `>>` on a body line closes the literal. The suffix
+/// belongs to the enclosing expression, including its newline and comments.
+pub fn chevronTerminatorEnd(text: []const u8, line_start: usize) ?usize {
+    var probe = line_start;
+    skipInlineSpaces(text, &probe);
+    return if (startsWithAt(text, probe, ">>")) probe + 2 else null;
+}
+
 pub fn skipQuotedString(source: []const u8, start: usize, limit: usize, quote: u8) usize {
     var index = @min(start + 1, source.len);
     const end = @min(limit, source.len);

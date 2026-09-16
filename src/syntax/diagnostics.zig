@@ -6,6 +6,7 @@ pub const ParseDiagnostic = struct {
     span: ast.Span,
     expected: ?[]const u8 = null,
     found: ?[]const u8 = null,
+    detail: ?[]const u8 = null,
 };
 
 pub fn expected(err: anyerror) ?[]const u8 {
@@ -27,6 +28,7 @@ pub fn expected(err: anyerror) ?[]const u8 {
         error.ExpectedEnd => "'end'",
         error.ExpectedNumber => "number",
         error.UnterminatedString => "closing string delimiter",
+        error.UnterminatedBlockString => "'>>' at the start of a line (indentation is allowed)",
         error.InvalidColorLiteral => "valid color literal",
         error.UnknownAnchor => "known anchor name",
         error.InvalidValueTag => "runtime value type",
@@ -54,8 +56,23 @@ pub fn foundToken(source: []const u8, pos: usize) []const u8 {
         '\t' => "tab",
         ' ' => "space",
         else => blk: {
+            for ([_][]const u8{ "|=|", "/=/", "|->", "~!~", "||", "//", "<<", ">>", "++", "??", "==", "::", "->", ";;" }) |operator| {
+                if (std.mem.startsWith(u8, source[pos..], operator)) break :blk source[pos .. pos + operator.len];
+            }
+            if (std.ascii.isAlphanumeric(source[pos]) or source[pos] == '_') {
+                var end = pos + 1;
+                while (end < source.len and (std.ascii.isAlphanumeric(source[end]) or source[end] == '_')) : (end += 1) {}
+                if (end < source.len and source[end] == '!') end += 1;
+                break :blk source[pos..end];
+            }
             const len = std.unicode.utf8ByteSequenceLength(source[pos]) catch 1;
             break :blk source[pos..@min(pos + len, source.len)];
         },
     };
+}
+
+pub fn foundSpan(source: []const u8, pos: usize) ast.Span {
+    if (pos >= source.len) return .{ .start = source.len, .end = source.len };
+    const len = if (std.ascii.isWhitespace(source[pos])) 1 else foundToken(source, pos).len;
+    return .{ .start = pos, .end = @min(pos + len, source.len) };
 }

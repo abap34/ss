@@ -18,6 +18,8 @@ module.exports = grammar({
 
   word: $ => $.identifier,
 
+  externals: $ => [$._composition_newline],
+
   conflicts: $ => [
     [$.source_file],
   ],
@@ -224,6 +226,7 @@ module.exports = grammar({
     // missing parentheses without losing syntax highlighting for either side.
     composition_expression: $ => prec.left(PREC.composition, seq(
       field("left", $._expression),
+      repeat($._composition_newline),
       field("operator", choice("||", "//", "|=|", "/=/")),
       repeat($._terminator),
       field("right", $._expression),
@@ -309,7 +312,9 @@ module.exports = grammar({
       seq('"', repeat(/[^"]/), '"'),
     )),
     color_string: _ => /c"[^"]*"/,
-    block_text: _ => token(seq("<<", /([^>]|>[^>])*/, ">>")),
+    // Only a line-leading delimiter closes the literal. Leave its suffix and
+    // newline to the surrounding expression, just like other string literals.
+    block_text: _ => token(seq("<<", /[ \t\r]*(;;[^\n]*|#[^\n]*)?\n([ \t\r]*([^ \t\r>\n][^\n]*|>([^>\n][^\n]*)?)?\n)*[ \t\r]*>>/)),
     line_text: _ => token.immediate(/[ \t]+([^ \t|/"(<?\n][^\n]*|\|([^|=\n][^\n]*|=([^|\n][^\n]*)?)?|\/([^/=\n][^\n]*|=([^/\n][^\n]*)?)?|<([^<\n][^\n]*)?|\?([^?\n][^\n]*)?)/),
     _bang_line_text: _ => token.immediate(/[ \t]+([^ \t"(<\n][^\n]*|<([^<\n][^\n]*)?)/),
     number: _ => /\d+(\.\d+)?/,

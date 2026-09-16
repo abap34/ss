@@ -1,0 +1,61 @@
+================================================================================
+Block delimiters preserve expression suffixes and ignore inline chevrons
+================================================================================
+
+page Blocks
+  let g = (text << ;; header
+inline >> remains content
+> a single chevron
+
+  >>) || text(<< # header
+B
+>>)
+  let equal = text <<
+A
+>>|=|text <<
+B
+>>
+  let vertical = text <<
+A
+>>//text <<
+B
+>>/=/text("C")
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (composition_expression
+        (parenthesized_expression
+          (text_call_expression
+            (callable_identifier (bare_callable_identifier (identifier)))
+            (block_text)))
+        (call_expression
+          (callable_identifier (bare_callable_identifier (identifier)))
+          (block_text))))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (text_call_expression
+          (callable_identifier (bare_callable_identifier (identifier)))
+          (block_text))
+        (text_call_expression
+          (callable_identifier (bare_callable_identifier (identifier)))
+          (block_text))))
+    (let_statement
+      (identifier)
+      (composition_expression
+        (composition_expression
+          (text_call_expression
+            (callable_identifier (bare_callable_identifier (identifier)))
+            (block_text))
+          (text_call_expression
+            (callable_identifier (bare_callable_identifier (identifier)))
+            (block_text)))
+        (call_expression
+          (callable_identifier (bare_callable_identifier (identifier)))
+          (string))))))

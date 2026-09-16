@@ -976,6 +976,7 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.MixedCompositionDirections,
         error.ExpectedReturn,
         error.UnterminatedString,
+        error.UnterminatedBlockString,
         error.UnknownAnchor,
         error.ReturnOutsideFunction,
         error.NoCurrentPage,
@@ -1025,17 +1026,26 @@ pub fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
 }
 
 pub fn parseDiagnosticMessage(buf: []u8, diagnostic: anytype) []const u8 {
+    if (@hasField(@TypeOf(diagnostic), "detail")) {
+        if (diagnostic.detail) |detail| return detail;
+    }
     return switch (diagnostic.err) {
         error.UnterminatedString => "unterminated string",
+        error.UnterminatedBlockString => "unterminated block string opened here; expected '>>' at the start of a line (indentation is allowed) before end of file",
         error.UnknownAnchor => "unknown anchor name",
         error.AssignmentRequiresLet => "plain assignment statements are not supported; use 'let name = expr'",
         error.BindRemoved => "'bind' has been removed; use lexical 'let' bindings and ordinary expression statements",
         error.ZeroArgCallRequiresParens => "a bare name is not a statement; use parentheses for a zero-argument call, or pass the value to a placing function such as 'text!(name)'",
-        error.MixedCompositionDirections => "mixed '||' and '//' compositions require parentheses; write 'a || (b // c)' or '(a || b) // c'",
+        error.MixedCompositionDirections => "mixed layout composition operators ('||', '//', '|=|', '/=/') require parentheses",
         error.PageCannotBeConstraintTarget => "page dimensions cannot be constraint targets; constrain an object dimension to a page anchor instead",
         else => blk: {
             const expected = diagnostic.expected orelse @errorName(diagnostic.err);
             const found = diagnostic.found orelse "unknown token";
+            if (diagnostic.err == error.ExpectedExpression) {
+                for ([_][]const u8{ "||", "//", "|=|", "/=/" }) |operator| {
+                    if (std.mem.eql(u8, found, operator)) break :blk std.fmt.bufPrint(buf, "expected expression, found '{s}'; a composition operator requires an expression on each side", .{found}) catch @errorName(diagnostic.err);
+                }
+            }
             break :blk std.fmt.bufPrint(buf, "expected {s}, found {s}", .{ expected, found }) catch @errorName(diagnostic.err);
         },
     };
@@ -1205,7 +1215,9 @@ fn scanHighlightState(slice: []const u8, initial: HighlightState) HighlightState
                 return .triple_string;
             },
             .chevron_block => {
-                return if (isChevronTerminatorLine(slice)) .normal else .chevron_block;
+                index = source.chevronTerminatorEnd(slice, 0) orelse return .chevron_block;
+                state = .normal;
+                continue;
             },
             .normal => {},
         }
@@ -1268,10 +1280,13 @@ fn printHighlightedSlice(slice: []const u8, initial: HighlightState) void {
                 continue;
             },
             .chevron_block => {
+                const end = source.chevronTerminatorEnd(slice, 0) orelse slice.len;
                 printAnsi("32");
-                printDisplayRaw(slice[index..]);
+                printDisplayRaw(slice[index..end]);
                 printReset();
-                return;
+                index = end;
+                state = .normal;
+                continue;
             },
             .normal => {},
         }
@@ -1408,6 +1423,10 @@ fn isCallableIdentifierContinue(byte: u8) bool {
 
 fn operatorEnd(slice: []const u8, start: usize) ?usize {
     const operators = [_][]const u8{
+        "|=|",
+        "/=/",
+        "||",
+        "//",
         "|->",
         "->",
         "??",
@@ -1424,16 +1443,7 @@ fn operatorEnd(slice: []const u8, start: usize) ?usize {
 fn startsChevronBlock(slice: []const u8, index: usize) bool {
     if (!std.mem.startsWith(u8, slice[index..], "<<")) return false;
     const after_marker = source.skipInlineSpacesUntil(slice, index + 2, slice.len);
-    return after_marker == slice.len;
-}
-
-fn isChevronTerminatorLine(slice: []const u8) bool {
-    var probe = source.skipInlineSpacesUntil(slice, 0, slice.len);
-    if (probe + 2 > slice.len) return false;
-    if (!std.mem.eql(u8, slice[probe .. probe + 2], ">>")) return false;
-    probe = source.skipInlineSpacesUntil(slice, probe + 2, slice.len);
-    if (probe == slice.len) return true;
-    return source.lineCommentMarkerLength(slice, probe) != null;
+    return after_marker == slice.len or source.lineCommentMarkerLength(slice, after_marker) != null;
 }
 
 fn isKeyword(token: []const u8) bool {

@@ -1292,6 +1292,8 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         "tests/runtime/render/markdown_underline/spec.mjs",
         "tests/runtime/render/vector_shapes/spec.mjs",
         "tests/runtime/stdlib_wrappers_runtime_spec.mjs",
+        "tests/runtime/syntax/blocks/spec.mjs",
+        "tests/runtime/syntax/formatting/spec.mjs",
         "tests/runtime/theme/spec.mjs",
     };
 
@@ -1309,6 +1311,12 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         }
         if (std.mem.eql(u8, path, "tests/runtime/layout/practical/spec.mjs")) {
             addFocusedTestStep(b, "test-layout-practical", "Check synthetic practical layouts and editor updates", &node_spec.step);
+        }
+        if (std.mem.eql(u8, path, "tests/runtime/syntax/blocks/spec.mjs")) {
+            addFocusedTestStep(b, "test-block-syntax", "Check block string expressions and CLI/LSP diagnostics", &node_spec.step);
+        }
+        if (std.mem.eql(u8, path, "tests/runtime/syntax/formatting/spec.mjs")) {
+            addFocusedTestStep(b, "test-syntax-formatting", "Compare generated formatting variants through evaluation and layout", &node_spec.step);
         }
     }
 
@@ -1394,6 +1402,7 @@ fn addTreeSitterSources(ctx: BuildContext, module: *Module, tree_sitter: TreeSit
     addTreeSitterIncludePaths(b, module, tree_sitter);
     addTreeSitterRuntimeSource(ctx, module, tree_sitter);
     addTreeSitterCSourceFile(ctx, module, b.path("editor/tree-sitter-ss/src/parser.c"));
+    addTreeSitterCSourceFile(ctx, module, b.path("editor/tree-sitter-ss/src/scanner.c"));
     for (generated_tree_sitter_sources) |source| {
         addTreeSitterCSourceFile(ctx, module, tree_sitter.root.path(b, b.fmt("generated/{s}", .{source})));
     }

@@ -1796,6 +1796,13 @@
             }
           },
           {
+            "type": "REPEAT",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_composition_newline"
+            }
+          },
+          {
             "type": "FIELD",
             "name": "operator",
             "content": {
@@ -3077,11 +3084,7 @@
           },
           {
             "type": "PATTERN",
-            "value": "([^>]|>[^>])*"
-          },
-          {
-            "type": "STRING",
-            "value": ">>"
+            "value": "[ \\t\\r]*(;;[^\\n]*|#[^\\n]*)?\\n([ \\t\\r]*([^ \\t\\r>\\n][^\\n]*|>([^>\\n][^\\n]*)?)?\\n)*[ \\t\\r]*>>"
           }
         ]
       }
@@ -3154,7 +3157,12 @@
     ]
   ],
   "precedences": [],
-  "externals": [],
+  "externals": [
+    {
+      "type": "SYMBOL",
+      "name": "_composition_newline"
+    }
+  ],
   "inline": [],
   "supertypes": [],
   "reserved": {}

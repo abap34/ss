@@ -72,8 +72,9 @@ fn parseWithSourceNameInner(allocator: Allocator, text: []const u8, source_name:
             out.diagnostic = .{
                 .err = err,
                 .span = span,
-                .expected = diagnostics.expected(err),
+                .expected = parser.error_expected orelse diagnostics.expected(err),
                 .found = diagnostics.foundToken(text, pos),
+                .detail = parser.error_detail,
             };
         }
         return err;
@@ -132,6 +133,9 @@ const Parser = struct {
     pos: usize,
     error_pos: usize,
     error_span: ?ast.Span,
+    error_expected: ?[]const u8 = null,
+    error_detail: ?[]const u8 = null,
+    unterminated_block_string: bool = false,
     generated_page_count: usize,
     recovering: bool,
     reject_empty_args: bool,
@@ -289,6 +293,10 @@ const Parser = struct {
     fn addTopLevelHole(self: *Parser, err: anyerror, item_start: usize) !void {
         const span = self.currentErrorSpan();
         const line = source.lineAt(self.source, span.start);
+        if (err == error.UnterminatedBlockString) {
+            _ = try self.addHole(.block, .block, span, err, diagnostics.foundToken(self.source, span.start));
+            return;
+        }
         if (err == error.InvalidImportSpec or err == error.ExpectedString) {
             _ = try self.addHole(.import_spec, .import_spec, span, if (err == error.ExpectedString) error.InvalidImportSpec else err, foundAt(self.source, span.start, line.span.end));
             return;
@@ -308,6 +316,9 @@ const Parser = struct {
 
     fn addHoleForParseError(self: *Parser, err: anyerror, span: ast.Span, line_span: source.ByteSpan) !ast.HoleId {
         const pos = span.start;
+        if (err == error.UnterminatedBlockString or self.error_expected != null or self.error_detail != null) {
+            return try self.addHole(.stmt, .statement, span, err, diagnostics.foundToken(self.source, pos));
+        }
         if (previousSignificantByte(self.source, pos, line_span.start) == '.') {
             return try self.addHole(.member_name, .member_name, pointSpan(pos), error.ExpectedMemberName, foundAt(self.source, pos, line_span.end));
         }
@@ -317,7 +328,7 @@ const Parser = struct {
         if (err == error.ExpectedExpression or err == error.ExpectedIdentifier or err == error.ExpectedString) {
             return try self.addHole(.expr, .expression, pointSpan(pos), error.ExpectedExpression, foundAt(self.source, pos, line_span.end));
         }
-        return try self.addHole(.stmt, .statement, pointSpan(pos), err, foundAt(self.source, pos, line_span.end));
+        return try self.addHole(.stmt, .statement, span, err, foundAt(self.source, pos, line_span.end));
     }
 
     fn makeHoleExpr(self: *Parser, kind: hole.HoleKind, expected: hole.ExpectedSyntax, span: ast.Span, err: anyerror, found: ?[]const u8) !Expr {
@@ -327,7 +338,19 @@ const Parser = struct {
 
     fn addHole(self: *Parser, kind: hole.HoleKind, expected: hole.ExpectedSyntax, span: ast.Span, err: anyerror, found: ?[]const u8) !ast.HoleId {
         const builder = self.holes orelse return err;
-        return try builder.add(kind, expected, span, err, found);
+        const id = try builder.add(kind, expected, span, err, found);
+        for (builder.diagnostics.items) |*diagnostic| {
+            if (diagnostic.hole_id != id) continue;
+            diagnostic.expected = diagnostics.expected(err) orelse diagnostic.expected;
+            if (self.error_pos == span.start) {
+                diagnostic.expected = self.error_expected orelse diagnostic.expected;
+                diagnostic.detail = self.error_detail;
+            }
+            break;
+        }
+        self.error_expected = null;
+        self.error_detail = null;
+        return id;
     }
 
     fn synchronizeTopLevelItem(self: *Parser, start: usize) void {
@@ -432,7 +455,7 @@ const Parser = struct {
             for (statements.items) |*statement| statement.deinit(self.allocator);
             statements.deinit(self.allocator);
         }
-        if (result_type.kind != .void and !functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
+        if (result_type.kind != .void and !functionBodyReturns(statements.items) and !(self.recovering and self.unterminated_block_string)) return self.fail(error.ExpectedReturn);
         return .{ .name = parsed_name.text, .name_span = parsed_name.span, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .statements = statements };
     }
 
@@ -1240,6 +1263,7 @@ const Parser = struct {
             statement_moved = true;
             source.skipTriviaFrom(self.source, &self.pos);
         }
+        if (self.recovering and self.unterminated_block_string) return statements;
         return self.fail(error.ExpectedEnd);
     }
 
@@ -1288,6 +1312,7 @@ const Parser = struct {
             statement_moved = true;
             source.skipTriviaFrom(self.source, &self.pos);
         }
+        if (self.recovering and self.unterminated_block_string) return .{ .statements = statements, .terminator = .end };
         return self.fail(error.ExpectedEnd);
     }
 
@@ -1409,7 +1434,9 @@ const Parser = struct {
         // A bang callable cannot be a bare operand. Its remaining line is
         // therefore still a text argument, including leading operator marks.
         if (std.mem.endsWith(u8, name.name, "!")) return false;
-        if (self.peekCompositionOperator() != null or source.startsWithAt(self.source, self.pos, "??")) return true;
+        var continuation = self.pos;
+        source.skipTriviaFrom(self.source, &continuation);
+        if (self.peekCompositionOperatorAt(continuation) != null or source.startsWithAt(self.source, self.pos, "??")) return true;
         // Keep spaced punctuation in line text. A member or optional operand
         // can use adjacent punctuation, parentheses, or a lexical binding.
         if (self.pos != name_end) return false;
@@ -1440,13 +1467,35 @@ const Parser = struct {
         fn equal(self: CompositionOperator) bool {
             return self == .equal_horizontal or self == .equal_vertical;
         }
+
+        fn spelling(self: CompositionOperator) []const u8 {
+            return switch (self) {
+                .horizontal => "||",
+                .vertical => "//",
+                .equal_horizontal => "|=|",
+                .equal_vertical => "/=/",
+            };
+        }
+
+        fn mixedMessage(first: CompositionOperator, second: CompositionOperator) []const u8 {
+            inline for (comptime std.meta.tags(CompositionOperator)) |a| {
+                inline for (comptime std.meta.tags(CompositionOperator)) |b| {
+                    if (first == a and second == b) return comptime std.fmt.comptimePrint("mixed '{s}' and '{s}' compositions require parentheses; write 'a {s} (b {s} c)' or '(a {s} b) {s} c'", .{ a.spelling(), b.spelling(), a.spelling(), b.spelling(), a.spelling(), b.spelling() });
+                }
+            }
+            unreachable;
+        }
     };
 
     fn peekCompositionOperator(self: *const Parser) ?CompositionOperator {
-        if (source.startsWithAt(self.source, self.pos, "|=|")) return .equal_horizontal;
-        if (source.startsWithAt(self.source, self.pos, "/=/")) return .equal_vertical;
-        if (source.startsWithAt(self.source, self.pos, "||")) return .horizontal;
-        if (source.startsWithAt(self.source, self.pos, "//")) return .vertical;
+        return self.peekCompositionOperatorAt(self.pos);
+    }
+
+    fn peekCompositionOperatorAt(self: *const Parser, pos: usize) ?CompositionOperator {
+        if (source.startsWithAt(self.source, pos, "|=|")) return .equal_horizontal;
+        if (source.startsWithAt(self.source, pos, "/=/")) return .equal_vertical;
+        if (source.startsWithAt(self.source, pos, "||")) return .horizontal;
+        if (source.startsWithAt(self.source, pos, "//")) return .vertical;
         return null;
     }
 
@@ -1459,7 +1508,12 @@ const Parser = struct {
         var first_operator_span: ast.Span = undefined;
         while (true) {
             source.skipInlineSpaces(self.source, &self.pos);
+            const boundary = self.pos;
+            source.skipTriviaFrom(self.source, &self.pos);
             const operator = self.peekCompositionOperator() orelse {
+                // Newlines separate statements unless the next token continues
+                // this composition. Do not consume the following statement.
+                self.pos = boundary;
                 if (direction != null and direction.?.equal()) {
                     left = try self.makeFixedCompositionCall(if (direction.? == .equal_horizontal) "hsplit" else "vsplit", first_operator_span, &.{left}, &.{self.trimExpressionSpan(left_start, self.pos)});
                 }
@@ -1467,7 +1521,10 @@ const Parser = struct {
             };
             const operator_span = ast.Span{ .start = self.pos, .end = self.pos + @as(usize, if (operator.equal()) 3 else 2) };
             if (direction != null and direction.? != operator) {
-                return self.failSpan(operator_span, error.MixedCompositionDirections);
+                if (self.recovering) try self.skipMixedCompositionTail();
+                const err = self.failSpan(operator_span, error.MixedCompositionDirections);
+                self.error_detail = CompositionOperator.mixedMessage(direction.?, operator);
+                return err;
             }
             const first = direction == null;
             if (first) first_operator_span = operator_span;
@@ -1484,6 +1541,31 @@ const Parser = struct {
                 .equal_horizontal, .equal_vertical => if (first) "composition_objects" else "composition_append",
             };
             left = try self.makeFixedCompositionCall(name, operator_span, &.{ left, right }, &.{ left_span, self.trimExpressionSpan(right_start, self.pos) });
+        }
+    }
+
+    fn skipMixedCompositionTail(self: *Parser) !void {
+        // Consume the rest of this expression before statement recovery, so
+        // multiline operands do not become unrelated statement diagnostics.
+        while (self.peekCompositionOperator()) |operator| {
+            self.pos += if (operator.equal()) @as(usize, 3) else 2;
+            const operator_end = self.pos;
+            source.skipTriviaFrom(self.source, &self.pos);
+            if (self.eof() or self.startsReservedKeyword()) {
+                self.pos = operator_end;
+                return;
+            }
+            var discarded = self.parseCompositionOperand() catch |err| switch (err) {
+                error.OutOfMemory, error.Canceled => return err,
+                else => return,
+            };
+            discarded.deinit(self.allocator);
+            const boundary = self.pos;
+            source.skipTriviaFrom(self.source, &self.pos);
+            if (self.peekCompositionOperator() == null) {
+                self.pos = boundary;
+                return;
+            }
         }
     }
 
@@ -1781,17 +1863,14 @@ const Parser = struct {
             }
             break;
         }
-        if (self.eof() or self.source[self.pos] != ')') {
-            if (!self.recovering) return self.fail(error.ExpectedChar);
-            return .{ .apply = .{ .callee = callee, .args = args, .arg_spans = arg_spans } };
-        }
-        self.pos += 1;
+        try self.expectCallClose();
         return .{ .apply = .{ .callee = callee, .args = args, .arg_spans = arg_spans } };
     }
 
     fn parsePrimaryExpr(self: *Parser) anyerror!Expr {
         try self.checkCanceled();
         source.skipInlineSpaces(self.source, &self.pos);
+        if (self.peekCompositionOperator() != null) return self.fail(error.ExpectedExpression);
         if (self.reject_empty_args) {
             if (self.eof()) {
                 if (self.recovering) return try self.makeHoleExpr(.expr, .expression, pointSpan(self.pos), error.ExpectedExpression, "end of file");
@@ -2055,12 +2134,15 @@ const Parser = struct {
             }
             break;
         }
-        if (self.eof() or self.source[self.pos] != ')') {
-            if (!self.recovering) return self.fail(error.ExpectedChar);
-            return .{ .callee = callee, .args = args, .arg_spans = arg_spans };
-        }
-        self.pos += 1;
+        try self.expectCallClose();
         return .{ .callee = callee, .args = args, .arg_spans = arg_spans };
+    }
+
+    fn expectCallClose(self: *Parser) !void {
+        self.expectChar(')') catch |err| {
+            if (!self.recovering or err != error.ExpectedChar) return err;
+            _ = try self.addHole(.call_arg, .call_arg, self.currentErrorSpan(), err, diagnostics.foundToken(self.source, self.pos));
+        };
     }
 
     fn makeUnaryStringCall(self: *Parser, name: ast.CallableName, text: ast.StringLiteral) !ast.CallExpr {
@@ -2442,17 +2524,17 @@ const Parser = struct {
     fn parseChevronBlockStringLiteral(self: *Parser) !ast.StringLiteral {
         source.skipInlineSpaces(self.source, &self.pos);
         if (!source.startsWithAt(self.source, self.pos, "<<")) return self.fail(error.ExpectedString);
+        const opening = self.pos;
         self.pos += 2;
-        source.skipInlineSpaces(self.source, &self.pos);
-        try self.expectLineBreak();
+        try self.expectLineBreakAfterHeader();
 
         const content_start = self.pos;
         while (!self.eof()) {
             const raw_line_end = std.mem.indexOfScalarPos(u8, self.source, self.pos, '\n') orelse self.source.len;
-            if (self.isChevronTerminatorLine(self.pos, raw_line_end)) {
+            if (source.chevronTerminatorEnd(self.source, self.pos)) |end| {
                 const raw = self.source[content_start..self.pos];
                 const bounds = normalizedBlockStringBounds(raw);
-                self.pos = if (raw_line_end < self.source.len) raw_line_end + 1 else raw_line_end;
+                self.pos = end;
                 return .{
                     .text = try self.allocator.dupe(u8, raw[bounds.start..bounds.end]),
                     .source_span = .{
@@ -2463,23 +2545,8 @@ const Parser = struct {
             }
             self.pos = if (raw_line_end < self.source.len) raw_line_end + 1 else raw_line_end;
         }
-        return self.fail(error.UnterminatedString);
-    }
-
-    fn isChevronTerminatorLine(self: *Parser, line_start: usize, raw_line_end: usize) bool {
-        var probe = line_start;
-        while (probe < raw_line_end and source.isInlineSpace(self.source[probe])) probe += 1;
-        if (probe + 2 > raw_line_end) return false;
-        if (!std.mem.eql(u8, self.source[probe .. probe + 2], ">>")) return false;
-        probe += 2;
-        while (probe < raw_line_end and source.isInlineSpace(self.source[probe])) probe += 1;
-        if (probe + 2 <= raw_line_end and std.mem.eql(u8, self.source[probe .. probe + 2], ";;")) {
-            return true;
-        }
-        if (probe < raw_line_end and self.source[probe] == '#') {
-            return true;
-        }
-        return probe == raw_line_end;
+        self.unterminated_block_string = true;
+        return self.failSpan(.{ .start = opening, .end = opening + 2 }, error.UnterminatedBlockString);
     }
 
     fn parseNumber(self: *Parser) !f32 {
@@ -2731,10 +2798,14 @@ const Parser = struct {
         return true;
     }
 
-    fn expectChar(self: *Parser, ch: u8) !void {
+    fn expectChar(self: *Parser, comptime ch: u8) !void {
         try self.checkCanceled();
         source.skipTriviaFrom(self.source, &self.pos);
-        if (self.eof() or self.source[self.pos] != ch) return self.fail(error.ExpectedChar);
+        if (self.eof() or self.source[self.pos] != ch) {
+            const err = self.fail(error.ExpectedChar);
+            self.error_expected = std.fmt.comptimePrint("'{c}'", .{ch});
+            return err;
+        }
         self.pos += 1;
     }
 
@@ -2863,20 +2934,18 @@ const Parser = struct {
     }
 
     fn fail(self: *Parser, err: anyerror) anyerror {
-        self.error_pos = @min(self.pos, self.source.len);
-        self.error_span = null;
-        return err;
+        return self.failAt(self.pos, err);
     }
 
     fn failAt(self: *Parser, pos: usize, err: anyerror) anyerror {
-        self.error_pos = @min(pos, self.source.len);
-        self.error_span = null;
-        return err;
+        return self.failSpan(diagnostics.foundSpan(self.source, pos), err);
     }
 
     fn failSpan(self: *Parser, span: ast.Span, err: anyerror) anyerror {
         self.error_pos = @min(span.start, self.source.len);
         self.error_span = span;
+        self.error_expected = null;
+        self.error_detail = null;
         return err;
     }
 };
@@ -2916,7 +2985,8 @@ fn isTypeAnnotationBoundary(text: []const u8, pos: usize) bool {
 }
 
 fn foundAt(text: []const u8, pos: usize, line_end: usize) []const u8 {
-    if (pos >= line_end or pos >= text.len or text[pos] == '\n') return "line break";
+    if (pos >= text.len) return "end of file";
+    if (pos >= line_end or text[pos] == '\n') return "line break";
     return diagnostics.foundToken(text, pos);
 }
 

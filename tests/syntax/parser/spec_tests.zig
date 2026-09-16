@@ -5,6 +5,10 @@ const Type = @import("language_type").Type;
 
 const testing = std.testing;
 
+comptime {
+    _ = @import("formatting/spec_tests.zig");
+}
+
 const ParsedModule = struct {
     arena: std.heap.ArenaAllocator,
     module: syntax.Module,
@@ -260,7 +264,7 @@ test "syntax spec: double slash comments are rejected in code" {
         "page Example\n  // removed comment\nend\n",
         "page Example\n  let value = 1; // removed comment\nend\n",
     }) |text| {
-        try expectParseErrorWithoutLeaks(error.ExpectedIdentifier, text);
+        try expectParseErrorWithoutLeaks(error.ExpectedExpression, text);
     }
 }
 
@@ -1579,7 +1583,7 @@ test "syntax spec: composition expression statements coexist with call and line 
     _ = try expectComposition(statements[9].kind.expr_stmt, "hjoin");
 }
 
-test "syntax spec: composition continues only after the operator across trivia" {
+test "syntax spec: composition continues before and after the operator across trivia" {
     var parsed = try parse(
         \\page Composition
         \\  let nested = a || ;; next operand
@@ -1598,8 +1602,8 @@ test "syntax spec: composition continues only after the operator across trivia" 
     _ = try expectComposition(nested.args.items[1], "vjoin");
     try expectIdent(statements[1].kind.let_binding.expr, "d");
 
-    try expectParseErrorWithoutLeaks(error.ExpectedIdentifier, "page Bad\n  let value = a\n    || b\nend\n");
-    try expectParseErrorWithoutLeaks(error.ExpectedChar, "page Bad\n  let value = (a\n    || b)\nend\n");
+    try parseAndDeinitSource(testing.allocator, "page Valid\n  let value = a\n    || b\nend\n");
+    try parseAndDeinitSource(testing.allocator, "page Valid\n  let value = (a\n    || b)\nend\n");
 }
 
 test "syntax spec: composition preserves punctuation in line text arguments" {
@@ -1747,6 +1751,7 @@ test "syntax spec: recovering mixed compositions preserves subsequent statements
     try testing.expect(statements[0].kind == .hole);
     try testing.expectEqualStrings("ok", statements[1].kind.let_binding.name);
     try testing.expectEqual(error.MixedCompositionDirections, parsed.result.holes.diagnostics[0].err);
+    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{"page Recover\ntext(\"A\")\n|| text(\"B\")\n//\ntext <<\nC\n>>\nlet ok = 1\nend\n"});
 }
 
 test "syntax spec: missing composition operands preserve conditional and constraint statements" {
@@ -1937,13 +1942,13 @@ test "syntax spec: call sugar is explicit about text-bearing and zero-argument c
     try expectParseErrorSpan(error.ZeroArgCallRequiresParens, bad_source, title_start, title_start + "title".len);
 }
 
-test "syntax spec: chevron blocks scan complete lines for terminators" {
+test "syntax spec: chevron blocks close at the first line-leading delimiter" {
     const source =
         \\page Text
         \\  code <<
         \\first
-        \\  >> remains content
-        \\  >> // also remains content
+        \\  inline >> remains content
+        \\  > single chevron remains content
         \\second
         \\  >> ;; terminator comment
         \\end
@@ -1955,11 +1960,110 @@ test "syntax spec: chevron blocks scan complete lines for terminators" {
     const call = try expectCall(parsed.module.pages.items[0].statements.items[0].kind.expr_stmt, "code", 1);
     switch (call.args.items[0]) {
         .string => |literal| {
-            try testing.expectEqualStrings("first\n  >> remains content\n  >> // also remains content\nsecond", literal.text);
+            try testing.expectEqualStrings("first\n  inline >> remains content\n  > single chevron remains content\nsecond", literal.text);
             const span = literal.source_span orelse return error.ExpectedStringSourceSpan;
             try testing.expectEqualStrings(literal.text, source[span.start..span.end]);
         },
         else => return error.ExpectedStringExpr,
+    }
+}
+
+test "syntax spec: chevron suffixes belong to the enclosing expression" {
+    const operators = [_][]const u8{ "||", "//", "|=|", "/=/" };
+    for (operators, [_][]const u8{ "hjoin", "vjoin", "hsplit", "vsplit" }) |operator, name| {
+        for ([_][]const u8{ "", " ", "\t" }) |spacing| {
+            const text = try std.fmt.allocPrint(testing.allocator, "page Blocks\nlet g = text << ;; header\nA\n\t>>{s}{s} # continuation\ntext <<\nB\n>>\nend\n", .{ spacing, operator });
+            defer testing.allocator.free(text);
+            var parsed = try parse(text);
+            defer parsed.deinit();
+            const expression = parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr;
+            const call = try expectCall(expression, name, if (operator.len == 2) 2 else 1);
+            const pair = if (operator.len == 2) call else try expectComposition(call.args.items[0], "composition_objects");
+            const left = try expectCall(pair.args.items[0], "text", 1);
+            const right = try expectCall(pair.args.items[1], "text", 1);
+            try expectString(left.args.items[0], "A");
+            try expectString(right.args.items[0], "B");
+        }
+    }
+    const nested = "page Blocks\nlet g = (text <<\nA\n>>) || text(<< # header\nB\n>>)\nend\n";
+    var parsed = try parse(nested);
+    defer parsed.deinit();
+    _ = try expectComposition(parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr, "hjoin");
+    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{nested});
+    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{nested});
+    var crlf = try parse("page Blocks\r\nlet s = << # header\r\nA\r\n\t>> ++ \"B\"\r\nend\r\n");
+    defer crlf.deinit();
+    _ = try expectCall(crlf.module.pages.items[0].statements.items[0].kind.let_binding.expr, "concat", 2);
+}
+
+test "syntax spec: block and quoted strings accept the same composition continuations" {
+    for ([_][]const u8{ "text(\"A\")", "text <<\nA\n>>" }) |left| {
+        for ([_][]const u8{ "\n", "\n\n", "\n;; comment\n", "\n# comment\n", "\r\n\t" }) |separator| {
+            for ([_][]const u8{ "||", "//", "|=|", "/=/" }) |operator| {
+                const text = try std.fmt.allocPrint(testing.allocator, "page Blocks\nlet g = {s}{s}{s} text(\"B\")\nend\n", .{ left, separator, operator });
+                defer testing.allocator.free(text);
+                var parsed = try parse(text);
+                defer parsed.deinit();
+                try testing.expectEqual(@as(usize, 1), parsed.module.pages.items[0].statements.items.len);
+                var recovered = try parseRecovering(text);
+                defer recovered.deinit();
+                try testing.expectEqual(@as(usize, 0), recovered.result.holes.diagnostics.len);
+            }
+        }
+    }
+}
+
+test "syntax spec: block diagnostics point to the opener without cascading end errors" {
+    for ([_][]const u8{
+        "const message: String = <<\nmissing\n",
+        "fn label() -> String\nreturn <<\nmissing\n",
+        "page Blocks\nlet s = <<\nmissing\nend\n",
+        "page Blocks\ntext(<<\nmissing\nend\n",
+        "page Blocks\nif true\ntext(<<\nmissing\nend\nend\n",
+    }) |text| {
+        const opening = std.mem.indexOf(u8, text, "<<").?;
+        try expectParseErrorSpan(error.UnterminatedBlockString, text, opening, opening + 2);
+        var recovered = try parseRecovering(text);
+        defer recovered.deinit();
+        try testing.expectEqual(@as(usize, 1), recovered.result.holes.diagnostics.len);
+        const diagnostic = recovered.result.holes.diagnostics[0];
+        try testing.expectEqual(error.UnterminatedBlockString, diagnostic.err);
+        try testing.expectEqual(ast.Span{ .start = opening, .end = opening + 2 }, diagnostic.span);
+        try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{text});
+    }
+    const punctuation = "page Blocks\nlet g = (text <<\nA\n>> || text(\"B\")\nend\n";
+    const diagnostic = try expectParseErrorDiagnostic(error.ExpectedChar, punctuation);
+    try testing.expectEqualStrings("')'", diagnostic.expected.?);
+    try testing.expectEqualStrings("end", diagnostic.found.?);
+    var recovered = try parseRecovering(punctuation);
+    defer recovered.deinit();
+    try testing.expectEqualStrings("')'", recovered.result.holes.diagnostics[0].expected.?);
+    const unclosed_call = "page Blocks\ntext(<<\nA\n>>\nend\n";
+    var call_recovered = try parseRecovering(unclosed_call);
+    defer call_recovered.deinit();
+    try testing.expectEqual(@as(usize, 1), call_recovered.result.holes.diagnostics.len);
+    try testing.expectEqualStrings("')'", call_recovered.result.holes.diagnostics[0].expected.?);
+    try testing.expectEqualStrings("end", call_recovered.result.holes.diagnostics[0].found.?);
+    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{unclosed_call});
+    const header = try expectParseErrorDiagnostic(error.ExpectedLineBreak, "page Blocks\ntext << unexpected\nend\n");
+    try testing.expectEqualStrings("unexpected", header.found.?);
+}
+
+test "syntax spec: mixed composition diagnostics name both actual operators" {
+    const operators = [_][]const u8{ "||", "//", "|=|", "/=/" };
+    for (operators) |left| {
+        for (operators) |right| {
+            if (std.mem.eql(u8, left, right)) continue;
+            const text = try std.fmt.allocPrint(testing.allocator, "page Mixed\na {s} b {s} c\nend\n", .{ left, right });
+            defer testing.allocator.free(text);
+            const expected = try std.fmt.allocPrint(testing.allocator, "mixed '{s}' and '{s}'", .{ left, right });
+            defer testing.allocator.free(expected);
+            const diagnostic = try expectParseErrorDiagnostic(error.MixedCompositionDirections, text);
+            try testing.expect(std.mem.startsWith(u8, diagnostic.detail.?, expected));
+            var recovered = try parseRecovering(text);
+            defer recovered.deinit();
+            try testing.expectEqualStrings(diagnostic.detail.?, recovered.result.holes.diagnostics[0].detail.?);
+        }
     }
 }
 

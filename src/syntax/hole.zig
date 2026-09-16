@@ -51,6 +51,7 @@ pub const Diagnostic = struct {
     span: ast.Span,
     expected: ?[]const u8 = null,
     found: ?[]const u8 = null,
+    detail: ?[]const u8 = null,
 };
 
 pub const Result = struct {

@@ -145,12 +145,13 @@ pub const TokenIterator = struct {
     fn skipChevronBlockString(self: *TokenIterator, line_value: source.Line) bool {
         if (!source.startsWithAt(self.text, self.cursor, "<<")) return false;
         const after_marker = source.skipInlineSpacesUntil(self.text, self.cursor + 2, line_value.span.end);
-        if (after_marker != line_value.span.end) return false;
+        if (after_marker != line_value.span.end and source.lineCommentMarkerLength(self.text, after_marker) == null) return false;
 
         self.current_line = null;
         while (self.lines.next()) |block_line| {
-            if (!isChevronTerminatorLine(self.text, block_line)) continue;
-            self.cursor = if (block_line.raw_end < self.text.len) block_line.raw_end + 1 else block_line.raw_end;
+            const end = source.chevronTerminatorEnd(self.text, block_line.span.start) orelse continue;
+            self.current_line = block_line;
+            self.cursor = end;
             return true;
         }
         self.cursor = self.text.len;
@@ -280,15 +281,6 @@ fn skipTripleQuotedString(text: []const u8, start: usize) usize {
         if (std.mem.eql(u8, text[index .. index + 3], "\"\"\"")) return index + 3;
     }
     return text.len;
-}
-
-fn isChevronTerminatorLine(text: []const u8, line_value: source.Line) bool {
-    var probe = source.skipInlineSpacesUntil(text, line_value.span.start, line_value.span.end);
-    if (probe + 2 > line_value.span.end) return false;
-    if (!std.mem.eql(u8, text[probe .. probe + 2], ">>")) return false;
-    probe = source.skipInlineSpacesUntil(text, probe + 2, line_value.span.end);
-    if (probe == line_value.span.end) return true;
-    return source.lineCommentMarkerLength(text, probe) != null;
 }
 
 fn semanticKindForIdentifier(word: []const u8, previous_word: ?[]const u8, next: ?u8, previous: ?u8) ?SemanticKind {
