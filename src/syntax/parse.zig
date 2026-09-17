@@ -1449,6 +1449,9 @@ const Parser = struct {
     fn parseExpressionStatement(self: *Parser, start: usize) !Statement {
         var expr = try self.parseExpr();
         errdefer expr.deinit(self.allocator);
+        // A missing expression may leave its delimiter for an enclosing parser.
+        // At statement level, recovery must consume it before trying again.
+        if (self.pos == start) return self.fail(error.ExpectedExpression);
         try self.consumeStatementTerminator();
         return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = expr } };
     }

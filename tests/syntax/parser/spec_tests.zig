@@ -2530,3 +2530,36 @@ test "syntax spec: malformed selected imports release ownership" {
     try expectParseErrorWithoutLeaks(error.ExpectedComma, "import dep as { alias::first }\n");
     try expectParseErrorWithoutLeaks(error.ExpectedIdentifier, "import dep as { first,, second }\n");
 }
+
+test "recovering parser advances past stray expression delimiters" {
+    const Budget = struct {
+        checks: usize = 0,
+        fn canceled(context: *const anyopaque) bool {
+            const self: *@This() = @ptrCast(@alignCast(@constCast(context)));
+            self.checks += 1;
+            return self.checks > 1000;
+        }
+    };
+    const sources = [_][]const u8{
+        "page sample\nlet t = Theme {\nbody.text.size = 10\n}\ntext! \"After\"\nend\n",
+        "page sample\n)\n,\n}\ntext! \"After\"\nend\n",
+        "page sample\nif true\n)\n,\n}\nelse\ntext! \"After\"\nend\nend\n",
+    };
+    for (sources) |source_text| {
+        var budget: Budget = .{};
+        var result = try syntax.parseRecoveringWithOptions(testing.allocator, source_text, "unit-test.ss", .{
+            .cancellation = .{ .context = &budget, .is_canceled = Budget.canceled },
+        });
+        defer result.deinit(testing.allocator);
+        try testing.expect(result.holes.diagnostics.len > 0);
+        try testing.expectEqual(@as(usize, 1), result.module.pages.items.len);
+        const statements = result.module.pages.items[0].statements.items;
+        const last = statements[statements.len - 1];
+        const after = if (last.kind == .if_stmt)
+            last.kind.if_stmt.else_statements.items[0]
+        else
+            last;
+        const call = try expectCall(after.kind.expr_stmt, "text!", 1);
+        try expectString(call.args.items[0], "After");
+    }
+}
