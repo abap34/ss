@@ -20,6 +20,36 @@ const VerticalFallbackPolicy = enum {
     center_stack,
 };
 
+/// A page-level vertical split uses the available page width when no size is
+/// prescribed. Nested groups keep the extent supplied by their containing group.
+pub fn defaultSplitGroupWidth(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId, position: AxisState) ?f32 {
+    if (workspace.axis != .horizontal or workspace.graph.split_frames != null) return null;
+    if (!isPageVerticalSplit(state, workspace, node_id)) return null;
+    const node = state.getNode(node_id).?;
+    const style = style_defaults.styleForNode(state, node);
+    const page = state.getNode(workspace.graph.page_id) orelse return null;
+    const left = page.frame.x + style.default_x;
+    const right = page.frame.x + page.frame.width - style.default_right_inset;
+    const width = if (position.start) |start|
+        right - start
+    else if (position.end) |end|
+        end - left
+    else if (position.center) |center|
+        2 * @min(center - left, right - center)
+    else
+        right - left;
+    return @max(@as(f32, 0), width);
+}
+
+fn isPageVerticalSplit(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) bool {
+    if (workspace.graph.parentGroupIndexes(node_id).len != 0) return false;
+    if (std.mem.indexOfScalar(NodeId, workspace.graph.placement_root_ids, node_id) == null) return false;
+    const node = state.getNode(node_id) orelse return false;
+    if (!groups.isGroupNode(node)) return false;
+    const axis = fields.read(state.allocator, state, node, "split_axis", &.{}, .text) orelse return false;
+    return std.mem.eql(u8, axis, "vertical");
+}
+
 pub fn buildHorizontalConstraints(state: anytype, workspace: *const graph.AxisWorkspace, options: graph.SolveOptions) !std.ArrayList(Constraint) {
     var constraints = std.ArrayList(Constraint).empty;
     errdefer constraints.deinit(state.allocator);
@@ -27,10 +57,28 @@ pub fn buildHorizontalConstraints(state: anytype, workspace: *const graph.AxisWo
     if (workspace.graph.len() == 0) return constraints;
 
     const allocator = state.allocator;
-    var seeded = try seededWorkspaceWithSoftConstraints(state, workspace, workspace.soft_constraints, options);
+    const anchor = horizontalPolicyAnchor(state, workspace.graph.page_id);
+    for (workspace.graph.placement_root_ids) |node_id| {
+        if (!isPageVerticalSplit(state, workspace, node_id)) continue;
+        if (hasHardPositionTargetConstraint(workspace, node_id, .horizontal)) continue;
+        const style = style_defaults.styleForNode(state, state.getNode(node_id).?);
+        try constraints.append(allocator, .{
+            .target_node = node_id,
+            .target_anchor = anchor,
+            .source = .{ .page = anchor },
+            .offset = switch (anchor) {
+                .center_x => horizontalCenterOffset(state, workspace.graph.page_id),
+                .right => -style.default_right_inset,
+                else => style.default_x,
+            },
+        });
+    }
+    // The result grows below; keep the borrowed seed slice alive across reallocations.
+    const seed_constraints = try allocator.dupe(Constraint, constraints.items);
+    defer allocator.free(seed_constraints);
+    var seeded = try seededWorkspaceWithSoftConstraints(state, workspace, seed_constraints, options);
     defer seeded.deinit();
     const active = &seeded.workspace;
-    const anchor = horizontalPolicyAnchor(state, workspace.graph.page_id);
     var components = try active.dependencyComponents(allocator, state, .{ .include_containment = anchor != .left });
     defer components.deinit();
     for (components.rootIndexes()) |root| {
@@ -302,7 +350,8 @@ fn containingAlignmentFrame(state: anytype, workspace: *const graph.AxisWorkspac
     if (!subtree.seen.contains(target_index)) return null;
     const frame = workspace.states[source_index];
     return frame.start != null and frame.size != null and
-        (frame.size_source != null or workspace.graph.hardTargetAnchorCount(source_id, workspace.axis) >= 2);
+        (frame.size_source != null or workspace.graph.hardTargetAnchorCount(source_id, workspace.axis) >= 2 or
+            defaultSplitGroupWidth(state, workspace, source_id, .{}) != null);
 }
 
 fn defaultAlignmentTargetIsPositioned(workspace: *const graph.AxisWorkspace, target_subgraph: *const graph.NodeSubgraph, include_resolved: bool) bool {

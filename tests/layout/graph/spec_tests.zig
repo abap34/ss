@@ -2771,7 +2771,13 @@ fn inspectSplitGraph(allocator: std.mem.Allocator, state: *core.DocumentState, i
         try testing.expect(constraint.group_split);
     }
     try testing.expectEqual(@as(usize, 2), frozen);
-    try testing.expectEqual(@as(usize, 1), split.default_alignment_constraints.len);
+    try testing.expectEqual(@as(usize, 3), split.default_alignment_constraints.len);
+    for (split.default_alignment_constraints) |constraint| {
+        try testing.expect(constraint.group_split);
+        const parent = constraint.source.node.node_id;
+        try testing.expect(parent == inner or parent == outer);
+        try testing.expectEqual(if (parent == inner) model.Anchor.left else model.Anchor.top, constraint.target_anchor);
+    }
 }
 
 const WidthSensitiveMeasurement = struct {

@@ -1,6 +1,7 @@
 const model = @import("model");
 const graph = @import("graph.zig");
 const metrics = @import("metrics.zig");
+const fallback = @import("fallback.zig");
 
 const NodeId = model.NodeId;
 const Node = model.Node;
@@ -65,7 +66,15 @@ fn computeTightGroupAxisState(state: anytype, workspace: *const graph.AxisWorksp
         const size = if (workspace.axis == .horizontal) frame.width else frame.height;
         return .{ .start = start, .end = start + size, .center = start + size / 2, .size = size };
     }
-    return computeChildGroupAxisState(state, workspace, node_id);
+    var bounds = try computeChildGroupAxisState(state, workspace, node_id);
+    if (fallback.defaultSplitGroupWidth(state, workspace, node_id, .{})) |width| {
+        if (bounds.start) |start| {
+            bounds.size = width;
+            bounds.end = start + width;
+            bounds.center = start + width / 2;
+        }
+    }
+    return bounds;
 }
 
 fn computeChildGroupAxisState(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) !AxisState {
@@ -275,7 +284,7 @@ pub fn applyTargetConstraints(
             temp = base;
         } else {
             if (temp.size == null) {
-                temp.size = base.size;
+                temp.size = fallback.defaultSplitGroupWidth(state, workspace, group_id, temp) orelse base.size;
                 temp.size_is_default = true;
             }
             if (temp.start == null and temp.end == null and temp.center == null) {
@@ -311,7 +320,8 @@ pub fn applyTargetConstraints(
         const delta = if (temp.start) |start| start - (child_bounds.start orelse start) else 0;
         // Split and frame-aligned children obtain their coordinates from parent
         // anchors. Subtree translation would apply their movement twice.
-        const subtree_changed = if (split_children or hasChildrenAlignedToFrame(workspace, group_id)) false else try translateSubtree(state, workspace, group_id, delta);
+        const page_split = fallback.defaultSplitGroupWidth(state, workspace, group_id, .{}) != null;
+        const subtree_changed = if (split_children or page_split or hasChildrenAlignedToFrame(workspace, group_id)) false else try translateSubtree(state, workspace, group_id, delta);
         workspace.states[group_index] = temp;
         if (subtree_changed or !axisStatesEq(previous, temp)) {
             update.changed = true;

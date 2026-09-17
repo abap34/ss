@@ -10,6 +10,7 @@ const outputRoot = path.join(root, ".ss-cache", "tests", "layout-composition");
 await mkdir(outputRoot, { recursive: true });
 const output = await mkdtemp(path.join(outputRoot, "run-"));
 const gap = 32;
+const constraintTolerance = 0.01;
 let caseCount = 0;
 
 const prelude = `import std:core/prelude as *
@@ -31,7 +32,7 @@ const failures = [];
 for (const test of [
   testNestedPlacedObjects, testNestedUnplacedObjectsAndOrdinaryGroup,
   testIntermediateBinding, testOrdinaryGroupInference, testNestedOrdinaryGroupBounds,
-  testUnplacedComposition, testNaturalWidths, testEqualFrames, testEqualChains, testEqualEvaluation, testEqualEditorUpdates, testSameDirectionBinaryGroups,
+  testUnplacedComposition, testNaturalWidths, testEqualFrames, testVerticalSplitWidths, testEqualChains, testEqualEvaluation, testEqualEditorUpdates, testSameDirectionBinaryGroups,
   testSharedObjects, testConstraintUpdate, testInferredGroupConstraintUpdate,
   testExplicitGap, testOperandEvaluation, testFixedStdlibResolution, testImportedFunctionComposition,
   testInvalidOperands, testConflictsAndMixedDirections, testHorizontalPolicyVariants,
@@ -306,7 +307,7 @@ end
     const split = await dumpSource(`natural-split-${horizontal}`, baseline.replace("group(a, b)", `a ${operator} b`).replace('set_prop(g, "align_children_y", true)', ""));
     const before = groupNodes(natural.dump)[0];
     const after = groupNodes(split.dump)[0];
-    assertClose(after.width, before.width, "implicit outer width changed");
+    assertClose(after.width, horizontal ? before.width : 1136, "implicit outer width");
     assertClose(after.height, before.height, "implicit outer height changed");
     assertSplitTree(split.dump, after);
   }
@@ -369,6 +370,94 @@ let items = selection_union(select(text("A"), "self_object"), select(text("B"), 
 place!(hsplit(items, -1))
 end
 `, "InvalidGroupSplit");
+}
+
+async function testVerticalSplitWidths() {
+  for (const [name, constraints, width, left] of [
+    ["default", "", 1136, 72],
+    ["width", "~ g.width == 600", 600, 72],
+    ["width-position", "~ g.width == 600\n~ g.left == page.left + 200", 600, 200],
+    ["edges", "~ g.left == page.left + 120\n~ g.right == page.right - 200", 960, 120],
+    ["left", "~ g.left == page.left + 200", 1008, 200],
+    ["right", "~ g.right == page.right - 200", 1008, 72],
+    ["center", "~ g.center_x == page.center_x - 100", 936, 72],
+    ["margins", "g.layout = LayoutStyle { x = 120, right_inset = 180 }", 980, 120],
+    ["padding", "g.chrome.pad_x = 12", 1136, 72],
+    ["updated-width", "~ g.width == 600\n~!~ g.width == 700", 700, 72],
+    ["positioned-child", "~ a.left == page.left + 200", 1136, 72],
+  ]) {
+    const { dump } = await dumpSource(`vertical-width-${name}`, `${prelude}
+page example
+let a = text("Short")
+let b = text("Second line")
+let g = a /=/ b
+${constraints}
+place!(g)
+end
+`);
+    const g = groupNodes(dump)[0];
+    assertClose(g.width, width, `${name} group width`);
+    assertClose(g.x, left, `${name} group left`);
+    assert(node(dump, "Short").width < node(dump, "Second line").width, "short text lost its natural width");
+    if (name === "positioned-child") assertClose(node(dump, "Short").x, 200, "explicit child position");
+    assertSplitTree(dump, g);
+    assert(dump.diagnostics.length === 0, `${name} diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+  }
+
+  for (const policy of ["left", "center", "right"]) {
+    const { dump } = await dumpSource(`vertical-width-policy-${policy}`, `${prelude}
+page example
+hflow(LayoutPolicy.${policy})
+let a = text("Short")
+let b = text("${"Words wrap within the available row width. ".repeat(12)}")
+let g = a /=/ b
+g.chrome.pad_x = 16
+~ g.height == 400
+place!(g)
+end
+`);
+    const g = groupNodes(dump)[0];
+    const a = node(dump, "Short");
+    const b = dump.nodes.find((item) => item.content?.startsWith("Words wrap"));
+    assertClose(g.x, 72, `${policy} page inset`);
+    assertClose(g.width, 1136, `${policy} page width`);
+    assert(b.width <= g.width - 32 + constraintTolerance, `${policy} wrapped width exceeds available width`);
+    assert(b.x >= g.x + 16 - constraintTolerance && b.x + b.width <= g.x + g.width - 16 + constraintTolerance, `${policy} text outside padded group`);
+    const aligned = (item) => policy === "left" ? item.x : policy === "center" ? item.x + item.width / 2 : item.x + item.width;
+    assertClose(aligned(a), aligned(b), `${policy} text alignment`);
+    assertSplitTree(dump, g);
+    assert(dump.diagnostics.length === 0, `${policy} wrapping diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+  }
+
+  for (const [name, expression, width] of [
+    ["horizontal-parent", "a |=| (b /=/ c)", 800],
+    ["vertical-parent", "a /=/ (b /=/ c)", 1136],
+    ["ordinary-parent", "group(a, b /=/ c)", null],
+    ["natural-parent", "a || (b /=/ c)", null],
+  ]) {
+    const { dump } = await dumpSource(`vertical-width-${name}`, `${prelude}
+page example
+let a = text("Short")
+let b = text("Second line")
+let c = text("Third")
+let g = ${expression}
+${name === "horizontal-parent" ? "~ g.width == 800" : ""}
+${name === "vertical-parent" ? "~ g.height == 400" : ""}
+place!(g)
+end
+`);
+    const rootId = dump.placement_roots.flatMap((entry) => entry.roots)[0];
+    const root = groupNodes(dump).find((item) => item.id === rootId);
+    const inner = groupNodes(dump).find((item) => item.id !== rootId);
+    if (width !== null) {
+      assertClose(root.width, width, `${name} root width`);
+      assertSplitTree(dump, root);
+    } else {
+      assertClose(inner.width, node(dump, "Second line").width, `${name} nested natural width`);
+      assertSplitTree(dump, inner);
+    }
+    assert(dump.diagnostics.length === 0, `${name} diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+  }
 }
 
 function assertSplitTree(dump, g) {
@@ -480,14 +569,14 @@ end
 }
 
 async function testEqualEditorUpdates() {
-  const expressions = ["a || b || c", "a |=| b |=| c", "(a |=| b) |=| c", "a /=/ b /=/ c", "a // b // c", "a |=| b |=| c"];
-  const sources = expressions.map((expression) => `${prelude}
+  const expressions = ["a || b || c", "a |=| b |=| c", "(a |=| b) |=| c", "a /=/ b /=/ c", "a // b // c", "a |=| b |=| c", "a /=/ b /=/ c", "a /=/ b /=/ c", "a // b // c"];
+  const sources = expressions.map((expression, index) => `${prelude}
 page editor
 let a = text("Short")
 let b = text("A considerably longer line")
 let c = text("Third")
 let g = ${expression}
-~ g.width == 1000
+${index < 6 ? "~ g.width == 1000" : index === 7 ? "~ g.width == 600" : ""}
 ~ g.height == 500
 ~ g.left == page.left + 80
 ~ g.top == page.top - 80
