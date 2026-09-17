@@ -1,4 +1,4 @@
-type LayoutPolicy = top | top_flow | center | center_stack
+type LayoutPolicy = left | right | top | top_flow | center | center_stack
 type SplitAxis = none | horizontal | vertical
 type RenderKind = text | code | latex | vector_asset | raster_asset | vector_path | connector | chrome_only
 type LineCap = butt | round | square
@@ -274,6 +274,8 @@ record AssetStyle {
 }
 
 type Doc = object {
+  layout_h: LayoutPolicy = LayoutPolicy.left
+  layout_h_center_offset: Number = 0
   layout_v: LayoutPolicy = LayoutPolicy.center
   layout_v_center_offset: Number = 0
   background_fill: Color? = none

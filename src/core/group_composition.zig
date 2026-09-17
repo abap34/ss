@@ -66,7 +66,7 @@ pub fn collect(state: anytype, node: *const model.Node, constraints: *std.ArrayL
             // Resolved to top or center_y by the effective page policy.
             try append(state.allocator, constraints, template, child_id, .top, .top, -pad_y, true);
         } else {
-            try append(state.allocator, constraints, template, child_id, .left, .left, pad_x, false);
+            try append(state.allocator, constraints, template, child_id, .left, .left, pad_x, true);
         }
     }
 }
@@ -104,6 +104,17 @@ fn collectAdjacency(state: anytype, node: *const model.Node, constraints: *std.A
         const child = state.getNode(id) orelse continue;
         if (child.discarded or child.kind != .object) continue;
         count += 1;
+        if (!horizontal) {
+            // Use the containing column when its width and position are fixed.
+            // Otherwise the directed sibling candidate below supplies alignment.
+            var alignment = template;
+            alignment.target_node = id;
+            alignment.target_anchor = .left;
+            alignment.source = .{ .node = .{ .node_id = node.id, .anchor = .left } };
+            alignment.offset = try readNumber(state, node, "chrome", &.{"pad_x"}, 0);
+            alignment.default_alignment = true;
+            try constraints.append(state.allocator, alignment);
+        }
         if (previous) |source_id| {
             var constraint = template;
             constraint.target_node = id;
@@ -113,6 +124,7 @@ fn collectAdjacency(state: anytype, node: *const model.Node, constraints: *std.A
                 constraint.target_anchor = .left;
                 constraint.source.node.anchor = .left;
                 constraint.offset = 0;
+                constraint.default_alignment = true;
                 try constraints.append(state.allocator, constraint);
             }
         }

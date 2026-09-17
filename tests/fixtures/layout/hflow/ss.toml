@@ -1,0 +1,3 @@
+[project]
+entry = "slide.ss"
+asset_base_dir = "."

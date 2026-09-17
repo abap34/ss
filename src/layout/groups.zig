@@ -309,9 +309,9 @@ pub fn applyTargetConstraints(
         else
             base;
         const delta = if (temp.start) |start| start - (child_bounds.start orelse start) else 0;
-        // Split children obtain their coordinates from parent anchors. Moving
-        // them here would also move explicit positions and apply the shift twice.
-        const subtree_changed = if (split_children) false else try translateSubtree(state, workspace, group_id, delta);
+        // Split and frame-aligned children obtain their coordinates from parent
+        // anchors. Subtree translation would apply their movement twice.
+        const subtree_changed = if (split_children or hasChildrenAlignedToFrame(workspace, group_id)) false else try translateSubtree(state, workspace, group_id, delta);
         workspace.states[group_index] = temp;
         if (subtree_changed or !axisStatesEq(previous, temp)) {
             update.changed = true;
@@ -319,6 +319,20 @@ pub fn applyTargetConstraints(
         }
     }
     return update;
+}
+
+fn hasChildrenAlignedToFrame(workspace: *const graph.AxisWorkspace, group_id: NodeId) bool {
+    for (workspace.soft_constraints) |constraint| {
+        if (!constraint.default_alignment or graph.anchorAxis(constraint.target_anchor) != workspace.axis) continue;
+        switch (constraint.source) {
+            .page => continue,
+            .node => |source| if (source.node_id != group_id) continue,
+        }
+        for (workspace.graph.parentGroupIndexes(constraint.target_node)) |parent| {
+            if (workspace.nodeAt(parent) == group_id) return true;
+        }
+    }
+    return false;
 }
 
 fn hasPositionedAncestor(workspace: *const graph.AxisWorkspace, node_id: NodeId) bool {

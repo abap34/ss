@@ -3,6 +3,7 @@ const model = @import("model");
 const fields = @import("../core/fields.zig");
 const graph = @import("graph.zig");
 const groups = @import("groups.zig");
+const metrics = @import("metrics.zig");
 const solver = @import("solver.zig");
 const propagation = @import("propagation.zig");
 const style_defaults = @import("style.zig");
@@ -21,28 +22,44 @@ const VerticalFallbackPolicy = enum {
 
 pub fn buildHorizontalConstraints(state: anytype, workspace: *const graph.AxisWorkspace, options: graph.SolveOptions) !std.ArrayList(Constraint) {
     var constraints = std.ArrayList(Constraint).empty;
+    errdefer constraints.deinit(state.allocator);
+    try constraints.appendSlice(state.allocator, workspace.soft_constraints);
     if (workspace.graph.len() == 0) return constraints;
 
     const allocator = state.allocator;
-    var components = try workspace.dependencyComponents(allocator, state, .{});
+    var seeded = try seededWorkspaceWithSoftConstraints(state, workspace, workspace.soft_constraints, options);
+    defer seeded.deinit();
+    const active = &seeded.workspace;
+    const anchor = horizontalPolicyAnchor(state, workspace.graph.page_id);
+    var components = try active.dependencyComponents(allocator, state, .{ .include_containment = anchor != .left });
     defer components.deinit();
     for (components.rootIndexes()) |root| {
         if (components.isPageDependent(root)) continue;
-        const placement_index = if (try computeHorizontalComponentUnit(state, workspace, &components, root, options)) |unit|
-            unit.placement_index
+        const unit = try computeHorizontalComponentUnit(state, active, &components, root, options);
+        const placement_index = if (unit) |value|
+            value.placement_index
         else
             components.axisFallbackRootIndex(state, root) orelse continue;
-        const placement_id = workspace.nodeAt(placement_index);
-        if (!hardFallbackSeedAllowed(workspace, &components, root, placement_id, .horizontal)) continue;
+        const placement_id = active.nodeAt(placement_index);
+        if (!hardFallbackSeedAllowed(active, &components, root, placement_id, .horizontal)) continue;
         const placement_node = state.getNode(placement_id) orelse return error.UnknownNode;
+        const style = style_defaults.styleForNode(state, placement_node);
+        const offset: f32 = if (unit) |value| switch (anchor) {
+            .center_x => value.placement_offset - value.width / 2 + horizontalCenterOffset(state, workspace.graph.page_id),
+            .right => value.placement_offset - value.width - style.default_right_inset,
+            else => style.default_x,
+        } else style.default_x;
         try constraints.append(state.allocator, .{
             .target_node = placement_id,
             .target_anchor = .left,
-            .source = .{ .page = .left },
-            .offset = style_defaults.styleForNode(state, placement_node).default_x,
+            .source = .{ .page = if (unit != null) anchor else .left },
+            .offset = offset,
         });
     }
-    try appendAbsoluteFallbackConstraints(state, workspace, &constraints);
+    for (workspace.states, active.states) |*original, fitted| {
+        if (original.size_is_default and fitted.size_is_default) original.size = fitted.size;
+    }
+    try appendAbsoluteFallbackConstraints(state, active, &constraints);
     return constraints;
 }
 
@@ -55,6 +72,8 @@ fn probeOptions(options: graph.SolveOptions) graph.SolveOptions {
 
 const HorizontalComponentUnit = struct {
     placement_index: usize,
+    placement_offset: f32,
+    width: f32,
 };
 
 fn computeHorizontalComponentUnit(
@@ -71,27 +90,83 @@ fn computeHorizontalComponentUnit(
     @memcpy(temp, workspace.states);
     _ = graph.setAxisAnchor(&temp[seed_index], .left, 0, null) catch return null;
 
-    var temp_workspace = graph.AxisWorkspace.borrow(workspace, temp, &.{});
+    var local_constraints = std.ArrayList(Constraint).empty;
+    defer local_constraints.deinit(state.allocator);
+    try local_constraints.appendSlice(state.allocator, workspace.soft_constraints);
+    for (components.memberIndexes(component_root)) |index| {
+        if (axisPositionKnown(temp[index])) continue;
+        const node_id = workspace.nodeAt(index);
+        const node = state.getNode(node_id) orelse return error.UnknownNode;
+        if (groups.isGroupNode(node)) continue;
+        if (hasHardPositionTargetConstraint(workspace, node_id, .horizontal)) continue;
+        if (hasFallbackTargetConstraint(local_constraints.items, node_id, .horizontal)) continue;
+        // Seed each nested group's free children before measuring the complete
+        // component. Group constraints then supply their relative translation.
+        try local_constraints.append(state.allocator, .{
+            .target_node = node_id,
+            .target_anchor = .left,
+            .source = .{ .page = .left },
+            .offset = 0,
+        });
+    }
+    var temp_workspace = graph.AxisWorkspace.borrow(workspace, temp, local_constraints.items);
     _ = solver.runPageAxisPass(state, &temp_workspace, probeOptions(options)) catch |err| switch (err) {
         error.LayoutDidNotConverge => return null,
         else => return err,
     };
 
+    const anchor = horizontalPolicyAnchor(state, workspace.graph.page_id);
+    if (anchor != .left) {
+        var min_start: ?f32 = null;
+        for (components.memberIndexes(component_root)) |index| {
+            const start = temp[index].start orelse continue;
+            min_start = @min(min_start orelse start, start);
+        }
+        if (min_start) |start| {
+            const seed = state.getNode(workspace.nodeAt(seed_index)).?;
+            const inset = style_defaults.styleForNode(state, seed).default_x;
+            // Measure wrapping within the page before deriving a center/right
+            // placement. The final pass uses the same fitted intrinsic widths.
+            for (components.memberIndexes(component_root)) |index| {
+                _ = graph.shiftAxisState(&temp[index], inset - start);
+            }
+            solver.settleHorizontalAxis(state, &temp_workspace, probeOptions(options)) catch |err| switch (err) {
+                error.LayoutDidNotConverge => return null,
+                else => return err,
+            };
+            for (components.memberIndexes(component_root)) |index| {
+                if (workspace.states[index].size_is_default and temp[index].size_is_default) {
+                    workspace.states[index].size = temp[index].size;
+                }
+            }
+        }
+    }
+
     var leftmost_index: ?usize = null;
     var leftmost_start: f32 = 0;
+    var rightmost_end: ?f32 = null;
     for (workspace.graph.child_ids, 0..) |child_id, index| {
         if (!components.contains(component_root, index)) continue;
         const node = state.getNode(child_id) orelse return error.UnknownNode;
-        if (groups.isGroupNode(node)) continue;
+        if (groups.isGroupNode(node) and anchor == .left) continue;
         const start = temp[index].start orelse continue;
+        const end = temp[index].end orelse continue;
+        rightmost_end = @max(rightmost_end orelse end, end);
         if (leftmost_index == null or start < leftmost_start) {
             leftmost_index = index;
             leftmost_start = start;
         }
     }
 
-    const placement_index = leftPredecessorGroupIndex(state, workspace, components, component_root, leftmost_index orelse return null) orelse return null;
-    return .{ .placement_index = placement_index };
+    const placement_index = if (anchor == .left)
+        leftPredecessorGroupIndex(state, workspace, components, component_root, leftmost_index orelse return null) orelse return null
+    else
+        seed_index;
+    return .{
+        .placement_index = placement_index,
+        .placement_offset = (temp[placement_index].start orelse leftmost_start) - leftmost_start,
+        .width = (rightmost_end orelse return null) - leftmost_start,
+    };
 }
 
 fn leftPredecessorGroupIndex(
@@ -153,26 +228,55 @@ pub fn buildDefaultAlignmentConstraints(state: anytype, workspace: *const graph.
     const seen = try state.allocator.alloc(bool, workspace.graph.len());
     defer state.allocator.free(seen);
     @memset(seen, false);
-    const anchor: model.Anchor = switch (verticalFallbackPolicy(state, workspace.graph.page_id)) {
-        .top_flow => .top,
-        .center_stack => .center_y,
+    const anchor: model.Anchor = switch (workspace.axis) {
+        .horizontal => horizontalPolicyAnchor(state, workspace.graph.page_id),
+        .vertical => switch (verticalFallbackPolicy(state, workspace.graph.page_id)) {
+            .top_flow => .top,
+            .center_stack => .center_y,
+        },
     };
     for (candidates) |candidate| {
         const target_index = workspace.indexOf(candidate.target_node) orelse continue;
         if (seen[target_index]) continue;
-        if (graph.anchorAxis(candidate.target_anchor) != .vertical) continue;
-        if (hasHardPositionTargetConstraint(workspace, candidate.target_node, .vertical)) continue;
+        if (graph.anchorAxis(candidate.target_anchor) != workspace.axis) continue;
+        if (hasHardPositionTargetConstraint(workspace, candidate.target_node, workspace.axis)) continue;
         var target_subgraph = try workspace.graph.groupSubgraph(state.allocator, state, candidate.target_node);
         defer target_subgraph.deinit();
         try target_subgraph.add(target_index);
+        const containing_frame = if (workspace.axis == .horizontal) try containingAlignmentFrame(state, workspace, candidate) else null;
+        if (containing_frame) |fixed| {
+            if (!fixed) continue;
+        }
         if (!candidate.group_split) {
-            if (defaultAlignmentTargetIsPositioned(workspace, &target_subgraph)) continue;
-            if (try defaultAlignmentCrossesPositionedAncestor(state, workspace, candidate, &target_subgraph)) continue;
-            if (try defaultAlignmentCreatesCycle(state, workspace, candidate, constraints.items, &target_subgraph)) continue;
+            if (defaultAlignmentTargetIsPositioned(workspace, &target_subgraph, containing_frame == null)) continue;
+            if (containing_frame == null and try defaultAlignmentCrossesPositionedAncestor(state, workspace, candidate, &target_subgraph)) continue;
+            if (containing_frame == null and try defaultAlignmentCreatesCycle(state, workspace, candidate, constraints.items, &target_subgraph)) continue;
+        }
+
+        if (containing_frame == true) {
+            // The hard pass may have translated these children with the column.
+            // Their own positions are still defaults; keep only measured sizes.
+            for (target_subgraph.indexes.items) |index| {
+                const previous = workspace.states[index];
+                workspace.states[index] = .{
+                    .size = previous.size,
+                    .size_source = previous.size_source,
+                    .size_is_default = previous.size_is_default,
+                };
+            }
+            const source_id = candidate.source.node.node_id;
+            const frame = workspace.states[workspace.indexOf(source_id).?];
+            const parent = state.getNode(source_id).?;
+            const child = state.getNode(candidate.target_node).?;
+            const target = &workspace.states[target_index];
+            if (target.size_is_default and target.size != null and metrics.shouldWrapNode(state, child)) {
+                target.size = @min(target.size.?, @max(1, frame.size.? - 2 * metrics.chromePadX(state, parent)));
+            }
         }
 
         var resolved = candidate;
-        if (candidate.group_split and anchor == .center_y) resolved.offset = 0;
+        if (anchor == .center_x or (candidate.group_split and anchor == .center_y)) resolved.offset = 0;
+        if (anchor == .right) resolved.offset = -resolved.offset;
         resolved.target_anchor = anchor;
         switch (resolved.source) {
             .page => resolved.source = .{ .page = anchor },
@@ -184,13 +288,30 @@ pub fn buildDefaultAlignmentConstraints(state: anytype, workspace: *const graph.
     return constraints;
 }
 
-fn defaultAlignmentTargetIsPositioned(workspace: *const graph.AxisWorkspace, target_subgraph: *const graph.NodeSubgraph) bool {
+fn containingAlignmentFrame(state: anytype, workspace: *const graph.AxisWorkspace, candidate: Constraint) !?bool {
+    const source_id = switch (candidate.source) {
+        .page => return null,
+        .node => |source| source.node_id,
+    };
+    const source_index = workspace.indexOf(source_id) orelse return null;
+    const source = state.getNode(source_id) orelse return error.UnknownNode;
+    if (!groups.isGroupNode(source)) return null;
+    var subtree = try workspace.graph.groupSubgraph(state.allocator, state, source_id);
+    defer subtree.deinit();
+    const target_index = workspace.indexOf(candidate.target_node) orelse return null;
+    if (!subtree.seen.contains(target_index)) return null;
+    const frame = workspace.states[source_index];
+    return frame.start != null and frame.size != null and
+        (frame.size_source != null or workspace.graph.hardTargetAnchorCount(source_id, workspace.axis) >= 2);
+}
+
+fn defaultAlignmentTargetIsPositioned(workspace: *const graph.AxisWorkspace, target_subgraph: *const graph.NodeSubgraph, include_resolved: bool) bool {
     for (target_subgraph.indexes.items) |index| {
-        if (axisPositionKnown(workspace.states[index])) return true;
+        if (include_resolved and axisPositionKnown(workspace.states[index])) return true;
         for (workspace.graph.targetConstraintIndexes(workspace.nodeAt(index))) |constraint_index| {
             const constraint = workspace.graph.constraints[constraint_index];
-            if (graph.anchorAxis(constraint.target_anchor) != .vertical) continue;
-            if (graph.classifySelfConstraint(constraint, .vertical) != .none) continue;
+            if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) continue;
+            if (graph.classifySelfConstraint(constraint, workspace.axis) != .none) continue;
             switch (constraint.source) {
                 .page => return true,
                 .node => |source| {
@@ -269,7 +390,7 @@ fn defaultAlignmentCrossesPositionedAncestor(
         const node_id = workspace.nodeAt(index);
         for (workspace.graph.parentGroupIndexes(node_id)) |parent| try ancestors.add(parent);
         if (target_subgraph.seen.contains(index)) continue;
-        if (!hasHardPositionTargetConstraint(workspace, node_id, .vertical)) continue;
+        if (!hasHardPositionTargetConstraint(workspace, node_id, workspace.axis)) continue;
         const source_id = switch (candidate.source) {
             .page => return true,
             .node => |source| source.node_id,
@@ -283,12 +404,12 @@ fn defaultAlignmentCrossesPositionedAncestor(
 }
 
 fn appendAlignmentDependency(workspace: *const graph.AxisWorkspace, dependencies: *graph.NodeSubgraph, constraint: Constraint) !void {
-    if (graph.anchorAxis(constraint.target_anchor) != .vertical) return;
-    if (graph.classifySelfConstraint(constraint, .vertical) != .none) return;
+    if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) return;
+    if (graph.classifySelfConstraint(constraint, workspace.axis) != .none) return;
     switch (constraint.source) {
         .page => {},
         .node => |source| {
-            if (graph.anchorAxis(source.anchor) != .vertical) return;
+            if (graph.anchorAxis(source.anchor) != workspace.axis) return;
             try dependencies.add(workspace.indexOf(source.node_id) orelse return);
         },
     }
@@ -302,6 +423,24 @@ fn verticalFallbackPolicy(state: anytype, page_id: NodeId) VerticalFallbackPolic
     };
     if (std.mem.eql(u8, value, "center") or std.mem.eql(u8, value, "center_stack")) return .center_stack;
     return .top_flow;
+}
+
+fn horizontalPolicyAnchor(state: anytype, page_id: NodeId) model.Anchor {
+    const page = state.getNode(page_id) orelse return .left;
+    const value = fields.readExplicit(page, "layout_h", &.{}, .text) orelse blk: {
+        const document = state.getNode(state.graph.document_id) orelse return .left;
+        break :blk fields.read(state.allocator, state, document, "layout_h", &.{}, .text) orelse return .left;
+    };
+    if (std.mem.eql(u8, value, "center") or std.mem.eql(u8, value, "center_stack")) return .center_x;
+    if (std.mem.eql(u8, value, "right")) return .right;
+    return .left;
+}
+
+fn horizontalCenterOffset(state: anytype, page_id: NodeId) f32 {
+    const page = state.getNode(page_id) orelse return 0;
+    if (fields.readExplicit(page, "layout_h_center_offset", &.{}, .number)) |value| return value;
+    const document = state.getNode(state.graph.document_id) orelse return 0;
+    return style_defaults.parseNodeFloatProperty(state, document, "layout_h_center_offset") orelse 0;
 }
 
 fn buildTopFlowVerticalFallbackConstraints(state: anytype, workspace: *const graph.AxisWorkspace, options: graph.SolveOptions) !std.ArrayList(Constraint) {
@@ -612,7 +751,9 @@ fn computeVerticalComponentUnitFromRoot(
         if (groups.isGroupNode(node) and (temp[index].start == null or temp[index].end == null)) continue;
         const start = temp[index].start orelse return null;
         const end = temp[index].end orelse return null;
-        if (index == root_index or (!workspace.graph.hasTargetConstraint(state, child_id, .vertical, &.{}) and !hasDefaultAlignmentTarget(workspace, child_id))) {
+        // Place the free leaves; their groups derive bounds from those leaves.
+        // Placing both would translate aligned subgroups a second time.
+        if (!groups.isGroupNode(node) and (index == root_index or (!workspace.graph.hasTargetConstraint(state, child_id, .vertical, &.{}) and !hasDefaultAlignmentTarget(workspace, child_id)))) {
             local_tops[index] = end;
         }
         if (local_bottom == null or start < local_bottom.?) {
@@ -975,11 +1116,17 @@ fn appendAbsoluteFallbackConstraints(
             seeded_hard_components[root] = true;
         }
 
+        const anchor = if (workspace.axis == .horizontal) horizontalPolicyAnchor(state, workspace.graph.page_id) else .top;
+        const offset = if (workspace.axis == .horizontal) switch (anchor) {
+            .center_x => horizontalCenterOffset(state, workspace.graph.page_id),
+            .right => -style_defaults.styleForNode(state, node).default_right_inset,
+            else => style_defaults.styleForNode(state, node).default_x,
+        } else Defaults.flow_top - Defaults.height;
         try constraints.append(state.allocator, .{
             .target_node = child_id,
-            .target_anchor = absoluteFallbackTargetAnchor(workspace.axis),
-            .source = .{ .page = absoluteFallbackTargetAnchor(workspace.axis) },
-            .offset = absoluteFallbackOffset(state, node, workspace.axis),
+            .target_anchor = anchor,
+            .source = .{ .page = anchor },
+            .offset = offset,
         });
     }
 }
@@ -996,20 +1143,6 @@ fn componentHasAxisPositionSeed(
         if (hasFallbackTargetConstraint(constraints, child_id, workspace.axis)) return true;
     }
     return false;
-}
-
-fn absoluteFallbackTargetAnchor(axis: Axis) model.Anchor {
-    return switch (axis) {
-        .horizontal => .left,
-        .vertical => .top,
-    };
-}
-
-fn absoluteFallbackOffset(state: anytype, node: *const model.Node, axis: Axis) f32 {
-    return switch (axis) {
-        .horizontal => style_defaults.styleForNode(state, node).default_x,
-        .vertical => Defaults.flow_top - Defaults.height,
-    };
 }
 
 fn axisPositionKnown(state: AxisState) bool {

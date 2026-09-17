@@ -457,12 +457,15 @@ fn solvePageLayoutPass(
     try solvePageAxis(state, &horizontal, trace_session, options);
     try graph.checkCancellation(options);
 
+    var horizontal_alignments = try fallback.buildDefaultAlignmentConstraints(state, &horizontal);
+    defer horizontal_alignments.deinit(state.allocator);
+    horizontal.soft_constraints = horizontal_alignments.items;
     var horizontal_fallback = try fallback.buildHorizontalConstraints(state, &horizontal, options);
     defer horizontal_fallback.deinit(state.allocator);
     trace_session.recordDefaultConstraints(state.allocator, &horizontal, horizontal_fallback.items);
     horizontal.soft_constraints = horizontal_fallback.items;
     try solvePageAxis(state, &horizontal, trace_session, options);
-    try settleHorizontalAxis(state, &horizontal, trace_session, options);
+    try settleHorizontalAxisWithTrace(state, &horizontal, trace_session, options);
     try applySolvedHorizontalFrames(state, &horizontal, measurement_cache, options);
     try graph.checkCancellation(options);
     try groups.propagateTargetedWidthsCached(state, &horizontal, measurement_cache);
@@ -644,7 +647,12 @@ fn applySolvedHorizontalFrames(state: anytype, workspace: *const graph.AxisWorks
     }
 }
 
-fn settleHorizontalAxis(state: anytype, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !void {
+pub fn settleHorizontalAxis(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
+    var trace_session = layout_trace.Session{};
+    try settleHorizontalAxisWithTrace(state, workspace, &trace_session, options);
+}
+
+fn settleHorizontalAxisWithTrace(state: anytype, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !void {
     var pass: usize = 0;
     const limit = axis_propagation.groupIterationLimit(workspace.states.len);
     while (pass < limit) : (pass += 1) {
@@ -994,6 +1002,16 @@ fn applyAxisConstraint(
     }
 
     const target_value = source_value.? + constraint.offset;
+    if (is_soft and constraint.default_alignment) {
+        if (graph.axisAnchorValue(workspace.states[target_index], constraint.target_anchor)) |current| {
+            const changed = graph.shiftAxisState(&workspace.states[target_index], target_value - current);
+            if (changed) {
+                try recordAnchorConstraintPropagation(state, workspace, target_index, constraint, target_value);
+                trace_session.recordConstraintPropagation(state.allocator, workspace, constraint, true, false);
+            }
+            return changed;
+        }
+    }
     if (!is_soft and canMoveDefaultSizedAnchor(state, workspace, target_index)) {
         if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
             try reconcileAppliedAxisState(state, workspace, target_index);

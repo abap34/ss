@@ -1273,6 +1273,7 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         "tests/runtime/layout/measurement_spec.mjs",
         "tests/runtime/layout/text-wrapping/spec.mjs",
         "tests/runtime/layout/vflow/policy_spec.mjs",
+        "tests/runtime/layout/hflow/spec.mjs",
         "tests/runtime/layout/practical/spec.mjs",
         "tests/runtime/lsp/cancellation/spec.mjs",
         "tests/runtime/lsp/diagnostics/spec.mjs",
@@ -1308,6 +1309,9 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         test_step.dependOn(&node_spec.step);
         if (std.mem.eql(u8, path, "tests/runtime/layout/composition/spec.mjs")) {
             addFocusedTestStep(b, "test-layout-composition", "Run focused layout composition semantics tests", &node_spec.step);
+        }
+        if (std.mem.eql(u8, path, "tests/runtime/layout/hflow/spec.mjs")) {
+            addFocusedTestStep(b, "test-layout-hflow", "Run horizontal flow policy tests", &node_spec.step);
         }
         if (std.mem.eql(u8, path, "tests/runtime/layout/practical/spec.mjs")) {
             addFocusedTestStep(b, "test-layout-practical", "Check synthetic practical layouts and editor updates", &node_spec.step);

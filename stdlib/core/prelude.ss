@@ -6,6 +6,8 @@ import std:core/layout as {
   vjoin,
   hsplit,
   vsplit,
+  hflow,
+  hflow_doc,
   vflow,
   vflow_doc,
   cols2_parts,

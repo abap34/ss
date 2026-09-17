@@ -57,6 +57,16 @@ record Cols2 {
   right: Object
 }
 
+fn hflow(policy: LayoutPolicy, center_offset: Number = 0) -> Void
+  pagectx().layout_h = policy
+  pagectx().layout_h_center_offset = center_offset
+end
+
+fn hflow_doc(policy: LayoutPolicy, center_offset: Number = 0) -> Void
+  docctx().layout_h = policy
+  docctx().layout_h_center_offset = center_offset
+end
+
 fn vflow(policy: LayoutPolicy, center_offset: Number = 0) -> Void
   pagectx().layout_v = policy
   pagectx().layout_v_center_offset = center_offset
