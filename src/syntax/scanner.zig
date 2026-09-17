@@ -87,7 +87,10 @@ pub const TokenIterator = struct {
             }
             if (source.isIdentifierStart(byte)) {
                 var end = self.cursor + 1;
-                while (end < line_value.span.end and isCallableIdentifierContinue(self.text[end])) end += 1;
+                while (end < line_value.span.end and isCallableIdentifierContinue(self.text[end])) {
+                    if (source.startsWithAt(self.text, end, "!=")) break;
+                    end += 1;
+                }
                 return self.advance(line_value, end, .identifier);
             }
 
@@ -268,6 +271,9 @@ fn operatorEnd(text: []const u8, start: usize, line_end: usize) ?usize {
         "//",
         "::",
         "==",
+        "!=",
+        "<=",
+        ">=",
     };
     for (operators) |operator| {
         if (start + operator.len <= end and source.startsWithAt(text, start, operator)) return start + operator.len;

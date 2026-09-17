@@ -5633,3 +5633,53 @@ test "compiler semantics: unknown annotation types report UnknownType" {
         \\
     , "case.ss:bytes:", "UnknownType: unknown type: string");
 }
+
+test "compiler semantics: numeric comparisons evaluate both outcomes" {
+    const failures = [_][]const u8{
+        "not(1==1)",
+        "1==2",
+        "2==1",
+        "1!=1",
+        "not(1!=2)",
+        "not(2!=1)",
+        "1<1",
+        "not(1<2)",
+        "2<1",
+        "not(1<=1)",
+        "not(1<=2)",
+        "2<=1",
+        "1>1",
+        "1>2",
+        "not(2>1)",
+        "not(1>=1)",
+        "1>=2",
+        "not(2>=1)",
+    };
+    for (failures) |condition| {
+        const source = try std.fmt.allocPrint(
+            testing.allocator,
+            "page comparisons\n  if {s}\n    report_error(\"incorrect comparison\")\n  end\nend\n",
+            .{condition},
+        );
+        defer testing.allocator.free(source);
+        try buildSource(source);
+    }
+}
+
+test "compiler semantics: numeric comparisons require numeric operands" {
+    try expectDiagnostic(
+        \\page comparisons
+        \\  let result = "one" == 1
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+    try expectDiagnostic(
+        \\page comparisons
+        \\  let result = 1 < "two"
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+    try expectDiagnostic(
+        \\page comparisons
+        \\  let result = 1 == 2 == 3
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+}

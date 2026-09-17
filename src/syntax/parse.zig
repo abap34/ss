@@ -1505,7 +1505,7 @@ const Parser = struct {
     fn parseCompositionExpr(self: *Parser) anyerror!Expr {
         source.skipInlineSpaces(self.source, &self.pos);
         const left_start = self.pos;
-        var left = try self.parseConcatExpr();
+        var left = try self.parseComparisonExpr();
         errdefer left.deinit(self.allocator);
         var direction: ?CompositionOperator = null;
         var first_operator_span: ast.Span = undefined;
@@ -1580,7 +1580,7 @@ const Parser = struct {
             if (self.recovering) return self.makeHoleExpr(.expr, .expression, pointSpan(self.pos), error.ExpectedExpression, diagnostics.foundToken(self.source, self.pos));
             return self.fail(error.ExpectedExpression);
         }
-        return self.parseConcatExpr();
+        return self.parseComparisonExpr();
     }
 
     fn startsReservedKeyword(self: *const Parser) bool {
@@ -1616,6 +1616,31 @@ const Parser = struct {
             .args = args,
             .arg_spans = arg_spans,
         } };
+    }
+
+    fn parseComparisonExpr(self: *Parser) anyerror!Expr {
+        var left = try self.parseConcatExpr();
+        errdefer left.deinit(self.allocator);
+        while (true) {
+            source.skipInlineSpaces(self.source, &self.pos);
+            const operators = .{ "==", "!=", "<=", ">=", "<", ">" };
+            const comparison_names = .{ "num_eq", "num_ne", "num_le", "num_ge", "num_lt", "num_gt" };
+            var matched = false;
+            inline for (operators, comparison_names) |operator, name| {
+                if (!matched and source.startsWithAt(self.source, self.pos, operator)) {
+                    self.pos += operator.len;
+                    source.skipInlineSpaces(self.source, &self.pos);
+                    var right = if (self.atStatementBoundary() or source.lineCommentMarkerLength(self.source, self.pos) != null) blk: {
+                        if (!self.recovering) return self.fail(error.ExpectedExpression);
+                        break :blk try self.makeHoleExpr(.expr, .expression, pointSpan(self.pos), error.ExpectedExpression, diagnostics.foundToken(self.source, self.pos));
+                    } else try self.parseConcatExpr();
+                    errdefer right.deinit(self.allocator);
+                    left = try self.makeBinaryCall(name, left, right);
+                    matched = true;
+                }
+            }
+            if (!matched) return left;
+        }
     }
 
     fn parseConcatExpr(self: *Parser) anyerror!Expr {
@@ -1666,7 +1691,7 @@ const Parser = struct {
     fn parseUnaryExpr(self: *Parser) anyerror!Expr {
         try self.checkCanceled();
         source.skipInlineSpaces(self.source, &self.pos);
-        if (!self.eof() and self.source[self.pos] == '!') {
+        if (!self.eof() and self.source[self.pos] == '!' and !source.startsWithAt(self.source, self.pos, "!=")) {
             self.pos += 1;
             var arg = try self.parseUnaryExpr();
             errdefer arg.deinit(self.allocator);
@@ -2706,7 +2731,7 @@ const Parser = struct {
                 .span = .{ .start = first_span.start, .end = self.pos },
             };
         }
-        if (!self.eof() and self.source[self.pos] == '!') {
+        if (!self.eof() and self.source[self.pos] == '!' and !source.startsWithAt(self.source, self.pos, "!=")) {
             self.pos += 1;
             const name = try std.fmt.allocPrint(self.allocator, "{s}!", .{first});
             self.allocator.free(first);
@@ -2737,7 +2762,7 @@ const Parser = struct {
             self.pos += 1;
         }
         const ident_end = self.pos;
-        if (kind == .callable and !self.eof() and self.source[self.pos] == '!') {
+        if (kind == .callable and !self.eof() and self.source[self.pos] == '!' and !source.startsWithAt(self.source, self.pos, "!=")) {
             self.pos += 1;
         }
         const base = self.source[start..ident_end];

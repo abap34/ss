@@ -1,0 +1,48 @@
+================================================================================
+Numeric comparisons and arithmetic precedence
+================================================================================
+
+page Comparisons
+  let result0 = phase==2
+  let result1 = phase!=2
+  let result2 = phase<2
+  let result3 = phase<=2
+  let result4 = phase>2
+  let result5 = phase>=2
+  let fallback = optional ?? 1 == 2
+  let precedence = 1 + 2 * 3 == 7
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    name: (identifier)
+    (let_statement
+      name: (identifier)
+      value: (binary_expression (identifier) (number)))
+    (let_statement
+      name: (identifier)
+      value: (binary_expression (identifier) (number)))
+    (let_statement
+      name: (identifier)
+      value: (binary_expression (identifier) (number)))
+    (let_statement
+      name: (identifier)
+      value: (binary_expression (identifier) (number)))
+    (let_statement
+      name: (identifier)
+      value: (binary_expression (identifier) (number)))
+    (let_statement
+      name: (identifier)
+      value: (binary_expression (identifier) (number)))
+    (let_statement
+      name: (identifier)
+      value: (binary_expression
+        (property_default_expression property: (identifier) default: (number))
+        (number)))
+    (let_statement
+      name: (identifier)
+      value: (binary_expression
+        (binary_expression (number) (binary_expression (number) (number)))
+        (number)))))

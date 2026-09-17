@@ -213,3 +213,29 @@ right
 value.
 field
 ```
+
+## Numeric comparisons
+
+Numeric comparisons return `Bool` and bind less tightly than arithmetic.
+Chained comparisons parse left to right and fail numeric type checking because
+an intermediate result has type `Bool`. Constraint statements keep their
+separate `~ target == source` syntax. Conditional blocks use a newline and `end`.
+
+<!-- syntax: accept expression -->
+```ss
+phase + 1 == 2
+```
+
+<!-- syntax: accept expression -->
+```ss
+phase!=2
+```
+
+<!-- syntax: accept module -->
+```ss
+fn stop(phase: Number) -> Void
+  if phase <= 2
+    return
+  end
+end
+```

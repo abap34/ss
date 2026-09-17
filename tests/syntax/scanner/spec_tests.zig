@@ -216,3 +216,17 @@ fn expectSemantic(tokens: []const scanner.SemanticToken, text: []const u8, expec
         try testing.expectEqualStrings(item.text, text[token.token.span.start..token.token.span.end]);
     }
 }
+
+test "syntax scanner: comparison does not consume a callable suffix" {
+    try expectTokens("phase!=2 <= 3 >= 1 == 1", &.{
+        .{ .kind = .identifier, .text = "phase", .line = 0 },
+        .{ .kind = .operator, .text = "!=", .line = 0 },
+        .{ .kind = .number, .text = "2", .line = 0 },
+        .{ .kind = .operator, .text = "<=", .line = 0 },
+        .{ .kind = .number, .text = "3", .line = 0 },
+        .{ .kind = .operator, .text = ">=", .line = 0 },
+        .{ .kind = .number, .text = "1", .line = 0 },
+        .{ .kind = .operator, .text = "==", .line = 0 },
+        .{ .kind = .number, .text = "1", .line = 0 },
+    });
+}

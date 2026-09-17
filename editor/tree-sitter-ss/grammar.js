@@ -1,9 +1,10 @@
 const PREC = {
-  call: 8,
-  unary: 7,
-  mul: 6,
-  add: 5,
-  concat: 4,
+  call: 9,
+  unary: 8,
+  mul: 7,
+  add: 6,
+  concat: 5,
+  coalesce: 4,
   compare: 3,
   composition: 2,
 };
@@ -141,11 +142,11 @@ module.exports = grammar({
 
     let_statement: $ => seq("let", field("name", $.identifier), "=", field("value", $._expression), $._terminator),
     return_statement: $ => seq("return", optional(field("value", $._expression)), $._terminator),
-    constrain_statement: $ => seq("~", field("left", $._expression), "==", field("right", $._expression), optional(seq(choice("+", "-"), $._expression)), $._terminator),
+    constrain_statement: $ => seq("~", field("left", $.member_expression), "==", field("right", $._expression), $._terminator),
     constraint_update_statement: $ => seq(
       token(prec(1, "~!~")),
-      field("target", $._expression),
-      optional(seq("==", field("source", $._expression), optional(seq(choice("+", "-"), $._expression)))),
+      field("target", $.member_expression),
+      optional(seq("==", field("source", $._expression))),
       $._terminator,
     ),
     member_assignment_statement: $ => seq(field("target", $.member_expression), "=", field("value", $._expression), $._terminator),
@@ -217,6 +218,7 @@ module.exports = grammar({
     ),
 
     binary_expression: $ => choice(
+      prec.left(PREC.compare, seq($._expression, choice("==", "!=", "<", "<=", ">", ">="), $._expression)),
       prec.left(PREC.mul, seq($._expression, choice("*", "/"), $._expression)),
       prec.left(PREC.add, seq($._expression, choice("+", "-"), $._expression)),
       prec.left(PREC.concat, seq($._expression, "++", $._expression)),
@@ -250,7 +252,7 @@ module.exports = grammar({
       ".",
       field("member", $.identifier),
     )),
-    property_default_expression: $ => prec.right(PREC.compare, seq(
+    property_default_expression: $ => prec.right(PREC.coalesce, seq(
       field("property", choice($.identifier, $.member_expression, $.call_expression, $.parenthesized_expression)),
       "??",
       field("default", $._expression),

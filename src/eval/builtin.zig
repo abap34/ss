@@ -26,6 +26,19 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const offset: f32 = if (call.args.items.len == 3) try ctx.evalNumberArg(call, 2) else 0;
             break :blk .{ .constraints = try ctx.equalAnchorConstraintSet(target, source, offset) };
         },
+        .num_eq, .num_ne, .num_lt, .num_le, .num_gt, .num_ge => blk: {
+            const left = try ctx.evalNumberArg(call, 0);
+            const right = try ctx.evalNumberArg(call, 1);
+            break :blk .{ .boolean = switch (descriptor.op) {
+                .num_eq => left == right,
+                .num_ne => left != right,
+                .num_lt => left < right,
+                .num_le => left <= right,
+                .num_gt => left > right,
+                .num_ge => left >= right,
+                else => unreachable,
+            } };
+        },
         .logical_not => blk: {
             var value = try ctx.evalExprValue(call.args.items[0]);
             defer value.deinit(ctx.state.allocator);
