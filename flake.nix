@@ -56,6 +56,10 @@
       url = "github:tree-sitter/tree-sitter-rust/77a3747266f4d621d0757825e6b11edcbf991ca5";
       flake = false;
     };
+    tree-sitter-scheme = {
+      url = "github:6cdh/tree-sitter-scheme/c6cb7c7d7a04b3f5d999c28e2e9c0c31b2d50ece";
+      flake = false;
+    };
     tree-sitter-toml = {
       url = "github:tree-sitter-grammars/tree-sitter-toml/64b56832c2cffe41758f28e05c756a3a98d16f41";
       flake = false;

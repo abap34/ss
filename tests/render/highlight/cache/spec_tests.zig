@@ -33,6 +33,39 @@ test "highlight cache: equal content and parser-query aliases reuse compiled wor
     try testing.expectEqual(@as(usize, 2), stats.content_analyses);
 }
 
+test "highlight cache: bundled Scheme aliases highlight literals and comments" {
+    var cache = Cache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    var config = try utils.highlight.defaultConfig(testing.allocator);
+    defer config.deinit(testing.allocator);
+    const content = "; Sample\n(define answer 42)\n(display \"hello\")\n#t\n#| block |#\n";
+    const cases = .{
+        .{ "; Sample", utils.highlight.CaptureRole.comment },
+        .{ "42", utils.highlight.CaptureRole.number },
+        .{ "hello", utils.highlight.CaptureRole.string },
+        .{ "#t", utils.highlight.CaptureRole.constant },
+        .{ "#| block |#", utils.highlight.CaptureRole.comment },
+    };
+    var failure: Failure = .none;
+    for ([_][]const u8{ "scheme", "scm" }) |name| {
+        var result = try cache.highlight(config.languages, name, content, &failure);
+        defer result.deinit();
+        inline for (cases) |case| {
+            const start = std.mem.indexOf(u8, content, case[0]).?;
+            for (start..start + case[0].len) |offset| {
+                var role: ?utils.highlight.CaptureRole = null;
+                for (result.segments()) |segment| {
+                    if (segment.start <= offset and offset < segment.end) {
+                        role = segment.role;
+                        break;
+                    }
+                }
+                try testing.expectEqual(case[1], role.?);
+            }
+        }
+    }
+}
+
 const query_root = ".ss-cache/test-highlight-query-generations";
 const query_path = query_root ++ "/query.scm";
 

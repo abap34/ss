@@ -32,6 +32,7 @@
         "tree-sitter-python": "tree-sitter-python",
         "tree-sitter-runtime": "tree-sitter-runtime",
         "tree-sitter-rust": "tree-sitter-rust",
+        "tree-sitter-scheme": "tree-sitter-scheme",
         "tree-sitter-toml": "tree-sitter-toml",
         "tree-sitter-typescript": "tree-sitter-typescript",
         "tree-sitter-yaml": "tree-sitter-yaml",
@@ -256,6 +257,23 @@
         "owner": "tree-sitter",
         "repo": "tree-sitter-rust",
         "rev": "77a3747266f4d621d0757825e6b11edcbf991ca5",
+        "type": "github"
+      }
+    },
+    "tree-sitter-scheme": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1773761636,
+        "narHash": "sha256-aFonUd15PJkQmz5lDJthtd1rU+8OXNknHDlgqH2s+OA=",
+        "owner": "6cdh",
+        "repo": "tree-sitter-scheme",
+        "rev": "c6cb7c7d7a04b3f5d999c28e2e9c0c31b2d50ece",
+        "type": "github"
+      },
+      "original": {
+        "owner": "6cdh",
+        "repo": "tree-sitter-scheme",
+        "rev": "c6cb7c7d7a04b3f5d999c28e2e9c0c31b2d50ece",
         "type": "github"
       }
     },

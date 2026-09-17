@@ -17,6 +17,7 @@ const TSLanguage *tree_sitter_json(void);
 const TSLanguage *tree_sitter_julia(void);
 const TSLanguage *tree_sitter_python(void);
 const TSLanguage *tree_sitter_rust(void);
+const TSLanguage *tree_sitter_scheme(void);
 const TSLanguage *tree_sitter_toml(void);
 const TSLanguage *tree_sitter_typescript(void);
 const TSLanguage *tree_sitter_tsx(void);
@@ -99,6 +100,7 @@ int main(int argc, char **argv) {
   status |= check_language(parser, "julia", tree_sitter_julia(), "function f(x)\n  x + 1\nend\n");
   status |= check_language(parser, "python", tree_sitter_python(), "def f(x):\n    return x + 1\n");
   status |= check_language(parser, "rust", tree_sitter_rust(), "fn main() { let value = 1; }\n");
+  status |= check_language(parser, "scheme", tree_sitter_scheme(), "(define (square x) (* x x))\n");
   status |= check_language(parser, "toml", tree_sitter_toml(), "name = \"ss\"\ncount = 1\n");
   status |= check_language(parser, "typescript", tree_sitter_typescript(), "const value: number = 1;\n");
   status |= check_language(parser, "tsx", tree_sitter_tsx(), "const value = <div>{1}</div>;\n");

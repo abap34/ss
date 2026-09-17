@@ -52,6 +52,7 @@ extern fn tree_sitter_json() *const TSLanguage;
 extern fn tree_sitter_julia() *const TSLanguage;
 extern fn tree_sitter_python() *const TSLanguage;
 extern fn tree_sitter_rust() *const TSLanguage;
+extern fn tree_sitter_scheme() *const TSLanguage;
 extern fn tree_sitter_toml() *const TSLanguage;
 extern fn tree_sitter_typescript() *const TSLanguage;
 extern fn tree_sitter_tsx() *const TSLanguage;
@@ -173,6 +174,13 @@ const language_definitions = [_]LanguageDefinition{
         .query_name = "builtin:rust",
         .query_source = build_options.rust_highlight_query,
         .health_sample = "fn main() { let value = 1; }\n",
+    },
+    .{
+        .parser_name = "scheme",
+        .load = tree_sitter_scheme,
+        .query_name = "builtin:scheme",
+        .query_source = build_options.scheme_highlight_query,
+        .health_sample = "(define (square x) (* x x))\n(display (square 2))\n",
     },
     .{
         .parser_name = "toml",

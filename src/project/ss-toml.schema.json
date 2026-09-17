@@ -226,7 +226,7 @@
             "properties": {
               "parser": {
                 "type": "string",
-                "description": "Bundled parser name such as ss, bash, c, cpp, css, go, html, java, javascript, json, julia, python, rust, toml, typescript, tsx, yaml, or zig."
+                "description": "Bundled parser name such as ss, bash, c, cpp, css, go, html, java, javascript, json, julia, python, rust, scheme, toml, typescript, tsx, yaml, or zig."
               },
               "query": {
                 "type": "string",

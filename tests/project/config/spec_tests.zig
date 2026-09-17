@@ -437,6 +437,7 @@ test "project spec: bundled highlight queries use mapped capture names" {
         "third_party/tree-sitter-languages/julia/queries/highlights.scm",
         "third_party/tree-sitter-languages/python/queries/highlights.scm",
         "third_party/tree-sitter-languages/rust/queries/highlights.scm",
+        "third_party/tree-sitter-languages/scheme/queries/highlights.scm",
         "third_party/tree-sitter-languages/toml/queries/highlights.scm",
         "third_party/tree-sitter-languages/typescript/queries/highlights.scm",
         "third_party/tree-sitter-languages/yaml/queries/highlights.scm",

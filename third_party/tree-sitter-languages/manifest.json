@@ -159,6 +159,18 @@
       ]
     },
     {
+      "name": "scheme",
+      "display_name": "Scheme",
+      "repo": "https://github.com/6cdh/tree-sitter-scheme",
+      "commit": "c6cb7c7d7a04b3f5d999c28e2e9c0c31b2d50ece",
+      "aliases": ["scheme", "scm"],
+      "files": [
+        { "from": "LICENSE", "to": "LICENSE" },
+        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
+        { "from": "src/parser.c", "to": "src/parser.c" }
+      ]
+    },
+    {
       "name": "toml",
       "display_name": "TOML",
       "repo": "https://github.com/tree-sitter-grammars/tree-sitter-toml",

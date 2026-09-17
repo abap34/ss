@@ -129,6 +129,8 @@ pub const builtin_languages = [_]BuiltinLanguage{
     .{ .name = "py", .parser = "python", .query = "builtin:python" },
     .{ .name = "rust", .parser = "rust", .query = "builtin:rust" },
     .{ .name = "rs", .parser = "rust", .query = "builtin:rust" },
+    .{ .name = "scheme", .parser = "scheme", .query = "builtin:scheme" },
+    .{ .name = "scm", .parser = "scheme", .query = "builtin:scheme" },
     .{ .name = "toml", .parser = "toml", .query = "builtin:toml" },
     .{ .name = "typescript", .parser = "typescript", .query = "builtin:typescript" },
     .{ .name = "ts", .parser = "typescript", .query = "builtin:typescript" },
