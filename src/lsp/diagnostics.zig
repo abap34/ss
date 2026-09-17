@@ -168,7 +168,8 @@ pub const DiagnosticSet = struct {
     }
 
     fn addAnalysisDiagnostic(self: *DiagnosticSet, item: analysis_diagnostics.Diagnostic, source_index: source.LineIndex) !void {
-        if (item.severity == .warning and isLayoutOverflowCode(item.code)) return;
+        // The analysis snapshot collects layout diagnostics only when layout
+        // runs. Preserve its measured warnings and object-level fit policy here.
         const span = item.span orelse source.ByteSpan{ .start = 0, .end = 0 };
         const uri = try protocol.uriFromPath(self.allocator, item.path);
         errdefer self.allocator.free(uri);
@@ -185,11 +186,6 @@ pub const DiagnosticSet = struct {
         });
     }
 };
-
-fn isLayoutOverflowCode(code: []const u8) bool {
-    return std.mem.eql(u8, code, "PageOverflow") or
-        std.mem.eql(u8, code, "FrameTooSmall");
-}
 
 const LspRelatedInput = struct {
     path: []const u8,

@@ -1277,6 +1277,7 @@ fn addNodeSpecTests(ctx: BuildContext, test_step: *Step, exe: *Step.Compile) voi
         "tests/runtime/layout/practical/spec.mjs",
         "tests/runtime/lsp/cancellation/spec.mjs",
         "tests/runtime/lsp/diagnostics/spec.mjs",
+        "tests/runtime/lsp/diagnostics/layout_spec.mjs",
         "tests/runtime/lsp/generated_edit/spec.mjs",
         "tests/runtime/lsp/manual_wysiwyg/spec.mjs",
         "tests/runtime/lsp/protocol/spec.mjs",
