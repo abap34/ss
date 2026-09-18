@@ -826,12 +826,18 @@ const CompletionCase = struct {
     fn completeSourceAfter(self: *CompletionCase, source: []const u8, needle: []const u8) !query_types.CompletionResult {
         const offset = offsetAfter(source, needle);
         const snapshot = try self.snapshotFor(source);
-        return snapshot_api.completeAt(self.allocator, snapshot, .{
+        // Visibility tests exercise full completion; deadline behavior is tested
+        // separately with an explicitly advancing clock.
+        var clock = DeadlineClock{};
+        var result = try snapshot_api.completeAt(self.allocator, snapshot, .{
             .path = self.path,
             .source = source,
             .offset = offset,
             .source_version = snapshot.generation,
-        }, .{ .budget_ms = 10 });
+        }, clock.options());
+        errdefer result.deinit(self.allocator);
+        try testing.expect(!result.is_incomplete);
+        return result;
     }
 
     fn snapshotFor(self: *CompletionCase, source: []const u8) !*snapshot_api.AnalysisSnapshot {
