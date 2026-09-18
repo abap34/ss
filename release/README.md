@@ -34,6 +34,19 @@ uses exact tags and exact Homebrew formula names for patch releases.
 
 ## Release Checklist
 
+The release tag must point to the final `chore: prepare vX.Y.Z release`
+commit. Commit implementation, test, and documentation fixes before that
+commit, and keep all release metadata and generated version metadata together
+in the preparation commit.
+
+If verification finds a fix after the preparation commit, edit or reorder the
+unpublished commits so the fix precedes the final preparation commit. Amend
+metadata corrections into the preparation commit. Rerun the release checks on
+the resulting `HEAD`, and only then create or replace the unpublished local
+tag. Before tagging, verify the preparation commit's subject and metadata-only
+diff. Do not rewrite published history or replace a published tag without
+explicit user approval.
+
 Before tagging, update the changelog section that becomes the GitHub Release
 notes:
 
