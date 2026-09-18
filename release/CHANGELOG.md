@@ -4,6 +4,30 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-17
+
+### Added
+
+- Added `||` and `//` for horizontal and vertical layout composition, plus
+  `|=|` and `/=/` for equal-width columns and equal-height rows.
+- Added `hflow` and `hflow_doc` policies for horizontal alignment.
+- Added numeric comparison operators `==`, `!=`, `<`, `<=`, `>`, and `>=`.
+- Added built-in Scheme syntax highlighting with `scheme` and `scm` aliases.
+
+### Changed
+
+- Made centered layout the default and inferred page flow from explicit
+  position constraints. Vertical equal-split groups use the available page width.
+- Removed `//` line comments; use `#` or `;;` for comments.
+
+### Fixed
+
+- Preserved block strings and multiline layout compositions across formatting,
+  and recovered from stray expression delimiters and incomplete comparisons.
+- Added a lightweight fallback for LSP completion, hover, and definition when
+  full analysis times out, and retained layout overflow diagnostics in the editor.
+- Corrected text wrapping at measured width boundaries and Unicode PDF links.
+
 ## [0.8.1] - 2026-09-11
 
 ### Changed
