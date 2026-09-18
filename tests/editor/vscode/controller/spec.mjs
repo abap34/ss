@@ -78,6 +78,7 @@ await testComponentWidthEditReachesTheWebview();
 await testComponentDeletionReachesTheWebview();
 await testIconCatalogAndInsertionReachTheWebview();
 await testResourceAcknowledgementsReachTheServer();
+await testPresentationDefersUntilWebviewReady();
 setProjectSettingsProvider(undefined);
 
 async function testOpenResolvesConfiguredEntryWithoutSsDocument() {
@@ -108,6 +109,65 @@ entry = "deck/slides.ss"
     assert.deepEqual(mock.warnings, []);
     assert.equal(mock.panels.length, 1);
     assert.match(mock.panels[0].title, /slides\.ss$/);
+    controller.dispose();
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+}
+
+async function testPresentationDefersUntilWebviewReady() {
+  const fixture = await mkdtemp(path.join(os.tmpdir(), "ss-editor-presentation-"));
+  try {
+    const slide = path.join(fixture, "slide.ss");
+    await writeFile(path.join(fixture, "ss.toml"), `[project]
+entry = "slide.ss"
+`, "utf8");
+    await writeFile(slide, "page demo\nend\n", "utf8");
+
+    mock.reset();
+    configureSettings(slide);
+    const uri = mock.Uri.file(slide);
+    const document = { uri, languageId: "ss-slide", version: 1 };
+    mock.workspace.textDocuments.push(document);
+    const controller = new EditorController(
+      { extensionUri: mock.Uri.file(fixture) },
+      { appendLine() {} },
+      () => undefined,
+    );
+
+    await controller.presentation(document);
+    assert.equal(mock.panels.length, 1, "starting a presentation did not open a webview panel");
+    const session = controller.sessions.get(uri.toString());
+    assert(session, "starting a presentation did not create a session");
+    assert.equal(
+      session.pendingPresentationStart,
+      true,
+      "a presentation requested before the webview is ready should be deferred",
+    );
+    assert.equal(
+      mock.panels[0].messages.some((message) => message.type === "startPresentation"),
+      false,
+      "startPresentation was sent before the webview announced it was ready",
+    );
+
+    await controller.handleMessage(session, { type: "ready" });
+    assert.equal(
+      session.pendingPresentationStart,
+      false,
+      "startPresentation was never flushed once the webview became ready",
+    );
+    assert.equal(
+      mock.panels[0].messages.some((message) => message.type === "startPresentation"),
+      true,
+      "the webview never received startPresentation once ready",
+    );
+
+    await controller.presentation(document);
+    assert.equal(
+      mock.panels[0].messages.filter((message) => message.type === "startPresentation").length,
+      2,
+      "starting a presentation on an already-open, ready session did not send startPresentation immediately",
+    );
     controller.dispose();
   } finally {
     await rm(fixture, { recursive: true, force: true });
@@ -1079,12 +1139,16 @@ function vscodeMock() {
       const panel = {
         title,
         active: true,
+        messages: [],
         webview: {
           options: {},
           cspSource: "test-webview",
           html: "",
           asWebviewUri: (value) => value,
-          postMessage: async () => true,
+          postMessage: async (message) => {
+            panel.messages.push(message);
+            return true;
+          },
           onDidReceiveMessage: () => disposable(),
         },
         onDidDispose: (listener) => {

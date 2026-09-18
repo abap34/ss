@@ -83,12 +83,13 @@ function activityButton(state, view, label, toggleSidebar) {
 function pagesPanel(state, actions) {
   const list = element("div", "page-list");
   for (const page of state.snapshot.layout.pages) {
-    const button = element(
-      "button",
+    const row = element(
+      "div",
       `page-entry${page.id === state.currentPageId ? " is-active" : ""}`,
     );
-    button.type = "button";
-    button.dataset.pageId = String(page.id);
+    row.dataset.pageId = String(page.id);
+    const select = element("button", "page-entry-select");
+    select.type = "button";
     const thumb = element("span", "page-thumbnail");
     thumb.append(renderPage(state.snapshot, page.id, true));
     const label = element("span", "page-entry-label");
@@ -97,9 +98,19 @@ function pagesPanel(state, actions) {
     const name = element("small");
     name.textContent = page.name || `Page ${page.index}`;
     label.append(number, name);
-    button.append(thumb, label);
-    button.addEventListener("click", () => actions.selectPage(page.id));
-    list.append(button);
+    select.append(thumb, label);
+    select.addEventListener("click", () => actions.selectPage(page.id));
+    const present = element("button", "page-entry-present");
+    present.type = "button";
+    present.title = "Start presentation from here";
+    present.setAttribute("aria-label", present.title);
+    present.append(element("span", "page-entry-present-icon"));
+    present.addEventListener("click", (event) => {
+      event.stopPropagation();
+      actions.presentation.start(page.id);
+    });
+    row.append(select, present);
+    list.append(row);
   }
   return list;
 }

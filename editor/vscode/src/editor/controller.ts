@@ -81,6 +81,7 @@ interface Session {
   document: vscode.TextDocument;
   panel: vscode.WebviewPanel;
   ready: boolean;
+  pendingPresentationStart: boolean;
   sourceEditQueue: Promise<void>;
   sourceEditCancellation?: vscode.CancellationTokenSource;
   timer?: NodeJS.Timeout;
@@ -135,13 +136,34 @@ export class EditorController implements vscode.Disposable {
 
   async open(document: vscode.TextDocument | undefined): Promise<void> {
     if (!document || !isSsDocument(document)) {
-      await this.openProjectEntry(document?.uri);
+      await this.openProjectEntry(document?.uri, (resolved) => this.openDocument(resolved));
       return;
     }
     await this.openDocument(document);
   }
 
-  private async openProjectEntry(contextUri: vscode.Uri | undefined): Promise<void> {
+  async presentation(document: vscode.TextDocument | undefined): Promise<void> {
+    if (!document || !isSsDocument(document)) {
+      await this.openProjectEntry(
+        document?.uri,
+        (resolved) => this.startPresentationFor(resolved),
+      );
+      return;
+    }
+    await this.startPresentationFor(document);
+  }
+
+  private async startPresentationFor(document: vscode.TextDocument): Promise<void> {
+    const session = await this.openDocument(document);
+    if (!session) return;
+    if (session.ready) void this.post(session, { type: "startPresentation" });
+    else session.pendingPresentationStart = true;
+  }
+
+  private async openProjectEntry(
+    contextUri: vscode.Uri | undefined,
+    onResolved: (document: vscode.TextDocument) => void | Promise<unknown>,
+  ): Promise<void> {
     const entryUri = await projectEntryUri(contextUri);
     if (this.disposed) return;
     if (!entryUri) {
@@ -166,23 +188,23 @@ export class EditorController implements vscode.Disposable {
       );
       return;
     }
-    await this.openDocument(document);
+    await onResolved(document);
   }
 
-  private async openDocument(document: vscode.TextDocument): Promise<void> {
+  private async openDocument(document: vscode.TextDocument): Promise<Session | undefined> {
     const settings = (await projectSettings(document.uri))?.wysiwyg;
-    if (!settings || this.disposed) return;
+    if (!settings || this.disposed) return undefined;
     if (!settings.enabled) {
       void vscode.window.showWarningMessage(
         "The WYSIWYG editor is disabled by ss.toml [editor.wysiwyg].enabled.",
       );
-      return;
+      return undefined;
     }
     const key = document.uri.toString();
     const existing = this.sessions.get(key);
     if (existing) {
       existing.panel.reveal(vscode.ViewColumn.Beside, true);
-      return;
+      return existing;
     }
 
     const panel = vscode.window.createWebviewPanel(
@@ -200,6 +222,7 @@ export class EditorController implements vscode.Disposable {
       settings,
       panel,
       ready: false,
+      pendingPresentationStart: false,
       sourceEditQueue: Promise.resolve(),
       serial: 0,
       requestRunning: false,
@@ -223,6 +246,7 @@ export class EditorController implements vscode.Disposable {
     panel.webview.onDidReceiveMessage((message: WebviewMessage) =>
       void this.handleMessage(session, message)
     );
+    return session;
   }
 
   async build(document: vscode.TextDocument | undefined): Promise<boolean> {
@@ -256,6 +280,10 @@ export class EditorController implements vscode.Disposable {
     if (message.type === "ready") {
       session.ready = true;
       this.schedule(session, immediateRefreshDelayMs);
+      if (session.pendingPresentationStart) {
+        session.pendingPresentationStart = false;
+        void this.post(session, { type: "startPresentation" });
+      }
       return;
     }
     if (message.type === "refreshFull") {

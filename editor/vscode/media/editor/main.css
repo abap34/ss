@@ -218,14 +218,11 @@ button {
 }
 .page-entry {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   width: 100%;
-  padding: 7px 8px 7px 6px;
   border-left: 2px solid transparent;
   background: transparent;
-  text-align: left;
-  cursor: pointer;
 }
 .page-entry:hover {
   background: var(--hover-background);
@@ -234,8 +231,49 @@ button {
   border-left-color: var(--accent);
   background: var(--accent-background);
 }
+.page-entry-select {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px 7px 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
 .page-entry-label {
   min-width: 0;
+}
+.page-entry-present {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  margin-right: 6px;
+  place-items: center;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+}
+.page-entry:hover .page-entry-present,
+.page-entry-present:focus-visible {
+  opacity: 1;
+}
+.page-entry-present:hover,
+.page-entry-present:focus-visible {
+  background: var(--accent-background);
+  color: var(--accent-text);
+  outline: none;
+}
+.page-entry-present-icon {
+  display: block;
+  width: 0;
+  height: 0;
+  margin-left: 1px;
+  border-style: solid;
+  border-width: 4px 0 4px 7px;
+  border-color: transparent transparent transparent currentColor;
 }
 .page-entry strong {
   display: block;
@@ -1807,7 +1845,7 @@ button {
   :root {
     --sidebar: 132px;
   }
-  .page-entry {
+  .page-entry-select {
     grid-template-columns: 54px minmax(0, 1fr);
   }
   .page-thumbnail {
@@ -1851,5 +1889,196 @@ button {
   }
   .relation-details {
     grid-column: 1 / -1;
+  }
+}
+
+/* Presentation mode */
+.presentation-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  overflow: hidden;
+  background: #000;
+}
+.presentation-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+.presentation-stage--laser {
+  cursor: none;
+}
+.presentation-stage--pen {
+  cursor: crosshair;
+}
+.presentation-page {
+  --page-width: 960px;
+  --page-height: 540px;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--page-width);
+  height: var(--page-height);
+  margin-top: calc(var(--page-height) / -2);
+  margin-left: calc(var(--page-width) / -2);
+  transform: translate(0, 0) scale(1);
+  will-change: transform;
+}
+.presentation-page-surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 24px 64px #00000080;
+}
+.presentation-ink-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.presentation-ink-stroke {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.presentation-laser-dot {
+  position: fixed;
+  z-index: 100002;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ff3b30 0%, #ff3b30cc 55%, #ff3b3000 75%);
+  box-shadow: 0 0 14px 4px #ff3b3080;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+.presentation-controls {
+  position: fixed;
+  z-index: 100001;
+  left: 18px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid #ffffff26;
+  border-radius: 9px;
+  background: #14161acc;
+  box-shadow: 0 10px 28px #00000059;
+  backdrop-filter: blur(6px);
+}
+.presentation-control {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 6px;
+  background: transparent;
+  color: #e7ebee;
+  cursor: pointer;
+}
+.presentation-control:hover:not(:disabled),
+.presentation-control:focus-visible {
+  background: #ffffff1f;
+  outline: none;
+}
+.presentation-control.is-active {
+  background: #ff3b3033;
+  color: #ff8a80;
+}
+.presentation-control:disabled {
+  color: #ffffff40;
+  cursor: default;
+}
+.presentation-counter {
+  padding: 0 8px;
+  color: #d6dadd;
+  font: 10px var(--vscode-editor-font-family, ui-monospace, monospace);
+  white-space: nowrap;
+}
+.presentation-icon--prev, .presentation-icon--next {
+  width: 0;
+  height: 0;
+  border-style: solid;
+}
+.presentation-icon--prev {
+  border-width: 5px 7px 5px 0;
+  border-color: transparent currentColor transparent transparent;
+}
+.presentation-icon--next {
+  border-width: 5px 0 5px 7px;
+  border-color: transparent transparent transparent currentColor;
+}
+.presentation-icon--laser {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px transparent;
+}
+.presentation-icon--pen {
+  position: relative;
+  width: 13px;
+  height: 13px;
+}
+.presentation-icon--pen::before {
+  position: absolute;
+  top: 5px;
+  left: 0;
+  width: 13px;
+  height: 3px;
+  content: "";
+  background: currentColor;
+  clip-path: polygon(0 0, 75% 0, 100% 50%, 75% 100%, 0 100%);
+  transform: rotate(-45deg);
+}
+.presentation-icon--clear {
+  position: relative;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+.presentation-icon--clear::before {
+  position: absolute;
+  inset: 4px -1px auto;
+  content: "";
+  border-top: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+.presentation-icon--exit {
+  position: relative;
+  width: 11px;
+  height: 11px;
+}
+.presentation-icon--exit::before, .presentation-icon--exit::after {
+  position: absolute;
+  top: 5px;
+  left: 0;
+  width: 100%;
+  height: 1.5px;
+  content: "";
+  background: currentColor;
+}
+.presentation-icon--exit::before {
+  transform: rotate(45deg);
+}
+.presentation-icon--exit::after {
+  transform: rotate(-45deg);
+}
+@media (max-width: 520px) {
+  .presentation-controls {
+    left: 10px;
+    bottom: 10px;
+  }
+  .presentation-counter {
+    display: none;
   }
 }

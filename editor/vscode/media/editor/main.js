@@ -15,6 +15,7 @@ import { defaultIconDraft, IconController } from "./icon-insertion.js";
 import { EditorNavigation } from "./navigation.js";
 import { ObjectLockController } from "./object-locks.js";
 import { disposePdfItems, disposePdfRuntime } from "./pdf.js";
+import { PresentationController } from "./presentation.js";
 import {
   reconcileSidebarSnapshot,
   renderActivityRail,
@@ -51,6 +52,13 @@ const state = {
   iconCatalogPending: false,
   iconCatalogError: null,
   iconDraft: structuredClone(defaultIconDraft),
+  presentation: {
+    active: false,
+    pageId: null,
+    tool: "none",
+    penColor: "#ff3b30",
+    strokes: new Map(),
+  },
   theme: persistedState.theme === "light" || persistedState.theme === "dark"
     ? persistedState.theme
     : initialTheme(),
@@ -99,6 +107,7 @@ const objectLocks = new ObjectLockController(state, {
   persist: (value) => persistWebviewState({ objectLocks: value }),
   render,
 }, persistedState.objectLocks);
+const presentation = new PresentationController(state, { render });
 const actions = {
   render,
   revealSource,
@@ -111,6 +120,7 @@ const actions = {
   shape,
   icon,
   objectLocks,
+  presentation,
   pointerOperationFinished: flushDeferredSnapshots,
 };
 const navigation = new EditorNavigation(state);
@@ -166,6 +176,8 @@ window.addEventListener("message", (event) => {
   } else if (message.type === "iconEditResult") {
     const outcome = icon.acceptResult(message);
     if (outcome?.status === "failed") showError(editFailureMessage(outcome.message));
+  } else if (message.type === "startPresentation") {
+    presentation.start();
   }
 });
 
@@ -422,7 +434,7 @@ function syncToast() {
 }
 
 function render() {
-  if (workspace.isPointerOperationActive()) {
+  if (!state.presentation.active && workspace.isPointerOperationActive()) {
     renderDeferred = true;
     return;
   }
@@ -433,6 +445,14 @@ function render() {
   resizeObserver.disconnect();
   app.replaceChildren();
   delete app.dataset.ssTextAligned;
+  if (state.presentation.active) {
+    app.append(presentation.render());
+    void alignTextBaselines(app).then(() => {
+      if (generation !== renderGeneration) return;
+      app.dataset.ssTextAligned = "true";
+    }).catch(() => {});
+    return;
+  }
   const shell = element("div", "editor-shell");
   shell.append(renderActivityRail(state, { toggleSidebar, toggleTheme }));
   if (state.sidebar) shell.append(renderSidebar(state, actions));

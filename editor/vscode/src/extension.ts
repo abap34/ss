@@ -29,6 +29,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(vscode.commands.registerCommand("ss.editor.build", () =>
     editorController?.build(vscode.window.activeTextEditor?.document)
   ));
+  context.subscriptions.push(vscode.commands.registerCommand("ss.editor.presentation", () =>
+    editorController?.presentation(vscode.window.activeTextEditor?.document)
+  ));
   context.subscriptions.push(vscode.commands.registerCommand("ss.checkCurrentFile", async () => {
     const document = vscode.window.activeTextEditor?.document;
     if (document?.languageId !== "ss-slide") {
