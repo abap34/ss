@@ -454,7 +454,7 @@ function render() {
     return;
   }
   const shell = element("div", "editor-shell");
-  shell.append(renderActivityRail(state, { toggleSidebar, toggleTheme }));
+  shell.append(renderActivityRail(state, { toggleSidebar, toggleTheme, presentation }));
   if (state.sidebar) shell.append(renderSidebar(state, actions));
   shell.append(workspace.render());
   app.append(shell);

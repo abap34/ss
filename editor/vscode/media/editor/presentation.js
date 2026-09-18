@@ -8,7 +8,8 @@ const pinchSensitivity = 0.004;
 const wheelDeltaModeLine = 1;
 const wheelDeltaModePage = 2;
 const wheelLinePixels = 16;
-const scrollNavigationThreshold = 12;
+const scrollNavigationThreshold = 180;
+const scrollGestureIdleMs = 220;
 const navigationCooldownMs = 450;
 const fitMarginRatio = 0.02;
 const defaultPenColor = "#ff3b30";
@@ -25,10 +26,13 @@ export class PresentationController {
     this.touchPan = null;
     this.stroke = null;
     this.lastNavAt = 0;
-    this.stageEl = null;
+    this.lastWheelAt = 0;
+    this.scrollAccumulator = 0;
     this.pageEl = null;
     this.inkSvg = null;
     this.laserDot = null;
+    this.controlsVisible = false;
+    this.focusedControlKind = null;
     this.handleKeydown = this.handleKeydown.bind(this);
     this.handleResize = this.handleResize.bind(this);
     this.handleWheel = this.handleWheel.bind(this);
@@ -73,9 +77,7 @@ export class PresentationController {
   step(offset) {
     if (!this.state.presentation.active) return;
     const pages = this.state.snapshot?.layout.pages || [];
-    const index = pages.findIndex((page) =>
-      page.id === this.state.presentation.pageId
-    );
+    const index = pageIndex(pages, this.state.presentation.pageId);
     if (index < 0) return;
     const next = index + offset;
     if (next < 0 || next >= pages.length) return;
@@ -95,13 +97,6 @@ export class PresentationController {
     this.state.presentation.pageId = page.id;
     this.resetView();
     this.actions.render();
-  }
-
-  goTo(pageId) {
-    const pages = this.state.snapshot?.layout.pages || [];
-    const index = pages.findIndex((page) => page.id === pageId);
-    if (index < 0) return;
-    this.goToIndex(index);
   }
 
   setTool(tool) {
@@ -132,15 +127,14 @@ export class PresentationController {
   resetView() {
     this.scale = minimumScale;
     this.pan = { x: 0, y: 0 };
+    this.scrollAccumulator = 0;
   }
 
   render() {
     this.cleanupGestures();
     const overlay = element("div", "presentation-overlay");
     const pages = this.state.snapshot?.layout.pages || [];
-    const page = pages.find((candidate) =>
-      candidate.id === this.state.presentation.pageId
-    ) || pages[0] || null;
+    const page = findPage(pages, this.state.presentation.pageId) || pages[0] || null;
     const stage = element("div", "presentation-stage");
     stage.tabIndex = -1;
     stage.classList.toggle(
@@ -186,18 +180,44 @@ export class PresentationController {
     const laser = element("div", "presentation-laser-dot");
     laser.hidden = true;
     this.laserDot = laser;
-    this.stageEl = stage;
-    overlay.append(stage, laser, this.controls(page, pages));
+    const controls = this.controls(page, pages);
+    overlay.append(stage, laser, controls);
+    // The control bar's visibility (hover/focus) and focused button live on
+    // this JS-tracked state rather than pure CSS :hover/:focus-within,
+    // because every navigation click rebuilds the whole overlay: without
+    // this, the freshly created bar would start unhovered/unfocused and
+    // flash hidden for a frame even though the pointer never left it.
+    if (this.focusedControlKind) {
+      const kind = this.focusedControlKind;
+      requestAnimationFrame(() => {
+        if (!controls.isConnected) return;
+        const target = controls.querySelector(`[data-control-kind="${kind}"]`);
+        if (target && !target.disabled) target.focus();
+      });
+    }
     return overlay;
   }
 
   controls(page, pages) {
     const bar = element("div", "presentation-controls");
+    bar.classList.toggle("is-visible", this.controlsVisible);
     bar.setAttribute("role", "toolbar");
     bar.setAttribute("aria-label", "Presentation controls");
-    const index = page
-      ? pages.findIndex((candidate) => candidate.id === page.id)
-      : -1;
+    const syncVisible = () => {
+      this.controlsVisible = bar.matches(":hover") || bar.contains(document.activeElement);
+      bar.classList.toggle("is-visible", this.controlsVisible);
+    };
+    bar.addEventListener("pointerenter", syncVisible);
+    bar.addEventListener("pointerleave", syncVisible);
+    bar.addEventListener("focusin", (event) => {
+      this.focusedControlKind = event.target.dataset.controlKind || null;
+      syncVisible();
+    });
+    bar.addEventListener("focusout", () => {
+      this.focusedControlKind = null;
+      syncVisible();
+    });
+    const index = page ? pageIndex(pages, page.id) : -1;
 
     const previous = this.controlButton("prev", "Previous slide", () => this.previous());
     previous.disabled = index <= 0;
@@ -230,6 +250,7 @@ export class PresentationController {
     button.type = "button";
     button.title = label;
     button.setAttribute("aria-label", label);
+    button.dataset.controlKind = kind;
     button.append(element("span", `presentation-icon presentation-icon--${kind}`));
     button.addEventListener("click", handler);
     return button;
@@ -252,9 +273,7 @@ export class PresentationController {
   handleResize() {
     if (!this.state.presentation.active || !this.pageEl) return;
     const pages = this.state.snapshot?.layout.pages || [];
-    const page = pages.find((candidate) =>
-      candidate.id === this.state.presentation.pageId
-    );
+    const page = findPage(pages, this.state.presentation.pageId);
     if (!page) return;
     this.fit = fitDimensions(page, viewportSize());
     this.applyTransform();
@@ -313,14 +332,24 @@ export class PresentationController {
       const delta = normalizedWheelDelta(event);
       const factor = Math.exp(-delta * pinchSensitivity);
       this.zoomAt(event.clientX, event.clientY, factor);
+      this.scrollAccumulator = 0;
       return;
     }
     const now = performance.now();
     if (now - this.lastNavAt < navigationCooldownMs) return;
-    if (event.deltaY > scrollNavigationThreshold) {
+    // Require a sustained scroll rather than reacting to a single wheel
+    // tick: accumulate delta across the gesture and only advance once it
+    // passes a real threshold. A pause resets the accumulator, so it
+    // reflects one continuous gesture rather than scroll drift over time.
+    if (now - this.lastWheelAt > scrollGestureIdleMs) this.scrollAccumulator = 0;
+    this.lastWheelAt = now;
+    this.scrollAccumulator += normalizedWheelDelta(event);
+    if (this.scrollAccumulator > scrollNavigationThreshold) {
+      this.scrollAccumulator = 0;
       this.lastNavAt = now;
       this.next();
-    } else if (event.deltaY < -scrollNavigationThreshold) {
+    } else if (this.scrollAccumulator < -scrollNavigationThreshold) {
+      this.scrollAccumulator = 0;
       this.lastNavAt = now;
       this.previous();
     }
@@ -508,6 +537,14 @@ export class PresentationController {
     this.laserDot.style.left = `${event.clientX}px`;
     this.laserDot.style.top = `${event.clientY}px`;
   }
+}
+
+function findPage(pages, pageId) {
+  return pages.find((page) => page.id === pageId) || null;
+}
+
+function pageIndex(pages, pageId) {
+  return pages.findIndex((page) => page.id === pageId);
 }
 
 function fitDimensions(page, viewport) {

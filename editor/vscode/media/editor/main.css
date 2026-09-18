@@ -162,8 +162,16 @@ button {
   background: currentColor;
   box-shadow: 0 4px 0 currentColor;
 }
-.activity-theme {
+.activity-present {
   margin-top: auto;
+}
+.activity-icon--present {
+  width: 0;
+  height: 0;
+  margin-left: 2px;
+  border-style: solid;
+  border-width: 6px 0 6px 10px;
+  border-color: transparent transparent transparent currentColor;
 }
 .activity-icon--theme-light {
   width: 12px;
@@ -1966,11 +1974,17 @@ button {
   align-items: center;
   gap: 4px;
   padding: 5px;
-  border: 1px solid #ffffff26;
+  border: 1px solid var(--control-border);
   border-radius: 9px;
-  background: #14161acc;
-  box-shadow: 0 10px 28px #00000059;
-  backdrop-filter: blur(6px);
+  background: var(--toolbar-background);
+  box-shadow: var(--sheet-shadow);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.presentation-controls:hover,
+.presentation-controls:focus-within,
+.presentation-controls.is-visible {
+  opacity: 1;
 }
 .presentation-control {
   display: grid;
@@ -1979,25 +1993,26 @@ button {
   place-items: center;
   border-radius: 6px;
   background: transparent;
-  color: #e7ebee;
+  color: var(--text-muted);
   cursor: pointer;
 }
 .presentation-control:hover:not(:disabled),
 .presentation-control:focus-visible {
-  background: #ffffff1f;
+  background: var(--hover-background);
+  color: var(--accent-text);
   outline: none;
 }
 .presentation-control.is-active {
-  background: #ff3b3033;
-  color: #ff8a80;
+  background: var(--accent-background);
+  color: var(--accent-text);
 }
 .presentation-control:disabled {
-  color: #ffffff40;
+  color: var(--text-faint);
   cursor: default;
 }
 .presentation-counter {
   padding: 0 8px;
-  color: #d6dadd;
+  color: var(--text-soft);
   font: 10px var(--vscode-editor-font-family, ui-monospace, monospace);
   white-space: nowrap;
 }

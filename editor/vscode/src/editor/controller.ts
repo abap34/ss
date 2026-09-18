@@ -156,8 +156,14 @@ export class EditorController implements vscode.Disposable {
   private async startPresentationFor(document: vscode.TextDocument): Promise<void> {
     const session = await this.openDocument(document);
     if (!session) return;
-    if (session.ready) void this.post(session, { type: "startPresentation" });
-    else session.pendingPresentationStart = true;
+    // Only safe to send once the webview has actually received a snapshot:
+    // "ready" alone fires well before the first build finishes, and posting
+    // this immediately would race an empty state.snapshot in the webview.
+    if (session.snapshotId != null) {
+      void this.post(session, { type: "startPresentation" });
+    } else {
+      session.pendingPresentationStart = true;
+    }
   }
 
   private async openProjectEntry(
@@ -280,10 +286,6 @@ export class EditorController implements vscode.Disposable {
     if (message.type === "ready") {
       session.ready = true;
       this.schedule(session, immediateRefreshDelayMs);
-      if (session.pendingPresentationStart) {
-        session.pendingPresentationStart = false;
-        void this.post(session, { type: "startPresentation" });
-      }
       return;
     }
     if (message.type === "refreshFull") {
@@ -870,6 +872,10 @@ export class EditorController implements vscode.Disposable {
       ) return;
       session.editorReconciliationPending = false;
       session.snapshotId = snapshot.snapshot_id;
+      if (session.pendingPresentationStart) {
+        session.pendingPresentationStart = false;
+        void this.post(session, { type: "startPresentation" });
+      }
     } catch (error) {
       if (session.disposed || serial !== session.serial) return;
       if (isRetryableSnapshotError(error)) {

@@ -8,6 +8,15 @@ export function renderActivityRail(state, actions) {
   rail.append(
     activityButton(state, "outline", "Outline", actions.toggleSidebar),
   );
+  if (state.snapshot?.layout.pages.length > 0) {
+    const present = element("button", "activity-present");
+    present.type = "button";
+    present.title = "Start presentation from the beginning";
+    present.setAttribute("aria-label", present.title);
+    present.append(element("span", "activity-icon activity-icon--present"));
+    present.addEventListener("click", () => actions.presentation.start());
+    rail.append(present);
+  }
   const theme = element("button", "activity-theme");
   const nextTheme = state.theme === "dark" ? "light" : "dark";
   theme.type = "button";

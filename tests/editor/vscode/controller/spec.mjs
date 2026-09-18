@@ -78,7 +78,7 @@ await testComponentWidthEditReachesTheWebview();
 await testComponentDeletionReachesTheWebview();
 await testIconCatalogAndInsertionReachTheWebview();
 await testResourceAcknowledgementsReachTheServer();
-await testPresentationDefersUntilWebviewReady();
+await testPresentationDefersUntilFirstSnapshot();
 setProjectSettingsProvider(undefined);
 
 async function testOpenResolvesConfiguredEntryWithoutSsDocument() {
@@ -115,7 +115,7 @@ entry = "deck/slides.ss"
   }
 }
 
-async function testPresentationDefersUntilWebviewReady() {
+async function testPresentationDefersUntilFirstSnapshot() {
   const fixture = await mkdtemp(path.join(os.tmpdir(), "ss-editor-presentation-"));
   try {
     const slide = path.join(fixture, "slide.ss");
@@ -129,10 +129,19 @@ entry = "slide.ss"
     const uri = mock.Uri.file(slide);
     const document = { uri, languageId: "ss-slide", version: 1 };
     mock.workspace.textDocuments.push(document);
+    const requests = [];
+    const client = {
+      async sendRequest(method) {
+        requests.push(method);
+        if (method === "ss/editorSnapshot") return editorSnapshot("s1");
+        throw new Error(`unexpected request ${method}`);
+      },
+      sendNotification() {},
+    };
     const controller = new EditorController(
       { extensionUri: mock.Uri.file(fixture) },
       { appendLine() {} },
-      () => undefined,
+      () => client,
     );
 
     await controller.presentation(document);
@@ -142,31 +151,42 @@ entry = "slide.ss"
     assert.equal(
       session.pendingPresentationStart,
       true,
-      "a presentation requested before the webview is ready should be deferred",
-    );
-    assert.equal(
-      mock.panels[0].messages.some((message) => message.type === "startPresentation"),
-      false,
-      "startPresentation was sent before the webview announced it was ready",
+      "a presentation requested before any snapshot exists should be deferred",
     );
 
     await controller.handleMessage(session, { type: "ready" });
     assert.equal(
       session.pendingPresentationStart,
-      false,
-      "startPresentation was never flushed once the webview became ready",
+      true,
+      // "ready" fires well before the first build finishes; flushing here
+      // would race an empty snapshot in the webview (the bug this guards).
+      "\"ready\" alone must not flush a pending presentation start",
     );
     assert.equal(
       mock.panels[0].messages.some((message) => message.type === "startPresentation"),
-      true,
-      "the webview never received startPresentation once ready",
+      false,
+      "startPresentation was sent before any snapshot reached the webview",
+    );
+
+    await waitFor(() => requests.includes("ss/editorSnapshot"));
+    await waitFor(() =>
+      mock.panels[0].messages.some((message) => message.type === "startPresentation")
+    );
+    assert.equal(session.pendingPresentationStart, false);
+    const messages = mock.panels[0].messages;
+    const snapshotIndex = messages.findIndex((message) => message.type === "snapshot");
+    const startIndex = messages.findIndex((message) => message.type === "startPresentation");
+    assert(snapshotIndex >= 0, "no snapshot was ever sent to the webview");
+    assert(
+      snapshotIndex < startIndex,
+      "startPresentation was sent before the snapshot that makes it safe to act on",
     );
 
     await controller.presentation(document);
     assert.equal(
       mock.panels[0].messages.filter((message) => message.type === "startPresentation").length,
       2,
-      "starting a presentation on an already-open, ready session did not send startPresentation immediately",
+      "starting a presentation on an already-open session with a snapshot did not send startPresentation immediately",
     );
     controller.dispose();
   } finally {
