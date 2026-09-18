@@ -34,7 +34,7 @@ da6fe9beb4f7f67beb75914ca8e0d48ae48d6406. Parser source ABI compatibility is che
 that runtime during `zig build`.
 
 Default highlighting is enabled for these code block language names:
-`ss`, `bash`, `sh`, `shell`, `c`, `cpp`, `c++`, `cc`, `css`, `go`, `golang`, `html`, `java`, `javascript`, `js`, `json`, `julia`, `jl`, `python`, `py`, `rust`, `rs`, `toml`, `typescript`, `ts`, `tsx`, `yaml`, `yml`, `zig`.
+`ss`, `bash`, `sh`, `shell`, `c`, `cpp`, `c++`, `cc`, `css`, `go`, `golang`, `html`, `java`, `javascript`, `js`, `json`, `julia`, `jl`, `python`, `py`, `rust`, `rs`, `scheme`, `scm`, `toml`, `typescript`, `ts`, `tsx`, `yaml`, `yml`, `zig`.
 
 | Language | Upstream | Commit |
 | --- | --- | --- |
@@ -50,6 +50,7 @@ Default highlighting is enabled for these code block language names:
 | Julia | https://github.com/tree-sitter/tree-sitter-julia | e0f9dcd180fdcfcfa8d79a3531e11d99e79321d3 |
 | Python | https://github.com/tree-sitter/tree-sitter-python | 26855eabccb19c6abf499fbc5b8dc7cc9ab8bc64 |
 | Rust | https://github.com/tree-sitter/tree-sitter-rust | 77a3747266f4d621d0757825e6b11edcbf991ca5 |
+| Scheme | https://github.com/6cdh/tree-sitter-scheme | c6cb7c7d7a04b3f5d999c28e2e9c0c31b2d50ece |
 | TOML | https://github.com/tree-sitter-grammars/tree-sitter-toml | 64b56832c2cffe41758f28e05c756a3a98d16f41 |
 | TypeScript | https://github.com/tree-sitter/tree-sitter-typescript | 75b3874edb2dc714fb1fd77a32013d0f8699989f |
 | YAML | https://github.com/tree-sitter-grammars/tree-sitter-yaml | a1c4812a73ec5e089de8e441fdea3a921e8d5079 |
