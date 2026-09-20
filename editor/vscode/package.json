@@ -30,6 +30,7 @@
     "onLanguage:ss-slide",
     "onCommand:ss.editor.open",
     "onCommand:ss.editor.build",
+    "onCommand:ss.editor.presentation",
     "onCommand:ss.checkCurrentFile"
   ],
   "categories": [
@@ -78,6 +79,11 @@
         "title": "ss: Build WYSIWYG Preview"
       },
       {
+        "command": "ss.editor.presentation",
+        "title": "ss: Start Presentation",
+        "icon": "$(play)"
+      },
+      {
         "command": "ss.checkCurrentFile",
         "title": "ss: Check Current File"
       }
@@ -87,7 +93,12 @@
         {
           "command": "ss.editor.open",
           "when": "resourceLangId == ss-slide",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "ss.editor.presentation",
+          "when": "resourceLangId == ss-slide",
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [
@@ -96,6 +107,9 @@
         },
         {
           "command": "ss.editor.build"
+        },
+        {
+          "command": "ss.editor.presentation"
         },
         {
           "command": "ss.checkCurrentFile"

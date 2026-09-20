@@ -78,6 +78,7 @@ await testComponentWidthEditReachesTheWebview();
 await testComponentDeletionReachesTheWebview();
 await testIconCatalogAndInsertionReachTheWebview();
 await testResourceAcknowledgementsReachTheServer();
+await testPresentationDefersUntilFirstSnapshot();
 setProjectSettingsProvider(undefined);
 
 async function testOpenResolvesConfiguredEntryWithoutSsDocument() {
@@ -108,6 +109,85 @@ entry = "deck/slides.ss"
     assert.deepEqual(mock.warnings, []);
     assert.equal(mock.panels.length, 1);
     assert.match(mock.panels[0].title, /slides\.ss$/);
+    controller.dispose();
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+}
+
+async function testPresentationDefersUntilFirstSnapshot() {
+  const fixture = await mkdtemp(path.join(os.tmpdir(), "ss-editor-presentation-"));
+  try {
+    const slide = path.join(fixture, "slide.ss");
+    await writeFile(path.join(fixture, "ss.toml"), `[project]
+entry = "slide.ss"
+`, "utf8");
+    await writeFile(slide, "page demo\nend\n", "utf8");
+
+    mock.reset();
+    configureSettings(slide);
+    const uri = mock.Uri.file(slide);
+    const document = { uri, languageId: "ss-slide", version: 1 };
+    mock.workspace.textDocuments.push(document);
+    const requests = [];
+    const client = {
+      async sendRequest(method) {
+        requests.push(method);
+        if (method === "ss/editorSnapshot") return editorSnapshot("s1");
+        throw new Error(`unexpected request ${method}`);
+      },
+      sendNotification() {},
+    };
+    const controller = new EditorController(
+      { extensionUri: mock.Uri.file(fixture) },
+      { appendLine() {} },
+      () => client,
+    );
+
+    await controller.presentation(document);
+    assert.equal(mock.panels.length, 1, "starting a presentation did not open a webview panel");
+    const session = controller.sessions.get(uri.toString());
+    assert(session, "starting a presentation did not create a session");
+    assert.equal(
+      session.pendingPresentationStart,
+      true,
+      "a presentation requested before any snapshot exists should be deferred",
+    );
+
+    await controller.handleMessage(session, { type: "ready" });
+    assert.equal(
+      session.pendingPresentationStart,
+      true,
+      // "ready" fires well before the first build finishes; flushing here
+      // would race an empty snapshot in the webview (the bug this guards).
+      "\"ready\" alone must not flush a pending presentation start",
+    );
+    assert.equal(
+      mock.panels[0].messages.some((message) => message.type === "startPresentation"),
+      false,
+      "startPresentation was sent before any snapshot reached the webview",
+    );
+
+    await waitFor(() => requests.includes("ss/editorSnapshot"));
+    await waitFor(() =>
+      mock.panels[0].messages.some((message) => message.type === "startPresentation")
+    );
+    assert.equal(session.pendingPresentationStart, false);
+    const messages = mock.panels[0].messages;
+    const snapshotIndex = messages.findIndex((message) => message.type === "snapshot");
+    const startIndex = messages.findIndex((message) => message.type === "startPresentation");
+    assert(snapshotIndex >= 0, "no snapshot was ever sent to the webview");
+    assert(
+      snapshotIndex < startIndex,
+      "startPresentation was sent before the snapshot that makes it safe to act on",
+    );
+
+    await controller.presentation(document);
+    assert.equal(
+      mock.panels[0].messages.filter((message) => message.type === "startPresentation").length,
+      2,
+      "starting a presentation on an already-open session with a snapshot did not send startPresentation immediately",
+    );
     controller.dispose();
   } finally {
     await rm(fixture, { recursive: true, force: true });
@@ -1079,12 +1159,16 @@ function vscodeMock() {
       const panel = {
         title,
         active: true,
+        messages: [],
         webview: {
           options: {},
           cspSource: "test-webview",
           html: "",
           asWebviewUri: (value) => value,
-          postMessage: async () => true,
+          postMessage: async (message) => {
+            panel.messages.push(message);
+            return true;
+          },
           onDidReceiveMessage: () => disposable(),
         },
         onDidDispose: (listener) => {

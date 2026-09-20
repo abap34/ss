@@ -282,6 +282,9 @@ export type HostMessage =
     status: BuildStatus;
   }
   | {
+    type: "startPresentation";
+  }
+  | {
     type: "error";
     revision: number;
     buildDurationMs: number;

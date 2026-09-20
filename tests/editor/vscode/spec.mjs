@@ -16,6 +16,7 @@ testHorizontalConstraintGeometry();
 testVerticalConstraintGeometry();
 await testCompletionDefaults();
 await testManualBuildCommand();
+await testPresentationCommand();
 await testLineCommentSyntax();
 await testCompositionOperatorSyntax();
 await testBlockStringSyntax();
@@ -154,6 +155,33 @@ async function testManualBuildCommand() {
   assert(
     keybindings.some((item) => item.when === "activeWebviewPanelId == ss.wysiwyg"),
     "manual build shortcut is unavailable in the WYSIWYG editor",
+  );
+}
+
+async function testPresentationCommand() {
+  const manifest = JSON.parse(
+    await readFile(path.join(root, "editor", "vscode", "package.json"), "utf8"),
+  );
+  const command = manifest.contributes?.commands?.find(
+    (item) => item.command === "ss.editor.presentation",
+  );
+  assert(command?.title === "ss: Start Presentation", "presentation command is missing");
+  assert(
+    manifest.activationEvents?.includes("onCommand:ss.editor.presentation"),
+    "presentation command does not activate the extension",
+  );
+  const menu = manifest.contributes?.menus?.["editor/title"]?.find(
+    (item) => item.command === "ss.editor.presentation",
+  );
+  assert(
+    menu?.when === "resourceLangId == ss-slide",
+    "presentation button is missing from the editor title bar",
+  );
+  assert(
+    manifest.contributes?.menus?.commandPalette?.some(
+      (item) => item.command === "ss.editor.presentation",
+    ),
+    "presentation command is missing from the command palette",
   );
 }
 
