@@ -67,8 +67,11 @@
 .presentation-controls {
   position: fixed;
   z-index: 100001;
-  left: 18px;
+  left: 50%;
   bottom: 18px;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100vw - 20px);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -190,7 +193,6 @@
 }
 @media (max-width: 520px) {
   .presentation-controls {
-    left: 10px;
     bottom: 10px;
   }
   .presentation-counter {

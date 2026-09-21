@@ -11,6 +11,9 @@ const scrollGestureIdleMs = 220;
 const navigationCooldownMs = 450;
 const fitMarginRatio = 0.02;
 const defaultPenColor = "#ff3b30";
+const controlsIntroHoldMs = 2000;
+const controlsIntroFadeMs = 800;
+const controlsIntroDurationMs = controlsIntroHoldMs + controlsIntroFadeMs;
 
 export function createPresentationState() {
   return { active: false, pageId: null, tool: "none", penColor: defaultPenColor, strokes: new Map() };
@@ -36,7 +39,12 @@ export class PresentationController {
     this.inkSvg = null;
     this.laserDot = null;
     this.controlsVisible = false;
+    this.controlsIntroElapsed = controlsIntroDurationMs;
+    this.controlsIntroAnimation = null;
+    this.controlsIntroFrame = null;
+    this.controlsBar = null;
     this.focusedControlKind = null;
+    this.syncControlsIntroduction = this.syncControlsIntroduction.bind(this);
     this.handleKeydown = this.handleKeydown.bind(this);
     this.handleResize = this.handleResize.bind(this);
     this.handleWheel = this.handleWheel.bind(this);
@@ -46,11 +54,19 @@ export class PresentationController {
     this.handleContextMenu = this.handleContextMenu.bind(this);
     window.addEventListener("keydown", this.handleKeydown);
     window.addEventListener("resize", this.handleResize);
+    window.addEventListener("focus", this.syncControlsIntroduction);
+    window.addEventListener("blur", this.syncControlsIntroduction);
+    document.addEventListener("visibilitychange", this.syncControlsIntroduction);
   }
 
   dispose() {
     window.removeEventListener("keydown", this.handleKeydown);
     window.removeEventListener("resize", this.handleResize);
+    window.removeEventListener("focus", this.syncControlsIntroduction);
+    window.removeEventListener("blur", this.syncControlsIntroduction);
+    document.removeEventListener("visibilitychange", this.syncControlsIntroduction);
+    this.stopControlsIntroduction();
+    this.controlsBar = null;
     this.cleanupGestures();
   }
 
@@ -63,6 +79,10 @@ export class PresentationController {
     this.state.active = true;
     this.state.pageId = resolved;
     this.state.tool = "none";
+    this.controlsVisible = false;
+    this.focusedControlKind = null;
+    this.stopControlsIntroduction();
+    this.controlsIntroElapsed = 0;
     this.resetView();
     this.actions.render();
   }
@@ -72,6 +92,8 @@ export class PresentationController {
     this.state.active = false;
     this.state.tool = "none";
     this.state.strokes = new Map();
+    this.stopControlsIntroduction();
+    this.controlsBar = null;
     this.cleanupGestures();
     this.actions.render();
     this.actions.onExit?.();
@@ -143,6 +165,7 @@ export class PresentationController {
   }
 
   render() {
+    this.stopControlsIntroduction();
     this.cleanupGestures();
     const overlay = element("div", "presentation-overlay");
     const pages = this.actions.getPages();
@@ -217,8 +240,15 @@ export class PresentationController {
     bar.classList.toggle("is-visible", this.controlsVisible);
     bar.setAttribute("role", "toolbar");
     bar.setAttribute("aria-label", "Presentation controls");
+    this.controlsBar = bar;
+    this.startControlsIntroduction();
     const syncVisible = () => {
+      if (bar !== this.controlsBar) return;
       this.controlsVisible = bar.matches(":hover") || bar.contains(document.activeElement);
+      if (this.controlsVisible) {
+        this.stopControlsIntroduction();
+        this.controlsIntroElapsed = controlsIntroDurationMs;
+      }
       bar.classList.toggle("is-visible", this.controlsVisible);
     };
     bar.addEventListener("pointerenter", syncVisible);
@@ -260,7 +290,69 @@ export class PresentationController {
       bar.append(this.controlButton("fullscreen", "Toggle full screen", this.actions.toggleFullscreen));
     }
     bar.append(exit);
+    requestAnimationFrame(() => {
+      if (bar.isConnected) syncVisible();
+    });
     return bar;
+  }
+
+  startControlsIntroduction() {
+    if (!this.controlsBar || this.controlsIntroElapsed >= controlsIntroDurationMs) return;
+    const animation = this.controlsBar.animate([
+      { opacity: 1 },
+      { opacity: 1, offset: controlsIntroHoldMs / controlsIntroDurationMs, easing: "ease-out" },
+      { opacity: 0 },
+    ], { duration: controlsIntroDurationMs, fill: "both" });
+    animation.pause();
+    animation.currentTime = this.controlsIntroElapsed;
+    this.controlsIntroAnimation = animation;
+    animation.onfinish = () => this.stopControlsIntroduction();
+    this.syncControlsIntroduction();
+  }
+
+  revealControls() {
+    if (this.controlsVisible) return;
+    this.controlsIntroElapsed = 0;
+    if (this.controlsIntroAnimation) {
+      this.controlsIntroAnimation.currentTime = 0;
+      this.syncControlsIntroduction();
+    } else {
+      this.startControlsIntroduction();
+    }
+  }
+
+  syncControlsIntroduction() {
+    cancelAnimationFrame(this.controlsIntroFrame);
+    this.controlsIntroFrame = null;
+    const animation = this.controlsIntroAnimation;
+    if (!animation) return;
+    animation.pause();
+    if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+    // Give the connected controls a paint before consuming their visible time.
+    // A CLI-opened browser can load while its window is still in the background.
+    this.controlsIntroFrame = requestAnimationFrame(() => {
+      const bar = this.controlsBar;
+      if (!bar?.isConnected || getComputedStyle(bar).visibility !== "visible") {
+        this.syncControlsIntroduction();
+        return;
+      }
+      this.controlsIntroFrame = requestAnimationFrame(() => {
+        this.controlsIntroFrame = null;
+        animation.play();
+      });
+    });
+  }
+
+  stopControlsIntroduction() {
+    cancelAnimationFrame(this.controlsIntroFrame);
+    this.controlsIntroFrame = null;
+    const animation = this.controlsIntroAnimation;
+    if (!animation) return;
+    // Preserve progress when navigation rebuilds the overlay.
+    this.controlsIntroElapsed = Math.min(Number(animation.currentTime ?? 0), controlsIntroDurationMs);
+    animation.onfinish = null;
+    animation.cancel();
+    this.controlsIntroAnimation = null;
   }
 
   controlButton(kind, label, handler) {
@@ -405,6 +497,7 @@ export class PresentationController {
 
   handlePointerMove(event) {
     if (!this.state.active) return;
+    if (event.pointerType !== "touch") this.revealControls();
     if (event.pointerType === "touch" && this.touches.has(event.pointerId)) {
       this.touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
       this.updateTouchPan();

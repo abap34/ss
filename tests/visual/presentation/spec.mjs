@@ -69,6 +69,15 @@ await cp(path.join(output, "asset.pdf"), path.join(output, "media/editor/asset.p
 await withBrowser(output, async (browser, baseUrl) => {
   for (const host of ["standalone", "vscode"]) {
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    // A CLI-opened browser window can finish loading before it gains focus.
+    await page.addInitScript(() => {
+      let focused = false;
+      Object.defineProperty(document, "hasFocus", { configurable: true, value: () => focused });
+      globalThis.__focusPresenter = () => {
+        focused = true;
+        window.dispatchEvent(new Event("focus"));
+      };
+    });
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (message) => {
@@ -89,6 +98,7 @@ await withBrowser(output, async (browser, baseUrl) => {
         await page.evaluate(() => window.postMessage({ type: "startPresentation" }, "*"));
       }
       await page.waitForSelector(".presentation-overlay", { timeout: 5000 });
+      await exerciseControlsIntroduction(page, host, output);
       const counter = page.locator(".presentation-counter");
       assert.equal(await counter.textContent(), "1 / 2");
       await page.keyboard.press("ArrowRight");
@@ -141,6 +151,7 @@ await withBrowser(output, async (browser, baseUrl) => {
         assert.equal(await page.locator(".ss-document > .ss-page").count(), 2);
         await page.keyboard.press("p");
         assert.equal(await counter.textContent(), "2 / 2");
+        assert.equal(await controlsOpacity(page), 1, "restarting must show the controls again");
       }
       assert.deepEqual(errors, [], `${host}: browser errors`);
     } finally {
@@ -149,3 +160,35 @@ await withBrowser(output, async (browser, baseUrl) => {
   }
 });
 console.log("Presentation CLI and shared browser controls passed in standalone HTML and VS Code");
+
+async function controlsOpacity(page) {
+  return page.locator(".presentation-controls").evaluate((bar) => Number(getComputedStyle(bar).opacity));
+}
+
+async function exerciseControlsIntroduction(page, host, output) {
+  const bar = page.locator(".presentation-controls");
+  // Wait past the entire introduction while the browser is not yet focused.
+  await page.waitForTimeout(3100);
+  await page.evaluate(() => globalThis.__focusPresenter());
+  assert.equal(await controlsOpacity(page), 1, `${host}: controls faded before the window gained focus`);
+  const bounds = await bar.boundingBox();
+  assert(Math.abs(bounds.x + bounds.width / 2 - 600) < 1, `${host}: controls are not horizontally centered`);
+  assert(Math.abs(bounds.y + bounds.height - 782) < 1, `${host}: controls are not at the bottom`);
+  await page.screenshot({ path: path.join(output, `${host}-controls-intro.png`) });
+  // Rebuilding the overlay must keep the original introduction's progress.
+  await page.waitForTimeout(700);
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await controlsOpacity(page), 1, `${host}: navigation hid the controls during the introduction`);
+  await page.waitForFunction(() => {
+    const opacity = Number(getComputedStyle(document.querySelector(".presentation-controls")).opacity);
+    return opacity > 0 && opacity < 1;
+  }, null, { timeout: 2500 });
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".presentation-controls")).opacity === "0", null, { timeout: 1500 });
+  await page.keyboard.press("Home");
+  assert.equal(await controlsOpacity(page), 0, `${host}: navigation restarted the introduction`);
+  await page.mouse.move(100, 100);
+  assert.equal(await controlsOpacity(page), 1, `${host}: moving the pointer did not reveal the controls`);
+  await bar.hover();
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".presentation-controls")).opacity === "1");
+  await page.mouse.move(10, 10);
+}
