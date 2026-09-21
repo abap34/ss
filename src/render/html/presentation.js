@@ -1,4 +1,4 @@
-import { element, svgElement, svgPoint } from "@ss/dom";
+import { element, setAttributes, svgElement, svgPoint } from "@ss/dom";
 
 const minimumScale = 1;
 const maximumScale = 6;
@@ -361,7 +361,7 @@ export class PresentationController {
     button.title = label;
     button.setAttribute("aria-label", label);
     button.dataset.controlKind = kind;
-    button.append(element("span", `presentation-icon presentation-icon--${kind}`));
+    button.append(kind === "clear" ? clearInkIcon() : element("span", `presentation-icon presentation-icon--${kind}`));
     button.addEventListener("click", handler);
     return button;
   }
@@ -656,6 +656,19 @@ export class PresentationController {
     this.laserDot.style.left = `${event.clientX}px`;
     this.laserDot.style.top = `${event.clientY}px`;
   }
+}
+
+function clearInkIcon() {
+  const icon = svgElement("svg", "presentation-icon presentation-icon--clear");
+  setAttributes(icon, {
+    viewBox: "0 0 24 24",
+    "aria-hidden": "true",
+    focusable: "false",
+  });
+  const path = svgElement("path");
+  path.setAttribute("d", "M13 4 3 14Q2 15 3 16L7 20H11L21 10Q22 9 21 8L17 4Q15 2 13 4ZM8 9l7 7M11 20H21");
+  icon.append(path);
+  return icon;
 }
 
 function findPage(pages, pageId) {
