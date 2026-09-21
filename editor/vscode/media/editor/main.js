@@ -10,12 +10,13 @@ import {
   applyDisplayTranslationPatch,
   composeDisplayTranslations,
   disposePages,
+  renderPage,
 } from "./document.js";
 import { defaultIconDraft, IconController } from "./icon-insertion.js";
 import { EditorNavigation } from "./navigation.js";
 import { ObjectLockController } from "./object-locks.js";
 import { disposePdfItems, disposePdfRuntime } from "./pdf.js";
-import { PresentationController } from "./presentation.js";
+import { PresentationController, createPresentationState } from "../../out/render/presentation.js";
 import {
   reconcileSidebarSnapshot,
   renderActivityRail,
@@ -52,13 +53,7 @@ const state = {
   iconCatalogPending: false,
   iconCatalogError: null,
   iconDraft: structuredClone(defaultIconDraft),
-  presentation: {
-    active: false,
-    pageId: null,
-    tool: "none",
-    penColor: "#ff3b30",
-    strokes: new Map(),
-  },
+  presentation: createPresentationState(),
   theme: persistedState.theme === "light" || persistedState.theme === "dark"
     ? persistedState.theme
     : initialTheme(),
@@ -107,7 +102,11 @@ const objectLocks = new ObjectLockController(state, {
   persist: (value) => persistWebviewState({ objectLocks: value }),
   render,
 }, persistedState.objectLocks);
-const presentation = new PresentationController(state, { render });
+const presentation = new PresentationController(state.presentation, {
+  render,
+  getPages: () => state.snapshot?.layout.pages || [],
+  renderPage: (id) => renderPage(state.snapshot, id),
+});
 const actions = {
   render,
   revealSource,

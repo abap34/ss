@@ -135,13 +135,17 @@ pub const WriteFailure = struct {
     }
 };
 
+pub const WriteOptions = struct {
+    start_presentation: bool = false,
+};
+
 pub fn write(
     allocator: std.mem.Allocator,
     io: std.Io,
     ir: *const render.Ir,
     output_path: []const u8,
 ) !void {
-    return writeWithFailure(allocator, io, ir, output_path, null);
+    return writeWithFailure(allocator, io, ir, output_path, .{}, null);
 }
 
 pub fn writeWithFailure(
@@ -149,6 +153,7 @@ pub fn writeWithFailure(
     io: std.Io,
     ir: *const render.Ir,
     output_path: []const u8,
+    options: WriteOptions,
     failure: ?*WriteFailure,
 ) !void {
     ir.validate() catch |err| {
@@ -182,6 +187,9 @@ pub fn writeWithFailure(
         .navigation_module = embedded_runtime.navigation_module,
         .text_module = embedded_runtime.text_module,
         .pdf = pdf,
+        .presentation_module = embedded_runtime.presentation_module,
+        .start_presentation = options.start_presentation,
+        .import_map = if (pdf) |value| value.import_map else embedded_runtime.presentation_import_map,
     };
 
     const cwd = std.Io.Dir.cwd();

@@ -40,7 +40,19 @@ await esbuild.build({
     },
   }],
 });
-await cp(path.join(repository, "src/render/html/text.js"), path.join(output, "out/render/text.js"));
+await esbuild.build({
+  entryPoints: [path.join(repository, "src/render/html/presentation.js")],
+  bundle: true,
+  outfile: path.join(output, "out/render/presentation.js"),
+  format: "esm",
+  platform: "browser",
+  plugins: [{ name: "ss-dom", setup(build) {
+    build.onResolve({ filter: /^@ss\/dom$/ }, () => ({ path: path.join(repository, "src/render/html/dom.js") }));
+  } }],
+});
+for (const name of ["text.js", "dom.js", "presentation.css"]) {
+  await cp(path.join(repository, "src/render/html", name), path.join(output, "out/render", name));
+}
 await cp(path.join(repository, "third_party/pdfjs/pdf.mjs"), path.join(output, "out/pdfjs/pdf.mjs"));
 await cp(path.join(repository, "third_party/pdfjs/pdf.worker.mjs"), path.join(output, "out/pdfjs/pdf.worker.mjs"));
 await writeFile(path.join(output, "asset.pdf"), pdfAsset());

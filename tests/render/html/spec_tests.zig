@@ -152,7 +152,7 @@ test "HTML renderer leaves a directory destination intact" {
     try addDocumentSemantics(&ir);
 
     var failure = html.WriteFailure{};
-    try testing.expectError(error.OutputPathNotFile, html.writeWithFailure(testing.allocator, testing.io, &ir, output, &failure));
+    try testing.expectError(error.OutputPathNotFile, html.writeWithFailure(testing.allocator, testing.io, &ir, output, .{}, &failure));
     try testing.expectEqual(html.WriteFailureKind.output, failure.kind);
     try testing.expectEqual(error.OutputPathNotFile, failure.cause.?);
     var directory = try std.Io.Dir.cwd().openDir(testing.io, output, .{});
@@ -172,7 +172,7 @@ test "HTML renderer reports a non-directory output path component" {
     try addDocumentSemantics(&ir);
 
     var failure = html.WriteFailure{};
-    try testing.expectError(error.NotDir, html.writeWithFailure(testing.allocator, testing.io, &ir, output, &failure));
+    try testing.expectError(error.NotDir, html.writeWithFailure(testing.allocator, testing.io, &ir, output, .{}, &failure));
     try testing.expectEqual(html.WriteFailureKind.output, failure.kind);
     try testing.expectEqualStrings("create HTML output file", failure.operation);
     try testing.expectEqual(error.NotDir, failure.cause.?);
@@ -187,7 +187,7 @@ test "HTML renderer distinguishes input materialization from output writes" {
     var ir = render.Ir{ .pages = pages };
     defer ir.deinit(testing.allocator);
     var failure = html.WriteFailure{};
-    html.writeWithFailure(testing.allocator, testing.io, &ir, output, &failure) catch |err| {
+    html.writeWithFailure(testing.allocator, testing.io, &ir, output, .{}, &failure) catch |err| {
         try testing.expectEqual(html.WriteFailureKind.materialization, failure.kind);
         try testing.expectEqualStrings("validate HTML render input", failure.operation);
         try testing.expectEqual(err, failure.cause.?);

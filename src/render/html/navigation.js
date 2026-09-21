@@ -1,4 +1,4 @@
-export function start(root) {
+export function start(root, presentation = null) {
   const pages = [...root.querySelectorAll(".ss-document > .ss-page")];
   const documentElement = root.documentElement ?? root.ownerDocument?.documentElement;
   if (pages.length === 0) {
@@ -12,6 +12,42 @@ export function start(root) {
     };
   }
 
+  const container = root.querySelector(".ss-document");
+  const presentationState = presentation?.createPresentationState();
+  const presentationRoot = root.createElement("div");
+  root.body.append(presentationRoot);
+  const restorePages = () => container.append(...pages);
+  const renderPresentation = () => {
+    restorePages();
+    presentationRoot.replaceChildren();
+    if (presentationState.active) presentationRoot.append(presenter.render());
+    else fit();
+  };
+  const presenter = presentation ? new presentation.PresentationController(presentationState, {
+    getPages: () => pages.map((page, index) => ({
+      id: index, width: parseFloat(page.style.width), height: parseFloat(page.style.height),
+    })),
+    renderPage: (index) => {
+      const content = root.createElement("div");
+      content.append(pages[index]);
+      return content;
+    },
+    render: renderPresentation,
+    onPageChange: (index) => {
+      activate(index);
+      history.replaceState(null, "", `#${index + 1}`);
+    },
+    onExit: () => {
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    },
+    toggleFullscreen: () => {
+      const result = document.fullscreenElement
+        ? document.exitFullscreen() : document.documentElement.requestFullscreen?.();
+      void result?.catch(() => {});
+    },
+  }) : null;
+  let startPresentation = documentElement?.hasAttribute("data-ss-present") ||
+    new URLSearchParams(location.search).get("present") === "1";
   let activeIndex = 0;
   let printHandler = null;
   let printPreparation = null;
@@ -53,7 +89,10 @@ export function start(root) {
     return 0;
   };
 
-  const updateFromHash = () => activate(pageIndexFromHash());
+  const updateFromHash = () => {
+    activate(pageIndexFromHash());
+    if (presentationState?.active) presenter.goToIndex(activeIndex);
+  };
 
   const move = (offset) => {
     const next = Math.min(Math.max(activeIndex + offset, 0), pages.length - 1);
@@ -70,7 +109,12 @@ export function start(root) {
       printHandler();
       return;
     }
-    if (event.ctrlKey || event.metaKey) return;
+    if (event.ctrlKey || event.metaKey || presentationState?.active) return;
+    if (event.key.toLowerCase() === "p" && presenter) {
+      event.preventDefault();
+      presenter.start(activeIndex);
+      return;
+    }
     if (event.key === "ArrowRight" || event.key === "ArrowDown") {
       event.preventDefault();
       move(1);
@@ -84,14 +128,26 @@ export function start(root) {
   window.addEventListener("resize", fit);
   window.visualViewport?.addEventListener("resize", fit);
   window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("beforeprint", restorePages);
+  window.addEventListener("afterprint", () => {
+    if (presentationState?.active) renderPresentation();
+  });
+  window.addEventListener("beforeunload", () => presenter?.dispose(), { once: true });
   root.fonts?.ready.then(fit);
   updateFromHash();
 
   return {
-    refresh: fit,
+    refresh() {
+      fit();
+      if (startPresentation && presenter) {
+        startPresentation = false;
+        presenter.start(activeIndex);
+      }
+    },
     async prepareForPrint(renderAll) {
       if (printPrepared) return;
       if (!printPreparation) {
+        restorePages();
         documentElement?.setAttribute("data-ss-print-layout", "true");
         printPreparation = (async () => {
           await nextFrame();
@@ -104,6 +160,7 @@ export function start(root) {
         await printPreparation;
       } catch (error) {
         documentElement?.removeAttribute("data-ss-print-layout");
+        if (presentationState?.active) renderPresentation();
         fit();
         throw error;
       } finally {
@@ -113,6 +170,7 @@ export function start(root) {
     finishPrint() {
       printPrepared = false;
       documentElement?.removeAttribute("data-ss-print-layout");
+      if (presentationState?.active) renderPresentation();
       fit();
     },
     setPrintHandler(handler) {

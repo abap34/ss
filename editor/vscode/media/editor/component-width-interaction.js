@@ -1,5 +1,5 @@
-import { setRect } from "./dom.js";
-import { clampPoint, svgPoint } from "./geometry.js";
+import { setRect, svgPoint } from "./dom.js";
+import { clampPoint } from "./geometry.js";
 import { componentWidthPolicy } from "./component-width.js";
 import {
   createResizeHandle,

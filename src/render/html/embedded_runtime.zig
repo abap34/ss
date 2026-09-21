@@ -7,3 +7,6 @@ pub const pdf_import_map = generated.pdf_import_map;
 pub const pdf_renderer_module = generated.pdf_renderer_module;
 pub const pdfjs_module = generated.pdfjs_module;
 pub const pdf_worker_module = generated.pdf_worker_module;
+
+pub const presentation_module = generated.presentation_module;
+pub const presentation_import_map = generated.presentation_import_map;

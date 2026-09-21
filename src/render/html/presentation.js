@@ -1,6 +1,4 @@
-import { element, svgElement } from "./dom.js";
-import { svgPoint } from "./geometry.js";
-import { renderPage } from "./document.js";
+import { element, svgElement, svgPoint } from "@ss/dom";
 
 const minimumScale = 1;
 const maximumScale = 6;
@@ -14,6 +12,12 @@ const navigationCooldownMs = 450;
 const fitMarginRatio = 0.02;
 const defaultPenColor = "#ff3b30";
 
+export function createPresentationState() {
+  return { active: false, pageId: null, tool: "none", penColor: defaultPenColor, strokes: new Map() };
+}
+
+// The host supplies page geometry and DOM content; no editor or transport state
+// crosses this boundary. Dimensions are in points, matching the rendering IR.
 export class PresentationController {
   constructor(state, actions) {
     this.state = state;
@@ -44,26 +48,33 @@ export class PresentationController {
     window.addEventListener("resize", this.handleResize);
   }
 
+  dispose() {
+    window.removeEventListener("keydown", this.handleKeydown);
+    window.removeEventListener("resize", this.handleResize);
+    this.cleanupGestures();
+  }
+
   start(pageId = null) {
-    const pages = this.state.snapshot?.layout.pages || [];
+    const pages = this.actions.getPages();
     if (pages.length === 0) return;
     const resolved = pageId != null && pages.some((page) => page.id === pageId)
       ? pageId
       : pages[0].id;
-    this.state.presentation.active = true;
-    this.state.presentation.pageId = resolved;
-    this.state.presentation.tool = "none";
+    this.state.active = true;
+    this.state.pageId = resolved;
+    this.state.tool = "none";
     this.resetView();
     this.actions.render();
   }
 
   exit() {
-    if (!this.state.presentation.active) return;
-    this.state.presentation.active = false;
-    this.state.presentation.tool = "none";
-    this.state.presentation.strokes = new Map();
+    if (!this.state.active) return;
+    this.state.active = false;
+    this.state.tool = "none";
+    this.state.strokes = new Map();
     this.cleanupGestures();
     this.actions.render();
+    this.actions.onExit?.();
   }
 
   next() {
@@ -75,9 +86,9 @@ export class PresentationController {
   }
 
   step(offset) {
-    if (!this.state.presentation.active) return;
-    const pages = this.state.snapshot?.layout.pages || [];
-    const index = pageIndex(pages, this.state.presentation.pageId);
+    if (!this.state.active) return;
+    const pages = this.actions.getPages();
+    const index = pageIndex(pages, this.state.pageId);
     if (index < 0) return;
     const next = index + offset;
     if (next < 0 || next >= pages.length) return;
@@ -87,40 +98,41 @@ export class PresentationController {
   // A negative index (as passed by the "End" key handler) means "last page";
   // step() above clamps its own range and never forwards a negative index.
   goToIndex(index) {
-    const pages = this.state.snapshot?.layout.pages || [];
+    const pages = this.actions.getPages();
     if (pages.length === 0) return;
     const resolvedIndex = index < 0
       ? pages.length - 1
       : Math.min(pages.length - 1, index);
     const page = pages[resolvedIndex];
-    if (!page || page.id === this.state.presentation.pageId) return;
-    this.state.presentation.pageId = page.id;
+    if (!page || page.id === this.state.pageId) return;
+    this.state.pageId = page.id;
+    this.actions.onPageChange?.(page.id);
     this.resetView();
     this.actions.render();
   }
 
   setTool(tool) {
-    if (!this.state.presentation.active) return;
+    if (!this.state.active) return;
     this.cancelStroke();
-    this.state.presentation.tool = this.state.presentation.tool === tool
+    this.state.tool = this.state.tool === tool
       ? "none"
       : tool;
     this.actions.render();
   }
 
   clearInk() {
-    const pageId = this.state.presentation.pageId;
+    const pageId = this.state.pageId;
     if (pageId == null) return;
-    this.state.presentation.strokes.delete(pageId);
+    this.state.strokes.delete(pageId);
     this.actions.render();
   }
 
   undoStroke() {
-    const pageId = this.state.presentation.pageId;
-    const list = this.state.presentation.strokes.get(pageId);
+    const pageId = this.state.pageId;
+    const list = this.state.strokes.get(pageId);
     if (!list || list.length === 0) return;
     list.pop();
-    if (list.length === 0) this.state.presentation.strokes.delete(pageId);
+    if (list.length === 0) this.state.strokes.delete(pageId);
     this.actions.render();
   }
 
@@ -133,17 +145,17 @@ export class PresentationController {
   render() {
     this.cleanupGestures();
     const overlay = element("div", "presentation-overlay");
-    const pages = this.state.snapshot?.layout.pages || [];
-    const page = findPage(pages, this.state.presentation.pageId) || pages[0] || null;
+    const pages = this.actions.getPages();
+    const page = findPage(pages, this.state.pageId) || pages[0] || null;
     const stage = element("div", "presentation-stage");
     stage.tabIndex = -1;
     stage.classList.toggle(
       "presentation-stage--laser",
-      this.state.presentation.tool === "laser",
+      this.state.tool === "laser",
     );
     stage.classList.toggle(
       "presentation-stage--pen",
-      this.state.presentation.tool === "pen",
+      this.state.tool === "pen",
     );
     stage.addEventListener("wheel", this.handleWheel, { passive: false });
     stage.addEventListener("pointerdown", this.handlePointerDown);
@@ -159,10 +171,12 @@ export class PresentationController {
       this.fit = fitDimensions(page, viewportSize());
       const pageBox = element("div", "presentation-page");
       const surface = element("div", "presentation-page-surface");
-      surface.append(renderPage(this.state.snapshot, page.id));
+      const content = element("div", "presentation-content");
+      content.append(this.actions.renderPage(page.id));
+      surface.append(content);
       const ink = svgElement("svg", "presentation-ink-layer");
       ink.setAttribute("viewBox", `0 0 ${page.width} ${page.height}`);
-      for (const stroke of this.state.presentation.strokes.get(page.id) || []) {
+      for (const stroke of this.state.strokes.get(page.id) || []) {
         ink.append(this.strokeElement(stroke));
       }
       surface.append(ink);
@@ -225,14 +239,14 @@ export class PresentationController {
     next.disabled = index < 0 || index >= pages.length - 1;
 
     const laser = this.controlButton("laser", "Laser pointer", () => this.setTool("laser"));
-    laser.setAttribute("aria-pressed", String(this.state.presentation.tool === "laser"));
-    laser.classList.toggle("is-active", this.state.presentation.tool === "laser");
+    laser.setAttribute("aria-pressed", String(this.state.tool === "laser"));
+    laser.classList.toggle("is-active", this.state.tool === "laser");
 
     const pen = this.controlButton("pen", "Pen", () => this.setTool("pen"));
-    pen.setAttribute("aria-pressed", String(this.state.presentation.tool === "pen"));
-    pen.classList.toggle("is-active", this.state.presentation.tool === "pen");
+    pen.setAttribute("aria-pressed", String(this.state.tool === "pen"));
+    pen.classList.toggle("is-active", this.state.tool === "pen");
 
-    const hasInk = Boolean(page && this.state.presentation.strokes.get(page.id)?.length);
+    const hasInk = Boolean(page && this.state.strokes.get(page.id)?.length);
     const clear = this.controlButton("clear", "Clear ink on this slide", () => this.clearInk());
     clear.disabled = !hasInk;
 
@@ -241,7 +255,11 @@ export class PresentationController {
 
     const exit = this.controlButton("exit", "Exit presentation", () => this.exit());
 
-    bar.append(previous, next, laser, pen, clear, counter, exit);
+    bar.append(previous, next, laser, pen, clear, counter);
+    if (this.actions.toggleFullscreen) {
+      bar.append(this.controlButton("fullscreen", "Toggle full screen", this.actions.toggleFullscreen));
+    }
+    bar.append(exit);
     return bar;
   }
 
@@ -258,7 +276,7 @@ export class PresentationController {
 
   strokeElement(points) {
     const polyline = svgElement("polyline", "presentation-ink-stroke");
-    polyline.style.stroke = this.state.presentation.penColor || defaultPenColor;
+    polyline.style.stroke = this.state.penColor || defaultPenColor;
     polyline.setAttribute("points", pointsAttribute(points));
     return polyline;
   }
@@ -271,16 +289,16 @@ export class PresentationController {
   }
 
   handleResize() {
-    if (!this.state.presentation.active || !this.pageEl) return;
-    const pages = this.state.snapshot?.layout.pages || [];
-    const page = findPage(pages, this.state.presentation.pageId);
+    if (!this.state.active || !this.pageEl) return;
+    const pages = this.actions.getPages();
+    const page = findPage(pages, this.state.pageId);
     if (!page) return;
     this.fit = fitDimensions(page, viewportSize());
     this.applyTransform();
   }
 
   handleKeydown(event) {
-    if (!this.state.presentation.active) return;
+    if (!this.state.active || event.defaultPrevented) return;
     if (
       (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey &&
       event.key.toLowerCase() === "z"
@@ -289,7 +307,15 @@ export class PresentationController {
       this.undoStroke();
       return;
     }
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
     switch (event.key) {
+    case "f":
+    case "F":
+      if (this.actions.toggleFullscreen) {
+        event.preventDefault();
+        this.actions.toggleFullscreen();
+      }
+      return;
     case "Escape":
       event.preventDefault();
       this.exit();
@@ -321,12 +347,12 @@ export class PresentationController {
   }
 
   handleContextMenu(event) {
-    if (!this.state.presentation.active) return;
+    if (!this.state.active) return;
     event.preventDefault();
   }
 
   handleWheel(event) {
-    if (!this.state.presentation.active) return;
+    if (!this.state.active) return;
     event.preventDefault();
     if (event.ctrlKey) {
       const delta = normalizedWheelDelta(event);
@@ -356,7 +382,7 @@ export class PresentationController {
   }
 
   handlePointerDown(event) {
-    if (!this.state.presentation.active) return;
+    if (!this.state.active) return;
     if (event.pointerType === "touch") {
       this.touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (this.touches.size === 2) {
@@ -371,14 +397,14 @@ export class PresentationController {
       return;
     }
     if (event.button !== 0 || this.dragPan || this.touchPan) return;
-    if (this.state.presentation.tool === "pen") {
+    if (this.state.tool === "pen") {
       event.preventDefault();
       this.beginStroke(event);
     }
   }
 
   handlePointerMove(event) {
-    if (!this.state.presentation.active) return;
+    if (!this.state.active) return;
     if (event.pointerType === "touch" && this.touches.has(event.pointerId)) {
       this.touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
       this.updateTouchPan();
@@ -392,13 +418,13 @@ export class PresentationController {
       this.updateStroke(event);
       return;
     }
-    if (this.state.presentation.tool === "laser" && event.pointerType !== "touch") {
+    if (this.state.tool === "laser" && event.pointerType !== "touch") {
       this.updateLaser(event);
     }
   }
 
   handlePointerUp(event) {
-    if (!this.state.presentation.active) return;
+    if (!this.state.active) return;
     if (event.pointerType === "touch" && this.touches.has(event.pointerId)) {
       this.touches.delete(event.pointerId);
       if (this.touches.size < 2) this.touchPan = null;
@@ -515,10 +541,10 @@ export class PresentationController {
       stroke.polyline.remove();
       return;
     }
-    const pageId = this.state.presentation.pageId;
-    const list = this.state.presentation.strokes.get(pageId) || [];
+    const pageId = this.state.pageId;
+    const list = this.state.strokes.get(pageId) || [];
     list.push(stroke.points);
-    this.state.presentation.strokes.set(pageId, list);
+    this.state.strokes.set(pageId, list);
     // Re-render so the control bar's Clear/Undo affordances (computed from
     // strokes at render time) reflect the ink that was just drawn — drawing
     // itself mutates the SVG directly for performance, without a render().

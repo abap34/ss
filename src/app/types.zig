@@ -38,6 +38,7 @@ pub const HtmlWriteRequest = struct {
     source: SourceRequest,
     output_path: []const u8,
     options: WriteOptions = .{},
+    start_presentation: bool = false,
 };
 
 pub const PdfAndHtmlWriteRequest = struct {

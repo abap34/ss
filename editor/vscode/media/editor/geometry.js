@@ -105,15 +105,6 @@ export function constraintGeometry(source, target, axis) {
   };
 }
 
-export function svgPoint(svg, event) {
-  const rect = svg.getBoundingClientRect();
-  const viewBox = svg.viewBox.baseVal;
-  return {
-    x: viewBox.x + ((event.clientX - rect.left) / rect.width) * viewBox.width,
-    y: viewBox.y + ((event.clientY - rect.top) / rect.height) * viewBox.height,
-  };
-}
-
 export function signed(value) {
   const number = formatNumber(value);
   return value > 0 ? `+${number}` : number;

@@ -58,7 +58,10 @@ pub fn styleSheet(allocator: std.mem.Allocator, ir: *const render.Ir, assets: re
     var fragment_out = FragmentOutput{ .list = &out };
     if (standalone) try out.appendSlice(allocator, document_css);
     try out.appendSlice(allocator, fragment_css);
-    if (standalone) try out.appendSlice(allocator, print_css);
+    if (standalone) {
+        try out.appendSlice(allocator, print_css);
+        try out.appendSlice(allocator, @embedFile("presentation.css"));
+    }
     for (ir.fonts.instances) |font| {
         const source = assets.fontSource(font.resource, font.face_index) orelse return error.MissingHtmlResource;
         try out.appendSlice(allocator, "@font-face { font-family: '");
@@ -98,6 +101,9 @@ pub const Runtime = struct {
     navigation_module: []const u8,
     text_module: []const u8,
     pdf: ?PdfRuntime,
+    presentation_module: ?[]const u8 = null,
+    import_map: ?[]const u8 = null,
+    start_presentation: bool = false,
 };
 
 pub fn generate(
@@ -123,7 +129,9 @@ pub fn write(
     style_sheet_url: []const u8,
     runtime: Runtime,
 ) !void {
-    try out.writeAll("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">" ++
+    try out.writeAll("<!doctype html><html lang=\"en\"");
+    if (runtime.start_presentation) try out.writeAll(" data-ss-present");
+    try out.writeAll("><head><meta charset=\"utf-8\">" ++
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" ++
         "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: blob:; style-src 'unsafe-inline' data: blob:; script-src 'unsafe-inline' data:; worker-src data: blob:; connect-src data: blob:; font-src data: blob:\">" ++
         "<title>ss document</title><style>html:not([data-ss-ready]):not([data-ss-error]) body{visibility:hidden}</style>" ++
@@ -136,13 +144,22 @@ pub fn write(
     if (runtime.pdf) |pdf| {
         try out.writeAll("<script type=\"text/plain\" data-ss-third-party-license=\"pdf.js\">");
         try writeText(out, pdf.license);
-        try out.writeAll("</script><script type=\"importmap\">");
-        try out.writeAll(pdf.import_map);
+        try out.writeAll("</script>");
+    }
+    if (runtime.import_map orelse (if (runtime.pdf) |pdf| pdf.import_map else null)) |import_map| {
+        try out.writeAll("<script type=\"importmap\">");
+        try out.writeAll(import_map);
         try out.writeAll("</script>");
     }
     try out.writeAll("<script type=\"module\">let resourceStore=null,pdfRuntime=null,pdfController=null;const reportError=error=>{const message=error instanceof Error?error.message:String(error);document.documentElement.dataset.ssError=message;let alert=document.querySelector('.ss-runtime-error');if(!alert){alert=document.createElement('div');alert.className='ss-runtime-error';alert.setAttribute('role','alert');document.body.append(alert)}alert.textContent=message;console.error(error)};try{const navigation=await import(\"");
     try out.writeAll(runtime.navigation_module);
-    try out.writeAll("\");const pager=navigation.start(document);const resources=await import(\"");
+    try out.writeAll("\");const presentation=");
+    if (runtime.presentation_module) |module| {
+        try out.writeAll("await import(\"");
+        try out.writeAll(module);
+        try out.writeAll("\")");
+    } else try out.writeAll("null");
+    try out.writeAll(";const pager=navigation.start(document,presentation);const resources=await import(\"");
     try out.writeAll(runtime.resource_module);
     try out.writeAll("\");resourceStore=await resources.prepareDocumentResources(document);const text=await import(\"");
     try out.writeAll(runtime.text_module);

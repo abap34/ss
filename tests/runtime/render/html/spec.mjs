@@ -48,7 +48,7 @@ end
     assert(count(document, 'data-ss-src="ss-resource:svg:') === 4, "repeated SVG uses did not share one resource reference");
     assert(count(document, 'data-media-type="image/svg+xml"') === 1, "repeated SVG bytes were serialized more than once");
     assert(document.includes("data:text/css;charset=utf-8;base64,"), "HTML did not embed its style sheet");
-    assert(count(document, "data:text/javascript;charset=utf-8;base64,") === 3, "non-PDF content did not embed exactly resource loading, page navigation, and text alignment");
+    assert(count(document, "data:text/javascript;charset=utf-8;base64,") === 5, "non-PDF content did not embed the resource, navigation, text, presentation, and DOM modules");
     assert(!document.includes('data-ss-third-party-license="pdf.js"'), "non-PDF content embedded the PDF.js license");
     assert(!document.includes("manifest.json") && !document.includes("assets/"), "HTML retained an external bundle reference");
 

@@ -211,7 +211,9 @@ pub fn writeHtml(io: std.Io, allocator: std.mem.Allocator, request: types.HtmlWr
     progress.begin("Write HTML");
     errdefer progress.abort();
     var html_failure = render_html.WriteFailure{};
-    render_html.writeWithFailure(allocator, io, &compiled.ir, request.output_path, &html_failure) catch |err| {
+    render_html.writeWithFailure(allocator, io, &compiled.ir, request.output_path, .{
+        .start_presentation = request.start_presentation,
+    }, &html_failure) catch |err| {
         const cause = html_failure.cause orelse err;
         const failure = switch (html_failure.kind) {
             .output => app_output.outputWriteFailed(.html, request.output_path, cause),
@@ -255,7 +257,7 @@ pub fn writePdfAndHtml(io: std.Io, allocator: std.mem.Allocator, request: types.
     progress.complete();
     progress.begin("Write HTML");
     var html_failure = render_html.WriteFailure{};
-    render_html.writeWithFailure(allocator, io, &compiled.ir, request.html_output_path, &html_failure) catch |err| {
+    render_html.writeWithFailure(allocator, io, &compiled.ir, request.html_output_path, .{}, &html_failure) catch |err| {
         const cause = html_failure.cause orelse err;
         const failure = switch (html_failure.kind) {
             .output => app_output.outputWriteFailed(.html, request.html_output_path, cause),

@@ -281,6 +281,17 @@ fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options:
     const behavior_step = b.step("test-render-behavior", "Inspect rendered PDF behavior locally with Chromium");
     behavior_step.dependOn(&behavior.step);
 
+    const presentation_build = b.addSystemCommand(&.{ "node", "editor/vscode/scripts/build.js" });
+    presentation_build.step.dependOn(&ctx.dependency_checks.vscode_packages.step);
+    presentation_build.setCwd(b.path("."));
+    const presentation = b.addSystemCommand(&.{ "node", "tests/visual/presentation/spec.mjs" });
+    presentation.step.dependOn(&presentation_build.step);
+    presentation.step.dependOn(&ctx.dependency_checks.visual_test_packages.step);
+    presentation.addFileArg(exe.getEmittedBin());
+    presentation.setCwd(b.path("."));
+    presentation.stdio = .inherit;
+    addFocusedTestStep(b, "test-presentation", "Exercise the CLI and shared presentation controls", &presentation.step);
+
     const editor_ui = b.addSystemCommand(&.{ "node", "tests/visual/editor/spec.mjs" });
     editor_ui.step.dependOn(&ctx.dependency_checks.node.step);
     editor_ui.step.dependOn(&ctx.dependency_checks.visual_test_packages.step);
@@ -1097,6 +1108,9 @@ fn createHtmlEmbedsModule(ctx: BuildContext) *Module {
     const b = ctx.b;
     const files = b.addWriteFiles();
     const resource_module = javascriptDataUrl(b, "src/render/html/resources.js", 256 * 1024);
+    const dom_module = javascriptDataUrl(b, "src/render/html/dom.js", 256 * 1024);
+    const presentation_module = javascriptDataUrl(b, "src/render/html/presentation.js", 256 * 1024);
+    const presentation_import_map = b.fmt("{{\"imports\":{{\"@ss/dom\":\"{s}\"}}}}", .{dom_module});
     const navigation_module = javascriptDataUrl(b, "src/render/html/navigation.js", 256 * 1024);
     const text_module = javascriptDataUrl(b, "src/render/html/text.js", 256 * 1024);
     const pdf_controller_module = javascriptDataUrl(b, "src/render/html/pdf/controller.js", 256 * 1024);
@@ -1108,10 +1122,12 @@ fn createHtmlEmbedsModule(ctx: BuildContext) *Module {
     const pdfjs_module = javascriptDataUrl(b, "third_party/pdfjs/pdf.mjs", 2 * 1024 * 1024);
     const pdf_worker_module = javascriptDataUrl(b, "third_party/pdfjs/pdf.worker.mjs", 4 * 1024 * 1024);
     const pdf_import_map = b.fmt(
-        "{{\"imports\":{{\"@ss/pdf/controller\":\"{s}\",\"@ss/pdf/geometry\":\"{s}\",\"@ss/pdf/placement\":\"{s}\",\"@ss/pdf/queue\":\"{s}\",\"@ss/pdf/service\":\"{s}\"}}}}",
-        .{ pdf_controller_module, pdf_geometry_module, pdf_placement_module, pdf_queue_module, pdf_service_module },
+        "{{\"imports\":{{\"@ss/pdf/controller\":\"{s}\",\"@ss/pdf/geometry\":\"{s}\",\"@ss/pdf/placement\":\"{s}\",\"@ss/pdf/queue\":\"{s}\",\"@ss/pdf/service\":\"{s}\",\"@ss/dom\":\"{s}\"}}}}",
+        .{ pdf_controller_module, pdf_geometry_module, pdf_placement_module, pdf_queue_module, pdf_service_module, dom_module },
     );
 
+    _ = files.add("presentation-module.txt", presentation_module);
+    _ = files.add("presentation-import-map.json", presentation_import_map);
     _ = files.add("resource-module.txt", resource_module);
     _ = files.add("navigation-module.txt", navigation_module);
     _ = files.add("text-module.txt", text_module);
@@ -1120,6 +1136,8 @@ fn createHtmlEmbedsModule(ctx: BuildContext) *Module {
     _ = files.add("pdfjs-module.txt", pdfjs_module);
     _ = files.add("pdf-worker-module.txt", pdf_worker_module);
     const root = files.add("root.zig",
+        \\pub const presentation_module = @embedFile("presentation-module.txt");
+        \\pub const presentation_import_map = @embedFile("presentation-import-map.json");
         \\pub const resource_module = @embedFile("resource-module.txt");
         \\pub const navigation_module = @embedFile("navigation-module.txt");
         \\pub const text_module = @embedFile("text-module.txt");

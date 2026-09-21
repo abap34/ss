@@ -54,6 +54,18 @@ const pdfRuntimeOptions = {
   plugins: [pdfRuntimeImports],
 };
 
+const presentationOptions = {
+  entryPoints: [path.join(repoRoot, "src/render/html/presentation.js")],
+  bundle: true,
+  outfile: path.join(outDir, "render", "presentation.js"),
+  format: "esm",
+  platform: "browser",
+  target: "chrome120",
+  plugins: [{ name: "ss-dom", setup(build) {
+    build.onResolve({ filter: /^@ss\/dom$/ }, () => ({ path: path.join(repoRoot, "src/render/html/dom.js") }));
+  } }],
+};
+
 function typecheck() {
   for (const config of ["tsconfig.json", "tsconfig.webview.json"]) {
     childProcess.execFileSync(process.execPath, [
@@ -80,6 +92,7 @@ function copyRenderAssets() {
   const renderRoot = path.join(outDir, "render");
   fs.mkdirSync(pdfjsRoot, { recursive: true });
   fs.mkdirSync(renderRoot, { recursive: true });
+  fs.writeFileSync(path.join(renderRoot, "package.json"), '{"type":"module"}\n');
   fs.copyFileSync(
     path.join(repoRoot, "third_party", "pdfjs", "pdf.mjs"),
     path.join(pdfjsRoot, "pdf.mjs"),
@@ -92,10 +105,9 @@ function copyRenderAssets() {
     path.join(repoRoot, "third_party", "pdfjs", "LICENSE"),
     path.join(pdfjsRoot, "LICENSE"),
   );
-  fs.copyFileSync(
-    path.join(repoRoot, "src", "render", "html", "text.js"),
-    path.join(renderRoot, "text.js"),
-  );
+  for (const name of ["text.js", "dom.js", "presentation.css"]) {
+    fs.copyFileSync(path.join(repoRoot, "src/render/html", name), path.join(renderRoot, name));
+  }
 }
 
 async function main() {
@@ -103,12 +115,15 @@ async function main() {
   fs.mkdirSync(outDir, { recursive: true });
   copySchemaAssets();
   copyRenderAssets();
+  await esbuild.build(presentationOptions);
 
   if (watch) {
     const extensionContext = await esbuild.context(buildOptions);
+    const presentationContext = await esbuild.context(presentationOptions);
     const pdfRuntimeContext = await esbuild.context(pdfRuntimeOptions);
     await Promise.all([
       extensionContext.watch(),
+      presentationContext.watch(),
       pdfRuntimeContext.watch(),
     ]);
     console.log("Watching VS Code extension sources.");

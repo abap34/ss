@@ -1,11 +1,10 @@
-import { setRect, svgElement } from "./dom.js";
+import { setRect, svgElement, svgPoint } from "./dom.js";
 import { ComponentWidthInteraction } from "./component-width-interaction.js";
 import {
   clampPoint,
   editableAncestorNodeId,
   previewFrame,
   subtreeNodeIds,
-  svgPoint,
 } from "./geometry.js";
 import { renderConstraints } from "./constraints.js";
 import {

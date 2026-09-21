@@ -8,6 +8,7 @@ const lsp = @import("lsp.zig");
 const pdf = @import("render/pdf.zig");
 const render_compiler = @import("render/compile.zig");
 const cli_help = @import("cli/help.zig");
+const cli_present = @import("cli/present.zig");
 const cli_completion = @import("cli/completion.zig");
 const error_report = utils.err;
 
@@ -108,6 +109,7 @@ const CommandOptions = struct {
     diagnostic_level: ?error_report.DiagnosticLevel = null,
     measure_profile: bool = false,
     quiet: bool = false,
+    no_open: bool = false,
     interval_ms: u64 = 500,
     format: RenderFormat = .pdf,
 };
@@ -150,11 +152,19 @@ fn parseCompletionOptions(args: []const []const u8) !cli_completion.Options {
 }
 
 fn parseCommandOptions(args: []const []const u8) !CommandOptions {
-    var options = CommandOptions{};
+    return parseRenderCommandOptions(args, false);
+}
+
+fn parseRenderCommandOptions(args: []const []const u8, presenting: bool) !CommandOptions {
+    var options = CommandOptions{ .format = if (presenting) .html else .pdf };
     var positional_index: usize = 0;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
+        if (presenting and std.mem.eql(u8, arg, "--no-open")) {
+            options.no_open = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--asset-base-dir")) {
             if (i + 1 >= args.len) return failUsage("missing value for --asset-base-dir", .{});
             options.asset_base_dir = args[i + 1];
@@ -177,6 +187,7 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
         if (std.mem.eql(u8, arg, "--format")) {
             if (i + 1 >= args.len) return failUsage("missing value for --format", .{});
             const value = args[i + 1];
+            if (presenting and !std.mem.eql(u8, value, "html")) return failUsage("ss present requires HTML output", .{});
             options.format = if (std.mem.eql(u8, value, "pdf"))
                 .pdf
             else if (std.mem.eql(u8, value, "html"))
@@ -1416,21 +1427,25 @@ fn run(init: std.process.Init) !void {
         return;
     }
 
-    if (std.mem.eql(u8, cmd, "render")) {
+    if (std.mem.eql(u8, cmd, "render") or std.mem.eql(u8, cmd, "present")) {
+        const presenting = std.mem.eql(u8, cmd, "present");
         if (wantsCommandHelp(args[2..])) {
-            _ = cli_help.command(.stdout, "render");
+            _ = cli_help.command(.stdout, cmd);
             return;
         }
-        const options = try parseCommandOptions(args[2..]);
+        const options = try parseRenderCommandOptions(args[2..], presenting);
         applyDiagnosticOptions(options, null);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         applyDiagnosticOptions(options, &resolved);
-        const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(
-            allocator,
-            resolved.entry_path,
-            if (options.format == .pdf) "pdf" else "html",
-        );
+        const output_path = options.output_path orelse if (presenting)
+            try cli_present.defaultOutputPath(allocator, io, resolved.entry_path)
+        else
+            try utils.fs.siblingPathWithExtension(
+                allocator,
+                resolved.entry_path,
+                if (options.format == .pdf) "pdf" else "html",
+            );
         try validateOutputParentOrCliError(io, output_path);
         if (options.diagnostics_json_path) |diagnostics_json_path| try validateOutputParentOrCliError(io, diagnostics_json_path);
         var output_targets = [_]OutputTarget{
@@ -1464,11 +1479,20 @@ fn run(init: std.process.Init) !void {
             .html => try app.writeHtml(io, allocator, .{
                 .source = source,
                 .output_path = output_path,
+                .start_presentation = presenting,
                 .options = .{
                     .render = render_options,
                     .diagnostics_json_path = options.diagnostics_json_path,
                 },
             }, &progress),
+        }
+        if (presenting) {
+            const url = try cli_present.documentUrl(allocator, io, output_path);
+            try utils.io.writeStdoutAll(url);
+            try utils.io.writeStdoutAll("\n");
+            if (!options.no_open) cli_present.openBrowser(io, url) catch |err| {
+                return failCli("could not open the browser ({s}); open the URL above, or use --no-open", .{@errorName(err)});
+            };
         }
         return;
     }
