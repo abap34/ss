@@ -61,7 +61,7 @@
       "name": "cpp",
       "display_name": "C++",
       "repo": "https://github.com/tree-sitter/tree-sitter-cpp",
-      "commit": "8b5b49eb196bec7040441bee33b2c9a4838d6967",
+      "commit": "c009222808634c1014f82438d4883753516a2c24",
       "aliases": [
         "cpp",
         "c++",
@@ -331,11 +331,23 @@
       "display_name": "Scheme",
       "repo": "https://github.com/6cdh/tree-sitter-scheme",
       "commit": "c6cb7c7d7a04b3f5d999c28e2e9c0c31b2d50ece",
-      "aliases": ["scheme", "scm"],
+      "aliases": [
+        "scheme",
+        "scm"
+      ],
       "files": [
-        { "from": "LICENSE", "to": "LICENSE" },
-        { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },
-        { "from": "src/parser.c", "to": "src/parser.c" }
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "queries/highlights.scm",
+          "to": "queries/highlights.scm"
+        },
+        {
+          "from": "src/parser.c",
+          "to": "src/parser.c"
+        }
       ]
     },
     {

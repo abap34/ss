@@ -40,7 +40,7 @@ Default highlighting is enabled for these code block language names:
 | --- | --- | --- |
 | Bash | https://github.com/tree-sitter/tree-sitter-bash | a06c2e4415e9bc0346c6b86d401879ffb44058f7 |
 | C | https://github.com/tree-sitter/tree-sitter-c | b780e47fc780ddc8da13afa35a3f4ed5c157823d |
-| C++ | https://github.com/tree-sitter/tree-sitter-cpp | 8b5b49eb196bec7040441bee33b2c9a4838d6967 |
+| C++ | https://github.com/tree-sitter/tree-sitter-cpp | c009222808634c1014f82438d4883753516a2c24 |
 | CSS | https://github.com/tree-sitter/tree-sitter-css | dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f |
 | Go | https://github.com/tree-sitter/tree-sitter-go | 2346a3ab1bb3857b48b29d779a1ef9799a248cd7 |
 | HTML | https://github.com/tree-sitter/tree-sitter-html | 73a3947324f6efddf9e17c0ea58d454843590cc0 |

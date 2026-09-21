@@ -17,7 +17,7 @@
       flake = false;
     };
     tree-sitter-cpp = {
-      url = "github:tree-sitter/tree-sitter-cpp/8b5b49eb196bec7040441bee33b2c9a4838d6967";
+      url = "github:tree-sitter/tree-sitter-cpp/c009222808634c1014f82438d4883753516a2c24";
       flake = false;
     };
     tree-sitter-css = {
