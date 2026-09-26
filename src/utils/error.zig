@@ -1409,6 +1409,7 @@ fn numberEnd(slice: []const u8, start: usize) usize {
 fn identifierEnd(slice: []const u8, start: usize) usize {
     var end = start + 1;
     while (end < slice.len and isCallableIdentifierContinue(slice[end])) end += 1;
+    if (std.mem.eql(u8, slice[start..end], "fn") and std.mem.startsWith(u8, slice[end..], "/!")) end += 2;
     return end;
 }
 
@@ -1450,6 +1451,7 @@ fn isKeyword(token: []const u8) bool {
         "document",
         "page",
         "fn",
+        "fn/!",
         "let",
         "bind",
         "return",

@@ -3349,10 +3349,6 @@
     "named": false
   },
   {
-    "type": "/!",
-    "named": false
-  },
-  {
     "type": "//",
     "named": false
   },
@@ -3487,6 +3483,10 @@
   },
   {
     "type": "fn",
+    "named": false
+  },
+  {
+    "type": "fn/!",
     "named": false
   },
   {

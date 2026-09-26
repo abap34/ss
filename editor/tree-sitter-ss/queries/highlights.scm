@@ -5,6 +5,7 @@
   "document"
   "page"
   "fn"
+  "fn/!"
   "let"
   "return"
   "end"

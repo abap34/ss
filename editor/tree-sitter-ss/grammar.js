@@ -69,7 +69,7 @@ module.exports = grammar({
     function_declaration: $ => seq(
       repeat(seq($.annotation, optional($._terminator))),
       choice(
-        seq("fn", "/!", field("name", $.identifier)),
+        seq("fn/!", field("name", $.identifier)),
         seq("fn", field("name", $.bare_callable_identifier)),
       ),
       $.parameters,

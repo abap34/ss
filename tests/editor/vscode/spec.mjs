@@ -19,7 +19,22 @@ await testManualBuildCommand();
 await testPresentationCommand();
 await testLineCommentSyntax();
 await testCompositionOperatorSyntax();
+await testPairedFunctionKeywordSyntax();
 await testBlockStringSyntax();
+
+async function testPairedFunctionKeywordSyntax() {
+  const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
+  const keyword = new RegExp(grammar.repository.keywords.patterns[0].match, "g");
+  for (const [source, expected] of [
+    ["fn/! make()", ["fn/!"]],
+    ["fn/!make()", ["fn/!"]],
+    ["  fn/! make()", ["fn/!"]],
+    ["fn title!()", ["fn"]],
+    ["fn_name/!other", []],
+  ]) {
+    assert(JSON.stringify(source.match(keyword) ?? []) === JSON.stringify(expected), `function keyword tokens differ: ${source}`);
+  }
+}
 
 async function testBlockStringSyntax() {
   const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));

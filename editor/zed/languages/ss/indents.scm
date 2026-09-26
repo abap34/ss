@@ -6,7 +6,7 @@
     "page" @start.page
     "end" @end)
   (function_declaration
-    "fn" @start.fn
+    ["fn" "fn/!"] @start.fn
     "end" @end)
   (if_statement
     "if" @start.if

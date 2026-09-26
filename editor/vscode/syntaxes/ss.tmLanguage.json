@@ -90,7 +90,7 @@
       "patterns": [
         {
           "name": "keyword.control.ss",
-          "match": "\\b(?:import|as|const|document|page|fn|let|return|end|type|extend|protocol|base|implements|roles|property|if|then|else|for|in)\\b"
+          "match": "\\bfn/!|\\b(?:import|as|const|document|page|fn|let|return|end|type|extend|protocol|base|implements|roles|property|if|then|else|for|in)\\b"
         },
         {
           "name": "storage.type.ss",

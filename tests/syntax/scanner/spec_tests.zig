@@ -193,6 +193,36 @@ test "syntax scanner: classifies semantic tokens without LSP logic" {
     });
 }
 
+test "syntax scanner: paired function declarations use one keyword token" {
+    const text = "fn/! make() -> Object\nfn/!make()\nfn title!()\nfn_name/!other\n\"fn/!\" ;; fn/! hidden";
+    try expectTokens(text, &.{
+        .{ .kind = .identifier, .text = "fn/!", .line = 0 },
+        .{ .kind = .identifier, .text = "make", .line = 0 },
+        .{ .kind = .operator, .text = "->", .line = 0 },
+        .{ .kind = .identifier, .text = "Object", .line = 0 },
+        .{ .kind = .identifier, .text = "fn/!", .line = 1 },
+        .{ .kind = .identifier, .text = "make", .line = 1 },
+        .{ .kind = .identifier, .text = "fn", .line = 2 },
+        .{ .kind = .identifier, .text = "title!", .line = 2 },
+        .{ .kind = .identifier, .text = "fn_name", .line = 3 },
+        .{ .kind = .identifier, .text = "other", .line = 3 },
+        .{ .kind = .string, .text = "\"fn/!\"", .line = 4 },
+    });
+    const tokens = try scanner.semanticTokens(testing.allocator, text);
+    defer testing.allocator.free(tokens);
+    try expectSemantic(tokens, text, &.{
+        .{ .kind = .keyword, .text = "fn/!" },
+        .{ .kind = .function, .text = "make" },
+        .{ .kind = .operator, .text = "->" },
+        .{ .kind = .type, .text = "Object" },
+        .{ .kind = .keyword, .text = "fn/!" },
+        .{ .kind = .function, .text = "make" },
+        .{ .kind = .keyword, .text = "fn" },
+        .{ .kind = .function, .text = "title!" },
+        .{ .kind = .string, .text = "\"fn/!\"" },
+    });
+}
+
 fn expectTokens(text: []const u8, expected: []const ExpectedToken) !void {
     var iter = scanner.tokens(text);
     for (expected) |item| {

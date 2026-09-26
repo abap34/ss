@@ -326,11 +326,7 @@
               "members": [
                 {
                   "type": "STRING",
-                  "value": "fn"
-                },
-                {
-                  "type": "STRING",
-                  "value": "/!"
+                  "value": "fn/!"
                 },
                 {
                   "type": "FIELD",

@@ -66,6 +66,20 @@ test "highlight cache: bundled Scheme aliases highlight literals and comments" {
     }
 }
 
+test "highlight cache: paired function declaration is one complete keyword" {
+    var cache = Cache.init(testing.allocator, testing.io);
+    defer cache.deinit();
+    const languages = [_]utils.highlight.Language{language("ss", "ss", "builtin:ss")};
+    const content = "fn/! make() -> Object\n  return text(\"fn/!\") ;; fn/!\nend\n";
+    var failure: Failure = .none;
+    var result = try cache.highlight(&languages, "ss", content, &failure);
+    defer result.deinit();
+    const first = result.segments()[0];
+    try testing.expectEqual(@as(usize, 0), first.start);
+    try testing.expectEqual(@as(usize, 4), first.end);
+    try testing.expectEqual(utils.highlight.CaptureRole.keyword, first.role.?);
+}
+
 const query_root = ".ss-cache/test-highlight-query-generations";
 const query_path = query_root ++ "/query.scm";
 

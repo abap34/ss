@@ -91,6 +91,7 @@ pub const TokenIterator = struct {
                     if (source.startsWithAt(self.text, end, "!=")) break;
                     end += 1;
                 }
+                if (std.mem.eql(u8, self.text[self.cursor..end], "fn") and source.startsWithAt(self.text, end, "/!")) end += 2;
                 return self.advance(line_value, end, .identifier);
             }
 
@@ -294,7 +295,7 @@ fn semanticKindForIdentifier(word: []const u8, previous_word: ?[]const u8, next:
     if (std.ascii.isUpper(word[0])) return .type;
     if (previous == '.') return .property;
     if (previous_word) |prev| {
-        if (std.mem.eql(u8, prev, "fn")) return .function;
+        if (std.mem.eql(u8, prev, "fn") or std.mem.eql(u8, prev, "fn/!")) return .function;
         if (std.mem.eql(u8, prev, "let") or std.mem.eql(u8, prev, "const")) return .variable;
     }
     if (next == '(') return .function;
@@ -309,6 +310,7 @@ const keywords = [_][]const u8{
     "document",
     "page",
     "fn",
+    "fn/!",
     "let",
     "bind",
     "return",
