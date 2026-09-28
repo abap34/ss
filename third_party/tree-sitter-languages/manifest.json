@@ -330,7 +330,7 @@
       "name": "scheme",
       "display_name": "Scheme",
       "repo": "https://github.com/6cdh/tree-sitter-scheme",
-      "commit": "c6cb7c7d7a04b3f5d999c28e2e9c0c31b2d50ece",
+      "commit": "1b112d9571e4f62fb3d095d52a51f1da7756fb94",
       "aliases": [
         "scheme",
         "scm"

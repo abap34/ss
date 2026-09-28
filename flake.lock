@@ -263,17 +263,17 @@
     "tree-sitter-scheme": {
       "flake": false,
       "locked": {
-        "lastModified": 1773761636,
-        "narHash": "sha256-aFonUd15PJkQmz5lDJthtd1rU+8OXNknHDlgqH2s+OA=",
+        "lastModified": 1790424180,
+        "narHash": "sha256-7bMxrSeJpIIYkD8brP6oIW2F9ePYRsx1l2ZRfx6yGwM=",
         "owner": "6cdh",
         "repo": "tree-sitter-scheme",
-        "rev": "c6cb7c7d7a04b3f5d999c28e2e9c0c31b2d50ece",
+        "rev": "1b112d9571e4f62fb3d095d52a51f1da7756fb94",
         "type": "github"
       },
       "original": {
         "owner": "6cdh",
         "repo": "tree-sitter-scheme",
-        "rev": "c6cb7c7d7a04b3f5d999c28e2e9c0c31b2d50ece",
+        "rev": "1b112d9571e4f62fb3d095d52a51f1da7756fb94",
         "type": "github"
       }
     },
