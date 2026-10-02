@@ -14,3 +14,5 @@
 coverage.xml
 *.py[cod]
 .DS_Store
+/site/doc_build
+/zig-pkg

@@ -1,6 +1,7 @@
 const std = @import("std");
 const cache = @import("../src/utils/tree_sitter_cache.zig");
 const Step = std.Build.Step;
+const Module = std.Build.Module;
 
 pub const cache_subdir = ".ss/cache/tree-sitter";
 const nix_tree_sitter_sources_dir = ".ss-cache/nix/tree-sitter-sources";
@@ -13,6 +14,8 @@ pub const Bundle = struct {
     manifest_hash: []const u8,
     root: std.Build.LazyPath,
     step: *Step,
+    c_sources: []const []const u8,
+    languages: []const TreeSitterManifest.Language,
 };
 
 const Paths = struct {
@@ -78,7 +81,22 @@ pub fn create(b: *std.Build) Bundle {
         .sources_root = if (sources) |root| b.pathFromRoot(root) else null,
     };
     prepare.generated = .{ .step = &prepare.step };
-    return .{ .manifest_hash = manifest_hash, .root = .{ .generated = .{ .file = &prepare.generated } }, .step = &prepare.step };
+    var c_sources: std.ArrayList([]const u8) = .empty;
+    for (manifest.languages) |language| {
+        for (language.files) |file| {
+            const basename = std.fs.path.basename(file.to);
+            if (std.mem.eql(u8, basename, "parser.c") or std.mem.eql(u8, basename, "scanner.c")) {
+                c_sources.append(b.allocator, b.fmt("{s}/{s}", .{ language.name, file.to })) catch @panic("OOM");
+            }
+        }
+    }
+    return .{
+        .manifest_hash = manifest_hash,
+        .root = .{ .generated = .{ .file = &prepare.generated } },
+        .step = &prepare.step,
+        .c_sources = c_sources.toOwnedSlice(b.allocator) catch @panic("OOM"),
+        .languages = manifest.languages,
+    };
 }
 
 const Prepare = struct {
@@ -365,4 +383,85 @@ fn copyFile(step: *Step, source: []const u8, dest: []const u8) !void {
     const cwd = std.Io.Dir.cwd();
     cwd.copyFile(source, cwd, dest, step.owner.graph.io, .{ .make_path = true }) catch |err|
         return step.fail("failed to copy tree-sitter source {s} to {s}: {}", .{ source, dest, err });
+}
+
+pub fn addSources(ctx: CompileOptions, module: *Module, tree_sitter: Bundle) void {
+    const b = ctx.b;
+    addTreeSitterIncludePaths(b, module, tree_sitter);
+    addTreeSitterRuntimeSource(ctx, module, tree_sitter);
+    addTreeSitterCSourceFile(ctx, module, b.path("editor/tree-sitter-ss/src/parser.c"));
+    addTreeSitterCSourceFile(ctx, module, b.path("editor/tree-sitter-ss/src/scanner.c"));
+    for (tree_sitter.c_sources) |source| {
+        addTreeSitterCSourceFile(ctx, module, tree_sitter.root.path(b, b.fmt("generated/{s}", .{source})));
+    }
+    module.addIncludePath(b.path("editor/tree-sitter-ss/src"));
+}
+
+fn addTreeSitterIncludePaths(b: *std.Build, module: *Module, tree_sitter: Bundle) void {
+    module.addIncludePath(tree_sitter.root.path(b, "runtime/source/lib/include"));
+    module.addIncludePath(tree_sitter.root.path(b, "runtime/source/lib/src"));
+}
+
+fn addTreeSitterRuntimeSource(ctx: CompileOptions, module: *Module, tree_sitter: Bundle) void {
+    addTreeSitterCSourceFile(ctx, module, tree_sitter.root.path(ctx.b, "runtime/source/lib/src/lib.c"));
+}
+
+fn addTreeSitterCSourceFile(ctx: CompileOptions, module: *Module, file: std.Build.LazyPath) void {
+    module.addCSourceFile(.{
+        .file = file,
+        .flags = if (ctx.ubsan) &.{} else &.{"-fno-sanitize=undefined"},
+    });
+}
+
+pub fn addAbiCheck(ctx: CompileOptions, tree_sitter: Bundle) *Step {
+    const b = ctx.b;
+    const check_mod = b.createModule(.{
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+        .link_libc = true,
+    });
+    addTreeSitterIncludePaths(b, check_mod, tree_sitter);
+    addTreeSitterRuntimeSource(ctx, check_mod, tree_sitter);
+    check_mod.addCSourceFile(.{
+        .file = b.path("src/tree_sitter/abi_check.c"),
+    });
+    for (tree_sitter.c_sources) |source| {
+        addTreeSitterCSourceFile(ctx, check_mod, tree_sitter.root.path(b, b.fmt("generated/{s}", .{source})));
+    }
+
+    const check_exe = b.addExecutable(.{
+        .name = "ss-tree-sitter-abi-check",
+        .root_module = check_mod,
+    });
+    if (!ctx.target.query.isNative()) {
+        return &check_exe.step;
+    }
+
+    const run_check = b.addRunArtifact(check_exe);
+    run_check.setName("tree-sitter ABI and parser check");
+    if (ctx.ubsan) {
+        run_check.addArg("--trace");
+    }
+    return &run_check.step;
+}
+
+pub const CompileOptions = struct {
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    ubsan: bool,
+};
+
+pub fn addOptions(b: *std.Build, options: *Step.Options, bundle: Bundle) void {
+    options.addOption([]const u8, "tree_sitter_cache_subdir", cache_subdir);
+    options.addOption([]const u8, "tree_sitter_manifest_hash", bundle.manifest_hash);
+    const ss_query = b.build_root.handle.readFileAlloc(b.graph.io, "editor/tree-sitter-ss/queries/highlights.scm", b.allocator, .limited(64 * 1024)) catch
+        @panic("editor/tree-sitter-ss/queries/highlights.scm is missing.");
+    options.addOption([]const u8, "ss_highlight_query", ss_query);
+    for (bundle.languages) |language| {
+        const path = b.fmt("third_party/tree-sitter-languages/{s}/queries/highlights.scm", .{language.name});
+        const query = b.build_root.handle.readFileAlloc(b.graph.io, path, b.allocator, .limited(128 * 1024)) catch
+            @panic("bundled tree-sitter highlight query is missing.");
+        options.addOption([]const u8, b.fmt("{s}_highlight_query", .{language.name}), query);
+    }
 }
