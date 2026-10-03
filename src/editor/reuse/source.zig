@@ -38,6 +38,8 @@ pub fn canApply(snapshot: *AnalysisSnapshot, path: []const u8, generated: *const
             if (previous.index == replacement.index) return false;
         }
         const constraint = state.constraints.active.items[replacement.index];
+        const origin = constraint.origin orelse return false;
+        if (origin.span == null) return false;
         if (!constraintEql(constraint, replacement.expected) or
             constraint.target_node != generated.node_id or
             constraint.role != .position or
@@ -47,7 +49,8 @@ pub fn canApply(snapshot: *AnalysisSnapshot, path: []const u8, generated: *const
         }
         if (replacement.literal_scale != 1 and replacement.literal_scale != -1) return false;
         const previous_text = generated.base_source[replacement.offset_span.start..replacement.offset_span.end];
-        const replacement_text = generated.source[replacement.offset_span.start..replacement.offset_span.end];
+        const next_span = generated.replacementSpan(replacement);
+        const replacement_text = generated.source[next_span.start..next_span.end];
         const parsed_previous = parseGeneratedNumericOffset(previous_text) orelse return false;
         const parsed_offset = parseGeneratedNumericOffset(replacement_text) orelse return false;
         const scale = @as(f64, replacement.literal_scale);
@@ -95,16 +98,6 @@ pub fn stateModuleForPathMutable(state: *core.DocumentState, path: []const u8) ?
         if (std.mem.eql(u8, module.spec, path)) return module;
     }
     return null;
-}
-
-pub fn rebaseSnapshotSource(snapshot: *AnalysisSnapshot, path: []const u8, source: []const u8) void {
-    for (snapshot.modules) |*module| {
-        const module_path = module.path orelse continue;
-        if (!std.mem.eql(u8, module_path, path)) continue;
-        @memcpy(module.source, source);
-        break;
-    }
-    snapshot.diagnostics.rebaseSource(path, source);
 }
 
 fn constraintEql(left: core.Constraint, right: core.Constraint) bool {
@@ -173,7 +166,7 @@ fn optionalStringEql(left: ?[]const u8, right: ?[]const u8) bool {
 
 fn parseGeneratedNumericOffset(text: []const u8) ?f64 {
     var remaining = std.mem.trim(u8, text, " \t\r\n");
-    if (remaining.len == 0) return null;
+    if (remaining.len == 0) return 0;
     var sign: f64 = 1;
     if (remaining[0] == '+' or remaining[0] == '-') {
         if (remaining[0] == '-') sign = -1;

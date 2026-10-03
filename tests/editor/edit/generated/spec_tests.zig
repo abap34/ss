@@ -7,6 +7,7 @@ fn replacement(start: usize, end: usize) generated.Replacement {
         .index = 0,
         .expected = .{ .target_node = 2, .target_anchor = .left, .source = .{ .page = .left }, .offset = 10, .origin = .{ .label = "generated origin" } },
         .offset_span = .{ .start = start, .end = end },
+        .new_length = end - start,
         .literal_scale = 1,
         .new_offset = 20,
     };
@@ -26,7 +27,7 @@ fn editWith(replacements: []const generated.Replacement) generated.Edit {
     };
 }
 
-test "generated edits reject changes outside distinct fixed-width numeric spans" {
+test "generated edits reject changes outside distinct numeric spans" {
     var edits = editWith(&.{ replacement(2, 4), replacement(8, 10) });
     try testing.expect(edits.onlyChangesOffsets());
     edits.replacements = &.{ replacement(8, 10), replacement(2, 4) };
@@ -76,4 +77,30 @@ fn cloneAndRelease(allocator: std.mem.Allocator) !void {
 test "generated edit copies retain all borrowed inputs and release partial allocations" {
     try cloneAndRelease(testing.allocator);
     try testing.checkAllAllocationFailures(testing.allocator, cloneAndRelease, .{});
+}
+
+test "generated edits map growing shrinking and omitted offsets in either order" {
+    var first = replacement(2, 4);
+    first.new_length = 3;
+    var second = replacement(8, 10);
+    second.new_length = 1;
+    var edit = editWith(&.{ second, first });
+    edit.source = "x=200; y=4;";
+    try testing.expect(edit.onlyChangesOffsets());
+    try testing.expectEqual(@as(usize, 5), edit.mapOffset(4));
+    try testing.expectEqual(@as(usize, 9), edit.mapOffset(8));
+    try testing.expectEqual(@as(usize, 10), edit.mapOffset(10));
+    try testing.expectEqualStrings("200", edit.source[edit.replacementSpan(first).start..edit.replacementSpan(first).end]);
+    try testing.expectEqualStrings("4", edit.source[edit.replacementSpan(second).start..edit.replacementSpan(second).end]);
+    first.new_length = 0;
+    edit.replacements = &.{ first, second };
+    edit.source = "x=; y=4;";
+    try testing.expect(edit.onlyChangesOffsets());
+    first.offset_span.end = first.offset_span.start;
+    first.new_length = 3;
+    edit.base_source = "x=; y=30;";
+    second.offset_span = .{ .start = 6, .end = 8 };
+    edit.replacements = &.{ first, second };
+    edit.source = "x=200; y=4;";
+    try testing.expect(edit.onlyChangesOffsets());
 }

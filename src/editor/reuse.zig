@@ -8,16 +8,17 @@ const render_text = @import("render_text");
 const editor_snapshot = @import("snapshot.zig");
 const generated_edit = @import("edit/generated.zig");
 const source = @import("reuse/source.zig");
+const rebase = @import("reuse/rebase.zig");
 const translations = @import("reuse/translations.zig");
 
 pub const collectTranslations = translations.collectTranslations;
 pub const translationPatchPreservesRenderedOutput = translations.translationPatchPreservesRenderedOutput;
-const hasExternalRenderDependency = translations.hasExternalRenderDependency;
+pub const inputs = @import("reuse/inputs.zig");
 
 fn matchesFontEnvironment(snapshot: *const analysis.snapshot.AnalysisSnapshot, current: render_layout.FontEnvironmentToken) bool {
     const retained = if (snapshot.retained_layout_state) |*value| value else return false;
-    const inputs = if (retained.reuse_inputs) |*value| value else return false;
-    return render_text.sameFontEnvironment(inputs.font_environment, current);
+    const retained_inputs = if (retained.reuse_inputs) |*value| value else return false;
+    return render_text.sameFontEnvironment(retained_inputs.font_environment, current);
 }
 
 pub fn translateRebuilt(
@@ -26,7 +27,6 @@ pub fn translateRebuilt(
     prepared: *const render_layout.EvaluatedPreparedPages,
     previous: *analysis.snapshot.AnalysisSnapshot,
     generation: u64,
-    highlight_languages: []const utils.highlight.Language,
     conflicts_json: []u8,
 ) !?analysis.snapshot.LayoutHookOutput {
     if (!matchesFontEnvironment(previous, prepared.font_environment)) return null;
@@ -34,7 +34,7 @@ pub fn translateRebuilt(
     const previous_editor = if (previous_layout.editor) |*value| value else return null;
     var collected = try collectTranslations(allocator, state, &previous_layout.report) orelse return null;
     defer collected.deinit(allocator);
-    if (!translationPatchPreservesRenderedOutput(state, &prepared.pages, collected.translations, highlight_languages)) return null;
+    if (!translationPatchPreservesRenderedOutput(state, &prepared.pages, collected.translations)) return null;
     const editor = try editor_snapshot.buildTranslationPatch(
         allocator,
         state,
@@ -72,12 +72,15 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
         snapshot.retained_layout_state = null;
     };
 
-    if (state.has_external_evaluation_inputs) return false;
     var render_cache_lease = utils.render_cache.Lease.acquire(ctx.io) catch return false;
     defer render_cache_lease.deinit();
     const reuse_inputs = if (retained.reuse_inputs) |*value| value else return false;
     const pages = &reuse_inputs.pages;
-    if (hasExternalRenderDependency(pages, snapshot.project.highlight.languages)) return false;
+    const external_inputs = if (reuse_inputs.external_inputs) |*value| value else return false;
+    const cache = ctx.resource_cache orelse return false;
+    const inputs_start = utils.measure_profile.start();
+    if (!try inputs.matches(external_inputs, cache)) return false;
+    utils.measure_profile.recordGeneratedEdit(.inputs, inputs_start);
     utils.measure_profile.recordGeneratedEdit(.prepare, prepare_start);
 
     for (generated.replacements) |replacement| {
@@ -102,6 +105,18 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     defer results.deinit(state.allocator);
     utils.measure_profile.recordGeneratedEdit(.solve, solve_start);
     if (source.hasLayoutDiagnostics(state)) return false;
+    const verify_inputs_start = utils.measure_profile.start();
+    if (!try inputs.matches(external_inputs, cache)) return false;
+    utils.measure_profile.recordGeneratedEdit(.inputs, verify_inputs_start);
+
+    const syntax_start = utils.measure_profile.start();
+    try snapshot.updateSyntax(path, generated.source, ctx.cancellation);
+    const syntax = snapshot.syntaxForSource(path, generated.source) orelse return false;
+    rebase.stateSource(state, pages, generated, syntax) catch |err| switch (err) {
+        error.OutOfMemory, error.Canceled => return err,
+        else => return false,
+    };
+    utils.measure_profile.recordGeneratedEdit(.syntax, syntax_start);
 
     const translations_start = utils.measure_profile.start();
     const previous_layout = &snapshot.layout_output.?;
@@ -113,13 +128,10 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
         state,
         pages,
         collected.translations,
-        snapshot.project.highlight.languages,
     )) return false;
     utils.measure_profile.recordGeneratedEdit(.translations, translations_start);
 
     const snapshot_start = utils.measure_profile.start();
-    const state_module = source.stateModuleForPathMutable(state, path) orelse return false;
-    @memcpy(state_module.source, generated.source);
     const conflicts_json = try core.layout.conflicts.toJson(ctx.allocator, state);
     const editor = editor_snapshot.buildTranslationPatch(
         ctx.allocator,
@@ -143,15 +155,13 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     var next_layout_owned = true;
     errdefer if (next_layout_owned) next_layout.deinit(ctx.allocator);
     utils.measure_profile.recordGeneratedEdit(.snapshot, snapshot_start);
-    const syntax_start = utils.measure_profile.start();
-    try snapshot.updateSyntax(path, generated.source, ctx.cancellation);
-    utils.measure_profile.recordGeneratedEdit(.syntax, syntax_start);
     previous_layout.deinit(ctx.allocator);
     snapshot.layout_output = next_layout;
     next_layout_owned = false;
-    source.rebaseSnapshotSource(snapshot, path, generated.source);
+    try rebase.snapshotSource(snapshot, generated);
     snapshot.generation = generation;
     discard_retained_state = false;
 
+    utils.measure_profile.recordGeneratedEdit(.applied, validation_start);
     return true;
 }

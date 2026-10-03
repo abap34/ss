@@ -8,9 +8,9 @@ const requestedSsBin = process.argv[2] ?? process.env.SS_BIN ?? path.join(root, 
 export const ssBin = resolveCommandPath(requestedSsBin);
 
 export class LspClient {
-  constructor({ cwd = root } = {}) {
+  constructor({ cwd = root, measureProfile = false } = {}) {
     this.cwd = cwd;
-    this.child = spawn(ssBin, ["lsp"], { cwd, stdio: ["pipe", "pipe", "pipe"] });
+    this.child = spawn(ssBin, ["lsp", ...(measureProfile ? ["--measure-profile"] : [])], { cwd, stdio: ["pipe", "pipe", "pipe"] });
     this.nextId = 1;
     this.buffer = Buffer.alloc(0);
     this.pending = new Map();

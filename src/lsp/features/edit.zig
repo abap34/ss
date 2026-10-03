@@ -237,9 +237,6 @@ fn fastConstraintReplacements(
         if (edit.end < edit.start or edit.end > source.len) return discardConstraintReplacements(allocator, &replacements);
         const previous_text = source[edit.start..edit.end];
         if (std.mem.eql(u8, previous_text, edit.text)) continue;
-        if (edit.start == edit.end or edit.text.len != previous_text.len) {
-            return discardConstraintReplacements(allocator, &replacements);
-        }
         const parsed_previous = parseNumericOffset(previous_text) orelse
             return discardConstraintReplacements(allocator, &replacements);
         const parsed_replacement = parseNumericOffset(edit.text) orelse
@@ -268,7 +265,10 @@ fn fastConstraintReplacements(
                 continue;
             }
             const syntax = relation.syntax orelse continue;
-            const offset_span = syntax.offset orelse continue;
+            const offset_span = syntax.offset orelse blk: {
+                const anchor = syntax.source orelse continue;
+                break :blk utils.source.ByteSpan{ .start = anchor.end, .end = anchor.end };
+            };
             if (offset_span.start != edit.start or offset_span.end != edit.end) continue;
             if (matched != null) return discardConstraintReplacements(allocator, &replacements);
             matched = relation;
@@ -305,6 +305,7 @@ fn fastConstraintReplacements(
                 .from_update = relation.from_update,
             },
             .offset_span = .{ .start = edit.start, .end = edit.end },
+            .new_length = edit.text.len,
             .literal_scale = @floatCast(literal_scale),
             .new_offset = new_offset,
         });
@@ -332,7 +333,7 @@ fn discardConstraintReplacements(
 
 fn parseNumericOffset(text: []const u8) ?f64 {
     var remaining = std.mem.trim(u8, text, " \t\r\n");
-    if (remaining.len == 0) return null;
+    if (remaining.len == 0) return 0;
     var sign: f64 = 1;
     if (remaining[0] == '+' or remaining[0] == '-') {
         if (remaining[0] == '-') sign = -1;

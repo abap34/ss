@@ -96,6 +96,8 @@ pub const WysiwygKind = enum {
 
 pub const GeneratedEditKind = enum {
     request,
+    applied,
+    inputs,
     validation,
     prepare,
     solve,
@@ -545,7 +547,7 @@ fn commandCounter(kind: CommandKind) *CountTime {
 fn printCounter(label: []const u8, counter: *const CountTime) void {
     const snap = counter.snapshot();
     if (snap.count == 0) return;
-    std.debug.print("  {s}: {d} calls, {d:.3}s aggregate\n", .{
+    std.debug.print("  {s}: {d} calls, {d:.6}s aggregate\n", .{
         label,
         snap.count,
         seconds(snap.ns),

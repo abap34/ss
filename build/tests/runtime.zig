@@ -46,6 +46,7 @@ pub fn register(suite: Suite, exe: *Step.Compile) void {
         .{ .path = "tests/runtime/lsp/diagnostics/spec.mjs" },
         .{ .path = "tests/runtime/lsp/diagnostics/layout_spec.mjs" },
         .{ .path = "tests/runtime/lsp/generated_edit/spec.mjs" },
+        .{ .path = "tests/runtime/lsp/generated_edit/reuse_spec.mjs" },
         .{ .path = "tests/runtime/lsp/manual_wysiwyg/spec.mjs" },
         .{ .path = "tests/runtime/lsp/protocol/spec.mjs" },
         .{ .path = "tests/runtime/lsp/render_cancellation/spec.mjs" },

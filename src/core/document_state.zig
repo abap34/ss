@@ -330,7 +330,6 @@ pub const DocumentState = struct {
     source_map: DocumentSourceMap,
     diagnostics: DocumentDiagnostics,
     runtime: DocumentRuntime,
-    has_external_evaluation_inputs: bool,
     // Borrowed observer owned by the host build request.
     file_inputs: ?*utils.FileInputs = null,
 
@@ -359,7 +358,6 @@ pub const DocumentState = struct {
             .source_map = .init(allocator),
             .diagnostics = .{},
             .runtime = runtime,
-            .has_external_evaluation_inputs = false,
         };
         errdefer state.deinitPartial();
 

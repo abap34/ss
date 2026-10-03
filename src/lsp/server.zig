@@ -720,6 +720,19 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     try hook.server.checkCanceled();
     var render_cache_lease = try utils.render_cache.Lease.acquire(hook.server.io);
     defer render_cache_lease.deinit();
+    var external_inputs = utils.FileInputs.init(state.allocator);
+    external_inputs.observer = editor_reuse.inputs.observer(&hook.server.render_resource_cache);
+    var external_inputs_owned = true;
+    defer if (external_inputs_owned) external_inputs.deinit();
+    state.file_inputs = &external_inputs;
+    defer state.file_inputs = null;
+    try editor_reuse.inputs.recordHighlightQueries(&external_inputs, hook.highlight_languages);
+    for (state.modules.entries.items) |module| {
+        const path = module.path orelse continue;
+        if (hook.server.documents.sourceForPath(path) == null) {
+            try editor_reuse.inputs.recordSource(&external_inputs, path, module.source);
+        }
+    }
     const layout_start = utils.measure_profile.start();
     var prepared = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph, .{
         .highlight_languages = hook.highlight_languages,
@@ -743,19 +756,34 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
 
     if (hook.prefer_translation_patch) {
         if (hook.server.analysis) |*previous| {
-            if (try editor_reuse.translateRebuilt(
-                state.allocator,
-                state,
-                &prepared,
-                previous,
-                hook.server.documents.generation,
-                hook.highlight_languages,
-                conflicts_json,
-            )) |result| {
-                var output = result;
-                output.reuse_inputs = prepared;
-                prepared_owned = false;
-                return output;
+            const previous_inputs = if (previous.retained_layout_state) |*retained|
+                if (retained.reuse_inputs) |*value| value.external_inputs else null
+            else
+                null;
+            if (previous_inputs != null and try editor_reuse.inputs.matches(&previous_inputs.?, &hook.server.render_resource_cache)) {
+                // Rendering may have observed additional inputs (including TeX
+                // recorder files) that preparation did not need to reopen.
+                for (previous_inputs.?.ordered.items) |input| try external_inputs.record(".", input.path, input.kind);
+                if (try editor_reuse.inputs.matches(&external_inputs, &hook.server.render_resource_cache) and
+                    try editor_reuse.inputs.matches(&previous_inputs.?, &hook.server.render_resource_cache))
+                {
+                    if (try editor_reuse.translateRebuilt(
+                        state.allocator,
+                        state,
+                        &prepared,
+                        previous,
+                        hook.server.documents.generation,
+                        conflicts_json,
+                    )) |result| {
+                        var output = result;
+                        external_inputs.observer = null;
+                        prepared.external_inputs = external_inputs;
+                        external_inputs_owned = false;
+                        output.reuse_inputs = prepared;
+                        prepared_owned = false;
+                        return output;
+                    }
+                }
             }
         }
     }
@@ -775,6 +803,7 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     try hook.server.checkCanceled();
     const snapshot_start = utils.measure_profile.start();
     defer utils.measure_profile.recordWysiwyg(.snapshot, snapshot_start);
+    external_inputs.observations_complete = try editor_reuse.inputs.matches(&external_inputs, &hook.server.render_resource_cache);
     const editor = try editor_snapshot.build(
         state.allocator,
         hook.server.io,
@@ -784,6 +813,9 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
         conflicts_json,
         &hook.server.editor_snapshot_cache,
     );
+    external_inputs.observer = null;
+    prepared.external_inputs = external_inputs;
+    external_inputs_owned = false;
     prepared_owned = false;
     return .{
         .reuse_inputs = prepared,

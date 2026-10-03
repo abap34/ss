@@ -84,7 +84,6 @@ test "document evaluation propagates read cancellation without a readlines diagn
     vtable.fileReadPositional = canceledRead;
     const io = std.Io{ .userdata = testing.io.userdata, .vtable = &vtable };
     try testing.expectError(error.Canceled, compiler.lowering.evaluateDocument(&evaluation.state, &evaluation.graph, .{ .io = io }));
-    try testing.expect(evaluation.state.has_external_evaluation_inputs);
     try testing.expectEqual(diagnostic_count, evaluation.state.diagnostics.entries.items.len);
 }
 

@@ -12,6 +12,7 @@ pub const Replacement = struct {
     index: usize,
     expected: model.Constraint,
     offset_span: utils.source.ByteSpan,
+    new_length: usize,
     literal_scale: f32,
     new_offset: f32,
 };
@@ -27,27 +28,57 @@ pub const Edit = struct {
     mode: Mode,
     replacements: []const Replacement,
 
-    /// Checks every unchanged interval once, accepting replacements in either source order.
+    /// Validate the entire edit, including unchanged intervals and insertion points.
     pub fn onlyChangesOffsets(self: *const Edit) bool {
-        if (self.base_source.len != self.source.len) return false;
-        var cursor: usize = 0;
+        var old_cursor: usize = 0;
+        var new_cursor: usize = 0;
+        var previous_start: ?usize = null;
         for (0..self.replacements.len) |_| {
-            var next: ?utils.source.ByteSpan = null;
+            var next: ?Replacement = null;
             for (self.replacements) |replacement| {
-                const span = replacement.offset_span;
-                if (span.start < cursor) continue;
-                if (next == null or span.start < next.?.start) next = span;
+                if (previous_start) |start| if (replacement.offset_span.start <= start) continue;
+                if (next == null or replacement.offset_span.start < next.?.offset_span.start) next = replacement;
             }
-            const span = next orelse return false;
-            if (span.end <= span.start or span.end > self.source.len) return false;
-            if (!std.mem.eql(u8, self.base_source[cursor..span.start], self.source[cursor..span.start])) return false;
+            const replacement = next orelse return false;
+            const span = replacement.offset_span;
+            if (span.start < old_cursor or span.end < span.start or span.end > self.base_source.len) return false;
+            const unchanged = span.start - old_cursor;
+            const new_start = std.math.add(usize, new_cursor, unchanged) catch return false;
+            const new_end = std.math.add(usize, new_start, replacement.new_length) catch return false;
+            if (new_end > self.source.len) return false;
+            if (!std.mem.eql(u8, self.base_source[old_cursor..span.start], self.source[new_cursor..new_start])) return false;
             const before = self.base_source[span.start..span.end];
-            const after = self.source[span.start..span.end];
+            const after = self.source[new_start..new_end];
             if (std.mem.indexOfScalar(u8, before, '\n') != null or
                 std.mem.indexOfScalar(u8, after, '\n') != null or std.mem.eql(u8, before, after)) return false;
-            cursor = span.end;
+            old_cursor = span.end;
+            new_cursor = new_end;
+            previous_start = span.start;
         }
-        return std.mem.eql(u8, self.base_source[cursor..], self.source[cursor..]);
+        return std.mem.eql(u8, self.base_source[old_cursor..], self.source[new_cursor..]);
+    }
+
+    pub fn replacementSpan(self: *const Edit, replacement: Replacement) utils.source.ByteSpan {
+        var start = replacement.offset_span.start;
+        for (self.replacements) |other| {
+            if (other.offset_span.start >= replacement.offset_span.start) continue;
+            start = start - (other.offset_span.end - other.offset_span.start) + other.new_length;
+        }
+        return .{ .start = start, .end = start + replacement.new_length };
+    }
+
+    pub fn mapOffset(self: *const Edit, offset: usize) usize {
+        if (offset == std.math.maxInt(usize)) return offset;
+        var result = offset;
+        for (self.replacements) |replacement| {
+            const span = replacement.offset_span;
+            if (offset >= span.end) result = result - (span.end - span.start) + replacement.new_length;
+        }
+        return result;
+    }
+
+    pub fn mapSpan(self: *const Edit, span: utils.source.ByteSpan) utils.source.ByteSpan {
+        return .{ .start = self.mapOffset(span.start), .end = self.mapOffset(span.end) };
     }
 
     pub fn clone(edit: *const Edit, allocator: std.mem.Allocator) !Edit {

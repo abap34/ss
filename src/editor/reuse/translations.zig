@@ -1,6 +1,5 @@
 const std = @import("std");
 const core = @import("core");
-const utils = @import("utils");
 const editor_snapshot = @import("../snapshot.zig");
 
 pub const CollectedTranslations = struct {
@@ -73,53 +72,11 @@ pub fn collectTranslations(
     };
 }
 
-pub fn hasExternalRenderDependency(
-    pages: *const core.prepared.PreparedPages,
-    highlight_languages: []const utils.highlight.Language,
-) bool {
-    for (highlight_languages) |language| {
-        if (!isBuiltinHighlightQuery(language.query)) return true;
-    }
-    for (pages.pages) |page| {
-        for (page.objects) |object| {
-            for (object.latex_preamble) |entry| {
-                if (entry.source == .file) return true;
-            }
-            switch (object.render.kind) {
-                .raster_asset, .latex => return true,
-                .vector_asset => {
-                    if (core.fontawesome.parseSource(object.content) == null) return true;
-                },
-                else => {},
-            }
-            for (object.asset_deps) |dependency| switch (dependency.kind) {
-                .vector_pdf, .raster_asset, .inline_math, .display_math, .latex_body => return true,
-                else => {},
-            };
-        }
-    }
-    return false;
-}
-
-fn isBuiltinHighlightQuery(query: []const u8) bool {
-    for (utils.highlight.builtin_languages) |language| {
-        if (std.mem.eql(u8, language.query, query)) return true;
-    }
-    return false;
-}
-
 pub fn translationPatchPreservesRenderedOutput(
     state: *core.DocumentState,
     pages: *const core.prepared.PreparedPages,
     translations: []const editor_snapshot.Translation,
-    highlight_languages: []const utils.highlight.Language,
 ) bool {
-    if (state.has_external_evaluation_inputs or
-        hasExternalRenderDependency(pages, highlight_languages))
-    {
-        return false;
-    }
-
     for (state.graph.nodes.items) |*node| {
         if (node.kind != .object or !node.attached or node.discarded) continue;
         const render = core.render_policy.resolve(state, node);

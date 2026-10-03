@@ -1118,7 +1118,6 @@ const BuiltinContext = struct {
     }
 
     pub fn readlines(self: *BuiltinContext, requested: []const u8) ![]const u8 {
-        self.state.has_external_evaluation_inputs = true;
         if (self.state.file_inputs) |inputs| try inputs.record(self.state.asset_base_dir, requested, .file);
         const resolved = try resolveAssetPath(self.state.allocator, self.state.asset_base_dir, requested);
         defer self.state.allocator.free(resolved);
@@ -1345,7 +1344,6 @@ fn emitUserReport(
 }
 
 fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_id: core.NodeId, origin: core.SourceOrigin) !void {
-    state.has_external_evaluation_inputs = true;
     const node = state.getNode(object_id) orelse return error.UnknownNode;
     const diagnostic_origin = assetContentDiagnosticOrigin(node, origin);
     if (node.object_kind == null or node.object_kind.? != .asset or node.content == null) {
