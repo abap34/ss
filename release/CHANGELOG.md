@@ -10,6 +10,16 @@ All notable changes to `ss` are recorded here.
   `show_table` / `show_table!` and `to_markdown`. CSV tables preserve numeric
   text, escape Markdown syntax, and track file changes through `readlines`.
 
+### Changed
+
+- Made inline and display math share the surrounding text size through
+  `text.math_scale`, with a 1.05 multiplier in the default theme. Multiline
+  formulas now grow in height without shrinking their base letters.
+  Replaced the math height factors with `math_scale`,
+  `display_math_gap`, and opt-in `display_math_fit = MathFit.shrink`.
+  Display formulas preserve their size by default and report constrained-frame
+  overflow through the existing layout diagnostics.
+
 ## [0.8.2] - 2026-09-17
 
 ### Added

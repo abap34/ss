@@ -132,10 +132,9 @@ pub fn appendTextSpan(
 }
 
 pub fn appendMathSpan(ctx: Context, spans: *std.ArrayList(InlineSpan), value: []const u8, text: TextPaint, kind: LatexFragmentKind) !void {
-    const target_height = @max(text.font_size * text.inline_math_height_factor, 1);
     const asset = try artifacts.renderLatexToPdf(ctx.assets, value, ctx.latex_preamble, ctx.latex_engine, kind);
     errdefer ctx.assets.allocator.free(asset.path);
-    const scale = if (asset.reference_height > 0) target_height / asset.reference_height else 1;
+    const scale = mathScale(asset, text);
     try spans.append(ctx.assets.allocator, .{
         .content = .{ .latex = .{ .path = asset.path, .page_index = asset.page_index } },
         .text = value,
@@ -231,11 +230,22 @@ pub fn displayMathSource(allocator: Allocator, runs: []const Run) ![]const u8 {
     return allocator.dupe(u8, trimmed);
 }
 
-pub fn fitDisplayMathBlockSize(source_width: f32, source_height: f32, max_width: f32, text: TextPaint) Size {
-    if (source_width <= 0 or source_height <= 0) return .{ .width = @max(max_width, 1), .height = @max(text.line_height, 1) };
-    const target_height = @max(text.line_height, text.font_size * text.display_math_height_factor);
-    const scale = @min(max_width / source_width, target_height / source_height);
-    return .{ .width = @max(source_width * scale, 1), .height = @max(source_height * scale, 1) };
+// Calibrate against a formula-independent strut, so scripts and extra rows
+// increase occupied space without changing the base glyph size.
+fn mathScale(asset: artifacts.LatexAsset, text: TextPaint) f32 {
+    return if (asset.reference_height > 0) text.font_size * text.math_scale / asset.reference_height else 1;
+}
+
+pub fn displayMathBlockSize(asset: artifacts.LatexAsset, max_width: f32, text: TextPaint) Size {
+    var scale = mathScale(asset, text);
+    if (text.display_math_fit == .shrink and asset.width > 0) {
+        scale = @min(scale, @max(max_width, 1) / asset.width);
+    }
+    return .{ .width = @max(asset.width * scale, 1), .height = @max(asset.height * scale, 1) };
+}
+
+pub fn displayMathGap(text: TextPaint) f32 {
+    return text.font_size * text.display_math_gap;
 }
 
 pub fn spanDecoration(span: *const InlineSpan) render_emitter.TextDecoration {
@@ -397,8 +407,8 @@ const BlockBuilder = struct {
         if (source.len == 0) return;
         const asset = try artifacts.renderLatexToPdf(self.ctx.assets, source, self.ctx.latex_preamble, self.ctx.latex_engine, .display_math);
         errdefer allocator.free(asset.path);
-        const size = fitDisplayMathBlockSize(asset.width, asset.height, self.width, self.text);
-        const pad = @max(self.text.line_height * 0.2, 2);
+        const size = displayMathBlockSize(asset, self.width, self.text);
+        const pad = displayMathGap(self.text);
         try self.segments.append(allocator, .{ .top = self.height + pad, .content = .{ .display_math = .{ .asset = asset, .size = size } } });
         include(&self.ink, .{ .x = 0, .y = self.height + pad, .width = size.width, .height = size.height });
         self.height += size.height + pad * 2;

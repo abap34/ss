@@ -56,6 +56,7 @@ pub fn register(suite: Suite, exe: *Step.Compile) void {
         .{ .path = "tests/runtime/markdown_table_alignment_runtime_spec.mjs" },
         .{ .path = "tests/runtime/math_pdf_runtime_spec.mjs" },
         .{ .path = "tests/runtime/math_scaling_runtime_spec.mjs" },
+        .{ .path = "tests/runtime/render/math/spec.mjs", .name = "test-math-sizing", .description = "Check inherited math sizing and explicit width fitting" },
         .{ .path = "tests/runtime/render_page_bounds_runtime_spec.mjs" },
         .{ .path = "tests/runtime/render_cache_runtime_spec.mjs" },
         .{ .path = "tests/runtime/render_diagnostics_runtime_spec.mjs" },

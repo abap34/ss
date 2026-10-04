@@ -14,6 +14,7 @@ fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme
     color = options.text_color ?? c"0.08,0.08,0.08"
     link_color = options.accent_color ?? c"0.1,0.25,0.75"
     markdown_bold_color = options.accent_color
+    math_scale = 1.05
   }
   return Theme {
     body = TextBlockStyle {

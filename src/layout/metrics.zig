@@ -381,13 +381,11 @@ fn markdownLineVisualLineCount(state: anytype, cache: ?*MeasurementCache, style:
 
         total += markdownRunSliceVisualLineCount(state, cache, style, runs[segment_start..index], max_width);
 
-        const display_start = index;
         while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
-        const visual_lines = displayMathRunLineCount(runs[display_start..index]);
-        if (visual_lines > 0) {
-            const block_height = displayMathBlockHeightForLines(style, visual_lines, style.display_math_height_factor);
-            total += @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(block_height / @max(style.line_height, 1)))));
-        }
+        // This path has no TeX measurement provider. Reserve one base-sized
+        // block; final layout uses the renderer's measured formula geometry.
+        const block_height = style.font_size * (style.math_scale + 2 * style.display_math_gap);
+        total += @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(block_height / @max(style.line_height, 1)))));
         segment_start = index;
     }
 
@@ -461,43 +459,6 @@ fn markdownLineContainsMeasuredRenderArtifact(line: markdown.Line) bool {
         }
     }
     return false;
-}
-
-fn displayMathRunLineCount(runs: []const markdown.Run) usize {
-    var count: usize = 0;
-    var line_has_content = false;
-    for (runs) |run| {
-        var index: usize = 0;
-        while (index < run.text.len) {
-            const byte = run.text[index];
-            if (byte == '\n') {
-                if (line_has_content) {
-                    count += 1;
-                    line_has_content = false;
-                }
-                index += 1;
-                continue;
-            }
-            if (byte == '\\' and index + 1 < run.text.len and run.text[index + 1] == '\\') {
-                count += 1;
-                line_has_content = false;
-                index += 2;
-                continue;
-            }
-            if (!(byte == ' ' or byte == '\t' or byte == '\r')) {
-                line_has_content = true;
-            }
-            index += 1;
-        }
-    }
-    if (line_has_content) count += 1;
-    return count;
-}
-
-fn displayMathBlockHeightForLines(style: TextPaint, visual_lines: usize, height_factor: f32) f32 {
-    const line_count = @as(f32, @floatFromInt(@max(visual_lines, 1)));
-    const target_height = line_count * @max(style.line_height, style.font_size * height_factor);
-    return target_height + @max(style.line_height * 0.2, 2.0) * 2.0;
 }
 
 fn shouldUseFullWrapWidth(state: anytype, node: *const Node, content: []const u8) bool {

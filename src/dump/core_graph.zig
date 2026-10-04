@@ -292,9 +292,10 @@ fn writeInlineTextPaint(object: *json.Object, spec: anytype) !void {
     try writeColor(object, "link_color", spec.link_color);
     try writeOptionalColor(object, "markdown_bold_color", spec.markdown_bold_color);
     try writeMarkdownUnderlinePaint(object, spec.markdown_underline);
-    try object.floatField("inline_math_height_factor", spec.inline_math_height_factor, "{d:.4}");
+    try object.floatField("math_scale", spec.math_scale, "{d:.4}");
     try object.floatField("inline_math_spacing", spec.inline_math_spacing, "{d:.4}");
-    try object.floatField("display_math_height_factor", spec.display_math_height_factor, "{d:.4}");
+    try object.floatField("display_math_gap", spec.display_math_gap, "{d:.4}");
+    try object.enumTagField("display_math_fit", spec.display_math_fit);
     try object.enumTagField("math_align", spec.math_align);
     try object.floatField("emoji_spacing", spec.emoji_spacing, "{d:.4}");
 }

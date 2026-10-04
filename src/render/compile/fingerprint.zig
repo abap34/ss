@@ -312,9 +312,10 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.Te
         hashMarkdownUnderlinePaint(hasher, text.markdown_underline);
         hashMarkdownQuotePaint(hasher, text.markdown_quote);
         for (text.markdown_headings) |heading| hashOptionalHeadingPaint(hasher, heading);
-        hashF32(hasher, text.inline_math_height_factor);
+        hashF32(hasher, text.math_scale);
         hashF32(hasher, text.inline_math_spacing);
-        hashF32(hasher, text.display_math_height_factor);
+        hashF32(hasher, text.display_math_gap);
+        std.hash.autoHash(hasher, @intFromEnum(text.display_math_fit));
         hashHorizontalAlign(hasher, text.math_align);
         hashF32(hasher, text.emoji_spacing);
         hashF32(hasher, text.markdown_block_gap);
@@ -361,9 +362,10 @@ fn hashOptionalHeadingPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy
         hashColor(hasher, heading.link_color);
         hashOptionalColor(hasher, heading.markdown_bold_color);
         hashMarkdownUnderlinePaint(hasher, heading.markdown_underline);
-        hashF32(hasher, heading.inline_math_height_factor);
+        hashF32(hasher, heading.math_scale);
         hashF32(hasher, heading.inline_math_spacing);
-        hashF32(hasher, heading.display_math_height_factor);
+        hashF32(hasher, heading.display_math_gap);
+        std.hash.autoHash(hasher, @intFromEnum(heading.display_math_fit));
         std.hash.autoHash(hasher, @intFromEnum(heading.math_align));
         hashF32(hasher, heading.emoji_spacing);
     }

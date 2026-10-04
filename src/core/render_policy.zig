@@ -160,12 +160,15 @@ pub const MarkdownHeadingPaint = struct {
     link_color: Color,
     markdown_bold_color: ?Color,
     markdown_underline: MarkdownUnderlinePaint,
-    inline_math_height_factor: f32,
+    math_scale: f32,
     inline_math_spacing: f32,
-    display_math_height_factor: f32,
+    display_math_gap: f32,
+    display_math_fit: MathFit,
     math_align: HorizontalAlign,
     emoji_spacing: f32,
 };
+
+pub const MathFit = enum { none, shrink };
 
 pub const TextPaint = struct {
     font: FontFace,
@@ -180,9 +183,10 @@ pub const TextPaint = struct {
     markdown_underline: MarkdownUnderlinePaint,
     markdown_quote: MarkdownQuotePaint,
     markdown_headings: [6]?MarkdownHeadingPaint,
-    inline_math_height_factor: f32,
+    math_scale: f32,
     inline_math_spacing: f32,
-    display_math_height_factor: f32,
+    display_math_gap: f32,
+    display_math_fit: MathFit,
     math_align: HorizontalAlign,
     emoji_spacing: f32,
     markdown_block_gap: f32,
@@ -228,9 +232,10 @@ pub const TextPaint = struct {
         result.link_color = heading.link_color;
         result.markdown_bold_color = heading.markdown_bold_color;
         result.markdown_underline = heading.markdown_underline;
-        result.inline_math_height_factor = heading.inline_math_height_factor;
+        result.math_scale = heading.math_scale;
         result.inline_math_spacing = heading.inline_math_spacing;
-        result.display_math_height_factor = heading.display_math_height_factor;
+        result.display_math_gap = heading.display_math_gap;
+        result.display_math_fit = heading.display_math_fit;
         result.math_align = heading.math_align;
         result.emoji_spacing = heading.emoji_spacing;
         return result;
@@ -392,9 +397,10 @@ fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
             resolveMarkdownHeading(node, "h5"),
             resolveMarkdownHeading(node, "h6"),
         },
-        .inline_math_height_factor = positiveRecordFloatProperty(state, node, "text", "inline_math_height_factor") orelse 1,
+        .math_scale = positiveRecordFloatProperty(state, node, "text", "math_scale") orelse 1,
         .inline_math_spacing = nonNegativeRecordFloatProperty(state, node, "text", "inline_math_spacing") orelse 0,
-        .display_math_height_factor = positiveRecordFloatProperty(state, node, "text", "display_math_height_factor") orelse 2,
+        .display_math_gap = nonNegativeRecordFloatProperty(state, node, "text", "display_math_gap") orelse 0.2,
+        .display_math_fit = parseEnum(MathFit, fields.read(state.allocator, state, node, "text", &.{"display_math_fit"}, .text)) orelse .none,
         .math_align = inheritedTextHorizontalAlign(state, node) orelse .center,
         .emoji_spacing = nonNegativeRecordFloatProperty(state, node, "text", "emoji_spacing") orelse 0,
         .markdown_block_gap = nonNegativeRecordFloatProperty(state, node, "text", "markdown_block_gap") orelse 0,
@@ -442,9 +448,10 @@ fn resolveMarkdownHeading(node: *const Node, field_name: []const u8) ?MarkdownHe
         .link_color = parseMarkdownHeadingTextColor(node, field_name, "link_color") orelse FALLBACK_LINK_COLOR,
         .markdown_bold_color = parseMarkdownHeadingTextColor(node, field_name, "markdown_bold_color"),
         .markdown_underline = resolveMarkdownHeadingUnderline(node, field_name),
-        .inline_math_height_factor = positiveMarkdownHeadingTextFloatProperty(node, field_name, "inline_math_height_factor") orelse 1,
+        .math_scale = positiveMarkdownHeadingTextFloatProperty(node, field_name, "math_scale") orelse 1,
         .inline_math_spacing = nonNegativeMarkdownHeadingTextFloatProperty(node, field_name, "inline_math_spacing") orelse 0,
-        .display_math_height_factor = positiveMarkdownHeadingTextFloatProperty(node, field_name, "display_math_height_factor") orelse 2,
+        .display_math_gap = nonNegativeMarkdownHeadingTextFloatProperty(node, field_name, "display_math_gap") orelse 0.2,
+        .display_math_fit = parseEnum(MathFit, fields.readExplicit(node, "markdown_headings", &.{ field_name, "text", "display_math_fit" }, .text)) orelse .none,
         .math_align = parseMarkdownHeadingHorizontalAlign(node, field_name) orelse .center,
         .emoji_spacing = nonNegativeMarkdownHeadingTextFloatProperty(node, field_name, "emoji_spacing") orelse 0,
     };

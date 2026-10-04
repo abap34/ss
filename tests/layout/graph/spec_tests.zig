@@ -199,8 +199,8 @@ fn setTextLineHeight(state: *core.DocumentState, node_id: model.NodeId, value: [
     try setRecordStringField(state, node_id, "text", "line_height", value);
 }
 
-fn setTextInlineMathHeightFactor(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordStringField(state, node_id, "text", "inline_math_height_factor", value);
+fn setTextMathScale(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
+    try setRecordStringField(state, node_id, "text", "math_scale", value);
 }
 
 fn setTextMarkdownBoldColor(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
@@ -2444,7 +2444,7 @@ test "render policy: invalid numeric properties fall back before rendering" {
     const object = try state.makeObject(page, "bad-numbers", null, .text, .text, "Hello");
     try setTextSize(&state, object, "-1");
     try setTextLineHeight(&state, object, "nan");
-    try setTextInlineMathHeightFactor(&state, object, "0");
+    try setTextMathScale(&state, object, "0");
     try setChromePadX(&state, object, "-10");
     try setChromePadY(&state, object, "inf");
     try setChromeLineWidth(&state, object, "-2");
@@ -2456,7 +2456,7 @@ test "render policy: invalid numeric properties fall back before rendering" {
     const text = resolved.text.?;
     try expectFloat(20, text.font_size);
     try expectFloat(29, text.line_height);
-    try expectFloat(1, text.inline_math_height_factor);
+    try expectFloat(1, text.math_scale);
     try expectFloat(0, resolved.chrome.pad_x);
     try expectFloat(0, resolved.chrome.pad_y);
     try expectFloat(0, resolved.chrome.line_width);
@@ -2594,9 +2594,10 @@ test "render policy: markdown headings resolve their own text paint" {
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "color" }, .{ .string = "0.1,0.6,0.2" });
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "font", "family" }, .{ .string = "Avenir Next" });
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "font", "weight" }, .{ .number = 650 });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "inline_math_height_factor" }, .{ .number = 1.3 });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math_scale" }, .{ .number = 1.3 });
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "inline_math_spacing" }, .{ .number = 0.2 });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "display_math_height_factor" }, .{ .number = 2.4 });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "display_math_gap" }, .{ .number = 2.4 });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "display_math_fit" }, .{ .string = "shrink" });
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math_align" }, .{ .string = "left" });
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "emoji_spacing" }, .{ .number = 0.25 });
 
@@ -2612,9 +2613,10 @@ test "render policy: markdown headings resolve their own text paint" {
     try expectFloat(35, selected.font_size);
     try expectFloat(42, selected.line_height);
     try expectColor(0.1, 0.6, 0.2, selected.color);
-    try expectFloat(1.3, selected.inline_math_height_factor);
+    try expectFloat(1.3, selected.math_scale);
     try expectFloat(0.2, selected.inline_math_spacing);
-    try expectFloat(2.4, selected.display_math_height_factor);
+    try expectFloat(2.4, selected.display_math_gap);
+    try testing.expectEqual(core.render_policy.MathFit.shrink, selected.display_math_fit);
     try testing.expectEqual(core.render_policy.HorizontalAlign.left, selected.math_align);
     try expectFloat(0.25, selected.emoji_spacing);
 }

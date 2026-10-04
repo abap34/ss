@@ -9,7 +9,7 @@ const module_loader = compiler.module_loader;
 const core = compiler.core;
 
 pub const BodyTextDefaults = struct {
-    inline_math_height_factor: f32,
+    math_scale: f32,
     inline_math_spacing: f32,
     markdown_table_line_width: f32,
 };
@@ -310,7 +310,7 @@ pub fn expectBodyTextDefaults(
         if (!std.mem.eql(u8, role, "body")) continue;
         const render = core.render_policy.resolve(&state, &node);
         const text = render.text orelse continue;
-        try std.testing.expectApproxEqAbs(expected.inline_math_height_factor, text.inline_math_height_factor, 0.0001);
+        try std.testing.expectApproxEqAbs(expected.math_scale, text.math_scale, 0.0001);
         try std.testing.expectApproxEqAbs(expected.inline_math_spacing, text.inline_math_spacing, 0.0001);
         try std.testing.expectApproxEqAbs(expected.markdown_table_line_width, text.markdown_table_line_width, 0.0001);
         return;

@@ -20,7 +20,7 @@ const PreparedParagraph = inline_layout.PreparedParagraph;
 const paragraphPaint = inline_layout.paragraphPaint;
 const deinitInlineSpans = inline_layout.deinitInlineSpans;
 const displayMathSource = inline_layout.displayMathSource;
-const fitDisplayMathBlockSize = inline_layout.fitDisplayMathBlockSize;
+const displayMathBlockSize = inline_layout.displayMathBlockSize;
 const spanDecoration = inline_layout.spanDecoration;
 const lineContainsDisplayMath = inline_layout.lineContainsDisplayMath;
 const LatexAsset = artifacts.LatexAsset;
@@ -3156,7 +3156,7 @@ fn inlineLineConstrainedLogicalWidth(ctx: *DrawContext, line: Line, text: TextPa
         if (source_text.len > 0) {
             const asset = try artifacts.renderLatexToPdf(artifactContext(ctx), source_text, ctx.latex_preamble, ctx.latex_engine, .display_math);
             defer ctx.allocator.free(asset.path);
-            const fitted = fitDisplayMathBlockSize(asset.width, asset.height, width, text);
+            const fitted = displayMathBlockSize(asset, width, text);
             max_width = @max(max_width, fitted.width);
         }
         segment_start = index;
@@ -3239,10 +3239,10 @@ fn drawInlineRunSliceAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width:
 fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, horizontal_align: HorizontalAlign) !f32 {
     const asset = try artifacts.renderLatexToPdf(artifactContext(ctx), source, ctx.latex_preamble, ctx.latex_engine, .display_math);
     defer ctx.allocator.free(asset.path);
-    const fitted = fitDisplayMathBlockSize(asset.width, asset.height, width, text);
+    const fitted = displayMathBlockSize(asset, width, text);
     const draw_width = fitted.width;
     const draw_height = fitted.height;
-    const vertical_pad = @max(text.line_height * 0.2, 2.0);
+    const vertical_pad = inline_layout.displayMathGap(text);
     const block_height = draw_height + vertical_pad * 2.0;
     const baseline_from_top = try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height);
     const block_top = baseline_bl + baseline_from_top;
