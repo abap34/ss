@@ -4,6 +4,12 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- Added `csv_map` for validated CSV cell callbacks and `std:data/csv` with
+  `show_table` / `show_table!` and `to_markdown`. CSV tables preserve numeric
+  text, escape Markdown syntax, and track file changes through `readlines`.
+
 ## [0.8.2] - 2026-09-17
 
 ### Added

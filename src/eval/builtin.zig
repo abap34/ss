@@ -4,6 +4,7 @@ const ast = @import("ast");
 const registry = @import("../language/registry.zig");
 const eval_value = @import("value.zig");
 const path_eval = @import("path.zig");
+const csv = @import("csv.zig");
 
 pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!core.Value {
     try ctx.checkArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity);
@@ -122,6 +123,46 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .readlines => blk: {
             const path = try ctx.evalStringArg(call, 0);
             break :blk .{ .string = try ctx.readlines(path) };
+        },
+        .csv_map => blk: {
+            const input = try ctx.evalStringArg(call, 0);
+            var callback = try evalFunctionArg(ctx, call, 1);
+            defer callback.deinit(ctx.state.allocator);
+            var extras = try evalExtraArgs(ctx, call, 2);
+            defer extras.deinit(ctx.state.allocator);
+            defer deinitValues(ctx.state.allocator, extras.items);
+            var failure = csv.Failure{};
+            var table = csv.parse(ctx.state.allocator, input, &failure, ctx.evaluation.cancellation) catch |err| {
+                if (err != error.InvalidCsv) return err;
+                const message = try std.fmt.allocPrint(ctx.state.allocator, "CsvParseFailed: record {d}, field {d}: {s}", .{ failure.row, failure.column, failure.reason });
+                defer ctx.state.allocator.free(message);
+                try ctx.emitDiagnosticReport(.@"error", message);
+                break :blk .{ .string = try ctx.ownString(try ctx.state.allocator.dupe(u8, "")) };
+            };
+            defer table.deinit();
+            var out = std.ArrayList(u8).empty;
+            defer out.deinit(ctx.state.allocator);
+            var provenance = std.ArrayList(core.ContentProvenance).empty;
+            defer deinitContentProvenance(ctx.state.allocator, &provenance);
+            for (table.cells.items) |cell| {
+                var args = std.ArrayList(core.Value).empty;
+                defer args.deinit(ctx.state.allocator);
+                // A callback may retain a cell in a binding or an object.
+                const owned_cell = try ctx.ownString(try ctx.state.allocator.dupe(u8, cell.text));
+                try args.appendSlice(ctx.state.allocator, &.{
+                    .{ .string = owned_cell },
+                    .{ .number = @floatFromInt(cell.row) },
+                    .{ .number = @floatFromInt(cell.column) },
+                    .{ .boolean = cell.end_row },
+                });
+                try args.appendSlice(ctx.state.allocator, extras.items);
+                var result = try ctx.invokeCallback(callback, args.items);
+                defer result.deinit(ctx.state.allocator);
+                const text = try eval_value.string(result);
+                try appendContentProvenance(ctx.state.allocator, &provenance, ctx.state.stringProvenance(text), out.items.len);
+                try out.appendSlice(ctx.state.allocator, text);
+            }
+            break :blk .{ .string = try ctx.ownStringWithProvenance(try out.toOwnedSlice(ctx.state.allocator), provenance.items) };
         },
         .foreach => blk: {
             var target = try ctx.evalExprValue(call.args.items[0]);

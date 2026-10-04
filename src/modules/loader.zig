@@ -57,6 +57,7 @@ const EmbeddedModule = struct {
 };
 
 const embedded_modules = [_]EmbeddedModule{
+    .{ .spec = "std:data/csv", .source = stdlib_assets.data_csv },
     .{ .spec = "std:core/prelude", .source = stdlib_assets.core_prelude },
     .{ .spec = "std:core/classes", .source = stdlib_assets.core_classes },
     .{ .spec = "std:core/layout", .source = stdlib_assets.core_layout },

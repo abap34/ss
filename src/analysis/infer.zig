@@ -990,7 +990,12 @@ fn validateCallbackShape(
         .any, .none => Type.object,
         else => Type.any,
     };
-    if (supplied_arg_count == 1) {
+    if (descriptor.op == .csv_map) {
+        const supplied_types = [_]Type{ Type.string, Type.number, Type.number, Type.boolean };
+        for (supplied_types, 0..) |ty, index| {
+            try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[index]), ty, origin, .UnmatchedArgumentType);
+        }
+    } else if (supplied_arg_count == 1) {
         try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[0]), item_type, origin, .UnmatchedArgumentType);
     } else if (supplied_arg_count == 2) {
         switch (descriptor.op) {

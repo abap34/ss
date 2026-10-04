@@ -14,6 +14,7 @@ pub fn register(suite: Suite, exe: *Step.Compile) void {
     const b = suite.ctx.b;
     const test_step = suite.all;
     const specs = [_]Spec{
+        .{ .path = "tests/runtime/data/csv/spec.mjs", .name = "test-csv", .description = "Check CSV parsing, table rendering, and editor inputs" },
         .{ .path = "tests/editor/build-status/spec.mjs" },
         .{ .path = "tests/editor/component-width/spec.mjs" },
         .{ .path = "tests/editor/deletion/spec.mjs" },
