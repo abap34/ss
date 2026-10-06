@@ -4,14 +4,22 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-06
+
 ### Added
 
+- Added `ss present` and fullscreen presentation mode in the VS Code WYSIWYG
+  editor, with shared navigation, drawing, and auto-hiding controls.
 - Added `csv_map` for validated CSV cell callbacks and `std:data/csv` with
   `show_table` / `show_table!` and `to_markdown`. CSV tables preserve numeric
   text, escape Markdown syntax, and track file changes through `readlines`.
 
 ### Changed
 
+- Added support for building with Zig 0.16 and 0.17.
+- Expanded incremental compilation for position edits and updated bundled
+  tree-sitter languages.
+- Made relative constraint adjustment clearer in the WYSIWYG editor.
 - Made inline and display math share the surrounding text size through
   `text.math_scale`, with a 1.05 multiplier in the default theme. Multiline
   formulas now grow in height without shrinking their base letters.
@@ -19,6 +27,12 @@ All notable changes to `ss` are recorded here.
   `display_math_gap`, and opt-in `display_math_fit = MathFit.shrink`.
   Display formulas preserve their size by default and report constrained-frame
   overflow through the existing layout diagnostics.
+
+### Fixed
+
+- Corrected page-wide horizontal split layouts and allowed relative dragging
+  when position relations constrain only part of an object's position.
+- Highlighted `fn/!` as a single keyword.
 
 ## [0.8.2] - 2026-09-17
 
