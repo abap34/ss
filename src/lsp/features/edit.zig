@@ -154,9 +154,6 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         }
         const adjustments = try edit_relations.collect(ctx.allocator, &layout.report, &editor.model, path, node_id, binding, page_span, to_x - from_x, to_y - from_y);
         defer ctx.allocator.free(adjustments);
-        if (!edit_relations.haveBothAxes(adjustments)) {
-            return try statusJson(ctx.allocator, "unsupported", "Keeping relations requires expressible horizontal and vertical position relations.");
-        }
         break :blk (try editor_edit.relativePosition(ctx.allocator, source, page_span, adjustments)) orelse
             return try statusJson(ctx.allocator, "unsupported", "The page insertion point could not be located.");
     } else blk: {
