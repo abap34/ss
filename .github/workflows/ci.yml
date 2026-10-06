@@ -13,8 +13,14 @@ env:
 
 jobs:
   test:
-    name: Zig build test
+    name: Zig ${{ matrix.zig-version }} build test
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        zig-version: ['0.16.0', '0.17.0']
+    env:
+      ZIG_VERSION: ${{ matrix.zig-version }}
 
     steps:
       - name: Check out repository
@@ -159,8 +165,13 @@ jobs:
           - environment: macOS 15 ARM64, Homebrew packages
             runner: macos-15
             qpdf-version: system
+          - environment: macOS 15 ARM64, Zig 0.17, Homebrew packages
+            runner: macos-15
+            qpdf-version: system
+            zig-version: '0.17.0'
 
     env:
+      ZIG_VERSION: ${{ matrix.zig-version || '0.16.0' }}
       QPDF_PREFIX: ${{ github.workspace }}/.qpdf/${{ matrix.qpdf-version }}
 
     steps:
