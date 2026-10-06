@@ -279,6 +279,8 @@ async function testRelativeEditsCompleteMovedAxes() {
       {
         name: `composition-right-${operator}`,
         body: `guide ${operator} item`,
+        // Equal splits start at the default page inset.
+        guideLeft: operator === "|=|" || operator === "/=/" ? 72 : 100,
         verify: operator === "||" ? (updated) => {
           assert(updated.includes("~!~ item.left == guide.right + 57"), updated);
           assert(updated.includes("~!~ item.top == guide.top - 20"), updated);
@@ -322,7 +324,7 @@ ${scenario.policy ?? "vflow(LayoutPolicy.top)"}
 ${scenario.header ?? ""}
 ${scenario.guide ?? 'let guide = text!("Guide")'}
 ${scenario.item ?? 'let item = text!("Move me")'}
-${scenario.fixGuide === false || scenario.guide ? "" : "~ guide.left == page.left + 100\n~ guide.top == page.top - 100"}
+${scenario.fixGuide === false || scenario.guide ? "" : `~ guide.left == page.left + ${scenario.guideLeft ?? 100}\n~ guide.top == page.top - 100`}
 ${scenario.body}
 end
 `;
