@@ -39,6 +39,8 @@ export class InteractionController {
     this.state = state;
     this.actions = actions;
     this.drag = null;
+    this.shiftPressed = false;
+    this.shiftKeys = new Set();
     this.placement = null;
     this.lineEndpointDrag = null;
     this.shapeResizeDrag = null;
@@ -47,6 +49,7 @@ export class InteractionController {
       {
         render: actions.render,
         finish: () => this.notifyPointerOperationFinished(),
+        stateChanged: () => this.actions.relativeAdjustmentChanged?.(),
       },
     );
     this.updateDrag = this.updateDrag.bind(this);
@@ -62,7 +65,15 @@ export class InteractionController {
     this.finishShapeResize = this.finishShapeResize.bind(this);
     this.cancelShapeResize = this.cancelShapeResize.bind(this);
     this.handleKeydown = this.handleKeydown.bind(this);
+    this.handleKeyup = this.handleKeyup.bind(this);
+    this.handleBlur = this.handleBlur.bind(this);
     window.addEventListener("keydown", this.handleKeydown);
+    window.addEventListener("keyup", this.handleKeyup);
+    window.addEventListener("blur", this.handleBlur);
+    window.addEventListener("focusin", () => this.actions.relativeAdjustmentChanged?.());
+    window.addEventListener("focusout", () => queueMicrotask(() =>
+      this.actions.relativeAdjustmentChanged?.()
+    ));
   }
 
   renderLayer(page, previewRoot) {
@@ -131,6 +142,33 @@ export class InteractionController {
     return this.drag != null || this.placement != null ||
       this.lineEndpointDrag != null || this.shapeResizeDrag != null ||
       this.componentWidthInteraction.isActive();
+  }
+
+  isRelativeAdjustmentActive() {
+    return this.shiftPressed && this.state.pointerMode === "select" &&
+      this.state.shapeTool === "select" && !this.state.presentation?.active &&
+      !this.placement && !this.lineEndpointDrag && !this.shapeResizeDrag &&
+      !this.componentWidthInteraction.isActive() &&
+      (this.drag != null || !isTypingTarget(document.activeElement)) &&
+      this.isMovable(this.state.selectedObjectId);
+  }
+
+  setShiftPressed(pressed) {
+    if (this.drag) this.drag.relative = pressed;
+    if (this.shiftPressed === pressed) return;
+    this.shiftPressed = pressed;
+    if (pressed && this.drag) this.refreshDragConstraints();
+    this.actions.relativeAdjustmentChanged?.();
+  }
+
+  handleKeyup(event) {
+    if (event.key === "Shift") this.shiftKeys.delete(event.code || event.key);
+    this.setShiftPressed(event.shiftKey || this.shiftKeys.size > 0);
+  }
+
+  handleBlur() {
+    this.shiftKeys.clear();
+    this.setShiftPressed(false);
   }
 
   placementTarget(page) {
@@ -222,6 +260,8 @@ export class InteractionController {
   }
 
   handleKeydown(event) {
+    if (event.key === "Shift") this.shiftKeys.add(event.code || event.key);
+    this.setShiftPressed(event.shiftKey || this.shiftKeys.size > 0);
     if (event.key === "Escape") {
       if (this.lineEndpointDrag) {
         event.preventDefault();
@@ -622,6 +662,7 @@ export class InteractionController {
     window.addEventListener("pointermove", this.updateShapeResize);
     window.addEventListener("pointerup", this.finishShapeResize);
     window.addEventListener("pointercancel", this.cancelShapeResize);
+    this.actions.relativeAdjustmentChanged?.();
   }
 
   updateShapeResize(event) {
@@ -707,6 +748,7 @@ export class InteractionController {
     window.addEventListener("pointermove", this.updateLineEndpoint);
     window.addEventListener("pointerup", this.finishLineEndpoint);
     window.addEventListener("pointercancel", this.cancelLineEndpoint);
+    this.actions.relativeAdjustmentChanged?.();
   }
 
   updateLineEndpoint(event) {
@@ -793,6 +835,9 @@ export class InteractionController {
     group.addEventListener("pointermove", this.updateDrag);
     group.addEventListener("pointerup", this.finishDrag);
     group.addEventListener("pointercancel", this.cancelDrag);
+    this.setShiftPressed(event.shiftKey);
+    this.refreshDragConstraints();
+    this.actions.relativeAdjustmentChanged?.();
   }
 
   updateDrag(event) {
@@ -801,7 +846,7 @@ export class InteractionController {
     const point = svgPoint(drag.svg, event);
     const dx = point.x - drag.start.x;
     const dy = point.y - drag.start.y;
-    drag.relative = event.shiftKey;
+    this.setShiftPressed(event.shiftKey);
     drag.to = { ...drag.from, x: drag.from.x + dx, y: drag.from.y + dy };
     const totalX = drag.to.x - drag.base.x;
     const totalY = drag.to.y - drag.base.y;
@@ -818,11 +863,27 @@ export class InteractionController {
         item.dataset.ssPendingTranslation = "true";
       }
     }
+    if (this.isRelativeAdjustmentActive()) this.refreshDragConstraints();
+  }
+
+  refreshDragConstraints() {
+    const drag = this.drag;
+    if (!drag) return;
+    const next = renderConstraints(
+      this.state.snapshot,
+      drag.page,
+      drag.object.id,
+      (nodeId) => this.frameByNode(drag.page, nodeId),
+    );
+    const current = drag.svg.querySelector(":scope > .constraint-layer");
+    if (current) current.replaceWith(next);
+    else drag.svg.insertBefore(next, drag.svg.firstChild);
   }
 
   finishDrag(event) {
     const drag = this.drag;
     if (!drag || event.pointerId !== drag.pointerId) return;
+    this.setShiftPressed(event.shiftKey);
     this.cleanup();
     const dx = drag.to.x - drag.from.x;
     const dy = drag.to.y - drag.from.y;
@@ -836,7 +897,7 @@ export class InteractionController {
       snapshotId: this.state.snapshot.snapshot_id,
       nodeId: drag.object.id,
       pageId: drag.object.page_id,
-      mode: drag.relative || event.shiftKey ? "relative" : "absolute",
+      mode: drag.relative ? "relative" : "absolute",
       fromBounds: drag.from,
       toBounds: drag.to,
     });
@@ -850,6 +911,7 @@ export class InteractionController {
   }
 
   notifyPointerOperationFinished() {
+    this.actions.relativeAdjustmentChanged?.();
     this.actions.pointerOperationFinished?.();
   }
 
@@ -872,7 +934,15 @@ export class InteractionController {
     );
     if (!object) return null;
     const translated = this.actions.translation.frame(page, object);
-    return this.actions.componentWidth.frame(page, object, translated);
+    const frame = this.actions.componentWidth.frame(page, object, translated);
+    if (this.drag?.page.id === page.id && this.drag.nodeIds.includes(nodeId)) {
+      return {
+        ...frame,
+        x: frame.x + this.drag.to.x - this.drag.from.x,
+        y: frame.y + this.drag.to.y - this.drag.from.y,
+      };
+    }
+    return frame;
   }
 
   activeInsertionController() {

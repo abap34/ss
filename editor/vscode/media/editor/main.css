@@ -1474,6 +1474,43 @@ button {
   stroke-linejoin: round;
   text-anchor: middle;
 }
+.constraint-reference {
+  display: none;
+  fill: color-mix(in srgb, var(--relative) 4%, transparent);
+  stroke: var(--relative);
+  stroke-width: 1.4;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.is-adjusting-relative .constraint-reference {
+  display: block;
+}
+.is-adjusting-relative .object-hit.is-selected .object-hit-rect,
+.is-adjusting-relative .object-hit.is-dragging .object-hit-rect {
+  fill: color-mix(in srgb, var(--relative) 4%, transparent);
+  stroke: var(--relative);
+}
+.is-adjusting-relative .object-hit.is-selected .object-hit-line-outline,
+.is-adjusting-relative .object-hit.is-dragging .object-hit-line-outline,
+.is-adjusting-relative .object-hit.is-selected .shape-resize-marker,
+.is-adjusting-relative .object-hit.is-selected .component-width-marker,
+.is-adjusting-relative .object-hit.is-selected .line-endpoint-marker {
+  stroke: var(--relative);
+}
+.is-adjusting-relative .constraint--object {
+  opacity: 1;
+}
+.is-adjusting-relative .constraint--object .constraint-connector {
+  stroke-width: 2;
+  stroke-dasharray: none;
+}
+.is-adjusting-relative .constraint--object .constraint-anchor {
+  stroke-width: 3;
+}
+.is-adjusting-relative .constraint--object .constraint-offset {
+  font-weight: 700;
+}
 .object-sheet {
   position: absolute;
   z-index: 20;
@@ -1645,6 +1682,44 @@ button {
 }
 .relation-details {
   min-width: 0;
+}
+.relation-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-bottom: 6px;
+}
+.relation-heading h2 {
+  margin-bottom: 0;
+}
+.relative-adjustment-status {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  color: var(--relative);
+  font-size: 9px;
+  white-space: nowrap;
+}
+.relative-adjustment-status kbd {
+  padding: 0 3px;
+  border: 1px solid color-mix(in srgb, var(--relative) 35%, transparent);
+  border-radius: 3px;
+  font: 10px var(--vscode-editor-font-family, ui-monospace, monospace);
+}
+.is-adjusting-relative .relative-adjustment-status {
+  display: inline-flex;
+}
+.is-adjusting-relative .relation-heading h2 {
+  color: var(--relative);
+}
+.is-adjusting-relative .relation-row {
+  margin-top: 3px;
+  padding: 5px;
+  border-top-color: transparent;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--relative) 9%, var(--sheet-background));
 }
 .shape-style-editor {
   min-width: 0;
@@ -1865,6 +1940,15 @@ button {
   .object-sheet {
     grid-template-columns:
       minmax(95px, 120px) minmax(130px, 155px) minmax(180px, 1fr);
+  }
+}
+@media (max-width: 840px) {
+  .object-sheet {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .relation-details,
+  .shape-style-editor {
+    grid-column: 1 / -1;
   }
 }
 @media (max-width: 520px) {

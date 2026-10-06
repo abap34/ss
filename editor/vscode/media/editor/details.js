@@ -16,6 +16,7 @@ export function renderObjectSheet(state, object, actions) {
     "section",
     `object-sheet${shapeTarget ? " object-sheet--shape" : ""}`,
   );
+  sheet.dataset.objectId = String(object.id);
   sheet.setAttribute("aria-label", "Object details");
   sheet.append(
     closeButton(actions.close),
@@ -267,9 +268,17 @@ function editableBound(label, value, minimum, maximum, edit) {
 
 function relations(state, object) {
   const container = element("div", "relation-details");
+  const heading = element("div", "relation-heading");
   const title = element("h2");
   title.textContent = "Constraints";
-  container.append(title);
+  const mode = element("span", "relative-adjustment-status");
+  mode.setAttribute("role", "status");
+  const key = element("kbd");
+  key.textContent = "⇧";
+  mode.append(key, document.createTextNode("Adjusting"));
+  mode.title = "Shift: adjust constraint offsets";
+  heading.append(title, mode);
+  container.append(heading);
   const values = state.snapshot.layout.relations.filter((relation) =>
     relation.target?.node_id === object.id
   );

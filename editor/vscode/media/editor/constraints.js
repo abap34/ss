@@ -1,4 +1,4 @@
-import { setAttributes, svgElement } from "./dom.js";
+import { setAttributes, setRect, svgElement } from "./dom.js";
 import {
   anchorSegment,
   constraintGeometry,
@@ -8,6 +8,7 @@ import {
 
 export function renderConstraints(snapshot, page, objectId, resolveFrame) {
   const group = svgElement("g", "constraint-layer");
+  const references = new Set();
   for (
     const relation of snapshot.layout.relations.filter((item) =>
       item.target?.node_id === objectId
@@ -20,6 +21,15 @@ export function renderConstraints(snapshot, page, objectId, resolveFrame) {
     const targetFrame = resolveFrame?.(relation.target.node_id) ??
       frameByNode(snapshot, page, relation.target.node_id);
     if (!sourceFrame || !targetFrame) continue;
+    if (relation.source.type !== "page" &&
+        relation.source.node_id !== objectId &&
+        !references.has(relation.source.node_id)) {
+      references.add(relation.source.node_id);
+      const reference = svgElement("rect", "constraint-reference");
+      reference.dataset.objectId = String(relation.source.node_id);
+      setRect(reference, sourceFrame);
+      group.append(reference);
+    }
     const sourceSegment = anchorSegment(sourceFrame, relation.source.anchor);
     const targetSegment = anchorSegment(targetFrame, relation.target.anchor);
     const geometry = constraintGeometry(

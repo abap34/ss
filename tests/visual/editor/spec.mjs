@@ -9,6 +9,7 @@ import { withBrowser } from "../render/capture.mjs";
 import { exerciseBuildDiagnosticMessages } from "./diagnostics.mjs";
 import { editorSnapshot, testDocument } from "./fixture.mjs";
 import { exerciseTranslationLifecycle } from "./translation.mjs";
+import { exerciseRelativeAdjustment } from "./relative-adjustment.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(repository, "editor/vscode/media/editor");
@@ -59,6 +60,11 @@ await writeFile(path.join(output, "asset.pdf"), pdfAsset());
 await writeFile(path.join(output, "index.html"), testDocument(), "utf8");
 
 await withBrowser(output, async (browser, baseUrl) => {
+  await exerciseRelativeAdjustment(browser, baseUrl, editorSnapshot(), output);
+  if (process.argv.includes("--relative-adjustment-only")) {
+    console.log("WYSIWYG relative adjustment checks passed.");
+    return;
+  }
   await exerciseBuildDiagnosticMessages(browser, baseUrl, editorSnapshot());
   await exerciseDeferredSnapshotDuringDrag(browser, baseUrl, editorSnapshot());
   const page = await browser.newPage({ viewport: { width: 560, height: 920 } });

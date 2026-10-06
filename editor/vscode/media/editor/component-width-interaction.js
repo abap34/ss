@@ -75,6 +75,7 @@ export class ComponentWidthInteraction {
     window.addEventListener("pointermove", this.update);
     window.addEventListener("pointerup", this.finish);
     window.addEventListener("pointercancel", this.cancel);
+    this.actions.stateChanged?.();
   }
 
   update(event) {
@@ -131,5 +132,6 @@ export class ComponentWidthInteraction {
     window.removeEventListener("pointerup", this.finish);
     window.removeEventListener("pointercancel", this.cancel);
     this.drag = null;
+    this.actions.stateChanged?.();
   }
 }

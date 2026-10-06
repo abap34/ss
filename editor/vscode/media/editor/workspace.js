@@ -45,6 +45,7 @@ export class WorkspaceView {
     this.finishPan = this.finishPan.bind(this);
     this.interaction = new InteractionController(state, {
       ...actions,
+      relativeAdjustmentChanged: () => this.syncRelativeAdjustment(),
     });
   }
 
@@ -83,6 +84,7 @@ export class WorkspaceView {
     if (toast) main.append(toast);
     this.root = main;
     this.viewport = viewport;
+    this.syncRelativeAdjustment();
     if (this.state.iconPickerOpen) {
       requestAnimationFrame(() => {
         const search = this.root?.querySelector(".icon-picker-search");
@@ -149,6 +151,7 @@ export class WorkspaceView {
     this.updateBuildStatus();
     this.syncObjectSheet();
     this.syncToast();
+    this.syncRelativeAdjustment();
     return true;
   }
 
@@ -199,6 +202,19 @@ export class WorkspaceView {
     }
   }
 
+  syncRelativeAdjustment() {
+    if (!this.root) return;
+    this.root.classList.toggle(
+      "is-adjusting-relative",
+      this.interaction.isRelativeAdjustmentActive(),
+    );
+    if (this.interaction.drag &&
+        Number(this.root.querySelector(":scope > .object-sheet")
+          ?.dataset.objectId) !== this.state.selectedObjectId) {
+      this.syncObjectSheet();
+    }
+  }
+
   syncSelection(pageId) {
     if (!this.root?.isConnected || !this.viewport?.isConnected) return false;
     const renderedSelection = [
@@ -211,6 +227,7 @@ export class WorkspaceView {
       Number(selected.closest(".page-shell")?.dataset.pageId) === pageId
     )) {
       this.syncObjectSheet();
+      this.syncRelativeAdjustment();
       return true;
     }
     const pageIds = new Set([pageId]);
@@ -232,6 +249,7 @@ export class WorkspaceView {
       interaction.replaceWith(this.interaction.renderLayer(page, preview));
     }
     this.syncObjectSheet();
+    this.syncRelativeAdjustment();
     return true;
   }
 
