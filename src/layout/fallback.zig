@@ -20,11 +20,11 @@ const VerticalFallbackPolicy = enum {
     center_stack,
 };
 
-/// A page-level vertical split uses the available page width when no size is
+/// A page-level split uses the available page width when no size is
 /// prescribed. Nested groups keep the extent supplied by their containing group.
 pub fn defaultSplitGroupWidth(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId, position: AxisState) ?f32 {
     if (workspace.axis != .horizontal or workspace.graph.split_frames != null) return null;
-    if (!isPageVerticalSplit(state, workspace, node_id)) return null;
+    if (!isPageSplit(state, workspace, node_id)) return null;
     const node = state.getNode(node_id).?;
     const style = style_defaults.styleForNode(state, node);
     const page = state.getNode(workspace.graph.page_id) orelse return null;
@@ -41,13 +41,14 @@ pub fn defaultSplitGroupWidth(state: anytype, workspace: *const graph.AxisWorksp
     return @max(@as(f32, 0), width);
 }
 
-fn isPageVerticalSplit(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) bool {
+fn isPageSplit(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) bool {
+    // Individually placed operands can give an unplaced composition group a
+    // page-local frame. Such a top-level frame uses the page width too.
     if (workspace.graph.parentGroupIndexes(node_id).len != 0) return false;
-    if (std.mem.indexOfScalar(NodeId, workspace.graph.placement_root_ids, node_id) == null) return false;
     const node = state.getNode(node_id) orelse return false;
     if (!groups.isGroupNode(node)) return false;
     const axis = fields.read(state.allocator, state, node, "split_axis", &.{}, .text) orelse return false;
-    return std.mem.eql(u8, axis, "vertical");
+    return std.mem.eql(u8, axis, "horizontal") or std.mem.eql(u8, axis, "vertical");
 }
 
 pub fn buildHorizontalConstraints(state: anytype, workspace: *const graph.AxisWorkspace, options: graph.SolveOptions) !std.ArrayList(Constraint) {
@@ -58,8 +59,8 @@ pub fn buildHorizontalConstraints(state: anytype, workspace: *const graph.AxisWo
 
     const allocator = state.allocator;
     const anchor = horizontalPolicyAnchor(state, workspace.graph.page_id);
-    for (workspace.graph.placement_root_ids) |node_id| {
-        if (!isPageVerticalSplit(state, workspace, node_id)) continue;
+    for (workspace.graph.child_ids) |node_id| {
+        if (!isPageSplit(state, workspace, node_id)) continue;
         if (hasHardPositionTargetConstraint(workspace, node_id, .horizontal)) continue;
         const style = style_defaults.styleForNode(state, state.getNode(node_id).?);
         try constraints.append(allocator, .{

@@ -166,7 +166,12 @@ end`);
   const a = node(dump, "A"), b = node(dump, "B"), c = node(dump, "C"), d = node(dump, "D");
   close(anchor(a, "center"), anchor(b, "center"), "natural left column alignment");
   close(anchor(c, "center"), anchor(d, "center"), "natural right column alignment");
-  close(c.x, a.x + a.width + 32, "natural column gap");
+  if (operator === "||") {
+    close(c.x, a.x + a.width + 32, "natural column gap");
+  } else {
+    close(anchor(a, "center"), 348, "left column centered within its page half");
+    close(anchor(c, "center"), 932, "right column centered within its page half");
+  }
   close((a.x + c.x + c.width) / 2, 640, "natural columns centered together");
 }
 
@@ -195,9 +200,10 @@ const codeBlock = node(naturalText, code);
 const caption = node(naturalText, "Example caption");
 close(anchor(description, "center"), anchor(illustration, "center"), "natural text and illustration alignment");
 close(anchor(codeBlock, "center"), anchor(caption, "center"), "code and caption alignment");
+close(codeBlock.width, 552, "page margins were applied again inside the right column");
 assert(description.x + description.width <= codeBlock.x + 0.1, "natural columns overlapped");
 for (const item of [description, illustration, codeBlock, caption]) {
-  assert(item.x >= 95.9 && item.x + item.width <= 1184.1, "natural columns exceeded horizontal page margins");
+  assert(item.x >= 71.9 && item.x + item.width <= 1208.1, "split columns exceeded horizontal group margins");
 }
 assert(illustration.y >= 0 && caption.y >= 0, "natural columns extended below the page");
 

@@ -32,7 +32,7 @@ const failures = [];
 for (const test of [
   testNestedPlacedObjects, testNestedUnplacedObjectsAndOrdinaryGroup,
   testIntermediateBinding, testOrdinaryGroupInference, testNestedOrdinaryGroupBounds,
-  testUnplacedComposition, testNaturalWidths, testEqualFrames, testVerticalSplitWidths, testEqualChains, testEqualEvaluation, testEqualEditorUpdates, testSameDirectionBinaryGroups,
+  testUnplacedComposition, testNaturalWidths, testEqualFrames, testHorizontalSplitWidths, testVerticalSplitWidths, testEqualChains, testEqualEvaluation, testEqualEditorUpdates, testSameDirectionBinaryGroups,
   testSharedObjects, testConstraintUpdate, testInferredGroupConstraintUpdate,
   testExplicitGap, testOperandEvaluation, testFixedStdlibResolution, testImportedFunctionComposition,
   testInvalidOperands, testConflictsAndMixedDirections, testHorizontalPolicyVariants,
@@ -307,7 +307,7 @@ end
     const split = await dumpSource(`natural-split-${horizontal}`, baseline.replace("group(a, b)", `a ${operator} b`).replace('set_prop(g, "align_children_y", true)', ""));
     const before = groupNodes(natural.dump)[0];
     const after = groupNodes(split.dump)[0];
-    assertClose(after.width, horizontal ? before.width : 1136, "implicit outer width");
+    assertClose(after.width, 1136, "implicit outer width");
     assertClose(after.height, before.height, "implicit outer height changed");
     assertSplitTree(split.dump, after);
   }
@@ -370,6 +370,85 @@ let items = selection_union(select(text("A"), "self_object"), select(text("B"), 
 place!(hsplit(items, -1))
 end
 `, "InvalidGroupSplit");
+}
+
+async function testHorizontalSplitWidths() {
+  for (const [name, constraints, width, left] of [
+    ["default", "", 1136, 72],
+    ["width", "~ g.width == 600", 600, 72],
+    ["width-position", "~ g.width == 600\n~ g.left == page.left + 200", 600, 200],
+    ["edges", "~ g.left == page.left + 120\n~ g.right == page.right - 200", 960, 120],
+    ["left", "~ g.left == page.left + 200", 1008, 200],
+    ["right", "~ g.right == page.right - 200", 1008, 72],
+    ["center", "~ g.center_x == page.center_x - 100", 936, 72],
+    ["margins", "g.layout = LayoutStyle { x = 120, right_inset = 180 }", 980, 120],
+    ["padding", "g.chrome.pad_x = 12", 1136, 72],
+    ["updated-width", "~ g.width == 600\n~!~ g.width == 700", 700, 72],
+  ]) {
+    const { dump } = await dumpSource(`horizontal-width-${name}`, `${prelude}
+page example
+let a = text("Short")
+let b = text("Second line")
+let g = a |=| b
+${constraints}
+place!(g)
+end
+`);
+    const g = groupNodes(dump)[0];
+    assertClose(g.width, width, `${name} group width`);
+    assertClose(g.x, left, `${name} group left`);
+    assertSplitTree(dump, g);
+    assert(dump.diagnostics.length === 0, `${name} diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+  }
+
+  const asset = path.join(output, "horizontal-split.svg");
+  await writeFile(asset, '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"><rect width="240" height="120" fill="#2563eb"/></svg>');
+  for (const policy of ["left", "center", "right"]) {
+    for (const scale of [1, 0.02]) {
+      const { dump } = await dumpSource(`horizontal-inferred-${policy}-${scale}`, `import std:themes/default as *
+page example
+hflow(LayoutPolicy.${policy})
+text!("Short") |=| image!("${asset}", ${scale})
+end
+`);
+      const a = node(dump, "Short");
+      const b = node(dump, asset);
+      assertClose(a.x, 72, "inferred left column inset");
+      assertClose(b.x, 656, "image scale changed the right column boundary");
+      assertClose(a.width, 552, "inferred left column width");
+      assertClose(b.width, 552, "inferred right column width");
+      assert(groupNodes(dump).length === 0, "inferred split implicitly attached a group");
+      assert(dump.diagnostics.length === 0, `inferred split diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+    }
+  }
+
+  for (const [name, expression, width] of [
+    ["horizontal-parent", "a |=| (b |=| c)", 1136],
+    ["vertical-parent", "a /=/ (b |=| c)", 1136],
+    ["ordinary-parent", "group(a, b |=| c)", null],
+    ["natural-parent", "a || (b |=| c)", null],
+  ]) {
+    const { dump } = await dumpSource(`horizontal-width-${name}`, `${prelude}
+page example
+let a = text("Short")
+let b = text("Second line")
+let c = text("Third")
+let g = ${expression}
+place!(g)
+end
+`);
+    const rootId = dump.placement_roots.flatMap((entry) => entry.roots)[0];
+    const outer = groupNodes(dump).find((item) => item.id === rootId);
+    const inner = groupNodes(dump).find((item) => item.id !== rootId);
+    if (width !== null) {
+      assertClose(outer.width, width, `${name} outer width`);
+      assertSplitTree(dump, outer);
+    } else {
+      assert(inner.width < 1136, `${name} nested split used the page width`);
+      assertSplitTree(dump, inner);
+    }
+    assert(dump.diagnostics.length === 0, `${name} nested diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+  }
 }
 
 async function testVerticalSplitWidths() {

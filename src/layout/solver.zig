@@ -693,7 +693,8 @@ fn capDefaultWrappedHorizontalWidths(state: anytype, workspace: *graph.AxisWorks
         if (!metrics.shouldWrapNode(state, node)) continue;
 
         const style = style_defaults.styleForNode(state, node);
-        const max_right = Defaults.width - style.default_right_inset;
+        const max_right = containingHorizontalRight(state, workspace, child_id) orelse
+            (Defaults.width - style.default_right_inset);
         const capped_width = @max(@as(f32, 1.0), max_right - axis_state.start.?);
         if (capped_width >= axis_state.size.? - ConstraintTolerance) continue;
 
@@ -705,6 +706,23 @@ fn capDefaultWrappedHorizontalWidths(state: anytype, workspace: *graph.AxisWorks
         changed = true;
     }
     return changed;
+}
+
+fn containingHorizontalRight(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) ?f32 {
+    var right: ?f32 = null;
+    for (workspace.graph.parentGroupIndexes(node_id)) |parent_index| {
+        const parent_id = workspace.nodeAt(parent_index);
+        const frame = workspace.states[parent_index];
+        const bounded = frame.size_source != null or
+            workspace.graph.hardTargetAnchorCount(parent_id, .horizontal) >= 2 or
+            fallback.defaultSplitGroupWidth(state, workspace, parent_id, .{}) != null;
+        const parent_right = if (bounded and frame.end != null)
+            frame.end.? - metrics.chromePadX(state, state.getNode(parent_id).?)
+        else
+            containingHorizontalRight(state, workspace, parent_id) orelse continue;
+        right = @min(right orelse parent_right, parent_right);
+    }
+    return right;
 }
 
 fn solvePageAxis(state: anytype, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !void {
