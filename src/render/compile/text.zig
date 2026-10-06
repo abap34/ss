@@ -693,7 +693,7 @@ const CacheReader = struct {
         const length: usize = try self.integer(u32);
         if (length == std.math.maxInt(usize)) return error.InvalidPersistentTextCache;
         try self.reserve(length + 1);
-        return try allocator.dupeZ(u8, try self.take(length));
+        return try allocator.dupeSentinel(u8, try self.take(length), 0);
     }
 
     fn atEnd(self: *const CacheReader) bool {
@@ -951,8 +951,8 @@ fn writeFontDependency(writer: *CacheWriter, font: FontDependency) !void {
     }) |value| try writer.float(value);
     try writer.boolean(font.math != null);
     if (font.math) |math| {
-        inline for (std.meta.fields(render.MathConstants)) |field| {
-            try writer.float(@field(math, field.name));
+        inline for (comptime std.meta.fieldNames(render.MathConstants)) |field_name| {
+            try writer.float(@field(math, field_name));
         }
     }
     try writer.boolean(font.family_substitution);
@@ -990,8 +990,8 @@ fn readFontDependency(allocator: Allocator, reader: *CacheReader) !FontDependenc
     const strikethrough_thickness_ratio = try reader.float();
     const maybe_math = if (try reader.boolean()) blk: {
         var math: render.MathConstants = undefined;
-        inline for (std.meta.fields(render.MathConstants)) |field| {
-            @field(math, field.name) = try reader.float();
+        inline for (comptime std.meta.fieldNames(render.MathConstants)) |field_name| {
+            @field(math, field_name) = try reader.float();
         }
         break :blk math;
     } else null;
@@ -1210,9 +1210,9 @@ fn shapeImpl(
         }
     }
 
-    const family_z = try allocator.dupeZ(u8, requested_font.family);
+    const family_z = try allocator.dupeSentinel(u8, requested_font.family, 0);
     defer allocator.free(family_z);
-    const source_z = try allocator.dupeZ(u8, source);
+    const source_z = try allocator.dupeSentinel(u8, source, 0);
     defer allocator.free(source_z);
     var native = std.mem.zeroes(c.SsTextShape);
     if (c.ss_text_shape(
@@ -1265,7 +1265,7 @@ fn copy(
     native: c.SsTextShape,
     failure: ?*ShapeFailure,
 ) !render.TextLayout {
-    const owned_source = try allocator.dupeZ(u8, source);
+    const owned_source = try allocator.dupeSentinel(u8, source, 0);
     errdefer allocator.free(owned_source);
     const lines = try allocator.alloc(render.TextLine, native.line_count);
     errdefer allocator.free(lines);
@@ -1302,7 +1302,7 @@ fn copy(
         }, failure);
         const font_resource = try resources.addPath(allocator, io, .font, font_path);
         const font_instance = try fonts.add(allocator, io, fontSpecFromNative(run, requested_font, font_size, font_resource));
-        const language = try allocator.dupeZ(u8, std.mem.span(run.language));
+        const language = try allocator.dupeSentinel(u8, std.mem.span(run.language), 0);
         errdefer allocator.free(language);
         runs[index] = .{
             .source = .{ .start = @intCast(run.source_start), .end = @intCast(run.source_end) },

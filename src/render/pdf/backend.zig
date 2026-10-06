@@ -32,7 +32,7 @@ fn renderCairo(
     output: []const u8,
     resources: *const ResourceFiles,
 ) !void {
-    const output_z = try allocator.dupeZ(u8, output);
+    const output_z = try allocator.dupeSentinel(u8, output, 0);
     defer allocator.free(output_z);
     const pdf = c.ss_pdf_create(output_z.ptr, page.width, page.height) orelse return cairoCreateFailure();
     defer c.ss_pdf_destroy(pdf);
@@ -161,7 +161,7 @@ const Composition = struct {
         errdefer deleteFileIfExists(self.io, native_path);
         try renderNativeLayers(self.allocator, self.ir, self.page, native_path, plan, self.resources);
 
-        const native_path_z = try self.allocator.dupeZ(u8, native_path);
+        const native_path_z = try self.allocator.dupeSentinel(u8, native_path, 0);
         self.native_path = native_path;
         self.native_path_z = native_path_z;
     }
@@ -214,7 +214,7 @@ const Composition = struct {
     }
 
     fn write(self: *Composition) !void {
-        const output_z = try self.allocator.dupeZ(u8, self.output);
+        const output_z = try self.allocator.dupeSentinel(u8, self.output, 0);
         defer self.allocator.free(output_z);
         if (c.ss_qpdf_compose(output_z.ptr, self.layers.items.ptr, self.layers.items.len) != 0) {
             return error.AssetConversionFailed;
@@ -271,7 +271,7 @@ fn renderNativeLayers(
     plan: []const CompositionStep,
     resources: *const ResourceFiles,
 ) !void {
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     const pdf = c.ss_pdf_create(path_z.ptr, page.width, page.height) orelse return cairoCreateFailure();
     defer c.ss_pdf_destroy(pdf);

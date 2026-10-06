@@ -143,7 +143,7 @@ pub fn siblingPathWithExtension(
 }
 
 pub fn fileExists(allocator: std.mem.Allocator, path: []const u8) !bool {
-    const zpath = try allocator.dupeZ(u8, path);
+    const zpath = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(zpath);
     while (true) {
         const result = std.c.access(zpath.ptr, 0);
@@ -168,7 +168,7 @@ fn readHeaderBytes(
     buf: *[HEADER_BUF_SIZE]u8,
     invalid_err: anyerror,
 ) ![]u8 {
-    const zpath = try allocator.dupeZ(u8, path);
+    const zpath = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(zpath);
 
     const fd = try openReadOnly(zpath.ptr);

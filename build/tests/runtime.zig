@@ -10,7 +10,7 @@ const Spec = struct {
     description: []const u8 = "",
 };
 
-pub fn register(suite: Suite, exe: *Step.Compile) void {
+pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     const b = suite.ctx.b;
     const test_step = suite.all;
     const specs = [_]Spec{
@@ -69,7 +69,7 @@ pub fn register(suite: Suite, exe: *Step.Compile) void {
         .{ .path = "tests/runtime/theme/spec.mjs" },
     };
     for (specs) |spec| {
-        const run = steps.node(b, &suite.checks.node.step, spec.path, exe.getEmittedBin());
+        const run = steps.node(b, &suite.checks.node.step, spec.path, exe);
         test_step.dependOn(&run.step);
         if (spec.name) |name| steps.focused(b, name, spec.description, &run.step);
     }
@@ -91,7 +91,7 @@ pub fn register(suite: Suite, exe: *Step.Compile) void {
     addSmokeChecks(b, test_step, exe);
 }
 
-fn addSmokeChecks(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
+fn addSmokeChecks(b: *std.Build, test_step: *Step, exe: std.Build.LazyPath) void {
     const smoke_check_files = [_][]const u8{
         "stdlib/core/classes.ss",
         "stdlib/core/components.ss",
@@ -112,7 +112,7 @@ fn addSmokeChecks(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
     };
 
     for (smoke_check_files) |path| {
-        const smoke_check = b.addRunArtifact(exe);
+        const smoke_check = steps.runExecutable(b, exe);
         smoke_check.addArgs(&.{ "check", path });
         test_step.dependOn(&smoke_check.step);
     }

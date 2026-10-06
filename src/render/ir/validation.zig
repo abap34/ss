@@ -452,8 +452,8 @@ fn fontCatalog(ir: anytype) Error!void {
         if (!std.unicode.utf8ValidateSlice(instance.family) or !std.unicode.utf8ValidateSlice(instance.postscript_name)) return error.InvalidFont;
         for (instance.variations) |variation| if (!std.math.isFinite(variation.value)) return error.InvalidFont;
         if (instance.math) |constants| {
-            inline for (std.meta.fields(@TypeOf(constants))) |field| {
-                if (!nonNegativeFinite(@field(constants, field.name))) return error.InvalidFont;
+            inline for (comptime std.meta.fieldNames(@TypeOf(constants))) |field_name| {
+                if (!nonNegativeFinite(@field(constants, field_name))) return error.InvalidFont;
             }
             if (constants.script_scale <= 0 or constants.script_script_scale <= 0) return error.InvalidFont;
         }

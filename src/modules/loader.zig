@@ -79,7 +79,7 @@ const embedded_modules = [_]EmbeddedModule{
 
 pub const EmbeddedSyntaxCache = struct {
     arena: std.heap.ArenaAllocator,
-    modules: [embedded_modules.len]?ast.Module = [_]?ast.Module{null} ** embedded_modules.len,
+    modules: [embedded_modules.len]?ast.Module = @splat(null),
     mutex: std.atomic.Mutex = .unlocked,
 
     pub fn init(allocator: std.mem.Allocator) EmbeddedSyntaxCache {

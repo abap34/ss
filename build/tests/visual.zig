@@ -10,7 +10,7 @@ const addFocusedTestStep = steps.focused;
 const dependencies = @import("../dependencies.zig");
 const qpdf = @import("../qpdf.zig");
 
-pub fn register(ctx: project.Context, modules: project.ProjectModules, build_options: *Step.Options, exe: *Step.Compile, checks: dependencies.Checks, bridge: qpdf.Bridge) void {
+pub fn register(ctx: project.Context, modules: project.ProjectModules, build_options: *Step.Options, exe: std.Build.LazyPath, checks: dependencies.Checks, bridge: qpdf.Bridge) void {
     const b = ctx.b;
     const app_mod = project.createAppModule(ctx, modules, build_options);
     const driver_mod = createModule(ctx, "tests/visual/render/driver.zig", &.{
@@ -18,22 +18,22 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
         import("utils", modules.utils),
     }, true);
     native_pdf.addHeaders(b, driver_mod);
-    qpdf.link(bridge, b, driver_mod, ctx.target, .build);
+    qpdf.link(bridge, b, driver_mod, ctx.target, .installed);
     const driver = b.addExecutable(.{ .name = "ss-render-parity-driver", .root_module = driver_mod });
-    driver.step.dependOn(&bridge.install.step);
+    const driver_file = qpdf.runnable(b, bridge, driver);
 
-    const parity = steps.node(b, &checks.node.step, "tests/visual/render/spec.mjs", driver.getEmittedBin());
+    const parity = steps.node(b, &checks.node.step, "tests/visual/render/spec.mjs", driver_file);
     parity.step.dependOn(&checks.visual_test_packages.step);
     const parity_step = b.step("test-render-parity", "Compare PDF and HTML pixels locally");
     parity_step.dependOn(&parity.step);
 
     const practical = steps.node(b, &checks.node.step, "tests/visual/render/spec.mjs", null);
     practical.addArg("--practical");
-    practical.addFileArg(driver.getEmittedBin());
+    practical.addFileArg(driver_file);
     practical.step.dependOn(&checks.visual_test_packages.step);
     addFocusedTestStep(b, "test-layout-practical-visual", "Compare PDF and HTML for synthetic practical layouts", &practical.step);
 
-    const navigation = steps.node(b, &checks.node.step, "tests/visual/render/navigation/spec.mjs", driver.getEmittedBin());
+    const navigation = steps.node(b, &checks.node.step, "tests/visual/render/navigation/spec.mjs", driver_file);
     navigation.step.dependOn(&checks.visual_test_packages.step);
     const navigation_step = b.step("test-render-html-navigation", "Inspect standalone HTML page navigation locally");
     navigation_step.dependOn(&navigation.step);
@@ -45,19 +45,19 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
 
     const full = steps.node(b, &checks.node.step, "tests/visual/render/spec.mjs", null);
     full.addArg("--full");
-    full.addFileArg(driver.getEmittedBin());
+    full.addFileArg(driver_file);
     full.step.dependOn(&checks.visual_test_packages.step);
     const full_step = b.step("test-render-parity-full", "Compare the extended PDF and HTML fixture set locally");
     full_step.dependOn(&full.step);
 
-    const behavior = steps.node(b, &checks.node.step, "tests/visual/render/behavior/spec.mjs", exe.getEmittedBin());
+    const behavior = steps.node(b, &checks.node.step, "tests/visual/render/behavior/spec.mjs", exe);
     behavior.step.dependOn(&checks.visual_test_packages.step);
     const behavior_step = b.step("test-render-behavior", "Inspect rendered PDF behavior locally with Chromium");
     behavior_step.dependOn(&behavior.step);
 
     const presentation_build = steps.node(b, &checks.node.step, "editor/vscode/scripts/build.js", null);
     presentation_build.step.dependOn(&checks.vscode_packages.step);
-    const presentation = steps.node(b, &checks.node.step, "tests/visual/presentation/spec.mjs", exe.getEmittedBin());
+    const presentation = steps.node(b, &checks.node.step, "tests/visual/presentation/spec.mjs", exe);
     presentation.step.dependOn(&presentation_build.step);
     presentation.step.dependOn(&checks.visual_test_packages.step);
     addFocusedTestStep(b, "test-presentation", "Exercise the CLI and shared presentation controls", &presentation.step);

@@ -196,7 +196,7 @@ fn relocateSpans(value: anytype, edit: *const Edit) void {
     }
     if (T == ast.Type) return;
     switch (@typeInfo(T)) {
-        .@"struct" => |info| inline for (info.fields) |field| relocateSpans(&@field(value.*, field.name), edit),
+        .@"struct" => inline for (comptime std.meta.fieldNames(T)) |field_name| relocateSpans(&@field(value.*, field_name), edit),
         .@"union" => switch (value.*) {
             inline else => |*item| relocateSpans(item, edit),
         },

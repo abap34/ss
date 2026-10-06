@@ -5,9 +5,7 @@ const render = @import("render");
 const render_support = @import("render_test_support");
 const render_resources = @import("render_resources");
 
-const c = @cImport({
-    @cInclude("backend.h");
-});
+const c = @import("pdf_ffi").c;
 
 const testing = std.testing;
 
@@ -373,7 +371,7 @@ test "render PDF spec: persistent worker font maps follow registered font genera
     ));
     defer c.ss_text_shape_free(&seed_shape);
     try testing.expect(seed_shape.run_count != 0);
-    const font_path = try testing.allocator.dupeZ(u8, cStringSlice(seed_shape.runs[0].font_path));
+    const font_path = try testing.allocator.dupeSentinel(u8, cStringSlice(seed_shape.runs[0].font_path), 0);
     defer testing.allocator.free(font_path);
 
     var phase = std.atomic.Value(usize).init(0);
@@ -474,17 +472,17 @@ test "render PDF spec: qpdf replaces selected pages in an immutable base documen
     try writeQpdfTestLayer(allocator, last_path, "last", "https://example.com/last");
     try writeQpdfTestLayerSized(allocator, replacement_path, "replacement", "https://example.com/replacement", 400, 240);
 
-    const first_z = try allocator.dupeZ(u8, first_path);
+    const first_z = try allocator.dupeSentinel(u8, first_path, 0);
     defer allocator.free(first_z);
-    const old_z = try allocator.dupeZ(u8, old_path);
+    const old_z = try allocator.dupeSentinel(u8, old_path, 0);
     defer allocator.free(old_z);
-    const last_z = try allocator.dupeZ(u8, last_path);
+    const last_z = try allocator.dupeSentinel(u8, last_path, 0);
     defer allocator.free(last_z);
-    const replacement_z = try allocator.dupeZ(u8, replacement_path);
+    const replacement_z = try allocator.dupeSentinel(u8, replacement_path, 0);
     defer allocator.free(replacement_z);
-    const base_z = try allocator.dupeZ(u8, base_path);
+    const base_z = try allocator.dupeSentinel(u8, base_path, 0);
     defer allocator.free(base_z);
-    const output_z = try allocator.dupeZ(u8, output_path);
+    const output_z = try allocator.dupeSentinel(u8, output_path, 0);
     defer allocator.free(output_z);
     const inputs = [_][*c]const u8{ first_z.ptr, old_z.ptr, last_z.ptr };
     try testing.expectEqual(
@@ -531,11 +529,11 @@ test "render PDF spec: qpdf merge creates link annotations and destinations" {
     const allocator = testing.allocator;
     const pdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/links.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(pdf_path);
-    const pdf_path_z = try allocator.dupeZ(u8, pdf_path);
+    const pdf_path_z = try allocator.dupeSentinel(u8, pdf_path, 0);
     defer allocator.free(pdf_path_z);
     const merged_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/merged-links.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(merged_path);
-    const merged_path_z = try allocator.dupeZ(u8, merged_path);
+    const merged_path_z = try allocator.dupeSentinel(u8, merged_path, 0);
     defer allocator.free(merged_path_z);
 
     {
@@ -616,11 +614,11 @@ test "render PDF spec: qpdf merge encodes Unicode URI actions as ASCII" {
     const allocator = testing.allocator;
     const source_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/source.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(source_path);
-    const source_z = try allocator.dupeZ(u8, source_path);
+    const source_z = try allocator.dupeSentinel(u8, source_path, 0);
     defer allocator.free(source_z);
     const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/uri.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(output_path);
-    const output_z = try allocator.dupeZ(u8, output_path);
+    const output_z = try allocator.dupeSentinel(u8, output_path, 0);
     defer allocator.free(output_z);
     const qdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/uri.qdf.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(qdf_path);
@@ -676,11 +674,11 @@ test "render PDF spec: qpdf merge rejects unsafe link annotations" {
     const allocator = testing.allocator;
     const pdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/unsafe-link.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(pdf_path);
-    const pdf_path_z = try allocator.dupeZ(u8, pdf_path);
+    const pdf_path_z = try allocator.dupeSentinel(u8, pdf_path, 0);
     defer allocator.free(pdf_path_z);
     const merged_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/unsafe-link-merged.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(merged_path);
-    const merged_path_z = try allocator.dupeZ(u8, merged_path);
+    const merged_path_z = try allocator.dupeSentinel(u8, merged_path, 0);
     defer allocator.free(merged_path_z);
 
     try writeCairoPage(pdf_path_z.ptr, 320, 180);
@@ -707,7 +705,7 @@ test "render PDF spec: Cairo item effects preserve drawing state" {
     const allocator = testing.allocator;
     const pdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/item-effects.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(pdf_path);
-    const pdf_path_z = try allocator.dupeZ(u8, pdf_path);
+    const pdf_path_z = try allocator.dupeSentinel(u8, pdf_path, 0);
     defer allocator.free(pdf_path_z);
 
     const pdf = c.ss_pdf_create(pdf_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
@@ -996,7 +994,7 @@ test "render PDF spec: document renderer publishes, verifies, and reuses content
     try pdf_document.write(allocator, testing.io, &ir, first_path, .{ .jobs = 1, .cache_dir = cache }, null);
     const first = try std.Io.Dir.cwd().readFileAlloc(testing.io, first_path, allocator, .unlimited);
     defer allocator.free(first);
-    const first_path_z = try allocator.dupeZ(u8, first_path);
+    const first_path_z = try allocator.dupeSentinel(u8, first_path, 0);
     defer allocator.free(first_path_z);
     try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_validate(first_path_z.ptr, 2, 1));
     try testing.expect(c.ss_qpdf_validate(first_path_z.ptr, 1, 1) != 0);
@@ -1119,7 +1117,7 @@ test "render PDF spec: manifest fingerprint workers handle empty and single-page
     const single_ir = render.Ir{ .semantics = single_semantics, .pages = &pages };
     try pdf_document.write(allocator, testing.io, &single_ir, single_path, .{ .jobs = 32, .cache_dir = cache }, null);
 
-    const single_path_z = try allocator.dupeZ(u8, single_path);
+    const single_path_z = try allocator.dupeSentinel(u8, single_path, 0);
     defer allocator.free(single_path_z);
     var width: f64 = 0;
     var height: f64 = 0;
@@ -1140,7 +1138,7 @@ test "render PDF spec: raster shim decodes and draws without a converted PNG" {
     const allocator = testing.allocator;
     const pdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/raster.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(pdf_path);
-    const pdf_path_z = try allocator.dupeZ(u8, pdf_path);
+    const pdf_path_z = try allocator.dupeSentinel(u8, pdf_path, 0);
     defer allocator.free(pdf_path_z);
 
     const pdf = c.ss_pdf_create(pdf_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
@@ -1157,7 +1155,7 @@ test "render PDF spec: image loaders preserve native error details" {
     const allocator = testing.allocator;
     const raster_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/missing-raster.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(raster_path);
-    const raster_path_z = try allocator.dupeZ(u8, raster_path);
+    const raster_path_z = try allocator.dupeSentinel(u8, raster_path, 0);
     defer allocator.free(raster_path_z);
 
     const raster_pdf = c.ss_pdf_create(raster_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
@@ -1170,7 +1168,7 @@ test "render PDF spec: image loaders preserve native error details" {
 
     const svg_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/missing-svg.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(svg_path);
-    const svg_path_z = try allocator.dupeZ(u8, svg_path);
+    const svg_path_z = try allocator.dupeSentinel(u8, svg_path, 0);
     defer allocator.free(svg_path_z);
 
     const svg_pdf = c.ss_pdf_create(svg_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
@@ -1224,7 +1222,7 @@ test "render PDF spec: glyph failures preserve native error details" {
     const allocator = testing.allocator;
     const pdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/operation-errors.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(pdf_path);
-    const pdf_path_z = try allocator.dupeZ(u8, pdf_path);
+    const pdf_path_z = try allocator.dupeSentinel(u8, pdf_path, 0);
     defer allocator.free(pdf_path_z);
 
     const pdf = c.ss_pdf_create(pdf_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
@@ -1262,11 +1260,11 @@ test "render PDF spec: libqpdf composes a selectable page form and copies links"
     defer allocator.free(source_path);
     const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/composed.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(output_path);
-    const base_path_z = try allocator.dupeZ(u8, base_path);
+    const base_path_z = try allocator.dupeSentinel(u8, base_path, 0);
     defer allocator.free(base_path_z);
-    const source_path_z = try allocator.dupeZ(u8, source_path);
+    const source_path_z = try allocator.dupeSentinel(u8, source_path, 0);
     defer allocator.free(source_path_z);
-    const output_path_z = try allocator.dupeZ(u8, output_path);
+    const output_path_z = try allocator.dupeSentinel(u8, output_path, 0);
     defer allocator.free(output_path_z);
 
     try writeQpdfTestLayer(allocator, base_path, "base", null);
@@ -1307,11 +1305,11 @@ test "render PDF spec: libqpdf reuses one imported form for repeated placements"
     defer allocator.free(output_path);
     const qdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/composed.qdf.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(qdf_path);
-    const base_path_z = try allocator.dupeZ(u8, base_path);
+    const base_path_z = try allocator.dupeSentinel(u8, base_path, 0);
     defer allocator.free(base_path_z);
-    const source_path_z = try allocator.dupeZ(u8, source_path);
+    const source_path_z = try allocator.dupeSentinel(u8, source_path, 0);
     defer allocator.free(source_path_z);
-    const output_path_z = try allocator.dupeZ(u8, output_path);
+    const output_path_z = try allocator.dupeSentinel(u8, output_path, 0);
     defer allocator.free(output_path_z);
 
     try writeQpdfTestLayer(allocator, base_path, "base", null);
@@ -1344,11 +1342,11 @@ test "render PDF spec: libqpdf omits source links when annotation copying is dis
     defer allocator.free(source_path);
     const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/composed.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(output_path);
-    const base_path_z = try allocator.dupeZ(u8, base_path);
+    const base_path_z = try allocator.dupeSentinel(u8, base_path, 0);
     defer allocator.free(base_path_z);
-    const source_path_z = try allocator.dupeZ(u8, source_path);
+    const source_path_z = try allocator.dupeSentinel(u8, source_path, 0);
     defer allocator.free(source_path_z);
-    const output_path_z = try allocator.dupeZ(u8, output_path);
+    const output_path_z = try allocator.dupeSentinel(u8, output_path, 0);
     defer allocator.free(output_path_z);
 
     try writeQpdfTestLayer(allocator, base_path, "base", null);
@@ -1380,11 +1378,11 @@ test "render PDF spec: libqpdf applies layer effects to content and copied links
     defer allocator.free(output_path);
     const qdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/composed.qdf.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(qdf_path);
-    const base_path_z = try allocator.dupeZ(u8, base_path);
+    const base_path_z = try allocator.dupeSentinel(u8, base_path, 0);
     defer allocator.free(base_path_z);
-    const source_path_z = try allocator.dupeZ(u8, source_path);
+    const source_path_z = try allocator.dupeSentinel(u8, source_path, 0);
     defer allocator.free(source_path_z);
-    const output_path_z = try allocator.dupeZ(u8, output_path);
+    const output_path_z = try allocator.dupeSentinel(u8, output_path, 0);
     defer allocator.free(output_path_z);
 
     try writeQpdfTestLayer(allocator, base_path, "base", null);

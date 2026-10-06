@@ -46,6 +46,7 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
         import("render_text", modules.render_text),
     }, true);
     const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{
+        import("pdf_ffi", modules.pdf_ffi),
         import("pdf_backend", modules.pdf_backend),
         import("pdf_document", render_pdf_document_mod),
         import("render", modules.render),
@@ -146,6 +147,20 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
         import("pdf_ffi", modules.pdf_ffi),
         import("render_text", modules.render_text),
     }, true);
+    const font_environment_abi = b.addTranslateC(.{
+        .root_source_file = b.path("tests/render/font_environment/native.h"),
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+    });
+    font_environment_abi.linkSystemLibrary("fontconfig", .{ .use_pkg_config = .force });
+    font_environment_abi.step.dependOn(&suite.checks.native_pdf.step);
+    // The translation needs pkg-config headers; native_pdf owns all linking.
+    font_environment_spec_mod.addImport("font_environment_abi", b.createModule(.{
+        .root_source_file = font_environment_abi.getOutput(),
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+        .link_libc = true,
+    }));
     native_pdf.addHeaders(b, font_environment_spec_mod);
     _ = suite.add(font_environment_spec_mod, .{ .name = "test-font-environment", .description = "Run isolated font environment invalidation tests" });
     const highlight_cache_spec_mod = createModule(ctx, "tests/render/highlight/cache/spec_tests.zig", &.{

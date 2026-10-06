@@ -164,17 +164,17 @@ fn hashFont(hash: *std.crypto.hash.sha2.Sha256, font: core.font.Face) void {
 pub fn shape(allocator: Allocator, io: std.Io, request: Request, environment: c.SsFontEnvironment) !*Layout {
     try std.Io.checkCancel(io);
     if (!std.math.isFinite(request.line_height) or request.line_height <= 0) return error.InvalidParagraphGeometry;
-    const source = try allocator.dupeZ(u8, request.source);
+    const source = try allocator.dupeSentinel(u8, request.source, 0);
     errdefer allocator.free(source);
     var temporary = std.heap.ArenaAllocator.init(allocator);
     defer temporary.deinit();
     const scratch = temporary.allocator();
-    const family = try scratch.dupeZ(u8, request.font.family);
+    const family = try scratch.dupeSentinel(u8, request.font.family, 0);
     const styles = try scratch.alloc(c.SsParagraphStyle, request.styles.len);
     for (request.styles, styles) |input, *style| style.* = .{
         .source_start = input.start,
         .source_end = input.end,
-        .font_family = (try scratch.dupeZ(u8, input.font.family)).ptr,
+        .font_family = (try scratch.dupeSentinel(u8, input.font.family, 0)).ptr,
         .font_weight = @intCast(input.font.weight),
         .font_style = core.font.styleCode(input.font.style),
         .font_stretch = core.font.stretchCode(input.font.stretch),

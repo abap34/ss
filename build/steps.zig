@@ -15,3 +15,9 @@ pub fn node(b: *std.Build, check: *Step, path: []const u8, executable: ?std.Buil
     run.stdio = .inherit;
     return run;
 }
+
+pub fn runExecutable(b: *std.Build, file: std.Build.LazyPath) *Step.Run {
+    const run = Step.Run.create(b, "run ss");
+    run.addFileArg(file);
+    return run;
+}

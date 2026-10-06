@@ -112,12 +112,12 @@ fn appendSettings(
 
 fn appendSettingsGroup(allocator: std.mem.Allocator, out: *std.ArrayList(u8), settings: anytype) !void {
     try out.append(allocator, '{');
-    inline for (std.meta.fields(@TypeOf(settings)), 0..) |field, i| {
+    inline for (comptime std.meta.fieldNames(@TypeOf(settings)), 0..) |field_name, i| {
         if (i != 0) try out.append(allocator, ',');
         const name = comptime blk: {
             var key_name: []const u8 = "";
             var uppercase = false;
-            for (field.name) |byte| {
+            for (field_name) |byte| {
                 if (byte == '_') {
                     uppercase = true;
                 } else {
@@ -129,9 +129,9 @@ fn appendSettingsGroup(allocator: std.mem.Allocator, out: *std.ArrayList(u8), se
         };
         try protocol.appendJsonString(allocator, out, name);
         try out.append(allocator, ':');
-        switch (field.type) {
-            bool => try protocol.appendBool(allocator, out, @field(settings, field.name)),
-            u64 => try protocol.appendInt(allocator, out, @field(settings, field.name)),
+        switch (@TypeOf(@field(settings, field_name))) {
+            bool => try protocol.appendBool(allocator, out, @field(settings, field_name)),
+            u64 => try protocol.appendInt(allocator, out, @field(settings, field_name)),
             else => @compileError("Unsupported project setting type"),
         }
     }

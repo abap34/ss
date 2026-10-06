@@ -106,7 +106,7 @@ pub const GeneratedEditKind = enum {
     syntax,
 };
 
-var generated_edits = [_]CountTime{.{}} ** @typeInfo(GeneratedEditKind).@"enum".fields.len;
+var generated_edits: [std.meta.fieldNames(GeneratedEditKind).len]CountTime = @splat(.{});
 
 pub fn recordGeneratedEdit(kind: GeneratedEditKind, start_ns: i128) void {
     if (start_ns != 0) generated_edits[@intFromEnum(kind)].add(elapsed(start_ns));
@@ -466,8 +466,8 @@ pub fn printIfEnabled() void {
     printCounter("WYSIWYG solve", &wysiwyg_solve);
     printCounter("WYSIWYG render compile", &wysiwyg_render_compile);
     printCounter("WYSIWYG snapshot", &wysiwyg_snapshot);
-    inline for (@typeInfo(GeneratedEditKind).@"enum".fields) |field| {
-        printCounter("generated edit " ++ field.name, &generated_edits[field.value]);
+    inline for (comptime std.meta.tags(GeneratedEditKind)) |kind| {
+        printCounter("generated edit " ++ @tagName(kind), &generated_edits[@intFromEnum(kind)]);
     }
 }
 

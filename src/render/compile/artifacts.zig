@@ -155,7 +155,7 @@ fn publishLatexBatch(
     defer ctx.allocator.free(batch_path);
     try publishGeneratedPdf(ctx, generated_pdf_path, batch_path);
 
-    const batch_path_z = try ctx.allocator.dupeZ(u8, batch_path);
+    const batch_path_z = try ctx.allocator.dupeSentinel(u8, batch_path, 0);
     defer ctx.allocator.free(batch_path_z);
     const widths = try ctx.allocator.alloc(f64, entries.len);
     defer ctx.allocator.free(widths);

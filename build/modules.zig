@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("compat.zig");
 const native_pdf = @import("native_pdf.zig");
 const tree_sitter_build = @import("tree_sitter.zig");
 const html = @import("html.zig");
@@ -9,7 +10,7 @@ const Import = Module.Import;
 pub const Context = struct {
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: compat.Optimize,
 };
 
 pub const ProjectModules = struct {
@@ -37,7 +38,7 @@ pub fn create(ctx: Context, build_options: *Step.Options, tree_sitter: tree_sitt
     const md4c_src = "third_party/md4c/src";
     const md4c_include = ctx.b.path(md4c_src);
     for ([_][]const u8{ md4c_src ++ "/md4c.c", md4c_src ++ "/md4c.h" }) |path| {
-        ctx.b.build_root.handle.access(ctx.b.graph.io, path, .{}) catch
+        compat.access(ctx.b, path) catch
             @panic(
                 \\Bundled MD4C sources are missing from third_party/md4c/src.
                 \\Restore the tracked third_party/md4c files and retry the build.
@@ -61,9 +62,25 @@ pub fn create(ctx: Context, build_options: *Step.Options, tree_sitter: tree_sitt
     const fontawesome_assets_mod = createModule(ctx, "third_party/fontawesome-free/embed.zig", &.{}, null);
     const pdfjs_assets_mod = createModule(ctx, "third_party/pdfjs/embed.zig", &.{}, null);
     const html_embeds_mod = html.create(ctx.b, ctx.target, ctx.optimize);
+    const md4c_abi = ctx.b.addTranslateC(.{
+        .root_source_file = ctx.b.path("third_party/md4c/src/md4c.h"),
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+    }).createModule();
+    const toml_abi = ctx.b.addTranslateC(.{
+        .root_source_file = ctx.b.path("third_party/tomlc17/tomlc17.h"),
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+    }).createModule();
+    const pdf_abi = ctx.b.addTranslateC(.{
+        .root_source_file = ctx.b.path("src/render/pdf/backend.h"),
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+    }).createModule();
     const project_mod = createModule(ctx, "src/project.zig", &.{
         import("utils", utils_mod),
     }, true);
+    project_mod.addImport("toml_abi", toml_abi);
     project_mod.addIncludePath(ctx.b.path("third_party/tomlc17"));
     project_mod.addCSourceFile(.{
         .file = ctx.b.path("third_party/tomlc17/tomlc17.c"),
@@ -76,6 +93,8 @@ pub fn create(ctx: Context, build_options: *Step.Options, tree_sitter: tree_sitt
         import("language_type", language_type_mod),
         import("fontawesome_assets", fontawesome_assets_mod),
     }, true);
+    core_mod.addImport("md4c_abi", md4c_abi);
+    core_mod.addImport("pdf_abi", pdf_abi);
     core_mod.addOptions("build_options", build_options);
     const tree_sitter_abi = ctx.b.addTranslateC(.{
         .root_source_file = tree_sitter.root.path(ctx.b, "runtime/source/lib/include/tree_sitter/api.h"),
@@ -99,6 +118,7 @@ pub fn create(ctx: Context, build_options: *Step.Options, tree_sitter: tree_sitt
         import("utils", utils_mod),
     }, null);
     const pdf_ffi_mod = createModule(ctx, "src/render/pdf/ffi.zig", &.{}, true);
+    pdf_ffi_mod.addImport("pdf_abi", pdf_abi);
     native_pdf.addHeaders(ctx.b, pdf_ffi_mod);
     const render_resources_mod = createModule(ctx, "src/render/compile/resources.zig", &.{
         import("pdf_ffi", pdf_ffi_mod),

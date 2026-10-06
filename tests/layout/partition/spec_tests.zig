@@ -73,7 +73,10 @@ test "layout partition: increasing page counts visits each constraint endpoint o
 }
 
 test "layout partition: allocation failures release builders and transferred pages" {
-    try testing.checkAllAllocationFailures(testing.allocator, partitionCountedDocument, .{@as(usize, 4)});
+    // In-place growth depends on the backing allocator's current free space.
+    // Force replacement allocations so every run reaches the same failure points.
+    var no_resize = testing.FailingAllocator.init(testing.allocator, .{ .resize_fail_index = 0 });
+    try testing.checkAllAllocationFailures(no_resize.allocator(), partitionCountedDocument, .{@as(usize, 4)});
 }
 
 fn emptyState() !core.DocumentState {

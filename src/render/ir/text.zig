@@ -139,12 +139,12 @@ pub const Layout = struct {
         var fixed = std.heap.FixedBufferAllocator.init(std.mem.sliceAsBytes(words));
         const fixed_allocator = fixed.allocator();
 
-        const source_text = try fixed_allocator.dupeZ(u8, self.source_text);
+        const source_text = try fixed_allocator.dupeSentinel(u8, self.source_text, 0);
         const lines = try fixed_allocator.dupe(Line, self.lines);
         const runs = try fixed_allocator.alloc(Run, self.runs.len);
         for (self.runs, 0..) |run, index| {
             runs[index] = run;
-            runs[index].language = try fixed_allocator.dupeZ(u8, run.language);
+            runs[index].language = try fixed_allocator.dupeSentinel(u8, run.language, 0);
         }
         const clusters = try fixed_allocator.dupe(Cluster, self.clusters);
         const glyphs = try fixed_allocator.dupe(Glyph, self.glyphs);

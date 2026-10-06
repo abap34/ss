@@ -2,9 +2,7 @@ const std = @import("std");
 const fields = @import("fields.zig");
 const source = @import("utils").source;
 
-const c = @cImport({
-    @cInclude("md4c.h");
-});
+const c = @import("md4c_abi");
 
 const Allocator = std.mem.Allocator;
 

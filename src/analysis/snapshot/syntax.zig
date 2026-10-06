@@ -100,9 +100,9 @@ fn copySyntax(allocator: std.mem.Allocator, value: anytype) anyerror!@TypeOf(val
         .@"union" => switch (value) {
             inline else => |item, tag| @unionInit(T, @tagName(tag), try copySyntax(allocator, item)),
         },
-        .@"struct" => |structure| blk: {
+        .@"struct" => blk: {
             var result: T = undefined;
-            inline for (structure.fields) |field| @field(result, field.name) = try copySyntax(allocator, @field(value, field.name));
+            inline for (comptime std.meta.fieldNames(T)) |field_name| @field(result, field_name) = try copySyntax(allocator, @field(value, field_name));
             if (@hasField(T, "items") and @hasField(T, "capacity")) result.capacity = result.items.len;
             break :blk result;
         },

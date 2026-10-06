@@ -524,7 +524,7 @@ const WriteMode = enum {
 };
 
 fn writePath(allocator: std.mem.Allocator, path: []const u8, bytes: []const u8, mode: WriteMode) !void {
-    const zpath = try allocator.dupeZ(u8, path);
+    const zpath = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(zpath);
 
     const flags: std.c.O = switch (mode) {

@@ -24,7 +24,7 @@ const barrier = path.join(temporary, "release");
 const started = path.join(temporary, "fetch-started");
 const fetched = path.join(temporary, "fetches");
 const bin = path.join(temporary, "bin");
-const zig = process.env.SS_TEST_ZIG || "zig";
+const zig = process.env.SS_TEST_ZIG || process.argv[3] || "zig";
 
 function write(relative, text) {
   const target = path.join(seed, relative);
@@ -156,8 +156,27 @@ try {
   }
   await success(zig, buildArgs("tree-sitter-prepare"), firstCheckout);
   assert.equal(readFileSync(fetched, "utf8").trim().split("\n").length, fetches.length);
+  const privateBundles = [firstCheckout, secondCheckout].map((checkout) => {
+    const objects = path.join(checkout, ".zig-cache", "o");
+    const bundles = readdirSync(objects).map((entry) => path.join(objects, entry, "tree-sitter"))
+      .filter((candidate) => existsSync(path.join(candidate, "complete.json")));
+    assert.equal(bundles.length, 1, "each build must own a complete source copy");
+    return bundles[0];
+  });
   await success(worker, ["clear", shared]);
   assert(!existsSync(shared));
+  for (const privateBundle of privateBundles) {
+    assert.equal(readFileSync(path.join(privateBundle, "runtime/source/lib/src/lib.c"), "utf8"), "/* runtime */\n");
+    for (const language of manifest.languages) {
+      for (const file of language.files) {
+        if (!file.to.endsWith("parser.c")) continue;
+        assert.equal(readFileSync(path.join(privateBundle, "generated", language.name, file.to), "utf8"), `/* ${language.name}/${file.from} */\n`);
+      }
+    }
+  }
+  await success(zig, buildArgs("tree-sitter-prepare"), firstCheckout);
+  assert.equal(readFileSync(fetched, "utf8").trim().split("\n").length, fetches.length,
+    "clearing the shared cache must not invalidate an existing build's source copy");
 
   const failedCache = path.join(temporary, "failed");
   const required = manifest.languages[0].files.find((file) => file.to === "src/parser.c");
@@ -170,7 +189,7 @@ try {
   write(`${manifest.languages[0].name}/${required.from}`, "/* repaired */\n");
   await success(zig, buildArgs("tree-sitter-prepare", failedCache, [`-Dtree-sitter-sources=${seed}`]));
   assert(existsSync(path.join(failedCache, "bundles", hash, "complete.json")));
-  console.log("isolated build dependencies, concurrent publication, leases, and recovery passed");
+  console.log("isolated build dependencies, concurrent publication, leases, private source copies, and recovery passed");
 } finally {
   for (const child of active) kill(child);
   if (active.size) await Promise.all([...active].map((child) => new Promise((resolve) => child.once("close", resolve))));

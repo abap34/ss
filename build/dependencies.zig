@@ -10,7 +10,7 @@ pub fn requiresNativePdf(b: *std.Build, root: *std.Build.Module) bool {
     while (index < modules.count()) : (index += 1) {
         const module = modules.keys()[index];
         for (module.link_objects.items) |object| {
-            if (object == .system_lib and std.mem.eql(u8, object.system_lib.name, "ss-pdf")) return true;
+            if (object == .system_lib and (std.mem.eql(u8, object.system_lib.name, "pangocairo") or std.mem.eql(u8, object.system_lib.name, "pangocairo-1.0"))) return true;
         }
         for (module.import_table.values()) |dependency| modules.put(b.allocator, dependency, {}) catch @panic("OOM");
     }

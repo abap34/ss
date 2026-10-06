@@ -1742,7 +1742,7 @@ fn measuredObjectCommandVisualFrame(ctx: *DrawContext, command: *const ObjectCom
     if (isPdfAssetOp(command)) {
         const source = try artifacts.resolveAssetPath(artifactContext(ctx), command.content);
         defer ctx.allocator.free(source);
-        const source_z = try ctx.allocator.dupeZ(u8, source);
+        const source_z = try ctx.allocator.dupeSentinel(u8, source, 0);
         defer ctx.allocator.free(source_z);
         const placement = try pdfAssetPlacement(ctx, command, source_z);
         return expandFrameToMeasuredInk(command.frame, command.render, placement);

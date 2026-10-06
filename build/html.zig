@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("compat.zig");
 
 const ImportGroup = enum { shared, pdf };
 const Source = struct {
@@ -27,7 +28,7 @@ const sources = [_]Source{
     .{ .name = "pdf_worker_module", .path = "third_party/pdfjs/pdf.worker.mjs", .limit = 4 * 1024 * 1024 },
 };
 
-pub fn create(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+pub fn create(b: *std.Build, target: std.Build.ResolvedTarget, optimize: compat.Optimize) *std.Build.Module {
     const files = b.addWriteFiles();
     var root: std.ArrayList(u8) = .empty;
     var urls: [sources.len][]const u8 = undefined;
@@ -65,7 +66,7 @@ fn importMap(b: *std.Build, urls: []const []const u8, include_pdf: bool) []const
 }
 
 fn javascriptDataUrl(b: *std.Build, path: []const u8, max_bytes: usize) []const u8 {
-    const source = b.build_root.handle.readFileAlloc(b.graph.io, path, b.allocator, .limited(max_bytes)) catch
+    const source = compat.readFile(b, path, .limited(max_bytes)) catch
         std.debug.panic("HTML runtime source is missing: {s}", .{path});
     const prefix = "data:text/javascript;charset=utf-8;base64,";
     const result = b.allocator.alloc(u8, prefix.len + std.base64.standard.Encoder.calcSize(source.len)) catch @panic("OOM");

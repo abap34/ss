@@ -37,11 +37,11 @@ test "render cache reference: dependency metadata does not obscure the PDF group
 }
 
 test "render cache reference: output manifests expose their document dependency" {
-    var lines = std.mem.splitScalar(u8, cache.PdfReference.version ++ "\ndocument\t" ++ "ab" ** 32 ++ "\nassembly\tfull\npages\t0\n", '\n');
+    var lines = std.mem.splitScalar(u8, cache.PdfReference.version ++ "\ndocument\t" ++ std.mem.asBytes(&@as([32]["ab".len]u8, @splat("ab".*))) ++ "\nassembly\tfull\npages\t0\n", '\n');
     const digest = try cache.PdfReference.document(&lines);
-    try testing.expectEqualSlices(u8, &([_]u8{0xab} ** 32), &digest);
+    try testing.expectEqualSlices(u8, &@as([32]u8, @splat(0xab)), &digest);
     try testing.expectEqualStrings("assembly\tfull", lines.next().?);
-    for ([_][]const u8{ "old\ndocument\t" ++ "ab" ** 32, cache.PdfReference.version ++ "\ndocument\tshort", cache.PdfReference.version ++ "\ndocument\t" ++ "zz" ** 32 }) |text| {
+    for ([_][]const u8{ "old\ndocument\t" ++ std.mem.asBytes(&@as([32]["ab".len]u8, @splat("ab".*))), cache.PdfReference.version ++ "\ndocument\tshort", cache.PdfReference.version ++ "\ndocument\t" ++ std.mem.asBytes(&@as([32]["zz".len]u8, @splat("zz".*))) }) |text| {
         var invalid = std.mem.splitScalar(u8, text, '\n');
         try testing.expectError(error.InvalidOutputManifest, cache.PdfReference.document(&invalid));
     }

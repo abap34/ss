@@ -1,3 +1,1 @@
-pub const c = @cImport({
-    @cInclude("backend.h");
-});
+pub const c = @import("pdf_abi");

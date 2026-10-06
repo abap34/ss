@@ -580,7 +580,7 @@ test "render IR validates resolved fonts and bidirectional text partitions" {
 
 test "render IR preserves source coverage for long paragraphs and complex scripts" {
     for ([_][]const u8{
-        "a b c " ** 4096,
+        std.mem.asBytes(&@as([4096]["a b c ".len]u8, @splat("a b c ".*))),
         "e\u{301} a\u{308} \u{304b}\u{3099} office",
         "\u{627}\u{644}\u{639}\u{631}\u{628}\u{64a}\u{629} 123 \u{5e9}\u{5dc}\u{5d5}\u{5dd}",
         "\u{915}\u{94d}\u{937}\u{93f} \u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}",

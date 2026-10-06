@@ -38,7 +38,7 @@ fn documentDigest(ir: anytype, comptime include_source_ranges: bool, domain: []c
         hash.float(font.strikethrough_thickness_ratio);
         if (font.math) |constants| {
             hash.boolean(true);
-            inline for (std.meta.fields(@TypeOf(constants))) |field| hash.float(@field(constants, field.name));
+            inline for (comptime std.meta.fieldNames(@TypeOf(constants))) |field_name| hash.float(@field(constants, field_name));
         } else hash.boolean(false);
         hash.integer(font.variations.len);
         for (font.variations) |variation| {

@@ -1,10 +1,7 @@
 const std = @import("std");
 const c = @import("pdf_ffi").c;
 const render_text = @import("render_text");
-const native = @cImport({
-    @cInclude("stdlib.h");
-    @cInclude("fontconfig/fontconfig.h");
-});
+const native = @import("font_environment_abi");
 const testing = std.testing;
 
 fn replacePreservingMtime(path: []const u8, bytes: []const u8) !void {
@@ -56,12 +53,11 @@ test "font input reuse detects configuration and font replacements and removals"
     const initial_config = try std.fmt.allocPrint(testing.allocator, "<?xml version=\"1.0\"?><!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\"><fontconfig><include ignore_missing=\"no\">{s}</include><!-- a --></fontconfig>\n", .{escaped_path.items});
     defer testing.allocator.free(initial_config);
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = config_path, .data = initial_config });
-    const absolute_config = native.realpath(config_path, null);
-    try testing.expect(absolute_config != null);
-    defer native.free(absolute_config);
+    const absolute_config = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, config_path, testing.allocator);
+    defer testing.allocator.free(absolute_config);
     const previous_environment = native.getenv("FONTCONFIG_FILE");
     const saved_environment = if (previous_environment != null)
-        try testing.allocator.dupeZ(u8, std.mem.span(@as([*:0]const u8, @ptrCast(previous_environment))))
+        try testing.allocator.dupeSentinel(u8, std.mem.span(@as([*:0]const u8, @ptrCast(previous_environment))), 0)
     else
         null;
     defer if (saved_environment) |value| testing.allocator.free(value);

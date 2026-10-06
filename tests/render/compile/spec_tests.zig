@@ -187,8 +187,8 @@ const ConcurrentResourceAdd = struct {
     io: std.Io,
     path: []const u8,
     ready: std.atomic.Value(usize) = .init(0),
-    results: [4]?render.ResourceId = .{null} ** 4,
-    errors: [4]?anyerror = .{null} ** 4,
+    results: [4]?render.ResourceId = @splat(null),
+    errors: [4]?anyerror = @splat(null),
 
     fn run(self: *ConcurrentResourceAdd, index: usize) void {
         _ = self.ready.fetchAdd(1, .seq_cst);
@@ -481,7 +481,7 @@ test "render compiler rejects unavailable PDF pages" {
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(testing.io, root);
 
-    const pdf_path_z = try testing.allocator.dupeZ(u8, pdf_path);
+    const pdf_path_z = try testing.allocator.dupeSentinel(u8, pdf_path, 0);
     defer testing.allocator.free(pdf_path_z);
     const pdf = c.ss_pdf_create(pdf_path_z.ptr, 120, 60) orelse return error.CairoCreateFailed;
     defer c.ss_pdf_destroy(pdf);
@@ -1044,7 +1044,7 @@ test "resource compiler records deterministic raster SVG and PDF metadata" {
         .data = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\" viewBox=\"1 2 80 40\" preserveAspectRatio=\"xMaxYMin slice\"><rect width=\"80\" height=\"40\"/></svg>",
         .flags = .{ .truncate = true },
     });
-    const pdf_path_z = try testing.allocator.dupeZ(u8, pdf_path);
+    const pdf_path_z = try testing.allocator.dupeSentinel(u8, pdf_path, 0);
     defer testing.allocator.free(pdf_path_z);
     const pdf = c.ss_pdf_create(pdf_path_z.ptr, 120, 60) orelse return error.CairoCreateFailed;
     defer c.ss_pdf_destroy(pdf);
@@ -1731,7 +1731,7 @@ test "document font environment rejects changes between layout and compilation" 
     try testing.expect(seed_shape.run_count != 0);
     try testing.expect(seed_shape.runs[0].font_path != null);
     const font_path_ptr: [*:0]const u8 = @ptrCast(seed_shape.runs[0].font_path);
-    const font_path = try testing.allocator.dupeZ(u8, std.mem.span(font_path_ptr));
+    const font_path = try testing.allocator.dupeSentinel(u8, std.mem.span(font_path_ptr), 0);
     defer testing.allocator.free(font_path);
 
     const generation_before_registration = c.ss_font_generation();

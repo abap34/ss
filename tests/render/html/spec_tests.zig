@@ -468,7 +468,7 @@ test "HTML renderer embeds LaTeX PDF with math semantics" {
     const resource_path = ".ss-cache/test-render-html/latex-source.pdf";
     try prepareOutput(output);
     defer deleteOutput(output);
-    const resource_path_z = try testing.allocator.dupeZ(u8, resource_path);
+    const resource_path_z = try testing.allocator.dupeSentinel(u8, resource_path, 0);
     defer testing.allocator.free(resource_path_z);
     const pdf = c.ss_pdf_create(resource_path_z.ptr, 120, 60) orelse return error.CairoCreateFailed;
     defer c.ss_pdf_destroy(pdf);
@@ -531,7 +531,7 @@ test "HTML renderer packages PDF.js with explicit page geometry" {
     const resource_path = ".ss-cache/test-render-html/pdf-source.pdf";
     try prepareOutput(output);
     defer deleteOutput(output);
-    const resource_path_z = try testing.allocator.dupeZ(u8, resource_path);
+    const resource_path_z = try testing.allocator.dupeSentinel(u8, resource_path, 0);
     defer testing.allocator.free(resource_path_z);
     const pdf = c.ss_pdf_create(resource_path_z.ptr, 120, 60) orelse return error.CairoCreateFailed;
     defer c.ss_pdf_destroy(pdf);

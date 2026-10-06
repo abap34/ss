@@ -98,9 +98,9 @@ pub const Instance = struct {
     }
 
     pub fn clone(self: *const Instance, allocator: std.mem.Allocator) !Instance {
-        const family = try allocator.dupeZ(u8, self.family);
+        const family = try allocator.dupeSentinel(u8, self.family, 0);
         errdefer allocator.free(family);
-        const postscript_name = try allocator.dupeZ(u8, self.postscript_name);
+        const postscript_name = try allocator.dupeSentinel(u8, self.postscript_name, 0);
         errdefer allocator.free(postscript_name);
         const variations = try allocator.dupe(Variation, self.variations);
         errdefer allocator.free(variations);
@@ -205,9 +205,9 @@ pub const Builder = struct {
         for (self.instances.items) |instance| {
             if (std.mem.eql(u8, &instance.id, &id)) return id;
         }
-        const family = try allocator.dupeZ(u8, spec.family);
+        const family = try allocator.dupeSentinel(u8, spec.family, 0);
         errdefer allocator.free(family);
-        const postscript_name = try allocator.dupeZ(u8, spec.postscript_name);
+        const postscript_name = try allocator.dupeSentinel(u8, spec.postscript_name, 0);
         errdefer allocator.free(postscript_name);
         const variations = try allocator.dupe(Variation, spec.variations);
         errdefer allocator.free(variations);
@@ -284,8 +284,8 @@ pub fn identify(spec: Spec) Id {
     hashInteger(&hasher, @as(u64, @bitCast(spec.strikethrough_thickness_ratio)));
     if (spec.math) |constants| {
         hasher.update(&.{1});
-        inline for (std.meta.fields(MathConstants)) |field| {
-            hashInteger(&hasher, @as(u64, @bitCast(@field(constants, field.name))));
+        inline for (comptime std.meta.fieldNames(MathConstants)) |field_name| {
+            hashInteger(&hasher, @as(u64, @bitCast(@field(constants, field_name))));
         }
     } else hasher.update(&.{0});
     hashInteger(&hasher, spec.variations.len);

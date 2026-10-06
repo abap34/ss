@@ -677,7 +677,7 @@ fn renderPageToCache(
 }
 
 fn mergePages(allocator: Allocator, ir: *const render.Ir, inputs: []const []u8, output: []const u8) !void {
-    const output_z = try allocator.dupeZ(u8, output);
+    const output_z = try allocator.dupeSentinel(u8, output, 0);
     defer allocator.free(output_z);
     if (ir.pages.len == 0) {
         if (c.ss_qpdf_empty(output_z.ptr) != 0) return error.PdfAssemblyFailed;
@@ -692,7 +692,7 @@ fn mergePages(allocator: Allocator, ir: *const render.Ir, inputs: []const []u8, 
     const pointers = try allocator.alloc([*c]const u8, inputs.len);
     defer allocator.free(pointers);
     for (inputs, 0..) |input, index| {
-        paths[index] = try allocator.dupeZ(u8, input);
+        paths[index] = try allocator.dupeSentinel(u8, input, 0);
         initialized += 1;
         pointers[index] = paths[index].ptr;
     }
@@ -803,9 +803,9 @@ fn replaceCachedDocument(
     page_paths: []const []u8,
     output: []const u8,
 ) !bool {
-    const output_z = try allocator.dupeZ(u8, output);
+    const output_z = try allocator.dupeSentinel(u8, output, 0);
     defer allocator.free(output_z);
-    const base_z = try allocator.dupeZ(u8, plan.base_path);
+    const base_z = try allocator.dupeSentinel(u8, plan.base_path, 0);
     defer allocator.free(base_z);
     const replacements = try allocator.alloc([:0]u8, plan.changed.len);
     var initialized: usize = 0;
@@ -816,7 +816,7 @@ fn replaceCachedDocument(
     const replacement_pointers = try allocator.alloc([*c]const u8, plan.changed.len);
     defer allocator.free(replacement_pointers);
     for (plan.changed, 0..) |page_index, replacement_index| {
-        replacements[replacement_index] = try allocator.dupeZ(u8, page_paths[page_index]);
+        replacements[replacement_index] = try allocator.dupeSentinel(u8, page_paths[page_index], 0);
         initialized += 1;
         replacement_pointers[replacement_index] = replacements[replacement_index].ptr;
     }
@@ -1208,7 +1208,7 @@ fn validateGeneratedPdf(
     qpdf_detail: *?[]const u8,
 ) !void {
     try validatePdf(allocator, io, path);
-    const path_z = try allocator.dupeZ(u8, path);
+    const path_z = try allocator.dupeSentinel(u8, path, 0);
     defer allocator.free(path_z);
     if (c.ss_qpdf_validate(path_z.ptr, expected_page_count, @intFromBool(strict)) != 0) {
         qpdf_detail.* = qpdfLastError();

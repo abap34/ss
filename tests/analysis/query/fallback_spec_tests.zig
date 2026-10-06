@@ -112,7 +112,7 @@ test "fallback analysis: comments and strings do not introduce declarations or h
 test "fallback analysis: large files retain nearby names and current positions" {
     var snapshot = emptySnapshot();
     defer snapshot.deinit();
-    const source = ("let repeated = 0\n" ** 5000) ++ "let nearby: Number = unknown(\nlet copy = nearby\n";
+    const source = (std.mem.asBytes(&@as([5000]["let repeated = 0\n".len]u8, @splat("let repeated = 0\n".*)))) ++ "let nearby: Number = unknown(\nlet copy = nearby\n";
     const index = try utils.source.LineIndex.init(testing.allocator, source);
     defer index.deinit(testing.allocator);
     const req = query_types.SourceRequest{ .path = "large.ss", .source = source, .offset = after(source, "copy = near"), .line_index = index };
@@ -154,12 +154,12 @@ test "fallback analysis: definition positions use UTF-16 and reject a stale line
 test "fallback analysis: its own deadline stops scanning snapshot facts" {
     var snapshot = emptySnapshot();
     defer snapshot.deinit();
-    var fields = [_]api.RecordFieldFact{.{
+    var fields: [128]api.RecordFieldFact = @splat(.{
         .name = @constCast("size"),
         .record_name = @constCast("Style"),
         .type_label = @constCast("Number"),
         .module_id = 0,
-    }} ** 128;
+    });
     fields[fields.len - 1].name = @constCast("last_field");
     snapshot.record_fields = &fields;
     defer snapshot.record_fields = &.{};

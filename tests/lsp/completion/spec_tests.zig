@@ -117,7 +117,7 @@ test "analysis queries: hover switches to shallow types when documentation excee
     for (snapshot.value_bindings) |*binding| {
         if (!std.mem.eql(u8, binding.name, "local")) continue;
         case.allocator.free(binding.documentation);
-        binding.documentation = try case.allocator.dupe(u8, "Long documentation.\n" ** 1024);
+        binding.documentation = try case.allocator.dupe(u8, std.mem.asBytes(&@as([1024]["Long documentation.\n".len]u8, @splat("Long documentation.\n".*))));
     }
     const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, "local(1") - 3 };
     var clock = DeadlineClock{};
@@ -995,7 +995,7 @@ const ParseCancellation = struct {
 };
 
 test "analysis queries: fallback parsing checks cancellation inside a document" {
-    const source = "page title\n" ++ ("  let value = add(1, 2)\n" ** 100) ++ "end\n";
+    const source = "page title\n" ++ (std.mem.asBytes(&@as([100]["  let value = add(1, 2)\n".len]u8, @splat("  let value = add(1, 2)\n".*)))) ++ "end\n";
     var cancellation = ParseCancellation{ .limit = 20 };
     const budget = query_types.QueryBudget.start(.{
         .budget_ms = 1000,
@@ -1066,7 +1066,7 @@ test "analysis queries: parser cancellation releases partial expressions and dec
 }
 
 test "analysis queries: retained syntax traversal stops before reaching a distant target" {
-    const source = ("fn repeated(value: Number) -> Number\n  return add(value, 1)\nend\n" ** 100) ++
+    const source = (std.mem.asBytes(&@as([100]["fn repeated(value: Number) -> Number\n  return add(value, 1)\nend\n".len]u8, @splat("fn repeated(value: Number) -> Number\n  return add(value, 1)\nend\n".*)))) ++
         "page title\n  let target = 1\nend\n";
     var parsed = try compiler.syntax.parseRecoveringWithSourceName(testing.allocator, source, "traversal.ss");
     defer parsed.deinit(testing.allocator);
@@ -1150,7 +1150,7 @@ test "analysis queries: fact lookup and import traversal honor cancellation" {
             return .{ .imports = self.imports };
         }
     };
-    const imports = [_]snapshot_api.ImportFact{.{ .spec = &.{}, .spec_span = .{ .start = 0, .end = 0 }, .unqualified = true }} ** 512;
+    const imports: [512]snapshot_api.ImportFact = @splat(.{ .spec = &.{}, .spec_span = .{ .start = 0, .end = 0 }, .unqualified = true });
     var visits: usize = 0;
     cancellation.checks = 0;
     budget = query_types.QueryBudget.start(.{

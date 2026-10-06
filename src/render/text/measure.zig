@@ -1,9 +1,7 @@
 const std = @import("std");
 const font_model = @import("../../core/font.zig");
 
-const c = @cImport({
-    @cInclude("backend.h");
-});
+const c = @import("pdf_abi");
 
 pub const Decoration = struct {
     strikethrough: bool = false,
@@ -42,9 +40,9 @@ pub const LineMetrics = struct {
 
 pub fn advanceWidth(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, font_size: f32) !f32 {
     if (text.len == 0) return 0;
-    const family_z = try allocator.dupeZ(u8, font.family);
+    const family_z = try allocator.dupeSentinel(u8, font.family, 0);
     defer allocator.free(family_z);
-    const text_z = try allocator.dupeZ(u8, text);
+    const text_z = try allocator.dupeSentinel(u8, text, 0);
     defer allocator.free(text_z);
     return @floatCast(c.ss_text_measure_text(
         text_z.ptr,
@@ -58,9 +56,9 @@ pub fn advanceWidth(allocator: std.mem.Allocator, text: []const u8, font: font_m
 
 pub fn visualWidth(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, font_size: f32) !f32 {
     if (text.len == 0) return 0;
-    const family_z = try allocator.dupeZ(u8, font.family);
+    const family_z = try allocator.dupeSentinel(u8, font.family, 0);
     defer allocator.free(family_z);
-    const text_z = try allocator.dupeZ(u8, text);
+    const text_z = try allocator.dupeSentinel(u8, text, 0);
     defer allocator.free(text_z);
     return @floatCast(c.ss_text_measure_text_visual_width(
         text_z.ptr,
@@ -81,9 +79,9 @@ pub fn layout(
     wrap: bool,
     decoration: Decoration,
 ) !LayoutMeasurement {
-    const family_z = try allocator.dupeZ(u8, font.family);
+    const family_z = try allocator.dupeSentinel(u8, font.family, 0);
     defer allocator.free(family_z);
-    const text_z = try allocator.dupeZ(u8, text);
+    const text_z = try allocator.dupeSentinel(u8, text, 0);
     defer allocator.free(text_z);
     if (!decoration.strikethrough and !decoration.underline) {
         var measurement = std.mem.zeroes(c.SsTextMeasurement);
@@ -209,13 +207,13 @@ pub fn paragraph(allocator: std.mem.Allocator, text: []const u8, font: font_mode
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const scratch = arena.allocator();
-    const source = try scratch.dupeZ(u8, text);
-    const family = try scratch.dupeZ(u8, font.family);
+    const source = try scratch.dupeSentinel(u8, text, 0);
+    const family = try scratch.dupeSentinel(u8, font.family, 0);
     const native_styles = try scratch.alloc(c.SsParagraphStyle, styles.len);
     for (styles, native_styles) |style, *native| native.* = .{
         .source_start = style.start,
         .source_end = style.end,
-        .font_family = (try scratch.dupeZ(u8, style.font.family)).ptr,
+        .font_family = (try scratch.dupeSentinel(u8, style.font.family, 0)).ptr,
         .font_weight = @intCast(style.font.weight),
         .font_style = font_model.styleCode(style.font.style),
         .font_stretch = font_model.stretchCode(style.font.stretch),

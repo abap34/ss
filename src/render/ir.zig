@@ -698,7 +698,7 @@ pub const Page = struct {
     }
 
     pub fn appendLink(self: *Page, allocator: std.mem.Allocator, kind: LinkKind, target: []const u8, rect: Rect) !void {
-        const owned_target = try allocator.dupeZ(u8, target);
+        const owned_target = try allocator.dupeSentinel(u8, target, 0);
         errdefer allocator.free(owned_target);
         try self.links.append(allocator, .{
             .kind = kind,
@@ -708,7 +708,7 @@ pub const Page = struct {
     }
 
     pub fn appendDestination(self: *Page, allocator: std.mem.Allocator, name: []const u8, point: Point) !void {
-        const owned_name = try allocator.dupeZ(u8, name);
+        const owned_name = try allocator.dupeSentinel(u8, name, 0);
         errdefer allocator.free(owned_name);
         try self.destinations.append(allocator, .{
             .name = owned_name,

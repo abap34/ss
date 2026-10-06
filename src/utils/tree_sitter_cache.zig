@@ -97,7 +97,7 @@ pub fn bundleCount(io: std.Io, allocator: std.mem.Allocator, root_path: []const 
 }
 
 pub fn pathExists(allocator: std.mem.Allocator, path: []const u8) bool {
-    const zpath = allocator.dupeZ(u8, path) catch return false;
+    const zpath = allocator.dupeSentinel(u8, path, 0) catch return false;
     defer allocator.free(zpath);
     return std.c.access(zpath.ptr, std.c.F_OK) == 0;
 }

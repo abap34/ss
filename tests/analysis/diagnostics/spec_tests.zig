@@ -31,7 +31,7 @@ fn shareDiagnosticSources(allocator: std.mem.Allocator) !void {
     {
         var original = analysis.diagnostics.DiagnosticBag.init(allocator);
         defer original.deinit();
-        var text = [_]u8{'x'} ** 32768;
+        var text: [32768]u8 = @splat('x');
         const id = try original.registerSource("large.ss", &text);
         for (0..100) |index| {
             try original.addAt(id, .@"error", "Example", "message", .{ .start = index, .end = index + 1 }, null);

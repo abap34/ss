@@ -748,7 +748,7 @@ fn findOnPath(allocator: std.mem.Allocator, environ: std.process.Environ, name: 
 }
 
 fn isExecutable(allocator: std.mem.Allocator, path: []const u8) bool {
-    const zpath = allocator.dupeZ(u8, path) catch return false;
+    const zpath = allocator.dupeSentinel(u8, path, 0) catch return false;
     defer allocator.free(zpath);
     return std.c.access(zpath.ptr, std.c.X_OK) == 0;
 }

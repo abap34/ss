@@ -6,6 +6,7 @@ const native_pdf = @import("build/native_pdf.zig");
 const cairo = @import("build/cairo.zig");
 const qpdf = @import("build/qpdf.zig");
 const tree_sitter = @import("build/tree_sitter.zig");
+const steps = @import("build/steps.zig");
 const tests = @import("build/tests/root.zig");
 const visual = @import("build/tests/visual.zig");
 const benchmarks = @import("build/benchmarks.zig");
@@ -41,12 +42,6 @@ pub fn build(b: *std.Build) void {
     const parser_check = tree_sitter.addAbiCheck(tree_options, parsers);
     b.step("tree-sitter-check", "Check bundled tree-sitter runtime and parsers").dependOn(parser_check);
 
-    const exe_mod = project.createCliModule(ctx, modules, build_options);
-    qpdf.link(bridge, b, exe_mod, ctx.target, .build);
-    const exe = b.addExecutable(.{ .name = "ss", .root_module = exe_mod });
-    exe.step.dependOn(&bridge.install.step);
-    exe.step.dependOn(parser_check);
-
     const installed_mod = project.createCliModule(ctx, modules, build_options);
     qpdf.link(bridge, b, installed_mod, ctx.target, .installed);
     const installed_exe = b.addExecutable(.{ .name = "ss", .root_module = installed_mod });
@@ -65,8 +60,11 @@ pub fn build(b: *std.Build) void {
         .install_subdir = "share/licenses/ss/fontawesome-free",
         .include_extensions = &.{".txt"},
     });
-    const run = b.addRunArtifact(exe);
-    if (b.args) |args| run.addArgs(args);
+    const exe = qpdf.runnable(b, bridge, installed_exe);
+    const run = steps.runExecutable(b, exe);
+    if (@hasDecl(std.Build.Step.Run, "addPassthruArgs")) {
+        run.addPassthruArgs();
+    } else if (b.args) |args| run.addArgs(args);
     b.step("run", "Run the ss CLI").dependOn(&run.step);
 
     tests.register(ctx, modules, build_options, exe, parser_check, checks, bridge);

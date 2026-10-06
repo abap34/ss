@@ -10,12 +10,13 @@ const oldCairoPkgConfig = path.join(root, "tests/fixtures/build/dependencies/cai
 const newCairoPkgConfig = path.join(root, "tests/fixtures/build/dependencies/cairo-2");
 const oldQpdfPkgConfig = path.join(root, "tests/fixtures/build/dependencies/qpdf-10");
 const newQpdfPkgConfig = path.join(root, "tests/fixtures/build/dependencies/qpdf-13");
+const zig = process.env.SS_TEST_ZIG || process.argv[3] || "zig";
 const dependencyChecker = process.argv[2] ? path.resolve(root, process.argv[2]) : undefined;
 
 assert.ok(dependencyChecker, "dependency checker executable argument is missing");
 
 function runBuild(args, environment = {}) {
-  const result = spawnSync("zig", ["build", "--summary", "none", ...args], {
+  const result = spawnSync(zig, ["build", "--summary", "none", ...args], {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, ...environment },

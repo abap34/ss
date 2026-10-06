@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("compat.zig");
 
 const Module = std.Build.Module;
 const Step = std.Build.Step;
@@ -37,7 +38,10 @@ pub fn link(
 ) void {
     module.addObjectFile(bridge.file);
     switch (location) {
-        .build => module.addRPath(.{ .cwd_relative = b.getInstallPath(.lib, "ss") }),
+        .build => module.addRPath(if (@hasDecl(std.Build, "getInstallPath"))
+            .{ .cwd_relative = b.getInstallPath(.lib, "ss") }
+        else
+            b.graph.path(.install_lib, "ss")),
         .installed => switch (target.result.os.tag) {
             .linux => module.addRPathSpecial("$ORIGIN/../lib/ss"),
             .macos => module.addRPathSpecial("@loader_path/../lib/ss"),
@@ -46,10 +50,19 @@ pub fn link(
     }
 }
 
+/// Keep build-time executables and their bridge in a private, relocatable tree.
+/// This also avoids depending on the install prefix during runtime tests.
+pub fn runnable(b: *std.Build, bridge: Bridge, executable: *Step.Compile) std.Build.LazyPath {
+    const files = b.addWriteFiles();
+    const target = executable.root_module.resolved_target.?.result;
+    _ = files.addCopyFile(bridge.file, b.fmt("lib/ss/{s}ss-qpdf{s}", .{ target.libPrefix(), target.dynamicLibSuffix() }));
+    return files.addCopyFile(executable.getEmittedBin(), b.fmt("bin/{s}", .{executable.name}));
+}
+
 pub fn create(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: compat.Optimize,
     build_config: Config,
     dependency_check: *Step,
 ) Bridge {
@@ -170,7 +183,7 @@ fn unsupportedTarget(
     };
 }
 
-fn optimizationFlag(optimize: std.builtin.OptimizeMode) []const u8 {
+fn optimizationFlag(optimize: compat.Optimize) []const u8 {
     return switch (optimize) {
         .Debug => "-O0",
         .ReleaseSafe => "-O2",

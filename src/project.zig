@@ -350,19 +350,19 @@ fn settingKey(comptime field: []const u8) []const u8 {
 }
 
 fn parseFlatSettings(comptime T: type, document: *const toml.Document, table: toml.Value) !T {
-    const fields = std.meta.fields(T);
+    const fields = comptime std.meta.fieldNames(T);
     const keys = comptime blk: {
         var names: [fields.len][]const u8 = undefined;
-        for (fields, 0..) |field, i| names[i] = settingKey(field.name);
+        for (fields, 0..) |field_name, i| names[i] = settingKey(field_name);
         break :blk names;
     };
     try document.keys(table, &keys, error.UnknownConfigKey);
     var result = T{};
-    inline for (fields) |field| {
-        const key = comptime settingKey(field.name);
-        @field(result, field.name) = switch (field.type) {
-            bool => try document.boolean(table, key, @field(result, field.name), error.InvalidEditorSetting),
-            u64 => (try document.integer(table, key, @field(result, field.name), 0, max_editor_delay_ms, error.InvalidEditorSetting)).?,
+    inline for (fields) |field_name| {
+        const key = comptime settingKey(field_name);
+        @field(result, field_name) = switch (@TypeOf(@field(result, field_name))) {
+            bool => try document.boolean(table, key, @field(result, field_name), error.InvalidEditorSetting),
+            u64 => (try document.integer(table, key, @field(result, field_name), 0, max_editor_delay_ms, error.InvalidEditorSetting)).?,
             else => @compileError("Unsupported project setting type"),
         };
     }

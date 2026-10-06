@@ -1,8 +1,6 @@
 const std = @import("std");
 const source = @import("utils").source;
-const c = @cImport({
-    @cInclude("tomlc17.h");
-});
+const c = @import("toml_abi");
 
 pub const Value = c.toml_datum_t;
 
