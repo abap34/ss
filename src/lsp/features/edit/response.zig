@@ -4,11 +4,21 @@ const utils = @import("utils");
 
 pub const build_diagnostics_message = "The current source cannot be built. See the WYSIWYG build diagnostics.";
 
-pub fn statusJson(allocator: std.mem.Allocator, status: []const u8, message: ?[]const u8) ![]u8 {
+pub const schema_version = 1;
+
+pub const Status = enum { ok, stale, unsupported, rejected };
+
+fn appendHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), status: Status) !void {
+    try out.appendSlice(allocator, "{\"schema\":");
+    try protocol.appendInt(allocator, out, schema_version);
+    try out.appendSlice(allocator, ",\"status\":");
+    try protocol.appendJsonString(allocator, out, @tagName(status));
+}
+
+pub fn statusJson(allocator: std.mem.Allocator, status: Status, message: ?[]const u8) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
-    try out.appendSlice(allocator, "{\"schema\":1,\"status\":");
-    try protocol.appendJsonString(allocator, &out, status);
+    try appendHeader(allocator, &out, status);
     if (message) |text| {
         try out.appendSlice(allocator, ",\"message\":");
         try protocol.appendJsonString(allocator, &out, text);
@@ -61,7 +71,8 @@ fn appendWorkspaceEdit(
 ) !void {
     const source_index = try utils.source.LineIndex.init(allocator, source);
     defer source_index.deinit(allocator);
-    try out.appendSlice(allocator, "{\"schema\":1,\"status\":\"ok\",\"workspaceEdit\":{\"changes\":{");
+    try appendHeader(allocator, out, .ok);
+    try out.appendSlice(allocator, ",\"workspaceEdit\":{\"changes\":{");
     try protocol.appendJsonString(allocator, out, uri);
     try out.appendSlice(allocator, ":[");
     for (edits, 0..) |edit, index| {
