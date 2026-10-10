@@ -8,6 +8,7 @@ import subprocess
 import sys
 from typing import List, Optional
 
+from release_notes import collect_pull_requests, credit_notes, draft_notes, release_commits
 from release_versions import (
     parse_release_tag,
     require_release_tag,
@@ -122,39 +123,33 @@ def previous_tag(root: pathlib.Path, base_commit: str, explicit: Optional[str]) 
     return None
 
 
-def commit_subjects(root: pathlib.Path, previous: Optional[str], base_commit: str) -> List[str]:
-    revision = f"{previous}..{base_commit}" if previous else base_commit
-    output = git(root, "log", "--format=%s", "--reverse", revision, capture=True)
-    return [line.strip() for line in output.splitlines() if line.strip()]
-
-
 def punctuate(subject: str) -> str:
     if subject.endswith((".", "!", "?")):
         return subject
     return f"{subject}."
 
 
-def generated_changelog(root: pathlib.Path, previous: Optional[str], base_commit: str) -> str:
-    subjects = commit_subjects(root, previous, base_commit)
-    if not subjects:
-        return "### Changed\n\n- Prepared release metadata."
-    bullets = "\n".join(f"- {punctuate(subject)}" for subject in subjects)
-    return f"### Changed\n\n{bullets}"
+def generated_changelog(root: pathlib.Path, previous: Optional[str], base_commit: str, pull_requests) -> str:
+    return draft_notes(release_commits(root, previous, base_commit), pull_requests)
 
 
-def generated_patch_changelog(root: pathlib.Path, from_tag: str, cherry_picks: List[str]) -> str:
+def generated_patch_changelog(root: pathlib.Path, from_tag: str, cherry_picks: List[str], pull_requests) -> str:
     bullets: list[str] = []
     for commit in cherry_picks:
         subject = git(root, "show", "-s", "--format=%s", commit, capture=True)
         short = git(root, "rev-parse", "--short", commit, capture=True)
+        sha = git(root, "rev-parse", commit, capture=True)
+        for pr in pull_requests:
+            if pr["merge_commit_sha"] == sha:
+                subject = f"{pr['title'].rstrip('.')} (#{pr['number']})"
         bullets.append(f"- Backported {punctuate(subject)} ({short})")
     if not bullets:
         bullets.append(f"- Prepared a patch release for users staying on {from_tag}.")
     intro = f"This patch release is based on {from_tag} and includes only the selected backports."
-    return f"{intro}\n\n### Fixed\n\n" + "\n".join(bullets)
+    return credit_notes(f"{intro}\n\n### Fixed\n\n" + "\n".join(bullets), pull_requests)
 
 
-def update_changelog(worktree: pathlib.Path, version: str, date: str, body: str) -> None:
+def update_changelog(worktree: pathlib.Path, version: str, date: str, body: str, pull_requests, notes_body=None) -> None:
     changelog_path = worktree / "release" / "CHANGELOG.md"
     text = changelog_path.read_text(encoding="utf-8")
     if re.search(rf"^## \[{re.escape(version)}\](?:\s|-)", text, re.MULTILINE):
@@ -169,7 +164,8 @@ def update_changelog(worktree: pathlib.Path, version: str, date: str, body: str)
         raise SystemExit("release/CHANGELOG.md has no Unreleased section")
 
     unreleased_body = match.group("body").strip()
-    release_body = unreleased_body if unreleased_body else body.strip()
+    release_body = notes_body if notes_body is not None else unreleased_body or body.strip()
+    release_body = credit_notes(release_body, pull_requests)
     replacement = f"## [Unreleased]\n\n## [{version}] - {date}\n\n{release_body}\n\n"
     updated = text[: match.start()] + replacement + text[match.end() :].lstrip("\n")
     changelog_path.write_text(updated, encoding="utf-8")
@@ -221,6 +217,8 @@ def main() -> int:
     parser.add_argument("--date", default=datetime.date.today().isoformat(), help="Changelog date. Defaults to today.")
     parser.add_argument("--previous-tag", help="Previous release tag used when drafting changelog entries.")
     parser.add_argument("--no-commit", action="store_true", help="Update files but leave the release commit to the caller.")
+    parser.add_argument("--pull-requests", type=pathlib.Path, help="Saved PR JSON; otherwise fetch merged PRs using GET only.")
+    parser.add_argument("--notes-file", type=pathlib.Path, help="Reviewed Markdown body with #PR references; overrides Unreleased.")
     args = parser.parse_args()
 
     try:
@@ -247,26 +245,30 @@ def main() -> int:
     source_base_commit = None
     release_base = None
     previous = None
+    notes_body = args.notes_file.read_text(encoding="utf-8") if args.notes_file else None
     if args.from_tag:
         try:
             source_base_tag = require_release_tag(args.from_tag)
         except ValueError as err:
             raise SystemExit(str(err))
         source_base_commit = git(root, "rev-parse", "--verify", f"{source_base_tag}^{{commit}}", capture=True)
+        picked_commits = [(git(root, "rev-parse", commit, capture=True), "") for commit in args.cherry_pick]
+        pull_requests = collect_pull_requests(root, picked_commits, args.pull_requests)
         create_worktree(root, worktree, source_base_commit, branch)
         for commit in args.cherry_pick:
             run(["git", "cherry-pick", "-x", commit], worktree)
         release_base = git(worktree, "rev-parse", "HEAD", capture=True)
-        changelog_body = generated_patch_changelog(root, source_base_tag, args.cherry_pick)
+        changelog_body = generated_patch_changelog(root, source_base_tag, args.cherry_pick, pull_requests)
     else:
         base_ref = args.base or "HEAD"
         release_base = git(root, "rev-parse", "--verify", f"{base_ref}^{{commit}}", capture=True)
         previous = previous_tag(root, release_base, args.previous_tag)
-        changelog_body = generated_changelog(root, previous, release_base)
+        pull_requests = collect_pull_requests(root, release_commits(root, previous, release_base), args.pull_requests)
+        changelog_body = generated_changelog(root, previous, release_base, pull_requests)
         create_worktree(root, worktree, release_base, branch)
 
+    update_changelog(worktree, version, args.date, changelog_body, pull_requests, notes_body)
     update_version_metadata(worktree, version)
-    update_changelog(worktree, version, args.date, changelog_body)
 
     run([str(worktree / "release" / "tools" / "preflight.py"), tag], worktree)
     run([str(worktree / "release" / "tools" / "changelog-section.py"), tag], worktree, capture=True)
@@ -311,4 +313,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (ValueError, OSError) as error:
+        raise SystemExit(str(error))

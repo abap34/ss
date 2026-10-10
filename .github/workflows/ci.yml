@@ -127,6 +127,7 @@ jobs:
         run: |
           release/tools/preflight.py
           python3 tests/release/release_tools_spec.py
+          python3 tests/release/notes_spec.py
 
       - name: Run tests
         run: zig build test

@@ -215,6 +215,7 @@ run pkg-config --exists cairo pangocairo librsvg-2.0
 step "release metadata"
 release/tools/preflight.py "$tag"
 run python3 tests/release/release_tools_spec.py
+run python3 tests/release/notes_spec.py
 release/tools/changelog-section.py "$tag" > "$notes_path"
 test -s "$notes_path"
 
