@@ -759,19 +759,11 @@ fn resolveRule(state: anytype, node: *const Node) RulePaint {
     };
 }
 
-fn recordFloatProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
-    return fields.read(state.allocator, state, node, record_key, &.{field_name}, .number);
-}
+const recordFloatProperty = fields.recordFloatProperty;
 
-fn positiveRecordFloatProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
-    const value = recordFloatProperty(state, node, record_key, field_name) orelse return null;
-    return if (value > 0) value else null;
-}
+const positiveRecordFloatProperty = fields.positiveRecordFloatProperty;
 
-fn nonNegativeRecordFloatProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
-    const value = recordFloatProperty(state, node, record_key, field_name) orelse return null;
-    return if (value >= 0) value else null;
-}
+const nonNegativeRecordFloatProperty = fields.nonNegativeRecordFloatProperty;
 
 fn markdownHeadingTextFloatProperty(node: *const Node, heading_field: []const u8, field_name: []const u8) ?f32 {
     return fields.readExplicit(node, "markdown_headings", &.{ heading_field, "text", field_name }, .number);

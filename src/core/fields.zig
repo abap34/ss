@@ -60,6 +60,20 @@ pub fn readExplicit(
     return readValue(field, as);
 }
 
+pub fn recordFloatProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
+    return read(state.allocator, state, node, record_key, &.{field_name}, .number);
+}
+
+pub fn positiveRecordFloatProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
+    const value = recordFloatProperty(state, node, record_key, field_name) orelse return null;
+    return if (value > 0) value else null;
+}
+
+pub fn nonNegativeRecordFloatProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
+    const value = recordFloatProperty(state, node, record_key, field_name) orelse return null;
+    return if (value >= 0) value else null;
+}
+
 pub fn classId(state: anytype, node: *const Node) ?model.NominalId {
     return switch (node.kind) {
         .document => state.builtinClass("Doc"),
