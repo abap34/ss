@@ -116,7 +116,7 @@ test "layout partition: solving one page preserves other frames and fallback ord
         .context = &measured,
         .measure = MeasuredPages.measure,
     } };
-    var initial = try state.finalizeDocument(null, options);
+    var initial = try core.layout.solver.finalizeDocument(&state, null, options);
     defer initial.deinit(testing.allocator);
     try testing.expectEqual(@as(u8, 7), measured.mask);
     const first = state.getNode(nodes[0]).?.frame;
@@ -134,7 +134,7 @@ test "layout partition: solving one page preserves other frames and fallback ord
     try testing.expectApproxEqAbs(@as(f32, 80), state.getNode(nodes[1]).?.frame.x, core.layout.graph.ConstraintTolerance);
     const fallbacks = try testing.allocator.dupe(core.Constraint, state.constraints.fallback.items);
     defer testing.allocator.free(fallbacks);
-    var full = try state.finalizeDocument(null, options);
+    var full = try core.layout.solver.finalizeDocument(&state, null, options);
     defer full.deinit(testing.allocator);
     try testing.expectEqualDeep(full.pages[1].object_frames, selected.object_frames);
     try testing.expectEqualDeep(fallbacks, state.constraints.fallback.items);
@@ -274,7 +274,7 @@ test "layout partition: prepared graphs read updated offsets without repeating p
     var graph = try core.layout.graph.PageLayoutGraph.init(testing.allocator, &state, prepared.layout.pages[0]);
     defer graph.deinit();
     try testing.expectEqual(@as(f32, 45), graph.constraints[0].offset);
-    var result = try state.finalizeDocument(null, .{ .page_inputs = prepared.layout.pages });
+    var result = try core.layout.solver.finalizeDocument(&state, null, .{ .page_inputs = prepared.layout.pages });
     defer result.deinit(testing.allocator);
     try testing.expectApproxEqAbs(@as(f32, 45), state.getNode(object).?.frame.x, core.layout.graph.ConstraintTolerance);
 }

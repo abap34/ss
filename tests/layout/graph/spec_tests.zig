@@ -11,7 +11,10 @@ const solver = core.layout.solver;
 const testing = std.testing;
 
 fn initEmptyDocumentState() !core.DocumentState {
-    const allocator = testing.allocator;
+    return initEmptyDocumentStateWithAllocator(testing.allocator);
+}
+
+fn initEmptyDocumentStateWithAllocator(allocator: std.mem.Allocator) !core.DocumentState {
     const asset_base_dir = try allocator.dupe(u8, ".");
     errdefer allocator.free(asset_base_dir);
     const project_path = try allocator.dupe(u8, "unit-test.ss");
@@ -22,7 +25,7 @@ fn initEmptyDocumentState() !core.DocumentState {
 }
 
 fn finalizeDocumentState(state: *core.DocumentState) !void {
-    var document = try state.finalizeDocument(null, .{});
+    var document = try solver.finalizeDocument(state, null, .{});
     defer document.deinit(state.allocator);
 }
 
@@ -698,7 +701,7 @@ test "layout exhaustion survives isolated jobs and cannot be applied" {
                 }
             }
             try testing.expectError(error.LayoutDidNotConverge, solver.applyDocument(&state, &result));
-            try testing.expectError(error.LayoutDidNotConverge, state.finalizeDocument(null, options));
+            try testing.expectError(error.LayoutDidNotConverge, solver.finalizeDocument(&state, null, options));
             try testing.expectEqual(@as(usize, if (record_diagnostics) 2 else 0), state.diagnostics.entries.items.len);
         }
     }
@@ -2822,4 +2825,27 @@ test "layout solver: subpixel width changes invalidate height before vertical so
 
 test "layout solver: width-dependent height is independent of the outer wrap policy" {
     try expectHeightAtFinalWidth(24, "off");
+}
+
+fn finalizeWithAllocationFailures(allocator: std.mem.Allocator, conflict: bool) !void {
+    var state = try initEmptyDocumentStateWithAllocator(allocator);
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    const object = try state.makeObject(page, "body", null, .text, .text, "");
+    try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, 100, null);
+    if (conflict) try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, 120, null);
+    var result = solver.finalizeDocument(&state, null, .{ .jobs = 1 }) catch |err| {
+        if (!conflict or err != error.ConstraintConflict) return err;
+        try testing.expect(state.diagnostics.constraint_failures.items.len != 0);
+        return;
+    };
+    defer result.deinit(allocator);
+    try testing.expect(!conflict);
+    try testing.expectEqual(@as(usize, 1), result.pages.len);
+    try expectFloat(100, state.getNode(object).?.frame.x);
+}
+
+test "layout solver: finalization releases results on every allocation failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, finalizeWithAllocationFailures, .{false});
+    try testing.checkAllAllocationFailures(testing.allocator, finalizeWithAllocationFailures, .{true});
 }

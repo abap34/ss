@@ -383,6 +383,40 @@ fn mergePageLayoutIssues(state: anytype, result: *const document.Page) !void {
     }
 }
 
+/// Solve and apply a document, retrying constraint failures with propagation details.
+pub fn finalizeDocument(state: anytype, trace_path: ?[]const u8, options: SolveOptions) !document.Document {
+    try graph.checkCancellation(options);
+    state.diagnostics.clearDiagnosticsForPhase(state.allocator, .layout);
+    state.diagnostics.clearConstraintFailures(state.allocator);
+    var results = try solveDocument(state, trace_path, options);
+    {
+        errdefer results.deinit(state.allocator);
+        try graph.checkCancellation(options);
+        if (state.diagnostics.constraint_failures.items.len == 0) {
+            try graph.checkCancellation(options);
+            try applyDocument(state, &results);
+            return results;
+        }
+    }
+    const first_kind = state.diagnostics.constraint_failures.items[0].kind;
+    results.deinit(state.allocator);
+    state.diagnostics.clearDiagnosticsForPhase(state.allocator, .layout);
+    state.diagnostics.clearConstraintFailures(state.allocator);
+    var propagation_options = options;
+    propagation_options.record_propagation = true;
+    var detailed = try solveDocument(state, trace_path, propagation_options);
+    defer detailed.deinit(state.allocator);
+    try graph.checkCancellation(options);
+    const kind = if (state.diagnostics.constraint_failures.items.len == 0)
+        first_kind
+    else
+        state.diagnostics.constraint_failures.items[0].kind;
+    return switch (kind) {
+        .conflict => error.ConstraintConflict,
+        .negative_frame_size => error.NegativeFrameSize,
+    };
+}
+
 pub fn applyDocument(state: anytype, results: *const document.Document) !void {
     for (results.pages) |page| {
         if (!page.converged) return error.LayoutDidNotConverge;

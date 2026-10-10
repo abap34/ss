@@ -33,7 +33,7 @@ pub fn evaluateDocument(
 }
 
 pub fn solveDocument(state: *core.DocumentState, trace_path: ?[]const u8, options: core.layout.graph.SolveOptions) !core.layout.Document {
-    return try state.finalizeDocument(trace_path, options);
+    return try core.layout.solver.finalizeDocument(state, trace_path, options);
 }
 
 pub fn scheduleTraceJsonFromGraph(allocator: std.mem.Allocator, state: *const core.DocumentState, graph: *const execution.ExecutionGraph) ![]u8 {
