@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const FileInputs = @import("utils").FileInputs;
 const testing = std.testing;
 
@@ -20,7 +21,7 @@ test "file inputs: canonical paths are unique and ordered independently of recor
 }
 
 test "file inputs: allocation failures preserve ownership" {
-    try testing.checkAllAllocationFailures(testing.allocator, recordInputs, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, recordInputs, .{});
 }
 
 fn recordInputs(allocator: std.mem.Allocator) !void {

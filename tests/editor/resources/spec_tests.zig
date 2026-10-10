@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const Clients = @import("editor_resources").Clients;
 const Lease = @import("utils").render_cache.PublishedLease;
 const testing = std.testing;
@@ -35,7 +36,7 @@ test "editor resources retain displayed, deferred, and in-flight snapshots until
 }
 
 test "editor resources release partial deliveries after every allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, resourceOwnership, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, resourceOwnership, .{});
 }
 
 fn resourceOwnership(allocator: std.mem.Allocator) !void {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const project = @import("project");
 const utils = @import("utils");
 
@@ -77,7 +78,7 @@ test "project spec: settings reject incorrect TOML types and unsupported fields"
 }
 
 test "project spec: parsed configuration owns decoded strings across allocation failures" {
-    try testing.checkAllAllocationFailures(testing.allocator, parseOwnedConfiguration, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseOwnedConfiguration, .{});
 }
 
 fn parseOwnedConfiguration(allocator: std.mem.Allocator) !void {
@@ -112,9 +113,9 @@ test "project spec: configuration discovery paths include missing nearer candida
 }
 
 test "project spec: configuration path ownership survives allocation failures" {
-    try testing.checkAllAllocationFailures(testing.allocator, collectConfigurationPaths, .{@as(?[]const u8, null)});
-    try testing.checkAllAllocationFailures(testing.allocator, collectConfigurationPaths, .{@as(?[]const u8, "/tmp/project")});
-    try testing.checkAllAllocationFailures(testing.allocator, collectConfigurationPaths, .{@as(?[]const u8, "/tmp/project.toml")});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, collectConfigurationPaths, .{@as(?[]const u8, null)});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, collectConfigurationPaths, .{@as(?[]const u8, "/tmp/project")});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, collectConfigurationPaths, .{@as(?[]const u8, "/tmp/project.toml")});
 }
 
 fn collectConfigurationPaths(allocator: std.mem.Allocator, project_arg: ?[]const u8) !void {

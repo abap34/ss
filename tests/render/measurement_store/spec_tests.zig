@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const core = @import("core");
 const measurements = @import("render_measurements");
 const testing = std.testing;
@@ -66,7 +67,7 @@ test "measurement storage propagates allocation failures without leaking" {
         .sub_path = path,
         .data = "ss-layout-measurements-v2\t" ++ measurements.version ++ "\n1\t3f800000\t3f800000\t-\t-\t-\t-\t-\t-\n",
     });
-    try testing.checkAllAllocationFailures(testing.allocator, exerciseStorage, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseStorage, .{});
 }
 
 test "retained measurement storage evicts the least recently used record" {

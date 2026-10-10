@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const c = @import("pdf_ffi").c;
 const render_text = @import("render_text");
 const testing = std.testing;
@@ -190,7 +191,7 @@ fn paragraphAllocationFailures(allocator: std.mem.Allocator) !void {
 }
 
 test "retained paragraph ownership survives every allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, paragraphAllocationFailures, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, paragraphAllocationFailures, .{});
 }
 
 test "paragraph wrapping consumes separators without adding empty visual lines" {

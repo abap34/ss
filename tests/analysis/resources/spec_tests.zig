@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const compiler = @import("compiler");
 const dependencies = compiler.analysis.dependencies;
 const resource_index = compiler.analysis.resource_index;
@@ -142,5 +143,5 @@ test "resource index: allocation failures release every partially built bucket" 
             .identity = .{ .scope = .{ .page = 2 }, .name = "title" },
         } }, "x"),
     };
-    try testing.checkAllAllocationFailures(testing.allocator, verifyResourceMatrix, .{&resources});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, verifyResourceMatrix, .{&resources});
 }

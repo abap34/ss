@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const render_compile = @import("render_compile");
 const utils = @import("utils");
 const testing = std.testing;
@@ -179,7 +180,7 @@ fn exerciseAllocationFailures(allocator: std.mem.Allocator) !void {
 }
 
 test "highlight cache: allocation failures release queries results and partial publication" {
-    try testing.checkAllAllocationFailures(testing.allocator, exerciseAllocationFailures, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseAllocationFailures, .{});
 }
 
 const Worker = struct {

@@ -11,7 +11,17 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
     const b = ctx.b;
     const all = b.step("test", "Run ss test targets");
     all.dependOn(parser_check);
-    const suite = Suite{ .ctx = ctx, .all = all, .checks = checks, .bridge = bridge };
+    const suite = Suite{
+        .ctx = ctx,
+        .all = all,
+        .checks = checks,
+        .bridge = bridge,
+        .allocation_testing = project.createModule(ctx, "tests/support/allocation.zig", &.{}, null),
+    };
+    _ = suite.add(project.createModule(ctx, "tests/support/allocation_spec.zig", &.{}, null), .{
+        .name = "test-allocation-failures",
+        .description = "Check deterministic allocation failure coverage",
+    });
     _ = suite.add(project.createCliModule(ctx, modules, build_options), .{ .link_qpdf = true });
     const compiler = project.createCompilerModule(ctx, modules);
     @import("language.zig").register(suite, modules);

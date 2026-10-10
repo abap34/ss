@@ -11,6 +11,7 @@ pub const Suite = struct {
     all: *Step,
     checks: dependencies.Checks,
     bridge: qpdf.Bridge,
+    allocation_testing: *Module,
 
     pub const Options = struct {
         name: ?[]const u8 = null,
@@ -20,6 +21,7 @@ pub const Suite = struct {
 
     pub fn add(self: Suite, module: *Module, options: Options) *Step.Run {
         const b = self.ctx.b;
+        module.addImport("allocation_testing", self.allocation_testing);
         if (options.link_qpdf) qpdf.link(self.bridge, b, module, self.ctx.target, .build);
         const artifact = b.addTest(.{ .root_module = module });
         if (dependencies.requiresNativePdf(b, module)) artifact.step.dependOn(&self.checks.native_pdf.step);

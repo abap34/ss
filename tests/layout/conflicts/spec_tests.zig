@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const ast = @import("ast");
 const core = @import("core");
 
@@ -122,7 +123,7 @@ test "layout conflict report releases every partial allocation" {
     defer state.deinit();
     _ = try addFixture(&state);
 
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         initAndDeinitReport,
         .{&state},

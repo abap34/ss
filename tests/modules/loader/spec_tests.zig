@@ -1,10 +1,11 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const compiler = @import("compiler");
 
 const testing = std.testing;
 
 test "module loader spec: module transfer preserves ownership on every allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, transferModuleOwnership, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, transferModuleOwnership, .{});
 }
 
 fn transferModuleOwnership(allocator: std.mem.Allocator) !void {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const highlight = @import("highlight_spans");
 const CaptureRole = @import("utils").highlight.CaptureRole;
 const testing = std.testing;
@@ -113,5 +114,5 @@ fn compileWithAllocationFailures(allocator: std.mem.Allocator) !void {
 }
 
 test "highlight spans: allocation failures release partially compiled segments" {
-    try testing.checkAllAllocationFailures(testing.allocator, compileWithAllocationFailures, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, compileWithAllocationFailures, .{});
 }

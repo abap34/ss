@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const source = @import("utils").source;
 const testing = std.testing;
 
@@ -42,7 +43,7 @@ test "source index: cloned generations own separate indexes" {
     defer clone.deinit(testing.allocator);
     try testing.expect(original.starts.ptr != clone.starts.ptr);
     try testing.expectEqualDeep(original.locationAt(8), clone.locationAt(8));
-    try testing.checkAllAllocationFailures(testing.allocator, createIndexes, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, createIndexes, .{});
 }
 
 fn createIndexes(allocator: std.mem.Allocator) !void {

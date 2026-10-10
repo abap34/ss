@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const generated = @import("editor_edit").generated;
 const testing = std.testing;
 
@@ -76,7 +77,7 @@ fn cloneAndRelease(allocator: std.mem.Allocator) !void {
 
 test "generated edit copies retain all borrowed inputs and release partial allocations" {
     try cloneAndRelease(testing.allocator);
-    try testing.checkAllAllocationFailures(testing.allocator, cloneAndRelease, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndRelease, .{});
 }
 
 test "generated edits map growing shrinking and omitted offsets in either order" {

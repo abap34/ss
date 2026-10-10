@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const artifacts = @import("artifacts");
 const resources = @import("render_resources");
 const testing = std.testing;
@@ -77,7 +78,7 @@ test "icon production owns paths and shares decoded resources without an IR buil
 }
 
 test "icon production releases owned outputs through every allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, produceIcon, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, produceIcon, .{});
 }
 
 fn produceIcon(allocator: std.mem.Allocator) !void {

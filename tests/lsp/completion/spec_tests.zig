@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const compiler = @import("compiler");
 const query_types = compiler.analysis.query.types;
 const resolve_query = compiler.analysis.query.resolve;
@@ -980,7 +981,7 @@ fn ownQuerySyntax(allocator: std.mem.Allocator) !void {
 
 test "analysis queries: retained syntax owns all type spellings and partial allocations" {
     try ownQuerySyntax(testing.allocator);
-    try testing.checkAllAllocationFailures(testing.allocator, ownQuerySyntax, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, ownQuerySyntax, .{});
 }
 
 const ParseCancellation = struct {

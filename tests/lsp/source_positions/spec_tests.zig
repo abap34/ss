@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const lsp = @import("lsp");
 const state = lsp.state;
 const tokens = lsp.semantic_tokens;
@@ -16,7 +17,7 @@ test "LSP source positions: sequential edits update line indexes in the same gen
 }
 
 test "LSP source positions: partial updates retain ownership on allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, applyEdits, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, applyEdits, .{});
 }
 
 fn applyEdits(allocator: std.mem.Allocator) !void {

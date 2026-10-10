@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const analysis = @import("analysis");
 const ast = @import("ast");
 const core = @import("core");
@@ -89,7 +90,7 @@ test "analysis snapshot layout output adopts an owned conflict report" {
 }
 
 test "analysis snapshot owned layout output releases every partial allocation" {
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         initAndDeinitOwnedLayoutOutput,
         .{},
@@ -112,7 +113,7 @@ fn retainQueryTypes(allocator: std.mem.Allocator) !void {
 
 test "analysis snapshot types retain nested names independently of source owners" {
     try retainQueryTypes(testing.allocator);
-    try testing.checkAllAllocationFailures(testing.allocator, retainQueryTypes, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, retainQueryTypes, .{});
 }
 
 fn releasePreparedLayoutInputs(allocator: std.mem.Allocator, retain_state: bool) !void {
@@ -143,6 +144,6 @@ fn releasePreparedLayoutInputs(allocator: std.mem.Allocator, retain_state: bool)
 test "prepared layout inputs follow retained state ownership and canceled hook output" {
     for ([_]bool{ false, true }) |retain_state| {
         try releasePreparedLayoutInputs(testing.allocator, retain_state);
-        try testing.checkAllAllocationFailures(testing.allocator, releasePreparedLayoutInputs, .{retain_state});
+        try allocation_testing.checkAllAllocationFailures(testing.allocator, releasePreparedLayoutInputs, .{retain_state});
     }
 }

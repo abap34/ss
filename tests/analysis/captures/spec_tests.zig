@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const compiler = @import("compiler");
 const Index = compiler.analysis.captures.Index;
 const testing = std.testing;
@@ -76,5 +77,5 @@ test "captures: every declaration and statement boundary collects lambdas with a
     defer index.deinit();
     try index.collectModule(module);
     try testing.expectEqual(@as(usize, 8), index.lambdas.count());
-    try testing.checkAllAllocationFailures(testing.allocator, collectWithAllocationFailures, .{module});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, collectWithAllocationFailures, .{module});
 }

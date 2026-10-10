@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const analysis = @import("analysis");
 
 const testing = std.testing;
@@ -18,7 +19,7 @@ fn addAndDeinitDiagnostic(allocator: std.mem.Allocator) !void {
 }
 
 test "analysis diagnostic ownership survives every allocation failure" {
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         addAndDeinitDiagnostic,
         .{},
@@ -52,7 +53,7 @@ fn shareDiagnosticSources(allocator: std.mem.Allocator) !void {
 }
 
 test "diagnostics share source storage and copy it once across ownership boundaries" {
-    try testing.checkAllAllocationFailures(testing.allocator, shareDiagnosticSources, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, shareDiagnosticSources, .{});
 }
 
 fn retainSourceVersions(allocator: std.mem.Allocator) !void {
@@ -74,7 +75,7 @@ fn retainSourceVersions(allocator: std.mem.Allocator) !void {
 }
 
 test "diagnostics preserve distinct source versions for the same path" {
-    try testing.checkAllAllocationFailures(testing.allocator, retainSourceVersions, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, retainSourceVersions, .{});
 }
 
 test "position edits rebase shared source storage once" {

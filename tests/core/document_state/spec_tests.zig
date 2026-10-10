@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const ast = @import("ast");
 const core = @import("core");
 const utils = @import("utils");
@@ -20,7 +21,7 @@ fn initEmptyDocumentStateWithAllocator(allocator: std.mem.Allocator) !core.Docum
 }
 
 test "document state spec: initialization preserves ownership on allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, struct {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, struct {
         fn run(allocator: std.mem.Allocator) !void {
             var state = try initEmptyDocumentStateWithAllocator(allocator);
             defer state.deinit();
@@ -1155,7 +1156,7 @@ fn cloneSourceOrigins(allocator: std.mem.Allocator) !void {
 }
 
 test "structured origins preserve paths labels spans and independent ownership" {
-    try testing.checkAllAllocationFailures(testing.allocator, cloneSourceOrigins, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneSourceOrigins, .{});
 }
 
 test "diagnostic constructors release message ownership when origin cloning fails" {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const Reference = @import("utils").render_cache.LatexReference;
 const testing = std.testing;
 const cache = @import("utils").render_cache;
@@ -48,7 +49,7 @@ test "render cache reference: output manifests expose their document dependency"
 }
 
 test "render cache published resources: ownership survives copies and allocation failures" {
-    try testing.checkAllAllocationFailures(testing.allocator, publishedOwnership, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, publishedOwnership, .{});
 }
 
 fn publishedOwnership(allocator: std.mem.Allocator) !void {

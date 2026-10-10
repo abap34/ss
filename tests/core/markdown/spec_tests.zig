@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const core = @import("core");
 
 const markdown = core.markdown;
@@ -238,7 +239,7 @@ fn parseInlineWithAllocator(allocator: std.mem.Allocator) !void {
 }
 
 test "inline Markdown preserves callback errors and releases partial runs" {
-    try testing.checkAllAllocationFailures(testing.allocator, parseInlineWithAllocator, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseInlineWithAllocator, .{});
 }
 
 fn parseBlocksWithAllocator(allocator: std.mem.Allocator) !void {
@@ -263,5 +264,5 @@ fn parseBlocksWithAllocator(allocator: std.mem.Allocator) !void {
 }
 
 test "block Markdown preserves callback errors across allocation failures" {
-    try testing.checkAllAllocationFailures(testing.allocator, parseBlocksWithAllocator, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseBlocksWithAllocator, .{});
 }

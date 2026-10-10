@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const csv = @import("csv");
 
 fn allocationCase(allocator: std.mem.Allocator, text: []const u8, invalid: bool) !void {
@@ -19,9 +20,9 @@ fn allocationCase(allocator: std.mem.Allocator, text: []const u8, invalid: bool)
 }
 
 test "CSV parser frees allocations on success and malformed input" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, allocationCase, .{ "A,B,C\r\n\"two\r\nlines\",\"quoted \"\"value\"\"\",", false });
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, allocationCase, .{ "A,B\n\"unterminated", true });
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, allocationCase, .{ "A,B\n1", true });
+    try allocation_testing.checkAllAllocationFailures(std.testing.allocator, allocationCase, .{ "A,B,C\r\n\"two\r\nlines\",\"quoted \"\"value\"\"\",", false });
+    try allocation_testing.checkAllAllocationFailures(std.testing.allocator, allocationCase, .{ "A,B\n\"unterminated", true });
+    try allocation_testing.checkAllAllocationFailures(std.testing.allocator, allocationCase, .{ "A,B\n1", true });
 }
 
 fn cancel(_: *const anyopaque) bool {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const ast = @import("ast");
 const core = @import("core");
 const model = @import("model");
@@ -2712,7 +2713,7 @@ test "layout graph: adjacency preserves shared parents and component order acros
     var inputs = try core.layout.partition.Document.init(testing.allocator, &state);
     defer inputs.deinit(testing.allocator);
     try inspectIndexedPageGraph(testing.allocator, &state, inputs.pages[0], b, outer);
-    try testing.checkAllAllocationFailures(testing.allocator, inspectIndexedPageGraph, .{ &state, inputs.pages[0], b, outer });
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, inspectIndexedPageGraph, .{ &state, inputs.pages[0], b, outer });
 }
 
 fn inspectIndexedPageGraph(allocator: std.mem.Allocator, state: *core.DocumentState, inputs: core.layout.partition.Page, target: model.NodeId, outer: model.NodeId) !void {
@@ -2756,7 +2757,7 @@ test "layout graph: split constraints are deferred until measured outer frames a
     try testing.expectEqual(@as(usize, 0), natural.default_alignment_constraints.len);
     try testing.expect(natural.splitFrame(outer) == null);
     try inspectSplitGraph(testing.allocator, &state, inputs.pages[0], inner, outer);
-    try testing.checkAllAllocationFailures(testing.allocator, inspectSplitGraph, .{ &state, inputs.pages[0], inner, outer });
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, inspectSplitGraph, .{ &state, inputs.pages[0], inner, outer });
 }
 
 fn inspectSplitGraph(allocator: std.mem.Allocator, state: *core.DocumentState, inputs: core.layout.partition.Page, inner: model.NodeId, outer: model.NodeId) !void {
@@ -2846,6 +2847,6 @@ fn finalizeWithAllocationFailures(allocator: std.mem.Allocator, conflict: bool) 
 }
 
 test "layout solver: finalization releases results on every allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, finalizeWithAllocationFailures, .{false});
-    try testing.checkAllAllocationFailures(testing.allocator, finalizeWithAllocationFailures, .{true});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, finalizeWithAllocationFailures, .{false});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, finalizeWithAllocationFailures, .{true});
 }

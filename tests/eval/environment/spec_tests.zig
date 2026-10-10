@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const compiler = @import("compiler");
 const core = compiler.core;
 const Environment = compiler.evaluation_environment.Environment;
@@ -71,7 +72,7 @@ test "environment: partially copied captures and failed insertions release owner
     defer source.deinit();
     try source.putOwned("first", try aggregate(testing.allocator, 128));
     try source.putOwned("second", try aggregate(testing.allocator, 256));
-    try testing.checkAllAllocationFailures(testing.allocator, captureWithAllocationFailures, .{&source});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, captureWithAllocationFailures, .{&source});
 }
 
 test "environment: child bindings shadow locally and preserve the parent" {

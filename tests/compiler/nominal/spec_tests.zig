@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const compiler = @import("compiler");
 const core = compiler.core;
 const Type = compiler.language.Type;
@@ -257,7 +258,7 @@ fn cloneNestedTypes(allocator: std.mem.Allocator) !void {
 }
 
 test "nominal types: partially cloned function parameters are released on allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, cloneNestedTypes, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneNestedTypes, .{});
 }
 
 const first_object =

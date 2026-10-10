@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const compiler = @import("compiler");
 const core = compiler.core;
 const testing = std.testing;
@@ -121,7 +122,7 @@ fn initializeDocument(allocator: std.mem.Allocator) !void {
 }
 
 test "declaration index: document initialization releases partially allocated owners" {
-    try testing.checkAllAllocationFailures(testing.allocator, initializeDocument, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, initializeDocument, .{});
 }
 
 test "declaration index: repeated extensions have the same precedence in analysis and runtime" {
@@ -155,5 +156,5 @@ fn buildIndex(allocator: std.mem.Allocator, state: *const core.DocumentState) !v
 test "declaration index: failed collection releases every partial container" {
     var state = try documentFromSource(source);
     defer state.deinit();
-    try testing.checkAllAllocationFailures(testing.allocator, buildIndex, .{&state});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, buildIndex, .{&state});
 }

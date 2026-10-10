@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const core = @import("core");
 const table_layout = @import("table_layout");
 const render_text = @import("render_text");
@@ -69,7 +70,7 @@ test "table layouts retain shared native paragraphs after cache teardown" {
 test "table preparation releases partially prepared rows through allocation failures" {
     var document = try core.markdown.parseMarkdownContent(testing.allocator, "| a | b |\n| --- | --- |\n| _j_ | **text** |");
     defer document.deinit();
-    try testing.checkAllAllocationFailures(testing.allocator, prepareTable, .{document.blocks.items[0].table.?});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, prepareTable, .{document.blocks.items[0].table.?});
 }
 
 fn prepareTable(allocator: std.mem.Allocator, table: core.markdown.TableData) !void {

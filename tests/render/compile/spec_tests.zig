@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const ast = @import("ast");
 const core = @import("core");
 const c = @import("pdf_ffi").c;
@@ -1487,7 +1488,7 @@ test "source cache: failed publication releases in-flight claims and partial sto
     defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(testing.io, root);
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "synthetic font bytes" });
-    try testing.checkAllAllocationFailures(testing.allocator, inspectSourceCacheAllocations, .{path});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, inspectSourceCacheAllocations, .{path});
 }
 
 test "page cache keeps materialized content alive across eviction" {

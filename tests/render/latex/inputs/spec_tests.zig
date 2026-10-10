@@ -1,10 +1,11 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const latex = @import("latex_inputs");
 const utils = @import("utils");
 const testing = std.testing;
 
 test "latex inputs: recorder paths honor working directories and exclude outputs" {
-    try testing.checkAllAllocationFailures(testing.allocator, recorderPaths, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, recorderPaths, .{});
 }
 
 fn recorderPaths(allocator: std.mem.Allocator) !void {
@@ -33,7 +34,7 @@ fn recorderPaths(allocator: std.mem.Allocator) !void {
 }
 
 test "latex inputs: manifests own validated paths through allocation failures" {
-    try testing.checkAllAllocationFailures(testing.allocator, parseManifest, .{});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseManifest, .{});
     const invalid = [_][]const u8{
         "{}",
         "{\"inputs\":[]}",

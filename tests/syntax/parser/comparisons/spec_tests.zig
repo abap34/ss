@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const syntax = @import("syntax");
 const ast = @import("ast");
 const testing = std.testing;
@@ -200,10 +201,10 @@ test "comparisons: malformed operands reject and recovery preserves following de
 
 test "comparisons: allocation failures release nested expression ownership" {
     const source = "page Sample\nlet value = left!=2+3 <= (other>=4)\nend\n";
-    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinit, .{source});
-    try testing.checkAllAllocationFailures(testing.allocator, recoverAndDeinit, .{source});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinit, .{source});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, recoverAndDeinit, .{source});
     const incomplete = "page Sample\nlet value = left != # missing\naccept()\nend\n";
-    try testing.checkAllAllocationFailures(testing.allocator, recoverAndDeinit, .{incomplete});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, recoverAndDeinit, .{incomplete});
 }
 
 test "comparisons: missing right operand cannot consume the next statement" {

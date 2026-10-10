@@ -1,4 +1,5 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const syntax = @import("syntax");
 const ast = @import("ast");
 const Type = @import("language_type").Type;
@@ -895,12 +896,12 @@ test "syntax spec: failed constant and type declarations release parsed ownershi
 }
 
 test "syntax spec: constant and enum parsing survive every allocation failure" {
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
         .{"const value: Selection<Text> = source\n"},
     );
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
         .{"type Mode = alpha | beta\n"},
@@ -908,7 +909,7 @@ test "syntax spec: constant and enum parsing survive every allocation failure" {
 }
 
 test "syntax spec: imports survive every allocation failure" {
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
         .{"import \"dep\"\n"},
@@ -924,7 +925,7 @@ test "syntax spec: failed pages release parsed ownership" {
 }
 
 test "syntax spec: document and page parsing survive every allocation failure" {
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
         .{
@@ -934,7 +935,7 @@ test "syntax spec: document and page parsing survive every allocation failure" {
             \\
         },
     );
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
         .{
@@ -944,7 +945,7 @@ test "syntax spec: document and page parsing survive every allocation failure" {
             \\
         },
     );
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
         .{
@@ -961,7 +962,7 @@ test "syntax spec: document and page parsing survive every allocation failure" {
 }
 
 test "syntax spec: recovering blocks propagate every allocation failure" {
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseRecoveringAndDeinitSource,
         .{
@@ -971,7 +972,7 @@ test "syntax spec: recovering blocks propagate every allocation failure" {
             \\
         },
     );
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseRecoveringAndDeinitSource,
         .{
@@ -1008,7 +1009,7 @@ test "syntax spec: failed object declarations release parsed ownership" {
 }
 
 test "syntax spec: object declarations survive every allocation failure" {
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
         .{
@@ -1021,7 +1022,7 @@ test "syntax spec: object declarations survive every allocation failure" {
             \\
         },
     );
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
         .{
@@ -1031,7 +1032,7 @@ test "syntax spec: object declarations survive every allocation failure" {
             \\
         },
     );
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
         .{
@@ -1131,7 +1132,7 @@ test "syntax spec: expression parsing survives every allocation failure" {
         \\end
         \\
     ;
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
         .{source},
@@ -1164,7 +1165,7 @@ test "syntax spec: module cloning survives every allocation failure" {
     ;
     var parsed = try parse(source);
     defer parsed.deinit();
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         cloneAndDeinitModule,
         .{&parsed.module},
@@ -1172,7 +1173,7 @@ test "syntax spec: module cloning survives every allocation failure" {
 }
 
 test "syntax spec: paired functions survive every allocation failure" {
-    try testing.checkAllAllocationFailures(
+    try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
         .{
@@ -1655,7 +1656,7 @@ test "syntax spec: composition preserves punctuation in line text arguments" {
     try expectIdent(checked.args.items[0].optional_check.target.*, "a");
     const placed = try expectComposition(statements[17].kind.expr_stmt, "hjoin");
     for (placed.args.items) |operand| _ = try expectCall(operand, "text!", 1);
-    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
 }
 
 test "syntax spec: mixed composition diagnostics point to the second direction" {
@@ -1753,7 +1754,7 @@ test "syntax spec: recovering mixed compositions preserves subsequent statements
     try testing.expect(statements[0].kind == .hole);
     try testing.expectEqualStrings("ok", statements[1].kind.let_binding.name);
     try testing.expectEqual(error.MixedCompositionDirections, parsed.result.holes.diagnostics[0].err);
-    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{"page Recover\ntext(\"A\")\n|| text(\"B\")\n//\ntext <<\nC\n>>\nlet ok = 1\nend\n"});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{"page Recover\ntext(\"A\")\n|| text(\"B\")\n//\ntext <<\nC\n>>\nlet ok = 1\nend\n"});
 }
 
 test "syntax spec: missing composition operands preserve conditional and constraint statements" {
@@ -1789,7 +1790,7 @@ test "syntax spec: missing composition operands preserve conditional and constra
     try testing.expectEqualStrings("after", statements[6].kind.let_binding.name);
     try testing.expectEqual(@as(usize, 3), parsed.result.holes.holes.len);
     for (parsed.result.holes.diagnostics) |diagnostic| try testing.expectEqual(error.ExpectedExpression, diagnostic.err);
-    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{source_text});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{source_text});
     for ([_][]const u8{
         "page Bad\n a ||\n if true\n end\nend\n",
         "page Bad\n a ||\n ~ a.left == page.left\nend\n",
@@ -1799,11 +1800,11 @@ test "syntax spec: missing composition operands preserve conditional and constra
 
 test "syntax spec: composition parsing and cloning survive every allocation failure" {
     const source_text = "page Composition\n  a || (b // c) || text(\"d\")\nend\n";
-    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
     var parsed = try parse(source_text);
     defer parsed.deinit();
-    try testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
-    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{"page Recover\n  a ||\n  let ok = 1\nend\n"});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{"page Recover\n  a ||\n  let ok = 1\nend\n"});
 }
 
 test "syntax spec: equal composition chains preserve grouping and spans" {
@@ -1839,8 +1840,8 @@ test "syntax spec: equal composition chains preserve grouping and spans" {
     const division = try expectCall(statements[4].kind.let_binding.expr, "vsplit", 1);
     const divided_pair = try expectComposition(division.args.items[0], "composition_objects");
     for (divided_pair.args.items) |operand| _ = try expectCall(operand, "div", 2);
-    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
-    try testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
 }
 
 test "syntax spec: equal compositions diagnose mixed operators and recover missing operands" {
@@ -1864,7 +1865,7 @@ test "syntax spec: equal compositions diagnose mixed operators and recover missi
     const append = try expectComposition(horizontal.args.items[0], "composition_append");
     try testing.expect(append.args.items[1] == .hole);
     try testing.expectEqualStrings("ok", statements[1].kind.let_binding.name);
-    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{incomplete});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{incomplete});
 }
 
 test "syntax spec: equal operators continue after trivia and remain literal in text" {
@@ -1991,8 +1992,8 @@ test "syntax spec: chevron suffixes belong to the enclosing expression" {
     var parsed = try parse(nested);
     defer parsed.deinit();
     _ = try expectComposition(parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr, "hjoin");
-    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{nested});
-    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{nested});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{nested});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{nested});
     var crlf = try parse("page Blocks\r\nlet s = << # header\r\nA\r\n\t>> ++ \"B\"\r\nend\r\n");
     defer crlf.deinit();
     _ = try expectCall(crlf.module.pages.items[0].statements.items[0].kind.let_binding.expr, "concat", 2);
@@ -2031,7 +2032,7 @@ test "syntax spec: block diagnostics point to the opener without cascading end e
         const diagnostic = recovered.result.holes.diagnostics[0];
         try testing.expectEqual(error.UnterminatedBlockString, diagnostic.err);
         try testing.expectEqual(ast.Span{ .start = opening, .end = opening + 2 }, diagnostic.span);
-        try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{text});
+        try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{text});
     }
     const punctuation = "page Blocks\nlet g = (text <<\nA\n>> || text(\"B\")\nend\n";
     const diagnostic = try expectParseErrorDiagnostic(error.ExpectedChar, punctuation);
@@ -2046,7 +2047,7 @@ test "syntax spec: block diagnostics point to the opener without cascading end e
     try testing.expectEqual(@as(usize, 1), call_recovered.result.holes.diagnostics.len);
     try testing.expectEqualStrings("')'", call_recovered.result.holes.diagnostics[0].expected.?);
     try testing.expectEqualStrings("end", call_recovered.result.holes.diagnostics[0].found.?);
-    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{unclosed_call});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{unclosed_call});
     const header = try expectParseErrorDiagnostic(error.ExpectedLineBreak, "page Blocks\ntext << unexpected\nend\n");
     try testing.expectEqualStrings("unexpected", header.found.?);
 }
@@ -2510,7 +2511,7 @@ test "syntax spec: selected imports retain names and spans through cloning" {
         try testing.expectEqualStrings(expected, item.name);
         try expectSpanText(source_text, item.span, expected);
     }
-    try testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&program});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&program});
     var cloned = try program.clone(testing.allocator);
     defer cloned.deinit(testing.allocator);
     const cloned_names = cloned.imports.items[0].mode.selected;
@@ -2519,8 +2520,8 @@ test "syntax spec: selected imports retain names and spans through cloning" {
         try testing.expect(original.name.ptr != copy.name.ptr);
         try testing.expectEqualStrings(original.name, copy.name);
     }
-    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
-    try testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{source_text});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{source_text});
 }
 
 test "syntax spec: malformed selected imports release ownership" {
