@@ -49,7 +49,7 @@ pub fn evaluateAndSolvePreparedPages(
     errdefer pages.deinit(state.allocator);
     try options.checkCanceled();
     const font_environment = options.font_environment orelse
-        compiler.acquireFontEnvironment(state.allocator, io, state, &pages) catch |err| {
+        compiler.acquireFontEnvironment() catch |err| {
         _ = try compiler.addFontEnvironmentDiagnostic(state, err);
         return err;
     };
@@ -92,7 +92,7 @@ pub fn solvePreparedPages(
 ) !core.layout.Document {
     try options.checkCanceled();
     const font_environment = options.font_environment orelse
-        compiler.acquireFontEnvironment(state.allocator, io, state, pages) catch |err| {
+        compiler.acquireFontEnvironment() catch |err| {
         _ = try compiler.addFontEnvironmentDiagnostic(state, err);
         return err;
     };

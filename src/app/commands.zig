@@ -281,17 +281,15 @@ fn compileRendering(
     progress: *Progress,
 ) !CompiledRendering {
     var analyzed = try pipeline.analyzeFile(io, allocator, source, progress, .evaluation);
-    var analyzed_active = true;
-    errdefer if (analyzed_active) analyzed.deinit();
+    errdefer analyzed.deinit();
     if (diagnostics_json_path) |path| {
         try app_output.validateOutputPathAgainstSources(io, allocator, &analyzed.state, path, .diagnostics_json);
     }
     try pipeline.evaluateDocument(io, &analyzed.state, analyzed.executionGraph(), progress);
     var pages = try pipeline.preparePages(&analyzed.state, progress);
     const prepared_allocator = analyzed.state.allocator;
-    var pages_errdefer_active = true;
-    errdefer if (pages_errdefer_active) pages.deinit(prepared_allocator);
-    const font_environment = render_compile.acquireFontEnvironment(prepared_allocator, io, &analyzed.state, &pages) catch |err| {
+    errdefer pages.deinit(prepared_allocator);
+    const font_environment = render_compile.acquireFontEnvironment() catch |err| {
         _ = try render_compile.addFontEnvironmentDiagnostic(&analyzed.state, err);
         if (error_report.hasDocumentStateErrors(&analyzed.state)) {
             error_report.printDocumentStateDiagnostics(analyzed.state.projectPath(), analyzed.state.projectSource(), &analyzed.state);
@@ -309,21 +307,14 @@ fn compileRendering(
         app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, diagnostics_json_path) catch {};
         return err;
     };
-    var layouts_errdefer_active = true;
-    errdefer if (layouts_errdefer_active) layouts.deinit(prepared_allocator);
-    var state = analyzed.takeState();
-    analyzed_active = false;
-    errdefer state.deinit();
-    errdefer layouts.deinit(state.allocator);
-    layouts_errdefer_active = false;
-    errdefer pages.deinit(state.allocator);
-    pages_errdefer_active = false;
+    errdefer layouts.deinit(prepared_allocator);
 
     progress.begin("Compile rendering");
     errdefer progress.abort();
-    const diagnostic_start = state.diagnostics.entries.items.len;
+    const diagnostic_start = analyzed.state.diagnostics.entries.items.len;
     const ir_allocator = std.heap.smp_allocator;
-    var ir = render_compile.compilePrepared(ir_allocator, io, &state, &pages, .{
+    var ir = render_compile.compile(ir_allocator, io, &analyzed.state, &pages, .{
+        .artifact_preparation = .already_preloaded,
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
         .highlight_languages = options.highlight_languages,
@@ -333,17 +324,17 @@ fn compileRendering(
         .thread_safe_allocator = true,
     }) catch |err| {
         progress.abort();
-        error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), &state);
-        app_output.writeDiagnosticsJsonIfRequested(io, allocator, &state, diagnostics_json_path) catch {};
-        if (error_report.hasDocumentStateErrors(&state)) return error.DiagnosticsFailed;
+        error_report.printDocumentStateDiagnostics(analyzed.state.projectPath(), analyzed.state.projectSource(), &analyzed.state);
+        app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, diagnostics_json_path) catch {};
+        if (error_report.hasDocumentStateErrors(&analyzed.state)) return error.DiagnosticsFailed;
         return err;
     };
     errdefer ir.deinit(ir_allocator);
     text_cache.persist(options.cache_dir);
     progress.complete();
-    error_report.printDocumentStateDiagnosticsFrom(state.projectPath(), state.projectSource(), &state, diagnostic_start);
+    error_report.printDocumentStateDiagnosticsFrom(analyzed.state.projectPath(), analyzed.state.projectSource(), &analyzed.state, diagnostic_start);
     return .{
-        .state = state,
+        .state = analyzed.takeState(),
         .pages = pages,
         .layouts = layouts,
         .ir = ir,

@@ -12,7 +12,15 @@ pub const table = @import("compile/table.zig");
 
 pub const FontEnvironmentToken = text_compile.FontEnvironment;
 
+pub const ArtifactPreparation = enum {
+    /// Generate all requested rendering artifacts before compiling the IR.
+    preload,
+    /// The caller has already preloaded artifacts using this document and cache.
+    already_preloaded,
+};
+
 pub const Options = struct {
+    artifact_preparation: ArtifactPreparation = .preload,
     jobs: ?usize = null,
     cache_dir: []const u8 = ".ss-cache/render",
     highlight_languages: []const utils.highlight.Language = &.{},
@@ -60,19 +68,10 @@ pub fn addFontEnvironmentDiagnostic(state: *core.DocumentState, err: anyerror) !
     return true;
 }
 
-pub fn acquireFontEnvironment(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    state: *core.DocumentState,
-    pages: *const core.prepared.PreparedPages,
-) !FontEnvironmentToken {
-    _ = state;
+pub fn acquireFontEnvironment() !FontEnvironmentToken {
     const refresh_fonts_start = utils.measure_profile.start();
     _ = try text_compile.fontEnvironmentRefresh();
     utils.measure_profile.recordRenderCompile(.font_environment, refresh_fonts_start);
-    _ = allocator;
-    _ = io;
-    _ = pages;
     const font_environment_start = utils.measure_profile.start();
     const font_environment = try text_compile.fontEnvironmentSnapshot();
     utils.measure_profile.recordRenderCompile(.font_environment, font_environment_start);
@@ -103,60 +102,31 @@ pub fn compile(
         .font_environment = options.font_environment,
         .thread_safe_allocator = options.thread_safe_allocator,
     } };
-    item_compiler.prepare(allocator, state, pages) catch |err| {
-        _ = try addFontEnvironmentDiagnostic(state, err);
-        return err;
-    };
+    switch (options.artifact_preparation) {
+        .preload => item_compiler.prepare(allocator, state, pages) catch |err| {
+            _ = try addFontEnvironmentDiagnostic(state, err);
+            return err;
+        },
+        .already_preloaded => {
+            item_compiler.font_environment = if (options.font_environment) |expected| blk: {
+                const font_environment_start = utils.measure_profile.start();
+                text_compile.refreshAndValidateFontEnvironment(expected) catch |err| {
+                    _ = try addFontEnvironmentDiagnostic(state, err);
+                    return err;
+                };
+                utils.measure_profile.recordRenderCompile(.font_environment, font_environment_start);
+                break :blk expected;
+            } else acquireFontEnvironment() catch |err| {
+                _ = try addFontEnvironmentDiagnostic(state, err);
+                return err;
+            };
+        },
+    }
     const font_environment = item_compiler.font_environment orelse {
         const err = error.FontEnvironmentRefreshFailed;
         _ = try addFontEnvironmentDiagnostic(state, err);
         return err;
     };
-    var ir = preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache) catch |err| {
-        _ = try addFontEnvironmentDiagnostic(state, err);
-        return err;
-    };
-    text_compile.refreshAndValidateFontEnvironment(font_environment) catch |err| {
-        ir.deinit(allocator);
-        _ = try addFontEnvironmentDiagnostic(state, err);
-        return err;
-    };
-    return ir;
-}
-
-pub fn compilePrepared(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    state: *core.DocumentState,
-    pages: *const core.prepared.PreparedPages,
-    options: Options,
-) !render.Ir {
-    const font_environment = if (options.font_environment) |expected| blk: {
-        const font_environment_start = utils.measure_profile.start();
-        text_compile.refreshAndValidateFontEnvironment(expected) catch |err| {
-            _ = try addFontEnvironmentDiagnostic(state, err);
-            return err;
-        };
-        utils.measure_profile.recordRenderCompile(.font_environment, font_environment_start);
-        break :blk expected;
-    } else acquireFontEnvironment(allocator, io, state, pages) catch |err| {
-        _ = try addFontEnvironmentDiagnostic(state, err);
-        return err;
-    };
-    var local_highlight_cache = HighlightCache.init(std.heap.smp_allocator, io);
-    defer local_highlight_cache.deinit();
-    var local_resource_cache = resource_compile.SourceCache.init(std.heap.smp_allocator, io);
-    defer local_resource_cache.deinit();
-    var item_compiler = items.Compiler{ .io = io, .options = .{
-        .jobs = options.jobs,
-        .cache_dir = options.cache_dir,
-        .highlight_languages = options.highlight_languages,
-        .resource_cache = options.resource_cache orelse &local_resource_cache,
-        .text_cache = options.text_cache,
-        .highlight_cache = options.highlight_cache orelse &local_highlight_cache,
-        .page_cache = options.page_cache,
-        .thread_safe_allocator = options.thread_safe_allocator,
-    }, .font_environment = font_environment };
     var ir = preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache) catch |err| {
         _ = try addFontEnvironmentDiagnostic(state, err);
         return err;

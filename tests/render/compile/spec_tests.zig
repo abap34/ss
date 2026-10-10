@@ -24,7 +24,7 @@ test "final-width measurements retain ink origins and baselines through the file
     text.font.style = .italic;
     text.font_size = 24;
     text.line_height = 36;
-    const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    const font_environment = try render_compile.acquireFontEnvironment();
 
     const measured = blk: {
         var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
@@ -79,7 +79,7 @@ test "code measurement includes empty logical lines and keeps its ink offset" {
     text.code_font.style = .italic;
     text.font_size = 24;
     text.line_height = 36;
-    const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    const font_environment = try render_compile.acquireFontEnvironment();
     var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
     defer {
         scope.measurements.dirty = false;
@@ -110,7 +110,7 @@ test "natural measurement includes tables beside ordinary paragraphs" {
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     try testing.expect(prepared.pages[0].objects[0].markdownDocument() != null);
-    const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    const font_environment = try render_compile.acquireFontEnvironment();
     var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
     defer {
         scope.measurements.dirty = false;
@@ -352,7 +352,7 @@ test "measurement cache observes changed highlight query contents" {
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     prepared.pages[0].objects[0].render.text.?.code_font.family = "DejaVu Serif";
-    const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    const font_environment = try render_compile.acquireFontEnvironment();
     var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{
         .highlight_languages = &.{.{
             .name = @constCast("python"),
@@ -409,7 +409,7 @@ test "measurement cache observes the inline math engine with an empty preamble" 
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), prepared.pages[0].objects[0].latex_preamble.len);
-    const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    const font_environment = try render_compile.acquireFontEnvironment();
     var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
     defer {
         scope.measurements.dirty = false;
@@ -445,7 +445,7 @@ test "measurement and page caches observe transitive TeX inputs" {
     object.frame = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
-    const font_environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    const font_environment = try render_compile.acquireFontEnvironment();
     var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
     defer {
         scope.measurements.dirty = false;
@@ -1706,12 +1706,7 @@ test "document font environment rejects changes between layout and compilation" 
     defer state.deinit();
     const prepared_pages = core.prepared.PreparedPages{ .pages = &.{} };
 
-    const font_environment = try render_compile.acquireFontEnvironment(
-        testing.allocator,
-        testing.io,
-        &state,
-        &prepared_pages,
-    );
+    const font_environment = try render_compile.acquireFontEnvironment();
     try render_compile.validateFontEnvironment(font_environment);
     try render_compile.refreshAndValidateFontEnvironment(font_environment);
 
@@ -1758,12 +1753,12 @@ test "document font environment rejects changes between layout and compilation" 
     );
     try testing.expectError(
         error.FontEnvironmentChanged,
-        render_compile.compilePrepared(
+        render_compile.compile(
             testing.allocator,
             testing.io,
             &state,
             &prepared_pages,
-            .{ .font_environment = font_environment },
+            .{ .artifact_preparation = .already_preloaded, .font_environment = font_environment },
         ),
     );
     try testing.expectError(
@@ -1919,7 +1914,7 @@ test "paragraph measurement and emission retain the same final-width glyph layou
         paint.wrap = true;
         var cache = render_text.Cache.init(testing.allocator, testing.io);
         defer cache.deinit();
-        const environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+        const environment = try render_compile.acquireFontEnvironment();
         var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = environment, .text_cache = &cache });
         defer scope.deinit();
         scope.measurements.persistent.clearRetainingCapacity();
@@ -1999,7 +1994,7 @@ test "inline math shares measured paragraph baselines with bidirectional text" {
     prepared.pages[0].objects[0].render.text.?.font.family = "DejaVu Sans";
     var cache = render_text.Cache.init(testing.allocator, testing.io);
     defer cache.deinit();
-    const environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &prepared);
+    const environment = try render_compile.acquireFontEnvironment();
     var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = environment, .text_cache = &cache });
     defer scope.deinit();
     scope.measurements.persistent.clearRetainingCapacity();
@@ -2059,7 +2054,7 @@ fn verifyTableGeometry(source: []const u8) !void {
     text.markdown_table_line_width = 2;
     text.markdown_table_cell_pad_x = 5;
     text.markdown_table_cell_pad_y = 7;
-    const environment = try render_compile.acquireFontEnvironment(testing.allocator, testing.io, &state, &pages);
+    const environment = try render_compile.acquireFontEnvironment();
     var cache = render_text.Cache.init(testing.allocator, testing.io);
     defer cache.deinit();
     var table = try render_compile.table.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/render/artifacts/native" }, .text_cache = &cache, .latex_preamble = prepared.latex_preamble, .latex_engine = prepared.latex_engine }, prepared.markdownDocument().?.blocks.items[0].table.?, text.*, object.frame.width);
@@ -2093,4 +2088,30 @@ fn verifyTableGeometry(source: []const u8) !void {
     }
     try testing.expectEqual(table.rows.len * table.columns, rectangles);
     try testing.expect(text_count > 0);
+}
+
+test "artifact preparation modes produce identical IR without caller text caches" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("preparation");
+    const object = try state.makeObject(page, "body", null, .text, .text, "Prepared text");
+    state.getNode(object).?.frame = .{ .x = 32, .y = 48, .width = 240, .height = 64 };
+    var pages = try core.prepared.prepare(testing.allocator, &state);
+    defer pages.deinit(testing.allocator);
+    const environment = try render_compile.acquireFontEnvironment();
+    try render_compile.preload(testing.allocator, testing.io, &state, &pages, .{}, null);
+    var prepared_ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, .{
+        .artifact_preparation = .already_preloaded,
+        .font_environment = environment,
+        .jobs = 1,
+    });
+    defer prepared_ir.deinit(testing.allocator);
+    var automatic_ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, .{
+        .font_environment = environment,
+        .jobs = 1,
+    });
+    defer automatic_ir.deinit(testing.allocator);
+    try prepared_ir.validate();
+    try automatic_ir.validate();
+    try testing.expectEqualDeep(automatic_ir.fingerprint(), prepared_ir.fingerprint());
 }
