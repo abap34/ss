@@ -1,3 +1,4 @@
+pub const syntax_keywords = @import("syntax_keywords");
 pub const json = @import("json.zig");
 pub const err = @import("error.zig");
 pub const source = @import("source.zig");

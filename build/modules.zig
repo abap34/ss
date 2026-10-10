@@ -45,7 +45,11 @@ pub fn create(ctx: Context, build_options: *Step.Options, tree_sitter: tree_sitt
             );
     }
     const model_mod = createModule(ctx, "src/core/model.zig", &.{}, null);
-    const utils_mod = createModule(ctx, "src/utils/root.zig", &.{import("model", model_mod)}, null);
+    const keywords_mod = createModule(ctx, "src/syntax/keywords.zig", &.{}, null);
+    const utils_mod = createModule(ctx, "src/utils/root.zig", &.{
+        import("model", model_mod),
+        import("syntax_keywords", keywords_mod),
+    }, null);
     const language_type_mod = createModule(ctx, "src/language/type.zig", &.{
         import("model", model_mod),
     }, null);

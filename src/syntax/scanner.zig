@@ -171,12 +171,11 @@ pub fn tokens(text: []const u8) TokenIterator {
 }
 
 pub fn isKeyword(text: []const u8) bool {
-    for (keywords) |keyword| if (std.mem.eql(u8, text, keyword)) return true;
-    return false;
+    return utils.syntax_keywords.contains(text);
 }
 
 pub fn keywordLabels() []const []const u8 {
-    return &keywords;
+    return utils.syntax_keywords.labels();
 }
 
 pub fn semanticTokens(allocator: std.mem.Allocator, text: []const u8) ![]SemanticToken {
@@ -301,31 +300,3 @@ fn semanticKindForIdentifier(word: []const u8, previous_word: ?[]const u8, next:
     if (next == '(') return .function;
     return null;
 }
-
-const keywords = [_][]const u8{
-    "import",
-    "as",
-    "with",
-    "const",
-    "document",
-    "page",
-    "fn",
-    "fn/!",
-    "let",
-    "bind",
-    "return",
-    "end",
-    "type",
-    "record",
-    "protocol",
-    "extend",
-    "base",
-    "implements",
-    "roles",
-    "if",
-    "then",
-    "else",
-    "for",
-    "in",
-    "property",
-};

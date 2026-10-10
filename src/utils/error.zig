@@ -1,5 +1,6 @@
 const model = @import("model");
 const std = @import("std");
+const syntax_keywords = @import("syntax_keywords");
 const json = @import("json.zig");
 const source = @import("source.zig");
 
@@ -1357,7 +1358,7 @@ fn printHighlightedSlice(slice: []const u8, initial: HighlightState) void {
         if (source.isIdentifierStart(slice[index])) {
             const end = identifierEnd(slice, index);
             const token = slice[index..end];
-            if (isKeyword(token)) {
+            if (syntax_keywords.contains(token)) {
                 printAnsi("34;1");
                 std.debug.print("{s}", .{token});
                 printReset();
@@ -1440,40 +1441,6 @@ fn startsChevronBlock(slice: []const u8, index: usize) bool {
     if (!std.mem.startsWith(u8, slice[index..], "<<")) return false;
     const after_marker = source.skipInlineSpacesUntil(slice, index + 2, slice.len);
     return after_marker == slice.len or source.lineCommentMarkerLength(slice, after_marker) != null;
-}
-
-fn isKeyword(token: []const u8) bool {
-    const keywords = [_][]const u8{
-        "import",
-        "as",
-        "with",
-        "const",
-        "document",
-        "page",
-        "fn",
-        "fn/!",
-        "let",
-        "bind",
-        "return",
-        "end",
-        "type",
-        "record",
-        "protocol",
-        "extend",
-        "base",
-        "implements",
-        "roles",
-        "if",
-        "then",
-        "else",
-        "for",
-        "in",
-        "property",
-    };
-    for (keywords) |keyword| {
-        if (std.mem.eql(u8, token, keyword)) return true;
-    }
-    return false;
 }
 
 fn printAnsi(code: []const u8) void {
