@@ -275,10 +275,7 @@ fn parseColorMode(value: []const u8) error_report.ColorMode {
     return std.meta.stringToEnum(error_report.ColorMode, value) orelse unreachable;
 }
 
-fn setColorMode(mode: error_report.ColorMode) void {
-    error_report.setColorMode(mode);
-    cli_help.setColorMode(mode);
-}
+const setColorMode = error_report.setColorMode;
 
 fn applyDiagnosticOptions(options: CommandOptions, resolved: ?*const project.Resolved) void {
     error_report.setDiagnosticLevel(effectiveDiagnosticLevel(options, resolved));

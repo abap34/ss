@@ -15,12 +15,6 @@ const Style = struct {
     reset: []const u8 = "",
 };
 
-var color_mode: error_report.ColorMode = .auto;
-
-pub fn setColorMode(mode: error_report.ColorMode) void {
-    color_mode = mode;
-}
-
 pub fn general(output: Output) void {
     const s = style(output);
     outputPrint(output,
@@ -610,7 +604,7 @@ fn style(output: Output) Style {
 }
 
 fn useColor(output: Output) bool {
-    return switch (color_mode) {
+    return switch (error_report.colorMode()) {
         .auto => std.c.getenv("NO_COLOR") == null and !envEquals("CLICOLOR", "0") and outputIsTty(output),
         .always => true,
         .never => false,

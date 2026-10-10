@@ -52,6 +52,10 @@ pub fn setColorMode(mode: ColorMode) void {
     color_mode = mode;
 }
 
+pub fn colorMode() ColorMode {
+    return color_mode;
+}
+
 pub const LocatedOrigin = model.SourceOrigin.Location;
 
 pub const SourceReport = struct {
