@@ -397,7 +397,6 @@ pub const Node = struct {
         }
         for (self.display_content_provenance.items) |*entry| entry.deinit(allocator);
         self.display_content_provenance.deinit(allocator);
-        if (self.repr_function) |*function| function.deinit(allocator);
     }
 };
 
@@ -504,36 +503,24 @@ pub const ConstraintSet = struct {
     }
 };
 
+/// A borrowed function identity. Names refer to module syntax, and closure_id
+/// indexes the evaluator's closure store; copying does not extend either lifetime.
 pub const FunctionRef = struct {
     name: []const u8,
     module_id: u32 = 0,
     closure_id: ?usize = null,
     param_count: usize,
     returns_value: bool,
-
-    pub fn deinit(self: *FunctionRef, allocator: Allocator) void {
-        _ = self;
-        _ = allocator;
-    }
-
-    pub fn clone(self: FunctionRef, allocator: Allocator) !FunctionRef {
-        _ = allocator;
-        return .{
-            .name = self.name,
-            .module_id = self.module_id,
-            .closure_id = self.closure_id,
-            .param_count = self.param_count,
-            .returns_value = self.returns_value,
-        };
-    }
 };
 
+/// Enum and case names borrow module syntax or the property value backing text.
 pub const EnumCaseValue = struct {
     module_id: ?u32 = null,
     enum_name: []const u8,
     case_name: []const u8,
 };
 
+/// The field name is borrowed; value follows the recursive Value ownership rules.
 pub const RecordFieldValue = struct {
     name: []const u8,
     value: Value,
@@ -552,6 +539,7 @@ pub const RecordFieldValue = struct {
     }
 };
 
+/// Owns fields and their values; type_name and field names remain borrowed.
 pub const RecordValue = struct {
     module_id: ?u32 = null,
     type_name: []const u8,
@@ -588,6 +576,12 @@ pub const RecordValue = struct {
     }
 };
 
+/// Runtime values own selections, record field storage, paths and constraints.
+/// Strings, nominal names and function identities are borrowed from module syntax,
+/// document strings/content, or the evaluator's closure store. Those owners must
+/// outlive every copy: clone duplicates owned storage without extending borrows.
+/// Parsed property values are a separate ownership context; value_text provides
+/// deinitParsedPropertyValue for their owned string and nominal-name buffers.
 pub const Value = union(ValueTag) {
     none: void,
     document: NodeId,
@@ -608,7 +602,6 @@ pub const Value = union(ValueTag) {
     pub fn deinit(self: *Value, allocator: Allocator) void {
         switch (self.*) {
             .selection => |*selection| selection.deinit(allocator),
-            .function => |*function| function.deinit(allocator),
             .record => |*record| record.deinit(allocator),
             .path => |*value| value.deinit(allocator),
             .constraints => |*constraints| constraints.deinit(allocator),
@@ -624,7 +617,7 @@ pub const Value = union(ValueTag) {
             .object => |id| .{ .object = id },
             .selection => |selection| .{ .selection = try selection.clone(allocator) },
             .anchor => |anchor| .{ .anchor = anchor },
-            .function => |function| .{ .function = try function.clone(allocator) },
+            .function => |function| .{ .function = function },
             .string => |text| .{ .string = text },
             .enum_case => |enum_case| .{ .enum_case = enum_case },
             .record => |record| .{ .record = try record.clone(allocator) },

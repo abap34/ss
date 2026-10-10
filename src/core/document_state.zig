@@ -413,24 +413,27 @@ pub const DocumentState = struct {
         self.runtime.default_values.clear();
     }
 
+    const InputOwnership = enum { borrowed, owned };
+
     fn deinitPartial(self: *DocumentState) void {
-        self.declaration_index.deinit();
-        self.allocator.destroy(self.declaration_index);
-        self.modules.entries.deinit(self.allocator);
-        self.modules.order.deinit(self.allocator);
-        self.constants.deinit(self.allocator);
-        self.functions.deinit();
-        self.graph.deinit(self.allocator);
-        self.constraints.deinit(self.allocator);
-        self.source_map.deinit(self.allocator);
-        self.diagnostics.deinit(self.allocator);
-        self.runtime.deinit(self.allocator);
+        self.deinitWithInputOwnership(.borrowed);
     }
 
     pub fn deinit(self: *DocumentState) void {
+        self.deinitWithInputOwnership(.owned);
+    }
+
+    // init transfers its inputs only on success; partial cleanup owns storage only.
+    fn deinitWithInputOwnership(self: *DocumentState, inputs: InputOwnership) void {
         self.declaration_index.deinit();
         self.allocator.destroy(self.declaration_index);
-        self.modules.deinit(self.allocator);
+        switch (inputs) {
+            .borrowed => {
+                self.modules.entries.deinit(self.allocator);
+                self.modules.order.deinit(self.allocator);
+            },
+            .owned => self.modules.deinit(self.allocator),
+        }
         self.constants.deinit(self.allocator);
         self.functions.deinit();
         self.graph.deinit(self.allocator);
@@ -438,7 +441,7 @@ pub const DocumentState = struct {
         self.source_map.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
         self.runtime.deinit(self.allocator);
-        self.allocator.free(self.asset_base_dir);
+        if (inputs == .owned) self.allocator.free(self.asset_base_dir);
     }
 
     pub fn cachedFieldDefault(self: *DocumentState, text: []const u8, value_type: ast.Type) !Value {
@@ -982,7 +985,7 @@ pub const DocumentState = struct {
     pub fn setNodeReprFunction(self: *DocumentState, node_id: NodeId, function: FunctionRef) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         if (node.repr_function != null) return error.DuplicateReprDefinition;
-        node.repr_function = try function.clone(self.allocator);
+        node.repr_function = function;
     }
 
     fn makeNodeWithOrigin(

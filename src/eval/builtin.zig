@@ -126,8 +126,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         },
         .csv_map => blk: {
             const input = try ctx.evalStringArg(call, 0);
-            var callback = try evalFunctionArg(ctx, call, 1);
-            defer callback.deinit(ctx.state.allocator);
+            const callback = try evalFunctionArg(ctx, call, 1);
             var extras = try evalExtraArgs(ctx, call, 2);
             defer extras.deinit(ctx.state.allocator);
             defer deinitValues(ctx.state.allocator, extras.items);
@@ -167,8 +166,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .foreach => blk: {
             var target = try ctx.evalExprValue(call.args.items[0]);
             errdefer target.deinit(ctx.state.allocator);
-            var callback = try evalFunctionArg(ctx, call, 1);
-            defer callback.deinit(ctx.state.allocator);
+            const callback = try evalFunctionArg(ctx, call, 1);
             var extras = try evalExtraArgs(ctx, call, 2);
             defer extras.deinit(ctx.state.allocator);
             defer deinitValues(ctx.state.allocator, extras.items);
@@ -191,8 +189,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .foreach_enumerate => blk: {
             var target = try ctx.evalExprValue(call.args.items[0]);
             errdefer target.deinit(ctx.state.allocator);
-            var callback = try evalFunctionArg(ctx, call, 1);
-            defer callback.deinit(ctx.state.allocator);
+            const callback = try evalFunctionArg(ctx, call, 1);
             var extras = try evalExtraArgs(ctx, call, 2);
             defer extras.deinit(ctx.state.allocator);
             defer deinitValues(ctx.state.allocator, extras.items);
@@ -217,8 +214,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             var target = try ctx.evalExprValue(call.args.items[0]);
             defer target.deinit(ctx.state.allocator);
             var accumulator = try ctx.evalStringArg(call, 1);
-            var callback = try evalFunctionArg(ctx, call, 2);
-            defer callback.deinit(ctx.state.allocator);
+            const callback = try evalFunctionArg(ctx, call, 2);
             var extras = try evalExtraArgs(ctx, call, 3);
             defer extras.deinit(ctx.state.allocator);
             defer deinitValues(ctx.state.allocator, extras.items);
@@ -247,8 +243,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             var target = try ctx.evalExprValue(call.args.items[0]);
             defer target.deinit(ctx.state.allocator);
             const separator = try ctx.evalStringArg(call, 1);
-            var callback = try evalFunctionArg(ctx, call, 2);
-            defer callback.deinit(ctx.state.allocator);
+            const callback = try evalFunctionArg(ctx, call, 2);
             var extras = try evalExtraArgs(ctx, call, 3);
             defer extras.deinit(ctx.state.allocator);
             defer deinitValues(ctx.state.allocator, extras.items);
@@ -408,8 +403,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         },
         .set_repr => blk: {
             const object_id = try ctx.evalObjectArg(call, 0);
-            var function = try evalFunctionArg(ctx, call, 1);
-            defer function.deinit(ctx.state.allocator);
+            const function = try evalFunctionArg(ctx, call, 1);
             try ctx.setNodeReprFunction(object_id, function);
             break :blk .{ .object = object_id };
         },
@@ -649,7 +643,7 @@ fn evalFunctionArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.Functio
     var value = try ctx.evalExprValue(call.args.items[index]);
     defer value.deinit(ctx.state.allocator);
     return switch (value) {
-        .function => |function| try function.clone(ctx.state.allocator),
+        .function => |function| function,
         else => error.InvalidValueTag,
     };
 }

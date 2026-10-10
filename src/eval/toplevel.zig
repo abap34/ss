@@ -369,11 +369,9 @@ fn materializeDisplayContent(evaluation: *EvalContext) !void {
         const node = state.getNode(node_id) orelse continue;
         if (node.kind != .object) continue;
         const function = if (node.repr_function) |repr_function|
-            try repr_function.clone(state.allocator)
+            repr_function
         else
             continue;
-        var owned_function = function;
-        defer owned_function.deinit(state.allocator);
 
         const page_id = state.parentPageOf(node_id) orelse state.graph.document_id;
         const scope: EvalScope = if (page_id == state.graph.document_id) .document else .page;
@@ -2171,8 +2169,7 @@ fn invokeUserFunctionValueInModule(
     call: CallExpr,
 ) anyerror!core.Value {
     const state = evaluation.state;
-    var func_ref = try eval_functions.functionRefForInModule(state.allocator, module_id, func);
-    defer func_ref.deinit(state.allocator);
+    const func_ref = try eval_functions.functionRefForInModule(state.allocator, module_id, func);
     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
     try validateUserFunctionArity(state, call.args.items.len, func, current_origin);
     const body_origin = elaboratedCallOrigin(evaluation, call) orelse evaluation.elaboration_origin;
