@@ -6,6 +6,10 @@ const render_html = @import("../render/html.zig");
 const utils = @import("utils");
 
 const json = utils.json;
+
+pub const schema_version = 1;
+const display_schema_version = 2;
+const translation_patch_schema_version = 3;
 const assets = @import("assets.zig");
 const binding_names = @import("names.zig");
 const editor_edit = @import("edit.zig");
@@ -244,10 +248,12 @@ pub const Translation = struct {
 };
 
 pub fn emptyJson(allocator: std.mem.Allocator) ![]u8 {
-    return try allocator.dupe(u8,
-        \\{"schema":1,"kind":"ss-editor-snapshot","snapshot_id":"","generation":0,"entry_path":"","source_paths":[],"coordinate_space":{"unit":"pt","origin":"page-top-left","x_axis":"right","y_axis":"down"},"layout":{"schema":1,"kind":"ss-layout-conflicts","entry_path":"","pages":[],"objects":[],"relations":[],"failures":[]},"display":{"schema":2,"html":"","css":"","has_pdf":false,"assets":[]},"outline":[],"editing":[],"page_editing":[],"shape_editing":[]}
-        \\
-    );
+    const layout_json = try core.layout.conflicts.emptyJson(allocator);
+    defer allocator.free(layout_json);
+    const display_json = try displayJson(allocator, "", "", false, &.{});
+    defer allocator.free(display_json);
+    const serialized = try snapshotJson(allocator, .{ .layout = layout_json, .display = display_json });
+    return serialized.bytes;
 }
 
 pub fn build(
@@ -267,7 +273,7 @@ pub fn build(
     var uncached_display: ?[]u8 = null;
     defer if (uncached_display) |value| allocator.free(value);
     const display_json = cache.displays.get(display_key) orelse blk: {
-        const generated = try displayJson(allocator, &fragment, &published_assets);
+        const generated = try displayJson(allocator, fragment.html, fragment.css, fragment.assets.has_pdf, published_assets.assets);
         errdefer allocator.free(generated);
         if (generated.len > Cache.max_display_bytes) {
             uncached_display = generated;
@@ -375,44 +381,85 @@ fn buildFromDisplayJson(
     const owned_display_base_snapshot_id = if (display_base_snapshot_id) |value| try allocator.dupe(u8, value) else null;
     errdefer if (owned_display_base_snapshot_id) |value| allocator.free(value);
 
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    try out.appendSlice(allocator, "{\"schema\":1,\"kind\":\"ss-editor-snapshot\",\"snapshot_id\":");
-    try json.appendString(allocator, &out, snapshot_id);
-    try out.appendSlice(allocator, ",\"generation\":");
-    try json.appendInt(allocator, &out, generation);
-    try out.appendSlice(allocator, ",\"entry_path\":");
-    try json.appendString(allocator, &out, state.projectPath());
-    try out.appendSlice(allocator, ",\"source_paths\":");
-    try out.appendSlice(allocator, source_paths_json);
-    try out.appendSlice(allocator, ",\"coordinate_space\":{\"unit\":\"pt\",\"origin\":\"page-top-left\",\"x_axis\":\"right\",\"y_axis\":\"down\"},\"layout\":");
-    try out.appendSlice(allocator, std.mem.trim(u8, layout_json, "\r\n"));
-    try out.appendSlice(allocator, ",\"display\":");
-    const display_json_start = out.items.len;
-    try out.appendSlice(allocator, display_json);
-    const display_json_end = out.items.len;
-    try out.appendSlice(allocator, ",\"outline\":");
-    try out.appendSlice(allocator, outline_json);
-    try out.appendSlice(allocator, ",\"editing\":");
-    try out.appendSlice(allocator, editing_json);
-    try out.appendSlice(allocator, ",\"page_editing\":");
-    try out.appendSlice(allocator, page_editing_json);
-    try out.appendSlice(allocator, ",\"shape_editing\":");
-    try out.appendSlice(allocator, shape_editing_json);
-    try out.appendSlice(allocator, "}\n");
+    const serialized = try snapshotJson(allocator, .{
+        .snapshot_id = snapshot_id,
+        .generation = generation,
+        .entry_path = state.projectPath(),
+        .source_paths = source_paths_json,
+        .layout = layout_json,
+        .display = display_json,
+        .outline = outline_json,
+        .editing = editing_json,
+        .page_editing = page_editing_json,
+        .shape_editing = shape_editing_json,
+    });
     return .{
-        .json = try out.toOwnedSlice(allocator),
+        .json = serialized.bytes,
         .model = .{
             .allocator = allocator,
             .snapshot_id = snapshot_id,
             .display_base_snapshot_id = owned_display_base_snapshot_id,
             .display_fingerprint = display_fingerprint,
-            .display_json_start = display_json_start,
-            .display_json_end = display_json_end,
+            .display_json_start = serialized.display_start,
+            .display_json_end = serialized.display_end,
             .editing = editing,
             .page_editing = page_editing,
             .shape_editing = shape_editing,
         },
+    };
+}
+
+const SnapshotJsonParts = struct {
+    snapshot_id: []const u8 = "",
+    generation: u64 = 0,
+    entry_path: []const u8 = "",
+    source_paths: []const u8 = "[]",
+    layout: []const u8,
+    display: []const u8,
+    outline: []const u8 = "[]",
+    editing: []const u8 = "[]",
+    page_editing: []const u8 = "[]",
+    shape_editing: []const u8 = "[]",
+};
+
+const SerializedSnapshot = struct {
+    bytes: []u8,
+    display_start: usize,
+    display_end: usize,
+};
+
+fn snapshotJson(allocator: std.mem.Allocator, parts: SnapshotJsonParts) !SerializedSnapshot {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "{\"schema\":");
+    try json.appendInt(allocator, &out, schema_version);
+    try out.appendSlice(allocator, ",\"kind\":\"ss-editor-snapshot\",\"snapshot_id\":");
+    try json.appendString(allocator, &out, parts.snapshot_id);
+    try out.appendSlice(allocator, ",\"generation\":");
+    try json.appendInt(allocator, &out, parts.generation);
+    try out.appendSlice(allocator, ",\"entry_path\":");
+    try json.appendString(allocator, &out, parts.entry_path);
+    try out.appendSlice(allocator, ",\"source_paths\":");
+    try out.appendSlice(allocator, parts.source_paths);
+    try out.appendSlice(allocator, ",\"coordinate_space\":{\"unit\":\"pt\",\"origin\":\"page-top-left\",\"x_axis\":\"right\",\"y_axis\":\"down\"},\"layout\":");
+    try out.appendSlice(allocator, std.mem.trim(u8, parts.layout, "\r\n"));
+    try out.appendSlice(allocator, ",\"display\":");
+    const display_json_start = out.items.len;
+    try out.appendSlice(allocator, parts.display);
+    const display_json_end = out.items.len;
+    try out.appendSlice(allocator, ",\"outline\":");
+    try out.appendSlice(allocator, parts.outline);
+    try out.appendSlice(allocator, ",\"editing\":");
+    try out.appendSlice(allocator, parts.editing);
+    try out.appendSlice(allocator, ",\"page_editing\":");
+    try out.appendSlice(allocator, parts.page_editing);
+    try out.appendSlice(allocator, ",\"shape_editing\":");
+    try out.appendSlice(allocator, parts.shape_editing);
+    try out.appendSlice(allocator, "}\n");
+    return .{
+        .bytes = try out.toOwnedSlice(allocator),
+        .display_start = display_json_start,
+        .display_end = display_json_end,
     };
 }
 
@@ -434,16 +481,16 @@ fn sourcePathsJson(allocator: std.mem.Allocator, state: *const core.DocumentStat
     return try buffer.toOwnedSlice(allocator);
 }
 
-fn displayJson(allocator: std.mem.Allocator, fragment: *const render_html.Fragment, published_assets: *const assets.Set) ![]u8 {
+fn displayJson(allocator: std.mem.Allocator, html: []const u8, css: []const u8, has_pdf: bool, published_assets: []const assets.Asset) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
     var root = try json.Object.beginBuffer(allocator, &buffer);
-    try root.intField("schema", 2);
-    try root.stringField("html", fragment.html);
-    try root.stringField("css", fragment.css);
-    try root.boolField("has_pdf", fragment.assets.has_pdf);
+    try root.intField("schema", display_schema_version);
+    try root.stringField("html", html);
+    try root.stringField("css", css);
+    try root.boolField("has_pdf", has_pdf);
     var asset_values = try root.arrayField("assets");
-    for (published_assets.assets) |asset| {
+    for (published_assets) |asset| {
         var value = try asset_values.objectItem();
         try value.stringField("kind", @tagName(asset.kind));
         const hex = std.fmt.bytesToHex(asset.resource_id, .lower);
@@ -466,7 +513,7 @@ fn translationPatchJson(allocator: std.mem.Allocator, base_snapshot_id: []const 
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
     var root = try json.Object.beginBuffer(allocator, &buffer);
-    try root.intField("schema", 3);
+    try root.intField("schema", translation_patch_schema_version);
     try root.stringField("kind", "translation_patch");
     try root.stringField("base_snapshot_id", base_snapshot_id);
     var values = try root.arrayField("translations");

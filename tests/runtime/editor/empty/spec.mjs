@@ -51,6 +51,34 @@ end
         missingDiagnostic.range.start.character === 0,
       `unlocated build failure was omitted: ${JSON.stringify(missingSnapshot)}`,
     );
+
+    const validSource = `page ready
+text!("Ready")
+end
+`;
+    await writeFile(slide, validSource, "utf8");
+    const readyDiagnostics = client.waitForDiagnostics(uri);
+    client.changeDocument({ uri, text: validSource, version: 2 });
+    await readyDiagnostics;
+    const ready = await client.request("ss/editorSnapshot", {
+      textDocument: { uri },
+    });
+    assert(ready.stale !== true, `valid source did not produce a fresh snapshot: ${JSON.stringify(ready)}`);
+    for (const section of ["layout", "display"]) {
+      assert(
+        snapshot[section].schema === ready[section].schema &&
+          JSON.stringify(Object.keys(snapshot[section]).sort()) ===
+            JSON.stringify(Object.keys(ready[section]).sort()),
+        `empty ${section} diverged from the populated response schema`,
+      );
+    }
+    const emptyLayout = await client.request("ss/layoutConflicts", {
+      textDocument: { uri: missingUri },
+    });
+    assert(
+      JSON.stringify(emptyLayout) === JSON.stringify(snapshot.layout),
+      "standalone and embedded empty layout reports diverged",
+    );
   });
 } finally {
   await rm(project, { recursive: true, force: true });

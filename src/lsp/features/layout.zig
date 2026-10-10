@@ -1,4 +1,5 @@
 const std = @import("std");
+const core = @import("core");
 
 const app = @import("../../app.zig");
 const analysis_snapshot = @import("../../analysis/snapshot.zig");
@@ -73,9 +74,4 @@ pub fn conflictsJsonFromOutput(allocator: std.mem.Allocator, layout: *const Layo
     return try allocator.dupe(u8, layout.conflicts_json);
 }
 
-pub fn emptyJson(allocator: std.mem.Allocator) ![]const u8 {
-    return allocator.dupe(u8,
-        \\{"schema":1,"kind":"ss-layout-conflicts","entry_path":"","pages":[],"objects":[],"relations":[],"failures":[]}
-        \\
-    );
-}
+pub const emptyJson = core.layout.conflicts.emptyJson;
