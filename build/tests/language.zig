@@ -60,10 +60,11 @@ pub fn register(suite: Suite, modules: project.ProjectModules) void {
         import("core", modules.core),
         import("language_type", modules.language_type),
     }, null);
-    suite.addFile("tests/language/registry/spec_tests.zig", &.{
+    const registry_spec_mod = createModule(ctx, "tests/language/registry/spec_tests.zig", &.{
         import("core", modules.core),
         import("model", modules.model),
         import("language_type", modules.language_type),
         import("registry", registry_mod),
     }, true);
+    _ = suite.add(registry_spec_mod, .{ .name = "test-language-registry", .description = "Run focused language registry tests" });
 }

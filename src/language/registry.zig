@@ -206,6 +206,30 @@ const query_descriptors = [_]QueryDescriptor{
     .{ .op = .document_objects_by_role, .name = "document_objects_by_role", .arity = 3, .input_name = "base", .input_type = Type.document, .extra_arg_names = &.{"role_name"}, .extra_arg_types = &.{Type.string}, .output_type = Type.selection(.object), .summary = "Select objects by role across the whole document" },
 };
 
+comptime {
+    validateDescriptors(PrimitiveCall, &primitive_descriptors);
+    validateDescriptors(QueryOp, &query_descriptors);
+}
+
+fn validateDescriptors(comptime Op: type, comptime descriptors: anytype) void {
+    @setEvalBranchQuota(20000);
+    const field_names = std.meta.fieldNames(Op);
+    var seen: [field_names.len]bool = undefined;
+    @memset(&seen, false);
+    for (descriptors, 0..) |descriptor, index| {
+        const op_index = std.meta.fieldIndex(Op, @tagName(descriptor.op)).?;
+        if (seen[op_index]) @compileError("duplicate descriptor for " ++ @tagName(descriptor.op));
+        seen[op_index] = true;
+        for (descriptors[0..index]) |previous| {
+            if (std.mem.eql(u8, previous.name, descriptor.name))
+                @compileError("duplicate descriptor name: " ++ descriptor.name);
+        }
+    }
+    for (field_names, 0..) |field_name, index| {
+        if (!seen[index]) @compileError("missing descriptor for " ++ field_name);
+    }
+}
+
 pub fn primitiveDescriptors() []const PrimitiveDescriptor {
     return &primitive_descriptors;
 }
@@ -242,17 +266,7 @@ pub fn primitiveArgType(descriptor: PrimitiveDescriptor, index: usize) ?Type {
 }
 
 pub fn primitiveResultType(descriptor: PrimitiveDescriptor) ?Type {
-    return switch (descriptor.result_policy) {
-        .declared,
-        .first_selection_item,
-        .first_arg,
-        .selection_algebra,
-        .select_query,
-        .target_arg,
-        .group_object,
-        .object_from_role_arg,
-        => descriptor.result_type,
-    };
+    return descriptor.result_type;
 }
 
 pub fn queryInputType(descriptor: QueryDescriptor) Type {
