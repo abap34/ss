@@ -494,11 +494,7 @@ fn analysisCounter(kind: AnalysisKind) *CountTime {
     };
 }
 
-fn monotonicNowNs() i128 {
-    var ts: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
-    return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
-}
+const monotonicNowNs = @import("time.zig").monotonicNowNs;
 
 fn commandKind(argv0: []const u8) CommandKind {
     const name = std.fs.path.basename(argv0);

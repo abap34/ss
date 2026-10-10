@@ -114,11 +114,7 @@ pub const Progress = struct {
     }
 };
 
-fn monotonicNowNs() i128 {
-    var ts: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
-    return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
-}
+const monotonicNowNs = @import("time.zig").monotonicNowNs;
 
 fn printProgress(current: usize, total: usize, label: []const u8, stage_elapsed_ms: i64, total_elapsed_ms: i64, clear_eol: bool) void {
     const width: usize = 18;

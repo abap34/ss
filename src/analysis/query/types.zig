@@ -80,11 +80,7 @@ pub const CompletionResult = struct {
     }
 };
 
-fn monotonicNowNs() i128 {
-    var ts: std.c.timespec = undefined;
-    if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) return 0;
-    return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
-}
+const monotonicNowNs = utils.time.monotonicNowNs;
 
 pub const HoverInfo = struct {
     markdown: []u8,
