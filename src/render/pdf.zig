@@ -69,7 +69,7 @@ const ReplacementPlan = struct {
 
 pub const Options = struct {
     jobs: ?usize = null,
-    cache_dir: []const u8 = ".ss-cache/render",
+    cache_dir: []const u8 = utils.render_cache.path,
     failure: ?*WriteFailure = null,
 };
 

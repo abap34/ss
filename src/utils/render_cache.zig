@@ -7,10 +7,16 @@ pub const PublishedLease = published.Lease;
 const cache_guard = @import("render_cache/guard.zig");
 
 pub const path = cache_guard.path;
+pub const native_path = path ++ "/" ++ native_relative_path;
+const native_relative_path = "artifacts/native";
 const artifacts_path = path ++ "/artifacts";
 const prune_stamp_path = artifacts_path ++ "/.prune-stamp";
 
 const bytes_per_mib: u64 = 1024 * 1024;
+
+pub fn nativePath(allocator: std.mem.Allocator, cache_dir: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &.{ cache_dir, native_relative_path });
+}
 
 pub const Config = struct {
     automatic_pruning: bool = true,

@@ -6,6 +6,7 @@ import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
 
 await testRenderCacheGenerations();
+await testAssetBasePathsInvalidateTheFilesActuallyRead();
 await testRenderManifestFallbacks();
 await testAnnotationChangesReusePageCache();
 await testDeltaRejectsInternalLinkChanges();
@@ -15,6 +16,41 @@ await testRenderCachePruneIntervalSkipsFreshStamp();
 await testCacheStatsCommands();
 await testCacheClearRejectsActiveRender();
 await testCacheClearRemovesStaleLeaseRecords();
+
+async function testAssetBasePathsInvalidateTheFilesActuallyRead() {
+  for (const absolute of [false, true]) {
+    const project = await mkdtempProject("ss-render-asset-base-");
+    try {
+      const assets = path.join(project, "assets");
+      await mkdir(assets);
+      const asset = path.join(assets, "shape.svg");
+      const requested = absolute ? asset : "shape.svg";
+      const svg = (color) => `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="${color}"/></svg>`;
+      const pages = path.join(project, ".ss-cache", "render", "ss-pdf-render-ir-v2", "pages");
+      await writeFile(asset, svg("#112233"), "utf8");
+      await writeFile(path.join(project, "slide.ss"), `page asset
+image!(${JSON.stringify(requested)})
+end
+`, "utf8");
+      const options = ["--asset-base-dir", "assets"];
+      await runSs(["check", "slide.ss", ...options], project);
+      await runSs(["render", "slide.ss", "out.pdf", ...options], project);
+      const initial = await pdfFiles(pages);
+
+      // A same-named file outside the asset base must not affect the cache key.
+      await writeFile(path.join(project, "shape.svg"), svg("#445566"), "utf8");
+      await runSs(["render", "slide.ss", "out.pdf", ...options], project);
+      assertAddedFiles(initial, await pdfFiles(pages), 0, "an unrelated asset changed the page cache key");
+
+      // Keep dimensions and byte length unchanged to exercise content invalidation.
+      await writeFile(asset, svg("#778899"), "utf8");
+      await runSs(["render", "slide.ss", "out.pdf", ...options], project);
+      assertAddedFiles(initial, await pdfFiles(pages), 1, "changing the resolved asset reused an old cached page");
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }
+}
 
 async function testRenderCacheGenerations() {
   const project = await mkdtempProject("ss-render-cache-");

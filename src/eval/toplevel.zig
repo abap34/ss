@@ -1378,10 +1378,7 @@ fn assetContentDiagnosticOrigin(node: *const core.Node, fallback: core.SourceOri
     return core.ContentProvenance.originForSpan(node.content_provenance.items, 0, content.len) orelse fallback;
 }
 
-fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requested: []const u8) ![]const u8 {
-    if (std.fs.path.isAbsolute(requested)) return allocator.dupe(u8, requested);
-    return std.fs.path.join(allocator, &.{ base_dir, requested });
-}
+const resolveAssetPath = utils.fs.resolveAssetPath;
 
 fn evalSelectCall(
     evaluation: *EvalContext,

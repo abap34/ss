@@ -246,7 +246,7 @@ const CommandFailure = struct {
 
 pub const Options = struct {
     jobs: ?usize = null,
-    cache_dir: []const u8 = ".ss-cache/render",
+    cache_dir: []const u8 = utils.render_cache.path,
     highlight_languages: []const utils.highlight.Language = &.{},
 };
 
@@ -350,7 +350,7 @@ pub const LayoutMeasurementScope = struct {
         const cache_dir = default_options.cache_dir;
         try render_text.validateFontEnvironment(options.font_environment);
         try createRenderCacheDirectory(io, state, cache_dir);
-        const asset_cache_dir = try std.fs.path.join(allocator, &.{ cache_dir, "artifacts", "native" });
+        const asset_cache_dir = try utils.render_cache.nativePath(allocator, cache_dir);
         errdefer allocator.free(asset_cache_dir);
         try createRenderCacheDirectory(io, state, asset_cache_dir);
         const measurement_cache_dir = try std.fs.path.join(allocator, &.{ asset_cache_dir, "measurements" });
@@ -582,7 +582,7 @@ pub fn preloadPreparedPageArtifacts(
     progress: ?Progress,
 ) !void {
     try createRenderCacheDirectory(io, state, options.cache_dir);
-    const asset_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "artifacts", "native" });
+    const asset_cache_dir = try utils.render_cache.nativePath(allocator, options.cache_dir);
     defer allocator.free(asset_cache_dir);
     try createRenderCacheDirectory(io, state, asset_cache_dir);
 
@@ -694,7 +694,7 @@ pub const Compiler = struct {
         const font_environment = self.font_environment orelse
             try render_text.fontEnvironmentSnapshot();
         try render_text.validateFontEnvironment(font_environment);
-        const asset_cache_dir = try std.fs.path.join(allocator, &.{ self.options.cache_dir, "artifacts", "native" });
+        const asset_cache_dir = try utils.render_cache.nativePath(allocator, self.options.cache_dir);
         defer allocator.free(asset_cache_dir);
         var synthetic_font_detected = false;
         var draw_context = DrawContext{

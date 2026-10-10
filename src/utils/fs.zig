@@ -6,6 +6,12 @@ pub const ImageDimensions = struct {
     height: f32,
 };
 
+/// Return an owned asset path, resolving relative requests from the asset base.
+pub fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requested: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(requested)) return allocator.dupe(u8, requested);
+    return std.fs.path.join(allocator, &.{ base_dir, requested });
+}
+
 pub fn absolutePath(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(path)) return std.fs.path.resolve(allocator, &.{path});
     const cwd = try std.process.currentPathAlloc(io, allocator);

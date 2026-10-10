@@ -262,7 +262,7 @@ pub fn build(
     const display_key = render_ir.displayFingerprint();
     var fragment = try render_html.prepareFragment(allocator, render_ir, display_key, &cache.html);
     defer fragment.deinit(allocator);
-    var published_assets = try assets.publish(allocator, io, &fragment, ".ss-cache/render", &cache.assets);
+    var published_assets = try assets.publish(allocator, io, &fragment, utils.render_cache.path, &cache.assets);
     defer published_assets.deinit(allocator);
     var uncached_display: ?[]u8 = null;
     defer if (uncached_display) |value| allocator.free(value);

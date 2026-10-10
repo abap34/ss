@@ -384,9 +384,8 @@ fn readLatexReference(ctx: Context, reference_path: []const u8) !LatexAsset {
     };
 }
 
-pub fn resolveAssetPath(ctx: Context, rel_path: []const u8) ![]const u8 {
-    if (std.fs.path.isAbsolute(rel_path)) return ctx.allocator.dupe(u8, rel_path);
-    return std.fs.path.join(ctx.allocator, &.{ ctx.asset_base_dir, rel_path });
+pub fn resolveAssetPath(ctx: Context, rel_path: []const u8) ![]u8 {
+    return utils.fs.resolveAssetPath(ctx.allocator, ctx.asset_base_dir, rel_path);
 }
 
 pub fn renderLatexToPdf(

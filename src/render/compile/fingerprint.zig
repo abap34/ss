@@ -17,7 +17,7 @@ pub const Context = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     asset_base_dir: []const u8,
-    cache_dir: []const u8 = ".ss-cache/render/artifacts/native",
+    cache_dir: []const u8 = utils.render_cache.native_path,
     resource_cache: ?*render_resources.SourceCache = null,
     font_environment: [c.SS_FONT_ENVIRONMENT_ID_SIZE]u8 = @splat(0),
 };
@@ -566,8 +566,7 @@ fn hashRulePaint(hasher: *std.hash.Wyhash, rule: core.render_policy.RulePaint) v
 }
 
 fn resolveAssetPath(ctx: Context, path: []const u8) ![]u8 {
-    if (std.fs.path.isAbsolute(path)) return ctx.allocator.dupe(u8, path);
-    return std.fs.path.join(ctx.allocator, &.{ ctx.asset_base_dir, path });
+    return utils.fs.resolveAssetPath(ctx.allocator, ctx.asset_base_dir, path);
 }
 
 fn hashLogicalAssetPath(ctx: Context, hasher: *std.hash.Wyhash, source: []const u8) void {
