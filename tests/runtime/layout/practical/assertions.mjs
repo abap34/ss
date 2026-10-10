@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 // Dump coordinates are rounded to one decimal place; font measurements are not
 // pinned to one operating system. Explicit geometry is checked to 0.2 points.
 export const tolerance = 0.2;
-// Table borders are centered on the logical edge (0.8-point default stroke).
-const inkTolerance = 0.6;
 export const top = (item) => item.y + item.height;
 export const right = (item) => item.x + item.width;
 export const center = (item) => item.y + item.height / 2;
@@ -61,12 +59,14 @@ export function assertHealthy(dump) {
       const measurement = node.measurement;
       assert(measurement, `${page.name}/${node.id}: missing text measurement`);
       close(measurement.measured_width, node.width, `${page.name}/${node.id}: stale measured width`);
-      for (const key of ["logical_bounds", "ink_bounds"]) {
-        const bounds = measurement[key];
-        const allowance = key === "ink_bounds" ? inkTolerance : tolerance;
-        assert(bounds.x >= -allowance && bounds.y >= -allowance && bounds.x + bounds.width <= node.width + allowance && bounds.y + bounds.height <= node.height + allowance,
-          `${page.name}/${node.id}: clipped ${key}: ${JSON.stringify(bounds)} in ${JSON.stringify(frame(node))}`);
-      }
+      const bounds = measurement.logical_bounds;
+      assert(bounds.x >= -tolerance && bounds.y >= -tolerance && bounds.x + bounds.width <= node.width + tolerance && bounds.y + bounds.height <= node.height + tolerance,
+        `${page.name}/${node.id}: logical_bounds exceeds fixture frame: ${JSON.stringify(bounds)} in ${JSON.stringify(frame(node))}`);
+      // Glyph bearings and decorations may extend beyond the logical frame.
+      // Render compiler tests compare measured ink with the emitted items.
+      const ink = measurement.ink_bounds;
+      assert(ink && [ink.x, ink.y, ink.width, ink.height].every(Number.isFinite) && ink.width >= 0 && ink.height >= 0,
+        `${page.name}/${node.id}: invalid ink bounds`);
     }
     const leaves = nodes.filter((node) => node.role !== "group");
     for (let i = 0; i < leaves.length; i += 1) {

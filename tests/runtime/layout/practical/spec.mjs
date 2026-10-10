@@ -48,7 +48,8 @@ assert(item(variants[1].dump, "columns", "## Collection notes").height >= item(b
 const corruptions = [
   ["collapsed", (d) => { item(d, "cards", "## Collect\n").width = 0; }, /collapsed frame/],
   ["non-finite", (d) => { item(d, "cards", "## Collect\n").y = NaN; }, /non-finite/],
-  ["clipped", (d) => { item(d, "table_code", "| stage |").height = 10; }, /clipped/],
+  ["overflow", (d) => { item(d, "table_code", "| stage |").height = 10; }, /exceeds fixture frame/],
+  ["invalid ink", (d) => { item(d, "columns", "## Collection notes").measurement.ink_bounds.width = NaN; }, /invalid ink bounds/],
   ["overlap", (d) => { const a = item(d, "cards", "## Collect\n"); item(d, "cards", "## Transform\n").x = a.x; }, /overlapping/],
   ["off-page", (d) => { item(d, "image_caption", "Diagram caption:").x = 1300; }, /page bounds/],
   ["stale measurement", (d) => { item(d, "columns", "## Collection notes").measurement.measured_width = 700; }, /stale measured width/],
@@ -59,6 +60,12 @@ for (const [name, corrupt, diagnostic] of corruptions) {
   corrupt(damaged);
   assert.throws(() => assertPractical(damaged), diagnostic, `detector missed ${name}`);
 }
+
+// Ink overhang does not change the logical space occupied by a text object.
+const withOverhang = structuredClone(baseline);
+const overhanging = item(withOverhang, "flow", "Flow introduction:");
+overhanging.measurement.ink_bounds = { x: -2, y: -2, width: overhanging.width + 4, height: overhanging.height + 4 };
+assertPractical(withOverhang);
 
 await writeFile(slide, source);
 await run(["check", "--quiet", slide]);

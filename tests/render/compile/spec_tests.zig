@@ -122,6 +122,147 @@ test "natural measurement includes tables beside ordinary paragraphs" {
     try testing.expectApproxEqAbs(@as(f32, 620), measured.width, 0.01);
 }
 
+const MarkdownGeometry = struct {
+    measurement: core.LayoutMeasurement,
+    baselines: [32]f64 = @splat(0),
+    baseline_count: usize = 0,
+};
+
+fn markdownGeometry(content: []const u8, family: []const u8, width: f32) !MarkdownGeometry {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page_id = try state.addPage("block-geometry");
+    const object_id = try state.makeObject(page_id, "blocks", null, .text, .text, content);
+    var style = core.RecordValue.init("TextStyle");
+    defer style.deinit(testing.allocator);
+    try style.fields.append(testing.allocator, .{
+        .name = "parse",
+        .value = .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } },
+        .explicit = true,
+    });
+    try state.setNodeFieldValue(object_id, "text", .{ .record = style });
+    const object = state.getNode(object_id).?;
+    object.frame = .{ .x = 0, .y = 0, .width = width, .height = 720 };
+    var prepared = try core.prepared.prepare(testing.allocator, &state);
+    defer prepared.deinit(testing.allocator);
+    const paint = &prepared.pages[0].objects[0].render.text.?;
+    paint.font.family = family;
+    paint.bold_font = paint.font;
+    paint.italic_font = paint.font;
+    paint.code_font = paint.font;
+    paint.font_size = 24;
+    paint.line_height = 31;
+    paint.wrap = true;
+    paint.markdown_block_gap = 8;
+    paint.markdown_quote.pad_y = 5;
+    paint.markdown_quote.pad_x = 0;
+    paint.markdown_quote.inset = 0;
+    var heading = std.mem.zeroes(core.render_policy.MarkdownHeadingPaint);
+    heading.font = paint.font;
+    heading.bold_font = paint.font;
+    heading.italic_font = paint.font;
+    heading.code_font = paint.font;
+    heading.font_size = 30;
+    heading.line_height = 47;
+    paint.markdown_headings[1] = heading;
+    const environment = try render_compile.acquireFontEnvironment();
+    var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = environment });
+    defer {
+        scope.measurements.dirty = false;
+        scope.deinit();
+    }
+    scope.measurements.persistent.clearRetainingCapacity();
+    const provider = scope.provider();
+    var result = MarkdownGeometry{ .measurement = (try provider.measure(provider.context, &state, object, width, .width_constrained)).? };
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1, .font_environment = environment });
+    defer ir.deinit(testing.allocator);
+    var ink: ?render.Rect = null;
+    for (ir.pages[0].items.items) |item| {
+        if (item.header().node_id != object_id) continue;
+        const bounds = item.header().ink_bounds;
+        if (bounds.width > 0 and bounds.height > 0) ink = if (ink) |previous| previous.unioned(bounds) else bounds;
+        if (item == .text) {
+            try testing.expect(result.baseline_count < result.baselines.len);
+            result.baselines[result.baseline_count] = item.text.baselineY();
+            result.baseline_count += 1;
+        }
+    }
+    const expected = result.measurement.ink_bounds.?;
+    try testing.expectApproxEqAbs(@as(f64, expected.x), ink.?.x, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, expected.y), ink.?.y, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, expected.width), ink.?.width, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, expected.height), ink.?.height, 0.001);
+    return result;
+}
+
+fn expectMarkdownBaselines(actual: MarkdownGeometry, start: usize, isolated: MarkdownGeometry, top: f64) !void {
+    try testing.expect(actual.baseline_count >= start + isolated.baseline_count);
+    for (isolated.baselines[0..isolated.baseline_count], 0..) |baseline, index| {
+        try testing.expectApproxEqAbs(top + baseline, actual.baselines[start + index], 0.001);
+    }
+}
+
+test "Markdown block gaps preserve logical edges across heading styles and wrapped lines" {
+    for ([_][]const u8{ "Liberation Sans", "DejaVu Sans" }) |family| {
+        for ([_]f32{ 500, 140 }) |width| {
+            const heading = try markdownGeometry("## Heading", family, width);
+            const body = try markdownGeometry("Body text wraps across a few lines.", family, width);
+            try testing.expect(@abs(heading.measurement.first_baseline.? - body.measurement.first_baseline.?) > 1);
+            const forward = try markdownGeometry("## Heading\n\nBody text wraps across a few lines.", family, width);
+            const reverse = try markdownGeometry("Body text wraps across a few lines.\n\n## Heading", family, width);
+            const height = heading.measurement.height + 8 + body.measurement.height;
+            try testing.expectApproxEqAbs(height, forward.measurement.height, 0.001);
+            try testing.expectApproxEqAbs(height, reverse.measurement.height, 0.001);
+            try testing.expectEqual(heading.baseline_count + body.baseline_count, forward.baseline_count);
+            try testing.expectEqual(forward.baseline_count, reverse.baseline_count);
+            try expectMarkdownBaselines(forward, 0, heading, 0);
+            try expectMarkdownBaselines(forward, heading.baseline_count, body, heading.measurement.height + 8);
+            try expectMarkdownBaselines(reverse, 0, body, 0);
+            try expectMarkdownBaselines(reverse, body.baseline_count, heading, body.measurement.height + 8);
+        }
+    }
+}
+
+test "Markdown quotes and list items share heading and paragraph block edges" {
+    const family = "Liberation Sans";
+    const heading = try markdownGeometry("## Heading", family, 500);
+    const body = try markdownGeometry("Body", family, 500);
+    const list = try markdownGeometry("- ## Heading\n\n  Body\n\n- Tail", family, 500);
+    const height = heading.measurement.height + 8 + body.measurement.height + 8 + body.measurement.height;
+    try testing.expectApproxEqAbs(height, list.measurement.height, 0.001);
+    try testing.expectEqual(@as(usize, 5), list.baseline_count);
+    // Each marker shares the first content baseline, including heading items.
+    try expectMarkdownBaselines(list, 0, heading, 0);
+    try expectMarkdownBaselines(list, 1, heading, 0);
+    try expectMarkdownBaselines(list, 2, body, heading.measurement.height + 8);
+    try expectMarkdownBaselines(list, 3, body, height - body.measurement.height);
+    try expectMarkdownBaselines(list, 4, body, height - body.measurement.height);
+    const quote = try markdownGeometry(
+        "> - ## Heading\n>\n>   Body\n>\n> - Tail",
+        family,
+        500,
+    );
+    try testing.expectApproxEqAbs(height + 10, quote.measurement.height, 0.001);
+    try testing.expectEqual(list.baseline_count, quote.baseline_count);
+    try expectMarkdownBaselines(quote, 0, list, 5);
+}
+
+test "Markdown tables and code boxes preserve their edges beside headings" {
+    const family = "Liberation Sans";
+    const heading = try markdownGeometry("## Heading", family, 500);
+    for ([_][]const u8{ "| Body |\n| --- |\n| Tail |", "```\nBody\nTail\n```" }) |content| {
+        const isolated = try markdownGeometry(content, family, 500);
+        const source = try std.fmt.allocPrint(testing.allocator, "## Heading\n\n{s}\n\n## Heading", .{content});
+        defer testing.allocator.free(source);
+        const combined = try markdownGeometry(source, family, 500);
+        try testing.expectApproxEqAbs(heading.measurement.height * 2 + 16 + isolated.measurement.height, combined.measurement.height, 0.001);
+        try testing.expectEqual(heading.baseline_count * 2 + isolated.baseline_count, combined.baseline_count);
+        try expectMarkdownBaselines(combined, 0, heading, 0);
+        try expectMarkdownBaselines(combined, heading.baseline_count, isolated, heading.measurement.height + 8);
+        try expectMarkdownBaselines(combined, heading.baseline_count + isolated.baseline_count, heading, heading.measurement.height + isolated.measurement.height + 16);
+    }
+}
+
 const FakeCompiler = struct {
     prepare_count: usize = 0,
     page_count: usize = 0,

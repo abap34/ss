@@ -2004,10 +2004,10 @@ fn expandContentMeasurement(render: ResolvedRender, frame: Frame, content_frame:
 }
 
 fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32, text: TextPaint, mode: core.LayoutMeasurementMode) !core.LayoutMeasurement {
-    const baseline_bl = Defaults.height * 0.5;
     return switch (command.parse_mode) {
         .none => .{ .width = 1, .height = 1, .ink_bounds = .{} },
         .block => blk: {
+            const top_bl = Defaults.height * 0.5;
             var owned_doc: ?MarkdownDocument = null;
             defer if (owned_doc) |*doc| doc.deinit();
             const doc = command.markdown_doc orelse blk2: {
@@ -2019,18 +2019,18 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
             defer measurement.deinit();
             const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = Defaults.height };
             const first_text = markdownFirstBlockText(text, doc.blocks.items);
-            const next_bl = try drawMarkdownBlocksAt(ctx, frame, baseline_bl, doc.blocks.items, text, 0);
+            const bottom_bl = try drawMarkdownBlocksAtTop(ctx, frame, top_bl, doc.blocks.items, text, 0);
             var measured = try measurementFromInk(
                 &measurement,
-                baseline_bl,
-                next_bl,
+                top_bl,
+                @max(top_bl - bottom_bl, first_text.line_height),
                 try lineBaselineFromTop(ctx, first_text.font, first_text.font_size, first_text.line_height),
-                first_text.line_height,
             );
             measured.width = @max(try markdownBlocksConstrainedLogicalWidth(ctx, doc.blocks.items, text, 0, width), 1);
             break :blk measured;
         },
         .@"inline" => blk: {
+            const baseline_bl = Defaults.height * 0.5;
             var owned_layout: ?core.markdown.TextLayout = null;
             defer if (owned_layout) |*layout| layout.deinit(ctx.allocator);
             const layout = command.text_layout orelse blk2: {
@@ -2043,12 +2043,12 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
             try measurement.begin();
             defer measurement.deinit();
             const next_bl = try drawInlineLines(ctx, 0, baseline_bl, @max(width, 1), layout.lines.items, inline_text, inline_text.wrap);
+            const baseline_from_top = try lineBaselineFromTop(ctx, inline_text.font, inline_text.font_size, inline_text.line_height);
             var measured = try measurementFromInk(
                 &measurement,
-                baseline_bl,
-                next_bl,
-                try lineBaselineFromTop(ctx, inline_text.font, inline_text.font_size, inline_text.line_height),
-                inline_text.line_height,
+                baseline_bl + baseline_from_top,
+                @max(baseline_bl - next_bl, inline_text.line_height),
+                baseline_from_top,
             );
             measured.width = @max(try inlineLinesConstrainedLogicalWidth(ctx, layout.lines.items, inline_text, width, inline_text.wrap), 1);
             break :blk measured;
@@ -2126,14 +2126,13 @@ fn measureAssetIntrinsic(
     };
 }
 
-fn measurementFromInk(measurement: *MeasurementScope, baseline_bl: f32, next_bl: f32, baseline_from_top: f32, line_height: f32) !core.LayoutMeasurement {
-    const content_top_bl = baseline_bl + baseline_from_top;
-    const ink = if (try measurement.inkFrame()) |frame| inkBoundsFromFrame(frame, 0, content_top_bl) else core.LayoutBounds{};
+fn measurementFromInk(measurement: *MeasurementScope, top_bl: f32, height: f32, baseline_from_top: f32) !core.LayoutMeasurement {
+    const ink = if (try measurement.inkFrame()) |frame| inkBoundsFromFrame(frame, 0, top_bl) else core.LayoutBounds{};
     return .{
         .width = @max(ink.x + ink.width, 1),
-        .height = @max(baseline_bl - next_bl, line_height),
+        .height = height,
         .ink_bounds = ink,
-        .first_baseline = if (measurement.bounds.first_baseline) |baseline| baseline - (Defaults.height - content_top_bl) else baseline_from_top,
+        .first_baseline = if (measurement.bounds.first_baseline) |baseline| baseline - (Defaults.height - top_bl) else baseline_from_top,
     };
 }
 
@@ -2751,25 +2750,19 @@ fn drawTextCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Fram
 }
 
 fn drawMarkdownBlocks(ctx: *DrawContext, frame: Frame, blocks: []const *Block, text: TextPaint, list_depth: usize) anyerror!f32 {
-    const first_text = markdownFirstBlockText(text, blocks);
-    return drawMarkdownBlocksAt(
-        ctx,
-        frame,
-        try baselineBlForBox(ctx, frame, first_text.font, first_text.font_size, first_text.line_height),
-        blocks,
-        text,
-        list_depth,
-    );
+    return drawMarkdownBlocksAtTop(ctx, frame, frame.y + frame.height, blocks, text, list_depth);
 }
 
-fn drawMarkdownBlocksAt(ctx: *DrawContext, frame: Frame, baseline_bl: f32, blocks: []const *Block, text: TextPaint, list_depth: usize) anyerror!f32 {
-    var cursor_bl = baseline_bl;
+// Block sequencing uses logical top/bottom edges; baselines are local to each style.
+fn drawMarkdownBlocksAtTop(ctx: *DrawContext, frame: Frame, top_bl: f32, blocks: []const *Block, text: TextPaint, list_depth: usize) anyerror!f32 {
+    var cursor_bl = top_bl;
     for (blocks, 0..) |block, index| {
         const block_text = markdownBlockText(text, block);
         switch (block.kind) {
             .paragraph, .heading => {
                 if (block.paragraph) |paragraph| {
-                    cursor_bl = try drawInlineLines(ctx, frame.x, cursor_bl, frame.width, paragraph.lines.items, block_text, block_text.wrap);
+                    const ascent = try lineBaselineFromTop(ctx, block_text.font, block_text.font_size, block_text.line_height);
+                    cursor_bl = try drawInlineLines(ctx, frame.x, cursor_bl - ascent, frame.width, paragraph.lines.items, block_text, block_text.wrap) + ascent;
                 }
             },
             .block_quote => cursor_bl = try drawMarkdownQuote(ctx, frame, cursor_bl, block, text, list_depth),
@@ -2798,8 +2791,8 @@ fn markdownQuoteText(text: TextPaint) TextPaint {
     return result;
 }
 
-fn drawMarkdownQuote(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Block, text: TextPaint, list_depth: usize) !f32 {
-    const quote = block.quote orelse return baseline_bl;
+fn drawMarkdownQuote(ctx: *DrawContext, frame: Frame, top_bl: f32, block: *const Block, text: TextPaint, list_depth: usize) !f32 {
+    const quote = block.quote orelse return top_bl;
     const paint = text.markdown_quote;
     const quote_x = frame.x + paint.inset;
     const quote_width = @max(frame.width - paint.inset, 1);
@@ -2807,8 +2800,7 @@ fn drawMarkdownQuote(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *
     const content_width = @max(quote_width - paint.pad_x * 2, 1);
     const quote_text = markdownQuoteText(text);
     const content_height = try measureMarkdownBlocksLogicalHeight(ctx, quote.blocks.items, quote_text, content_width, list_depth);
-    const outer_baseline_from_top = try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height);
-    const box_top = baseline_bl + outer_baseline_from_top;
+    const box_top = top_bl;
     const box_height = paint.pad_y * 2 + content_height;
     const box_bottom = box_top - box_height;
     const quote_frame = Frame{ .x = quote_x, .y = box_bottom, .width = quote_width, .height = box_height };
@@ -2823,35 +2815,34 @@ fn drawMarkdownQuote(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *
         }
     }
 
-    const first_text = markdownFirstBlockText(quote_text, quote.blocks.items);
-    const first_baseline_from_top = try lineBaselineFromTop(ctx, first_text.font, first_text.font_size, first_text.line_height);
-    const first_baseline_bl = box_top - paint.pad_y - first_baseline_from_top;
     const content_frame = Frame{ .x = content_x, .y = frame.y, .width = content_width, .height = frame.height };
-    _ = try drawMarkdownBlocksAt(ctx, content_frame, first_baseline_bl, quote.blocks.items, quote_text, list_depth);
-    return box_bottom - outer_baseline_from_top;
+    _ = try drawMarkdownBlocksAtTop(ctx, content_frame, box_top - paint.pad_y, quote.blocks.items, quote_text, list_depth);
+    return box_bottom;
 }
 
 fn measureMarkdownBlocksLogicalHeight(ctx: *DrawContext, blocks: []const *Block, text: TextPaint, width: f32, list_depth: usize) !f32 {
     if (blocks.len == 0) return text.line_height;
-    const baseline_bl = Defaults.height * 0.5;
+    const top_bl = Defaults.height * 0.5;
     var measurement = MeasurementScope.init(ctx);
     try measurement.begin();
     defer measurement.deinit();
     const frame = Frame{ .x = 0, .y = 0, .width = width, .height = Defaults.height };
-    const next_bl = try drawMarkdownBlocksAt(ctx, frame, baseline_bl, blocks, text, list_depth);
-    return @max(baseline_bl - next_bl, text.line_height);
+    const bottom_bl = try drawMarkdownBlocksAtTop(ctx, frame, top_bl, blocks, text, list_depth);
+    return @max(top_bl - bottom_bl, text.line_height);
 }
 
-fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Block, text: TextPaint, list_depth: usize) anyerror!f32 {
-    const list = block.list orelse return baseline_bl;
-    var cursor_bl = baseline_bl;
+fn drawList(ctx: *DrawContext, frame: Frame, top_bl: f32, block: *const Block, text: TextPaint, list_depth: usize) anyerror!f32 {
+    const list = block.list orelse return top_bl;
+    var cursor_bl = top_bl;
     const list_inset: f32 = if (list_depth == 0) @max(text.markdown_list_inset, 0) else @max(text.markdown_list_indent, 0);
     const item_x = frame.x + list_inset;
     const item_width = @max(frame.width - list_inset, 1);
     for (list.items.items, 0..) |item, item_index| {
         const marker = try listMarker(ctx.allocator, block.kind, list_depth, list.start + item_index);
         defer ctx.allocator.free(marker);
-        try drawRawText(ctx, item_x, baselineTop(cursor_bl, text.font_size), item_width, marker, text.font, text.font_size, text.color, false, .{});
+        const first_text = markdownFirstBlockText(text, item.blocks.items);
+        const baseline_bl = cursor_bl - try lineBaselineFromTop(ctx, first_text.font, first_text.font_size, first_text.line_height);
+        try drawRawText(ctx, item_x, baselineTop(baseline_bl, text.font_size), item_width, marker, text.font, text.font_size, text.color, false, .{});
         const marker_width = try measureText(ctx, marker, text.font, text.font_size);
         const content_x = item_x + marker_width + @max(@as(f32, 8.0), text.font_size * 0.35);
         const content_frame = Frame{
@@ -2860,25 +2851,25 @@ fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Blo
             .width = @max(item_width - marker_width - @max(@as(f32, 8.0), text.font_size * 0.35), 1),
             .height = frame.height,
         };
-        cursor_bl = try drawMarkdownBlocksAt(ctx, content_frame, cursor_bl, item.blocks.items, text, list_depth + 1);
+        cursor_bl = try drawMarkdownBlocksAtTop(ctx, content_frame, cursor_bl, item.blocks.items, text, list_depth + 1);
         if (item_index + 1 < list.items.items.len) cursor_bl -= text.markdown_block_gap;
     }
     return cursor_bl;
 }
 
-fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint) !f32 {
+fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, top_bl: f32, width: f32, block: *const Block, text: TextPaint) !f32 {
     const source = try markdownCodeBlockContent(ctx.allocator, block);
     defer ctx.allocator.free(source);
     const code_paint = markdownCodeBlockPaint(block, text);
     const initial_content_width = @max(width - text.markdown_code_pad_x * 2, 1);
     const measured = try measureMarkdownCodeBlockContent(ctx, source, initial_content_width, text, code_paint);
-    const placement = markdownCodeBlockPlacement(x, baseline_bl, width, measured, text, try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height));
+    const placement = markdownCodeBlockPlacement(x, top_bl, width, measured, text);
     const frame = placement.frame;
 
     try drawRoundedRect(ctx, frame, text.markdown_code_radius, text.markdown_code_fill, text.markdown_code_stroke, text.markdown_code_line_width);
 
     try drawMarkdownCodeBlockContent(ctx, placement.content_x, placement.first_baseline_bl, placement.content_width, source, text, code_paint);
-    return placement.next_baseline_bl;
+    return placement.frame.y;
 }
 
 fn markdownCodeBlockPaint(block: *const Block, text: TextPaint) CodePaint {
@@ -2920,7 +2911,6 @@ const MarkdownCodeBlockPlacement = struct {
     content_x: f32,
     content_width: f32,
     first_baseline_bl: f32,
-    next_baseline_bl: f32,
 };
 
 const MarkdownCodeBlockMeasure = struct {
@@ -2964,8 +2954,8 @@ fn physicalCodeLineCount(source: []const u8) usize {
     return count;
 }
 
-fn markdownCodeBlockPlacement(x: f32, baseline_bl: f32, width: f32, measured: MarkdownCodeBlockMeasure, text: TextPaint, baseline_from_top: f32) MarkdownCodeBlockPlacement {
-    const box_top = baseline_bl + baseline_from_top;
+fn markdownCodeBlockPlacement(x: f32, top_bl: f32, width: f32, measured: MarkdownCodeBlockMeasure, text: TextPaint) MarkdownCodeBlockPlacement {
+    const box_top = top_bl;
     const first_baseline_bl = box_top - text.markdown_code_pad_y - measured.top_over_baseline;
     const content_left = x + text.markdown_code_pad_x + measured.left;
     const content_right = x + text.markdown_code_pad_x + measured.right;
@@ -2978,7 +2968,6 @@ fn markdownCodeBlockPlacement(x: f32, baseline_bl: f32, width: f32, measured: Ma
         .content_x = x + text.markdown_code_pad_x,
         .content_width = @max(width - text.markdown_code_pad_x * 2, 1),
         .first_baseline_bl = first_baseline_bl,
-        .next_baseline_bl = box_bottom - baseline_from_top,
     };
 }
 
@@ -2993,12 +2982,11 @@ fn markdownCodeBlockContent(allocator: Allocator, block: *const Block) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint) !f32 {
-    const table = block.table orelse return baseline_bl;
+fn drawTable(ctx: *DrawContext, x: f32, top_bl: f32, width: f32, block: *const Block, text: TextPaint) !f32 {
+    const table = block.table orelse return top_bl;
     var layout = try table_layout.prepare(inlineContext(ctx), table, text, width);
     defer layout.deinit(ctx.allocator);
-    const baseline_from_top = try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height);
-    const table_top_bl = baseline_bl + baseline_from_top - layout.border_width * 0.5;
+    const table_top_bl = top_bl - layout.border_width * 0.5;
     const table_x = x + layout.border_width * 0.5;
     var body_row_index: usize = 0;
     for (layout.rows) |*row| {
@@ -3013,7 +3001,7 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
             }
         }
     }
-    return table_top_bl - layout.height - baseline_from_top;
+    return top_bl - layout.height - layout.border_width;
 }
 
 fn drawPreparedInlineBlock(ctx: *DrawContext, x: f32, top_bl: f32, width: f32, block: *inline_layout.PreparedBlock, alignment: HorizontalAlign) !void {
@@ -3106,7 +3094,6 @@ fn markdownCodeBlockConstrainedLogicalWidth(ctx: *DrawContext, block: *const Blo
         width,
         measured,
         text,
-        try lineBaselineFromTop(ctx, text.font, text.font_size, text.line_height),
     );
     return placement.frame.width;
 }
