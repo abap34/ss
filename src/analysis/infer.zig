@@ -32,13 +32,7 @@ const InferenceOptions = struct {
     validate_contracts: bool = true,
 };
 
-fn addUserReport(state: ?*core.DocumentState, origin: core.SourceOrigin, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
-    const sink = state orelse return;
-    const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
-    try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .code = code, .message = message },
-    });
-}
+const addUserReport = @import("diagnostics.zig").addUserReport;
 
 fn preferredDiagnosticSpan(primary: ?ast.Span, fallback: ?ast.Span) ?ast.Span {
     return if (primary) |span| span else fallback;

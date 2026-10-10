@@ -249,12 +249,7 @@ fn checkRolesUnique(
     }
 }
 
-fn addUserReport(state: *core.DocumentState, origin: core.SourceOrigin, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
-    const message = try std.fmt.allocPrint(state.allocator, fmt, args);
-    try state.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .code = code, .message = message },
-    });
-}
+const addUserReport = @import("diagnostics.zig").addUserReport;
 
 fn originPathForModule(module: *const core.SourceModule) []const u8 {
     return module.path orelse module.spec;

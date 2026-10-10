@@ -404,6 +404,4 @@ const TypeResolver = struct {
     }
 };
 
-pub fn isBuiltinTypeName(name: []const u8) bool {
-    return type_resolution.isBuiltinTypeName(name);
-}
+pub const isBuiltinTypeName = type_resolution.isBuiltinTypeName;

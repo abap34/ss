@@ -10,6 +10,14 @@ pub const Diagnostic = shared.Diagnostic;
 pub const SourceId = shared.SourceId;
 pub const DiagnosticBag = shared.Bag;
 
+pub fn addUserReport(state: ?*core.DocumentState, origin: core.SourceOrigin, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
+    const sink = state orelse return;
+    const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
+    try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{ .code = code, .message = message },
+    });
+}
+
 pub fn addSyntaxHoles(bag: *DiagnosticBag, path: []const u8, text: []const u8, holes: syntax.HoleTable) !void {
     if (holes.diagnostics.len == 0) return;
     const source_id = try bag.registerSource(path, text);

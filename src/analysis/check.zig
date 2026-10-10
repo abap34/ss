@@ -219,13 +219,7 @@ pub fn originPathForModule(module: *const core.SourceModule) []const u8 {
     return module.path orelse module.spec;
 }
 
-fn addUserReport(state: ?*core.DocumentState, origin: core.SourceOrigin, code: []const u8, comptime fmt: []const u8, args: anytype) !void {
-    const sink = state orelse return;
-    const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
-    try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .code = code, .message = message },
-    });
-}
+const addUserReport = @import("diagnostics.zig").addUserReport;
 
 pub fn continueAfterDiagnostic(state: *const core.DocumentState, diagnostic_count_before: usize, err: anyerror) !void {
     if (state.diagnostics.entries.items.len > diagnostic_count_before) return;

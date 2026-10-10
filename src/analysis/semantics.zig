@@ -128,9 +128,7 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
     }
 }
 
-fn isBuiltinTypeName(name: []const u8) bool {
-    return semantic_env.isBuiltinTypeName(name);
-}
+const isBuiltinTypeName = semantic_env.isBuiltinTypeName;
 
 pub fn checkTypeAnnotations(
     allocator: std.mem.Allocator,
