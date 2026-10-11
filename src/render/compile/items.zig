@@ -718,94 +718,107 @@ pub const Compiler = struct {
             for (commands) |*command| command.deinit(allocator);
             allocator.free(commands);
         }
-        if (self.options.page_cache) |cache| {
-            const page_cache_start = utils.measure_profile.start();
-            const key = try fingerprint.renderPageKey(
-                .{
-                    .allocator = allocator,
-                    .io = self.io,
-                    .asset_base_dir = draw_context.asset_base_dir,
-                    .cache_dir = draw_context.cache_dir,
-                    .resource_cache = self.options.resource_cache,
-                    .font_environment = font_environment.id,
-                },
-                render_page_cache_version,
-                prepared_page.page_id,
-                prepared_page.index,
-                prepared_page.background,
-                self.options.highlight_languages,
-                commands,
-            );
-            if (try cache.materialize(key, allocator, self.io, resources, fonts)) |page| {
-                utils.measure_profile.recordRenderPage(true, page_cache_start);
-                return page;
-            }
+        const compilation = PageCompilation{
+            .compiler = self,
+            .draw_context = &draw_context,
+            .state = state,
+            .prepared_page = prepared_page,
+            .commands = commands,
+            .font_environment = font_environment,
+        };
+        return compilation.compile(resources, fonts);
+    }
+};
 
-            var local_resources = render_resources.Builder{ .cache = self.options.resource_cache };
-            defer local_resources.deinit(allocator);
-            var local_fonts = render_ir.FontBuilder{};
-            defer local_fonts.deinit(allocator);
-            var page = try buildRenderPage(
-                self,
-                &draw_context,
-                state,
-                prepared_page.page_id,
-                prepared_page.index,
-                prepared_page.background,
-                commands,
-                &local_resources,
-                &local_fonts,
-            );
-            var page_live = true;
-            errdefer if (page_live) page.deinit(allocator);
-            const source_dependencies = try local_resources.sourceDependencies(allocator, self.io);
-            defer render_resources.deinitSourceDependencies(allocator, source_dependencies);
-            var resource_graph = try local_resources.take(allocator);
-            defer resource_graph.deinit(allocator);
-            var font_catalog = try local_fonts.take(allocator);
-            defer font_catalog.deinit(allocator);
-            try render_text.validateFontEnvironment(font_environment);
-            const cached = if (synthetic_font_detected)
-                false
-            else
-                try cache.put(
-                    key,
-                    allocator,
-                    &page,
-                    &resource_graph,
-                    source_dependencies,
-                    &font_catalog,
-                );
-            if (!cached) {
-                try mergeUncachedPage(
-                    allocator,
-                    self.io,
-                    &page,
-                    &resource_graph,
-                    &font_catalog,
-                    resources,
-                    fonts,
-                );
-                utils.measure_profile.recordRenderPage(false, page_cache_start);
-                return page;
-            }
-            page.deinit(allocator);
-            page_live = false;
-            const materialized = (try cache.materialize(key, allocator, self.io, resources, fonts)) orelse return error.InvalidRenderPageCache;
-            utils.measure_profile.recordRenderPage(false, page_cache_start);
-            return materialized;
+// Borrows the page inputs and drawing environment for this compilation.
+const PageCompilation = struct {
+    compiler: *Compiler,
+    draw_context: *DrawContext,
+    state: *core.DocumentState,
+    prepared_page: *const core.prepared.PreparedPage,
+    commands: []ObjectCommand,
+    font_environment: render_text.FontEnvironment,
+
+    fn compile(self: *const PageCompilation, resources: *render_resources.Builder, fonts: *render_ir.FontBuilder) !render_ir.Page {
+        const cache = self.compiler.options.page_cache orelse return self.build(resources, fonts);
+        const started = utils.measure_profile.start();
+        const key = try self.cacheKey();
+        if (try cache.materialize(key, self.draw_context.allocator, self.compiler.io, resources, fonts)) |page| {
+            utils.measure_profile.recordRenderPage(true, started);
+            return page;
         }
-        return try buildRenderPage(
-            self,
-            &draw_context,
-            state,
-            prepared_page.page_id,
-            prepared_page.index,
-            prepared_page.background,
-            commands,
-            resources,
-            fonts,
+        const page = try self.buildCached(cache, key, resources, fonts);
+        utils.measure_profile.recordRenderPage(false, started);
+        return page;
+    }
+
+    fn build(self: *const PageCompilation, resources: *render_resources.Builder, fonts: *render_ir.FontBuilder) !render_ir.Page {
+        return buildRenderPage(self.compiler, self.draw_context, self.state, self.prepared_page.page_id, self.prepared_page.index, self.prepared_page.background, self.commands, resources, fonts);
+    }
+
+    fn cacheKey(self: *const PageCompilation) !u64 {
+        const allocator = self.draw_context.allocator;
+        return fingerprint.renderPageKey(
+            .{
+                .allocator = allocator,
+                .io = self.compiler.io,
+                .asset_base_dir = self.draw_context.asset_base_dir,
+                .cache_dir = self.draw_context.cache_dir,
+                .resource_cache = self.compiler.options.resource_cache,
+                .font_environment = self.font_environment.id,
+            },
+            render_page_cache_version,
+            self.prepared_page.page_id,
+            self.prepared_page.index,
+            self.prepared_page.background,
+            self.compiler.options.highlight_languages,
+            self.commands,
         );
+    }
+
+    fn buildCached(self: *const PageCompilation, cache: *PageCache, key: u64, resources: *render_resources.Builder, fonts: *render_ir.FontBuilder) !render_ir.Page {
+        const allocator = self.draw_context.allocator;
+        var local_resources = render_resources.Builder{ .cache = self.compiler.options.resource_cache };
+        defer local_resources.deinit(allocator);
+        var local_fonts = render_ir.FontBuilder{};
+        defer local_fonts.deinit(allocator);
+        var page = try self.build(&local_resources, &local_fonts);
+        var page_live = true;
+        errdefer if (page_live) page.deinit(allocator);
+        const source_dependencies = try local_resources.sourceDependencies(allocator, self.compiler.io);
+        defer render_resources.deinitSourceDependencies(allocator, source_dependencies);
+        var resource_graph = try local_resources.take(allocator);
+        defer resource_graph.deinit(allocator);
+        var font_catalog = try local_fonts.take(allocator);
+        defer font_catalog.deinit(allocator);
+        try render_text.validateFontEnvironment(self.font_environment);
+        const cached = if (self.draw_context.synthetic_font_detected.?.*)
+            false
+        else
+            try cache.put(
+                key,
+                allocator,
+                &page,
+                &resource_graph,
+                source_dependencies,
+                &font_catalog,
+            );
+        if (!cached) {
+            try mergeUncachedPage(
+                allocator,
+                self.compiler.io,
+                &page,
+                &resource_graph,
+                &font_catalog,
+                resources,
+                fonts,
+            );
+            return page;
+        }
+        page.deinit(allocator);
+        page_live = false;
+        const materialized = (try cache.materialize(key, allocator, self.compiler.io, resources, fonts)) orelse return error.InvalidRenderPageCache;
+        return materialized;
     }
 };
 
