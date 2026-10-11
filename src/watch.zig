@@ -185,9 +185,8 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, initial_options
     };
     initial_inspection.deinit(scratch);
 
-    var last_failure: ?FingerprintFailure = null;
-    defer if (last_failure) |*failure| failure.deinit(allocator);
-    var last_unlocated_error: ?anyerror = null;
+    var inspection_diagnostics = InspectionDiagnostics{};
+    defer inspection_diagnostics.deinit(allocator);
     var embedded_cache = module_loader.EmbeddedSyntaxCache.init(allocator);
     defer embedded_cache.deinit();
 
@@ -203,40 +202,53 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, initial_options
                 return;
             }
         }
-        var inspection = inspectFingerprintWithCache(io, scratch, options, &imports) catch |err| {
-            clearFingerprintFailure(allocator, &last_failure);
-            if (last_unlocated_error == null or last_unlocated_error.? != err) {
-                printUnlocatedFingerprintFailure(options, err);
-            }
-            last_unlocated_error = err;
-            continue;
-        };
-        defer inspection.deinit(scratch);
-        const next_fingerprint = switch (inspection) {
-            .value => |value| blk: {
-                if (last_failure) |failure| printFingerprintRecovery(failure);
-                if (last_unlocated_error != null) {
-                    std.debug.print("watch: input inspection recovered\n", .{});
-                }
-                clearFingerprintFailure(allocator, &last_failure);
-                last_unlocated_error = null;
-                break :blk value;
-            },
-            .failure => |failure| {
-                last_unlocated_error = null;
-                if (!sameFingerprintFailure(last_failure, failure)) {
-                    printFingerprintFailure(failure);
-                    try replaceFingerprintFailure(allocator, &last_failure, failure);
-                }
-                continue;
-            },
-        };
+        const next_fingerprint = try inspection_diagnostics.inspect(io, allocator, scratch, options, &imports) orelse continue;
         if (next_fingerprint.complete == last_fingerprint.complete) continue;
         last_fingerprint = next_fingerprint;
         std.debug.print("watch: change detected\n", .{});
         runOnce(io, allocator, mode, options, &embedded_cache, &last_fingerprint);
     }
 }
+
+const InspectionDiagnostics = struct {
+    last_failure: ?FingerprintFailure = null,
+    last_unlocated_error: ?anyerror = null,
+
+    fn deinit(self: *InspectionDiagnostics, allocator: std.mem.Allocator) void {
+        clearFingerprintFailure(allocator, &self.last_failure);
+    }
+
+    fn inspect(self: *InspectionDiagnostics, io: std.Io, allocator: std.mem.Allocator, scratch: std.mem.Allocator, options: Options, imports: *ImportCache) !?Fingerprint {
+        var inspection = inspectFingerprintWithCache(io, scratch, options, imports) catch |err| {
+            clearFingerprintFailure(allocator, &self.last_failure);
+            if (self.last_unlocated_error == null or self.last_unlocated_error.? != err) {
+                printUnlocatedFingerprintFailure(options, err);
+            }
+            self.last_unlocated_error = err;
+            return null;
+        };
+        defer inspection.deinit(scratch);
+        return switch (inspection) {
+            .value => |value| blk: {
+                if (self.last_failure) |failure| printFingerprintRecovery(failure);
+                if (self.last_unlocated_error != null) {
+                    std.debug.print("watch: input inspection recovered\n", .{});
+                }
+                clearFingerprintFailure(allocator, &self.last_failure);
+                self.last_unlocated_error = null;
+                break :blk value;
+            },
+            .failure => |failure| {
+                self.last_unlocated_error = null;
+                if (!sameFingerprintFailure(self.last_failure, failure)) {
+                    printFingerprintFailure(failure);
+                    try replaceFingerprintFailure(allocator, &self.last_failure, failure);
+                }
+                return null;
+            },
+        };
+    }
+};
 
 fn sleep(io: std.Io, interval_ms: u64) !void {
     const sleep_ms: i64 = @intCast(@min(@max(interval_ms, 50), @as(u64, std.math.maxInt(i64))));
