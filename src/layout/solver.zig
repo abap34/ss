@@ -391,62 +391,10 @@ fn solvePageLayoutPass(
     try initializePageObjectMeasurements(state, &page_graph, measurement_cache, options);
     try graph.checkCancellation(options);
 
-    var horizontal = try graph.AxisWorkspace.init(state.allocator, state, &page_graph, .horizontal);
-    defer horizontal.deinit();
-    var horizontal_propagation: ?graph.PropagationTracker = null;
-    defer if (horizontal_propagation) |*tracker| tracker.deinit();
-    if (options.record_propagation) {
-        horizontal_propagation = try graph.PropagationTracker.init(state.allocator, page_graph.len());
-        if (horizontal_propagation) |*tracker| horizontal.propagation = tracker;
-    }
-
-    try solvePageAxis(state, &horizontal, trace_session, options);
-    try graph.checkCancellation(options);
-
-    var horizontal_alignments = try fallback.buildDefaultAlignmentConstraints(state, &horizontal);
-    defer horizontal_alignments.deinit(state.allocator);
-    horizontal.soft_constraints = horizontal_alignments.items;
-    var horizontal_fallback = try fallback.buildHorizontalConstraints(state, &horizontal, options);
+    var horizontal_fallback = try solveHorizontalLayout(state, &page_graph, measurement_cache, trace_session, options);
     defer horizontal_fallback.deinit(state.allocator);
-    trace_session.recordDefaultConstraints(state.allocator, &horizontal, horizontal_fallback.items);
-    horizontal.soft_constraints = horizontal_fallback.items;
-    try solvePageAxis(state, &horizontal, trace_session, options);
-    try settleHorizontalAxisWithTrace(state, &horizontal, trace_session, options);
-    try applySolvedHorizontalFrames(state, &horizontal, measurement_cache, options);
-    try graph.checkCancellation(options);
-    try groups.propagateTargetedWidthsCached(state, &horizontal, measurement_cache);
-    try graph.checkCancellation(options);
-
-    var vertical = try graph.AxisWorkspace.init(state.allocator, state, &page_graph, .vertical);
-    defer vertical.deinit();
-    var vertical_propagation: ?graph.PropagationTracker = null;
-    defer if (vertical_propagation) |*tracker| tracker.deinit();
-    if (options.record_propagation) {
-        vertical_propagation = try graph.PropagationTracker.init(state.allocator, page_graph.len());
-        if (vertical_propagation) |*tracker| vertical.propagation = tracker;
-    }
-
-    try solvePageAxis(state, &vertical, trace_session, options);
-    try graph.checkCancellation(options);
-    var default_alignments = try fallback.buildDefaultAlignmentConstraints(state, &vertical);
-    defer default_alignments.deinit(state.allocator);
-    vertical.soft_constraints = default_alignments.items;
-    var vertical_fallback = try fallback.buildVerticalConstraints(state, &vertical, options);
+    var vertical_fallback = try solveVerticalLayout(state, &page_graph, trace_session, options);
     defer vertical_fallback.deinit(state.allocator);
-    trace_session.recordDefaultConstraints(state.allocator, &vertical, vertical_fallback.items);
-    vertical.soft_constraints = vertical_fallback.items;
-    try solvePageAxis(state, &vertical, trace_session, options);
-
-    for (page_graph.child_ids, vertical.states) |child_id, v_state| {
-        try graph.checkCancellation(options);
-        const node = state.source.getNode(child_id) orelse return error.UnknownNode;
-        state.frame(node.id).*.height = v_state.size orelse state.frame(node.id).*.height;
-        state.frame(node.id).*.y_set = false;
-        if (v_state.start) |y| {
-            state.frame(node.id).*.y = y;
-            state.frame(node.id).*.y_set = true;
-        }
-    }
 
     if (!measure_only) {
         try validatePageConstraints(state, page_id, &page_graph, options);
@@ -465,6 +413,85 @@ fn solvePageLayoutPass(
         constraint_failure_start,
         options,
     );
+}
+
+fn solveHorizontalLayout(
+    state: *Workspace,
+    page_graph: *const graph.PageLayoutGraph,
+    measurement_cache: *metrics.MeasurementCache,
+    trace_session: *layout_trace.Session,
+    options: SolveOptions,
+) !std.ArrayList(Constraint) {
+    var horizontal = try graph.AxisWorkspace.init(state.allocator, state, page_graph, .horizontal);
+    defer horizontal.deinit();
+    var horizontal_propagation: ?graph.PropagationTracker = null;
+    defer if (horizontal_propagation) |*tracker| tracker.deinit();
+    if (options.record_propagation) {
+        horizontal_propagation = try graph.PropagationTracker.init(state.allocator, page_graph.len());
+        if (horizontal_propagation) |*tracker| horizontal.propagation = tracker;
+    }
+
+    try solvePageAxis(state, &horizontal, trace_session, options);
+    try graph.checkCancellation(options);
+
+    var horizontal_alignments = try fallback.buildDefaultAlignmentConstraints(state, &horizontal);
+    defer horizontal_alignments.deinit(state.allocator);
+    horizontal.soft_constraints = horizontal_alignments.items;
+    var horizontal_fallback = try fallback.buildHorizontalConstraints(state, &horizontal, options);
+    errdefer horizontal_fallback.deinit(state.allocator);
+    trace_session.recordDefaultConstraints(state.allocator, &horizontal, horizontal_fallback.items);
+    horizontal.soft_constraints = horizontal_fallback.items;
+    try solvePageAxis(state, &horizontal, trace_session, options);
+    try settleHorizontalAxisWithTrace(state, &horizontal, trace_session, options);
+    try applySolvedHorizontalFrames(state, &horizontal, measurement_cache, options);
+    try graph.checkCancellation(options);
+    try groups.propagateTargetedWidthsCached(state, &horizontal, measurement_cache);
+    try graph.checkCancellation(options);
+
+    return horizontal_fallback;
+}
+
+fn solveVerticalLayout(
+    state: *Workspace,
+    page_graph: *const graph.PageLayoutGraph,
+    trace_session: *layout_trace.Session,
+    options: SolveOptions,
+) !std.ArrayList(Constraint) {
+    var vertical = try graph.AxisWorkspace.init(state.allocator, state, page_graph, .vertical);
+    defer vertical.deinit();
+    var vertical_propagation: ?graph.PropagationTracker = null;
+    defer if (vertical_propagation) |*tracker| tracker.deinit();
+    if (options.record_propagation) {
+        vertical_propagation = try graph.PropagationTracker.init(state.allocator, page_graph.len());
+        if (vertical_propagation) |*tracker| vertical.propagation = tracker;
+    }
+
+    try solvePageAxis(state, &vertical, trace_session, options);
+    try graph.checkCancellation(options);
+    var default_alignments = try fallback.buildDefaultAlignmentConstraints(state, &vertical);
+    defer default_alignments.deinit(state.allocator);
+    vertical.soft_constraints = default_alignments.items;
+    var vertical_fallback = try fallback.buildVerticalConstraints(state, &vertical, options);
+    errdefer vertical_fallback.deinit(state.allocator);
+    trace_session.recordDefaultConstraints(state.allocator, &vertical, vertical_fallback.items);
+    vertical.soft_constraints = vertical_fallback.items;
+    try solvePageAxis(state, &vertical, trace_session, options);
+
+    try applySolvedVerticalFrames(state, &vertical, options);
+    return vertical_fallback;
+}
+
+fn applySolvedVerticalFrames(state: *Workspace, workspace: *const graph.AxisWorkspace, options: SolveOptions) !void {
+    for (workspace.graph.child_ids, workspace.states) |child_id, v_state| {
+        try graph.checkCancellation(options);
+        const node = state.source.getNode(child_id) orelse return error.UnknownNode;
+        state.frame(node.id).*.height = v_state.size orelse state.frame(node.id).*.height;
+        state.frame(node.id).*.y_set = false;
+        if (v_state.start) |y| {
+            state.frame(node.id).*.y = y;
+            state.frame(node.id).*.y_set = true;
+        }
+    }
 }
 
 fn collectPage(

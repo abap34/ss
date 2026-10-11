@@ -107,33 +107,37 @@ pub fn prepare(allocator: std.mem.Allocator, state: *DocumentState) !PreparedPag
 
     try pages.ensureTotalCapacity(allocator, layout.pages.len);
     for (layout.pages, 0..) |page_layout, page_index| {
-        const page_id = page_layout.page_id;
-        const page = state.getNode(page_id) orelse return error.UnknownNode;
-        var objects = std.ArrayList(PreparedObject).empty;
-        errdefer {
-            for (objects.items) |*object| object.deinit(allocator);
-            objects.deinit(allocator);
-        }
-        for (page_layout.node_ids) |node_id| {
-            const node = state.getNode(node_id) orelse continue;
-            if (node.kind != .object) continue;
-            var unit = try prepareObject(allocator, state, node);
-            var unit_transferred = false;
-            errdefer if (!unit_transferred) unit.deinit(allocator);
-            try recordFileInputs(state, &unit);
-            try objects.append(allocator, unit);
-            unit_transferred = true;
-        }
-
-        pages.appendAssumeCapacity(.{
-            .page_id = page_id,
-            .index = page_index,
-            .background = render_policy.resolvePageBackground(state, page),
-            .objects = try objects.toOwnedSlice(allocator),
-        });
+        pages.appendAssumeCapacity(try preparePage(allocator, state, page_layout, page_index));
     }
 
     return .{ .pages = try pages.toOwnedSlice(allocator), .layout = layout };
+}
+
+fn preparePage(allocator: std.mem.Allocator, state: *DocumentState, page_layout: partition.Page, page_index: usize) !PreparedPage {
+    const page_id = page_layout.page_id;
+    const page = state.getNode(page_id) orelse return error.UnknownNode;
+    var objects = std.ArrayList(PreparedObject).empty;
+    errdefer {
+        for (objects.items) |*object| object.deinit(allocator);
+        objects.deinit(allocator);
+    }
+    for (page_layout.node_ids) |node_id| {
+        const node = state.getNode(node_id) orelse continue;
+        if (node.kind != .object) continue;
+        var unit = try prepareObject(allocator, state, node);
+        var unit_transferred = false;
+        errdefer if (!unit_transferred) unit.deinit(allocator);
+        try recordFileInputs(state, &unit);
+        try objects.append(allocator, unit);
+        unit_transferred = true;
+    }
+
+    return .{
+        .page_id = page_id,
+        .index = page_index,
+        .background = render_policy.resolvePageBackground(state, page),
+        .objects = try objects.toOwnedSlice(allocator),
+    };
 }
 
 pub fn prepareObject(allocator: std.mem.Allocator, state: *DocumentState, node: *const model.Node) !PreparedObject {
