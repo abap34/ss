@@ -1,3 +1,4 @@
+const LayoutFixture = @import("layout_testing").Fixture;
 const std = @import("std");
 const allocation_testing = @import("allocation_testing");
 const ast = @import("ast");
@@ -28,7 +29,7 @@ fn initDocumentState(allocator: std.mem.Allocator) !core.DocumentState {
     );
 }
 
-fn addFixture(state: *core.DocumentState) !Fixture {
+fn addFixture(state: *core.DocumentState, geometry: *LayoutFixture) !Fixture {
     const first_page = try state.addPage("first");
     const second_page = try state.addPage("second");
     const first_object = try state.makeObject(
@@ -56,15 +57,15 @@ fn addFixture(state: *core.DocumentState) !Fixture {
         .{ .span = .{ .start = 0, .end = 0 } },
     );
 
-    state.getNode(first_page).?.frame = .{ .width = 640, .height = 360 };
-    state.getNode(second_page).?.frame = .{ .width = 1280, .height = 720 };
-    state.getNode(first_object).?.frame = .{
+    (try geometry.frame(first_page)).* = .{ .width = 640, .height = 360 };
+    (try geometry.frame(second_page)).* = .{ .width = 1280, .height = 720 };
+    (try geometry.frame(first_object)).* = .{
         .x = 10,
         .y = 20,
         .width = 30,
         .height = 40,
     };
-    state.getNode(second_object).?.frame = .{
+    (try geometry.frame(second_object)).* = .{
         .x = 50,
         .y = 60,
         .width = 70,
@@ -79,8 +80,8 @@ fn addFixture(state: *core.DocumentState) !Fixture {
     };
 }
 
-fn initAndDeinitReport(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
-    var report = try core.layout.conflicts.Report.init(allocator, state);
+fn initAndDeinitReport(allocator: std.mem.Allocator, state: *core.DocumentState, layouts: *const core.layout.Document) !void {
+    var report = try core.layout.conflicts.Report.init(allocator, state, layouts);
     defer report.deinit();
 
     try testing.expectEqual(state.graph.page_order.items.len, report.page_index_by_id.count());
@@ -91,9 +92,11 @@ fn initAndDeinitReport(allocator: std.mem.Allocator, state: *core.DocumentState)
 test "layout conflict report indexes pages and objects by node id" {
     var state = try initDocumentState(testing.allocator);
     defer state.deinit();
-    const fixture = try addFixture(&state);
+    var geometry = LayoutFixture.init(&state);
+    defer geometry.deinit();
+    const fixture = try addFixture(&state, &geometry);
 
-    var report = try core.layout.conflicts.Report.init(testing.allocator, &state);
+    var report = try core.layout.conflicts.Report.init(testing.allocator, &state, try geometry.document());
     defer report.deinit();
 
     try testing.expectEqual(@as(?usize, 0), report.page_index_by_id.get(fixture.first_page));
@@ -121,19 +124,23 @@ test "layout conflict report indexes pages and objects by node id" {
 test "layout conflict report releases every partial allocation" {
     var state = try initDocumentState(testing.allocator);
     defer state.deinit();
-    _ = try addFixture(&state);
+    var geometry = LayoutFixture.init(&state);
+    defer geometry.deinit();
+    _ = try addFixture(&state, &geometry);
 
     try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         initAndDeinitReport,
-        .{&state},
+        .{ &state, try geometry.document() },
     );
 }
 
 test "layout conflict report shows resolved alignment only as fallback" {
     var state = try initDocumentState(testing.allocator);
     defer state.deinit();
-    const fixture = try addFixture(&state);
+    var geometry = LayoutFixture.init(&state);
+    defer geometry.deinit();
+    const fixture = try addFixture(&state, &geometry);
     const candidate = core.Constraint{
         .target_node = fixture.first_object,
         .target_anchor = .top,
@@ -145,9 +152,10 @@ test "layout conflict report shows resolved alignment only as fallback" {
     var resolved = candidate;
     resolved.target_anchor = .center_y;
     resolved.source = .{ .page = .center_y };
-    try state.constraints.fallback.append(testing.allocator, resolved);
+    _ = try geometry.document();
+    geometry.result.pages[0].fallback_constraints = try testing.allocator.dupe(core.Constraint, &.{resolved});
 
-    var report = try core.layout.conflicts.Report.init(testing.allocator, &state);
+    var report = try core.layout.conflicts.Report.init(testing.allocator, &state, try geometry.document());
     defer report.deinit();
     try testing.expectEqual(@as(usize, 2), report.relations.len);
     try testing.expectEqual(core.layout.conflicts.RelationKind.explicit, report.relations[0].kind);

@@ -1,3 +1,4 @@
+const LayoutFixture = @import("layout_testing").Fixture;
 const std = @import("std");
 const allocation_testing = @import("allocation_testing");
 const ast = @import("ast");
@@ -25,19 +26,14 @@ fn initEmptyDocumentStateWithAllocator(allocator: std.mem.Allocator) !core.Docum
     return try core.DocumentState.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
 }
 
-fn finalizeDocumentState(state: *core.DocumentState) !void {
-    var document = try solver.finalizeDocument(state, null, .{});
-    defer document.deinit(state.allocator);
+fn finalizeDocumentState(layout: *LayoutFixture) !void {
+    try layout.solve(null, .{}, true);
 }
-
-fn solveDocumentState(state: *core.DocumentState) !void {
-    try solveDocumentStateWithOptions(state, null, .{});
+fn solveDocumentState(layout: *LayoutFixture) !void {
+    try layout.solve(null, .{}, false);
 }
-
-fn solveDocumentStateWithOptions(state: *core.DocumentState, trace_path: ?[]const u8, options: graph.SolveOptions) !void {
-    var document = try solver.solveDocument(state, trace_path, options);
-    defer document.deinit(state.allocator);
-    try solver.applyDocument(state, &document);
+fn solveDocumentStateWithOptions(layout: *LayoutFixture, trace_path: ?[]const u8, options: graph.SolveOptions) !void {
+    try layout.solve(trace_path, options, false);
 }
 
 fn expectFloat(expected: f32, actual: f32) !void {
@@ -456,6 +452,8 @@ test "layout graph spec: hard anchors move default-sized states" {
 test "layout graph spec: page graph indexes direct page children and filters axis constraints" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
@@ -472,9 +470,9 @@ test "layout graph spec: page graph indexes direct page children and filters axi
     try testing.expectEqual(@as(usize, 3), page_graph.len());
     try testing.expect(page_graph.indexOf(a) != null);
     try testing.expect(page_graph.indexOf(b) != null);
-    try testing.expect(page_graph.hasTargetConstraint(&state, a, .horizontal, &.{}));
-    try testing.expect(page_graph.hasTargetConstraint(&state, a, .vertical, &.{}));
-    try testing.expect(!page_graph.hasTargetConstraint(&state, b, .vertical, &.{}));
+    try testing.expect(page_graph.hasTargetConstraint(try state_layout.work(), a, .horizontal, &.{}));
+    try testing.expect(page_graph.hasTargetConstraint(try state_layout.work(), a, .vertical, &.{}));
+    try testing.expect(!page_graph.hasTargetConstraint(try state_layout.work(), b, .vertical, &.{}));
 
     try testing.expectEqual(@as(usize, 2), page_graph.constraintsOnAxis(.horizontal).len);
     try testing.expectEqualSlices(usize, &.{ 0, 1 }, page_graph.targetConstraintIndexes(a));
@@ -486,6 +484,8 @@ test "layout graph spec: page graph indexes direct page children and filters axi
 test "layout graph spec: implicit constraint objects stay page local" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const first_page = try state.addPage("First");
     const second_page = try state.addPage("Second");
@@ -510,6 +510,8 @@ test "layout graph spec: implicit constraint objects stay page local" {
 test "layout graph spec: constraint classification names layout dependency roles" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
@@ -519,56 +521,56 @@ test "layout graph spec: constraint classification names layout dependency roles
     var page_graph = try initPageGraph(&state, page);
     defer page_graph.deinit();
 
-    try testing.expectEqual(graph.ConstraintClass.page_source, page_graph.constraintClass(&state, .{
+    try testing.expectEqual(graph.ConstraintClass.page_source, page_graph.constraintClass(try state_layout.work(), .{
         .target_node = a,
         .target_anchor = .left,
         .source = .{ .page = .left },
         .offset = 10,
     }, .horizontal));
 
-    try testing.expectEqual(graph.ConstraintClass.normal, page_graph.constraintClass(&state, .{
+    try testing.expectEqual(graph.ConstraintClass.normal, page_graph.constraintClass(try state_layout.work(), .{
         .target_node = b,
         .target_anchor = .left,
         .source = .{ .node = .{ .node_id = a, .anchor = .right } },
         .offset = 20,
     }, .horizontal));
 
-    try testing.expectEqual(graph.ConstraintClass.self_size, page_graph.constraintClass(&state, .{
+    try testing.expectEqual(graph.ConstraintClass.self_size, page_graph.constraintClass(try state_layout.work(), .{
         .target_node = a,
         .target_anchor = .right,
         .source = .{ .node = .{ .node_id = a, .anchor = .left } },
         .offset = 120,
     }, .horizontal));
 
-    try testing.expectEqual(graph.ConstraintClass.self_anchor, page_graph.constraintClass(&state, .{
+    try testing.expectEqual(graph.ConstraintClass.self_anchor, page_graph.constraintClass(try state_layout.work(), .{
         .target_node = a,
         .target_anchor = .right,
         .source = .{ .node = .{ .node_id = a, .anchor = .right } },
         .offset = 120,
     }, .horizontal));
 
-    try testing.expectEqual(graph.ConstraintClass.group_target, page_graph.constraintClass(&state, .{
+    try testing.expectEqual(graph.ConstraintClass.group_target, page_graph.constraintClass(try state_layout.work(), .{
         .target_node = group_id,
         .target_anchor = .left,
         .source = .{ .page = .left },
         .offset = 0,
     }, .horizontal));
 
-    try testing.expectEqual(graph.ConstraintClass.group_source, page_graph.constraintClass(&state, .{
+    try testing.expectEqual(graph.ConstraintClass.group_source, page_graph.constraintClass(try state_layout.work(), .{
         .target_node = a,
         .target_anchor = .left,
         .source = .{ .node = .{ .node_id = group_id, .anchor = .right } },
         .offset = 0,
     }, .horizontal));
 
-    try testing.expectEqual(graph.ConstraintClass.wrong_axis, page_graph.constraintClass(&state, .{
+    try testing.expectEqual(graph.ConstraintClass.wrong_axis, page_graph.constraintClass(try state_layout.work(), .{
         .target_node = a,
         .target_anchor = .top,
         .source = .{ .page = .top },
         .offset = 0,
     }, .horizontal));
 
-    try testing.expectEqual(graph.ConstraintClass.external_source, page_graph.constraintClass(&state, .{
+    try testing.expectEqual(graph.ConstraintClass.external_source, page_graph.constraintClass(try state_layout.work(), .{
         .target_node = 9999,
         .target_anchor = .left,
         .source = .{ .page = .left },
@@ -579,18 +581,20 @@ test "layout graph spec: constraint classification names layout dependency roles
 test "layout graph spec: axis workspaces seed known frames only without target constraints" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const unconstrained = try state.makeObject(page, "free", null, .text, .text, "Free");
     const constrained = try state.makeObject(page, "fixed", null, .text, .text, "Fixed");
 
-    state.getNode(unconstrained).?.frame = .{ .x = 10, .y = 20, .width = 30, .height = 40, .x_set = true, .y_set = true };
-    state.getNode(constrained).?.frame = .{ .x = 100, .y = 200, .width = 50, .height = 60, .x_set = true, .y_set = true };
+    (try state_layout.frame(unconstrained)).* = .{ .x = 10, .y = 20, .width = 30, .height = 40, .x_set = true, .y_set = true };
+    (try state_layout.frame(constrained)).* = .{ .x = 100, .y = 200, .width = 50, .height = 60, .x_set = true, .y_set = true };
     try state.constraints.addAnchor(state.allocator, constrained, .left, .{ .page = .left }, 15, .{ .label = "fixed-left" });
 
     var page_graph = try initPageGraph(&state, page);
     defer page_graph.deinit();
-    var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .horizontal);
+    var workspace = try graph.AxisWorkspace.init(testing.allocator, try state_layout.work(), &page_graph, .horizontal);
     defer workspace.deinit();
 
     const free_state = workspace.stateOfConst(unconstrained).?;
@@ -611,6 +615,8 @@ test "axis propagation completes long dependency chains in either constraint ord
     for ([_]bool{ false, true }) |reversed| {
         var state = try initEmptyDocumentState();
         defer state.deinit();
+        var state_layout = LayoutFixture.init(&state);
+        defer state_layout.deinit();
         const page = try state.addPage("Long chain");
         var nodes: [count]model.NodeId = undefined;
         for (&nodes) |*node| node.* = try state.makeObject(page, "cell", null, .text, .text, "x");
@@ -621,19 +627,19 @@ test "axis propagation completes long dependency chains in either constraint ord
         try state.constraints.addAnchor(state.allocator, nodes[0], .left, .{ .page = .left }, 0, .{ .label = "start" });
         var page_graph = try initPageGraph(&state, page);
         defer page_graph.deinit();
-        var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .horizontal);
+        var workspace = try graph.AxisWorkspace.init(testing.allocator, try state_layout.work(), &page_graph, .horizontal);
         defer workspace.deinit();
         for (workspace.states) |*axis_state| axis_state.size = 10;
-        _ = try solver.runPageAxisPass(&state, &workspace, .{});
+        _ = try solver.runPageAxisPass(try state_layout.work(), &workspace, .{});
         for (nodes, 0..) |node, index| {
             const placed = workspace.stateOfConst(node).?;
             try testing.expect(placed.start != null and placed.end != null);
             try expectFloat(@as(f32, @floatFromInt(index * 11)), placed.start.?);
             try expectFloat(@as(f32, @floatFromInt(index * 11 + 10)), placed.end.?);
         }
-        try testing.expectEqual(@as(usize, 0), state.diagnostics.constraint_failures.items.len);
+        try testing.expectEqual(@as(usize, 0), (try state_layout.work()).diagnostics.constraint_failures.items.len);
         var cancellation = LayoutCancellationCounter{ .cancel_after = 20 };
-        try testing.expectError(error.Canceled, solver.runPageAxisPass(&state, &workspace, .{
+        try testing.expectError(error.Canceled, solver.runPageAxisPass(try state_layout.work(), &workspace, .{
             .cancellation = .{ .context = &cancellation, .is_canceled = cancelLayoutAfterCheck },
         }));
     }
@@ -642,6 +648,8 @@ test "axis propagation completes long dependency chains in either constraint ord
 test "axis propagation resolves deep groups in either node order" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page = try state.addPage("Deep groups");
     const leaf = try state.makeObject(page, "leaf", null, .text, .text, "x");
     var outer = leaf;
@@ -650,21 +658,21 @@ test "axis propagation resolves deep groups in either node order" {
     var inputs = try core.layout.partition.Document.init(testing.allocator, &state);
     defer inputs.deinit(testing.allocator);
     for (0..2) |_| {
-        var page_graph = try graph.PageLayoutGraph.init(testing.allocator, &state, inputs.pages[0]);
+        var page_graph = try graph.PageLayoutGraph.init(testing.allocator, try state_layout.work(), inputs.pages[0]);
         defer page_graph.deinit();
-        var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .horizontal);
+        var workspace = try graph.AxisWorkspace.init(testing.allocator, try state_layout.work(), &page_graph, .horizontal);
         defer workspace.deinit();
         workspace.stateOf(leaf).?.* = .{ .start = 10, .size = 20 };
-        _ = try solver.runPageAxisPass(&state, &workspace, .{});
+        _ = try solver.runPageAxisPass(try state_layout.work(), &workspace, .{});
         for (workspace.states) |placed| {
             try testing.expect(placed.start != null and placed.end != null);
             try expectFloat(100, placed.start.?);
             try expectFloat(120, placed.end.?);
         }
-        try testing.expect(!(try solver.runPageAxisPass(&state, &workspace, .{})));
+        try testing.expect(!(try solver.runPageAxisPass(try state_layout.work(), &workspace, .{})));
         std.mem.reverse(model.NodeId, inputs.pages[0].node_ids);
     }
-    try testing.expectEqual(@as(usize, 0), state.diagnostics.constraint_failures.items.len);
+    try testing.expectEqual(@as(usize, 0), (try state_layout.work()).diagnostics.constraint_failures.items.len);
 }
 
 test "layout exhaustion survives isolated jobs and cannot be applied" {
@@ -672,6 +680,8 @@ test "layout exhaustion survives isolated jobs and cannot be applied" {
         for ([_]bool{ false, true }) |record_diagnostics| {
             var state = try initEmptyDocumentState();
             defer state.deinit();
+            var state_layout = LayoutFixture.init(&state);
+            defer state_layout.deinit();
             for (0..2) |_| {
                 const page = try state.addPage("Unconverged group");
                 const child = try state.makeObject(page, "child", null, .text, .text, "x");
@@ -685,7 +695,7 @@ test "layout exhaustion survives isolated jobs and cannot be applied" {
             defer result.deinit(testing.allocator);
             for (result.pages) |*page| {
                 try testing.expect(!page.converged);
-                try testing.expectError(error.LayoutDidNotConverge, solver.applyPage(&state, page));
+                try testing.expectError(error.LayoutDidNotConverge, page.validate());
                 try testing.expectEqual(@as(usize, 0), page.constraint_failures.len);
                 try testing.expectEqual(@as(usize, if (record_diagnostics) 1 else 0), page.diagnostics.len);
                 if (record_diagnostics) {
@@ -701,9 +711,11 @@ test "layout exhaustion survives isolated jobs and cannot be applied" {
                     try testing.expect(std.mem.indexOf(u8, message, "LayoutDidNotConverge: horizontal axis stopped during group_constraints") != null);
                 }
             }
-            try testing.expectError(error.LayoutDidNotConverge, solver.applyDocument(&state, &result));
-            try testing.expectError(error.LayoutDidNotConverge, solver.finalizeDocument(&state, null, options));
-            try testing.expectEqual(@as(usize, if (record_diagnostics) 2 else 0), state.diagnostics.entries.items.len);
+            try testing.expectError(error.LayoutDidNotConverge, result.validate());
+            var detailed = try solver.finalizeDocument(&state, null, options);
+            defer detailed.deinit(testing.allocator);
+            try testing.expectError(error.LayoutDidNotConverge, detailed.validate());
+            try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
         }
     }
 }
@@ -711,26 +723,32 @@ test "layout exhaustion survives isolated jobs and cannot be applied" {
 test "layout solver: final validation rejects unsatisfied hard constraints" {
     var self_conflict = try initEmptyDocumentState();
     defer self_conflict.deinit();
+    var self_conflict_layout = LayoutFixture.init(&self_conflict);
+    defer self_conflict_layout.deinit();
 
     const self_page = try self_conflict.addPage("Page");
     const object = try self_conflict.makeObject(self_page, "body", null, .text, .text, "A");
     try self_conflict.constraints.addAnchor(self_conflict.allocator, object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 100, .{ .label = "self-top" });
-    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&self_conflict));
+    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&self_conflict_layout));
 
     var cycle = try initEmptyDocumentState();
     defer cycle.deinit();
+    var cycle_layout = LayoutFixture.init(&cycle);
+    defer cycle_layout.deinit();
 
     const cycle_page = try cycle.addPage("Page");
     const a = try cycle.makeObject(cycle_page, "a", null, .text, .text, "A");
     const b = try cycle.makeObject(cycle_page, "b", null, .text, .text, "B");
     try cycle.constraints.addAnchor(cycle.allocator, a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 10, .{ .label = "a-top" });
     try cycle.constraints.addAnchor(cycle.allocator, b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 10, .{ .label = "b-top" });
-    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&cycle));
+    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&cycle_layout));
 }
 
 test "layout solver: consistent constraint cycles are fixed by fallback placement" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
@@ -738,35 +756,36 @@ test "layout solver: consistent constraint cycles are fixed by fallback placemen
     try state.constraints.addAnchor(state.allocator, a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, .{ .label = "a-top" });
     try state.constraints.addAnchor(state.allocator, b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 0, .{ .label = "b-top" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const a_node = state.getNode(a).?;
-    const b_node = state.getNode(b).?;
-    try testing.expect(a_node.frame.y_set);
-    try testing.expect(b_node.frame.y_set);
-    try expectFloat(graph.anchorValue(a_node.frame, .top), graph.anchorValue(b_node.frame, .top));
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try testing.expect((try state_layout.frame(a)).*.y_set);
+    try testing.expect((try state_layout.frame(b)).*.y_set);
+    try expectFloat(graph.anchorValue((try state_layout.frame(a)).*, .top), graph.anchorValue((try state_layout.frame(b)).*, .top));
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: tautological self-anchor constraints do not block fallback placement" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "A");
     try state.constraints.addAnchor(state.allocator, object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 0, .{ .label = "self-top" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const node = state.getNode(object).?;
-    try testing.expect(node.frame.x_set);
-    try testing.expect(node.frame.y_set);
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try testing.expect((try state_layout.frame(object)).*.x_set);
+    try testing.expect((try state_layout.frame(object)).*.y_set);
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: vertical fallback tries alternate roots in incomplete components" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const panel = try state.makeObject(page, "panel", null, .text, .text, "");
@@ -778,58 +797,59 @@ test "layout solver: vertical fallback tries alternate roots in incomplete compo
     try state.constraints.addAnchor(state.allocator, panel, .top, .{ .node = .{ .node_id = body, .anchor = .top } }, 16, .{ .label = "panel-top" });
     try state.constraints.addAnchor(state.allocator, panel, .bottom, .{ .node = .{ .node_id = body, .anchor = .bottom } }, -16, .{ .label = "panel-bottom" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const panel_node = state.getNode(panel).?;
-    const body_node = state.getNode(body).?;
-    try testing.expect(panel_node.frame.y_set);
-    try testing.expect(body_node.frame.y_set);
-    try expectFloat(graph.anchorValue(body_node.frame, .top) + 16, graph.anchorValue(panel_node.frame, .top));
-    try expectFloat(graph.anchorValue(body_node.frame, .bottom) - 16, graph.anchorValue(panel_node.frame, .bottom));
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try testing.expect((try state_layout.frame(panel)).*.y_set);
+    try testing.expect((try state_layout.frame(body)).*.y_set);
+    try expectFloat(graph.anchorValue((try state_layout.frame(body)).*, .top) + 16, graph.anchorValue((try state_layout.frame(panel)).*, .top));
+    try expectFloat(graph.anchorValue((try state_layout.frame(body)).*, .bottom) - 16, graph.anchorValue((try state_layout.frame(panel)).*, .bottom));
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: constraint-referenced objects participate in fallback placement" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const placed = try state.makeObject(page, "placed", null, .text, .text, "placed");
     const referenced = try state.makeObject(page, "referenced", null, .text, .text, "referenced");
     try state.constraints.addAnchor(state.allocator, placed, .top, .{ .node = .{ .node_id = referenced, .anchor = .top } }, 10, .{ .label = "placed-top" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const placed_node = state.getNode(placed).?;
-    const referenced_node = state.getNode(referenced).?;
-    try testing.expect(placed_node.frame.y_set);
-    try testing.expect(referenced_node.frame.y_set);
-    try expectFloat(graph.anchorValue(referenced_node.frame, .top) + 10, graph.anchorValue(placed_node.frame, .top));
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try testing.expect((try state_layout.frame(placed)).*.y_set);
+    try testing.expect((try state_layout.frame(referenced)).*.y_set);
+    try expectFloat(graph.anchorValue((try state_layout.frame(referenced)).*, .top) + 10, graph.anchorValue((try state_layout.frame(placed)).*, .top));
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: size-only constraints still receive fallback placement" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "content");
     try state.constraints.addAnchor(state.allocator, object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, .{ .label = "object-width" });
     try state.constraints.addAnchor(state.allocator, object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 96, .{ .label = "object-height" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const node = state.getNode(object).?;
-    try testing.expect(node.frame.x_set);
-    try testing.expect(node.frame.y_set);
-    try expectFloat(240, node.frame.width);
-    try expectFloat(96, node.frame.height);
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try testing.expect((try state_layout.frame(object)).*.x_set);
+    try testing.expect((try state_layout.frame(object)).*.y_set);
+    try expectFloat(240, (try state_layout.frame(object)).*.width);
+    try expectFloat(96, (try state_layout.frame(object)).*.height);
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: page-dependent group children receive local vertical fallback" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
@@ -840,23 +860,22 @@ test "layout solver: page-dependent group children receive local vertical fallba
     try setLayoutSpacingAfter(&state, ruler, "12");
     try state.constraints.addAnchor(state.allocator, ruler, .top, .{ .page = .top }, -200, .{ .label = "rule-top" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const ruler_node = state.getNode(ruler).?;
-    const title_node = state.getNode(title).?;
-    const body_node = state.getNode(body).?;
-    try testing.expect(ruler_node.frame.y_set);
-    try testing.expect(title_node.frame.y_set);
-    try testing.expect(body_node.frame.y_set);
-    try expectFloat(graph.anchorValue(ruler_node.frame, .bottom) - 12, graph.anchorValue(title_node.frame, .top));
-    try expectFloat(core.layout.Defaults.flow_top, graph.anchorValue(body_node.frame, .top));
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try testing.expect((try state_layout.frame(ruler)).*.y_set);
+    try testing.expect((try state_layout.frame(title)).*.y_set);
+    try testing.expect((try state_layout.frame(body)).*.y_set);
+    try expectFloat(graph.anchorValue((try state_layout.frame(ruler)).*, .bottom) - 12, graph.anchorValue((try state_layout.frame(title)).*, .top));
+    try expectFloat(core.layout.Defaults.flow_top, graph.anchorValue((try state_layout.frame(body)).*, .top));
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: fallback does not conflict with a nested group target" {
     for ([_]bool{ false, true }) |place_outer| {
         var state = try initEmptyDocumentState();
         defer state.deinit();
+        var state_layout = LayoutFixture.init(&state);
+        defer state_layout.deinit();
         const page = try state.addPage("Nested group");
         const a = try state.createObjectWithOrigin("a", null, .text, .text, "A", null);
         const b = try state.createObjectWithOrigin("b", null, .text, .text, "B", null);
@@ -879,31 +898,33 @@ test "layout solver: fallback does not conflict with a nested group target" {
         try state.constraints.addAnchor(state.allocator, inner, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
         try state.constraints.addAnchor(state.allocator, inner, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 0, null);
 
-        try solveDocumentState(&state);
+        try solveDocumentState(&state_layout);
 
-        try testing.expect(!state.diagnostics.hasConstraintFailures());
-        const a_frame = state.getNode(a).?.frame;
-        const b_frame = state.getNode(b).?.frame;
-        const c_frame = state.getNode(c).?.frame;
+        try testing.expect(!(state_layout.result.failureCount() != 0));
+        const a_frame = (try state_layout.frame(a)).*;
+        const b_frame = (try state_layout.frame(b)).*;
+        const c_frame = (try state_layout.frame(c)).*;
         try expectFloat(80, a_frame.x);
         try expectFloat(core.layout.Defaults.height - 80, graph.anchorValue(a_frame, .top));
         try expectFloat(a_frame.x + a_frame.width + 32, b_frame.x);
         try expectFloat(graph.anchorValue(a_frame, .top), graph.anchorValue(b_frame, .top));
         try expectFloat(b_frame.x, c_frame.x);
         try expectFloat(b_frame.y - 32, graph.anchorValue(c_frame, .top));
-        try expectFloat(142, state.getNode(inner).?.frame.height);
+        try expectFloat(142, (try state_layout.frame(inner)).*.height);
     }
 }
 
 test "layout graph: affine cuts wait for and use the source axis extent" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page = try state.addPage("Affine cuts");
     const child = try state.makeObject(page, "body", null, .text, .text, "A");
     const group = try state.makeGroupWithOrigin(page, true, &.{child}, null);
     var page_graph = try initPageGraph(&state, page);
     defer page_graph.deinit();
-    var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .horizontal);
+    var workspace = try graph.AxisWorkspace.init(testing.allocator, try state_layout.work(), &page_graph, .horizontal);
     defer workspace.deinit();
     const cut = model.Constraint{
         .target_node = child,
@@ -914,24 +935,26 @@ test "layout graph: affine cuts wait for and use the source axis extent" {
         .group_split = true,
     };
     workspace.stateOf(group).?.* = .{ .start = 100 };
-    try testing.expect((try graph.constraintAffineSourceValue(&state, &workspace, cut)) == null);
+    try testing.expect((try graph.constraintAffineSourceValue(try state_layout.work(), &workspace, cut)) == null);
     workspace.stateOf(group).?.size = 900;
-    try expectFloat(400, (try graph.constraintAffineSourceValue(&state, &workspace, cut)).?);
+    try expectFloat(400, (try graph.constraintAffineSourceValue(try state_layout.work(), &workspace, cut)).?);
     workspace.stateOf(group).?.size = 1200;
-    try expectFloat(500, (try graph.constraintAffineSourceValue(&state, &workspace, cut)).?);
+    try expectFloat(500, (try graph.constraintAffineSourceValue(try state_layout.work(), &workspace, cut)).?);
 }
 
 test "layout groups: soft positions preserve hard anchors and tight sizes" {
     for ([_]model.Anchor{ .top, .bottom, .center_y }) |hard_anchor| {
         var state = try initEmptyDocumentState();
         defer state.deinit();
+        var state_layout = LayoutFixture.init(&state);
+        defer state_layout.deinit();
         const page = try state.addPage("Group fallback");
         const child = try state.makeObject(page, "body", null, .text, .text, "A");
         const group = try state.makeGroupWithOrigin(page, true, &.{child}, null);
         try state.constraints.addAnchor(state.allocator, group, hard_anchor, .{ .page = .bottom }, 400, null);
         var page_graph = try initPageGraph(&state, page);
         defer page_graph.deinit();
-        var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .vertical);
+        var workspace = try graph.AxisWorkspace.init(testing.allocator, try state_layout.work(), &page_graph, .vertical);
         defer workspace.deinit();
         workspace.stateOf(child).?.* = .{ .start = 0, .end = 80, .center = 40, .size = 80 };
         workspace.soft_constraints = &.{.{
@@ -941,9 +964,9 @@ test "layout groups: soft positions preserve hard anchors and tight sizes" {
             .offset = 300,
         }};
 
-        _ = try core.layout.groups.applyTargetConstraints(&state, &workspace, .{});
+        _ = try core.layout.groups.applyTargetConstraints(try state_layout.work(), &workspace, .{});
 
-        try testing.expect(!state.diagnostics.hasConstraintFailures());
+        try testing.expect(!(state_layout.result.failureCount() != 0));
         const group_state = workspace.stateOfConst(group).?.*;
         try expectFloat(400, graph.axisAnchorValue(group_state, hard_anchor).?);
         try expectFloat(80, group_state.size.?);
@@ -955,6 +978,8 @@ test "layout groups: soft positions preserve hard anchors and tight sizes" {
 test "layout solver: a page-positioned object does not affect page flow" {
     var baseline = try initEmptyDocumentState();
     defer baseline.deinit();
+    var baseline_layout = LayoutFixture.init(&baseline);
+    defer baseline_layout.deinit();
 
     const baseline_page = try baseline.addPage("Page");
     const baseline_title = try baseline.createObjectWithOrigin("title", null, .text, .text, "Title", null);
@@ -969,10 +994,12 @@ test "layout solver: a page-positioned object does not affect page flow" {
     try setLayoutLineHeight(&baseline, baseline_body, "70");
     try baseline.constraints.addAnchor(baseline.allocator, baseline_title, .top, .{ .page = .top }, -56, .{ .label = "title-top" });
     try baseline.constraints.addAnchor(baseline.allocator, baseline_rule, .top, .{ .node = .{ .node_id = baseline_title, .anchor = .bottom } }, -14, .{ .label = "rule-below-title" });
-    try solveDocumentState(&baseline);
+    try solveDocumentState(&baseline_layout);
 
     var decorated = try initEmptyDocumentState();
     defer decorated.deinit();
+    var decorated_layout = LayoutFixture.init(&decorated);
+    defer decorated_layout.deinit();
 
     const decorated_page = try decorated.addPage("Page");
     const page_number = try decorated.createObjectWithOrigin("pageno", null, .text, .text, "1", null);
@@ -993,14 +1020,14 @@ test "layout solver: a page-positioned object does not affect page flow" {
     try setLayoutLineHeight(&decorated, decorated_body, "70");
     try decorated.constraints.addAnchor(decorated.allocator, decorated_title, .top, .{ .page = .top }, -56, .{ .label = "title-top" });
     try decorated.constraints.addAnchor(decorated.allocator, decorated_rule, .top, .{ .node = .{ .node_id = decorated_title, .anchor = .bottom } }, -14, .{ .label = "rule-below-title" });
-    try solveDocumentState(&decorated);
+    try solveDocumentState(&decorated_layout);
 
     try testing.expectEqualSlices(model.NodeId, &.{ page_number, decorated_head, decorated_body }, decorated.placementRootsOf(decorated_page));
-    try expectFrame(baseline.getNode(baseline_title).?.frame, decorated.getNode(decorated_title).?.frame);
-    try expectFrame(baseline.getNode(baseline_rule).?.frame, decorated.getNode(decorated_rule).?.frame);
-    try expectFrame(baseline.getNode(baseline_body).?.frame, decorated.getNode(decorated_body).?.frame);
-    try expectFloat(20, graph.anchorValue(decorated.getNode(page_number).?.frame, .bottom));
-    try testing.expect(!decorated.diagnostics.hasConstraintFailures());
+    try expectFrame((try baseline_layout.frame(baseline_title)).*, (try decorated_layout.frame(decorated_title)).*);
+    try expectFrame((try baseline_layout.frame(baseline_rule)).*, (try decorated_layout.frame(decorated_rule)).*);
+    try expectFrame((try baseline_layout.frame(baseline_body)).*, (try decorated_layout.frame(decorated_body)).*);
+    try expectFloat(20, graph.anchorValue((try decorated_layout.frame(page_number)).*, .bottom));
+    try testing.expect(!(decorated_layout.result.failureCount() != 0));
 }
 
 test "layout solver: page-positioned components leave unrelated vertical flow unchanged" {
@@ -1009,6 +1036,8 @@ test "layout solver: page-positioned components leave unrelated vertical flow un
             for ([_]bool{ false, true }) |place_fixed_first| {
                 var state = try initEmptyDocumentState();
                 defer state.deinit();
+                var state_layout = LayoutFixture.init(&state);
+                defer state_layout.deinit();
                 const page = try state.addPage("Page anchors");
                 try setLayoutPolicy(&state, page, policy);
 
@@ -1035,11 +1064,11 @@ test "layout solver: page-positioned components leave unrelated vertical flow un
                 try state.constraints.addAnchor(state.allocator, first, .left, .{ .page = .left }, 180, null);
                 try state.constraints.addAnchor(state.allocator, second, .right, .{ .page = .right }, -180, null);
 
-                try solveDocumentState(&state);
+                try solveDocumentState(&state_layout);
 
-                try testing.expect(!state.diagnostics.hasConstraintFailures());
-                const first_frame = state.getNode(first).?.frame;
-                const second_frame = state.getNode(second).?.frame;
+                try testing.expect(!(state_layout.result.failureCount() != 0));
+                const first_frame = (try state_layout.frame(first)).*;
+                const second_frame = (try state_layout.frame(second)).*;
                 const expected_top = if (std.mem.eql(u8, policy, "center"))
                     (core.layout.Defaults.height + 80 + 24 + 60) / 2
                 else
@@ -1048,8 +1077,8 @@ test "layout solver: page-positioned components leave unrelated vertical flow un
                 try expectFloat(expected_top - 80 - 24, graph.anchorValue(second_frame, .top));
                 try expectFloat(180, graph.anchorValue(first_frame, .left));
                 try expectFloat(core.layout.Defaults.width - 180, graph.anchorValue(second_frame, .right));
-                try expectFloat(400, graph.anchorValue(state.getNode(heading).?.frame, .top));
-                try expectFloat(344, graph.anchorValue(state.getNode(note).?.frame, .top));
+                try expectFloat(400, graph.anchorValue((try state_layout.frame(heading)).*, .top));
+                try expectFloat(344, graph.anchorValue((try state_layout.frame(note)).*, .top));
             }
         }
     }
@@ -1058,6 +1087,8 @@ test "layout solver: page-positioned components leave unrelated vertical flow un
 test "layout solver: page-dependent group children before fixed anchors receive fallback" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const title = try state.makeObject(page, "title", null, .text, .text, "Title");
@@ -1067,19 +1098,19 @@ test "layout solver: page-dependent group children before fixed anchors receive 
     try setLayoutLineHeight(&state, ruler, "4");
     try state.constraints.addAnchor(state.allocator, ruler, .top, .{ .page = .top }, -200, .{ .label = "rule-top" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const title_node = state.getNode(title).?;
-    const ruler_node = state.getNode(ruler).?;
-    try testing.expect(title_node.frame.y_set);
-    try testing.expect(ruler_node.frame.y_set);
-    try expectFloat(graph.anchorValue(ruler_node.frame, .top) + 12, graph.anchorValue(title_node.frame, .bottom));
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try testing.expect((try state_layout.frame(title)).*.y_set);
+    try testing.expect((try state_layout.frame(ruler)).*.y_set);
+    try expectFloat(graph.anchorValue((try state_layout.frame(ruler)).*, .top) + 12, graph.anchorValue((try state_layout.frame(title)).*, .bottom));
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: page-dependent vertical cycles receive fallback placement" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
@@ -1092,21 +1123,20 @@ test "layout solver: page-dependent vertical cycles receive fallback placement" 
     try state.constraints.addAnchor(state.allocator, first, .top, .{ .node = .{ .node_id = second, .anchor = .top } }, 0, .{ .label = "first-cycle" });
     try state.constraints.addAnchor(state.allocator, second, .top, .{ .node = .{ .node_id = first, .anchor = .top } }, 0, .{ .label = "second-cycle" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const ruler_node = state.getNode(ruler).?;
-    const first_node = state.getNode(first).?;
-    const second_node = state.getNode(second).?;
-    try testing.expect(first_node.frame.y_set);
-    try testing.expect(second_node.frame.y_set);
-    try expectFloat(graph.anchorValue(ruler_node.frame, .bottom) - 12, graph.anchorValue(first_node.frame, .top));
-    try expectFloat(graph.anchorValue(first_node.frame, .top), graph.anchorValue(second_node.frame, .top));
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try testing.expect((try state_layout.frame(first)).*.y_set);
+    try testing.expect((try state_layout.frame(second)).*.y_set);
+    try expectFloat(graph.anchorValue((try state_layout.frame(ruler)).*, .bottom) - 12, graph.anchorValue((try state_layout.frame(first)).*, .top));
+    try expectFloat(graph.anchorValue((try state_layout.frame(first)).*, .top), graph.anchorValue((try state_layout.frame(second)).*, .top));
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: page-dependent horizontal cycles receive fallback placement" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const ruler = try state.makeObject(page, "rule", null, .text, .text, "");
@@ -1118,19 +1148,19 @@ test "layout solver: page-dependent horizontal cycles receive fallback placement
     try state.constraints.addAnchor(state.allocator, first, .left, .{ .node = .{ .node_id = second, .anchor = .left } }, 0, .{ .label = "first-cycle" });
     try state.constraints.addAnchor(state.allocator, second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, .{ .label = "second-cycle" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const first_node = state.getNode(first).?;
-    const second_node = state.getNode(second).?;
-    try testing.expect(first_node.frame.x_set);
-    try testing.expect(second_node.frame.x_set);
-    try expectFloat(first_node.frame.x, second_node.frame.x);
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try testing.expect((try state_layout.frame(first)).*.x_set);
+    try testing.expect((try state_layout.frame(second)).*.x_set);
+    try expectFloat((try state_layout.frame(first)).*.x, (try state_layout.frame(second)).*.x);
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: centered page-dependent group children receive local vertical fallback" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     try setLayoutPolicy(&state, state.graph.document_id, "center");
 
@@ -1144,22 +1174,21 @@ test "layout solver: centered page-dependent group children receive local vertic
     try setLayoutLineHeight(&state, body, "500");
     try state.constraints.addAnchor(state.allocator, ruler, .top, .{ .page = .top }, -200, .{ .label = "rule-top" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const ruler_node = state.getNode(ruler).?;
-    const title_node = state.getNode(title).?;
-    const body_node = state.getNode(body).?;
-    try testing.expect(ruler_node.frame.y_set);
-    try testing.expect(title_node.frame.y_set);
-    try testing.expect(body_node.frame.y_set);
-    try expectFloat(graph.anchorValue(ruler_node.frame, .bottom) - 12, graph.anchorValue(title_node.frame, .top));
-    try expectFloat(core.layout.Defaults.height / 2, graph.anchorValue(body_node.frame, .center_y));
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try testing.expect((try state_layout.frame(ruler)).*.y_set);
+    try testing.expect((try state_layout.frame(title)).*.y_set);
+    try testing.expect((try state_layout.frame(body)).*.y_set);
+    try expectFloat(graph.anchorValue((try state_layout.frame(ruler)).*, .bottom) - 12, graph.anchorValue((try state_layout.frame(title)).*, .top));
+    try expectFloat(core.layout.Defaults.height / 2, graph.anchorValue((try state_layout.frame(body)).*, .center_y));
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: horizontal alignment alone does not imply vertical row alignment" {
     var stacked = try initEmptyDocumentState();
     defer stacked.deinit();
+    var stacked_layout = LayoutFixture.init(&stacked);
+    defer stacked_layout.deinit();
 
     const stacked_page = try stacked.addPage("Page");
     const first = try stacked.makeObject(stacked_page, "first", null, .text, .text, "A");
@@ -1167,15 +1196,16 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
     _ = try stacked.makeGroupWithOrigin(stacked_page, true, &.{ first, second }, .{ .label = "group" });
     try stacked.constraints.addAnchor(stacked.allocator, second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, .{ .label = "same-left" });
 
-    try solveDocumentState(&stacked);
+    try solveDocumentState(&stacked_layout);
 
     const first_node = stacked.getNode(first).?;
-    const second_node = stacked.getNode(second).?;
     const first_spacing = core.layout.styleForNode(&stacked, first_node).spacing_after;
-    try expectFloat(first_node.frame.y - first_spacing, second_node.frame.y + second_node.frame.height);
+    try expectFloat((try stacked_layout.frame(first)).*.y - first_spacing, (try stacked_layout.frame(second)).*.y + (try stacked_layout.frame(second)).*.height);
 
     var row = try initEmptyDocumentState();
     defer row.deinit();
+    var row_layout = LayoutFixture.init(&row);
+    defer row_layout.deinit();
 
     const row_page = try row.addPage("Page");
     const left = try row.makeObject(row_page, "left", null, .text, .text, "A");
@@ -1183,11 +1213,9 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
     try row.constraints.addAnchor(row.allocator, right, .left, .{ .node = .{ .node_id = left, .anchor = .right } }, 30, .{ .label = "right-of-left" });
     try row.constraints.addAnchor(row.allocator, right, .center_y, .{ .node = .{ .node_id = left, .anchor = .center_y } }, 0, .{ .label = "same-center-y" });
 
-    try solveDocumentState(&row);
+    try solveDocumentState(&row_layout);
 
-    const left_node = row.getNode(left).?;
-    const right_node = row.getNode(right).?;
-    try expectFloat(left_node.frame.y + left_node.frame.height / 2, right_node.frame.y + right_node.frame.height / 2);
+    try expectFloat((try row_layout.frame(left)).*.y + (try row_layout.frame(left)).*.height / 2, (try row_layout.frame(right)).*.y + (try row_layout.frame(right)).*.height / 2);
 }
 
 fn addDefaultAlignment(state: *core.DocumentState, target: model.NodeId, source: model.NodeId) !void {
@@ -1213,6 +1241,8 @@ test "layout solver: row defaults follow effective page policy independently of 
         for ([_]bool{ false, true }) |reverse| {
             var state = try initEmptyDocumentState();
             defer state.deinit();
+            var state_layout = LayoutFixture.init(&state);
+            defer state_layout.deinit();
             const page = try state.addPage("Row policy");
             try setLayoutPolicy(&state, state.graph.document_id, case.document);
             if (case.page) |policy| try setLayoutPolicy(&state, page, policy);
@@ -1225,11 +1255,11 @@ test "layout solver: row defaults follow effective page policy independently of 
             try state.constraints.addAnchor(state.allocator, b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
             try addDefaultAlignment(&state, b, a);
 
-            try solveDocumentState(&state);
+            try solveDocumentState(&state_layout);
 
-            try testing.expect(!state.diagnostics.hasConstraintFailures());
-            const a_frame = state.getNode(a).?.frame;
-            const b_frame = state.getNode(b).?.frame;
+            try testing.expect(!(state_layout.result.failureCount() != 0));
+            const a_frame = (try state_layout.frame(a)).*;
+            const b_frame = (try state_layout.frame(b)).*;
             try testing.expect(a_frame.y_set and b_frame.y_set);
             try expectFloat(80, a_frame.height);
             try expectFloat(160, b_frame.height);
@@ -1242,6 +1272,8 @@ test "layout solver: explicit target anchors override row defaults without rever
     for ([_]model.Anchor{ .top, .bottom, .center_y }) |anchor| {
         var state = try initEmptyDocumentState();
         defer state.deinit();
+        var state_layout = LayoutFixture.init(&state);
+        defer state_layout.deinit();
         const page = try state.addPage("Explicit target");
         const a = try state.makeObject(page, "a", null, .text, .text, "A");
         const b = try state.makeObject(page, "b", null, .text, .text, "B");
@@ -1251,11 +1283,11 @@ test "layout solver: explicit target anchors override row defaults without rever
         try addDefaultAlignment(&state, b, a);
         try state.constraints.addAnchor(state.allocator, b, anchor, .{ .page = .bottom }, 300, null);
 
-        try solveDocumentState(&state);
+        try solveDocumentState(&state_layout);
 
-        try testing.expect(!state.diagnostics.hasConstraintFailures());
-        const a_frame = state.getNode(a).?.frame;
-        const b_frame = state.getNode(b).?.frame;
+        try testing.expect(!(state_layout.result.failureCount() != 0));
+        const a_frame = (try state_layout.frame(a)).*;
+        const b_frame = (try state_layout.frame(b)).*;
         try expectFloat(300, graph.anchorValue(b_frame, anchor));
         try expectFloat(core.layout.Defaults.flow_top, graph.anchorValue(a_frame, .top));
     }
@@ -1267,6 +1299,8 @@ test "layout solver: row defaults align nested column bounds with fixed or flowi
             for ([_]bool{ false, true }) |anchor_source| {
                 var state = try initEmptyDocumentState();
                 defer state.deinit();
+                var state_layout = LayoutFixture.init(&state);
+                defer state_layout.deinit();
                 const page = try state.addPage("Nested default alignment");
                 try setLayoutPolicy(&state, state.graph.document_id, policy);
                 const a = try state.createObjectWithOrigin("a", null, .text, .text, "A", null);
@@ -1288,13 +1322,13 @@ test "layout solver: row defaults align nested column bounds with fixed or flowi
                 try state.constraints.addAnchor(state.allocator, inner, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
                 try addDefaultAlignment(&state, inner, a);
 
-                try solveDocumentState(&state);
+                try solveDocumentState(&state_layout);
 
-                try testing.expect(!state.diagnostics.hasConstraintFailures());
-                const a_frame = state.getNode(a).?.frame;
-                const b_frame = state.getNode(b).?.frame;
-                const c_frame = state.getNode(c).?.frame;
-                const inner_frame = state.getNode(inner).?.frame;
+                try testing.expect(!(state_layout.result.failureCount() != 0));
+                const a_frame = (try state_layout.frame(a)).*;
+                const b_frame = (try state_layout.frame(b)).*;
+                const c_frame = (try state_layout.frame(c)).*;
+                const inner_frame = (try state_layout.frame(inner)).*;
                 const anchor: model.Anchor = if (std.mem.eql(u8, policy, "center")) .center_y else .top;
                 try testing.expect(a_frame.y_set and b_frame.y_set and c_frame.y_set);
                 try expectFloat(graph.anchorValue(a_frame, anchor), graph.anchorValue(inner_frame, anchor));
@@ -1311,6 +1345,8 @@ test "layout solver: row defaults align nested column bounds with fixed or flowi
 test "layout solver: row defaults do not translate explicitly positioned group descendants" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page = try state.addPage("Positioned column");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
@@ -1324,17 +1360,19 @@ test "layout solver: row defaults do not translate explicitly positioned group d
     try state.constraints.addAnchor(state.allocator, column, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
     try addDefaultAlignment(&state, column, a);
 
-    try solveDocumentState(&state);
+    try solveDocumentState(&state_layout);
 
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
-    try expectFloat(300, graph.anchorValue(state.getNode(b).?.frame, .top));
-    try expectFloat(158, state.getNode(c).?.frame.y);
-    try expectFloat(core.layout.Defaults.flow_top, graph.anchorValue(state.getNode(a).?.frame, .top));
+    try testing.expect(!(state_layout.result.failureCount() != 0));
+    try expectFloat(300, graph.anchorValue((try state_layout.frame(b)).*, .top));
+    try expectFloat(158, (try state_layout.frame(c)).*.y);
+    try expectFloat(core.layout.Defaults.flow_top, graph.anchorValue((try state_layout.frame(a)).*, .top));
 }
 
 test "layout graph: row defaults choose the first eligible target candidate and reject dependency cycles" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page = try state.addPage("Default selection");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
@@ -1352,10 +1390,10 @@ test "layout graph: row defaults choose the first eligible target candidate and 
     try testing.expectEqual(@as(usize, 1), page_graph.constraints.len);
     try testing.expectEqual(@as(usize, 6), page_graph.default_alignment_constraints.len);
     try testing.expectEqual(@as(usize, 0), page_graph.targetConstraintIndexes(b).len);
-    try testing.expect(!page_graph.hasTargetConstraint(&state, b, .vertical, &.{}));
-    var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .vertical);
+    try testing.expect(!page_graph.hasTargetConstraint(try state_layout.work(), b, .vertical, &.{}));
+    var workspace = try graph.AxisWorkspace.init(testing.allocator, try state_layout.work(), &page_graph, .vertical);
     defer workspace.deinit();
-    var defaults = try core.layout.fallback.buildDefaultAlignmentConstraints(&state, &workspace);
+    var defaults = try core.layout.fallback.buildDefaultAlignmentConstraints(try state_layout.work(), &workspace);
     defer defaults.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 2), defaults.items.len);
     try testing.expectEqual(b, defaults.items[0].target_node);
@@ -1368,6 +1406,8 @@ test "layout solver: positioned ancestors preserve internal defaults but exclude
     for ([_]bool{ false, true }) |source_inside| {
         var state = try initEmptyDocumentState();
         defer state.deinit();
+        var state_layout = LayoutFixture.init(&state);
+        defer state_layout.deinit();
         const page = try state.addPage("Positioned ancestor");
         const a = try state.makeObject(page, "a", null, .text, .text, "A");
         const b = try state.makeObject(page, "b", null, .text, .text, "B");
@@ -1378,17 +1418,19 @@ test "layout solver: positioned ancestors preserve internal defaults but exclude
         try state.constraints.addAnchor(state.allocator, b, .left, .{ .node = .{ .node_id = a, .anchor = .right } }, 32, null);
         try addDefaultAlignment(&state, b, a);
 
-        try solveDocumentState(&state);
+        try solveDocumentState(&state_layout);
 
-        try testing.expect(!state.diagnostics.hasConstraintFailures());
-        try expectFloat(500, graph.anchorValue(state.getNode(b).?.frame, .top));
-        if (source_inside) try expectFloat(500, graph.anchorValue(state.getNode(a).?.frame, .top));
+        try testing.expect(!(state_layout.result.failureCount() != 0));
+        try expectFloat(500, graph.anchorValue((try state_layout.frame(b)).*, .top));
+        if (source_inside) try expectFloat(500, graph.anchorValue((try state_layout.frame(a)).*, .top));
     }
 }
 
 test "layout graph: row defaults reject a cycle through an explicit vertical relation" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page = try state.addPage("Hard dependency cycle");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
@@ -1396,20 +1438,22 @@ test "layout graph: row defaults reject a cycle through an explicit vertical rel
     try addDefaultAlignment(&state, b, a);
     var page_graph = try initPageGraph(&state, page);
     defer page_graph.deinit();
-    var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .vertical);
+    var workspace = try graph.AxisWorkspace.init(testing.allocator, try state_layout.work(), &page_graph, .vertical);
     defer workspace.deinit();
-    var defaults = try core.layout.fallback.buildDefaultAlignmentConstraints(&state, &workspace);
+    var defaults = try core.layout.fallback.buildDefaultAlignmentConstraints(try state_layout.work(), &workspace);
     defer defaults.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), defaults.items.len);
 
-    try solveDocumentState(&state);
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
-    try expectFloat(state.getNode(b).?.frame.y - 32, graph.anchorValue(state.getNode(a).?.frame, .top));
+    try solveDocumentState(&state_layout);
+    try testing.expect(!(state_layout.result.failureCount() != 0));
+    try expectFloat((try state_layout.frame(b)).*.y - 32, graph.anchorValue((try state_layout.frame(a)).*, .top));
 }
 
 test "layout graph: row defaults reject cycles through ancestor group translation" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page = try state.addPage("Group translation cycle");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
@@ -1423,37 +1467,39 @@ test "layout graph: row defaults reject cycles through ancestor group translatio
     try addDefaultAlignment(&state, a, c);
     var page_graph = try initPageGraph(&state, page);
     defer page_graph.deinit();
-    var workspace = try graph.AxisWorkspace.init(testing.allocator, &state, &page_graph, .vertical);
+    var workspace = try graph.AxisWorkspace.init(testing.allocator, try state_layout.work(), &page_graph, .vertical);
     defer workspace.deinit();
-    var defaults = try core.layout.fallback.buildDefaultAlignmentConstraints(&state, &workspace);
+    var defaults = try core.layout.fallback.buildDefaultAlignmentConstraints(try state_layout.work(), &workspace);
     defer defaults.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 1), defaults.items.len);
     try testing.expectEqual(group, defaults.items[0].target_node);
 
-    try solveDocumentState(&state);
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
-    try expectFloat(graph.anchorValue(state.getNode(a).?.frame, .top), graph.anchorValue(state.getNode(group).?.frame, .top));
+    try solveDocumentState(&state_layout);
+    try testing.expect(!(state_layout.result.failureCount() != 0));
+    try expectFloat(graph.anchorValue((try state_layout.frame(a)).*, .top), graph.anchorValue((try state_layout.frame(group)).*, .top));
 }
 
 test "layout solver: horizontal fallback seeds unconstrained peer anchors" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const title = try state.makeObject(page, "title", null, .text, .text, "Title");
     const byline = try state.makeObject(page, "byline", null, .text, .text, "Byline");
     try state.constraints.addAnchor(state.allocator, title, .left, .{ .node = .{ .node_id = byline, .anchor = .left } }, 0, .{ .label = "same-left" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const title_node = state.getNode(title).?;
-    const byline_node = state.getNode(byline).?;
-    try expectFloat(title_node.frame.x, byline_node.frame.x);
+    try expectFloat((try state_layout.frame(title)).*.x, (try state_layout.frame(byline)).*.x);
 }
 
 test "layout solver: same-target peer equalities form one fallback unit" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
@@ -1462,19 +1508,18 @@ test "layout solver: same-target peer equalities form one fallback unit" {
     try state.constraints.addAnchor(state.allocator, a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, .{ .label = "a-is-b" });
     try state.constraints.addAnchor(state.allocator, a, .top, .{ .node = .{ .node_id = c, .anchor = .top } }, 0, .{ .label = "a-is-c" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const a_node = state.getNode(a).?;
-    const b_node = state.getNode(b).?;
-    const c_node = state.getNode(c).?;
-    try expectFloat(graph.anchorValue(a_node.frame, .top), graph.anchorValue(b_node.frame, .top));
-    try expectFloat(graph.anchorValue(a_node.frame, .top), graph.anchorValue(c_node.frame, .top));
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try expectFloat(graph.anchorValue((try state_layout.frame(a)).*, .top), graph.anchorValue((try state_layout.frame(b)).*, .top));
+    try expectFloat(graph.anchorValue((try state_layout.frame(a)).*, .top), graph.anchorValue((try state_layout.frame(c)).*, .top));
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: chained peer equalities form one fallback unit" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
@@ -1483,19 +1528,18 @@ test "layout solver: chained peer equalities form one fallback unit" {
     try state.constraints.addAnchor(state.allocator, a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, .{ .label = "a-is-b" });
     try state.constraints.addAnchor(state.allocator, b, .top, .{ .node = .{ .node_id = c, .anchor = .top } }, 0, .{ .label = "b-is-c" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const a_node = state.getNode(a).?;
-    const b_node = state.getNode(b).?;
-    const c_node = state.getNode(c).?;
-    try expectFloat(graph.anchorValue(a_node.frame, .top), graph.anchorValue(b_node.frame, .top));
-    try expectFloat(graph.anchorValue(a_node.frame, .top), graph.anchorValue(c_node.frame, .top));
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try expectFloat(graph.anchorValue((try state_layout.frame(a)).*, .top), graph.anchorValue((try state_layout.frame(b)).*, .top));
+    try expectFloat(graph.anchorValue((try state_layout.frame(a)).*, .top), graph.anchorValue((try state_layout.frame(c)).*, .top));
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: hard peer equality conflicts are independent of direction and chaining" {
     var forward = try initEmptyDocumentState();
     defer forward.deinit();
+    var forward_layout = LayoutFixture.init(&forward);
+    defer forward_layout.deinit();
 
     const forward_page = try forward.addPage("Page");
     const forward_a = try forward.makeObject(forward_page, "a", null, .text, .text, "A");
@@ -1503,10 +1547,12 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     try forward.constraints.addAnchor(forward.allocator, forward_a, .top, .{ .page = .top }, -100, .{ .label = "a-top" });
     try forward.constraints.addAnchor(forward.allocator, forward_b, .top, .{ .page = .top }, -200, .{ .label = "b-top" });
     try forward.constraints.addAnchor(forward.allocator, forward_a, .top, .{ .node = .{ .node_id = forward_b, .anchor = .top } }, 0, .{ .label = "a-is-b" });
-    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&forward));
+    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&forward_layout));
 
     var reverse = try initEmptyDocumentState();
     defer reverse.deinit();
+    var reverse_layout = LayoutFixture.init(&reverse);
+    defer reverse_layout.deinit();
 
     const reverse_page = try reverse.addPage("Page");
     const reverse_a = try reverse.makeObject(reverse_page, "a", null, .text, .text, "A");
@@ -1514,10 +1560,12 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     try reverse.constraints.addAnchor(reverse.allocator, reverse_a, .top, .{ .page = .top }, -100, .{ .label = "a-top" });
     try reverse.constraints.addAnchor(reverse.allocator, reverse_b, .top, .{ .page = .top }, -200, .{ .label = "b-top" });
     try reverse.constraints.addAnchor(reverse.allocator, reverse_b, .top, .{ .node = .{ .node_id = reverse_a, .anchor = .top } }, 0, .{ .label = "b-is-a" });
-    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&reverse));
+    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&reverse_layout));
 
     var chain = try initEmptyDocumentState();
     defer chain.deinit();
+    var chain_layout = LayoutFixture.init(&chain);
+    defer chain_layout.deinit();
 
     const chain_page = try chain.addPage("Page");
     const chain_a = try chain.makeObject(chain_page, "a", null, .text, .text, "A");
@@ -1527,12 +1575,14 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     try chain.constraints.addAnchor(chain.allocator, chain_c, .top, .{ .page = .top }, -200, .{ .label = "c-top" });
     try chain.constraints.addAnchor(chain.allocator, chain_a, .top, .{ .node = .{ .node_id = chain_b, .anchor = .top } }, 0, .{ .label = "a-is-b" });
     try chain.constraints.addAnchor(chain.allocator, chain_b, .top, .{ .node = .{ .node_id = chain_c, .anchor = .top } }, 0, .{ .label = "b-is-c" });
-    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&chain));
+    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&chain_layout));
 }
 
 test "layout solver: horizontal fallback does not seed inconsistent hard cycles" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const a = try state.makeObject(page, "a", null, .text, .text, "aa");
@@ -1540,12 +1590,14 @@ test "layout solver: horizontal fallback does not seed inconsistent hard cycles"
     try state.constraints.addAnchor(state.allocator, a, .left, .{ .node = .{ .node_id = b, .anchor = .left } }, 100, .{ .label = "a-left" });
     try state.constraints.addAnchor(state.allocator, b, .left, .{ .node = .{ .node_id = a, .anchor = .left } }, 200, .{ .label = "b-left" });
 
-    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&state));
+    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&state_layout));
 }
 
 test "layout solver: constrained group source forms one fallback unit" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     try setLayoutPolicy(&state, state.graph.document_id, "center");
 
@@ -1558,24 +1610,23 @@ test "layout solver: constrained group source forms one fallback unit" {
     try state.constraints.addAnchor(state.allocator, right, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, .{ .label = "right-of-group" });
     try state.constraints.addAnchor(state.allocator, right, .center_y, .{ .node = .{ .node_id = left_group, .anchor = .center_y } }, 0, .{ .label = "align-group-center" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const group_node = state.getNode(left_group).?;
     const left_title_node = state.getNode(left_title).?;
-    const left_body_node = state.getNode(left_body).?;
-    const right_node = state.getNode(right).?;
-    try testing.expect(group_node.frame.x_set);
-    try testing.expect(group_node.frame.y_set);
-    try expectFloat(group_node.frame.x + group_node.frame.width + 30, right_node.frame.x);
-    try expectFloat(group_node.frame.y + group_node.frame.height / 2, right_node.frame.y + right_node.frame.height / 2);
+    try testing.expect((try state_layout.frame(left_group)).*.x_set);
+    try testing.expect((try state_layout.frame(left_group)).*.y_set);
+    try expectFloat((try state_layout.frame(left_group)).*.x + (try state_layout.frame(left_group)).*.width + 30, (try state_layout.frame(right)).*.x);
+    try expectFloat((try state_layout.frame(left_group)).*.y + (try state_layout.frame(left_group)).*.height / 2, (try state_layout.frame(right)).*.y + (try state_layout.frame(right)).*.height / 2);
 
     const title_spacing = core.layout.styleForNode(&state, left_title_node).spacing_after;
-    try expectFloat(left_title_node.frame.y - title_spacing, left_body_node.frame.y + left_body_node.frame.height);
+    try expectFloat((try state_layout.frame(left_title)).*.y - title_spacing, (try state_layout.frame(left_body)).*.y + (try state_layout.frame(left_body)).*.height);
 }
 
 test "layout solver: centered vflow treats vertically aligned groups as one row" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     try setLayoutPolicy(&state, state.graph.document_id, "center");
 
@@ -1599,22 +1650,22 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
     try state.constraints.addAnchor(state.allocator, right_group, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, .{ .label = "right-of-left-group" });
     try state.constraints.addAnchor(state.allocator, right_group, .center_y, .{ .node = .{ .node_id = left_group, .anchor = .center_y } }, 0, .{ .label = "align-group-centers" });
 
-    try finalizeDocumentState(&state);
+    try finalizeDocumentState(&state_layout);
 
-    const left_group_node = state.getNode(left_group).?;
-    const right_group_node = state.getNode(right_group).?;
-    const left_center = left_group_node.frame.y + left_group_node.frame.height / 2;
-    const right_center = right_group_node.frame.y + right_group_node.frame.height / 2;
+    const left_center = (try state_layout.frame(left_group)).*.y + (try state_layout.frame(left_group)).*.height / 2;
+    const right_center = (try state_layout.frame(right_group)).*.y + (try state_layout.frame(right_group)).*.height / 2;
     try expectFloat(left_center, right_center);
 
-    const row_top = @max(left_group_node.frame.y + left_group_node.frame.height, right_group_node.frame.y + right_group_node.frame.height);
-    const row_bottom = @min(left_group_node.frame.y, right_group_node.frame.y);
+    const row_top = @max((try state_layout.frame(left_group)).*.y + (try state_layout.frame(left_group)).*.height, (try state_layout.frame(right_group)).*.y + (try state_layout.frame(right_group)).*.height);
+    const row_bottom = @min((try state_layout.frame(left_group)).*.y, (try state_layout.frame(right_group)).*.y);
     try expectFloat(core.layout.Defaults.height / 2, (row_top + row_bottom) / 2);
 }
 
 test "layout solver: centered vflow ignores the space occupied by fixed top components" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     try setLayoutPolicy(&state, state.graph.document_id, "center");
 
@@ -1627,17 +1678,18 @@ test "layout solver: centered vflow ignores the space occupied by fixed top comp
     try setLayoutLineHeight(&state, body, "580");
     try state.constraints.addAnchor(state.allocator, header, .top, .{ .page = .top }, -56, .{ .label = "header-top" });
 
-    try solveDocumentState(&state);
+    try solveDocumentState(&state_layout);
 
-    const body_node = state.getNode(body).?;
-    try expectFloat(core.layout.Defaults.height / 2, graph.anchorValue(body_node.frame, .center_y));
-    try expectFloat(core.layout.Defaults.height - 56, graph.anchorValue(state.getNode(header).?.frame, .top));
-    try testing.expect(!state.diagnostics.hasConstraintFailures());
+    try expectFloat(core.layout.Defaults.height / 2, graph.anchorValue((try state_layout.frame(body)).*, .center_y));
+    try expectFloat(core.layout.Defaults.height - 56, graph.anchorValue((try state_layout.frame(header)).*, .top));
+    try testing.expect(!(state_layout.result.failureCount() != 0));
 }
 
 test "layout solver: document centered vflow is not shadowed by page default policy" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     try setLayoutPolicy(&state, state.graph.document_id, "center");
     try setLayoutCenterOffset(&state, state.graph.document_id, "40");
@@ -1656,20 +1708,19 @@ test "layout solver: document centered vflow is not shadowed by page default pol
     try setLayoutSpacingAfter(&state, subtitle, "0");
     try state.constraints.addAnchor(state.allocator, pageno, .bottom, .{ .page = .bottom }, 20, .{ .label = "pageno-bottom" });
 
-    try solveDocumentState(&state);
+    try solveDocumentState(&state_layout);
 
-    const pageno_node = state.getNode(pageno).?;
-    const title_node = state.getNode(title).?;
-    const subtitle_node = state.getNode(subtitle).?;
-    const stack_top = graph.anchorValue(title_node.frame, .top);
-    const stack_bottom = graph.anchorValue(subtitle_node.frame, .bottom);
+    const stack_top = graph.anchorValue((try state_layout.frame(title)).*, .top);
+    const stack_bottom = graph.anchorValue((try state_layout.frame(subtitle)).*, .bottom);
     try expectFloat(core.layout.Defaults.height / 2 - 40, (stack_top + stack_bottom) / 2);
-    try testing.expect(graph.anchorValue(title_node.frame, .bottom) > graph.anchorValue(pageno_node.frame, .top));
+    try testing.expect(graph.anchorValue((try state_layout.frame(title)).*, .bottom) > graph.anchorValue((try state_layout.frame(pageno)).*, .top));
 }
 
 test "layout solver: centered vflow preserves page center for side-by-side rows" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     try setLayoutPolicy(&state, state.graph.document_id, "center");
 
@@ -1690,12 +1741,10 @@ test "layout solver: centered vflow preserves page center for side-by-side rows"
     try state.constraints.addAnchor(state.allocator, pipe, .right, .{ .page = .right }, -100, .{ .label = "pipe-right" });
     try state.constraints.addAnchor(state.allocator, pipe, .top, .{ .node = .{ .node_id = body, .anchor = .top } }, 0, .{ .label = "align-row-top" });
 
-    try solveDocumentState(&state);
+    try solveDocumentState(&state_layout);
 
-    const body_node = state.getNode(body).?;
-    const pipe_node = state.getNode(pipe).?;
-    const body_center = body_node.frame.y + body_node.frame.height / 2;
-    const pipe_center = pipe_node.frame.y + pipe_node.frame.height / 2;
+    const body_center = (try state_layout.frame(body)).*.y + (try state_layout.frame(body)).*.height / 2;
+    const pipe_center = (try state_layout.frame(pipe)).*.y + (try state_layout.frame(pipe)).*.height / 2;
     try expectFloat(body_center, pipe_center);
     try expectFloat(core.layout.Defaults.height / 2, body_center);
 }
@@ -1703,25 +1752,31 @@ test "layout solver: centered vflow preserves page center for side-by-side rows"
 test "layout solver: explicit anchor conflicts and negative frame sizes are rejected" {
     var conflict = try initEmptyDocumentState();
     defer conflict.deinit();
+    var conflict_layout = LayoutFixture.init(&conflict);
+    defer conflict_layout.deinit();
 
     const conflict_page = try conflict.addPage("Page");
     const conflict_object = try conflict.makeObject(conflict_page, "body", null, .text, .text, "A");
     try conflict.constraints.addAnchor(conflict.allocator, conflict_object, .left, .{ .page = .left }, 100, .{ .label = "left-a" });
     try conflict.constraints.addAnchor(conflict.allocator, conflict_object, .left, .{ .page = .left }, 120, .{ .label = "left-b" });
-    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&conflict));
+    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&conflict_layout));
 
     var negative = try initEmptyDocumentState();
     defer negative.deinit();
+    var negative_layout = LayoutFixture.init(&negative);
+    defer negative_layout.deinit();
 
     const negative_page = try negative.addPage("Page");
     const negative_object = try negative.makeObject(negative_page, "body", null, .text, .text, "A");
     try negative.constraints.addAnchor(negative.allocator, negative_object, .left, .{ .node = .{ .node_id = negative_object, .anchor = .right } }, 10, .{ .label = "negative-width" });
-    try testing.expectError(error.NegativeFrameSize, finalizeDocumentState(&negative));
+    try testing.expectError(error.NegativeFrameSize, finalizeDocumentState(&negative_layout));
 }
 
 test "layout solver: group width propagation must preserve child hard widths" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const child = try state.makeObject(page, "body", null, .text, .text, "this text can be wrapped");
@@ -1732,12 +1787,14 @@ test "layout solver: group width propagation must preserve child hard widths" {
     try state.constraints.addAnchor(state.allocator, child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 700, .{ .label = "child-width" });
     try state.constraints.addAnchor(state.allocator, group, .right, .{ .node = .{ .node_id = group, .anchor = .left } }, 600, .{ .label = "group-width" });
 
-    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&state));
+    try testing.expectError(error.ConstraintConflict, finalizeDocumentState(&state_layout));
 }
 
 test "layout solver: wrapped width cap propagates through dependent anchors" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const wrapped = try state.makeObject(
@@ -1754,19 +1811,20 @@ test "layout solver: wrapped width cap propagates through dependent anchors" {
     try state.constraints.addAnchor(state.allocator, wrapped, .left, .{ .page = .left }, 1100, .{ .label = "wrapped-left" });
     try state.constraints.addAnchor(state.allocator, follower, .left, .{ .node = .{ .node_id = wrapped, .anchor = .right } }, 20, .{ .label = "follower-left" });
 
-    try solveDocumentState(&state);
+    try solveDocumentState(&state_layout);
 
     const wrapped_node = state.getNode(wrapped).?;
-    const follower_node = state.getNode(follower).?;
     const style = core.layout.styleForNode(&state, wrapped_node);
     const expected_width = core.layout.Defaults.width - style.default_right_inset - 1100;
-    try expectFloat(expected_width, wrapped_node.frame.width);
-    try expectFloat(wrapped_node.frame.x + wrapped_node.frame.width + 20, follower_node.frame.x);
+    try expectFloat(expected_width, (try state_layout.frame(wrapped)).*.width);
+    try expectFloat((try state_layout.frame(wrapped)).*.x + (try state_layout.frame(wrapped)).*.width + 20, (try state_layout.frame(follower)).*.x);
 }
 
 test "layout solver: vertical axis observes width-dependent wrapped height" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const wrapped = try state.makeObject(
@@ -1781,12 +1839,12 @@ test "layout solver: vertical axis observes width-dependent wrapped height" {
     try state.constraints.addAnchor(state.allocator, wrapped, .left, .{ .page = .left }, 1100, .{ .label = "wrapped-left" });
     try state.constraints.addAnchor(state.allocator, wrapped, .bottom, .{ .page = .bottom }, 40, .{ .label = "wrapped-bottom" });
 
-    try solveDocumentState(&state);
+    try solveDocumentState(&state_layout);
 
     const wrapped_node = state.getNode(wrapped).?;
-    const expected_height = metrics.intrinsicHeight(&state, wrapped_node);
+    const expected_height = metrics.intrinsicHeight(try state_layout.work(), wrapped_node, (try state_layout.frame(wrapped_node.id)).*);
     try testing.expect(expected_height > 28);
-    try expectFloat(expected_height, wrapped_node.frame.height);
+    try expectFloat(expected_height, (try state_layout.frame(wrapped)).*.height);
 }
 
 const FakeMeasurementContext = struct {
@@ -1799,7 +1857,7 @@ const FakeMeasurementContext = struct {
 const InkMeasurement = struct {
     ink: model.LayoutBounds,
 
-    fn measure(context: *anyopaque, _: *anyopaque, _: *const model.Node, width: f32, _: model.LayoutMeasurementMode) !?model.LayoutMeasurement {
+    fn measure(context: *anyopaque, _: *core.layout.Workspace, _: *const model.Node, width: f32, _: model.LayoutMeasurementMode) !?model.LayoutMeasurement {
         const self: *InkMeasurement = @ptrCast(@alignCast(context));
         return .{ .width = 10, .height = 36, .ink_bounds = self.ink, .first_baseline = 26, .measured_width = width };
     }
@@ -1814,17 +1872,19 @@ test "layout diagnostics preserve the direction of ink outside the page" {
     for (cases) |case| {
         var state = try initEmptyDocumentState();
         defer state.deinit();
+        var state_layout = LayoutFixture.init(&state);
+        defer state_layout.deinit();
         const page = try state.addPage("Ink overflow");
         const object = try state.makeObject(page, "text", null, .text, .text, "j");
         try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, case.left, .{ .label = "left" });
         try state.constraints.addAnchor(state.allocator, object, .top, .{ .page = .top }, 0, .{ .label = "top" });
         var measurement = InkMeasurement{ .ink = case.ink };
-        try solveDocumentStateWithOptions(&state, null, .{ .measurement_provider = .{ .context = &measurement, .measure = InkMeasurement.measure } });
-        const retained = state.getNode(object).?.layout_measurement.?;
+        try solveDocumentStateWithOptions(&state_layout, null, .{ .measurement_provider = .{ .context = &measurement, .measure = InkMeasurement.measure } });
+        const retained = state_layout.result.measurementOf(object).?;
         try testing.expectEqualDeep(case.ink, retained.ink_bounds.?);
         try testing.expectEqual(@as(f32, 26), retained.first_baseline.?);
         var found = false;
-        for (state.diagnostics.entries.items) |diagnostic| {
+        for (state_layout.result.pages[0].diagnostics) |diagnostic| {
             if (diagnostic.node_id != object or diagnostic.data != .page_overflow) continue;
             const data = diagnostic.data.page_overflow;
             try expectFloat(case.overflow_left, data.overflow_left);
@@ -1839,7 +1899,7 @@ test "layout diagnostics preserve the direction of ink outside the page" {
 
 fn fakeLayoutMeasurement(
     context: *anyopaque,
-    state_ptr: *anyopaque,
+    state_ptr: *core.layout.Workspace,
     node: *const model.Node,
     width: f32,
     mode: model.LayoutMeasurementMode,
@@ -1867,7 +1927,7 @@ const FailingMeasurementContext = struct {
 
 fn failRepeatedConstrainedMeasurement(
     context: *anyopaque,
-    state_ptr: *anyopaque,
+    state_ptr: *core.layout.Workspace,
     node: *const model.Node,
     width: f32,
     mode: model.LayoutMeasurementMode,
@@ -1891,7 +1951,7 @@ const FakeAllMeasurementContext = struct {
 
 fn fakeAllLayoutMeasurement(
     context: *anyopaque,
-    state_ptr: *anyopaque,
+    state_ptr: *core.layout.Workspace,
     node: *const model.Node,
     width: f32,
     mode: model.LayoutMeasurementMode,
@@ -1913,7 +1973,7 @@ const NestedTraceMeasurementContext = struct {
 
 fn solveNestedTraceDuringMeasurement(
     context: *anyopaque,
-    state_ptr: *anyopaque,
+    state_ptr: *core.layout.Workspace,
     node: *const model.Node,
     width: f32,
     mode: model.LayoutMeasurementMode,
@@ -1949,11 +2009,15 @@ fn expectTraceContainsOnly(path: []const u8, expected_name: []const u8, unexpect
 test "nested layout traces keep independent sessions" {
     var outer_state = try initEmptyDocumentState();
     defer outer_state.deinit();
+    var outer_state_layout = LayoutFixture.init(&outer_state);
+    defer outer_state_layout.deinit();
     const outer_page = try outer_state.addPage("Outer");
     _ = try outer_state.makeObject(outer_page, "outer-only", null, .text, .text, "outer");
 
     var inner_state = try initEmptyDocumentState();
     defer inner_state.deinit();
+    var inner_state_layout = LayoutFixture.init(&inner_state);
+    defer inner_state_layout.deinit();
     const inner_page = try inner_state.addPage("Inner");
     _ = try inner_state.makeObject(inner_page, "inner-only", null, .text, .text, "inner");
 
@@ -1986,21 +2050,22 @@ test "nested layout traces keep independent sessions" {
 test "layout solver uses render measurement provider for intrinsic object size" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "provider measured text");
     var measurement = FakeMeasurementContext{ .target = object };
 
-    try solveDocumentStateWithOptions(&state, null, .{
+    try solveDocumentStateWithOptions(&state_layout, null, .{
         .measurement_provider = .{
             .context = &measurement,
             .measure = fakeLayoutMeasurement,
         },
     });
 
-    const node = state.getNode(object).?;
-    try expectFloat(321, node.frame.width);
-    try expectFloat(87, node.frame.height);
+    try expectFloat(321, (try state_layout.frame(object)).*.width);
+    try expectFloat(87, (try state_layout.frame(object)).*.height);
     try expectFloat(321, measurement.last_constrained_width);
     try testing.expect(measurement.natural_calls > 0);
     try testing.expect(measurement.constrained_calls > 0);
@@ -2009,6 +2074,8 @@ test "layout solver uses render measurement provider for intrinsic object size" 
 test "layout solver preserves render measurement errors after horizontal solving" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "provider measured text");
@@ -2045,6 +2112,8 @@ fn recordLayoutPageCompleted(context: *anyopaque, completed: usize, total: usize
 test "layout solver runs page jobs with configured job count" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const first_page = try state.addPage("First");
     const first = try state.makeObject(first_page, "first", null, .text, .text, "First");
@@ -2088,6 +2157,8 @@ fn cancelLayoutAfterCheck(context: *const anyopaque) bool {
 test "layout solver cooperatively cancels parallel page jobs" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const first_page = try state.addPage("First");
     const first = try state.makeObject(first_page, "first", null, .text, .text, "First");
@@ -2113,6 +2184,8 @@ test "layout solver cooperatively cancels parallel page jobs" {
 test "layout metrics prefer render measurement provider for asset size" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const pdf = try state.makeObject(page, "pdf", null, .asset, .pdf_ref, "chart.pdf");
@@ -2121,36 +2194,38 @@ test "layout metrics prefer render measurement provider for asset size" {
     const image = try state.makeObject(page, "image", null, .asset, .image_ref, "chart.png");
 
     var measurement = FakeAllMeasurementContext{};
-    try solveDocumentStateWithOptions(&state, null, .{
+    try solveDocumentStateWithOptions(&state_layout, null, .{
         .measurement_provider = .{
             .context = &measurement,
             .measure = fakeAllLayoutMeasurement,
         },
     });
 
-    const pdf_node = state.getNode(pdf).?;
-    try expectFloat(1000, pdf_node.frame.width);
-    try expectFloat(700, pdf_node.frame.height);
-    const image_node = state.getNode(image).?;
-    try expectFloat(1000, image_node.frame.width);
-    try expectFloat(700, image_node.frame.height);
+    try expectFloat(1000, (try state_layout.frame(pdf)).*.width);
+    try expectFloat(700, (try state_layout.frame(pdf)).*.height);
+    try expectFloat(1000, (try state_layout.frame(image)).*.width);
+    try expectFloat(700, (try state_layout.frame(image)).*.height);
     try testing.expect(measurement.calls > 0);
 }
 
 test "asset payloads ignore text wrap requests" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const image = try state.makeObject(page, "image", null, .asset, .image_ref, "chart.png");
     try setLayoutWrap(&state, image, "on");
 
-    try testing.expect(!metrics.shouldWrapNode(&state, state.getNode(image).?));
+    try testing.expect(!metrics.shouldWrapNode(try state_layout.work(), state.getNode(image).?));
 }
 
 test "layout metrics use measured font width for wrapped text height" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "0123456789012345678901234567");
@@ -2159,14 +2234,16 @@ test "layout metrics use measured font width for wrapped text height" {
     try setTextSize(&state, object, "30");
 
     const node = state.getNode(object).?;
-    node.frame.width = 480;
+    (try state_layout.frame(object)).*.width = 480;
 
-    try expectFloat(43.5, metrics.intrinsicHeight(&state, node));
+    try expectFloat(43.5, metrics.intrinsicHeight(try state_layout.work(), node, (try state_layout.frame(node.id)).*));
 }
 
 test "layout metrics use render atom widths for CJK emoji markdown text" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "✅ 最初のエラー報告までの時間が短縮できる");
@@ -2178,16 +2255,18 @@ test "layout metrics use render atom widths for CJK emoji markdown text" {
     try setTextLineHeight(&state, object, "31");
 
     const node = state.getNode(object).?;
-    const measured_width = metrics.intrinsicWidth(&state, node);
+    const measured_width = metrics.intrinsicWidth(try state_layout.work(), node);
     try testing.expect(measured_width > 1);
-    node.frame.width = measured_width - 1;
+    (try state_layout.frame(object)).*.width = measured_width - 1;
 
-    try expectFloat(62, metrics.intrinsicHeight(&state, node));
+    try expectFloat(62, metrics.intrinsicHeight(try state_layout.work(), node, (try state_layout.frame(node.id)).*));
 }
 
 test "layout solver keeps CJK emoji markdown text on one line when measured atom width fits" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "✅ 最初のエラー報告までの時間が短縮できる");
@@ -2198,19 +2277,20 @@ test "layout solver keeps CJK emoji markdown text on one line when measured atom
     try setTextSize(&state, object, "30");
     try setTextLineHeight(&state, object, "31");
 
-    const expected_width = metrics.intrinsicWidth(&state, state.getNode(object).?);
+    const expected_width = metrics.intrinsicWidth(try state_layout.work(), state.getNode(object).?);
     try testing.expect(expected_width > 1);
 
-    try solveDocumentState(&state);
+    try solveDocumentState(&state_layout);
 
-    const node = state.getNode(object).?;
-    try expectFloat(expected_width, node.frame.width);
-    try expectFloat(31, node.frame.height);
+    try expectFloat(expected_width, (try state_layout.frame(object)).*.width);
+    try expectFloat(31, (try state_layout.frame(object)).*.height);
 }
 
 test "layout metrics: chrome padding is part of visual bounds and yields a content frame" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const plain = try state.makeObject(page, "plain", null, .text, .text, "Hello");
@@ -2220,11 +2300,11 @@ test "layout metrics: chrome padding is part of visual bounds and yields a conte
 
     const plain_node = state.getNode(plain).?;
     const padded_node = state.getNode(padded).?;
-    try expectFloat(metrics.intrinsicWidth(&state, plain_node) + 24, metrics.intrinsicWidth(&state, padded_node));
-    try expectFloat(metrics.intrinsicHeight(&state, plain_node) + 16, metrics.intrinsicHeight(&state, padded_node));
+    try expectFloat(metrics.intrinsicWidth(try state_layout.work(), plain_node) + 24, metrics.intrinsicWidth(try state_layout.work(), padded_node));
+    try expectFloat(metrics.intrinsicHeight(try state_layout.work(), plain_node, (try state_layout.frame(plain_node.id)).*) + 16, metrics.intrinsicHeight(try state_layout.work(), padded_node, (try state_layout.frame(padded_node.id)).*));
 
-    state.getNode(padded).?.frame = .{ .x = 10, .y = 20, .width = 100, .height = 50, .x_set = true, .y_set = true };
-    const content = core.layout.contentFrame(&state, state.getNode(padded).?);
+    (try state_layout.frame(padded)).* = .{ .x = 10, .y = 20, .width = 100, .height = 50, .x_set = true, .y_set = true };
+    const content = core.layout.contentFrame(try state_layout.work(), state.getNode(padded).?, (try state_layout.frame(padded)).*);
     try expectFloat(22, content.x);
     try expectFloat(28, content.y);
     try expectFloat(76, content.width);
@@ -2234,6 +2314,8 @@ test "layout metrics: chrome padding is part of visual bounds and yields a conte
 test "layout metrics: unwrapped text width includes visual glyph bounds" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "コンポーネントの集合と絶対位置");
@@ -2250,12 +2332,14 @@ test "layout metrics: unwrapped text width includes visual glyph bounds" {
         atom_width += try core.render_text_measure.advanceWidth(testing.allocator, slice, font, style.font_size);
     }
 
-    try testing.expect(metrics.intrinsicWidth(&state, node) >= atom_width + 40);
+    try testing.expect(metrics.intrinsicWidth(try state_layout.work(), node) >= atom_width + 40);
 }
 
 test "layout solver: group chrome padding expands tight group bounds" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const child = try state.makeObject(page, "child", null, .text, .text, "Hello");
@@ -2268,18 +2352,19 @@ test "layout solver: group chrome padding expands tight group bounds" {
     try state.constraints.addAnchor(state.allocator, child, .bottom, .{ .page = .bottom }, 100, .{ .label = "child-bottom" });
     try state.constraints.addAnchor(state.allocator, child, .top, .{ .node = .{ .node_id = child, .anchor = .bottom } }, 40, .{ .label = "child-height" });
 
-    try solveDocumentState(&state);
+    try solveDocumentState(&state_layout);
 
-    const group_node = state.getNode(group).?;
-    try expectFloat(88, group_node.frame.x);
-    try expectFloat(92, group_node.frame.y);
-    try expectFloat(224, group_node.frame.width);
-    try expectFloat(56, group_node.frame.height);
+    try expectFloat(88, (try state_layout.frame(group)).*.x);
+    try expectFloat(92, (try state_layout.frame(group)).*.y);
+    try expectFloat(224, (try state_layout.frame(group)).*.width);
+    try expectFloat(56, (try state_layout.frame(group)).*.height);
 }
 
 test "layout solver: target group width leaves room for chrome padding" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const child = try state.makeObject(
@@ -2297,19 +2382,19 @@ test "layout solver: target group width leaves room for chrome padding" {
     try state.constraints.addAnchor(state.allocator, group, .left, .{ .page = .left }, 100, .{ .label = "group-left" });
     try state.constraints.addAnchor(state.allocator, group, .right, .{ .node = .{ .node_id = group, .anchor = .left } }, 220, .{ .label = "group-width" });
 
-    try solveDocumentState(&state);
+    try solveDocumentState(&state_layout);
 
-    const group_node = state.getNode(group).?;
-    const child_node = state.getNode(child).?;
-    try expectFloat(100, group_node.frame.x);
-    try expectFloat(220, group_node.frame.width);
-    try expectFloat(110, child_node.frame.x);
-    try expectFloat(200, child_node.frame.width);
+    try expectFloat(100, (try state_layout.frame(group)).*.x);
+    try expectFloat(220, (try state_layout.frame(group)).*.width);
+    try expectFloat(110, (try state_layout.frame(child)).*.x);
+    try expectFloat(200, (try state_layout.frame(child)).*.width);
 }
 
 test "layout diagnostics: fixed-height object reports frame too small" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "short-box", null, .text, .text, "line one\nline two");
@@ -2318,26 +2403,26 @@ test "layout diagnostics: fixed-height object reports frame too small" {
     try state.constraints.addAnchor(state.allocator, object, .bottom, .{ .page = .bottom }, 20, .{ .label = "bottom" });
     try state.constraints.addAnchor(state.allocator, object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 20, .{ .label = "height" });
 
-    try solveDocumentState(&state);
+    try solveDocumentState(&state_layout);
 
     const node = state.getNode(object).?;
-    try expectFloat(20, node.frame.height);
-    const required_height = metrics.intrinsicHeight(&state, node);
-    try testing.expect(required_height > node.frame.height);
+    try expectFloat(20, (try state_layout.frame(object)).*.height);
+    const required_height = metrics.intrinsicHeight(try state_layout.work(), node, (try state_layout.frame(node.id)).*);
+    try testing.expect(required_height > (try state_layout.frame(object)).*.height);
 
     var found = false;
-    for (state.diagnostics.entries.items) |diagnostic| {
+    for (state_layout.result.pages[0].diagnostics) |diagnostic| {
         if (diagnostic.node_id != object) continue;
         switch (diagnostic.data) {
             .content_overflow => |data| {
                 found = true;
                 try testing.expectEqual(core.DiagnosticSeverity.warning, diagnostic.severity);
-                try expectFloat(metrics.intrinsicWidth(&state, node), data.required_width);
-                try expectFloat(node.frame.width, data.frame_width);
+                try expectFloat(metrics.intrinsicWidth(try state_layout.work(), node), data.required_width);
+                try expectFloat((try state_layout.frame(object)).*.width, data.frame_width);
                 try expectFloat(0, data.overflow_width);
                 try expectFloat(required_height, data.required_height);
-                try expectFloat(node.frame.height, data.frame_height);
-                try expectFloat(required_height - node.frame.height, data.overflow_height);
+                try expectFloat((try state_layout.frame(object)).*.height, data.frame_height);
+                try expectFloat(required_height - (try state_layout.frame(object)).*.height, data.overflow_height);
             },
             else => {},
         }
@@ -2348,6 +2433,8 @@ test "layout diagnostics: fixed-height object reports frame too small" {
 test "layout diagnostics: one-pixel text reports frame too small" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "toc-marker", null, .text, .text, "hidden section title");
@@ -2361,10 +2448,10 @@ test "layout diagnostics: one-pixel text reports frame too small" {
     try state.constraints.addAnchor(state.allocator, object, .bottom, .{ .page = .bottom }, 20, .{ .label = "bottom" });
     try state.constraints.addAnchor(state.allocator, object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 1, .{ .label = "height" });
 
-    try solveDocumentState(&state);
+    try solveDocumentState(&state_layout);
 
     var found = false;
-    for (state.diagnostics.entries.items) |diagnostic| {
+    for (state_layout.result.pages[0].diagnostics) |diagnostic| {
         if (diagnostic.node_id == object and diagnostic.data == .content_overflow) found = true;
     }
     try testing.expect(found);
@@ -2373,6 +2460,8 @@ test "layout diagnostics: one-pixel text reports frame too small" {
 test "layout font size resolves consistently for measurement and rendering" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "one\ntwo");
@@ -2381,7 +2470,7 @@ test "layout font size resolves consistently for measurement and rendering" {
     try setTextLineHeight(&state, object, "45");
 
     const node = state.getNode(object).?;
-    try expectFloat(90, metrics.intrinsicHeight(&state, node));
+    try expectFloat(90, metrics.intrinsicHeight(try state_layout.work(), node, (try state_layout.frame(node.id)).*));
     const resolved = core.render_policy.resolve(&state, node);
     try expectFloat(20, resolved.text.?.font_size);
     try expectFloat(45, resolved.text.?.line_height);
@@ -2390,13 +2479,15 @@ test "layout font size resolves consistently for measurement and rendering" {
 test "layout metrics derive line height from explicit text size" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "one\ntwo");
     try setTextSize(&state, object, "30");
 
     const node = state.getNode(object).?;
-    try expectFloat(87, metrics.intrinsicHeight(&state, node));
+    try expectFloat(87, metrics.intrinsicHeight(try state_layout.work(), node, (try state_layout.frame(node.id)).*));
 
     const resolved = core.render_policy.resolve(&state, node);
     try expectFloat(30, resolved.text.?.font_size);
@@ -2406,18 +2497,20 @@ test "layout metrics derive line height from explicit text size" {
 test "layout metrics honor explicit text and layout line heights" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const text_only = try state.makeObject(page, "text-only", null, .text, .text, "one\ntwo");
     try setTextSize(&state, text_only, "30");
     try setTextLineHeight(&state, text_only, "45");
-    try expectFloat(90, metrics.intrinsicHeight(&state, state.getNode(text_only).?));
+    try expectFloat(90, metrics.intrinsicHeight(try state_layout.work(), state.getNode(text_only).?, (try state_layout.frame(text_only)).*));
 
     const layout_override = try state.makeObject(page, "layout-override", null, .text, .text, "one\ntwo");
     try setTextSize(&state, layout_override, "30");
     try setTextLineHeight(&state, layout_override, "45");
     try setLayoutLineHeight(&state, layout_override, "50");
-    try expectFloat(100, metrics.intrinsicHeight(&state, state.getNode(layout_override).?));
+    try expectFloat(100, metrics.intrinsicHeight(try state_layout.work(), state.getNode(layout_override).?, (try state_layout.frame(layout_override)).*));
 
     const resolved = core.render_policy.resolve(&state, state.getNode(layout_override).?);
     try expectFloat(50, resolved.text.?.line_height);
@@ -2426,6 +2519,8 @@ test "layout metrics honor explicit text and layout line heights" {
 test "layout metrics treat zero line heights as automatic" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "one\ntwo");
@@ -2434,7 +2529,7 @@ test "layout metrics treat zero line heights as automatic" {
     try setLayoutLineHeight(&state, object, "0");
 
     const node = state.getNode(object).?;
-    try expectFloat(87, metrics.intrinsicHeight(&state, node));
+    try expectFloat(87, metrics.intrinsicHeight(try state_layout.work(), node, (try state_layout.frame(node.id)).*));
 
     const resolved = core.render_policy.resolve(&state, node);
     try expectFloat(43.5, resolved.text.?.line_height);
@@ -2443,6 +2538,8 @@ test "layout metrics treat zero line heights as automatic" {
 test "render policy: invalid numeric properties fall back before rendering" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "bad-numbers", null, .text, .text, "Hello");
@@ -2472,6 +2569,8 @@ test "render policy: invalid numeric properties fall back before rendering" {
 test "render policy: font face properties resolve structurally" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "font", null, .text, .text, "Hello");
@@ -2499,6 +2598,8 @@ test "render policy: font face properties resolve structurally" {
 test "render policy: markdown bold color is optional and resolves as text paint" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "**Hello**");
@@ -2514,6 +2615,8 @@ test "render policy: markdown bold color is optional and resolves as text paint"
 test "render policy: markdown underline style resolves as text paint" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "_Hello_");
@@ -2536,6 +2639,8 @@ test "render policy: markdown underline style resolves as text paint" {
 test "render policy: markdown quote style resolves as text paint" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "> Hello");
@@ -2565,6 +2670,8 @@ test "render policy: markdown quote style resolves as text paint" {
 test "layout metrics include markdown quote padding" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const compact = try state.makeObject(page, "compact", null, .text, .text, "> Quoted paragraph");
@@ -2577,19 +2684,21 @@ test "layout metrics include markdown quote padding" {
         try setTextLineHeight(&state, object, "29");
         try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "inset" }, .{ .number = 0 });
         try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "pad_x" }, .{ .number = 0 });
-        state.getNode(object).?.frame.width = 1000;
+        (try state_layout.frame(object)).*.width = 1000;
     }
     try setRecordPathValue(&state, compact, "text", &.{ "markdown_quote", "pad_y" }, .{ .number = 0 });
     try setRecordPathValue(&state, padded, "text", &.{ "markdown_quote", "pad_y" }, .{ .number = 12 });
 
-    const compact_height = metrics.intrinsicHeight(&state, state.getNode(compact).?);
-    const padded_height = metrics.intrinsicHeight(&state, state.getNode(padded).?);
+    const compact_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(compact).?, (try state_layout.frame(compact)).*);
+    const padded_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(padded).?, (try state_layout.frame(padded)).*);
     try expectFloat(24, padded_height - compact_height);
 }
 
 test "render policy: markdown headings resolve their own text paint" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "## Heading");
@@ -2628,6 +2737,8 @@ test "render policy: markdown headings resolve their own text paint" {
 test "layout metrics use the markdown block gap after a heading" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const compact = try state.makeObject(page, "compact", null, .text, .text, "## Heading\n\nBody");
@@ -2643,19 +2754,21 @@ test "layout metrics use the markdown block gap after a heading" {
         try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "line_height" }, .{ .number = 37 });
         // Standalone heading layout spacing must not override spacing inside a Markdown document.
         try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "spacing_after" }, .{ .number = 97 });
-        state.getNode(object).?.frame.width = 1000;
+        (try state_layout.frame(object)).*.width = 1000;
     }
     try setRecordNumberField(&state, compact, "text", "markdown_block_gap", 8);
     try setRecordNumberField(&state, relaxed, "text", "markdown_block_gap", 20);
 
-    const compact_height = metrics.intrinsicHeight(&state, state.getNode(compact).?);
-    const relaxed_height = metrics.intrinsicHeight(&state, state.getNode(relaxed).?);
+    const compact_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(compact).?, (try state_layout.frame(compact)).*);
+    const relaxed_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(relaxed).?, (try state_layout.frame(relaxed)).*);
     try expectFloat(12, relaxed_height - compact_height);
 }
 
 test "render policy: math alignment applies to markdown and vector math" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     const page = try state.addPage("Page");
     const text_object = try state.makeObject(page, "body", null, .text, .text, "$$x^2$$");
@@ -2690,8 +2803,10 @@ test "render policy: math alignment applies to markdown and vector math" {
 fn initPageGraph(state: *core.DocumentState, page_id: model.NodeId) !graph.PageLayoutGraph {
     var inputs = try core.layout.partition.Document.init(testing.allocator, state);
     defer inputs.deinit(testing.allocator);
+    var fixture = LayoutFixture.init(state);
+    defer fixture.deinit();
     for (inputs.pages) |page| {
-        if (page.page_id == page_id) return graph.PageLayoutGraph.init(testing.allocator, state, page);
+        if (page.page_id == page_id) return graph.PageLayoutGraph.init(testing.allocator, try fixture.work(), page);
     }
     return error.UnknownNode;
 }
@@ -2699,6 +2814,8 @@ fn initPageGraph(state: *core.DocumentState, page_id: model.NodeId) !graph.PageL
 test "layout graph: adjacency preserves shared parents and component order across allocation failures" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page = try state.addPage("page");
     const a = try state.makeObject(page, "a", null, .text, .text, "a");
     const b = try state.makeObject(page, "b", null, .text, .text, "b");
@@ -2717,7 +2834,9 @@ test "layout graph: adjacency preserves shared parents and component order acros
 }
 
 fn inspectIndexedPageGraph(allocator: std.mem.Allocator, state: *core.DocumentState, inputs: core.layout.partition.Page, target: model.NodeId, outer: model.NodeId) !void {
-    var page_graph = try graph.PageLayoutGraph.init(allocator, state, inputs);
+    var area = try core.layout.Workspace.init(allocator, state, inputs);
+    defer area.deinit();
+    var page_graph = try graph.PageLayoutGraph.init(allocator, &area, inputs);
     defer page_graph.deinit();
     try testing.expectEqual(@as(usize, 1), page_graph.default_alignment_constraints.len);
     try testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, page_graph.targetConstraintIndexes(target));
@@ -2725,14 +2844,14 @@ fn inspectIndexedPageGraph(allocator: std.mem.Allocator, state: *core.DocumentSt
     try testing.expectEqual(@as(f32, 30), page_graph.constraintTargetingAnchor(target, .left).?.offset);
     try testing.expectEqual(@as(usize, 0), page_graph.targetConstraintIndexes(9999).len);
     try testing.expectEqual(@as(usize, 0), page_graph.parentGroupIndexes(9999).len);
-    var workspace = try graph.AxisWorkspace.init(allocator, state, &page_graph, .horizontal);
+    var workspace = try graph.AxisWorkspace.init(allocator, &area, &page_graph, .horizontal);
     defer workspace.deinit();
-    var components = try workspace.dependencyComponents(allocator, state, .{});
+    var components = try workspace.dependencyComponents(allocator, &area, .{});
     defer components.deinit();
     try testing.expectEqualSlices(usize, &.{ 1, 2, 3, 4, 5 }, components.rootIndexes());
     try testing.expectEqualSlices(usize, &.{ 0, 1 }, components.memberIndexes(1));
-    try testing.expectEqual(@as(?usize, 0), components.fallbackRootIndex(state, 1));
-    var subgraph = try page_graph.groupSubgraph(allocator, state, outer);
+    try testing.expectEqual(@as(?usize, 0), components.fallbackRootIndex(&area, 1));
+    var subgraph = try page_graph.groupSubgraph(allocator, &area, outer);
     defer subgraph.deinit();
     try testing.expectEqualSlices(usize, &.{ 3, 0, 1, 4, 2 }, subgraph.indexes.items);
 }
@@ -2740,6 +2859,8 @@ fn inspectIndexedPageGraph(allocator: std.mem.Allocator, state: *core.DocumentSt
 test "layout graph: split constraints are deferred until measured outer frames are available" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page = try state.addPage("Split");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
@@ -2751,7 +2872,7 @@ test "layout graph: split constraints are deferred until measured outer frames a
     try state.collectDefaultAlignments();
     var inputs = try core.layout.partition.Document.init(testing.allocator, &state);
     defer inputs.deinit(testing.allocator);
-    var natural = try graph.PageLayoutGraph.init(testing.allocator, &state, inputs.pages[0]);
+    var natural = try graph.PageLayoutGraph.init(testing.allocator, try state_layout.work(), inputs.pages[0]);
     defer natural.deinit();
     try testing.expectEqual(@as(usize, 0), natural.constraints.len);
     try testing.expectEqual(@as(usize, 0), natural.default_alignment_constraints.len);
@@ -2761,10 +2882,12 @@ test "layout graph: split constraints are deferred until measured outer frames a
 }
 
 fn inspectSplitGraph(allocator: std.mem.Allocator, state: *core.DocumentState, inputs: core.layout.partition.Page, inner: model.NodeId, outer: model.NodeId) !void {
+    var area = try core.layout.Workspace.init(allocator, state, inputs);
+    defer area.deinit();
     const frames = try allocator.alloc(model.Frame, inputs.node_ids.len);
     defer allocator.free(frames);
     @memset(frames, .{ .x = 100, .y = 200, .width = 1000, .height = 400 });
-    var split = try graph.PageLayoutGraph.initWithSplitFrames(allocator, state, inputs, frames);
+    var split = try graph.PageLayoutGraph.initWithSplitFrames(allocator, &area, inputs, frames);
     defer split.deinit();
     try testing.expectEqual(@as(f32, 1000), split.splitFrame(outer).?.width);
     try testing.expect(split.splitFrame(inner) != null);
@@ -2790,7 +2913,7 @@ const WidthSensitiveMeasurement = struct {
     target: model.NodeId,
     last_width: f32 = 0,
 
-    fn measure(context: *anyopaque, _: *anyopaque, node: *const model.Node, width: f32, mode: model.LayoutMeasurementMode) !?model.LayoutMeasurement {
+    fn measure(context: *anyopaque, _: *core.layout.Workspace, node: *const model.Node, width: f32, mode: model.LayoutMeasurementMode) !?model.LayoutMeasurement {
         const self: *@This() = @ptrCast(@alignCast(context));
         if (node.id != self.target) return null;
         if (mode == .natural) return .{ .width = 48, .height = 36 };
@@ -2802,6 +2925,8 @@ const WidthSensitiveMeasurement = struct {
 fn expectHeightAtFinalWidth(width: f32, wrap: []const u8) !void {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page = try state.addPage("Final width");
     const object = try state.makeObject(page, "body", null, .text, .text, "width-dependent content");
     const follower = try state.makeObject(page, "following", null, .text, .text, "following content");
@@ -2811,12 +2936,12 @@ fn expectHeightAtFinalWidth(width: f32, wrap: []const u8) !void {
     try state.constraints.addAnchor(state.allocator, object, .top, .{ .page = .top }, -100, .{ .label = "body-top" });
     try state.constraints.addAnchor(state.allocator, follower, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, -10, .{ .label = "following-top" });
     var measurement = WidthSensitiveMeasurement{ .target = object };
-    try solveDocumentStateWithOptions(&state, null, .{ .measurement_provider = .{ .context = &measurement, .measure = WidthSensitiveMeasurement.measure } });
-    const frame = state.getNode(object).?.frame;
+    try solveDocumentStateWithOptions(&state_layout, null, .{ .measurement_provider = .{ .context = &measurement, .measure = WidthSensitiveMeasurement.measure } });
+    const frame = (try state_layout.frame(object)).*;
     try testing.expectEqual(width, frame.width);
     try testing.expectEqual(width, measurement.last_width);
     try expectFloat(72, frame.height);
-    const next = state.getNode(follower).?.frame;
+    const next = (try state_layout.frame(follower)).*;
     try expectFloat(core.layout.Defaults.height - 100 - 72 - 10, next.y + next.height);
 }
 
@@ -2835,18 +2960,51 @@ fn finalizeWithAllocationFailures(allocator: std.mem.Allocator, conflict: bool) 
     const object = try state.makeObject(page, "body", null, .text, .text, "");
     try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, 100, null);
     if (conflict) try state.constraints.addAnchor(state.allocator, object, .left, .{ .page = .left }, 120, null);
-    var result = solver.finalizeDocument(&state, null, .{ .jobs = 1 }) catch |err| {
-        if (!conflict or err != error.ConstraintConflict) return err;
-        try testing.expect(state.diagnostics.constraint_failures.items.len != 0);
-        return;
-    };
+    var result = try solver.finalizeDocument(&state, null, .{ .jobs = 1 });
     defer result.deinit(allocator);
-    try testing.expect(!conflict);
     try testing.expectEqual(@as(usize, 1), result.pages.len);
-    try expectFloat(100, state.getNode(object).?.frame.x);
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
+    if (conflict) {
+        try testing.expectError(error.ConstraintConflict, result.validate());
+        try testing.expect(result.failureCount() > 0);
+        try testing.expect(result.pages[0].constraint_failures[0].propagation != null);
+    } else {
+        try result.validate();
+        try expectFloat(100, result.nodeFrame(object).?.x);
+    }
 }
 
 test "layout solver: finalization releases results on every allocation failure" {
     try allocation_testing.checkAllAllocationFailures(testing.allocator, finalizeWithAllocationFailures, .{false});
     try allocation_testing.checkAllAllocationFailures(testing.allocator, finalizeWithAllocationFailures, .{true});
+}
+
+test "layout results preserve source and prior generations across sequential and parallel solves" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    var objects: [3]model.NodeId = undefined;
+    for (&objects, 0..) |*object, index| {
+        const page = try state.addPage("Page");
+        object.* = try state.makeObject(page, "body", null, .text, .text, "Hello");
+        try state.constraints.addAnchor(state.allocator, object.*, .left, .{ .page = .left }, if (index == 0) -40 else 60, .{ .label = "left" });
+        if (index == 1) try state.constraints.addAnchor(state.allocator, object.*, .left, .{ .page = .left }, 80, .{ .label = "conflicting-left" });
+    }
+    const node_count = state.graph.nodes.items.len;
+    var sequential = try solver.solveDocument(&state, null, .{ .jobs = 1 });
+    defer sequential.deinit(testing.allocator);
+    var parallel = try solver.solveDocument(&state, null, .{ .jobs = 3 });
+    defer parallel.deinit(testing.allocator);
+    try testing.expectEqualDeep(sequential.pages, parallel.pages);
+    try testing.expectEqual(node_count, state.graph.nodes.items.len);
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.constraint_failures.items.len);
+    try testing.expect(sequential.pages[0].diagnostics.len > 0);
+    try testing.expectError(error.ConstraintConflict, sequential.pages[1].validate());
+    try sequential.pages[2].validate();
+    const old_frame = sequential.nodeFrame(objects[2]).?;
+    state.constraints.active.items[3].offset = 90;
+    var next = try solver.finalizeDocument(&state, null, .{ .jobs = 1 });
+    defer next.deinit(testing.allocator);
+    try testing.expectEqualDeep(old_frame, sequential.nodeFrame(objects[2]).?);
+    try expectFloat(90, next.nodeFrame(objects[2]).?.x);
 }

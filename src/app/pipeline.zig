@@ -36,7 +36,17 @@ pub const AnalyzedProject = struct {
     }
 };
 
-pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.DocumentState {
+pub const BuiltDocument = struct {
+    state: core.DocumentState,
+    layouts: core.layout.Document,
+
+    pub fn deinit(self: *BuiltDocument) void {
+        self.layouts.deinit(self.state.allocator);
+        self.state.deinit();
+    }
+};
+
+pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !BuiltDocument {
     var render_cache_lease = try app_output.acquireRenderCacheLeaseOrPrintDiagnostic(io);
     defer render_cache_lease.deinit();
     var analyzed = try analyzeFile(io, allocator, request, progress, .evaluation);
@@ -46,8 +56,9 @@ pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.Source
     const state_allocator = analyzed.state.allocator;
     defer pages.deinit(state_allocator);
     var layouts = try solveLayouts(io, &analyzed.state, &pages, progress, request.layout_jobs, request.highlight_languages, null, null, null);
-    defer layouts.deinit(state_allocator);
-    return analyzed.takeState();
+    errdefer layouts.deinit(state_allocator);
+    try validateLayouts(&analyzed.state, &layouts);
+    return .{ .state = analyzed.takeState(), .layouts = layouts };
 }
 
 pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.DocumentState {
@@ -213,6 +224,7 @@ pub fn preparePages(state: *core.DocumentState, progress: ?*Progress) !core.prep
     return pages;
 }
 
+/// Returns owned results, including diagnosed failures. Validate after writing any requested diagnostics.
 pub fn solveLayouts(
     io: std.Io,
     state: *core.DocumentState,
@@ -241,6 +253,7 @@ pub fn solveLayouts(
         return err;
     };
     errdefer layouts.deinit(state.allocator);
+    error_report.printLayoutDiagnostics(state.projectPath(), state.projectSource(), state, &layouts);
     if (progress) |p| p.complete();
     error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
     if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
@@ -273,10 +286,19 @@ pub fn solveLayoutsWithTracePath(
         return err;
     };
     errdefer layouts.deinit(state.allocator);
+    error_report.printLayoutDiagnostics(state.projectPath(), state.projectSource(), state, &layouts);
+    try validateLayouts(state, &layouts);
     if (progress) |p| p.complete();
     error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
     if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
     return layouts;
+}
+
+pub fn validateLayouts(state: *core.DocumentState, layouts: *const core.layout.Document) !void {
+    layouts.validate() catch |err| {
+        if (layouts.failureCount() > 0) error_report.printConstraintFailure(state.projectPath(), state.projectSource(), state, layouts, err);
+        return error.DiagnosticsFailed;
+    };
 }
 
 fn preloadLayoutArtifacts(
@@ -350,7 +372,7 @@ fn printImportReadFailureDiagnostic(
 
 fn reportLayoutFailure(state: *core.DocumentState, err: anyerror) !void {
     switch (err) {
-        error.ConstraintConflict, error.NegativeFrameSize => error_report.printConstraintFailure(state.projectPath(), state.projectSource(), state, err),
+        error.ConstraintConflict, error.NegativeFrameSize => error_report.printConstraintFailure(state.projectPath(), state.projectSource(), state, &core.layout.Document{}, err),
         else => {
             error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
             if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;

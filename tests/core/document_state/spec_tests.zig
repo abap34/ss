@@ -618,10 +618,11 @@ test "document state spec: layout results collect solved page frames" {
     try testing.expectEqual(@as(usize, 1), results.pages.len);
     try testing.expectEqual(page, results.pages[0].page_id);
     const result_frame = results.frameOf(page, object) orelse return error.MissingLayoutFrame;
-    const node_frame = state.getNode(object).?.frame;
     try testing.expect(result_frame.x_set);
     try testing.expect(result_frame.y_set);
-    try testing.expectEqual(node_frame, result_frame);
+    try testing.expectEqual(@as(f32, 40), result_frame.x);
+    try testing.expectEqual(@as(f32, 640), result_frame.y + result_frame.height);
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
 }
 
 test "document state spec: layout results own page diagnostics" {
@@ -638,7 +639,7 @@ test "document state spec: layout results own page diagnostics" {
 
     try testing.expectEqual(@as(usize, 1), results.pages.len);
     try testing.expect(results.pages[0].diagnostics.len > 0);
-    try testing.expect(state.diagnostics.entries.items.len > 0);
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
     try testing.expectEqual(core.DiagnosticPhase.layout, results.pages[0].diagnostics[0].phase);
 }
 

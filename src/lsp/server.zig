@@ -748,10 +748,12 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     var prepared_owned = true;
     defer if (prepared_owned) prepared.deinit(state.allocator);
     try hook.server.checkCanceled();
-    const conflicts_json = try core.layout.conflicts.toJson(state.allocator, state);
+    const conflicts_json = try core.layout.conflicts.toJson(state.allocator, state, &prepared.layouts);
     errdefer state.allocator.free(conflicts_json);
-    if (!hook.include_editor_snapshot or hook.server.wysiwyg_paths.count() == 0) {
-        return .{ .conflicts_json = conflicts_json };
+    const layout_valid = if (prepared.layouts.validate()) |_| true else |_| false;
+    if (!layout_valid or !hook.include_editor_snapshot or hook.server.wysiwyg_paths.count() == 0) {
+        prepared_owned = false;
+        return .{ .conflicts_json = conflicts_json, .reuse_inputs = prepared };
     }
 
     if (hook.prefer_translation_patch) {
@@ -789,7 +791,7 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     }
 
     const render_start = utils.measure_profile.start();
-    var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &prepared.pages, .{
+    var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &prepared.pages, &prepared.layouts, .{
         .jobs = 1,
         .highlight_languages = hook.highlight_languages,
         .resource_cache = &hook.server.render_resource_cache,
@@ -840,9 +842,9 @@ fn cancelAnalysisLayoutTasks(tasks: *std.Io.Select(AnalysisLayoutTaskResult), al
     };
 }
 
-fn addAnalysisLayoutError(context: *anyopaque, state: *core.DocumentState, err: anyerror) !void {
+fn addAnalysisLayoutError(context: *anyopaque, state: *core.DocumentState, layouts: *const core.layout.Document, err: anyerror) !void {
     const hook: *AnalysisLayoutContext = @ptrCast(@alignCast(context));
-    try hook.diagnostics.addConstraintFailure(state, err);
+    try hook.diagnostics.addConstraintFailure(state, layouts, err);
 }
 
 fn putStringSet(allocator: std.mem.Allocator, set: *std.StringHashMap(void), value: []const u8) !void {

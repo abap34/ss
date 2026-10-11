@@ -79,7 +79,7 @@ pub const LayoutHookOutput = struct {
 pub const LayoutHook = struct {
     context: *anyopaque,
     run: *const fn (context: *anyopaque, state: *core.DocumentState, graph: *const execution.ExecutionGraph) anyerror!LayoutHookOutput,
-    on_error: ?*const fn (context: *anyopaque, state: *core.DocumentState, err: anyerror) anyerror!void = null,
+    on_error: ?*const fn (context: *anyopaque, state: *core.DocumentState, layouts: *const core.layout.Document, err: anyerror) anyerror!void = null,
 };
 
 pub const Options = struct {
@@ -274,12 +274,14 @@ pub const LayoutOutput = struct {
     pub fn fromDocumentState(
         allocator: std.mem.Allocator,
         state: *core.DocumentState,
+        layouts: *const core.layout.Document,
         owned_editor: ?editor_snapshot.Output,
         owned_conflicts_json: ?[]u8,
     ) !LayoutOutput {
         return try fromDocumentStateWithOwnedReport(
             allocator,
             state,
+            layouts,
             null,
             owned_editor,
             owned_conflicts_json,
@@ -289,6 +291,7 @@ pub const LayoutOutput = struct {
     pub fn fromDocumentStateWithOwnedReport(
         allocator: std.mem.Allocator,
         state: *core.DocumentState,
+        layouts: *const core.layout.Document,
         owned_report: ?core.layout.conflicts.Report,
         owned_editor: ?editor_snapshot.Output,
         owned_conflicts_json: ?[]u8,
@@ -297,9 +300,9 @@ pub const LayoutOutput = struct {
         errdefer if (report) |*value| value.deinit();
         var editor = owned_editor;
         errdefer if (editor) |*value| value.deinit();
-        const conflicts_json = owned_conflicts_json orelse try core.layout.conflicts.toJson(allocator, state);
+        const conflicts_json = owned_conflicts_json orelse try core.layout.conflicts.toJson(allocator, state, layouts);
         errdefer allocator.free(conflicts_json);
-        if (report == null) report = try core.layout.conflicts.Report.init(allocator, state);
+        if (report == null) report = try core.layout.conflicts.Report.init(allocator, state, layouts);
         const transferred_report = report.?;
         report = null;
         return .{
@@ -537,10 +540,22 @@ pub const AnalysisSnapshot = struct {
             self.layout_output = try LayoutOutput.fromDocumentStateWithOwnedReport(
                 self.allocator,
                 &inputs.state,
+                if (reuse_inputs) |*value| &value.layouts else &.{},
                 result.report,
                 result.editor,
                 result.conflicts_json,
             );
+            if (reuse_inputs) |*value| {
+                try diagnostics.addLayoutResult(&self.diagnostics, &inputs.state, &value.layouts);
+                value.layouts.validate() catch |err| {
+                    if (hook.on_error) |on_error| {
+                        if (value.layouts.failureCount() > 0 or !self.diagnostics.hasErrors())
+                            try on_error(hook.context, &inputs.state, &value.layouts, err);
+                    } else if (!self.diagnostics.hasErrors()) {
+                        try addBuildFailureDiagnostic(&self.diagnostics, self.project.entry_path, inputs.state.projectSource(), err, null);
+                    }
+                };
+            }
             try diagnostics.addDocumentStateFrom(&self.diagnostics, &inputs.state, inputs.diagnostic_count);
             if (retain_state) {
                 self.retained_layout_state = .{ .state = inputs.state, .reuse_inputs = reuse_inputs };
@@ -553,8 +568,8 @@ pub const AnalysisSnapshot = struct {
             error.NegativeFrameSize,
             => {
                 if (hook.on_error) |on_error| {
-                    try on_error(hook.context, &inputs.state, err);
-                    self.layout_output = try LayoutOutput.fromDocumentState(self.allocator, &inputs.state, null, null);
+                    try on_error(hook.context, &inputs.state, &.{}, err);
+                    self.layout_output = try LayoutOutput.fromDocumentState(self.allocator, &inputs.state, &.{}, null, null);
                 } else {
                     try addBuildFailureDiagnostic(&self.diagnostics, self.project.entry_path, inputs.state.projectSource(), err, null);
                 }
@@ -763,10 +778,22 @@ fn buildWithSyntax(
                     layout_output = try LayoutOutput.fromDocumentStateWithOwnedReport(
                         allocator,
                         &state,
+                        if (reuse_inputs) |*value| &value.layouts else &.{},
                         result.report,
                         result.editor,
                         result.conflicts_json,
                     );
+                    if (reuse_inputs) |*value| {
+                        try diagnostics.addLayoutResult(&diagnostic_bag, &state, &value.layouts);
+                        value.layouts.validate() catch |err| {
+                            if (hook.on_error) |on_error| {
+                                if (value.layouts.failureCount() > 0 or !diagnostic_bag.hasErrors())
+                                    try on_error(hook.context, &state, &value.layouts, err);
+                            } else if (!diagnostic_bag.hasErrors()) {
+                                try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), err, null);
+                            }
+                        };
+                    }
                     try diagnostics.addDocumentStateFrom(&diagnostic_bag, &state, analyzed_diagnostic_count);
                 } else |err| switch (err) {
                     error.Canceled => return error.Canceled,
@@ -774,8 +801,8 @@ fn buildWithSyntax(
                     error.NegativeFrameSize,
                     => {
                         if (hook.on_error) |on_error| {
-                            try on_error(hook.context, &state, err);
-                            layout_output = try LayoutOutput.fromDocumentState(allocator, &state, null, null);
+                            try on_error(hook.context, &state, &.{}, err);
+                            layout_output = try LayoutOutput.fromDocumentState(allocator, &state, &.{}, null, null);
                         } else {
                             try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), err, null);
                         }

@@ -1,3 +1,5 @@
+const DocumentState = @import("../core/document_state.zig").DocumentState;
+const Workspace = @import("workspace.zig").Workspace;
 const std = @import("std");
 const model = @import("model");
 const diagnostics = @import("diagnostics.zig");
@@ -20,25 +22,12 @@ const ConstraintTolerance = graph.ConstraintTolerance;
 
 pub const SolveOptions = graph.SolveOptions;
 
-pub fn solveDocument(state: anytype, trace_path: ?[]const u8, options: SolveOptions) !document.Document {
+pub fn solveDocument(state: *DocumentState, trace_path: ?[]const u8, options: SolveOptions) !document.Document {
     try graph.checkCancellation(options);
     var trace_session = layout_trace.Session{};
     try trace_session.begin(state.allocator, trace_path, options.trace_failure);
     var trace_active = true;
     defer if (trace_active) trace_session.abort(state.allocator);
-
-    for (state.graph.page_order.items) |page_id| {
-        try graph.checkCancellation(options);
-        const page = state.getNode(page_id) orelse return error.UnknownNode;
-        page.frame = .{
-            .x = 0,
-            .y = 0,
-            .width = Defaults.width,
-            .height = Defaults.height,
-            .x_set = true,
-            .y_set = true,
-        };
-    }
 
     const page_count = state.graph.page_order.items.len;
     if (page_count > 0) {
@@ -84,52 +73,46 @@ const PageJob = struct {
     page: partition.Page,
     page_index: usize,
 
-    fn run(self: PageJob, state: anytype, trace_session: *layout_trace.Session, options: SolveOptions) !document.Page {
+    fn run(self: PageJob, source: *DocumentState, trace_session: *layout_trace.Session, options: SolveOptions) !document.Page {
+        return self.runAllocated(source, source.allocator, trace_session, options);
+    }
+
+    fn runAllocated(self: PageJob, source: *DocumentState, allocator: std.mem.Allocator, trace_session: *layout_trace.Session, options: SolveOptions) !document.Page {
+        var state = try Workspace.init(allocator, source, self.page);
+        defer state.deinit();
         try graph.checkCancellation(options);
-        var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(state.allocator, options.measurement_provider);
+        var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(allocator, options.measurement_provider);
         defer measurement_cache.deinit();
-        const diagnostic_start = state.diagnostics.entries.items.len;
-        const failure_start = state.diagnostics.constraint_failures.items.len;
-        var result = solvePageLayout(state, self.page, self.page_index, &measurement_cache, trace_session, options) catch |err| switch (err) {
-            error.LayoutDidNotConverge => try self.unconvergedPage(state, diagnostic_start, failure_start, options),
-            else => return err,
+        var result = solvePageLayout(&state, self.page, self.page_index, &measurement_cache, trace_session, options) catch |err| switch (err) {
+            error.LayoutDidNotConverge => try self.unconvergedPage(&state, 0, 0, options),
+            error.OutOfMemory, error.Canceled => return err,
+            else => blk: {
+                if (state.diagnostics.entries.items.len == 0) return err;
+                var failed = try collectPage(&state, self.page.page_id, self.page_index, self.page.node_ids, &.{}, &.{}, 0, 0, options);
+                failed.failure = err;
+                break :blk failed;
+            },
         };
-        errdefer result.deinit(state.allocator);
+        errdefer result.deinit(allocator);
         try graph.checkCancellation(options);
         return result;
     }
 
-    fn runIsolated(self: PageJob, state: anytype, allocator: std.mem.Allocator, options: SolveOptions) !document.Page {
-        try graph.checkCancellation(options);
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-
-        var local_context = state.*;
-        local_context.allocator = arena.allocator();
-        local_context.diagnostics = .{};
-        defer local_context.diagnostics.deinit(local_context.allocator);
+    fn runIsolated(self: PageJob, source: *DocumentState, allocator: std.mem.Allocator, options: SolveOptions) !document.Page {
         var local_options = options;
         local_options.progress = null;
-        var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(local_context.allocator, local_options.measurement_provider);
-        defer measurement_cache.deinit();
         var trace_session = layout_trace.Session{};
-        var result = solvePageLayout(&local_context, self.page, self.page_index, &measurement_cache, &trace_session, local_options) catch |err| switch (err) {
-            error.LayoutDidNotConverge => try self.unconvergedPage(&local_context, 0, 0, local_options),
-            else => return err,
-        };
-        defer result.deinit(local_context.allocator);
-        try graph.checkCancellation(options);
-        return try clonePage(allocator, &result);
+        return self.runAllocated(source, allocator, &trace_session, local_options);
     }
 
-    fn unconvergedPage(self: PageJob, state: anytype, diagnostic_start: usize, failure_start: usize, options: SolveOptions) !document.Page {
+    fn unconvergedPage(self: PageJob, state: *Workspace, diagnostic_start: usize, failure_start: usize, options: SolveOptions) !document.Page {
         var result = try collectPage(state, self.page.page_id, self.page_index, self.page.node_ids, &.{}, &.{}, diagnostic_start, failure_start, options);
         result.converged = false;
         return result;
     }
 };
 
-pub fn solvePage(state: anytype, inputs: partition.Page, page_index: usize, trace_path: ?[]const u8, options: SolveOptions) !document.Page {
+pub fn solvePage(state: *DocumentState, inputs: partition.Page, page_index: usize, trace_path: ?[]const u8, options: SolveOptions) !document.Page {
     if (page_index >= state.graph.page_order.items.len or state.graph.page_order.items[page_index] != inputs.page_id) {
         return error.InvalidPageLayoutInputs;
     }
@@ -142,34 +125,6 @@ pub fn solvePage(state: anytype, inputs: partition.Page, page_index: usize, trac
     try trace_session.end(state.allocator);
     trace_active = false;
     return result;
-}
-
-pub fn applyPage(state: anytype, page: *const document.Page) !void {
-    if (!page.converged) return error.LayoutDidNotConverge;
-    var constraints = std.ArrayList(Constraint).empty;
-    errdefer constraints.deinit(state.allocator);
-    try constraints.ensureTotalCapacity(state.allocator, state.constraints.fallback.items.len + page.fallback_constraints.len);
-    var inserted = false;
-    const page_index = state.pageIndexOf(page.page_id);
-    for (state.constraints.fallback.items) |constraint| {
-        const owner = state.layoutPageOf(constraint.target_node);
-        if (!inserted and owner != null and state.pageIndexOf(owner.?) >= page_index) {
-            constraints.appendSliceAssumeCapacity(page.fallback_constraints);
-            inserted = true;
-        }
-        if (owner != page.page_id) constraints.appendAssumeCapacity(constraint);
-    }
-    if (!inserted) constraints.appendSliceAssumeCapacity(page.fallback_constraints);
-    for (page.object_frames) |entry| {
-        if (state.getNode(entry.node_id) == null) return error.UnknownNode;
-    }
-    for (page.object_frames) |entry| {
-        const node = state.getNode(entry.node_id).?;
-        node.frame = entry.frame;
-        node.layout_measurement = entry.measurement;
-    }
-    state.constraints.fallback.deinit(state.allocator);
-    state.constraints.fallback = constraints;
 }
 
 const PageLayoutJobOutput = struct {
@@ -191,7 +146,7 @@ fn PageWork(comptime ContextPtr: type) type {
 }
 
 fn runPageJobs(
-    state: anytype,
+    state: *DocumentState,
     jobs: []const PageJob,
     options: SolveOptions,
     parallel_allowed: bool,
@@ -203,7 +158,7 @@ fn runPageJobs(
     return try runPageJobsParallel(state, jobs, options, worker_count, out);
 }
 
-fn runPageJobsSequential(state: anytype, jobs: []const PageJob, trace_session: *layout_trace.Session, options: SolveOptions, out: *std.ArrayList(document.Page)) !void {
+fn runPageJobsSequential(state: *DocumentState, jobs: []const PageJob, trace_session: *layout_trace.Session, options: SolveOptions, out: *std.ArrayList(document.Page)) !void {
     for (jobs, 0..) |job, completed_index| {
         try graph.checkCancellation(options);
         var result = try job.run(state, trace_session, options);
@@ -215,7 +170,7 @@ fn runPageJobsSequential(state: anytype, jobs: []const PageJob, trace_session: *
     }
 }
 
-fn runPageJobsParallel(state: anytype, jobs: []const PageJob, options: SolveOptions, worker_count: usize, out: *std.ArrayList(document.Page)) !void {
+fn runPageJobsParallel(state: *DocumentState, jobs: []const PageJob, options: SolveOptions, worker_count: usize, out: *std.ArrayList(document.Page)) !void {
     try graph.checkCancellation(options);
     const ContextPtr = @TypeOf(state);
     const outputs = try state.allocator.alloc(PageLayoutJobOutput, jobs.len);
@@ -268,7 +223,6 @@ fn runPageJobsParallel(state: anytype, jobs: []const PageJob, options: SolveOpti
         var cloned = try clonePage(state.allocator, result);
         var cloned_transferred = false;
         errdefer if (!cloned_transferred) cloned.deinit(state.allocator);
-        try mergePageLayoutIssues(state, &cloned);
         try out.append(state.allocator, cloned);
         cloned_transferred = true;
     }
@@ -363,6 +317,8 @@ fn clonePage(allocator: std.mem.Allocator, result: *const document.Page) !docume
         .page_id = result.page_id,
         .index = result.index,
         .converged = result.converged,
+        .failure = result.failure,
+        .frame = result.frame,
         .object_frames = object_frames,
         .fallback_constraints = fallback_constraints,
         .diagnostics = diagnostics_slice,
@@ -370,70 +326,26 @@ fn clonePage(allocator: std.mem.Allocator, result: *const document.Page) !docume
     };
 }
 
-fn mergePageLayoutIssues(state: anytype, result: *const document.Page) !void {
-    for (result.diagnostics) |diagnostic| {
-        var cloned = try diagnostic.clone(state.allocator);
-        errdefer cloned.deinit(state.allocator);
-        try state.diagnostics.addDiagnostic(state.allocator, cloned);
-    }
-    for (result.constraint_failures) |failure| {
-        var cloned = try failure.clone(state.allocator);
-        errdefer cloned.deinit(state.allocator);
-        try state.diagnostics.constraint_failures.append(state.allocator, cloned);
-    }
-}
-
-/// Solve and apply a document, retrying constraint failures with propagation details.
-pub fn finalizeDocument(state: anytype, trace_path: ?[]const u8, options: SolveOptions) !document.Document {
-    try graph.checkCancellation(options);
-    state.diagnostics.clearDiagnosticsForPhase(state.allocator, .layout);
-    state.diagnostics.clearConstraintFailures(state.allocator);
+/// Retain both successful and failed pages, retrying conflicts with propagation details.
+pub fn finalizeDocument(state: *DocumentState, trace_path: ?[]const u8, options: SolveOptions) !document.Document {
     var results = try solveDocument(state, trace_path, options);
-    {
-        errdefer results.deinit(state.allocator);
-        try graph.checkCancellation(options);
-        if (state.diagnostics.constraint_failures.items.len == 0) {
-            try graph.checkCancellation(options);
-            try applyDocument(state, &results);
-            return results;
-        }
-    }
-    const first_kind = state.diagnostics.constraint_failures.items[0].kind;
-    results.deinit(state.allocator);
-    state.diagnostics.clearDiagnosticsForPhase(state.allocator, .layout);
-    state.diagnostics.clearConstraintFailures(state.allocator);
-    var propagation_options = options;
-    propagation_options.record_propagation = true;
-    var detailed = try solveDocument(state, trace_path, propagation_options);
-    defer detailed.deinit(state.allocator);
+    errdefer results.deinit(state.allocator);
     try graph.checkCancellation(options);
-    const kind = if (state.diagnostics.constraint_failures.items.len == 0)
-        first_kind
-    else
-        state.diagnostics.constraint_failures.items[0].kind;
-    return switch (kind) {
-        .conflict => error.ConstraintConflict,
-        .negative_frame_size => error.NegativeFrameSize,
+    var has_failures = false;
+    for (results.pages) |page| if (page.constraint_failures.len > 0) {
+        has_failures = true;
+        break;
     };
-}
-
-pub fn applyDocument(state: anytype, results: *const document.Document) !void {
-    for (results.pages) |page| {
-        if (!page.converged) return error.LayoutDidNotConverge;
-    }
-    state.constraints.fallback.clearRetainingCapacity();
-    for (results.pages) |page| {
-        try state.constraints.fallback.appendSlice(state.allocator, page.fallback_constraints);
-        for (page.object_frames) |entry| {
-            const node = state.getNode(entry.node_id) orelse return error.UnknownNode;
-            node.frame = entry.frame;
-            node.layout_measurement = entry.measurement;
-        }
-    }
+    if (!has_failures or options.record_propagation) return results;
+    var detailed_options = options;
+    detailed_options.record_propagation = true;
+    const detailed = try solveDocument(state, trace_path, detailed_options);
+    results.deinit(state.allocator);
+    return detailed;
 }
 
 fn solvePageLayout(
-    state: anytype,
+    state: *Workspace,
     page_inputs: partition.Page,
     page_index: usize,
     measurement_cache: *metrics.MeasurementCache,
@@ -442,7 +354,7 @@ fn solvePageLayout(
 ) !document.Page {
     var has_split = false;
     for (page_inputs.constraint_indexes) |index| {
-        if (state.constraints.active.items[index].group_split) {
+        if (state.source.constraints.active.items[index].group_split) {
             has_split = true;
             break;
         }
@@ -454,12 +366,12 @@ fn solvePageLayout(
     defer measured.deinit(state.allocator);
     const frames = try state.allocator.alloc(model.Frame, page_inputs.node_ids.len);
     defer state.allocator.free(frames);
-    for (page_inputs.node_ids, frames) |node_id, *frame| frame.* = state.getNode(node_id).?.frame;
+    for (page_inputs.node_ids, frames) |node_id, *frame| frame.* = state.frame(node_id).*;
     return solvePageLayoutPass(state, page_inputs, page_index, measurement_cache, trace_session, options, frames, false);
 }
 
 fn solvePageLayoutPass(
-    state: anytype,
+    state: *Workspace,
     page_inputs: partition.Page,
     page_index: usize,
     measurement_cache: *metrics.MeasurementCache,
@@ -527,12 +439,12 @@ fn solvePageLayoutPass(
 
     for (page_graph.child_ids, vertical.states) |child_id, v_state| {
         try graph.checkCancellation(options);
-        const node = state.getNode(child_id) orelse return error.UnknownNode;
-        node.frame.height = v_state.size orelse node.frame.height;
-        node.frame.y_set = false;
+        const node = state.source.getNode(child_id) orelse return error.UnknownNode;
+        state.frame(node.id).*.height = v_state.size orelse state.frame(node.id).*.height;
+        state.frame(node.id).*.y_set = false;
         if (v_state.start) |y| {
-            node.frame.y = y;
-            node.frame.y_set = true;
+            state.frame(node.id).*.y = y;
+            state.frame(node.id).*.y_set = true;
         }
     }
 
@@ -556,7 +468,7 @@ fn solvePageLayoutPass(
 }
 
 fn collectPage(
-    state: anytype,
+    state: *Workspace,
     page_id: NodeId,
     page_index: usize,
     child_ids: []const NodeId,
@@ -583,12 +495,12 @@ fn collectPage(
     try fallback_constraints.appendSlice(state.allocator, vertical_fallback);
     for (child_ids) |child_id| {
         try graph.checkCancellation(options);
-        const node = state.getNode(child_id) orelse return error.UnknownNode;
+        const node = state.source.getNode(child_id) orelse return error.UnknownNode;
         if (node.kind != .object) continue;
         try frames.append(state.allocator, .{
             .node_id = child_id,
-            .frame = node.frame,
-            .measurement = node.layout_measurement,
+            .frame = state.frame(node.id).*,
+            .measurement = state.measurement(node.id).*,
         });
     }
     for (state.diagnostics.entries.items[diagnostic_start..]) |diagnostic| {
@@ -639,6 +551,7 @@ fn collectPage(
     return .{
         .page_id = page_id,
         .index = page_index,
+        .frame = state.frame(page_id).*,
         .object_frames = frame_slice,
         .fallback_constraints = fallback_slice,
         .diagnostics = diagnostic_slice,
@@ -646,47 +559,47 @@ fn collectPage(
     };
 }
 
-fn initializePageObjectMeasurements(state: anytype, page_graph: *const graph.PageLayoutGraph, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !void {
+fn initializePageObjectMeasurements(state: *Workspace, page_graph: *const graph.PageLayoutGraph, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !void {
     for (page_graph.child_ids) |node_id| {
         try graph.checkCancellation(options);
-        const node = state.getNode(node_id) orelse return error.UnknownNode;
+        const node = state.source.getNode(node_id) orelse return error.UnknownNode;
         if (node.kind != .object) continue;
-        node.layout_measurement = null;
-        node.frame.x = 0;
-        node.frame.y = 0;
-        node.frame.x_set = false;
-        node.frame.y_set = false;
-        node.frame.width = try metrics.intrinsicWidthCached(state, node, measurement_cache);
-        node.frame.height = try metrics.intrinsicHeightCached(state, node, measurement_cache);
+        state.measurement(node.id).* = null;
+        state.frame(node.id).*.x = 0;
+        state.frame(node.id).*.y = 0;
+        state.frame(node.id).*.x_set = false;
+        state.frame(node.id).*.y_set = false;
+        state.frame(node.id).*.width = try metrics.intrinsicWidthCached(state, node, measurement_cache);
+        state.frame(node.id).*.height = try metrics.intrinsicHeightCached(state, node, state.frame(node.id).*, measurement_cache);
     }
 }
 
-fn applySolvedHorizontalFrames(state: anytype, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !void {
+fn applySolvedHorizontalFrames(state: *Workspace, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !void {
     for (workspace.graph.child_ids, workspace.states) |child_id, h_state| {
         try graph.checkCancellation(options);
-        const node = state.getNode(child_id) orelse return error.UnknownNode;
-        const old_width = node.frame.width;
+        const node = state.source.getNode(child_id) orelse return error.UnknownNode;
+        const old_width = state.frame(node.id).*.width;
         const solved_width = h_state.size orelse old_width;
-        node.frame.width = solved_width;
+        state.frame(node.id).*.width = solved_width;
         // Height may change discontinuously at any width, including content
         // such as tables whose cells wrap independently of the outer policy.
         if (solved_width != old_width) {
-            node.frame.height = try metrics.intrinsicHeightCached(state, node, measurement_cache);
+            state.frame(node.id).*.height = try metrics.intrinsicHeightCached(state, node, state.frame(node.id).*, measurement_cache);
         }
-        node.frame.x_set = false;
+        state.frame(node.id).*.x_set = false;
         if (h_state.start) |x| {
-            node.frame.x = x;
-            node.frame.x_set = true;
+            state.frame(node.id).*.x = x;
+            state.frame(node.id).*.x_set = true;
         }
     }
 }
 
-pub fn settleHorizontalAxis(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
+pub fn settleHorizontalAxis(state: *Workspace, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
     var trace_session = layout_trace.Session{};
     try settleHorizontalAxisWithTrace(state, workspace, &trace_session, options);
 }
 
-fn settleHorizontalAxisWithTrace(state: anytype, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !void {
+fn settleHorizontalAxisWithTrace(state: *Workspace, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !void {
     var pass: usize = 0;
     const limit = axis_propagation.groupIterationLimit(workspace.states.len);
     while (pass < limit) : (pass += 1) {
@@ -698,7 +611,7 @@ fn settleHorizontalAxisWithTrace(state: anytype, workspace: *graph.AxisWorkspace
     return axis_propagation.nonConvergenceError(state, workspace, options, .horizontal_groups, pass, limit, null);
 }
 
-fn finalizeHorizontalGroupStates(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
+fn finalizeHorizontalGroupStates(state: *Workspace, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
     var any_changed = false;
     var pass: usize = 0;
     const limit = axis_propagation.groupIterationLimit(workspace.states.len);
@@ -714,7 +627,7 @@ fn finalizeHorizontalGroupStates(state: anytype, workspace: *graph.AxisWorkspace
     return axis_propagation.nonConvergenceError(state, workspace, options, .horizontal_groups, pass, limit, null);
 }
 
-fn capDefaultWrappedHorizontalWidths(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
+fn capDefaultWrappedHorizontalWidths(state: *Workspace, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
     var changed = false;
     for (workspace.graph.child_ids, workspace.states) |child_id, *axis_state| {
         try graph.checkCancellation(options);
@@ -722,11 +635,11 @@ fn capDefaultWrappedHorizontalWidths(state: anytype, workspace: *graph.AxisWorks
         if (axis_state.start == null or axis_state.size == null) continue;
         if (axis_state.end_source != null or axis_state.size_source != null) continue;
 
-        const node = state.getNode(child_id) orelse return error.UnknownNode;
+        const node = state.source.getNode(child_id) orelse return error.UnknownNode;
         if (groups.isGroupNode(node)) continue;
         if (!metrics.shouldWrapNode(state, node)) continue;
 
-        const style = style_defaults.styleForNode(state, node);
+        const style = style_defaults.styleForNode(state.source, node);
         const max_right = containingHorizontalRight(state, workspace, child_id) orelse
             (Defaults.width - style.default_right_inset);
         const capped_width = @max(@as(f32, 1.0), max_right - axis_state.start.?);
@@ -742,7 +655,7 @@ fn capDefaultWrappedHorizontalWidths(state: anytype, workspace: *graph.AxisWorks
     return changed;
 }
 
-fn containingHorizontalRight(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) ?f32 {
+fn containingHorizontalRight(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId) ?f32 {
     var right: ?f32 = null;
     for (workspace.graph.parentGroupIndexes(node_id)) |parent_index| {
         const parent_id = workspace.nodeAt(parent_index);
@@ -751,7 +664,7 @@ fn containingHorizontalRight(state: anytype, workspace: *const graph.AxisWorkspa
             workspace.graph.hardTargetAnchorCount(parent_id, .horizontal) >= 2 or
             fallback.defaultSplitGroupWidth(state, workspace, parent_id, .{}) != null;
         const parent_right = if (bounded and frame.end != null)
-            frame.end.? - metrics.chromePadX(state, state.getNode(parent_id).?)
+            frame.end.? - metrics.chromePadX(state, state.source.getNode(parent_id).?)
         else
             containingHorizontalRight(state, workspace, parent_id) orelse continue;
         right = @min(right orelse parent_right, parent_right);
@@ -759,17 +672,17 @@ fn containingHorizontalRight(state: anytype, workspace: *const graph.AxisWorkspa
     return right;
 }
 
-fn solvePageAxis(state: anytype, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !void {
+fn solvePageAxis(state: *Workspace, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !void {
     try graph.checkCancellation(options);
     _ = try runPageAxisPassWithTrace(state, workspace, trace_session, options);
 
     for (workspace.graph.child_ids, workspace.states, 0..) |child_id, *axis_state, index| {
         try graph.checkCancellation(options);
         if (axis_state.size == null) {
-            const node = state.getNode(child_id) orelse return error.UnknownNode;
+            const node = state.source.getNode(child_id) orelse return error.UnknownNode;
             axis_state.size = switch (workspace.axis) {
-                .horizontal => node.frame.width,
-                .vertical => node.frame.height,
+                .horizontal => state.frame(node.id).*.width,
+                .vertical => state.frame(node.id).*.height,
             };
             axis_state.size_is_default = true;
             try recordDefaultSizePropagation(state, workspace, index, axis_state.size.?);
@@ -780,12 +693,12 @@ fn solvePageAxis(state: anytype, workspace: *graph.AxisWorkspace, trace_session:
     _ = try runPageAxisPassWithTrace(state, workspace, trace_session, options);
 }
 
-pub fn runPageAxisPass(state: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
+pub fn runPageAxisPass(state: *Workspace, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
     var trace_session = layout_trace.Session{};
     return runPageAxisPassWithTrace(state, workspace, &trace_session, options);
 }
 
-fn runPageAxisPassWithTrace(state: anytype, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !bool {
+fn runPageAxisPassWithTrace(state: *Workspace, workspace: *graph.AxisWorkspace, trace_session: *layout_trace.Session, options: SolveOptions) !bool {
     const trace_enabled = trace_session.shouldTraceAxisPass(workspace);
     const run_id = if (trace_enabled) trace_session.nextRunId() else 0;
     if (trace_enabled) trace_session.axisPassBegin(state.allocator, state, workspace, run_id);
@@ -879,7 +792,7 @@ fn runPageAxisPassWithTrace(state: anytype, workspace: *graph.AxisWorkspace, tra
     return any_changed;
 }
 
-fn reconcileAxisStateLocalized(state: anytype, workspace: *graph.AxisWorkspace, index: usize, axis_state: *AxisState, options: SolveOptions) !bool {
+fn reconcileAxisStateLocalized(state: *Workspace, workspace: *graph.AxisWorkspace, index: usize, axis_state: *AxisState, options: SolveOptions) !bool {
     const changed = graph.reconcileAxisState(axis_state) catch |err| switch (err) {
         error.ConstraintConflict, error.NegativeFrameSize => blk: {
             const incoming = axis_state.size_source orelse axis_state.end_source orelse axis_state.start_source orelse axis_state.center_source;
@@ -909,7 +822,7 @@ fn reconcileAxisStateLocalized(state: anytype, workspace: *graph.AxisWorkspace, 
     return changed;
 }
 
-fn reconcileAppliedAxisState(state: anytype, workspace: *graph.AxisWorkspace, index: usize) !void {
+fn reconcileAppliedAxisState(state: *Workspace, workspace: *graph.AxisWorkspace, index: usize) !void {
     const changed = graph.reconcileAxisState(&workspace.states[index]) catch return;
     if (changed) try recordReconciledPropagation(state, workspace, index);
 }
@@ -944,7 +857,7 @@ fn constraintsSame(a: Constraint, b: Constraint) bool {
 }
 
 fn applyAxisConstraint(
-    state: anytype,
+    state: *Workspace,
     workspace: *graph.AxisWorkspace,
     constraint: Constraint,
     is_soft: bool,
@@ -955,7 +868,7 @@ fn applyAxisConstraint(
     if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) return false;
 
     const target_index = workspace.indexOf(constraint.target_node) orelse return false;
-    const target_node = state.getNode(constraint.target_node) orelse return error.UnknownNode;
+    const target_node = state.source.getNode(constraint.target_node) orelse return error.UnknownNode;
     if (groups.isGroupNode(target_node)) return false;
 
     switch (graph.classifySelfConstraint(constraint, workspace.axis)) {
@@ -1149,7 +1062,7 @@ fn applyAxisConstraint(
     return applied;
 }
 
-fn canMoveDefaultSizedAnchor(state: anytype, workspace: *const graph.AxisWorkspace, target_index: usize) bool {
+fn canMoveDefaultSizedAnchor(state: *Workspace, workspace: *const graph.AxisWorkspace, target_index: usize) bool {
     const axis_state = workspace.states[target_index];
     if (!axis_state.size_is_default or axis_state.size == null) return false;
     _ = state;
@@ -1162,7 +1075,7 @@ fn canMoveDefaultSizedAnchor(state: anytype, workspace: *const graph.AxisWorkspa
     return true;
 }
 
-fn canReplaceDuplicateDefaultAnchor(state: anytype, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
+fn canReplaceDuplicateDefaultAnchor(state: *Workspace, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
     const axis_state = workspace.states[target_index];
     if (!axis_state.size_is_default or axis_state.size == null) return false;
     _ = state;
@@ -1171,7 +1084,7 @@ fn canReplaceDuplicateDefaultAnchor(state: anytype, workspace: *const graph.Axis
     return !constraintInSlice(workspace.soft_constraints, existing);
 }
 
-fn shouldReplaceDefaultGeometry(state: anytype, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
+fn shouldReplaceDefaultGeometry(state: *Workspace, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
     const axis_state = workspace.states[target_index];
     if (!axis_state.size_is_default) return false;
     _ = state;
@@ -1190,7 +1103,7 @@ fn constraintInSlice(constraints: []const Constraint, needle: Constraint) bool {
 }
 
 fn applyReverseAxisConstraint(
-    state: anytype,
+    state: *Workspace,
     workspace: *graph.AxisWorkspace,
     constraint: Constraint,
     is_soft: bool,
@@ -1210,7 +1123,7 @@ fn applyReverseAxisConstraint(
     };
     if (graph.anchorAxis(node_source.anchor) != workspace.axis) return error.ConstraintAxisMismatch;
 
-    const source_node = state.getNode(node_source.node_id) orelse return error.UnknownNode;
+    const source_node = state.source.getNode(node_source.node_id) orelse return error.UnknownNode;
     if (groups.isGroupNode(source_node)) return false;
 
     const source_index = workspace.indexOf(node_source.node_id) orelse return false;
@@ -1267,7 +1180,7 @@ fn applyReverseAxisConstraint(
     return applied;
 }
 
-fn recordDefaultSizePropagation(state: anytype, workspace: *graph.AxisWorkspace, index: usize, value: f32) !void {
+fn recordDefaultSizePropagation(state: *Workspace, workspace: *graph.AxisWorkspace, index: usize, value: f32) !void {
     const tracker = workspace.propagation orelse return;
     var trace = graph.PropagationTrace{};
     errdefer trace.deinit(state.allocator);
@@ -1281,7 +1194,7 @@ fn recordDefaultSizePropagation(state: anytype, workspace: *graph.AxisWorkspace,
     tracker.setTrace(index, .size, trace);
 }
 
-fn recordAnchorConstraintPropagation(state: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, value: f32) !void {
+fn recordAnchorConstraintPropagation(state: *Workspace, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, value: f32) !void {
     const tracker = workspace.propagation orelse return;
     var trace = try sourceTraceForConstraint(state, workspace, constraint);
     errdefer trace.deinit(state.allocator);
@@ -1289,7 +1202,7 @@ fn recordAnchorConstraintPropagation(state: anytype, workspace: *graph.AxisWorks
     tracker.setTrace(target_index, anchorSlot(constraint.target_anchor), trace);
 }
 
-fn recordReverseAnchorConstraintPropagation(state: anytype, workspace: *graph.AxisWorkspace, source_index: usize, constraint: Constraint, value: f32) !void {
+fn recordReverseAnchorConstraintPropagation(state: *Workspace, workspace: *graph.AxisWorkspace, source_index: usize, constraint: Constraint, value: f32) !void {
     const tracker = workspace.propagation orelse return;
     const target_value = graph.axisAnchorValue(workspace.states[workspace.indexOf(constraint.target_node) orelse return], constraint.target_anchor) orelse value + constraint.offset;
     var trace = try traceForNodeAnchorOrSeed(state, workspace, constraint.target_node, constraint.target_anchor, target_value);
@@ -1311,7 +1224,7 @@ fn shouldRecordSizeConstraintPropagation(workspace: *graph.AxisWorkspace, target
     return true;
 }
 
-fn recordSizeConstraintPropagation(state: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, value: f32) !void {
+fn recordSizeConstraintPropagation(state: *Workspace, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, value: f32) !void {
     const tracker = workspace.propagation orelse return;
     var trace = graph.PropagationTrace{};
     errdefer trace.deinit(state.allocator);
@@ -1320,13 +1233,13 @@ fn recordSizeConstraintPropagation(state: anytype, workspace: *graph.AxisWorkspa
     try recordReconciledPropagation(state, workspace, target_index);
 }
 
-fn recordReconciledPropagation(state: anytype, workspace: *graph.AxisWorkspace, index: usize) !void {
+fn recordReconciledPropagation(state: *Workspace, workspace: *graph.AxisWorkspace, index: usize) !void {
     if (workspace.propagation == null) return;
     try recordDerivedSlot(state, workspace, index, .start);
     try recordDerivedSlot(state, workspace, index, .end);
 }
 
-fn recordDerivedSlot(state: anytype, workspace: *graph.AxisWorkspace, index: usize, slot: graph.PropagationSlot) !void {
+fn recordDerivedSlot(state: *Workspace, workspace: *graph.AxisWorkspace, index: usize, slot: graph.PropagationSlot) !void {
     const tracker = workspace.propagation orelse return;
     const axis_state = workspace.states[index];
     if (tracker.trace(index, slot) != null) return;
@@ -1401,7 +1314,7 @@ fn slotValue(state: AxisState, slot: graph.PropagationSlot) ?f32 {
     };
 }
 
-fn sourceTraceForConstraint(state: anytype, workspace: *graph.AxisWorkspace, constraint: Constraint) !graph.PropagationTrace {
+fn sourceTraceForConstraint(state: *Workspace, workspace: *graph.AxisWorkspace, constraint: Constraint) !graph.PropagationTrace {
     return switch (constraint.source) {
         .page => |anchor| try pageAnchorTrace(state, workspace, anchor),
         .node => |source| blk: {
@@ -1411,7 +1324,7 @@ fn sourceTraceForConstraint(state: anytype, workspace: *graph.AxisWorkspace, con
     };
 }
 
-fn traceForNodeAnchorOrSeed(state: anytype, workspace: *graph.AxisWorkspace, node_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
+fn traceForNodeAnchorOrSeed(state: *Workspace, workspace: *graph.AxisWorkspace, node_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
     if (workspace.propagation) |tracker| {
         if (workspace.indexOf(node_id)) |index| {
             if (tracker.trace(index, anchorSlot(anchor))) |existing| return try existing.clone(state.allocator);
@@ -1429,19 +1342,19 @@ fn traceForNodeAnchorOrSeed(state: anytype, workspace: *graph.AxisWorkspace, nod
     return trace;
 }
 
-fn pageAnchorTrace(state: anytype, workspace: *graph.AxisWorkspace, anchor: model.Anchor) !graph.PropagationTrace {
+fn pageAnchorTrace(state: *Workspace, workspace: *graph.AxisWorkspace, anchor: model.Anchor) !graph.PropagationTrace {
     var trace = graph.PropagationTrace{};
     errdefer trace.deinit(state.allocator);
-    const page = state.getNode(workspace.graph.page_id) orelse return error.UnknownNode;
+    const page = state.source.getNode(workspace.graph.page_id) orelse return error.UnknownNode;
     try trace.appendOwnedLine(state.allocator, try std.fmt.allocPrint(
         state.allocator,
         "page.{s} = {d:.1}",
-        .{ @tagName(anchor), graph.anchorValue(page.frame, anchor) },
+        .{ @tagName(anchor), graph.anchorValue(state.frame(page.id).*, anchor) },
     ));
     return trace;
 }
 
-fn appendConstraintLine(state: anytype, trace: *graph.PropagationTrace, constraint: Constraint, value: f32, reverse: bool) !void {
+fn appendConstraintLine(state: *Workspace, trace: *graph.PropagationTrace, constraint: Constraint, value: f32, reverse: bool) !void {
     const prefix = if (trace.lines.items.len == 0) "" else "→ ";
     const target_label = if (reverse)
         try reverseTargetLabel(state.allocator, state, constraint)
@@ -1466,7 +1379,7 @@ fn appendConstraintLine(state: anytype, trace: *graph.PropagationTrace, constrai
     try trace.appendOwnedLineWithSource(state.allocator, line, source_text);
 }
 
-fn appendSizeLine(state: anytype, workspace: *graph.AxisWorkspace, trace: *graph.PropagationTrace, target_index: usize, constraint: Constraint, value: f32) !void {
+fn appendSizeLine(state: *Workspace, workspace: *graph.AxisWorkspace, trace: *graph.PropagationTrace, target_index: usize, constraint: Constraint, value: f32) !void {
     const prefix = if (trace.lines.items.len == 0) "" else "→ ";
     const size_label = try nodeSlotLabel(state.allocator, state, workspace, target_index, .size);
     defer state.allocator.free(size_label);
@@ -1511,7 +1424,7 @@ fn appendSizeLine(state: anytype, workspace: *graph.AxisWorkspace, trace: *graph
     try trace.appendOwnedLineWithSource(state.allocator, line, source_text);
 }
 
-fn appendDerivedLine(state: anytype, workspace: *graph.AxisWorkspace, trace: *graph.PropagationTrace, index: usize, slot: graph.PropagationSlot, pair: DerivationPair, value: f32) !void {
+fn appendDerivedLine(state: *Workspace, workspace: *graph.AxisWorkspace, trace: *graph.PropagationTrace, index: usize, slot: graph.PropagationSlot, pair: DerivationPair, value: f32) !void {
     const target_label = try nodeSlotLabel(state.allocator, state, workspace, index, slot);
     defer state.allocator.free(target_label);
     const first_label = try nodeSlotLabel(state.allocator, state, workspace, index, pair.first);
@@ -1525,20 +1438,20 @@ fn appendDerivedLine(state: anytype, workspace: *graph.AxisWorkspace, trace: *gr
     ));
 }
 
-fn constraintOriginLabel(allocator: std.mem.Allocator, state: anytype, constraint: Constraint) ![]const u8 {
+fn constraintOriginLabel(allocator: std.mem.Allocator, state: *Workspace, constraint: Constraint) ![]const u8 {
     const origin_text = constraint.origin orelse return allocator.dupe(u8, "fallback");
     const located = origin_text.location() orelse return allocator.dupe(u8, "unknown");
-    var path = state.projectPath();
-    var source = state.projectModule().line_index;
+    var path = state.source.projectPath();
+    var source = state.source.projectModule().line_index;
     if (located.path) |origin_path| {
-        if (state.moduleByPathOrSpec(origin_path)) |module| {
+        if (state.source.moduleByPathOrSpec(origin_path)) |module| {
             path = module.path orelse module.spec;
             source = module.line_index;
         } else {
             path = origin_path;
         }
     } else {
-        const module = state.projectModule();
+        const module = state.source.projectModule();
         path = module.path orelse module.spec;
         source = module.line_index;
     }
@@ -1554,7 +1467,7 @@ fn anchorSlot(anchor: model.Anchor) graph.PropagationSlot {
     };
 }
 
-fn nodeSlotLabel(allocator: std.mem.Allocator, state: anytype, workspace: *const graph.AxisWorkspace, index: usize, slot: graph.PropagationSlot) ![]const u8 {
+fn nodeSlotLabel(allocator: std.mem.Allocator, state: *Workspace, workspace: *const graph.AxisWorkspace, index: usize, slot: graph.PropagationSlot) ![]const u8 {
     const node_id = workspace.nodeAt(index);
     const suffix = switch (slot) {
         .start => if (workspace.axis == .horizontal) "left" else "bottom",
@@ -1565,18 +1478,18 @@ fn nodeSlotLabel(allocator: std.mem.Allocator, state: anytype, workspace: *const
     return std.fmt.allocPrint(allocator, "{s}.{s}", .{ nodeLabel(state, node_id), suffix });
 }
 
-fn nodeAnchorLabel(allocator: std.mem.Allocator, state: anytype, node_id: NodeId, anchor: model.Anchor) ![]const u8 {
+fn nodeAnchorLabel(allocator: std.mem.Allocator, state: *Workspace, node_id: NodeId, anchor: model.Anchor) ![]const u8 {
     return std.fmt.allocPrint(allocator, "{s}.{s}", .{ nodeLabel(state, node_id), @tagName(anchor) });
 }
 
-fn reverseTargetLabel(allocator: std.mem.Allocator, state: anytype, constraint: Constraint) ![]const u8 {
+fn reverseTargetLabel(allocator: std.mem.Allocator, state: *Workspace, constraint: Constraint) ![]const u8 {
     return switch (constraint.source) {
         .page => std.fmt.allocPrint(allocator, "page.unknown", .{}),
         .node => |source| nodeAnchorLabel(allocator, state, source.node_id, source.anchor),
     };
 }
 
-fn constraintSourceLabel(allocator: std.mem.Allocator, state: anytype, constraint: Constraint) ![]const u8 {
+fn constraintSourceLabel(allocator: std.mem.Allocator, state: *Workspace, constraint: Constraint) ![]const u8 {
     const label = try switch (constraint.source) {
         .page => |anchor| std.fmt.allocPrint(allocator, "page.{s}", .{@tagName(anchor)}),
         .node => |node_source| nodeAnchorLabel(allocator, state, node_source.node_id, node_source.anchor),
@@ -1586,12 +1499,12 @@ fn constraintSourceLabel(allocator: std.mem.Allocator, state: anytype, constrain
     return std.fmt.allocPrint(allocator, "{s} + {d} * source.{s}", .{ label, constraint.source_extent_factor, if (graph.anchorAxis(constraint.target_anchor) == .horizontal) "width" else "height" });
 }
 
-fn nodeLabel(state: anytype, node_id: NodeId) []const u8 {
-    const node = state.getNode(node_id) orelse return "unknown";
+fn nodeLabel(state: *Workspace, node_id: NodeId) []const u8 {
+    const node = state.source.getNode(node_id) orelse return "unknown";
     return node.role orelse node.name;
 }
 
-fn anchorConflictPropagation(state: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, incoming_value: f32) !?model.ConstraintPropagation {
+fn anchorConflictPropagation(state: *Workspace, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, incoming_value: f32) !?model.ConstraintPropagation {
     if (workspace.propagation == null) return null;
     const current_value = graph.axisAnchorValue(workspace.states[target_index], constraint.target_anchor) orelse return null;
     var current = try traceForNodeAnchorOrSeed(state, workspace, constraint.target_node, constraint.target_anchor, current_value);
@@ -1617,7 +1530,7 @@ fn anchorConflictPropagation(state: anytype, workspace: *graph.AxisWorkspace, ta
     );
 }
 
-fn reverseAnchorConflictPropagation(state: anytype, workspace: *graph.AxisWorkspace, source_index: usize, constraint: Constraint, incoming_value: f32) !?model.ConstraintPropagation {
+fn reverseAnchorConflictPropagation(state: *Workspace, workspace: *graph.AxisWorkspace, source_index: usize, constraint: Constraint, incoming_value: f32) !?model.ConstraintPropagation {
     if (workspace.propagation == null) return null;
     const node_source = switch (constraint.source) {
         .page => return null,
@@ -1648,7 +1561,7 @@ fn reverseAnchorConflictPropagation(state: anytype, workspace: *graph.AxisWorksp
     );
 }
 
-fn sizeConflictPropagation(state: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, current_value: ?f32, incoming_value: f32) !?model.ConstraintPropagation {
+fn sizeConflictPropagation(state: *Workspace, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, current_value: ?f32, incoming_value: f32) !?model.ConstraintPropagation {
     if (workspace.propagation == null) return null;
     const current_size = current_value orelse return null;
     var current = try traceForSlotOrSeed(state, workspace, target_index, .size, current_size);
@@ -1674,7 +1587,7 @@ fn sizeConflictPropagation(state: anytype, workspace: *graph.AxisWorkspace, targ
     );
 }
 
-fn negativeSizePropagation(state: anytype, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, size: f32) !?model.ConstraintPropagation {
+fn negativeSizePropagation(state: *Workspace, workspace: *graph.AxisWorkspace, target_index: usize, constraint: Constraint, size: f32) !?model.ConstraintPropagation {
     if (workspace.propagation == null) return null;
     var trace = graph.PropagationTrace{};
     defer trace.deinit(state.allocator);
@@ -1694,7 +1607,7 @@ fn negativeSizePropagation(state: anytype, workspace: *graph.AxisWorkspace, targ
     );
 }
 
-fn negativeAnchorPropagation(state: anytype, workspace: *graph.AxisWorkspace, target_index: usize) !?model.ConstraintPropagation {
+fn negativeAnchorPropagation(state: *Workspace, workspace: *graph.AxisWorkspace, target_index: usize) !?model.ConstraintPropagation {
     if (workspace.propagation == null) return null;
     const start_value = workspace.states[target_index].start;
     const end_value = workspace.states[target_index].end;
@@ -1702,7 +1615,7 @@ fn negativeAnchorPropagation(state: anytype, workspace: *graph.AxisWorkspace, ta
     return try frameEdgePropagation(state, workspace, target_index, start_value.?, end_value.?);
 }
 
-fn reconciliationFailurePropagation(state: anytype, workspace: *graph.AxisWorkspace, index: usize, axis_state: *const AxisState, err: anyerror) !?model.ConstraintPropagation {
+fn reconciliationFailurePropagation(state: *Workspace, workspace: *graph.AxisWorkspace, index: usize, axis_state: *const AxisState, err: anyerror) !?model.ConstraintPropagation {
     if (workspace.propagation == null) return null;
     if (err == error.NegativeFrameSize and axis_state.start != null and axis_state.end != null) {
         return try frameEdgePropagation(state, workspace, index, axis_state.start.?, axis_state.end.?);
@@ -1710,7 +1623,7 @@ fn reconciliationFailurePropagation(state: anytype, workspace: *graph.AxisWorksp
     return null;
 }
 
-fn frameEdgePropagation(state: anytype, workspace: *graph.AxisWorkspace, index: usize, start_value: f32, end_value: f32) !?model.ConstraintPropagation {
+fn frameEdgePropagation(state: *Workspace, workspace: *graph.AxisWorkspace, index: usize, start_value: f32, end_value: f32) !?model.ConstraintPropagation {
     var start_trace = try traceForSlotOrSeed(state, workspace, index, .start, start_value);
     defer start_trace.deinit(state.allocator);
     var end_trace = try traceForSlotOrSeed(state, workspace, index, .end, end_value);
@@ -1737,7 +1650,7 @@ fn frameEdgePropagation(state: anytype, workspace: *graph.AxisWorkspace, index: 
     );
 }
 
-fn traceForSlotOrSeed(state: anytype, workspace: *graph.AxisWorkspace, index: usize, slot: graph.PropagationSlot, value: f32) !graph.PropagationTrace {
+fn traceForSlotOrSeed(state: *Workspace, workspace: *graph.AxisWorkspace, index: usize, slot: graph.PropagationSlot, value: f32) !graph.PropagationTrace {
     if (workspace.propagation) |tracker| {
         if (tracker.trace(index, slot)) |existing| return try existing.clone(state.allocator);
     }
@@ -1840,7 +1753,7 @@ fn modelPathFromTrace(allocator: std.mem.Allocator, title: []const u8, trace: *c
     };
 }
 
-fn validatePageConstraints(state: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, options: SolveOptions) !void {
+fn validatePageConstraints(state: *Workspace, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, options: SolveOptions) !void {
     for (page_graph.constraints) |constraint| {
         try graph.checkCancellation(options);
         if (page_graph.indexOf(constraint.target_node) == null) continue;
@@ -1878,7 +1791,7 @@ const ConstraintEndpoint = struct {
     anchor: model.Anchor,
 };
 
-fn constraintCyclePropagation(state: anytype, page_graph: *const graph.PageLayoutGraph, start_constraint: Constraint) !?model.ConstraintPropagation {
+fn constraintCyclePropagation(state: *Workspace, page_graph: *const graph.PageLayoutGraph, start_constraint: Constraint) !?model.ConstraintPropagation {
     const axis = graph.anchorAxis(start_constraint.target_anchor);
     const start_endpoint: ConstraintEndpoint = .{ .node_id = start_constraint.target_node, .anchor = start_constraint.target_anchor };
     var current = start_constraint;
@@ -1916,7 +1829,7 @@ fn constraintCyclePropagation(state: anytype, page_graph: *const graph.PageLayou
 }
 
 fn validationConflictPropagation(
-    state: anytype,
+    state: *Workspace,
     page_id: NodeId,
     page_graph: *const graph.PageLayoutGraph,
     constraint: Constraint,
@@ -1958,7 +1871,7 @@ fn validationConflictPropagation(
     );
 }
 
-fn finalConstraintTrace(state: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, constraint: Constraint, value: f32, depth: usize) anyerror!graph.PropagationTrace {
+fn finalConstraintTrace(state: *Workspace, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, constraint: Constraint, value: f32, depth: usize) anyerror!graph.PropagationTrace {
     if (depth > page_graph.constraints.len) return finalNodeAnchorTrace(state, constraint.target_node, constraint.target_anchor, value);
     var anchor_constraint = constraint;
     anchor_constraint.source_extent_factor = 0;
@@ -1972,7 +1885,7 @@ fn finalConstraintTrace(state: anytype, page_id: NodeId, page_graph: *const grap
     return trace;
 }
 
-fn finalConstraintSourceTrace(state: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, source: model.ConstraintSource, value: f32, depth: usize) anyerror!graph.PropagationTrace {
+fn finalConstraintSourceTrace(state: *Workspace, page_id: NodeId, page_graph: *const graph.PageLayoutGraph, source: model.ConstraintSource, value: f32, depth: usize) anyerror!graph.PropagationTrace {
     return switch (source) {
         .page => |anchor| try finalPageAnchorTrace(state, page_id, anchor, value),
         .node => |node_source| blk: {
@@ -1984,7 +1897,7 @@ fn finalConstraintSourceTrace(state: anytype, page_id: NodeId, page_graph: *cons
     };
 }
 
-fn finalPageAnchorTrace(state: anytype, page_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
+fn finalPageAnchorTrace(state: *Workspace, page_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
     _ = page_id;
     var trace = graph.PropagationTrace{};
     errdefer trace.deinit(state.allocator);
@@ -1996,7 +1909,7 @@ fn finalPageAnchorTrace(state: anytype, page_id: NodeId, anchor: model.Anchor, v
     return trace;
 }
 
-fn finalNodeAnchorTrace(state: anytype, node_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
+fn finalNodeAnchorTrace(state: *Workspace, node_id: NodeId, anchor: model.Anchor, value: f32) !graph.PropagationTrace {
     var trace = graph.PropagationTrace{};
     errdefer trace.deinit(state.allocator);
     const label = try nodeAnchorLabel(state.allocator, state, node_id, anchor);
@@ -2005,7 +1918,7 @@ fn finalNodeAnchorTrace(state: anytype, node_id: NodeId, anchor: model.Anchor, v
     return trace;
 }
 
-fn appendCycleConstraintLine(state: anytype, trace: *graph.PropagationTrace, constraint: Constraint, accumulated_offset: f32) !void {
+fn appendCycleConstraintLine(state: *Workspace, trace: *graph.PropagationTrace, constraint: Constraint, accumulated_offset: f32) !void {
     const prefix = if (trace.lines.items.len == 0) "" else "→ ";
     const target_label = try nodeAnchorLabel(state.allocator, state, constraint.target_node, constraint.target_anchor);
     defer state.allocator.free(target_label);
@@ -2034,7 +1947,7 @@ fn constraintEndpointSame(a: ConstraintEndpoint, b: ConstraintEndpoint) bool {
     return a.node_id == b.node_id and a.anchor == b.anchor;
 }
 
-fn constraintAlreadyFailed(state: anytype, constraint: Constraint) bool {
+fn constraintAlreadyFailed(state: *Workspace, constraint: Constraint) bool {
     for (state.diagnostics.constraint_failures.items) |failure| {
         if (constraintsSame(failure.constraint, constraint)) return true;
     }
@@ -2057,12 +1970,12 @@ const FinalAnchorValue = union(enum) {
     unknown: void,
 };
 
-fn finalConstraintSourceValue(state: anytype, page_id: NodeId, constraint: Constraint) !FinalAnchorValue {
+fn finalConstraintSourceValue(state: *Workspace, page_id: NodeId, constraint: Constraint) !FinalAnchorValue {
     const value: FinalAnchorValue = switch (constraint.source) {
         .page => |anchor| blk: {
-            const page = state.getNode(page_id) orelse return error.UnknownNode;
-            if (!graph.anchorKnown(page.frame, anchor)) break :blk .{ .unknown = {} };
-            break :blk .{ .known = graph.anchorValue(page.frame, anchor) };
+            const page = state.source.getNode(page_id) orelse return error.UnknownNode;
+            if (!graph.anchorKnown(state.frame(page.id).*, anchor)) break :blk .{ .unknown = {} };
+            break :blk .{ .known = graph.anchorValue(state.frame(page.id).*, anchor) };
         },
         .node => |node_source| try finalNodeAnchorValue(state, node_source.node_id, node_source.anchor),
     };
@@ -2071,13 +1984,14 @@ fn finalConstraintSourceValue(state: anytype, page_id: NodeId, constraint: Const
         .page => page_id,
         .node => |node| node.node_id,
     };
-    const node = state.getNode(id) orelse return error.UnknownNode;
-    const extent = if (graph.anchorAxis(constraint.target_anchor) == .horizontal) node.frame.width else node.frame.height;
+    const node = state.source.getNode(id) orelse return error.UnknownNode;
+    const extent = if (graph.anchorAxis(constraint.target_anchor) == .horizontal) state.frame(node.id).*.width else state.frame(node.id).*.height;
     return .{ .known = value.known + constraint.source_extent_factor * extent };
 }
 
-fn finalNodeAnchorValue(state: anytype, node_id: NodeId, anchor: model.Anchor) !FinalAnchorValue {
-    const node = state.getNode(node_id) orelse return error.UnknownNode;
-    if (!graph.anchorKnown(node.frame, anchor)) return .{ .unknown = {} };
-    return .{ .known = graph.anchorValue(node.frame, anchor) };
+fn finalNodeAnchorValue(state: *Workspace, node_id: NodeId, anchor: model.Anchor) !FinalAnchorValue {
+    const node = state.source.getNode(node_id) orelse return error.UnknownNode;
+    const geometry = state.geometry.get(node.id) orelse return .{ .unknown = {} };
+    if (!graph.anchorKnown(geometry.frame, anchor)) return .{ .unknown = {} };
+    return .{ .known = graph.anchorValue(geometry.frame, anchor) };
 }

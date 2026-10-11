@@ -23,9 +23,10 @@ pub const CollectedTranslations = struct {
 pub fn collectTranslations(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
+    layouts: *const core.layout.Document,
     previous: *const core.layout.conflicts.Report,
 ) !?CollectedTranslations {
-    var current = try core.layout.conflicts.Report.init(allocator, state);
+    var current = try core.layout.conflicts.Report.init(allocator, state, layouts);
     var current_owned = true;
     defer if (current_owned) current.deinit();
     if (current.failure_count != 0 or

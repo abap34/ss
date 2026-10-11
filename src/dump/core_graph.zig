@@ -4,16 +4,16 @@ const core = @import("core");
 const utils = @import("utils");
 const json = utils.json;
 
-pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, state: *core.DocumentState) !void {
+pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, state: *core.DocumentState, layouts: *const core.layout.Document) !void {
     var nodes = try root.arrayField("nodes");
     for (state.graph.nodes.items) |node| {
         if (node.kind == .object and !node.attached) continue;
-        try writeNode(allocator, &nodes, state, node);
+        try writeNode(allocator, &nodes, state, node, layouts);
     }
     try nodes.end();
 }
 
-fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.DocumentState, node: core.Node) !void {
+fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.DocumentState, node: core.Node, layouts: *const core.layout.Document) !void {
     const render = core.render_policy.resolve(state, &node);
     const display_content = core.nodeDisplayContent(&node);
     const has_display_content = display_content.len != 0 or node.content != null or node.display_content != null;
@@ -68,11 +68,12 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.Docu
     try writeRenderEnv(&item, render_env);
     try item.optionalIntField("page_index", node.page_index);
     try utils.err.writeOriginField(&item, "origin", node.origin);
-    try item.floatField("x", node.frame.x, "{d:.1}");
-    try item.floatField("y", node.frame.y, "{d:.1}");
-    try item.floatField("width", node.frame.width, "{d:.1}");
-    try item.floatField("height", node.frame.height, "{d:.1}");
-    if (node.layout_measurement) |measured| {
+    const frame = layouts.nodeFrame(node.id) orelse core.Frame{};
+    try item.floatField("x", frame.x, "{d:.1}");
+    try item.floatField("y", frame.y, "{d:.1}");
+    try item.floatField("width", frame.width, "{d:.1}");
+    try item.floatField("height", frame.height, "{d:.1}");
+    if (layouts.measurementOf(node.id)) |measured| {
         var measurement = try item.objectField("measurement");
         try writeMeasurementBounds(&measurement, "logical_bounds", measured.logicalBounds());
         if (measured.ink_bounds) |ink| {

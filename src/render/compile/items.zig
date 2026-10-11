@@ -414,17 +414,16 @@ pub const LayoutMeasurementScope = struct {
 
     fn measureLayoutNode(
         context: *anyopaque,
-        state_ptr: *anyopaque,
+        state: *core.layout.Workspace,
         node: *const core.Node,
         width: f32,
         mode: core.LayoutMeasurementMode,
     ) anyerror!?core.LayoutMeasurement {
         const scope: *LayoutMeasurementScope = @ptrCast(@alignCast(context));
-        const state: *core.DocumentState = @ptrCast(@alignCast(state_ptr));
         return try scope.measureNode(state, node, width, mode);
     }
 
-    fn measureNode(self: *LayoutMeasurementScope, state: *core.DocumentState, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
+    fn measureNode(self: *LayoutMeasurementScope, state: *core.layout.Workspace, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
         try std.Io.checkCancel(self.io);
         const profile_total = utils.measure_profile.start();
         defer utils.measure_profile.recordLayoutMeasurementTotal(profile_total);
@@ -432,7 +431,8 @@ pub const LayoutMeasurementScope = struct {
         if (node.kind != .object) return null;
 
         const profile_object_command = utils.measure_profile.start();
-        var command = try self.objectCommandForNode(state.allocator, node, width, mode);
+        var command = try self.objectCommandForNode(state.allocator, node, state.frame(node.id).*, width, mode);
+        command.page_id = state.source.layoutPageOf(node.id) orelse return error.UnknownNode;
         utils.measure_profile.recordLayoutMeasurementObjectCommand(profile_object_command);
         defer command.deinit(state.allocator);
 
@@ -506,14 +506,15 @@ pub const LayoutMeasurementScope = struct {
         );
     }
 
-    fn objectCommandForNode(self: *LayoutMeasurementScope, _: Allocator, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !ObjectCommand {
+    fn objectCommandForNode(self: *LayoutMeasurementScope, _: Allocator, node: *const core.Node, frame: Frame, width: f32, mode: core.LayoutMeasurementMode) !ObjectCommand {
         const object = self.preparedObject(node.id) orelse return error.MissingPreparedObject;
-        return objectCommandForObject(node, object, width, mode);
+        return objectCommandForObject(node, object, frame, width, mode);
     }
 
     fn objectCommandForObject(
         node: *const core.Node,
         object: *const core.prepared.PreparedObject,
+        frame: Frame,
         width: f32,
         mode: core.LayoutMeasurementMode,
     ) ObjectCommand {
@@ -528,7 +529,7 @@ pub const LayoutMeasurementScope = struct {
                 .x = 0,
                 .y = 0,
                 .width = @max(width, 1),
-                .height = measurementFrameHeight(node, mode),
+                .height = measurementFrameHeight(frame, mode),
             },
             .content = object.content,
             .content_provenance = object.content_provenance,
@@ -551,9 +552,9 @@ pub const LayoutMeasurementScope = struct {
     }
 };
 
-fn measurementFrameHeight(node: *const core.Node, mode: core.LayoutMeasurementMode) f32 {
-    if (mode == .width_constrained and node.frame.height > 0) {
-        return @max(node.frame.height, 1);
+fn measurementFrameHeight(frame: Frame, mode: core.LayoutMeasurementMode) f32 {
+    if (mode == .width_constrained and frame.height > 0) {
+        return @max(frame.height, 1);
     }
     return Defaults.height;
 }
@@ -687,9 +688,12 @@ pub const Compiler = struct {
         allocator: Allocator,
         state: *core.DocumentState,
         prepared_page: *const core.prepared.PreparedPage,
+        layout: *const core.layout.Page,
         resources: *render_resources.Builder,
         fonts: *render_ir.FontBuilder,
     ) !render_ir.Page {
+        try layout.validate();
+        if (layout.page_id != prepared_page.page_id or layout.index != prepared_page.index) return error.InvalidPageLayoutInputs;
         try std.Io.checkCancel(self.io);
         const font_environment = self.font_environment orelse
             try render_text.fontEnvironmentSnapshot();
@@ -709,7 +713,7 @@ pub const Compiler = struct {
             .synthetic_font_detected = &synthetic_font_detected,
         };
 
-        const commands = try buildObjectCommands(allocator, state, prepared_page);
+        const commands = try buildObjectCommands(allocator, state, prepared_page, layout);
         defer {
             for (commands) |*command| command.deinit(allocator);
             allocator.free(commands);
@@ -831,6 +835,7 @@ fn buildObjectCommands(
     allocator: Allocator,
     state: *core.DocumentState,
     page_unit: *const core.prepared.PreparedPage,
+    layout: *const core.layout.Page,
 ) ![]ObjectCommand {
     var commands = std.ArrayList(ObjectCommand).empty;
     errdefer {
@@ -842,7 +847,7 @@ fn buildObjectCommands(
         const node = state.getNode(object.node_id) orelse continue;
         if (node.kind != .object or !object.attached) continue;
         if ((state.parentPageOf(node.id) orelse continue) != page_unit.page_id) continue;
-        commands.appendAssumeCapacity(initObjectCommand(page_unit.page_id, node, object, node.frame));
+        commands.appendAssumeCapacity(initObjectCommand(page_unit.page_id, node, object, layout.frameOf(node.id) orelse return error.MissingObjectLayout));
     }
     return try commands.toOwnedSlice(allocator);
 }
@@ -1109,13 +1114,13 @@ fn appendUniqueIndex(allocator: Allocator, values: *std.ArrayList(usize), value:
     try values.append(allocator, value);
 }
 
-fn addPreloadRenderDiagnostic(state: *core.DocumentState, task: PreloadTask, err: anyerror, failure: ?*const CommandFailure) !void {
+fn addPreloadRenderDiagnostic(state: anytype, task: PreloadTask, err: anyerror, failure: ?*const CommandFailure) !void {
     const target = preloadTaskTarget(task);
     try addTargetedRenderDiagnostic(state, target, preloadTaskLabel(task), err, failure);
 }
 
 fn addTargetedRenderDiagnostic(
-    state: *core.DocumentState,
+    state: anytype,
     target: RenderDiagnosticTarget,
     label: []const u8,
     err: anyerror,
@@ -1200,7 +1205,7 @@ fn preloadTaskDiagnosticOrigin(target: RenderDiagnosticTarget) ?core.SourceOrigi
     return target.origin;
 }
 
-fn addObjectCommandDiagnostic(state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, failure: ?*const CommandFailure) !void {
+fn addObjectCommandDiagnostic(state: anytype, command: *const ObjectCommand, err: anyerror, failure: ?*const CommandFailure) !void {
     try addTargetedRenderDiagnostic(state, objectCommandDiagnosticTarget(command), objectCommandLabel(command), err, failure);
 }
 
@@ -1214,7 +1219,7 @@ fn addObjectFontSubstitutionWarning(state: *core.DocumentState, command: *const 
     try addFontFaceSubstitutionWarning(state, target.page_id, target.node_id, origin, synthetic_font);
 }
 
-fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, failure: ?*const CommandFailure) !void {
+fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: anytype, command: *const ObjectCommand, err: anyerror, failure: ?*const CommandFailure) !void {
     var tasks = std.ArrayList(PreloadTask).empty;
     defer {
         freePreloadTasks(ctx.allocator, tasks.items);

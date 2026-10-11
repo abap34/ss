@@ -45,6 +45,20 @@ pub fn addDocumentStateFrom(bag: *DiagnosticBag, state: *core.DocumentState, sta
     }
 }
 
+pub fn addLayoutResult(bag: *DiagnosticBag, state: *core.DocumentState, layouts: *const core.layout.Document) !void {
+    for (layouts.pages) |page| {
+        for (page.diagnostics) |diagnostic| {
+            const message = try utils.err.formatContextDiagnostic(bag.allocator, diagnostic);
+            defer bag.allocator.free(message);
+            const location = diagnosticLocation(state, diagnostic);
+            try bag.add(location.path, location.source, diagnostic.severity, diagnostic.code(), message, location.span, null);
+        }
+        if (!page.converged and page.diagnostics.len == 0) {
+            try bag.add(state.projectPath(), state.projectSource(), .@"error", "LayoutDidNotConverge", "LayoutDidNotConverge: the page layout did not converge", null, null);
+        }
+    }
+}
+
 const DiagnosticLocation = struct {
     path: []const u8,
     source: []const u8,

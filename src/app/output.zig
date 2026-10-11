@@ -179,6 +179,7 @@ pub fn writePdfOrPrintDiagnostics(
     allocator: std.mem.Allocator,
     io: std.Io,
     state: *core.DocumentState,
+    layouts: *const core.layout.Document,
     ir: *const render.Ir,
     output_path: []const u8,
     options: types.RenderOptions,
@@ -201,7 +202,7 @@ pub fn writePdfOrPrintDiagnostics(
                 printUnclassifiedPdfFailure(output_path, err);
             }
         }
-        writeDiagnosticsJsonIfRequested(io, allocator, state, diagnostics_json_path) catch {};
+        writeDiagnosticsJsonIfRequested(io, allocator, state, layouts, diagnostics_json_path) catch {};
         return error.DiagnosticsFailed;
     };
 }
@@ -210,11 +211,12 @@ pub fn writeDiagnosticsJsonIfRequested(
     io: std.Io,
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
+    layouts: *const core.layout.Document,
     diagnostics_json_path: ?[]const u8,
 ) !void {
     const path = diagnostics_json_path orelse return;
     try validateOutputPathAgainstSources(io, allocator, state, path, .diagnostics_json);
-    const data = error_report.irDiagnosticsJson(allocator, state.projectPath(), state.projectSource(), state, .{}) catch |err| {
+    const data = error_report.irDiagnosticsJson(allocator, state.projectPath(), state.projectSource(), state, layouts, .{}) catch |err| {
         printDiagnosticsSerializationFailure(path, err);
         return error.DiagnosticsFailed;
     };

@@ -11,14 +11,12 @@ const ConstraintRole = model.ConstraintRole;
 
 pub const DocumentConstraints = struct {
     active: std.ArrayList(Constraint) = .empty,
-    fallback: std.ArrayList(Constraint) = .empty,
     updates: std.ArrayList(model.ConstraintUpdate) = .empty,
     overridden: std.ArrayList(Constraint) = .empty,
     default_alignments_collected: bool = false,
 
     pub fn deinit(self: *DocumentConstraints, allocator: Allocator) void {
         self.active.deinit(allocator);
-        self.fallback.deinit(allocator);
         self.updates.deinit(allocator);
         self.overridden.deinit(allocator);
     }

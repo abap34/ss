@@ -223,7 +223,15 @@ pub fn printDocumentStateDiagnostics(path: []const u8, text: []const u8, state: 
 
 pub fn printDocumentStateDiagnosticsFrom(path: []const u8, text: []const u8, state: anytype, start: usize) void {
     const first = @min(start, state.diagnostics.entries.items.len);
-    for (state.diagnostics.entries.items[first..]) |diagnostic| {
+    printDiagnostics(path, text, state, state.diagnostics.entries.items[first..], null);
+}
+
+pub fn printLayoutDiagnostics(path: []const u8, text: []const u8, state: anytype, layouts: anytype) void {
+    for (layouts.pages) |page| printDiagnostics(path, text, state, page.diagnostics, layouts);
+}
+
+fn printDiagnostics(path: []const u8, text: []const u8, state: anytype, diagnostics: []const model.Diagnostic, layouts: anytype) void {
+    for (diagnostics) |diagnostic| {
         var resolved = resolveContextDiagnostic(state.allocator, path, text, state, diagnostic) catch {
             var message_buf: [128]u8 = undefined;
             print(.{
@@ -245,24 +253,24 @@ pub fn printDocumentStateDiagnosticsFrom(path: []const u8, text: []const u8, sta
             .message = resolved.message,
             .span = resolved.span,
         });
-        printContextDiagnosticDetailsWithSource(path, text, state, diagnostic);
+        printContextDiagnosticDetailsWithSource(path, text, state, diagnostic, layouts);
     }
 }
 
 fn printContextDiagnosticDetails(state: anytype, diagnostic: anytype) void {
-    printContextDiagnosticDetailsWithSource("", "", state, diagnostic);
+    printContextDiagnosticDetailsWithSource("", "", state, diagnostic, null);
 }
 
-fn printContextDiagnosticDetailsWithSource(default_path: []const u8, default_source: []const u8, state: anytype, diagnostic: anytype) void {
+fn printContextDiagnosticDetailsWithSource(default_path: []const u8, default_source: []const u8, state: anytype, diagnostic: anytype, layouts: anytype) void {
     switch (diagnostic.data) {
-        .page_overflow => |data| printPageOverflowBox(state, diagnostic, data),
-        .content_overflow => |data| printContentOverflowBox(default_path, default_source, state, diagnostic, data),
+        .page_overflow => |data| printPageOverflowBox(state, diagnostic, data, layouts),
+        .content_overflow => |data| printContentOverflowBox(default_path, default_source, state, diagnostic, data, layouts),
         else => {},
     }
 }
 
 pub fn irRenderDiagnosticsJson(allocator: std.mem.Allocator, default_path: []const u8, default_source: []const u8, state: anytype) ![]u8 {
-    return irDiagnosticsJson(allocator, default_path, default_source, state, .{ .phase = "render" });
+    return irDiagnosticsJson(allocator, default_path, default_source, state, null, .{ .phase = "render" });
 }
 
 pub const DiagnosticsJsonOptions = struct {
@@ -274,6 +282,7 @@ pub fn irDiagnosticsJson(
     default_path: []const u8,
     default_source: []const u8,
     state: anytype,
+    layouts: anytype,
     options: DiagnosticsJsonOptions,
 ) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
@@ -290,6 +299,16 @@ pub fn irDiagnosticsJson(
         var resolved = try resolveContextDiagnostic(allocator, default_path, default_source, state, diagnostic);
         defer resolved.deinit(allocator);
         try writeContextDiagnosticJson(&diagnostics, resolved, diagnostic);
+    }
+    if (@TypeOf(layouts) != @TypeOf(null)) {
+        for (layouts.pages) |page| for (page.diagnostics) |diagnostic| {
+            if (options.phase) |phase| {
+                if (!std.mem.eql(u8, @tagName(diagnostic.phase), phase)) continue;
+            }
+            var resolved = try resolveContextDiagnostic(allocator, default_path, default_source, state, diagnostic);
+            defer resolved.deinit(allocator);
+            try writeContextDiagnosticJson(&diagnostics, resolved, diagnostic);
+        };
     }
     try diagnostics.end();
     try root.end();
@@ -530,14 +549,20 @@ pub fn printUnexpectedCliError(err: anyerror) void {
     std.debug.print("CommandFailed: {s}\n", .{formatErrorReason(&reason_buf, err)});
 }
 
-pub fn printConstraintFailure(
+pub fn printConstraintFailure(path: []const u8, text: []const u8, state: anytype, layouts: anytype, err: anyerror) void {
+    if (layouts.failureCount() == 0) return printConstraintFailures(path, text, state, &.{}, err);
+    for (layouts.pages) |page| if (page.constraint_failures.len > 0) printConstraintFailures(path, text, state, page.constraint_failures, err);
+}
+
+fn printConstraintFailures(
     path: []const u8,
     text: []const u8,
     state: anytype,
+    failures: []const model.ConstraintFailure,
     err: anyerror,
 ) void {
     if (!shouldPrint(.@"error")) return;
-    if (state.diagnostics.constraint_failures.items.len == 0) {
+    if (failures.len == 0) {
         var message_buf: [320]u8 = undefined;
         var reason_buf: [256]u8 = undefined;
         const reason = switch (err) {
@@ -559,7 +584,6 @@ pub fn printConstraintFailure(
         return;
     }
 
-    const failures = state.diagnostics.constraint_failures.items;
     const count = failures.len;
     if (count > 1) {
         printColor(.@"error");
@@ -635,14 +659,14 @@ fn printConstraintFailureBox(state: anytype, failure: anytype) void {
     printReset();
 }
 
-fn printPageOverflowBox(state: anytype, diagnostic: anytype, data: anytype) void {
+fn printPageOverflowBox(state: anytype, diagnostic: anytype, data: anytype, layouts: anytype) void {
     printDim();
     std.debug.print("╭─ page overflow\n", .{});
     printReset();
 
     printDiagnosticPageField(state, diagnostic.page_id);
     printDiagnosticNodeField(state, diagnostic.node_id);
-    printDiagnosticFrameField(state, diagnostic.node_id);
+    printDiagnosticFrameField(layouts, diagnostic.node_id);
     const directions = formatPageOverflowDirections(state.allocator, data, false) catch null;
     defer if (directions) |text| state.allocator.free(text);
     if (directions) |text| printBoxField("outside page", text);
@@ -652,14 +676,14 @@ fn printPageOverflowBox(state: anytype, diagnostic: anytype, data: anytype) void
     printReset();
 }
 
-fn printContentOverflowBox(default_path: []const u8, default_source: []const u8, state: anytype, diagnostic: anytype, data: anytype) void {
+fn printContentOverflowBox(default_path: []const u8, default_source: []const u8, state: anytype, diagnostic: anytype, data: anytype, layouts: anytype) void {
     printDim();
     std.debug.print("╭─ frame too small\n", .{});
     printReset();
 
     printDiagnosticPageField(state, diagnostic.page_id);
     printDiagnosticNodeField(state, diagnostic.node_id);
-    printDiagnosticFrameField(state, diagnostic.node_id);
+    printDiagnosticFrameField(layouts, diagnostic.node_id);
     printFloatTripleField("width", data.required_width, data.frame_width, data.overflow_width);
     printFloatTripleField("height", data.required_height, data.frame_height, data.overflow_height);
     printFrameTooSmallConstraints(default_path, default_source, state, diagnostic.node_id, data);
@@ -690,11 +714,12 @@ fn printDiagnosticNodeField(state: anytype, node_id: anytype) void {
     printBoxField("object", label);
 }
 
-fn printDiagnosticFrameField(state: anytype, node_id: anytype) void {
+fn printDiagnosticFrameField(layouts: anytype, node_id: anytype) void {
+    if (comptime @TypeOf(layouts) == @TypeOf(null)) return;
     const id = node_id orelse return;
-    const node = state.getNode(id) orelse return;
+    const frame = layouts.nodeFrame(id) orelse return;
     var buffer: [160]u8 = undefined;
-    const label = std.fmt.bufPrint(&buffer, "x={d:.1} y={d:.1} w={d:.1} h={d:.1}", .{ node.frame.x, node.frame.y, node.frame.width, node.frame.height }) catch return;
+    const label = std.fmt.bufPrint(&buffer, "x={d:.1} y={d:.1} w={d:.1} h={d:.1}", .{ frame.x, frame.y, frame.width, frame.height }) catch return;
     printBoxField("object frame", label);
 }
 

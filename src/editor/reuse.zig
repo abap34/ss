@@ -32,7 +32,7 @@ pub fn translateRebuilt(
     if (!matchesFontEnvironment(previous, prepared.font_environment)) return null;
     const previous_layout = if (previous.layout_output) |*value| value else return null;
     const previous_editor = if (previous_layout.editor) |*value| value else return null;
-    var collected = try collectTranslations(allocator, state, &previous_layout.report) orelse return null;
+    var collected = try collectTranslations(allocator, state, &prepared.layouts, &previous_layout.report) orelse return null;
     defer collected.deinit(allocator);
     if (!translationPatchPreservesRenderedOutput(state, &prepared.pages, collected.translations)) return null;
     const editor = try editor_snapshot.buildTranslationPatch(
@@ -104,7 +104,9 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     };
     defer results.deinit(state.allocator);
     utils.measure_profile.recordGeneratedEdit(.solve, solve_start);
-    if (source.hasLayoutDiagnostics(state)) return false;
+    results.validate() catch return false;
+    for (results.pages) |page| if (page.diagnostics.len != 0) return false;
+    try reuse_inputs.layouts.replacePages(state.allocator, &results);
     const verify_inputs_start = utils.measure_profile.start();
     if (!try inputs.matches(external_inputs, cache)) return false;
     utils.measure_profile.recordGeneratedEdit(.inputs, verify_inputs_start);
@@ -112,7 +114,7 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     const syntax_start = utils.measure_profile.start();
     try snapshot.updateSyntax(path, generated.source, ctx.cancellation);
     const syntax = snapshot.syntaxForSource(path, generated.source) orelse return false;
-    rebase.stateSource(state, pages, generated, syntax) catch |err| switch (err) {
+    rebase.stateSource(state, pages, &reuse_inputs.layouts, generated, syntax) catch |err| switch (err) {
         error.OutOfMemory, error.Canceled => return err,
         else => return false,
     };
@@ -121,7 +123,7 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     const translations_start = utils.measure_profile.start();
     const previous_layout = &snapshot.layout_output.?;
     const previous_editor = &previous_layout.editor.?;
-    var collected = try collectTranslations(ctx.allocator, state, &previous_layout.report) orelse
+    var collected = try collectTranslations(ctx.allocator, state, &reuse_inputs.layouts, &previous_layout.report) orelse
         return false;
     defer collected.deinit(ctx.allocator);
     if (!translationPatchPreservesRenderedOutput(
@@ -132,7 +134,7 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     utils.measure_profile.recordGeneratedEdit(.translations, translations_start);
 
     const snapshot_start = utils.measure_profile.start();
-    const conflicts_json = try core.layout.conflicts.toJson(ctx.allocator, state);
+    const conflicts_json = try core.layout.conflicts.toJson(ctx.allocator, state, &reuse_inputs.layouts);
     const editor = editor_snapshot.buildTranslationPatch(
         ctx.allocator,
         state,
@@ -147,6 +149,7 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
     var next_layout = try analysis.snapshot.LayoutOutput.fromDocumentStateWithOwnedReport(
         ctx.allocator,
         state,
+        &reuse_inputs.layouts,
         collected.takeReport(),
         editor,
         conflicts_json,

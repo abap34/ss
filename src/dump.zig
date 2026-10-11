@@ -9,7 +9,7 @@ const dump_source = @import("dump/source.zig");
 const utils = @import("utils");
 const json = utils.json;
 
-pub fn toOwnedString(allocator: std.mem.Allocator, state: *core.DocumentState) ![]u8 {
+pub fn toOwnedString(allocator: std.mem.Allocator, state: *core.DocumentState, layouts: *const core.layout.Document) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
 
@@ -30,22 +30,23 @@ pub fn toOwnedString(allocator: std.mem.Allocator, state: *core.DocumentState) !
 
     try root.intField("document_id", state.graph.document_id);
     try dump_layout.writePageOrderField(&root, state.graph.page_order.items);
-    try dump_core_graph.writeNodesField(allocator, &root, state);
+    try dump_core_graph.writeNodesField(allocator, &root, state, layouts);
     try dump_layout.writeContainsField(&root, &state.graph.contains);
     try dump_layout.writePlacementRootsField(&root, "placement_roots", &state.graph.page_placement_roots);
     try dump_layout.writeConstraintsField(&root, state.constraints.active.items);
     try dump_layout.writeConstraintUpdatesField(&root, state.constraints.updates.items);
     try dump_layout.writeOverriddenConstraintsField(&root, state.constraints.overridden.items);
-    try writeDiagnosticsField(&root, state.diagnostics.entries.items);
+    try writeDiagnosticsField(&root, state.diagnostics.entries.items, layouts);
 
     try root.end();
     try json.appendNewline(&buffer, allocator);
     return buffer.toOwnedSlice(allocator);
 }
 
-fn writeDiagnosticsField(root: *json.Object, diagnostics: []const core.Diagnostic) !void {
+fn writeDiagnosticsField(root: *json.Object, diagnostics: []const core.Diagnostic, layouts: *const core.layout.Document) !void {
     var array = try root.arrayField("diagnostics");
     for (diagnostics) |diagnostic| try writeDiagnostic(&array, diagnostic);
+    for (layouts.pages) |page| for (page.diagnostics) |diagnostic| try writeDiagnostic(&array, diagnostic);
     try array.end();
 }
 

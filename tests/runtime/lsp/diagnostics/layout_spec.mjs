@@ -100,6 +100,8 @@ end
       } else {
         assert(diagnostics.some(item => item.code === "FrameTooSmall" && item.severity === (policy === "error" ? 1 : 2)),
           `wrong ${policy ?? "default"} fit diagnostics: ${JSON.stringify(diagnostics)}`);
+        assert(!diagnostics.some(item => item.code === "BuildFailed"),
+          `measured fit diagnostic was duplicated as a generic failure: ${JSON.stringify(diagnostics)}`);
       }
     });
   }

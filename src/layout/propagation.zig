@@ -1,3 +1,4 @@
+const Workspace = @import("workspace.zig").Workspace;
 const std = @import("std");
 const model = @import("model");
 const graph = @import("graph.zig");
@@ -12,7 +13,7 @@ pub const Queue = struct {
     head: usize = 0,
     count: usize = 0,
 
-    pub fn init(allocator: std.mem.Allocator, state: anytype, workspace: *const graph.AxisWorkspace) !Queue {
+    pub fn init(allocator: std.mem.Allocator, state: *Workspace, workspace: *const graph.AxisWorkspace) !Queue {
         const node_count = workspace.states.len;
         const pending = try allocator.alloc(usize, node_count);
         errdefer allocator.free(pending);
@@ -87,7 +88,7 @@ pub fn groupIterationLimit(node_count: usize) usize {
     return @max(node_count + 1, 32);
 }
 
-pub fn nonConvergenceError(state: anytype, workspace: *const graph.AxisWorkspace, options: graph.SolveOptions, stage: model.LayoutConvergenceStage, iterations: usize, limit: usize, pending: ?model.Constraint) anyerror {
+pub fn nonConvergenceError(state: *Workspace, workspace: *const graph.AxisWorkspace, options: graph.SolveOptions, stage: model.LayoutConvergenceStage, iterations: usize, limit: usize, pending: ?model.Constraint) anyerror {
     if (options.record_diagnostics) {
         const origin = if (pending) |constraint| constraint.origin else null;
         var diagnostic = model.Diagnostic{

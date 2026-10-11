@@ -61,10 +61,11 @@ pub fn evaluateAndSolvePreparedPages(
     const solve_start = utils.measure_profile.start();
     var results = try solvePreparedPages(io, state, &pages, solve_options);
     utils.measure_profile.recordWysiwyg(.solve, solve_start);
-    defer results.deinit(state.allocator);
+    errdefer results.deinit(state.allocator);
     try options.checkCanceled();
     return .{
         .pages = pages,
+        .layouts = results,
         .font_environment = font_environment,
         .measurements = retained_measurements,
     };
@@ -146,17 +147,12 @@ fn solveSelectedPage(
     trace_path: ?[]const u8,
     options: core.layout.graph.SolveOptions,
 ) !core.layout.Document {
-    for (pages.layout.pages, 0..) |inputs, index| {
+    for (pages.layout.pages) |inputs| {
         if (inputs.page_id != page_id) continue;
         const output = try state.allocator.alloc(core.layout.Page, 1);
         errdefer state.allocator.free(output);
-        output[0] = try core.layout.solver.solvePage(state, inputs, index, trace_path, options);
+        output[0] = try core.layout.solver.solvePage(state, inputs, state.pageIndexOf(page_id) - 1, trace_path, options);
         errdefer output[0].deinit(state.allocator);
-        if (output[0].constraint_failures.len != 0) return switch (output[0].constraint_failures[0].kind) {
-            .conflict => error.ConstraintConflict,
-            .negative_frame_size => error.NegativeFrameSize,
-        };
-        try core.layout.solver.applyPage(state, &output[0]);
         return .{ .pages = output };
     }
     return error.InvalidPageLayoutInputs;

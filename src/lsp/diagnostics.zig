@@ -115,11 +115,13 @@ pub const DiagnosticSet = struct {
         try out.append(allocator, ']');
     }
 
-    pub fn addConstraintFailure(self: *DiagnosticSet, state: *core.DocumentState, err: anyerror) !void {
+    pub fn addConstraintFailure(self: *DiagnosticSet, state: *core.DocumentState, layouts: *const core.layout.Document, err: anyerror) !void {
         if (err == error.Canceled) return err;
-        if (state.diagnostics.constraint_failures.items.len > 0) {
-            try self.addConstraintFailureItem(state, state.diagnostics.constraint_failures.items[0]);
-            return;
+        for (layouts.pages) |page| {
+            if (page.constraint_failures.len > 0) {
+                try self.addConstraintFailureItem(state, page.constraint_failures[0]);
+                return;
+            }
         }
 
         var message_buf: [512]u8 = undefined;

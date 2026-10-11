@@ -27,7 +27,6 @@ pub fn canApply(snapshot: *AnalysisSnapshot, path: []const u8, generated: *const
     if (node.kind != .object) return false;
     if ((state.parentPageOf(node.id) orelse return false) != generated.page_id) return false;
     if (!canRebaseGeneratedSource(snapshot, state, path, generated)) return false;
-    if (hasLayoutDiagnostics(state)) return false;
     for (generated.replacements, 0..) |replacement, replacement_position| {
         if (replacement.index >= state.constraints.active.items.len or
             !std.math.isFinite(replacement.new_offset))
@@ -175,11 +174,4 @@ fn parseGeneratedNumericOffset(text: []const u8) ?f64 {
     if (remaining.len == 0) return null;
     const value = std.fmt.parseFloat(f64, remaining) catch return null;
     return sign * value;
-}
-
-pub fn hasLayoutDiagnostics(state: *const core.DocumentState) bool {
-    for (state.diagnostics.entries.items) |diagnostic| {
-        if (diagnostic.phase == .layout) return true;
-    }
-    return false;
 }

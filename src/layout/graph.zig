@@ -1,3 +1,4 @@
+const Workspace = @import("workspace.zig").Workspace;
 const std = @import("std");
 const model = @import("model");
 const utils = @import("utils");
@@ -41,7 +42,7 @@ pub const GroupTargetPolicy = enum {
 pub const SolveOptions = struct {
     record_diagnostics: bool = true,
     record_propagation: bool = false,
-    measurement_provider: ?model.LayoutMeasurementProvider = null,
+    measurement_provider: ?@import("workspace.zig").MeasurementProvider = null,
     progress: ?LayoutProgress = null,
     jobs: ?usize = null,
     cancellation: ?utils.Cancellation = null,
@@ -233,7 +234,7 @@ pub const NodeAdjacency = struct {
     }
 };
 
-fn orderGroups(allocator: std.mem.Allocator, state: anytype, child_ids: []const NodeId, index_by_node: *const std.AutoHashMap(NodeId, usize), parents: *const NodeAdjacency) ![]usize {
+fn orderGroups(allocator: std.mem.Allocator, state: *Workspace, child_ids: []const NodeId, index_by_node: *const std.AutoHashMap(NodeId, usize), parents: *const NodeAdjacency) ![]usize {
     const remaining = try allocator.alloc(usize, child_ids.len);
     defer allocator.free(remaining);
     @memset(remaining, 0);
@@ -241,12 +242,12 @@ fn orderGroups(allocator: std.mem.Allocator, state: anytype, child_ids: []const 
     errdefer order.deinit(allocator);
     var group_count: usize = 0;
     for (child_ids, 0..) |id, index| {
-        const node = state.getNode(id) orelse return error.UnknownNode;
+        const node = state.source.getNode(id) orelse return error.UnknownNode;
         if (!isGroupNode(node)) continue;
         group_count += 1;
-        for (state.childrenOf(id) orelse &.{}) |child_id| {
+        for (state.source.childrenOf(id) orelse &.{}) |child_id| {
             if (!index_by_node.contains(child_id)) continue;
-            const child = state.getNode(child_id) orelse return error.UnknownNode;
+            const child = state.source.getNode(child_id) orelse return error.UnknownNode;
             if (isGroupNode(child)) remaining[index] += 1;
         }
         if (remaining[index] == 0) try order.append(allocator, index);
@@ -283,15 +284,15 @@ pub const PageLayoutGraph = struct {
     split_frames: ?[]const model.Frame = null,
     split_groups: []bool,
 
-    pub fn init(allocator: std.mem.Allocator, state: anytype, page: partition.Page) !PageLayoutGraph {
+    pub fn init(allocator: std.mem.Allocator, state: *Workspace, page: partition.Page) !PageLayoutGraph {
         return initWithSplitFrames(allocator, state, page, null);
     }
 
-    pub fn initWithSplitFrames(allocator: std.mem.Allocator, state: anytype, page: partition.Page, split_frames: ?[]const model.Frame) !PageLayoutGraph {
+    pub fn initWithSplitFrames(allocator: std.mem.Allocator, state: *Workspace, page: partition.Page, split_frames: ?[]const model.Frame) !PageLayoutGraph {
         const page_id = page.page_id;
         const child_ids = try allocator.dupe(NodeId, page.node_ids);
         errdefer allocator.free(child_ids);
-        const placement_root_ids = try allocator.dupe(NodeId, state.placementRootsOf(page_id));
+        const placement_root_ids = try allocator.dupe(NodeId, state.source.placementRootsOf(page_id));
         errdefer allocator.free(placement_root_ids);
 
         var index_by_node = std.AutoHashMap(NodeId, usize).init(allocator);
@@ -306,17 +307,17 @@ pub const PageLayoutGraph = struct {
         var active = std.ArrayList(Constraint).empty;
         defer active.deinit(allocator);
         for (page.constraint_indexes) |constraint_index| {
-            const constraint = state.constraints.active.items[constraint_index];
+            const constraint = state.source.constraints.active.items[constraint_index];
             if (constraint.group_split and split_frames == null) continue;
             try active.append(allocator, constraint);
             if (!constraint.group_split) continue;
             if (index_by_node.get(constraint.target_node)) |index| {
-                if (isGroupNode(state.getNode(constraint.target_node).?)) split_groups[index] = true;
+                if (isGroupNode(state.source.getNode(constraint.target_node).?)) split_groups[index] = true;
             }
             switch (constraint.source) {
                 .page => {},
                 .node => |source| if (index_by_node.get(source.node_id)) |index| {
-                    if (isGroupNode(state.getNode(source.node_id).?)) split_groups[index] = true;
+                    if (isGroupNode(state.source.getNode(source.node_id).?)) split_groups[index] = true;
                 },
             }
         }
@@ -343,7 +344,7 @@ pub const PageLayoutGraph = struct {
                         .offset = if (axis == .horizontal) frame.width else frame.height,
                         .role = .size,
                         .group_split = true,
-                        .origin = state.getNode(node_id).?.origin,
+                        .origin = state.source.getNode(node_id).?.origin,
                     });
                 }
             }
@@ -407,9 +408,9 @@ pub const PageLayoutGraph = struct {
         errdefer target_constraints.deinit(allocator);
         edges.clearRetainingCapacity();
         for (child_ids, 0..) |node_id, parent_index| {
-            const node = state.getNode(node_id) orelse continue;
+            const node = state.source.getNode(node_id) orelse continue;
             if (!isGroupNode(node)) continue;
-            const children = state.childrenOf(node_id) orelse continue;
+            const children = state.source.childrenOf(node_id) orelse continue;
             for (children) |child_id| {
                 const child_index = index_by_node.get(child_id) orelse continue;
                 try edges.append(allocator, .{ .node = child_index, .value = parent_index });
@@ -496,16 +497,16 @@ pub const PageLayoutGraph = struct {
         return self.child_ids[index];
     }
 
-    pub fn childrenOf(self: *const PageLayoutGraph, state: anytype, node_id: NodeId) []const NodeId {
+    pub fn childrenOf(self: *const PageLayoutGraph, state: *Workspace, node_id: NodeId) []const NodeId {
         _ = self;
-        return state.childrenOf(node_id) orelse &.{};
+        return state.source.childrenOf(node_id) orelse &.{};
     }
 
     pub fn parentGroupIndexes(self: *const PageLayoutGraph, child_id: NodeId) []const usize {
         return self.parent_groups.forNode(self.indexOf(child_id) orelse return &.{});
     }
 
-    pub fn hasTargetConstraint(self: *const PageLayoutGraph, state: anytype, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) bool {
+    pub fn hasTargetConstraint(self: *const PageLayoutGraph, state: *Workspace, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) bool {
         _ = state;
         if (self.indexOf(node_id)) |index| {
             switch (axis) {
@@ -547,30 +548,30 @@ pub const PageLayoutGraph = struct {
         return null;
     }
 
-    pub fn groupChildren(self: *const PageLayoutGraph, state: anytype, group_id: NodeId) []const NodeId {
+    pub fn groupChildren(self: *const PageLayoutGraph, state: *Workspace, group_id: NodeId) []const NodeId {
         return self.childrenOf(state, group_id);
     }
 
-    pub fn groupSubgraph(self: *const PageLayoutGraph, allocator: std.mem.Allocator, state: anytype, group_id: NodeId) !NodeSubgraph {
+    pub fn groupSubgraph(self: *const PageLayoutGraph, allocator: std.mem.Allocator, state: *Workspace, group_id: NodeId) !NodeSubgraph {
         var subgraph = NodeSubgraph.init(allocator);
         errdefer subgraph.deinit();
         try self.collectGroupSubgraph(state, group_id, &subgraph);
         return subgraph;
     }
 
-    fn collectGroupSubgraph(self: *const PageLayoutGraph, state: anytype, group_id: NodeId, subgraph: *NodeSubgraph) !void {
-        const children = state.childrenOf(group_id) orelse return;
+    fn collectGroupSubgraph(self: *const PageLayoutGraph, state: *Workspace, group_id: NodeId, subgraph: *NodeSubgraph) !void {
+        const children = state.source.childrenOf(group_id) orelse return;
         for (children) |child_id| {
             if (self.indexOf(child_id)) |index| {
                 if (subgraph.seen.contains(index)) continue;
                 try subgraph.add(index);
             }
-            const child = state.getNode(child_id) orelse return error.UnknownNode;
+            const child = state.source.getNode(child_id) orelse return error.UnknownNode;
             if (isGroupNode(child)) try self.collectGroupSubgraph(state, child_id, subgraph);
         }
     }
 
-    pub fn translateSubgraph(self: *const PageLayoutGraph, workspace: *AxisWorkspace, state: anytype, group_id: NodeId, delta: f32) !bool {
+    pub fn translateSubgraph(self: *const PageLayoutGraph, workspace: *AxisWorkspace, state: *Workspace, group_id: NodeId, delta: f32) !bool {
         if (approxEq(delta, 0)) return false;
         var subgraph = try self.groupSubgraph(self.allocator, state, group_id);
         defer subgraph.deinit();
@@ -581,11 +582,11 @@ pub const PageLayoutGraph = struct {
         return changed;
     }
 
-    pub fn constraintClass(self: *const PageLayoutGraph, state: anytype, constraint: Constraint, axis: Axis) ConstraintClass {
+    pub fn constraintClass(self: *const PageLayoutGraph, state: *Workspace, constraint: Constraint, axis: Axis) ConstraintClass {
         if (anchorAxis(constraint.target_anchor) != axis) return .wrong_axis;
         const target_index = self.indexOf(constraint.target_node) orelse return .external_source;
         _ = target_index;
-        const target_node = state.getNode(constraint.target_node) orelse return .external_source;
+        const target_node = state.source.getNode(constraint.target_node) orelse return .external_source;
         switch (classifySelfConstraint(constraint, axis)) {
             .none => {},
             .size => return .self_size,
@@ -596,7 +597,7 @@ pub const PageLayoutGraph = struct {
             .page => .page_source,
             .node => |source| blk: {
                 if (anchorAxis(source.anchor) != axis) break :blk .wrong_axis;
-                const source_node = state.getNode(source.node_id) orelse break :blk .external_source;
+                const source_node = state.source.getNode(source.node_id) orelse break :blk .external_source;
                 if (isGroupNode(source_node)) break :blk .group_source;
                 if (self.indexOf(source.node_id) == null) break :blk .external_source;
                 break :blk .normal;
@@ -632,27 +633,27 @@ pub const AxisWorkspace = struct {
     propagation: ?*PropagationTracker = null,
     owns_states: bool = true,
 
-    pub fn init(allocator: std.mem.Allocator, state: anytype, page_graph: *const PageLayoutGraph, axis: Axis) !AxisWorkspace {
+    pub fn init(allocator: std.mem.Allocator, state: *Workspace, page_graph: *const PageLayoutGraph, axis: Axis) !AxisWorkspace {
         const states = try allocator.alloc(AxisState, page_graph.len());
         errdefer allocator.free(states);
 
         for (page_graph.child_ids, states) |child_id, *axis_state| {
-            const node = state.getNode(child_id) orelse return error.UnknownNode;
+            const node = state.source.getNode(child_id) orelse return error.UnknownNode;
             axis_state.* = .{};
             if (isGroupNode(node)) continue;
             if (page_graph.hasTargetConstraint(state, child_id, axis, &.{})) continue;
             switch (axis) {
-                .horizontal => if (node.frame.x_set) {
-                    axis_state.size = node.frame.width;
-                    axis_state.start = node.frame.x;
-                    axis_state.end = node.frame.x + node.frame.width;
-                    axis_state.center = node.frame.x + node.frame.width / 2;
+                .horizontal => if (state.frame(node.id).*.x_set) {
+                    axis_state.size = state.frame(node.id).*.width;
+                    axis_state.start = state.frame(node.id).*.x;
+                    axis_state.end = state.frame(node.id).*.x + state.frame(node.id).*.width;
+                    axis_state.center = state.frame(node.id).*.x + state.frame(node.id).*.width / 2;
                 },
-                .vertical => if (node.frame.y_set) {
-                    axis_state.size = node.frame.height;
-                    axis_state.start = node.frame.y;
-                    axis_state.end = node.frame.y + node.frame.height;
-                    axis_state.center = node.frame.y + node.frame.height / 2;
+                .vertical => if (state.frame(node.id).*.y_set) {
+                    axis_state.size = state.frame(node.id).*.height;
+                    axis_state.start = state.frame(node.id).*.y;
+                    axis_state.end = state.frame(node.id).*.y + state.frame(node.id).*.height;
+                    axis_state.center = state.frame(node.id).*.y + state.frame(node.id).*.height / 2;
                 },
             }
         }
@@ -701,7 +702,7 @@ pub const AxisWorkspace = struct {
         return &self.states[index];
     }
 
-    pub fn dependencyComponents(self: *const AxisWorkspace, allocator: std.mem.Allocator, state: anytype, policy: ComponentPolicy) !ComponentSet {
+    pub fn dependencyComponents(self: *const AxisWorkspace, allocator: std.mem.Allocator, state: *Workspace, policy: ComponentPolicy) !ComponentSet {
         return try ComponentSet.init(allocator, state, self, policy);
     }
 };
@@ -714,7 +715,7 @@ pub const ComponentSet = struct {
     members: NodeAdjacency = .{},
     roots: []usize = &.{},
 
-    pub fn init(allocator: std.mem.Allocator, state: anytype, workspace: *const AxisWorkspace, policy: ComponentPolicy) !ComponentSet {
+    pub fn init(allocator: std.mem.Allocator, state: *Workspace, workspace: *const AxisWorkspace, policy: ComponentPolicy) !ComponentSet {
         const len = workspace.graph.len();
         const parent = try allocator.alloc(usize, len);
         errdefer allocator.free(parent);
@@ -811,21 +812,21 @@ pub const ComponentSet = struct {
         return self.members.forNode(self.findConst(component_root));
     }
 
-    pub fn fallbackRootIndex(self: *const ComponentSet, state: anytype, component_root: usize) ?usize {
+    pub fn fallbackRootIndex(self: *const ComponentSet, state: *Workspace, component_root: usize) ?usize {
         for (self.memberIndexes(component_root)) |index| {
-            const node = state.getNode(self.workspace.nodeAt(index)) orelse continue;
+            const node = state.source.getNode(self.workspace.nodeAt(index)) orelse continue;
             if (isGroupNode(node)) continue;
             return index;
         }
         return null;
     }
 
-    pub fn axisFallbackRootIndex(self: *const ComponentSet, state: anytype, component_root: usize) ?usize {
+    pub fn axisFallbackRootIndex(self: *const ComponentSet, state: *Workspace, component_root: usize) ?usize {
         var fallback: ?usize = null;
         for (self.memberIndexes(component_root)) |index| {
             const child_id = self.workspace.nodeAt(index);
             const axis_state = self.workspace.states[index];
-            const node = state.getNode(child_id) orelse continue;
+            const node = state.source.getNode(child_id) orelse continue;
             if (isGroupNode(node)) continue;
             if (fallback == null) fallback = index;
             if (axis_state.start == null and !self.workspace.graph.hasTargetConstraint(state, child_id, self.workspace.axis, self.workspace.soft_constraints)) return index;
@@ -833,11 +834,11 @@ pub const ComponentSet = struct {
         return fallback;
     }
 
-    fn unionContainment(self: *ComponentSet, state: anytype) !void {
+    fn unionContainment(self: *ComponentSet, state: *Workspace) !void {
         for (self.workspace.graph.child_ids, 0..) |node_id, index| {
-            const node = state.getNode(node_id) orelse return error.UnknownNode;
+            const node = state.source.getNode(node_id) orelse return error.UnknownNode;
             if (!isGroupNode(node)) continue;
-            const children = state.childrenOf(node_id) orelse continue;
+            const children = state.source.childrenOf(node_id) orelse continue;
             for (children) |child_id| {
                 const child_index = self.workspace.indexOf(child_id) orelse continue;
                 self.merge(index, child_index);
@@ -845,7 +846,7 @@ pub const ComponentSet = struct {
         }
     }
 
-    fn markKnownAnchors(self: *ComponentSet, state: anytype) !void {
+    fn markKnownAnchors(self: *ComponentSet, state: *Workspace) !void {
         _ = state;
         for (self.workspace.states, 0..) |axis_state, index| {
             if (axis_state.start != null or axis_state.end != null or axis_state.center != null) {
@@ -854,7 +855,7 @@ pub const ComponentSet = struct {
         }
     }
 
-    fn unionConstraintSlice(self: *ComponentSet, state: anytype, constraints: []const Constraint, policy: ComponentPolicy) !void {
+    fn unionConstraintSlice(self: *ComponentSet, state: *Workspace, constraints: []const Constraint, policy: ComponentPolicy) !void {
         for (constraints) |constraint| {
             const class = self.workspace.graph.constraintClass(state, constraint, self.workspace.axis);
             switch (class) {
@@ -890,9 +891,9 @@ pub const ComponentSet = struct {
         }
     }
 
-    fn mergeGroupTargetDependency(self: *ComponentSet, state: anytype, constraint: Constraint) !void {
+    fn mergeGroupTargetDependency(self: *ComponentSet, state: *Workspace, constraint: Constraint) !void {
         const target_index = self.workspace.indexOf(constraint.target_node) orelse return;
-        const target_node = state.getNode(constraint.target_node) orelse return error.UnknownNode;
+        const target_node = state.source.getNode(constraint.target_node) orelse return error.UnknownNode;
         if (!isGroupNode(target_node)) return;
 
         const source = switch (constraint.source) {
@@ -964,12 +965,12 @@ pub fn classifySelfConstraint(constraint: Constraint, axis: Axis) SelfConstraint
     return .{ .none = {} };
 }
 
-pub fn constraintSourceValue(state: anytype, workspace: *const AxisWorkspace, source: ConstraintSource) !?f32 {
+pub fn constraintSourceValue(state: *Workspace, workspace: *const AxisWorkspace, source: ConstraintSource) !?f32 {
     return switch (source) {
         .page => |anchor| blk: {
             if (anchorAxis(anchor) != workspace.axis) return error.ConstraintAxisMismatch;
-            const page = state.getNode(workspace.graph.page_id) orelse return error.UnknownNode;
-            break :blk anchorValue(page.frame, anchor);
+            const page = state.source.getNode(workspace.graph.page_id) orelse return error.UnknownNode;
+            break :blk anchorValue(state.frame(page.id).*, anchor);
         },
         .node => |node_source| blk: {
             if (anchorAxis(node_source.anchor) != workspace.axis) return error.ConstraintAxisMismatch;
@@ -977,14 +978,15 @@ pub fn constraintSourceValue(state: anytype, workspace: *const AxisWorkspace, so
                 break :blk axisAnchorValue(workspace.states[index], node_source.anchor);
             }
 
-            const source_node = state.getNode(node_source.node_id) orelse return error.UnknownNode;
-            if (!anchorKnown(source_node.frame, node_source.anchor)) break :blk null;
-            break :blk anchorValue(source_node.frame, node_source.anchor);
+            const source_node = state.source.getNode(node_source.node_id) orelse return error.UnknownNode;
+            const geometry = state.geometry.get(source_node.id) orelse break :blk null;
+            if (!anchorKnown(geometry.frame, node_source.anchor)) break :blk null;
+            break :blk anchorValue(geometry.frame, node_source.anchor);
         },
     };
 }
 
-pub fn constraintAffineSourceValue(state: anytype, workspace: *const AxisWorkspace, constraint: Constraint) !?f32 {
+pub fn constraintAffineSourceValue(state: *Workspace, workspace: *const AxisWorkspace, constraint: Constraint) !?f32 {
     const anchor = (try constraintSourceValue(state, workspace, constraint.source)) orelse return null;
     if (constraint.source_extent_factor == 0) return anchor;
     const id = switch (constraint.source) {
@@ -994,8 +996,9 @@ pub fn constraintAffineSourceValue(state: anytype, workspace: *const AxisWorkspa
     const extent = if (workspace.indexOf(id)) |index|
         workspace.states[index].size orelse return null
     else blk: {
-        const node = state.getNode(id) orelse return error.UnknownNode;
-        break :blk if (workspace.axis == .horizontal) node.frame.width else node.frame.height;
+        const node = state.source.getNode(id) orelse return error.UnknownNode;
+        const geometry = state.geometry.get(node.id) orelse return null;
+        break :blk if (workspace.axis == .horizontal) geometry.frame.width else geometry.frame.height;
     };
     return anchor + constraint.source_extent_factor * extent;
 }

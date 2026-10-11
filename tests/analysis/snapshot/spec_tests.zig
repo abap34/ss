@@ -1,3 +1,4 @@
+const LayoutFixture = @import("layout_testing").Fixture;
 const std = @import("std");
 const allocation_testing = @import("allocation_testing");
 const analysis = @import("analysis");
@@ -23,7 +24,7 @@ fn initDocumentState(allocator: std.mem.Allocator) !core.DocumentState {
     );
 }
 
-fn addLayoutFixture(state: *core.DocumentState) !void {
+fn addLayoutFixture(state: *core.DocumentState, geometry: *LayoutFixture) !void {
     const page_id = try state.addPage("page");
     const object_id = try state.makeObject(
         page_id,
@@ -33,8 +34,8 @@ fn addLayoutFixture(state: *core.DocumentState) !void {
         .text,
         "content",
     );
-    state.getNode(page_id).?.frame = .{ .width = 640, .height = 360 };
-    state.getNode(object_id).?.frame = .{
+    (try geometry.frame(page_id)).* = .{ .width = 640, .height = 360 };
+    (try geometry.frame(object_id)).* = .{
         .x = 10,
         .y = 20,
         .width = 30,
@@ -45,15 +46,18 @@ fn addLayoutFixture(state: *core.DocumentState) !void {
 fn initAndDeinitOwnedLayoutOutput(allocator: std.mem.Allocator) !void {
     var state = try initDocumentState(allocator);
     defer state.deinit();
-    try addLayoutFixture(&state);
+    var geometry = LayoutFixture.init(&state);
+    defer geometry.deinit();
+    try addLayoutFixture(&state, &geometry);
 
-    var report = try core.layout.conflicts.Report.init(allocator, &state);
+    var report = try core.layout.conflicts.Report.init(allocator, &state, try geometry.document());
     var report_transferred = false;
     errdefer if (!report_transferred) report.deinit();
     report_transferred = true;
     var output = try analysis.snapshot.LayoutOutput.fromDocumentStateWithOwnedReport(
         allocator,
         &state,
+        try geometry.document(),
         report,
         null,
         null,
@@ -64,9 +68,11 @@ fn initAndDeinitOwnedLayoutOutput(allocator: std.mem.Allocator) !void {
 test "analysis snapshot layout output adopts an owned conflict report" {
     var state = try initDocumentState(testing.allocator);
     defer state.deinit();
-    try addLayoutFixture(&state);
+    var geometry = LayoutFixture.init(&state);
+    defer geometry.deinit();
+    try addLayoutFixture(&state, &geometry);
 
-    var report = try core.layout.conflicts.Report.init(testing.allocator, &state);
+    var report = try core.layout.conflicts.Report.init(testing.allocator, &state, try geometry.document());
     var report_transferred = false;
     errdefer if (!report_transferred) report.deinit();
     const report_pages_pointer = report.pages.ptr;
@@ -77,6 +83,7 @@ test "analysis snapshot layout output adopts an owned conflict report" {
     var output = try analysis.snapshot.LayoutOutput.fromDocumentStateWithOwnedReport(
         testing.allocator,
         &state,
+        try geometry.document(),
         report,
         null,
         conflicts_json,

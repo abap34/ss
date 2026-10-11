@@ -1,3 +1,4 @@
+const Document = @import("document.zig").Document;
 const std = @import("std");
 const ast = @import("ast");
 const model = @import("model");
@@ -71,15 +72,16 @@ pub const Report = struct {
     page_index_by_id: NodeIndex,
     object_index_by_id: NodeIndex,
 
-    pub fn init(allocator: std.mem.Allocator, state: anytype) !Report {
+    pub fn init(allocator: std.mem.Allocator, state: anytype, layouts: *const Document) !Report {
         var pages = std.ArrayList(Page).empty;
         errdefer pages.deinit(allocator);
         for (state.graph.page_order.items) |page_id| {
             const page = state.getNode(page_id) orelse continue;
+            const frame = layouts.nodeFrame(page_id) orelse continue;
             try pages.append(allocator, .{
                 .id = page.id,
-                .width = page.frame.width,
-                .height = page.frame.height,
+                .width = frame.width,
+                .height = frame.height,
             });
         }
 
@@ -88,13 +90,14 @@ pub const Report = struct {
         for (state.graph.nodes.items) |node| {
             if (node.kind != .object) continue;
             const page_id = state.parentPageOf(node.id) orelse continue;
+            const frame = layouts.nodeFrame(node.id) orelse continue;
             try objects.append(allocator, .{
                 .id = node.id,
                 .page_id = page_id,
-                .x = node.frame.x,
-                .y = node.frame.y,
-                .width = node.frame.width,
-                .height = node.frame.height,
+                .x = frame.x,
+                .y = frame.y,
+                .width = frame.width,
+                .height = frame.height,
             });
         }
 
@@ -105,8 +108,10 @@ pub const Report = struct {
             if (constraint.default_alignment) continue;
             try appendRelationModel(allocator, &relations, state, .explicit, constraint_index, constraint);
         }
-        for (state.constraints.fallback.items) |constraint| {
-            try appendRelationModel(allocator, &relations, state, .fallback, null, constraint);
+        for (layouts.pages) |solved_page| {
+            for (solved_page.fallback_constraints) |constraint| {
+                try appendRelationModel(allocator, &relations, state, .fallback, null, constraint);
+            }
         }
 
         const owned_pages = try pages.toOwnedSlice(allocator);
@@ -140,7 +145,7 @@ pub const Report = struct {
             .pages = owned_pages,
             .objects = owned_objects,
             .relations = owned_relations,
-            .failure_count = state.diagnostics.constraint_failures.items.len,
+            .failure_count = layouts.failureCount(),
             .page_index_by_id = page_index_by_id,
             .object_index_by_id = object_index_by_id,
         };
@@ -291,10 +296,10 @@ fn findStatementInList(statements: []const ast.Statement, span: ast.Span) ?*cons
 pub const schema_version = 1;
 
 pub fn emptyJson(allocator: std.mem.Allocator) ![]u8 {
-    return toJson(allocator, null);
+    return toJson(allocator, null, &.{});
 }
 
-pub fn toJson(allocator: std.mem.Allocator, state: anytype) ![]u8 {
+pub fn toJson(allocator: std.mem.Allocator, state: anytype, layouts: *const Document) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
 
@@ -308,12 +313,17 @@ pub fn toJson(allocator: std.mem.Allocator, state: anytype) ![]u8 {
     if (comptime has_state) {
         for (state.graph.page_order.items, 0..) |page_id, index| {
             const page = state.getNode(page_id) orelse continue;
+            const frame = layouts.nodeFrame(page_id) orelse continue;
             var item = try pages.objectItem();
             try item.intField("id", page.id);
             try item.intField("index", index + 1);
             try item.stringField("name", page.name);
-            try item.floatField("width", page.frame.width, "{d:.4}");
-            try item.floatField("height", page.frame.height, "{d:.4}");
+            const solved = layouts.pageById(page.id).?;
+            try item.boolField("converged", solved.converged);
+            const failure: ?[]const u8 = if (solved.validate()) |_| null else |err| @errorName(err);
+            try item.optionalStringField("error", failure);
+            try item.floatField("width", frame.width, "{d:.4}");
+            try item.floatField("height", frame.height, "{d:.4}");
             try appendOriginObject(&item, "location", state, page.origin);
             try item.end();
         }
@@ -325,15 +335,16 @@ pub fn toJson(allocator: std.mem.Allocator, state: anytype) ![]u8 {
         for (state.graph.nodes.items) |*node| {
             if (node.kind != .object) continue;
             const page_id = state.parentPageOf(node.id) orelse continue;
+            const frame = layouts.nodeFrame(node.id) orelse continue;
             var item = try objects.objectItem();
             try item.intField("id", node.id);
             try item.intField("page_id", page_id);
             try item.stringField("name", node.name);
             try item.optionalStringField("role", node.role);
-            try item.floatField("x", node.frame.x, "{d:.4}");
-            try item.floatField("y", node.frame.y, "{d:.4}");
-            try item.floatField("width", node.frame.width, "{d:.4}");
-            try item.floatField("height", node.frame.height, "{d:.4}");
+            try item.floatField("x", frame.x, "{d:.4}");
+            try item.floatField("y", frame.y, "{d:.4}");
+            try item.floatField("width", frame.width, "{d:.4}");
+            try item.floatField("height", frame.height, "{d:.4}");
             try item.boolField("group", graph.isGroupNode(node));
             try appendOriginObject(&item, "location", state, node.origin);
             try item.end();
@@ -346,37 +357,44 @@ pub fn toJson(allocator: std.mem.Allocator, state: anytype) ![]u8 {
         for (state.constraints.active.items, 0..) |constraint, index| {
             try appendRelation(&relations, state, index, "explicit", constraint);
         }
-        for (state.constraints.fallback.items, 0..) |constraint, index| {
-            try appendRelation(&relations, state, state.constraints.active.items.len + index, "fallback", constraint);
-        }
+        var fallback_index = state.constraints.active.items.len;
+        for (layouts.pages) |solved_page| for (solved_page.fallback_constraints) |constraint| {
+            try appendRelation(&relations, state, fallback_index, "fallback", constraint);
+            fallback_index += 1;
+        };
     }
     try relations.end();
 
     var failures = try root.arrayField("failures");
     if (comptime has_state) {
-        for (state.diagnostics.constraint_failures.items, 0..) |failure, index| {
-            var item = try failures.objectItem();
-            try item.intField("index", index);
-            try item.stringField("code", failureCode(failure.kind));
-            try item.enumTagField("reason", failure.reason);
-            try item.intField("page_id", failure.page_id);
-            try item.optionalEnumTagField("axis", failure.axis);
-            try item.optionalFloatField("actual", failure.actual, "{d:.4}");
-            try item.optionalFloatField("expected", failure.expected, "{d:.4}");
-            try item.optionalIntField("constraint_index", constraintIndex(state, failure.constraint));
-            try item.optionalIntField("existing_constraint_index", if (failure.existing_constraint) |c| constraintIndex(state, c) else null);
-            try appendConstraintObject(&item, "constraint", state, failure.constraint);
-            if (failure.existing_constraint) |constraint| {
-                try appendConstraintObject(&item, "existing_constraint", state, constraint);
-            } else {
-                try item.nullField("existing_constraint");
+        var failure_index: usize = 0;
+        for (layouts.pages) |solved_page| {
+            for (solved_page.constraint_failures) |failure| {
+                const index = failure_index;
+                failure_index += 1;
+                var item = try failures.objectItem();
+                try item.intField("index", index);
+                try item.stringField("code", failureCode(failure.kind));
+                try item.enumTagField("reason", failure.reason);
+                try item.intField("page_id", failure.page_id);
+                try item.optionalEnumTagField("axis", failure.axis);
+                try item.optionalFloatField("actual", failure.actual, "{d:.4}");
+                try item.optionalFloatField("expected", failure.expected, "{d:.4}");
+                try item.optionalIntField("constraint_index", constraintIndex(state, failure.constraint));
+                try item.optionalIntField("existing_constraint_index", if (failure.existing_constraint) |c| constraintIndex(state, c) else null);
+                try appendConstraintObject(&item, "constraint", state, failure.constraint);
+                if (failure.existing_constraint) |constraint| {
+                    try appendConstraintObject(&item, "existing_constraint", state, constraint);
+                } else {
+                    try item.nullField("existing_constraint");
+                }
+                if (failure.propagation) |propagation| {
+                    try appendPropagationObject(&item, "propagation", propagation);
+                } else {
+                    try item.nullField("propagation");
+                }
+                try item.end();
             }
-            if (failure.propagation) |propagation| {
-                try appendPropagationObject(&item, "propagation", propagation);
-            } else {
-                try item.nullField("propagation");
-            }
-            try item.end();
         }
     }
     try failures.end();

@@ -83,8 +83,10 @@ pub fn compile(
     io: std.Io,
     state: *core.DocumentState,
     pages: *const core.prepared.PreparedPages,
+    layouts: *const core.layout.Document,
     options: Options,
 ) !render.Ir {
+    try layouts.validate();
     var local_text_cache = text_compile.Cache.init(std.heap.smp_allocator, io);
     defer local_text_cache.deinit();
     var local_highlight_cache = HighlightCache.init(std.heap.smp_allocator, io);
@@ -127,7 +129,7 @@ pub fn compile(
         _ = try addFontEnvironmentDiagnostic(state, err);
         return err;
     };
-    var ir = preparedDocument(allocator, state, pages, &item_compiler, options.resource_cache) catch |err| {
+    var ir = preparedDocument(allocator, state, pages, layouts, &item_compiler, options.resource_cache) catch |err| {
         _ = try addFontEnvironmentDiagnostic(state, err);
         return err;
     };
@@ -158,16 +160,19 @@ pub fn document(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     prepared_pages: *const core.prepared.PreparedPages,
+    layouts: *const core.layout.Document,
     compiler: anytype,
 ) !render.Ir {
+    try layouts.validate();
     try compiler.prepare(allocator, state, prepared_pages);
-    return try sequentialDocument(allocator, state, prepared_pages, compiler, null);
+    return try sequentialDocument(allocator, state, prepared_pages, layouts, compiler, null);
 }
 
 fn preparedDocument(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     prepared_pages: *const core.prepared.PreparedPages,
+    layouts: *const core.layout.Document,
     compiler: *items.Compiler,
     resource_cache: ?*resource_compile.SourceCache,
 ) !render.Ir {
@@ -179,17 +184,18 @@ fn preparedDocument(
     }
     if (compiler.options.page_cache) |page_cache| {
         page_cache.beginDocument(prepared_pages.pages.len);
-        return try sequentialDocument(allocator, state, prepared_pages, compiler, resource_cache);
+        return try sequentialDocument(allocator, state, prepared_pages, layouts, compiler, resource_cache);
     }
     const worker_count = renderWorkerCount(prepared_pages.pages.len, compiler.options.jobs);
-    if (worker_count <= 1) return try sequentialDocument(allocator, state, prepared_pages, compiler, resource_cache);
-    return try parallelPreparedDocument(allocator, state, prepared_pages, compiler, resource_cache, worker_count);
+    if (worker_count <= 1) return try sequentialDocument(allocator, state, prepared_pages, layouts, compiler, resource_cache);
+    return try parallelPreparedDocument(allocator, state, prepared_pages, layouts, compiler, resource_cache, worker_count);
 }
 
 fn sequentialDocument(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     prepared_pages: *const core.prepared.PreparedPages,
+    layouts: *const core.layout.Document,
     compiler: anytype,
     resource_cache: ?*resource_compile.SourceCache,
 ) !render.Ir {
@@ -205,6 +211,7 @@ fn sequentialDocument(
             allocator,
             state,
             prepared_page,
+            layouts.pageById(prepared_page.page_id) orelse return error.MissingPageLayout,
             &resources,
             &fonts,
         );
@@ -228,6 +235,7 @@ const PageCompilationWork = struct {
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     prepared_pages: *const core.prepared.PreparedPages,
+    layouts: *const core.layout.Document,
     compiler: *items.Compiler,
     resources: *resource_compile.Builder,
     fonts: *render.FontBuilder,
@@ -240,6 +248,7 @@ fn parallelPreparedDocument(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     prepared_pages: *const core.prepared.PreparedPages,
+    layouts: *const core.layout.Document,
     compiler: *items.Compiler,
     resource_cache: ?*resource_compile.SourceCache,
     worker_count: usize,
@@ -263,6 +272,7 @@ fn parallelPreparedDocument(
         .allocator = worker_allocator,
         .state = state,
         .prepared_pages = prepared_pages,
+        .layouts = layouts,
         .compiler = compiler,
         .resources = &resources,
         .fonts = &fonts,
@@ -311,6 +321,11 @@ fn pageCompilationWorker(work: *PageCompilationWork) void {
             work.allocator,
             work.state,
             prepared_page,
+            work.layouts.pageById(prepared_page.page_id) orelse {
+                output.err = error.MissingPageLayout;
+                work.failed.store(true, .seq_cst);
+                return;
+            },
             work.resources,
             work.fonts,
         ) catch |err| {

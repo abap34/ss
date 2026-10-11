@@ -1,3 +1,4 @@
+const LayoutFixture = @import("layout_testing").Fixture;
 const std = @import("std");
 const allocation_testing = @import("allocation_testing");
 const ast = @import("ast");
@@ -14,10 +15,12 @@ const testing = std.testing;
 test "final-width measurements retain ink origins and baselines through the file cache" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("measurement-geometry");
     const object_id = try state.makeObject(page_id, "italic", null, .text, .text, "j");
     const object = state.getNode(object_id).?;
-    object.frame = .{ .x = 0, .y = 684, .width = 47.995, .height = 36 };
+    (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 684, .width = 47.995, .height = 36 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     const text = &prepared.pages[0].objects[0].render.text.?;
@@ -32,22 +35,22 @@ test "final-width measurements retain ink origins and baselines through the file
         defer scope.deinit();
         scope.measurements.persistent.clearRetainingCapacity();
         const provider = scope.provider();
-        break :blk (try provider.measure(provider.context, &state, object, object.frame.width, .width_constrained)).?;
+        break :blk (try provider.measure(provider.context, try state_layout.work(), object, (try state_layout.frame(object_id)).*.width, .width_constrained)).?;
     };
     try testing.expect(measured.ink_bounds.?.x < 0);
     try testing.expectEqual(@as(f32, 36), measured.logicalBounds().height);
     try testing.expect(measured.first_baseline.? > 0);
-    try testing.expectEqual(object.frame.width, measured.measured_width.?);
+    try testing.expectEqual((try state_layout.frame(object_id)).*.width, measured.measured_width.?);
 
     var warm_scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = font_environment });
     defer warm_scope.deinit();
     const persisted = warm_scope.measurements.persistent.get(measured.cache_key.?) orelse return error.MissingPersistedMeasurement;
     try testing.expectEqualDeep(measured, persisted);
     const provider = warm_scope.provider();
-    const warm = (try provider.measure(provider.context, &state, object, object.frame.width, .width_constrained)).?;
+    const warm = (try provider.measure(provider.context, try state_layout.work(), object, (try state_layout.frame(object_id)).*.width, .width_constrained)).?;
     try testing.expectEqualDeep(measured, warm);
 
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1 });
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1 });
     defer ir.deinit(testing.allocator);
     var ink: ?render.Rect = null;
     var first_baseline: ?f64 = null;
@@ -68,11 +71,13 @@ test "final-width measurements retain ink origins and baselines through the file
 test "code measurement includes empty logical lines and keeps its ink offset" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("code-geometry");
     const object_id = try state.makeObject(page_id, "code", null, .source, .code, "j\n\nj");
     try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "code" });
     const object = state.getNode(object_id).?;
-    object.frame = .{ .width = 240, .height = 108 };
+    (try state_layout.frame(object_id)).* = .{ .width = 240, .height = 108 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     const text = &prepared.pages[0].objects[0].render.text.?;
@@ -87,7 +92,7 @@ test "code measurement includes empty logical lines and keeps its ink offset" {
         scope.deinit();
     }
     const provider = scope.provider();
-    const measured = (try provider.measure(provider.context, &state, object, object.frame.width, .width_constrained)).?;
+    const measured = (try provider.measure(provider.context, try state_layout.work(), object, (try state_layout.frame(object_id)).*.width, .width_constrained)).?;
     try testing.expectEqual(@as(f32, 108), measured.height);
     try testing.expect(measured.ink_bounds.?.x < 0);
     try testing.expect(measured.ink_bounds.?.y > 0);
@@ -97,6 +102,8 @@ test "code measurement includes empty logical lines and keeps its ink offset" {
 test "natural measurement includes tables beside ordinary paragraphs" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("mixed-block-geometry");
     const object_id = try state.makeObject(page_id, "mixed blocks", null, .text, .text, "Introduction\n\n| column | value |\n| --- | --- |\n| first | second |");
     var text_style = core.RecordValue.init("TextStyle");
@@ -118,7 +125,7 @@ test "natural measurement includes tables beside ordinary paragraphs" {
         scope.deinit();
     }
     const provider = scope.provider();
-    const measured = (try provider.measure(provider.context, &state, object, 620, .natural)).?;
+    const measured = (try provider.measure(provider.context, try state_layout.work(), object, 620, .natural)).?;
     try testing.expectApproxEqAbs(@as(f32, 620), measured.width, 0.01);
 }
 
@@ -131,6 +138,8 @@ const MarkdownGeometry = struct {
 fn markdownGeometry(content: []const u8, family: []const u8, width: f32) !MarkdownGeometry {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("block-geometry");
     const object_id = try state.makeObject(page_id, "blocks", null, .text, .text, content);
     var style = core.RecordValue.init("TextStyle");
@@ -142,7 +151,7 @@ fn markdownGeometry(content: []const u8, family: []const u8, width: f32) !Markdo
     });
     try state.setNodeFieldValue(object_id, "text", .{ .record = style });
     const object = state.getNode(object_id).?;
-    object.frame = .{ .x = 0, .y = 0, .width = width, .height = 720 };
+    (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 0, .width = width, .height = 720 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     const paint = &prepared.pages[0].objects[0].render.text.?;
@@ -173,8 +182,8 @@ fn markdownGeometry(content: []const u8, family: []const u8, width: f32) !Markdo
     }
     scope.measurements.persistent.clearRetainingCapacity();
     const provider = scope.provider();
-    var result = MarkdownGeometry{ .measurement = (try provider.measure(provider.context, &state, object, width, .width_constrained)).? };
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1, .font_environment = environment });
+    var result = MarkdownGeometry{ .measurement = (try provider.measure(provider.context, try state_layout.work(), object, width, .width_constrained)).? };
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1, .font_environment = environment });
     defer ir.deinit(testing.allocator);
     var ink: ?render.Rect = null;
     for (ir.pages[0].items.items) |item| {
@@ -282,6 +291,7 @@ const FakeCompiler = struct {
         allocator: std.mem.Allocator,
         _: *core.DocumentState,
         prepared_page: *const core.prepared.PreparedPage,
+        _: *const core.layout.Page,
         _: *render_resources.Builder,
         _: *render.FontBuilder,
     ) !render.Page {
@@ -345,6 +355,13 @@ const ConcurrentResourceAdd = struct {
 test "render compiler prepares once and preserves page order" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
+    var solved_pages = [_]core.layout.Page{
+        .{ .page_id = 10, .index = 0, .object_frames = &.{} },
+        .{ .page_id = 20, .index = 1, .object_frames = &.{} },
+    };
+    const solved = core.layout.Document{ .pages = &solved_pages };
     var source_pages = [_]core.prepared.PreparedPage{
         preparedPage(10, 0),
         preparedPage(20, 1),
@@ -352,7 +369,7 @@ test "render compiler prepares once and preserves page order" {
     const prepared_pages = core.prepared.PreparedPages{ .pages = &source_pages };
     var compiler = FakeCompiler{};
 
-    var result = try render_compile.document(testing.allocator, &state, &prepared_pages, &compiler);
+    var result = try render_compile.document(testing.allocator, &state, &prepared_pages, &solved, &compiler);
     defer result.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 1), compiler.prepare_count);
@@ -365,6 +382,13 @@ test "render compiler prepares once and preserves page order" {
 test "render compiler releases completed pages after a later failure" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
+    var solved_pages = [_]core.layout.Page{
+        .{ .page_id = 10, .index = 0, .object_frames = &.{} },
+        .{ .page_id = 20, .index = 1, .object_frames = &.{} },
+    };
+    const solved = core.layout.Document{ .pages = &solved_pages };
     var source_pages = [_]core.prepared.PreparedPage{
         preparedPage(10, 0),
         preparedPage(20, 1),
@@ -374,7 +398,7 @@ test "render compiler releases completed pages after a later failure" {
 
     try testing.expectError(
         error.IntentionalCompileFailure,
-        render_compile.document(testing.allocator, &state, &prepared_pages, &compiler),
+        render_compile.document(testing.allocator, &state, &prepared_pages, &solved, &compiler),
     );
     try testing.expectEqual(@as(usize, 1), compiler.page_count);
 }
@@ -382,8 +406,17 @@ test "render compiler releases completed pages after a later failure" {
 test "render compiler produces deterministic document fingerprints" {
     var first_state = try initEmptyDocumentState();
     defer first_state.deinit();
+    var first_state_layout = LayoutFixture.init(&first_state);
+    defer first_state_layout.deinit();
     var second_state = try initEmptyDocumentState();
     defer second_state.deinit();
+    var second_state_layout = LayoutFixture.init(&second_state);
+    defer second_state_layout.deinit();
+    var solved_pages = [_]core.layout.Page{
+        .{ .page_id = 10, .index = 0, .object_frames = &.{} },
+        .{ .page_id = 20, .index = 1, .object_frames = &.{} },
+    };
+    const solved = core.layout.Document{ .pages = &solved_pages };
     var source_pages = [_]core.prepared.PreparedPage{
         preparedPage(10, 0),
         preparedPage(20, 1),
@@ -392,9 +425,9 @@ test "render compiler produces deterministic document fingerprints" {
     var first_compiler = FakeCompiler{};
     var second_compiler = FakeCompiler{};
 
-    var first = try render_compile.document(testing.allocator, &first_state, &prepared_pages, &first_compiler);
+    var first = try render_compile.document(testing.allocator, &first_state, &prepared_pages, &solved, &first_compiler);
     defer first.deinit(testing.allocator);
-    var second = try render_compile.document(testing.allocator, &second_state, &prepared_pages, &second_compiler);
+    var second = try render_compile.document(testing.allocator, &second_state, &prepared_pages, &solved, &second_compiler);
     defer second.deinit(testing.allocator);
 
     try testing.expectEqualSlices(u8, &first.fingerprint(), &second.fingerprint());
@@ -406,6 +439,8 @@ test "render compiler produces deterministic document fingerprints" {
 test "captured measurement items keep page order and annotations" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("capture");
     const object_id = try state.makeObject(
         page_id,
@@ -415,8 +450,7 @@ test "captured measurement items keep page order and annotations" {
         .text,
         "[linked text](https://example.com)",
     );
-    const object = state.getNode(object_id) orelse return error.MissingTestObject;
-    object.frame = .{ .x = 80, .y = 500, .width = 420, .height = 80 };
+    (try state_layout.frame(object_id)).* = .{ .x = 80, .y = 500, .width = 420, .height = 80 };
 
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
@@ -427,6 +461,7 @@ test "captured measurement items keep page order and annotations" {
         testing.io,
         &state,
         &prepared,
+        try state_layout.document(),
         .{ .jobs = 1 },
     );
     defer result.deinit(testing.allocator);
@@ -447,13 +482,14 @@ test "captured measurement items keep page order and annotations" {
 test "render compiler shares highlight work across objects and compilations" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("highlight");
     for (0..2) |index| {
         const object_id = try state.makeObject(page_id, "code", null, .text, .text, "def hello():\n  return 1\n");
         try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "code" });
         try state.setNodeFieldValue(object_id, "language", .{ .string = "python" });
-        const object = state.getNode(object_id) orelse return error.MissingTestObject;
-        object.frame = .{ .x = 40, .y = 60 + @as(f32, @floatFromInt(index)) * 160, .width = 400, .height = 120 };
+        (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60 + @as(f32, @floatFromInt(index)) * 160, .width = 400, .height = 120 };
     }
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
@@ -461,7 +497,7 @@ test "render compiler shares highlight work across objects and compilations" {
     defer cache.deinit();
 
     for (0..2) |_| {
-        var result = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{
+        var result = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{
             .jobs = 1,
             .highlight_cache = &cache,
             .highlight_languages = &.{.{
@@ -485,12 +521,14 @@ test "measurement cache observes changed highlight query contents" {
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = query_path, .data = "(module) @plain" });
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("measurement-highlight");
     const object_id = try state.makeObject(page_id, "code", null, .source, .code, "T-T");
     try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "code" });
     try state.setNodeFieldValue(object_id, "language", .{ .string = "python" });
     const object = state.getNode(object_id) orelse return error.MissingTestObject;
-    object.frame = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
+    (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     prepared.pages[0].objects[0].render.text.?.code_font.family = "DejaVu Serif";
@@ -509,14 +547,14 @@ test "measurement cache observes changed highlight query contents" {
     }
     scope.measurements.persistent.clearRetainingCapacity();
     const provider = scope.provider();
-    const initial = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    const initial = (try provider.measure(provider.context, try state_layout.work(), object, 400, .natural)).?;
     try scope.measurements.persistent.put(initial.cache_key.?, initial);
     scope.measurements.clearMemory();
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = query_path, .data = "\"-\" @operator" });
-    const changed = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    const changed = (try provider.measure(provider.context, try state_layout.work(), object, 400, .natural)).?;
     scope.measurements.clearMemory();
     scope.measurements.persistent.clearRetainingCapacity();
-    const fresh = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    const fresh = (try provider.measure(provider.context, try state_layout.work(), object, 400, .natural)).?;
     try testing.expect(initial.cache_key != changed.cache_key);
     try testing.expectEqual(fresh.width, changed.width);
     try testing.expectEqual(fresh.height, changed.height);
@@ -544,10 +582,12 @@ test "measurement cache observes the inline math engine with an empty preamble" 
     if (!try latexEngineAvailable(.pdflatex) or !try latexEngineAvailable(.lualatex)) return error.SkipZigTest;
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("measurement-engine");
     const object_id = try state.makeObject(page_id, "inline math", null, .text, .text, "$\\ifdefined\\directlua\\rule{36pt}{10pt}\\else\\rule{12pt}{10pt}\\fi$");
     const object = state.getNode(object_id) orelse return error.MissingTestObject;
-    object.frame = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
+    (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), prepared.pages[0].objects[0].latex_preamble.len);
@@ -559,12 +599,12 @@ test "measurement cache observes the inline math engine with an empty preamble" 
     }
     scope.measurements.persistent.clearRetainingCapacity();
     const provider = scope.provider();
-    const initial = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    const initial = (try provider.measure(provider.context, try state_layout.work(), object, 400, .natural)).?;
     prepared.pages[0].objects[0].latex_engine = .lualatex;
-    const changed = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    const changed = (try provider.measure(provider.context, try state_layout.work(), object, 400, .natural)).?;
     scope.measurements.clearMemory();
     scope.measurements.persistent.clearRetainingCapacity();
-    const fresh = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    const fresh = (try provider.measure(provider.context, try state_layout.work(), object, 400, .natural)).?;
     try testing.expect(initial.cache_key != changed.cache_key);
     try testing.expect(fresh.width > initial.width * 2);
     try testing.expectEqual(fresh.width, changed.width);
@@ -581,10 +621,12 @@ test "measurement and page caches observe transitive TeX inputs" {
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = input_path, .data = "\\rule{12pt}{10pt}" });
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("measurement-inputs");
     const object_id = try state.makeObject(page_id, "inline math", null, .text, .text, "$\\input{" ++ input_path ++ "}$");
     const object = state.getNode(object_id) orelse return error.MissingTestObject;
-    object.frame = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
+    (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60, .width = 400, .height = 120 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     const font_environment = try render_compile.acquireFontEnvironment();
@@ -595,23 +637,23 @@ test "measurement and page caches observe transitive TeX inputs" {
     }
     scope.measurements.persistent.clearRetainingCapacity();
     const provider = scope.provider();
-    const initial = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
-    const warm = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    const initial = (try provider.measure(provider.context, try state_layout.work(), object, 400, .natural)).?;
+    const warm = (try provider.measure(provider.context, try state_layout.work(), object, 400, .natural)).?;
     try testing.expectEqual(initial.cache_key, warm.cache_key);
     var page_cache = render_compile.PageCache.init(testing.allocator, testing.io);
     defer page_cache.deinit();
-    var initial_ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1, .page_cache = &page_cache });
+    var initial_ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1, .page_cache = &page_cache });
     defer initial_ir.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 1), page_cache.entries.count());
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = input_path, .data = "\\rule{44pt}{10pt}" });
-    const changed = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    const changed = (try provider.measure(provider.context, try state_layout.work(), object, 400, .natural)).?;
     try testing.expect(initial.cache_key != changed.cache_key);
     try testing.expect(changed.width > initial.width * 2);
-    var changed_ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1, .page_cache = &page_cache });
+    var changed_ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1, .page_cache = &page_cache });
     defer changed_ir.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 2), page_cache.entries.count());
     scope.measurements.clearMemory();
-    const fresh = (try provider.measure(provider.context, &state, object, 400, .natural)).?;
+    const fresh = (try provider.measure(provider.context, try state_layout.work(), object, 400, .natural)).?;
     try testing.expectEqual(changed.width, fresh.width);
     try testing.expectEqual(changed.cache_key, fresh.cache_key);
 }
@@ -632,11 +674,12 @@ test "render compiler rejects unavailable PDF pages" {
 
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("pdf-page");
     const object_id = try state.makeObject(page_id, "pdf", null, .asset, .pdf_ref, pdf_path);
     try state.setNodeFieldValue(object_id, "render_kind", .{ .string = "vector_asset" });
-    const object = state.getNode(object_id) orelse return error.MissingTestObject;
-    object.frame = .{ .x = 40, .y = 60, .width = 240, .height = 120, .x_set = true, .y_set = true };
+    (try state_layout.frame(object_id)).* = .{ .x = 40, .y = 60, .width = 240, .height = 120, .x_set = true, .y_set = true };
 
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
@@ -647,6 +690,7 @@ test "render compiler rejects unavailable PDF pages" {
         testing.io,
         &state,
         &prepared,
+        try state_layout.document(),
         .{ .jobs = 1, .cache_dir = root ++ "/cache" },
     )) |result| {
         var ir = result;
@@ -1014,6 +1058,8 @@ test "synthetic font faces produce non-fatal deduplicated warnings" {
         if (index == 0) {
             var state = try initEmptyDocumentState();
             defer state.deinit();
+            var state_layout = LayoutFixture.init(&state);
+            defer state_layout.deinit();
             try render_compile.addFontFaceSubstitutionWarning(&state, null, null, null, detail);
             try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
             try testing.expectEqual(core.DiagnosticSeverity.warning, state.diagnostics.entries.items[0].severity);
@@ -1846,6 +1892,8 @@ test "page cache resource survives source graph and cache teardown" {
 test "document font environment rejects changes between layout and compilation" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const prepared_pages = core.prepared.PreparedPages{ .pages = &.{} };
 
     const font_environment = try render_compile.acquireFontEnvironment();
@@ -1900,6 +1948,7 @@ test "document font environment rejects changes between layout and compilation" 
             testing.io,
             &state,
             &prepared_pages,
+            try state_layout.document(),
             .{ .artifact_preparation = .already_preloaded, .font_environment = font_environment },
         ),
     );
@@ -1910,6 +1959,7 @@ test "document font environment rejects changes between layout and compilation" 
             testing.io,
             &state,
             &prepared_pages,
+            try state_layout.document(),
             .{ .font_environment = font_environment },
         ),
     );
@@ -1927,6 +1977,8 @@ test "document font environment rejects changes between layout and compilation" 
 test "font environment refresh failures produce actionable diagnostics" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
 
     try testing.expect(try render_compile.addFontEnvironmentDiagnostic(&state, error.FontEnvironmentRefreshFailed));
     try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
@@ -1969,6 +2021,8 @@ test "preload cache scan reports the LaTeX preamble path" {
 
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const preamble = [_]core.render_env.LatexPreambleEntry{
         .{ .source = .file, .value = preamble_path },
     };
@@ -2019,6 +2073,8 @@ test "preload cache scan reports the LaTeX preamble path" {
 test "font diagnostics identify prior failures by cause code" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     try state.addRenderDiagnostic(.@"error", null, null, null, .{
         .render_failed = .{
             .cause_code = "FontSetupFailed",
@@ -2042,10 +2098,12 @@ test "paragraph measurement and emission retain the same final-width glyph layou
     for (examples) |content| {
         var state = try initEmptyDocumentState();
         defer state.deinit();
+        var state_layout = LayoutFixture.init(&state);
+        defer state_layout.deinit();
         const page_id = try state.addPage("paragraph");
         const object_id = try state.makeObject(page_id, "paragraph", null, .text, .text, content);
         const object = state.getNode(object_id).?;
-        object.frame = .{ .x = 0, .y = 0, .width = 100, .height = 720 };
+        (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 0, .width = 100, .height = 720 };
         var prepared = try core.prepared.prepare(testing.allocator, &state);
         defer prepared.deinit(testing.allocator);
         const paint = &prepared.pages[0].objects[0].render.text.?;
@@ -2061,10 +2119,10 @@ test "paragraph measurement and emission retain the same final-width glyph layou
         defer scope.deinit();
         scope.measurements.persistent.clearRetainingCapacity();
         const provider = scope.provider();
-        const measured = (try provider.measure(provider.context, &state, object, 100, .width_constrained)).?;
+        const measured = (try provider.measure(provider.context, try state_layout.work(), object, 100, .width_constrained)).?;
         try testing.expect(cache.paragraphs.entries.count() > 0);
         const retained_count = cache.paragraphs.entries.count();
-        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1, .text_cache = &cache, .font_environment = environment });
+        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1, .text_cache = &cache, .font_environment = environment });
         defer ir.deinit(testing.allocator);
         try ir.validate();
         try testing.expectEqual(retained_count, cache.paragraphs.entries.count());
@@ -2088,10 +2146,12 @@ test "paragraph measurement and emission retain the same final-width glyph layou
 test "paint boundaries preserve contextual glyphs and visual positions" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("contextual");
     for ([_][]const u8{ "\u{633}\u{644}\u{627}\u{645}", "\u{633}\u{644}[\u{627}\u{645}](https://example.com)" }) |content| {
         const object_id = try state.makeObject(page_id, "contextual", null, .text, .text, content);
-        state.getNode(object_id).?.frame = .{ .width = 500, .height = 720 };
+        (try state_layout.frame(object_id)).* = .{ .width = 500, .height = 720 };
     }
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
@@ -2099,7 +2159,7 @@ test "paint boundaries preserve contextual glyphs and visual positions" {
         object.render.text.?.font.family = "DejaVu Sans";
         object.render.text.?.font_size = 24;
     }
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1 });
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1 });
     defer ir.deinit(testing.allocator);
     try ir.validate();
     const PositionedGlyph = struct { id: u32, x: f64, y: f64, advance: f64 };
@@ -2127,10 +2187,12 @@ test "inline math shares measured paragraph baselines with bidirectional text" {
     if (!try latexEngineAvailable(.pdflatex)) return error.SkipZigTest;
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("inline-math");
     const object_id = try state.makeObject(page_id, "inline-math", null, .text, .text, "\u{633}\u{644}\u{627}\u{645} $x^2$ \u{633}\u{644}\u{627}\u{645}");
     const object = state.getNode(object_id).?;
-    object.frame = .{ .width = 250, .height = 720 };
+    (try state_layout.frame(object_id)).* = .{ .width = 250, .height = 720 };
     var prepared = try core.prepared.prepare(testing.allocator, &state);
     defer prepared.deinit(testing.allocator);
     prepared.pages[0].objects[0].render.text.?.font.family = "DejaVu Sans";
@@ -2141,9 +2203,9 @@ test "inline math shares measured paragraph baselines with bidirectional text" {
     defer scope.deinit();
     scope.measurements.persistent.clearRetainingCapacity();
     const provider = scope.provider();
-    const measured = (try provider.measure(provider.context, &state, object, object.frame.width, .width_constrained)).?;
+    const measured = (try provider.measure(provider.context, try state_layout.work(), object, (try state_layout.frame(object_id)).*.width, .width_constrained)).?;
     const retained_count = cache.paragraphs.entries.count();
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, .{ .jobs = 1, .text_cache = &cache, .font_environment = environment });
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try state_layout.document(), .{ .jobs = 1, .text_cache = &cache, .font_environment = environment });
     defer ir.deinit(testing.allocator);
     try ir.validate();
     try testing.expectEqual(retained_count, cache.paragraphs.entries.count());
@@ -2175,14 +2237,15 @@ test "retained table geometry includes inline and display math when TeX is avail
 fn verifyTableGeometry(source: []const u8) !void {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page_id = try state.addPage("retained-table");
     const object_id = try state.makeObject(page_id, "table", null, .text, .text, source);
     var text_style = core.RecordValue.init("TextStyle");
     defer text_style.deinit(testing.allocator);
     try text_style.fields.append(testing.allocator, .{ .name = "parse", .value = .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } }, .explicit = true });
     try state.setNodeFieldValue(object_id, "text", .{ .record = text_style });
-    const object = state.getNode(object_id).?;
-    object.frame = .{ .x = 0, .y = 360, .width = 280, .height = 360 };
+    (try state_layout.frame(object_id)).* = .{ .x = 0, .y = 360, .width = 280, .height = 360 };
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);
     const prepared = &pages.pages[0].objects[0];
@@ -2199,10 +2262,10 @@ fn verifyTableGeometry(source: []const u8) !void {
     const environment = try render_compile.acquireFontEnvironment();
     var cache = render_text.Cache.init(testing.allocator, testing.io);
     defer cache.deinit();
-    var table = try render_compile.table.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/render/artifacts/native" }, .text_cache = &cache, .latex_preamble = prepared.latex_preamble, .latex_engine = prepared.latex_engine }, prepared.markdownDocument().?.blocks.items[0].table.?, text.*, object.frame.width);
+    var table = try render_compile.table.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/render/artifacts/native" }, .text_cache = &cache, .latex_preamble = prepared.latex_preamble, .latex_engine = prepared.latex_engine }, prepared.markdownDocument().?.blocks.items[0].table.?, text.*, (try state_layout.frame(object_id)).*.width);
     defer table.deinit(testing.allocator);
     const shaped = cache.paragraphs.entries.count();
-    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, .{ .jobs = 1, .text_cache = &cache, .font_environment = environment });
+    var ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, try state_layout.document(), .{ .jobs = 1, .text_cache = &cache, .font_environment = environment });
     defer ir.deinit(testing.allocator);
     try testing.expectEqual(shaped, cache.paragraphs.entries.count());
     var rectangles: usize = 0;
@@ -2235,20 +2298,22 @@ fn verifyTableGeometry(source: []const u8) !void {
 test "artifact preparation modes produce identical IR without caller text caches" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
     const page = try state.addPage("preparation");
     const object = try state.makeObject(page, "body", null, .text, .text, "Prepared text");
-    state.getNode(object).?.frame = .{ .x = 32, .y = 48, .width = 240, .height = 64 };
+    (try state_layout.frame(object)).* = .{ .x = 32, .y = 48, .width = 240, .height = 64 };
     var pages = try core.prepared.prepare(testing.allocator, &state);
     defer pages.deinit(testing.allocator);
     const environment = try render_compile.acquireFontEnvironment();
     try render_compile.preload(testing.allocator, testing.io, &state, &pages, .{}, null);
-    var prepared_ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, .{
+    var prepared_ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, try state_layout.document(), .{
         .artifact_preparation = .already_preloaded,
         .font_environment = environment,
         .jobs = 1,
     });
     defer prepared_ir.deinit(testing.allocator);
-    var automatic_ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, .{
+    var automatic_ir = try render_compile.compile(testing.allocator, testing.io, &state, &pages, try state_layout.document(), .{
         .font_environment = environment,
         .jobs = 1,
     });

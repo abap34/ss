@@ -7,7 +7,7 @@ const Edit = @import("../edit/generated.zig").Edit;
 
 // The evaluated store keeps its owned declarations and runtime values. Relocate
 // their source references without replacing the trees borrowed by those values.
-pub fn stateSource(state: *core.DocumentState, pages: *core.prepared.PreparedPages, edit: *const Edit, syntax: *const ast.Module) !void {
+pub fn stateSource(state: *core.DocumentState, pages: *core.prepared.PreparedPages, layouts: *core.layout.Document, edit: *const Edit, syntax: *const ast.Module) !void {
     const module = @import("source.zig").stateModuleForPathMutable(state, edit.path) orelse return error.UnknownModule;
     const allocator = state.allocator;
     const text = try allocator.dupe(u8, edit.source);
@@ -77,7 +77,7 @@ pub fn stateSource(state: *core.DocumentState, pages: *core.prepared.PreparedPag
     var provenance = state.runtime.string_provenance.valueIterator();
     while (provenance.next()) |entries| for (entries.items) |*entry| relocateOriginValue(&entry.origin, edit, state.projectPath(), syntax);
     for (state.constraints.active.items) |*item| relocateOrigin(&item.origin, edit, state.projectPath(), syntax);
-    for (state.constraints.fallback.items) |*item| relocateOrigin(&item.origin, edit, state.projectPath(), syntax);
+    for (layouts.pages) |*page| for (page.fallback_constraints) |*item| relocateOrigin(&item.origin, edit, state.projectPath(), syntax);
     for (state.constraints.overridden.items) |*item| relocateOrigin(&item.origin, edit, state.projectPath(), syntax);
     for (state.constraints.updates.items) |*item| {
         relocateOrigin(&item.origin, edit, state.projectPath(), syntax);

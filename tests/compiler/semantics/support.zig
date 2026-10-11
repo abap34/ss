@@ -47,6 +47,7 @@ fn analyzeAndFinalizeDocumentState(io: std.Io, allocator: std.mem.Allocator, sta
 fn solveDocumentAndDiscard(state: *core.DocumentState) !void {
     var document = try lowering.solveDocument(state, null, .{});
     defer document.deinit(state.allocator);
+    try document.validate();
 }
 
 pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -351,7 +352,9 @@ pub fn expectDumpContains(
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    const text = try compiler.dump.toOwnedString(allocator, &state);
+    var layouts = try lowering.solveDocument(&state, null, .{});
+    defer layouts.deinit(state.allocator);
+    const text = try compiler.dump.toOwnedString(allocator, &state, &layouts);
     defer allocator.free(text);
     for (expected) |needle| {
         if (std.mem.indexOf(u8, text, needle) == null) return error.ExpectedDumpTextMissing;
@@ -368,7 +371,9 @@ pub fn expectVariableObjectClasses(
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
 
-    const text = try compiler.dump.toOwnedString(allocator, &state);
+    var layouts = try lowering.solveDocument(&state, null, .{});
+    defer layouts.deinit(state.allocator);
+    const text = try compiler.dump.toOwnedString(allocator, &state, &layouts);
     defer allocator.free(text);
     var parsed = try utils.json.parseValue(allocator, text, .{});
     defer parsed.deinit();
@@ -629,8 +634,14 @@ pub fn expectLoweredDiagnostic(
 ) !void {
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
+    var layouts = try lowering.solveDocument(&state, null, .{});
+    defer layouts.deinit(allocator);
+    var diagnostics = std.ArrayList(core.Diagnostic).empty;
+    defer diagnostics.deinit(allocator);
+    try diagnostics.appendSlice(allocator, state.diagnostics.entries.items);
+    for (layouts.pages) |page| try diagnostics.appendSlice(allocator, page.diagnostics);
 
-    for (state.diagnostics.entries.items) |diagnostic| {
+    for (diagnostics.items) |diagnostic| {
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
@@ -648,8 +659,14 @@ pub fn expectLoweredDiagnosticWithOrigin(
 ) !void {
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
+    var layouts = try lowering.solveDocument(&state, null, .{});
+    defer layouts.deinit(allocator);
+    var diagnostics = std.ArrayList(core.Diagnostic).empty;
+    defer diagnostics.deinit(allocator);
+    try diagnostics.appendSlice(allocator, state.diagnostics.entries.items);
+    for (layouts.pages) |page| try diagnostics.appendSlice(allocator, page.diagnostics);
 
-    for (state.diagnostics.entries.items) |diagnostic| {
+    for (diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         const origin_text = try std.fmt.allocPrint(allocator, "{f}", .{origin});
         defer allocator.free(origin_text);
@@ -670,8 +687,14 @@ pub fn expectNoLoweredDiagnostic(
 ) !void {
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
+    var layouts = try lowering.solveDocument(&state, null, .{});
+    defer layouts.deinit(allocator);
+    var diagnostics = std.ArrayList(core.Diagnostic).empty;
+    defer diagnostics.deinit(allocator);
+    try diagnostics.appendSlice(allocator, state.diagnostics.entries.items);
+    for (layouts.pages) |page| try diagnostics.appendSlice(allocator, page.diagnostics);
 
-    for (state.diagnostics.entries.items) |diagnostic| {
+    for (diagnostics.items) |diagnostic| {
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, unexpected_message) != null) {
@@ -690,9 +713,15 @@ pub fn expectLoweredDiagnosticCount(
 ) !void {
     var state = try buildFinalizedDocumentState(io, allocator, path, source);
     defer state.deinit();
+    var layouts = try lowering.solveDocument(&state, null, .{});
+    defer layouts.deinit(allocator);
+    var diagnostics = std.ArrayList(core.Diagnostic).empty;
+    defer diagnostics.deinit(allocator);
+    try diagnostics.appendSlice(allocator, state.diagnostics.entries.items);
+    for (layouts.pages) |page| try diagnostics.appendSlice(allocator, page.diagnostics);
 
     var count: usize = 0;
-    for (state.diagnostics.entries.items) |diagnostic| {
+    for (diagnostics.items) |diagnostic| {
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) count += 1;

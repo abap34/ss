@@ -1,3 +1,4 @@
+const Workspace = @import("workspace.zig").Workspace;
 const model = @import("model");
 const graph = @import("graph.zig");
 const metrics = @import("metrics.zig");
@@ -12,55 +13,55 @@ const GroupRole = model.GroupRole;
 const ConnectorRole = model.ConnectorRole;
 const roleEq = model.roleEq;
 
-pub fn constraintTargetsGroup(state: anytype, constraint: Constraint) bool {
-    const target_node = state.getNode(constraint.target_node) orelse return false;
+pub fn constraintTargetsGroup(state: *Workspace, constraint: Constraint) bool {
+    const target_node = state.source.getNode(constraint.target_node) orelse return false;
     return isGroupNode(target_node);
 }
 
-fn propagateWidthCapToSubtree(state: anytype, node_id: NodeId, max_right: f32, measurement_cache: ?*metrics.MeasurementCache) !void {
-    const node = state.getNode(node_id) orelse return error.UnknownNode;
-    if (node.frame.x_set and metrics.shouldWrapNode(state, node)) {
-        const available = @max(@as(f32, 1.0), max_right - node.frame.x);
-        if (available < node.frame.width - graph.ConstraintTolerance) {
-            node.frame.width = available;
-            node.frame.height = if (measurement_cache) |cache|
-                try metrics.intrinsicHeightCached(state, node, cache)
+fn propagateWidthCapToSubtree(state: *Workspace, node_id: NodeId, max_right: f32, measurement_cache: ?*metrics.MeasurementCache) !void {
+    const node = state.source.getNode(node_id) orelse return error.UnknownNode;
+    if (state.frame(node.id).*.x_set and metrics.shouldWrapNode(state, node)) {
+        const available = @max(@as(f32, 1.0), max_right - state.frame(node.id).*.x);
+        if (available < state.frame(node.id).*.width - graph.ConstraintTolerance) {
+            state.frame(node.id).*.width = available;
+            state.frame(node.id).*.height = if (measurement_cache) |cache|
+                try metrics.intrinsicHeightCached(state, node, state.frame(node.id).*, cache)
             else
-                metrics.intrinsicHeight(state, node);
+                metrics.intrinsicHeight(state, node, state.frame(node.id).*);
         }
     }
     if (isGroupNode(node)) {
-        const children = state.childrenOf(node_id) orelse return;
+        const children = state.source.childrenOf(node_id) orelse return;
         for (children) |child_id| {
             try propagateWidthCapToSubtree(state, child_id, max_right, measurement_cache);
         }
     }
 }
 
-pub fn propagateTargetedWidths(state: anytype, workspace: *const graph.AxisWorkspace) !void {
+pub fn propagateTargetedWidths(state: *Workspace, workspace: *const graph.AxisWorkspace) !void {
     try propagateTargetedWidthsWithCache(state, workspace, null);
 }
 
-pub fn propagateTargetedWidthsCached(state: anytype, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache) !void {
+pub fn propagateTargetedWidthsCached(state: *Workspace, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache) !void {
     try propagateTargetedWidthsWithCache(state, workspace, measurement_cache);
 }
 
-fn propagateTargetedWidthsWithCache(state: anytype, workspace: *const graph.AxisWorkspace, measurement_cache: ?*metrics.MeasurementCache) !void {
+fn propagateTargetedWidthsWithCache(state: *Workspace, workspace: *const graph.AxisWorkspace, measurement_cache: ?*metrics.MeasurementCache) !void {
     for (workspace.graph.child_ids, workspace.states) |group_id, h_state| {
-        const node = state.getNode(group_id) orelse return error.UnknownNode;
+        const node = state.source.getNode(group_id) orelse return error.UnknownNode;
         if (!isGroupNode(node)) continue;
         if (!workspace.graph.hasTargetConstraint(state, group_id, .horizontal, workspace.soft_constraints)) continue;
         const group_left = h_state.start orelse continue;
         const group_width = h_state.size orelse continue;
         const group_right = group_left + group_width - metrics.chromePadX(state, node);
-        const children = state.childrenOf(group_id) orelse continue;
+        const children = state.source.childrenOf(group_id) orelse continue;
         for (children) |child_id| {
             try propagateWidthCapToSubtree(state, child_id, group_right, measurement_cache);
         }
     }
 }
 
-fn computeTightGroupAxisState(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) !AxisState {
+fn computeTightGroupAxisState(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId) !AxisState {
     if (workspace.graph.splitFrame(node_id)) |frame| {
         const start = if (workspace.axis == .horizontal) frame.x else frame.y;
         const size = if (workspace.axis == .horizontal) frame.width else frame.height;
@@ -77,13 +78,13 @@ fn computeTightGroupAxisState(state: anytype, workspace: *const graph.AxisWorksp
     return bounds;
 }
 
-fn computeChildGroupAxisState(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) !AxisState {
-    const group_children = state.childrenOf(node_id) orelse return .{};
+fn computeChildGroupAxisState(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId) !AxisState {
+    const group_children = state.source.childrenOf(node_id) orelse return .{};
 
     var start: ?f32 = null;
     var end: ?f32 = null;
     for (group_children) |child_id| {
-        const child = state.getNode(child_id) orelse return error.UnknownNode;
+        const child = state.source.getNode(child_id) orelse return error.UnknownNode;
         if (roleEq(child.role, ConnectorRole)) continue;
         const child_start, const child_end = try groupChildAxisBounds(state, workspace, child_id);
         if (child_start == null or child_end == null) return .{};
@@ -105,15 +106,15 @@ fn computeChildGroupAxisState(state: anytype, workspace: *const graph.AxisWorksp
     };
 }
 
-fn groupAxisPadding(state: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) f32 {
-    const node = state.getNode(node_id) orelse return 0;
+fn groupAxisPadding(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId) f32 {
+    const node = state.source.getNode(node_id) orelse return 0;
     return switch (workspace.axis) {
         .horizontal => metrics.chromePadX(state, node),
         .vertical => metrics.chromePadY(state, node),
     };
 }
 
-pub fn updateAxisStates(state: anytype, workspace: *graph.AxisWorkspace) !bool {
+pub fn updateAxisStates(state: *Workspace, workspace: *graph.AxisWorkspace) !bool {
     var changed = false;
     for (workspace.graph.group_order) |index| {
         const node_id = workspace.nodeAt(index);
@@ -129,7 +130,7 @@ pub fn updateAxisStates(state: anytype, workspace: *graph.AxisWorkspace) !bool {
 }
 
 fn applyGroupTargetConstraintSlice(
-    state: anytype,
+    state: *Workspace,
     workspace: *const graph.AxisWorkspace,
     group_id: NodeId,
     base: AxisState,
@@ -244,7 +245,7 @@ pub fn shiftAxisState(state: *AxisState, delta: f32) bool {
 }
 
 pub fn translateSubtree(
-    state: anytype,
+    state: *Workspace,
     workspace: *graph.AxisWorkspace,
     group_id: NodeId,
     delta: f32,
@@ -258,7 +259,7 @@ pub const TargetUpdate = struct {
 };
 
 pub fn applyTargetConstraints(
-    state: anytype,
+    state: *Workspace,
     workspace: *graph.AxisWorkspace,
     options: graph.SolveOptions,
 ) !TargetUpdate {
@@ -360,11 +361,11 @@ fn hasPositionedAncestor(workspace: *const graph.AxisWorkspace, node_id: NodeId)
     return false;
 }
 
-pub fn constraintUsesGroupSource(state: anytype, constraint: Constraint) bool {
+pub fn constraintUsesGroupSource(state: *Workspace, constraint: Constraint) bool {
     return switch (constraint.source) {
         .page => false,
         .node => |node_source| blk: {
-            const source_node = state.getNode(node_source.node_id) orelse break :blk false;
+            const source_node = state.source.getNode(node_source.node_id) orelse break :blk false;
             break :blk isGroupNode(source_node);
         },
     };
@@ -406,7 +407,7 @@ fn optionalFloatEq(a: ?f32, b: ?f32) bool {
     return graph.approxEq(a.?, b.?);
 }
 
-fn groupChildAxisBounds(state: anytype, workspace: *const graph.AxisWorkspace, child_id: NodeId) !struct { ?f32, ?f32 } {
+fn groupChildAxisBounds(state: *Workspace, workspace: *const graph.AxisWorkspace, child_id: NodeId) !struct { ?f32, ?f32 } {
     if (workspace.indexOf(child_id)) |index| {
         return .{
             graph.axisAnchorValue(workspace.states[index], switch (workspace.axis) {
@@ -420,7 +421,7 @@ fn groupChildAxisBounds(state: anytype, workspace: *const graph.AxisWorkspace, c
         };
     }
 
-    const child = state.getNode(child_id) orelse return error.UnknownNode;
+    const child = state.source.getNode(child_id) orelse return error.UnknownNode;
     const start_anchor: Anchor = switch (workspace.axis) {
         .horizontal => .left,
         .vertical => .bottom,
@@ -429,8 +430,8 @@ fn groupChildAxisBounds(state: anytype, workspace: *const graph.AxisWorkspace, c
         .horizontal => .right,
         .vertical => .top,
     };
-    if (!graph.anchorKnown(child.frame, start_anchor) or !graph.anchorKnown(child.frame, end_anchor)) return .{ null, null };
-    return .{ graph.anchorValue(child.frame, start_anchor), graph.anchorValue(child.frame, end_anchor) };
+    if (!graph.anchorKnown(state.frame(child.id).*, start_anchor) or !graph.anchorKnown(state.frame(child.id).*, end_anchor)) return .{ null, null };
+    return .{ graph.anchorValue(state.frame(child.id).*, start_anchor), graph.anchorValue(state.frame(child.id).*, end_anchor) };
 }
 
 pub fn isGroupNode(node: *const Node) bool {

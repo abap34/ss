@@ -1,3 +1,4 @@
+const Workspace = @import("workspace.zig").Workspace;
 const std = @import("std");
 const model = @import("model");
 const utils = @import("utils");
@@ -154,7 +155,7 @@ pub const Session = struct {
     pub fn axisPassBegin(
         self: *Session,
         allocator: std.mem.Allocator,
-        state: anytype,
+        state: *Workspace,
         workspace: *const graph.AxisWorkspace,
         run_id: usize,
     ) void {
@@ -169,7 +170,7 @@ pub const Session = struct {
     pub fn axisPassIteration(
         self: *Session,
         allocator: std.mem.Allocator,
-        state: anytype,
+        state: *Workspace,
         run_id: usize,
         workspace: *const graph.AxisWorkspace,
         pass: usize,
@@ -198,7 +199,7 @@ pub const Session = struct {
     pub fn axisPassEnd(
         self: *Session,
         allocator: std.mem.Allocator,
-        state: anytype,
+        state: *Workspace,
         run_id: usize,
         workspace: *const graph.AxisWorkspace,
         iteration_count: usize,
@@ -214,7 +215,7 @@ pub const Session = struct {
         });
     }
 
-    fn emitEvent(self: *Session, allocator: std.mem.Allocator, state: anytype, workspace: *const graph.AxisWorkspace, event: Event) void {
+    fn emitEvent(self: *Session, allocator: std.mem.Allocator, state: *Workspace, workspace: *const graph.AxisWorkspace, event: Event) void {
         if (self.json_path == null or self.failure != null) return;
 
         var buffer = std.ArrayList(u8).empty;
@@ -232,7 +233,7 @@ pub const Session = struct {
         self.clearPendingMessages(allocator);
     }
 
-    fn appendEventJson(self: *const Session, allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), state: anytype, workspace: *const graph.AxisWorkspace, event: Event) !void {
+    fn appendEventJson(self: *const Session, allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), state: *Workspace, workspace: *const graph.AxisWorkspace, event: Event) !void {
         var object = try json.Object.beginBuffer(allocator, buffer);
         try object.stringField("event", event.name);
         try object.intField("run", event.run_id);
@@ -312,10 +313,10 @@ fn appendEventToPath(allocator: std.mem.Allocator, path: []const u8, event_json:
     count.* += 1;
 }
 
-fn appendStateArray(object: *json.Object, state: anytype, field_name: []const u8, child_ids: []const model.NodeId, axis_states: []const AxisState) !void {
+fn appendStateArray(object: *json.Object, state: *Workspace, field_name: []const u8, child_ids: []const model.NodeId, axis_states: []const AxisState) !void {
     var states = try object.arrayField(field_name);
     for (child_ids, axis_states) |child_id, axis_state| {
-        const node = state.getNode(child_id) orelse continue;
+        const node = state.source.getNode(child_id) orelse continue;
         var item = try states.objectItem();
         try item.intField("id", child_id);
         try item.stringField("name", node.name);
@@ -348,7 +349,7 @@ const TraceMessage = struct {
     }
 };
 
-fn appendTraceMessage(object: *json.Object, state: anytype, message: TraceMessage) !void {
+fn appendTraceMessage(object: *json.Object, state: *Workspace, message: TraceMessage) !void {
     try object.stringField("kind", messageKindName(message.kind));
     try object.stringField("axis", axisName(message.axis));
     try object.boolField("soft", message.soft);
@@ -433,7 +434,7 @@ fn affectedAnchor(message: TraceMessage) model.Anchor {
     return message.constraint.target_anchor;
 }
 
-fn appendConstraint(object: *json.Object, state: anytype, constraint: Constraint) !void {
+fn appendConstraint(object: *json.Object, state: *Workspace, constraint: Constraint) !void {
     try utils.err.writeOriginField(object, "origin", constraint.origin);
     try object.stringField("target_anchor", anchorName(constraint.target_anchor));
     try object.floatField("offset", constraint.offset, "{d:.4}");
@@ -447,7 +448,7 @@ fn appendConstraint(object: *json.Object, state: anytype, constraint: Constraint
     try source.end();
 }
 
-fn appendConstraintSourceEndpoint(object: *json.Object, state: anytype, source: model.ConstraintSource) !void {
+fn appendConstraintSourceEndpoint(object: *json.Object, state: *Workspace, source: model.ConstraintSource) !void {
     switch (source) {
         .page => |anchor| {
             try object.stringField("type", "page");
@@ -458,8 +459,8 @@ fn appendConstraintSourceEndpoint(object: *json.Object, state: anytype, source: 
     }
 }
 
-fn appendNodeEndpoint(object: *json.Object, state: anytype, node_id: model.NodeId, anchor: model.Anchor) !void {
-    const node = state.getNode(node_id);
+fn appendNodeEndpoint(object: *json.Object, state: *Workspace, node_id: model.NodeId, anchor: model.Anchor) !void {
+    const node = state.source.getNode(node_id);
     try object.stringField("type", "node");
     try object.intField("id", node_id);
     try object.stringField("name", if (node) |value| value.name else "unknown");

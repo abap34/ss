@@ -1,3 +1,4 @@
+const Workspace = @import("workspace.zig").Workspace;
 const std = @import("std");
 const model = @import("model");
 const fields = @import("../core/fields.zig");
@@ -34,27 +35,27 @@ const VisualFrame = struct {
     height: f32,
 };
 
-pub fn collectPageDiagnostics(state: anytype, page_id: NodeId, child_ids: []const NodeId) !void {
+pub fn collectPageDiagnostics(state: *Workspace, page_id: NodeId, child_ids: []const NodeId) !void {
     try collectPageDiagnosticsWithCache(state, page_id, child_ids, null);
 }
 
-pub fn collectPageDiagnosticsCached(state: anytype, page_id: NodeId, child_ids: []const NodeId, measurement_cache: *metrics.MeasurementCache) !void {
+pub fn collectPageDiagnosticsCached(state: *Workspace, page_id: NodeId, child_ids: []const NodeId, measurement_cache: *metrics.MeasurementCache) !void {
     try collectPageDiagnosticsWithCache(state, page_id, child_ids, measurement_cache);
 }
 
-fn collectPageDiagnosticsWithCache(state: anytype, page_id: NodeId, child_ids: []const NodeId, measurement_cache: ?*metrics.MeasurementCache) !void {
+fn collectPageDiagnosticsWithCache(state: *Workspace, page_id: NodeId, child_ids: []const NodeId, measurement_cache: ?*metrics.MeasurementCache) !void {
     var overflows = std.ArrayList(OverflowDiagnostic).empty;
     defer overflows.deinit(state.allocator);
 
     for (child_ids) |child_id| {
-        const node = state.getNode(child_id) orelse return error.UnknownNode;
+        const node = state.source.getNode(child_id) orelse return error.UnknownNode;
 
-        if (!node.frame.x_set or !node.frame.y_set) {
+        if (!state.frame(node.id).*.x_set or !state.frame(node.id).*.y_set) {
             continue;
         }
 
         const requirement = try frameRequirement(state, node, measurement_cache);
-        node.layout_measurement = requirement;
+        state.measurement(node.id).* = requirement;
         if (pageVisualFrame(state, node, requirement)) |visual| {
             const visual_top = visual.y + visual.height;
             const visual_bottom = visual.y;
@@ -84,11 +85,11 @@ fn collectPageDiagnosticsWithCache(state: anytype, page_id: NodeId, child_ids: [
         if (requirement) |measured| {
             const fixed_axes = fixedAxesForNode(state, child_id);
             const overflow_width = if (fixed_axes.horizontal)
-                @max(@as(f32, 0.0), measured.width - node.frame.width)
+                @max(@as(f32, 0.0), measured.width - state.frame(node.id).*.width)
             else
                 0;
             const overflow_height = if (fixed_axes.vertical)
-                @max(@as(f32, 0.0), measured.height - node.frame.height)
+                @max(@as(f32, 0.0), measured.height - state.frame(node.id).*.height)
             else
                 0;
             if (overflow_width > graph.ConstraintTolerance or overflow_height > graph.ConstraintTolerance) {
@@ -96,18 +97,18 @@ fn collectPageDiagnosticsWithCache(state: anytype, page_id: NodeId, child_ids: [
                     .ignore => {},
                     .warn => try state.addLayoutWarning(page_id, child_id, .{ .content_overflow = .{
                         .required_width = measured.width,
-                        .frame_width = node.frame.width,
+                        .frame_width = state.frame(node.id).*.width,
                         .overflow_width = overflow_width,
                         .required_height = measured.height,
-                        .frame_height = node.frame.height,
+                        .frame_height = state.frame(node.id).*.height,
                         .overflow_height = overflow_height,
                     } }),
                     .@"error" => try state.addLayoutError(page_id, child_id, .{ .content_overflow = .{
                         .required_width = measured.width,
-                        .frame_width = node.frame.width,
+                        .frame_width = state.frame(node.id).*.width,
                         .overflow_width = overflow_width,
                         .required_height = measured.height,
-                        .frame_height = node.frame.height,
+                        .frame_height = state.frame(node.id).*.height,
                         .overflow_height = overflow_height,
                     } }),
                 }
@@ -130,10 +131,10 @@ fn collectPageDiagnosticsWithCache(state: anytype, page_id: NodeId, child_ids: [
     }
 }
 
-fn frameRequirement(state: anytype, node: *const Node, measurement_cache: ?*metrics.MeasurementCache) !?FrameRequirement {
+fn frameRequirement(state: *Workspace, node: *const Node, measurement_cache: ?*metrics.MeasurementCache) !?FrameRequirement {
     if (!shouldCheckContentOverflow(state, node)) return null;
     if (measurement_cache) |cache| {
-        if (try metrics.frameConstrainedMeasurementCached(state, node, cache)) |measured| {
+        if (try metrics.frameConstrainedMeasurementCached(state, node, state.frame(node.id).*, cache)) |measured| {
             if (measured.width > 0 and measured.height > 0) {
                 return measured;
             }
@@ -145,25 +146,25 @@ fn frameRequirement(state: anytype, node: *const Node, measurement_cache: ?*metr
         else
             metrics.intrinsicWidth(state, node),
         .height = if (measurement_cache) |cache|
-            try metrics.intrinsicHeightCached(state, node, cache)
+            try metrics.intrinsicHeightCached(state, node, state.frame(node.id).*, cache)
         else
-            metrics.intrinsicHeight(state, node),
+            metrics.intrinsicHeight(state, node, state.frame(node.id).*),
     };
 }
 
-fn fixedAxesForNode(state: anytype, node_id: NodeId) FixedAxes {
+fn fixedAxesForNode(state: *Workspace, node_id: NodeId) FixedAxes {
     return .{
         .horizontal = axisFrameFixedByUserConstraints(state, node_id, .horizontal),
         .vertical = axisFrameFixedByUserConstraints(state, node_id, .vertical),
     };
 }
 
-fn axisFrameFixedByUserConstraints(state: anytype, node_id: NodeId, axis: Axis) bool {
+fn axisFrameFixedByUserConstraints(state: *Workspace, node_id: NodeId, axis: Axis) bool {
     var has_start = false;
     var has_end = false;
     var has_center = false;
 
-    for (state.constraints.active.items) |constraint| {
+    for (state.source.constraints.active.items) |constraint| {
         if (constraint.target_node != node_id) continue;
         if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
 
@@ -185,10 +186,10 @@ fn axisFrameFixedByUserConstraints(state: anytype, node_id: NodeId, axis: Axis) 
         (has_end and has_center);
 }
 
-fn pageVisualFrame(state: anytype, node: *const Node, requirement: ?FrameRequirement) ?VisualFrame {
-    const render = render_policy.resolve(state, node);
+fn pageVisualFrame(state: *Workspace, node: *const Node, requirement: ?FrameRequirement) ?VisualFrame {
+    const render = render_policy.resolve(state.source, node);
     var visual: ?VisualFrame = if (hasFrameInk(render))
-        frameToVisual(model.LayoutBounds.expandFrame(node.frame, render.chrome.pad_x, render.chrome.pad_y, if (requirement) |measured| measured.ink_bounds else null))
+        frameToVisual(model.LayoutBounds.expandFrame(state.frame(node.id).*, render.chrome.pad_x, render.chrome.pad_y, if (requirement) |measured| measured.ink_bounds else null))
     else
         null;
 
@@ -208,16 +209,16 @@ fn frameToVisual(frame: model.Frame) VisualFrame {
     };
 }
 
-fn contentVisualFrame(state: anytype, node: *const Node, render: render_policy.ResolvedRender, requirement: ?FrameRequirement) ?VisualFrame {
+fn contentVisualFrame(state: *Workspace, node: *const Node, render: render_policy.ResolvedRender, requirement: ?FrameRequirement) ?VisualFrame {
     const measured = requirement orelse return switch (render.kind) {
         .chrome_only => null,
-        else => frameToVisual(node.frame),
+        else => frameToVisual(state.frame(node.id).*),
     };
     if (measured.ink_bounds) |ink| {
         if (ink.width <= 0 or ink.height <= 0) return null;
-        return frameToVisual(ink.inFrame(node.frame));
+        return frameToVisual(ink.inFrame(state.frame(node.id).*));
     }
-    const content_frame = metrics.contentFrame(state, node);
+    const content_frame = metrics.contentFrame(state, node, state.frame(node.id).*);
     const content_width = @max(@as(f32, 1.0), measured.width - 2.0 * metrics.chromePadX(state, node));
     const content_height = @max(@as(f32, 1.0), measured.height - 2.0 * metrics.chromePadY(state, node));
 
@@ -284,14 +285,14 @@ const OverflowPolicy = enum {
     ignore,
 };
 
-fn shouldCheckContentOverflow(state: anytype, node: *const Node) bool {
+fn shouldCheckContentOverflow(state: *Workspace, node: *const Node) bool {
     _ = state;
     if (node.kind != .object) return false;
     return true;
 }
 
-fn overflowPolicy(state: anytype, node: *const Node) OverflowPolicy {
-    const fit = fields.read(state.allocator, state, node, "layout", &.{"fit"}, .text);
+fn overflowPolicy(state: *Workspace, node: *const Node) OverflowPolicy {
+    const fit = fields.read(state.allocator, state.source, node, "layout", &.{"fit"}, .text);
     if (fit) |value| {
         if (std.meta.stringToEnum(OverflowPolicy, value)) |parsed| return parsed;
     }
