@@ -156,6 +156,27 @@ pub fn writeWithFailure(
     options: WriteOptions,
     failure: ?*WriteFailure,
 ) !void {
+    var prepared = try prepareDocument(allocator, ir, failure);
+    defer prepared.deinit(allocator);
+    const runtime = documentRuntime(prepared.references(), options);
+    try writePreparedDocument(allocator, io, ir, output_path, &prepared, runtime, failure);
+}
+
+const PreparedDocument = struct {
+    assets: resources.Set,
+    style_sheet_url: []u8,
+
+    fn references(self: *const PreparedDocument) resources.References {
+        return .{ .set = &self.assets, .mode = .embedded };
+    }
+
+    fn deinit(self: *PreparedDocument, allocator: std.mem.Allocator) void {
+        allocator.free(self.style_sheet_url);
+        self.assets.deinit(allocator);
+    }
+};
+
+fn prepareDocument(allocator: std.mem.Allocator, ir: *const render.Ir, failure: ?*WriteFailure) !PreparedDocument {
     ir.validate() catch |err| {
         recordWriteFailure(failure, .materialization, "validate HTML render input", err);
         return err;
@@ -164,7 +185,7 @@ pub fn writeWithFailure(
         recordWriteFailure(failure, .materialization, "collect HTML resources", err);
         return err;
     };
-    defer assets.deinit(allocator);
+    errdefer assets.deinit(allocator);
     assets.prepareEmbeddedResources(allocator) catch |err| {
         recordWriteFailure(failure, .materialization, "embed HTML resources", err);
         return err;
@@ -179,10 +200,13 @@ pub fn writeWithFailure(
         recordWriteFailure(failure, .materialization, "embed HTML style sheet", err);
         return err;
     };
-    defer allocator.free(style_sheet_url);
 
+    return .{ .assets = assets, .style_sheet_url = style_sheet_url };
+}
+
+fn documentRuntime(references: resources.References, options: WriteOptions) document.Runtime {
     const pdf: ?document.PdfRuntime = if (references.hasPdf()) pdf_runtime.documentRuntime() else null;
-    const runtime = document.Runtime{
+    return .{
         .resource_module = embedded_runtime.resource_module,
         .navigation_module = embedded_runtime.navigation_module,
         .text_module = embedded_runtime.text_module,
@@ -191,7 +215,9 @@ pub fn writeWithFailure(
         .start_presentation = options.start_presentation,
         .import_map = if (pdf) |value| value.import_map else embedded_runtime.presentation_import_map,
     };
+}
 
+fn writePreparedDocument(allocator: std.mem.Allocator, io: std.Io, ir: *const render.Ir, output_path: []const u8, prepared: *const PreparedDocument, runtime: document.Runtime, failure: ?*WriteFailure) !void {
     const cwd = std.Io.Dir.cwd();
     var atomic = cwd.createFileAtomic(io, output_path, .{ .replace = true }) catch |err| switch (err) {
         else => {
@@ -202,7 +228,7 @@ pub fn writeWithFailure(
     defer atomic.deinit(io);
     var buffer: [64 * 1024]u8 = undefined;
     var writer = atomic.file.writerStreaming(io, &buffer);
-    document.write(allocator, &writer.interface, ir, references, style_sheet_url, runtime) catch |err| {
+    document.write(allocator, &writer.interface, ir, prepared.references(), prepared.style_sheet_url, runtime) catch |err| {
         recordWriteFailure(
             failure,
             if (utils.err.isFileSystemError(err)) .output else .materialization,

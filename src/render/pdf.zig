@@ -145,136 +145,198 @@ pub fn writeValidated(
     options: Options,
     progress: ?Progress,
 ) !void {
-    const cache_root = std.fs.path.join(allocator, &.{ options.cache_dir, cache_version }) catch |err| {
-        recordWriteFailure(allocator, options, .preparation, "prepare PDF cache-root path", options.cache_dir, err);
-        return err;
-    };
-    defer allocator.free(cache_root);
-    const page_cache = std.fs.path.join(allocator, &.{ cache_root, "pages" }) catch |err| {
-        recordWriteFailure(allocator, options, .preparation, "prepare PDF page-cache path", cache_root, err);
-        return err;
-    };
-    defer allocator.free(page_cache);
-    const document_cache = std.fs.path.join(allocator, &.{ cache_root, "documents" }) catch |err| {
-        recordWriteFailure(allocator, options, .preparation, "prepare PDF document-cache path", cache_root, err);
-        return err;
-    };
-    defer allocator.free(document_cache);
-    const manifest_cache = std.fs.path.join(allocator, &.{ cache_root, "output-manifests" }) catch |err| {
-        recordWriteFailure(allocator, options, .preparation, "prepare PDF manifest-cache path", cache_root, err);
-        return err;
-    };
-    defer allocator.free(manifest_cache);
-    const cwd = std.Io.Dir.cwd();
-    cwd.createDirPath(io, page_cache) catch |err| {
-        recordWriteFailure(allocator, options, .cache, "create PDF page-cache directory", page_cache, err);
-        return err;
-    };
-    cwd.createDirPath(io, document_cache) catch |err| {
-        recordWriteFailure(allocator, options, .cache, "create PDF document-cache directory", document_cache, err);
-        return err;
-    };
-    cwd.createDirPath(io, manifest_cache) catch |err| {
-        recordWriteFailure(allocator, options, .cache, "create PDF manifest-cache directory", manifest_cache, err);
-        return err;
-    };
-
-    var current_manifest = buildOutputManifest(allocator, ir, options.jobs) catch |err| {
+    var cache = try CachePaths.init(allocator, io, options);
+    defer cache.deinit(allocator);
+    var manifest = buildOutputManifest(allocator, ir, options.jobs) catch |err| {
         recordWriteFailure(allocator, options, .preparation, "fingerprint PDF document", output, err);
         return err;
     };
-    defer current_manifest.deinit(allocator);
-    const document_digest = current_manifest.document_digest;
-    const document_path = digestPath(allocator, document_cache, document_digest) catch |err| {
-        recordWriteFailure(allocator, options, .preparation, "prepare cached PDF document path", document_cache, err);
+    defer manifest.deinit(allocator);
+    var paths = try DocumentPaths.init(allocator, &cache, &manifest, output, options);
+    defer paths.deinit(allocator);
+    if (try publishCachedDocument(allocator, io, ir, &paths, output, &manifest, options, progress)) return;
+
+    var replacement = prepareReplacementPlan(allocator, io, paths.manifest, cache.documents, &manifest, options) catch |err| {
+        recordWriteFailure(allocator, options, .preparation, "prepare PDF replacement plan", paths.manifest, err);
         return err;
     };
-    defer allocator.free(document_path);
-    const manifest_path = outputManifestPath(allocator, manifest_cache, output) catch |err| {
-        recordWriteFailure(allocator, options, .preparation, "prepare PDF output-manifest path", manifest_cache, err);
+    defer if (replacement) |*plan| plan.deinit(allocator);
+    const plan = if (replacement) |*value| value else null;
+    var pages = try PageFiles.init(allocator, cache.pages, &manifest, options);
+    defer pages.deinit(allocator);
+    try pages.inspectMissing(allocator, io, &manifest, plan, .replacement, options);
+    if (progress) |value| value.pageCompleted(value.context, ir.pages.len - countMissing(pages.missing), ir.pages.len);
+    try renderRequiredPages(allocator, io, ir, &manifest, cache.root, &pages, options, progress);
+
+    const temporary_document = try assembleDocument(allocator, io, ir, &cache, &paths, &manifest, &pages, plan, options, progress);
+    defer allocator.free(temporary_document);
+    errdefer deleteFile(io, temporary_document);
+    const identity = CacheIdentity{ .kind = .document, .key = manifest.document_digest, .page_count = ir.pages.len };
+    publishCache(allocator, io, temporary_document, paths.document, identity) catch |err| {
+        recordCacheOperationFailure(allocator, options, "publish cached PDF document", paths.document, err);
         return err;
     };
-    defer allocator.free(manifest_path);
+    if (progress) |value| value.assemblyCompleted(value.context, 1, 1);
+    try publishOutputAndManifest(allocator, io, &paths, output, &manifest, options);
+}
+
+const CachePaths = struct {
+    root: []u8,
+    pages: []u8,
+    documents: []u8,
+    manifests: []u8,
+
+    fn init(allocator: Allocator, io: std.Io, options: Options) !CachePaths {
+        const cache_root = std.fs.path.join(allocator, &.{ options.cache_dir, cache_version }) catch |err| {
+            recordWriteFailure(allocator, options, .preparation, "prepare PDF cache-root path", options.cache_dir, err);
+            return err;
+        };
+        errdefer allocator.free(cache_root);
+        const page_cache = std.fs.path.join(allocator, &.{ cache_root, "pages" }) catch |err| {
+            recordWriteFailure(allocator, options, .preparation, "prepare PDF page-cache path", cache_root, err);
+            return err;
+        };
+        errdefer allocator.free(page_cache);
+        const document_cache = std.fs.path.join(allocator, &.{ cache_root, "documents" }) catch |err| {
+            recordWriteFailure(allocator, options, .preparation, "prepare PDF document-cache path", cache_root, err);
+            return err;
+        };
+        errdefer allocator.free(document_cache);
+        const manifest_cache = std.fs.path.join(allocator, &.{ cache_root, "output-manifests" }) catch |err| {
+            recordWriteFailure(allocator, options, .preparation, "prepare PDF manifest-cache path", cache_root, err);
+            return err;
+        };
+        errdefer allocator.free(manifest_cache);
+        const cwd = std.Io.Dir.cwd();
+        cwd.createDirPath(io, page_cache) catch |err| {
+            recordWriteFailure(allocator, options, .cache, "create PDF page-cache directory", page_cache, err);
+            return err;
+        };
+        cwd.createDirPath(io, document_cache) catch |err| {
+            recordWriteFailure(allocator, options, .cache, "create PDF document-cache directory", document_cache, err);
+            return err;
+        };
+        cwd.createDirPath(io, manifest_cache) catch |err| {
+            recordWriteFailure(allocator, options, .cache, "create PDF manifest-cache directory", manifest_cache, err);
+            return err;
+        };
+
+        return .{ .root = cache_root, .pages = page_cache, .documents = document_cache, .manifests = manifest_cache };
+    }
+
+    fn deinit(self: *CachePaths, allocator: Allocator) void {
+        allocator.free(self.manifests);
+        allocator.free(self.documents);
+        allocator.free(self.pages);
+        allocator.free(self.root);
+    }
+};
+
+const DocumentPaths = struct {
+    document: []u8,
+    manifest: []u8,
+
+    fn init(allocator: Allocator, cache: *const CachePaths, manifest: *const OutputManifest, output: []const u8, options: Options) !DocumentPaths {
+        const document_digest = manifest.document_digest;
+        const document_path = digestPath(allocator, cache.documents, document_digest) catch |err| {
+            recordWriteFailure(allocator, options, .preparation, "prepare cached PDF document path", cache.documents, err);
+            return err;
+        };
+        errdefer allocator.free(document_path);
+        const manifest_path = outputManifestPath(allocator, cache.manifests, output) catch |err| {
+            recordWriteFailure(allocator, options, .preparation, "prepare PDF output-manifest path", cache.manifests, err);
+            return err;
+        };
+        errdefer allocator.free(manifest_path);
+        return .{ .document = document_path, .manifest = manifest_path };
+    }
+
+    fn deinit(self: *DocumentPaths, allocator: Allocator) void {
+        allocator.free(self.manifest);
+        allocator.free(self.document);
+    }
+};
+
+fn publishCachedDocument(allocator: Allocator, io: std.Io, ir: *const render.Ir, paths: *const DocumentPaths, output: []const u8, manifest: *OutputManifest, options: Options, progress: ?Progress) !bool {
     const document_identity = CacheIdentity{
         .kind = .document,
-        .key = document_digest,
+        .key = manifest.document_digest,
         .page_count = ir.pages.len,
     };
-    const document_cached = cachedPdfAvailable(allocator, io, document_path, document_identity) catch |err| {
-        recordCacheOperationFailure(allocator, options, "read cached PDF document", document_path, err);
+    const document_cached = cachedPdfAvailable(allocator, io, paths.document, document_identity) catch |err| {
+        recordCacheOperationFailure(allocator, options, "read cached PDF document", paths.document, err);
         return err;
     };
     if (document_cached) {
-        current_manifest.assembly = .document_cache;
+        manifest.assembly = .document_cache;
         if (progress) |value| {
             value.pageCompleted(value.context, ir.pages.len, ir.pages.len);
             value.assemblyCompleted(value.context, 1, 1);
         }
-        var publish_failure = PublishFailure{ .path = output };
-        publishOutput(allocator, io, document_path, output, &publish_failure) catch |err| {
-            recordWriteFailure(allocator, options, publish_failure.kind, publish_failure.operation, publish_failure.path, err);
-            return err;
-        };
-        persistOutputManifest(allocator, io, manifest_path, &current_manifest) catch |err| {
-            recordCacheOperationFailure(allocator, options, "write PDF output manifest", manifest_path, err);
-            return err;
-        };
-        return;
+        try publishOutputAndManifest(allocator, io, paths, output, manifest, options);
+        return true;
     }
+    return false;
+}
 
-    var replacement_plan = prepareReplacementPlan(
-        allocator,
-        io,
-        manifest_path,
-        document_cache,
-        &current_manifest,
-        options,
-    ) catch |err| {
-        recordWriteFailure(allocator, options, .preparation, "prepare PDF replacement plan", manifest_path, err);
-        return err;
-    };
-    defer if (replacement_plan) |*plan| plan.deinit(allocator);
+const PageFiles = struct {
+    paths: [][]u8,
+    missing: []bool,
 
-    const page_paths = allocator.alloc([]u8, ir.pages.len) catch |err| {
-        recordWriteFailure(allocator, options, .preparation, "allocate PDF page-cache paths", page_cache, err);
-        return err;
-    };
-    var initialized_paths: usize = 0;
-    defer {
-        for (page_paths[0..initialized_paths]) |path| allocator.free(path);
-        allocator.free(page_paths);
-    }
-    const missing = allocator.alloc(bool, ir.pages.len) catch |err| {
-        recordWriteFailure(allocator, options, .preparation, "allocate PDF page-cache state", page_cache, err);
-        return err;
-    };
-    defer allocator.free(missing);
-    var missing_count: usize = 0;
-    for (current_manifest.pages, 0..) |page, index| {
-        page_paths[index] = digestPath(allocator, page_cache, page.content_digest) catch |err| {
-            recordWriteFailure(allocator, options, .preparation, "prepare cached PDF page path", page_cache, err);
+    fn init(allocator: Allocator, page_cache: []const u8, manifest: *const OutputManifest, options: Options) !PageFiles {
+        const paths = allocator.alloc([]u8, manifest.pages.len) catch |err| {
+            recordWriteFailure(allocator, options, .preparation, "allocate PDF page-cache paths", page_cache, err);
             return err;
         };
-        initialized_paths += 1;
-        if (replacement_plan) |*plan| {
-            if (!plan.requiresPage(index)) {
-                missing[index] = false;
-                continue;
-            }
+        var initialized: usize = 0;
+        errdefer {
+            for (paths[0..initialized]) |path| allocator.free(path);
+            allocator.free(paths);
         }
-        missing[index] = !(cachedPdfAvailable(
-            allocator,
-            io,
-            page_paths[index],
-            pageCacheIdentity(page),
-        ) catch |err| {
-            recordCacheOperationFailure(allocator, options, "read cached PDF page", page_paths[index], err);
+        const missing = allocator.alloc(bool, manifest.pages.len) catch |err| {
+            recordWriteFailure(allocator, options, .preparation, "allocate PDF page-cache state", page_cache, err);
             return err;
-        });
-        if (missing[index]) missing_count += 1;
+        };
+        errdefer allocator.free(missing);
+        for (manifest.pages, paths) |page, *path| {
+            path.* = digestPath(allocator, page_cache, page.content_digest) catch |err| {
+                recordWriteFailure(allocator, options, .preparation, "prepare cached PDF page path", page_cache, err);
+                return err;
+            };
+            initialized += 1;
+        }
+        return .{ .paths = paths, .missing = missing };
     }
-    if (progress) |value| value.pageCompleted(value.context, ir.pages.len - missing_count, ir.pages.len);
-    if (missing_count != 0) {
+
+    fn deinit(self: *PageFiles, allocator: Allocator) void {
+        for (self.paths) |path| allocator.free(path);
+        allocator.free(self.paths);
+        allocator.free(self.missing);
+    }
+
+    fn inspectMissing(self: *PageFiles, allocator: Allocator, io: std.Io, manifest: *const OutputManifest, replacement_plan: ?*const ReplacementPlan, selection: enum { replacement, remaining }, options: Options) !void {
+        for (manifest.pages, 0..) |page, index| {
+            if (replacement_plan) |plan| {
+                if (plan.requiresPage(index) != (selection == .replacement)) {
+                    self.missing[index] = false;
+                    continue;
+                }
+            }
+            self.missing[index] = !(cachedPdfAvailable(
+                allocator,
+                io,
+                self.paths[index],
+                pageCacheIdentity(page),
+            ) catch |err| {
+                recordCacheOperationFailure(allocator, options, "read cached PDF page", self.paths[index], err);
+                return err;
+            });
+        }
+    }
+};
+
+fn renderRequiredPages(allocator: Allocator, io: std.Io, ir: *const render.Ir, manifest: *const OutputManifest, cache_root: []const u8, pages: *const PageFiles, options: Options, progress: ?Progress) !void {
+    if (countMissing(pages.missing) != 0) {
         const resource_cache = std.fs.path.join(allocator, &.{ cache_root, "resources" }) catch |err| {
             recordWriteFailure(allocator, options, .preparation, "prepare PDF resource-cache path", cache_root, err);
             return err;
@@ -292,29 +354,31 @@ pub fn writeValidated(
             allocator,
             io,
             ir,
-            current_manifest.pages,
-            page_paths,
-            missing,
+            manifest.pages,
+            pages.paths,
+            pages.missing,
             options.jobs,
             progress,
             &resources,
             options,
         );
     }
+}
 
-    const temporary_document = temporaryPath(allocator, document_path, "pdf") catch |err| {
-        recordWriteFailure(allocator, options, .preparation, "prepare temporary PDF document path", document_path, err);
+fn assembleDocument(allocator: Allocator, io: std.Io, ir: *const render.Ir, cache: *const CachePaths, paths: *const DocumentPaths, manifest: *OutputManifest, pages: *PageFiles, replacement_plan: ?*const ReplacementPlan, options: Options, progress: ?Progress) ![]u8 {
+    const temporary_document = temporaryPath(allocator, paths.document, "pdf") catch |err| {
+        recordWriteFailure(allocator, options, .preparation, "prepare temporary PDF document path", paths.document, err);
         return err;
     };
-    defer allocator.free(temporary_document);
+    errdefer allocator.free(temporary_document);
     errdefer deleteFile(io, temporary_document);
     if (progress) |value| value.assemblyCompleted(value.context, 0, 1);
-    const replaced = if (replacement_plan) |*plan|
+    const replaced = if (replacement_plan) |plan|
         replaceCachedDocument(
             allocator,
             io,
             plan,
-            page_paths,
+            pages.paths,
             temporary_document,
         ) catch |err| {
             recordWriteFailure(
@@ -330,53 +394,13 @@ pub fn writeValidated(
     else
         false;
     if (replaced) {
-        current_manifest.assembly = .delta;
+        manifest.assembly = .delta;
     } else {
         if (replacement_plan != null) {
-            @memset(missing, false);
-            missing_count = 0;
-            for (current_manifest.pages, 0..) |page, index| {
-                if (replacement_plan.?.requiresPage(index)) continue;
-                missing[index] = !(cachedPdfAvailable(
-                    allocator,
-                    io,
-                    page_paths[index],
-                    pageCacheIdentity(page),
-                ) catch |err| {
-                    recordCacheOperationFailure(allocator, options, "read cached PDF page", page_paths[index], err);
-                    return err;
-                });
-                if (missing[index]) missing_count += 1;
-            }
-            if (missing_count != 0) {
-                const resource_cache = std.fs.path.join(allocator, &.{ cache_root, "resources" }) catch |err| {
-                    recordWriteFailure(allocator, options, .preparation, "prepare PDF resource-cache path", cache_root, err);
-                    return err;
-                };
-                defer allocator.free(resource_cache);
-                var resources = page_backend.ResourceFiles.initCached(allocator, io, &ir.resources, cache_root) catch |err| {
-                    if (utils.err.isFileSystemError(err))
-                        recordWriteFailure(allocator, options, .cache, "materialize PDF resources", resource_cache, err)
-                    else
-                        recordWriteFailure(allocator, options, .preparation, "prepare PDF resources", resource_cache, err);
-                    return err;
-                };
-                defer resources.deinit();
-                try renderMissingPages(
-                    allocator,
-                    io,
-                    ir,
-                    current_manifest.pages,
-                    page_paths,
-                    missing,
-                    options.jobs,
-                    progress,
-                    &resources,
-                    options,
-                );
-            }
+            try pages.inspectMissing(allocator, io, manifest, replacement_plan, .remaining, options);
+            try renderRequiredPages(allocator, io, ir, manifest, cache.root, pages, options, progress);
         }
-        mergePages(allocator, ir, page_paths, temporary_document) catch |err| {
+        mergePages(allocator, ir, pages.paths, temporary_document) catch |err| {
             recordWriteFailureWithDetail(
                 allocator,
                 options,
@@ -388,20 +412,19 @@ pub fn writeValidated(
             );
             return err;
         };
-        current_manifest.assembly = .full;
+        manifest.assembly = .full;
     }
-    publishCache(allocator, io, temporary_document, document_path, document_identity) catch |err| {
-        recordCacheOperationFailure(allocator, options, "publish cached PDF document", document_path, err);
-        return err;
-    };
-    if (progress) |value| value.assemblyCompleted(value.context, 1, 1);
+    return temporary_document;
+}
+
+fn publishOutputAndManifest(allocator: Allocator, io: std.Io, paths: *const DocumentPaths, output: []const u8, manifest: *const OutputManifest, options: Options) !void {
     var publish_failure = PublishFailure{ .path = output };
-    publishOutput(allocator, io, document_path, output, &publish_failure) catch |err| {
+    publishOutput(allocator, io, paths.document, output, &publish_failure) catch |err| {
         recordWriteFailure(allocator, options, publish_failure.kind, publish_failure.operation, publish_failure.path, err);
         return err;
     };
-    persistOutputManifest(allocator, io, manifest_path, &current_manifest) catch |err| {
-        recordCacheOperationFailure(allocator, options, "write PDF output manifest", manifest_path, err);
+    persistOutputManifest(allocator, io, paths.manifest, manifest) catch |err| {
+        recordCacheOperationFailure(allocator, options, "write PDF output manifest", paths.manifest, err);
         return err;
     };
 }
