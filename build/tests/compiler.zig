@@ -7,6 +7,10 @@ const import = project.import;
 
 pub fn register(suite: Suite, modules: project.ProjectModules, compiler_mod: *Module) void {
     const ctx = suite.ctx;
+    const execution_spec_mod = createModule(ctx, "tests/analysis/execution/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    _ = suite.add(execution_spec_mod, .{ .name = "test-execution-graph", .description = "Check execution graph state effects and diagnostics" });
     const csv_parser_mod = createModule(ctx, "src/eval/csv.zig", &.{
         import("utils", modules.utils),
     }, true);

@@ -12,7 +12,9 @@ const declarations = @import("../language/declarations.zig");
 const SemanticEnv = semantic_env.SemanticEnv;
 
 pub const PageIdMode = enum {
+    /// Validate execution dependencies without adding pages or source mappings.
     synthetic,
+    /// Register pages and their source mappings in document order before evaluation.
     create,
 };
 
@@ -60,10 +62,11 @@ pub const ExecutionGraph = struct {
     edges: std.ArrayList(DependencyEdge),
     order: []usize,
 
+    /// Reads declarations and source modules, appends diagnostics, and registers
+    /// pages only in create mode. The returned graph borrows this source generation.
     pub fn build(
         allocator: std.mem.Allocator,
-        state: *const core.DocumentState,
-        diagnostic_state: *core.DocumentState,
+        state: *core.DocumentState,
         declaration_index: *const declarations.DeclarationIndex,
         options: BuildOptions,
     ) !ExecutionGraph {
@@ -89,7 +92,6 @@ pub const ExecutionGraph = struct {
         var builder = GraphBuilder{
             .allocator = allocator,
             .state = state,
-            .diagnostic_state = diagnostic_state,
             .functions = &state.functions,
             .declarations = declaration_index,
             .units = &graph.units,
@@ -99,13 +101,13 @@ pub const ExecutionGraph = struct {
             .page_id_mode = options.page_id_mode,
         };
         try builder.collectExecutionUnits(state.projectModule());
-        try validateExecutionUnits(diagnostic_state, graph.units.items);
+        try validateExecutionUnits(state, graph.units.items);
         try buildDependencyEdges(allocator, graph.units.items, &graph.edges);
         var cycle_hint: ?usize = null;
         graph.order = scheduleFromEdges(allocator, graph.units.items, graph.edges.items, &cycle_hint) catch |err| {
             if (err == error.ExecutionDependencyCycle and graph.units.items.len != 0) {
                 const diagnostic = analysisDiagnostic(err);
-                try addUnitErrorDiagnostic(diagnostic_state, graph.units.items[cycle_hint orelse 0], diagnostic.code, diagnostic.message);
+                try addUnitErrorDiagnostic(state, graph.units.items[cycle_hint orelse 0], diagnostic.code, diagnostic.message);
             }
             return err;
         };
@@ -126,14 +128,13 @@ pub fn validateDependencies(
     state: *core.DocumentState,
     declaration_index: *const declarations.DeclarationIndex,
 ) !void {
-    var graph = try ExecutionGraph.build(allocator, state, state, declaration_index, .{ .page_id_mode = .synthetic });
+    var graph = try ExecutionGraph.build(allocator, state, declaration_index, .{ .page_id_mode = .synthetic });
     defer graph.deinit();
 }
 
 const GraphBuilder = struct {
     allocator: std.mem.Allocator,
-    state: *const core.DocumentState,
-    diagnostic_state: *core.DocumentState,
+    state: *core.DocumentState,
     functions: *const core.FunctionMap,
     declarations: *const declarations.DeclarationIndex,
     units: *std.ArrayList(ExecutionUnit),
@@ -214,7 +215,7 @@ const GraphBuilder = struct {
         page: ast.PageDecl,
     ) !void {
         const page_id = try self.nextPageId(module, page);
-        const sema = SemanticEnv.init(self.diagnostic_state, self.declarations, self.functions).forModule(module.id);
+        const sema = SemanticEnv.init(self.state, self.declarations, self.functions).forModule(module.id);
         var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .page = page_id }, self.run_cache);
         defer analyzer.deinit();
         for (page.statements.items, 0..) |stmt, stmt_index| {
@@ -243,8 +244,8 @@ const GraphBuilder = struct {
     fn nextPageId(self: *GraphBuilder, module: *const core.SourceModule, page: ast.PageDecl) !core.NodeId {
         return switch (self.page_id_mode) {
             .create => blk: {
-                const page_id = try self.diagnostic_state.addPage(page.name);
-                try self.diagnostic_state.addPageSource(
+                const page_id = try self.state.addPage(page.name);
+                try self.state.addPageSource(
                     page_id,
                     module.id,
                     module.path orelse module.spec,

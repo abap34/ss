@@ -153,7 +153,7 @@ pub fn analyzeDocumentStateWithMode(
             try execution.validateDependencies(allocator, state, declaration_index);
             break :blk null;
         },
-        .evaluation => try execution.ExecutionGraph.build(allocator, state, state, declaration_index, .{ .page_id_mode = .create }),
+        .evaluation => try execution.ExecutionGraph.build(allocator, state, declaration_index, .{ .page_id_mode = .create }),
     };
 }
 
