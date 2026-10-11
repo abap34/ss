@@ -1,9 +1,43 @@
 const std = @import("std");
+const allocation_testing = @import("allocation_testing");
 const render_ir = @import("render");
 const render_support = @import("render_test_support");
 const render_resources = @import("render_resources");
 
 const testing = std.testing;
+
+fn sharePageContent(allocator: std.mem.Allocator) !void {
+    var page = render_ir.Page{ .page_id = 1, .index = 0, .width = 640, .height = 360 };
+    defer page.deinit(allocator);
+    try page.appendFillRect(allocator, 2, .{ .x = 10, .y = 20, .width = 30, .height = 40 }, .{ .r = 1, .g = 0, .b = 0 });
+    try page.appendLink(allocator, .destination, "section", .{ .x = 10, .y = 20, .width = 30, .height = 40 });
+    try page.appendDestination(allocator, "section", .{ .x = 10, .y = 20 });
+    const content = try page.takeContent(allocator, allocator);
+    var content_owned = true;
+    defer if (content_owned) content.release();
+    try testing.expectEqual(@as(usize, 0), page.items.items.len);
+    try testing.expectEqual(@as(usize, 0), page.links().len);
+    var first = try content.materialize(allocator, 1, 0, 640, 360);
+    defer first.deinit(allocator);
+    var second = try content.materialize(allocator, 1, 0, 640, 360);
+    defer second.deinit(allocator);
+    content.release();
+    content_owned = false;
+    first.items.items[0].setSemanticId(7);
+    try testing.expectEqual(@as(?render_ir.SemanticId, null), second.items.items[0].header().semantic_id);
+    try testing.expect(first.items.items.ptr != second.items.items.ptr);
+    try testing.expect(first.links().ptr == second.links().ptr);
+    try testing.expectEqualStrings("section", first.links()[0].target);
+    try testing.expectEqualStrings("section", second.destinations()[0].name);
+    try testing.expectError(error.SharedPageContent, first.appendLink(allocator, .uri, "https://example.com", .{ .x = 0, .y = 0, .width = 1, .height = 1 }));
+    try testing.expectError(error.SharedPageContent, first.appendFillRect(allocator, null, .{ .x = 0, .y = 0, .width = 1, .height = 1 }, .{ .r = 0, .g = 0, .b = 0 }));
+    try testing.expectError(error.SharedPageContent, first.takeContent(allocator, allocator));
+}
+
+test "shared page payloads retain immutable annotations and independent headers through allocation failures" {
+    try sharePageContent(testing.allocator);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, sharePageContent, .{});
+}
 
 fn addDocumentSemantics(ir: *render_ir.Ir) !void {
     const nodes = try testing.allocator.alloc(render_ir.SemanticNode, ir.pages.len + 1);
@@ -138,8 +172,8 @@ test "render IR page preserves PDF placement and annotations" {
     const pdf = page.items.items[0].pdf_page;
     try testing.expectEqual(@as(usize, 3), pdf.page_index);
     try testing.expectEqual(render_ir.CoordinateSpace.origin, "page-top-left");
-    try testing.expectEqualStrings("section", page.destinations.items[0].name);
-    try testing.expectEqualStrings("section", page.links.items[0].target);
+    try testing.expectEqualStrings("section", page.destinations()[0].name);
+    try testing.expectEqualStrings("section", page.links()[0].target);
 }
 
 test "render IR LaTeX items require LaTeX PDF resources" {
@@ -481,7 +515,7 @@ test "render IR buffered page fingerprints match the unbuffered reference" {
     const content_reference = render_ir.pageContentFingerprintUnbufferedForTesting(&page);
     try testing.expectEqualSlices(u8, &content_reference, &content_buffered);
 
-    page.destinations.items[0].point.x += 1;
+    page.content.owned.destinations.items[0].point.x += 1;
     try testing.expect(!std.mem.eql(u8, &buffered, &render_ir.pageFingerprint(&page)));
     try testing.expectEqualSlices(u8, &content_buffered, &render_ir.pageContentFingerprint(&page));
 }

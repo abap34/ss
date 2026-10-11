@@ -230,14 +230,14 @@ fn pageDigestWithHash(
         }
     }
     if (include_annotations) {
-        hash.integer(page_value.links.items.len);
-        for (page_value.links.items) |link| {
+        hash.integer(page_value.links().len);
+        for (page_value.links()) |link| {
             hash.tag(link.kind);
             hash.bytes(link.target);
             hashRect(&hash, link.rect);
         }
-        hash.integer(page_value.destinations.items.len);
-        for (page_value.destinations.items) |destination| {
+        hash.integer(page_value.destinations().len);
+        for (page_value.destinations()) |destination| {
             hash.bytes(destination.name);
             hashPoint(&hash, destination.point);
         }

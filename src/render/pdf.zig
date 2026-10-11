@@ -701,7 +701,7 @@ fn mergePages(allocator: Allocator, ir: *const render.Ir, inputs: []const []u8, 
     var destinations = std.ArrayList(c.SsQpdfDestination).empty;
     defer destinations.deinit(allocator);
     for (ir.pages, 0..) |page, page_index| {
-        for (page.links.items) |link| try links.append(allocator, .{
+        for (page.links()) |link| try links.append(allocator, .{
             .page_index = page_index,
             .kind = switch (link.kind) {
                 .uri => c.SS_QPDF_LINK_URI,
@@ -713,7 +713,7 @@ fn mergePages(allocator: Allocator, ir: *const render.Ir, inputs: []const []u8, 
             .width = link.rect.width,
             .height = link.rect.height,
         });
-        for (page.destinations.items) |destination| try destinations.append(allocator, .{
+        for (page.destinations()) |destination| try destinations.append(allocator, .{
             .page_index = page_index,
             .name = destination.name.ptr,
             .x = destination.point.x,
@@ -891,7 +891,7 @@ fn manifestPage(page: *const render.Page, environment_digest: render.Fingerprint
     return .{
         .digest = render.pageFingerprint(page),
         .content_digest = pageContentCacheDigest(page, environment_digest),
-        .has_annotations = page.links.items.len != 0 or page.destinations.items.len != 0,
+        .has_annotations = page.links().len != 0 or page.destinations().len != 0,
     };
 }
 

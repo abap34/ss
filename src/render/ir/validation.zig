@@ -65,12 +65,12 @@ pub fn document(ir: anytype) Error!void {
                 if (ir.semantics.find(semantic_id) == null) return error.InvalidSemantics;
             }
         }
-        for (page.links.items) |link| {
+        for (page.links()) |link| {
             if (!link.rect.isValid() or link.target.len == 0 or
                 !std.unicode.utf8ValidateSlice(link.target) or !validLinkTarget(link.kind, link.target)) return error.InvalidAnnotation;
             if (link.kind == .destination and !hasDestination(ir, link.target)) return error.InvalidAnnotation;
         }
-        for (page.destinations.items) |destination| {
+        for (page.destinations()) |destination| {
             if (!std.math.isFinite(destination.point.x) or !std.math.isFinite(destination.point.y) or
                 destination.name.len == 0 or !std.unicode.utf8ValidateSlice(destination.name) or destination.name[0] == '#') return error.InvalidAnnotation;
             if (destinationCount(ir, destination.name) != 1) return error.InvalidAnnotation;
@@ -282,7 +282,7 @@ fn hasDestination(ir: anytype, name: []const u8) bool {
 
 fn destinationCount(ir: anytype, name: []const u8) usize {
     var count: usize = 0;
-    for (ir.pages) |page| for (page.destinations.items) |destination| {
+    for (ir.pages) |page| for (page.destinations()) |destination| {
         if (std.mem.eql(u8, destination.name, name)) count += 1;
     };
     return count;

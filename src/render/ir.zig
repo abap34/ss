@@ -344,7 +344,7 @@ pub const LinkKind = enum {
 
 pub const Link = struct {
     kind: LinkKind,
-    target: [:0]u8,
+    target: [:0]const u8,
     rect: Rect,
 
     fn deinit(self: *Link, allocator: std.mem.Allocator) void {
@@ -353,7 +353,7 @@ pub const Link = struct {
 };
 
 pub const Destination = struct {
-    name: [:0]u8,
+    name: [:0]const u8,
     point: Point,
 
     fn deinit(self: *Destination, allocator: std.mem.Allocator) void {
@@ -400,9 +400,7 @@ pub const PageContent = struct {
             .width = width,
             .height = height,
             .items = copied_items,
-            .links = self.links,
-            .destinations = self.destinations,
-            .shared_content = self,
+            .content = .{ .shared = self },
         };
     }
 };
@@ -414,24 +412,52 @@ pub const Page = struct {
     width: f64,
     height: f64,
     items: std.ArrayList(Item) = .empty,
-    links: std.ArrayList(Link) = .empty,
-    destinations: std.ArrayList(Destination) = .empty,
     reading_order: []SemanticId = &.{},
-    shared_content: ?*PageContent = null,
+    // The item array and metadata are page-local. Item payloads and annotations
+    // are either owned here or retained together through PageContent.
+    content: union(enum) {
+        owned: Annotations,
+        shared: *PageContent,
+    } = .{ .owned = .{} },
+
+    pub const Annotations = struct {
+        links: std.ArrayList(Link) = .empty,
+        destinations: std.ArrayList(Destination) = .empty,
+    };
+
+    pub fn links(self: *const Page) []const Link {
+        return switch (self.content) {
+            .owned => |owned| owned.links.items,
+            .shared => |shared| shared.links.items,
+        };
+    }
+
+    pub fn destinations(self: *const Page) []const Destination {
+        return switch (self.content) {
+            .owned => |owned| owned.destinations.items,
+            .shared => |shared| shared.destinations.items,
+        };
+    }
+
+    fn requireOwnedContent(self: *const Page) !void {
+        if (self.content == .shared) return error.SharedPageContent;
+    }
 
     pub fn deinit(self: *Page, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
-        if (self.shared_content == null) for (self.items.items) |*item| item.deinit(allocator);
-        self.items.deinit(allocator);
-        if (self.shared_content) |content| {
-            content.release();
-        } else {
-            for (self.links.items) |*link| link.deinit(allocator);
-            self.links.deinit(allocator);
-            for (self.destinations.items) |*destination| destination.deinit(allocator);
-            self.destinations.deinit(allocator);
+        switch (self.content) {
+            .owned => |*owned| {
+                for (self.items.items) |*item| item.deinit(allocator);
+                for (owned.links.items) |*link| link.deinit(allocator);
+                owned.links.deinit(allocator);
+                for (owned.destinations.items) |*destination| destination.deinit(allocator);
+                owned.destinations.deinit(allocator);
+            },
+            .shared => |shared| shared.release(),
         }
+        self.items.deinit(allocator);
         allocator.free(self.reading_order);
+        self.* = undefined;
     }
 
     pub fn takeContent(
@@ -439,7 +465,7 @@ pub const Page = struct {
         owner_allocator: std.mem.Allocator,
         content_allocator: std.mem.Allocator,
     ) !*PageContent {
-        std.debug.assert(self.shared_content == null);
+        try self.requireOwnedContent();
         std.debug.assert(self.name.len == 0);
         std.debug.assert(self.reading_order.len == 0);
         const content = try owner_allocator.create(PageContent);
@@ -447,20 +473,20 @@ pub const Page = struct {
             .owner_allocator = owner_allocator,
             .content_allocator = content_allocator,
             .items = self.items,
-            .links = self.links,
-            .destinations = self.destinations,
+            .links = self.content.owned.links,
+            .destinations = self.content.owned.destinations,
         };
         self.items = .empty;
-        self.links = .empty;
-        self.destinations = .empty;
+        self.content = .{ .owned = .{} };
         return content;
     }
 
     pub fn ownedContentByteSize(self: *const Page) usize {
+        std.debug.assert(self.content == .owned);
         var total = @sizeOf(PageContent) +|
             self.items.capacity *| @sizeOf(Item) +|
-            self.links.capacity *| @sizeOf(Link) +|
-            self.destinations.capacity *| @sizeOf(Destination);
+            self.content.owned.links.capacity *| @sizeOf(Link) +|
+            self.content.owned.destinations.capacity *| @sizeOf(Destination);
         for (self.items.items) |item| switch (item) {
             .text => |value| total +|= value.layout.ownedByteSize(),
             .vector_path => |value| {
@@ -470,8 +496,8 @@ pub const Page = struct {
             },
             .fill_rect, .stroke_line, .rounded_rect, .raster, .svg, .latex, .pdf_page => {},
         };
-        for (self.links.items) |link| total +|= link.target.len +| 1;
-        for (self.destinations.items) |destination| total +|= destination.name.len +| 1;
+        for (self.links()) |link| total +|= link.target.len +| 1;
+        for (self.destinations()) |destination| total +|= destination.name.len +| 1;
         return total;
     }
 
@@ -484,6 +510,7 @@ pub const Page = struct {
     }
 
     pub fn appendFillRect(self: *Page, allocator: std.mem.Allocator, node_id: ?core.NodeId, rect: Rect, color: core.render_policy.Color) !void {
+        try self.requireOwnedContent();
         try self.items.append(allocator, .{ .fill_rect = .{
             .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
@@ -502,6 +529,7 @@ pub const Page = struct {
         dash_on: f64,
         dash_off: f64,
     ) !void {
+        try self.requireOwnedContent();
         return self.appendStrokeLineWithOpacity(allocator, node_id, start, end, line_width, color, dash_on, dash_off, 1);
     }
 
@@ -517,6 +545,7 @@ pub const Page = struct {
         dash_off: f64,
         opacity: f64,
     ) !void {
+        try self.requireOwnedContent();
         const half_width = @max(line_width / 2, 0);
         const dx = end.x - start.x;
         const dy = end.y - start.y;
@@ -558,6 +587,7 @@ pub const Page = struct {
         stroke: ?core.render_policy.Color,
         line_width: f64,
     ) !void {
+        try self.requireOwnedContent();
         const half_width = if (stroke != null) @max(line_width / 2, 0) else 0;
         const ink_bounds = Rect{
             .x = rect.x - half_width,
@@ -583,6 +613,7 @@ pub const Page = struct {
         fill: FillPaint,
         stroke: ?StrokePaint,
     ) !void {
+        try self.requireOwnedContent();
         const owned_commands = try allocator.dupe(PathCommand, commands);
         errdefer allocator.free(owned_commands);
         var owned_fill = try fill.clone(allocator);
@@ -619,6 +650,7 @@ pub const Page = struct {
     ) !void {
         var owned_layout = layout;
         errdefer owned_layout.deinit(allocator);
+        try self.requireOwnedContent();
         const y = baseline_y - owned_layout.firstBaseline();
         const logical = owned_layout.logical_bounds;
         const ink = owned_layout.ink_bounds;
@@ -636,6 +668,7 @@ pub const Page = struct {
     }
 
     pub fn appendRaster(self: *Page, allocator: std.mem.Allocator, node_id: ?core.NodeId, rect: Rect, resource: ResourceId) !void {
+        try self.requireOwnedContent();
         try self.items.append(allocator, .{ .raster = .{
             .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
@@ -651,6 +684,7 @@ pub const Page = struct {
         resource: ResourceId,
         tint: ?core.render_policy.Color,
     ) !void {
+        try self.requireOwnedContent();
         try self.items.append(allocator, .{ .svg = .{
             .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
@@ -669,6 +703,7 @@ pub const Page = struct {
         box: core.render_policy.PdfPageBox,
         copy_annotations: bool,
     ) !void {
+        try self.requireOwnedContent();
         try self.items.append(allocator, .{ .pdf_page = .{
             .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
@@ -688,6 +723,7 @@ pub const Page = struct {
         page_index: usize,
         box: core.render_policy.PdfPageBox,
     ) !void {
+        try self.requireOwnedContent();
         try self.items.append(allocator, .{ .latex = .{
             .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
@@ -698,9 +734,10 @@ pub const Page = struct {
     }
 
     pub fn appendLink(self: *Page, allocator: std.mem.Allocator, kind: LinkKind, target: []const u8, rect: Rect) !void {
+        try self.requireOwnedContent();
         const owned_target = try allocator.dupeSentinel(u8, target, 0);
         errdefer allocator.free(owned_target);
-        try self.links.append(allocator, .{
+        try self.content.owned.links.append(allocator, .{
             .kind = kind,
             .target = owned_target,
             .rect = rect,
@@ -708,9 +745,10 @@ pub const Page = struct {
     }
 
     pub fn appendDestination(self: *Page, allocator: std.mem.Allocator, name: []const u8, point: Point) !void {
+        try self.requireOwnedContent();
         const owned_name = try allocator.dupeSentinel(u8, name, 0);
         errdefer allocator.free(owned_name);
-        try self.destinations.append(allocator, .{
+        try self.content.owned.destinations.append(allocator, .{
             .name = owned_name,
             .point = point,
         });

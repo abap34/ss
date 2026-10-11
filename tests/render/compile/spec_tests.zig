@@ -438,8 +438,8 @@ test "captured measurement items keep page order and annotations" {
         try testing.expectEqual(@as(u32, @intCast(index)), header.paint_index);
         try testing.expectEqual((@as(u64, 1) << 32) | @as(u64, @intCast(index)), header.item_id);
     }
-    try testing.expectEqual(@as(usize, 1), page.links.items.len);
-    for (page.links.items) |link| {
+    try testing.expectEqual(@as(usize, 1), page.links().len);
+    for (page.links()) |link| {
         try testing.expectEqualStrings("https://example.com", link.target);
     }
 }
@@ -1678,8 +1678,8 @@ test "page cache keeps materialized content alive across eviction" {
     cache.deinit();
     cache_live = false;
 
-    try testing.expectEqualStrings("target", first.links.items[0].target);
-    try testing.expectEqualStrings("target", second.destinations.items[0].name);
+    try testing.expectEqualStrings("target", first.links()[0].target);
+    try testing.expectEqualStrings("target", second.destinations()[0].name);
     try testing.expectEqual(@as(f64, 0.25), first.items.items[0].fill_rect.header.opacity);
     try testing.expectEqual(@as(f64, 1), second.items.items[0].fill_rect.header.opacity);
 }

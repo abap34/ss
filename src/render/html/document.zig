@@ -269,7 +269,7 @@ fn appendPage(
     });
     try appendAttribute(allocator, out, page.name);
     try appendFormat(allocator, out, "\" style=\"width:{d:.6}pt;height:{d:.6}pt\">", .{ normalized(page.width), normalized(page.height) });
-    for (page.destinations.items) |destination| {
+    for (page.destinations()) |destination| {
         try out.appendSlice(allocator, "<span class=\"ss-destination\" id=\"");
         try appendAttribute(allocator, out, destination.name);
         try appendFormat(allocator, out, "\" style=\"left:{d:.6}pt;top:{d:.6}pt\"></span>", .{ normalized(destination.point.x), normalized(destination.point.y) });
@@ -280,7 +280,7 @@ fn appendPage(
         try appendSemanticNode(allocator, out, ir, semantic_id, 0);
     }
     try out.appendSlice(allocator, "</div>");
-    for (page.links.items) |link| {
+    for (page.links()) |link| {
         try out.appendSlice(allocator, "<a class=\"ss-link\" href=\"");
         if (link.kind == .destination) try out.append(allocator, '#');
         try appendAttribute(allocator, out, link.target);
