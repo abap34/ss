@@ -114,28 +114,25 @@ const Builder = struct {
 
     fn object(self: *Builder, state: *core.DocumentState, prepared_object: *const core.prepared.PreparedObject) !render.SemanticId {
         const node = state.getNode(prepared_object.node_id);
-        const role = if (node) |value| value.role orelse "" else "";
-        if (std.mem.eql(u8, role, "title") or std.mem.eql(u8, role, "subtitle")) {
-            const level: u8 = if (std.mem.eql(u8, role, "title")) 1 else 2;
-            if (prepared_object.textLayout()) |layout| return try self.lines(.heading, level, layout.lines.items);
-            if (prepared_object.markdownDocument()) |document| {
-                if (document.blocks.items.len == 1) {
-                    const block_value = document.blocks.items[0];
-                    if (block_value.paragraph) |paragraph| return try self.lines(.heading, level, paragraph.lines.items);
-                }
+        const explicit: ?render.SemanticRole = switch (prepared_object.semantics) {
+            .auto => null,
+            .heading => .heading,
+            .paragraph => .paragraph,
+            .code => .code,
+            .figure => .figure,
+            .caption => .caption,
+        };
+        if (explicit) |role| {
+            const level: ?u8 = if (prepared_object.semantics == .heading) prepared_object.semantics.heading else null;
+            const id = try self.objectWithRole(prepared_object, role, level);
+            if (role == .figure) {
+                const label = if (node) |value| value.name else prepared_object.content;
+                self.nodes.items[self.index(id)].alt_text = try duplicateOptional(self.allocator, label);
             }
-            const id = try self.append(.heading);
-            const index_value = self.index(id);
-            self.nodes.items[index_value].heading_level = level;
-            self.nodes.items[index_value].text = try self.objectText(prepared_object);
             return id;
         }
-        if (std.mem.eql(u8, role, "code") or prepared_object.render.kind == .code) {
-            const id = try self.append(.code);
-            self.nodes.items[self.index(id)].text = try self.objectText(prepared_object);
-            return id;
-        }
-        if (std.mem.eql(u8, role, "figure") or prepared_object.render.kind == .vector_asset or prepared_object.render.kind == .raster_asset) {
+        if (prepared_object.render.kind == .code) return self.objectWithRole(prepared_object, .code, null);
+        if (prepared_object.render.kind == .vector_asset or prepared_object.render.kind == .raster_asset) {
             const id = try self.append(.figure);
             const label = if (node) |value| value.name else prepared_object.content;
             self.nodes.items[self.index(id)].alt_text = try duplicateOptional(self.allocator, label);
@@ -147,7 +144,7 @@ const Builder = struct {
             return id;
         }
         if (prepared_object.textLayout()) |layout| {
-            return try self.lines(if (std.mem.eql(u8, role, "caption")) .caption else .paragraph, null, layout.lines.items);
+            return try self.lines(.paragraph, null, layout.lines.items);
         }
         if (prepared_object.markdownDocument()) |document| {
             if (document.blocks.items.len == 1) return try self.block(document.blocks.items[0]);
@@ -158,9 +155,53 @@ const Builder = struct {
             self.nodes.items[self.index(id)].children = try children.toOwnedSlice(self.allocator);
             return id;
         }
-        const id = try self.append(if (std.mem.eql(u8, role, "caption")) .caption else .paragraph);
+        const id = try self.append(.paragraph);
         self.nodes.items[self.index(id)].text = try self.objectText(prepared_object);
         return id;
+    }
+
+    fn objectWithRole(self: *Builder, object_value: *const core.prepared.PreparedObject, role: render.SemanticRole, level: ?u8) !render.SemanticId {
+        if (object_value.textLayout()) |layout| return self.lines(role, level, layout.lines.items);
+        if (object_value.markdownDocument()) |document| {
+            if (document.blocks.items.len == 1) {
+                if (document.blocks.items[0].paragraph) |paragraph| return self.lines(role, level, paragraph.lines.items);
+            }
+            const id = try self.append(role);
+            self.nodes.items[self.index(id)].heading_level = level;
+            var children = std.ArrayList(render.SemanticId).empty;
+            defer children.deinit(self.allocator);
+            for (document.blocks.items, 0..) |block_value, block_index| {
+                if (block_index != 0) try children.append(self.allocator, try self.text("\n"));
+                const child = try self.block(block_value);
+                if (role == .heading or role == .paragraph or role == .code) self.inlineStructure(child);
+                try children.append(self.allocator, child);
+            }
+            self.nodes.items[self.index(id)].children = try children.toOwnedSlice(self.allocator);
+            return id;
+        }
+        const id = try self.append(role);
+        self.nodes.items[self.index(id)].heading_level = level;
+        if (object_value.render.kind == .latex) {
+            const math = try self.leaf(.math, object_value.content);
+            self.nodes.items[self.index(id)].children = try self.allocator.dupe(render.SemanticId, &.{math});
+        } else if (role != .figure) {
+            self.nodes.items[self.index(id)].text = try self.objectText(object_value);
+        }
+        return id;
+    }
+
+    // Explicit text roles own the block boundary. Keep inline links and math,
+    // while rendering nested Markdown structure as phrasing content in HTML.
+    fn inlineStructure(self: *Builder, id: render.SemanticId) void {
+        const node = &self.nodes.items[self.index(id)];
+        if (node.role == .math or node.role == .link or node.role == .text) return;
+        node.role = .text;
+        node.heading_level = null;
+        node.list_ordered = null;
+        node.list_start = null;
+        if (node.code_language) |language| self.allocator.free(language);
+        node.code_language = null;
+        for (node.children) |child| self.inlineStructure(child);
     }
 
     fn objectText(self: *Builder, prepared_object: *const core.prepared.PreparedObject) !?[]u8 {

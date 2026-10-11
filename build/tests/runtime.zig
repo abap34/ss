@@ -61,6 +61,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/render_cache_runtime_spec.mjs" },
         .{ .path = "tests/runtime/render_diagnostics_runtime_spec.mjs" },
         .{ .path = "tests/runtime/render/html/spec.mjs" },
+        .{ .path = "tests/runtime/render/semantics/spec.mjs", .name = "test-semantic-html", .description = "Check declared semantics in HTML output" },
         .{ .path = "tests/runtime/render/markdown_underline/spec.mjs" },
         .{ .path = "tests/runtime/render/vector_shapes/spec.mjs" },
         .{ .path = "tests/runtime/stdlib_wrappers_runtime_spec.mjs" },

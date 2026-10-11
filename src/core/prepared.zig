@@ -5,6 +5,16 @@ const markdown = @import("markdown.zig");
 const render_env = @import("render_env.zig");
 const render_policy = @import("render_policy.zig");
 const partition = @import("../layout/partition.zig");
+const fields = @import("fields.zig");
+
+pub const ObjectSemantics = union(enum) {
+    auto,
+    paragraph,
+    heading: u8,
+    code,
+    figure,
+    caption,
+};
 
 pub const PreparedObject = struct {
     node_id: model.NodeId,
@@ -12,6 +22,7 @@ pub const PreparedObject = struct {
     content_provenance: []const model.ContentProvenance,
     link_id: ?[]const u8,
     render: render_policy.ResolvedRender,
+    semantics: ObjectSemantics = .auto,
     parse_mode: markdown.ParseMode,
     markdown_doc: ?markdown.MarkdownDocument = null,
     text_layout: ?markdown.TextLayout = null,
@@ -158,6 +169,7 @@ pub fn prepareObjectWithRender(
     node: *const model.Node,
     render: render_policy.ResolvedRender,
 ) !PreparedObject {
+    const semantics = try resolveSemantics(state, node);
     var env = try render_env.resolveForNode(allocator, state, node);
     defer env.deinit(allocator);
     const uses_asset_content = switch (node.payload_kind orelse .text) {
@@ -231,6 +243,7 @@ pub fn prepareObjectWithRender(
         .content_provenance = if (uses_asset_content) node.content_provenance.items else model.nodeDisplayContentProvenance(node),
         .link_id = nodeStringField(node, "link_id"),
         .render = render,
+        .semantics = semantics,
         .parse_mode = parse_mode,
         .markdown_doc = markdown_doc,
         .text_layout = text_layout,
@@ -241,6 +254,50 @@ pub fn prepareObjectWithRender(
         .payload_kind = node.payload_kind,
         .attached = node.attached,
     };
+}
+
+fn resolveSemantics(state: *DocumentState, node: *const model.Node) !ObjectSemantics {
+    var slot = (try fields.get(state.allocator, state, node, "semantics")) orelse return .auto;
+    defer slot.deinit(state.allocator);
+    const record = switch (slot.value) {
+        .record => |value| value,
+        else => return invalidSemantics(state, node, "semantics must be a SemanticStyle record"),
+    };
+    const role_name = if (record.field("role")) |value| switch (value) {
+        .enum_case => |role| role.case_name,
+        else => return invalidSemantics(state, node, "semantics.role must be a SemanticRole case"),
+    } else "auto";
+    const role = std.meta.stringToEnum(std.meta.Tag(ObjectSemantics), role_name) orelse
+        return invalidSemantics(state, node, "unknown semantic role");
+    const level = record.field("heading_level") orelse model.Value{ .none = {} };
+    if (role == .heading) {
+        const number = switch (level) {
+            .number => |value| value,
+            else => return invalidSemantics(state, node, "heading semantics require heading_level from 1 to 6"),
+        };
+        if (!std.math.isFinite(number) or number < 1 or number > 6 or @trunc(number) != number)
+            return invalidSemantics(state, node, "heading_level must be an integer from 1 to 6");
+        return .{ .heading = @intFromFloat(number) };
+    }
+    if (level != .none) return invalidSemantics(state, node, "heading_level is only valid for heading semantics");
+    return switch (role) {
+        .auto => .auto,
+        .paragraph => .paragraph,
+        .code => .code,
+        .figure => .figure,
+        .caption => .caption,
+        .heading => unreachable,
+    };
+}
+
+fn invalidSemantics(state: *DocumentState, node: *const model.Node, message: []const u8) !ObjectSemantics {
+    try state.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
+        .user_report = .{
+            .code = "InvalidSemanticAttributes",
+            .message = try state.allocator.dupe(u8, message),
+        },
+    });
+    return error.InvalidSemanticAttributes;
 }
 
 pub fn pageById(pages: *const PreparedPages, page_id: model.NodeId) ?*const PreparedPage {

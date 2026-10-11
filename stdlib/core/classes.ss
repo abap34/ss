@@ -1,3 +1,10 @@
+type SemanticRole = auto | paragraph | heading | code | figure | caption
+
+record SemanticStyle {
+  role: SemanticRole = SemanticRole.auto
+  heading_level: Number? = none
+}
+
 type LayoutPolicy = left | right | top | top_flow | center | center_stack
 type SplitAxis = none | horizontal | vertical
 type RenderKind = text | code | latex | vector_asset | raster_asset | vector_path | connector | chrome_only
@@ -306,6 +313,7 @@ type PageContext = object {
 }
 
 type Flow = object {
+  semantics: SemanticStyle = SemanticStyle {}
   render_kind: RenderKind = RenderKind.text
   layout: LayoutStyle = LayoutStyle {}
   chrome: ChromeStyle = ChromeStyle {}
@@ -328,6 +336,7 @@ type Text = object {
 type Title = object {
   base = Text
   roles = ["title"]
+  semantics: SemanticStyle = SemanticStyle { role = SemanticRole.heading, heading_level = 1 }
 
   text: TextStyle = TextStyle {
     size = 34
@@ -343,6 +352,7 @@ type Title = object {
 type Sub = object {
   base = Text
   roles = ["subtitle"]
+  semantics: SemanticStyle = SemanticStyle { role = SemanticRole.heading, heading_level = 2 }
 
   text: TextStyle = TextStyle {
     size = 18
@@ -434,6 +444,7 @@ type Cite = object {
 type Code = object {
   base = Text
   roles = ["code"]
+  semantics: SemanticStyle = SemanticStyle { role = SemanticRole.code }
 
   render_kind: RenderKind = RenderKind.code
   text: TextStyle = TextStyle {
@@ -487,6 +498,7 @@ type Latex = object {
 type Fig = object {
   base = Text
   roles = ["figure"]
+  semantics: SemanticStyle = SemanticStyle { role = SemanticRole.figure }
 
   asset: AssetStyle = AssetStyle {}
   text: TextStyle = TextStyle {

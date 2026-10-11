@@ -104,6 +104,12 @@ pub fn register(suite: Suite, modules: project.ProjectModules, build_options: *S
         import("render_text", modules.render_text),
     }, null);
     _ = suite.add(render_compile_spec_mod, .{ .layout_fixture = true, .name = "test-render-compile", .description = "Run focused render compiler tests", .link_qpdf = true });
+    const semantic_spec_mod = createModule(ctx, "tests/render/semantics/spec_tests.zig", &.{
+        import("compiler", project.createCompilerModule(ctx, modules)),
+        import("render", modules.render),
+        import("render_compile", render_compile_mod),
+    }, true);
+    _ = suite.add(semantic_spec_mod, .{ .layout_fixture = true, .name = "test-render-semantics", .description = "Check declared semantic attributes through IR", .link_qpdf = true });
     const artifacts_mod = createModule(ctx, "src/render/compile/artifacts.zig", &.{
         import("core", modules.core),
         import("pdf_ffi", modules.pdf_ffi),
