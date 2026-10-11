@@ -726,13 +726,7 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     defer if (external_inputs_owned) external_inputs.deinit();
     state.file_inputs = &external_inputs;
     defer state.file_inputs = null;
-    try editor_reuse.inputs.recordHighlightQueries(&external_inputs, hook.highlight_languages);
-    for (state.modules.entries.items) |module| {
-        const path = module.path orelse continue;
-        if (hook.server.documents.sourceForPath(path) == null) {
-            try editor_reuse.inputs.recordSource(&external_inputs, path, module.source);
-        }
-    }
+    try recordLayoutInputs(hook, state, &external_inputs);
     const layout_start = utils.measure_profile.start();
     var prepared = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph, .{
         .highlight_languages = hook.highlight_languages,
@@ -756,40 +750,54 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
         return .{ .conflicts_json = conflicts_json, .reuse_inputs = prepared };
     }
 
-    if (hook.prefer_translation_patch) {
-        if (hook.server.analysis) |*previous| {
-            const previous_inputs = if (previous.retained_layout_state) |*retained|
-                if (retained.reuse_inputs) |*value| value.external_inputs else null
-            else
-                null;
-            if (previous_inputs != null and try editor_reuse.inputs.matches(&previous_inputs.?, &hook.server.render_resource_cache)) {
-                // Rendering may have observed additional inputs (including TeX
-                // recorder files) that preparation did not need to reopen.
-                for (previous_inputs.?.ordered.items) |input| try external_inputs.record(".", input.path, input.kind);
-                if (try editor_reuse.inputs.matches(&external_inputs, &hook.server.render_resource_cache) and
-                    try editor_reuse.inputs.matches(&previous_inputs.?, &hook.server.render_resource_cache))
-                {
-                    if (try editor_reuse.translateRebuilt(
-                        state.allocator,
-                        state,
-                        &prepared,
-                        previous,
-                        hook.server.documents.generation,
-                        conflicts_json,
-                    )) |result| {
-                        var output = result;
-                        external_inputs.observer = null;
-                        prepared.external_inputs = external_inputs;
-                        external_inputs_owned = false;
-                        output.reuse_inputs = prepared;
-                        prepared_owned = false;
-                        return output;
-                    }
-                }
-            }
-        }
+    if (try reuseLayoutPreview(hook, state, &prepared, &external_inputs, conflicts_json)) |result| {
+        var output = result;
+        external_inputs.observer = null;
+        prepared.external_inputs = external_inputs;
+        external_inputs_owned = false;
+        output.reuse_inputs = prepared;
+        prepared_owned = false;
+        return output;
     }
 
+    const editor = try buildLayoutPreview(hook, state, &prepared, &external_inputs, conflicts_json);
+    external_inputs.observer = null;
+    prepared.external_inputs = external_inputs;
+    external_inputs_owned = false;
+    prepared_owned = false;
+    return .{
+        .reuse_inputs = prepared,
+        .editor = editor,
+        .conflicts_json = conflicts_json,
+    };
+}
+
+fn recordLayoutInputs(hook: *const AnalysisLayoutContext, state: *const core.DocumentState, external_inputs: *utils.FileInputs) !void {
+    try editor_reuse.inputs.recordHighlightQueries(external_inputs, hook.highlight_languages);
+    for (state.modules.entries.items) |module| {
+        const path = module.path orelse continue;
+        if (hook.server.documents.sourceForPath(path) == null) {
+            try editor_reuse.inputs.recordSource(external_inputs, path, module.source);
+        }
+    }
+}
+
+fn reuseLayoutPreview(hook: *const AnalysisLayoutContext, state: *core.DocumentState, prepared: *const render_layout.EvaluatedPreparedPages, external_inputs: *utils.FileInputs, conflicts_json: []u8) !?analysis.snapshot.LayoutHookOutput {
+    if (!hook.prefer_translation_patch) return null;
+    const previous = if (hook.server.analysis) |*value| value else return null;
+    const retained = if (previous.retained_layout_state) |*value| value else return null;
+    const inputs = if (retained.reuse_inputs) |*value| value else return null;
+    const previous_inputs = if (inputs.external_inputs) |*value| value else return null;
+    const cache = &hook.server.render_resource_cache;
+    if (!try editor_reuse.inputs.matches(previous_inputs, cache)) return null;
+    // Rendering may have observed files that page preparation did not reopen.
+    for (previous_inputs.ordered.items) |input| try external_inputs.record(".", input.path, input.kind);
+    if (!try editor_reuse.inputs.matches(external_inputs, cache) or
+        !try editor_reuse.inputs.matches(previous_inputs, cache)) return null;
+    return editor_reuse.translateRebuilt(state.allocator, state, prepared, previous, hook.server.documents.generation, conflicts_json);
+}
+
+fn buildLayoutPreview(hook: *const AnalysisLayoutContext, state: *core.DocumentState, prepared: *const render_layout.EvaluatedPreparedPages, external_inputs: *utils.FileInputs, conflicts_json: []u8) !editor_snapshot.Output {
     const render_start = utils.measure_profile.start();
     var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &prepared.pages, &prepared.layouts, .{
         .jobs = 1,
@@ -805,8 +813,8 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
     try hook.server.checkCanceled();
     const snapshot_start = utils.measure_profile.start();
     defer utils.measure_profile.recordWysiwyg(.snapshot, snapshot_start);
-    external_inputs.observations_complete = try editor_reuse.inputs.matches(&external_inputs, &hook.server.render_resource_cache);
-    const editor = try editor_snapshot.build(
+    external_inputs.observations_complete = try editor_reuse.inputs.matches(external_inputs, &hook.server.render_resource_cache);
+    return try editor_snapshot.build(
         state.allocator,
         hook.server.io,
         state,
@@ -815,15 +823,6 @@ fn runAnalysisLayoutWork(context: *anyopaque, state: *core.DocumentState, graph:
         conflicts_json,
         &hook.server.editor_snapshot_cache,
     );
-    external_inputs.observer = null;
-    prepared.external_inputs = external_inputs;
-    external_inputs_owned = false;
-    prepared_owned = false;
-    return .{
-        .reuse_inputs = prepared,
-        .editor = editor,
-        .conflicts_json = conflicts_json,
-    };
 }
 
 fn waitForAnalysisCancellation(server: *Server) void {

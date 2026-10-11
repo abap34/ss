@@ -50,6 +50,17 @@ pub const Cache = struct {
         self.* = undefined;
     }
 
+    // Takes ownership only when the display is admitted to the cache.
+    fn storeDisplay(self: *Cache, key: render.Fingerprint, generated: []u8) !bool {
+        if (generated.len > max_display_bytes) return false;
+        if (self.displays.count() >= max_displays or self.display_bytes > max_display_bytes - generated.len) {
+            self.clearDisplays();
+        }
+        try self.displays.putNoClobber(key, generated);
+        self.display_bytes += generated.len;
+        return true;
+    }
+
     fn clearDisplays(self: *Cache) void {
         var values = self.displays.valueIterator();
         while (values.next()) |display| self.allocator.free(display.*);
@@ -275,17 +286,7 @@ pub fn build(
     const display_json = cache.displays.get(display_key) orelse blk: {
         const generated = try displayJson(allocator, fragment.html, fragment.css, fragment.assets.has_pdf, published_assets.assets);
         errdefer allocator.free(generated);
-        if (generated.len > Cache.max_display_bytes) {
-            uncached_display = generated;
-            break :blk generated;
-        }
-        if (cache.displays.count() >= Cache.max_displays or
-            cache.display_bytes > Cache.max_display_bytes - generated.len)
-        {
-            cache.clearDisplays();
-        }
-        try cache.displays.putNoClobber(display_key, generated);
-        cache.display_bytes += generated.len;
+        if (!try cache.storeDisplay(display_key, generated)) uncached_display = generated;
         break :blk generated;
     };
     var output = try buildFromDisplayJson(allocator, state, generation, display_json, null, display_key, layout_json);
