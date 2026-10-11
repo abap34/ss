@@ -55,7 +55,10 @@ pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.Source
     var pages = try preparePages(&analyzed.state, progress);
     const state_allocator = analyzed.state.allocator;
     defer pages.deinit(state_allocator);
-    var layouts = try solveLayouts(io, &analyzed.state, &pages, progress, request.layout_jobs, request.highlight_languages, null, null, null);
+    var layouts = try solveLayouts(io, &analyzed.state, &pages, progress, .{
+        .jobs = request.layout_jobs,
+        .highlight_languages = request.highlight_languages,
+    });
     errdefer layouts.deinit(state_allocator);
     try validateLayouts(&analyzed.state, &layouts);
     return .{ .state = analyzed.takeState(), .layouts = layouts };
@@ -230,24 +233,15 @@ pub fn solveLayouts(
     state: *core.DocumentState,
     pages: *const core.prepared.PreparedPages,
     progress: ?*Progress,
-    jobs: ?usize,
-    highlight_languages: []const utils.highlight.Language,
-    font_environment: ?render_layout.FontEnvironmentToken,
-    highlight_cache: ?*render_layout.HighlightCache,
-    text_cache: ?*render_layout.TextCache,
+    options: render_layout.Options,
 ) !core.layout.Document {
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
     errdefer if (progress) |p| p.abort();
-    try preloadLayoutArtifacts(io, state, pages, progress, jobs, highlight_languages);
-    var layouts = render_layout.solvePreparedPages(io, state, pages, .{
-        .progress = layout_progress,
-        .jobs = jobs,
-        .highlight_languages = highlight_languages,
-        .highlight_cache = highlight_cache,
-        .text_cache = text_cache,
-        .font_environment = font_environment,
-    }) catch |err| {
+    try preloadLayoutArtifacts(io, state, pages, progress, options.jobs, options.highlight_languages);
+    var solve_options = options;
+    solve_options.progress = layout_progress;
+    var layouts = render_layout.solvePreparedPages(io, state, pages, solve_options) catch |err| {
         if (progress) |p| p.abort();
         try reportLayoutFailure(state, err);
         return err;

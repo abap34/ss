@@ -285,59 +285,105 @@ fn compileRendering(
     var pages = try pipeline.preparePages(&analyzed.state, progress);
     const prepared_allocator = analyzed.state.allocator;
     errdefer pages.deinit(prepared_allocator);
-    const font_environment = render_compile.acquireFontEnvironment() catch |err| {
-        _ = try render_compile.addFontEnvironmentDiagnostic(&analyzed.state, err);
-        if (error_report.hasDocumentStateErrors(&analyzed.state)) {
-            error_report.printDocumentStateDiagnostics(analyzed.state.projectPath(), analyzed.state.projectSource(), &analyzed.state);
-            app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, &.{}, diagnostics_json_path) catch {};
-            return error.DiagnosticsFailed;
-        }
-        return err;
-    };
-    var text_cache = render_text.Cache.init(std.heap.smp_allocator, io);
-    defer text_cache.deinit();
-    text_cache.restore(options.cache_dir);
-    var highlight_cache = render_compile.HighlightCache.init(std.heap.smp_allocator, io);
-    defer highlight_cache.deinit();
-    var layouts = pipeline.solveLayouts(io, &analyzed.state, &pages, progress, source.layout_jobs, options.highlight_languages, font_environment, &highlight_cache, &text_cache) catch |err| {
-        app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, &.{}, diagnostics_json_path) catch {};
-        return err;
-    };
+    var session = try RenderingSession.init(io, allocator, options, diagnostics_json_path, progress, &analyzed.state);
+    defer session.deinit();
+    var layouts = try session.solve(&analyzed.state, &pages, source.layout_jobs);
     errdefer layouts.deinit(prepared_allocator);
-    pipeline.validateLayouts(&analyzed.state, &layouts) catch |err| {
-        app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, &layouts, diagnostics_json_path) catch {};
-        return err;
-    };
-
-    progress.begin("Compile rendering");
-    errdefer progress.abort();
-    const diagnostic_start = analyzed.state.diagnostics.entries.items.len;
-    const ir_allocator = std.heap.smp_allocator;
-    var ir = render_compile.compile(ir_allocator, io, &analyzed.state, &pages, &layouts, .{
-        .artifact_preparation = .already_preloaded,
-        .jobs = options.jobs,
-        .cache_dir = options.cache_dir,
-        .highlight_languages = options.highlight_languages,
-        .text_cache = &text_cache,
-        .highlight_cache = &highlight_cache,
-        .font_environment = font_environment,
-        .thread_safe_allocator = true,
-    }) catch |err| {
-        progress.abort();
-        error_report.printDocumentStateDiagnostics(analyzed.state.projectPath(), analyzed.state.projectSource(), &analyzed.state);
-        app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, &layouts, diagnostics_json_path) catch {};
-        if (error_report.hasDocumentStateErrors(&analyzed.state)) return error.DiagnosticsFailed;
-        return err;
-    };
-    errdefer ir.deinit(ir_allocator);
-    text_cache.persist(options.cache_dir);
-    progress.complete();
-    error_report.printDocumentStateDiagnosticsFrom(analyzed.state.projectPath(), analyzed.state.projectSource(), &analyzed.state, diagnostic_start);
+    const ir = try session.compile(&analyzed.state, &pages, &layouts);
     return .{
         .state = analyzed.takeState(),
         .pages = pages,
         .layouts = layouts,
         .ir = ir,
-        .ir_allocator = ir_allocator,
+        .ir_allocator = std.heap.smp_allocator,
     };
 }
+
+// Shares one font environment and its caches between measurement and rendering.
+const RenderingSession = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    options: types.RenderOptions,
+    diagnostics_json_path: ?[]const u8,
+    progress: *Progress,
+    font_environment: render_compile.FontEnvironmentToken,
+    text_cache: render_text.Cache,
+    highlight_cache: render_compile.HighlightCache,
+
+    fn init(io: std.Io, allocator: std.mem.Allocator, options: types.RenderOptions, diagnostics_json_path: ?[]const u8, progress: *Progress, state: *core.DocumentState) !RenderingSession {
+        const font_environment = render_compile.acquireFontEnvironment() catch |err| {
+            _ = try render_compile.addFontEnvironmentDiagnostic(state, err);
+            if (error_report.hasDocumentStateErrors(state)) {
+                error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
+                app_output.writeDiagnosticsJsonIfRequested(io, allocator, state, &.{}, diagnostics_json_path) catch {};
+                return error.DiagnosticsFailed;
+            }
+            return err;
+        };
+        var session = RenderingSession{
+            .io = io,
+            .allocator = allocator,
+            .options = options,
+            .diagnostics_json_path = diagnostics_json_path,
+            .progress = progress,
+            .font_environment = font_environment,
+            .text_cache = render_text.Cache.init(std.heap.smp_allocator, io),
+            .highlight_cache = render_compile.HighlightCache.init(std.heap.smp_allocator, io),
+        };
+        session.text_cache.restore(options.cache_dir);
+        return session;
+    }
+
+    fn deinit(self: *RenderingSession) void {
+        self.highlight_cache.deinit();
+        self.text_cache.deinit();
+    }
+
+    fn solve(self: *RenderingSession, state: *core.DocumentState, pages: *const core.prepared.PreparedPages, jobs: ?usize) !core.layout.Document {
+        var layouts = pipeline.solveLayouts(self.io, state, pages, self.progress, .{
+            .jobs = jobs,
+            .highlight_languages = self.options.highlight_languages,
+            .font_environment = self.font_environment,
+            .highlight_cache = &self.highlight_cache,
+            .text_cache = &self.text_cache,
+        }) catch |err| {
+            app_output.writeDiagnosticsJsonIfRequested(self.io, self.allocator, state, &.{}, self.diagnostics_json_path) catch {};
+            return err;
+        };
+        errdefer layouts.deinit(state.allocator);
+        pipeline.validateLayouts(state, &layouts) catch |err| {
+            app_output.writeDiagnosticsJsonIfRequested(self.io, self.allocator, state, &layouts, self.diagnostics_json_path) catch {};
+            return err;
+        };
+
+        return layouts;
+    }
+
+    fn compile(self: *RenderingSession, state: *core.DocumentState, pages: *const core.prepared.PreparedPages, layouts: *const core.layout.Document) !render.Ir {
+        self.progress.begin("Compile rendering");
+        errdefer self.progress.abort();
+        const diagnostic_start = state.diagnostics.entries.items.len;
+        const ir_allocator = std.heap.smp_allocator;
+        var ir = render_compile.compile(ir_allocator, self.io, state, pages, layouts, .{
+            .artifact_preparation = .already_preloaded,
+            .jobs = self.options.jobs,
+            .cache_dir = self.options.cache_dir,
+            .highlight_languages = self.options.highlight_languages,
+            .text_cache = &self.text_cache,
+            .highlight_cache = &self.highlight_cache,
+            .font_environment = self.font_environment,
+            .thread_safe_allocator = true,
+        }) catch |err| {
+            self.progress.abort();
+            error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
+            app_output.writeDiagnosticsJsonIfRequested(self.io, self.allocator, state, layouts, self.diagnostics_json_path) catch {};
+            if (error_report.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
+            return err;
+        };
+        errdefer ir.deinit(ir_allocator);
+        self.text_cache.persist(self.options.cache_dir);
+        self.progress.complete();
+        error_report.printDocumentStateDiagnosticsFrom(state.projectPath(), state.projectSource(), state, diagnostic_start);
+        return ir;
+    }
+};
