@@ -166,34 +166,48 @@ fn analyzeDocumentStateSemantics(
     var inference_context = infer.Context.init(allocator);
     defer inference_context.deinit();
 
+    try checkDocumentDeclarations(allocator, state, &sema);
+    try checkDocumentBodies(&inference_context, allocator, state, &sema);
+    {
+        const measure_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordAnalysis(.semantics_dependency_queries, measure_start);
+        try addDependencyQueryDiagnostics(allocator, state, &sema);
+    }
+    return declaration_index;
+}
+
+fn checkDocumentDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.semantics_types, measure_start);
-        try semantics.checkSelectedImports(state, &sema);
+        try semantics.checkSelectedImports(state, sema);
         try semantics.checkTypeDeclarations(allocator, state);
     }
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.semantics_fields, measure_start);
         try semantics.checkDuplicateValueDeclarations(allocator, state);
-        try semantics.checkTypeAnnotations(allocator, state, &sema);
+        try semantics.checkTypeAnnotations(allocator, state, sema);
         {
             const object_declarations_start = utils.measure_profile.start();
             defer utils.measure_profile.recordAnalysis(.semantics_object_declarations, object_declarations_start);
-            try fields.checkObjectDeclarations(allocator, state, &sema);
+            try fields.checkObjectDeclarations(allocator, state, sema);
         }
         try checker.checkPageNamesUnique(allocator, state);
         {
             const placement_effects_start = utils.measure_profile.start();
             defer utils.measure_profile.recordAnalysis(.semantics_placement_effects, placement_effects_start);
-            try checkPlacementEffectDeclarations(allocator, state, &sema);
+            try checkPlacementEffectDeclarations(allocator, state, sema);
         }
     }
+}
+
+fn checkDocumentBodies(inference_context: *infer.Context, allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
     var had_body_diagnostics = false;
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.semantics_functions, measure_start);
-        checkFunctionDefinitionsWithEnv(&inference_context, allocator, state, &sema) catch |err| {
+        checkFunctionDefinitionsWithEnv(inference_context, allocator, state, sema) catch |err| {
             if (err != error.DiagnosticsFailed) return err;
             had_body_diagnostics = true;
         };
@@ -204,19 +218,13 @@ fn analyzeDocumentStateSemantics(
         for (state.modules.order.items) |module_id| {
             const module = state.moduleById(module_id) orelse continue;
             const module_sema = sema.forModule(module_id);
-            checker.checkPageStatements(&inference_context, allocator, state, &module_sema, checker.originPathForModule(module), module.syntax) catch |err| {
+            checker.checkPageStatements(inference_context, allocator, state, &module_sema, checker.originPathForModule(module), module.syntax) catch |err| {
                 if (err != error.DiagnosticsFailed) return err;
                 had_body_diagnostics = true;
             };
         }
     }
     if (had_body_diagnostics) return error.DiagnosticsFailed;
-    {
-        const measure_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordAnalysis(.semantics_dependency_queries, measure_start);
-        try addDependencyQueryDiagnostics(allocator, state, &sema);
-    }
-    return declaration_index;
 }
 
 const DependencyQuery = struct {

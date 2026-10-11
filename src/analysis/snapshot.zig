@@ -613,10 +613,186 @@ fn buildWithSyntax(
     var diagnostic_bag = diagnostics.DiagnosticBag.init(allocator);
     var diagnostics_moved = false;
     defer if (!diagnostics_moved) diagnostic_bag.deinit();
-    var layout_output: ?LayoutOutput = null;
-    defer if (layout_output) |*facts| facts.deinit(allocator);
 
-    var entry_source = sources.readFileAlloc(entry_path) catch |err| {
+    var inputs = try loadSnapshotInputs(allocator, sources, entry_path, asset_base_dir, options, syntax_storage, &diagnostic_bag) orelse
+        return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
+    defer inputs.deinit(allocator);
+    if (!try inputs.analyze(allocator, options, &diagnostic_bag)) {
+        return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
+    }
+    try inputs.solveLayout(allocator, options, &diagnostic_bag);
+    return inputs.finish(allocator, entry_path, asset_base_dir, options, &diagnostic_bag, &diagnostics_moved);
+}
+
+// Owns the intermediate results until the snapshot takes the requested state.
+const SnapshotInputs = struct {
+    state: ?core.DocumentState,
+    parse_holes: syntax_hole.Result,
+    execution_graph: ?execution.ExecutionGraph = null,
+    analyzed_diagnostic_count: usize = 0,
+    layout_output: ?LayoutOutput = null,
+    reuse_inputs: ?ReuseInputs = null,
+
+    fn deinit(self: *SnapshotInputs, allocator: std.mem.Allocator) void {
+        if (self.layout_output) |*value| value.deinit(allocator);
+        if (self.reuse_inputs) |*value| value.deinit(allocator);
+        if (self.execution_graph) |*value| value.deinit();
+        self.parse_holes.deinit(allocator);
+        if (self.state) |*value| value.deinit();
+    }
+
+    fn analyze(self: *SnapshotInputs, allocator: std.mem.Allocator, options: Options, diagnostic_bag: *diagnostics.DiagnosticBag) !bool {
+        const state = &self.state.?;
+        try options.checkCanceled();
+        const diagnostic_count_before_analysis = state.diagnostics.entries.items.len;
+        var analysis_failed = false;
+        self.execution_graph = analysis_pipeline.analyzeDocumentStateWithMode(allocator, state, .evaluation) catch |err| blk: {
+            if (err == error.Canceled) return err;
+            if (err != error.DiagnosticsFailed and state.diagnostics.entries.items.len == diagnostic_count_before_analysis) {
+                try addBuildFailureDiagnostic(diagnostic_bag, state.projectPath(), state.projectSource(), err, null);
+                analysis_failed = true;
+            }
+            break :blk null;
+        };
+        try options.checkCanceled();
+        if (analysis_failed) {
+            try diagnostics.addDocumentStateFrom(diagnostic_bag, state, 0);
+            return false;
+        }
+        const declaration_index = state.declaration_index;
+        try hole_facts.populateExpectedTypes(allocator, state, declaration_index, &self.parse_holes);
+        try options.checkCanceled();
+        try diagnostics.addDocumentStateFrom(diagnostic_bag, state, 0);
+        self.analyzed_diagnostic_count = state.diagnostics.entries.items.len;
+        return true;
+    }
+
+    fn solveLayout(self: *SnapshotInputs, allocator: std.mem.Allocator, options: Options, diagnostic_bag: *diagnostics.DiagnosticBag) !void {
+        const state = &self.state.?;
+        try options.checkCanceled();
+        if (!diagnostic_bag.hasErrors()) {
+            if (options.layout_hook) |hook| {
+                if (self.execution_graph) |*graph| {
+                    try options.checkCanceled();
+                    if (hook.run(hook.context, state, graph)) |result| {
+                        self.reuse_inputs = result.reuse_inputs;
+                        self.layout_output = try LayoutOutput.fromDocumentStateWithOwnedReport(
+                            allocator,
+                            state,
+                            if (self.reuse_inputs) |*value| &value.layouts else &.{},
+                            result.report,
+                            result.editor,
+                            result.conflicts_json,
+                        );
+                        if (self.reuse_inputs) |*value| {
+                            try diagnostics.addLayoutResult(diagnostic_bag, state, &value.layouts);
+                            value.layouts.validate() catch |err| {
+                                if (hook.on_error) |on_error| {
+                                    if (value.layouts.failureCount() > 0 or !diagnostic_bag.hasErrors())
+                                        try on_error(hook.context, state, &value.layouts, err);
+                                } else if (!diagnostic_bag.hasErrors()) {
+                                    try addBuildFailureDiagnostic(diagnostic_bag, state.projectPath(), state.projectSource(), err, null);
+                                }
+                            };
+                        }
+                        try diagnostics.addDocumentStateFrom(diagnostic_bag, state, self.analyzed_diagnostic_count);
+                    } else |err| switch (err) {
+                        error.Canceled => return error.Canceled,
+                        error.ConstraintConflict,
+                        error.NegativeFrameSize,
+                        => {
+                            if (hook.on_error) |on_error| {
+                                try on_error(hook.context, state, &.{}, err);
+                                self.layout_output = try LayoutOutput.fromDocumentState(allocator, state, &.{}, null, null);
+                            } else {
+                                try addBuildFailureDiagnostic(diagnostic_bag, state.projectPath(), state.projectSource(), err, null);
+                            }
+                        },
+                        else => {
+                            try diagnostics.addDocumentStateFrom(diagnostic_bag, state, self.analyzed_diagnostic_count);
+                            if (!diagnostic_bag.hasErrors()) {
+                                try addBuildFailureDiagnostic(diagnostic_bag, state.projectPath(), state.projectSource(), err, null);
+                            }
+                        },
+                    }
+                } else {
+                    try addBuildDiagnostic(diagnostic_bag, state.projectPath(), state.projectSource(), .@"error", "ScheduleBuildFailed", "ScheduleBuildFailed: evaluation schedule was not available", .{}, null);
+                }
+            }
+        }
+        try options.checkCanceled();
+    }
+
+    fn finish(self: *SnapshotInputs, allocator: std.mem.Allocator, entry_path: []const u8, asset_base_dir: []const u8, options: Options, diagnostic_bag: *diagnostics.DiagnosticBag, diagnostics_moved: *bool) !AnalysisSnapshot {
+        const state = &self.state.?;
+        const module_paths = try collectModulePaths(allocator, state);
+        try options.checkCanceled();
+        const project_facts = try initProjectFacts(allocator, entry_path, asset_base_dir, module_paths, options.project);
+        diagnostics_moved.* = true;
+        const snapshot_facts_start = utils.measure_profile.start();
+        var snapshot = try AnalysisSnapshot.fromDocumentState(allocator, state, state.declaration_index, diagnostic_bag.*, &self.parse_holes, project_facts);
+        utils.measure_profile.recordAnalysis(.snapshot_facts, snapshot_facts_start);
+        snapshot.generation = options.generation;
+        snapshot.layout_output = self.layout_output;
+        self.layout_output = null;
+        if (options.retain_layout_inputs and snapshot.layout_output == null and self.execution_graph != null and !snapshot.diagnostics.hasErrors()) {
+            snapshot.retained_layout_inputs = .{
+                .state = state.*,
+                .graph = self.execution_graph.?,
+                .diagnostic_count = self.analyzed_diagnostic_count,
+            };
+            self.execution_graph = null;
+            self.state = null;
+        } else if (options.retain_evaluated_layout_state and
+            snapshot.layout_output != null and
+            snapshot.layout_output.?.editor != null and
+            !snapshot.diagnostics.hasErrors())
+        {
+            snapshot.retained_layout_state = .{ .state = state.*, .reuse_inputs = self.reuse_inputs };
+            self.reuse_inputs = null;
+            self.state = null;
+        }
+        return snapshot;
+    }
+};
+
+fn loadSnapshotInputs(
+    allocator: std.mem.Allocator,
+    sources: *const SourceSet,
+    entry_path: []const u8,
+    asset_base_dir: []const u8,
+    options: Options,
+    syntax_storage: *SyntaxStorage,
+    diagnostic_bag: *diagnostics.DiagnosticBag,
+) !?SnapshotInputs {
+    var source = try readSnapshotSource(sources, entry_path, diagnostic_bag) orelse return null;
+    defer allocator.free(source);
+    try options.checkCanceled();
+    var parsed = try parseSnapshotSource(allocator, source, entry_path, options, diagnostic_bag) orelse return null;
+    defer parsed.deinit(allocator);
+    try syntax_storage.capture(entry_path, source, parsed.module);
+    try options.checkCanceled();
+
+    var index = try loadSnapshotModules(allocator, sources, entry_path, source, &parsed, options, diagnostic_bag) orelse return null;
+    defer index.deinit();
+    try options.checkCanceled();
+    for (index.module_graph.modules.items) |module| {
+        if (module.path) |path| try syntax_storage.capture(path, module.source, module.syntax);
+    }
+    const state = analysis_pipeline.buildDocumentStateWithOptions(allocator, entry_path, asset_base_dir, &source, &parsed.module, &index, .{
+        .parse_holes = parsed.holes,
+    }) catch |err| {
+        if (err == error.Canceled) return err;
+        try addBuildFailureDiagnostic(diagnostic_bag, entry_path, source, err, null);
+        return null;
+    };
+    const holes = parsed.holes;
+    parsed.holes = .{ .holes = &.{}, .diagnostics = &.{} };
+    return .{ .state = state, .parse_holes = holes };
+}
+
+fn readSnapshotSource(sources: *const SourceSet, entry_path: []const u8, diagnostic_bag: *diagnostics.DiagnosticBag) !?[]u8 {
+    return sources.readFileAlloc(entry_path) catch |err| {
         if (err == error.Canceled) return err;
         var message_buf: [512]u8 = undefined;
         try diagnostic_bag.add(
@@ -628,16 +804,13 @@ fn buildWithSyntax(
             null,
             null,
         );
-        return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
+        return null;
     };
-    options.checkCanceled() catch |err| {
-        allocator.free(entry_source);
-        return err;
-    };
+}
 
+fn parseSnapshotSource(allocator: std.mem.Allocator, entry_source: []const u8, entry_path: []const u8, options: Options, diagnostic_bag: *diagnostics.DiagnosticBag) !?syntax.ParseResult {
     var parse_failure: syntax.ParseFailure = .{};
-    const parse_result = syntax.parseRecoveringWithOptions(allocator, entry_source, entry_path, .{ .failure = &parse_failure, .cancellation = options.cancellation }) catch |err| {
-        defer allocator.free(entry_source);
+    return syntax.parseRecoveringWithOptions(allocator, entry_source, entry_path, .{ .failure = &parse_failure, .cancellation = options.cancellation }) catch |err| {
         if (err == error.OutOfMemory or err == error.Canceled) return err;
         const diagnostic = parse_failure.diagnostic;
         var message_buf: [256]u8 = undefined;
@@ -649,46 +822,33 @@ fn buildWithSyntax(
             .start = diag.span.start,
             .end = diag.span.end,
         } else null, null);
-        return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
+        return null;
     };
-    var program = parse_result.module;
-    var parse_holes = parse_result.holes;
-    syntax_storage.capture(entry_path, entry_source, program) catch |err| {
-        program.deinit(allocator);
-        parse_holes.deinit(allocator);
-        allocator.free(entry_source);
-        return err;
-    };
-    options.checkCanceled() catch |err| {
-        program.deinit(allocator);
-        parse_holes.deinit(allocator);
-        allocator.free(entry_source);
-        return err;
-    };
+}
 
+fn loadSnapshotModules(allocator: std.mem.Allocator, sources: *const SourceSet, entry_path: []const u8, entry_source: []const u8, parsed: *const syntax.ParseResult, options: Options, diagnostic_bag: *diagnostics.DiagnosticBag) !?module_index.Index {
+    const program = parsed.module;
+    const parse_holes = parsed.holes;
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
     const import_base_dir = std.fs.path.dirname(entry_path) orelse ".";
-    var index = module_index.load(allocator, sources.io, import_base_dir, program, .{
+    return module_index.load(allocator, sources.io, import_base_dir, program, .{
         .overlay = &sources.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
         .recovering = true,
         .embedded_cache = options.embedded_cache,
     }) catch |err| {
-        defer program.deinit(allocator);
-        defer parse_holes.deinit(allocator);
-        defer allocator.free(entry_source);
         if (err == error.Canceled) return err;
         if (err != error.DiagnosticsFailed and err != error.UnknownImport and !module_loader.isImportReadFailure(err)) return err;
-        try diagnostics.addSyntaxHoles(&diagnostic_bag, entry_path, entry_source, parse_holes);
-        try addLoadDiagnostics(&diagnostic_bag, &load_diagnostics);
+        try diagnostics.addSyntaxHoles(diagnostic_bag, entry_path, entry_source, parse_holes);
+        try addLoadDiagnostics(diagnostic_bag, &load_diagnostics);
         if (err == error.DiagnosticsFailed) {
             if (load_diagnostics.items.items.len != 0) {
                 const span = try module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics);
                 try diagnostic_bag.add(entry_path, entry_source, .@"error", "ImportFailed", "ImportFailed: imported module failed to load", span, null);
             } else {
-                try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, entry_source, err, null);
+                try addBuildFailureDiagnostic(diagnostic_bag, entry_path, entry_source, err, null);
             }
         } else if (err == error.UnknownImport) {
             if (try module_loader.findUnknownImportReport(allocator, sources.io, import_base_dir, program, &sources.overlay)) |found| {
@@ -708,147 +868,11 @@ fn buildWithSyntax(
                     .end = report.span.end,
                 }, null);
             } else {
-                try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, entry_source, err, null);
+                try addBuildFailureDiagnostic(diagnostic_bag, entry_path, entry_source, err, null);
             }
         }
-        return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
+        return null;
     };
-    defer index.deinit();
-    options.checkCanceled() catch |err| {
-        program.deinit(allocator);
-        parse_holes.deinit(allocator);
-        allocator.free(entry_source);
-        return err;
-    };
-
-    for (index.module_graph.modules.items) |module| {
-        if (module.path) |path| syntax_storage.capture(path, module.source, module.syntax) catch |err| {
-            program.deinit(allocator);
-            parse_holes.deinit(allocator);
-            allocator.free(entry_source);
-            return err;
-        };
-    }
-
-    var state = analysis_pipeline.buildDocumentStateWithOptions(allocator, entry_path, asset_base_dir, &entry_source, &program, &index, .{
-        .parse_holes = parse_holes,
-    }) catch |err| {
-        defer program.deinit(allocator);
-        defer parse_holes.deinit(allocator);
-        defer if (entry_source.len != 0) allocator.free(entry_source);
-        if (err == error.Canceled) return err;
-        try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, entry_source, err, null);
-        return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
-    };
-    defer parse_holes.deinit(allocator);
-    var state_owned = true;
-    defer if (state_owned) state.deinit();
-    try options.checkCanceled();
-
-    const diagnostic_count_before_analysis = state.diagnostics.entries.items.len;
-    var analysis_failed = false;
-    var execution_graph = analysis_pipeline.analyzeDocumentStateWithMode(allocator, &state, .evaluation) catch |err| blk: {
-        if (err == error.Canceled) return err;
-        if (err != error.DiagnosticsFailed and state.diagnostics.entries.items.len == diagnostic_count_before_analysis) {
-            try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), err, null);
-            analysis_failed = true;
-        }
-        break :blk null;
-    };
-    defer if (execution_graph) |*graph| graph.deinit();
-    try options.checkCanceled();
-    if (analysis_failed) {
-        try diagnostics.addDocumentStateFrom(&diagnostic_bag, &state, 0);
-        return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
-    }
-    const declaration_index = state.declaration_index;
-    try hole_facts.populateExpectedTypes(allocator, &state, declaration_index, &parse_holes);
-    try options.checkCanceled();
-    try diagnostics.addDocumentStateFrom(&diagnostic_bag, &state, 0);
-    var reuse_inputs: ?ReuseInputs = null;
-    defer if (reuse_inputs) |*value| value.deinit(allocator);
-    const analyzed_diagnostic_count = state.diagnostics.entries.items.len;
-    try options.checkCanceled();
-    if (!diagnostic_bag.hasErrors()) {
-        if (options.layout_hook) |hook| {
-            if (execution_graph) |*graph| {
-                try options.checkCanceled();
-                if (hook.run(hook.context, &state, graph)) |result| {
-                    reuse_inputs = result.reuse_inputs;
-                    layout_output = try LayoutOutput.fromDocumentStateWithOwnedReport(
-                        allocator,
-                        &state,
-                        if (reuse_inputs) |*value| &value.layouts else &.{},
-                        result.report,
-                        result.editor,
-                        result.conflicts_json,
-                    );
-                    if (reuse_inputs) |*value| {
-                        try diagnostics.addLayoutResult(&diagnostic_bag, &state, &value.layouts);
-                        value.layouts.validate() catch |err| {
-                            if (hook.on_error) |on_error| {
-                                if (value.layouts.failureCount() > 0 or !diagnostic_bag.hasErrors())
-                                    try on_error(hook.context, &state, &value.layouts, err);
-                            } else if (!diagnostic_bag.hasErrors()) {
-                                try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), err, null);
-                            }
-                        };
-                    }
-                    try diagnostics.addDocumentStateFrom(&diagnostic_bag, &state, analyzed_diagnostic_count);
-                } else |err| switch (err) {
-                    error.Canceled => return error.Canceled,
-                    error.ConstraintConflict,
-                    error.NegativeFrameSize,
-                    => {
-                        if (hook.on_error) |on_error| {
-                            try on_error(hook.context, &state, &.{}, err);
-                            layout_output = try LayoutOutput.fromDocumentState(allocator, &state, &.{}, null, null);
-                        } else {
-                            try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), err, null);
-                        }
-                    },
-                    else => {
-                        try diagnostics.addDocumentStateFrom(&diagnostic_bag, &state, analyzed_diagnostic_count);
-                        if (!diagnostic_bag.hasErrors()) {
-                            try addBuildFailureDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), err, null);
-                        }
-                    },
-                }
-            } else {
-                try addBuildDiagnostic(&diagnostic_bag, entry_path, state.projectSource(), .@"error", "ScheduleBuildFailed", "ScheduleBuildFailed: evaluation schedule was not available", .{}, null);
-            }
-        }
-    }
-    try options.checkCanceled();
-
-    const module_paths = try collectModulePaths(allocator, &state);
-    try options.checkCanceled();
-    const project_facts = try initProjectFacts(allocator, entry_path, asset_base_dir, module_paths, options.project);
-    diagnostics_moved = true;
-    const snapshot_facts_start = utils.measure_profile.start();
-    var snapshot = try AnalysisSnapshot.fromDocumentState(allocator, &state, declaration_index, diagnostic_bag, &parse_holes, project_facts);
-    utils.measure_profile.recordAnalysis(.snapshot_facts, snapshot_facts_start);
-    snapshot.generation = options.generation;
-    snapshot.layout_output = layout_output;
-    layout_output = null;
-    if (options.retain_layout_inputs and snapshot.layout_output == null and execution_graph != null and !snapshot.diagnostics.hasErrors()) {
-        snapshot.retained_layout_inputs = .{
-            .state = state,
-            .graph = execution_graph.?,
-            .diagnostic_count = analyzed_diagnostic_count,
-        };
-        execution_graph = null;
-        state_owned = false;
-    } else if (options.retain_evaluated_layout_state and
-        snapshot.layout_output != null and
-        snapshot.layout_output.?.editor != null and
-        !snapshot.diagnostics.hasErrors())
-    {
-        snapshot.retained_layout_state = .{ .state = state, .reuse_inputs = reuse_inputs };
-        reuse_inputs = null;
-        state_owned = false;
-    }
-    return snapshot;
 }
 
 fn finishDiagnosticSnapshot(

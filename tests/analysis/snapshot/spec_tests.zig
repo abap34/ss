@@ -154,3 +154,66 @@ test "prepared layout inputs follow retained state ownership and canceled hook o
         try allocation_testing.checkAllAllocationFailures(testing.allocator, releasePreparedLayoutInputs, .{retain_state});
     }
 }
+
+fn buildStageSnapshot(source: []const u8, options: analysis.snapshot.Options) !analysis.snapshot.AnalysisSnapshot {
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    // A core-module path keeps these ownership checks independent of the prelude.
+    const path = "stdlib/core/snapshot-stage-test.ss";
+    try sources.put(path, source);
+    return analysis.snapshot.build(testing.allocator, &sources, path, ".", options);
+}
+
+test "snapshot construction preserves query sources and optional execution inputs" {
+    const source = "page sample\nend\n";
+    for ([_]bool{ false, true }) |retain_inputs| {
+        var snapshot = try buildStageSnapshot(source, .{ .generation = 7, .retain_layout_inputs = retain_inputs });
+        defer snapshot.deinit();
+        try testing.expect(!snapshot.diagnostics.hasErrors());
+        try testing.expectEqual(@as(u64, 7), snapshot.generation);
+        try testing.expectEqual(retain_inputs, snapshot.retained_layout_inputs != null);
+        try testing.expectEqualStrings(source, analysis.snapshot.sourceForPath(&snapshot, "stdlib/core/snapshot-stage-test.ss").?);
+        if (snapshot.retained_layout_inputs) |*inputs| {
+            try testing.expectEqualStrings(source, inputs.state.projectSource());
+            try testing.expectEqual(@as(usize, 1), inputs.state.graph.page_order.items.len);
+        }
+    }
+}
+
+test "snapshot construction preserves query sources after semantic errors" {
+    const source = "page sample\nlet value: Number = \"invalid\"\nend\n";
+    var snapshot = try buildStageSnapshot(source, .{ .retain_layout_inputs = true });
+    defer snapshot.deinit();
+    try testing.expect(snapshot.diagnostics.hasErrors());
+    try testing.expect(snapshot.retained_layout_inputs == null);
+    try testing.expectEqualStrings(source, analysis.snapshot.sourceForPath(&snapshot, "stdlib/core/snapshot-stage-test.ss").?);
+}
+
+const CancelAfterLayout = struct {
+    canceled: bool = false,
+
+    fn isCanceled(context: *const anyopaque) bool {
+        const self: *const CancelAfterLayout = @ptrCast(@alignCast(context));
+        return self.canceled;
+    }
+
+    fn run(context: *anyopaque, state: *core.DocumentState, _: *const analysis.execution.ExecutionGraph) anyerror!analysis.snapshot.LayoutHookOutput {
+        const self: *CancelAfterLayout = @ptrCast(@alignCast(context));
+        const pages = try core.prepared.prepare(state.allocator, state);
+        self.canceled = true;
+        return .{ .reuse_inputs = .{
+            .pages = pages,
+            .font_environment = std.mem.zeroes(render_text.FontEnvironment),
+        } };
+    }
+};
+
+test "snapshot cancellation releases results returned by the layout hook" {
+    var cancellation = CancelAfterLayout{};
+    try testing.expectError(error.Canceled, buildStageSnapshot("page sample\nend\n", .{
+        .layout_hook = .{ .context = &cancellation, .run = CancelAfterLayout.run },
+        .cancellation = .{ .context = &cancellation, .is_canceled = CancelAfterLayout.isCanceled },
+        .retain_evaluated_layout_state = true,
+    }));
+    try testing.expect(cancellation.canceled);
+}
