@@ -15,6 +15,8 @@ pub const Document = document.Document;
 
 pub const solveDocument = solver.solveDocument;
 pub const applyDocument = solver.applyDocument;
+pub const MeasurementProvider = @import("workspace.zig").MeasurementProvider;
+pub const Workspace = @import("workspace.zig").Workspace;
 pub const styleForNode = style.styleForNode;
 pub const intrinsicWidth = metrics.intrinsicWidth;
 pub const intrinsicHeight = metrics.intrinsicHeight;

@@ -12,16 +12,19 @@ pub const Suite = struct {
     checks: dependencies.Checks,
     bridge: qpdf.Bridge,
     allocation_testing: *Module,
+    layout_testing: *Module,
 
     pub const Options = struct {
         name: ?[]const u8 = null,
         description: []const u8 = "",
         link_qpdf: bool = false,
+        layout_fixture: bool = false,
     };
 
     pub fn add(self: Suite, module: *Module, options: Options) *Step.Run {
         const b = self.ctx.b;
         module.addImport("allocation_testing", self.allocation_testing);
+        if (options.layout_fixture) module.addImport("layout_testing", self.layout_testing);
         if (options.link_qpdf) qpdf.link(self.bridge, b, module, self.ctx.target, .build);
         const artifact = b.addTest(.{ .root_module = module });
         if (dependencies.requiresNativePdf(b, module)) artifact.step.dependOn(&self.checks.native_pdf.step);

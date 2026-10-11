@@ -17,6 +17,7 @@ pub fn register(ctx: project.Context, modules: project.ProjectModules, build_opt
         .checks = checks,
         .bridge = bridge,
         .allocation_testing = project.createModule(ctx, "tests/support/allocation.zig", &.{}, null),
+        .layout_testing = project.createModule(ctx, "tests/support/layout.zig", &.{project.import("core", modules.core)}, null),
     };
     _ = suite.add(project.createModule(ctx, "tests/support/allocation_spec.zig", &.{}, null), .{
         .name = "test-allocation-failures",
