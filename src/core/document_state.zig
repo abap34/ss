@@ -1,6 +1,5 @@
 const std = @import("std");
 const model = @import("model");
-const layout = @import("../layout/root.zig");
 const ast = @import("ast");
 const value_text = @import("value_text.zig");
 const declarations = @import("declarations.zig");
@@ -1496,21 +1495,5 @@ pub const DocumentState = struct {
                 .selection = try self.selectDocumentPages(allocator, query.name),
             },
         };
-    }
-
-    pub fn styleForNode(self: *DocumentState, node: *const Node) model.TextStyle {
-        return layout.styleForNode(self, node);
-    }
-
-    pub fn intrinsicWidth(self: *DocumentState, node: *const Node) f32 {
-        return layout.intrinsicWidth(self, node);
-    }
-
-    pub fn intrinsicHeight(self: *DocumentState, node: *const Node) f32 {
-        return layout.intrinsicHeight(self, node);
-    }
-
-    pub fn shouldWrapNode(self: *DocumentState, node: *const Node) bool {
-        return layout.shouldWrapNode(self, node);
     }
 };
