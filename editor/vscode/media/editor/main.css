@@ -228,11 +228,15 @@ button {
 }
 .page-entry {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 64px minmax(0, 1fr);
   align-items: center;
+  gap: 8px;
   width: 100%;
+  padding: 7px 8px 7px 6px;
   border-left: 2px solid transparent;
   background: transparent;
+  text-align: left;
+  cursor: pointer;
 }
 .page-entry:hover {
   background: var(--hover-background);
@@ -241,49 +245,8 @@ button {
   border-left-color: var(--accent);
   background: var(--accent-background);
 }
-.page-entry-select {
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  gap: 8px;
-  width: 100%;
-  padding: 7px 8px 7px 6px;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
 .page-entry-label {
   min-width: 0;
-}
-.page-entry-present {
-  display: grid;
-  width: 22px;
-  height: 22px;
-  margin-right: 6px;
-  place-items: center;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-  opacity: 0;
-}
-.page-entry:hover .page-entry-present,
-.page-entry-present:focus-visible {
-  opacity: 1;
-}
-.page-entry-present:hover,
-.page-entry-present:focus-visible {
-  background: var(--accent-background);
-  color: var(--accent-text);
-  outline: none;
-}
-.page-entry-present-icon {
-  display: block;
-  width: 0;
-  height: 0;
-  margin-left: 1px;
-  border-style: solid;
-  border-width: 4px 0 4px 7px;
-  border-color: transparent transparent transparent currentColor;
 }
 .page-entry strong {
   display: block;
@@ -1930,7 +1893,7 @@ button {
   :root {
     --sidebar: 132px;
   }
-  .page-entry-select {
+  .page-entry {
     grid-template-columns: 54px minmax(0, 1fr);
   }
   .page-thumbnail {
