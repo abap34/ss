@@ -50,8 +50,8 @@ time and `1.10` memory limits. Benchmark files remain under
 WYSIWYG initial snapshots, full snapshots after body-text changes, and delta
 snapshots after generated position-constraint rewrites are measured with the
 existing large-text fixture by running
-`SS_DEV_TIMEOUT=10m ./dev.sh build -Doptimize=ReleaseSafe benchmark-wysiwyg`
-on the development server. The timing boundary starts when a document or
+`zig build -Doptimize=ReleaseSafe benchmark-wysiwyg`.
+The timing boundary starts when a document or
 change is sent to an initialized language server and ends when the
 `ss/editorSnapshot` response arrives. It excludes language-server startup and
 initialization, webview delivery, DOM updates, and painting. Body-text changes
@@ -64,19 +64,20 @@ server. Every metric retains 30 samples after five warmup samples and records
 the median, 95th percentile, minimum, and maximum in
 `.ss-cache/wysiwyg-benchmark/result.json`.
 
-Record the baseline from the unchanged source on the same development server,
+Record the baseline from the unchanged source on the same machine,
 with the same ReleaseSafe configuration and fixture, before modifying the
 working tree:
 
 ```sh
-SS_DEV_TIMEOUT=10m ./dev.sh exec env SS_WYSIWYG_BENCHMARK_WRITE_BASELINE=.ss-cache/wysiwyg-baseline.json zig build -Doptimize=ReleaseSafe benchmark-wysiwyg
+SS_WYSIWYG_BENCHMARK_WRITE_BASELINE=.ss-cache/wysiwyg-baseline.json \
+  zig build -Doptimize=ReleaseSafe benchmark-wysiwyg
 ```
 
-Compare the current source against that baseline on the same development
-server:
+Compare the current source against that baseline on the same machine:
 
 ```sh
-SS_DEV_TIMEOUT=10m ./dev.sh exec env SS_WYSIWYG_BENCHMARK_BASELINE=.ss-cache/wysiwyg-baseline.json zig build -Doptimize=ReleaseSafe benchmark-wysiwyg
+SS_WYSIWYG_BENCHMARK_BASELINE=.ss-cache/wysiwyg-baseline.json \
+  zig build -Doptimize=ReleaseSafe benchmark-wysiwyg
 ```
 
 Generated position edits must keep both the median and 95th percentile at or

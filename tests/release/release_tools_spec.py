@@ -101,6 +101,7 @@ def test_bundled_md4c():
             "HEAD",
             "third_party/md4c",
             "third_party/md4c-manifest.json",
+            "third_party/md4c-maintenance.md",
             "third_party/md4c-origin.md",
             "scripts/md4c.py",
         ],
@@ -128,6 +129,7 @@ def test_bundled_md4c():
     }
     required.update({
         "ss-test/third_party/md4c-manifest.json",
+        "ss-test/third_party/md4c-maintenance.md",
         "ss-test/third_party/md4c-origin.md",
         "ss-test/scripts/md4c.py",
     })
