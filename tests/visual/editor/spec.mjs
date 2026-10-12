@@ -119,7 +119,7 @@ await withBrowser(output, async (browser, baseUrl) => {
 
     assert.equal(await page.locator(".page-entry").count(), 2, "page sidebar omitted a page");
     assert.equal(await page.locator(".page-thumbnail .ss-page").count(), 2, "page thumbnails did not reuse shared HTML pages");
-    assert.equal(await page.locator(".page-shell").count(), 1, "single-page mode displayed more than one page");
+    assert.equal(await page.locator(".page-shell").count(), 2, "editor omitted a page from continuous display");
     const firstPageSource = page.locator('.page-shell[data-page-id="11"] .page-source-button');
     assert.equal(await firstPageSource.textContent(), "Open in Editor");
     await firstPageSource.click();
@@ -1128,7 +1128,6 @@ await withBrowser(output, async (browser, baseUrl) => {
     assert.equal(await page.locator('.page-entry.is-active small').textContent(), "Details",
       "ArrowDown did not select the next page");
 
-    await page.locator("select.page-mode").selectOption("continuous");
     await page.waitForFunction(() => document.querySelectorAll(".page-shell").length === 2);
     assert.deepEqual(await page.locator(".page-caption").allTextContents(), ["Overview", "Details"]);
     await page.locator('.page-shell[data-page-id="22"] .page-source-button').click();
@@ -1196,10 +1195,10 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.evaluate(() => new Promise((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(resolve))
     ));
-    assert.equal(
-      await page.locator(".viewport").evaluate((viewport) => viewport.scrollTop),
-      pageSelectionScrollTop,
-      "selecting a page from the sidebar forcibly scrolled the preview",
+    assert(
+      await page.locator(".viewport").evaluate((viewport) => viewport.scrollTop) <
+        pageSelectionScrollTop,
+      "selecting a page from the sidebar did not scroll it into view",
     );
     await page.setViewportSize({ width: 560, height: 920 });
     await page.waitForTimeout(100);
@@ -2070,7 +2069,6 @@ async function exerciseComponentWidth(browser, baseUrl, initial) {
       label: "Detail child",
     });
     await postSnapshot(page, 1, grouped);
-    await page.locator("select.page-mode").selectOption("continuous");
     const childRect = page.locator(
       '.page-shell[data-page-id="22"] ' +
       '.object-hit[data-object-id="203"] > .object-hit-rect',

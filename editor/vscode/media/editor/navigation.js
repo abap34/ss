@@ -19,7 +19,6 @@ export class EditorNavigation {
   selectPage(pageId) {
     if (!this.hasPage(pageId)) return false;
     this.state.currentPageId = pageId;
-    if (this.state.mode === "single") this.state.selectedObjectId = null;
     return true;
   }
 

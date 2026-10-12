@@ -54,7 +54,7 @@ export class WorkspaceView {
     this.cleanupPan();
     const main = element("main", "workspace");
     main.append(this.toolbar());
-    const viewport = element("div", `viewport viewport--${this.state.mode}`);
+    const viewport = element("div", "viewport");
     viewport.classList.toggle("viewport--pan", this.state.pointerMode === "pan");
     viewport.addEventListener("wheel", this.handlePinch, { passive: false });
     viewport.addEventListener("pointerdown", this.beginPan, true);
@@ -65,12 +65,9 @@ export class WorkspaceView {
     }, true);
     const pages = element("div", "pages-stage");
     if (this.state.snapshot) {
-      const visiblePages = this.state.mode === "single"
-        ? this.state.snapshot.layout.pages.filter((page) =>
-          page.id === this.state.currentPageId
-        )
-        : this.state.snapshot.layout.pages;
-      for (const page of visiblePages) pages.append(this.pageShell(page));
+      for (const page of this.state.snapshot.layout.pages) {
+        pages.append(this.pageShell(page));
+      }
     } else {
       const empty = element("div", "empty-state");
       empty.textContent = emptyPreviewMessage(this.state.buildStatus);
@@ -109,11 +106,7 @@ export class WorkspaceView {
         !samePageEditingCapabilities(previousSnapshot, snapshot)) {
       return false;
     }
-    const visiblePages = this.state.mode === "single"
-      ? snapshot.layout.pages.filter((page) =>
-        page.id === this.state.currentPageId
-      )
-      : snapshot.layout.pages;
+    const visiblePages = snapshot.layout.pages;
     const shells = [...this.viewport.querySelectorAll(".page-shell")];
     if (shells.length !== visiblePages.length) return false;
     const retainedPages = [];
@@ -292,16 +285,6 @@ export class WorkspaceView {
 
   toolbar() {
     const bar = element("div", "toolbar");
-    const mode = element("select", "page-mode");
-    mode.setAttribute("aria-label", "Page display");
-    mode.append(
-      modeOption("single", "Single page", this.state.mode),
-      modeOption("continuous", "Continuous", this.state.mode),
-    );
-    mode.addEventListener("change", () => {
-      this.state.mode = mode.value;
-      this.actions.render();
-    });
     const zoom = this.zoomControls();
     const status = element("div", "build-status");
     status.setAttribute("role", "status");
@@ -321,7 +304,7 @@ export class WorkspaceView {
       this.shapePicker(),
       this.iconPicker(),
     );
-    bar.append(mode, zoom, tools);
+    bar.append(zoom, tools);
     if (this.state.shapeTool !== "select") {
       const iconActive = this.state.shapeTool === "icon";
       bar.append(
@@ -836,11 +819,9 @@ export class WorkspaceView {
       open.setAttribute("aria-label", open.title);
       shell.append(open);
     }
-    if (this.state.mode === "continuous") {
-      const caption = element("div", "page-caption");
-      caption.textContent = page.name;
-      shell.append(caption);
-    }
+    const caption = element("div", "page-caption");
+    caption.textContent = page.name;
+    shell.append(caption);
     return shell;
   }
 
@@ -872,25 +853,17 @@ export class WorkspaceView {
     const shells = [...viewport.querySelectorAll(".page-shell")];
     if (shells.length === 0) return;
     const widths = shells.map((shell) => Number(shell.dataset.pageWidth));
-    const heights = shells.map((shell) => Number(shell.dataset.pageHeight));
     const viewportMarginX = viewport.clientWidth * viewportMarginRatio;
     const viewportMarginY = viewport.clientHeight * viewportMarginRatio;
     viewport.style.setProperty("--viewport-margin-x", `${viewportMarginX}px`);
     viewport.style.setProperty("--viewport-margin-y", `${viewportMarginY}px`);
     const horizontalMargin = viewportMarginX * 2;
-    const verticalMargin = viewportMarginY * 2;
     const fitScale = (reservedRulerSpace) => {
       const availableWidth = Math.max(
         80,
         viewport.clientWidth - horizontalMargin - reservedRulerSpace,
       );
-      const availableHeight = Math.max(
-        60,
-        viewport.clientHeight - verticalMargin - reservedRulerSpace,
-      );
-      return this.state.mode === "single"
-        ? Math.min(availableWidth / widths[0], availableHeight / heights[0])
-        : Math.min(1, availableWidth / Math.max(...widths));
+      return Math.min(1, availableWidth / Math.max(...widths));
     };
     const scaleWithRulers = fitScale(rulerSize);
     const automaticRulers = scaleWithRulers * rulerInterval >=

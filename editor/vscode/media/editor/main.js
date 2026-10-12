@@ -35,7 +35,6 @@ const state = {
   buildStatus: "starting",
   buildDurationMs: null,
   sidebar: "pages",
-  mode: "single",
   zoomMode: "fit",
   zoomScale: 1,
   previewScale: 1,
@@ -509,14 +508,16 @@ function persistWebviewState(update) {
 function selectPage(pageId) {
   if (!navigation.selectPage(pageId)) return;
   render();
+  requestAnimationFrame(() => {
+    app.querySelector(`.page-shell[data-page-id="${pageId}"]`)
+      ?.scrollIntoView({ block: "center", inline: "nearest" });
+  });
 }
 
 function navigatePage(pageId) {
   if (!navigation.selectPage(pageId)) return;
   state.selectedObjectId = null;
-  const revealPage = state.mode === "continuous";
   render();
-  if (!revealPage) return;
   requestAnimationFrame(() => {
     app.querySelector(`.page-shell[data-page-id="${pageId}"]`)
       ?.scrollIntoView({ block: "center", inline: "nearest" });
@@ -541,8 +542,7 @@ function selectObject(objectId, pageId, rerender = true) {
   if (
     rerender &&
     selectionChanged &&
-    result.pageChanged &&
-    state.mode === "continuous"
+    result.pageChanged
   ) {
     requestAnimationFrame(() => {
       app.querySelector(`.page-shell[data-page-id="${pageId}"]`)

@@ -14,7 +14,6 @@ const state = {
       objects: [selectedObject],
     },
   },
-  mode: "continuous",
   currentPageId: secondPage.id,
   selectedObjectId: null,
 };

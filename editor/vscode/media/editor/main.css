@@ -376,22 +376,6 @@ button {
   border-bottom: 1px solid var(--border);
   background: var(--toolbar-background);
 }
-.page-mode {
-  min-height: 24px;
-  padding: 2px 26px 2px 8px;
-  border: 1px solid var(--control-border);
-  border-radius: 5px;
-  background: var(--control-background);
-  color: var(--text-muted);
-  font-size: 9px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.page-mode:hover, .page-mode:focus {
-  border-color: var(--accent-border);
-  color: var(--accent-text);
-  outline: none;
-}
 .zoom-controls {
   display: flex;
   flex: 0 0 auto;
@@ -1073,6 +1057,7 @@ button {
 .viewport {
   position: absolute;
   inset: var(--toolbar) 0 0;
+  padding: var(--viewport-margin-y, 4%) var(--viewport-margin-x, 4%);
   overflow: auto;
   background: var(--viewport-background);
   scrollbar-color: var(--text-faint) var(--shell-background);
@@ -1083,20 +1068,7 @@ button {
 .viewport--pan.viewport--panning {
   cursor: grabbing;
 }
-.viewport--single {
-  padding: var(--viewport-margin-y, 4%) var(--viewport-margin-x, 4%);
-}
-.viewport--single .pages-stage {
-  display: grid;
-  width: max-content;
-  min-width: 100%;
-  min-height: 100%;
-  place-items: center;
-}
-.viewport--continuous {
-  padding: var(--viewport-margin-y, 4%) var(--viewport-margin-x, 4%);
-}
-.viewport--continuous .pages-stage {
+.pages-stage {
   display: flex;
   width: max-content;
   flex-direction: column;
