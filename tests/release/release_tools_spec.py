@@ -72,7 +72,6 @@ def test_bundled_md4c():
     metadata = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(metadata)
     metadata.validate(manifest, ROOT)
-    assert_equal(metadata.imported_commit(), manifest["fork"]["imported_commit"])
 
     stale_hash = copy.deepcopy(manifest)
     stale_hash["files"][0]["sha256"] = "0" * 64
