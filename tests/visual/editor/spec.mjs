@@ -10,6 +10,7 @@ import { exerciseBuildDiagnosticMessages } from "./diagnostics.mjs";
 import { editorSnapshot, testDocument } from "./fixture.mjs";
 import { exerciseTranslationLifecycle } from "./translation.mjs";
 import { exerciseRelativeAdjustment } from "./relative-adjustment.mjs";
+import { exerciseObjectDrag } from "./drag.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(repository, "editor/vscode/media/editor");
@@ -60,6 +61,13 @@ await writeFile(path.join(output, "asset.pdf"), pdfAsset());
 await writeFile(path.join(output, "index.html"), testDocument(), "utf8");
 
 await withBrowser(output, async (browser, baseUrl) => {
+  if (!process.argv.includes("--relative-adjustment-only")) {
+    await exerciseObjectDrag(browser, baseUrl, editorSnapshot());
+  }
+  if (process.argv.includes("--drag-only")) {
+    console.log("WYSIWYG object drag checks passed.");
+    return;
+  }
   await exerciseRelativeAdjustment(browser, baseUrl, editorSnapshot(), output);
   if (process.argv.includes("--relative-adjustment-only")) {
     console.log("WYSIWYG relative adjustment checks passed.");
@@ -1055,7 +1063,7 @@ await withBrowser(output, async (browser, baseUrl) => {
     await page.waitForFunction(() =>
       document.querySelector(".viewport")?.classList.contains("viewport--rulers-hidden")
     );
-    assert.equal(await page.locator(".ruler--vertical").isVisible(), false,
+    assert.equal(await page.locator(".ruler--vertical:visible").count(), 0,
       "rulers remained visible at a scale where their fixed labels obscure the page");
     const narrowToolbarBox = await page.locator(".toolbar").boundingBox();
     const narrowZoomBox = await page.locator(".zoom-controls").boundingBox();

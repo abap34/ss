@@ -83,6 +83,9 @@ export async function exerciseRelativeAdjustment(browser, baseUrl, snapshot, out
     await page.setViewportSize({ width: 1024, height: 760 });
 
     await page.locator(".object-sheet .close-button").click();
+    await page.evaluate(() => new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
     await page.keyboard.down("Shift");
     await expectMode(page, false);
     const bounds = await outline.boundingBox();
@@ -113,8 +116,17 @@ export async function exerciseRelativeAdjustment(browser, baseUrl, snapshot, out
       } }));
     });
     await page.waitForFunction(() => !document.querySelector("[data-ss-pending-translation]"));
+    // Keep the next drag target above the object details sheet after rejection.
+    await page.setViewportSize({ width: 1024, height: 1200 });
+    await page.evaluate(() => new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    ));
 
     const moved = await outline.boundingBox();
+    assert.equal(await page.evaluate(({ x, y }) =>
+      document.elementFromPoint(x, y)?.closest(".object-hit")?.dataset.objectId,
+    { x: moved.x + moved.width / 2, y: moved.y + moved.height / 2 }), "202",
+    "relative adjustment target was covered by another control");
     await page.mouse.move(moved.x + moved.width / 2, moved.y + moved.height / 2);
     await page.mouse.down();
     await page.mouse.move(moved.x + moved.width / 2 + 10, moved.y + moved.height / 2 + 6);

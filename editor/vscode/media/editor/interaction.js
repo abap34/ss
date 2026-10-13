@@ -16,6 +16,8 @@ const minimumPlacementLength = 4;
 const minimumEditedLineLength = 0.25;
 const minimumResizedShapeExtent = 4;
 const pointerMovementTolerance = 0.25;
+// Use CSS pixels so click jitter has the same tolerance at every preview zoom.
+const objectDragStartDistance = 5;
 const defaultLineLength = 160;
 const lineSnapAngle = Math.PI / 12;
 const lineArrowMinimumSize = 8;
@@ -824,6 +826,8 @@ export class InteractionController {
       svg,
       previewRoot,
       start: svgPoint(svg, event),
+      startClient: { x: event.clientX, y: event.clientY },
+      active: false,
       from: frame,
       base: previewFrame(page, object),
       to: { ...frame },
@@ -831,7 +835,6 @@ export class InteractionController {
       nodeIds: subtreeNodeIds(this.state.snapshot, object.id),
     };
     group.setPointerCapture(event.pointerId);
-    group.classList.add("is-dragging");
     group.addEventListener("pointermove", this.updateDrag);
     group.addEventListener("pointerup", this.finishDrag);
     group.addEventListener("pointercancel", this.cancelDrag);
@@ -843,10 +846,19 @@ export class InteractionController {
   updateDrag(event) {
     const drag = this.drag;
     if (!drag || event.pointerId !== drag.pointerId) return;
+    this.setShiftPressed(event.shiftKey);
+    if (!drag.active) {
+      const distance = Math.hypot(
+        event.clientX - drag.startClient.x,
+        event.clientY - drag.startClient.y,
+      );
+      if (distance < objectDragStartDistance) return;
+      drag.active = true;
+      drag.group.classList.add("is-dragging");
+    }
     const point = svgPoint(drag.svg, event);
     const dx = point.x - drag.start.x;
     const dy = point.y - drag.start.y;
-    this.setShiftPressed(event.shiftKey);
     drag.to = { ...drag.from, x: drag.from.x + dx, y: drag.from.y + dy };
     const totalX = drag.to.x - drag.base.x;
     const totalY = drag.to.y - drag.base.y;
@@ -883,8 +895,12 @@ export class InteractionController {
   finishDrag(event) {
     const drag = this.drag;
     if (!drag || event.pointerId !== drag.pointerId) return;
-    this.setShiftPressed(event.shiftKey);
+    this.updateDrag(event);
     this.cleanup();
+    if (!drag.active) {
+      this.notifyPointerOperationFinished();
+      return;
+    }
     const dx = drag.to.x - drag.from.x;
     const dy = drag.to.y - drag.from.y;
     if (Math.abs(dx) < pointerMovementTolerance &&
