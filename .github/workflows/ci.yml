@@ -132,6 +132,9 @@ jobs:
       - name: Run tests
         run: zig build test
 
+      - name: Test bundled MD4C fork
+        run: python3 scripts/test-md4c.py
+
       - name: Build ss binary
         run: zig build
 

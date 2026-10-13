@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "upstream": "https://github.com/mity/md4c",
   "version": "0.5.3",
   "tag": "release-0.5.3",
@@ -18,5 +18,11 @@
       "path": "src/md4c.h",
       "sha256": "4efd19bf7ec270691d5b4189f496886e421768a814b5e817eb945aa85e859f18"
     }
-  ]
+  ],
+  "integration": "git-subtree",
+  "fork": {
+    "repository": "https://github.com/abap34/md4c",
+    "branch": "master",
+    "imported_commit": "472c417005c2c71b8617de4f7b8d6b30411d78f4"
+  }
 }
