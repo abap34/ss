@@ -250,15 +250,15 @@ try {
     editor.document.lineAt = (index) => ({ text: lines[index], range: { line: index } });
     paints.length = 0;
     await guide.refreshEditor(editor);
-    assert.equal(paints.some((ranges) => ranges.length > 0), marker !== "//", `page guide treated ${marker} incorrectly`);
+    assert.equal(paints.some((ranges) => ranges.length > 0), marker === ";;", `page guide treated ${marker} incorrectly`);
   }
-  for (const marker of [";;", "#"]) {
+  for (const marker of [";;", "#", "//"]) {
     const lines = ["page example", "text <<", ">> // body text", "end", `>> ${marker} terminator`, "end"];
     editor.document.lineCount = lines.length;
     editor.document.lineAt = (index) => ({ text: lines[index], range: { line: index } });
     paints.length = 0;
     await guide.refreshEditor(editor);
-    assert.ok(paints.some((ranges) => ranges.some((range) => range.line === 5)), "double slash prematurely terminated the page guide's block string");
+    assert.equal(paints.some((ranges) => ranges.some((range) => range.line === 5)), marker === ";;", `page guide treated ${marker} block suffix incorrectly`);
   }
   paints.length = 0;
   config.setProjectSettingsProvider(async () => {

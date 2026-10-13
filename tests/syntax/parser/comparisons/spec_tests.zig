@@ -142,7 +142,7 @@ test "comparisons: conditional headers consume comparisons before their newline"
     for (operators, callees) |operator, callee| {
         const source = try std.fmt.allocPrint(
             testing.allocator,
-            "page Sample\nif a{s}b # condition\nlet yes = 1\nelse\nlet no = 2\nend\nlet after = 3\nend\n",
+            "page Sample\nif a{s}b ;; condition\nlet yes = 1\nelse\nlet no = 2\nend\nlet after = 3\nend\n",
             .{operator},
         );
         defer testing.allocator.free(source);
@@ -203,13 +203,13 @@ test "comparisons: allocation failures release nested expression ownership" {
     const source = "page Sample\nlet value = left!=2+3 <= (other>=4)\nend\n";
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinit, .{source});
     try allocation_testing.checkAllAllocationFailures(testing.allocator, recoverAndDeinit, .{source});
-    const incomplete = "page Sample\nlet value = left != # missing\naccept()\nend\n";
+    const incomplete = "page Sample\nlet value = left != ;; missing\naccept()\nend\n";
     try allocation_testing.checkAllAllocationFailures(testing.allocator, recoverAndDeinit, .{incomplete});
 }
 
 test "comparisons: missing right operand cannot consume the next statement" {
     for (operators) |operator| {
-        for ([_][]const u8{ "\n", " # missing\n", " ;; missing\n" }) |ending| {
+        for ([_][]const u8{ "\n", " ;; missing\n" }) |ending| {
             const source = try std.fmt.allocPrint(
                 testing.allocator,
                 "page Sample\nlet invalid = left {s}{s}accept()\nlet after = 7\nend\n",

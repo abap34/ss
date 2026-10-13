@@ -1,9 +1,9 @@
 ================================================================================
-Semicolon and hash comments preserve double slashes in strings
+Double semicolon comments preserve double slashes in strings
 ================================================================================
 
 ;; first comment
-# second comment
+;; second comment
 const url: String = "https://example.com/a//b"
 
 --------------------------------------------------------------------------------
@@ -15,6 +15,18 @@ const url: String = "https://example.com/a//b"
     (identifier)
     (type (primary_type (type_identifier)))
     (string)))
+
+================================================================================
+Hash is not a comment
+================================================================================
+
+#
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (ERROR
+    (UNEXPECTED '#')))
 
 ================================================================================
 Double slash is not a comment

@@ -236,8 +236,8 @@ async function testMultilineRelativeEditPreservesTrivia() {
       assert(result.status === "ok", `multiline relative edit was rejected: ${JSON.stringify(result)}`);
       const updated = applyProtocolEdits(source, result.workspaceEdit?.changes?.[uri] ?? []);
       assert(
-        updated.includes("# Keep horizontal context.\n  + (horizontal_gap) + 15") &&
-          updated.includes("# Keep vertical context.\n  + (-(vertical_gap)) - 10"),
+        updated.includes(";; Keep horizontal context.\n  + (horizontal_gap) + 15") &&
+          updated.includes(";; Keep vertical context.\n  + (-(vertical_gap)) - 10"),
         `multiline relation trivia was not preserved: ${updated}`,
       );
     });

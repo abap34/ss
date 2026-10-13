@@ -7,7 +7,7 @@ page Blocks
 inline >> remains content
 > a single chevron
 
-  >>) || text(<< # header
+  >>) || text(<< ;; header
 B
 >>)
   let equal = text <<

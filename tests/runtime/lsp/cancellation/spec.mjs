@@ -13,7 +13,7 @@ try {
   const validSource = `page title
 end
 `;
-  const filler = Array.from({ length: 100_000 }, (_, index) => `# cancellation filler ${index}`).join("\n");
+  const filler = Array.from({ length: 100_000 }, (_, index) => `;; cancellation filler ${index}`).join("\n");
   const largeSource = `${validSource}${filler}\n`;
   const invalidLargeSource = `${largeSource}page broken\n  let value =\nend\n`;
   await writeFile(slide, validSource, "utf8");

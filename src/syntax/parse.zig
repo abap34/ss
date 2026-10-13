@@ -1086,7 +1086,6 @@ const Parser = struct {
         while (!self.eof()) {
             const ch = self.source[self.pos];
             if (source.isInlineSpace(ch) or ch == '\n') break;
-            if (ch == '#') break;
             if (ch == ';' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == ';') break;
             if (ch == '/' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') break;
             self.pos += 1;
@@ -1149,7 +1148,6 @@ const Parser = struct {
         while (!self.eof()) {
             const ch = self.source[self.pos];
             if (source.isInlineSpace(ch) or ch == '\n') break;
-            if (ch == '#') break;
             if (ch == ';' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == ';') break;
             if (ch == '/' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') break;
             self.pos += 1;

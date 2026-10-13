@@ -247,18 +247,46 @@ fn expectSpanText(source: []const u8, span: ast.Span, expected: []const u8) !voi
     try testing.expectEqualStrings(expected, source[span.start..span.end]);
 }
 
-test "syntax spec: line comment helpers recognize only semicolons and hash" {
+test "syntax spec: line comment helpers recognize only double semicolons" {
     const source = @import("utils").source;
     try testing.expectEqual(@as(?usize, 2), source.lineCommentMarkerLength(";; comment", 0));
-    try testing.expectEqual(@as(?usize, 1), source.lineCommentMarkerLength("# comment", 0));
+    try testing.expectEqual(@as(?usize, null), source.lineCommentMarkerLength("# code", 0));
+    try testing.expectEqual(@as(?usize, null), source.lineCommentMarkerLength(";", 0));
     try testing.expectEqual(@as(?usize, null), source.lineCommentMarkerLength("// code", 0));
     try testing.expectEqualStrings("a // b ", source.stripLineComment("a // b ;; comment"));
-    try testing.expectEqualStrings("a // b ", source.stripLineComment("a // b # comment"));
+    try testing.expectEqualStrings("a # code", source.stripLineComment("a # code"));
+    try testing.expectEqualStrings("a # code ", source.stripLineComment("a # code ;; comment"));
     try testing.expectEqualStrings("\"https://example.com/a//b;;#\" ", source.stripLineComment("\"https://example.com/a//b;;#\" ;; comment"));
-    const text = " ;; first\n # second\n // code";
+    const text = " ;; first\n ;; second\n # code";
     var pos: usize = 0;
     source.skipTriviaFrom(text, &pos);
-    try testing.expectEqualStrings("// code", text[pos..]);
+    try testing.expectEqualStrings("# code", text[pos..]);
+}
+
+test "syntax spec: hash comments are rejected in code and block headers" {
+    try expectParseErrorWithoutLeaks(error.ExpectedKeyword, "# removed comment\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedKeyword, "const value: Number = 1 # removed comment\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedIdentifier, "page Example\n# removed comment\nend\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedLineBreak, "page Example\ntext << # removed comment\nbody\n>>\nend\n");
+}
+
+test "syntax spec: hash characters remain in paths names and text" {
+    var parsed = try parse(
+        \\import ./parts#one as *
+        \\page Part#one
+        \\text("# Heading")
+        \\text <<
+        \\# Heading
+        \\>>
+        \\end
+    );
+    defer parsed.deinit();
+    try testing.expectEqualStrings("./parts#one", parsed.module.imports.items[0].spec);
+    try testing.expectEqualStrings("Part#one", parsed.module.pages.items[0].name);
+    for (parsed.module.pages.items[0].statements.items) |statement| {
+        const call = try expectCall(statement.kind.expr_stmt, "text", 1);
+        try testing.expectEqualStrings("# Heading", call.args.items[0].string.text);
+    }
 }
 
 test "syntax spec: double slash comments are rejected in code" {
@@ -296,7 +324,7 @@ test "syntax spec: imports and pages preserve source order" {
     const source_text =
         \\;; Leading trivia is not part of the AST.
         \\import core
-        \\import "themes/default"; # comments may follow terminators
+        \\import "themes/default"; ;; comments may follow terminators
         \\
         \\document
         \\  let deck_title = "Intro"
@@ -1590,7 +1618,7 @@ test "syntax spec: composition continues before and after the operator across tr
     var parsed = try parse(
         \\page Composition
         \\  let nested = a || ;; next operand
-        \\    # explanation
+        \\    ;; explanation
         \\    (
         \\      b //
         \\      c
@@ -1975,7 +2003,7 @@ test "syntax spec: chevron suffixes belong to the enclosing expression" {
     const operators = [_][]const u8{ "||", "//", "|=|", "/=/" };
     for (operators, [_][]const u8{ "hjoin", "vjoin", "hsplit", "vsplit" }) |operator, name| {
         for ([_][]const u8{ "", " ", "\t" }) |spacing| {
-            const text = try std.fmt.allocPrint(testing.allocator, "page Blocks\nlet g = text << ;; header\nA\n\t>>{s}{s} # continuation\ntext <<\nB\n>>\nend\n", .{ spacing, operator });
+            const text = try std.fmt.allocPrint(testing.allocator, "page Blocks\nlet g = text << ;; header\nA\n\t>>{s}{s} ;; continuation\ntext <<\nB\n>>\nend\n", .{ spacing, operator });
             defer testing.allocator.free(text);
             var parsed = try parse(text);
             defer parsed.deinit();
@@ -1988,20 +2016,20 @@ test "syntax spec: chevron suffixes belong to the enclosing expression" {
             try expectString(right.args.items[0], "B");
         }
     }
-    const nested = "page Blocks\nlet g = (text <<\nA\n>>) || text(<< # header\nB\n>>)\nend\n";
+    const nested = "page Blocks\nlet g = (text <<\nA\n>>) || text(<< ;; header\nB\n>>)\nend\n";
     var parsed = try parse(nested);
     defer parsed.deinit();
     _ = try expectComposition(parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr, "hjoin");
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{nested});
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{nested});
-    var crlf = try parse("page Blocks\r\nlet s = << # header\r\nA\r\n\t>> ++ \"B\"\r\nend\r\n");
+    var crlf = try parse("page Blocks\r\nlet s = << ;; header\r\nA\r\n\t>> ++ \"B\"\r\nend\r\n");
     defer crlf.deinit();
     _ = try expectCall(crlf.module.pages.items[0].statements.items[0].kind.let_binding.expr, "concat", 2);
 }
 
 test "syntax spec: block and quoted strings accept the same composition continuations" {
     for ([_][]const u8{ "text(\"A\")", "text <<\nA\n>>" }) |left| {
-        for ([_][]const u8{ "\n", "\n\n", "\n;; comment\n", "\n# comment\n", "\r\n\t" }) |separator| {
+        for ([_][]const u8{ "\n", "\n\n", "\n;; comment\n", "\r\n;; comment\r\n", "\r\n\t" }) |separator| {
             for ([_][]const u8{ "||", "//", "|=|", "/=/" }) |operator| {
                 const text = try std.fmt.allocPrint(testing.allocator, "page Blocks\nlet g = {s}{s}{s} text(\"B\")\nend\n", .{ left, separator, operator });
                 defer testing.allocator.free(text);

@@ -76,7 +76,7 @@ end
     await waitForFile(marker, 3_000);
     const supersededPid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
     const changedAt = performance.now();
-    client.changeDocument({ uri, text: `${source}# latest revision\n`, version: 2 });
+    client.changeDocument({ uri, text: `${source};; latest revision\n`, version: 2 });
     const contentModifiedError = await superseded.promise.then(
       () => null,
       (error) => error,

@@ -24,9 +24,9 @@ const dump = JSON.parse(await readFile(dumpFile, "utf8"));
 assert.deepEqual(dump.nodes.filter((node) => node.content).map((node) => node.content), ["A >> remains text", "B", "C"]);
 
 for (const operator of operators) {
-  await check(wrap(`let g = (text << ;; header\nInline >> content\n>>) ${operator}\ntext(<< # header\nB\n>>)\nplace!(g)`));
+  await check(wrap(`let g = (text << ;; header\nInline >> content\n>>) ${operator}\ntext(<< ;; header\nB\n>>)\nplace!(g)`));
   for (const left of ['text("A")', "text <<\nA\n>>"]) {
-    for (const separator of ["\n", "\n\n", "\n;; comment\n", "\n# comment\n"]) {
+    for (const separator of ["\n", "\n\n", "\n;; comment\n", "\r\n;; comment\r\n"]) {
       await check(wrap(`let g = ${left}${separator}${operator} text("B")\nplace!(g)`));
     }
   }

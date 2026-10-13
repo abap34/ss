@@ -11,7 +11,7 @@ style with {}
 ```ss
 style with {
   ;; No fields are updated.
-  # The closing brace is still required.
+  ;; The closing brace is still required.
 }
 ```
 
@@ -105,7 +105,7 @@ end
 
 <!-- syntax: accept expression -->
 ```ss
-text << # Header comment
+text << ;; Header comment
 A >> stays in the string
 >> || text("B")
 ```

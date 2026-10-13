@@ -22,7 +22,7 @@
       "patterns": [
         {
           "name": "comment.line.double-semicolon.ss",
-          "match": "(?:;;|#).*$"
+          "match": ";;.*$"
         }
       ]
     },
@@ -30,7 +30,7 @@
       "patterns": [
         {
           "name": "string.unquoted.block.ss",
-          "begin": "<<[ \\t\\r]*(?:(?:;;|#).*)?$",
+          "begin": "<<[ \\t\\r]*(?:;;.*)?$",
           "end": "^[ \\t\\r]*>>",
           "beginCaptures": {
             "0": { "name": "punctuation.definition.string.begin.ss" }

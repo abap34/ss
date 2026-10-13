@@ -36,8 +36,6 @@ bool tree_sitter_ss_external_scanner_scan(void *payload, TSLexer *lexer, const b
         lexer->advance(lexer, false);
         if (lexer->lookahead != ';') return false;
         break;
-      case '#':
-        break;
       default:
         goto operator;
     }

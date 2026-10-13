@@ -42,6 +42,16 @@ fn expectFixtureOutput(allocator: std.mem.Allocator, path: []const u8, actual: [
     try std.testing.expectEqualStrings(expected, actual);
 }
 
+test "page body indentation skips only double semicolon comments" {
+    for ([_][]const u8{ ";;", "#" }, [_][]const u8{ "  ", "    " }) |marker, expected| {
+        const source = try std.fmt.allocPrint(std.testing.allocator, "page Example\n    {s} text\n  text!(\"Body\")\nend\n", .{marker});
+        defer std.testing.allocator.free(source);
+        const page_span = edit.ByteSpan{ .start = 0, .end = source.len };
+        const insertion = edit.pageEndLineStart(source, page_span).?;
+        try std.testing.expectEqualStrings(expected, edit.pageBodyIndent(source, page_span, insertion));
+    }
+}
+
 test "component removal deletes complete multiline statements and adjacent constraints" {
     const allocator = std.testing.allocator;
     const source =

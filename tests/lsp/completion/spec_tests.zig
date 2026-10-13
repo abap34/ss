@@ -655,7 +655,7 @@ test "analysis completion: chevron blocks and comments do not create fake bindin
         \\import std:themes/default as *
         \\
         \\page title
-        \\  # let fake_comment = h2! "comment"
+        \\  ;; let fake_comment = h2! "comment"
         \\  let t = h2! <<
         \\let fake_block = h2! "block"
         \\end
@@ -670,7 +670,7 @@ test "analysis completion: chevron blocks and comments do not create fake bindin
         \\import std:themes/default as *
         \\
         \\page title
-        \\  # let fake_comment = h2! "comment"
+        \\  ;; let fake_comment = h2! "comment"
         \\  let t = h2! <<
         \\let fake_block = h2! "block"
         \\end

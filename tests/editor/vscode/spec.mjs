@@ -41,10 +41,11 @@ async function testBlockStringSyntax() {
   const block = grammar.repository["block-string"].patterns[0];
   const begin = new RegExp(block.begin);
   const end = new RegExp(block.end);
-  for (const header of ["text <<", "text << ;; header", "text << # header", "text <<\r"]) {
+  for (const header of ["text <<", "text << ;; header", "text <<\r"]) {
     assert(begin.test(header), `block header not recognized: ${header}`);
   }
   assert(!begin.test("text << content"), "block header accepted inline content");
+  assert(!begin.test("text << # header"), "block header accepted a hash comment");
   for (const suffix of ["", " || text(\"B\")", ") |=| other", "//other", "/=/ other", " # comment", " ;; comment", "\r"]) {
     const matched = end.exec(` \t>>${suffix}`);
     assert(matched?.[0] === " \t>>", `block delimiter consumed its suffix: ${suffix}`);
@@ -84,11 +85,11 @@ async function testCompositionOperatorSyntax() {
 async function testLineCommentSyntax() {
   const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
   const comments = grammar.repository.comments.patterns.map((pattern) => new RegExp(pattern.match));
-  for (const line of [";; comment", "# comment", "value ;; comment", "value # comment"]) {
+  for (const line of [";; comment", "value ;; comment"]) {
     assert(comments.some((pattern) => pattern.test(line)), `comment was not highlighted: ${line}`);
   }
-  for (const line of ["// code", "a // b", "https://example.com"]) {
-    assert(comments.every((pattern) => !pattern.test(line)), `double slash was highlighted as a comment: ${line}`);
+  for (const line of ["# code", "value # code", "#include(\"parts\")", "// code", "a // b", "https://example.com"]) {
+    assert(comments.every((pattern) => !pattern.test(line)), `code was highlighted as a comment: ${line}`);
   }
 }
 

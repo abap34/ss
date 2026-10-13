@@ -3066,7 +3066,7 @@
           },
           {
             "type": "PATTERN",
-            "value": "[ \\t\\r]*(;;[^\\n]*|#[^\\n]*)?\\n([ \\t\\r]*([^ \\t\\r>\\n][^\\n]*|>([^>\\n][^\\n]*)?)?\\n)*[ \\t\\r]*>>"
+            "value": "[ \\t\\r]*(;;[^\\n]*)?\\n([ \\t\\r]*([^ \\t\\r>\\n][^\\n]*|>([^>\\n][^\\n]*)?)?\\n)*[ \\t\\r]*>>"
           }
         ]
       }
@@ -3105,17 +3105,8 @@
     "comment": {
       "type": "TOKEN",
       "content": {
-        "type": "CHOICE",
-        "members": [
-          {
-            "type": "PATTERN",
-            "value": ";;[^\\n]*"
-          },
-          {
-            "type": "PATTERN",
-            "value": "#[^\\n]*"
-          }
-        ]
+        "type": "PATTERN",
+        "value": ";;[^\\n]*"
       }
     },
     "_terminator": {

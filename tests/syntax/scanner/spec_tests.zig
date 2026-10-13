@@ -67,14 +67,23 @@ test "syntax scanner: tokenizes source words and literals without comments" {
     });
 }
 
+test "syntax scanner: hash does not discard following tokens" {
+    try expectTokens("#include(\"parts\") ;; hidden\nvalue # visible", &.{
+        .{ .kind = .identifier, .text = "include", .line = 0 },
+        .{ .kind = .string, .text = "\"parts\"", .line = 0 },
+        .{ .kind = .identifier, .text = "value", .line = 1 },
+        .{ .kind = .identifier, .text = "visible", .line = 1 },
+    });
+}
+
 test "syntax scanner: double slashes remain operators after block strings" {
     const text =
         \\a//b ;; comment
-        \\c // d # comment
+        \\c // d ;; comment
         \\code <<
         \\inline >> // still block content
         \\hidden
-        \\>> // visible # terminator comment
+        \\>> // visible ;; terminator comment
         \\visible
     ;
     try expectTokens(text, &.{
@@ -92,7 +101,7 @@ test "syntax scanner: double slashes remain operators after block strings" {
 }
 
 test "syntax scanner: block suffixes and header comments preserve subsequent tokens" {
-    try expectTokens("text << ;; header\ninline >> text\n  >>)|=|text(<< # header\nhidden\n>>)/=/tail\n", &.{
+    try expectTokens("text << ;; header\ninline >> text\n  >>)|=|text(<< ;; header\nhidden\n>>)/=/tail\n", &.{
         .{ .kind = .identifier, .text = "text", .line = 0 },
         .{ .kind = .operator, .text = "|=|", .line = 2 },
         .{ .kind = .identifier, .text = "text", .line = 2 },

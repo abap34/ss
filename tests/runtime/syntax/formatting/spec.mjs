@@ -8,7 +8,7 @@ import { root, ssBin } from "../../harness.mjs";
 
 const exec = promisify(execFile);
 const operators = ["||", "//", "|=|", "/=/"];
-const gaps = ["", " ", "\n", "\n\n", "\n;; generated comment\n\t", "\r\n# generated comment\r\n  "];
+const gaps = ["", " ", "\n", "\n\n", "\n;; generated comment\n\t", "\r\n;; generated comment\r\n  "];
 const labels = ["A short", "B a considerably longer sentence", "C middle text"];
 const leaf = (index) => ({ leaf: index });
 const chain = (operator, ...children) => ({ operator, children });
@@ -95,7 +95,7 @@ function print(tree, format) {
         case 0: text = `mark!(${gap}"${label}"${gap})`; break;
         case 1: text = `mark! "${label}"`; break;
         case 2: text = `mark!(<<\n${label}\n\t>>${gap})`; break;
-        case 3: text = `mark! << # generated header\n${label}\n\t>>`; break;
+        case 3: text = `mark! << ;; generated header\n${label}\n\t>>`; break;
       }
     }
     for (let index = 0; index < depth; index += 1) text = `(${gap}${text}${gap})`;

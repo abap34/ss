@@ -4,7 +4,7 @@ const syntax = @import("syntax");
 const testing = std.testing;
 
 const operators = [_][]const u8{ "||", "//", "|=|", "/=/" };
-const gaps = [_][]const u8{ "", " ", "\n", "\n\n", "\n;; generated comment\n\t", "\r\n# generated comment\r\n  " };
+const gaps = [_][]const u8{ "", " ", "\n", "\n\n", "\n;; generated comment\n\t", "\r\n;; generated comment\r\n  " };
 const Node = union(enum) {
     leaf: u8,
     chain: struct { operator: usize, children: []const Node },
@@ -58,7 +58,7 @@ const Printer = struct {
                         try self.append("\"");
                     },
                     2, 3 => {
-                        try self.append(if (style == 2) "text(<<\n" else "text << # generated header\n");
+                        try self.append(if (style == 2) "text(<<\n" else "text << ;; generated header\n");
                         // String contents are not formatting trivia.
                         try self.append(text);
                         try self.append("\n\t>>");

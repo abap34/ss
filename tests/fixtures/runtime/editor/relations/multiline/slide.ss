@@ -9,9 +9,9 @@ let item = text!("Item")
 ~ guide.left == page.left + 100
 ~ guide.top == page.top - 100
 ~ item.left == guide.right
-  # Keep horizontal context.
+  ;; Keep horizontal context.
   + horizontal_gap
 ~ item.bottom == guide.top
-  # Keep vertical context.
+  ;; Keep vertical context.
   - vertical_gap
 end

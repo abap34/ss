@@ -156,7 +156,7 @@ fn/! ultra_big(content: String) -> Object
   return default::h1(content)
 end
 `;
-    const filler = Array.from({ length: 8000 }, (_, index) => `# filler ${index}`).join("\n");
+    const filler = Array.from({ length: 8000 }, (_, index) => `;; filler ${index}`).join("\n");
     const slideSource = `import "./theme" as *
 
 page title

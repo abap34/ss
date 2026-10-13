@@ -316,12 +316,12 @@ module.exports = grammar({
     color_string: _ => /c"[^"]*"/,
     // Only a line-leading delimiter closes the literal. Leave its suffix and
     // newline to the surrounding expression, just like other string literals.
-    block_text: _ => token(seq("<<", /[ \t\r]*(;;[^\n]*|#[^\n]*)?\n([ \t\r]*([^ \t\r>\n][^\n]*|>([^>\n][^\n]*)?)?\n)*[ \t\r]*>>/)),
+    block_text: _ => token(seq("<<", /[ \t\r]*(;;[^\n]*)?\n([ \t\r]*([^ \t\r>\n][^\n]*|>([^>\n][^\n]*)?)?\n)*[ \t\r]*>>/)),
     line_text: _ => token.immediate(/[ \t]+([^ \t|/"(<?\n][^\n]*|\|([^|=\n][^\n]*|=([^|\n][^\n]*)?)?|\/([^/=\n][^\n]*|=([^/\n][^\n]*)?)?|<([^<\n][^\n]*)?|\?([^?\n][^\n]*)?)/),
     _bang_line_text: _ => token.immediate(/[ \t]+([^ \t"(<\n][^\n]*|<([^<\n][^\n]*)?)/),
     number: _ => /\d+(\.\d+)?/,
     boolean: _ => choice("true", "false"),
-    comment: _ => token(choice(/;;[^\n]*/, /#[^\n]*/)),
+    comment: _ => token(/;;[^\n]*/),
     _terminator: _ => /\n+/,
   },
 });

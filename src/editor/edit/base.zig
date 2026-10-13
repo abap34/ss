@@ -71,7 +71,7 @@ pub fn pageBodyIndent(source: []const u8, page_span: ByteSpan, insertion: usize)
         const end = std.mem.indexOfScalarPos(u8, source, cursor, '\n') orelse insertion;
         const line = source[cursor..@min(end, insertion)];
         const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len != 0 and !std.mem.startsWith(u8, trimmed, "#")) return line[0..leadingWhitespace(line)];
+        if (trimmed.len != 0 and utils.source.lineCommentMarkerLength(trimmed, 0) == null) return line[0..leadingWhitespace(line)];
         cursor = @min(end + 1, insertion);
     }
     return "  ";

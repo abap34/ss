@@ -708,7 +708,7 @@ end
       `shape insertion followed an existing constraint: ${edited}`,
     );
 
-    await writeFile(importedPage, `${pageSource}# changed after snapshot\n`, "utf8");
+    await writeFile(importedPage, `${pageSource};; changed after snapshot\n`, "utf8");
     const changedDependency = await client.request("ss/insertShape", {
       textDocument: { uri: importedUri },
       snapshotId: snapshot.snapshot_id,

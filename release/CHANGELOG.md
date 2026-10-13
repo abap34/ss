@@ -4,6 +4,10 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+### Changed
+
+- Removed `#` line comments; use `;;` for comments.
+
 ## [0.8.3] - 2026-10-06
 
 ### Added

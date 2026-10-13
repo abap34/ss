@@ -12,7 +12,7 @@ await mkdir(output, { recursive: true });
 const directory = await mkdtemp(path.join(output, "run-"));
 const file = path.join(directory, "generated.ss");
 const operators = ["||", "//", "|=|", "/=/"];
-const gaps = ["", " ", "\n", "\n\n", "\n;; generated comment\n\t", "\r\n# generated comment\r\n  "];
+const gaps = ["", " ", "\n", "\n\n", "\n;; generated comment\n\t", "\r\n;; generated comment\r\n  "];
 const leaf = (index) => ({ leaf: index });
 const chain = (operator, ...children) => ({ operator, children });
 const trees = [];
@@ -41,7 +41,7 @@ for (const tree of trees) {
             case 0: text = `text(${gap}"${label}"${gap})`; break;
             case 1: text = `text "${label}"`; break;
             case 2: text = `text(<<\n${label}\n>>${gap})`; break;
-            case 3: text = `text << # header\n${label}\n>>`; break;
+            case 3: text = `text << ;; header\n${label}\n>>`; break;
           }
         }
         if (nested && node.children) text = `(${gap}${text}${gap})`;

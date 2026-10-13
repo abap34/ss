@@ -8,7 +8,7 @@ A >> remains text
 B
 >>
     //
-    text << # Caption
+    text << ;; Caption
 C
 >>)
   place!(g)
