@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[3]
 SOURCE = ROOT / "third_party" / "md4c"
 BUILD = ROOT / ".ss-cache" / "md4c"
 

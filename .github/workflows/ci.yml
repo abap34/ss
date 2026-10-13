@@ -133,7 +133,7 @@ jobs:
         run: zig build test
 
       - name: Test bundled MD4C fork
-        run: python3 scripts/test-md4c.py
+        run: python3 third_party/tools/md4c/test.py
 
       - name: Build ss binary
         run: zig build

@@ -5,13 +5,14 @@ Git subtree with squashed imports.
 The initial import preserves the previously bundled 0.5.3 parser sources.
 The fork is <https://github.com/abap34/md4c>, on branch `master`.
 
-The ss manifest is `third_party/md4c-manifest.json`. Its top-level `upstream`,
+The ss maintenance files live under `third_party/tools/md4c/`.
+The manifest is `third_party/tools/md4c/manifest.json`. Its top-level `upstream`,
 `version`, `tag`, and `commit` identify the upstream baseline of the fork.
 `fork.imported_commit` identifies the last fork commit imported by subtree.
 The checksums cover the license and the two parser files compiled by ss,
 including any local edits recorded in ss. Local edits do not change the last
 imported commit. The original vendor description is preserved verbatim in
-`third_party/md4c-origin.md` as a record of the pre-subtree snapshot.
+`third_party/tools/md4c/origin.md` as a record of the pre-subtree snapshot.
 
 Keep ss-specific metadata, tools, and documentation outside the subtree so
 that they are not exported to the fork. Keep imported upstream files,
@@ -25,7 +26,7 @@ Keep MD4C changes and ss integration changes in separate commits where
 practical. Refresh the checksums after editing the parser:
 
 ```sh
-python3 scripts/md4c.py --refresh
+python3 third_party/tools/md4c/metadata.py --refresh
 ```
 
 Run the focused source-packaging check and the upstream MD4C tests from the
@@ -33,7 +34,7 @@ repository root:
 
 ```sh
 python3 tests/release/release_tools_spec.py
-python3 scripts/test-md4c.py
+python3 third_party/tools/md4c/test.py
 ```
 
 The source-archive check uses committed `HEAD`, so run it again after
@@ -55,7 +56,7 @@ Fetch the fork, review the candidate commit, and merge its full object ID:
 ```sh
 git fetch --no-tags md4c-fork master
 git subtree merge --prefix=third_party/md4c --squash <reviewed-fork-commit>
-python3 scripts/md4c.py --refresh
+python3 third_party/tools/md4c/metadata.py --refresh
 ```
 
 Commit the refreshed ss manifest after resolving conflicts and testing.

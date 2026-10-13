@@ -9,8 +9,8 @@ import re
 import subprocess
 
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "third_party" / "md4c-manifest.json"
+ROOT = pathlib.Path(__file__).resolve().parents[3]
+MANIFEST = ROOT / "third_party" / "tools" / "md4c" / "manifest.json"
 PREFIX = "third_party/md4c"
 FILES = ("LICENSE.md", "src/md4c.c", "src/md4c.h")
 
@@ -44,7 +44,7 @@ def validate(manifest, root):
         if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
             raise ValueError("MD4C commits must be full 40-character object IDs")
     if manifest.get("files") != file_entries(root):
-        raise ValueError("MD4C checksums differ; run python3 scripts/md4c.py --refresh")
+        raise ValueError("MD4C checksums differ; run python3 third_party/tools/md4c/metadata.py --refresh")
     if (root / PREFIX / "manifest.json").exists():
         raise ValueError("ss metadata must stay outside the MD4C subtree")
 

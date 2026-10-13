@@ -59,7 +59,7 @@ def test_homebrew_formula_names():
 
 def test_bundled_md4c():
     root = ROOT / "third_party" / "md4c"
-    manifest = json.loads((ROOT / "third_party/md4c-manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((ROOT / "third_party/tools/md4c/manifest.json").read_text(encoding="utf-8"))
     assert_equal(manifest["schema"], 2)
     assert_equal(manifest["integration"], "git-subtree")
     assert_equal(manifest["upstream"], "https://github.com/mity/md4c")
@@ -68,7 +68,7 @@ def test_bundled_md4c():
     assert_equal(manifest["license"], "MIT")
     assert_equal((root / "manifest.json").exists(), False)
 
-    spec = importlib.util.spec_from_file_location("md4c_metadata", ROOT / "scripts/md4c.py")
+    spec = importlib.util.spec_from_file_location("md4c_metadata", ROOT / "third_party/tools/md4c/metadata.py")
     metadata = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(metadata)
     metadata.validate(manifest, ROOT)
@@ -99,10 +99,7 @@ def test_bundled_md4c():
             "--prefix=ss-test/",
             "HEAD",
             "third_party/md4c",
-            "third_party/md4c-manifest.json",
-            "third_party/md4c-maintenance.md",
-            "third_party/md4c-origin.md",
-            "scripts/md4c.py",
+            "third_party/tools/md4c",
         ],
         cwd=ROOT,
         check=True,
@@ -127,10 +124,11 @@ def test_bundled_md4c():
         }
     }
     required.update({
-        "ss-test/third_party/md4c-manifest.json",
-        "ss-test/third_party/md4c-maintenance.md",
-        "ss-test/third_party/md4c-origin.md",
-        "ss-test/scripts/md4c.py",
+        "ss-test/third_party/tools/md4c/manifest.json",
+        "ss-test/third_party/tools/md4c/guide.md",
+        "ss-test/third_party/tools/md4c/origin.md",
+        "ss-test/third_party/tools/md4c/metadata.py",
+        "ss-test/third_party/tools/md4c/test.py",
     })
     assert_equal(required - archived, set())
 
@@ -138,7 +136,7 @@ def test_bundled_md4c():
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
             source.extractall(tmp, filter="data")
         subprocess.run(
-            [sys.executable, str(pathlib.Path(tmp) / "ss-test/scripts/md4c.py"), "--check"],
+            [sys.executable, str(pathlib.Path(tmp) / "ss-test/third_party/tools/md4c/metadata.py"), "--check"],
             cwd=tmp,
             check=True,
             timeout=30,
