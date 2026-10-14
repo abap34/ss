@@ -2229,6 +2229,11 @@ test "retained table geometry matches emitted rows and text baselines" {
     try verifyTableGeometry("| Left | Right |\n| :--- | ---: |\n| _j_ | Several words wrap inside a narrow cell |\n| ![star](fa:star) | last |");
 }
 
+test "annotated table widths match emitted cell positions wrapping and alignment" {
+    try verifyTableGeometry("| Left | Center | Right |\n| :---{60pt} | :---:{1fr} | ---:{2fr} |\n| _j_ | Several words wrap inside a narrow cell | 123 |\n| ![star](fa:star) | last | end |");
+    try verifyTableGeometry("| Name | Value |\n| ---{auto} | ---:{1fr} |\n| Header | Remaining space |");
+}
+
 test "retained table geometry includes inline and display math when TeX is available" {
     if (!try latexEngineAvailable(.pdflatex)) return error.SkipZigTest;
     try verifyTableGeometry("| Text | Math |\n| --- | ---: |\n| before $x$ after | $$x^2 + y^2$$ |\n| last | row |");
@@ -2279,7 +2284,11 @@ fn verifyTableGeometry(source: []const u8) !void {
             if (rectangles == 0) table_top = rect.y;
             try testing.expectApproxEqAbs(table_top + row.top, rect.y, 0.001);
             try testing.expectApproxEqAbs(@as(f64, row.height), rect.height, 0.001);
-            try testing.expectApproxEqAbs(@as(f64, table.column_width), rect.width, 0.001);
+            const column_index = rectangles % table.columns;
+            try testing.expectApproxEqAbs(@as(f64, table.column_widths[column_index]), rect.width, 0.001);
+            var column_left: f64 = table.border_width * 0.5;
+            for (table.column_widths[0..column_index]) |column_width| column_left += column_width;
+            try testing.expectApproxEqAbs(column_left, rect.x, 0.001);
             rectangles += 1;
         } else if (item == .text) {
             if (text_count == 0) {

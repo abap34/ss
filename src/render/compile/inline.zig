@@ -374,6 +374,7 @@ const BlockBuilder = struct {
     ctx: Context,
     text: TextPaint,
     width: f32,
+    wrap: bool = true,
     segments: std.ArrayList(Segment) = .empty,
     height: f32 = 0,
     logical_width: f32 = 0,
@@ -390,7 +391,7 @@ const BlockBuilder = struct {
         defer spans.deinit(allocator);
         errdefer deinitInlineSpans(allocator, spans.items);
         try prepareRunSpans(self.ctx, runs, self.text, &spans);
-        var prepared = try prepareParagraph(self.ctx, spans.items, paragraphPaint(self.text), self.width, true);
+        var prepared = try prepareParagraph(self.ctx, spans.items, paragraphPaint(self.text), self.width, self.wrap);
         errdefer prepared.deinit(allocator);
         try self.segments.ensureUnusedCapacity(allocator, 1);
         const owned_spans = try spans.toOwnedSlice(allocator);
@@ -407,7 +408,7 @@ const BlockBuilder = struct {
         if (source.len == 0) return;
         const asset = try artifacts.renderLatexToPdf(self.ctx.assets, source, self.ctx.latex_preamble, self.ctx.latex_engine, .display_math);
         errdefer allocator.free(asset.path);
-        const size = displayMathBlockSize(asset, self.width, self.text);
+        const size = displayMathBlockSize(asset, if (self.wrap) self.width else std.math.floatMax(f32), self.text);
         const pad = displayMathGap(self.text);
         try self.segments.append(allocator, .{ .top = self.height + pad, .content = .{ .display_math = .{ .asset = asset, .size = size } } });
         include(&self.ink, .{ .x = 0, .y = self.height + pad, .width = size.width, .height = size.height });
@@ -417,7 +418,17 @@ const BlockBuilder = struct {
 };
 
 pub fn prepareBlock(ctx: Context, lines: []const Line, text: TextPaint, width: f32) !PreparedBlock {
-    var builder = BlockBuilder{ .ctx = ctx, .text = text, .width = width };
+    return prepareBlockWithWrap(ctx, lines, text, width, true);
+}
+
+pub fn naturalBlockWidth(ctx: Context, lines: []const Line, text: TextPaint) !f32 {
+    var block = try prepareBlockWithWrap(ctx, lines, text, 0, false);
+    defer block.deinit(ctx.assets.allocator);
+    return block.logical_width;
+}
+
+fn prepareBlockWithWrap(ctx: Context, lines: []const Line, text: TextPaint, width: f32, wrap: bool) !PreparedBlock {
+    var builder = BlockBuilder{ .ctx = ctx, .text = text, .width = width, .wrap = wrap };
     defer builder.deinit();
     for (lines) |line| {
         try std.Io.checkCancel(ctx.assets.io);

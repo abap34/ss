@@ -3010,13 +3010,14 @@ fn drawTable(ctx: *DrawContext, x: f32, top_bl: f32, width: f32, block: *const B
     for (layout.rows) |*row| {
         const fill = if (row.header) text.markdown_table_header_fill else if (text.markdown_table_alt_row_fill != null and body_row_index % 2 == 1) text.markdown_table_alt_row_fill else null;
         if (!row.header) body_row_index += 1;
-        for (0..layout.columns) |column_index| {
-            const cell_x = table_x + @as(f32, @floatFromInt(column_index)) * layout.column_width;
-            try drawRoundedRect(ctx, .{ .x = cell_x, .y = table_top_bl - row.top - row.height, .width = layout.column_width, .height = row.height }, 0, fill, text.markdown_table_border, text.markdown_table_line_width);
+        var cell_x = table_x;
+        for (layout.column_widths, 0..) |column_width, column_index| {
+            try drawRoundedRect(ctx, .{ .x = cell_x, .y = table_top_bl - row.top - row.height, .width = column_width, .height = row.height }, 0, fill, text.markdown_table_border, text.markdown_table_line_width);
             if (column_index < row.cells.len) {
                 const cell = &row.cells[column_index];
-                try drawPreparedInlineBlock(ctx, cell_x + text.markdown_table_cell_pad_x, table_top_bl - row.content_top, layout.content_width, &cell.content, cell.alignment);
+                try drawPreparedInlineBlock(ctx, cell_x + text.markdown_table_cell_pad_x, table_top_bl - row.content_top, layout.contentWidth(column_index), &cell.content, cell.alignment);
             }
+            cell_x += column_width;
         }
     }
     return top_bl - layout.height - layout.border_width;

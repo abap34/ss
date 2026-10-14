@@ -4493,26 +4493,38 @@ abort:
  ***************************/
 
 static void
-md_analyze_table_alignment(MD_CTX* ctx, OFF beg, OFF end, MD_ALIGN* align, int n_align)
+md_analyze_table_columns(MD_CTX* ctx, OFF beg, OFF end, MD_TABLE_COLUMN_DETAIL* columns, int col_count)
 {
     static const MD_ALIGN align_map[] = { MD_ALIGN_DEFAULT, MD_ALIGN_LEFT, MD_ALIGN_RIGHT, MD_ALIGN_CENTER };
     OFF off = beg;
 
-    while(n_align > 0) {
+    while(col_count > 0) {
         int index = 0;  /* index into align_map[] */
 
-        while(CH(off) != _T('-'))
+        while(off < end  &&  CH(off) != _T('-'))
             off++;
         if(off > beg  &&  CH(off-1) == _T(':'))
             index |= 1;
         while(off < end  &&  CH(off) == _T('-'))
             off++;
-        if(off < end  &&  CH(off) == _T(':'))
+        if(off < end  &&  CH(off) == _T(':')) {
             index |= 2;
+            off++;
+        }
 
-        *align = align_map[index];
-        align++;
-        n_align--;
+        columns->align = align_map[index];
+        columns->width = NULL;
+        columns->width_size = 0;
+        if(off < end  &&  CH(off) == _T('{')) {
+            OFF width_beg = ++off;
+            while(off < end  &&  CH(off) != _T('}'))
+                off++;
+            columns->width = STR(width_beg);
+            columns->width_size = off - width_beg;
+            off++;
+        }
+        columns++;
+        col_count--;
     }
 
 }
@@ -4546,7 +4558,7 @@ abort:
 
 static int
 md_process_table_row(MD_CTX* ctx, MD_BLOCKTYPE cell_type, OFF beg, OFF end,
-                     const MD_ALIGN* align, int col_count)
+                     const MD_TABLE_COLUMN_DETAIL* columns, int col_count)
 {
     MD_LINE line;
     OFF* pipe_offs = NULL;
@@ -4582,12 +4594,12 @@ md_process_table_row(MD_CTX* ctx, MD_BLOCKTYPE cell_type, OFF beg, OFF end,
     k = 0;
     for(i = 0; i < j-1  &&  k < col_count; i++) {
         if(pipe_offs[i] < pipe_offs[i+1]-1)
-            MD_CHECK(md_process_table_cell(ctx, cell_type, align[k++], pipe_offs[i], pipe_offs[i+1]-1));
+            MD_CHECK(md_process_table_cell(ctx, cell_type, columns[k++].align, pipe_offs[i], pipe_offs[i+1]-1));
     }
     /* Make sure we call enough table cells even if the current table contains
      * too few of them. */
     while(k < col_count)
-        MD_CHECK(md_process_table_cell(ctx, cell_type, align[k++], 0, 0));
+        MD_CHECK(md_process_table_cell(ctx, cell_type, columns[k++].align, 0, 0));
     MD_LEAVE_BLOCK(MD_BLOCK_TR, NULL);
 
 abort:
@@ -4600,9 +4612,9 @@ abort:
 }
 
 static int
-md_process_table_block_contents(MD_CTX* ctx, int col_count, const MD_LINE* lines, MD_SIZE n_lines)
+md_process_table_block_contents(MD_CTX* ctx, const MD_TABLE_COLUMN_DETAIL* columns,
+                               int col_count, const MD_LINE* lines, MD_SIZE n_lines)
 {
-    MD_ALIGN* align;
     MD_SIZE line_index;
     int ret = 0;
 
@@ -4610,31 +4622,21 @@ md_process_table_block_contents(MD_CTX* ctx, int col_count, const MD_LINE* lines
      * with the underlines. */
     MD_ASSERT(n_lines >= 2);
 
-    align = malloc(col_count * sizeof(MD_ALIGN));
-    if(align == NULL) {
-        MD_LOG("malloc() failed.");
-        ret = -1;
-        goto abort;
-    }
-
-    md_analyze_table_alignment(ctx, lines[1].beg, lines[1].end, align, col_count);
-
     MD_ENTER_BLOCK(MD_BLOCK_THEAD, NULL);
     MD_CHECK(md_process_table_row(ctx, MD_BLOCK_TH,
-                        lines[0].beg, lines[0].end, align, col_count));
+                        lines[0].beg, lines[0].end, columns, col_count));
     MD_LEAVE_BLOCK(MD_BLOCK_THEAD, NULL);
 
     if(n_lines > 2) {
         MD_ENTER_BLOCK(MD_BLOCK_TBODY, NULL);
         for(line_index = 2; line_index < n_lines; line_index++) {
             MD_CHECK(md_process_table_row(ctx, MD_BLOCK_TD,
-                     lines[line_index].beg, lines[line_index].end, align, col_count));
+                     lines[line_index].beg, lines[line_index].end, columns, col_count));
         }
         MD_LEAVE_BLOCK(MD_BLOCK_TBODY, NULL);
     }
 
 abort:
-    free(align);
     return ret;
 }
 
@@ -4803,6 +4805,7 @@ md_process_leaf_block(MD_CTX* ctx, const MD_BLOCK* block)
     } det;
     MD_ATTRIBUTE_BUILD info_build = { 0 };
     MD_ATTRIBUTE_BUILD lang_build = { 0 };
+    MD_TABLE_COLUMN_DETAIL* table_columns = NULL;
     int is_in_tight_list;
     int clean_fence_code_detail = FALSE;
     int ret = 0;
@@ -4832,6 +4835,18 @@ md_process_leaf_block(MD_CTX* ctx, const MD_BLOCK* block)
             det.table.col_count = block->data;
             det.table.head_row_count = 1;
             det.table.body_row_count = block->n_lines - 2;
+            table_columns = malloc(block->data * sizeof(MD_TABLE_COLUMN_DETAIL));
+            if(table_columns == NULL) {
+                MD_LOG("malloc() failed.");
+                ret = -1;
+                goto abort;
+            }
+            {
+                const MD_LINE* lines = (const MD_LINE*)(block + 1);
+                md_analyze_table_columns(ctx, lines[1].beg, lines[1].end,
+                                         table_columns, block->data);
+            }
+            det.table.columns = table_columns;
             break;
 
         default:
@@ -4859,7 +4874,7 @@ md_process_leaf_block(MD_CTX* ctx, const MD_BLOCK* block)
             break;
 
         case MD_BLOCK_TABLE:
-            MD_CHECK(md_process_table_block_contents(ctx, block->data,
+            MD_CHECK(md_process_table_block_contents(ctx, table_columns, block->data,
                             (const MD_LINE*)(block + 1), block->n_lines));
             break;
 
@@ -4873,6 +4888,7 @@ md_process_leaf_block(MD_CTX* ctx, const MD_BLOCK* block)
         MD_LEAVE_BLOCK(block->type, (void*) &det);
 
 abort:
+    free(table_columns);
     if(clean_fence_code_detail) {
         md_free_attribute(ctx, &info_build);
         md_free_attribute(ctx, &lang_build);
@@ -5301,6 +5317,19 @@ md_is_table_underline(MD_CTX* ctx, OFF beg, OFF* p_end, unsigned* p_col_count)
             off++;
         if(off < ctx->size  &&  CH(off) == _T(':'))
             off++;
+
+        if((ctx->parser.flags & MD_FLAG_TABLECOLUMNWIDTHS)  &&
+           off < ctx->size  &&  CH(off) == _T('{')) {
+            off++;
+            while(off < ctx->size  &&  CH(off) != _T('}')) {
+                if(ISNEWLINE(off)  ||  CH(off) == _T('|')  ||  CH(off) == _T('{'))
+                    return FALSE;
+                off++;
+            }
+            if(off >= ctx->size)
+                return FALSE;
+            off++;
+        }
 
         col_count++;
         if(col_count > TABLE_MAXCOLCOUNT) {

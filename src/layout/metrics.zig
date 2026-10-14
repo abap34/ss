@@ -336,14 +336,31 @@ fn markdownTableHeight(state: *Workspace, cache: ?*MeasurementCache, style: Text
     const pad_x = markdownTableCellPadX(style);
     const pad_y = markdownTableCellPadY(style);
     const line_width = style.markdown_table_line_width;
-    const cell_width = @max(@as(f32, 1.0), max_width / @as(f32, @floatFromInt(columns)));
-    const content_width = @max(@as(f32, 1.0), cell_width - 2.0 * pad_x);
+    const widths = state.allocator.alloc(f32, columns) catch return style.line_height;
+    defer state.allocator.free(widths);
+    const natural_widths = state.allocator.alloc(f32, columns) catch return style.line_height;
+    defer state.allocator.free(natural_widths);
+    @memset(natural_widths, 0);
+    for (table.rows.items) |row| {
+        var cell_style = style;
+        cell_style.font = if (row.header) style.bold_font else style.font;
+        for (row.cells.items, 0..) |cell, index| {
+            if (table.columnWidth(index) != .auto) continue;
+            const natural = markdownParagraphNaturalWidth(state, cache, cell_style, cell.lines.items) orelse max_width;
+            natural_widths[index] = @max(natural_widths[index], natural + 2 * pad_x);
+        }
+    }
+    const border_width = if (style.markdown_table_border != null and line_width > 0) line_width else 0;
+    markdown.resolveTableColumnWidths(table, @max(max_width - border_width, 1), natural_widths, widths);
 
     var total: f32 = line_width;
     for (table.rows.items) |row| {
         var row_content_height = style.line_height;
-        for (row.cells.items) |cell| {
-            row_content_height = @max(row_content_height, markdownLinesHeight(state, cache, style, cell.lines.items, content_width));
+        var cell_style = style;
+        cell_style.font = if (row.header) style.bold_font else style.font;
+        for (row.cells.items, 0..) |cell, index| {
+            const content_width = @max(widths[index] - 2 * pad_x, 1);
+            row_content_height = @max(row_content_height, markdownLinesHeight(state, cache, cell_style, cell.lines.items, content_width));
         }
         total += row_content_height + 2.0 * pad_y + line_width;
     }

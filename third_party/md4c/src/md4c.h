@@ -268,11 +268,21 @@ typedef struct MD_BLOCK_CODE_DETAIL {
     MD_CHAR fence_char;     /* The character used for fenced code block; or zero for indented code block. */
 } MD_BLOCK_CODE_DETAIL;
 
+/* Column metadata for MD_BLOCK_TABLE. Width is an unparsed slice of the input,
+ * without braces, or NULL when omitted. Width annotations require
+ * MD_FLAG_TABLECOLUMNWIDTHS. The application defines the width value syntax. */
+typedef struct MD_TABLE_COLUMN_DETAIL {
+    MD_ALIGN align;
+    const MD_CHAR* width;
+    MD_SIZE width_size;
+} MD_TABLE_COLUMN_DETAIL;
+
 /* Detailed info for MD_BLOCK_TABLE. */
 typedef struct MD_BLOCK_TABLE_DETAIL {
     unsigned col_count;         /* Count of columns in the table. */
     unsigned head_row_count;    /* Count of rows in the table header (currently always 1) */
     unsigned body_row_count;    /* Count of rows in the table body */
+    const MD_TABLE_COLUMN_DETAIL* columns; /* col_count entries, valid during table callbacks. */
 } MD_BLOCK_TABLE_DETAIL;
 
 /* Detailed info for MD_BLOCK_TH and MD_BLOCK_TD. */
@@ -318,6 +328,7 @@ typedef struct MD_SPAN_WIKILINK {
 #define MD_FLAG_WIKILINKS                   0x2000  /* Enable wiki links extension. */
 #define MD_FLAG_UNDERLINE                   0x4000  /* Enable underline extension (and disables '_' for normal emphasis). */
 #define MD_FLAG_HARD_SOFT_BREAKS            0x8000  /* Force all soft breaks to act as hard breaks. */
+#define MD_FLAG_TABLECOLUMNWIDTHS         0x10000  /* Allow column width annotations: | ---{100pt} | ---{1fr} | */
 
 #define MD_FLAG_PERMISSIVEAUTOLINKS         (MD_FLAG_PERMISSIVEEMAILAUTOLINKS | MD_FLAG_PERMISSIVEURLAUTOLINKS | MD_FLAG_PERMISSIVEWWWAUTOLINKS)
 #define MD_FLAG_NOHTML                      (MD_FLAG_NOHTMLBLOCKS | MD_FLAG_NOHTMLSPANS)

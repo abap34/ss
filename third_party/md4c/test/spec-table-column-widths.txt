@@ -1,0 +1,124 @@
+# Table column width annotations
+
+MD_FLAG_TABLECOLUMNWIDTHS allows an annotation immediately after each separator
+cell, including its optional alignment colon. Width tokens are exposed through
+MD_BLOCK_TABLE_DETAIL.columns; consumers interpret their values. The HTML
+renderer preserves table structure and alignment without applying widths.
+
+```````````````````````````````` example
+| Name | Description | Notes |
+| ---{100pt} | ---{1fr} | ---{2fr} |
+| A | Example | Memo |
+.
+<table>
+<thead>
+<tr><th>Name</th><th>Description</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td>A</td><td>Example</td><td>Memo</td></tr>
+</tbody>
+</table>
+.
+--ftable-column-widths
+````````````````````````````````
+
+The extension is opt-in and is not enabled by MD_FLAG_TABLES alone.
+
+```````````````````````````````` example
+| A | B |
+| ---{100pt} | ---{1fr} |
+.
+<p>| A | B |
+| ---{100pt} | ---{1fr} |</p>
+.
+--ftables
+````````````````````````````````
+
+Alignment and omitted annotations work together, with optional outer pipes.
+
+```````````````````````````````` example
+Left | Center | Right
+:---{ 100pt } | :---:{auto} | ---:
+a | b | c
+.
+<table>
+<thead>
+<tr><th align="left">Left</th><th align="center">Center</th><th align="right">Right</th></tr>
+</thead>
+<tbody>
+<tr><td align="left">a</td><td align="center">b</td><td align="right">c</td></tr>
+</tbody>
+</table>
+.
+--ftable-column-widths
+````````````````````````````````
+
+Tokens are opaque to MD4C, even when they contain a dash or are empty.
+
+```````````````````````````````` example
+| A | B |
+| ---{custom-width} | ---:{} |
+.
+<table>
+<thead>
+<tr><th>A</th><th align="right">B</th></tr>
+</thead>
+</table>
+.
+--ftable-column-widths
+````````````````````````````````
+
+Nested tables retain their annotations and fill missing cells.
+
+```````````````````````````````` example
+> | A | B |
+> | ---{auto} | ---{2fr} |
+> | x |
+.
+<blockquote>
+<table>
+<thead>
+<tr><th>A</th><th>B</th></tr>
+</thead>
+<tbody>
+<tr><td>x</td><td></td></tr>
+</tbody>
+</table>
+</blockquote>
+.
+--ftable-column-widths
+````````````````````````````````
+
+An annotation must close on the same line and cannot contain a pipe or brace.
+
+```````````````````````````````` example
+| A | B |
+| ---{100pt | ---{1fr} |
+.
+<p>| A | B |
+| ---{100pt | ---{1fr} |</p>
+.
+--ftable-column-widths
+````````````````````````````````
+
+```````````````````````````````` example
+| A | B |
+| ---{100pt
+} | ---{1fr} |
+.
+<p>| A | B |
+| ---{100pt
+} | ---{1fr} |</p>
+.
+--ftable-column-widths
+````````````````````````````````
+
+```````````````````````````````` example
+| A | B |
+| ---{{100pt}} | ---{1fr} |
+.
+<p>| A | B |
+| ---{{100pt}} | ---{1fr} |</p>
+.
+--ftable-column-widths
+````````````````````````````````

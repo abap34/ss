@@ -31,7 +31,7 @@ test "table rows contain wrapped cell ink and decoration overhangs" {
     var layout = try table_layout.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/test-table-layout" } }, document.blocks.items[0].table.?, paint(), 302);
     defer layout.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 3), layout.columns);
-    try testing.expectEqual(@as(f32, 100), layout.column_width);
+    try testing.expectEqualSlices(f32, &.{ 100, 100, 100 }, layout.column_widths);
     try testing.expectEqual(.center, layout.rows[1].cells[1].alignment);
     try testing.expectEqual(.right, layout.rows[1].cells[2].alignment);
     try testing.expect(layout.rows[1].cells[1].content.height > 20);
@@ -67,8 +67,34 @@ test "table layouts retain shared native paragraphs after cache teardown" {
     }
 }
 
+test "fixed and fractional table columns control wrapping and alignment" {
+    var document = try core.markdown.parseMarkdownContent(testing.allocator, "| Left | Center | Right |\n| :---{60pt} | :---:{1fr} | ---:{2fr} |\n| Several words wrap here | Short | Longer content has more space |");
+    defer document.deinit();
+    var layout = try table_layout.prepare(.{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/test-table-layout" } }, document.blocks.items[0].table.?, paint(), 302);
+    defer layout.deinit(testing.allocator);
+    try testing.expectEqualSlices(f32, &.{ 60, 80, 160 }, layout.column_widths);
+    try testing.expectEqual(@as(f32, 50), layout.contentWidth(0));
+    try testing.expectEqual(.center, layout.rows[1].cells[1].alignment);
+    try testing.expectEqual(.right, layout.rows[1].cells[2].alignment);
+    try testing.expect(layout.rows[1].cells[0].content.height > layout.rows[1].cells[1].content.height);
+}
+
+test "automatic table columns measure headers formatted text and icons before fractions" {
+    var document = try core.markdown.parseMarkdownContent(testing.allocator, "| Wide heading | Value |\n| ---{auto} | ---{1fr} |\n| ![star](fa:star) **bold** | Several words wrap in the remaining space |");
+    defer document.deinit();
+    const ctx: table_layout.Context = .{ .assets = .{ .allocator = testing.allocator, .io = testing.io, .asset_base_dir = ".", .cache_dir = ".ss-cache/test-table-layout" } };
+    try std.Io.Dir.cwd().createDirPath(testing.io, ctx.assets.cache_dir);
+    var layout = try table_layout.prepare(ctx, document.blocks.items[0].table.?, paint(), 602);
+    defer layout.deinit(testing.allocator);
+    try testing.expect(layout.column_widths[0] > 100);
+    try testing.expect(layout.column_widths[0] < 300);
+    try testing.expectApproxEqAbs(@as(f32, 600), layout.column_widths[0] + layout.column_widths[1], 0.001);
+    try testing.expectApproxEqAbs(layout.column_widths[0], layout.rows[0].cells[0].content.logical_width + 10, 0.001);
+    try testing.expect(layout.rows[1].cells[0].content.logical_width <= layout.contentWidth(0));
+}
+
 test "table preparation releases partially prepared rows through allocation failures" {
-    var document = try core.markdown.parseMarkdownContent(testing.allocator, "| a | b |\n| --- | --- |\n| _j_ | **text** |");
+    var document = try core.markdown.parseMarkdownContent(testing.allocator, "| a | b |\n| ---{auto} | ---{1fr} |\n| _j_ | **text** |");
     defer document.deinit();
     try allocation_testing.checkAllAllocationFailures(testing.allocator, prepareTable, .{document.blocks.items[0].table.?});
 }
@@ -90,7 +116,7 @@ const CancellationProbe = struct {
 };
 
 test "table preparation releases retained cells at each cancellation boundary" {
-    var document = try core.markdown.parseMarkdownContent(testing.allocator, "| a | b |\n| --- | --- |\n| first | second |\n| third | fourth |");
+    var document = try core.markdown.parseMarkdownContent(testing.allocator, "| a | b |\n| ---{auto} | ---{1fr} |\n| first | second |\n| third | fourth |");
     defer document.deinit();
     var vtable = testing.io.vtable.*;
     vtable.checkCancel = CancellationProbe.check;

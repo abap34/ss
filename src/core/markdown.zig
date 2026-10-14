@@ -10,6 +10,7 @@ const markdown_flags = c.MD_DIALECT_GITHUB |
     c.MD_FLAG_LATEXMATHSPANS |
     c.MD_FLAG_TASKLISTS |
     c.MD_FLAG_UNDERLINE |
+    c.MD_FLAG_TABLECOLUMNWIDTHS |
     c.MD_FLAG_NOHTML |
     c.MD_FLAG_NOINDENTEDCODEBLOCKS;
 
@@ -111,9 +112,20 @@ pub const TableRow = struct {
     cells: std.ArrayList(*TableCell) = .empty,
 };
 
+pub const TableColumnWidth = union(enum) {
+    auto,
+    fixed: f32,
+    fraction: f32,
+};
+
 pub const TableData = struct {
     columns: usize = 0,
+    column_widths: []const TableColumnWidth = &.{},
     rows: std.ArrayList(*TableRow) = .empty,
+
+    pub fn columnWidth(self: TableData, index: usize) TableColumnWidth {
+        return if (index < self.column_widths.len) self.column_widths[index] else .{ .fraction = 1 };
+    }
 };
 
 pub fn tableColumnCount(table: TableData) usize {
@@ -122,6 +134,67 @@ pub fn tableColumnCount(table: TableData) usize {
         columns = @max(columns, row.cells.items.len);
     }
     return @max(@as(usize, 1), columns);
+}
+
+/// Fixed columns keep their sizes. Auto columns fit their contents within a
+/// fair share of the remaining space, then fractional columns divide the rest.
+pub fn resolveTableColumnWidths(table: TableData, available_width: f32, natural_widths: []const f32, widths: []f32) void {
+    std.debug.assert(natural_widths.len == widths.len);
+    var remaining: f64 = @max(available_width, 0);
+    var fractions: f64 = 0;
+    var auto_count: usize = 0;
+    for (widths, 0..) |*width, index| switch (table.columnWidth(index)) {
+        .fixed => |value| {
+            width.* = value;
+            remaining -= value;
+        },
+        .fraction => |value| {
+            width.* = 0;
+            fractions += value;
+        },
+        .auto => {
+            width.* = -1;
+            auto_count += 1;
+        },
+    };
+    remaining = @max(remaining, 0);
+    while (auto_count > 0) {
+        const share = remaining / @as(f64, @floatFromInt(auto_count));
+        var settled: usize = 0;
+        for (widths, natural_widths) |*width, natural| {
+            if (width.* != -1 or natural > share) continue;
+            width.* = @max(natural, 0);
+            remaining = @max(remaining - width.*, 0);
+            settled += 1;
+        }
+        if (settled == 0) {
+            for (widths) |*width| if (width.* == -1) {
+                width.* = @floatCast(share);
+            };
+            remaining = 0;
+            break;
+        }
+        auto_count -= settled;
+    }
+    if (fractions > 0) {
+        for (widths, 0..) |*width, index| switch (table.columnWidth(index)) {
+            .fraction => |value| width.* = @floatCast(remaining * (@as(f64, value) / fractions)),
+            else => {},
+        };
+    }
+}
+
+fn parseTableColumnWidth(raw: []const u8) !TableColumnWidth {
+    const token = std.mem.trim(u8, raw, " \t");
+    if (std.mem.eql(u8, token, "auto")) return .auto;
+    if (token.len <= 2) return error.InvalidMarkdownTableColumnWidth;
+    const unit = token[token.len - 2 ..];
+    if (!std.mem.eql(u8, unit, "pt") and !std.mem.eql(u8, unit, "fr")) return error.InvalidMarkdownTableColumnWidth;
+    const number = token[0 .. token.len - 2];
+    for (number) |ch| if (!std.ascii.isDigit(ch) and ch != '.') return error.InvalidMarkdownTableColumnWidth;
+    const value = std.fmt.parseFloat(f32, number) catch return error.InvalidMarkdownTableColumnWidth;
+    if (!std.math.isFinite(value) or value <= 0) return error.InvalidMarkdownTableColumnWidth;
+    return if (std.mem.eql(u8, unit, "pt")) .{ .fixed = value } else .{ .fraction = value };
 }
 
 pub const Block = struct {
@@ -555,6 +628,15 @@ fn enterBlock(
             if (detail) |ptr| {
                 const table_detail: *const c.MD_BLOCK_TABLE_DETAIL = @ptrCast(@alignCast(ptr));
                 block.table.?.columns = @intCast(table_detail.col_count);
+                const widths = state.arenaAllocator().alloc(TableColumnWidth, table_detail.col_count) catch |err| return callbackFailure(state, err);
+                for (widths, 0..) |*width, index| {
+                    const column = table_detail.columns[index];
+                    width.* = if (column.width != null)
+                        parseTableColumnWidth(column.width[0..column.width_size]) catch |err| return callbackFailure(state, err)
+                    else
+                        .{ .fraction = 1 };
+                }
+                block.table.?.column_widths = widths;
             }
             state.appendBlock(block) catch |err| return callbackFailure(state, err);
             state.current_table = &block.table.?;

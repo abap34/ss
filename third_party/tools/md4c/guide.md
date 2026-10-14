@@ -43,6 +43,35 @@ The MD4C runner requires CMake and a C compiler. It creates its build directory
 under `.ss-cache/md4c/`, runs every upstream suite and the pathological-input
 tests, and is also registered in ss CI.
 
+## Table column widths
+
+The fork adds the opt-in `MD_FLAG_TABLECOLUMNWIDTHS` flag alongside
+`MD_FLAG_TABLES`. It recognizes braces immediately after a separator cell and
+exposes the unparsed annotation through `MD_BLOCK_TABLE_DETAIL.columns`.
+The application interprets width values; MD4C's HTML renderer only preserves
+the table structure and alignment.
+
+ss enables this extension for block Markdown:
+
+```markdown
+| Name | Description | Notes |
+| ---{100pt} | ---{1fr} | ---{2fr} |
+| Alpha | Example | Additional information |
+```
+
+`pt` specifies the column width, including horizontal cell padding. `fr`
+divides the space remaining after fixed and automatic columns according to
+its weight. `auto` measures the widest cell, including the header, and wraps
+content when the available space is insufficient. Numeric values must be
+positive and finite; decimal values are supported. An omitted annotation is
+equivalent to `1fr`. Fixed widths are preserved even if they exceed the table's
+available width.
+
+Alignment remains part of the separator: `:---{100pt}` is left-aligned,
+`---:{1fr}` is right-aligned, and `:---:{auto}` is centered. Malformed braces
+leave the row as ordinary Markdown; a closed annotation with an unsupported
+unit or value is an error in ss.
+
 ## Importing a fork update
 
 Git remotes are local configuration. Each new clone needs this once:

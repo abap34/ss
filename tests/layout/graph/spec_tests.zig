@@ -2694,6 +2694,28 @@ test "layout metrics include markdown quote padding" {
     try expectFloat(24, padded_height - compact_height);
 }
 
+test "layout metrics wrap Markdown cells using annotated column widths" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    var state_layout = LayoutFixture.init(&state);
+    defer state_layout.deinit();
+
+    const page = try state.addPage("Page");
+    const narrow = try state.makeObject(page, "narrow", null, .text, .text, "| Name | Value |\n| ---{75pt} | ---{1fr} |\n| Several words wrap inside the first column | 123 |");
+    const wide = try state.makeObject(page, "wide", null, .text, .text, "| Name | Value |\n| ---{300pt} | ---{1fr} |\n| Several words wrap inside the first column | 123 |");
+    for ([_]model.NodeId{ narrow, wide }) |object| {
+        try setLayoutWrap(&state, object, "on");
+        try setTextParse(&state, object, "block");
+        try setTextFontFamily(&state, object, "Helvetica");
+        try setTextSize(&state, object, "20");
+        try setTextLineHeight(&state, object, "24");
+        (try state_layout.frame(object)).*.width = 600;
+    }
+    const narrow_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(narrow).?, (try state_layout.frame(narrow)).*);
+    const wide_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(wide).?, (try state_layout.frame(wide)).*);
+    try testing.expect(narrow_height > wide_height);
+}
+
 test "render policy: markdown headings resolve their own text paint" {
     var state = try initEmptyDocumentState();
     defer state.deinit();

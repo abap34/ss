@@ -44,6 +44,78 @@ test "core markdown spec: table column count expands to widest row" {
     try testing.expectEqual(@as(usize, 3), markdown.tableColumnCount(table));
 }
 
+test "table separator widths preserve alignment and decimal lengths" {
+    var doc = try markdown.parseMarkdownContent(testing.allocator,
+        \\| Name | Description | Notes | Extra |
+        \\| :---{100.5pt} | :---:{1fr} | ---:{ 2.5fr } | ---{auto} |
+        \\| A | Example | Memo | Value |
+    );
+    defer doc.deinit();
+    const table = doc.blocks.items[0].table.?;
+    try testing.expectEqual(@as(f32, 100.5), table.column_widths[0].fixed);
+    try testing.expectEqual(@as(f32, 1), table.column_widths[1].fraction);
+    try testing.expectEqual(@as(f32, 2.5), table.column_widths[2].fraction);
+    try testing.expectEqual(markdown.TableColumnWidth.auto, table.column_widths[3]);
+    for (table.rows.items) |row| {
+        try testing.expectEqual(markdown.Align.left, row.cells.items[0].alignment);
+        try testing.expectEqual(markdown.Align.center, row.cells.items[1].alignment);
+        try testing.expectEqual(markdown.Align.right, row.cells.items[2].alignment);
+    }
+}
+
+test "table widths support omitted annotations optional pipes and nested tables" {
+    var doc = try markdown.parseMarkdownContent(testing.allocator,
+        \\> Name | Description | Notes
+        \\> ---{100pt} | --- | ---{2fr}
+        \\> A | Example
+    );
+    defer doc.deinit();
+    const table = doc.blocks.items[0].quote.?.blocks.items[0].table.?;
+    try testing.expectEqual(@as(f32, 100), table.column_widths[0].fixed);
+    try testing.expectEqual(@as(f32, 1), table.column_widths[1].fraction);
+    try testing.expectEqual(@as(f32, 2), table.column_widths[2].fraction);
+    try testing.expectEqual(@as(usize, 3), table.rows.items[1].cells.items.len);
+}
+
+test "table widths reject invalid units nonpositive values and nonfinite lengths" {
+    for ([_][]const u8{ "", "pt", "0pt", "-1pt", "0fr", "1px", "25%", "nanpt", "infpt", "1.2.3pt", "1 pt", "9999999999999999999999999999999999999999999pt" }) |token| {
+        const source = try std.fmt.allocPrint(testing.allocator, "| A | B |\n| ---{{{s}}} | --- |", .{token});
+        defer testing.allocator.free(source);
+        try testing.expectError(error.InvalidMarkdownTableColumnWidth, markdown.parseMarkdownContent(testing.allocator, source));
+    }
+}
+
+test "unclosed table width annotations remain ordinary Markdown" {
+    var doc = try markdown.parseMarkdownContent(testing.allocator, "| A | B |\n| ---{100pt | --- |\n| x | y |");
+    defer doc.deinit();
+    try testing.expectEqual(markdown.BlockKind.paragraph, doc.blocks.items[0].kind);
+}
+
+test "table widths divide remaining space after fixed and automatic columns" {
+    const table = markdown.TableData{ .column_widths = &.{ .{ .fixed = 100 }, .auto, .{ .fraction = 1 }, .{ .fraction = 2 } } };
+    var widths: [4]f32 = undefined;
+    markdown.resolveTableColumnWidths(table, 500, &.{ 0, 40, 0, 0 }, &widths);
+    try testing.expectEqualSlices(f32, &.{ 100, 40, 120, 240 }, &widths);
+}
+
+test "automatic table widths redistribute unused shares and constrain large contents" {
+    const table = markdown.TableData{ .column_widths = &.{ .auto, .auto, .auto } };
+    var widths: [3]f32 = undefined;
+    markdown.resolveTableColumnWidths(table, 300, &.{ 30, 1000, 1000 }, &widths);
+    try testing.expectEqualSlices(f32, &.{ 30, 135, 135 }, &widths);
+    markdown.resolveTableColumnWidths(table, 300, &.{ 30, 50, 70 }, &widths);
+    try testing.expectEqualSlices(f32, &.{ 30, 50, 70 }, &widths);
+}
+
+test "fixed table widths preserve overflow and omitted widths share remaining space" {
+    const table = markdown.TableData{ .column_widths = &.{.{ .fixed = 100 }} };
+    var widths: [3]f32 = undefined;
+    markdown.resolveTableColumnWidths(table, 300, &.{ 0, 0, 0 }, &widths);
+    try testing.expectEqualSlices(f32, &.{ 100, 100, 100 }, &widths);
+    markdown.resolveTableColumnWidths(table, 50, &.{ 0, 0, 0 }, &widths);
+    try testing.expectEqualSlices(f32, &.{ 100, 0, 0 }, &widths);
+}
+
 test "core markdown spec: links preserve target URLs on link runs" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -256,7 +328,7 @@ fn parseBlocksWithAllocator(allocator: std.mem.Allocator) !void {
         \\const n = 1;
         \\~~~
         \\| Left | Right |
-        \\| :--- | ---: |
+        \\| :---{auto} | ---:{2fr} |
         \\| A | B |
     );
     defer doc.deinit();
