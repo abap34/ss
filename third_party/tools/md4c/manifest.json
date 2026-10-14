@@ -12,11 +12,11 @@
     },
     {
       "path": "src/md4c.c",
-      "sha256": "030c043e502e48bb8db07a64351bf98f1d8e8870c8bee5ab83a40d277d31dc77"
+      "sha256": "79fd26774b57e7d320ab2f40d8339d079dcdfe840613cbaf6213e01b1725037a"
     },
     {
       "path": "src/md4c.h",
-      "sha256": "755bafea1aa1c8c5025afd889b18f857ab41dd073942f411f08879f9d63b6742"
+      "sha256": "f951a0268bee98ee7d34a253ed66ea7bf0267f315e13d4949ac66294346d847d"
     }
   ],
   "integration": "git-subtree",

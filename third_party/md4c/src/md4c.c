@@ -198,7 +198,7 @@ struct MD_CTX_tag {
 #endif
 
     /* For resolving of inline spans. */
-    MD_MARKSTACK opener_stacks[16];
+    MD_MARKSTACK opener_stacks[17];
 #define ASTERISK_OPENERS_oo_mod3_0      (ctx->opener_stacks[0])     /* Opener-only */
 #define ASTERISK_OPENERS_oo_mod3_1      (ctx->opener_stacks[1])
 #define ASTERISK_OPENERS_oo_mod3_2      (ctx->opener_stacks[2])
@@ -215,6 +215,7 @@ struct MD_CTX_tag {
 #define TILDE_OPENERS_2                 (ctx->opener_stacks[13])
 #define BRACKET_OPENERS                 (ctx->opener_stacks[14])
 #define DOLLAR_OPENERS                  (ctx->opener_stacks[15])
+#define EQUAL_OPENERS                   (ctx->opener_stacks[16])
 
     /* Stack of dummies which need to call free() for pointers stored in them.
      * These are constructed during inline parsing and freed after all the block
@@ -2502,6 +2503,7 @@ md_free_ref_defs(MD_CTX* ctx)
  *  '*': Maybe (strong) emphasis start/end.
  *  '_': Maybe (strong) emphasis start/end.
  *  '~': Maybe strikethrough start/end (needs MD_FLAG_STRIKETHROUGH).
+ *  '=': Maybe highlight start/end (needs MD_FLAG_MARK).
  *  '`': Maybe code span start/end.
  *  '&': Maybe start of entity.
  *  ';': Maybe end of entity.
@@ -2597,6 +2599,7 @@ md_opener_stack(MD_CTX* ctx, int mark_index)
         case _T('_'):   return md_emph_stack(ctx, mark->ch, mark->flags);
 
         case _T('~'):   return (mark->end - mark->beg == 1) ? &TILDE_OPENERS_1 : &TILDE_OPENERS_2;
+        case _T('='):   return &EQUAL_OPENERS;
 
         case _T('!'):
         case _T('['):   return &BRACKET_OPENERS;
@@ -2738,6 +2741,9 @@ md_build_mark_char_map(MD_CTX* ctx)
 
     if(ctx->parser.flags & MD_FLAG_STRIKETHROUGH)
         ctx->mark_char_map['~'] = 1;
+
+    if(ctx->parser.flags & MD_FLAG_MARK)
+        ctx->mark_char_map['='] = 1;
 
     if(ctx->parser.flags & MD_FLAG_LATEXMATHSPANS)
         ctx->mark_char_map['$'] = 1;
@@ -3286,6 +3292,26 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                 continue;
             }
 
+            /* Highlight requires exactly two equals signs and non-whitespace
+             * just inside each delimiter. Intraword highlights are allowed. */
+            if(ch == _T('=')) {
+                OFF tmp = off+1;
+                unsigned flags = 0;
+
+                while(tmp < line->end && CH(tmp) == ch)
+                    tmp++;
+                if(tmp - off == 2) {
+                    if(tmp < line->end && !ISUNICODEWHITESPACE(tmp))
+                        flags |= MD_MARK_POTENTIAL_OPENER;
+                    if(off > line->beg && !ISUNICODEWHITESPACEBEFORE(off))
+                        flags |= MD_MARK_POTENTIAL_CLOSER;
+                    if(flags != 0)
+                        ADD_MARK(ch, off, tmp, flags);
+                }
+                off = tmp;
+                continue;
+            }
+
             /* A potential strikethrough/equation start/end. */
             if(ch == _T('$') || ch == _T('~')) {
                 OFF tmp = off+1;
@@ -3788,14 +3814,12 @@ md_analyze_emph(MD_CTX* ctx, int mark_index)
 }
 
 static void
-md_analyze_tilde(MD_CTX* ctx, int mark_index)
+md_analyze_pair(MD_CTX* ctx, int mark_index)
 {
     MD_MARK* mark = &ctx->marks[mark_index];
     MD_MARKSTACK* stack = md_opener_stack(ctx, mark_index);
 
-    /* We attempt to be Github Flavored Markdown compatible here. GFM accepts
-     * only tildes sequences of length 1 and 2, and the length of the opener
-     * and closer has to match. */
+    /* Collection and the opener stack enforce matching delimiter lengths. */
 
     if((mark->flags & MD_MARK_POTENTIAL_CLOSER)  &&  stack->top >= 0) {
         int opener_index = stack->top;
@@ -4043,7 +4067,7 @@ md_analyze_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines,
         /* Skip resolved spans. */
         if(mark->flags & MD_MARK_RESOLVED) {
             if((mark->flags & MD_MARK_OPENER)  &&
-               !((flags & MD_ANALYZE_NOSKIP_EMPH) && ISANYOF_(mark->ch, "*_~")))
+               !((flags & MD_ANALYZE_NOSKIP_EMPH) && ISANYOF_(mark->ch, "*_~=")))
             {
                 MD_ASSERT(i < mark->next);
                 i = mark->next + 1;
@@ -4074,7 +4098,8 @@ md_analyze_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines,
             case '|':   md_analyze_table_cell_boundary(ctx, i); break;
             case '_':   /* Pass through. */
             case '*':   md_analyze_emph(ctx, i); break;
-            case '~':   md_analyze_tilde(ctx, i); break;
+            case '~':   /* Pass through. */
+            case '=':   md_analyze_pair(ctx, i); break;
             case '$':   md_analyze_dollar(ctx, i); break;
             case '.':   /* Pass through. */
             case ':':   /* Pass through. */
@@ -4133,7 +4158,7 @@ md_analyze_link_contents(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines,
     int i;
 
     md_analyze_marks(ctx, lines, n_lines, mark_beg, mark_end, _T("&"), 0);
-    md_analyze_marks(ctx, lines, n_lines, mark_beg, mark_end, _T("*_~$"), 0);
+    md_analyze_marks(ctx, lines, n_lines, mark_beg, mark_end, _T("*_~$="), 0);
 
     if((ctx->parser.flags & MD_FLAG_PERMISSIVEAUTOLINKS) != 0) {
         /* These have to be processed last, as they may be greedy and expand
@@ -4289,6 +4314,13 @@ md_process_inlines(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines)
                             off++;
                         }
                     }
+                    break;
+
+                case '=':
+                    if(mark->flags & MD_MARK_OPENER)
+                        MD_ENTER_SPAN(MD_SPAN_MARK, NULL);
+                    else
+                        MD_LEAVE_SPAN(MD_SPAN_MARK, NULL);
                     break;
 
                 case '~':

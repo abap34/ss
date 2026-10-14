@@ -1,0 +1,120 @@
+# Highlighted spans
+
+MD_FLAG_MARK enables ==text== and emits MD_SPAN_MARK callbacks.
+Exactly two equals signs are required, with no whitespace just inside the
+delimiters. Inline formatting nests normally; code and escapes stay literal.
+
+```````````````````````````````` example
+==marked==
+.
+<p><mark>marked</mark></p>
+.
+--fmark
+````````````````````````````````
+
+```````````````````````````````` example
+==plain==
+.
+<p>==plain==</p>
+.
+````````````````````````````````
+
+```````````````````````````````` example
+a==b==c
+.
+<p>a<mark>b</mark>c</p>
+.
+--fmark
+````````````````````````````````
+
+```````````````````````````````` example
+==**bold** and *italic* and _under_==
+.
+<p><mark><strong>bold</strong> and <em>italic</em> and <u>under</u></mark></p>
+.
+--fmark --funderline
+````````````````````````````````
+
+```````````````````````````````` example
+[==linked==](https://example.com) and ==[link](https://example.com)==
+.
+<p><a href="https://example.com"><mark>linked</mark></a> and <mark><a href="https://example.com">link</a></mark></p>
+.
+--fmark
+````````````````````````````````
+
+```````````````````````````````` example
+==`x == y`==
+.
+<p><mark><code>x == y</code></mark></p>
+.
+--fmark
+````````````````````````````````
+
+```````````````````````````````` example
+\==literal== and `==code==`
+.
+<p>==literal== and <code>==code==</code></p>
+.
+--fmark
+````````````````````````````````
+
+```````````````````````````````` example
+== spaced== ==spaced == ===long=== =single= ====
+.
+<p>== spaced== ==spaced == ===long=== =single= ====</p>
+.
+--fmark
+````````````````````````````````
+
+```````````````````````````````` example
+==first
+second==
+.
+<p><mark>first
+second</mark></p>
+.
+--fmark
+````````````````````````````````
+
+```````````````````````````````` example
+Heading
+===
+.
+<h1>Heading</h1>
+.
+--fmark
+````````````````````````````````
+
+```````````````````````````````` example
+==~~gone~~== and ~~==marked==~~
+.
+<p><mark><del>gone</del></mark> and <del><mark>marked</mark></del></p>
+.
+--fmark --fstrikethrough
+````````````````````````````````
+
+```````````````````````````````` example
+前==強調==後
+.
+<p>前<mark>強調</mark>後</p>
+.
+--fmark
+````````````````````````````````
+
+```````````````````````````````` example
+==A &amp; B==
+.
+<p><mark>A &amp; B</mark></p>
+.
+--fmark
+````````````````````````````````
+
+```````````````````````````````` example
+==unclosed
+.
+<p>==unclosed</p>
+.
+--fmark
+````````````````````````````````
+
