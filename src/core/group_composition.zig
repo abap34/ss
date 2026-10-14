@@ -3,7 +3,7 @@ const model = @import("model");
 const fields = @import("fields.zig");
 
 /// Collect adjacency and optional equal cuts before update normalization.
-/// Natural measurement excludes only cuts; the final pass applies survivors.
+/// Layout consumes only the constraints surviving update normalization.
 pub fn collect(state: anytype, node: *const model.Node, constraints: *std.ArrayList(model.Constraint)) !void {
     try collectAdjacency(state, node, constraints);
     var axis_field = (try fields.get(state.allocator, state, node, "split_axis")) orelse return;

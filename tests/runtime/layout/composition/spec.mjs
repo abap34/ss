@@ -32,7 +32,7 @@ const failures = [];
 for (const test of [
   testNestedPlacedObjects, testNestedUnplacedObjectsAndOrdinaryGroup,
   testIntermediateBinding, testOrdinaryGroupInference, testNestedOrdinaryGroupBounds,
-  testUnplacedComposition, testNaturalWidths, testEqualFrames, testHorizontalSplitWidths, testVerticalSplitWidths, testEqualChains, testEqualEvaluation, testEqualEditorUpdates, testSameDirectionBinaryGroups,
+  testUnplacedComposition, testNaturalWidths, testEqualFrames, testMeasuredSplitFlow, testMeasuredNestedConstraintUpdate, testHorizontalSplitWidths, testVerticalSplitWidths, testEqualChains, testEqualEvaluation, testEqualEditorUpdates, testSameDirectionBinaryGroups,
   testSharedObjects, testConstraintUpdate, testInferredGroupConstraintUpdate,
   testExplicitGap, testOperandEvaluation, testFixedStdlibResolution, testImportedFunctionComposition,
   testInvalidOperands, testConflictsAndMixedDirections, testHorizontalPolicyVariants,
@@ -303,12 +303,12 @@ g.chrome.pad_y = 8
 place!(g)
 end
 `;
-    const natural = await dumpSource(`natural-base-${horizontal}`, baseline);
     const split = await dumpSource(`natural-split-${horizontal}`, baseline.replace("group(a, b)", `a ${operator} b`).replace('set_prop(g, "align_children_y", true)', ""));
-    const before = groupNodes(natural.dump)[0];
     const after = groupNodes(split.dump)[0];
     assertClose(after.width, 1136, "implicit outer width");
-    assertClose(after.height, before.height, "implicit outer height changed");
+    const children = split.dump.contains.find((entry) => entry.parent === after.id)?.children;
+    const contentHeight = Math.max(...split.dump.nodes.filter((item) => children.includes(item.id)).map((item) => item.height));
+    assertClose(after.height, horizontal ? contentHeight + 16 : 2 * contentHeight + gap + 16, "implicit outer height fits final-width contents");
     assertSplitTree(split.dump, after);
   }
 
@@ -364,12 +364,104 @@ end
   assert(!updated.dump.constraints.some((item) => item.group_split && item.target_node === right.id && ["left", "right"].includes(item.target_anchor)), "removed split constraints were regenerated");
   assert(updated.dump.overridden_constraints.filter((item) => item.group_split && item.target_node === right.id && ["left", "right"].includes(item.target_anchor)).length === 2, "both split edges must participate in update normalization");
 
+  for (const [index, scenario] of ["|=|", "/=/"].flatMap((operator) =>
+    ["top", "center"].flatMap((policy) => [40, 80].map((offset) => ({ operator, policy, offset }))),
+  ).entries()) {
+    const { operator, policy, offset } = scenario;
+    const { dump } = await dumpSource(`equal-first-update-${index}`, `import std:themes/default as *
+page update
+vflow(LayoutPolicy.${policy})
+let a = text!("Move me")
+let b = text!("Guide")
+a ${operator} b
+~!~ a.left == page.left + 97
+~!~ a.top == page.top - ${offset}
+end
+`);
+    const first = node(dump, "Move me");
+    const second = node(dump, "Guide");
+    assertClose(first.x, 97, "first cell horizontal update");
+    assertClose(top(first), 720 - offset, "first cell vertical update");
+    if (operator === "|=|") {
+      assertClose(second.x, first.x + first.width + gap, "remaining horizontal adjacency");
+      assertClose(policy === "top" ? top(second) : centerY(second), policy === "top" ? top(first) : centerY(first), "remaining sibling alignment");
+    } else assertClose(top(second), first.y - gap, "remaining vertical adjacency");
+    assert(dump.diagnostics.length === 0, `first cell update diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+  }
+
   await expectFailure("negative-split-gap", `${prelude}
 page invalid
 let items = selection_union(select(text("A"), "self_object"), select(text("B"), "self_object"))
 place!(hsplit(items, -1))
 end
 `, "InvalidGroupSplit");
+}
+
+async function testMeasuredSplitFlow() {
+  for (const policy of ["center", "top"]) {
+    for (const expression of ["a |=| b", "a /=/ b", "a |=| (b /=/ c)", "a /=/ (b |=| c)"]) {
+      const { dump } = await dumpSource(`measured-flow-${policy}-${caseCount}`, `${prelude}
+page measured
+vflow(LayoutPolicy.${policy})
+text!("Before split")
+let a = text("Short")
+let b = text("${"Words wrap at the allocated width. ".repeat(5)}")
+${expression.includes("c") ? 'let c = text("Third")' : ""}
+let g = ${expression}
+g.chrome.pad_x = 12
+g.chrome.pad_y = 8
+g.layout.spacing_after = 32
+~ g.width == 1000
+place!(g)
+text!("After split")
+end
+`);
+      const before = node(dump, "Before split");
+      const after = node(dump, "After split");
+      const g = groupNodes(dump).find((item) => dump.placement_roots.some((entry) => entry.roots.includes(item.id)));
+      assertClose(before.y - top(g), 32, "split follows preceding component");
+      assertClose(g.y - top(after), 32, "following component reserves split height");
+      assertClose(g.height, requiredHeight(g), "split uses the minimum height fitting measured contents");
+      assertSplitTree(dump, g);
+      if (policy === "center") assertClose((top(before) + after.y) / 2, 360, "components share page centering");
+      assert(dump.diagnostics.length === 0, `measured split diagnostics: ${JSON.stringify(dump.diagnostics)}`);
+
+      function requiredHeight(item) {
+        if (item.role !== "group") return item.measurement.logical_bounds.height;
+        const children = dump.contains.find((entry) => entry.parent === item.id).children.map((id) => dump.nodes.find((candidate) => candidate.id === id));
+        const maximum = Math.max(...children.map(requiredHeight));
+        return item.fields.split_axis === "vertical"
+          ? children.length * maximum + (children.length - 1) * Number(item.fields.split_gap) + 2 * item.render.chrome.pad_y
+          : maximum + 2 * item.render.chrome.pad_y;
+      }
+    }
+  }
+}
+
+async function testMeasuredNestedConstraintUpdate() {
+  const { dump } = await dumpSource("measured-nested-update", `${prelude}
+page updated
+text!("Before split")
+let a = text("Short")
+let b = text("Second line")
+let c = text("Third")
+let inner = b // c
+~!~ c.top == b.bottom - 80
+let g = a |=| inner
+g.layout.spacing_after = 32
+~ g.width == 1000
+place!(g)
+text!("After split")
+end
+`);
+  const b = node(dump, "Second line");
+  const c = node(dump, "Third");
+  const outer = groupNodes(dump).find((item) => item.fields.split_axis === "horizontal");
+  assertClose(b.y - top(c), 80, "nested spacing update survives measurement");
+  assertClose(outer.height, b.height + c.height + 80, "outer height accounts for updated child constraints");
+  assertClose(node(dump, "Before split").y - top(outer), 32, "updated split reserves space above");
+  assertClose(outer.y - top(node(dump, "After split")), 32, "updated split reserves space below");
+  assert(dump.diagnostics.length === 0, `updated split diagnostics: ${JSON.stringify(dump.diagnostics)}`);
 }
 
 async function testHorizontalSplitWidths() {

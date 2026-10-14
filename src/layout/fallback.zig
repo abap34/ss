@@ -24,7 +24,7 @@ const VerticalFallbackPolicy = enum {
 /// A page-level split uses the available page width when no size is
 /// prescribed. Nested groups keep the extent supplied by their containing group.
 pub fn defaultSplitGroupWidth(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId, position: AxisState) ?f32 {
-    if (workspace.axis != .horizontal or workspace.graph.split_frames != null) return null;
+    if (workspace.axis != .horizontal) return null;
     if (!isPageSplit(state, workspace, node_id)) return null;
     const node = state.source.getNode(node_id).?;
     const style = style_defaults.styleForNode(state.source, node);
@@ -290,6 +290,22 @@ pub fn buildDefaultAlignmentConstraints(state: *Workspace, workspace: *const gra
         if (seen[target_index]) continue;
         if (graph.anchorAxis(candidate.target_anchor) != workspace.axis) continue;
         if (hasHardPositionTargetConstraint(workspace, candidate.target_node, workspace.axis)) continue;
+        if (candidate.group_split and candidate.source == .node and try graph.constraintAffineSourceValue(state, workspace, candidate) == null and
+            !hasHardPositionTargetConstraint(workspace, candidate.source.node.node_id, workspace.axis))
+        {
+            // A cell update can remove the only positioned edge of its parent.
+            // Prefer a surviving sibling alignment that already has an origin.
+            var resolved_alternative = false;
+            for (candidates) |alternative| {
+                if (alternative.group_split or alternative.target_node != candidate.target_node) continue;
+                if (graph.anchorAxis(alternative.target_anchor) != workspace.axis) continue;
+                if (try graph.constraintAffineSourceValue(state, workspace, alternative) != null) {
+                    resolved_alternative = true;
+                    break;
+                }
+            }
+            if (resolved_alternative) continue;
+        }
         var target_subgraph = try workspace.graph.groupSubgraph(state.allocator, state, candidate.target_node);
         defer target_subgraph.deinit();
         try target_subgraph.add(target_index);
@@ -745,6 +761,14 @@ fn computeVerticalComponentUnit(
     policy: VerticalFallbackPolicy,
     options: graph.SolveOptions,
 ) !?VerticalComponentUnit {
+    // Allocate and position a split frame once; child cuts then obtain their
+    // coordinates from that frame without reverse-seeding an arbitrary cell.
+    for (workspace.graph.child_ids, 0..) |child_id, index| {
+        if (!components.contains(component_root, index)) continue;
+        if (!workspace.graph.hasSplitChildren(child_id)) continue;
+        if (hasHardPositionTargetConstraint(workspace, child_id, .vertical)) continue;
+        if (try computeVerticalComponentUnitFromRoot(state, workspace, components, component_root, local_tops, policy, index, options)) |unit| return unit;
+    }
     const root_index = components.fallbackRootIndex(state, component_root) orelse return null;
 
     if (try computeVerticalComponentUnitFromRoot(state, workspace, components, component_root, local_tops, policy, root_index, options)) |unit| {
@@ -755,7 +779,7 @@ fn computeVerticalComponentUnit(
         if (candidate_index == root_index) continue;
         if (!components.contains(component_root, candidate_index)) continue;
         const node = state.source.getNode(child_id) orelse return error.UnknownNode;
-        if (groups.isGroupNode(node)) continue;
+        if (groups.isGroupNode(node) and !workspace.graph.hasSplitChildren(child_id)) continue;
         if (try computeVerticalComponentUnitFromRoot(state, workspace, components, component_root, local_tops, policy, candidate_index, options)) |unit| {
             return unit;
         }
@@ -802,9 +826,10 @@ fn computeVerticalComponentUnitFromRoot(
         if (groups.isGroupNode(node) and (temp[index].start == null or temp[index].end == null)) continue;
         const start = temp[index].start orelse return null;
         const end = temp[index].end orelse return null;
-        // Place the free leaves; their groups derive bounds from those leaves.
-        // Placing both would translate aligned subgroups a second time.
-        if (!groups.isGroupNode(node) and (index == root_index or (!workspace.graph.hasTargetConstraint(state, child_id, .vertical, &.{}) and !hasDefaultAlignmentTarget(workspace, child_id)))) {
+        // A split frame owns its placement. Its children follow the frame,
+        // while ordinary groups continue to derive bounds from free leaves.
+        const placement_candidate = !groups.isGroupNode(node) or index == root_index;
+        if (placement_candidate and (index == root_index or (!workspace.graph.hasTargetConstraint(state, child_id, .vertical, &.{}) and !hasDefaultAlignmentAncestor(workspace, child_id)))) {
             local_tops[index] = end;
         }
         if (local_bottom == null or start < local_bottom.?) {

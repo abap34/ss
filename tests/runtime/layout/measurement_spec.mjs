@@ -9,6 +9,7 @@ const pdflatexAvailable = await commandAvailable("pdflatex");
 
 await testNaturalTitleWidthDoesNotSelfWrap();
 await testTableHeightUsesFinalWidthWithWrappingDisabled();
+await testSplitTablesReserveTheirFinalHeight();
 await testPageOverflowUsesInkOrigins();
 await testCheckReportsRasterMeasurementFailure();
 await testCheckReportsUnknownStandaloneIcon();
@@ -62,6 +63,29 @@ async function testTableHeightUsesFinalWidthWithWrappingDisabled() {
     const after = followers[index];
     assert(close(after.y + after.height, table.y - 20), `The following object overlapped its table: ${frameSummary(after)}`);
   }
+  await runSs(["render", "--quiet", fixture, path.join(output, "fixture.pdf")], root);
+}
+
+async function testSplitTablesReserveTheirFinalHeight() {
+  const output = path.join(root, ".ss-cache", "tests", "layout-measured-splits");
+  await mkdir(output, { recursive: true });
+  const fixture = path.join(root, "tests", "fixtures", "layout", "composition", "measured-splits.ss");
+  const dumpPath = path.join(output, "dump.json");
+  await runSs(["check", "--quiet", fixture], root);
+  await runSs(["dump", "--quiet", fixture, dumpPath], root);
+  const dump = JSON.parse(await readFile(dumpPath, "utf8"));
+  const tables = dump.nodes.filter((node) => node.content?.startsWith("| ああ |"));
+  const intro = nodeByContentPrefix(dump, "あああああああああああ");
+  const after = nodeByContent(dump, "Following component");
+  assert(tables.length === 2, "Split fixture omitted a table");
+  for (const table of tables) {
+    assert(close(table.width, 552), `Unexpected split width: ${frameSummary(table)}`);
+    assert(table.height > 150, `Wrapped table header was not measured: ${frameSummary(table)}`);
+    assert(close(intro.y - table.y - table.height, 28), "Split table overlapped the preceding component");
+    assert(close(table.y - after.y - after.height, 28), "Following component overlapped a split table");
+  }
+  assert(close((intro.y + intro.height + after.y) / 2, 360), "Measured components were not centered together");
+  assert(dump.diagnostics.length === 0, `Split fixture diagnostics: ${JSON.stringify(dump.diagnostics)}`);
   await runSs(["render", "--quiet", fixture, path.join(output, "fixture.pdf")], root);
 }
 

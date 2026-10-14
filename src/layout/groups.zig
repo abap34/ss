@@ -1,3 +1,5 @@
+const std = @import("std");
+const fields = @import("../core/fields.zig");
 const Workspace = @import("workspace.zig").Workspace;
 const model = @import("model");
 const graph = @import("graph.zig");
@@ -62,20 +64,79 @@ fn propagateTargetedWidthsWithCache(state: *Workspace, workspace: *const graph.A
 }
 
 fn computeTightGroupAxisState(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId) !AxisState {
-    if (workspace.graph.splitFrame(node_id)) |frame| {
-        const start = if (workspace.axis == .horizontal) frame.x else frame.y;
-        const size = if (workspace.axis == .horizontal) frame.width else frame.height;
-        return .{ .start = start, .end = start + size, .center = start + size / 2, .size = size };
-    }
     var bounds = try computeChildGroupAxisState(state, workspace, node_id);
-    if (fallback.defaultSplitGroupWidth(state, workspace, node_id, .{})) |width| {
-        if (bounds.start) |start| {
-            bounds.size = width;
-            bounds.end = start + width;
-            bounds.center = start + width / 2;
-        }
+    if (!workspace.graph.hasSplitChildren(node_id)) return bounds;
+
+    // Measure the contents without using an allocated parent extent. In
+    // particular, equal-height cells must not feed back into their own minimum.
+    const size = fallback.defaultSplitGroupWidth(state, workspace, node_id, .{}) orelse
+        (try requiredGroupAxisSize(state, workspace, node_id, workspace.graph.len())) orelse return bounds;
+    const current = workspace.stateOfConst(node_id).?.*;
+    const start = current.start orelse bounds.start;
+    bounds = .{ .size = size, .size_is_default = true };
+    if (start) |value| {
+        bounds.start = value;
+        bounds.end = value + size;
+        bounds.center = value + size / 2;
     }
     return bounds;
+}
+
+fn requiredGroupAxisSize(state: *Workspace, workspace: *const graph.AxisWorkspace, group_id: NodeId, remaining: usize) anyerror!?f32 {
+    if (remaining == 0) return null;
+    const node = state.source.getNode(group_id) orelse return error.UnknownNode;
+    const split = workspace.graph.hasSplitChildren(group_id);
+    const direction = fields.read(state.allocator, state.source, node, if (split) "split_axis" else "join_axis", &.{}, .text) orelse return null;
+    const along = if (workspace.axis == .horizontal) std.mem.eql(u8, direction, "horizontal") else std.mem.eql(u8, direction, "vertical");
+    if (!along and !std.mem.eql(u8, direction, "horizontal") and !std.mem.eql(u8, direction, "vertical")) return null;
+    var total: f32 = 0;
+    var largest: f32 = 0;
+    var count: usize = 0;
+    for (state.source.childrenOf(group_id) orelse &.{}) |child_id| {
+        const child = state.source.getNode(child_id) orelse return error.UnknownNode;
+        if (roleEq(child.role, ConnectorRole)) continue;
+        const extent = (try requiredChildAxisSize(state, workspace, child_id, remaining - 1)) orelse return null;
+        total += extent;
+        largest = @max(largest, extent);
+        count += 1;
+    }
+    if (count == 0) return null;
+    const gap = fields.read(state.allocator, state.source, node, "split_gap", &.{}, .number) orelse 32;
+    const n: f32 = @floatFromInt(count);
+    const extent = if (!along) largest else if (split) n * largest + (n - 1) * gap else total + (n - 1) * gap;
+    return extent + 2 * groupAxisPadding(state, workspace, group_id);
+}
+
+fn requiredChildAxisSize(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId, remaining: usize) !?f32 {
+    // Explicit sizes retain their original constraint source. Parent cuts are
+    // allocations, and do not describe the height required by the contents.
+    for (workspace.graph.targetConstraintIndexes(node_id)) |index| {
+        const constraint = workspace.graph.constraints[index];
+        if (constraint.group_split or graph.anchorAxis(constraint.target_anchor) != workspace.axis) continue;
+        switch (graph.classifySelfConstraint(constraint, workspace.axis)) {
+            .size => |size| if (size >= 0) return size,
+            else => {},
+        }
+    }
+    const current = workspace.stateOfConst(node_id).?.*;
+    const allocated = (if (current.start_source) |source| source.group_split else false) or
+        (if (current.end_source) |source| source.group_split else false) or
+        (if (current.center_source) |source| source.group_split else false);
+    if (!allocated and !current.size_is_default) {
+        if (current.size) |size| return size;
+    }
+    const node = state.source.getNode(node_id) orelse return error.UnknownNode;
+    if (isGroupNode(node)) {
+        // Ordinary child groups retain the bounds produced by their surviving
+        // relative constraints, including user updates to composition spacing.
+        const bounds = try computeChildGroupAxisState(state, workspace, node_id);
+        if (!workspace.graph.hasSplitChildren(node_id) and bounds.size != null) return bounds.size;
+        return (try requiredGroupAxisSize(state, workspace, node_id, remaining)) orelse bounds.size;
+    }
+    return switch (workspace.axis) {
+        .horizontal => state.frame(node_id).*.width,
+        .vertical => state.frame(node_id).*.height,
+    };
 }
 
 fn computeChildGroupAxisState(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id: NodeId) !AxisState {
@@ -120,11 +181,9 @@ pub fn updateAxisStates(state: *Workspace, workspace: *graph.AxisWorkspace) !boo
         const node_id = workspace.nodeAt(index);
         if (workspace.graph.hasTargetConstraint(state, node_id, workspace.axis, workspace.soft_constraints)) continue;
         const tight = try computeTightGroupAxisState(state, workspace, node_id);
-        if (tight.start == null or tight.end == null) {
-            changed = setGroupAxisState(&workspace.states[index], null, null) or changed;
-            continue;
-        }
-        changed = setGroupAxisState(&workspace.states[index], tight.start.?, tight.end.?) or changed;
+        const previous = workspace.states[index];
+        workspace.states[index] = tight;
+        changed = !axisStatesEq(previous, tight) or changed;
     }
     return changed;
 }
@@ -272,7 +331,8 @@ pub fn applyTargetConstraints(
         if (!workspace.graph.hasTargetConstraint(state, group_id, workspace.axis, workspace.soft_constraints)) continue;
 
         const base = try computeTightGroupAxisState(state, workspace, group_id);
-        if (base.start == null or base.end == null or base.center == null or base.size == null) continue;
+        if (!workspace.graph.hasSplitChildren(group_id) and !axisAllocatedBySplit(workspace, group_id) and
+            (base.start == null or base.end == null or base.size == null)) continue;
 
         var temp = AxisState{};
         var used = false;
@@ -314,10 +374,7 @@ pub fn applyTargetConstraints(
 
         const previous = workspace.states[group_index];
         const split_children = workspace.graph.hasSplitChildren(group_id);
-        const child_bounds = if (!split_children and workspace.graph.splitFrame(group_id) != null)
-            try computeChildGroupAxisState(state, workspace, group_id)
-        else
-            base;
+        const child_bounds = base;
         const delta = if (temp.start) |start| start - (child_bounds.start orelse start) else 0;
         // Split and frame-aligned children obtain their coordinates from parent
         // anchors. Subtree translation would apply their movement twice.
@@ -330,6 +387,14 @@ pub fn applyTargetConstraints(
         }
     }
     return update;
+}
+
+fn axisAllocatedBySplit(workspace: *const graph.AxisWorkspace, group_id: NodeId) bool {
+    for (workspace.graph.targetConstraintIndexes(group_id)) |index| {
+        const constraint = workspace.graph.constraints[index];
+        if (constraint.group_split and graph.anchorAxis(constraint.target_anchor) == workspace.axis) return true;
+    }
+    return false;
 }
 
 fn hasChildrenAlignedToFrame(workspace: *const graph.AxisWorkspace, group_id: NodeId) bool {
@@ -369,28 +434,6 @@ pub fn constraintUsesGroupSource(state: *Workspace, constraint: Constraint) bool
             break :blk isGroupNode(source_node);
         },
     };
-}
-
-fn setGroupAxisState(state: *AxisState, start: ?f32, end: ?f32) bool {
-    const old = state.*;
-    if (start == null or end == null) {
-        state.* = .{};
-        return !axisStatesEq(old, state.*);
-    }
-
-    const size = end.? - start.?;
-    state.* = .{
-        .start = start,
-        .end = end,
-        .center = start.? + size / 2,
-        .size = size,
-        .start_source = null,
-        .end_source = null,
-        .center_source = null,
-        .size_source = null,
-        .size_is_default = false,
-    };
-    return !axisStatesEq(old, state.*);
 }
 
 fn axisStatesEq(a: AxisState, b: AxisState) bool {

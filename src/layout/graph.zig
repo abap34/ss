@@ -281,14 +281,8 @@ pub const PageLayoutGraph = struct {
     has_vertical_target_constraint: []bool,
     horizontal_target_anchor_mask: []u8,
     vertical_target_anchor_mask: []u8,
-    split_frames: ?[]const model.Frame = null,
-    split_groups: []bool,
 
     pub fn init(allocator: std.mem.Allocator, state: *Workspace, page: partition.Page) !PageLayoutGraph {
-        return initWithSplitFrames(allocator, state, page, null);
-    }
-
-    pub fn initWithSplitFrames(allocator: std.mem.Allocator, state: *Workspace, page: partition.Page, split_frames: ?[]const model.Frame) !PageLayoutGraph {
         const page_id = page.page_id;
         const child_ids = try allocator.dupe(NodeId, page.node_ids);
         errdefer allocator.free(child_ids);
@@ -300,54 +294,6 @@ pub const PageLayoutGraph = struct {
         try index_by_node.ensureTotalCapacity(@intCast(child_ids.len));
         for (child_ids, 0..) |node_id, index| {
             index_by_node.putAssumeCapacity(node_id, index);
-        }
-        const split_groups = try allocator.alloc(bool, child_ids.len);
-        errdefer allocator.free(split_groups);
-        @memset(split_groups, false);
-        var active = std.ArrayList(Constraint).empty;
-        defer active.deinit(allocator);
-        for (page.constraint_indexes) |constraint_index| {
-            const constraint = state.source.constraints.active.items[constraint_index];
-            if (constraint.group_split and split_frames == null) continue;
-            try active.append(allocator, constraint);
-            if (!constraint.group_split) continue;
-            if (index_by_node.get(constraint.target_node)) |index| {
-                if (isGroupNode(state.source.getNode(constraint.target_node).?)) split_groups[index] = true;
-            }
-            switch (constraint.source) {
-                .page => {},
-                .node => |source| if (index_by_node.get(source.node_id)) |index| {
-                    if (isGroupNode(state.source.getNode(source.node_id).?)) split_groups[index] = true;
-                },
-            }
-        }
-        if (split_frames) |frames| {
-            if (frames.len != child_ids.len) return error.InvalidPageLayoutInputs;
-            const cuts = active.items.len;
-            for (child_ids, split_groups, frames) |node_id, controlled, frame| {
-                if (!controlled) continue;
-                for ([_]Axis{ .horizontal, .vertical }) |axis| {
-                    var assigned_by_parent = false;
-                    for (active.items[0..cuts]) |constraint| {
-                        if (constraint.group_split and !constraint.default_alignment and constraint.target_node == node_id and anchorAxis(constraint.target_anchor) == axis) {
-                            assigned_by_parent = true;
-                            break;
-                        }
-                    }
-                    if (assigned_by_parent) continue;
-                    // Preserve the measured outer extent, including explicit
-                    // size/edge constraints, while cuts reposition the children.
-                    try active.append(allocator, .{
-                        .target_node = node_id,
-                        .target_anchor = if (axis == .horizontal) .right else .top,
-                        .source = .{ .node = .{ .node_id = node_id, .anchor = if (axis == .horizontal) .left else .bottom } },
-                        .offset = if (axis == .horizontal) frame.width else frame.height,
-                        .role = .size,
-                        .group_split = true,
-                        .origin = state.source.getNode(node_id).?.origin,
-                    });
-                }
-            }
         }
         const has_horizontal_target_constraint = try allocator.alloc(bool, child_ids.len);
         errdefer allocator.free(has_horizontal_target_constraint);
@@ -369,7 +315,8 @@ pub const PageLayoutGraph = struct {
         errdefer vertical_constraint_list.deinit(allocator);
         var default_alignment_list = std.ArrayList(Constraint).empty;
         errdefer default_alignment_list.deinit(allocator);
-        for (active.items) |constraint| {
+        for (page.constraint_indexes) |constraint_index| {
+            const constraint = state.source.constraints.active.items[constraint_index];
             const target_index = index_by_node.get(constraint.target_node) orelse continue;
             if (constraint.default_alignment) {
                 try default_alignment_list.append(allocator, constraint);
@@ -444,13 +391,10 @@ pub const PageLayoutGraph = struct {
             .has_vertical_target_constraint = has_vertical_target_constraint,
             .horizontal_target_anchor_mask = horizontal_target_anchor_mask,
             .vertical_target_anchor_mask = vertical_target_anchor_mask,
-            .split_frames = split_frames,
-            .split_groups = split_groups,
         };
     }
 
     pub fn deinit(self: *PageLayoutGraph) void {
-        self.allocator.free(self.split_groups);
         self.target_constraints.deinit(self.allocator);
         self.parent_groups.deinit(self.allocator);
         self.allocator.free(self.group_order);
@@ -471,14 +415,36 @@ pub const PageLayoutGraph = struct {
         return self.child_ids.len;
     }
 
-    pub fn splitFrame(self: *const PageLayoutGraph, node_id: NodeId) ?model.Frame {
-        const frames = self.split_frames orelse return null;
-        const index = self.indexOf(node_id) orelse return null;
-        return if (self.split_groups[index]) frames[index] else null;
+    pub fn impliedBySplitEdges(self: *const PageLayoutGraph, constraint: Constraint) bool {
+        if (constraint.group_split or constraint.source_extent_factor != 0) return false;
+        const source = switch (constraint.source) {
+            .page => return false,
+            .node => |value| value,
+        };
+        if (source.node_id == constraint.target_node) return false;
+        for (self.targetConstraintIndexes(constraint.target_node)) |target_index| {
+            const target_cut = self.constraints[target_index];
+            if (!target_cut.group_split or target_cut.target_anchor != constraint.target_anchor) continue;
+            for (self.targetConstraintIndexes(source.node_id)) |source_index| {
+                const source_cut = self.constraints[source_index];
+                if (!source_cut.group_split or source_cut.target_anchor != source.anchor) continue;
+                if (!constraintSourcesEquivalent(target_cut.source, source_cut.source)) continue;
+                if (target_cut.source_extent_factor != source_cut.source_extent_factor) continue;
+                if (approxEq(target_cut.offset, source_cut.offset + constraint.offset)) return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn hasSplitTargetAnchor(self: *const PageLayoutGraph, node_id: NodeId, anchor: Anchor) bool {
+        for (self.targetConstraintIndexes(node_id)) |index| {
+            const constraint = self.constraints[index];
+            if (constraint.group_split and constraint.target_anchor == anchor) return true;
+        }
+        return false;
     }
 
     pub fn hasSplitChildren(self: *const PageLayoutGraph, node_id: NodeId) bool {
-        if (self.split_frames == null) return false;
         for (self.constraints) |constraint| {
             if (!constraint.group_split or constraint.role == .size) continue;
             switch (constraint.source) {

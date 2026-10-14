@@ -352,39 +352,11 @@ fn solvePageLayout(
     trace_session: *layout_trace.Session,
     options: SolveOptions,
 ) !document.Page {
-    var has_split = false;
-    for (page_inputs.constraint_indexes) |index| {
-        if (state.source.constraints.active.items[index].group_split) {
-            has_split = true;
-            break;
-        }
-    }
-    if (!has_split) return solvePageLayoutPass(state, page_inputs, page_index, measurement_cache, trace_session, options, null, false);
-    var measurement_options = options;
-    measurement_options.record_diagnostics = false;
-    var measured = try solvePageLayoutPass(state, page_inputs, page_index, measurement_cache, trace_session, measurement_options, null, true);
-    defer measured.deinit(state.allocator);
-    const frames = try state.allocator.alloc(model.Frame, page_inputs.node_ids.len);
-    defer state.allocator.free(frames);
-    for (page_inputs.node_ids, frames) |node_id, *frame| frame.* = state.frame(node_id).*;
-    return solvePageLayoutPass(state, page_inputs, page_index, measurement_cache, trace_session, options, frames, false);
-}
-
-fn solvePageLayoutPass(
-    state: *Workspace,
-    page_inputs: partition.Page,
-    page_index: usize,
-    measurement_cache: *metrics.MeasurementCache,
-    trace_session: *layout_trace.Session,
-    options: SolveOptions,
-    split_frames: ?[]const model.Frame,
-    measure_only: bool,
-) !document.Page {
     try graph.checkCancellation(options);
     const diagnostic_start = state.diagnostics.entries.items.len;
     const constraint_failure_start = state.diagnostics.constraint_failures.items.len;
     const page_id = page_inputs.page_id;
-    var page_graph = try graph.PageLayoutGraph.initWithSplitFrames(state.allocator, state, page_inputs, split_frames);
+    var page_graph = try graph.PageLayoutGraph.init(state.allocator, state, page_inputs);
     defer page_graph.deinit();
     try graph.checkCancellation(options);
     if (page_graph.len() == 0) return try collectPage(state, page_id, page_index, &.{}, &.{}, &.{}, diagnostic_start, constraint_failure_start, options);
@@ -396,11 +368,9 @@ fn solvePageLayoutPass(
     var vertical_fallback = try solveVerticalLayout(state, &page_graph, trace_session, options);
     defer vertical_fallback.deinit(state.allocator);
 
-    if (!measure_only) {
-        try validatePageConstraints(state, page_id, &page_graph, options);
-        try graph.checkCancellation(options);
-        try diagnostics.collectPageDiagnosticsCached(state, page_id, page_graph.child_ids, measurement_cache);
-    }
+    try validatePageConstraints(state, page_id, &page_graph, options);
+    try graph.checkCancellation(options);
+    try diagnostics.collectPageDiagnosticsCached(state, page_id, page_graph.child_ids, measurement_cache);
     try graph.checkCancellation(options);
     return try collectPage(
         state,
@@ -442,6 +412,32 @@ fn solveHorizontalLayout(
     trace_session.recordDefaultConstraints(state.allocator, &horizontal, horizontal_fallback.items);
     horizontal.soft_constraints = horizontal_fallback.items;
     try solvePageAxis(state, &horizontal, trace_session, options);
+    for (page_graph.group_order) |index| {
+        if (!page_graph.hasSplitChildren(page_graph.nodeAt(index))) continue;
+        // Page fallback can allocate a split whose origin was previously
+        // unknown. Resolve child alignment against those allocated frames.
+        var allocated_alignments = try fallback.buildDefaultAlignmentConstraints(state, &horizontal);
+        defer allocated_alignments.deinit(state.allocator);
+        var retained: usize = 0;
+        for (horizontal_fallback.items) |constraint| {
+            if (constraint.default_alignment) continue;
+            var aligned = false;
+            for (allocated_alignments.items) |alignment| {
+                if (alignment.target_node == constraint.target_node) {
+                    aligned = true;
+                    break;
+                }
+            }
+            if (aligned) continue;
+            horizontal_fallback.items[retained] = constraint;
+            retained += 1;
+        }
+        horizontal_fallback.items.len = retained;
+        try horizontal_fallback.appendSlice(state.allocator, allocated_alignments.items);
+        horizontal.soft_constraints = horizontal_fallback.items;
+        try solvePageAxis(state, &horizontal, trace_session, options);
+        break;
+    }
     try settleHorizontalAxisWithTrace(state, &horizontal, trace_session, options);
     try applySolvedHorizontalFrames(state, &horizontal, measurement_cache, options);
     try graph.checkCancellation(options);
@@ -597,7 +593,7 @@ fn initializePageObjectMeasurements(state: *Workspace, page_graph: *const graph.
         state.frame(node.id).*.x_set = false;
         state.frame(node.id).*.y_set = false;
         state.frame(node.id).*.width = try metrics.intrinsicWidthCached(state, node, measurement_cache);
-        state.frame(node.id).*.height = try metrics.intrinsicHeightCached(state, node, state.frame(node.id).*, measurement_cache);
+        state.frame(node.id).*.height = 0;
     }
 }
 
@@ -608,11 +604,9 @@ fn applySolvedHorizontalFrames(state: *Workspace, workspace: *const graph.AxisWo
         const old_width = state.frame(node.id).*.width;
         const solved_width = h_state.size orelse old_width;
         state.frame(node.id).*.width = solved_width;
-        // Height may change discontinuously at any width, including content
-        // such as tables whose cells wrap independently of the outer policy.
-        if (solved_width != old_width) {
-            state.frame(node.id).*.height = try metrics.intrinsicHeightCached(state, node, state.frame(node.id).*, measurement_cache);
-        }
+        // Measure required height only after width allocation has settled.
+        // Table cells wrap independently of the object's outer wrap policy.
+        state.frame(node.id).*.height = try metrics.intrinsicHeightCached(state, node, state.frame(node.id).*, measurement_cache);
         state.frame(node.id).*.x_set = false;
         if (h_state.start) |x| {
             state.frame(node.id).*.x = x;
@@ -894,6 +888,11 @@ fn applyAxisConstraint(
     try graph.checkCancellation(options);
     if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) return false;
 
+    // Surviving cell edges already imply sibling adjacency. Propagating that
+    // relation with an intrinsic width would create a transient conflict before
+    // the parent allocation arrives. Final validation still checks the relation.
+    if (workspace.graph.impliedBySplitEdges(constraint)) return false;
+
     const target_index = workspace.indexOf(constraint.target_node) orelse return false;
     const target_node = state.source.getNode(constraint.target_node) orelse return error.UnknownNode;
     if (groups.isGroupNode(target_node)) return false;
@@ -981,6 +980,12 @@ fn applyAxisConstraint(
             }
             return applied;
         },
+    }
+
+    // A surviving cut allocates this edge from its parent. If an update removed
+    // the other cell's cut, adjacency instead determines that cell's free edge.
+    if (!is_soft and !constraint.group_split and constraint.source == .node and workspace.graph.hasSplitTargetAnchor(constraint.target_node, constraint.target_anchor)) {
+        return try applyReverseAxisConstraint(state, workspace, constraint, false, target_index, trace_session, options);
     }
 
     if (is_soft and graph.axisAnchorValue(workspace.states[target_index], constraint.target_anchor) != null) {
@@ -1141,8 +1146,9 @@ fn applyReverseAxisConstraint(
     try graph.checkCancellation(options);
     if (is_soft) return false;
 
-    // Generated affine cuts are solved from the allocated parent extent.
-    if (constraint.source_extent_factor != 0) return false;
+    // A cut can recover the parent origin from a positioned cell once the
+    // parent extent is known. It must never infer that extent from the cell.
+    if (constraint.source_extent_factor != 0 and !constraint.group_split) return false;
 
     const node_source = switch (constraint.source) {
         .page => return false,
@@ -1151,23 +1157,28 @@ fn applyReverseAxisConstraint(
     if (graph.anchorAxis(node_source.anchor) != workspace.axis) return error.ConstraintAxisMismatch;
 
     const source_node = state.source.getNode(node_source.node_id) orelse return error.UnknownNode;
-    if (groups.isGroupNode(source_node)) return false;
-
     const source_index = workspace.indexOf(node_source.node_id) orelse return false;
-    if (graph.axisAnchorValue(workspace.states[source_index], node_source.anchor) != null) return false;
+    if (groups.isGroupNode(source_node) and (!constraint.group_split or workspace.states[source_index].size == null)) return false;
+    const source_state = workspace.states[source_index];
+    if (graph.axisAnchorValue(source_state, node_source.anchor) != null) {
+        if (graph.axisAnchorSource(source_state, node_source.anchor)) |source| {
+            if (!constraintsSame(source, constraint)) return false;
+        } else if (!source_state.size_is_default) return false;
+    }
 
     const target_state = workspace.states[target_index];
     const target_anchor_source = graph.axisAnchorSource(target_state, constraint.target_anchor);
     if (target_anchor_source) |source| {
-        if (constraintInSlice(workspace.soft_constraints, source) and workspace.graph.hardTargetAnchorCount(node_source.node_id, workspace.axis) > 0) return false;
+        if (!constraint.group_split and constraintInSlice(workspace.soft_constraints, source) and workspace.graph.hardTargetAnchorCount(node_source.node_id, workspace.axis) > 0) return false;
     } else if (target_state.size_is_default) {
         return false;
     }
 
     const target_value = graph.axisAnchorValue(target_state, constraint.target_anchor) orelse return false;
-    const applied = graph.setAxisAnchor(&workspace.states[source_index], node_source.anchor, target_value - constraint.offset, constraint) catch |err| {
+    const source_value = target_value - constraint.offset - constraint.source_extent_factor * (workspace.states[source_index].size orelse 0);
+    const applied = graph.setAxisAnchor(&workspace.states[source_index], node_source.anchor, source_value, constraint) catch |err| {
         if (options.record_diagnostics) {
-            const expected = target_value - constraint.offset;
+            const expected = source_value;
             if (err == error.ConstraintConflict) {
                 const propagation = try reverseAnchorConflictPropagation(state, workspace, source_index, constraint, expected);
                 try state.diagnostics.noteConstraintFailureDetailedWithPropagation(
@@ -1201,7 +1212,7 @@ fn applyReverseAxisConstraint(
         return false;
     };
     if (applied) {
-        try recordReverseAnchorConstraintPropagation(state, workspace, source_index, constraint, target_value - constraint.offset);
+        try recordReverseAnchorConstraintPropagation(state, workspace, source_index, constraint, source_value);
         trace_session.recordConstraintPropagation(state.allocator, workspace, constraint, is_soft, true);
     }
     return applied;

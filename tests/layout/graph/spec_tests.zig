@@ -2878,11 +2878,9 @@ fn inspectIndexedPageGraph(allocator: std.mem.Allocator, state: *core.DocumentSt
     try testing.expectEqualSlices(usize, &.{ 3, 0, 1, 4, 2 }, subgraph.indexes.items);
 }
 
-test "layout graph: split constraints are deferred until measured outer frames are available" {
+test "layout graph: normalized split constraints need no preliminary frames" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
-    var state_layout = LayoutFixture.init(&state);
-    defer state_layout.deinit();
     const page = try state.addPage("Split");
     const a = try state.makeObject(page, "a", null, .text, .text, "A");
     const b = try state.makeObject(page, "b", null, .text, .text, "B");
@@ -2894,11 +2892,6 @@ test "layout graph: split constraints are deferred until measured outer frames a
     try state.collectDefaultAlignments();
     var inputs = try core.layout.partition.Document.init(testing.allocator, &state);
     defer inputs.deinit(testing.allocator);
-    var natural = try graph.PageLayoutGraph.init(testing.allocator, try state_layout.work(), inputs.pages[0]);
-    defer natural.deinit();
-    try testing.expectEqual(@as(usize, 0), natural.constraints.len);
-    try testing.expectEqual(@as(usize, 0), natural.default_alignment_constraints.len);
-    try testing.expect(natural.splitFrame(outer) == null);
     try inspectSplitGraph(testing.allocator, &state, inputs.pages[0], inner, outer);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, inspectSplitGraph, .{ &state, inputs.pages[0], inner, outer });
 }
@@ -2906,28 +2899,44 @@ test "layout graph: split constraints are deferred until measured outer frames a
 fn inspectSplitGraph(allocator: std.mem.Allocator, state: *core.DocumentState, inputs: core.layout.partition.Page, inner: model.NodeId, outer: model.NodeId) !void {
     var area = try core.layout.Workspace.init(allocator, state, inputs);
     defer area.deinit();
-    const frames = try allocator.alloc(model.Frame, inputs.node_ids.len);
-    defer allocator.free(frames);
-    @memset(frames, .{ .x = 100, .y = 200, .width = 1000, .height = 400 });
-    var split = try graph.PageLayoutGraph.initWithSplitFrames(allocator, &area, inputs, frames);
+    var split = try graph.PageLayoutGraph.init(allocator, &area, inputs);
     defer split.deinit();
-    try testing.expectEqual(@as(f32, 1000), split.splitFrame(outer).?.width);
-    try testing.expect(split.splitFrame(inner) != null);
-    var frozen: usize = 0;
-    for (split.constraints) |constraint| {
-        if (constraint.role != .size) continue;
-        frozen += 1;
-        try testing.expectEqual(outer, constraint.target_node);
-        try testing.expectEqual(outer, constraint.source.node.node_id);
-        try testing.expect(constraint.group_split);
-    }
-    try testing.expectEqual(@as(usize, 2), frozen);
+    try testing.expect(split.hasSplitChildren(outer));
+    try testing.expect(split.hasSplitChildren(inner));
+    for (split.constraints) |constraint| try testing.expect(constraint.role != .size);
     try testing.expectEqual(@as(usize, 3), split.default_alignment_constraints.len);
     for (split.default_alignment_constraints) |constraint| {
         try testing.expect(constraint.group_split);
         const parent = constraint.source.node.node_id;
         try testing.expect(parent == inner or parent == outer);
         try testing.expectEqual(if (parent == inner) model.Anchor.left else model.Anchor.top, constraint.target_anchor);
+    }
+}
+
+test "layout groups: required split height does not assign page coordinates" {
+    for ([_][]const u8{ "horizontal", "vertical" }) |direction| {
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        var fixture = LayoutFixture.init(&state);
+        defer fixture.deinit();
+        const page = try state.addPage("Measured split");
+        const a = try state.makeObject(page, "a", null, .text, .text, "A");
+        const b = try state.makeObject(page, "b", null, .text, .text, "B");
+        const group = try state.makeGroupWithOrigin(page, true, &.{ a, b }, null);
+        try state.setNodeFieldValue(group, "split_axis", .{ .string = direction });
+        try setRecordPathValue(&state, group, "chrome", &.{"pad_y"}, .{ .number = 5 });
+        try state.collectDefaultAlignments();
+        (try fixture.frame(a)).height = 40;
+        (try fixture.frame(b)).height = 100;
+        var page_graph = try initPageGraph(&state, page);
+        defer page_graph.deinit();
+        var vertical = try graph.AxisWorkspace.init(testing.allocator, try fixture.work(), &page_graph, .vertical);
+        defer vertical.deinit();
+        _ = try core.layout.groups.updateAxisStates(try fixture.work(), &vertical);
+        const measured = vertical.stateOf(group).?.*;
+        try expectFloat(if (std.mem.eql(u8, direction, "horizontal")) 110 else 242, measured.size.?);
+        try testing.expect(measured.size_is_default);
+        try testing.expect(measured.start == null and measured.end == null and measured.center == null);
     }
 }
 
