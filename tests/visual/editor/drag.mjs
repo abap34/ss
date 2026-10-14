@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 
 export async function exerciseObjectDrag(browser, baseUrl, snapshot) {
+  // Keep free-movement checks away from object and page snap candidates.
+  snapshot = structuredClone(snapshot);
+  snapshot.layout.objects.find((object) => object.id === 202).width = 240;
+  snapshot.layout.objects.find((object) => object.id === 201).y = 260;
+  snapshot.display.html = snapshot.display.html.replace("width:380pt;height:120pt", "width:240pt;height:120pt");
+  snapshot.display.html = snapshot.display.html.replace("left:60pt;top:130pt;width:120pt", "left:60pt;top:400pt;width:120pt");
   for (const scale of [0.25, 1, 4]) {
     const page = await browser.newPage({
       viewport: { width: 1200, height: 1200 },
@@ -129,7 +135,7 @@ export async function exerciseObjectDrag(browser, baseUrl, snapshot) {
   }
 }
 
-async function pressObject(page, target) {
+export async function pressObject(page, target) {
   const outline = target.locator(":scope > .object-hit-rect");
   await outline.scrollIntoViewIfNeeded();
   await settleLayout(page);
@@ -179,7 +185,7 @@ async function lastReveal(page) {
   return page.evaluate(() => globalThis.__messages.filter((message) => message.type === "revealSource").at(-1));
 }
 
-async function rejectTranslation(page, edit) {
+export async function rejectTranslation(page, edit) {
   await page.evaluate((requestId) => window.dispatchEvent(new MessageEvent("message", {
     data: { type: "editResult", requestId, status: "rejected", message: "Reset the drag fixture" },
   })), edit.requestId);
@@ -187,7 +193,7 @@ async function rejectTranslation(page, edit) {
   await settleLayout(page);
 }
 
-async function settleLayout(page) {
+export async function settleLayout(page) {
   await page.evaluate(() => new Promise((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(resolve))
   ));

@@ -21,6 +21,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/editor/locks/spec.mjs" },
         .{ .path = "tests/editor/navigation/spec.mjs" },
         .{ .path = "tests/editor/shapes/spec.mjs" },
+        .{ .path = "tests/editor/snapping/spec.mjs", .name = "test-editor-snapping", .description = "Check object alignment snapping and hysteresis" },
         .{ .path = "tests/editor/icons/webview_spec.mjs" },
         .{ .path = "tests/editor/edit_queue/spec.mjs" },
         .{ .path = "tests/editor/translation/spec.mjs" },

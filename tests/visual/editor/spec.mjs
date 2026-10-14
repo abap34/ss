@@ -11,6 +11,7 @@ import { editorSnapshot, testDocument } from "./fixture.mjs";
 import { exerciseTranslationLifecycle } from "./translation.mjs";
 import { exerciseRelativeAdjustment } from "./relative-adjustment.mjs";
 import { exerciseObjectDrag } from "./drag.mjs";
+import { exerciseSnapping } from "./snapping.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(repository, "editor/vscode/media/editor");
@@ -61,6 +62,13 @@ await writeFile(path.join(output, "asset.pdf"), pdfAsset());
 await writeFile(path.join(output, "index.html"), testDocument(), "utf8");
 
 await withBrowser(output, async (browser, baseUrl) => {
+  if (!process.argv.includes("--drag-only") && !process.argv.includes("--relative-adjustment-only")) {
+    await exerciseSnapping(browser, baseUrl, editorSnapshot(), output);
+  }
+  if (process.argv.includes("--snapping-only")) {
+    console.log("WYSIWYG snapping UI checks passed.");
+    return;
+  }
   if (!process.argv.includes("--relative-adjustment-only")) {
     await exerciseObjectDrag(browser, baseUrl, editorSnapshot());
   }

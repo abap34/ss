@@ -7,6 +7,8 @@ import {
   subtreeNodeIds,
 } from "./geometry.js";
 import { renderConstraints } from "./constraints.js";
+import { collectSnapTargets, snapBounds } from "./snapping.js";
+import { updateSnapGuides } from "./snap-guides.js";
 import {
   createResizeHandle,
   setResizeHandlePosition,
@@ -265,6 +267,11 @@ export class InteractionController {
     if (event.key === "Shift") this.shiftKeys.add(event.code || event.key);
     this.setShiftPressed(event.shiftKey || this.shiftKeys.size > 0);
     if (event.key === "Escape") {
+      if (this.drag) {
+        event.preventDefault();
+        this.cancelDrag();
+        return;
+      }
       if (this.lineEndpointDrag) {
         event.preventDefault();
         this.cancelLineEndpoint();
@@ -818,6 +825,16 @@ export class InteractionController {
     this.actions.selectObject(object.id, object.page_id, false);
     if (!this.isMovable(object.id)) return;
     const svg = group.ownerSVGElement;
+    const snapTargets = collectSnapTargets(
+      this.state.snapshot,
+      page,
+      object.id,
+      (nodeId) => this.actions.shape.pendingBounds(nodeId)?.bounds ||
+        this.frameByNode(page, nodeId),
+      (nodeId) => this.actions.componentDeletion.isDeleting(nodeId),
+    );
+    const guideLayer = svgElement("g", "snap-guide-layer");
+    svg.append(guideLayer);
     this.drag = {
       pointerId: event.pointerId,
       page,
@@ -833,6 +850,9 @@ export class InteractionController {
       to: { ...frame },
       relative: event.shiftKey,
       nodeIds: subtreeNodeIds(this.state.snapshot, object.id),
+      snapTargets,
+      snaps: {},
+      guideLayer,
     };
     group.setPointerCapture(event.pointerId);
     group.addEventListener("pointermove", this.updateDrag);
@@ -859,7 +879,17 @@ export class InteractionController {
     const point = svgPoint(drag.svg, event);
     const dx = point.x - drag.start.x;
     const dy = point.y - drag.start.y;
-    drag.to = { ...drag.from, x: drag.from.x + dx, y: drag.from.y + dy };
+    const rect = drag.svg.getBoundingClientRect();
+    const scale = { x: rect.width / drag.page.width, y: rect.height / drag.page.height };
+    const snapped = snapBounds(
+      { ...drag.from, x: drag.from.x + dx, y: drag.from.y + dy },
+      drag.snapTargets,
+      scale,
+      drag.snaps,
+    );
+    drag.to = snapped.bounds;
+    drag.snaps = snapped.snaps;
+    updateSnapGuides(drag.guideLayer, snapped.guides, scale);
     const totalX = drag.to.x - drag.base.x;
     const totalY = drag.to.y - drag.base.y;
     drag.group.setAttribute("transform", `translate(${totalX} ${totalY})`);
@@ -938,6 +968,7 @@ export class InteractionController {
     drag.group.removeEventListener("pointermove", this.updateDrag);
     drag.group.removeEventListener("pointerup", this.finishDrag);
     drag.group.removeEventListener("pointercancel", this.cancelDrag);
+    drag.guideLayer.remove();
     this.drag = null;
   }
 

@@ -27,7 +27,7 @@ export async function exerciseTranslationLifecycle(page, current) {
   assert(initialPreviewBox, "movable object had no rendered preview bounds");
 
   await page.keyboard.down("Shift");
-  await drag(page, box, 14, 9);
+  await drag(page, box, 32, 24);
   await page.keyboard.up("Shift");
   const translate = await lastMessage(page, "translate");
   assert.equal(translate.snapshotId, current.snapshot_id);
@@ -77,7 +77,7 @@ export async function exerciseTranslationLifecycle(page, current) {
   const followUpY = movedTargetBox.y + movedTargetBox.height / 2;
   await page.mouse.move(followUpX, followUpY);
   await page.mouse.down();
-  await page.mouse.move(followUpX + 10, followUpY + 7, { steps: 3 });
+  await page.mouse.move(followUpX + 32, followUpY + 24, { steps: 3 });
   await postEditResult(page, {
     type: "editResult",
     requestId: translate.requestId,
@@ -264,7 +264,7 @@ export async function exerciseTranslationLifecycle(page, current) {
   );
 
   const staleRequestCount = await messageCount(page, "translate");
-  await drag(page, await targetRect.boundingBox(), 9, 6);
+  await drag(page, await targetRect.boundingBox(), 24, 24);
   const staleRequest = await lastMessage(page, "translate");
   await settleLayout(page);
   const staleDesiredBox = await previewTarget.boundingBox();
@@ -325,7 +325,7 @@ export async function exerciseTranslationLifecycle(page, current) {
   await settleLayout(page);
 
   const failedBuildRequestCount = await messageCount(page, "translate");
-  await drag(page, await targetRect.boundingBox(), 12, 8);
+  await drag(page, await targetRect.boundingBox(), 24, 24);
   await page.waitForFunction(
     (count) => globalThis.__messages.filter((message) =>
       message.type === "translate"
