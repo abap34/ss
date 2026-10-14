@@ -309,6 +309,7 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.Te
         hashColor(hasher, text.color);
         hashColor(hasher, text.link_color);
         hashOptionalColor(hasher, text.markdown_bold_color);
+        hashOptionalColor(hasher, text.markdown_highlight_fill);
         hashMarkdownUnderlinePaint(hasher, text.markdown_underline);
         hashMarkdownQuotePaint(hasher, text.markdown_quote);
         for (text.markdown_headings) |heading| hashOptionalHeadingPaint(hasher, heading);
@@ -361,6 +362,7 @@ fn hashOptionalHeadingPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy
         hashColor(hasher, heading.color);
         hashColor(hasher, heading.link_color);
         hashOptionalColor(hasher, heading.markdown_bold_color);
+        hashOptionalColor(hasher, heading.markdown_highlight_fill);
         hashMarkdownUnderlinePaint(hasher, heading.markdown_underline);
         hashF32(hasher, heading.math_scale);
         hashF32(hasher, heading.inline_math_spacing);

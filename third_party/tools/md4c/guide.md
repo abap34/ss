@@ -72,6 +72,26 @@ Alignment remains part of the separator: `:---{100pt}` is left-aligned,
 leave the row as ordinary Markdown; a closed annotation with an unsupported
 unit or value is an error in ss.
 
+## Highlighted spans
+
+The opt-in `MD_FLAG_MARK` flag recognizes `==text==` and emits `MD_SPAN_MARK`.
+The MD4C HTML renderer emits `<mark>` elements. Exactly two equals signs are
+required, with no whitespace just inside the delimiters. Code spans, escaped
+equals signs, and unmatched delimiters remain literal. Other inline formatting
+can be nested inside highlights, and highlights can appear inside links.
+
+ss enables highlights in inline and block Markdown, including headings, lists,
+quotes, and table cells. `TextStyle.markdown_highlight_fill` controls the
+background color and defaults to pale yellow. Set it to `none` to disable the
+background without changing the parsed text. The same property on a Markdown
+heading's text style controls highlights in that heading.
+
+```ss
+text!("An ==important **detail**== and a ==[link](https://example.com)==")
+let note = text!("A ==custom highlight==")
+note.text.markdown_highlight_fill = c"#b9f6ca"
+```
+
 ## Importing a fork update
 
 Git remotes are local configuration. Each new clone needs this once:

@@ -3294,6 +3294,45 @@ fn drawPreparedParagraph(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32
     if (ctx.measurement_bounds) |bounds| {
         if (bounds.first_baseline == null and layout.native.line_count > 0) bounds.first_baseline = @floatCast(top_y + layout.native.lines[0].baseline_y);
     }
+    var has_background = false;
+    for (spans) |span| {
+        if (span.background != null) {
+            has_background = true;
+            break;
+        }
+    }
+    if (has_background) {
+        // Emit all backgrounds before glyphs and inline assets, so adjacent paint
+        // fragments cannot cover each other's ink.
+        for (layout.native.lines[0..layout.native.line_count]) |line| {
+            try std.Io.checkCancel(ctx.io);
+            const line_x = alignedX(x, width, @floatCast(line.logical_bounds.width), horizontal_align);
+            for (line.run_start..line.run_start + line.run_count) |run_index| {
+                var fragments = inline_layout.Fragments.init(prepared, run_index);
+                while (fragments.next()) |fragment| {
+                    const span = &spans[fragment.span_index];
+                    if (span.content != .text) continue;
+                    if (span.background) |color| {
+                        var rect = inline_layout.fragmentBackground(layout, run_index, fragment.start, fragment.end, line.logical_bounds.y, line.logical_bounds.height);
+                        rect.x += line_x;
+                        rect.y += top_y;
+                        try drawParagraphBackground(ctx, rect, color);
+                    }
+                }
+            }
+        }
+        var background_object: usize = 0;
+        for (spans) |span| {
+            if (span.content == .text) continue;
+            const position = layout.objects[background_object];
+            background_object += 1;
+            if (span.background) |color| {
+                const line = layout.native.lines[position.line_index];
+                const line_x = alignedX(x, width, @floatCast(line.logical_bounds.width), horizontal_align);
+                try drawParagraphBackground(ctx, .{ .x = line_x + position.x, .y = top_y + line.logical_bounds.y, .width = span.width, .height = line.logical_bounds.height }, color);
+            }
+        }
+    }
     for (layout.native.lines[0..layout.native.line_count]) |line| {
         try std.Io.checkCancel(ctx.io);
         const line_x = alignedX(x, width, @floatCast(line.logical_bounds.width), horizontal_align);
@@ -3326,6 +3365,15 @@ fn drawPreparedParagraph(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32
         },
     };
     return .{ .next_baseline = @floatCast(Defaults.height - top_y - layout.native.logical_bounds.height - layout.default_ascent), .logical_width = @floatCast(layout.native.logical_bounds.width) };
+}
+
+fn drawParagraphBackground(ctx: *DrawContext, rect: render_ir.Rect, color: Color) !void {
+    if (rect.width <= 0 or rect.height <= 0) return;
+    if (ctx.measurement_bounds) |bounds| {
+        bounds.include(rect);
+        if (!ctx.capture_measurement_content) return;
+    }
+    try activeEmitter(ctx).fillRect(ctx.allocator, rect, color);
 }
 
 fn drawParagraphFragment(ctx: *DrawContext, layout: *const render_text.paragraph.Layout, run_index: usize, start: usize, end: usize, span: *InlineSpan, span_start: usize, line_x: f32, top_y: f64, paint: ParagraphPaint) !void {

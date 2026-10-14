@@ -159,6 +159,7 @@ pub const MarkdownHeadingPaint = struct {
     color: Color,
     link_color: Color,
     markdown_bold_color: ?Color,
+    markdown_highlight_fill: ?Color = null,
     markdown_underline: MarkdownUnderlinePaint,
     math_scale: f32,
     inline_math_spacing: f32,
@@ -180,6 +181,7 @@ pub const TextPaint = struct {
     color: Color,
     link_color: Color,
     markdown_bold_color: ?Color,
+    markdown_highlight_fill: ?Color = null,
     markdown_underline: MarkdownUnderlinePaint,
     markdown_quote: MarkdownQuotePaint,
     markdown_headings: [6]?MarkdownHeadingPaint,
@@ -231,6 +233,7 @@ pub const TextPaint = struct {
         result.color = heading.color;
         result.link_color = heading.link_color;
         result.markdown_bold_color = heading.markdown_bold_color;
+        result.markdown_highlight_fill = heading.markdown_highlight_fill;
         result.markdown_underline = heading.markdown_underline;
         result.math_scale = heading.math_scale;
         result.inline_math_spacing = heading.inline_math_spacing;
@@ -387,6 +390,7 @@ fn resolveText(state: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .color = parseRecordColorProperty(state, node, "text", "color") orelse FALLBACK_TEXT_COLOR,
         .link_color = parseRecordColorProperty(state, node, "text", "link_color") orelse FALLBACK_LINK_COLOR,
         .markdown_bold_color = parseRecordColorProperty(state, node, "text", "markdown_bold_color"),
+        .markdown_highlight_fill = parseRecordColorProperty(state, node, "text", "markdown_highlight_fill"),
         .markdown_underline = resolveMarkdownUnderline(state, node),
         .markdown_quote = resolveMarkdownQuote(state, node),
         .markdown_headings = .{
@@ -447,6 +451,7 @@ fn resolveMarkdownHeading(node: *const Node, field_name: []const u8) ?MarkdownHe
         .color = parseMarkdownHeadingTextColor(node, field_name, "color") orelse FALLBACK_TEXT_COLOR,
         .link_color = parseMarkdownHeadingTextColor(node, field_name, "link_color") orelse FALLBACK_LINK_COLOR,
         .markdown_bold_color = parseMarkdownHeadingTextColor(node, field_name, "markdown_bold_color"),
+        .markdown_highlight_fill = parseMarkdownHeadingTextColor(node, field_name, "markdown_highlight_fill"),
         .markdown_underline = resolveMarkdownHeadingUnderline(node, field_name),
         .math_scale = positiveMarkdownHeadingTextFloatProperty(node, field_name, "math_scale") orelse 1,
         .inline_math_spacing = nonNegativeMarkdownHeadingTextFloatProperty(node, field_name, "inline_math_spacing") orelse 0,

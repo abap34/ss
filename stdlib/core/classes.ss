@@ -178,6 +178,7 @@ record TextStyle {
   color: Color = c"0.08,0.08,0.08"
   link_color: Color = c"0.1,0.25,0.75"
   markdown_bold_color: Color? = none
+  markdown_highlight_fill: Color? = c"#fff2a8"
   markdown_underline: MarkdownUnderlineStyle = MarkdownUnderlineStyle {}
   markdown_quote: MarkdownQuoteStyle = MarkdownQuoteStyle {}
   math_scale: Number = 1

@@ -46,6 +46,7 @@ pub const InlineSpan = struct {
     text: []const u8,
     font: FontFace,
     color: Color,
+    background: ?Color = null,
     width: f32 = 0,
     height: f32 = 0,
     baseline_from_bottom: f32 = 0,
@@ -92,6 +93,7 @@ pub fn prepareRunSpans(ctx: Context, runs: []const Run, text: TextPaint, spans: 
     try spans.ensureUnusedCapacity(ctx.assets.allocator, runs.len);
 
     for (runs) |run| {
+        const start = spans.items.len;
         switch (run.kind) {
             .math, .display_math => {
                 try appendMathSpan(ctx, spans, run.text, text, if (run.kind == .display_math) .display_math else .inline_math);
@@ -103,6 +105,9 @@ pub fn prepareRunSpans(ctx: Context, runs: []const Run, text: TextPaint, spans: 
             .link => try appendTextSpan(ctx, spans, run.text, text.font, text.link_color, run.url, run.strikethrough, true, .{}, .{ .start = run.source_start, .end = run.source_end }),
             .text => try appendTextSpan(ctx, spans, run.text, text.font, text.color, null, run.strikethrough, run.underline, text.markdown_underline, .{ .start = run.source_start, .end = run.source_end }),
         }
+        if (run.highlighted) for (spans.items[start..]) |*span| {
+            span.background = text.markdown_highlight_fill;
+        };
     }
 }
 
@@ -318,13 +323,24 @@ pub fn fragmentInk(layout: *const render_text.paragraph.Layout, run_index: usize
     return ink;
 }
 
+pub fn fragmentBackground(layout: *const render_text.paragraph.Layout, run_index: usize, start: usize, end: usize, line_top: f64, line_height: f64) render_ir.Rect {
+    const run = layout.native.runs[run_index];
+    const first = layout.native.clusters[start];
+    const last = layout.native.clusters[end - 1];
+    return .{ .x = run.x + first.x, .y = line_top, .width = last.x + last.advance_x - first.x, .height = line_height };
+}
+
 fn paragraphInk(prepared: *const PreparedParagraph, spans: []const InlineSpan) ?render_ir.Rect {
     const layout = prepared.layout;
     var ink: ?render_ir.Rect = null;
-    for (0..layout.native.run_count) |run_index| {
-        var fragments = Fragments.init(prepared, run_index);
-        while (fragments.next()) |fragment| {
-            if (fragmentInk(layout, run_index, fragment.start, fragment.end, spanDecoration(&spans[fragment.span_index]))) |rect| include(&ink, rect);
+    for (layout.native.lines[0..layout.native.line_count]) |line| {
+        for (line.run_start..line.run_start + line.run_count) |run_index| {
+            var fragments = Fragments.init(prepared, run_index);
+            while (fragments.next()) |fragment| {
+                const span = &spans[fragment.span_index];
+                if (span.background != null and span.content == .text) include(&ink, fragmentBackground(layout, run_index, fragment.start, fragment.end, line.logical_bounds.y, line.logical_bounds.height));
+                if (fragmentInk(layout, run_index, fragment.start, fragment.end, spanDecoration(span))) |rect| include(&ink, rect);
+            }
         }
     }
     var object_index: usize = 0;
@@ -332,6 +348,10 @@ fn paragraphInk(prepared: *const PreparedParagraph, spans: []const InlineSpan) ?
         if (span.content == .text) continue;
         const position = layout.objects[object_index];
         object_index += 1;
+        if (span.background != null) {
+            const line = layout.native.lines[position.line_index];
+            include(&ink, .{ .x = position.x, .y = line.logical_bounds.y, .width = span.width, .height = line.logical_bounds.height });
+        }
         include(&ink, .{ .x = position.x, .y = position.baseline_y + span.baseline_from_bottom - span.height, .width = span.width, .height = span.height });
     }
     return ink;

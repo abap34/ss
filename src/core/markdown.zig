@@ -10,6 +10,7 @@ const markdown_flags = c.MD_DIALECT_GITHUB |
     c.MD_FLAG_LATEXMATHSPANS |
     c.MD_FLAG_TASKLISTS |
     c.MD_FLAG_UNDERLINE |
+    c.MD_FLAG_MARK |
     c.MD_FLAG_TABLECOLUMNWIDTHS |
     c.MD_FLAG_NOHTML |
     c.MD_FLAG_NOINDENTEDCODEBLOCKS;
@@ -38,6 +39,7 @@ pub const Run = struct {
     source_end: usize = 0,
     strikethrough: bool = false,
     underline: bool = false,
+    highlighted: bool = false,
     url: ?[]const u8 = null,
     icon: ?[]const u8 = null,
 
@@ -243,6 +245,7 @@ const ParserState = struct {
     italic_depth: usize = 0,
     strikethrough_depth: usize = 0,
     underline_depth: usize = 0,
+    highlight_depth: usize = 0,
     code_depth: usize = 0,
     math_depth: usize = 0,
     display_math_depth: usize = 0,
@@ -535,6 +538,7 @@ const InlineParserState = struct {
     italic_depth: usize = 0,
     strikethrough_depth: usize = 0,
     underline_depth: usize = 0,
+    highlight_depth: usize = 0,
     code_depth: usize = 0,
     math_depth: usize = 0,
     display_math_depth: usize = 0,
@@ -756,6 +760,7 @@ fn handleEnterSpan(comptime T: type, state: *T, span_type: c.MD_SPANTYPE, detail
         c.MD_SPAN_STRONG => state.strong_depth += 1,
         c.MD_SPAN_DEL => state.strikethrough_depth += 1,
         c.MD_SPAN_U => state.underline_depth += 1,
+        c.MD_SPAN_MARK => state.highlight_depth += 1,
         c.MD_SPAN_CODE => state.code_depth += 1,
         c.MD_SPAN_LATEXMATH => state.math_depth += 1,
         c.MD_SPAN_LATEXMATH_DISPLAY => {
@@ -793,6 +798,9 @@ fn handleLeaveSpan(comptime T: type, state: *T, span_type: c.MD_SPANTYPE, runs: 
         },
         c.MD_SPAN_U => {
             if (state.underline_depth > 0) state.underline_depth -= 1;
+        },
+        c.MD_SPAN_MARK => {
+            if (state.highlight_depth > 0) state.highlight_depth -= 1;
         },
         c.MD_SPAN_CODE => {
             if (state.code_depth > 0) state.code_depth -= 1;
@@ -900,6 +908,7 @@ fn appendTextRun(
         .source_end = source_span.end,
         .strikethrough = state.strikethrough_depth > 0,
         .underline = state.underline_depth > 0,
+        .highlighted = state.highlight_depth > 0,
     };
     errdefer run.deinit(alloc);
     if (run.kind == .link and state.link_url != null) {
@@ -941,6 +950,7 @@ fn appendIconRun(comptime T: type, state: *T, runs: *std.ArrayList(Run), src: []
         .kind = .icon,
         .text = text_copy,
         .icon = src_copy,
+        .highlighted = state.highlight_depth > 0,
     });
 }
 

@@ -176,6 +176,48 @@ test "core markdown spec: underscore marks underline without changing style kind
     try testing.expectEqualStrings("bold under", runs[3].text);
 }
 
+test "highlight spans compose with inline formatting links code math and icons" {
+    var layout = try markdown.parseTextLayoutContent(testing.allocator, "==plain **bold** *italic* _under_ ~~gone~~ `code` [link](https://example.com) $x$ ![star](fa:star)==");
+    defer layout.deinit(testing.allocator);
+    var underlined = false;
+    var deleted = false;
+    for (layout.lines.items[0].runs.items) |run| {
+        try testing.expect(run.highlighted);
+        underlined = underlined or run.underline;
+        deleted = deleted or run.strikethrough;
+    }
+    for ([_]markdown.RunKind{ .text, .bold, .italic, .code, .link, .math, .icon }) |kind| {
+        var found = false;
+        for (layout.lines.items[0].runs.items) |run| found = found or run.kind == kind;
+        try testing.expect(found);
+    }
+    try testing.expect(underlined and deleted);
+}
+
+test "highlight delimiters respect escapes code whitespace and unmatched runs" {
+    for ([_][]const u8{ "\\==literal==", "`==code==`", "== spaced==", "==spaced ==", "===long===", "=single=", "====", "==unclosed" }) |source| {
+        var layout = try markdown.parseTextLayoutContent(testing.allocator, source);
+        defer layout.deinit(testing.allocator);
+        for (layout.lines.items) |line| for (line.runs.items) |run| try testing.expect(!run.highlighted);
+    }
+    var layout = try markdown.parseTextLayoutContent(testing.allocator, "plain ==marked== after");
+    defer layout.deinit(testing.allocator);
+    const runs = layout.lines.items[0].runs.items;
+    try testing.expect(!runs[0].highlighted);
+    try testing.expect(runs[1].highlighted);
+    try testing.expectEqualStrings("marked", runs[1].text);
+    try testing.expectEqual(@as(usize, 8), runs[1].source_start);
+    try testing.expectEqual(@as(usize, 14), runs[1].source_end);
+    try testing.expect(!runs[2].highlighted);
+}
+
+test "highlight spans persist across soft breaks in block Markdown" {
+    var doc = try markdown.parseMarkdownContent(testing.allocator, "==first\nsecond==");
+    defer doc.deinit();
+    const paragraph = doc.blocks.items[0].paragraph.?;
+    for (paragraph.lines.items) |line| for (line.runs.items) |run| try testing.expect(run.highlighted);
+}
+
 test "core markdown spec: task list markers are consumed" {
     const allocator = testing.allocator;
     var doc = try markdown.parseMarkdownContent(allocator,
@@ -304,7 +346,7 @@ test "core markdown spec: html blocks do not suppress markdown parsing" {
 }
 
 fn parseInlineWithAllocator(allocator: std.mem.Allocator) !void {
-    var layout = try markdown.parseTextLayoutContent(allocator, "[link](https://example.com) ![icon](fa:star) **bold** _underlined_ ~~deleted~~ $x$");
+    var layout = try markdown.parseTextLayoutContent(allocator, "[link](https://example.com) ![icon](fa:star) **bold** _underlined_ ~~deleted~~ ==marked== $x$");
     defer layout.deinit(allocator);
     try testing.expect(layout.lines.items.len > 0);
     try testing.expect(layout.lines.items[0].runs.items.len > 0);
