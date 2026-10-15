@@ -78,6 +78,7 @@ const Server = struct {
     editor_snapshot_cache: editor_snapshot.Cache,
     analysis: ?AnalysisSnapshot = null,
     analysis_revision: u64 = 0,
+    analysis_diagnostics: DiagnosticSet,
     layout_responses: ResponseStore = .{},
     editor_responses: ResponseStore = .{},
     editor_diagnostics: ResponseStore = .{},
@@ -99,6 +100,7 @@ const Server = struct {
             .allocator = allocator,
             .ingress = ingress,
             .documents = DocumentStore.init(allocator),
+            .analysis_diagnostics = DiagnosticSet.init(allocator),
             .embedded_cache = module_loader.EmbeddedSyntaxCache.init(allocator),
             .render_resource_cache = render_resources.SourceCache.init(allocator, io),
             .text_shape_cache = render_text.Cache.init(allocator, io),
@@ -113,6 +115,7 @@ const Server = struct {
     fn deinit(self: *Server) void {
         self.documents.deinit();
         if (self.analysis) |*snapshot| snapshot.deinit();
+        self.analysis_diagnostics.deinit();
         self.embedded_cache.deinit();
         self.render_resource_cache.deinit();
         self.text_shape_cache.deinit();
@@ -175,7 +178,16 @@ const Server = struct {
         self.analysis = snapshot;
         self.analysis_revision = self.active_revision;
         snapshot_owned = false;
-        try self.publishAnalysisDiagnostics(&diagnostics);
+        try self.acceptAnalysisDiagnostics(&diagnostics);
+    }
+
+    fn acceptAnalysisDiagnostics(self: *Server, diagnostics: *DiagnosticSet) !void {
+        // Keep the complete diagnostics alongside the accepted analysis generation.
+        // Layout hooks may add information absent from the static analysis bag.
+        self.analysis_diagnostics.deinit();
+        self.analysis_diagnostics = diagnostics.*;
+        diagnostics.* = DiagnosticSet.init(self.allocator);
+        try self.publishAnalysisDiagnostics(&self.analysis_diagnostics);
     }
 
     fn publishAnalysisDiagnostics(self: *Server, diagnostics: *DiagnosticSet) !void {
@@ -238,7 +250,7 @@ const Server = struct {
         if (!completed) return false;
         try self.checkCanceled();
         try diagnostics.addAnalysisBag(&snapshot.diagnostics);
-        try self.publishAnalysisDiagnostics(&diagnostics);
+        try self.acceptAnalysisDiagnostics(&diagnostics);
         return true;
     }
 
@@ -255,10 +267,7 @@ const Server = struct {
     fn republishCurrentDiagnostics(self: *Server) !void {
         const snapshot = if (self.analysis) |*value| value else return;
         if (snapshot.generation != self.documents.generation or self.analysis_revision != self.active_revision) return;
-        var diagnostics = DiagnosticSet.init(self.allocator);
-        defer diagnostics.deinit();
-        try diagnostics.addAnalysisBag(&snapshot.diagnostics);
-        try self.publishAnalysisDiagnostics(&diagnostics);
+        try self.publishAnalysisDiagnostics(&self.analysis_diagnostics);
     }
 
     fn scheduleRebuild(self: *Server, changed_path: []const u8) !void {
@@ -396,7 +405,7 @@ const Server = struct {
         var diagnostics = DiagnosticSet.init(self.allocator);
         defer diagnostics.deinit();
         try diagnostics.addAnalysisBag(&snapshot.diagnostics);
-        try self.publishAnalysisDiagnostics(&diagnostics);
+        try self.acceptAnalysisDiagnostics(&diagnostics);
         return true;
     }
 
@@ -466,9 +475,10 @@ const Server = struct {
         try self.checkCanceled();
 
         var config: ?project.Config = null;
+        var config_error: ?anyerror = null;
         if (project_path) |path| {
             config = project.loadFile(self.allocator, self.io, path) catch |err| blk: {
-                try self.addProjectConfigDiagnostic(diagnostics, path, err);
+                config_error = err;
                 break :blk null;
             };
         }
@@ -525,6 +535,7 @@ const Server = struct {
             .retain_evaluated_layout_state = include_layout and self.wysiwyg_paths.count() != 0,
         });
         errdefer analysis_snapshot.deinit();
+        if (config_error) |err| try self.addProjectConfigDiagnostic(&analysis_snapshot.diagnostics, project_path.?, err);
         try diagnostics.addAnalysisBag(&analysis_snapshot.diagnostics);
         return analysis_snapshot;
     }
@@ -556,7 +567,7 @@ const Server = struct {
         return analysis_snapshot;
     }
 
-    fn addProjectConfigDiagnostic(self: *Server, diagnostics: *DiagnosticSet, path: []const u8, err: anyerror) !void {
+    fn addProjectConfigDiagnostic(self: *Server, diagnostics: *analysis.diagnostics.DiagnosticBag, path: []const u8, err: anyerror) !void {
         var owned_source: ?[]u8 = null;
         defer if (owned_source) |text| self.allocator.free(text);
         const text = self.documents.sourceForPath(path) orelse blk: {
@@ -570,7 +581,7 @@ const Server = struct {
         const diagnostic = project.configErrorDiagnostic(text, err);
         const explanation = project.configErrorMessage(err) orelse utils.err.formatBuildFailure(&message_buf, err);
         const message = if (diagnostic.message().len == 0) explanation else try std.fmt.bufPrint(&message_buf, "{s}: {s}", .{ explanation, diagnostic.message() });
-        try diagnostics.add(path, text, .@"error", @errorName(err), message, diagnostic.span);
+        try diagnostics.add(path, text, .@"error", @errorName(err), message, diagnostic.span, null);
     }
 
     fn clearChangedDocumentDiagnostics(self: *Server, uri: []const u8) !void {

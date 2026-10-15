@@ -2,7 +2,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { assert, withLspClient } from "../../harness.mjs";
 import {
   applyProtocolEdits,
@@ -26,6 +26,45 @@ end
 await testDraggingPublishesAndClearsFollowerOverflow();
 await testManualPreviewPublishesWarningsAfterMeasurement();
 await testFrameDiagnosticsRespectFitPolicy();
+await testUnchangedTextPreservesConstraintDiagnostics();
+await testUnchangedTextPreservesConfigDiagnostics();
+
+async function testUnchangedTextPreservesConstraintDiagnostics() {
+  const conflict = `page example
+let item = text!("A")
+~ item.left == page.left
+~ item.left == page.left + 10
+end
+`;
+  await withProject(conflict, null, async (client, uri) => {
+    const initial = await open(client, uri, conflict);
+    assert(initial.some(item => item.code === "ConstraintConflict"), "missing initial constraint conflict");
+    const pending = client.waitForDiagnostics(uri, (_, message) => message.params.version === 2);
+    client.changeDocument({ uri, text: conflict, version: 2 });
+    const repeated = (await pending).params.diagnostics;
+    assert(JSON.stringify(repeated) === JSON.stringify(initial),
+      `unchanged text lost constraint diagnostics: ${JSON.stringify(repeated)}`);
+  });
+}
+
+async function testUnchangedTextPreservesConfigDiagnostics() {
+  const text = 'page example\ntext!("A")\nend\n';
+  await withProject(text, '[project]\nentry = 23\n', async (client, uri) => {
+    const configUri = new URL("ss.toml", uri).toString();
+    const first = client.waitForDiagnostics(configUri, diagnostics => diagnostics.length > 0);
+    await open(client, uri, text);
+    const initial = (await first).params.diagnostics;
+    const pending = client.waitForDiagnostics(configUri);
+    client.changeDocument({ uri, text, version: 2 });
+    const repeated = (await pending).params.diagnostics;
+    assert(JSON.stringify(repeated) === JSON.stringify(initial),
+      `unchanged text lost configuration diagnostics: ${JSON.stringify(repeated)}`);
+    const cleared = client.waitForDiagnostics(configUri, diagnostics => diagnostics.length === 0);
+    await writeFile(fileURLToPath(configUri), '[project]\nentry = "slide.ss"\n');
+    client.notify("workspace/didChangeWatchedFiles", { changes: [{ uri: configUri, type: 2 }] });
+    await cleared;
+  });
+}
 
 async function testDraggingPublishesAndClearsFollowerOverflow() {
   await withProject(source, null, async (client, uri) => {
