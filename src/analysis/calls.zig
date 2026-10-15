@@ -8,9 +8,14 @@ const analysis_env = @import("env.zig");
 
 const SemanticEnv = semantic_env.SemanticEnv;
 
+// Closure specialization can create an unbounded sequence of environments.
+// Exhaustion rejects the program before evaluation; it is not a termination proof.
+const max_call_analysis_depth = 128;
+
 const LambdaKey = struct {
     module_id: core.SourceModuleId,
     span: ast.Span,
+    capture_id: usize = 0,
 };
 
 const Label = union(enum) {
@@ -34,8 +39,10 @@ const Label = union(enum) {
                 .function => false,
                 .lambda => |right_key| if (left_key.module_id != right_key.module_id)
                     left_key.module_id < right_key.module_id
+                else if (!spanEql(left_key.span, right_key.span))
+                    spanLessThan(left_key.span, right_key.span)
                 else
-                    spanLessThan(left_key.span, right_key.span),
+                    left_key.capture_id < right_key.capture_id,
             },
         };
     }
@@ -55,6 +62,7 @@ const LabelContext = struct {
                 hasher.update(std.mem.asBytes(&key.module_id));
                 hasher.update(std.mem.asBytes(&key.span.start));
                 hasher.update(std.mem.asBytes(&key.span.end));
+                hasher.update(std.mem.asBytes(&key.capture_id));
             },
         }
         return hasher.final();
@@ -68,7 +76,7 @@ const LabelContext = struct {
             },
             .lambda => |left_key| switch (right) {
                 .function => false,
-                .lambda => |right_key| left_key.module_id == right_key.module_id and spanEql(left_key.span, right_key.span),
+                .lambda => |right_key| left_key.module_id == right_key.module_id and spanEql(left_key.span, right_key.span) and left_key.capture_id == right_key.capture_id,
             },
         };
     }
@@ -77,54 +85,99 @@ const LabelContext = struct {
 const LabelMap = std.HashMap(Label, void, LabelContext, std.hash_map.default_max_load_percentage);
 const ConstVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 const LambdaMap = std.AutoHashMap(LambdaKey, ast.LambdaExpr);
-const LambdaCaptureMap = std.AutoHashMap(LambdaKey, std.ArrayList(FunctionEnv));
+const LambdaCaptureMap = std.AutoHashMap(LambdaKey, FunctionEnv);
 
-const LabelSet = struct {
+// Function candidates follow the runtime value shape. Optional values use the
+// same facts as their present value; none contributes no function candidates.
+// Unknown facts also describe unspecified record fields. Explicit fields can
+// refine them, for example after a record update.
+const ValueFacts = struct {
     labels: LabelMap,
+    fields: std.StringHashMap(ValueFacts),
+    unknown: bool = false,
 
-    fn init(allocator: std.mem.Allocator) LabelSet {
-        return .{ .labels = LabelMap.init(allocator) };
+    fn init(allocator: std.mem.Allocator) ValueFacts {
+        return .{ .labels = LabelMap.init(allocator), .fields = std.StringHashMap(ValueFacts).init(allocator) };
     }
 
-    fn singleton(allocator: std.mem.Allocator, label: Label) !LabelSet {
-        var set = init(allocator);
-        try set.add(label);
-        return set;
+    fn unknownValue(allocator: std.mem.Allocator) ValueFacts {
+        var value = init(allocator);
+        value.unknown = true;
+        return value;
     }
 
-    fn add(self: *LabelSet, label: Label) !void {
-        try self.labels.put(label, {});
+    fn singleton(allocator: std.mem.Allocator, label: Label) !ValueFacts {
+        var value = init(allocator);
+        try value.labels.put(label, {});
+        return value;
     }
 
-    fn deinit(self: *LabelSet) void {
+    fn deinit(self: *ValueFacts) void {
+        var fields = self.fields.valueIterator();
+        while (fields.next()) |field| field.deinit();
+        self.fields.deinit();
         self.labels.deinit();
     }
 
-    fn unionWith(self: *LabelSet, other: LabelSet) !void {
-        var iterator = other.labels.keyIterator();
-        while (iterator.next()) |label| try self.add(label.*);
+    fn unionWith(self: *ValueFacts, other: ValueFacts) anyerror!void {
+        var labels = other.labels.keyIterator();
+        while (labels.next()) |label| try self.labels.put(label.*, {});
+        var fields = self.fields.iterator();
+        while (fields.next()) |field| {
+            if (other.fields.get(field.key_ptr.*)) |value| {
+                try field.value_ptr.unionWith(value);
+            } else if (other.unknown) {
+                try field.value_ptr.unionWith(unknownValue(self.fields.allocator));
+            }
+        }
+        var other_fields = other.fields.iterator();
+        while (other_fields.next()) |field| {
+            if (self.fields.contains(field.key_ptr.*)) continue;
+            var value = try field.value_ptr.clone(self.fields.allocator);
+            if (self.unknown) try value.unionWith(unknownValue(self.fields.allocator));
+            try self.fields.put(field.key_ptr.*, value);
+        }
+        self.unknown = self.unknown or other.unknown;
     }
 
-    fn clone(self: LabelSet, allocator: std.mem.Allocator) !LabelSet {
+    fn clone(self: ValueFacts, allocator: std.mem.Allocator) anyerror!ValueFacts {
         var out = init(allocator);
+        errdefer out.deinit();
         try out.unionWith(self);
         return out;
     }
 
-    fn count(self: LabelSet) usize {
-        return self.labels.count();
+    fn getField(self: ValueFacts, name: []const u8, allocator: std.mem.Allocator) !ValueFacts {
+        if (self.fields.get(name)) |value| return value.clone(allocator);
+        return if (self.unknown) unknownValue(allocator) else init(allocator);
+    }
+
+    fn putField(self: *ValueFacts, name: []const u8, value: ValueFacts) !void {
+        if (self.fields.fetchRemove(name)) |entry| {
+            var old = entry.value;
+            old.deinit();
+        }
+        try self.fields.put(name, value);
+    }
+
+    fn updatePath(self: *ValueFacts, path: []const ast.RecordPathSegment, value: ValueFacts) !void {
+        std.debug.assert(path.len != 0);
+        if (path.len == 1) return self.putField(path[0].name, value);
+        var nested = try self.getField(path[0].name, self.fields.allocator);
+        try nested.updatePath(path[1..], value);
+        try self.putField(path[0].name, nested);
     }
 };
 
-fn cloneLabelSet(allocator: std.mem.Allocator, labels: LabelSet) anyerror!LabelSet {
+fn cloneValueFacts(allocator: std.mem.Allocator, labels: ValueFacts) anyerror!ValueFacts {
     return labels.clone(allocator);
 }
 
-fn deinitLabelSet(labels: *LabelSet) void {
+fn deinitValueFacts(labels: *ValueFacts) void {
     labels.deinit();
 }
 
-const FunctionEnv = analysis_env.CloneEnv(LabelSet, cloneLabelSet, deinitLabelSet);
+const FunctionEnv = analysis_env.CloneEnv(ValueFacts, cloneValueFacts, deinitValueFacts);
 
 const Activation = struct {
     label: Label,
@@ -137,10 +190,14 @@ const Analyzer = struct {
     state: *core.DocumentState,
     sema: SemanticEnv,
     states: std.StringHashMap(u8),
-    returns: std.StringHashMap(LabelSet),
+    returns: std.StringHashMap(ValueFacts),
     const_visiting: ConstVisitSet,
     lambda_exprs: LambdaMap,
     lambda_captures: LambdaCaptureMap,
+    capture_keys: std.StringHashMap(Label),
+    require_known_calls: bool = false,
+    current_origin: ?core.SourceOrigin = null,
+    call_depth: usize = 0,
 
     fn init(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) Analyzer {
         return .{
@@ -148,17 +205,18 @@ const Analyzer = struct {
             .state = state,
             .sema = sema.*,
             .states = std.StringHashMap(u8).init(allocator),
-            .returns = std.StringHashMap(LabelSet).init(allocator),
+            .returns = std.StringHashMap(ValueFacts).init(allocator),
             .const_visiting = ConstVisitSet.init(allocator),
             .lambda_exprs = LambdaMap.init(allocator),
             .lambda_captures = LambdaCaptureMap.init(allocator),
+            .capture_keys = std.StringHashMap(Label).init(allocator),
         };
     }
 
     fn checkAll(self: *Analyzer) !void {
         var const_it = self.state.constants.declarations.iterator();
         while (const_it.next()) |entry| {
-            var labels = try self.constLabels(.{
+            var labels = try self.constFacts(.{
                 .key = entry.key_ptr.*,
                 .module_id = entry.key_ptr.module_id,
                 .decl = entry.value_ptr.*,
@@ -169,10 +227,16 @@ const Analyzer = struct {
         while (it.next()) |entry| {
             const func = entry.value_ptr.*;
             const label = self.namedLabel(entry.key_ptr.*);
-            const env = FunctionEnv.init(self.allocator);
+            var env = FunctionEnv.init(self.allocator);
+            for (func.params.items) |param| try env.bind(param.name, ValueFacts.unknownValue(self.allocator));
             _ = try self.enter(.{ .label = label, .env = env, .owner = func });
         }
-        try self.checkRoots();
+        // Declaration checking leaves higher-order parameters open. Recheck
+        // executed roots with actual arguments, without reusing open captures
+        // or summaries as evidence that a call has been verified.
+        var roots = Analyzer.init(self.allocator, self.state, &self.sema);
+        roots.require_known_calls = true;
+        try roots.checkRoots();
     }
 
     fn checkRoots(self: *Analyzer) !void {
@@ -183,11 +247,11 @@ const Analyzer = struct {
             {
                 defer self.sema = previous;
                 var document_env = FunctionEnv.init(self.allocator);
-                var document_returns = LabelSet.init(self.allocator);
+                var document_returns = ValueFacts.init(self.allocator);
                 try self.analyzeStatements(module.syntax.document_statements.items, &document_env, &document_returns, null);
                 for (module.syntax.pages.items) |page| {
                     var page_env = FunctionEnv.init(self.allocator);
-                    var page_returns = LabelSet.init(self.allocator);
+                    var page_returns = ValueFacts.init(self.allocator);
                     try self.analyzeStatements(page.statements.items, &page_env, &page_returns, null);
                 }
             }
@@ -202,7 +266,15 @@ const Analyzer = struct {
         return .{ .lambda = .{ .module_id = self.sema.module_id, .span = lambda.span } };
     }
 
-    fn enter(self: *Analyzer, activation: Activation) anyerror!LabelSet {
+    fn enter(self: *Analyzer, activation: Activation) anyerror!ValueFacts {
+        if (self.call_depth >= max_call_analysis_depth) {
+            try self.state.addValidationDiagnostic(.@"error", null, null, activationOrigin(self.state, activation), .{
+                .user_report = .{ .code = "FunctionAnalysisLimitExceeded", .message = "cannot establish termination within the function analysis depth limit" },
+            });
+            return error.FunctionAnalysisLimitExceeded;
+        }
+        self.call_depth += 1;
+        defer self.call_depth -= 1;
         const key = try self.activationKey(activation);
         if (self.states.get(key)) |state| {
             if (state == 1) {
@@ -210,7 +282,7 @@ const Analyzer = struct {
                 return error.RecursiveFunction;
             }
             if (self.returns.get(key)) |cached| return try cached.clone(self.allocator);
-            return LabelSet.init(self.allocator);
+            return ValueFacts.init(self.allocator);
         }
 
         const previous = self.sema;
@@ -218,16 +290,16 @@ const Analyzer = struct {
         defer self.sema = previous;
 
         try self.states.put(key, 1);
-        var result = LabelSet.init(self.allocator);
+        var result = ValueFacts.init(self.allocator);
         switch (activation.label) {
             .function => |function_key| {
-                const func = self.sema.functions.get(function_key) orelse return LabelSet.init(self.allocator);
+                const func = self.sema.functions.get(function_key) orelse return ValueFacts.init(self.allocator);
                 var env = try activation.env.clone();
                 try self.analyzeStatements(func.statements.items, &env, &result, func);
             },
             .lambda => |lambda_key| {
-                const lambda = self.lambda_exprs.get(lambda_key) orelse return LabelSet.init(self.allocator);
-                const body_labels = try self.exprLabels(lambda.body.*, &activation.env, activation.owner);
+                const lambda = self.lambda_exprs.get(lambda_key) orelse return ValueFacts.init(self.allocator);
+                const body_labels = try self.exprFacts(lambda.body.*, &activation.env, activation.owner);
                 try result.unionWith(body_labels);
             },
         }
@@ -240,93 +312,113 @@ const Analyzer = struct {
         self: *Analyzer,
         statements: []const ast.Statement,
         env: *FunctionEnv,
-        returns: *LabelSet,
+        returns: *ValueFacts,
         owner: ?ast.FunctionDecl,
     ) anyerror!void {
+        const previous_origin = self.current_origin;
+        defer self.current_origin = previous_origin;
         for (statements) |stmt| {
+            self.current_origin = self.state.sourceOrigin(self.sema.module_id, stmt.span);
             switch (stmt.kind) {
                 .hole => {},
                 .let_binding => |binding| {
-                    const labels = try self.exprLabels(binding.expr, env, owner);
+                    const labels = try self.exprFacts(binding.expr, env, owner);
                     if (language_names.isDiscardBindingName(binding.name)) continue;
                     try env.bind(binding.name, labels);
                 },
                 .return_expr => |expr| {
-                    const labels = try self.exprLabels(expr, env, owner);
+                    const labels = try self.exprFacts(expr, env, owner);
                     try returns.unionWith(labels);
                 },
                 .return_void => {},
                 .property_set => |property_set| {
-                    _ = try self.exprLabels(property_set.target, env, owner);
-                    _ = try self.exprLabels(property_set.value, env, owner);
+                    _ = try self.exprFacts(property_set.target, env, owner);
+                    _ = try self.exprFacts(property_set.value, env, owner);
                 },
                 .if_stmt => |if_stmt| {
-                    _ = try self.exprLabels(if_stmt.condition, env, owner);
+                    _ = try self.exprFacts(if_stmt.condition, env, owner);
                     var then_env = try env.clone();
                     try self.analyzeStatements(if_stmt.then_statements.items, &then_env, returns, owner);
                     var else_env = try env.clone();
                     try self.analyzeStatements(if_stmt.else_statements.items, &else_env, returns, owner);
                 },
                 .constrain => |decl| if (decl.offset) |expr| {
-                    _ = try self.exprLabels(expr, env, owner);
+                    _ = try self.exprFacts(expr, env, owner);
                 },
                 .expr_stmt => |expr| {
-                    _ = try self.exprLabels(expr, env, owner);
+                    _ = try self.exprFacts(expr, env, owner);
                 },
             }
         }
     }
 
-    fn exprLabels(self: *Analyzer, expr: ast.Expr, env: *const FunctionEnv, owner: ?ast.FunctionDecl) anyerror!LabelSet {
+    fn exprFacts(self: *Analyzer, expr: ast.Expr, env: *const FunctionEnv, owner: ?ast.FunctionDecl) anyerror!ValueFacts {
         switch (expr) {
-            .hole => return LabelSet.init(self.allocator),
+            .hole => return ValueFacts.init(self.allocator),
             .ident => |ident| {
                 const name = ident.name;
-                switch (try self.sema.resolveValue(LabelSet, ast.CallableName.bare(name), env.get(name))) {
+                switch (try self.sema.resolveValue(ValueFacts, ast.CallableName.bare(name), env.get(name))) {
                     .local => |labels| return try labels.clone(self.allocator),
-                    .constant => |resolved| return try self.constLabels(resolved),
-                    .function => |resolved| return try LabelSet.singleton(self.allocator, self.namedLabel(resolved.key)),
-                    .primitive, .unknown => {},
+                    .constant => |resolved| return try self.constFacts(resolved),
+                    .function => |resolved| return try ValueFacts.singleton(self.allocator, self.namedLabel(resolved.key)),
+                    .primitive, .unknown => return ValueFacts.unknownValue(self.allocator),
                 }
-                return LabelSet.init(self.allocator);
             },
-            .string, .color, .number, .boolean, .none, .enum_case => return LabelSet.init(self.allocator),
+            .string, .color, .number, .boolean, .none, .enum_case => return ValueFacts.init(self.allocator),
             .lambda => |lambda| {
                 const label = try self.registerLambda(lambda, env);
-                return try LabelSet.singleton(self.allocator, label);
+                return try ValueFacts.singleton(self.allocator, label);
             },
             .record => |record| {
-                var labels = LabelSet.init(self.allocator);
-                errdefer labels.deinit();
-                for (record.fields.items) |field| {
-                    var nested = try self.exprLabels(field.value, env, owner);
-                    defer nested.deinit();
-                    try labels.unionWith(nested);
+                var value = ValueFacts.init(self.allocator);
+                const resolved = self.sema.record(record.module_id, record.type_name) orelse return ValueFacts.unknownValue(self.allocator);
+                const previous = self.sema;
+                {
+                    self.sema = self.sema.forModule(resolved.module_id);
+                    defer self.sema = previous;
+                    const default_env = FunctionEnv.init(self.allocator);
+                    for (resolved.decl.fields.items) |field| {
+                        var supplied = false;
+                        for (record.fields.items) |explicit| {
+                            if (std.mem.eql(u8, explicit.name, field.name)) supplied = true;
+                        }
+                        if (supplied) continue;
+                        if (field.default_value) |expr_value| {
+                            try value.putField(field.name, try self.exprFacts(expr_value.*, &default_env, owner));
+                        }
+                    }
                 }
-                return labels;
+                for (record.fields.items) |field| {
+                    try value.putField(field.name, try self.exprFacts(field.value, env, owner));
+                }
+                return value;
             },
             .record_update => |update| {
-                var labels = try self.exprLabels(update.target.*, env, owner);
-                errdefer labels.deinit();
+                var value = try self.exprFacts(update.target.*, env, owner);
                 for (update.fields.items) |field| {
-                    var nested = try self.exprLabels(field.value, env, owner);
-                    defer nested.deinit();
-                    try labels.unionWith(nested);
+                    try value.updatePath(field.path.items, try self.exprFacts(field.value, env, owner));
                 }
-                return labels;
+                return value;
             },
-            .call => |call| return try self.callLabels(call, env, owner),
+            .call => |call| return try self.callFacts(call, env, owner),
             .apply => |apply| {
-                const callee_labels = try self.exprLabels(apply.callee.*, env, owner);
-                const arg_labels = try self.argumentLabelSets(apply.args.items, env, owner);
-                return try self.invokeLabels(callee_labels, arg_labels.items, owner);
+                const callee_labels = try self.exprFacts(apply.callee.*, env, owner);
+                const arg_labels = try self.argumentFacts(apply.args.items, env, owner);
+                return try self.invokeValue(callee_labels, arg_labels.items, owner);
             },
-            .member => |member| return try self.exprLabels(member.target.*, env, owner),
-            .optional_check => |check| return try self.exprLabels(check.target.*, env, owner),
+            .member => |member| {
+                var value = try self.exprFacts(member.target.*, env, owner);
+                defer value.deinit();
+                return value.getField(member.name, self.allocator);
+            },
+            .optional_check => |check| {
+                _ = try self.exprFacts(check.target.*, env, owner);
+                return ValueFacts.init(self.allocator);
+            },
             .coalesce => |coalesce| {
-                var target = try self.exprLabels(coalesce.target.*, env, owner);
+                var target = try self.exprFacts(coalesce.target.*, env, owner);
                 errdefer target.deinit();
-                var fallback = try self.exprLabels(coalesce.fallback.*, env, owner);
+                var fallback = try self.exprFacts(coalesce.fallback.*, env, owner);
                 defer fallback.deinit();
                 try target.unionWith(fallback);
                 return target;
@@ -334,70 +426,77 @@ const Analyzer = struct {
         }
     }
 
-    fn callLabels(self: *Analyzer, call: ast.CallExpr, env: *const FunctionEnv, owner: ?ast.FunctionDecl) anyerror!LabelSet {
-        if (call.callee.name_hole != null) return LabelSet.init(self.allocator);
-        switch (try self.sema.resolveValue(LabelSet, call.callee, env.get(call.callee.name))) {
+    fn callFacts(self: *Analyzer, call: ast.CallExpr, env: *const FunctionEnv, owner: ?ast.FunctionDecl) anyerror!ValueFacts {
+        if (call.callee.name_hole != null) return ValueFacts.init(self.allocator);
+        switch (try self.sema.resolveValue(ValueFacts, call.callee, env.get(call.callee.name))) {
             .local => |labels| {
-                const args = try self.argumentLabelSets(call.args.items, env, owner);
-                return try self.invokeLabels(labels, args.items, owner);
+                const args = try self.argumentFacts(call.args.items, env, owner);
+                return try self.invokeValue(labels, args.items, owner);
             },
             .constant => |resolved| {
-                const labels = try self.constLabels(resolved);
-                const args = try self.argumentLabelSets(call.args.items, env, owner);
-                return try self.invokeLabels(labels, args.items, owner);
+                const labels = try self.constFacts(resolved);
+                const args = try self.argumentFacts(call.args.items, env, owner);
+                return try self.invokeValue(labels, args.items, owner);
             },
             .unknown => {
-                _ = try self.argumentLabelSets(call.args.items, env, owner);
-                return LabelSet.init(self.allocator);
+                _ = try self.argumentFacts(call.args.items, env, owner);
+                // Name resolution reports undefined names during type checking.
+                return ValueFacts.unknownValue(self.allocator);
             },
             .function => |resolved| {
                 const func = resolved.decl;
                 const label = self.namedLabel(resolved.key);
-                const arg_labels = try self.argumentLabelSets(call.args.items, env, owner);
+                const arg_labels = try self.argumentFacts(call.args.items, env, owner);
                 return try self.invokeNamed(label, resolved.module_id, func, arg_labels.items);
             },
             .primitive => |primitive| {
-                const arg_labels = try self.argumentLabelSets(call.args.items, env, owner);
+                const arg_labels = try self.argumentFacts(call.args.items, env, owner);
                 if (primitive.callback) |callback_spec| {
                     if (call.args.items.len > callback_spec.function_arg_index) {
-                        const callback = try self.exprLabels(call.args.items[callback_spec.function_arg_index], env, owner);
-                        var callback_args = std.ArrayList(LabelSet).empty;
+                        const callback = arg_labels.items[callback_spec.function_arg_index];
+                        var callback_args = std.ArrayList(ValueFacts).empty;
                         var fixed_index: usize = 0;
                         while (fixed_index < callback_spec.supplied_arg_count) : (fixed_index += 1) {
-                            try callback_args.append(self.allocator, LabelSet.init(self.allocator));
+                            try callback_args.append(self.allocator, ValueFacts.unknownValue(self.allocator));
                         }
                         var index = callback_spec.function_arg_index + 1;
                         while (index < arg_labels.items.len) : (index += 1) {
                             try callback_args.append(self.allocator, arg_labels.items[index]);
                         }
-                        _ = try self.invokeLabels(callback, callback_args.items, owner);
+                        _ = try self.invokeValue(callback, callback_args.items, owner);
                     }
                 }
-                return LabelSet.init(self.allocator);
+                return ValueFacts.unknownValue(self.allocator);
             },
         }
     }
 
-    fn argumentLabelSets(
+    fn argumentFacts(
         self: *Analyzer,
         args: []const ast.Expr,
         env: *const FunctionEnv,
         owner: ?ast.FunctionDecl,
-    ) !std.ArrayList(LabelSet) {
-        var labels = std.ArrayList(LabelSet).empty;
+    ) !std.ArrayList(ValueFacts) {
+        var labels = std.ArrayList(ValueFacts).empty;
         for (args) |arg| {
-            try labels.append(self.allocator, try self.exprLabels(arg, env, owner));
+            try labels.append(self.allocator, try self.exprFacts(arg, env, owner));
         }
         return labels;
     }
 
-    fn invokeLabels(
+    fn invokeValue(
         self: *Analyzer,
-        labels: LabelSet,
-        args: []const LabelSet,
+        labels: ValueFacts,
+        args: []const ValueFacts,
         owner: ?ast.FunctionDecl,
-    ) anyerror!LabelSet {
-        var result = LabelSet.init(self.allocator);
+    ) anyerror!ValueFacts {
+        if (labels.unknown and self.require_known_calls) {
+            try self.state.addValidationDiagnostic(.@"error", null, null, self.current_origin, .{
+                .user_report = .{ .code = "UnresolvedFunctionCall", .message = "cannot establish termination: function call candidates are unknown" },
+            });
+            return error.UnresolvedFunctionCall;
+        }
+        var result = if (labels.unknown) ValueFacts.unknownValue(self.allocator) else ValueFacts.init(self.allocator);
         var iterator = labels.labels.keyIterator();
         while (iterator.next()) |label_ptr| {
             const returned = try self.invokeLabel(label_ptr.*, args, owner);
@@ -409,25 +508,20 @@ const Analyzer = struct {
     fn invokeLabel(
         self: *Analyzer,
         label: Label,
-        args: []const LabelSet,
+        args: []const ValueFacts,
         owner: ?ast.FunctionDecl,
-    ) anyerror!LabelSet {
+    ) anyerror!ValueFacts {
         return switch (label) {
             .function => |key| blk: {
-                const func = self.sema.functions.get(key) orelse break :blk LabelSet.init(self.allocator);
+                const func = self.sema.functions.get(key) orelse break :blk ValueFacts.init(self.allocator);
                 break :blk try self.invokeNamed(label, key.module_id, func, args);
             },
             .lambda => |lambda_key| blk: {
-                const captures = self.lambda_captures.get(lambda_key) orelse break :blk LabelSet.init(self.allocator);
-                var result = LabelSet.init(self.allocator);
-                for (captures.items) |capture_env| {
-                    const lambda = self.lambda_exprs.get(lambda_key) orelse break :blk LabelSet.init(self.allocator);
-                    var env = try capture_env.clone();
-                    try self.bindParams(&env, lambda.params.items, args);
-                    const returned = try self.enter(.{ .label = label, .env = env, .owner = owner });
-                    try result.unionWith(returned);
-                }
-                break :blk result;
+                const capture = self.lambda_captures.get(lambda_key) orelse break :blk ValueFacts.unknownValue(self.allocator);
+                const lambda = self.lambda_exprs.get(lambda_key) orelse break :blk ValueFacts.unknownValue(self.allocator);
+                var env = try capture.clone();
+                try self.bindParams(&env, lambda.params.items, args);
+                break :blk try self.enter(.{ .label = label, .env = env, .owner = owner });
             },
         };
     }
@@ -437,8 +531,8 @@ const Analyzer = struct {
         label: Label,
         module_id: core.SourceModuleId,
         func: ast.FunctionDecl,
-        args: []const LabelSet,
-    ) anyerror!LabelSet {
+        args: []const ValueFacts,
+    ) anyerror!ValueFacts {
         var env = FunctionEnv.init(self.allocator);
         try self.bindParams(&env, func.params.items, args);
         var index: usize = args.len;
@@ -449,7 +543,7 @@ const Analyzer = struct {
                 self.sema = self.sema.forModule(module_id);
                 {
                     defer self.sema = previous;
-                    const labels = try self.exprLabels(default_value.*, &env, func);
+                    const labels = try self.exprFacts(default_value.*, &env, func);
                     try env.bind(param.name, labels);
                 }
             }
@@ -457,8 +551,8 @@ const Analyzer = struct {
         return try self.enter(.{ .label = label, .env = env, .owner = func });
     }
 
-    fn constLabels(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!LabelSet {
-        if (self.const_visiting.contains(resolved.key)) return LabelSet.init(self.allocator);
+    fn constFacts(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!ValueFacts {
+        if (self.const_visiting.contains(resolved.key)) return ValueFacts.init(self.allocator);
         try self.const_visiting.put(resolved.key, {});
         defer _ = self.const_visiting.remove(resolved.key);
 
@@ -467,26 +561,27 @@ const Analyzer = struct {
         defer self.sema = previous;
 
         const env = FunctionEnv.init(self.allocator);
-        return try self.exprLabels(resolved.decl.value, &env, null);
+        return try self.exprFacts(resolved.decl.value, &env, null);
     }
 
-    fn bindParams(self: *Analyzer, env: *FunctionEnv, params: []const ast.ParamDecl, args: []const LabelSet) !void {
+    fn bindParams(self: *Analyzer, env: *FunctionEnv, params: []const ast.ParamDecl, args: []const ValueFacts) !void {
         _ = self;
         var index: usize = 0;
         while (index < params.len and index < args.len) : (index += 1) {
-            if (params[index].ty.kind == .function) {
-                try env.bind(params[index].name, args[index]);
-            }
+            try env.bind(params[index].name, args[index]);
         }
     }
 
     fn registerLambda(self: *Analyzer, lambda: ast.LambdaExpr, env: *const FunctionEnv) !Label {
-        const label = self.lambdaLabel(lambda);
-        if (!self.lambda_exprs.contains(label.lambda)) try self.lambda_exprs.put(label.lambda, lambda);
-        const capture = try env.clone();
-        const gop = try self.lambda_captures.getOrPut(label.lambda);
-        if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(FunctionEnv).empty;
-        try gop.value_ptr.append(self.allocator, capture);
+        var label = self.lambdaLabel(lambda);
+        // Intern the captured value facts as part of closure identity. A cached
+        // higher-order call must not hide a later closure with different fields.
+        const key = try self.activationKey(.{ .label = label, .env = env.*, .owner = null });
+        if (self.capture_keys.get(key)) |existing| return existing;
+        label.lambda.capture_id = self.capture_keys.count() + 1;
+        try self.lambda_exprs.put(label.lambda, lambda);
+        try self.lambda_captures.put(label.lambda, try env.clone());
+        try self.capture_keys.put(key, label);
         return label;
     }
 
@@ -494,7 +589,7 @@ const Analyzer = struct {
         var names = std.ArrayList([]const u8).empty;
         var iterator = activation.env.values.iterator();
         while (iterator.next()) |entry| {
-            if (entry.value_ptr.count() != 0) try names.append(self.allocator, entry.key_ptr.*);
+            try names.append(self.allocator, entry.key_ptr.*);
         }
         std.mem.sort([]const u8, names.items, {}, stringLessThan);
 
@@ -503,21 +598,34 @@ const Analyzer = struct {
         for (names.items) |name| {
             try out.append(self.allocator, '|');
             try out.appendSlice(self.allocator, name);
-            try out.appendSlice(self.allocator, "=[");
-            const labels = activation.env.values.get(name).?;
-            var label_names = std.ArrayList([]const u8).empty;
-            var label_iterator = labels.labels.keyIterator();
-            while (label_iterator.next()) |label| {
-                try label_names.append(self.allocator, try self.labelText(label.*));
-            }
-            std.mem.sort([]const u8, label_names.items, {}, stringLessThan);
-            for (label_names.items, 0..) |label, index| {
-                if (index > 0) try out.append(self.allocator, ',');
-                try out.appendSlice(self.allocator, label);
-            }
-            try out.append(self.allocator, ']');
+            try out.append(self.allocator, '=');
+            try self.appendValue(&out, activation.env.values.get(name).?);
         }
         return try out.toOwnedSlice(self.allocator);
+    }
+
+    fn appendValue(self: *Analyzer, out: *std.ArrayList(u8), value: ValueFacts) anyerror!void {
+        try out.appendSlice(self.allocator, if (value.unknown) "?[" else "[");
+        var labels = std.ArrayList(Label).empty;
+        var iterator = value.labels.keyIterator();
+        while (iterator.next()) |label| try labels.append(self.allocator, label.*);
+        std.mem.sort(Label, labels.items, {}, Label.lessThan);
+        for (labels.items) |label| {
+            try self.appendLabel(out, label);
+            try out.append(self.allocator, ',');
+        }
+        try out.appendSlice(self.allocator, "]{");
+        var names = std.ArrayList([]const u8).empty;
+        var fields = value.fields.keyIterator();
+        while (fields.next()) |name| try names.append(self.allocator, name.*);
+        std.mem.sort([]const u8, names.items, {}, stringLessThan);
+        for (names.items) |name| {
+            try out.appendSlice(self.allocator, name);
+            try out.append(self.allocator, '=');
+            try self.appendValue(out, value.fields.get(name).?);
+            try out.append(self.allocator, ';');
+        }
+        try out.append(self.allocator, '}');
     }
 
     fn appendLabel(self: *Analyzer, out: *std.ArrayList(u8), label: Label) !void {
@@ -528,7 +636,7 @@ const Analyzer = struct {
     fn labelText(self: *Analyzer, label: Label) ![]const u8 {
         return switch (label) {
             .function => |key| try std.fmt.allocPrint(self.allocator, "fn:{d}:{s}", .{ key.module_id, key.name }),
-            .lambda => |key| try std.fmt.allocPrint(self.allocator, "lambda:{d}:{d}-{d}", .{ key.module_id, key.span.start, key.span.end }),
+            .lambda => |key| try std.fmt.allocPrint(self.allocator, "lambda:{d}:{d}-{d}:{d}", .{ key.module_id, key.span.start, key.span.end, key.capture_id }),
         };
     }
 

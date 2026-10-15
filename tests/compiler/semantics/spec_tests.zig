@@ -4534,6 +4534,441 @@ test "compiler semantics: nested captured cross-module lambdas cannot hide recur
     , "case.ss:bytes:", "RecursiveFunction");
 }
 
+test "compiler semantics: record argument recursion is rejected before evaluation" {
+    try expectDiagnostic(
+        \\record Box {
+        \\  f: Number -> Number
+        \\}
+        \\fn call_box(b: Box, x: Number) -> Number
+        \\  return b.f(x)
+        \\end
+        \\fn bad(x: Number) -> Number
+        \\  return call_box(Box { f = bad }, x)
+        \\end
+        \\page main
+        \\  let value = bad(1)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: optional function argument recursion is rejected before evaluation" {
+    try expectDiagnostic(
+        \\record Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\
+        \\fn invoke(f: (Number -> Number)?, x: Number) -> Number
+        \\  return (f ?? inc)(x)
+        \\end
+        \\fn bad(x: Number) -> Number
+        \\  return invoke(bad, x)
+        \\end
+        \\page main
+        \\  let value = bad(1)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: record and optional function arguments retain terminating candidates" {
+    try expectObjectContent(
+        \\record Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\
+        \\fn invoke(b: Box, f: (Number -> Number)?, x: Number) -> Number
+        \\  return b.f((f ?? inc)(x))
+        \\end
+        \\page main
+        \\  text!(str(invoke(Box { f = inc }, inc, 1)) ++ ":" ++ str(invoke(Box { f = inc }, none, 1)))
+        \\end
+    , "3:3");
+}
+
+test "compiler semantics: record fields do not mix callable candidates" {
+    try expectObjectContent(
+        \\record Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\
+        \\record Pair {
+        \\  first: Number -> Number
+        \\  second: Number -> Number
+        \\}
+        \\fn first(p: Pair, x: Number) -> Number
+        \\  return p.first(x)
+        \\end
+        \\fn good(x: Number) -> Number
+        \\  return first(Pair { first = inc, second = good }, x)
+        \\end
+        \\page main
+        \\  text!(str(good(1)))
+        \\end
+    , "2");
+}
+
+test "compiler semantics: nested record updates replace only the selected callable field" {
+    try expectObjectContent(
+        \\record Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\
+        \\record Nested {
+        \\  box: Box
+        \\  other: Number -> Number
+        \\}
+        \\fn invoke(n: Nested, x: Number) -> Number
+        \\  return n.box.f(x)
+        \\end
+        \\fn good(x: Number) -> Number
+        \\  let original = Nested { box = Box { f = good }, other = good }
+        \\  let changed = original with { box.f = inc }
+        \\  return invoke(changed, x)
+        \\end
+        \\page main
+        \\  text!(str(good(1)))
+        \\end
+    , "2");
+}
+
+test "compiler semantics: record updates retain recursion in untouched fields" {
+    try expectDiagnostic(
+        \\record Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\
+        \\record Pair {
+        \\  first: Number -> Number
+        \\  second: Number -> Number
+        \\}
+        \\fn invoke(p: Pair, x: Number) -> Number
+        \\  return p.second(x)
+        \\end
+        \\fn bad(x: Number) -> Number
+        \\  let original = Pair { first = inc, second = bad }
+        \\  return invoke(original with { first = inc }, x)
+        \\end
+        \\page main
+        \\  let value = bad(1)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: returned captured records retain recursive candidates" {
+    try expectDiagnostic(
+        \\record Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\
+        \\record Nested { box: Box }
+        \\fn wrap(n: Nested) -> Number -> Number
+        \\  return (x: Number) |-> n.box.f(x)
+        \\end
+        \\fn identity(n: Nested) -> Nested
+        \\  return n
+        \\end
+        \\fn bad(x: Number) -> Number
+        \\  return wrap(identity(Nested { box = Box { f = bad } }))(x)
+        \\end
+        \\page main
+        \\  let value = bad(1)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: returned captured records retain terminating candidates" {
+    try expectObjectContent(
+        \\record Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\
+        \\record Nested { box: Box }
+        \\fn wrap(n: Nested) -> Number -> Number
+        \\  return (x: Number) |-> n.box.f(x)
+        \\end
+        \\fn identity(n: Nested) -> Nested
+        \\  return n
+        \\end
+        \\page main
+        \\  text!(str(wrap(identity(Nested { box = Box { f = inc } }))(1)))
+        \\end
+    , "2");
+}
+
+test "compiler semantics: record return paths merge candidates by field" {
+    try expectDiagnostic(
+        \\record Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\
+        \\fn choose(flag: Bool) -> Box
+        \\  if flag
+        \\    return Box { f = inc }
+        \\  else
+        \\    return Box { f = bad }
+        \\  end
+        \\end
+        \\fn bad(x: Number) -> Number
+        \\  return choose(false).f(x)
+        \\end
+        \\page main
+        \\  let value = bad(1)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: record parameter defaults retain recursive candidates" {
+    try expectDiagnostic(
+        \\record Box { f: Number -> Number }
+        \\fn invoke(b: Box = Box { f = bad }) -> Number
+        \\  return b.f(1)
+        \\end
+        \\fn bad(x: Number) -> Number
+        \\  return invoke()
+        \\end
+        \\page main
+        \\  let value = bad(1)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: optional record defaults preserve explicit function fields" {
+    try expectObjectContent(
+        \\record Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\
+        \\record DefaultBox { f: (Number -> Number)? = none }
+        \\fn invoke(b: DefaultBox = DefaultBox { f = inc }) -> Number
+        \\  return (b.f ?? inc)(1)
+        \\end
+        \\fn good(x: Number) -> Number
+        \\  return invoke()
+        \\end
+        \\page main
+        \\  text!(str(good(1)))
+        \\end
+    , "2");
+}
+
+test "compiler semantics: record field placement distinguishes cached calls" {
+    try expectDiagnostic(
+        \\record Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\
+        \\record Pair {
+        \\  first: Number -> Number
+        \\  second: Number -> Number
+        \\}
+        \\fn invoke(p: Pair, x: Number) -> Number
+        \\  return p.first(x)
+        \\end
+        \\fn bad(x: Number) -> Number
+        \\  let safe = invoke(Pair { first = inc, second = bad }, x)
+        \\  return invoke(Pair { first = bad, second = inc }, x)
+        \\end
+        \\page main
+        \\  let value = bad(1)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: unknown property callbacks cannot establish termination" {
+    try expectDiagnostic(
+        \\record Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\
+        \\type Holder = object {
+        \\  roles = ["holder"]
+        \\  callback: (Number -> Number)?
+        \\}
+        \\fn invoke(h: Holder) -> Number
+        \\  return (h.callback ?? inc)(1)
+        \\end
+        \\page main
+        \\  let holder = obj("holder", "holder", "text")
+        \\  let value = invoke(holder)
+        \\end
+    , "case.ss:bytes:", "UnresolvedFunctionCall");
+}
+
+test "compiler semantics: cached higher-order calls distinguish captured records" {
+    try expectDiagnostic(
+        \\record Box { f: Number -> Number }
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\fn wrap(b: Box) -> Number -> Number
+        \\  return (x: Number) |-> b.f(x)
+        \\end
+        \\fn invoke(f: Number -> Number, x: Number) -> Number
+        \\  return f(x)
+        \\end
+        \\fn bad(x: Number) -> Number
+        \\  let safe = invoke(wrap(Box { f = inc }), x)
+        \\  return invoke(wrap(Box { f = bad }), x)
+        \\end
+        \\page main
+        \\  let value = bad(1)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: record updates refine known fields of unknown values" {
+    try expectObjectContent(
+        \\record Box { f: Number -> Number }
+        \\type Holder = object {
+        \\  roles = ["holder"]
+        \\  payload: Box?
+        \\}
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\fn invoke(h: Holder) -> Number
+        \\  let value = (h.payload ?? Box { f = inc }) with { f = inc }
+        \\  return value.f(1)
+        \\end
+        \\page main
+        \\  let holder = obj("holder", "holder", "text")
+        \\  text!(str(invoke(holder)))
+        \\end
+    , "2");
+}
+
+test "compiler semantics: cross-module captured record closures remain distinct" {
+    try expectObjectContentWithTwoOverlays(
+        \\import "./lib/a" as a
+        \\import "./lib/b" as b
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\fn twice(x: Number) -> Number
+        \\  return x * 2
+        \\end
+        \\page main
+        \\  let first = a::wrap(a::pack(inc))
+        \\  let second = a::wrap(a::pack(twice))
+        \\  text!(str(b::invoke(first, 3)) ++ ":" ++ str(b::invoke(second, 3)))
+        \\end
+    ,
+        \\record Box { f: Number -> Number }
+        \\fn pack(f: Number -> Number) -> Box
+        \\  return Box { f = f }
+        \\end
+        \\fn wrap(b: Box) -> Number -> Number
+        \\  return (x: Number) |-> b.f(x)
+        \\end
+    ,
+        \\fn invoke(f: Number -> Number, x: Number) -> Number
+        \\  return f(x)
+        \\end
+    , "4:6");
+}
+
+test "compiler semantics: callbacks cannot hide unknown function properties" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\type Holder = object {
+        \\  roles = ["holder"]
+        \\  callback: (Number -> Number)?
+        \\}
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\fn invoke(h: Holder) -> Number
+        \\  return (h.callback ?? inc)(1)
+        \\end
+        \\page main
+        \\  let holder = obj("holder", "holder", "text")
+        \\  let _ = foreach(objs(pagectx(), "holder"), invoke)
+        \\end
+    , "case.ss:bytes:", "UnresolvedFunctionCall");
+}
+
+test "compiler semantics: record return joins retain unknown fields after known fields" {
+    try expectDiagnostic(
+        \\record Box { f: Number -> Number }
+        \\type Holder = object {
+        \\  roles = ["holder"]
+        \\  payload: Box?
+        \\}
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\fn choose(h: Holder, flag: Bool) -> Box
+        \\  if flag
+        \\    return Box { f = inc }
+        \\  else
+        \\    return h.payload ?? Box { f = inc }
+        \\  end
+        \\end
+        \\fn invoke(h: Holder) -> Number
+        \\  return choose(h, true).f(1)
+        \\end
+        \\page main
+        \\  let holder = obj("holder", "holder", "text")
+        \\  let value = invoke(holder)
+        \\end
+    , "case.ss:bytes:", "UnresolvedFunctionCall");
+}
+
+test "compiler semantics: record return joins retain unknown fields before known fields" {
+    try expectDiagnostic(
+        \\record Box { f: Number -> Number }
+        \\type Holder = object {
+        \\  roles = ["holder"]
+        \\  payload: Box?
+        \\}
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\fn choose(h: Holder, flag: Bool) -> Box
+        \\  if flag
+        \\    return h.payload ?? Box { f = inc }
+        \\  else
+        \\    return Box { f = inc }
+        \\  end
+        \\end
+        \\fn invoke(h: Holder) -> Number
+        \\  return choose(h, true).f(1)
+        \\end
+        \\page main
+        \\  let holder = obj("holder", "holder", "text")
+        \\  let value = invoke(holder)
+        \\end
+    , "case.ss:bytes:", "UnresolvedFunctionCall");
+}
+
+test "compiler semantics: growing closure environments exhaust analysis before evaluation" {
+    try expectDiagnostic(
+        \\record Box { f: Number -> Number }
+        \\fn wrap(b: Box) -> Number -> Number
+        \\  return (x: Number) |-> b.f(x)
+        \\end
+        \\fn repeat(b: Box, x: Number) -> Number
+        \\  return repeat(Box { f = wrap(b) }, x)
+        \\end
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\page main
+        \\  let value = repeat(Box { f = inc }, 1)
+        \\end
+    , "case.ss:bytes:", "FunctionAnalysisLimitExceeded");
+}
+
 test "compiler semantics: mutual recursion is rejected" {
     try expectBuildFails(
         \\import std:themes/default as *
