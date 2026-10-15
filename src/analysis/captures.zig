@@ -62,7 +62,7 @@ pub const Index = struct {
         }
     }
 
-    fn lambdaNames(self: *Index, lambda: ast.LambdaExpr) anyerror![]const []const u8 {
+    pub fn lambdaNames(self: *Index, lambda: ast.LambdaExpr) anyerror![]const []const u8 {
         if (self.names(lambda)) |existing| return existing;
         var references = References{
             .allocator = self.allocator,

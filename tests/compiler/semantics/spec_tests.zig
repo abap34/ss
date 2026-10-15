@@ -6847,3 +6847,170 @@ test "compiler semantics: static string construction has a finite size limit" {
     try source.appendSlice(testing.allocator, "  let result = select(pagectx(), s17)\nend\n");
     try expectDiagnostic(source.items, "case.ss:bytes:", "UnknownQuery: select query must be a statically known string");
 }
+
+test "compiler semantics: higher order writes determine execution order" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const input = try fixtureSource(arena.allocator(), "higher-order-effects");
+    try compiler_semantics.expectObjectContent(testing.io, arena.allocator(), input.path, input.source, "marked");
+}
+
+test "compiler semantics: returned closures keep captured property targets" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn reader(item: Object) -> (() -> String)
+        \\  return () |-> (item.link_id ?? "missing")
+        \\end
+        \\page main
+        \\  let item = text!("A")
+        \\  let read = reader(item)
+        \\  note!(read())
+        \\  item.link_id = "marked"
+        \\end
+    , "marked");
+}
+
+test "compiler semantics: record and optional function calls retain write effects" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\record Action { run: (Object -> Object)? }
+        \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
+        \\fn apply_to(item: Object, action: Action) -> Object
+        \\  let callback = action.run ?? ((value: Object) |-> value)
+        \\  return callback(item)
+        \\end
+        \\page main
+        \\  let item = text!("A")
+        \\  note!(item.link_id ?? "missing")
+        \\  apply_to(item, Action { run = mark })
+        \\end
+    , "marked");
+}
+
+test "compiler semantics: unused closures do not execute property writes" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\page main
+        \\  let item = text!("A")
+        \\  let unused = () |-> set_prop(item, "link_id", "unused")
+        \\  item.link_id = "marked"
+        \\  note!(item.link_id ?? "missing")
+        \\end
+    , "marked");
+}
+
+test "compiler semantics: selected callback aliases retain transitive reads" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn label(item: Object) -> String = (item.link_id ?? "missing")
+        \\page main
+        \\  let item = text!("A")
+        \\  let callback = label
+        \\  note!(join(objs_here("body"), ",", callback))
+        \\  item.link_id = "marked"
+        \\end
+    , "marked");
+}
+
+test "compiler semantics: nested imported closures preserve callback effects and definition environments" {
+    try expectObjectContentWithTwoOverlays(
+        \\import std:themes/default as *
+        \\import "./lib/a" as a
+        \\import "./lib/b" as b
+        \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
+        \\fn helper(item: Object) -> String = "wrong"
+        \\page main
+        \\  let item = text!("A")
+        \\  let callback = a::wrap(mark)
+        \\  note!(a::reader(item)())
+        \\  b::invoke(callback, item)
+        \\end
+    ,
+        \\fn helper(item: Object) -> String = (item.link_id ?? "missing")
+        \\fn wrap(callback: Object -> Object) -> Object -> Object
+        \\  return (item: Object) |-> callback(item)
+        \\end
+        \\fn reader(item: Object) -> (() -> String)
+        \\  return () |-> helper(item)
+        \\end
+    ,
+        \\fn invoke(callback: Object -> Object, item: Object) -> Object = callback(item)
+    , "marked");
+}
+
+test "compiler semantics: default callbacks contribute effects in their definition environment" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
+        \\fn apply_to(item: Object, callback: Object -> Object = mark) -> Object = callback(item)
+        \\page main
+        \\  let item = text!("A")
+        \\  note!(item.link_id ?? "missing")
+        \\  apply_to(item)
+        \\end
+    , "marked");
+}
+
+test "compiler semantics: callback effects distinguish specializations and returned record updates" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\record Action { run: Object -> Object }
+        \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
+        \\fn identity(item: Object) -> Object = item
+        \\fn pack(callback: Object -> Object) -> Action = Action { run = callback }
+        \\fn apply_to(item: Object, action: Action) -> Object = action.run(item)
+        \\page main
+        \\  let item = text!("A")
+        \\  apply_to(item, pack(identity))
+        \\  note!(item.link_id ?? "missing")
+        \\  apply_to(item, pack(identity) with { run = mark })
+        \\end
+    , "marked");
+}
+
+test "compiler semantics: function aliases retain effects across document blocks" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn label(item: Object) -> String = (item.link_id ?? "missing")
+        \\document
+        \\  let callback = label
+        \\end
+        \\document
+        \\  let item = text("A")
+        \\  let value = callback(item)
+        \\  item.link_id = "marked"
+        \\  let output = text(value)
+        \\  place_on!(new_page(docctx(), "main"), output)
+        \\end
+    , "marked");
+}
+
+test "compiler semantics: finite higher order reentry retains inner callback effects" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
+        \\fn apply_to(item: Object, callback: Object -> Object) -> Object = callback(item)
+        \\fn indirect(item: Object) -> Object = apply_to(item, mark)
+        \\page main
+        \\  let item = text!("A")
+        \\  note!(item.link_id ?? "missing")
+        \\  apply_to(item, indirect)
+        \\end
+    , "marked");
+}
+
+test "compiler semantics: finite higher order reentry preserves returned function effects" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn label(item: Object) -> String = item.link_id ?? "missing"
+        \\fn direct() -> Object -> String = label
+        \\fn apply_factory(factory: () -> (Object -> String)) -> Object -> String = factory()
+        \\fn nested() -> Object -> String = apply_factory(direct)
+        \\page main
+        \\  let item = text!("A")
+        \\  let callback = apply_factory(nested)
+        \\  note!(callback(item))
+        \\  item.link_id = "marked"
+        \\end
+    , "marked");
+}

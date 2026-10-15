@@ -193,7 +193,7 @@ const GraphBuilder = struct {
         try analyzer.bindPrecedingStatements(module.syntax.document_statements.items[0..statement_start]);
         const statement_end = @min(statement_start + statement_count, module.syntax.document_statements.items.len);
         for (module.syntax.document_statements.items[statement_start..statement_end], statement_start..) |stmt, stmt_index| {
-            const summary = try analyzer.statement(stmt);
+            const summary = try self.statementSummary(&analyzer, module, stmt);
             errdefer {
                 var owned = summary;
                 owned.deinit();
@@ -224,7 +224,7 @@ const GraphBuilder = struct {
         var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .page = page_id }, self.run_cache);
         defer analyzer.deinit();
         for (page.statements.items, 0..) |stmt, stmt_index| {
-            const summary = try analyzer.statement(stmt);
+            const summary = try self.statementSummary(&analyzer, module, stmt);
             errdefer {
                 var owned = summary;
                 owned.deinit();
@@ -244,6 +244,17 @@ const GraphBuilder = struct {
             });
             self.source_order += 1;
         }
+    }
+
+    fn statementSummary(self: *GraphBuilder, analyzer: *dependencies.Analyzer, module: *const core.SourceModule, stmt: ast.Statement) !dependencies.AccessSummary {
+        return analyzer.statement(stmt) catch |err| {
+            if (err == error.FunctionAnalysisLimitExceeded) {
+                try self.state.addValidationDiagnostic(.@"error", null, null, core.SourceOrigin.at(module.path orelse module.spec, stmt.span), .{
+                    .user_report = .{ .code = "FunctionAnalysisLimitExceeded", .message = try self.state.allocator.dupe(u8, "cannot establish call effects within the dependency analysis depth limit") },
+                });
+            }
+            return err;
+        };
     }
 
     fn nextPageId(self: *GraphBuilder, module: *const core.SourceModule, page: ast.PageDecl) !core.NodeId {

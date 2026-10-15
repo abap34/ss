@@ -152,3 +152,21 @@ test "execution graph owns computed resource names after analyzers and cached su
         }
     }
 }
+
+test "execution graph bounds effect analysis even when called without termination checking" {
+    var state = try document(
+        \\fn recurse() -> Number = recurse()
+        \\page main
+        \\  let value = recurse()
+        \\end
+    );
+    defer state.deinit();
+    var declarations = try compiler.declarations.build(testing.allocator, &state);
+    defer declarations.deinit();
+    try testing.expectError(error.FunctionAnalysisLimitExceeded, compiler.analysis.ExecutionGraph.build(testing.allocator, &state, &declarations, .{}));
+    const diagnostic = state.diagnostics.entries.items[state.diagnostics.entries.items.len - 1];
+    try testing.expectEqualStrings("FunctionAnalysisLimitExceeded", diagnostic.code());
+    const location = diagnostic.origin.?.location().?;
+    try testing.expectEqualStrings("execution.ss", location.path.?);
+    try testing.expect(location.span.end > location.span.start);
+}
