@@ -684,7 +684,10 @@ fn evalRecord(
     evaluation.module_id = resolved.module_id;
     for (resolved.decl.fields.items) |field| {
         if (recordDefinesField(record, field.name)) continue;
-        const default_expr = field.default_value orelse continue;
+        const default_expr = field.default_value orelse {
+            try reportRecordUpdateError(state, current_origin, "MissingRecordField", "record '{s}' requires field '{s}'", .{ record.type_name, field.name });
+            return error.InvalidType;
+        };
         const field_value = try evalExpr(evaluation, page_id, scope, &default_env, current_origin, default_expr.*);
         try putRecordFieldValue(state.allocator, &value, field.name, field_value, false);
     }

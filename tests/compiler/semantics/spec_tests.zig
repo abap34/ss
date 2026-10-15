@@ -7166,3 +7166,37 @@ test "compiler semantics: materialized displays cannot read solved geometry" {
         \\end
     , "bytes:", "LayoutDependencyCycle");
 }
+
+test "compiler semantics: records require fields without declared defaults" {
+    try expectDiagnostic(
+        \\record Settings { size: Number }
+        \\page main
+        \\  let settings = Settings {}
+        \\end
+    , "bytes:", "MissingRecordField");
+    try expectDiagnostic(
+        \\record Settings { size: Number? }
+        \\page main
+        \\  let settings = Settings {}
+        \\end
+    , "bytes:", "MissingRecordField");
+}
+
+test "compiler semantics: explicit none and declared defaults satisfy record fields" {
+    try expectObjectContent(
+        \\record Settings {
+        \\  size: Number
+        \\  suffix: String? = none
+        \\}
+        \\page main
+        \\  let settings = Settings { size = 2 } with { size = 3 }
+        \\  text!(str(settings.size) ++ (settings.suffix ?? "!"))
+        \\end
+    , "3!");
+    try buildSource(
+        \\record Settings { size: Number? }
+        \\page main
+        \\  let settings = Settings { size = none }
+        \\end
+    );
+}

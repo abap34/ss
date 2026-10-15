@@ -231,6 +231,12 @@ fn inferRecordInfo(
         const actual = try exprInfoWithOptions(allocator, state, sema, env, field_expr.value, origin, options);
         try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
     }
+    for (record_decl.decl.fields.items) |field| {
+        if (!seen.contains(field.name) and field.default_value == null) {
+            try addUserReportAtSpan(state, origin, record.type_name_span, "MissingRecordField", "record '{s}' requires field '{s}'; provide a value or declare a default", .{ record.type_name, field.name });
+            return error.InvalidType;
+        }
+    }
     return infoFromType(Type.recordType(record_decl.name).inModule(record_decl.module_id));
 }
 
