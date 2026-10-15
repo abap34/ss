@@ -274,9 +274,10 @@ pub const DocumentSourceMap = struct {
     pages: std.ArrayList(PageSource) = .empty,
     definitions: std.ArrayList(Definition) = .empty,
     binding_types: std.AutoHashMap(BindingLocation, BindingType),
+    inferred_values: std.heap.ArenaAllocator,
 
     fn init(allocator: Allocator) DocumentSourceMap {
-        return .{ .binding_types = .init(allocator) };
+        return .{ .binding_types = .init(allocator), .inferred_values = .init(allocator) };
     }
 
     fn deinit(self: *DocumentSourceMap, allocator: Allocator) void {
@@ -289,6 +290,7 @@ pub const DocumentSourceMap = struct {
         }
         self.definitions.deinit(allocator);
         self.binding_types.deinit();
+        self.inferred_values.deinit();
     }
 };
 
@@ -399,6 +401,13 @@ pub const DocumentState = struct {
 
     pub fn bindingTypeAt(self: *const DocumentState, module_id: SourceModuleId, offset: usize) ?BindingType {
         return self.source_map.binding_types.get(.{ .module_id = module_id, .offset = offset });
+    }
+
+    // Inferred types and facts are shared by environments, caches, and bindings.
+    // Their storage follows the state, including retained evaluation inputs.
+    // Callers must obtain this allocator again after moving DocumentState.
+    pub fn inferenceAllocator(self: *DocumentState) Allocator {
+        return self.source_map.inferred_values.allocator();
     }
 
     pub fn builtinClass(self: *const DocumentState, name: []const u8) ?model.NominalId {

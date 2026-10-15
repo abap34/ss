@@ -135,7 +135,7 @@ pub fn exprInfoWithContext(
 }
 
 fn exprInfoWithOptions(
-    allocator: std.mem.Allocator,
+    caller_allocator: std.mem.Allocator,
     state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
@@ -143,6 +143,7 @@ fn exprInfoWithOptions(
     origin: core.SourceOrigin,
     options: InferenceOptions,
 ) anyerror!TypeInfo {
+    const allocator = if (state) |owner| owner.inferenceAllocator() else caller_allocator;
     return switch (expr) {
         .hole => |id| infoFromHole(id),
         .string => |literal| blk: {
@@ -353,7 +354,7 @@ fn inferMemberInfo(
 }
 
 fn inferMemberInfoFromTargetInfo(
-    allocator: std.mem.Allocator,
+    caller_allocator: std.mem.Allocator,
     state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     target_info: TypeInfo,
@@ -361,6 +362,7 @@ fn inferMemberInfoFromTargetInfo(
     member_span: ?ast.Span,
     origin: core.SourceOrigin,
 ) !TypeInfo {
+    const allocator = if (state) |owner| owner.inferenceAllocator() else caller_allocator;
     if (target_info.ty.kind == .optional) {
         const child = target_info.ty.optional_child orelse {
             try addUserReportAtSpan(state, origin, member_span, "InvalidOptionalType", "ss produced an optional type without its child; report this as an ss bug with the source file", .{});
