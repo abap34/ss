@@ -230,3 +230,35 @@ test "call analysis limit diagnostics survive temporary analysis storage" {
     try source.appendSlice(testing.allocator, "fn f130() -> Number = 0\npage main\nlet value = f0()\nend\n");
     try expectOwnedCallDiagnostic(source.items, "FunctionAnalysisLimitExceeded", "cannot establish termination within the function analysis depth limit");
 }
+
+test "dependency summary deduplication preserves overlapping resources in either order" {
+    const deps = compiler.analysis.dependencies;
+    const specific: deps.PropertyOwner = .{ .object = .{ .identity = .{ .scope = .{ .page = 1 }, .name = "item" } } };
+    const pairs = [_][2]deps.Resource{
+        .{ deps.Resource.makeProperty(specific, "badge"), deps.Resource.makeProperty(.{ .object = .{} }, "badge") },
+        .{ deps.Resource.makeProperty(.document, "badge"), deps.Resource.makeProperty(.document, null) },
+        .{ deps.Resource.makeObjects("body"), deps.Resource.makeObjects(null) },
+        .{ deps.Resource.makePages(1), deps.Resource.makePages(null) },
+        .{ deps.Resource.makeVariable(.{ .page = 1 }, "item"), deps.Resource.makeVariable(.any, "item") },
+    };
+    for (pairs) |pair| for ([_]bool{ false, true }) |reverse| {
+        const first = pair[@intFromBool(reverse)];
+        const second = pair[1 - @as(usize, @intFromBool(reverse))];
+        try testing.expect(first.intersects(second));
+        try testing.expect(!first.eql(second));
+        var summary = deps.AccessSummary.init(testing.allocator);
+        defer summary.deinit();
+        try summary.addSelectionRead(first);
+        try summary.addSelectionRead(second);
+        try summary.addSelectionRead(first);
+        try summary.addWrite(first);
+        try summary.addWrite(second);
+        try summary.addWrite(second);
+        try testing.expectEqual(@as(usize, 2), summary.reads.items.len);
+        try testing.expectEqual(@as(usize, 2), summary.writes.items.len);
+        try testing.expectEqual(@as(usize, 2), summary.selection_reads.items.len);
+    };
+    const name = try testing.allocator.dupe(u8, "body");
+    defer testing.allocator.free(name);
+    try testing.expect(deps.Resource.makeObjects(name).eql(deps.Resource.makeObjects("body")));
+}

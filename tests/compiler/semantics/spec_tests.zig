@@ -7014,3 +7014,22 @@ test "compiler semantics: finite higher order reentry preserves returned functio
         \\end
     , "marked");
 }
+
+test "compiler semantics: broad reads survive narrower overlapping reads" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\type Tagged = object {
+        \\  base = Text
+        \\  roles = ["tagged"]
+        \\  badge: String? = none
+        \\  summary: String? = none
+        \\}
+        \\page main
+        \\  let a = txt_obj!("A", "tagged")
+        \\  let b = txt_obj!("B", "tagged")
+        \\  a.summary = (a.badge ?? "-") ++ join(doc_objs(docctx(), "tagged"), ",", (item: Object) |-> item.badge ?? "-")
+        \\  b.badge = "X"
+        \\  note!(a.summary ?? "missing")
+        \\end
+    , "--,X");
+}

@@ -32,6 +32,12 @@ pub const ObjectOwner = struct {
     class_id: ?core.NominalId = null,
     identity: ?ObjectIdentity = null,
 
+    pub fn eql(self: ObjectOwner, other: ObjectOwner) bool {
+        if (!core.NominalId.optionalEql(self.class_id, other.class_id)) return false;
+        if (self.identity) |identity| return if (other.identity) |other_identity| identity.eql(other_identity) else false;
+        return other.identity == null;
+    }
+
     pub fn intersects(self: ObjectOwner, other: ObjectOwner) bool {
         if (self.identity != null and other.identity != null) {
             return self.identity.?.eql(other.identity.?);
@@ -59,6 +65,15 @@ pub const PropertyOwner = union(enum) {
     document,
     page,
     object: ObjectOwner,
+
+    pub fn eql(self: PropertyOwner, other: PropertyOwner) bool {
+        return switch (self) {
+            .any => other == .any,
+            .document => other == .document,
+            .page => other == .page,
+            .object => |owner| other == .object and owner.eql(other.object),
+        };
+    }
 
     pub fn intersects(self: PropertyOwner, other: PropertyOwner) bool {
         return switch (self) {
@@ -179,6 +194,15 @@ pub const Resource = union(ResourceKind) {
         owner: PropertyOwner,
         key: PropertyKey,
     },
+
+    pub fn eql(self: Resource, other: Resource) bool {
+        return switch (self) {
+            .variable => |variable| other == .variable and resourceScopeEql(variable.scope, other.variable.scope) and std.mem.eql(u8, variable.name, other.variable.name),
+            .pages => |scope| other == .pages and resourceScopeEql(scope, other.pages),
+            .objects => |role| other == .objects and optionalNameEql(role, other.objects),
+            .property => |property| other == .property and property.owner.eql(other.property.owner) and optionalNameEql(property.key.displayName(), other.property.key.displayName()),
+        };
+    }
 
     pub fn intersects(self: Resource, other: Resource) bool {
         return switch (self) {
@@ -449,6 +473,11 @@ fn appendScopeDisplayName(allocator: std.mem.Allocator, out: *std.ArrayList(u8),
     }
 }
 
+fn optionalNameEql(left: ?[]const u8, right: ?[]const u8) bool {
+    if (left) |value| return if (right) |other| std.mem.eql(u8, value, other) else false;
+    return right == null;
+}
+
 fn resourceScopeEql(left: ResourceScope, right: ResourceScope) bool {
     return switch (left) {
         .any => right == .any,
@@ -514,7 +543,7 @@ fn mergeOptionalNames(left: ?[]const u8, right: ?[]const u8) ?[]const u8 {
 
 fn appendUnique(allocator: std.mem.Allocator, list: *std.ArrayList(Resource), resource: Resource) !void {
     for (list.items) |existing| {
-        if (existing.intersects(resource)) return;
+        if (existing.eql(resource)) return;
     }
     try list.append(allocator, resource);
 }
