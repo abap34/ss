@@ -58,6 +58,8 @@ pub const ExecutionGraph = struct {
     // Borrowed from the document whose source generation defines this graph.
     declarations: *const declarations.DeclarationIndex,
     captures: captures.Index,
+    // Computed resource names must outlive every analyzer and summary cache.
+    resource_strings: std.heap.ArenaAllocator,
     units: std.ArrayList(ExecutionUnit),
     edges: std.ArrayList(DependencyEdge),
     order: []usize,
@@ -74,6 +76,7 @@ pub const ExecutionGraph = struct {
             .allocator = allocator,
             .declarations = declaration_index,
             .captures = captures.Index.init(allocator),
+            .resource_strings = std.heap.ArenaAllocator.init(allocator),
             .units = .empty,
             .edges = .empty,
             .order = &.{},
@@ -86,7 +89,7 @@ pub const ExecutionGraph = struct {
 
         var collected_modules = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
         defer collected_modules.deinit();
-        var run_cache = dependencies.RunCache.init(allocator);
+        var run_cache = dependencies.RunCache.init(allocator, graph.resource_strings.allocator());
         defer run_cache.deinit();
         try run_cache.reserve(state);
         var builder = GraphBuilder{
@@ -120,6 +123,7 @@ pub const ExecutionGraph = struct {
         self.edges.deinit(self.allocator);
         for (self.units.items) |*unit| unit.deinit();
         self.units.deinit(self.allocator);
+        self.resource_strings.deinit();
     }
 };
 

@@ -524,12 +524,15 @@ pub const RunCache = struct {
     allocator: std.mem.Allocator,
     name_resolution: analysis_cache.NameResolutionCache,
     summaries: SummaryCache,
+    // Borrowed from the graph; cached and returned summaries share these bytes.
+    string_allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) RunCache {
+    pub fn init(allocator: std.mem.Allocator, string_allocator: std.mem.Allocator) RunCache {
         return .{
             .allocator = allocator,
             .name_resolution = analysis_cache.NameResolutionCache.init(allocator),
             .summaries = SummaryCache.init(allocator),
+            .string_allocator = string_allocator,
         };
     }
 
@@ -2426,6 +2429,10 @@ fn literalStringFunctionCall(
 }
 
 fn ownString(self: *Analyzer, value: []const u8) ![]const u8 {
+    if (self.run_cache) |cache| {
+        defer self.allocator.free(value);
+        return cache.string_allocator.dupe(u8, value);
+    }
     errdefer self.allocator.free(value);
     try self.owned_strings.append(self.allocator, value);
     return value;
