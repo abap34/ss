@@ -451,10 +451,33 @@ fn importAsSpecBeforeCursor(source: []const u8, offset: usize) ?[]const u8 {
     const safe_offset = @min(offset, source.len);
     const line_start = utils.source.lineSpanAt(source, safe_offset).start;
     const before = std.mem.trim(u8, source[line_start..safe_offset], " \t\r");
-    if (!std.mem.startsWith(u8, before, "import ")) return null;
-    const as_index = std.mem.lastIndexOf(u8, before, " as") orelse return null;
-    const spec = std.mem.trim(u8, before["import ".len..as_index], " \t");
-    if (spec.len == 0) return null;
+    if (!std.mem.startsWith(u8, before, "import")) return null;
+    var pos: usize = "import".len;
+    if (pos == before.len or !utils.source.isInlineSpace(before[pos])) return null;
+    pos = utils.source.skipInlineSpacesUntil(before, pos, before.len);
+    const spec_start = pos;
+    if (pos == before.len) return null;
+    if (before[pos] == '"') {
+        pos = utils.source.skipDoubleQuotedString(before, pos, before.len);
+    } else {
+        while (pos < before.len and !utils.source.isInlineSpace(before[pos])) : (pos += 1) {
+            if (utils.source.lineCommentMarkerLength(before, pos) != null) return null;
+        }
+    }
+    const spec_end = pos;
+    if (spec_start == spec_end or pos == before.len or !utils.source.isInlineSpace(before[pos])) return null;
+    pos = utils.source.skipInlineSpacesUntil(before, pos, before.len);
+    if (!std.mem.startsWith(u8, before[pos..], "as")) return null;
+    pos += "as".len;
+    if (pos < before.len and !utils.source.isInlineSpace(before[pos])) return null;
+    pos = utils.source.skipInlineSpacesUntil(before, pos, before.len);
+    // Only a partial alias may follow the keyword, never another import mode
+    // or a comment. Quoted paths and path components are not keyword tokens.
+    for (before[pos..], 0..) |ch, i| {
+        if (i == 0 and !utils.source.isIdentifierStart(ch)) return null;
+        if (!utils.source.isIdentifierContinue(ch)) return null;
+    }
+    const spec = before[spec_start..spec_end];
     return unquoteImportSpec(spec);
 }
 

@@ -101,3 +101,44 @@ fn cancellationState(context: *const anyopaque) bool {
     const canceled: *const bool = @ptrCast(@alignCast(context));
     return canceled.*;
 }
+
+test "analysis query spec: import alias completion respects path and keyword boundaries" {
+    var snapshot = analysis.snapshot.AnalysisSnapshot{
+        .allocator = testing.allocator,
+        .diagnostics = analysis.diagnostics.DiagnosticBag.init(testing.allocator),
+    };
+    defer snapshot.deinit();
+    const cases = [_]struct { source: []const u8, alias: ?[]const u8 }{
+        .{ .source = "import as", .alias = null },
+        .{ .source = "import assets/the", .alias = null },
+        .{ .source = "import \"x\" as ", .alias = "x" },
+        .{ .source = "import x as ", .alias = "x" },
+        .{ .source = "  import\tx\tas\t", .alias = "x" },
+        .{ .source = "import assets/theme as th", .alias = "theme" },
+        .{ .source = "import \"assets as/theme\" as ", .alias = "theme" },
+        .{ .source = "import \"assets as/theme", .alias = null },
+        .{ .source = "import x aside", .alias = null },
+        .{ .source = "import x ;; as ", .alias = null },
+        .{ .source = "import x as ;; alias", .alias = null },
+        .{ .source = "import x as *", .alias = null },
+    };
+    for (cases) |case| {
+        var result = try analysis.snapshot.completeAt(testing.allocator, &snapshot, .{
+            .path = "import.ss",
+            .source = case.source,
+            .offset = case.source.len,
+        }, .{ .budget_ms = 1000 });
+        defer result.deinit(testing.allocator);
+        try testing.expect(!result.is_incomplete);
+        var star = false;
+        var alias = false;
+        for (result.items) |item| {
+            if (std.mem.eql(u8, item.label, "*")) star = true;
+            if (case.alias) |expected| {
+                if (std.mem.eql(u8, item.label, expected)) alias = true;
+            }
+        }
+        try testing.expectEqual(case.alias != null, star);
+        if (case.alias != null) try testing.expect(alias);
+    }
+}
