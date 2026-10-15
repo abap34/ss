@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 
+const registry = @import("../language/registry.zig");
 const language_names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
 const analysis_env = @import("env.zig");
@@ -94,15 +95,18 @@ const LambdaCaptureMap = std.AutoHashMap(LambdaKey, FunctionEnv);
 const ValueFacts = struct {
     labels: LabelMap,
     fields: std.StringHashMap(ValueFacts),
+    objects: std.AutoHashMap(usize, void),
+    unknown_objects: bool = false,
     unknown: bool = false,
 
     fn init(allocator: std.mem.Allocator) ValueFacts {
-        return .{ .labels = LabelMap.init(allocator), .fields = std.StringHashMap(ValueFacts).init(allocator) };
+        return .{ .labels = LabelMap.init(allocator), .fields = std.StringHashMap(ValueFacts).init(allocator), .objects = std.AutoHashMap(usize, void).init(allocator) };
     }
 
     fn unknownValue(allocator: std.mem.Allocator) ValueFacts {
         var value = init(allocator);
         value.unknown = true;
+        value.unknown_objects = true;
         return value;
     }
 
@@ -117,9 +121,13 @@ const ValueFacts = struct {
         while (fields.next()) |field| field.deinit();
         self.fields.deinit();
         self.labels.deinit();
+        self.objects.deinit();
     }
 
     fn unionWith(self: *ValueFacts, other: ValueFacts) anyerror!void {
+        var objects = other.objects.keyIterator();
+        while (objects.next()) |id| try self.objects.put(id.*, {});
+        self.unknown_objects = self.unknown_objects or other.unknown_objects;
         var labels = other.labels.keyIterator();
         while (labels.next()) |label| try self.labels.put(label.*, {});
         var fields = self.fields.iterator();
@@ -145,6 +153,13 @@ const ValueFacts = struct {
         errdefer out.deinit();
         try out.unionWith(self);
         return out;
+    }
+
+    fn forgetFunctions(self: *ValueFacts) void {
+        self.labels.clearRetainingCapacity();
+        self.unknown = true;
+        var fields = self.fields.valueIterator();
+        while (fields.next()) |field| field.forgetFunctions();
     }
 
     fn getField(self: ValueFacts, name: []const u8, allocator: std.mem.Allocator) !ValueFacts {
@@ -185,6 +200,17 @@ const Activation = struct {
     owner: ?ast.FunctionDecl,
 };
 
+const DisplayRegistration = struct {
+    target: ValueFacts,
+    callback: ValueFacts,
+    origin: ?core.SourceOrigin,
+};
+
+const DisplayRead = struct {
+    target: ValueFacts,
+    origin: ?core.SourceOrigin,
+};
+
 const Analyzer = struct {
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
@@ -192,12 +218,18 @@ const Analyzer = struct {
     states: std.StringHashMap(u8),
     returns: std.StringHashMap(ValueFacts),
     const_visiting: ConstVisitSet,
+    const_values: std.HashMap(core.FunctionKey, ValueFacts, core.FunctionKeyContext, std.hash_map.default_max_load_percentage),
     lambda_exprs: LambdaMap,
     lambda_captures: LambdaCaptureMap,
     capture_keys: std.StringHashMap(Label),
     require_known_calls: bool = false,
     current_origin: ?core.SourceOrigin = null,
     call_depth: usize = 0,
+    checking_display: bool = false,
+    object_properties: std.ArrayList(ValueFacts) = .empty,
+    unknown_properties: ValueFacts,
+    display_registrations: std.ArrayList(DisplayRegistration) = .empty,
+    display_reads: std.ArrayList(DisplayRead) = .empty,
 
     fn init(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) Analyzer {
         return .{
@@ -207,9 +239,11 @@ const Analyzer = struct {
             .states = std.StringHashMap(u8).init(allocator),
             .returns = std.StringHashMap(ValueFacts).init(allocator),
             .const_visiting = ConstVisitSet.init(allocator),
+            .const_values = .init(allocator),
             .lambda_exprs = LambdaMap.init(allocator),
             .lambda_captures = LambdaCaptureMap.init(allocator),
             .capture_keys = std.StringHashMap(Label).init(allocator),
+            .unknown_properties = ValueFacts.init(allocator),
         };
     }
 
@@ -237,6 +271,7 @@ const Analyzer = struct {
         var roots = Analyzer.init(self.allocator, self.state, &self.sema);
         roots.require_known_calls = true;
         try roots.checkRoots();
+        try roots.checkDisplayFunctions();
     }
 
     fn checkRoots(self: *Analyzer) !void {
@@ -276,6 +311,12 @@ const Analyzer = struct {
         self.call_depth += 1;
         defer self.call_depth -= 1;
         const key = try self.activationKey(activation);
+        // Construction calls allocate fresh abstract objects and may register
+        // display functions. Their effects cannot be skipped by a return cache.
+        const memoize = !self.require_known_calls or self.checking_display;
+        defer if (!memoize) {
+            _ = self.states.remove(key);
+        };
         if (self.states.get(key)) |state| {
             if (state == 1) {
                 try self.reportRecursiveActivation(activation);
@@ -299,12 +340,17 @@ const Analyzer = struct {
             },
             .lambda => |lambda_key| {
                 const lambda = self.lambda_exprs.get(lambda_key) orelse return ValueFacts.init(self.allocator);
+                const previous_origin = self.current_origin;
+                self.current_origin = self.state.sourceOrigin(lambda_key.module_id, lambda_key.span);
+                defer self.current_origin = previous_origin;
                 const body_labels = try self.exprFacts(lambda.body.*, &activation.env, activation.owner);
                 try result.unionWith(body_labels);
             },
         }
-        try self.states.put(key, 2);
-        try self.returns.put(key, try result.clone(self.allocator));
+        if (memoize) {
+            try self.states.put(key, 2);
+            try self.returns.put(key, try result.clone(self.allocator));
+        }
         return result;
     }
 
@@ -332,8 +378,10 @@ const Analyzer = struct {
                 },
                 .return_void => {},
                 .property_set => |property_set| {
-                    _ = try self.exprFacts(property_set.target, env, owner);
-                    _ = try self.exprFacts(property_set.value, env, owner);
+                    if (self.checking_display) return self.rejectDisplayWrite();
+                    const target = try self.exprFacts(property_set.target, env, owner);
+                    const value = try self.exprFacts(property_set.value, env, owner);
+                    try self.writeProperty(target, property_set.path.items, value);
                 },
                 .if_stmt => |if_stmt| {
                     _ = try self.exprFacts(if_stmt.condition, env, owner);
@@ -342,8 +390,9 @@ const Analyzer = struct {
                     var else_env = try env.clone();
                     try self.analyzeStatements(if_stmt.else_statements.items, &else_env, returns, owner);
                 },
-                .constrain => |decl| if (decl.offset) |expr| {
-                    _ = try self.exprFacts(expr, env, owner);
+                .constrain => |decl| {
+                    if (self.checking_display) return self.rejectDisplayWrite();
+                    if (decl.offset) |expr| _ = try self.exprFacts(expr, env, owner);
                 },
                 .expr_stmt => |expr| {
                     _ = try self.exprFacts(expr, env, owner);
@@ -409,7 +458,7 @@ const Analyzer = struct {
             .member => |member| {
                 var value = try self.exprFacts(member.target.*, env, owner);
                 defer value.deinit();
-                return value.getField(member.name, self.allocator);
+                return self.memberFacts(value, member.name);
             },
             .optional_check => |check| {
                 _ = try self.exprFacts(check.target.*, env, owner);
@@ -450,6 +499,7 @@ const Analyzer = struct {
                 return try self.invokeNamed(label, resolved.module_id, func, arg_labels.items);
             },
             .primitive => |primitive| {
+                if (self.checking_display and !registry.primitiveAllowsDisplayEvaluation(primitive.op)) return self.rejectDisplayWrite();
                 const arg_labels = try self.argumentFacts(call.args.items, env, owner);
                 if (primitive.callback) |callback_spec| {
                     if (call.args.items.len > callback_spec.function_arg_index) {
@@ -466,9 +516,140 @@ const Analyzer = struct {
                         _ = try self.invokeValue(callback, callback_args.items, owner);
                     }
                 }
-                return ValueFacts.unknownValue(self.allocator);
+                return self.primitiveFacts(primitive, call, arg_labels.items);
             },
         }
+    }
+
+    fn primitiveFacts(self: *Analyzer, primitive: registry.PrimitiveDescriptor, call: ast.CallExpr, args: []const ValueFacts) !ValueFacts {
+        switch (primitive.op) {
+            .new, .group => {
+                if (!self.require_known_calls) return ValueFacts.unknownValue(self.allocator);
+                var value = ValueFacts.init(self.allocator);
+                const id = self.object_properties.items.len;
+                try self.object_properties.append(self.allocator, ValueFacts.init(self.allocator));
+                try value.objects.put(id, {});
+                return value;
+            },
+            .set_repr => {
+                if (args.len >= 2 and self.require_known_calls) {
+                    try self.display_registrations.append(self.allocator, .{
+                        .target = try args[0].clone(self.allocator),
+                        .callback = try args[1].clone(self.allocator),
+                        .origin = self.current_origin,
+                    });
+                }
+            },
+            .repr => {
+                if (args.len >= 1 and self.require_known_calls) {
+                    if (self.checking_display) {
+                        try self.checkDisplayRead(args[0]);
+                    } else {
+                        try self.display_reads.append(self.allocator, .{ .target = try args[0].clone(self.allocator), .origin = self.current_origin });
+                    }
+                }
+            },
+            .set_prop => {
+                if (args.len >= 3 and call.args.items[1] == .string) {
+                    const path = [_]ast.RecordPathSegment{.{ .name = call.args.items[1].string.text, .span = .{ .start = 0, .end = 0 } }};
+                    try self.writeProperty(args[0], &path, args[2]);
+                } else if (args.len >= 3 and self.require_known_calls) {
+                    // A computed name may affect any property of the target.
+                    try self.mergeProperties(args[0], ValueFacts.unknownValue(self.allocator));
+                }
+            },
+            .require_asset_exists => if (args.len >= 1) return args[0].clone(self.allocator),
+            else => {},
+        }
+        switch (primitive.result_policy) {
+            .first_arg => if (args.len >= 1) return args[0].clone(self.allocator),
+            .target_arg => if (args.len > primitive.result_arg_index) return args[primitive.result_arg_index].clone(self.allocator),
+            else => {},
+        }
+        return ValueFacts.unknownValue(self.allocator);
+    }
+
+    fn writeProperty(self: *Analyzer, target: ValueFacts, path: []const ast.RecordPathSegment, value: ValueFacts) !void {
+        if (!self.require_known_calls or path.len == 0) return;
+        // Property definitions in alternative branches are joined. References
+        // point into this store, so later definitions are visible to displays.
+        var written = ValueFacts.init(self.allocator);
+        try written.updatePath(path, try value.clone(self.allocator));
+        try self.mergeProperties(target, written);
+    }
+
+    fn mergeProperties(self: *Analyzer, target: ValueFacts, written: ValueFacts) !void {
+        if (target.unknown_objects) try self.unknown_properties.unionWith(written);
+        var objects = target.objects.keyIterator();
+        while (objects.next()) |id| try self.object_properties.items[id.*].unionWith(written);
+    }
+
+    fn memberFacts(self: *Analyzer, target: ValueFacts, name: []const u8) !ValueFacts {
+        // Explicit record updates refine even an otherwise unknown record.
+        if (target.fields.get(name)) |field| return field.clone(self.allocator);
+        if (target.unknown_objects) return ValueFacts.unknownValue(self.allocator);
+        if (target.objects.count() == 0) return target.getField(name, self.allocator);
+        // Construction units are scheduled independently of source order. Only
+        // display checking can read the completed store as a fixed set of facts.
+        if (!self.checking_display) return ValueFacts.unknownValue(self.allocator);
+        var result = ValueFacts.init(self.allocator);
+        var objects = target.objects.keyIterator();
+        while (objects.next()) |id| {
+            const properties = self.object_properties.items[id.*];
+            const value = properties.fields.get(name) orelse ValueFacts.unknownValue(self.allocator);
+            try result.unionWith(value);
+        }
+        if (self.unknown_properties.fields.get(name)) |value| {
+            try result.unionWith(value);
+        } else if (self.unknown_properties.unknown) {
+            try result.unionWith(ValueFacts.unknownValue(self.allocator));
+        }
+        // This store refines object references only. Property-based function
+        // calls still require a separate lifetime and storage contract.
+        result.forgetFunctions();
+        return result;
+    }
+
+    fn checkDisplayFunctions(self: *Analyzer) !void {
+        self.checking_display = true;
+        defer self.checking_display = false;
+        self.states.clearRetainingCapacity();
+        self.returns.clearRetainingCapacity();
+        // Materialization invokes every registered display, even when no repr
+        // expression occurs in the source. The construction store is now frozen.
+        for (self.display_registrations.items) |registration| {
+            self.current_origin = registration.origin;
+            _ = try self.invokeValue(registration.callback, &.{registration.target}, null);
+        }
+        for (self.display_reads.items) |read| {
+            self.current_origin = read.origin;
+            try self.checkDisplayRead(read.target);
+        }
+    }
+
+    fn checkDisplayRead(self: *Analyzer, target: ValueFacts) anyerror!void {
+        for (self.display_registrations.items) |registration| {
+            var receiver = ValueFacts.init(self.allocator);
+            if (target.unknown_objects) {
+                receiver = try registration.target.clone(self.allocator);
+            } else if (registration.target.unknown_objects) {
+                receiver = try target.clone(self.allocator);
+            } else {
+                var objects = target.objects.keyIterator();
+                while (objects.next()) |id| {
+                    if (registration.target.objects.contains(id.*)) try receiver.objects.put(id.*, {});
+                }
+            }
+            if (!receiver.unknown_objects and receiver.objects.count() == 0) continue;
+            _ = try self.invokeValue(registration.callback, &.{receiver}, null);
+        }
+    }
+
+    fn rejectDisplayWrite(self: *Analyzer) anyerror {
+        try self.state.addValidationDiagnostic(.@"error", null, null, self.current_origin, .{
+            .user_report = .{ .code = "ImpureDisplayFunction", .message = "display functions must be pure and read-only, including indirect calls" },
+        });
+        return error.ImpureDisplayFunction;
     }
 
     fn argumentFacts(
@@ -552,6 +733,12 @@ const Analyzer = struct {
     }
 
     fn constFacts(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!ValueFacts {
+        // Runtime constants retain their first value, including object identity.
+        // Display reads still check initializer purity: an explicit repr may
+        // execute before a construction root has forced the lazy constant.
+        if (!self.checking_display) {
+            if (self.const_values.get(resolved.key)) |value| return value.clone(self.allocator);
+        }
         if (self.const_visiting.contains(resolved.key)) return ValueFacts.init(self.allocator);
         try self.const_visiting.put(resolved.key, {});
         defer _ = self.const_visiting.remove(resolved.key);
@@ -561,7 +748,9 @@ const Analyzer = struct {
         defer self.sema = previous;
 
         const env = FunctionEnv.init(self.allocator);
-        return try self.exprFacts(resolved.decl.value, &env, null);
+        const value = try self.exprFacts(resolved.decl.value, &env, null);
+        if (!self.checking_display) try self.const_values.put(resolved.key, try value.clone(self.allocator));
+        return value;
     }
 
     fn bindParams(self: *Analyzer, env: *FunctionEnv, params: []const ast.ParamDecl, args: []const ValueFacts) !void {
@@ -625,7 +814,13 @@ const Analyzer = struct {
             try self.appendValue(out, value.fields.get(name).?);
             try out.append(self.allocator, ';');
         }
-        try out.append(self.allocator, '}');
+        try out.appendSlice(self.allocator, if (value.unknown_objects) "}?objects[" else "}objects[");
+        var ids = std.ArrayList(usize).empty;
+        var objects = value.objects.keyIterator();
+        while (objects.next()) |id| try ids.append(self.allocator, id.*);
+        std.mem.sort(usize, ids.items, {}, std.sort.asc(usize));
+        for (ids.items) |id| try out.appendSlice(self.allocator, try std.fmt.allocPrint(self.allocator, "{d},", .{id}));
+        try out.append(self.allocator, ']');
     }
 
     fn appendLabel(self: *Analyzer, out: *std.ArrayList(u8), label: Label) !void {

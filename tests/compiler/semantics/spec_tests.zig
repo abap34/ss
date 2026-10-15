@@ -3773,6 +3773,324 @@ test "compiler semantics: repr reads wait for later property definitions" {
     , .{ .role = "note", .content = "A!,B" });
 }
 
+test "compiler semantics: implicit display recursion is rejected before evaluation" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\fn self_repr(item: Object) -> String
+        \\  return repr(item)
+        \\end
+        \\page main
+        \\  let item = text!("A")
+        \\  set_repr(item, self_repr)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: display recursion through a helper and a later registration is rejected" {
+    try expectDiagnostic(
+        \\fn label(item: Object) -> String = helper(item)
+        \\fn helper(item: Object) -> String = repr(item)
+        \\page main
+        \\  let item = text("A")
+        \\  let value = repr(item)
+        \\  set_repr(item, label)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: mutually recursive captured displays are rejected" {
+    try expectDiagnostic(
+        \\page main
+        \\  let a = text("A")
+        \\  let b = text("B")
+        \\  set_repr(a, (self: Object) |-> repr(b))
+        \\  set_repr(b, (self: Object) |-> repr(a))
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: separate constructor calls keep noncyclic captured displays distinct" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const input = try fixtureSource(arena.allocator(), "display-captures");
+    try compiler_semantics.expectObjectContent(testing.io, arena.allocator(), input.path, input.source, "A!");
+}
+
+test "compiler semantics: display recursion through object properties is rejected" {
+    try expectDiagnostic(
+        \\type Link = object {
+        \\  roles = ["link"]
+        \\  peer: Object?
+        \\}
+        \\fn linked(item: Object) -> String = repr(item.peer ?? item)
+        \\
+        \\page main
+        \\  let a = txt_obj("A", "link")
+        \\  let b = txt_obj("B", "link")
+        \\  set_repr(a, linked)
+        \\  set_repr(b, linked)
+        \\  a.peer = b
+        \\  b.peer = a
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: object properties distinguish a noncyclic display chain" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const input = try fixtureSource(arena.allocator(), "display-chain");
+    try compiler_semantics.expectObjectContent(testing.io, arena.allocator(), input.path, input.source, "leaf!!");
+}
+
+test "compiler semantics: literal set_prop object links participate in display recursion" {
+    try expectDiagnostic(
+        \\type Link = object {
+        \\  roles = ["link"]
+        \\  peer: Object?
+        \\}
+        \\fn linked(item: Object) -> String = repr(item.peer ?? item)
+        \\
+        \\page main
+        \\  let a = txt_obj("A", "link")
+        \\  set_prop(a, "peer", a)
+        \\  set_repr(a, linked)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: unknown property names cannot hide a recursive object link" {
+    try expectDiagnostic(
+        \\type Link = object {
+        \\  roles = ["link"]
+        \\  peer: Object?
+        \\}
+        \\fn linked(item: Object) -> String = repr(item.peer ?? item)
+        \\
+        \\fn assign(item: Object, key: String, other: Object) -> Object = set_prop(item, key, other)
+        \\page main
+        \\  let a = txt_obj("A", "link")
+        \\  let leaf = text("leaf")
+        \\  a.peer = leaf
+        \\  assign(leaf, "peer", a)
+        \\  set_repr(a, linked)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: display property writes are rejected" {
+    try expectDiagnostic(
+        \\fn label(item: Object) -> String
+        \\  item.font_size = 24
+        \\  return content(item)
+        \\end
+        \\page main
+        \\  set_repr(text!("A"), label)
+        \\end
+    , "case.ss:bytes:", "ImpureDisplayFunction");
+}
+
+test "compiler semantics: display object creation through a helper is rejected" {
+    try expectDiagnostic(
+        \\fn helper(item: Object) -> String
+        \\  let extra = new("extra", "text", "text")
+        \\  return content(item)
+        \\end
+        \\fn label(item: Object) -> String = helper(item)
+        \\page main
+        \\  set_repr(text!("A"), label)
+        \\end
+    , "case.ss:bytes:", "ImpureDisplayFunction");
+}
+
+test "compiler semantics: cached ordinary calls do not bypass display purity checks" {
+    try expectDiagnostic(
+        \\fn helper(item: Object) -> String
+        \\  set_content(item, "changed")
+        \\  return "label"
+        \\end
+        \\page main
+        \\  let a = text("A")
+        \\  let value = helper(a)
+        \\  set_repr(a, helper)
+        \\end
+    , "case.ss:bytes:", "ImpureDisplayFunction");
+}
+
+test "compiler semantics: display callback writes are rejected" {
+    try expectDiagnostic(
+        \\fn mutate(item: Object) -> String
+        \\  set_content(item, "changed")
+        \\  return "label"
+        \\end
+        \\fn label(item: Object) -> String = join(doc_objs(docctx(), "text"), ",", mutate)
+        \\page main
+        \\  set_repr(text!("A"), label)
+        \\end
+    , "case.ss:bytes:", "ImpureDisplayFunction");
+}
+
+test "compiler semantics: display registration through record and optional callbacks is checked" {
+    try expectDiagnostic(
+        \\record Formatter { format: (Object -> String)? }
+        \\fn attach(item: Object, formatter: Formatter) -> Object
+        \\  return set_repr(item, formatter.format ?? ((value: Object) |-> content(value)))
+        \\end
+        \\fn label(item: Object) -> String = repr(item)
+        \\page main
+        \\  attach(text("A"), Formatter { format = label })
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: pure higher order display helpers are accepted" {
+    try expectObjectContent(
+        \\fn apply(item: Object, format: Object -> String) -> String = format(item)
+        \\fn label(item: Object) -> String = apply(item, (value: Object) |-> content(value) ++ "!")
+        \\page main
+        \\  set_repr(text!("A"), label)
+        \\end
+    , "A!");
+}
+
+test "compiler semantics: unknown display callbacks are rejected before evaluation" {
+    try expectDiagnostic(
+        \\type Holder = object {
+        \\  roles = ["holder"]
+        \\  format: (Object -> String)?
+        \\}
+        \\page main
+        \\  let item = txt_obj("A", "holder")
+        \\  set_repr(item, item.format ?? ((value: Object) |-> content(value)))
+        \\end
+    , "case.ss:bytes:", "UnresolvedFunctionCall");
+}
+
+test "compiler semantics: display registration inside a selection callback is checked" {
+    try expectDiagnostic(
+        \\fn label(item: Object) -> String = repr(item)
+        \\fn attach(item: Object) -> Object = set_repr(item, label)
+        \\page main
+        \\  text!("A")
+        \\  foreach(doc_objs(docctx(), "text"), attach)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: imported displays resolve helpers in their definition module" {
+    try expectOverlayDiagnostic(
+        \\import "./lib/bad" as lib
+        \\fn helper(item: Object) -> String = content(item)
+        \\page main
+        \\  set_repr(text!("A"), lib::formatter())
+        \\end
+    ,
+        \\fn helper(item: Object) -> String = repr(item)
+        \\fn label(item: Object) -> String = helper(item)
+        \\fn formatter() -> Object -> String = label
+    , "lib/bad.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: imported read-only displays keep their definition environment" {
+    try buildSourceWithOverlay(
+        \\import "./lib/types" as lib
+        \\fn helper(item: Object) -> String = repr(item)
+        \\page main
+        \\  set_repr(text!("A"), lib::formatter())
+        \\end
+    ,
+        \\fn helper(item: Object) -> String = content(item)
+        \\fn label(item: Object) -> String = helper(item)
+        \\fn formatter() -> Object -> String = label
+    );
+}
+
+test "compiler semantics: displays cannot register another display" {
+    try expectDiagnostic(
+        \\fn label(item: Object) -> String
+        \\  set_repr(item, (value: Object) |-> content(value))
+        \\  return content(item)
+        \\end
+        \\page main
+        \\  set_repr(text!("A"), label)
+        \\end
+    , "case.ss:bytes:", "ImpureDisplayFunction");
+}
+
+test "compiler semantics: displays cannot create pages" {
+    try expectDiagnostic(
+        \\fn label(item: Object) -> String
+        \\  let extra = new_page("extra")
+        \\  return content(item)
+        \\end
+        \\page main
+        \\  set_repr(text!("A"), label)
+        \\end
+    , "case.ss:bytes:", "ImpureDisplayFunction");
+}
+
+test "compiler semantics: displays cannot read external files during materialization" {
+    try expectDiagnostic(
+        \\fn label(item: Object) -> String = readlines("unavailable.txt")
+        \\page main
+        \\  set_repr(text!("A"), label)
+        \\end
+    , "case.ss:bytes:", "ImpureDisplayFunction");
+}
+
+test "compiler semantics: object link tracking does not authorize nested stored function calls" {
+    try expectDiagnostic(
+        \\record Formatter { format: Object -> String }
+        \\type Holder = object {
+        \\  roles = ["holder"]
+        \\  formatter: Formatter?
+        \\}
+        \\fn label(item: Object) -> String = content(item)
+        \\page main
+        \\  let item = txt_obj("A", "holder")
+        \\  item.formatter = Formatter { format = label }
+        \\  let stored = item.formatter ?? Formatter { format = label }
+        \\  set_repr(item, stored.format)
+        \\end
+    , "case.ss:bytes:", "UnresolvedFunctionCall");
+}
+
+test "compiler semantics: aliases of an object constant cannot hide display recursion" {
+    try expectDiagnostic(
+        \\const shared: Object = text("A")
+        \\page main
+        \\  let a = shared
+        \\  let b = shared
+        \\  set_repr(a, (self: Object) |-> repr(b))
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: aliases of an object constant support read-only displays" {
+    try expectObjectContent(
+        \\const shared: Object = text("A")
+        \\page main
+        \\  let a = shared
+        \\  let b = shared
+        \\  set_repr(a, (self: Object) |-> content(b) ++ "!")
+        \\  place!(a)
+        \\end
+    , "A!");
+}
+
+test "compiler semantics: lazy constant initialization cannot bypass display purity" {
+    try expectDiagnostic(
+        \\fn initialize() -> String
+        \\  report_warning("initializing")
+        \\  return "label"
+        \\end
+        \\const label: String = initialize()
+        \\page main
+        \\  let cached = label
+        \\  set_repr(text!("A"), (item: Object) |-> label)
+        \\end
+    , "case.ss:bytes:", "ImpureDisplayFunction");
+}
+
 test "compiler semantics: repr functions are single definitions" {
     try expectLoweringErrorDiagnostic(
         \\import std:themes/default as *
