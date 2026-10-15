@@ -2886,6 +2886,19 @@ fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, top_bl: f32, width: f32, blo
 
     try drawRoundedRect(ctx, frame, text.markdown_code_radius, text.markdown_code_fill, text.markdown_code_stroke, text.markdown_code_line_width);
 
+    if (text.markdown_code_highlight_fill) |color| {
+        const baseline_from_top = try lineBaselineFromTop(ctx, text.code_font, text.markdown_code_font_size, text.markdown_code_line_height);
+        const first_top = Defaults.height - placement.first_baseline_bl - baseline_from_top;
+        for (0..physicalCodeLineCount(source)) |index| {
+            if (!block.highlightsCodeLine(index + 1)) continue;
+            try drawParagraphBackground(ctx, .{
+                .x = frame.x + text.markdown_code_pad_x,
+                .y = first_top + @as(f32, @floatFromInt(index)) * text.markdown_code_line_height,
+                .width = @max(frame.width - text.markdown_code_pad_x * 2, 1),
+                .height = text.markdown_code_line_height,
+            }, color);
+        }
+    }
     try drawMarkdownCodeBlockContent(ctx, placement.content_x, placement.first_baseline_bl, placement.content_width, source, text, code_paint);
     return placement.frame.y;
 }
@@ -2945,23 +2958,25 @@ fn measureMarkdownCodeBlockContent(ctx: *DrawContext, source: []const u8, width:
     defer measurement.deinit();
 
     try drawMarkdownCodeBlockContent(ctx, 0, baseline_bl, width, source, text, code_paint);
+    const line_count: f32 = @floatFromInt(@max(physicalCodeLineCount(source), 1));
+    const baseline_from_top = try lineBaselineFromTop(ctx, text.code_font, text.markdown_code_font_size, text.markdown_code_line_height);
+    const default_height = @max(line_count * text.markdown_code_line_height, baseline_from_top);
+    const bottom_under_baseline = @max(default_height - baseline_from_top, 0);
+    // Include every source line's logical band, including leading/trailing blanks.
     if (try measurement.inkFrame()) |ink| {
         return .{
             .left = ink.x,
             .right = ink.x + ink.width,
-            .top_over_baseline = @max(@as(f32, 0), ink.y + ink.height - baseline_bl),
-            .bottom_under_baseline = @max(@as(f32, 0), baseline_bl - ink.y),
+            .top_over_baseline = @max(baseline_from_top, ink.y + ink.height - baseline_bl),
+            .bottom_under_baseline = @max(bottom_under_baseline, baseline_bl - ink.y),
         };
     }
 
-    const line_count: f32 = @floatFromInt(@max(physicalCodeLineCount(source), 1));
-    const baseline_from_top = try lineBaselineFromTop(ctx, text.code_font, text.markdown_code_font_size, text.markdown_code_line_height);
-    const default_height = @max(line_count * text.markdown_code_line_height, baseline_from_top);
     return .{
         .left = 0,
         .right = 1,
         .top_over_baseline = baseline_from_top,
-        .bottom_under_baseline = @max(default_height - baseline_from_top, 0),
+        .bottom_under_baseline = bottom_under_baseline,
     };
 }
 

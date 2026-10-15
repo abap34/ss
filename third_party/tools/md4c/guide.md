@@ -92,6 +92,40 @@ let note = text!("A ==custom highlight==")
 note.text.markdown_highlight_fill = c"#b9f6ca"
 ```
 
+## Code line highlights
+
+ss interprets line selections in the existing MD4C code-fence info string;
+this feature does not require an additional MD4C extension flag.
+
+````markdown
+```zig {2-3,5}
+fn add(a: i32, b: i32) i32 {
+    const x = a;
+    const y = b;
+
+    return x + y;
+}
+```
+````
+
+Place the selection after the language, separated by whitespace, or omit the
+language and start the info string with the selection. `{3}` selects one line,
+`{2-4}` selects an inclusive range, and `{1,3-5,8}` combines selections. Spaces
+around commas and hyphens are allowed. Order does not matter, and repeated or
+overlapping selections highlight each line once.
+
+Line numbers start at one in the code body, count blank lines, and exclude the
+fences. Empty selections, zero, descending ranges, malformed values, and lines
+outside the code body are errors. An empty code body has no selectable lines.
+Without a selection, the block has no line highlights. Code lines retain the
+existing unwrapped display and syntax coloring.
+
+`TextStyle.markdown_code_highlight_fill` controls the line background and
+defaults to pale yellow. Set it to another color or to `none` to disable the
+background without changing the parsed selection or text geometry. Highlights
+span the code area's width inside the block's horizontal padding, including
+blank lines. See `tests/fixtures/markdown/code-line-highlights.ss` for examples.
+
 ## Importing a fork update
 
 Git remotes are local configuration. Each new clone needs this once:

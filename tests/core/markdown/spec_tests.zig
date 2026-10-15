@@ -303,6 +303,86 @@ test "core markdown spec: fenced code blocks preserve blank physical lines witho
     try testing.expectEqual(@as(usize, 3), markdown.codeBlockPhysicalLineCount(block));
 }
 
+test "code line highlights accept ranges spaces duplicates and arbitrary order" {
+    var doc = try markdown.parseMarkdownContent(
+        testing.allocator,
+        "```zig {5, 2 - 3, 2, 3-5}\nfirst\n\nthird\nfourth\nfifth\n```\n\n```zig\nplain\n```",
+    );
+    defer doc.deinit();
+    const block = doc.blocks.items[0];
+    try testing.expectEqualStrings("zig", block.language.?);
+    try testing.expectEqual(@as(usize, 5), markdown.codeBlockPhysicalLineCount(block));
+    try testing.expect(!block.highlightsCodeLine(0));
+    try testing.expect(!block.highlightsCodeLine(1));
+    for (2..6) |line| try testing.expect(block.highlightsCodeLine(line));
+    try testing.expect(!block.highlightsCodeLine(6));
+    try testing.expectEqual(@as(usize, 0), doc.blocks.items[1].code_line_highlights.len);
+}
+
+test "code line highlights count blank source lines in nested and language free fences" {
+    var doc = try markdown.parseMarkdownContent(testing.allocator,
+        \\> ~~~ {1, 3}
+        \\>
+        \\> middle
+        \\>
+        \\> ~~~
+        \\
+        \\- Item
+        \\
+        \\  ```unknown {2}
+        \\  first
+        \\  last
+        \\  ```
+    );
+    defer doc.deinit();
+    const quoted = doc.blocks.items[0].quote.?.blocks.items[0];
+    try testing.expect(quoted.language == null);
+    try testing.expectEqual(@as(usize, 3), markdown.codeBlockPhysicalLineCount(quoted));
+    try testing.expect(quoted.highlightsCodeLine(1));
+    try testing.expect(!quoted.highlightsCodeLine(2));
+    try testing.expect(quoted.highlightsCodeLine(3));
+    const nested = doc.blocks.items[1].list.?.items.items[0].blocks.items[1];
+    try testing.expectEqualStrings("unknown", nested.language.?);
+    try testing.expect(nested.highlightsCodeLine(2));
+}
+
+test "code line highlights accept CRLF unterminated fences and unrelated metadata" {
+    var doc = try markdown.parseMarkdownContent(testing.allocator, "```zig\t{ 1 - 2 }\r\nfirst\r\nlast");
+    defer doc.deinit();
+    try testing.expect(doc.blocks.items[0].highlightsCodeLine(2));
+    var unrelated = try markdown.parseMarkdownContent(testing.allocator, "```zig title=example\nfirst\n```");
+    defer unrelated.deinit();
+    try testing.expectEqualStrings("zig", unrelated.blocks.items[0].language.?);
+    try testing.expectEqual(@as(usize, 0), unrelated.blocks.items[0].code_line_highlights.len);
+}
+
+test "code line highlights reject malformed specifications" {
+    const invalid = [_][]const u8{
+        "{}",     "{ }",                                          "{0}",    "{2-1}", "{-1}",    "{+1}",  "{1.5}", "{a}",
+        "{1,}",   "{,1}",                                         "{1,,2}", "{1-}",  "{1-2-3}", "{1 2}", "{1",    "{1} extra",
+        "{1}{2}", "{999999999999999999999999999999999999999999}",
+    };
+    for (invalid) |annotation| {
+        const content = try std.fmt.allocPrint(testing.allocator, "```zig {s}\nfirst\nsecond\n```", .{annotation});
+        defer testing.allocator.free(content);
+        try testing.expectError(error.InvalidMarkdownCodeLineHighlight, markdown.parseMarkdownContent(testing.allocator, content));
+    }
+}
+
+test "code line highlights reject nonexistent lines including the trailing phantom and empty blocks" {
+    for ([_][]const u8{
+        "```zig {3}\nfirst\nsecond\n```",
+        "```zig {1-3}\nfirst\nsecond\n```",
+        "``` {1}\n```",
+        "``` {2}\n\n```",
+    }) |content| {
+        try testing.expectError(error.MarkdownCodeLineHighlightOutOfBounds, markdown.parseMarkdownContent(testing.allocator, content));
+    }
+    var blank = try markdown.parseMarkdownContent(testing.allocator, "``` {1}\n\n```");
+    defer blank.deinit();
+    try testing.expect(blank.blocks.items[0].highlightsCodeLine(1));
+}
+
 test "core markdown spec: indented lines stay paragraphs instead of code blocks" {
     const allocator = testing.allocator;
     var doc = try markdown.parseMarkdownContent(allocator, "    not code");
@@ -366,7 +446,7 @@ fn parseBlocksWithAllocator(allocator: std.mem.Allocator) !void {
         \\> - Two
         \\1. Ordered
         \\2. Items
-        \\~~~zig
+        \\~~~zig {1}
         \\const n = 1;
         \\~~~
         \\| Left | Right |

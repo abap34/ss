@@ -466,6 +466,8 @@ pub fn formatErrorReason(buf: []u8, err: anyerror) []const u8 {
         error.WriteFailed => "the output writer could not write to the destination",
         error.Canceled => "the operation was canceled",
         error.OutOfMemory => "the process ran out of memory",
+        error.InvalidMarkdownCodeLineHighlight => "invalid Markdown code line highlight; use positive line numbers or ascending ranges, separated by commas, such as {2-4,7}",
+        error.MarkdownCodeLineHighlightOutOfBounds => "Markdown code line highlight refers to a line outside the code block",
         error.InvalidMarkdownTableColumnWidth => "invalid Markdown table column width; use auto, a positive width in pt, or a positive weight in fr",
         error.CurrentWorkingDirectoryUnavailable, error.CurrentDirUnlinked => "the current working directory is no longer accessible",
         else => std.fmt.bufPrint(

@@ -199,6 +199,11 @@ fn parseTableColumnWidth(raw: []const u8) !TableColumnWidth {
     return if (std.mem.eql(u8, unit, "pt")) .{ .fixed = value } else .{ .fraction = value };
 }
 
+pub const CodeLineRange = struct {
+    start: usize,
+    end: usize,
+};
+
 pub const Block = struct {
     kind: BlockKind,
     paragraph: ?Paragraph = null,
@@ -206,7 +211,15 @@ pub const Block = struct {
     list: ?ListData = null,
     table: ?TableData = null,
     language: ?[]const u8 = null,
+    code_line_highlights: []const CodeLineRange = &.{},
     heading_level: ?u8 = null,
+
+    pub fn highlightsCodeLine(self: Block, line_number: usize) bool {
+        for (self.code_line_highlights) |range| {
+            if (line_number >= range.start and line_number <= range.end) return true;
+        }
+        return false;
+    }
 };
 
 pub const MarkdownDocument = struct {
@@ -236,6 +249,7 @@ const ParserState = struct {
     containers: std.ArrayList(*std.ArrayList(*Block)),
     lists: std.ArrayList(*ListData),
     current_paragraph: ?*Paragraph = null,
+    current_code_block: ?*Block = null,
     current_table: ?*TableData = null,
     current_row: ?*TableRow = null,
     current_cell: ?*TableCell = null,
@@ -482,6 +496,50 @@ pub fn codeBlockPhysicalLineCount(block: *const Block) usize {
     return @max(@as(usize, 1), total);
 }
 
+fn parseCodeBlockInfo(allocator: Allocator, block: *Block, info: []const u8) !void {
+    var annotation = std.mem.trim(u8, info, " \t");
+    if (annotation.len == 0) return;
+    if (annotation[0] != '{') {
+        const language_end = std.mem.indexOfAny(u8, annotation, " \t") orelse annotation.len;
+        block.language = annotation[0..language_end];
+        annotation = std.mem.trim(u8, annotation[language_end..], " \t");
+    }
+    // Preserve unrelated fence metadata, as before.
+    if (annotation.len == 0 or annotation[0] != '{') return;
+    if (annotation[annotation.len - 1] != '}') return error.InvalidMarkdownCodeLineHighlight;
+    var ranges = std.ArrayList(CodeLineRange).empty;
+    var tokens = std.mem.splitScalar(u8, annotation[1 .. annotation.len - 1], ',');
+    while (tokens.next()) |token| {
+        var endpoints = std.mem.splitScalar(u8, token, '-');
+        const start = try parseCodeLineNumber(endpoints.next().?);
+        const end = if (endpoints.next()) |last| try parseCodeLineNumber(last) else start;
+        if (endpoints.next() != null or end < start) return error.InvalidMarkdownCodeLineHighlight;
+        try ranges.append(allocator, .{ .start = start, .end = end });
+    }
+    block.code_line_highlights = try ranges.toOwnedSlice(allocator);
+}
+
+fn parseCodeLineNumber(raw: []const u8) !usize {
+    const token = std.mem.trim(u8, raw, " \t");
+    if (token.len == 0) return error.InvalidMarkdownCodeLineHighlight;
+    for (token) |ch| if (!std.ascii.isDigit(ch)) return error.InvalidMarkdownCodeLineHighlight;
+    const number = std.fmt.parseInt(usize, token, 10) catch return error.InvalidMarkdownCodeLineHighlight;
+    if (number == 0) return error.InvalidMarkdownCodeLineHighlight;
+    return number;
+}
+
+fn validateCodeLineHighlights(block: *const Block) !void {
+    if (block.code_line_highlights.len == 0) return;
+    var has_content = false;
+    for (block.paragraph.?.lines.items) |line| {
+        for (line.runs.items) |run| has_content = has_content or run.text.len > 0;
+    }
+    const line_count = if (has_content) codeBlockPhysicalLineCount(block) else 0;
+    for (block.code_line_highlights) |range| {
+        if (range.end > line_count) return error.MarkdownCodeLineHighlightOutOfBounds;
+    }
+}
+
 fn parsePlainLines(allocator: Allocator, layout: *TextLayout, content: []const u8) !void {
     var it = source.lineIterator(content);
     var saw_any = false;
@@ -585,14 +643,12 @@ fn enterBlock(
             const block = state.newBlock(.code_block) catch |err| return callbackFailure(state, err);
             if (detail) |ptr| {
                 const code_detail: *const c.MD_BLOCK_CODE_DETAIL = @ptrCast(@alignCast(ptr));
-                if (code_detail.lang.size > 0) {
-                    block.language = duplicateAttribute(state.arenaAllocator(), code_detail.lang) catch |err| return callbackFailure(state, err);
-                } else if (code_detail.info.size > 0) {
-                    block.language = duplicateAttribute(state.arenaAllocator(), code_detail.info) catch |err| return callbackFailure(state, err);
-                }
+                const info = duplicateAttribute(state.arenaAllocator(), code_detail.info) catch |err| return callbackFailure(state, err);
+                parseCodeBlockInfo(state.arenaAllocator(), block, info) catch |err| return callbackFailure(state, err);
             }
             state.appendBlock(block) catch |err| return callbackFailure(state, err);
             state.current_paragraph = &block.paragraph.?;
+            state.current_code_block = block;
             state.current_line = .{};
         },
         c.MD_BLOCK_QUOTE => {
@@ -681,7 +737,14 @@ fn leaveBlock(
         return 0;
     }
     switch (block_type) {
-        c.MD_BLOCK_P, c.MD_BLOCK_H, c.MD_BLOCK_CODE => state.endParagraph() catch |err| return callbackFailure(state, err),
+        c.MD_BLOCK_P, c.MD_BLOCK_H => state.endParagraph() catch |err| return callbackFailure(state, err),
+        c.MD_BLOCK_CODE => {
+            state.endParagraph() catch |err| return callbackFailure(state, err);
+            if (state.current_code_block) |block| {
+                validateCodeLineHighlights(block) catch |err| return callbackFailure(state, err);
+            }
+            state.current_code_block = null;
+        },
         c.MD_BLOCK_QUOTE => {
             state.endParagraph() catch |err| return callbackFailure(state, err);
             if (state.containers.items.len > 1) _ = state.containers.pop();

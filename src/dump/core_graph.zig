@@ -238,6 +238,7 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     try text.floatField("markdown_code_line_height", text_spec.markdown_code_line_height, "{d:.1}");
     try text.floatField("markdown_code_pad_x", text_spec.markdown_code_pad_x, "{d:.1}");
     try text.floatField("markdown_code_pad_y", text_spec.markdown_code_pad_y, "{d:.1}");
+    try writeOptionalColor(&text, "markdown_code_highlight_fill", text_spec.markdown_code_highlight_fill);
     try writeOptionalColor(&text, "markdown_code_fill", text_spec.markdown_code_fill);
     try writeOptionalColor(&text, "markdown_code_stroke", text_spec.markdown_code_stroke);
     try text.floatField("markdown_code_line_width", text_spec.markdown_code_line_width, "{d:.1}");

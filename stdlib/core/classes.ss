@@ -194,6 +194,7 @@ record TextStyle {
   markdown_code_line_height: Number = 20
   markdown_code_pad_x: Number = 12
   markdown_code_pad_y: Number = 10
+  markdown_code_highlight_fill: Color? = c"#fff2a8"
   markdown_code_fill: Color? = none
   markdown_code_stroke: Color? = none
   markdown_code_line_width: Number = 1

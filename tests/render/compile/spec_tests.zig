@@ -2283,6 +2283,118 @@ test "Markdown highlight backgrounds wrap behind glyphs and inline icons without
     }
 }
 
+test "Markdown code line backgrounds cover source rows without changing glyphs or syntax colors" {
+    for ([_][]const u8{ "zig", "unknown", "" }) |language| {
+        const body = "\nconst message = \"A long source line keeps its original line number and extends beyond the narrow frame\";\n\nreturn message;\n\n";
+        const plain = try std.fmt.allocPrint(testing.allocator, "```{s}\n{s}```", .{ language, body });
+        defer testing.allocator.free(plain);
+        const marked = try std.fmt.allocPrint(testing.allocator, "```{s} {{5,1-2,2,4}}\n{s}```", .{ language, body });
+        defer testing.allocator.free(marked);
+        var state = try initEmptyDocumentState();
+        defer state.deinit();
+        var fixture = LayoutFixture.init(&state);
+        defer fixture.deinit();
+        const page_id = try state.addPage("code-line-highlights");
+        var style = core.RecordValue.init("TextStyle");
+        defer style.deinit(testing.allocator);
+        try style.fields.append(testing.allocator, .{
+            .name = "parse",
+            .value = .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } },
+            .explicit = true,
+        });
+        for ([_][]const u8{ plain, marked }) |content| {
+            const id = try state.makeObject(page_id, "code", null, .text, .text, content);
+            try state.setNodeFieldValue(id, "text", .{ .record = style });
+            (try fixture.frame(id)).* = .{ .width = 180, .height = 720 };
+        }
+        var prepared = try core.prepared.prepare(testing.allocator, &state);
+        defer prepared.deinit(testing.allocator);
+        const color = core.render_policy.Color{ .r = 1, .g = 0.9, .b = 0.4 };
+        for (prepared.pages[0].objects) |*object| {
+            const paint = &object.render.text.?;
+            paint.code_font.family = "DejaVu Sans Mono";
+            paint.markdown_code_font_size = 18;
+            paint.markdown_code_line_height = 26;
+            paint.markdown_code_pad_x = 10;
+            paint.markdown_code_pad_y = 8;
+            paint.markdown_code_highlight_fill = color;
+        }
+        const plain_id = prepared.pages[0].objects[0].node_id;
+        const marked_id = prepared.pages[0].objects[1].node_id;
+        const environment = try render_compile.acquireFontEnvironment();
+        var scope = try render_compile.LayoutMeasurementScope.init(testing.allocator, testing.io, &state, &prepared, .{ .font_environment = environment });
+        defer scope.deinit();
+        scope.measurements.persistent.clearRetainingCapacity();
+        const provider = scope.provider();
+        const measured = (try provider.measure(provider.context, try fixture.work(), state.getNode(marked_id).?, 180, .width_constrained)).?;
+        const unmarked = (try provider.measure(provider.context, try fixture.work(), state.getNode(plain_id).?, 180, .width_constrained)).?;
+        try testing.expectEqual(unmarked.logicalBounds(), measured.logicalBounds());
+        try testing.expectApproxEqAbs(@as(f32, 5 * 26 + 2 * 8), measured.height, 0.001);
+        var ir = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .jobs = 1, .font_environment = environment });
+        defer ir.deinit(testing.allocator);
+        try ir.validate();
+        const Glyph = struct { id: u32, x: f64, y: f64, advance: f64, color: core.render_policy.Color };
+        var plain_glyphs = std.ArrayList(Glyph).empty;
+        defer plain_glyphs.deinit(testing.allocator);
+        var marked_glyphs = std.ArrayList(Glyph).empty;
+        defer marked_glyphs.deinit(testing.allocator);
+        var backgrounds: usize = 0;
+        var first_background: ?render.Rect = null;
+        var foreground_started = false;
+        var ink: ?render.Rect = null;
+        for (ir.pages[0].items.items) |item| {
+            if (item.header().node_id != plain_id and item.header().node_id != marked_id) continue;
+            const is_marked = item.header().node_id == marked_id;
+            if (is_marked) {
+                const bounds = item.header().ink_bounds;
+                if (bounds.width > 0 and bounds.height > 0) ink = if (ink) |previous| previous.unioned(bounds) else bounds;
+            }
+            if (item == .fill_rect) {
+                try testing.expect(is_marked);
+                try testing.expect(!foreground_started);
+                try testing.expectEqualDeep(color, item.fill_rect.color);
+                const rect = item.fill_rect.rect;
+                if (first_background == null) first_background = rect;
+                const row_offsets = [_]f64{ 0, 1, 3, 4 };
+                try testing.expect(backgrounds < row_offsets.len);
+                try testing.expectApproxEqAbs(first_background.?.y + row_offsets[backgrounds] * 26, rect.y, 0.001);
+                try testing.expectApproxEqAbs(@as(f64, 26), rect.height, 0.001);
+                try testing.expect(rect.width > 160);
+                try testing.expectApproxEqAbs(first_background.?.width, rect.width, 0.001);
+                backgrounds += 1;
+            }
+            if (item != .text) continue;
+            if (is_marked) foreground_started = true;
+            const target = if (is_marked) &marked_glyphs else &plain_glyphs;
+            for (item.text.layout.runs) |run| {
+                var x = item.text.x + run.x;
+                for (item.text.layout.glyphs[run.glyph_range.start..run.glyph_range.end]) |glyph| {
+                    try target.append(testing.allocator, .{ .id = glyph.id, .x = x + glyph.offset_x, .y = item.text.baselineY() + glyph.offset_y, .advance = glyph.advance_x, .color = item.text.color });
+                    x += glyph.advance_x;
+                }
+            }
+        }
+        try testing.expectEqual(@as(usize, 4), backgrounds);
+        try testing.expect(plain_glyphs.items.len > 0);
+        try testing.expectEqualDeep(plain_glyphs.items, marked_glyphs.items);
+        const expected = measured.ink_bounds.?;
+        try testing.expectApproxEqAbs(@as(f64, expected.x), ink.?.x, 0.001);
+        try testing.expectApproxEqAbs(@as(f64, expected.y), ink.?.y, 0.001);
+        try testing.expectApproxEqAbs(@as(f64, expected.width), ink.?.width, 0.001);
+        try testing.expectApproxEqAbs(@as(f64, expected.height), ink.?.height, 0.001);
+
+        prepared.pages[0].objects[1].render.text.?.markdown_code_highlight_fill = null;
+        const disabled_measurement = (try provider.measure(provider.context, try fixture.work(), state.getNode(marked_id).?, 180, .width_constrained)).?;
+        try testing.expect(measured.cache_key != disabled_measurement.cache_key);
+        try testing.expectEqual(measured.logicalBounds(), disabled_measurement.logicalBounds());
+        var disabled = try render_compile.compile(testing.allocator, testing.io, &state, &prepared, try fixture.document(), .{ .jobs = 1, .font_environment = environment });
+        defer disabled.deinit(testing.allocator);
+        for (disabled.pages[0].items.items) |item| {
+            if (item.header().node_id == marked_id) try testing.expect(item != .fill_rect);
+        }
+    }
+}
+
 test "inline math shares measured paragraph baselines with bidirectional text" {
     if (!try latexEngineAvailable(.pdflatex)) return error.SkipZigTest;
     var state = try initEmptyDocumentState();

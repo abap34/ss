@@ -326,6 +326,7 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.Te
         hashF32(hasher, text.markdown_code_line_height);
         hashF32(hasher, text.markdown_code_pad_x);
         hashF32(hasher, text.markdown_code_pad_y);
+        hashOptionalColor(hasher, text.markdown_code_highlight_fill);
         hashOptionalColor(hasher, text.markdown_code_fill);
         hashOptionalColor(hasher, text.markdown_code_stroke);
         hashF32(hasher, text.markdown_code_line_width);
