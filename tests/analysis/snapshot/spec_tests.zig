@@ -217,3 +217,46 @@ test "snapshot cancellation releases results returned by the layout hook" {
     }));
     try testing.expect(cancellation.canceled);
 }
+
+test "snapshot retains recovered import diagnostics and clears them after repair" {
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    const entry = "stdlib/core/snapshot-import-test.ss";
+    const imported = "stdlib/core/snapshot-import-library.ss";
+    const entry_source = "import ./snapshot-import-library as library\npage sample\nend\n";
+    const broken_source = "const missing: Number =\nconst kept: Number = 2\n";
+    try sources.put(entry, entry_source);
+    try sources.put(imported, broken_source);
+    {
+        var snapshot = try analysis.snapshot.build(testing.allocator, &sources, entry, ".", .{});
+        defer snapshot.deinit();
+        try testing.expect(snapshot.diagnostics.hasErrors());
+        var found_import = false;
+        var found_summary = false;
+        for (snapshot.diagnostics.items.items) |diagnostic| {
+            if (std.mem.endsWith(u8, diagnostic.path, "snapshot-import-library.ss")) {
+                found_import = true;
+                try testing.expectEqualStrings(broken_source, diagnostic.source);
+                try testing.expect(diagnostic.span != null);
+                try testing.expectEqual(core.DiagnosticSeverity.@"error", diagnostic.severity);
+            }
+            if (std.mem.eql(u8, diagnostic.code, "ImportFailed")) {
+                found_summary = true;
+                try testing.expectEqualStrings(entry, diagnostic.path);
+                try testing.expect(diagnostic.span != null);
+            }
+        }
+        if (!found_import) {
+            for (snapshot.diagnostics.items.items) |diagnostic| {
+                std.debug.print("{s}: {s}: {s}\n", .{ diagnostic.path, diagnostic.code, diagnostic.message });
+            }
+        }
+        try testing.expect(found_import);
+        try testing.expect(found_summary);
+        try testing.expectEqualStrings(entry_source, analysis.snapshot.sourceForPath(&snapshot, entry).?);
+    }
+    try sources.put(imported, "const missing: Number = 1\nconst kept: Number = 2\n");
+    var repaired = try analysis.snapshot.build(testing.allocator, &sources, entry, ".", .{ .generation = 2 });
+    defer repaired.deinit();
+    try testing.expect(!repaired.diagnostics.hasErrors());
+}

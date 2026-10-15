@@ -832,7 +832,7 @@ fn loadSnapshotModules(allocator: std.mem.Allocator, sources: *const SourceSet, 
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
     const import_base_dir = std.fs.path.dirname(entry_path) orelse ".";
-    return module_index.load(allocator, sources.io, import_base_dir, program, .{
+    var index = module_index.load(allocator, sources.io, import_base_dir, program, .{
         .overlay = &sources.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
@@ -873,6 +873,13 @@ fn loadSnapshotModules(allocator: std.mem.Allocator, sources: *const SourceSet, 
         }
         return null;
     };
+    errdefer index.deinit();
+    try addLoadDiagnostics(diagnostic_bag, &load_diagnostics);
+    if (load_diagnostics.hasErrors()) {
+        const span = try module_loader.importFailureSpan(allocator, sources.io, import_base_dir, &program, &sources.overlay, &load_diagnostics);
+        try diagnostic_bag.add(entry_path, entry_source, .@"error", "ImportFailed", "ImportFailed: imported module contains syntax errors", span, null);
+    }
+    return index;
 }
 
 fn finishDiagnosticSnapshot(
