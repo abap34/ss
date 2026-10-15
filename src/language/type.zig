@@ -254,7 +254,7 @@ pub const Type = struct {
             if (actual.fn_result == null) return false;
             if (expected.fn_params.len != actual.fn_params.len) return false;
             for (expected.fn_params, 0..) |expected_param, index| {
-                if (!accepts(expected_param, actual.fn_params[index])) return false;
+                if (!accepts(actual.fn_params[index], expected_param)) return false;
             }
             return accepts(expected.fn_result.?.*, actual.fn_result.?.*);
         }

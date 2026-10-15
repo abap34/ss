@@ -1012,19 +1012,19 @@ fn validateCallbackShape(
     if (descriptor.op == .csv_map) {
         const supplied_types = [_]Type{ Type.string, Type.number, Type.number, Type.boolean };
         for (supplied_types, 0..) |ty, index| {
-            try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[index]), ty, origin, .UnmatchedArgumentType);
+            try ensureType(state, allocator, infoFromType(ty), callback_info.ty.fn_params[index], origin, .UnmatchedArgumentType);
         }
     } else if (supplied_arg_count == 1) {
-        try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[0]), item_type, origin, .UnmatchedArgumentType);
+        try ensureType(state, allocator, infoFromType(item_type), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
     } else if (supplied_arg_count == 2) {
         switch (descriptor.op) {
             .fold => {
-                try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[0]), Type.string, origin, .UnmatchedArgumentType);
-                try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[1]), item_type, origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, infoFromType(Type.string), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, infoFromType(item_type), callback_info.ty.fn_params[1], origin, .UnmatchedArgumentType);
             },
             .foreach_enumerate => {
-                try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[0]), item_type, origin, .UnmatchedArgumentType);
-                try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[1]), Type.number, origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, infoFromType(item_type), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, infoFromType(Type.number), callback_info.ty.fn_params[1], origin, .UnmatchedArgumentType);
             },
             else => {},
         }

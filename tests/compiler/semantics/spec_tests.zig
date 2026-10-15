@@ -6324,7 +6324,7 @@ test "compiler semantics: object class annotations are checked through selection
         \\  foreach(select(pagectx(), "page_objects_by_role", "card"), accept_body)
         \\end
         \\
-    , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Body>");
+    , "case.ss:bytes:", "TypeMismatch: expected Object<Body>, got Object<Card>");
 }
 
 test "compiler semantics: object class mismatches report concrete type labels" {
@@ -7199,4 +7199,32 @@ test "compiler semantics: explicit none and declared defaults satisfy record fie
         \\  let settings = Settings { size = none }
         \\end
     );
+}
+
+test "compiler semantics: callbacks must accept every supplied argument" {
+    try expectDiagnostic(
+        \\fn call_with_none(callback: (Number?) -> String) -> String = callback(none)
+        \\fn show(value: Number) -> String = str(value)
+        \\page main
+        \\  text!(call_with_none(show))
+        \\end
+    , "bytes:", "TypeMismatch");
+    try expectObjectContent(
+        \\fn apply(callback: Number -> String) -> String = callback(3)
+        \\fn show(value: Number?) -> String = str(value ?? 0)
+        \\page main
+        \\  text!(apply(show))
+        \\end
+    , "3");
+}
+
+test "compiler semantics: primitive callbacks accept broader parameter types" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn label(item: Object?) -> String = "X"
+        \\page main
+        \\  txt_obj!("A", "tagged")
+        \\  note!(join(doc_objs(docctx(), "tagged"), "", label))
+        \\end
+    , "X");
 }

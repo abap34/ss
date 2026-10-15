@@ -124,3 +124,18 @@ test "type spec: optional function types preserve their child shape" {
     try testing.expect(Type.accepts(maybe_callback, callback));
     try testing.expect(!Type.accepts(callback, maybe_callback));
 }
+
+test "type spec: function parameters are contravariant and results are covariant" {
+    var maybe = try Type.optional(testing.allocator, Type.number);
+    defer maybe.deinit(testing.allocator);
+    var narrow = try Type.functionType(testing.allocator, &.{Type.number}, Type.number);
+    defer narrow.deinit(testing.allocator);
+    var broad = try Type.functionType(testing.allocator, &.{maybe}, Type.number);
+    defer broad.deinit(testing.allocator);
+    var optional_result = try Type.functionType(testing.allocator, &.{Type.number}, maybe);
+    defer optional_result.deinit(testing.allocator);
+    try testing.expect(Type.accepts(narrow, broad));
+    try testing.expect(!Type.accepts(broad, narrow));
+    try testing.expect(Type.accepts(optional_result, narrow));
+    try testing.expect(!Type.accepts(narrow, optional_result));
+}
