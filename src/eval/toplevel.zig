@@ -257,7 +257,6 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
     return switch (err) {
         error.ReturnOutsideFunction => "return is only valid inside a function",
         error.InvalidLibraryModule => "imported modules must contain functions, constants, and imports only",
-        error.FunctionDoesNotReturnValue => "function used as a value does not return anything",
         error.InvalidArity => "wrong number of arguments",
         error.InvalidValueTag => "value has the wrong semantic kind",
         error.RecursiveFunction => "recursive functions are not allowed",
@@ -375,7 +374,6 @@ fn materializeDisplayContent(evaluation: *EvalContext) !void {
 
 const DocumentExecutionState = struct {
     env: Environment,
-    last_code_like: ?core.NodeId = null,
 
     fn init(allocator: std.mem.Allocator) DocumentExecutionState {
         return .{ .env = Environment.init(allocator) };
@@ -423,7 +421,7 @@ fn executeDocumentStatement(
 ) !void {
     const state = evaluation.state;
     const error_count = diagnosticErrorCount(state);
-    const flow = executeStatement(evaluation, state.graph.document_id, .document, &execution_state.env, &execution_state.last_code_like, stmt, null) catch |err| {
+    const flow = executeStatement(evaluation, state.graph.document_id, .document, &execution_state.env, stmt, null) catch |err| {
         if (err == error.Canceled) return err;
         const origin = state.sourceOrigin(evaluation.module_id, stmt.span);
         if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
@@ -447,7 +445,7 @@ fn executePageStatement(
 ) !void {
     const state = evaluation.state;
     const error_count = diagnosticErrorCount(state);
-    const flow = executeStatement(evaluation, page_id, .page, &execution_state.env, &execution_state.last_code_like, stmt, null) catch |err| {
+    const flow = executeStatement(evaluation, page_id, .page, &execution_state.env, stmt, null) catch |err| {
         if (err == error.Canceled) return err;
         const origin = state.sourceOrigin(evaluation.module_id, stmt.span);
         if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
@@ -898,8 +896,6 @@ fn evalCall(
                     return error.UnknownFunction;
                 },
             };
-            if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
-            try validateFixedArity(state, call.args.items.len, func_ref.param_count, current_origin);
             var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
             defer deinitCallArgs(state.allocator, &args);
             break :blk try invokeFunctionRef(evaluation, page_id, scope, env, func_ref, current_origin, args.items(.value));
@@ -919,8 +915,13 @@ fn evalCall(
             break :blk try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, args.items(.value));
         },
         .function => |resolved| blk: {
-            try eval_functions.requireReturnsValue(resolved.decl);
-            break :blk try invokeUserFunctionValueInModule(evaluation, page_id, scope, env, resolved.module_id, resolved.decl, current_origin, call);
+            try validateUserFunctionArity(state, call.args.items.len, resolved.decl, current_origin);
+            var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
+            defer deinitCallArgs(state.allocator, &args);
+            const previous_origin = evaluation.elaboration_origin;
+            evaluation.elaboration_origin = elaboratedCallOrigin(evaluation, call) orelse previous_origin;
+            defer evaluation.elaboration_origin = previous_origin;
+            break :blk try invokeUserFunctionValues(evaluation, page_id, scope, env, resolved.module_id, resolved.decl, current_origin, args.items(.value));
         },
         .primitive => |primitive| try evalPrimitiveCall(evaluation, page_id, scope, env, current_origin, call, primitive),
         .unknown => {
@@ -942,8 +943,6 @@ fn evalLambda(
         .name = "#lambda",
         .module_id = evaluation.module_id,
         .closure_id = id,
-        .param_count = lambda.params.items.len,
-        .returns_value = true,
     } };
 }
 
@@ -1145,12 +1144,12 @@ const BuiltinContext = struct {
         return .{ .anchor = .{ .node = .{ .node_id = node_id, .anchor = anchor } } };
     }
 
-    pub fn pageAnchorValue(self: *BuiltinContext, anchor_name: []const u8) !core.Value {
+    pub fn pageAnchorValue(self: *BuiltinContext, page_id: core.NodeId, anchor_name: []const u8) !core.Value {
         const anchor = names.parseAnchorName(anchor_name) orelse {
             try reportNamedResolutionError(self.state, error.UnknownAnchor, "anchor", anchor_name, self.current_origin);
             return error.UnknownAnchor;
         };
-        return .{ .anchor = .{ .page = anchor } };
+        return .{ .anchor = .{ .page = .{ .page_id = page_id, .anchor = anchor } } };
     }
 
     pub fn makeObject(
@@ -1277,6 +1276,10 @@ const BuiltinContext = struct {
         offset: f32,
     ) !core.ConstraintSet {
         return try anchorEqualityConstraintSet(self.evaluation, target, source, offset, self.current_origin);
+    }
+
+    pub fn registerConstraints(self: *BuiltinContext, page_id: core.NodeId, rules: []const core.Constraint) !void {
+        try registerConstraintsOnPage(self.evaluation, page_id, rules, self.current_origin);
     }
 
     pub fn emitDiagnosticReport(self: *BuiltinContext, severity: core.DiagnosticSeverity, message: []const u8) !void {
@@ -1472,31 +1475,6 @@ fn bindFunctionArgument(
     try local_env.put(param.name, binding);
 }
 
-fn bindUserFunctionArgs(
-    evaluation: *EvalContext,
-    page_id: core.NodeId,
-    scope: EvalScope,
-    caller_env: *Environment,
-    local_env: *Environment,
-    module_id: core.SourceModuleId,
-    func: FunctionDecl,
-    current_origin: core.SourceOrigin,
-    call: CallExpr,
-) !void {
-    const state = evaluation.state;
-    for (func.params.items, 0..) |param, index| {
-        const binding = if (index < call.args.items.len) blk: {
-            break :blk try evalArgument(evaluation, page_id, scope, caller_env, current_origin, call.args.items[index]);
-        } else blk: {
-            const previous_module_id = evaluation.module_id;
-            evaluation.module_id = module_id;
-            defer evaluation.module_id = previous_module_id;
-            break :blk try evalArgument(evaluation, page_id, scope, local_env, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        };
-        try bindFunctionArgument(state, page_id, local_env, param, current_origin, binding);
-    }
-}
-
 fn bindUserFunctionValueArgs(
     evaluation: *EvalContext,
     page_id: core.NodeId,
@@ -1672,9 +1650,33 @@ fn anchorEqualityConstraintSet(
             .offset = offset,
             .origin = origin,
             .role = core.constraintRoleForRelation(node.node_id, node.anchor, source.toConstraintSource()),
-            .scope_depth = evaluation.call_depth,
+            .page_id = if (source == .page) source.page.page_id else null,
         }),
     };
+}
+
+fn registerConstraintsOnPage(evaluation: *EvalContext, page_id: core.NodeId, rules: []const core.Constraint, origin: core.SourceOrigin) !void {
+    const state = evaluation.state;
+    const page = state.getNode(page_id) orelse return error.ExpectedPage;
+    if (page.kind != .page) return error.ExpectedPage;
+    for (rules) |rule| {
+        if (rule.page_id) |required_page| {
+            if (required_page != page_id) {
+                try state.addValidationDiagnostic(.@"error", page_id, rule.target_node, origin, .{
+                    .user_report = .{ .code = "CrossPageConstraint", .message = try state.allocator.dupe(u8, "constraint page anchor refers to a different page from its registration") },
+                });
+                return error.DiagnosticsFailed;
+            }
+        }
+    }
+    try state.constraints.active.ensureUnusedCapacity(state.allocator, rules.len);
+    for (rules) |rule| {
+        var registered = rule;
+        registered.page_id = page_id;
+        registered.scope_depth = evaluation.call_depth;
+        registered.origin = origin;
+        state.constraints.active.appendAssumeCapacity(registered);
+    }
 }
 
 const ResolvedTarget = struct {
@@ -1831,12 +1833,10 @@ fn executeStatement(
     page_id: core.NodeId,
     scope: EvalScope,
     env: *Environment,
-    last_code_like: *?core.NodeId,
     stmt: Statement,
     origin_override: ?core.SourceOrigin,
 ) anyerror!ExecFlow {
     const state = evaluation.state;
-    const functions = evaluation.functions;
     try checkCancellation(evaluation);
     const origin = origin_override orelse evaluation.elaboration_origin orelse state.sourceOrigin(evaluation.module_id, stmt.span);
     switch (stmt.kind) {
@@ -1876,7 +1876,7 @@ fn executeStatement(
             var branch_env = Environment.child(state.allocator, env);
             defer branch_env.deinit();
             for (branch) |nested| {
-                const flow = try executeStatement(evaluation, page_id, scope, &branch_env, last_code_like, nested, null);
+                const flow = try executeStatement(evaluation, page_id, scope, &branch_env, nested, null);
                 switch (flow) {
                     .none => {},
                     .returned => return flow,
@@ -1884,6 +1884,7 @@ fn executeStatement(
             }
         },
         .constrain => |decl| {
+            if (scope != .page) return error.NoCurrentPage;
             const target = try resolveAnchorRef(state, env, origin, decl.target, true);
             const resolved_source: ?core.ConstraintSource = if (decl.source) |source_ref|
                 try resolveAnchorRef(state, env, origin, source_ref, false)
@@ -1900,15 +1901,14 @@ fn executeStatement(
             else
                 .position;
             switch (decl.action) {
-                .add => try state.constraints.addAnchorAtScope(
-                    state.allocator,
-                    target.node_id,
-                    target.anchor,
-                    resolved_source orelse return error.InvalidConstraint,
-                    offset,
-                    origin,
-                    evaluation.call_depth,
-                ),
+                .add => try registerConstraintsOnPage(evaluation, page_id, &.{.{
+                    .target_node = target.node_id,
+                    .target_anchor = target.anchor,
+                    .source = resolved_source orelse return error.InvalidConstraint,
+                    .offset = offset,
+                    .origin = origin,
+                    .role = role,
+                }}, origin),
                 .update => try state.constraints.addUpdate(
                     state.allocator,
                     target.node_id,
@@ -1922,18 +1922,8 @@ fn executeStatement(
             }
         },
         .expr_stmt => |expr| {
-            var value = switch (expr) {
-                .call => |call| blk: {
-                    const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
-                    if ((try evaluation.name_resolution_cache.resolveValue(&sema, core.Value, call.callee, env.get(call.callee.name))) == .function) {
-                        break :blk try executeCallStatement(evaluation, page_id, scope, env, last_code_like, origin, call);
-                    }
-                    break :blk try evalExpr(evaluation, page_id, scope, env, origin, expr);
-                },
-                else => try evalExpr(evaluation, page_id, scope, env, origin, expr),
-            };
+            var value = try evalExpr(evaluation, page_id, scope, env, origin, expr);
             defer value.deinit(state.allocator);
-            try materializeStatementValue(state, last_code_like, value);
             if (scope == .page and evaluation.call_depth == 0) {
                 const binding_base = switch (expr) {
                     .call => |call| call.callee.name,
@@ -1944,14 +1934,6 @@ fn executeStatement(
         },
     }
     return .none;
-}
-
-fn materializeStatementValue(state: *core.DocumentState, last_code_like: *?core.NodeId, value: core.Value) !void {
-    switch (value) {
-        .constraints => |constraints| try state.constraints.addSet(state.allocator, constraints),
-        .object => |id| last_code_like.* = id,
-        else => {},
-    }
 }
 
 fn addValueObjectSources(
@@ -1979,13 +1961,6 @@ fn addValueObjectSources(
     }
 }
 
-fn connectReturnedObject(state: *core.DocumentState, value: core.Value, start_node_count: usize, origin: core.SourceOrigin) !void {
-    switch (value) {
-        .object => |id| try state.connectGeneratedReturnObjects(id, start_node_count, origin),
-        else => {},
-    }
-}
-
 fn connectValueObjects(state: *core.DocumentState, value: core.Value, start_node_count: usize, origin: core.SourceOrigin) !void {
     switch (value) {
         .object => |id| try state.connectGeneratedReturnObjects(id, start_node_count, origin),
@@ -2005,70 +1980,6 @@ fn discardStatementValue(state: *core.DocumentState, value: core.Value) !void {
         },
         else => {},
     }
-}
-
-fn executeCallStatement(
-    evaluation: *EvalContext,
-    page_id: core.NodeId,
-    scope: EvalScope,
-    env: *Environment,
-    last_code_like: *?core.NodeId,
-    current_origin: core.SourceOrigin,
-    call: CallExpr,
-) anyerror!core.Value {
-    const state = evaluation.state;
-    const functions = evaluation.functions;
-    const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
-    const resolved = (try resolvedFunction(evaluation, &sema, call.callee)) orelse {
-        return try evalCall(evaluation, page_id, scope, env, current_origin, call);
-    };
-    const func = resolved.decl;
-    try validateUserFunctionArity(state, call.args.items.len, func, current_origin);
-    const body_origin = elaboratedCallOrigin(evaluation, call) orelse evaluation.elaboration_origin;
-
-    const previous_call_depth = evaluation.call_depth;
-    evaluation.call_depth += 1;
-    defer evaluation.call_depth = previous_call_depth;
-
-    var local_env = Environment.init(state.allocator);
-    defer local_env.deinit();
-    try bindUserFunctionArgs(evaluation, page_id, scope, env, &local_env, resolved.module_id, func, current_origin, call);
-    const previous_elaboration_origin = evaluation.elaboration_origin;
-    evaluation.elaboration_origin = body_origin;
-    defer evaluation.elaboration_origin = previous_elaboration_origin;
-    const start_node_count = state.nodeCount();
-    const previous_module_id = evaluation.module_id;
-    evaluation.module_id = resolved.module_id;
-    defer evaluation.module_id = previous_module_id;
-    for (func.statements.items) |inner| {
-        const flow = try executeStatement(evaluation, page_id, scope, &local_env, last_code_like, inner, body_origin);
-        switch (flow) {
-            .none => {},
-            .returned => |value| {
-                if (func.result_type.kind == .void) {
-                    value_contracts.ensureValueTypeWithCode(state, page_id, value, .void, current_origin, .UnmatchedReturnType) catch |err| {
-                        var owned = value;
-                        owned.deinit(state.allocator);
-                        return err;
-                    };
-                } else {
-                    value_contracts.ensureValueConformsToType(state, page_id, value, func.result_type, current_origin, .UnmatchedReturnType) catch |err| {
-                        var owned = value;
-                        owned.deinit(state.allocator);
-                        return err;
-                    };
-                    connectValueObjects(state, value, start_node_count, body_origin orelse current_origin) catch |err| {
-                        var owned = value;
-                        owned.deinit(state.allocator);
-                        return err;
-                    };
-                }
-                return value;
-            },
-        }
-    }
-    if (func.result_type.kind != .void) return error.FunctionDidNotReturnValue;
-    return .{ .void = {} };
 }
 
 fn invokeFunctionRef(
@@ -2128,69 +2039,10 @@ fn invokeClosureValues(
     const previous_module_id = evaluation.module_id;
     evaluation.module_id = module_id;
     defer evaluation.module_id = previous_module_id;
-    const value = try evalExpr(evaluation, page_id, scope, &local_env, current_origin, closure.lambda.body.*);
-    try connectReturnedObject(state, value, start_node_count, current_origin);
+    var value = try evalExpr(evaluation, page_id, scope, &local_env, current_origin, closure.lambda.body.*);
+    errdefer value.deinit(state.allocator);
+    try connectValueObjects(state, value, start_node_count, current_origin);
     return value;
-}
-
-fn invokeUserFunctionValue(
-    evaluation: *EvalContext,
-    page_id: core.NodeId,
-    scope: EvalScope,
-    env: *Environment,
-    func: FunctionDecl,
-    current_origin: core.SourceOrigin,
-    call: CallExpr,
-) anyerror!core.Value {
-    return invokeUserFunctionValueInModule(evaluation, page_id, scope, env, evaluation.module_id, func, current_origin, call);
-}
-
-fn invokeUserFunctionValueInModule(
-    evaluation: *EvalContext,
-    page_id: core.NodeId,
-    scope: EvalScope,
-    env: *Environment,
-    module_id: core.SourceModuleId,
-    func: FunctionDecl,
-    current_origin: core.SourceOrigin,
-    call: CallExpr,
-) anyerror!core.Value {
-    const state = evaluation.state;
-    const func_ref = try eval_functions.functionRefForInModule(state.allocator, module_id, func);
-    if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
-    try validateUserFunctionArity(state, call.args.items.len, func, current_origin);
-    const body_origin = elaboratedCallOrigin(evaluation, call) orelse evaluation.elaboration_origin;
-
-    const previous_call_depth = evaluation.call_depth;
-    evaluation.call_depth += 1;
-    defer evaluation.call_depth = previous_call_depth;
-
-    var local_env = Environment.init(state.allocator);
-    defer local_env.deinit();
-    try bindUserFunctionArgs(evaluation, page_id, scope, env, &local_env, module_id, func, current_origin, call);
-
-    const previous_elaboration_origin = evaluation.elaboration_origin;
-    evaluation.elaboration_origin = body_origin;
-    defer evaluation.elaboration_origin = previous_elaboration_origin;
-
-    var last_code_like: ?core.NodeId = null;
-    const start_node_count = state.nodeCount();
-    const previous_module_id = evaluation.module_id;
-    evaluation.module_id = module_id;
-    defer evaluation.module_id = previous_module_id;
-    for (func.statements.items) |inner| {
-        const flow = try executeStatement(evaluation, page_id, scope, &local_env, &last_code_like, inner, body_origin);
-        switch (flow) {
-            .none => {},
-            .returned => |value| {
-                try value_contracts.ensureValueConformsToType(state, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
-                try connectReturnedObject(state, value, start_node_count, body_origin orelse current_origin);
-                return value;
-            },
-        }
-    }
-
-    return error.FunctionDidNotReturnValue;
 }
 
 fn elaboratedCallOrigin(evaluation: *EvalContext, call: CallExpr) ?core.SourceOrigin {
@@ -2218,18 +2070,19 @@ fn invokeUserFunctionValues(
     defer local_env.deinit();
     try bindUserFunctionValueArgs(evaluation, page_id, scope, env, &local_env, module_id, func, current_origin, args);
 
-    var last_code_like: ?core.NodeId = null;
     const start_node_count = state.nodeCount();
     const previous_module_id = evaluation.module_id;
     evaluation.module_id = module_id;
     defer evaluation.module_id = previous_module_id;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(evaluation, page_id, scope, &local_env, &last_code_like, inner, null);
+        const flow = try executeStatement(evaluation, page_id, scope, &local_env, inner, evaluation.elaboration_origin);
         switch (flow) {
             .none => {},
-            .returned => |value| {
+            .returned => |result| {
+                var value = result;
+                errdefer value.deinit(state.allocator);
                 try value_contracts.ensureValueConformsToType(state, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
-                try connectReturnedObject(state, value, start_node_count, current_origin);
+                try connectValueObjects(state, value, start_node_count, evaluation.elaboration_origin orelse current_origin);
                 return value;
             },
         }

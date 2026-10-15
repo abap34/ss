@@ -18,8 +18,14 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk try ctx.anchorValueForObject(node_id, anchor_name);
         },
         .page_anchor => blk: {
-            const anchor_name = try ctx.evalStringArg(call, 0);
-            break :blk try ctx.pageAnchorValue(anchor_name);
+            var page_value = try ctx.evalExprValue(call.args.items[0]);
+            defer page_value.deinit(ctx.state.allocator);
+            const page_id = switch (page_value) {
+                .page => |id| id,
+                else => return error.ExpectedPage,
+            };
+            const anchor_name = try ctx.evalStringArg(call, 1);
+            break :blk try ctx.pageAnchorValue(page_id, anchor_name);
         },
         .equal => blk: {
             const target = try ctx.evalAnchorArg(call, 0);
@@ -557,6 +563,19 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                     return error.InvalidValueTag;
                 },
             };
+        },
+        .constrain_on => blk: {
+            var page_value = try ctx.evalExprValue(call.args.items[0]);
+            defer page_value.deinit(ctx.state.allocator);
+            var rules = try ctx.evalExprValue(call.args.items[1]);
+            defer rules.deinit(ctx.state.allocator);
+            const page_id = switch (page_value) {
+                .page => |id| id,
+                else => return error.ExpectedPage,
+            };
+            if (rules != .constraints) return error.ExpectedConstraintSet;
+            try ctx.registerConstraints(page_id, rules.constraints.items.items);
+            break :blk .{ .void = {} };
         },
         .constraints => blk: {
             var bundle = core.ConstraintSet.init();

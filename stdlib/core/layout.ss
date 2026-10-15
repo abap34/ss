@@ -1,5 +1,9 @@
 import std:core/classes
 
+fn constrain!(rules: Constraints) -> Void
+  constrain_on!(pagectx(), rules)
+end
+
 fn hjoin(a: Object, b: Object, gap: Number = 32) -> Object
   return compose(composition_objects(a, b), true, false, gap)
 end

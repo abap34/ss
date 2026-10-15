@@ -920,6 +920,8 @@ pub const Analyzer = struct {
                 try summary.merge(nested);
             },
             .constrain => |decl| {
+                try self.addAnchorReads(&summary, decl.target);
+                if (decl.source) |source| try self.addAnchorReads(&summary, source);
                 if (decl.offset) |offset| {
                     var nested = try self.analyzeExpr(offset);
                     defer nested.deinit();
@@ -1278,7 +1280,6 @@ pub const Analyzer = struct {
                 },
             };
             defer body.deinit();
-            if (candidate == .named and callableNamePlacesObjects(candidate.named.key.name)) body.places_objects = true;
             try summary.merge(body);
         }
         return summary;
@@ -1386,7 +1387,6 @@ pub const Analyzer = struct {
                 defer self.deinitCallArgFacts(&arg_facts);
                 var summary = try self.callArgFactsSummary(arg_facts.items);
                 errdefer summary.deinit();
-                if (callableNamePlacesObjects(call.callee.name)) summary.places_objects = true;
                 break :blk try self.functionCall(resolved.key, resolved.module_id, resolved.decl, arg_facts.items, summary);
             },
             .primitive => |primitive| try self.primitiveCall(call, primitive),
@@ -1957,6 +1957,13 @@ pub const Analyzer = struct {
         };
     }
 
+    fn addAnchorReads(self: *Analyzer, summary: *AccessSummary, anchor: ast.AnchorRef) !void {
+        if (anchor.kind == .page) return;
+        const path = anchor.node_path orelse anchor.node_name orelse return;
+        var parts = std.mem.splitScalar(u8, path, '.');
+        try self.addVariableRead(summary, parts.first());
+    }
+
     fn primitiveCall(
         self: *Analyzer,
         call: ast.CallExpr,
@@ -1985,7 +1992,7 @@ pub const Analyzer = struct {
                 try summary.addWrite(Resource.makePages(null));
                 summary.writes_layout_input = true;
             },
-            .equal, .constraints => {
+            .constrain_on => {
                 summary.writes_layout_input = true;
             },
             else => {},
@@ -2057,7 +2064,7 @@ pub const Analyzer = struct {
                 ));
                 summary.writes_layout_input = true;
             },
-            .equal, .constraints => {
+            .constrain_on => {
                 summary.writes_layout_input = true;
             },
             .extend_render_env,

@@ -2,32 +2,15 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 
-pub const FunctionContract = struct {
-    min_param_count: usize,
-    max_param_count: usize,
-    returns_value: bool,
-};
-
 pub fn functionRefFor(allocator: std.mem.Allocator, func: ast.FunctionDecl) !core.FunctionRef {
     return functionRefForInModule(allocator, 0, func);
 }
 
 pub fn functionRefForInModule(allocator: std.mem.Allocator, module_id: core.SourceModuleId, func: ast.FunctionDecl) !core.FunctionRef {
     _ = allocator;
-    const contract = functionContract(func);
     return .{
         .name = func.name,
         .module_id = module_id,
-        .param_count = contract.max_param_count,
-        .returns_value = contract.returns_value,
-    };
-}
-
-pub fn functionContract(func: ast.FunctionDecl) FunctionContract {
-    return .{
-        .min_param_count = requiredParamCount(func),
-        .max_param_count = func.params.items.len,
-        .returns_value = functionReturnsValue(func),
     };
 }
 
@@ -37,10 +20,6 @@ pub fn requiredParamCount(func: ast.FunctionDecl) usize {
         if (param.default_value == null) required += 1;
     }
     return required;
-}
-
-pub fn functionReturnsValue(func: ast.FunctionDecl) bool {
-    return func.result_type.kind != .void;
 }
 
 pub fn functionBodyReturns(statements: []const ast.Statement) bool {

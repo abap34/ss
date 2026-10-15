@@ -550,7 +550,6 @@ const PlacementEffectAnalyzer = struct {
             .primitive => |primitive| primitive.places_objects or
                 try self.primitiveCallback(sema, locals, call_expr, primitive),
             .function => |resolved| blk: {
-                if (dependencies.callableNamePlacesObjects(call_expr.callee.name)) break :blk true;
                 break :blk try self.functionBody(resolved.key, resolved.module_id, resolved.decl);
             },
         };

@@ -207,6 +207,7 @@ fn constraintFailureConstraintPairSame(a: ConstraintFailure, b: ConstraintFailur
 }
 
 fn constraintEq(a: Constraint, b: Constraint) bool {
+    if (a.page_id != b.page_id) return false;
     if (a.target_node != b.target_node) return false;
     if (a.target_anchor != b.target_anchor) return false;
     if (a.offset != b.offset) return false;

@@ -2,6 +2,7 @@ import std:core/classes
 import std:core/layout
 import std:core/components
 import std:core/layout as {
+  constrain!,
   hjoin,
   vjoin,
   hsplit,

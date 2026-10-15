@@ -196,7 +196,7 @@ const PageContextRequirement = struct {
                 if ((try self.exprRequirement(scope, property_set.target)) != null) break :blk true;
                 break :blk (try self.exprRequirement(scope, property_set.value)) != null;
             },
-            .constrain => |constraint| if (constraint.offset) |offset| (try self.exprRequirement(scope, offset)) != null else false,
+            .constrain => true,
             .expr_stmt => |expr| (try self.exprRequirement(scope, expr)) != null,
             .if_stmt => |if_stmt| blk: {
                 if ((try self.exprRequirement(scope, if_stmt.condition)) != null) break :blk true;
@@ -586,6 +586,10 @@ fn checkStatement(
             try recordBindingType(state, sema.module_id, binding.name_span, info);
         },
         .return_expr => |expr| {
+            if (result_type.kind == .void) {
+                try addUserReport(state, origin, "VoidReturnValue", "Void functions must use return without an expression", .{});
+                return error.InvalidType;
+            }
             const actual = try inferExprInfo(inference_context, allocator, state, sema, env, expr, origin);
             try ensureType(state, allocator, actual, result_type, origin, .UnmatchedReturnType);
         },
@@ -615,6 +619,8 @@ fn checkStatement(
             _ = try inferExprInfo(inference_context, allocator, state, sema, env, expr, origin);
         },
         .constrain => |decl| {
+            try validateAnchorRef(allocator, state, sema, env, origin, decl.target, true);
+            if (decl.source) |source| try validateAnchorRef(allocator, state, sema, env, origin, source, false);
             if (decl.offset) |expr| {
                 const actual = try inferExprInfo(inference_context, allocator, state, sema, env, expr, origin);
                 try ensureType(state, allocator, actual, Type.number, origin, .UnmatchedArgumentType);

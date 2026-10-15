@@ -5,7 +5,6 @@ const Allocator = model.Allocator;
 const NodeId = model.NodeId;
 const Anchor = model.Anchor;
 const Constraint = model.Constraint;
-const ConstraintSet = model.ConstraintSet;
 const ConstraintSource = model.ConstraintSource;
 const ConstraintRole = model.ConstraintRole;
 
@@ -83,9 +82,5 @@ pub const DocumentConstraints = struct {
             } else null,
             .origin = origin,
         });
-    }
-
-    pub fn addSet(self: *DocumentConstraints, allocator: Allocator, constraints: ConstraintSet) !void {
-        try self.active.appendSlice(allocator, constraints.items.items);
     }
 };

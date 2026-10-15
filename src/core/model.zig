@@ -136,6 +136,8 @@ pub const ConstraintRole = enum {
 };
 
 pub const Constraint = struct {
+    /// Required page, fixed by a page anchor or by explicit registration.
+    page_id: ?NodeId = null,
     target_node: NodeId,
     target_anchor: Anchor,
     source: ConstraintSource,
@@ -320,7 +322,7 @@ pub const PropagationPath = struct {
 };
 
 pub const AnchorValue = union(enum) {
-    page: Anchor,
+    page: struct { page_id: NodeId, anchor: Anchor },
     node: struct {
         node_id: NodeId,
         anchor: Anchor,
@@ -328,7 +330,7 @@ pub const AnchorValue = union(enum) {
 
     pub fn toConstraintSource(self: AnchorValue) ConstraintSource {
         return switch (self) {
-            .page => |anchor| .{ .page = anchor },
+            .page => |page| .{ .page = page.anchor },
             .node => |node| .{ .node = .{ .node_id = node.node_id, .anchor = node.anchor } },
         };
     }
@@ -496,8 +498,6 @@ pub const FunctionRef = struct {
     name: []const u8,
     module_id: u32 = 0,
     closure_id: ?usize = null,
-    param_count: usize,
-    returns_value: bool,
 };
 
 /// Enum and case names borrow module syntax or the property value backing text.

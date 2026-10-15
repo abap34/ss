@@ -492,10 +492,6 @@ fn inferLambdaInfo(
     }
     const body_info = try exprInfoWithOptions(allocator, state, sema, &local_env, lambda.body.*, origin, options);
     if (body_info.hole != null) return body_info;
-    if (body_info.ty.kind == .void) {
-        try addUserReport(state, origin, "VoidValue", "lambda bodies must produce a value", .{});
-        return error.InvalidType;
-    }
     var info = infoFromType(try Type.functionType(allocator, param_types, body_info.ty));
     info.function_labels = try singleFunctionLabel(allocator, try lambdaLabel(allocator, lambda));
     return info;
@@ -664,6 +660,10 @@ fn inferPrimitiveCallInfo(
     for (call.args.items, 0..) |arg, index| {
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
         const actual = try exprInfoWithOptions(allocator, state, sema, env, arg, origin, options);
+        if (actual.hole == null and actual.ty.kind == .void) {
+            try addUserReport(state, origin, "VoidValue", "Void calls do not produce argument values", .{});
+            return error.InvalidType;
+        }
         if (sema.primitiveArgType(descriptor, index)) |expected| {
             const argument_type = if (descriptor.op == .group and actual.ty.kind == .selection) Type.selection(.object) else expected;
             try ensureType(state, allocator, actual, argument_type, origin, .UnmatchedArgumentType);

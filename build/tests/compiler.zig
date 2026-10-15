@@ -71,6 +71,11 @@ pub fn register(suite: Suite, modules: project.ProjectModules, compiler_mod: *Mo
     }, true);
     _ = suite.add(binding_types_mod, .{ .name = "test-binding-types", .description = "Run focused checked binding type tests" });
 
+    const constraints_spec_mod = createModule(ctx, "tests/compiler/constraints/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    _ = suite.add(constraints_spec_mod, .{ .name = "test-constraint-registration", .description = "Check explicit constraint values and registration" });
+
     const compiler_semantics_support_mod = createModule(ctx, "tests/compiler/semantics/support.zig", &.{
         import("utils", modules.utils),
         import("compiler", compiler_mod),

@@ -2885,7 +2885,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\  text("bad")
         \\end
         \\
-    , "case.ss:bytes:", "TypeMismatch: expected Void, got Number");
+    , "case.ss:bytes:", "VoidReturnValue: Void functions must use return without an expression");
 }
 
 test "compiler semantics: enum optional values reject strings and other enums" {
@@ -4658,8 +4658,8 @@ test "compiler semantics: stdlib numbering keeps counters separate" {
     try expectObjectContent(source, "Definition 1: B");
 }
 
-test "compiler semantics: lambda bodies cannot be void" {
-    try expectBuildFails(
+test "compiler semantics: void lambda callbacks execute their effects" {
+    try expectObjectContent(
         \\import std:themes/default as *
         \\
         \\fn side_effect!(page_value: Page) -> Void
@@ -4673,7 +4673,7 @@ test "compiler semantics: lambda bodies cannot be void" {
         \\page bad
         \\end
         \\
-    );
+    , "side");
 }
 
 test "compiler semantics: function value application checks argument types" {
@@ -5497,7 +5497,7 @@ test "compiler semantics: document callbacks may use explicit pages without curr
         \\
         \\fn decorate!(page_value: Page) -> Object
         \\  let item = place_on!(page_value, new("explicit", "body", "text"))
-        \\  ~ item.left == page.left + 72
+        \\  constrain_on!(page_value, equal(anchor(item, "left"), page_anchor(page_value, "left"), 72))
         \\  return item
         \\end
         \\
@@ -5919,7 +5919,7 @@ test "compiler semantics: placing calls require bang-marked functions" {
         \\
     );
 
-    try expectDiagnostic(
+    try buildSource(
         \\import std:themes/default as *
         \\
         \\fn ok!() -> Object
@@ -5933,7 +5933,7 @@ test "compiler semantics: placing calls require bang-marked functions" {
         \\page ok
         \\end
         \\
-    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+    );
 }
 
 test "compiler semantics: paired placement functions desugar through existing checks" {
@@ -7486,4 +7486,217 @@ test "compiler semantics: optional member results cannot be assignment targets" 
         \\  (holder?.item).link_id = "X"
         \\end
     , "bytes:", "InvalidProperty");
+}
+
+test "compiler semantics: void calls share direct indirect apply record and callback behavior" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\record Action {
+        \\  run: (Object, String) -> Void
+        \\}
+        \\fn mark(item: Object, value: String) -> Void
+        \\  item.link_id = value
+        \\end
+        \\fn invoke(action: (Object, String) -> Void, item: Object, value: String) -> Void
+        \\  action(item, value)
+        \\end
+        \\page main
+        \\  let a = text!("A")
+        \\  let b = text!("B")
+        \\  let c = text!("C")
+        \\  let d = text!("D")
+        \\  let e = text!("E")
+        \\  let f = text!("F")
+        \\  mark(a, "direct")
+        \\  let apply_mark = mark
+        \\  apply_mark(b, "indirect")
+        \\  (apply_mark)(c, "apply")
+        \\  let action = Action { run = mark }
+        \\  action.run(d, "record")
+        \\  invoke(mark, e, "callback")
+        \\  let lambda = (item: Object, value: String) |-> mark(item, value)
+        \\  lambda(f, "lambda")
+        \\  note!((a.link_id ?? "missing") ++ ":" ++ (b.link_id ?? "missing") ++ ":" ++ (c.link_id ?? "missing") ++ ":" ++ (d.link_id ?? "missing") ++ ":" ++ (e.link_id ?? "missing") ++ ":" ++ (f.link_id ?? "missing"))
+        \\end
+    , "direct:indirect:apply:record:callback:lambda");
+}
+
+test "compiler semantics: void indirect bare returns stop the body" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn stop() -> Void
+        \\  docctx().footer_text = "stopped"
+        \\  return
+        \\  docctx().footer_text = "unreachable"
+        \\end
+        \\document
+        \\  let f = stop
+        \\  f()
+        \\end
+        \\page main
+        \\  text!(docctx().footer_text ?? "missing")
+        \\end
+    , "stopped");
+}
+
+test "compiler semantics: void return expressions are rejected even when their expression is void" {
+    try expectDiagnostic(
+        \\fn noop() -> Void
+        \\end
+        \\fn invalid() -> Void
+        \\  return noop()
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "VoidReturnValue");
+}
+
+test "compiler semantics: void calls cannot supply primitive argument values" {
+    try expectDiagnostic(
+        \\fn noop() -> Void
+        \\end
+        \\page main
+        \\  str(noop())
+        \\end
+    , "case.ss:bytes:", "VoidValue");
+}
+
+test "compiler semantics: void types are restricted to function results" {
+    try expectDiagnostic(
+        \\fn invalid(value: Void) -> Void
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidVoidType");
+    try expectDiagnostic(
+        \\record Invalid {
+        \\  value: Void
+        \\}
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidVoidType");
+    try expectDiagnostic(
+        \\fn invalid() -> Void? = none
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidVoidType");
+    try expectDiagnostic(
+        \\const invalid: Void = noop()
+        \\fn noop() -> Void
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidVoidType");
+}
+
+test "compiler semantics: imported void function values keep definition module defaults and effects" {
+    try buildSourceWithOverlay(
+        \\import "./lib/types" as lib
+        \\page main
+        \\  let a = text!("A")
+        \\  let b = text!("B")
+        \\  lib::mark(a)
+        \\  let f = lib::action()
+        \\  f(b, "indirect")
+        \\end
+    ,
+        \\const label: String = "default"
+        \\fn mark(item: Object, value: String = label) -> Void
+        \\  item.link_id = value
+        \\end
+        \\fn action() -> (Object, String) -> Void
+        \\  return mark
+        \\end
+    );
+}
+
+test "compiler semantics: explicit constraints solve a representative layout" {
+    try buildFixture("explicit-constraints");
+}
+
+test "compiler semantics: explicit constraint registration rejects page anchor mismatches" {
+    try expectLoweringErrorDiagnostic(
+        \\document
+        \\  let p = new_page(docctx(), "First")
+        \\  let q = new_page(docctx(), "Second")
+        \\  let item = new("Item", "body", "text")
+        \\  constrain_on!(p, equal(anchor(item, "left"), page_anchor(q, "left"), 40))
+        \\  place_on!(p, item)
+        \\end
+    , "CrossPageConstraint");
+}
+
+test "compiler semantics: constraint registration rejects layout feedback" {
+    try expectLoweringErrorDiagnostic(
+        \\page main
+        \\  let item = text!("Item")
+        \\  constrain!(equal(anchor(item, "left"), page_anchor(pagectx(), "left"), frame_x(item)))
+        \\end
+    , "LayoutDependencyCycle");
+}
+
+test "compiler semantics: functions with constraint statements require a current page" {
+    try expectDiagnostic(
+        \\fn pin(item: Object) -> Void
+        \\  ~ item.left == page.left + 40
+        \\end
+        \\document
+        \\  let item = new("Item", "body", "text")
+        \\  pin(item)
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "NoCurrentPage");
+}
+
+test "compiler semantics: function constraint anchors are checked without invocation" {
+    try expectDiagnostic(
+        \\fn pin(item: Object, label: String) -> Void
+        \\  ~ item.left == label.right
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "TypeMismatch: expected Object, got String");
+    try expectDiagnostic(
+        \\fn pin(item: Object) -> Void
+        \\  ~ item.left == missing.right
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "UnknownIdentifier");
+}
+
+test "compiler semantics: registration is an effect even in a String returning display function" {
+    try expectDiagnostic(
+        \\fn display(item: Object) -> String
+        \\  constrain_on!(pagectx(), equal(anchor(item, "left"), page_anchor(pagectx(), "left"), 40))
+        \\  return "Item"
+        \\end
+        \\page main
+        \\  let item = text!("Item")
+        \\  set_repr(item, display)
+        \\end
+    , "case.ss:bytes:", "ImpureDisplayFunction");
+}
+
+test "compiler semantics: saved constraint values cannot feed solved geometry back into layout" {
+    try expectLoweringErrorDiagnostic(
+        \\page main
+        \\  let item = text!("Item")
+        \\  let rules = equal(anchor(item, "left"), page_anchor(pagectx(), "left"), frame_x(item))
+        \\  constrain!(rules)
+        \\end
+    , "PostLayoutComputationUnsupported");
+}
+
+test "compiler semantics: constraint anchors wait for delayed object bindings" {
+    try buildSource(
+        \\page main
+        \\  let item = text!(docctx().footer_text ?? "missing")
+        \\  ~ item.left == page.left + 40
+        \\end
+        \\document
+        \\  docctx().footer_text = "Ready"
+        \\end
+    );
 }

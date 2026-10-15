@@ -186,7 +186,7 @@ pub fn checkTypeAnnotations(
                 }
             }
             const result_diagnostic_count = state.diagnostics.entries.items.len;
-            checkTypeAnnotation(state, sema, module_id, func.result_type, origin) catch |err| {
+            checkResultTypeAnnotation(state, sema, module_id, func.result_type, origin) catch |err| {
                 try continueAfterDiagnostic(state, result_diagnostic_count, err);
                 had_diagnostics = true;
             };
@@ -972,6 +972,11 @@ fn checkExprTypeAnnotations(
     }
 }
 
+fn checkResultTypeAnnotation(state: *core.DocumentState, sema: *const SemanticEnv, module_id: core.SourceModuleId, ty: ast.Type, origin: core.SourceOrigin) anyerror!void {
+    if (ty.kind == .void) return;
+    try checkTypeAnnotation(state, sema, module_id, ty, origin);
+}
+
 fn checkTypeAnnotation(
     state: *core.DocumentState,
     sema: *const SemanticEnv,
@@ -979,6 +984,12 @@ fn checkTypeAnnotation(
     ty: ast.Type,
     origin: core.SourceOrigin,
 ) !void {
+    if (ty.kind == .void) {
+        try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+            .user_report = .{ .code = "InvalidVoidType", .message = try state.allocator.dupe(u8, "Void is only valid as a function result type") },
+        });
+        return error.InvalidType;
+    }
     if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none or ty.kind == .hole) return;
     if (ty.kind == .optional) {
         if (ty.optional_child) |child| try checkTypeAnnotation(state, sema, module_id, child.*, origin);
@@ -1006,7 +1017,7 @@ fn checkTypeAnnotation(
         }
         if (ty.fn_result) |result| {
             const diagnostic_count = state.diagnostics.entries.items.len;
-            checkTypeAnnotation(state, sema, module_id, result.*, origin) catch |err| {
+            checkResultTypeAnnotation(state, sema, module_id, result.*, origin) catch |err| {
                 try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
             };

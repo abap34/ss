@@ -1010,7 +1010,6 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.NoCurrentPage,
         error.InvalidLibraryModule,
         error.UnknownProperty,
-        error.FunctionDoesNotReturnValue,
         error.InvalidArity,
         error.InvalidValueTag,
         error.EmptySelection,

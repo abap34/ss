@@ -1107,10 +1107,16 @@ end
 async function testPolicyAfterPagePlacement() {
   const { dump } = await dumpSource("policy-after-page-placement", `${prelude}
 document
-let a = box("A", 120, 80)
-let b = box("B", 180, 60)
+let a = new("A", "body", "text")
+let b = new("B", "body", "text")
 let combined = a || b
 let destination = new_page(docctx(), "generated")
+constrain_on!(destination, constraints(
+  equal(anchor(a, "right"), anchor(a, "left"), 120),
+  equal(anchor(a, "top"), anchor(a, "bottom"), 80),
+  equal(anchor(b, "right"), anchor(b, "left"), 180),
+  equal(anchor(b, "top"), anchor(b, "bottom"), 60)
+))
 destination.layout_v = LayoutPolicy.center
 place_on!(destination, combined)
 end

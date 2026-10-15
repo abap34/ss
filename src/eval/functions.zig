@@ -21,10 +21,6 @@ pub fn requireArity(actual: usize, func: ast.FunctionDecl) !void {
     if (actual < range.min or actual > range.max) return error.InvalidArity;
 }
 
-pub fn requireReturnsValue(func: ast.FunctionDecl) !void {
-    if (!contracts.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
-}
-
 pub fn functionRefFor(allocator: std.mem.Allocator, func: ast.FunctionDecl) !core.FunctionRef {
     return contracts.functionRefFor(allocator, func);
 }

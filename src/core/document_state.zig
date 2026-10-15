@@ -1232,18 +1232,19 @@ pub const DocumentState = struct {
     fn addCrossPageConstraintDiagnosticIfKnown(self: *DocumentState, constraint: Constraint) !void {
         const target_page = self.layoutPageOf(constraint.target_node) orelse return;
         const source_page = switch (constraint.source) {
-            .page => target_page,
+            .page => constraint.page_id orelse target_page,
             .node => |source| self.layoutPageOf(source.node_id) orelse return,
         };
-        if (target_page == source_page) return;
+        const registered_page = constraint.page_id orelse target_page;
+        if (target_page == source_page and target_page == registered_page) return;
         if (self.hasCrossPageConstraintDiagnostic(constraint)) return;
 
         const target_node = self.getNode(constraint.target_node);
         const target_role = if (target_node) |node| node.role orelse node.name else "unknown";
         const message = try std.fmt.allocPrint(
             self.allocator,
-            "constraint target object '{s}' belongs to page {d}, but source object belongs to page {d}",
-            .{ target_role, self.pageIndexOf(target_page), self.pageIndexOf(source_page) },
+            "constraint target object '{s}' belongs to page {d}, source belongs to page {d}, and registration belongs to page {d}",
+            .{ target_role, self.pageIndexOf(target_page), self.pageIndexOf(source_page), self.pageIndexOf(registered_page) },
         );
         try self.addValidationDiagnostic(.@"error", target_page, constraint.target_node, constraint.origin, .{
             .user_report = .{ .code = "CrossPageConstraint", .message = message },
