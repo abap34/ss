@@ -20,11 +20,12 @@ pub const ResourceKind = enum {
 };
 
 pub const ObjectIdentity = struct {
+    origin: enum { binding, constant } = .binding,
     scope: ResourceScope,
     name: []const u8,
 
     pub fn eql(self: ObjectIdentity, other: ObjectIdentity) bool {
-        return resourceScopeEql(self.scope, other.scope) and std.mem.eql(u8, self.name, other.name);
+        return self.origin == other.origin and resourceScopeEql(self.scope, other.scope) and std.mem.eql(u8, self.name, other.name);
     }
 };
 
@@ -525,6 +526,7 @@ fn appendObjectIdentity(
     identity: ObjectIdentity,
     options: AccessSummaryFormatOptions,
 ) !void {
+    if (identity.origin == .constant) try out.appendSlice(allocator, "const:");
     try appendScope(allocator, out, identity.scope, options.variable_scope_displays);
     try out.append(allocator, '.');
     try out.appendSlice(allocator, identity.name);
@@ -625,6 +627,8 @@ const LetPolicy = enum {
 
 const PropertyTarget = struct {
     owner: PropertyOwner,
+    // Only a proven allocation may acquire a new binding identity.
+    fresh: bool = false,
 
     fn any() PropertyTarget {
         return .{ .owner = .any };
@@ -640,6 +644,10 @@ const PropertyTarget = struct {
 
     fn object(class_id: ?core.NominalId) PropertyTarget {
         return .{ .owner = .{ .object = .{ .class_id = class_id } } };
+    }
+
+    fn freshObject(class_id: ?core.NominalId) PropertyTarget {
+        return .{ .owner = .{ .object = .{ .class_id = class_id } }, .fresh = true };
     }
 
     fn objectWithIdentity(class_id: ?core.NominalId, scope: ResourceScope, name: []const u8) PropertyTarget {
@@ -833,7 +841,9 @@ pub const Analyzer = struct {
                         const expr_target = try self.propertyTargetExpr(binding.expr);
                         if (role_name) |name| {
                             if (expr_target == null or expr_target.?.owner.isUnknown()) {
-                                break :blk PropertyTarget.object(self.objectClassForRole(name));
+                                var refined = PropertyTarget.object(self.objectClassForRole(name));
+                                refined.fresh = if (expr_target) |value| value.fresh else false;
+                                break :blk refined;
                             }
                         }
                         if (expr_target) |value| break :blk value;
@@ -906,7 +916,7 @@ pub const Analyzer = struct {
         const value = target orelse return null;
         return switch (value.owner) {
             .object => |owner| blk: {
-                if (owner.identity != null or let_policy == .local) break :blk value;
+                if (owner.identity != null or !value.fresh or let_policy == .local) break :blk value;
                 break :blk PropertyTarget.objectWithIdentity(owner.class_id, self.variable_scope, name);
             },
             .any, .document, .page => value,
@@ -2197,8 +2207,8 @@ pub const Analyzer = struct {
             .primitive => |primitive| switch (primitive.op) {
                 .docctx => PropertyTarget.document(),
                 .pagectx, .new_page => PropertyTarget.page(),
-                .new => PropertyTarget.object(self.objectClassForRole(try literalStringArg(self, call, 1))),
-                .group => PropertyTarget.object(self.objectClassForRole(core.GroupRole)),
+                .new => PropertyTarget.freshObject(self.objectClassForRole(try literalStringArg(self, call, 1))),
+                .group => PropertyTarget.freshObject(self.objectClassForRole(core.GroupRole)),
                 .place_on => if (call.args.items.len > 1)
                     try self.propertyTargetExpr(call.args.items[1])
                 else
@@ -2246,7 +2256,8 @@ pub const Analyzer = struct {
             .page_objects_by_role,
             .document_objects_by_role,
             => PropertyTarget.object(self.objectClassForRole(try literalStringArg(self, call, 2))),
-            .children, .descendants, .self_object => if (call.args.items.len > 0)
+            .children, .descendants => PropertyTarget.object(null),
+            .self_object => if (call.args.items.len > 0)
                 (try self.propertyTargetExpr(call.args.items[0])) orelse PropertyTarget.any()
             else
                 PropertyTarget.any(),
@@ -2265,7 +2276,16 @@ pub const Analyzer = struct {
         self.sema = self.sema.forModule(resolved.module_id);
         defer self.sema = previous;
 
-        return try self.propertyTargetExpr(resolved.decl.value);
+        var target = (try self.propertyTargetExpr(resolved.decl.value)) orelse return null;
+        if (target.owner == .object and target.fresh) {
+            target.owner.object.identity = .{
+                .origin = .constant,
+                .scope = .{ .document = resolved.module_id },
+                .name = resolved.decl.name,
+            };
+            target.fresh = false;
+        }
+        return target;
     }
 
     const ReturnFactKind = enum { string_literal, object_role, property_target };
@@ -2533,6 +2553,7 @@ fn appendOptionalPropertyTargetKey(
 ) !void {
     if (target) |value| {
         try out.append(allocator, 's');
+        try out.append(allocator, if (value.fresh) 'f' else 'a');
         try appendPropertyOwnerKey(allocator, out, value.owner);
     } else {
         try out.append(allocator, 'n');
@@ -2552,7 +2573,7 @@ fn appendPropertyOwnerKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8),
                 try appendKeyBytes(allocator, out, id.name);
             } else try out.append(allocator, 'n');
             if (object_owner.identity) |identity| {
-                try out.append(allocator, 'i');
+                try out.append(allocator, if (identity.origin == .constant) 'c' else 'i');
                 try appendResourceScopeKey(allocator, out, identity.scope);
                 try appendKeyBytes(allocator, out, identity.name);
             } else {
@@ -2598,7 +2619,7 @@ fn appendKeyInt(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: an
 
 fn joinPropertyTargets(left: ?PropertyTarget, right: ?PropertyTarget) ?PropertyTarget {
     if (left == null or right == null) return null;
-    return .{ .owner = left.?.owner.merge(right.?.owner) };
+    return .{ .owner = left.?.owner.merge(right.?.owner), .fresh = left.?.fresh and right.?.fresh };
 }
 
 fn literalStringArg(self: *Analyzer, call: ast.CallExpr, index: usize) !?[]const u8 {

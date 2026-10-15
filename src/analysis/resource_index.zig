@@ -214,6 +214,7 @@ const NominalContext = struct {
 const IdentityContext = struct {
     pub fn hash(_: IdentityContext, identity: ObjectIdentity) u64 {
         var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, identity.origin);
         std.hash.autoHash(&hasher, identity.scope);
         hasher.update(identity.name);
         return hasher.final();

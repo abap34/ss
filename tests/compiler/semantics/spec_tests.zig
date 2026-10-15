@@ -7033,3 +7033,48 @@ test "compiler semantics: broad reads survive narrower overlapping reads" {
         \\end
     , "--,X");
 }
+
+test "compiler semantics: selected aliases retain object property dependencies" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn identity(item: Object) -> Object = item
+        \\page main
+        \\  let a = txt_obj!("A", "tagged")
+        \\  let label = a.link_id ?? "none"
+        \\  let b = identity(first(objs(pagectx(), "tagged")))
+        \\  b.link_id = "X"
+        \\  note!("label=" ++ label)
+        \\end
+    , "label=X");
+}
+
+test "compiler semantics: constant object aliases retain shared identity" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\const shared: Object = text("A")
+        \\fn identity(item: Object) -> Object = item
+        \\page main
+        \\  let a = shared
+        \\  let b = identity(shared)
+        \\  note!(a.link_id ?? "none")
+        \\  b.link_id = "X"
+        \\end
+    , "X");
+}
+
+test "compiler semantics: separate constructor calls retain distinct identities" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn make() -> Object
+        \\  let item = text("A")
+        \\  return item
+        \\end
+        \\page main
+        \\  let a = make()
+        \\  let b = make()
+        \\  a.link_id = "A"
+        \\  b.link_id = a.link_id ?? "none"
+        \\  note!(b.link_id ?? "none")
+        \\end
+    , "A");
+}
