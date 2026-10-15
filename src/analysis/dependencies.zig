@@ -1206,23 +1206,51 @@ pub const Analyzer = struct {
         }
     }
 
-    fn bindValueParams(self: *Analyzer, params: []const ast.ParamDecl, args: []const CallArgFacts) !void {
+    fn bindParamFacts(self: *Analyzer, param: ast.ParamDecl, facts: anytype) !void {
+        const Facts = @TypeOf(facts);
+        if (facts.string_literal) |value| try self.string_bindings.put(param.name, value) else _ = self.string_bindings.remove(param.name);
+        const role: ?[]const u8 = if (@hasField(Facts, "object_role")) facts.object_role else null;
+        if (role) |value| try self.object_role_bindings.put(param.name, value) else _ = self.object_role_bindings.remove(param.name);
+        var target: ?PropertyTarget = if (@hasField(Facts, "property_target")) facts.property_target else null;
+        if (role) |name| {
+            if (target == null or target.?.owner.isUnknown()) {
+                var refined = PropertyTarget.object(self.objectClassForRole(name));
+                refined.fresh = if (target) |value| value.fresh else false;
+                target = refined;
+            }
+        }
+        if (target) |value| try self.property_target_bindings.put(param.name, value) else _ = self.property_target_bindings.remove(param.name);
+        if (@hasField(Facts, "functions")) {
+            try self.function_bindings.put(param.name, facts.functions);
+        } else {
+            _ = self.function_bindings.remove(param.name);
+        }
+        if (@hasField(Facts, "summary")) {
+            try self.bindSelectionReads(param.name, facts.summary.selection_reads.items);
+        } else {
+            self.removeSelectionReads(param.name);
+        }
+        try self.bindLocalParams(&.{param});
+    }
+
+    fn bindValueParams(self: *Analyzer, params: []const ast.ParamDecl, args: []const CallArgFacts) anyerror!AccessSummary {
+        var defaults = AccessSummary.init(self.allocator);
+        errdefer defaults.deinit();
         for (params, 0..) |param, i| {
             if (i < args.len) {
-                const arg = args[i];
-                try self.function_bindings.put(param.name, arg.functions);
-                if (arg.string_literal) |value| try self.string_bindings.put(param.name, value) else _ = self.string_bindings.remove(param.name);
-                if (arg.object_role) |value| try self.object_role_bindings.put(param.name, value) else _ = self.object_role_bindings.remove(param.name);
-                if (arg.property_target) |value| try self.property_target_bindings.put(param.name, value) else _ = self.property_target_bindings.remove(param.name);
-                try self.bindSelectionReads(param.name, arg.summary.selection_reads.items);
+                try self.bindParamFacts(param, args[i]);
             } else if (param.default_value) |default| {
-                try self.function_bindings.put(param.name, try self.functionValue(default.*));
-                if (try literalStringExpr(self, default.*)) |value| try self.string_bindings.put(param.name, value);
-                if (try self.propertyTargetExpr(default.*)) |value| try self.property_target_bindings.put(param.name, value);
+                // The definition module and only preceding parameters are visible.
+                // Defaults execute even when the function body ignores the value.
+                var facts = try self.analyzeCallArgFacts(default.*);
+                defer facts.deinit();
+                try defaults.merge(facts.summary);
+                try self.bindParamFacts(param, facts);
+            } else {
+                try self.bindParamFacts(param, CallArgFacts{ .summary = AccessSummary.init(self.allocator) });
             }
-            try self.variable_bindings.put(param.name, .local);
         }
-        try self.bindLocalParams(params);
+        return defaults;
     }
 
     fn invokeFunctionValue(self: *Analyzer, value: FunctionValue, args: []const CallArgFacts) anyerror!AccessSummary {
@@ -1241,8 +1269,12 @@ pub const Analyzer = struct {
                     const previous = self.sema;
                     self.sema = self.sema.forModule(closure.module_id);
                     defer self.sema = previous;
-                    try self.bindValueParams(closure.lambda.params.items, args);
-                    break :blk try self.analyzeExpr(closure.lambda.body.*);
+                    var defaults = try self.bindValueParams(closure.lambda.params.items, args);
+                    errdefer defaults.deinit();
+                    var body = try self.analyzeExpr(closure.lambda.body.*);
+                    defer body.deinit();
+                    try defaults.merge(body);
+                    break :blk defaults;
                 },
             };
             defer body.deinit();
@@ -1272,7 +1304,8 @@ pub const Analyzer = struct {
                         _ = self.visiting.remove(named.key);
                     };
                     self.sema = self.sema.forModule(named.module_id);
-                    try self.bindValueParams(named.decl.params.items, args);
+                    var defaults = try self.bindValueParams(named.decl.params.items, args);
+                    defer defaults.deinit();
                     var returned = FunctionValue{};
                     _ = try self.collectFunctionReturns(named.decl.statements.items, &returned);
                     break :blk returned;
@@ -1280,7 +1313,8 @@ pub const Analyzer = struct {
                 .closure => |closure| blk: {
                     self.sema = self.sema.forModule(closure.module_id);
                     try self.restoreCapturedBindings(closure.bindings);
-                    try self.bindValueParams(closure.lambda.params.items, args);
+                    var defaults = try self.bindValueParams(closure.lambda.params.items, args);
+                    defer defaults.deinit();
                     break :blk try self.functionValue(closure.lambda.body.*);
                 },
             };
@@ -1556,12 +1590,11 @@ pub const Analyzer = struct {
         const previous = self.sema;
         self.sema = self.sema.forModule(module_id);
         defer self.sema = previous;
-        try self.bindFunctionParamsFromFacts(func, arg_facts);
-        try self.bindValueParams(func.params.items, arg_facts);
-
-        try self.bindLocalParams(func.params.items);
-        var body = try self.analyzeStatements(func.statements.items, .local);
+        var body = try self.bindValueParams(func.params.items, arg_facts);
         defer body.deinit();
+        var statements = try self.analyzeStatements(func.statements.items, .local);
+        defer statements.deinit();
+        try body.merge(statements);
         if (cache_key) |owned| try self.run_cache.?.putSummary(owned, body);
         try summary.merge(body);
         return summary;
@@ -1646,82 +1679,21 @@ pub const Analyzer = struct {
         }
     }
 
-    fn propertyTargetForArgFacts(self: *Analyzer, arg_facts: []const CallArgFacts, index: usize, param_type: ast.Type) ?PropertyTarget {
-        if (index >= arg_facts.len) return self.propertyTargetForType(param_type);
-        const fact = arg_facts[index];
-        if (fact.object_role) |role_name| {
-            if (fact.property_target == null or fact.property_target.?.owner.isUnknown()) {
-                return PropertyTarget.object(self.objectClassForRole(role_name));
-            }
+    fn bindStaticParams(self: *Analyzer, comptime Facts: type, params: []const ast.ParamDecl, args: []const Facts) anyerror!void {
+        for (params, 0..) |param, index| {
+            const facts = if (index < args.len)
+                args[index]
+            else if (param.default_value) |default|
+                if (Facts == StaticCallArgFacts)
+                    try self.analyzeStaticCallArgFacts(default.*)
+                else if (Facts == StringRoleArgFacts)
+                    try self.analyzeStringRoleArgFacts(default.*)
+                else
+                    try self.analyzeStringArgFacts(default.*)
+            else
+                Facts{};
+            try self.bindParamFacts(param, facts);
         }
-        return fact.property_target;
-    }
-
-    fn bindFunctionParamsFromFacts(self: *Analyzer, func: ast.FunctionDecl, arg_facts: []const CallArgFacts) !void {
-        try self.string_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
-        try self.object_role_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
-        try self.property_target_bindings.ensureUnusedCapacity(@intCast(func.params.items.len));
-        for (func.params.items, 0..) |param, index| {
-            if (index < arg_facts.len) {
-                if (arg_facts[index].string_literal) |value| try self.string_bindings.put(param.name, value);
-                if (arg_facts[index].object_role) |role_name| try self.object_role_bindings.put(param.name, role_name);
-                if (self.propertyTargetForArgFacts(arg_facts, index, param.ty)) |target| {
-                    try self.property_target_bindings.put(param.name, target);
-                }
-                try self.function_bindings.put(param.name, arg_facts[index].functions);
-                try self.bindSelectionReads(param.name, arg_facts[index].summary.selection_reads.items);
-            }
-        }
-        try self.bindLocalParams(func.params.items);
-    }
-
-    fn bindFunctionParamsFromStaticFacts(self: *Analyzer, func: ast.FunctionDecl, arg_facts: []const StaticCallArgFacts) !void {
-        try self.string_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
-        try self.object_role_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
-        try self.property_target_bindings.ensureUnusedCapacity(@intCast(func.params.items.len));
-        for (func.params.items, 0..) |param, index| {
-            if (index < arg_facts.len) {
-                if (arg_facts[index].string_literal) |value| try self.string_bindings.put(param.name, value);
-                if (arg_facts[index].object_role) |role_name| try self.object_role_bindings.put(param.name, role_name);
-                if (self.propertyTargetForStaticFacts(arg_facts, index, param.ty)) |target| {
-                    try self.property_target_bindings.put(param.name, target);
-                }
-            }
-        }
-        try self.bindLocalParams(func.params.items);
-    }
-
-    fn propertyTargetForStaticFacts(self: *Analyzer, arg_facts: []const StaticCallArgFacts, index: usize, param_type: ast.Type) ?PropertyTarget {
-        if (index >= arg_facts.len) return self.propertyTargetForType(param_type);
-        const fact = arg_facts[index];
-        if (fact.object_role) |role_name| {
-            if (fact.property_target == null or fact.property_target.?.owner.isUnknown()) {
-                return PropertyTarget.object(self.objectClassForRole(role_name));
-            }
-        }
-        return fact.property_target orelse self.propertyTargetForType(param_type);
-    }
-
-    fn bindFunctionParamsFromStringRoleFacts(self: *Analyzer, func: ast.FunctionDecl, arg_facts: []const StringRoleArgFacts) !void {
-        try self.string_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
-        try self.object_role_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
-        for (func.params.items, 0..) |param, index| {
-            if (index < arg_facts.len) {
-                if (arg_facts[index].string_literal) |value| try self.string_bindings.put(param.name, value);
-                if (arg_facts[index].object_role) |role_name| try self.object_role_bindings.put(param.name, role_name);
-            }
-        }
-        try self.bindLocalParams(func.params.items);
-    }
-
-    fn bindFunctionParamsFromStringFacts(self: *Analyzer, func: ast.FunctionDecl, arg_facts: []const StringArgFacts) !void {
-        try self.string_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
-        for (func.params.items, 0..) |param, index| {
-            if (index < arg_facts.len) {
-                if (arg_facts[index].string_literal) |value| try self.string_bindings.put(param.name, value);
-            }
-        }
-        try self.bindLocalParams(func.params.items);
     }
 
     const FunctionFactsSnapshot = struct {
@@ -2400,11 +2372,11 @@ pub const Analyzer = struct {
         defer arg_facts.deinit(self.allocator);
         var facts = self.pushFreshFunctionFacts();
         defer facts.restore();
-        try self.bindFunctionParamsFromStaticFacts(resolved.decl, arg_facts.items);
 
         const previous = self.sema;
         self.sema = self.sema.forModule(resolved.module_id);
         defer self.sema = previous;
+        try self.bindStaticParams(StaticCallArgFacts, resolved.decl.params.items, arg_facts.items);
 
         var result: ?ReturnedFact(.property_target) = null;
         _ = try self.collectReturnFacts(.property_target, resolved.decl.statements.items, &result);
@@ -2490,11 +2462,11 @@ pub const Analyzer = struct {
         defer arg_facts.deinit(self.allocator);
         var facts = self.pushFreshFunctionFacts();
         defer facts.restore();
-        try self.bindFunctionParamsFromStringRoleFacts(resolved.decl, arg_facts.items);
 
         const previous = self.sema;
         self.sema = self.sema.forModule(resolved.module_id);
         defer self.sema = previous;
+        try self.bindStaticParams(StringRoleArgFacts, resolved.decl.params.items, arg_facts.items);
 
         var result: ?ReturnedFact(.object_role) = null;
         _ = try self.collectReturnFacts(.object_role, resolved.decl.statements.items, &result);
@@ -2719,11 +2691,11 @@ fn literalStringFunctionCall(
     defer arg_facts.deinit(self.allocator);
     var facts = self.pushFreshFunctionFacts();
     defer facts.restore();
-    try self.bindFunctionParamsFromStringFacts(resolved.decl, arg_facts.items);
 
     const previous = self.sema;
     self.sema = self.sema.forModule(resolved.module_id);
     defer self.sema = previous;
+    try self.bindStaticParams(Analyzer.StringArgFacts, resolved.decl.params.items, arg_facts.items);
 
     var result: ?Analyzer.ReturnedFact(.string_literal) = null;
     _ = try self.collectReturnFacts(.string_literal, resolved.decl.statements.items, &result);

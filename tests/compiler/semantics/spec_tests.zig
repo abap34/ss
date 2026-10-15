@@ -6931,6 +6931,106 @@ test "compiler semantics: default callbacks contribute effects in their definiti
     , "marked");
 }
 
+test "compiler semantics: omitted theme arguments read later document definitions" {
+    try expectFixtureObjectFieldPath("default-arguments", "text", &.{"size"}, "22");
+}
+
+test "compiler semantics: unused default arguments still contribute writes" {
+    try expectObjectContent(
+        \\fn initialize(item: Object, ignored: Object = set_prop(item, "link_id", "Ready")) -> String = "done"
+        \\page main
+        \\  let item = text!("Target")
+        \\  note!(item.link_id ?? "missing")
+        \\  note!(initialize(item))
+        \\end
+    , "Ready");
+}
+
+test "compiler semantics: default reads use preceding parameters and distinguish call arguments" {
+    try expectObjectContent(
+        \\fn read(item: Object, selected: Object = item, value: String = selected.link_id ?? "missing") -> String = value
+        \\page main
+        \\  let first = text!("First")
+        \\  let second = text!("Second")
+        \\  note!(read(first) ++ ":" ++ read(second))
+        \\  first.link_id = "A"
+        \\  second.link_id = "B"
+        \\end
+    , "A:B");
+}
+
+test "compiler semantics: explicit arguments do not evaluate default effects" {
+    try expectObjectContent(
+        \\fn label(item: Object, value: String = item.link_id ?? "missing") -> String = value
+        \\page main
+        \\  let item = text!("Target")
+        \\  item.link_id = label(item, "Ready")
+        \\  note!(item.link_id ?? "missing")
+        \\end
+    , "Ready");
+}
+
+test "compiler semantics: default object allocations retain distinct identities" {
+    try expectObjectContent(
+        \\fn make(item: Object = new("Target", "custom", "text")) -> Object = item
+        \\page main
+        \\  let first = make()
+        \\  let second = make()
+        \\  first.link_id = second.link_id ?? "missing"
+        \\  second.link_id = "Ready"
+        \\  note!(first.link_id ?? "missing")
+        \\end
+    , "Ready");
+}
+
+test "compiler semantics: default selections retain collection dependencies" {
+    try expectObjectContent(
+        \\fn label(item: Object) -> String = content(item)
+        \\fn labels(items: Selection<Object> = objs_here("tagged")) -> String = join(items, ",", label)
+        \\page main
+        \\  note!(labels())
+        \\  txt_obj!("A", "tagged")
+        \\end
+    , "A");
+}
+
+test "compiler semantics: later parameters do not shadow names in earlier defaults" {
+    try expectObjectContent(
+        \\fn source(item: Object) -> String = item.link_id ?? "missing"
+        \\fn other(item: Object) -> String = "wrong"
+        \\fn read(item: Object, value: String = source(item), source: Object -> String = other) -> String = value
+        \\page main
+        \\  let item = text!("Target")
+        \\  note!(read(item))
+        \\  item.link_id = "Ready"
+        \\end
+    , "Ready");
+}
+
+test "compiler semantics: default facts and effects use the definition module" {
+    try expectObjectContentWithTwoOverlays(
+        \\import ./lib/a as a
+        \\import ./lib/b as b
+        \\const selected_role: String = "other"
+        \\page main
+        \\  let item = text!("Target")
+        \\  note!(b::read(item))
+        \\  item.link_id = "Ready"
+        \\  txt_obj!("A", "tagged")
+        \\end
+    ,
+        \\const selected_role: String = "tagged"
+        \\fn role(value: String = selected_role) -> String = value
+        \\fn identity(item: Object, selected: Object = item) -> Object = selected
+    ,
+        \\import ./a as a
+        \\const selected_role: String = "wrong"
+        \\fn read(item: Object, value: String = a::identity(item).link_id ?? "missing") -> String
+        \\  return value ++ ":" ++ str(selection_count(doc_objs(docctx(), a::role())))
+        \\end
+    , "Ready:1");
+}
+
 test "compiler semantics: callback effects distinguish specializations and returned record updates" {
     try expectObjectContent(
         \\import std:themes/default as *
