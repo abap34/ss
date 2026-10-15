@@ -382,11 +382,21 @@ fn inferMemberInfoFromTargetInfo(
         errdefer result_type.deinit(allocator);
         return infoFromType(result_type);
     }
-    if (!isPropertyTarget(target_info)) {
-        try addUserReportAtSpan(state, origin, member_span, "InvalidProperty", "member target must be Document, Page, Object, or Selection<Object>", .{});
+    if (!semantic_types.isPropertyReadTarget(target_info)) {
+        const message = if (target_info.ty.kind == .selection)
+            "selection fields cannot be read directly; select an object with first(...) before reading its fields"
+        else
+            "member reads require a record, Document, Page, or Object";
+        try addUserReportAtSpan(state, origin, member_span, "InvalidProperty", "{s}", .{message});
         return error.InvalidType;
     }
-    if (std.mem.eql(u8, member_name, "content")) return infoFromType(Type.string);
+    if (std.mem.eql(u8, member_name, "content")) {
+        if (target_info.ty.kind != .object) {
+            try addUserReportAtSpan(state, origin, member_span, "InvalidProperty", "content is available only on Object", .{});
+            return error.InvalidType;
+        }
+        return infoFromType(Type.string);
+    }
     const field = lookupFieldForTarget(sema, target_info, member_name) orelse {
         try addUserReportAtSpan(state, origin, member_span, "UnknownField", "unknown field: {s}", .{member_name});
         return error.InvalidType;
@@ -702,6 +712,10 @@ fn validateKnownPropertyKeyCall(
     };
     const target_info = try exprInfoWithOptions(state.allocator, state, sema, env, call.args.items[0], origin, options);
     if (target_info.hole != null) return;
+    if (!semantic_types.isPropertyReadTarget(target_info)) {
+        try addUserReport(state, origin, "InvalidProperty", "property reads require Document, Page, or Object", .{});
+        return error.InvalidType;
+    }
     if (lookupFieldForTarget(sema, target_info, key) == null) {
         try addUserReport(state, origin, "UnknownField", "unknown field: {s}", .{key});
         return error.InvalidType;

@@ -7228,3 +7228,37 @@ test "compiler semantics: primitive callbacks accept broader parameter types" {
         \\end
     , "X");
 }
+
+test "compiler semantics: property reads reject selections and nonobject content" {
+    try expectDiagnostic(
+        \\page main
+        \\  let value = objs_here("body").link_id
+        \\end
+    , "bytes:", "InvalidProperty");
+    try expectDiagnostic(
+        \\page main
+        \\  let value = pagectx().content
+        \\end
+    , "bytes:", "InvalidProperty");
+    try expectDiagnostic(
+        \\document
+        \\  let value = docctx().content
+        \\end
+    , "bytes:", "InvalidProperty");
+    try expectDiagnostic(
+        \\page main
+        \\  let value = prop(objs_here("body"), "link_id", "none")
+        \\end
+    , "bytes:", "InvalidProperty");
+}
+
+test "compiler semantics: selections remain writable and individual objects readable" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\page main
+        \\  let item = txt_obj!("A", "tagged")
+        \\  objs(pagectx(), "tagged").link_id = "X"
+        \\  note!(item.link_id ?? "missing")
+        \\end
+    , "X");
+}

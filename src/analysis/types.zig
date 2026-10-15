@@ -126,6 +126,13 @@ pub fn resolveStringLiteral(env: *const TypeEnv, expr: ast.Expr) ?[]const u8 {
     };
 }
 
+pub fn isPropertyReadTarget(info: TypeInfo) bool {
+    return switch (info.ty.kind) {
+        .document, .page, .object => true,
+        else => false,
+    };
+}
+
 pub fn isPropertyTarget(info: TypeInfo) bool {
     return switch (info.ty.kind) {
         .document, .page, .object => true,
