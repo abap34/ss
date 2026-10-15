@@ -120,18 +120,7 @@ pub fn analyzeDocumentState(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
 ) !void {
-    defer state.diagnostics.deduplicateValidationUserReports(state.allocator);
-    var declaration_index: *const declarations.DeclarationIndex = undefined;
-    {
-        const measure_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordAnalysis(.static_semantics, measure_start);
-        declaration_index = try analyzeDocumentStateSemantics(allocator, state);
-    }
-    {
-        const measure_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordAnalysis(.execution_graph, measure_start);
-        try execution.validateDependencies(allocator, state, declaration_index);
-    }
+    _ = try analyzeDocumentStateWithMode(allocator, state, .diagnostics_only);
 }
 
 pub fn analyzeDocumentStateWithMode(
@@ -148,13 +137,21 @@ pub fn analyzeDocumentStateWithMode(
     }
     const measure_start = utils.measure_profile.start();
     defer utils.measure_profile.recordAnalysis(.execution_graph, measure_start);
-    return switch (mode) {
-        .diagnostics_only => blk: {
-            try execution.validateDependencies(allocator, state, declaration_index);
-            break :blk null;
-        },
-        .evaluation => try execution.ExecutionGraph.build(allocator, state, declaration_index, .{ .page_id_mode = .create }),
-    };
+    var graph = try execution.ExecutionGraph.build(allocator, state, declaration_index, .{
+        .page_id_mode = if (mode == .evaluation) .create else .synthetic,
+    });
+    errdefer graph.deinit();
+    {
+        const query_start = utils.measure_profile.start();
+        defer utils.measure_profile.recordAnalysis(.semantics_dependency_queries, query_start);
+        const sema = SemanticEnv.init(state, declaration_index, &state.functions);
+        try addDependencyQueryDiagnostics(allocator, state, &sema, &graph);
+    }
+    if (mode == .diagnostics_only) {
+        graph.deinit();
+        return null;
+    }
+    return graph;
 }
 
 fn analyzeDocumentStateSemantics(
@@ -168,11 +165,6 @@ fn analyzeDocumentStateSemantics(
 
     try checkDocumentDeclarations(allocator, state, &sema);
     try checkDocumentBodies(&inference_context, allocator, state, &sema);
-    {
-        const measure_start = utils.measure_profile.start();
-        defer utils.measure_profile.recordAnalysis(.semantics_dependency_queries, measure_start);
-        try addDependencyQueryDiagnostics(allocator, state, &sema);
-    }
     return declaration_index;
 }
 
@@ -238,7 +230,7 @@ const DependencyQueryTarget = struct {
     scope_display: dependencies.ScopeDisplayName,
 };
 
-fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
+fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv, graph: *const execution.ExecutionGraph) !void {
     for (state.modules.order.items) |module_id| {
         const module = state.moduleById(module_id) orelse continue;
         if (std.mem.indexOf(u8, module.source, "^dep?") == null) continue;
@@ -248,16 +240,29 @@ fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, state: *core.Docu
             const target = dependencyQueryTarget(module, query.span.start) orelse continue;
             var analyzer = dependencies.Analyzer.initWithScope(allocator, &module_sema, target.scope);
             defer analyzer.deinit();
-            for (target.context) |stmt| {
-                var context_summary = try analyzer.statement(stmt);
-                context_summary.deinit();
-            }
-            var summary = try analyzer.statement(target.stmt);
+            var scope = target.scope;
+            var summary = dependencies.AccessSummary.init(allocator);
             defer summary.deinit();
-            const scope_displays = [_]dependencies.ScopeDisplay{.{
-                .scope = target.scope,
-                .name = target.scope_display,
-            }};
+            var scheduled = false;
+            for (graph.units.items) |unit| {
+                if (unit.module_id != module_id or unit.span.start != target.stmt.span.start or unit.span.end != target.stmt.span.end) continue;
+                summary = try unit.summary.clone(allocator);
+                scope = switch (unit.kind) {
+                    .document_statement => .{ .document = module_id },
+                    .page_statement => |page| .{ .page = page.page_id },
+                };
+                scheduled = true;
+                break;
+            }
+            if (!scheduled) {
+                // Function bodies and nested statements have no execution unit.
+                for (target.context) |stmt| {
+                    var context_summary = try analyzer.statement(stmt);
+                    context_summary.deinit();
+                }
+                summary = try analyzer.statement(target.stmt);
+            }
+            const scope_displays = [_]dependencies.ScopeDisplay{.{ .scope = scope, .name = target.scope_display }};
             const message = try dependencies.formatAccessSummaryWithOptions(state.allocator, summary, .{
                 .variable_scope_displays = &scope_displays,
                 .pages_scope_displays = &scope_displays,

@@ -262,3 +262,42 @@ test "dependency summary deduplication preserves overlapping resources in either
     defer testing.allocator.free(name);
     try testing.expect(deps.Resource.makeObjects(name).eql(deps.Resource.makeObjects("body")));
 }
+
+test "execution graph owns deferred display summaries and their computed resource names" {
+    var poison = PoisonAllocator{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer poison.arena.deinit();
+    for ([_]std.mem.Allocator{ poison.allocator(), testing.allocator }) |allocator| {
+        var state = try document(
+            \\fn label(item: Object) -> String = prop(docctx(), "footer_" ++ "text") ?? ""
+            \\page main
+            \\  let item = new("item", "body", "text")
+            \\  set_repr(item, label)
+            \\  let text = repr(item)
+            \\end
+            \\document
+            \\  set_prop(docctx(), "footer_" ++ "text", "X")
+            \\end
+        );
+        defer state.deinit();
+        var declarations = try compiler.declarations.build(testing.allocator, &state);
+        defer declarations.deinit();
+        var graph = try compiler.analysis.ExecutionGraph.build(allocator, &state, &declarations, .{});
+        defer graph.deinit();
+        var found = false;
+        for (graph.edges.items) |edge| {
+            if (edge.from == 3 and edge.to == 2) found = true;
+        }
+        try testing.expect(found);
+        const definitions = graph.units.items[1].summary.display_definitions.items;
+        try testing.expectEqual(@as(usize, 1), definitions.len);
+        var found_name = false;
+        for (definitions[0].reads.reads.items) |resource| {
+            if (resource == .property) {
+                if (resource.property.key.displayName()) |name| {
+                    if (std.mem.eql(u8, name, "footer_text")) found_name = true;
+                }
+            }
+        }
+        try testing.expect(found_name);
+    }
+}

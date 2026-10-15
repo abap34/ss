@@ -7078,3 +7078,91 @@ test "compiler semantics: separate constructor calls retain distinct identities"
         \\end
     , "A");
 }
+
+test "compiler semantics: explicit repr waits for display property reads" {
+    try expectFixtureObjectContent("display-dependencies", "repr=A!");
+}
+
+test "compiler semantics: display closures retain transitive captured reads" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn label(other: Object) -> Object -> String
+        \\  return (self: Object) |-> other.link_id ?? "missing"
+        \\end
+        \\page main
+        \\  let other = text!("other")
+        \\  let item = text!("A")
+        \\  set_repr(item, label(other))
+        \\  note!("repr=" ++ repr(item))
+        \\  other.link_id = "X"
+        \\end
+    , "repr=X");
+}
+
+test "compiler semantics: nested display calls propagate property reads" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\page main
+        \\  let inner = text!("A")
+        \\  let outer = text!("B")
+        \\  set_repr(inner, (self: Object) |-> content(self) ++ (docctx().footer_text ?? ""))
+        \\  set_repr(outer, (self: Object) |-> repr(inner))
+        \\  note!("repr=" ++ repr(outer))
+        \\end
+        \\document
+        \\  docctx().footer_text = "!"
+        \\end
+    , "repr=A!");
+}
+
+test "compiler semantics: display registration defers collection reads until materialization" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn make() -> Object
+        \\  let item = txt_obj("A", "body")
+        \\  return set_repr(item, (self: Object) |-> str(selection_count(doc_objs(docctx(), "body"))))
+        \\end
+        \\page main
+        \\  place!(make())
+        \\end
+    , "1");
+}
+
+test "compiler semantics: selected aliases retain display dependencies" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\page main
+        \\  let item = txt_obj!("A", "claim")
+        \\  set_repr(item, (self: Object) |-> content(self) ++ (docctx().footer_text ?? ""))
+        \\  let alias = first(objs(pagectx(), "claim"))
+        \\  note!("repr=" ++ repr(alias))
+        \\end
+        \\document
+        \\  docctx().footer_text = "!"
+        \\end
+    , "repr=A!");
+}
+
+test "compiler semantics: dependency queries include deferred display reads" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\page main
+        \\  let item = text!("A")
+        \\  set_repr(item, (self: Object) |-> docctx().footer_text ?? "")
+        \\  note!(repr(item))
+        \\  ;; ^dep?
+        \\end
+        \\document
+        \\  docctx().footer_text = "X"
+        \\end
+    , "bytes:", "read Property(owner=document, key=footer_text)");
+}
+
+test "compiler semantics: materialized displays cannot read solved geometry" {
+    try expectDiagnostic(
+        \\fn label(item: Object) -> String = str(frame_width(item))
+        \\page main
+        \\  set_repr(text!("A"), label)
+        \\end
+    , "bytes:", "LayoutDependencyCycle");
+}

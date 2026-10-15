@@ -252,10 +252,17 @@ pub const AccessSummary = struct {
     reads: std.ArrayList(Resource),
     writes: std.ArrayList(Resource),
     selection_reads: std.ArrayList(Resource),
+    display_reads: std.ArrayList(PropertyOwner) = .empty,
+    display_definitions: std.ArrayList(DisplayDefinition) = .empty,
     reads_layout: bool = false,
     writes_layout_input: bool = false,
     places_objects: bool = false,
     invalid_selection_mutation: ?InvalidSelectionMutation = null,
+
+    pub const DisplayDefinition = struct {
+        owner: PropertyOwner,
+        reads: *AccessSummary,
+    };
 
     pub const InvalidSelectionMutation = struct {
         resource: Resource,
@@ -272,6 +279,12 @@ pub const AccessSummary = struct {
     }
 
     pub fn deinit(self: *AccessSummary) void {
+        for (self.display_definitions.items) |definition| {
+            definition.reads.deinit();
+            self.allocator.destroy(definition.reads);
+        }
+        self.display_definitions.deinit(self.allocator);
+        self.display_reads.deinit(self.allocator);
         self.reads.deinit(self.allocator);
         self.writes.deinit(self.allocator);
         self.selection_reads.deinit(self.allocator);
@@ -290,7 +303,17 @@ pub const AccessSummary = struct {
         try self.addRead(resource);
     }
 
+    pub fn addDisplayDefinition(self: *AccessSummary, owner: PropertyOwner, reads: AccessSummary) !void {
+        const owned = try self.allocator.create(AccessSummary);
+        errdefer self.allocator.destroy(owned);
+        owned.* = try reads.clone(self.allocator);
+        errdefer owned.deinit();
+        try self.display_definitions.append(self.allocator, .{ .owner = owner, .reads = owned });
+    }
+
     pub fn merge(self: *AccessSummary, other: AccessSummary) !void {
+        try self.display_reads.appendSlice(self.allocator, other.display_reads.items);
+        for (other.display_definitions.items) |definition| try self.addDisplayDefinition(definition.owner, definition.reads.*);
         try self.reads.ensureUnusedCapacity(self.allocator, other.reads.items.len);
         try self.writes.ensureUnusedCapacity(self.allocator, other.writes.items.len);
         try self.selection_reads.ensureUnusedCapacity(self.allocator, other.selection_reads.items.len);
@@ -303,7 +326,7 @@ pub const AccessSummary = struct {
         if (self.invalid_selection_mutation == null) self.invalid_selection_mutation = other.invalid_selection_mutation;
     }
 
-    pub fn clone(self: AccessSummary, allocator: std.mem.Allocator) !AccessSummary {
+    pub fn clone(self: AccessSummary, allocator: std.mem.Allocator) std.mem.Allocator.Error!AccessSummary {
         var copied = AccessSummary.init(allocator);
         errdefer copied.deinit();
         try copied.reads.ensureTotalCapacity(allocator, @intCast(self.reads.items.len));
@@ -312,6 +335,8 @@ pub const AccessSummary = struct {
         copied.reads.appendSliceAssumeCapacity(self.reads.items);
         copied.writes.appendSliceAssumeCapacity(self.writes.items);
         copied.selection_reads.appendSliceAssumeCapacity(self.selection_reads.items);
+        try copied.display_reads.appendSlice(allocator, self.display_reads.items);
+        for (self.display_definitions.items) |definition| try copied.addDisplayDefinition(definition.owner, definition.reads.*);
         copied.reads_layout = self.reads_layout;
         copied.writes_layout_input = self.writes_layout_input;
         copied.places_objects = self.places_objects;
@@ -2014,7 +2039,8 @@ pub const Analyzer = struct {
             .repr => {
                 const owner = propertyOwnerFromArgFacts(arg_facts, 0);
                 try summary.addRead(Resource.makeContentProperty(owner));
-                try summary.addRead(Resource.makeProperty(owner, null));
+                try summary.addRead(Resource.makeProperty(owner, "repr"));
+                try summary.display_reads.append(self.allocator, owner);
             },
             .prop, .has_prop, .prop_eq => try summary.addRead(Resource.makeProperty(
                 propertyOwnerFromArgFacts(arg_facts, 0),
@@ -2025,8 +2051,16 @@ pub const Analyzer = struct {
                 summary.writes_layout_input = true;
             },
             .set_repr => {
-                try summary.addWrite(Resource.makeProperty(propertyOwnerFromArgFacts(arg_facts, 0), "repr"));
+                const owner = propertyOwnerFromArgFacts(arg_facts, 0);
+                try summary.addWrite(Resource.makeProperty(owner, "repr"));
                 summary.writes_layout_input = true;
+                if (arg_facts.len >= 2) {
+                    var reads = try self.invokeFunctionValue(arg_facts[1].functions, arg_facts[0..1]);
+                    defer reads.deinit();
+                    // Registration captures a verified display; its reads occur
+                    // when repr is evaluated, not while the callback is stored.
+                    try summary.addDisplayDefinition(owner, reads);
+                }
             },
             .group => {
                 try summary.addWrite(Resource.makeObjects(core.GroupRole));
