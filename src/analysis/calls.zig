@@ -304,7 +304,7 @@ const Analyzer = struct {
     fn enter(self: *Analyzer, activation: Activation) anyerror!ValueFacts {
         if (self.call_depth >= max_call_analysis_depth) {
             try self.state.addValidationDiagnostic(.@"error", null, null, activationOrigin(self.state, activation), .{
-                .user_report = .{ .code = "FunctionAnalysisLimitExceeded", .message = "cannot establish termination within the function analysis depth limit" },
+                .user_report = .{ .code = "FunctionAnalysisLimitExceeded", .message = try self.state.allocator.dupe(u8, "cannot establish termination within the function analysis depth limit") },
             });
             return error.FunctionAnalysisLimitExceeded;
         }
@@ -647,7 +647,7 @@ const Analyzer = struct {
 
     fn rejectDisplayWrite(self: *Analyzer) anyerror {
         try self.state.addValidationDiagnostic(.@"error", null, null, self.current_origin, .{
-            .user_report = .{ .code = "ImpureDisplayFunction", .message = "display functions must be pure and read-only, including indirect calls" },
+            .user_report = .{ .code = "ImpureDisplayFunction", .message = try self.state.allocator.dupe(u8, "display functions must be pure and read-only, including indirect calls") },
         });
         return error.ImpureDisplayFunction;
     }
@@ -673,7 +673,7 @@ const Analyzer = struct {
     ) anyerror!ValueFacts {
         if (labels.unknown and self.require_known_calls) {
             try self.state.addValidationDiagnostic(.@"error", null, null, self.current_origin, .{
-                .user_report = .{ .code = "UnresolvedFunctionCall", .message = "cannot establish termination: function call candidates are unknown" },
+                .user_report = .{ .code = "UnresolvedFunctionCall", .message = try self.state.allocator.dupe(u8, "cannot establish termination: function call candidates are unknown") },
             });
             return error.UnresolvedFunctionCall;
         }
@@ -844,7 +844,7 @@ const Analyzer = struct {
         }
         const origin = activationOrigin(self.state, activation);
         try self.state.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .code = "RecursiveFunction", .message = try self.allocator.dupe(u8, "recursive function value application") },
+            .user_report = .{ .code = "RecursiveFunction", .message = try self.state.allocator.dupe(u8, "recursive function value application") },
         });
     }
 };

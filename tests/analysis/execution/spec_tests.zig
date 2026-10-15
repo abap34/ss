@@ -170,3 +170,63 @@ test "execution graph bounds effect analysis even when called without terminatio
     try testing.expectEqualStrings("execution.ss", location.path.?);
     try testing.expect(location.span.end > location.span.start);
 }
+
+fn expectOwnedCallDiagnostic(source: []const u8, expected_code: []const u8, expected_message: []const u8) !void {
+    var analysis_storage = std.heap.ArenaAllocator.init(testing.allocator);
+    defer analysis_storage.deinit();
+    // Document diagnostics use a freeing allocator, independently of the
+    // temporary arena inside the call analysis pass.
+    var state = try document(source);
+    defer state.deinit();
+    if (compiler.analysis.analyzeDocumentStateWithMode(analysis_storage.allocator(), &state, .diagnostics_only)) |graph| {
+        if (graph) |value| {
+            var owned = value;
+            owned.deinit();
+        }
+        return error.ExpectedCallDiagnostic;
+    } else |_| {}
+    for (state.diagnostics.entries.items) |diagnostic| {
+        if (!std.mem.eql(u8, diagnostic.code(), expected_code)) continue;
+        try testing.expect(diagnostic.data == .user_report);
+        try testing.expectEqualStrings(expected_message, diagnostic.data.user_report.message);
+        return;
+    }
+    return error.ExpectedCallDiagnostic;
+}
+
+test "call diagnostics own messages independently of analysis storage" {
+    try expectOwnedCallDiagnostic(
+        \\fn label(item: Object) -> String = readlines("missing.txt")
+        \\page main
+        \\  set_repr(text!("A"), label)
+        \\end
+    , "ImpureDisplayFunction", "display functions must be pure and read-only, including indirect calls");
+    try expectOwnedCallDiagnostic(
+        \\type Holder = object {
+        \\  roles = ["holder"]
+        \\  format: (Object -> String)?
+        \\}
+        \\page main
+        \\  let item = txt_obj("A", "holder")
+        \\  set_repr(item, item.format ?? ((value: Object) |-> content(value)))
+        \\end
+    , "UnresolvedFunctionCall", "cannot establish termination: function call candidates are unknown");
+    try expectOwnedCallDiagnostic(
+        \\page main
+        \\  let item = text!("A")
+        \\  set_repr(item, (self: Object) |-> repr(self))
+        \\end
+    , "RecursiveFunction", "recursive function value application");
+}
+
+test "call analysis limit diagnostics survive temporary analysis storage" {
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(testing.allocator);
+    for (0..130) |i| {
+        const line = try std.fmt.allocPrint(testing.allocator, "fn f{d}() -> Number = f{d}()\n", .{ i, i + 1 });
+        defer testing.allocator.free(line);
+        try source.appendSlice(testing.allocator, line);
+    }
+    try source.appendSlice(testing.allocator, "fn f130() -> Number = 0\npage main\nlet value = f0()\nend\n");
+    try expectOwnedCallDiagnostic(source.items, "FunctionAnalysisLimitExceeded", "cannot establish termination within the function analysis depth limit");
+}
