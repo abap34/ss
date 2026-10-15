@@ -7,6 +7,39 @@ pub const Name = struct {
     name: []const u8,
 };
 
+/// A selected value binding. A non-callable local still shadows global values.
+pub fn ValueResolution(comptime Local: type, comptime Constant: type, comptime Function: type) type {
+    return union(enum) {
+        local: Local,
+        constant: Constant,
+        function: Function,
+        primitive: @import("registry.zig").PrimitiveDescriptor,
+        unknown,
+    };
+}
+
+/// Select the binding before checking its type or invoking it. Qualified names
+/// cannot resolve to lexical bindings or unqualified kernel primitives.
+pub fn resolveValue(
+    comptime Local: type,
+    comptime Constant: type,
+    comptime Function: type,
+    resolver: anytype,
+    callee: ast.CallableName,
+    local: ?Local,
+) !ValueResolution(Local, Constant, Function) {
+    if (callee.name_hole != null) return .unknown;
+    if (!callee.isQualified()) {
+        if (local) |binding| return .{ .local = binding };
+    }
+    if (try resolver.constant(callee)) |binding| return .{ .constant = binding };
+    if (try resolver.function(callee)) |binding| return .{ .function = binding };
+    if (!callee.isQualified()) {
+        if (@import("registry.zig").lookupPrimitiveCall(callee.name)) |primitive| return .{ .primitive = primitive };
+    }
+    return .unknown;
+}
+
 pub const OpenImport = struct {
     unqualified: bool,
     selected: []const ast.ImportDecl.SelectedName = &.{},

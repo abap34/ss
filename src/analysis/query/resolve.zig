@@ -77,7 +77,7 @@ pub fn visibleVariable(budget: ?QueryBudget, snapshot: anytype, module_id: core.
         if (item.kind != .variable) continue;
         if (item.module_id != module_id) continue;
         if (!std.mem.eql(u8, item.name, name)) continue;
-        if (offset < item.visible_start or offset > item.visible_end) continue;
+        if (!(offset >= item.span_start and offset < item.span_end) and (offset < item.visible_start or offset > item.visible_end)) continue;
         if (!scopeMatches(item.scope_kind, item.scope_name, scope)) continue;
         if (best == null or item.span_start >= best_start) {
             best = item;
@@ -96,7 +96,7 @@ pub fn visibleVariableBinding(budget: ?QueryBudget, snapshot: anytype, module_id
         if (expired(budget)) return null;
         if (binding.module_id != module_id) continue;
         if (!std.mem.eql(u8, binding.name, name)) continue;
-        if (offset < binding.visible_start or offset > binding.visible_end) continue;
+        if (!(offset >= binding.span_start and offset < binding.span_end) and (offset < binding.visible_start or offset > binding.visible_end)) continue;
         if (!scopeMatches(binding.scope_kind, binding.scope_name, scope)) continue;
         if (best == null or binding.span_start >= best_start) {
             best = .{
@@ -154,18 +154,26 @@ pub fn typeForExpr(budget: ?QueryBudget, snapshot: anytype, module_id: core.Sour
         .record => |record| if (record.module_id) |id| ast.Type.recordType(record.type_name).inModule(id) else resolvedTypeName(budget, snapshot, module_id, record.type_name),
         .record_update => |update| typeForExpr(budget, snapshot, module_id, offset, update.target.*),
         .ident => |ident| blk: {
-            if (visibleVariableBinding(budget, snapshot, module_id, offset, ident.name)) |binding| {
-                if (binding.object_class) |id| {
-                    break :blk if (binding.value_type.kind == .selection) ast.Type.selectionType(ast.Type.objectId(id)) else ast.Type.objectId(id);
-                }
-                break :blk binding.value_type;
+            switch (selectedValue(budget, snapshot, module_id, offset, ast.CallableName.bare(ident.name)) catch unreachable) {
+                .local => |binding| {
+                    if (binding.object_class) |id| {
+                        break :blk if (binding.value_type.kind == .selection) ast.Type.selectionType(ast.Type.objectId(id)) else ast.Type.objectId(id);
+                    }
+                    break :blk binding.value_type;
+                },
+                .constant => |binding| break :blk binding.value_type,
+                else => break :blk null,
             }
-            if (valueBinding(budget, snapshot, module_id, ident.name, null, .constant)) |binding| break :blk binding.value_type;
-            break :blk null;
         },
         .call => |call| blk: {
-            const binding = valueBinding(budget, snapshot, module_id, call.callee.name, call.callee.qualifier, .function) orelse break :blk null;
-            break :blk binding.value_type;
+            const binding = selectedValue(budget, snapshot, module_id, offset, call.callee) catch unreachable;
+            break :blk switch (binding) {
+                .local => |value| if (value.value_type.kind == .function and value.value_type.fn_result != null) value.value_type.fn_result.?.* else null,
+                .constant => |value| if (value.value_type.kind == .function and value.value_type.fn_result != null) value.value_type.fn_result.?.* else null,
+                .function => |value| value.value_type,
+                .primitive => if (primitiveBinding(budget, snapshot, call.callee.name)) |value| value.value_type else null,
+                .unknown => null,
+            };
         },
         .member => |member| blk: {
             const target = typeForExpr(budget, snapshot, module_id, offset, member.target.*) orelse break :blk null;
@@ -268,6 +276,46 @@ fn scopeMatches(kind: core.DefinitionScopeKind, name: ?[]const u8, request_scope
     if (kind != request_scope.kind) return false;
     if (request_scope.name) |scope_name| return std.mem.eql(u8, name orelse "", scope_name);
     return name == null;
+}
+
+pub fn selectedValue(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, callee: ast.CallableName) !name_resolution.ValueResolution(VariableBinding, ValueBinding, ValueBinding) {
+    const Resolver = struct {
+        snapshot: @TypeOf(snapshot),
+        budget: ?QueryBudget,
+        module_id: core.SourceModuleId,
+
+        pub fn constant(self: @This(), name: ast.CallableName) !?ValueBinding {
+            return valueBinding(self.budget, self.snapshot, self.module_id, name.name, name.qualifier, .constant);
+        }
+
+        pub fn function(self: @This(), name: ast.CallableName) !?ValueBinding {
+            const binding = valueBinding(self.budget, self.snapshot, self.module_id, name.name, name.qualifier, .function) orelse return null;
+            return if (binding.primitive) null else binding;
+        }
+    };
+    return name_resolution.resolveValue(VariableBinding, ValueBinding, ValueBinding, Resolver{ .snapshot = snapshot, .budget = budget, .module_id = module_id }, callee, visibleVariableBinding(budget, snapshot, module_id, offset, callee.name));
+}
+
+pub fn structuredField(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, context: anytype) ?FieldRef {
+    const cursor = @import("cursor.zig");
+    if (context.targetKindIs(.member_name)) {
+        const parsed = context.module() orelse return null;
+        const member = cursor.memberAt(budget, parsed, context.offset) orelse return null;
+        const ty = typeForExpr(budget, snapshot, module_id, context.offset, member.target) orelse return null;
+        return fieldForType(budget, snapshot, ty, member.name);
+    }
+    if (context.targetKindIs(.record_field_name)) {
+        const id = recordIdForTypeName(budget, snapshot, module_id, context.qualifier orelse return null) orelse return null;
+        return recordField(budget, snapshot, id, context.target);
+    }
+    if (context.targetKindIs(.record_update_path_segment)) {
+        const parsed = context.module() orelse return null;
+        const target = cursor.recordUpdatePathAt(budget, parsed, context.offset) orelse return null;
+        const base = recordIdForExpr(budget, snapshot, module_id, context.offset, target.target) orelse return null;
+        const id = recordIdAfterPath(budget, snapshot, base, target.path[0..target.segment_index]) orelse return null;
+        return recordField(budget, snapshot, id, target.path[target.segment_index].name);
+    }
+    return null;
 }
 
 pub fn valueDefinition(

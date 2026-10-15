@@ -186,6 +186,7 @@ const GraphBuilder = struct {
         const sema = SemanticEnv.init(self.state, self.declarations, self.functions).forModule(module.id);
         var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .document = sema.module_id }, self.run_cache);
         defer analyzer.deinit();
+        try analyzer.bindPrecedingStatements(module.syntax.document_statements.items[0..statement_start]);
         const statement_end = @min(statement_start + statement_count, module.syntax.document_statements.items.len);
         for (module.syntax.document_statements.items[statement_start..statement_end], statement_start..) |stmt, stmt_index| {
             const summary = try analyzer.statement(stmt);

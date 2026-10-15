@@ -1238,3 +1238,98 @@ test "selected imports: queries retain canonical declarations and export visibil
         try testing.expect(std.mem.indexOf(u8, hover.markdown, binding.signature) != null);
     }
 }
+
+test "analysis queries: qualified calls bypass local names in hover and definition" {
+    var case = try CompletionCase.init(
+        \\import std:themes/default as theme
+        \\page main
+        \\  let h1 = theme::h1("First")
+        \\  theme::h1("Second")
+        \\end
+    );
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    const offset = offsetAfter(case.source, "  theme::h1") - 1;
+    const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offset };
+    var clock = DeadlineClock{};
+    var hover = (try snapshot_api.hoverAt(case.allocator, snapshot, req, clock.options())) orelse return error.ExpectedHover;
+    defer hover.deinit(case.allocator);
+    try testing.expect(std.mem.indexOf(u8, hover.markdown, "h1(") != null);
+    const targets = try snapshot_api.definitionAt(case.allocator, snapshot, req, clock.options());
+    defer case.allocator.free(targets);
+    try testing.expectEqual(@as(usize, 1), targets.len);
+    try testing.expect(targets[0].module_spec != null or !std.mem.eql(u8, targets[0].path orelse "", case.path));
+}
+
+test "analysis queries: fields never fall back to unrelated value names" {
+    var case = try CompletionCase.init(
+        \\record Label {
+        \\  text: String = "Body"
+        \\}
+        \\page main
+        \\  let item = Label {}
+        \\  let value = item.text
+        \\  let str = "local"
+        \\  let invalid = item.str
+        \\end
+    );
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    var clock = DeadlineClock{};
+    const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, "item.text") - 1 };
+    var hover = (try snapshot_api.hoverAt(case.allocator, snapshot, req, clock.options())) orelse return error.ExpectedHover;
+    defer hover.deinit(case.allocator);
+    try testing.expectEqualStrings("```ss\n(text: String)\n```", hover.markdown);
+    const targets = try snapshot_api.definitionAt(case.allocator, snapshot, req, clock.options());
+    defer case.allocator.free(targets);
+    try testing.expectEqual(@as(usize, 1), targets.len);
+    try testing.expectEqual(@as(usize, 1), targets[0].line);
+    const missing = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, "item.str") - 1 };
+    try testing.expect((try snapshot_api.hoverAt(case.allocator, snapshot, missing, clock.options())) == null);
+    const absent = try snapshot_api.definitionAt(case.allocator, snapshot, missing, clock.options());
+    defer case.allocator.free(absent);
+    try testing.expectEqual(@as(usize, 0), absent.len);
+}
+
+test "analysis queries: let initializer resolves outside its own binding" {
+    var case = try CompletionCase.init(
+        \\page main
+        \\  let text = text("Body")
+        \\end
+    );
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    var clock = DeadlineClock{};
+    const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, "= text") - 1 };
+    var hover = (try snapshot_api.hoverAt(case.allocator, snapshot, req, clock.options())) orelse return error.ExpectedHover;
+    defer hover.deinit(case.allocator);
+    try testing.expect(std.mem.indexOf(u8, hover.markdown, "text(") != null);
+    const declaration = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, "let text") - 1 };
+    var local = (try snapshot_api.hoverAt(case.allocator, snapshot, declaration, clock.options())) orelse return error.ExpectedHover;
+    defer local.deinit(case.allocator);
+    try testing.expect(std.mem.indexOf(u8, local.markdown, "text: Object") != null);
+}
+
+test "analysis queries: constant record receivers precede enum names" {
+    var case = try CompletionCase.init(
+        \\type Mode = alpha | beta
+        \\record Settings {
+        \\  size: Number = 17
+        \\}
+        \\const Mode: Settings = Settings {}
+        \\page main
+        \\  let value = Mode.size
+        \\end
+    );
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    var clock = DeadlineClock{};
+    const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, "Mode.size") - 1 };
+    var hover = (try snapshot_api.hoverAt(case.allocator, snapshot, req, clock.options())) orelse return error.ExpectedHover;
+    defer hover.deinit(case.allocator);
+    try testing.expectEqualStrings("```ss\n(size: Number)\n```", hover.markdown);
+    const targets = try snapshot_api.definitionAt(case.allocator, snapshot, req, clock.options());
+    defer case.allocator.free(targets);
+    try testing.expectEqual(@as(usize, 1), targets.len);
+    try testing.expectEqual(@as(usize, 2), targets[0].line);
+}

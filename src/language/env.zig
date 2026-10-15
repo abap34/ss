@@ -96,6 +96,10 @@ pub const SemanticEnv = struct {
         });
     }
 
+    pub fn resolveValue(self: *const SemanticEnv, comptime Local: type, callee: ast.CallableName, local: ?Local) !name_resolution.ValueResolution(Local, ResolvedConst, ResolvedFunction) {
+        return name_resolution.resolveValue(Local, ResolvedConst, ResolvedFunction, ValueResolver{ .env = self }, callee, local);
+    }
+
     pub fn hasModuleExport(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) bool {
         if (name_resolution.resolveExport(ResolvedFunction, FunctionResolver{ .env = self }, module_id, name) == .found) return true;
         if (name_resolution.resolveExport(ResolvedConst, ConstResolver{ .env = self }, module_id, name) == .found) return true;
@@ -116,17 +120,15 @@ pub const SemanticEnv = struct {
     }
 
     pub fn call(self: *const SemanticEnv, name: []const u8) ?CallDescriptor {
-        if (self.resolvedFunction(ast.CallableName.bare(name))) |func| return .{ .function = func };
-        if (self.primitive(name)) |descriptor| return .{ .primitive = descriptor };
-        return null;
+        return self.callCallee(ast.CallableName.bare(name));
     }
 
     pub fn callCallee(self: *const SemanticEnv, callee: ast.CallableName) ?CallDescriptor {
-        if (self.resolvedFunction(callee)) |func| return .{ .function = func };
-        if (!callee.isQualified()) {
-            if (self.primitive(callee.name)) |descriptor| return .{ .primitive = descriptor };
-        }
-        return null;
+        return switch (self.resolveValue(void, callee, null) catch unreachable) {
+            .function => |func| .{ .function = func },
+            .primitive => |descriptor| .{ .primitive = descriptor },
+            else => null,
+        };
     }
 
     pub fn primitiveArgType(self: *const SemanticEnv, descriptor: registry.PrimitiveDescriptor, index: usize) ?ast.Type {
@@ -405,3 +407,15 @@ const TypeResolver = struct {
 };
 
 pub const isBuiltinTypeName = type_resolution.isBuiltinTypeName;
+
+const ValueResolver = struct {
+    env: *const SemanticEnv,
+
+    pub fn constant(self: ValueResolver, callee: ast.CallableName) !?ResolvedConst {
+        return self.env.resolvedConst(callee);
+    }
+
+    pub fn function(self: ValueResolver, callee: ast.CallableName) !?ResolvedFunction {
+        return self.env.resolvedFunction(callee);
+    }
+};

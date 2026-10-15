@@ -58,6 +58,23 @@ pub const NameResolutionCache = struct {
         try self.constants.ensureTotalCapacity(@intCast(state.constants.declarations.count() * 2));
     }
 
+    pub fn resolveValue(self: *NameResolutionCache, sema: *const SemanticEnv, comptime Local: type, callee: ast.CallableName, local: ?Local) !@import("../language/name_resolution.zig").ValueResolution(Local, semantic_env.ResolvedConst, semantic_env.ResolvedFunction) {
+        return @import("../language/name_resolution.zig").resolveValue(Local, semantic_env.ResolvedConst, semantic_env.ResolvedFunction, ValueResolver{ .cache = self, .sema = sema }, callee, local);
+    }
+
+    const ValueResolver = struct {
+        cache: *NameResolutionCache,
+        sema: *const SemanticEnv,
+
+        pub fn constant(self: ValueResolver, callee: ast.CallableName) !?semantic_env.ResolvedConst {
+            return self.cache.resolvedConst(self.sema, callee);
+        }
+
+        pub fn function(self: ValueResolver, callee: ast.CallableName) !?semantic_env.ResolvedFunction {
+            return self.cache.resolvedFunction(self.sema, callee);
+        }
+    };
+
     pub fn resolvedFunction(self: *NameResolutionCache, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedFunction {
         const key = resolutionKey(sema, callee);
         if (self.functions.get(key)) |cached| return cached;

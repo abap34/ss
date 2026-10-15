@@ -547,14 +547,6 @@ pub const RunCache = struct {
         try self.summaries.ensureTotalCapacity(@intCast((state.functions.count() * 8) + (state.constants.declarations.count() * 2)));
     }
 
-    pub fn resolvedFunction(self: *RunCache, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedFunction {
-        return try self.name_resolution.resolvedFunction(sema, callee);
-    }
-
-    pub fn resolvedConst(self: *RunCache, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedConst {
-        return try self.name_resolution.resolvedConst(sema, callee);
-    }
-
     pub fn cachedSummary(self: *RunCache, key: []const u8, allocator: std.mem.Allocator) !?AccessSummary {
         const summary = self.summaries.get(key) orelse return null;
         return try summary.clone(allocator);
@@ -639,7 +631,7 @@ pub const Analyzer = struct {
     property_target_bindings: std.StringHashMap(PropertyTarget),
     selection_read_bindings: std.StringHashMap(std.ArrayList(Resource)),
     owned_strings: std.ArrayList([]const u8),
-    local_variables: std.StringHashMap(void),
+    variable_bindings: std.StringHashMap(LetPolicy),
     run_cache: ?*RunCache,
 
     pub fn init(allocator: std.mem.Allocator, sema: *const SemanticEnv) Analyzer {
@@ -666,13 +658,13 @@ pub const Analyzer = struct {
             .property_target_bindings = std.StringHashMap(PropertyTarget).init(allocator),
             .selection_read_bindings = std.StringHashMap(std.ArrayList(Resource)).init(allocator),
             .owned_strings = .empty,
-            .local_variables = std.StringHashMap(void).init(allocator),
+            .variable_bindings = std.StringHashMap(LetPolicy).init(allocator),
             .run_cache = run_cache,
         };
     }
 
     pub fn deinit(self: *Analyzer) void {
-        self.local_variables.deinit();
+        self.variable_bindings.deinit();
         for (self.owned_strings.items) |value| self.allocator.free(value);
         self.owned_strings.deinit(self.allocator);
         self.deinitSelectionReadBindings(&self.selection_read_bindings);
@@ -698,23 +690,26 @@ pub const Analyzer = struct {
         return try self.analyzeStatement(stmt, .scheduled);
     }
 
-    fn resolvedFunction(self: *Analyzer, callee: ast.CallableName) !?semantic_env.ResolvedFunction {
-        if (self.run_cache) |cache| return try cache.resolvedFunction(&self.sema, callee);
-        return self.sema.resolvedFunction(callee);
-    }
-
-    fn resolvedConst(self: *Analyzer, callee: ast.CallableName) !?semantic_env.ResolvedConst {
-        if (self.run_cache) |cache| return try cache.resolvedConst(&self.sema, callee);
-        return self.sema.resolvedConst(callee);
+    fn valueBinding(self: *Analyzer, callee: ast.CallableName) !@import("../language/name_resolution.zig").ValueResolution(LetPolicy, semantic_env.ResolvedConst, semantic_env.ResolvedFunction) {
+        const local = self.variable_bindings.get(callee.name);
+        if (self.run_cache) |cache| return cache.name_resolution.resolveValue(&self.sema, LetPolicy, callee, local);
+        return self.sema.resolveValue(LetPolicy, callee, local);
     }
 
     fn callCallee(self: *Analyzer, callee: ast.CallableName) !?semantic_env.CallDescriptor {
-        if (callee.name_hole != null) return null;
-        if (try self.resolvedFunction(callee)) |func| return .{ .function = func };
-        if (!callee.isQualified()) {
-            if (self.sema.primitive(callee.name)) |descriptor| return .{ .primitive = descriptor };
+        return switch (try self.valueBinding(callee)) {
+            .function => |func| .{ .function = func },
+            .primitive => |primitive| .{ .primitive = primitive },
+            else => null,
+        };
+    }
+
+    pub fn bindPrecedingStatements(self: *Analyzer, statements: []const ast.Statement) !void {
+        for (statements) |stmt| {
+            if (stmt.kind == .let_binding and !names.isDiscardBindingName(stmt.kind.let_binding.name)) {
+                try self.variable_bindings.put(stmt.kind.let_binding.name, .scheduled);
+            }
         }
-        return null;
     }
 
     fn analyzeStatements(self: *Analyzer, items: []const ast.Statement, let_policy: LetPolicy) anyerror!AccessSummary {
@@ -740,7 +735,7 @@ pub const Analyzer = struct {
                 if (!names.isDiscardBindingName(binding.name)) {
                     switch (let_policy) {
                         .scheduled => try summary.addWrite(Resource.makeVariable(self.variable_scope, binding.name)),
-                        .local => try self.local_variables.put(binding.name, {}),
+                        .local => {},
                     }
                     if (try literalStringExpr(self, binding.expr)) |value| {
                         try self.string_bindings.put(binding.name, value);
@@ -769,6 +764,7 @@ pub const Analyzer = struct {
                     } else {
                         _ = self.property_target_bindings.remove(binding.name);
                     }
+                    try self.variable_bindings.put(binding.name, let_policy);
                 }
             },
             .return_expr => |expr| {
@@ -908,33 +904,41 @@ pub const Analyzer = struct {
     }
 
     fn addVariableRead(self: *Analyzer, summary: *AccessSummary, name: []const u8) !void {
-        if (self.local_variables.contains(name)) {
-            try self.addBoundSelectionReads(summary, name);
-            return;
+        switch (try self.valueBinding(ast.CallableName.bare(name))) {
+            .local => |policy| {
+                if (policy == .scheduled) try summary.addRead(Resource.makeVariable(self.variable_scope, name));
+                try self.addBoundSelectionReads(summary, name);
+            },
+            .constant => |resolved| {
+                var nested = try self.constValue(resolved);
+                defer nested.deinit();
+                try summary.merge(nested);
+            },
+            .function, .primitive => {},
+            .unknown => {
+                try summary.addRead(Resource.makeVariable(self.variable_scope, name));
+                try self.addBoundSelectionReads(summary, name);
+            },
         }
-        if (try self.resolvedConst(ast.CallableName.bare(name))) |resolved| {
-            var nested = try self.constValue(resolved);
-            defer nested.deinit();
-            try summary.merge(nested);
-            return;
-        }
-        if ((try self.resolvedFunction(ast.CallableName.bare(name))) != null) return;
-        try summary.addRead(Resource.makeVariable(self.variable_scope, name));
-        try self.addBoundSelectionReads(summary, name);
     }
 
     fn analyzeCall(self: *Analyzer, call: ast.CallExpr) anyerror!AccessSummary {
         if (call.callee.name_hole != null) return try self.callArgs(call);
-        if (try self.resolvedConst(call.callee)) |resolved| {
-            var summary = try self.callArgs(call);
-            errdefer summary.deinit();
-            var const_summary = try self.constValue(resolved);
-            defer const_summary.deinit();
-            try summary.merge(const_summary);
-            return summary;
-        }
-        const descriptor = (try self.callCallee(call.callee)) orelse return try self.callArgs(call);
-        return switch (descriptor) {
+        return switch (try self.valueBinding(call.callee)) {
+            .local => blk: {
+                var summary = try self.callArgs(call);
+                errdefer summary.deinit();
+                try self.addVariableRead(&summary, call.callee.name);
+                break :blk summary;
+            },
+            .constant => |resolved| blk: {
+                var summary = try self.callArgs(call);
+                errdefer summary.deinit();
+                var const_summary = try self.constValue(resolved);
+                defer const_summary.deinit();
+                try summary.merge(const_summary);
+                break :blk summary;
+            },
             .function => |resolved| blk: {
                 var arg_facts = try self.collectCallArgFacts(call);
                 defer self.deinitCallArgFacts(&arg_facts);
@@ -944,6 +948,7 @@ pub const Analyzer = struct {
                 break :blk try self.functionCall(resolved.key, resolved.module_id, resolved.decl, arg_facts.items, summary);
             },
             .primitive => |primitive| try self.primitiveCall(call, primitive),
+            .unknown => try self.callArgs(call),
         };
     }
 
@@ -1215,9 +1220,9 @@ pub const Analyzer = struct {
     }
 
     fn bindLocalParams(self: *Analyzer, params: []const ast.ParamDecl) !void {
-        try self.local_variables.ensureUnusedCapacity(@intCast(params.len));
+        try self.variable_bindings.ensureUnusedCapacity(@intCast(params.len));
         for (params) |param| {
-            try self.local_variables.put(param.name, {});
+            try self.variable_bindings.put(param.name, .local);
             if (!self.property_target_bindings.contains(param.name)) {
                 if (self.propertyTargetForType(param.ty)) |target| {
                     try self.property_target_bindings.put(param.name, target);
@@ -1306,7 +1311,7 @@ pub const Analyzer = struct {
     const FunctionFactsSnapshot = struct {
         analyzer: *Analyzer,
         string_bindings: std.StringHashMap([]const u8),
-        local_variables: std.StringHashMap(void),
+        variable_bindings: std.StringHashMap(LetPolicy),
         object_role_bindings: std.StringHashMap([]const u8),
         property_target_bindings: std.StringHashMap(PropertyTarget),
         selection_read_bindings: std.StringHashMap(std.ArrayList(Resource)),
@@ -1316,8 +1321,8 @@ pub const Analyzer = struct {
             self.analyzer.string_bindings = self.string_bindings;
             string_snapshot.deinit();
 
-            var local_snapshot = self.analyzer.local_variables;
-            self.analyzer.local_variables = self.local_variables;
+            var local_snapshot = self.analyzer.variable_bindings;
+            self.analyzer.variable_bindings = self.variable_bindings;
             local_snapshot.deinit();
 
             var role_snapshot = self.analyzer.object_role_bindings;
@@ -1338,13 +1343,13 @@ pub const Analyzer = struct {
         const snapshot = FunctionFactsSnapshot{
             .analyzer = self,
             .string_bindings = self.string_bindings,
-            .local_variables = self.local_variables,
+            .variable_bindings = self.variable_bindings,
             .object_role_bindings = self.object_role_bindings,
             .property_target_bindings = self.property_target_bindings,
             .selection_read_bindings = self.selection_read_bindings,
         };
         self.string_bindings = std.StringHashMap([]const u8).init(self.allocator);
-        self.local_variables = std.StringHashMap(void).init(self.allocator);
+        self.variable_bindings = std.StringHashMap(LetPolicy).init(self.allocator);
         self.object_role_bindings = std.StringHashMap([]const u8).init(self.allocator);
         self.property_target_bindings = std.StringHashMap(PropertyTarget).init(self.allocator);
         self.selection_read_bindings = std.StringHashMap(std.ArrayList(Resource)).init(self.allocator);
@@ -1353,14 +1358,14 @@ pub const Analyzer = struct {
 
     const LocalFactsSnapshot = struct {
         analyzer: *Analyzer,
-        local_variables: std.StringHashMap(void),
+        variable_bindings: std.StringHashMap(LetPolicy),
         object_role_bindings: std.StringHashMap([]const u8),
         property_target_bindings: std.StringHashMap(PropertyTarget),
         selection_read_bindings: std.StringHashMap(std.ArrayList(Resource)),
 
         fn restore(self: *LocalFactsSnapshot) void {
-            var local_snapshot = self.analyzer.local_variables;
-            self.analyzer.local_variables = self.local_variables;
+            var local_snapshot = self.analyzer.variable_bindings;
+            self.analyzer.variable_bindings = self.variable_bindings;
             local_snapshot.deinit();
 
             var role_snapshot = self.analyzer.object_role_bindings;
@@ -1378,7 +1383,7 @@ pub const Analyzer = struct {
     };
 
     fn pushLocalFacts(self: *Analyzer) !LocalFactsSnapshot {
-        var local_clone = try self.cloneLocalVariables();
+        var local_clone = try self.cloneVariableBindings();
         errdefer local_clone.deinit();
         var role_clone = try self.cloneObjectRoles();
         errdefer role_clone.deinit();
@@ -1389,24 +1394,24 @@ pub const Analyzer = struct {
 
         const snapshot = LocalFactsSnapshot{
             .analyzer = self,
-            .local_variables = self.local_variables,
+            .variable_bindings = self.variable_bindings,
             .object_role_bindings = self.object_role_bindings,
             .property_target_bindings = self.property_target_bindings,
             .selection_read_bindings = self.selection_read_bindings,
         };
-        self.local_variables = local_clone;
+        self.variable_bindings = local_clone;
         self.object_role_bindings = role_clone;
         self.property_target_bindings = property_target_clone;
         self.selection_read_bindings = selection_clone;
         return snapshot;
     }
 
-    fn cloneLocalVariables(self: *Analyzer) !std.StringHashMap(void) {
-        var clone = std.StringHashMap(void).init(self.allocator);
+    fn cloneVariableBindings(self: *Analyzer) !std.StringHashMap(LetPolicy) {
+        var clone = std.StringHashMap(LetPolicy).init(self.allocator);
         errdefer clone.deinit();
-        try clone.ensureTotalCapacity(@intCast(self.local_variables.count()));
-        var iter = self.local_variables.iterator();
-        while (iter.next()) |entry| try clone.put(entry.key_ptr.*, {});
+        try clone.ensureTotalCapacity(@intCast(self.variable_bindings.count()));
+        var iter = self.variable_bindings.iterator();
+        while (iter.next()) |entry| try clone.put(entry.key_ptr.*, entry.value_ptr.*);
         return clone;
     }
 
@@ -1797,18 +1802,17 @@ pub const Analyzer = struct {
             switch (call.args.items[callback_spec.function_arg_index]) {
                 .ident => |callback_ident| {
                     const callback_name = callback_ident.name;
-                    if (try self.resolvedConst(ast.CallableName.bare(callback_name))) |callback| {
-                        callback_summary = try self.constValue(callback);
-                    } else if (try self.resolvedFunction(ast.CallableName.bare(callback_name))) |callback| {
-                        var initial_summary = AccessSummary.init(self.allocator);
-                        errdefer initial_summary.deinit();
-                        callback_summary = try self.functionCallbackCall(
-                            callback.key,
-                            callback.module_id,
-                            callback.decl,
-                            callback_arg_bindings.items,
-                            initial_summary,
-                        );
+                    switch (try self.valueBinding(ast.CallableName.bare(callback_name))) {
+                        .local => try self.addVariableRead(&callback_summary, callback_name),
+                        .constant => |callback| {
+                            callback_summary = try self.constValue(callback);
+                        },
+                        .function => |callback| {
+                            var initial_summary = AccessSummary.init(self.allocator);
+                            errdefer initial_summary.deinit();
+                            callback_summary = try self.functionCallbackCall(callback.key, callback.module_id, callback.decl, callback_arg_bindings.items, initial_summary);
+                        },
+                        else => {},
                     }
                 },
                 .lambda => |lambda| {
@@ -1893,8 +1897,9 @@ pub const Analyzer = struct {
             .ident => |ident| blk: {
                 const name = ident.name;
                 if (self.property_target_bindings.get(name)) |target| break :blk target;
-                if (try self.resolvedConst(ast.CallableName.bare(name))) |resolved| {
-                    break :blk try self.propertyTargetConst(resolved);
+                switch (try self.valueBinding(ast.CallableName.bare(name))) {
+                    .constant => |resolved| break :blk try self.propertyTargetConst(resolved),
+                    else => {},
                 }
                 break :blk null;
             },
@@ -2043,8 +2048,9 @@ pub const Analyzer = struct {
             .ident => |ident| blk: {
                 const name = ident.name;
                 if (self.object_role_bindings.get(name)) |role_name| break :blk role_name;
-                if (try self.resolvedConst(ast.CallableName.bare(name))) |resolved| {
-                    break :blk try self.objectRoleConst(resolved);
+                switch (try self.valueBinding(ast.CallableName.bare(name))) {
+                    .constant => |resolved| break :blk try self.objectRoleConst(resolved),
+                    else => {},
                 }
                 break :blk null;
             },

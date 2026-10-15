@@ -266,13 +266,11 @@ const Analyzer = struct {
             .hole => return LabelSet.init(self.allocator),
             .ident => |ident| {
                 const name = ident.name;
-                if (env.get(name)) |labels| return try labels.clone(self.allocator);
-                if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
-                    return try self.constLabels(resolved);
-                }
-                if (self.sema.resolvedFunction(ast.CallableName.bare(name))) |resolved| {
-                    const label = self.namedLabel(resolved.key);
-                    return try LabelSet.singleton(self.allocator, label);
+                switch (try self.sema.resolveValue(LabelSet, ast.CallableName.bare(name), env.get(name))) {
+                    .local => |labels| return try labels.clone(self.allocator),
+                    .constant => |resolved| return try self.constLabels(resolved),
+                    .function => |resolved| return try LabelSet.singleton(self.allocator, self.namedLabel(resolved.key)),
+                    .primitive, .unknown => {},
                 }
                 return LabelSet.init(self.allocator);
             },
@@ -322,25 +320,20 @@ const Analyzer = struct {
 
     fn callLabels(self: *Analyzer, call: ast.CallExpr, env: *const FunctionEnv, owner: ?ast.FunctionDecl) anyerror!LabelSet {
         if (call.callee.name_hole != null) return LabelSet.init(self.allocator);
-        if (!call.callee.isQualified()) {
-            if (env.get(call.callee.name)) |callee_labels| {
-                const arg_labels = try self.argumentLabelSets(call.args.items, env, owner);
-                return try self.invokeLabels(callee_labels, arg_labels.items, owner);
-            }
-        }
-
-        const descriptor = self.sema.callCallee(call.callee) orelse {
-            if (self.sema.resolvedConst(call.callee)) |resolved| {
-                const callee_labels = try self.constLabels(resolved);
-                const arg_labels = try self.argumentLabelSets(call.args.items, env, owner);
-                return try self.invokeLabels(callee_labels, arg_labels.items, owner);
-            }
-            const arg_labels = try self.argumentLabelSets(call.args.items, env, owner);
-            _ = arg_labels;
-            return LabelSet.init(self.allocator);
-        };
-
-        switch (descriptor) {
+        switch (try self.sema.resolveValue(LabelSet, call.callee, env.get(call.callee.name))) {
+            .local => |labels| {
+                const args = try self.argumentLabelSets(call.args.items, env, owner);
+                return try self.invokeLabels(labels, args.items, owner);
+            },
+            .constant => |resolved| {
+                const labels = try self.constLabels(resolved);
+                const args = try self.argumentLabelSets(call.args.items, env, owner);
+                return try self.invokeLabels(labels, args.items, owner);
+            },
+            .unknown => {
+                _ = try self.argumentLabelSets(call.args.items, env, owner);
+                return LabelSet.init(self.allocator);
+            },
             .function => |resolved| {
                 const func = resolved.decl;
                 const label = self.namedLabel(resolved.key);

@@ -539,12 +539,9 @@ const PlacementEffectAnalyzer = struct {
         call_expr: ast.CallExpr,
     ) anyerror!bool {
         if (try self.exprList(sema, locals, call_expr.args.items)) return true;
-        if (!call_expr.callee.isQualified() and locals.contains(call_expr.callee.name)) return false;
-        if (sema.resolvedConst(call_expr.callee)) |resolved| {
-            return try self.constValue(resolved);
-        }
-        const descriptor = sema.callCallee(call_expr.callee) orelse return false;
-        return switch (descriptor) {
+        return switch (try sema.resolveValue(void, call_expr.callee, if (locals.contains(call_expr.callee.name)) {} else null)) {
+            .local, .unknown => false,
+            .constant => |resolved| try self.constValue(resolved),
             .primitive => |primitive| primitive.places_objects or
                 try self.primitiveCallback(sema, locals, call_expr, primitive),
             .function => |resolved| blk: {

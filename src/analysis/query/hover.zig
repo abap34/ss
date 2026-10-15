@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core");
+const ast = @import("ast");
 
 const context_query = @import("context.zig");
 const import_query = @import("imports.zig");
@@ -39,7 +40,7 @@ fn resolveHover(allocator: std.mem.Allocator, snapshot: anytype, req: types.Sour
     }
 
     if (import_query.selectedBindingAt(snapshot, context, req.path)) |selected| {
-        inline for (.{ core.DefinitionKind.function, core.DefinitionKind.constant }) |kind| {
+        inline for (.{ core.DefinitionKind.constant, core.DefinitionKind.function }) |kind| {
             if (resolve_query.exportedValueBinding(budget, snapshot, selected.module_id, selected.name, kind)) |binding| return try bindingHover(allocator, binding, budget);
         }
         if (resolve_query.exportedTypeDefinition(budget, snapshot, selected.module_id, selected.name) != null) return .{
@@ -50,15 +51,22 @@ fn resolveHover(allocator: std.mem.Allocator, snapshot: anytype, req: types.Sour
 
     if (context.expired()) return null;
     const module = snapshot.moduleForPath(req.path) orelse return null;
-    if (resolve_query.visibleVariableBinding(budget, snapshot, module.id, req.offset, context.target)) |variable| {
-        return .{
-            .markdown = try std.fmt.allocPrint(allocator, "```ss\n({s}: {s})\n```", .{ variable.name, variable.type_label }),
-        };
-    }
+    if (resolve_query.structuredField(budget, snapshot, module.id, context)) |field| return .{
+        .markdown = try std.fmt.allocPrint(allocator, "```ss\n({s}: {s})\n```", .{ field.name, field.type_label }),
+    };
     const qualifier = context.qualifiedCallableAlias();
-    if (context.expired()) return null;
-    if (resolve_query.valueBinding(budget, snapshot, module.id, context.target, qualifier, .function)) |binding| return try bindingHover(allocator, binding, budget);
-    if (resolve_query.valueBinding(budget, snapshot, module.id, context.target, qualifier, .constant)) |binding| return try bindingHover(allocator, binding, budget);
+    if (context.isValueName()) {
+        var callee = ast.CallableName.bare(context.target);
+        callee.qualifier = qualifier;
+        switch (try resolve_query.selectedValue(budget, snapshot, module.id, req.offset, callee)) {
+            .local => |variable| return .{ .markdown = try std.fmt.allocPrint(allocator, "```ss\n({s}: {s})\n```", .{ variable.name, variable.type_label }) },
+            .constant, .function => |binding| return try bindingHover(allocator, binding, budget),
+            .primitive => {
+                if (resolve_query.valueBinding(budget, snapshot, module.id, context.target, null, .function)) |binding| return try bindingHover(allocator, binding, budget);
+            },
+            .unknown => {},
+        }
+    } else if (!context.targetKindIs(.enum_name)) return null;
     if (resolve_query.typeDefinition(budget, snapshot, module.id, context.target, context.qualifiedCallableAlias())) |type_definition| {
         _ = type_definition;
         return .{

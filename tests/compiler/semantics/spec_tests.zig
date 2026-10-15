@@ -5683,3 +5683,128 @@ test "compiler semantics: numeric comparisons require numeric operands" {
         \\end
     , "case.ss:bytes:", "TypeMismatch");
 }
+
+test "compiler semantics: local callable wins in statement and expression positions" {
+    try expectObjectContent(
+        \\fn label(n: Number) -> String
+        \\  return str(n)
+        \\end
+        \\page main
+        \\  let label = (s: String) |-> s
+        \\  label("statement")
+        \\  text!(label("expression"))
+        \\end
+    , "expression");
+}
+
+test "compiler semantics: non-callable locals shadow functions and primitives" {
+    try expectDiagnostic(
+        \\fn label(n: Number) -> Number
+        \\  return n
+        \\end
+        \\page main
+        \\  let label = 1
+        \\  label(2)
+        \\end
+    , "case.ss:bytes:", "local binding 'label' is not callable");
+    try expectDiagnostic(
+        \\page main
+        \\  let str = 1
+        \\  str(2)
+        \\end
+    , "case.ss:bytes:", "local binding 'str' is not callable");
+}
+
+test "compiler semantics: scheduled local object wins over same-named constructor" {
+    try expectObjectContent(
+        \\page main
+        \\  let figure = text(docctx().footer_text ?? "unset")
+        \\  place!(figure)
+        \\end
+        \\document
+        \\  docctx().footer_text = "after"
+        \\end
+    , "after");
+}
+
+test "compiler semantics: scheduled bindings remain visible across document blocks" {
+    try buildSource(
+        \\fn label(n: Number) -> Number
+        \\  return n
+        \\end
+        \\document
+        \\  let label = (s: String) |-> s
+        \\end
+        \\document
+        \\  let value = label("local")
+        \\end
+        \\page main
+        \\end
+    );
+}
+
+test "compiler semantics: page requirement follows the selected callable" {
+    try buildSource(
+        \\fn f(n: Number) -> Number
+        \\  let p = pagectx()
+        \\  return n
+        \\end
+        \\document
+        \\  let f = (n: Number) |-> n
+        \\  let result = f(1)
+        \\  let pagectx = (n: Number) |-> n
+        \\  let other = pagectx(2)
+        \\end
+        \\page main
+        \\end
+    );
+    try expectDiagnostic(
+        \\document
+        \\  let f = (n: Number) |-> pagectx()
+        \\  let result = f(1)
+        \\end
+    , "case.ss:bytes:", "NoCurrentPage");
+}
+
+test "compiler semantics: constants shadow enum receivers in expressions" {
+    try expectObjectContent(
+        \\type Mode = alpha | beta
+        \\record Settings {
+        \\  size: Number = 17
+        \\}
+        \\const Mode: Settings = Settings {}
+        \\page main
+        \\  text!(str(Mode.size))
+        \\end
+    , "17");
+}
+
+test "compiler semantics: qualified calls bypass local values" {
+    try expectObjectContent(
+        \\import std:themes/default as theme
+        \\page main
+        \\  let h1 = 1
+        \\  theme::h1!("qualified")
+        \\end
+    , "qualified");
+}
+
+test "compiler semantics: local function values shadow constants" {
+    try expectObjectContent(
+        \\const label: Number = 7
+        \\page main
+        \\  let label = (s: String) |-> s
+        \\  label("statement")
+        \\  text!(label("local"))
+        \\end
+    , "local");
+}
+
+test "compiler semantics: constant function values shadow primitive calls" {
+    try expectObjectContent(
+        \\const str: Number -> String = (n: Number) |-> "constant"
+        \\page main
+        \\  text!(str(7))
+        \\end
+    , "constant");
+}

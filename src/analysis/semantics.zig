@@ -737,7 +737,7 @@ fn resolveMemberAsEnumCase(
         .ident => |enum_ident| {
             const enum_name = enum_ident.name;
             const qualified = std.mem.indexOf(u8, enum_name, "::") != null;
-            if (!qualified and (env.get(enum_name) != null or sema.function(enum_name) != null or sema.constant(enum_name) != null)) return false;
+            if (!qualified and (try sema.resolveValue(semantic_types.TypeInfo, ast.CallableName.bare(enum_name), env.get(enum_name))) != .unknown) return false;
             const resolved = sema.resolveTypeNameInContext(module_id, enum_name) orelse return false;
             if (resolved.kind != .enum_type) return false;
             const resolved_enum_name = resolved.enum_name orelse return false;

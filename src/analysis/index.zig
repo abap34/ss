@@ -69,7 +69,7 @@ fn collectDefinitionsFromStatement(
         .let_binding => |binding| {
             if (!language_names.isDiscardBindingName(binding.name)) {
                 if (binding.type_annotation) |annotation| try recordAnnotation(state, module_id, binding.name_span, annotation);
-                try putDefinitionAtSpan(allocator, definitions, source, binding.name, binding.name_span, stmt.span.start, visible_end, .variable, module_id, null, scope.kind, scope.name);
+                try putDefinitionAtSpan(allocator, definitions, source, binding.name, binding.name_span, stmt.span.end, visible_end, .variable, module_id, null, scope.kind, scope.name);
             }
         },
         .if_stmt => |if_stmt| {

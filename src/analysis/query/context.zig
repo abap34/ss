@@ -84,6 +84,10 @@ pub const Context = struct {
         return self.kindIs(kind);
     }
 
+    pub fn isValueName(self: *const Context) bool {
+        return self.target_kind == null or self.kindIs(.identifier) or self.kindIs(.callable_name);
+    }
+
     pub fn callableRoleIsName(self: *const Context) bool {
         const parsed = self.module() orelse return false;
         if (cursor.callableAt(self.budget, parsed, self.offset)) |target| {

@@ -99,18 +99,6 @@ fn resolvedFunction(evaluation: *EvalContext, sema: *const SemanticEnv, callee: 
     return evaluation.name_resolution_cache.resolvedFunction(sema, callee);
 }
 
-fn resolvedConst(evaluation: *EvalContext, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedConst {
-    return evaluation.name_resolution_cache.resolvedConst(sema, callee);
-}
-
-fn callDescriptor(evaluation: *EvalContext, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.CallDescriptor {
-    if (try resolvedFunction(evaluation, sema, callee)) |function| return .{ .function = function };
-    if (!callee.isQualified()) {
-        if (sema.primitive(callee.name)) |primitive| return .{ .primitive = primitive };
-    }
-    return null;
-}
-
 const LowerDiagnostic = struct {
     err: anyerror,
     origin: ?core.SourceOrigin,
@@ -498,14 +486,12 @@ fn evalExpr(
         .hole => error.HoleExpression,
         .ident => |ident| blk: {
             const name = ident.name;
-            if (env.get(name)) |value| break :blk try value.clone(state.allocator);
             const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
-            if (try resolvedConst(evaluation, &sema, ast.CallableName.bare(name))) |resolved| {
-                break :blk try evalConstValue(evaluation, page_id, scope, current_origin, resolved);
-            }
-            if (try resolvedFunction(evaluation, &sema, ast.CallableName.bare(name))) |resolved| {
-                const func = resolved.decl;
-                break :blk .{ .function = try eval_functions.functionRefForInModule(state.allocator, resolved.module_id, func) };
+            switch (try evaluation.name_resolution_cache.resolveValue(&sema, core.Value, ast.CallableName.bare(name), env.get(name))) {
+                .local => |value| break :blk try value.clone(state.allocator),
+                .constant => |resolved| break :blk try evalConstValue(evaluation, page_id, scope, current_origin, resolved),
+                .function => |resolved| break :blk .{ .function = try eval_functions.functionRefForInModule(state.allocator, resolved.module_id, resolved.decl) },
+                .primitive, .unknown => {},
             }
             try reportUnknownIdentifier(state, name, current_origin);
             break :blk error.UnknownIdentifier;
@@ -897,46 +883,46 @@ fn evalCall(
 ) anyerror!core.Value {
     const state = evaluation.state;
     const functions = evaluation.functions;
-    if (!call.callee.isQualified()) {
-        if (env.get(call.callee.name)) |value| {
-            switch (value) {
-                .function => |func_ref| {
-                    if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
-                    try validateFixedArity(state, call.args.items.len, func_ref.param_count, current_origin);
-                    var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
-                    defer deinitCallArgs(state.allocator, &args);
-                    return try invokeFunctionRef(evaluation, page_id, scope, env, func_ref, current_origin, args.items(.value));
-                },
-                else => {},
-            }
-        }
-    }
     const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
-    if (try resolvedConst(evaluation, &sema, call.callee)) |resolved| {
-        var const_value = try evalConstValue(evaluation, page_id, scope, current_origin, resolved);
-        defer const_value.deinit(state.allocator);
-        const function = switch (const_value) {
-            .function => |function| function,
-            else => {
-                try reportUnknownFunction(state, call.callee.name, current_origin);
-                return error.UnknownFunction;
-            },
-        };
-        var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
-        defer deinitCallArgs(state.allocator, &args);
-        return try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, args.items(.value));
-    }
-    const descriptor = (try callDescriptor(evaluation, &sema, call.callee)) orelse {
-        try reportUnknownCallable(state, &sema, call.callee, current_origin);
-        return error.UnknownFunction;
-    };
-    return switch (descriptor) {
+    const binding = try evaluation.name_resolution_cache.resolveValue(&sema, core.Value, call.callee, env.get(call.callee.name));
+    return switch (binding) {
+        .local => |value| blk: {
+            const func_ref = switch (value) {
+                .function => |func| func,
+                else => {
+                    try reportUnknownFunction(state, call.callee.name, current_origin);
+                    return error.UnknownFunction;
+                },
+            };
+            if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
+            try validateFixedArity(state, call.args.items.len, func_ref.param_count, current_origin);
+            var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
+            defer deinitCallArgs(state.allocator, &args);
+            break :blk try invokeFunctionRef(evaluation, page_id, scope, env, func_ref, current_origin, args.items(.value));
+        },
+        .constant => |resolved| blk: {
+            var const_value = try evalConstValue(evaluation, page_id, scope, current_origin, resolved);
+            defer const_value.deinit(state.allocator);
+            const function = switch (const_value) {
+                .function => |function| function,
+                else => {
+                    try reportUnknownFunction(state, call.callee.name, current_origin);
+                    return error.UnknownFunction;
+                },
+            };
+            var args = try evalCallArgs(evaluation, page_id, scope, env, current_origin, call.args.items);
+            defer deinitCallArgs(state.allocator, &args);
+            break :blk try invokeFunctionRef(evaluation, page_id, scope, env, function, current_origin, args.items(.value));
+        },
         .function => |resolved| blk: {
-            const func = resolved.decl;
-            try eval_functions.requireReturnsValue(func);
-            break :blk try invokeUserFunctionValueInModule(evaluation, page_id, scope, env, resolved.module_id, func, current_origin, call);
+            try eval_functions.requireReturnsValue(resolved.decl);
+            break :blk try invokeUserFunctionValueInModule(evaluation, page_id, scope, env, resolved.module_id, resolved.decl, current_origin, call);
         },
         .primitive => |primitive| try evalPrimitiveCall(evaluation, page_id, scope, env, current_origin, call, primitive),
+        .unknown => {
+            try reportUnknownCallable(state, &sema, call.callee, current_origin);
+            return error.UnknownFunction;
+        },
     };
 }
 
@@ -1935,7 +1921,7 @@ fn executeStatement(
             var value = switch (expr) {
                 .call => |call| blk: {
                     const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
-                    if ((try resolvedFunction(evaluation, &sema, call.callee)) != null) {
+                    if ((try evaluation.name_resolution_cache.resolveValue(&sema, core.Value, call.callee, env.get(call.callee.name))) == .function) {
                         break :blk try executeCallStatement(evaluation, page_id, scope, env, last_code_like, origin, call);
                     }
                     break :blk try evalExpr(evaluation, page_id, scope, env, origin, expr);

@@ -64,12 +64,11 @@ const PageContextRequirement = struct {
             .hole => null,
             .ident => |ident| blk: {
                 const name = ident.name;
-                if (scope.contains(name)) break :blk null;
-                if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
-                    break :blk if (try self.constRequiresPage(resolved.key, resolved.decl)) .{ .constant = resolved.decl } else null;
-                }
-                const resolved = self.sema.resolvedFunction(ast.CallableName.bare(name)) orelse break :blk null;
-                break :blk if (try self.functionRequiresPage(resolved.key, resolved.decl)) .{ .function = resolved.decl } else null;
+                break :blk switch (try self.sema.resolveValue(void, ast.CallableName.bare(name), if (scope.contains(name)) {} else null)) {
+                    .constant => |resolved| if (try self.constRequiresPage(resolved.key, resolved.decl)) .{ .constant = resolved.decl } else null,
+                    .function => |resolved| if (try self.functionRequiresPage(resolved.key, resolved.decl)) .{ .function = resolved.decl } else null,
+                    else => null,
+                };
             },
             .string, .color, .number, .boolean, .none, .enum_case => null,
             .record => |record| blk: {
@@ -86,16 +85,18 @@ const PageContextRequirement = struct {
                 break :blk null;
             },
             .call => |call| blk: {
-                if (!call.callee.isQualified()) {
-                    if (registry.lookupPrimitiveCall(call.callee.name)) |descriptor| {
-                        if (descriptor.context == .page) break :blk .{ .primitive = descriptor };
-                    }
-                }
-                if (self.sema.resolvedFunction(call.callee)) |resolved| {
-                    if (try self.functionRequiresPage(resolved.key, resolved.decl)) break :blk .{ .function = resolved.decl };
-                }
-                if (self.sema.resolvedConst(call.callee)) |resolved| {
-                    if (try self.constRequiresPage(resolved.key, resolved.decl)) break :blk .{ .constant = resolved.decl };
+                const binding = try self.sema.resolveValue(void, call.callee, if (scope.contains(call.callee.name)) {} else null);
+                switch (binding) {
+                    .local, .unknown => {},
+                    .primitive => |descriptor| if (descriptor.context == .page) {
+                        break :blk .{ .primitive = descriptor };
+                    },
+                    .function => |resolved| if (try self.functionRequiresPage(resolved.key, resolved.decl)) {
+                        break :blk .{ .function = resolved.decl };
+                    },
+                    .constant => |resolved| if (try self.constRequiresPage(resolved.key, resolved.decl)) {
+                        break :blk .{ .constant = resolved.decl };
+                    },
                 }
                 for (call.args.items) |arg| {
                     if (try self.exprRequirement(scope, arg)) |requirement| break :blk requirement;

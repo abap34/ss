@@ -166,14 +166,15 @@ fn exprInfoWithOptions(
         },
         .ident => |ident| blk: {
             const name = ident.name;
-            if (env.get(name)) |info| break :blk info;
-            if (sema.resolvedConst(ast.CallableName.bare(name))) |constant_decl| {
-                break :blk infoFromType(constant_decl.decl.value_type);
-            }
-            if (sema.function(name)) |func| {
-                var info = infoFromType(try functionTypeForDecl(allocator, func));
-                info.function_labels = try singleFunctionLabel(allocator, func.name);
-                break :blk info;
+            switch (try sema.resolveValue(TypeInfo, ast.CallableName.bare(name), env.get(name))) {
+                .local => |info| break :blk info,
+                .constant => |resolved| break :blk infoFromType(resolved.decl.value_type),
+                .function => |resolved| {
+                    var info = infoFromType(try functionTypeForDecl(allocator, resolved.decl));
+                    info.function_labels = try singleFunctionLabel(allocator, resolved.decl.name);
+                    break :blk info;
+                },
+                .primitive, .unknown => {},
             }
             try addUserReportAtSpan(state, origin, ident.name_span, "UnknownIdentifier", "unknown identifier: {s}", .{name});
             return error.UnknownIdentifier;
@@ -324,7 +325,7 @@ fn inferMemberInfo(
     if (member.name_hole) |hole_id| return infoFromHole(hole_id);
     if (member.target.* == .ident) {
         const enum_name = member.target.ident.name;
-        if (env.get(enum_name) == null and sema.function(enum_name) == null) {
+        if ((try sema.resolveValue(TypeInfo, ast.CallableName.bare(enum_name), env.get(enum_name))) == .unknown) {
             if (sema.enumExists(null, enum_name)) {
                 try addUserReportAtSpan(state, origin, member.name_span, "UnknownEnumCase", "enum '{s}' has no case '{s}'", .{ enum_name, member.name });
                 return error.InvalidType;
@@ -497,32 +498,33 @@ fn inferCallInfo(
     options: InferenceOptions,
 ) anyerror!TypeInfo {
     if (call.callee.name_hole) |hole_id| return infoFromHole(hole_id);
-    if (!call.callee.isQualified()) {
-        if (env.get(call.callee.name)) |callee_info| {
-            if (callee_info.hole != null) return callee_info;
+    const binding = try sema.resolveValue(TypeInfo, call.callee, env.get(call.callee.name));
+    return switch (binding) {
+        .local => |callee_info| blk: {
+            if (callee_info.hole != null) break :blk callee_info;
             if (callee_info.ty.kind == .function and callee_info.ty.fn_result != null) {
-                return try inferFunctionValueCallInfo(allocator, state, sema, env, callee_info, call.args.items, origin, options);
+                break :blk try inferFunctionValueCallInfo(allocator, state, sema, env, callee_info, call.args.items, origin, options);
             }
-        }
-    }
-    if (sema.resolvedConst(call.callee)) |resolved| {
-        const const_info = infoFromType(resolved.decl.value_type);
-        if (const_info.ty.kind == .function and const_info.ty.fn_result != null) {
-            return try inferFunctionValueCallInfo(allocator, state, sema, env, const_info, call.args.items, origin, options);
-        }
-        try addUserReportAtSpan(state, origin, preferredDiagnosticSpan(call.callee.name_span, call.callee.span), "UnknownFunction", "constants are values; use '{s}' without parentheses", .{call.callee.name});
-        return error.UnknownFunction;
-    }
-    const descriptor = sema.callCallee(call.callee) orelse {
-        try reportCallResolutionFailure(allocator, state, sema, call.callee, origin);
-        return error.UnknownFunction;
-    };
-    return switch (descriptor) {
+            try addUserReportAtSpan(state, origin, preferredDiagnosticSpan(call.callee.name_span, call.callee.span), "UnknownFunction", "local binding '{s}' is not callable", .{call.callee.name});
+            return error.UnknownFunction;
+        },
+        .constant => |resolved| blk: {
+            const const_info = infoFromType(resolved.decl.value_type);
+            if (const_info.ty.kind == .function and const_info.ty.fn_result != null) {
+                break :blk try inferFunctionValueCallInfo(allocator, state, sema, env, const_info, call.args.items, origin, options);
+            }
+            try addUserReportAtSpan(state, origin, preferredDiagnosticSpan(call.callee.name_span, call.callee.span), "UnknownFunction", "constants are values; use '{s}' without parentheses", .{call.callee.name});
+            return error.UnknownFunction;
+        },
         .function => |resolved| blk: {
             const callee_sema = sema.forModule(resolved.module_id);
             break :blk try inferUserCallInfo(allocator, state, sema, &callee_sema, env, call, origin, resolved.decl, options);
         },
         .primitive => |primitive| try inferPrimitiveCallInfo(allocator, state, sema, env, call, origin, primitive, options),
+        .unknown => {
+            try reportCallResolutionFailure(allocator, state, sema, call.callee, origin);
+            return error.UnknownFunction;
+        },
     };
 }
 
