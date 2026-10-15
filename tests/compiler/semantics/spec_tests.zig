@@ -3962,7 +3962,7 @@ test "compiler semantics: unknown display callbacks are rejected before evaluati
         \\  let item = txt_obj("A", "holder")
         \\  set_repr(item, item.format ?? ((value: Object) |-> content(value)))
         \\end
-    , "case.ss:bytes:", "UnresolvedFunctionCall");
+    , "case.ss:bytes:", "InvalidPropertyType");
 }
 
 test "compiler semantics: display registration inside a selection callback is checked" {
@@ -4051,7 +4051,7 @@ test "compiler semantics: object link tracking does not authorize nested stored 
         \\  let stored = item.formatter ?? Formatter { format = label }
         \\  set_repr(item, stored.format)
         \\end
-    , "case.ss:bytes:", "UnresolvedFunctionCall");
+    , "case.ss:bytes:", "InvalidPropertyType");
 }
 
 test "compiler semantics: aliases of an object constant cannot hide display recursion" {
@@ -5119,7 +5119,7 @@ test "compiler semantics: unknown property callbacks cannot establish terminatio
         \\  let holder = obj("holder", "holder", "text")
         \\  let value = invoke(holder)
         \\end
-    , "case.ss:bytes:", "UnresolvedFunctionCall");
+    , "case.ss:bytes:", "InvalidPropertyType");
 }
 
 test "compiler semantics: cached higher-order calls distinguish captured records" {
@@ -5144,23 +5144,17 @@ test "compiler semantics: cached higher-order calls distinguish captured records
     , "case.ss:bytes:", "RecursiveFunction");
 }
 
-test "compiler semantics: record updates refine known fields of unknown values" {
+test "compiler semantics: record updates replace recursive function fields before calls" {
     try expectObjectContent(
         \\record Box { f: Number -> Number }
-        \\type Holder = object {
-        \\  roles = ["holder"]
-        \\  payload: Box?
-        \\}
-        \\fn inc(x: Number) -> Number
-        \\  return x + 1
-        \\end
-        \\fn invoke(h: Holder) -> Number
-        \\  let value = (h.payload ?? Box { f = inc }) with { f = inc }
+        \\fn inc(x: Number) -> Number = x + 1
+        \\fn invoke(box: Box) -> Number
+        \\  let value = box with { f = inc }
         \\  return value.f(1)
         \\end
+        \\fn replaced(x: Number) -> Number = invoke(Box { f = replaced })
         \\page main
-        \\  let holder = obj("holder", "holder", "text")
-        \\  text!(str(invoke(holder)))
+        \\  text!(str(replaced(1)))
         \\end
     , "2");
 }
@@ -5212,61 +5206,43 @@ test "compiler semantics: callbacks cannot hide unknown function properties" {
         \\  let holder = obj("holder", "holder", "text")
         \\  let _ = foreach(objs(pagectx(), "holder"), invoke)
         \\end
-    , "case.ss:bytes:", "UnresolvedFunctionCall");
+    , "case.ss:bytes:", "InvalidPropertyType");
 }
 
-test "compiler semantics: record return joins retain unknown fields after known fields" {
+test "compiler semantics: record return joins retain recursive fields after known fields" {
     try expectDiagnostic(
         \\record Box { f: Number -> Number }
-        \\type Holder = object {
-        \\  roles = ["holder"]
-        \\  payload: Box?
-        \\}
-        \\fn inc(x: Number) -> Number
-        \\  return x + 1
-        \\end
-        \\fn choose(h: Holder, flag: Bool) -> Box
+        \\fn inc(x: Number) -> Number = x + 1
+        \\fn choose(box: Box, flag: Bool) -> Box
         \\  if flag
         \\    return Box { f = inc }
         \\  else
-        \\    return h.payload ?? Box { f = inc }
+        \\    return box
         \\  end
         \\end
-        \\fn invoke(h: Holder) -> Number
-        \\  return choose(h, true).f(1)
-        \\end
+        \\fn recursive(x: Number) -> Number = choose(Box { f = recursive }, true).f(x)
         \\page main
-        \\  let holder = obj("holder", "holder", "text")
-        \\  let value = invoke(holder)
+        \\  let value = recursive(1)
         \\end
-    , "case.ss:bytes:", "UnresolvedFunctionCall");
+    , "case.ss:bytes:", "RecursiveFunction");
 }
 
-test "compiler semantics: record return joins retain unknown fields before known fields" {
+test "compiler semantics: record return joins retain recursive fields before known fields" {
     try expectDiagnostic(
         \\record Box { f: Number -> Number }
-        \\type Holder = object {
-        \\  roles = ["holder"]
-        \\  payload: Box?
-        \\}
-        \\fn inc(x: Number) -> Number
-        \\  return x + 1
-        \\end
-        \\fn choose(h: Holder, flag: Bool) -> Box
+        \\fn inc(x: Number) -> Number = x + 1
+        \\fn choose(box: Box, flag: Bool) -> Box
         \\  if flag
-        \\    return h.payload ?? Box { f = inc }
+        \\    return box
         \\  else
         \\    return Box { f = inc }
         \\  end
         \\end
-        \\fn invoke(h: Holder) -> Number
-        \\  return choose(h, true).f(1)
-        \\end
+        \\fn recursive(x: Number) -> Number = choose(Box { f = recursive }, true).f(x)
         \\page main
-        \\  let holder = obj("holder", "holder", "text")
-        \\  let value = invoke(holder)
+        \\  let value = recursive(1)
         \\end
-    , "case.ss:bytes:", "UnresolvedFunctionCall");
+    , "case.ss:bytes:", "RecursiveFunction");
 }
 
 test "compiler semantics: growing closure environments exhaust analysis before evaluation" {
@@ -7259,6 +7235,66 @@ test "compiler semantics: selections remain writable and individual objects read
         \\  let item = txt_obj!("A", "tagged")
         \\  objs(pagectx(), "tagged").link_id = "X"
         \\  note!(item.link_id ?? "missing")
+        \\end
+    , "X");
+}
+
+test "compiler semantics: stored property declarations reject functions recursively" {
+    try expectDiagnostic(
+        \\type Holder = object {
+        \\  roles = ["holder"]
+        \\  callback: Number -> Number
+        \\}
+        \\page main
+        \\end
+    , "bytes:", "InvalidPropertyType");
+    try expectDiagnostic(
+        \\record Action { callback: Number -> Number }
+        \\record Wrapper { action: Action? = none }
+        \\type Holder = object {
+        \\  roles = ["holder"]
+        \\  wrapper: Wrapper?
+        \\}
+        \\page main
+        \\end
+    , "bytes:", "InvalidPropertyType");
+}
+
+test "compiler semantics: property assignment and set_prop reject embedded function values" {
+    try expectDiagnostic(
+        \\fn identity(value: Number) -> Number = value
+        \\page main
+        \\  let item = text!("A")
+        \\  item.link_id = identity
+        \\end
+    , "bytes:", "InvalidProperty");
+    try expectDiagnostic(
+        \\record Action { callback: Number -> Number }
+        \\record Wrapper { action: Action }
+        \\fn identity(value: Number) -> Number = value
+        \\page main
+        \\  let item = text!("A")
+        \\  item.link_id = Wrapper { action = Action { callback = identity } }
+        \\end
+    , "bytes:", "InvalidProperty");
+    try expectDiagnostic(
+        \\record Action { callback: Number -> Number }
+        \\fn identity(value: Number) -> Number = value
+        \\page main
+        \\  let item = text!("A")
+        \\  set_prop(item, "link_id", Action { callback = identity })
+        \\end
+    , "bytes:", "InvalidProperty");
+}
+
+test "compiler semantics: local records may contain functions and register displays" {
+    try expectObjectContent(
+        \\record Action { callback: Object -> String }
+        \\fn label(item: Object) -> String = "X"
+        \\page main
+        \\  let action = Action { callback = label }
+        \\  let item = text!("A")
+        \\  set_repr(item, action.callback)
         \\end
     , "X");
 }

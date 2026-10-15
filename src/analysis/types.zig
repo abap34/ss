@@ -211,3 +211,35 @@ pub fn ensureTypeWithHoles(
     }
     return error.InvalidType;
 }
+
+// Stored properties must have a function-free value type. Object and
+// page references do not embed the properties of their referents.
+pub fn isPropertyStorable(allocator: std.mem.Allocator, sema: *const @import("../language/env.zig").SemanticEnv, ty: Type) !bool {
+    var pending = std.ArrayList(Type).empty;
+    defer pending.deinit(allocator);
+    var visited = std.ArrayList(core.NominalId).empty;
+    defer visited.deinit(allocator);
+    try pending.append(allocator, ty);
+    while (pending.pop()) |current| {
+        switch (current.kind) {
+            .function, .any => return false,
+            .optional => if (current.optional_child) |child| {
+                try pending.append(allocator, child.*);
+            },
+            .record => {
+                const id = current.nominalId() orelse return false;
+                var seen = false;
+                for (visited.items) |previous| if (previous.eql(id)) {
+                    seen = true;
+                    break;
+                };
+                if (seen) continue;
+                try visited.append(allocator, id);
+                const record = sema.record(id.module_id, id.name) orelse return false;
+                for (record.decl.fields.items) |field| try pending.append(allocator, field.value_type);
+            },
+            else => {},
+        }
+    }
+    return true;
+}

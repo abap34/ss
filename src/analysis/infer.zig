@@ -1205,8 +1205,8 @@ fn validateSetPropCall(
 
     const value_info = try exprInfoWithOptions(state.allocator, state, sema, env, call.args.items[2], origin, options);
     if (value_info.hole != null) return;
-    if (value_info.ty.kind == .function) {
-        try addUserReport(state, origin, "InvalidProperty", "function values cannot be stored as properties", .{});
+    if (!try semantic_types.isPropertyStorable(state.allocator, sema, value_info.ty)) {
+        try addUserReport(state, origin, "InvalidProperty", "properties cannot contain functions or unconstrained Any values", .{});
         return error.InvalidType;
     }
     if (lookupFieldForTarget(sema, target_info, key)) |field| {
@@ -1390,6 +1390,10 @@ fn validatePropertySetPath(
     origin: core.SourceOrigin,
 ) !void {
     if (path.len == 0) return;
+    if (value_info.hole == null and !try semantic_types.isPropertyStorable(allocator, sema, value_info.ty)) {
+        try addUserReport(state, origin, "InvalidProperty", "properties cannot contain functions or unconstrained Any values", .{});
+        return error.InvalidType;
+    }
     if (state) |sink| {
         const first = path[0];
         if (path.len == 1 and std.mem.eql(u8, first.name, "content")) {

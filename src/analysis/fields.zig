@@ -103,7 +103,7 @@ fn checkRecordDeclaration(
     origin_path: []const u8,
     record_decl: ast.RecordDecl,
 ) !void {
-    try checkObjectFields(allocator, state, sema, origin_path, record_decl.fields.items);
+    try checkObjectFields(allocator, state, sema, origin_path, record_decl.fields.items, false);
 }
 
 fn checkObjectNamesUnique(
@@ -140,7 +140,7 @@ fn checkObjectDeclaration(
             return error.InvalidType;
         }
     }
-    try checkObjectFields(allocator, state, sema, origin_path, object_decl.fields.items);
+    try checkObjectFields(allocator, state, sema, origin_path, object_decl.fields.items, true);
 }
 
 fn checkObjectExtension(
@@ -162,7 +162,7 @@ fn checkObjectExtension(
             return error.InvalidType;
         }
     }
-    try checkObjectFields(allocator, state, sema, origin_path, extension.fields.items);
+    try checkObjectFields(allocator, state, sema, origin_path, extension.fields.items, true);
 }
 
 fn checkObjectFields(
@@ -171,12 +171,17 @@ fn checkObjectFields(
     sema: *const SemanticEnv,
     origin_path: []const u8,
     fields: []const ast.ObjectFieldDecl,
+    stored: bool,
 ) !void {
     for (fields) |field| {
         const origin = core.SourceOrigin.at(origin_path, field.span);
 
         const field_type = field.value_type;
         if (field_type.kind == .hole) continue;
+        if (stored and !try semantic_types.isPropertyStorable(allocator, sema, field_type)) {
+            try addUserReport(state, origin, "InvalidPropertyType", "property '{s}' must not contain functions or unconstrained Any values", .{field.name});
+            return error.InvalidType;
+        }
         if (field.default_value) |default_value| {
             try checkFieldDefault(allocator, state, sema, origin, field_type, default_value.*, field.default_property_value);
         }
