@@ -408,6 +408,7 @@ fn propertyTargetForVariable(snapshot: anytype, variable: anytype) ?PropertyTarg
 }
 
 fn propertyTargetForType(snapshot: anytype, ty: ast.Type) ?PropertyTarget {
+    if (ty.kind == .optional) return if (ty.optional_child) |child| propertyTargetForType(snapshot, child.*) else null;
     if (resolve_query.objectClassForType(snapshot, ty)) |id| return .{ .class = id };
     return switch (ty.kind) {
         .object => .any_object,

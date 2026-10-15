@@ -247,9 +247,9 @@ module.exports = grammar({
       repeat($._terminator),
       ")",
     )),
-    member_expression: $ => prec(PREC.call, seq(
-      field("object", choice($.identifier, $.call_expression, $.parenthesized_expression)),
-      ".",
+    member_expression: $ => prec.left(PREC.call, seq(
+      field("object", choice($.identifier, $.call_expression, $.member_expression, $.parenthesized_expression)),
+      choice(".", "?."),
       field("member", $.identifier),
     )),
     property_default_expression: $ => prec.right(PREC.coalesce, seq(

@@ -307,6 +307,7 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
         .member => |member| {
             try object.stringField("exprKind", "member");
             try object.stringField("name", member.name);
+            try object.boolField("optional", member.optional);
         },
         .enum_case => |case| {
             try object.stringField("exprKind", "enum_case");
@@ -505,6 +506,7 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
         .member => |member| {
             try item.stringField("kind", "member");
             try item.stringField("name", member.name);
+            try item.boolField("optional", member.optional);
             try writeExpr(allocator, item, "target", member.target.*);
         },
         .enum_case => |case| {

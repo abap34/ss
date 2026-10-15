@@ -1375,6 +1375,30 @@ test "syntax spec: member optional and coalesce keep nested targets" {
     }
 }
 
+test "syntax spec: optional members preserve chains and cloning" {
+    var parsed = try parse("page main\nlet width = style.marker?.nested?.width ?? 0\nend\n");
+    defer parsed.deinit();
+    var copy = try parsed.module.clone(testing.allocator);
+    defer copy.deinit(testing.allocator);
+    const expression = copy.pages.items[0].statements.items[0].kind.let_binding.expr.coalesce.target.*;
+    const width = try expectMember(expression, "width");
+    try testing.expect(width.optional);
+    const nested = try expectMember(width.target.*, "nested");
+    try testing.expect(nested.optional);
+    const marker = try expectMember(nested.target.*, "marker");
+    try testing.expect(!marker.optional);
+}
+
+test "syntax spec: incomplete optional members preserve a member name hole" {
+    var parsed = try parseRecovering("page main\nlet width = style.marker?.\nlet ok = 1\nend\n");
+    defer parsed.deinit();
+    const member = parsed.result.module.pages.items[0].statements.items[0].kind.let_binding.expr.member;
+    try testing.expect(member.optional);
+    const hole = member.name_hole.?;
+    try testing.expectEqual(syntax.HoleKind.member_name, parsed.result.holes.holes[hole].kind);
+    try testing.expectEqualStrings("ok", parsed.result.module.pages.items[0].statements.items[1].kind.let_binding.name);
+}
+
 test "syntax spec: record update keeps target and nested field paths" {
     var parsed = try parse(
         \\page Update

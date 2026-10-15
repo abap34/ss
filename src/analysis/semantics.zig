@@ -733,6 +733,7 @@ fn resolveMemberAsEnumCase(
     expr: *ast.Expr,
     member: *ast.MemberExpr,
 ) !bool {
+    if (member.optional) return false;
     switch (member.target.*) {
         .ident => |enum_ident| {
             const enum_name = enum_ident.name;

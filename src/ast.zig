@@ -662,6 +662,7 @@ pub const LambdaExpr = struct {
 
 pub const MemberExpr = struct {
     target: *Expr,
+    optional: bool = false,
     name: []const u8,
     name_span: ?Span = null,
     name_hole: ?HoleId = null,
@@ -679,6 +680,7 @@ pub const MemberExpr = struct {
         errdefer target.deinit(allocator);
         return .{
             .target = target,
+            .optional = self.optional,
             .name = try allocator.dupe(u8, self.name),
             .name_span = self.name_span,
             .name_hole = self.name_hole,

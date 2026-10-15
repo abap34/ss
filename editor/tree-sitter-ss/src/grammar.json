@@ -2015,7 +2015,7 @@
       }
     },
     "member_expression": {
-      "type": "PREC",
+      "type": "PREC_LEFT",
       "value": 9,
       "content": {
         "type": "SEQ",
@@ -2036,14 +2036,27 @@
                 },
                 {
                   "type": "SYMBOL",
+                  "name": "member_expression"
+                },
+                {
+                  "type": "SYMBOL",
                   "name": "parenthesized_expression"
                 }
               ]
             }
           },
           {
-            "type": "STRING",
-            "value": "."
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "STRING",
+                "value": "."
+              },
+              {
+                "type": "STRING",
+                "value": "?."
+              }
+            ]
           },
           {
             "type": "FIELD",

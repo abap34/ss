@@ -148,7 +148,7 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
         .member => |member| blk: {
             const target = try formatExpr(allocator, member.target.*);
             defer allocator.free(target);
-            break :blk std.fmt.allocPrint(allocator, "{s}.{s}", .{ target, member.name });
+            break :blk std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ target, if (member.optional) "?." else ".", member.name });
         },
         .optional_check => |check| blk: {
             const target = try formatExpr(allocator, check.target.*);

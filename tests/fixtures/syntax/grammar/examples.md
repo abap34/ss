@@ -4,6 +4,21 @@ These parser fixtures remain available without the local design notes.
 
 <!-- syntax: accept expression -->
 ```ss
+style.marker?.nested?.width ?? 0
+```
+
+<!-- syntax: accept expression -->
+```ss
+(style.marker ?? MarkerStyle {}).width
+```
+
+<!-- syntax: reject expression ExpectedMemberName -->
+```ss
+style?.
+```
+
+<!-- syntax: accept expression -->
+```ss
 style with {}
 ```
 

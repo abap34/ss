@@ -2187,6 +2187,10 @@
             "named": true
           },
           {
+            "type": "member_expression",
+            "named": true
+          },
+          {
             "type": "parenthesized_expression",
             "named": true
           }
@@ -3390,6 +3394,10 @@
   },
   {
     "type": "?",
+    "named": false
+  },
+  {
+    "type": "?.",
     "named": false
   },
   {

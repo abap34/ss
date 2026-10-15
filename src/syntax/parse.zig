@@ -1714,6 +1714,12 @@ const Parser = struct {
                 expr = try self.parseRecordUpdateAfterTarget(expr);
                 continue;
             }
+            if (source.startsWithAt(self.source, self.pos, "?.")) {
+                self.pos += 1;
+                expr = try self.parseMemberExprAfterTarget(expr);
+                expr.member.optional = true;
+                continue;
+            }
             if (source.startsWithAt(self.source, self.pos, "??")) {
                 self.pos += 2;
                 var fallback = try self.parseConcatExpr();
@@ -2210,6 +2216,7 @@ const Parser = struct {
     fn clonePropertySetRoot(self: *Parser, target: Expr, path: *std.ArrayList(ast.RecordPathSegment)) !Expr {
         return switch (target) {
             .member => |member| blk: {
+                if (member.optional) break :blk try target.clone(self.allocator);
                 var root = try self.clonePropertySetRoot(member.target.*, path);
                 errdefer root.deinit(self.allocator);
                 const span = member.name_span orelse return error.ExpectedMemberName;

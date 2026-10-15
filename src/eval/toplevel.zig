@@ -597,6 +597,7 @@ fn evalMember(
     }
     var target = try evalExpr(evaluation, page_id, scope, env, current_origin, member.target.*);
     defer target.deinit(state.allocator);
+    if (member.optional and target == .none) return .{ .none = {} };
     return evalMemberValue(state, functions, target, member.name);
 }
 

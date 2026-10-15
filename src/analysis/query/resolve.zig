@@ -140,6 +140,7 @@ pub fn recordField(budget: ?QueryBudget, snapshot: anytype, record_id: core.Nomi
 }
 
 pub fn recordIdForType(ty: ast.Type) ?core.NominalId {
+    if (ty.kind == .optional) return if (ty.optional_child) |child| recordIdForType(child.*) else null;
     return if (ty.kind == .record) ty.nominalId() else null;
 }
 
@@ -207,6 +208,7 @@ pub fn fieldForType(budget: ?QueryBudget, snapshot: anytype, ty: ast.Type, name:
 }
 
 pub fn objectClassForType(snapshot: anytype, ty: ast.Type) ?core.NominalId {
+    if (ty.kind == .optional) return if (ty.optional_child) |child| objectClassForType(snapshot, child.*) else null;
     return switch (ty.kind) {
         .object => ty.nominalId(),
         .selection => ty.selectionItemId(),

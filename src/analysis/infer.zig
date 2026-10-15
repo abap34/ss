@@ -342,6 +342,10 @@ fn inferMemberInfo(
         const enum_name = member.target.ident.name;
         if ((try sema.resolveValue(TypeInfo, ast.CallableName.bare(enum_name), env.get(enum_name))) == .unknown) {
             if (sema.enumExists(null, enum_name)) {
+                if (member.optional) {
+                    try addUserReportAtSpan(state, origin, member.name_span, "InvalidOptionalMember", "enum cases use '.'; '?.' requires a value receiver", .{});
+                    return error.InvalidType;
+                }
                 try addUserReportAtSpan(state, origin, member.name_span, "UnknownEnumCase", "enum '{s}' has no case '{s}'", .{ enum_name, member.name });
                 return error.InvalidType;
             }
@@ -350,6 +354,15 @@ fn inferMemberInfo(
 
     const target_info = try exprInfoWithOptions(allocator, state, sema, env, member.target.*, origin, options);
     if (target_info.hole != null) return target_info;
+    if (member.optional) {
+        const receiver = if (target_info.ty.kind == .optional)
+            infoFromType((target_info.ty.optional_child orelse return error.InvalidType).*)
+        else
+            target_info;
+        const field = try inferMemberInfoFromTargetInfo(allocator, state, sema, receiver, member.name, member.name_span, origin);
+        if (target_info.ty.kind != .optional or field.hole != null or field.ty.kind == .optional) return field;
+        return infoFromType(try Type.optional(allocator, field.ty));
+    }
     return inferMemberInfoFromTargetInfo(allocator, state, sema, target_info, member.name, member.name_span, origin);
 }
 
@@ -364,11 +377,8 @@ fn inferMemberInfoFromTargetInfo(
 ) !TypeInfo {
     const allocator = if (state) |owner| owner.inferenceAllocator() else caller_allocator;
     if (target_info.ty.kind == .optional) {
-        const child = target_info.ty.optional_child orelse {
-            try addUserReportAtSpan(state, origin, member_span, "InvalidOptionalType", "ss produced an optional type without its child; report this as an ss bug with the source file", .{});
-            return error.InvalidType;
-        };
-        if (child.kind == .record) return inferOptionalRecordMemberInfo(allocator, state, sema, child.*, member_name, member_span, origin);
+        try addUserReportAtSpan(state, origin, member_span, "InvalidOptionalMember", "optional receivers require ?. or an explicit fallback with ?? before member access", .{});
+        return error.InvalidType;
     }
     if (target_info.ty.kind == .record) {
         const record_id = target_info.ty.nominalId() orelse {
@@ -401,29 +411,6 @@ fn inferMemberInfoFromTargetInfo(
     }
     const field = lookupFieldForTarget(sema, target_info, member_name) orelse {
         try addUserReportAtSpan(state, origin, member_span, "UnknownField", "unknown field: {s}", .{member_name});
-        return error.InvalidType;
-    };
-    const field_type = field.value_type;
-    var result_type = if (field_type.kind == .optional) try field_type.clone(allocator) else try Type.optional(allocator, field_type);
-    errdefer result_type.deinit(allocator);
-    return infoFromType(result_type);
-}
-
-fn inferOptionalRecordMemberInfo(
-    allocator: std.mem.Allocator,
-    state: ?*core.DocumentState,
-    sema: *const SemanticEnv,
-    record_type: Type,
-    member_name: []const u8,
-    member_span: ?ast.Span,
-    origin: core.SourceOrigin,
-) !TypeInfo {
-    const record_id = record_type.nominalId() orelse {
-        try addUserReportAtSpan(state, origin, member_span, "InvalidRecordType", "ss produced a record type without a resolved declaration; report this as an ss bug with the source file", .{});
-        return error.InvalidType;
-    };
-    const field = sema.recordField(record_id, member_name) orelse {
-        try addUserReportAtSpan(state, origin, member_span, "UnknownRecordField", "record type '{s}' has no field '{s}'", .{ record_id.name, member_name });
         return error.InvalidType;
     };
     const field_type = field.value_type;
@@ -1371,6 +1358,14 @@ fn validatePropertySetStatementWithOptions(
     options: InferenceOptions,
 ) !void {
     if (path.len == 0) return;
+    var receiver = target;
+    while (receiver == .member) {
+        if (receiver.member.optional) {
+            try addUserReport(state, origin, "InvalidProperty", "optional member access cannot be an assignment target", .{});
+            return error.InvalidType;
+        }
+        receiver = receiver.member.target.*;
+    }
     const object_info = try exprInfoWithOptions(allocator, state, sema, env, target, origin, options);
     if (object_info.hole != null) return;
     const value_info = try exprInfoWithOptions(allocator, state, sema, env, value, origin, options);

@@ -2327,7 +2327,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\page ok
         \\  let body = body_obj("ok")
         \\  body.text.markdown_code_fill = none
-        \\  body.text.color = fallback(body.text.markdown_code_fill)
+        \\  body.text.color = fallback(body.text?.markdown_code_fill)
         \\end
         \\
     );
@@ -2373,7 +2373,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\
         \\page ok
         \\  let body = body_obj("body")
-        \\  if body.text.markdown_code_fill?
+        \\  if body.text?.markdown_code_fill?
         \\    body_obj("still-set")
         \\  else
         \\    body_obj("unset")
@@ -2428,7 +2428,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text.color = take_color(body.text.markdown_code_fill)
+        \\  body.text.color = take_color(body.text?.markdown_code_fill)
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -2510,7 +2510,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\
         \\fn may_be_none(target: Body, prefer_markup: Bool) -> Color?
         \\  if prefer_markup
-        \\    return target.text.markdown_code_fill
+        \\    return target.text?.markdown_code_fill
         \\  else
         \\    if target.link_id?
         \\      return c"0.1,0.2,0.3"
@@ -2659,7 +2659,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\
         \\fn maybe_accent(target: Body, use_saved: Bool, force_number: Bool) -> Color?
         \\  if use_saved
-        \\    return target.text.markdown_code_fill
+        \\    return target.text?.markdown_code_fill
         \\  else
         \\    if force_number
         \\      return 1
@@ -2683,7 +2683,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\    let chosen = maybe_color
         \\    return chosen
         \\  else
-        \\    let chosen = target.text.color
+        \\    let chosen = target.text?.color ?? c"0,0,0"
         \\    return chosen
         \\  end
         \\end
@@ -3028,7 +3028,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  set_prop(body, "text_color", body.text.markdown_code_fill)
+        \\  set_prop(body, "text_color", body.text?.markdown_code_fill)
         \\end
         \\
     , "case.ss:bytes:", "UnknownField: unknown field: text_color");
@@ -3401,8 +3401,8 @@ test "compiler semantics: member reads materialize typed property values" {
         \\  target.text.markdown_code_fill = c"0.1,0.2,0.3"
         \\  let panel_obj = panel()
         \\  let other = body_obj("color")
-        \\  other.text.color = target.text.markdown_code_fill ?? c"0,0,0"
-        \\  body_obj(wrap_label(target.layout.wrap ?? WrapMode.on) ++ ":" ++ str(target.text.size ?? 0) ++ ":" ++ link_label(target.link_id ?? "fallback"))
+        \\  other.text.color = target.text?.markdown_code_fill ?? c"0,0,0"
+        \\  body_obj(wrap_label(target.layout?.wrap ?? WrapMode.on) ++ ":" ++ str(target.text?.size ?? 0) ++ ":" ++ link_label(target.link_id ?? "fallback"))
         \\  body_obj(render_label(panel_obj.render_kind ?? RenderKind.text))
         \\end
         \\
@@ -3428,7 +3428,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
         \\import std:themes/default as *
         \\
         \\fn optional_color_label(target: Body) -> String
-        \\  if !target.text.markdown_code_fill?
+        \\  if !target.text?.markdown_code_fill?
         \\    return "none"
         \\  else
         \\    return "some"
@@ -7301,4 +7301,89 @@ test "compiler semantics: local records may contain functions and register displ
         \\  set_repr(item, action.callback)
         \\end
     , "X");
+}
+
+test "compiler semantics: optional records require explicit optional member access" {
+    try expectDiagnostic(
+        \\page main
+        \\  let style = LineStyle {}
+        \\  text!(str(style.marker_start.width ?? 0))
+        \\end
+    , "bytes:", "InvalidOptionalMember");
+    try expectObjectContent(
+        \\record Leaf { width: Number = 5 }
+        \\record Branch { leaf: Leaf? = none }
+        \\fn width(branch: Branch?) -> Number = branch?.leaf?.width ?? 0
+        \\page main
+        \\  let missing = Branch {}
+        \\  let present = Branch { leaf = Leaf {} }
+        \\  text!(str(width(none)) ++ ":" ++ str(width(missing)) ++ ":" ++ str(width(present)))
+        \\end
+    , "0:0:5");
+    try expectObjectContent(
+        \\record Leaf { width: Number = 5 }
+        \\fn width(leaf: Leaf) -> Number = leaf?.width
+        \\page main
+        \\  text!(str(width(Leaf {})))
+        \\end
+    , "5");
+    try expectDiagnostic(
+        \\record Leaf { width: Number = 5 }
+        \\record Branch { leaf: Leaf = Leaf {} }
+        \\fn width(branch: Branch?) -> Number = branch?.leaf.width
+        \\page main
+        \\end
+    , "bytes:", "InvalidOptionalMember");
+    try expectDiagnostic(
+        \\page main
+        \\  let mode = WrapMode?.on
+        \\end
+    , "bytes:", "InvalidOptionalMember");
+}
+
+test "compiler semantics: optional object members retain property dependencies" {
+    try expectObjectContent(
+        \\fn label(item: Object?) -> String = item?.link_id ?? "missing"
+        \\page main
+        \\  let item = text!("Target")
+        \\  note!(label(item))
+        \\  item.link_id = "Ready"
+        \\end
+    , "Ready");
+    try expectObjectContent(
+        \\fn label(item: Object?) -> String = item?.content ?? "missing"
+        \\page main
+        \\  text!(label(none))
+        \\end
+    , "missing");
+}
+
+test "compiler semantics: optional function members retain termination checking" {
+    try expectObjectContent(
+        \\record Action { callback: Number -> Number }
+        \\fn identity(value: Number) -> Number = value
+        \\fn apply(action: Action?) -> Number = (action?.callback ?? identity)(3)
+        \\page main
+        \\  text!(str(apply(none)) ++ ":" ++ str(apply(Action { callback = identity })))
+        \\end
+    , "3:3");
+    try expectDiagnostic(
+        \\record Action { callback: Number -> Number }
+        \\fn identity(value: Number) -> Number = value
+        \\fn apply(action: Action?, value: Number) -> Number = (action?.callback ?? identity)(value)
+        \\fn recursive(value: Number) -> Number = apply(Action { callback = recursive }, value)
+        \\page main
+        \\  text!(str(recursive(1)))
+        \\end
+    , "bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: optional member results cannot be assignment targets" {
+    try expectDiagnostic(
+        \\record Holder { item: Object? = none }
+        \\page main
+        \\  let holder = Holder { item = text!("A") }
+        \\  (holder?.item).link_id = "X"
+        \\end
+    , "bytes:", "InvalidProperty");
 }

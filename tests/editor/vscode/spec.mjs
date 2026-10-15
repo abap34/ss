@@ -65,6 +65,7 @@ async function testCompositionOperatorSyntax() {
     ["a/=/b/=/c", ["/=/", "/=/"]],
     ["a |=| (b // c)", ["|=|", "//"]],
     ["a / 2", ["/"]],
+    ["a?.field ?? fallback", ["?.", "??"]],
     ["(a: Object) |-> a", [":", "|->"]],
   ]) {
     assert(JSON.stringify(source.match(operator)) === JSON.stringify(expected), `operator tokens differ: ${source}`);

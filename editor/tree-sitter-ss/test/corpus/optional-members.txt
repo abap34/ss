@@ -1,0 +1,32 @@
+==================
+Optional member chains
+==================
+
+page Main
+  let width = style.marker?.nested?.width ?? 0
+  let content = item?.content ?? "missing"
+end
+
+---
+
+(source_file
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (property_default_expression
+        (member_expression
+          (member_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier))
+        (number)))
+    (let_statement
+      (identifier)
+      (property_default_expression
+        (member_expression
+          (identifier)
+          (identifier))
+        (string)))))

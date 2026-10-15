@@ -13,6 +13,7 @@ page sample
 let title = label!("Hello")
 let subtitle = default::h2("Qualified")
 let nested = title || (subtitle // label("Below"))
+let optional_width = style.marker?.width ?? 0
 title || subtitle
 if title then
   set_prop(title, "text_color", c"#334455")
