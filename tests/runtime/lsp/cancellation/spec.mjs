@@ -160,6 +160,48 @@ end
       snapshot.kind === "ss-editor-snapshot" && snapshot.layout?.pages?.length === 1,
       `editor snapshot did not recover after cancellation: ${JSON.stringify(snapshot)}`,
     );
+
+    const auxiliary = path.join(project, "auxiliary.ss");
+    const auxiliaryUri = pathToFileURL(auxiliary).toString();
+    await writeFile(auxiliary, validSource);
+    let version = 8;
+    for (const notification of ["open-file-watch", "unrelated-watch", "close-other-document"]) {
+      if (notification === "close-other-document") {
+        const opened = client.waitForDiagnostics(auxiliaryUri);
+        client.openDocument({ uri: auxiliaryUri, text: validSource, version: 1 });
+        await opened;
+      }
+      version += 1;
+      const baselineVersion = version;
+      const baseline = client.waitForDiagnostics(uri,
+        (diagnostics, message) => diagnostics.length === 0 && message.params.version === baselineVersion);
+      client.changeDocument({ uri, version, text: `${validSource};; baseline ${notification}\n` });
+      await baseline;
+
+      version += 1;
+      const changedVersion = version;
+      const restored = client.waitForDiagnostics(uri,
+        (diagnostics, message) => diagnostics.length > 0 && message.params.version === changedVersion,
+        `diagnostics after ${notification} interrupted analysis`);
+      client.changeDocument({ uri, version, text: `${invalidLargeSource};; ${notification}\n` });
+      const request = client.startRequest("textDocument/completion", {
+        textDocument: { uri }, position: { line: 0, character: 0 },
+      });
+      const outcome = request.promise.then(() => null, error => error);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      if (notification === "close-other-document") {
+        client.notify("textDocument/didClose", { textDocument: { uri: auxiliaryUri } });
+      } else {
+        client.notify("workspace/didChangeWatchedFiles", { changes: [{
+          uri: notification === "open-file-watch" ? uri : pathToFileURL(path.join(project, "unrelated.txt")).toString(),
+          type: 2,
+        }] });
+      }
+      const interrupted = await outcome;
+      assert(interrupted instanceof Error && interrupted.message.includes("-32801"),
+        `${notification} did not interrupt the active build: ${interrupted}`);
+      await restored;
+    }
   });
 } finally {
   await rm(project, { recursive: true, force: true });

@@ -87,6 +87,7 @@ const Server = struct {
     pending_rebuild_due_ms: u64 = 0,
     pending_rebuild_revision: u64 = 0,
     pending_rebuild_translation_patch: bool = false,
+    pending_rebuild_layout_build: LayoutBuildMode = .configured,
     generated_edit: ?PendingGeneratedEdit = null,
     watched_files_revision: u64 = 0,
     active_revision: u64 = 0,
@@ -160,6 +161,20 @@ const Server = struct {
     }
 
     fn rebuild(
+        self: *Server,
+        changed_path: []const u8,
+        layout_build: LayoutBuildMode,
+        prefer_translation_patch: bool,
+    ) !void {
+        self.rebuildOnce(changed_path, layout_build, prefer_translation_patch) catch |err| {
+            if (err == error.Canceled and self.pending_rebuild_path == null) {
+                try self.enqueueRebuild(changed_path, layout_build, prefer_translation_patch, @max(1, self.lspDebounceMs()));
+            }
+            return err;
+        };
+    }
+
+    fn rebuildOnce(
         self: *Server,
         changed_path: []const u8,
         layout_build: LayoutBuildMode,
@@ -289,6 +304,10 @@ const Server = struct {
             );
             return;
         }
+        try self.enqueueRebuild(changed_path, if (prefer_translation_patch) .required else .configured, prefer_translation_patch, delay_ms);
+    }
+
+    fn enqueueRebuild(self: *Server, changed_path: []const u8, layout_build: LayoutBuildMode, prefer_translation_patch: bool, delay_ms: u64) !void {
         const owned_path = try self.allocator.dupe(u8, changed_path);
         errdefer self.allocator.free(owned_path);
         self.clearPendingRebuild();
@@ -296,18 +315,20 @@ const Server = struct {
         self.pending_rebuild_due_ms = saturatedAddMillis(monotonicMillis(), delay_ms);
         self.pending_rebuild_revision = self.active_revision;
         self.pending_rebuild_translation_patch = prefer_translation_patch;
+        self.pending_rebuild_layout_build = layout_build;
     }
 
     fn flushPendingRebuild(self: *Server, layout_build: LayoutBuildMode) !void {
         const path = self.pending_rebuild_path orelse return;
-        var path_owned = true;
-        defer if (path_owned) self.allocator.free(path);
+        defer self.allocator.free(path);
         const revision = self.pending_rebuild_revision;
         const prefer_translation_patch = self.pending_rebuild_translation_patch;
+        const required_layout = layout_build == .required or self.pending_rebuild_layout_build == .required;
         self.pending_rebuild_path = null;
         self.pending_rebuild_due_ms = 0;
         self.pending_rebuild_revision = 0;
         self.pending_rebuild_translation_patch = false;
+        self.pending_rebuild_layout_build = .configured;
         const previous_revision = self.active_revision;
         const previous_request = self.active_request;
         self.active_revision = revision;
@@ -316,19 +337,7 @@ const Server = struct {
             self.active_revision = previous_revision;
             self.active_request = previous_request;
         }
-        self.rebuild(path, layout_build, prefer_translation_patch) catch |err| {
-            if (err == error.Canceled and
-                layout_build == .required and
-                revision == self.ingress.revision.load(.acquire))
-            {
-                self.pending_rebuild_path = path;
-                self.pending_rebuild_due_ms = saturatedAddMillis(monotonicMillis(), self.lspDebounceMs());
-                self.pending_rebuild_revision = revision;
-                self.pending_rebuild_translation_patch = prefer_translation_patch;
-                path_owned = false;
-            }
-            return err;
-        };
+        try self.rebuild(path, if (required_layout) .required else .configured, prefer_translation_patch);
     }
 
     fn flushPendingRebuildIfDue(self: *Server) !void {
@@ -338,7 +347,7 @@ const Server = struct {
     }
 
     fn pendingLayoutBuildMode(self: *const Server) LayoutBuildMode {
-        return if (self.pending_rebuild_translation_patch) .required else .configured;
+        return self.pending_rebuild_layout_build;
     }
 
     fn pendingRebuildPollTimeout(self: *const Server) ?u64 {
@@ -358,6 +367,7 @@ const Server = struct {
         self.pending_rebuild_due_ms = 0;
         self.pending_rebuild_revision = 0;
         self.pending_rebuild_translation_patch = false;
+        self.pending_rebuild_layout_build = .configured;
     }
 
     fn rememberGeneratedEdit(self: *Server, edit: *const feature_edit.GeneratedEdit) !void {
@@ -1080,6 +1090,8 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                 if (server.documents.removeUri(uri)) |path| server.allocator.free(path);
             }
         };
+        if (server.documents.items.count() == 0) server.clearPendingRebuild();
+        server.acceptCurrentRevision();
         return;
     }
 
