@@ -7,6 +7,7 @@ const syntax_hole = @import("../syntax/hole.zig");
 const Type = ast.Type;
 pub const HoleType = syntax_hole.HoleType;
 
+// Optional facts use null only for unknown. An unreached return uses ?TypeInfo.
 pub const TypeInfo = struct {
     ty: Type = Type.any,
     hole: ?HoleType = null,
@@ -42,15 +43,31 @@ pub fn typeInfoLabelAlloc(allocator: std.mem.Allocator, info: TypeInfo) ![]const
     return typeLabelAlloc(allocator, info.ty);
 }
 
-pub fn mergeTypeInfo(allocator: std.mem.Allocator, a: TypeInfo, b: TypeInfo) !TypeInfo {
+pub fn joinTypeInfo(allocator: std.mem.Allocator, a: TypeInfo, b: TypeInfo) !TypeInfo {
     if (a.hole != null) return a;
     if (b.hole != null) return b;
     return .{
         .ty = a.ty,
-        .object_class = mergeObjectClass(a.object_class, b.object_class),
-        .string_literal = mergeStringLiteral(a.string_literal, b.string_literal),
-        .function_labels = try mergeFunctionLabels(allocator, a.function_labels, b.function_labels),
+        .object_class = joinObjectClass(a.object_class, b.object_class),
+        .string_literal = joinStringLiteral(a.string_literal, b.string_literal),
+        .function_labels = try joinFunctionLabels(allocator, a.function_labels, b.function_labels),
     };
+}
+
+// The annotation and actual value constrain the same value, unlike a control-flow join.
+pub fn refineTypeInfo(annotation: TypeInfo, actual: TypeInfo) TypeInfo {
+    if (annotation.hole != null) return annotation;
+    if (actual.hole != null) return actual;
+    var result = actual;
+    result.ty = annotation.ty;
+    result.object_class = meetObjectClass(annotation.object_class, actual.object_class);
+    return result;
+}
+
+// Distinct nominal classes have an empty intersection. Without an empty-selection
+// fact, retaining either operand is a sound approximation of that intersection.
+pub fn meetObjectClass(a: ?core.NominalId, b: ?core.NominalId) ?core.NominalId {
+    return a orelse b;
 }
 
 pub fn singleFunctionLabel(allocator: std.mem.Allocator, label: []const u8) ![]const []const u8 {
@@ -59,13 +76,12 @@ pub fn singleFunctionLabel(allocator: std.mem.Allocator, label: []const u8) ![]c
     return labels;
 }
 
-pub fn mergeFunctionLabels(
+fn joinFunctionLabels(
     allocator: std.mem.Allocator,
     left: []const []const u8,
     right: []const []const u8,
 ) ![]const []const u8 {
-    if (left.len == 0) return right;
-    if (right.len == 0) return left;
+    if (left.len == 0 or right.len == 0) return &.{};
     var out = std.ArrayList([]const u8).empty;
     errdefer out.deinit(allocator);
     for (left) |label| try appendUniqueLabel(allocator, &out, label);
@@ -80,18 +96,26 @@ fn appendUniqueLabel(allocator: std.mem.Allocator, labels: *std.ArrayList([]cons
     try labels.append(allocator, label);
 }
 
-pub fn mergeObjectClass(a: ?core.NominalId, b: ?core.NominalId) ?core.NominalId {
-    if (a == null) return b;
-    if (b == null) return a;
+pub fn joinObjectClass(a: ?core.NominalId, b: ?core.NominalId) ?core.NominalId {
+    if (a == null or b == null) return null;
     if (a.?.eql(b.?)) return a;
     return null;
 }
 
-pub fn mergeStringLiteral(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
-    if (a == null) return b;
-    if (b == null) return a;
+pub fn joinStringLiteral(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
+    if (a == null or b == null) return null;
     if (std.mem.eql(u8, a.?, b.?)) return a;
     return null;
+}
+
+// Bound static string construction independently of runtime string operations.
+pub const max_static_string_bytes = 64 * 1024;
+
+pub fn concatStringLiterals(allocator: std.mem.Allocator, left: ?[]const u8, right: ?[]const u8) !?[]const u8 {
+    const a = left orelse return null;
+    const b = right orelse return null;
+    if (a.len > max_static_string_bytes or b.len > max_static_string_bytes - a.len) return null;
+    return try std.fmt.allocPrint(allocator, "{s}{s}", .{ a, b });
 }
 
 pub fn resolveStringLiteral(env: *const TypeEnv, expr: ast.Expr) ?[]const u8 {

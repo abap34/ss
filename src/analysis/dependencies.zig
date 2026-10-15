@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 
+const semantic_types = @import("types.zig");
 const analysis_cache = @import("cache.zig");
 const registry = @import("../language/registry.zig");
 const semantic_env = @import("../language/env.zig");
@@ -1358,12 +1359,17 @@ pub const Analyzer = struct {
 
     const LocalFactsSnapshot = struct {
         analyzer: *Analyzer,
+        string_bindings: std.StringHashMap([]const u8),
         variable_bindings: std.StringHashMap(LetPolicy),
         object_role_bindings: std.StringHashMap([]const u8),
         property_target_bindings: std.StringHashMap(PropertyTarget),
         selection_read_bindings: std.StringHashMap(std.ArrayList(Resource)),
 
         fn restore(self: *LocalFactsSnapshot) void {
+            var strings = self.analyzer.string_bindings;
+            self.analyzer.string_bindings = self.string_bindings;
+            strings.deinit();
+
             var local_snapshot = self.analyzer.variable_bindings;
             self.analyzer.variable_bindings = self.variable_bindings;
             local_snapshot.deinit();
@@ -1383,6 +1389,8 @@ pub const Analyzer = struct {
     };
 
     fn pushLocalFacts(self: *Analyzer) !LocalFactsSnapshot {
+        var string_clone = try self.cloneStringBindings();
+        errdefer string_clone.deinit();
         var local_clone = try self.cloneVariableBindings();
         errdefer local_clone.deinit();
         var role_clone = try self.cloneObjectRoles();
@@ -1394,11 +1402,13 @@ pub const Analyzer = struct {
 
         const snapshot = LocalFactsSnapshot{
             .analyzer = self,
+            .string_bindings = self.string_bindings,
             .variable_bindings = self.variable_bindings,
             .object_role_bindings = self.object_role_bindings,
             .property_target_bindings = self.property_target_bindings,
             .selection_read_bindings = self.selection_read_bindings,
         };
+        self.string_bindings = string_clone;
         self.variable_bindings = local_clone;
         self.object_role_bindings = role_clone;
         self.property_target_bindings = property_target_clone;
@@ -1908,7 +1918,7 @@ pub const Analyzer = struct {
             .coalesce => |coalesce| blk: {
                 const target = try self.propertyTargetExpr(coalesce.target.*);
                 const fallback = try self.propertyTargetExpr(coalesce.fallback.*);
-                break :blk mergePropertyTargets(target, fallback);
+                break :blk joinPropertyTargets(target, fallback);
             },
             else => null,
         };
@@ -1938,7 +1948,7 @@ pub const Analyzer = struct {
                     (try self.propertyTargetExpr(call.args.items[0])) orelse PropertyTarget.any()
                 else
                     PropertyTarget.any(),
-                .selection_union, .selection_intersection, .selection_difference => try self.propertyTargetSelectionAlgebra(call),
+                .selection_union, .selection_intersection, .selection_difference => try self.propertyTargetSelectionAlgebra(call, primitive.op),
                 .select => try self.propertyTargetSelect(call),
                 else => if (primitive.result_type) |ty| self.propertyTargetForType(ty) else null,
             },
@@ -1946,13 +1956,19 @@ pub const Analyzer = struct {
         };
     }
 
-    fn propertyTargetSelectionAlgebra(self: *Analyzer, call: ast.CallExpr) !?PropertyTarget {
-        if (call.args.items.len == 0) return PropertyTarget.any();
-        var target = try self.propertyTargetExpr(call.args.items[0]);
-        for (call.args.items[1..]) |arg| {
-            target = mergePropertyTargets(target, try self.propertyTargetExpr(arg));
-        }
-        return target orelse PropertyTarget.any();
+    fn propertyTargetSelectionAlgebra(self: *Analyzer, call: ast.CallExpr, op: registry.PrimitiveCall) !?PropertyTarget {
+        if (call.args.items.len < 2) return PropertyTarget.any();
+        const left = try self.propertyTargetExpr(call.args.items[0]);
+        const right = try self.propertyTargetExpr(call.args.items[1]);
+        return switch (op) {
+            .selection_union => joinPropertyTargets(left, right),
+            .selection_difference => left,
+            .selection_intersection => if (left) |target|
+                if (!target.owner.isUnknown()) target else right
+            else
+                right,
+            else => unreachable,
+        };
     }
 
     fn propertyTargetSelect(self: *Analyzer, call: ast.CallExpr) !?PropertyTarget {
@@ -1985,6 +2001,70 @@ pub const Analyzer = struct {
         return try self.propertyTargetExpr(resolved.decl.value);
     }
 
+    const ReturnFactKind = enum { string_literal, object_role, property_target };
+
+    fn FactValue(comptime kind: ReturnFactKind) type {
+        return if (kind == .property_target) PropertyTarget else []const u8;
+    }
+
+    // The outer optional means no return was reached; value = null means unknown.
+    fn ReturnedFact(comptime kind: ReturnFactKind) type {
+        return struct { value: ?FactValue(kind) };
+    }
+
+    fn returnExprFact(self: *Analyzer, comptime kind: ReturnFactKind, expr: ast.Expr) anyerror!?FactValue(kind) {
+        return switch (kind) {
+            .string_literal => try literalStringExpr(self, expr),
+            .object_role => try self.objectRoleExpr(expr),
+            .property_target => try self.propertyTargetExpr(expr),
+        };
+    }
+
+    fn collectReturnFacts(self: *Analyzer, comptime kind: ReturnFactKind, statements: []const ast.Statement, result: *?ReturnedFact(kind)) anyerror!bool {
+        for (statements) |stmt| {
+            switch (stmt.kind) {
+                .return_expr => |expr| {
+                    const value = try self.returnExprFact(kind, expr);
+                    const joined = if (result.*) |previous|
+                        if (kind == .property_target) joinPropertyTargets(previous.value, value) else semantic_types.joinStringLiteral(previous.value, value)
+                    else
+                        value;
+                    result.* = .{ .value = joined };
+                    return false;
+                },
+                .return_void => {
+                    result.* = .{ .value = null };
+                    return false;
+                },
+                .if_stmt => |branch| {
+                    const then_continues = blk: {
+                        var snapshot = try self.pushLocalFacts();
+                        defer snapshot.restore();
+                        break :blk try self.collectReturnFacts(kind, branch.then_statements.items, result);
+                    };
+                    const else_continues = blk: {
+                        var snapshot = try self.pushLocalFacts();
+                        defer snapshot.restore();
+                        break :blk try self.collectReturnFacts(kind, branch.else_statements.items, result);
+                    };
+                    if (!then_continues and !else_continues) return false;
+                },
+                .let_binding => |binding| {
+                    if (names.isDiscardBindingName(binding.name)) continue;
+                    const string = try literalStringExpr(self, binding.expr);
+                    const role = if (kind != .string_literal) try self.objectRoleExpr(binding.expr) else null;
+                    const target = if (kind == .property_target) try self.propertyTargetExpr(binding.expr) else null;
+                    if (string) |value| try self.string_bindings.put(binding.name, value) else _ = self.string_bindings.remove(binding.name);
+                    if (role) |value| try self.object_role_bindings.put(binding.name, value) else _ = self.object_role_bindings.remove(binding.name);
+                    if (target) |value| try self.property_target_bindings.put(binding.name, value) else _ = self.property_target_bindings.remove(binding.name);
+                    try self.variable_bindings.put(binding.name, .local);
+                },
+                else => {},
+            }
+        }
+        return true;
+    }
+
     fn propertyTargetFunctionCall(
         self: *Analyzer,
         resolved: semantic_env.ResolvedFunction,
@@ -2005,17 +2085,9 @@ pub const Analyzer = struct {
         self.sema = self.sema.forModule(resolved.module_id);
         defer self.sema = previous;
 
-        for (resolved.decl.statements.items) |stmt| {
-            switch (stmt.kind) {
-                .return_expr => |expr| return (try self.propertyTargetExpr(expr)) orelse fallback,
-                .return_void => return null,
-                else => {
-                    var nested = try self.analyzeStatement(stmt, .local);
-                    nested.deinit();
-                },
-            }
-        }
-        return fallback;
+        var result: ?ReturnedFact(.property_target) = null;
+        _ = try self.collectReturnFacts(.property_target, resolved.decl.statements.items, &result);
+        return if (result) |fact| fact.value orelse fallback else fallback;
     }
 
     fn propertyTargetForType(self: *Analyzer, ty: ast.Type) ?PropertyTarget {
@@ -2103,17 +2175,9 @@ pub const Analyzer = struct {
         self.sema = self.sema.forModule(resolved.module_id);
         defer self.sema = previous;
 
-        for (resolved.decl.statements.items) |stmt| {
-            switch (stmt.kind) {
-                .return_expr => |expr| return try self.objectRoleExpr(expr),
-                .return_void => return null,
-                else => {
-                    var nested = try self.analyzeStatement(stmt, .local);
-                    nested.deinit();
-                },
-            }
-        }
-        return null;
+        var result: ?ReturnedFact(.object_role) = null;
+        _ = try self.collectReturnFacts(.object_role, resolved.decl.statements.items, &result);
+        return if (result) |fact| fact.value orelse null else null;
     }
 };
 
@@ -2282,9 +2346,8 @@ fn appendKeyInt(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: an
     try out.append(allocator, ';');
 }
 
-fn mergePropertyTargets(left: ?PropertyTarget, right: ?PropertyTarget) ?PropertyTarget {
-    if (left == null) return right;
-    if (right == null) return left;
+fn joinPropertyTargets(left: ?PropertyTarget, right: ?PropertyTarget) ?PropertyTarget {
+    if (left == null or right == null) return null;
     return .{ .owner = left.?.owner.merge(right.?.owner) };
 }
 
@@ -2297,7 +2360,23 @@ fn literalStringExpr(self: *Analyzer, expr: ast.Expr) anyerror!?[]const u8 {
     return switch (expr) {
         .string => |literal| literal.text,
         .color => |value| value,
-        .ident => |ident| self.string_bindings.get(ident.name),
+        .ident => |ident| blk: {
+            if (self.string_bindings.get(ident.name)) |value| break :blk value;
+            switch (try self.valueBinding(ast.CallableName.bare(ident.name))) {
+                .constant => |resolved| {
+                    if (self.visiting.contains(resolved.key)) break :blk null;
+                    try self.visiting.put(resolved.key, {});
+                    defer _ = self.visiting.remove(resolved.key);
+                    var facts = self.pushFreshFunctionFacts();
+                    defer facts.restore();
+                    const previous = self.sema;
+                    self.sema = self.sema.forModule(resolved.module_id);
+                    defer self.sema = previous;
+                    break :blk try literalStringExpr(self, resolved.decl.value);
+                },
+                else => break :blk null,
+            }
+        },
         .call => |call| try literalStringCall(self, call),
         else => null,
     };
@@ -2318,7 +2397,8 @@ fn literalConcat(self: *Analyzer, call: ast.CallExpr) !?[]const u8 {
     if (call.args.items.len != 2) return null;
     const left = (try literalStringExpr(self, call.args.items[0])) orelse return null;
     const right = (try literalStringExpr(self, call.args.items[1])) orelse return null;
-    return try ownString(self, try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ left, right }));
+    const value = (try semantic_types.concatStringLiterals(self.allocator, left, right)) orelse return null;
+    return try ownString(self, value);
 }
 
 fn literalStringFunctionCall(
@@ -2340,14 +2420,9 @@ fn literalStringFunctionCall(
     self.sema = self.sema.forModule(resolved.module_id);
     defer self.sema = previous;
 
-    for (resolved.decl.statements.items) |stmt| {
-        switch (stmt.kind) {
-            .return_expr => |expr| return try literalStringExpr(self, expr),
-            .return_void => return null,
-            else => {},
-        }
-    }
-    return null;
+    var result: ?Analyzer.ReturnedFact(.string_literal) = null;
+    _ = try self.collectReturnFacts(.string_literal, resolved.decl.statements.items, &result);
+    return if (result) |fact| fact.value else null;
 }
 
 fn ownString(self: *Analyzer, value: []const u8) ![]const u8 {

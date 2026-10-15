@@ -18,8 +18,7 @@ const ensureType = semantic_types.ensureType;
 const infoFromHole = semantic_types.infoFromHole;
 const infoFromType = semantic_types.infoFromType;
 const isPropertyTarget = semantic_types.isPropertyTarget;
-const mergeObjectClass = semantic_types.mergeObjectClass;
-const mergeTypeInfo = semantic_types.mergeTypeInfo;
+const joinTypeInfo = semantic_types.joinTypeInfo;
 const resolveStringLiteral = semantic_types.resolveStringLiteral;
 const singleFunctionLabel = semantic_types.singleFunctionLabel;
 const targetClassForInfo = semantic_types.targetClassForInfo;
@@ -168,7 +167,16 @@ fn exprInfoWithOptions(
             const name = ident.name;
             switch (try sema.resolveValue(TypeInfo, ast.CallableName.bare(name), env.get(name))) {
                 .local => |info| break :blk info,
-                .constant => |resolved| break :blk infoFromType(resolved.decl.value_type),
+                .constant => |resolved| {
+                    if (options.context.visiting.contains(resolved.key)) break :blk infoFromType(resolved.decl.value_type);
+                    try options.context.visiting.put(resolved.key, {});
+                    defer _ = options.context.visiting.remove(resolved.key);
+                    var constant_env = TypeEnv.init(allocator);
+                    defer constant_env.deinit();
+                    const constant_sema = sema.forModule(resolved.module_id);
+                    const value = try exprInfoWithOptions(allocator, state, &constant_sema, &constant_env, resolved.decl.value, origin, options);
+                    break :blk semantic_types.refineTypeInfo(infoFromType(resolved.decl.value_type), value);
+                },
                 .function => |resolved| {
                     var info = infoFromType(try functionTypeForDecl(allocator, resolved.decl));
                     info.function_labels = try singleFunctionLabel(allocator, resolved.decl.name);
@@ -784,10 +792,10 @@ fn inferUserFunctionReturnInfo(
             if (param.default_value) |default_value| {
                 const default_info = try exprInfoWithOptions(allocator, state, sema, &env, default_value.*, origin, options);
                 try ensureType(state, allocator, default_info, param.ty, origin, .UnmatchedArgumentType);
-                param_info = try mergeTypeInfo(allocator, param_info, default_info);
+                param_info = semantic_types.refineTypeInfo(param_info, default_info);
             }
         } else {
-            param_info = try mergeTypeInfo(allocator, param_info, actual_arguments[index]);
+            param_info = semantic_types.refineTypeInfo(param_info, actual_arguments[index]);
         }
         arguments[index] = param_info;
         try env.put(param.name, param_info);
@@ -796,8 +804,8 @@ fn inferUserFunctionReturnInfo(
     const key = return_facts.Key{ .function = visit_key, .arguments = arguments };
     if (context.get(key)) |cached| return cached;
     context.body_analyses += 1;
-    var result = infoFromType(func.result_type);
-    try inferReturnInfoFromStatements(
+    var returns: ?TypeInfo = null;
+    _ = try inferReturnInfoFromStatements(
         allocator,
         state,
         sema,
@@ -805,8 +813,9 @@ fn inferUserFunctionReturnInfo(
         .{ .context = context, .validate_contracts = false },
         &env,
         func.statements.items,
-        &result,
+        &returns,
     );
+    var result = returns orelse infoFromType(func.result_type);
     result.ty = func.result_type;
     if (func.result_type.kind == .object) {
         if (func.result_type.nominalId()) |class_id| result.object_class = class_id;
@@ -824,8 +833,8 @@ fn inferReturnInfoFromStatements(
     options: InferenceOptions,
     env: *TypeEnv,
     statements: []const ast.Statement,
-    result: *TypeInfo,
-) !void {
+    result: *?TypeInfo,
+) anyerror!bool {
     for (statements) |stmt| {
         const origin = core.SourceOrigin.at(origin_path, stmt.span);
 
@@ -841,9 +850,10 @@ fn inferReturnInfoFromStatements(
             },
             .return_expr => |expr| {
                 const info = try exprInfoWithOptions(allocator, state, sema, env, expr, origin, options);
-                result.* = try mergeTypeInfo(allocator, result.*, info);
+                result.* = if (result.*) |previous| try joinTypeInfo(allocator, previous, info) else info;
+                return false;
             },
-            .return_void => {},
+            .return_void => return false,
             .property_set => |property_set| {
                 try validatePropertySetStatementWithOptions(allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin, options);
             },
@@ -851,10 +861,11 @@ fn inferReturnInfoFromStatements(
                 _ = try exprInfoWithOptions(allocator, state, sema, env, if_stmt.condition, origin, options);
                 var then_env = try env.clone();
                 defer then_env.deinit();
-                try inferReturnInfoFromStatements(allocator, state, sema, origin_path, options, &then_env, if_stmt.then_statements.items, result);
+                const then_continues = try inferReturnInfoFromStatements(allocator, state, sema, origin_path, options, &then_env, if_stmt.then_statements.items, result);
                 var else_env = try env.clone();
                 defer else_env.deinit();
-                try inferReturnInfoFromStatements(allocator, state, sema, origin_path, options, &else_env, if_stmt.else_statements.items, result);
+                const else_continues = try inferReturnInfoFromStatements(allocator, state, sema, origin_path, options, &else_env, if_stmt.else_statements.items, result);
+                if (!then_continues and !else_continues) return false;
             },
             .expr_stmt => |expr| {
                 _ = try exprInfoWithOptions(allocator, state, sema, env, expr, origin, options);
@@ -864,6 +875,7 @@ fn inferReturnInfoFromStatements(
             },
         }
     }
+    return true;
 }
 
 fn primitiveResultTypeInfo(
@@ -919,7 +931,7 @@ fn primitiveResultTypeInfo(
             if (call.args.items.len <= descriptor.result_arg_index) return infoFromType(registry.primitiveResultType(descriptor) orelse Type.object);
             return try exprInfoWithOptions(allocator, state, sema, env, call.args.items[descriptor.result_arg_index], origin, options);
         },
-        .selection_algebra => return try inferSelectionAlgebraInfo(allocator, state, sema, env, call, origin, options),
+        .selection_algebra => return try inferSelectionAlgebraInfo(allocator, state, sema, env, call, descriptor.op, origin, options),
         .select_query => return try inferSelectCallInfo(allocator, state, sema, env, call, origin, options),
         .target_arg => {
             if (call.args.items.len <= descriptor.result_arg_index) return infoFromType(Type.object);
@@ -936,6 +948,11 @@ fn primitiveResultTypeInfo(
         .declared, .group_object, .object_from_role_arg => {},
     }
 
+    if (descriptor.op == .concat and call.args.items.len == 2) {
+        const left = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[0], origin, options);
+        const right = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[1], origin, options);
+        return .{ .ty = Type.string, .string_literal = try semantic_types.concatStringLiterals(allocator, left.string_literal, right.string_literal) };
+    }
     const result_type = registry.primitiveResultType(descriptor) orelse Type.object;
     if (result_type.kind != .object) return infoFromType(result_type);
 
@@ -1023,6 +1040,7 @@ fn inferSelectionAlgebraInfo(
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
+    op: registry.PrimitiveCall,
     origin: core.SourceOrigin,
     options: InferenceOptions,
 ) !TypeInfo {
@@ -1049,9 +1067,19 @@ fn inferSelectionAlgebraInfo(
         return error.InvalidType;
     }
 
-    const item_tag = if (left.ty.param != .any) left.ty.param else right.ty.param;
+    const item_tag = switch (op) {
+        .selection_union => if (left.ty.param == right.ty.param) left.ty.param else .any,
+        .selection_intersection => if (left.ty.param != .any) left.ty.param else right.ty.param,
+        .selection_difference => left.ty.param,
+        else => unreachable,
+    };
     var info = infoFromType(Type.selection(item_tag));
-    info.object_class = mergeObjectClass(left.object_class, right.object_class);
+    info.object_class = switch (op) {
+        .selection_union => semantic_types.joinObjectClass(left.object_class, right.object_class),
+        .selection_intersection => semantic_types.meetObjectClass(left.object_class, right.object_class),
+        .selection_difference => left.object_class,
+        else => unreachable,
+    };
     if (info.ty.param == .object) if (info.object_class) |id| {
         info.ty = Type.selectionType(Type.objectId(id));
     };
@@ -1068,7 +1096,12 @@ fn inferSelectCallInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
-    const query_name = resolveStringLiteral(env, call.args.items[1]) orelse return infoFromType(Type.selection(.any));
+    const query_info = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[1], origin, options);
+    if (query_info.hole != null) return query_info;
+    const query_name = query_info.string_literal orelse {
+        try addUserReport(state, origin, "UnknownQuery", "select query must be a statically known string", .{});
+        return error.UnknownQuery;
+    };
     const query = sema.query(query_name) orelse {
         try addUserReport(state, origin, "UnknownQuery", "unknown query: {s}", .{query_name});
         return error.UnknownQuery;

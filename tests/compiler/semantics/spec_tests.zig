@@ -5808,3 +5808,199 @@ test "compiler semantics: constant function values shadow primitive calls" {
         \\end
     , "constant");
 }
+
+test "compiler semantics: unknown and conflicting return facts cannot recover a literal" {
+    const bodies = [_][]const u8{
+        \\  if flag
+        \\    return "parent_page"
+        \\  end
+        \\  return str(1)
+        ,
+        \\  if flag
+        \\    return str(1)
+        \\  end
+        \\  return "parent_page"
+        ,
+        \\  if flag
+        \\    return "parent_page"
+        \\  else
+        \\    if flag
+        \\      return "children"
+        \\    end
+        \\  end
+        \\  return "parent_page"
+        ,
+    };
+    for (bodies) |body| {
+        const source = try std.fmt.allocPrint(testing.allocator,
+            \\fn query_name(flag: Bool) -> String
+            \\{s}
+            \\end
+            \\page main
+            \\  let item = text!("x")
+            \\  let result = select(item, query_name(false))
+            \\end
+        , .{body});
+        defer testing.allocator.free(source);
+        try expectDiagnostic(source, "case.ss:bytes:", "UnknownQuery: select query must be a statically known string");
+    }
+}
+
+test "compiler semantics: equal branch returns retain query facts and stop at returns" {
+    try buildSource(
+        \\fn query_name(flag: Bool) -> String
+        \\  if flag
+        \\    let query = "parent_page"
+        \\    return query
+        \\    return "children"
+        \\  else
+        \\    let query = "parent_page"
+        \\    return query
+        \\  end
+        \\  return "children"
+        \\end
+        \\page main
+        \\  let item = text!("x")
+        \\  let result = select(item, query_name(false))
+        \\  let index = page_index(result)
+        \\end
+    );
+}
+
+test "compiler semantics: constant concatenation and argument facts resolve query kinds" {
+    try buildSource(
+        \\const query: String = "parent_" ++ "page"
+        \\fn identity(value: String) -> String
+        \\  return value
+        \\end
+        \\page main
+        \\  let item = text!("x")
+        \\  let result = select(item, identity(query))
+        \\  let index = page_index(result)
+        \\end
+    );
+}
+
+test "compiler semantics: return joins and selection algebra preserve only justified classes" {
+    try expectVariableObjectClasses(
+        \\type Card = object { roles = ["card"] }
+        \\fn choose(flag: Bool, value: Object) -> Object
+        \\  if flag
+        \\    return new("card", "card", "text")
+        \\  end
+        \\  return value
+        \\end
+        \\fn reverse(flag: Bool, value: Object) -> Object
+        \\  if flag
+        \\    return value
+        \\  end
+        \\  return new("card", "card", "text")
+        \\end
+        \\page main
+        \\  let untyped = new("x", "untyped", "text")
+        \\  let chosen = choose(false, untyped)
+        \\  let reversed = reverse(true, untyped)
+        \\  let cards = select(new("card", "card", "text"), "self_object")
+        \\  let others = select(untyped, "self_object")
+        \\  let combined = selection_union(cards, others)
+        \\  let common = selection_intersection(others, cards)
+        \\  let remaining = selection_difference(others, cards)
+        \\  let kept = selection_difference(cards, others)
+        \\end
+    , &.{
+        .{ .name = "chosen", .scope_kind = "page", .scope_name = "main", .object_class = null },
+        .{ .name = "reversed", .scope_kind = "page", .scope_name = "main", .object_class = null },
+        .{ .name = "combined", .scope_kind = "page", .scope_name = "main", .object_class = null },
+        .{ .name = "common", .scope_kind = "page", .scope_name = "main", .object_class = "Card" },
+        .{ .name = "remaining", .scope_kind = "page", .scope_name = "main", .object_class = null },
+        .{ .name = "kept", .scope_kind = "page", .scope_name = "main", .object_class = "Card" },
+    });
+}
+
+test "compiler semantics: dependency roles include nested and fallthrough returns" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn role_for(important: Bool) -> String
+        \\  if important
+        \\    if important
+        \\      let role = "claim"
+        \\      return role
+        \\    end
+        \\  end
+        \\  return "aside"
+        \\end
+        \\page summary
+        \\  note!("claims=" ++ join(doc_objs(docctx(), "claim"), ",", (o: Object) |-> content(o)))
+        \\end
+        \\page body
+        \\  txt_obj!("A", role_for(true))
+        \\end
+    , "claims=A");
+}
+
+test "compiler semantics: dependency role joins include unknown return expressions" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn role_for(flag: Bool) -> String
+        \\  if flag
+        \\    return str(123)
+        \\  end
+        \\  return "aside"
+        \\end
+        \\page summary
+        \\  note!("items=" ++ join(doc_objs(docctx(), "123"), ",", (o: Object) |-> content(o)))
+        \\end
+        \\page body
+        \\  txt_obj!("A", role_for(true))
+        \\end
+    , "items=A");
+}
+
+test "compiler semantics: property target returns join identities across branches" {
+    try expectObjectContent(
+        \\type Card = object { roles = ["card"] label: String = "old" }
+        \\fn pick(flag: Bool, a: Card, b: Card) -> Object
+        \\  if flag
+        \\    return a
+        \\  end
+        \\  return b
+        \\end
+        \\page main
+        \\  let a = new("A", "card", "text")
+        \\  let b = new("B", "card", "text")
+        \\  text!("picked=" ++ (pick(true, a, b).label ?? ""))
+        \\  a.label = "new A"
+        \\end
+    , "picked=new A");
+}
+
+test "compiler semantics: returned object roles join all branches before placement" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\fn pick(flag: Bool) -> Object
+        \\  if flag
+        \\    return txt_obj("A", "claim")
+        \\  end
+        \\  return txt_obj("B", "aside")
+        \\end
+        \\page summary
+        \\  note!("claims=" ++ join(doc_objs(docctx(), "claim"), ",", (o: Object) |-> content(o)))
+        \\end
+        \\page body
+        \\  place!(pick(true))
+        \\end
+    , "claims=A");
+}
+
+test "compiler semantics: static string construction has a finite size limit" {
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(testing.allocator);
+    try source.appendSlice(testing.allocator, "page main\n  let s0 = \"x\"\n");
+    for (1..18) |index| {
+        const line = try std.fmt.allocPrint(testing.allocator, "  let s{d} = concat(s{d}, s{d})\n", .{ index, index - 1, index - 1 });
+        defer testing.allocator.free(line);
+        try source.appendSlice(testing.allocator, line);
+    }
+    try source.appendSlice(testing.allocator, "  let result = select(pagectx(), s17)\nend\n");
+    try expectDiagnostic(source.items, "case.ss:bytes:", "UnknownQuery: select query must be a statically known string");
+}
