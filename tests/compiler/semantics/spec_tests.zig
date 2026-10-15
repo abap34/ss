@@ -4444,6 +4444,96 @@ test "compiler semantics: function-value recursion is rejected" {
     );
 }
 
+test "compiler semantics: cross-module lambda recursion is rejected before evaluation" {
+    try expectOverlayDiagnostic(
+        \\import "./lib/bad" as lib
+        \\fn bad(x: Number) -> Number
+        \\  return lib::apply_fn((y: Number) |-> bad(y), x)
+        \\end
+        \\page main
+        \\  let value = bad(1)
+        \\end
+    ,
+        \\fn apply_fn(f: Number -> Number, x: Number) -> Number
+        \\  return f(x)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: imported recursive lambdas report their defining source" {
+    const library =
+        \\fn make_bad() -> Number -> Number
+        \\  return (x: Number) |-> make_bad()(x)
+        \\end
+    ;
+    const start = std.mem.indexOf(u8, library, "(x: Number)").?;
+    const end = std.mem.indexOf(u8, library, "\nend").?;
+    const expected_origin = try std.fmt.allocPrint(testing.allocator, "lib/bad.ss:bytes:{d}-{d}", .{ start, end });
+    defer testing.allocator.free(expected_origin);
+    try expectOverlayDiagnostic(
+        \\import "./lib/bad" as lib
+        \\page main
+        \\  let value = lib::make_bad()(1)
+        \\end
+    , library, expected_origin, "RecursiveFunction");
+}
+
+test "compiler semantics: equal lambda spans in different modules remain distinct" {
+    const library =
+        \\fn wrap(f: Number -> Number) -> Number -> Number
+        \\  return (x: Number) |-> f(x)
+        \\end
+    ;
+    try expectObjectContentWithTwoOverlays(
+        \\import "./lib/a" as a
+        \\import "./lib/b" as b
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\page main
+        \\  text!(str(a::wrap(b::wrap(inc))(1)))
+        \\end
+    , library, library, "2");
+}
+
+test "compiler semantics: nested cross-module lambdas retain defining imports and captures" {
+    try expectObjectContentWithTwoOverlays(
+        \\import "./lib/a" as a
+        \\fn suffix(value: String) -> String
+        \\  return value ++ "!"
+        \\end
+        \\page main
+        \\  text!(a::make(suffix)("A"))
+        \\end
+    ,
+        \\import "./b" as b
+        \\fn make(f: String -> String) -> String -> String
+        \\  return (x: String) |-> b::apply_fn((y: String) |-> f(y), x)
+        \\end
+    ,
+        \\fn apply_fn(f: String -> String, x: String) -> String
+        \\  return f(x)
+        \\end
+    , "A!");
+}
+
+test "compiler semantics: nested captured cross-module lambdas cannot hide recursion" {
+    try expectOverlayDiagnostic(
+        \\import "./lib/bad" as lib
+        \\fn bad(x: Number) -> Number
+        \\  let recurse = bad
+        \\  return lib::apply_fn((y: Number) |-> ((z: Number) |-> recurse(z))(y), x)
+        \\end
+        \\page main
+        \\  let value = bad(1)
+        \\end
+    ,
+        \\fn apply_fn(f: Number -> Number, x: Number) -> Number
+        \\  return f(x)
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
 test "compiler semantics: mutual recursion is rejected" {
     try expectBuildFails(
         \\import std:themes/default as *
