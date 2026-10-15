@@ -9,8 +9,7 @@ pub fn propertyString(allocator: std.mem.Allocator, value: model.Value) ![]const
     return switch (value) {
         .string => |text| text,
         .enum_case => |case| case.case_name,
-        .record => |record| try recordPropertyString(allocator, record),
-        .path => |path| try pathPropertyString(allocator, path),
+        .object, .record, .path => try taggedPropertyString(allocator, value),
         .number => |number_value| std.fmt.allocPrint(allocator, "{d}", .{number_value}),
         .boolean => |boolean_value| if (boolean_value) "true" else "false",
         else => error.ExpectedStringArgument,
@@ -19,9 +18,7 @@ pub fn propertyString(allocator: std.mem.Allocator, value: model.Value) ![]const
 
 pub fn propertyStringNeedsFree(value: model.Value) bool {
     return switch (value) {
-        .number => true,
-        .record => true,
-        .path => true,
+        .number, .object, .record, .path => true,
         .boolean => false,
         else => false,
     };
@@ -87,6 +84,12 @@ pub fn typedPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: as
             if (parsed != .path) return error.InvalidValueTag;
             break :blk parsed;
         },
+        .object => blk: {
+            var parsed = try parsePropertyValue(allocator, text);
+            errdefer deinitParsedPropertyValue(allocator, &parsed);
+            if (parsed != .object) return error.InvalidValueTag;
+            break :blk parsed;
+        },
         .number => .{ .number = std.fmt.parseFloat(f32, text) catch return error.InvalidValueTag },
         .boolean => blk: {
             if (std.mem.eql(u8, text, "true")) break :blk .{ .boolean = true };
@@ -106,17 +109,10 @@ fn deinitParsedRecordValue(allocator: std.mem.Allocator, record: *model.RecordVa
     record.fields.deinit(allocator);
 }
 
-fn recordPropertyString(allocator: std.mem.Allocator, record: model.RecordValue) ![]const u8 {
+fn taggedPropertyString(allocator: std.mem.Allocator, value: model.Value) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
-    try appendTaggedValueJson(allocator, &out, .{ .record = record });
-    return out.toOwnedSlice(allocator);
-}
-
-fn pathPropertyString(allocator: std.mem.Allocator, path: model.Path) ![]const u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    try appendTaggedValueJson(allocator, &out, .{ .path = path });
+    try appendTaggedValueJson(allocator, &out, value);
     return out.toOwnedSlice(allocator);
 }
 
@@ -256,11 +252,11 @@ fn parseTaggedValue(allocator: std.mem.Allocator, value: json.Value) !model.Valu
         } };
     }
     if (std.mem.eql(u8, kind, "object")) {
-        const raw = json.numberField(object, "value") orelse return error.InvalidValueTag;
-        if (!std.math.isFinite(raw) or raw < 0 or raw > std.math.maxInt(model.NodeId) or @trunc(raw) != raw) {
+        const raw = json.fieldValue(object, "value") orelse return error.InvalidValueTag;
+        if (raw.* != .integer or raw.integer < 0 or raw.integer > std.math.maxInt(model.NodeId)) {
             return error.InvalidValueTag;
         }
-        return .{ .object = @intFromFloat(raw) };
+        return .{ .object = @intCast(raw.integer) };
     }
     if (std.mem.eql(u8, kind, "record")) {
         const type_value = json.stringField(object, "type") orelse return error.InvalidValueTag;

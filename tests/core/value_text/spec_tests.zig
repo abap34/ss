@@ -4,6 +4,26 @@ const core = @import("core");
 
 const testing = std.testing;
 
+test "core value text spec: object properties round trip exact node identifiers" {
+    for ([_]core.NodeId{ 0, 1, 16777217, std.math.maxInt(core.NodeId) }) |id| {
+        const original = core.Value{ .object = id };
+        try testing.expect(core.value_text.propertyStringNeedsFree(original));
+        const text = try core.value_text.propertyString(testing.allocator, original);
+        defer testing.allocator.free(text);
+        var parsed = try core.value_text.parsePropertyValue(testing.allocator, text);
+        defer core.value_text.deinitParsedPropertyValue(testing.allocator, &parsed);
+        try testing.expectEqual(id, parsed.object);
+        var typed = try core.value_text.typedPropertyValue(testing.allocator, text, ast.Type.object);
+        defer core.value_text.deinitParsedPropertyValue(testing.allocator, &typed);
+        try testing.expectEqual(id, typed.object);
+    }
+    for ([_][]const u8{ "-1", "1.5", "4294967296", "null", "\"1\"" }) |invalid| {
+        const text = try std.fmt.allocPrint(testing.allocator, "{{\"kind\":\"object\",\"value\":{s}}}", .{invalid});
+        defer testing.allocator.free(text);
+        try testing.expectError(error.InvalidValueTag, core.value_text.parsePropertyValue(testing.allocator, text));
+    }
+}
+
 const tagged_style_json =
     \\{"kind":"record","type":"TextStyle","fields":[{"name":"font","explicit":true,"value":{"kind":"record","type":"FontFace","fields":[{"name":"family","explicit":true,"value":{"kind":"string","value":"Helvetica"}},{"name":"weight","explicit":true,"value":{"kind":"enum","type":"FontWeight","case":"bold"}}]}},{"name":"line_height","explicit":false,"value":{"kind":"number","value":28}},{"name":"enabled","explicit":true,"value":{"kind":"bool","value":true}}]}
 ;

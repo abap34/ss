@@ -5878,6 +5878,10 @@ test "compiler semantics: dump includes unplaced object diagnostics" {
     , &.{ "diagnostics", "UnplacedObject", "object 'body' was generated but not placed" });
 }
 
+test "compiler semantics: dump preserves direct and nested object properties" {
+    try expectFixtureDumpContains("object-property-dump", &.{ "referent", "wrapped", "\\\"kind\\\":\\\"object\\\"" });
+}
+
 test "compiler semantics: underscore let binding is not a variable" {
     try expectDiagnostic(
         \\import std:themes/default as *
