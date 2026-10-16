@@ -19,12 +19,10 @@ fn canceledRead(_: ?*anyopaque, _: std.Io.File, _: []const []u8, _: u64) std.Io.
 }
 
 test "utils fs: bounded reads enforce limits and release canceled results" {
-    const root = ".ss-cache/test-fs-bounded-read";
-    const path = root ++ "/input.txt";
-    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
-    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
-    try std.Io.Dir.cwd().createDirPath(testing.io, root);
-    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "contents" });
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try writeTmpFile(testing.allocator, tmp, "input.txt", "contents");
+    defer testing.allocator.free(path);
     const contents = try utils.fs.readFileAllocLimited(testing.io, testing.allocator, path, .limited(9));
     defer testing.allocator.free(contents);
     try testing.expectEqualStrings("contents", contents);
