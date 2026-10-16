@@ -579,18 +579,17 @@ fn putStaticRecordFieldValue(
     value: core.Value,
     explicit: bool,
 ) !void {
-    var owned = value;
-    errdefer owned.deinit(allocator);
+    // The caller retains ownership on failure; the record adopts on success.
     for (record.fields.items) |*field| {
         if (!std.mem.eql(u8, field.name, name)) continue;
         field.value.deinit(allocator);
-        field.value = owned;
+        field.value = value;
         field.explicit = explicit;
         return;
     }
     try record.fields.append(allocator, .{
         .name = name,
-        .value = owned,
+        .value = value,
         .explicit = explicit,
     });
 }

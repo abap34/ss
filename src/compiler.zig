@@ -3,6 +3,7 @@ pub const language = @import("language.zig");
 pub const lowering = @import("lowering.zig");
 pub const evaluation_environment = @import("eval/environment.zig");
 pub const analysis = @import("analysis.zig");
+pub const analysis_semantics = @import("analysis/semantics.zig");
 pub const analysis_env = @import("analysis/env.zig");
 pub const analysis_scope = @import("analysis/scope.zig");
 pub const module_loader = @import("modules/loader.zig");

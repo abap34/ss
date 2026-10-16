@@ -260,3 +260,44 @@ test "snapshot retains recovered import diagnostics and clears them after repair
     defer repaired.deinit();
     try testing.expect(!repaired.diagnostics.hasErrors());
 }
+
+fn projectFactsWithFailure(allocator: std.mem.Allocator, state: *const core.DocumentState, cancel: bool) !void {
+    var languages = [_]std.meta.Child(@TypeOf((analysis.snapshot.ProjectFacts{}).highlight.languages)){.{
+        .name = @constCast("custom"),
+        .parser = @constCast("parser.so"),
+        .query = @constCast("(identifier) @variable"),
+    }};
+    const result = analysis.snapshot.ProjectFacts.fromDocumentState(allocator, state, "entry.ss", ".", .{
+        .project = .{ .highlight = .{ .languages = &languages } },
+        .cancellation = .{ .context = &cancel, .is_canceled = projectFactsCanceled },
+    });
+    if (cancel) {
+        // Allocation failure remains visible to the failure enumerator.
+        if (result) |value| {
+            var facts = value;
+            facts.deinit(allocator);
+            return error.ExpectedCancellation;
+        } else |err| {
+            if (err == error.OutOfMemory) return err;
+            try testing.expectEqual(error.Canceled, err);
+        }
+    } else {
+        var facts = try result;
+        defer facts.deinit(allocator);
+        try testing.expectEqual(@as(usize, 1), facts.module_paths.len);
+        try testing.expectEqualStrings("custom", facts.highlight.languages[0].name);
+    }
+}
+
+fn projectFactsCanceled(context: *const anyopaque) bool {
+    const canceled: *const bool = @ptrCast(@alignCast(context));
+    return canceled.*;
+}
+
+test "project facts release collected module paths on cancellation and allocation failure" {
+    var state = try initDocumentState(testing.allocator);
+    defer state.deinit();
+    for ([_]bool{ false, true }) |cancel| {
+        try allocation_testing.checkAllAllocationFailures(testing.allocator, projectFactsWithFailure, .{ &state, cancel });
+    }
+}

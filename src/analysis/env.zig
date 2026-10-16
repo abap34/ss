@@ -129,17 +129,17 @@ pub fn CloneEnv(
             errdefer out.deinit();
             var iterator = self.values.iterator();
             while (iterator.next()) |entry| {
-                try out.values.put(entry.key_ptr.*, try cloneValue(self.allocator, entry.value_ptr.*));
+                try out.bind(entry.key_ptr.*, entry.value_ptr.*);
             }
             return out;
         }
 
         pub fn bind(self: *Self, name: []const u8, value: Value) !void {
-            if (self.values.fetchRemove(name)) |entry| {
-                var old = entry.value;
-                deinitValue(&old);
-            }
-            try self.values.put(name, try cloneValue(self.allocator, value));
+            var owned = try cloneValue(self.allocator, value);
+            errdefer deinitValue(&owned);
+            const entry = try self.values.getOrPut(name);
+            if (entry.found_existing) deinitValue(entry.value_ptr);
+            entry.value_ptr.* = owned;
         }
 
         pub fn bindLet(self: *Self, name: []const u8, value: Value) !bool {

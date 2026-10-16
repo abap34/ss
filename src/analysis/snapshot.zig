@@ -129,6 +129,28 @@ pub const ProjectFacts = struct {
     page_guide: project.PageGuideConfig = .{},
     cache: utils.render_cache.Config = .{},
 
+    pub fn init(allocator: std.mem.Allocator, entry_path: []const u8, asset_base_dir: []const u8, options: ProjectOptions) !ProjectFacts {
+        var facts = ProjectFacts{
+            .lsp = options.lsp,
+            .wysiwyg = options.wysiwyg,
+            .page_guide = options.page_guide,
+            .cache = options.cache,
+        };
+        errdefer facts.deinit(allocator);
+        facts.highlight = try options.highlight.clone(allocator);
+        facts.entry_path = try allocator.dupe(u8, entry_path);
+        facts.asset_base_dir = try allocator.dupe(u8, asset_base_dir);
+        return facts;
+    }
+
+    pub fn fromDocumentState(allocator: std.mem.Allocator, state: *const core.DocumentState, entry_path: []const u8, asset_base_dir: []const u8, options: Options) !ProjectFacts {
+        var facts = try init(allocator, entry_path, asset_base_dir, options.project);
+        errdefer facts.deinit(allocator);
+        facts.module_paths = try collectModulePaths(allocator, state);
+        try options.checkCanceled();
+        return facts;
+    }
+
     pub fn deinit(self: *ProjectFacts, allocator: std.mem.Allocator) void {
         allocator.free(self.entry_path);
         allocator.free(self.asset_base_dir);
@@ -725,9 +747,7 @@ const SnapshotInputs = struct {
 
     fn finish(self: *SnapshotInputs, allocator: std.mem.Allocator, entry_path: []const u8, asset_base_dir: []const u8, options: Options, diagnostic_bag: *diagnostics.DiagnosticBag, diagnostics_moved: *bool) !AnalysisSnapshot {
         const state = &self.state.?;
-        const module_paths = try collectModulePaths(allocator, state);
-        try options.checkCanceled();
-        const project_facts = try initProjectFacts(allocator, entry_path, asset_base_dir, module_paths, options.project);
+        const project_facts = try ProjectFacts.fromDocumentState(allocator, state, entry_path, asset_base_dir, options);
         diagnostics_moved.* = true;
         const snapshot_facts_start = utils.measure_profile.start();
         var snapshot = try AnalysisSnapshot.fromDocumentState(allocator, state, state.declaration_index, diagnostic_bag.*, &self.parse_holes, project_facts);
@@ -891,33 +911,12 @@ fn finishDiagnosticSnapshot(
     diagnostic_bag: *diagnostics.DiagnosticBag,
     diagnostics_moved: *bool,
 ) !AnalysisSnapshot {
-    var project_facts = try initProjectFacts(allocator, entry_path, asset_base_dir, &.{}, options);
+    var project_facts = try ProjectFacts.init(allocator, entry_path, asset_base_dir, options);
     errdefer project_facts.deinit(allocator);
     var snapshot = AnalysisSnapshot.fromDiagnostics(allocator, diagnostic_bag.*, project_facts);
     snapshot.generation = generation;
     diagnostics_moved.* = true;
     return snapshot;
-}
-
-fn initProjectFacts(
-    allocator: std.mem.Allocator,
-    entry_path: []const u8,
-    asset_base_dir: []const u8,
-    module_paths: [][]u8,
-    options: ProjectOptions,
-) !ProjectFacts {
-    var facts = ProjectFacts{
-        .module_paths = module_paths,
-        .highlight = try options.highlight.clone(allocator),
-        .lsp = options.lsp,
-        .wysiwyg = options.wysiwyg,
-        .page_guide = options.page_guide,
-        .cache = options.cache,
-    };
-    errdefer facts.deinit(allocator);
-    facts.entry_path = try allocator.dupe(u8, entry_path);
-    facts.asset_base_dir = try allocator.dupe(u8, asset_base_dir);
-    return facts;
 }
 
 fn addLoadDiagnostics(bag: *diagnostics.DiagnosticBag, load_diagnostics: *const module_loader.LoadDiagnostics) !void {
@@ -971,7 +970,9 @@ fn collectModulePaths(allocator: std.mem.Allocator, state: *const core.DocumentS
         const module_path = module.path orelse continue;
         if (seen.contains(module_path)) continue;
         try seen.put(module_path, {});
-        try out.append(allocator, try allocator.dupe(u8, module_path));
+        const owned = try allocator.dupe(u8, module_path);
+        errdefer allocator.free(owned);
+        try out.append(allocator, owned);
     }
     return out.toOwnedSlice(allocator);
 }

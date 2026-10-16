@@ -54,6 +54,10 @@ pub fn register(suite: Suite, modules: project.ProjectModules, compiler_mod: *Mo
         import("compiler", compiler_mod),
     }, true);
     _ = suite.add(return_facts_mod, .{ .name = "test-return-facts", .description = "Run focused argument-sensitive return inference tests" });
+    const ownership_spec_mod = createModule(ctx, "tests/analysis/ownership/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    _ = suite.add(ownership_spec_mod, .{ .name = "test-analysis-ownership", .description = "Check analysis ownership under allocation failure" });
     const captures_spec_mod = createModule(ctx, "tests/analysis/captures/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);
