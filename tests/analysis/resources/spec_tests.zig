@@ -51,8 +51,11 @@ test "resource index: candidates equal pairwise intersections across scopes owne
         .{ .scope = .{ .page = 1 }, .name = "title" },
         .{ .scope = .{ .page = 2 }, .name = "title" },
         .{ .scope = .{ .page = 1 }, .name = "body" },
+        .{ .origin = .constant, .scope = .{ .document = 1 }, .name = "title" },
+        .{ .origin = .local, .scope = .{ .page = 1 }, .name = "title", .local_id = 1 },
+        .{ .origin = .local, .scope = .{ .page = 1 }, .name = "title", .local_id = 2 },
     };
-    const keys = [_]Key{ .any, .content, .{ .named = "content" }, .{ .named = "x" }, .{ .named = "y" } };
+    const keys = [_]Key{ .any, .content, .{ .named = "content" }, .{ .named = "x" }, .{ .named = "y" }, .{ .named = "layout" }, .{ .named = "layout.x" }, .{ .named = "layout.y" }, .{ .named = "layout_extra.x" }, .{ .named = "text.font" }, .{ .named = "text.font.family" } };
     var resources = std.ArrayList(Resource).empty;
     defer resources.deinit(testing.allocator);
     for (scopes) |scope| {

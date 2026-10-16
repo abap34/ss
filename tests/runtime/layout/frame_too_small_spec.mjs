@@ -18,9 +18,10 @@ async function testWrappedTextUsesConstrainedWidthForDiagnostics() {
       `import std:themes/default as *
 
 page wrapped_ok
-  let body = text!("This is a deliberately long paragraph that should wrap inside the fixed width frame without reporting frame too small.")
-  body.text.size = 22
-  body.text.line_height = 30
+  let body = text!("This is a deliberately long paragraph that should wrap inside the fixed width frame without reporting frame too small.", current_theme() with {
+    body.text.size = 22
+    body.text.line_height = 30
+  })
   ~ body.left == page.left + 100
   ~ body.right == body.left + 260
   ~ body.top == page.top - 120
@@ -44,7 +45,7 @@ async function testMarkdownTableUsesConstrainedWidthForDiagnostics() {
       `import std:themes/default as *
 
 page table_ok
-  let body = text! <<
+  let body_content = <<
 **Observed \`kernel_seidel_2d\` updates**
 
 | Applications | Metric 1 | Metric 2 | Metric 3 |
@@ -53,11 +54,13 @@ page table_ok
 
 Repeated updates continue along the same edge after the older state is processed.
 >>
-  body.text.size = 16
-  body.text.line_height = 22
-  body.text.markdown_table_cell_pad_x = 7
-  body.text.markdown_table_cell_pad_y = 5
-  body.text.markdown_table_line_width = 0.8
+  let body = text!(body_content, current_theme() with {
+    body.text.size = 16
+    body.text.line_height = 22
+    body.text.markdown_table_cell_pad_x = 7
+    body.text.markdown_table_cell_pad_y = 5
+    body.text.markdown_table_line_width = 0.8
+  })
 
   ~ body.left == page.left + 642
   ~ body.right == page.right - 96
@@ -113,9 +116,10 @@ async function testTooSmallFixedFrameReportsConstraints() {
       `import std:themes/default as *
 
 page too_small
-  let body = text!("SupercalifragilisticexpialidociousSupercalifragilisticexpialidocious")
-  body.text.size = 24
-  body.text.line_height = 30
+  let body = text!("SupercalifragilisticexpialidociousSupercalifragilisticexpialidocious", current_theme() with {
+    body.text.size = 24
+    body.text.line_height = 30
+  })
   ~ body.left == page.left + 100
   ~ body.right == body.left + 120
   ~ body.top == page.top - 120

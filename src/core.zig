@@ -8,6 +8,7 @@ pub const SourceSpan = model.SourceSpan;
 pub const NominalId = model.NominalId;
 pub const NodeKind = model.NodeKind;
 pub const Field = model.Field;
+pub const PropertyPath = model.PropertyPath;
 pub const Role = model.Role;
 pub const GroupRole = model.GroupRole;
 pub const ObjectKind = model.ObjectKind;

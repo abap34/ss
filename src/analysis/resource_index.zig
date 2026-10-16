@@ -50,15 +50,27 @@ pub const ResourceWriterIndex = struct {
             .pages => |scope| try self.pages.add(self.allocator, scope, entry),
             .objects => |role| try self.objects.add(self.allocator, role, entry),
             .property => |property| switch (property.owner) {
-                .any => try self.any_owner.add(self.allocator, property.key.displayName(), entry),
-                .document => try self.document_owner.add(self.allocator, property.key.displayName(), entry),
-                .page => try self.page_owner.add(self.allocator, property.key.displayName(), entry),
+                .any => try self.any_owner.add(self.allocator, property.key.indexName(), entry),
+                .document => try self.document_owner.add(self.allocator, property.key.indexName(), entry),
+                .page => try self.page_owner.add(self.allocator, property.key.indexName(), entry),
                 .object => try self.object_owners.add(self.allocator, entry),
             },
         }
     }
 
     pub fn forEachCandidate(self: *const ResourceWriterIndex, read: Resource, visitor: anytype) !void {
+        var matching = struct {
+            read: Resource,
+            visitor: @TypeOf(visitor),
+
+            pub fn visit(filter: *@This(), entry: WriteEntry) !void {
+                if (entry.resource.intersects(filter.read)) try filter.visitor.visit(entry);
+            }
+        }{ .read = read, .visitor = visitor };
+        try self.visitBuckets(read, &matching);
+    }
+
+    fn visitBuckets(self: *const ResourceWriterIndex, read: Resource, visitor: anytype) !void {
         switch (read) {
             .variable => |variable| {
                 if (self.variables.getPtr(variable.name)) |scoped| try scoped.visit(variable.scope, visitor);
@@ -66,7 +78,7 @@ pub const ResourceWriterIndex = struct {
             .pages => |scope| try self.pages.visit(scope, visitor),
             .objects => |role| try self.objects.visit(role, visitor),
             .property => |property| {
-                const key = property.key.displayName();
+                const key = property.key.indexName();
                 try self.any_owner.visit(key, visitor);
                 switch (property.owner) {
                     .any => {
@@ -109,7 +121,7 @@ const ScopedEntries = struct {
     }
 };
 
-// Content and named("content") share a bucket, matching PropertyKey.intersects.
+// Property callers supply the first path segment; role callers supply the full name.
 const NamedEntries = struct {
     any: Entries = .empty,
     named: std.StringHashMapUnmanaged(Entries) = .{},
@@ -151,7 +163,7 @@ const ClassEntries = struct {
             try getBucket(allocator, &self.concrete, class_id)
         else
             &self.any;
-        try keys.add(allocator, property.key.displayName(), entry);
+        try keys.add(allocator, property.key.indexName(), entry);
     }
 
     fn visit(self: *const ClassEntries, class_id: ?core.NominalId, key: ?[]const u8, visitor: anytype) !void {
@@ -181,7 +193,7 @@ const ObjectEntries = struct {
         const property = entry.resource.property;
         if (property.owner.object.identity) |identity| {
             const keys = try getBucket(allocator, &self.by_identity, identity);
-            try keys.add(allocator, property.key.displayName(), entry);
+            try keys.add(allocator, property.key.indexName(), entry);
         } else {
             try self.unidentified_by_class.add(allocator, entry);
         }
@@ -215,6 +227,7 @@ const IdentityContext = struct {
     pub fn hash(_: IdentityContext, identity: ObjectIdentity) u64 {
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, identity.origin);
+        std.hash.autoHash(&hasher, identity.local_id);
         std.hash.autoHash(&hasher, identity.scope);
         hasher.update(identity.name);
         return hasher.final();

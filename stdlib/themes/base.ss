@@ -2,6 +2,7 @@ import std:core/classes
 import std:core/components as components
 import std:core/generated as generated
 import std:core/objects as objects
+import std:core/render as render
 
 record TextBlockStyle {
   text: TextStyle = TextStyle {}
@@ -143,7 +144,8 @@ fn apply_markdown_heading_styles(target: Object, theme: Theme) -> Object
 end
 
 fn apply_markdown_text_style(target: Object, theme: Theme) -> Object
-  apply_text_block_style(target, theme.body)
+  apply_text_block_style(target, theme.body with { text = render::text_with_code_theme(theme.body.text, theme.code.highlight) })
+  target.code = theme.code.highlight.code
   apply_markdown_heading_styles(target, theme)
   return target
 end
@@ -156,7 +158,8 @@ fn apply_figure_block_style(target: Object, style: FigureBlockStyle) -> Object
 end
 
 fn apply_code_block_style(target: Object, style: CodeBlockStyle) -> Object
-  set_prop(target, "text", style.text)
+  set_prop(target, "text", render::text_with_code_theme(style.text, style.highlight))
+  target.code = style.highlight.code
   set_prop(target, "layout", style.layout)
   set_prop(target, "chrome", style.chrome)
   return target

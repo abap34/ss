@@ -17,11 +17,13 @@ let body = text! <<
 end
 
 page ordered
-let body = text! <<
+let body_content = <<
 1. silver green violet
 >>
-body.text.size = 31.25
-body.text.line_height = 40
+let body = text!(body_content, current_theme() with {
+  body.text.size = 31.25
+  body.text.line_height = 40
+})
 end
 
 page nested

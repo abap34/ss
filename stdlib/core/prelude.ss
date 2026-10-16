@@ -251,6 +251,7 @@ import std:core/render as {
   code_theme_one_dark,
   code_theme_monokai,
   code_theme,
+  text_with_code_theme,
   code_theme_all,
   code_theme_page,
   md_bold,

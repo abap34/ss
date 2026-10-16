@@ -165,6 +165,22 @@ fn code_theme_monokai() -> CodeHighlightTheme
   }
 end
 
+fn text_with_code_theme(text: TextStyle, theme: CodeHighlightTheme) -> TextStyle
+  let style = theme.code
+  return text with {
+    markdown_code_plain_color = style.plain_color
+    markdown_code_keyword_color = style.keyword_color
+    markdown_code_function_color = style.function_color
+    markdown_code_type_color = style.type_color
+    markdown_code_constant_color = style.constant_color
+    markdown_code_number_color = style.number_color
+    markdown_code_variable_color = style.variable_color
+    markdown_code_operator_color = style.operator_color
+    markdown_code_comment_color = style.comment_color
+    markdown_code_string_color = style.string_color
+  }
+end
+
 fn code_theme(obj: Object, theme: CodeHighlightTheme) -> Object
   let style = theme.code
   obj.code = style

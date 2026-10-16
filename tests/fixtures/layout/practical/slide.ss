@@ -7,9 +7,10 @@ const column_policy: LayoutPolicy = LayoutPolicy.top
 fn card(title: String, detail: String) -> Object
   let result = text("## " ++ title ++ "
 
-" ++ detail)
-  result.text.size = 20
-  result.text.line_height = 27
+" ++ detail, current_theme() with {
+    body.text.size = 20
+    body.text.line_height = 27
+  })
   result.chrome.fill = c"#eff6ff"
   result.chrome.stroke = c"#2563eb"
   result.chrome.pad_x = 16
@@ -22,7 +23,7 @@ end
 page columns
   vflow(column_policy)
   head!("A description beside two supporting blocks")
-  let description = text <<
+  let description_content = <<
 ## Collection notes
 
 A synthetic paragraph explains how a small collection is checked before processing.
@@ -31,6 +32,7 @@ A synthetic paragraph explains how a small collection is checked before processi
 - Keep the original ordering.
 - Report missing values clearly.
 >>
+  let description = text(description_content, current_theme() with { body.text.size = 24 })
   let upper = text <<
 ## Input summary
 

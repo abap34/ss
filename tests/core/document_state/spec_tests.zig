@@ -691,10 +691,9 @@ test "document state spec: node field writes retain their scope and origin" {
     try testing.expect(field.origin.?.eql(origin));
     try testing.expectError(error.DuplicatePropertyDefinition, state.setNodeFieldValueWithOrigin(group, "align_children_y", .{ .boolean = false }, 0, null));
     try testing.expect(state.getNode(group).?.fields.items[0].origin.?.eql(origin));
-    try state.unsetNodeField(group, "align_children_y");
-    try state.setNodeFieldValue(group, "align_children_y", .{ .boolean = false });
-    try testing.expectEqual(@as(u32, 0), state.getNode(group).?.fields.items[0].scope_depth);
-    try testing.expect(state.getNode(group).?.fields.items[0].origin == null);
+    try testing.expectError(error.DuplicatePropertyDefinition, state.setNodeFieldValue(group, "align_children_y", .none));
+    try testing.expectEqual(@as(u32, 3), state.getNode(group).?.fields.items[0].scope_depth);
+    try testing.expect(state.getNode(group).?.fields.items[0].origin.?.eql(origin));
 }
 
 test "document state spec: default group alignments connect consecutive children without placing the group" {
@@ -1181,4 +1180,29 @@ test "diagnostic constructors release message ownership when origin cloning fail
         try testing.expectError(error.OutOfMemory, result);
         try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
     }
+}
+
+fn exercisePropertyPathDefinitions(allocator: std.mem.Allocator) !void {
+    var state = try initEmptyDocumentStateWithAllocator(allocator);
+    defer state.deinit();
+    const object = try state.createGroupWithOrigin(&.{}, null);
+    var record = core.RecordValue.init("LayoutStyle");
+    defer record.deinit(allocator);
+    try record.fields.append(allocator, .{ .name = "x", .value = .{ .number = 12 } });
+    try state.defineNodeFieldPath(object, "layout", "layout.x", .{ .record = record }, 0, null);
+    try record.fields.append(allocator, .{ .name = "right_inset", .value = .{ .number = 99 } });
+    state.defineNodeFieldPath(object, "layout", "layout.right_inset", .{ .record = record }, 0, null) catch |err| {
+        const original = state.getNodeField(object, "layout").?.record;
+        try testing.expectEqual(@as(f32, 12), original.field("x").?.number);
+        try testing.expect(original.field("right_inset") == null);
+        try testing.expectEqual(@as(usize, 1), state.getNode(object).?.property_definitions.items.len);
+        return err;
+    };
+    try testing.expectEqual(@as(f32, 99), state.getNodeField(object, "layout").?.record.field("right_inset").?.number);
+    try testing.expectError(error.DuplicatePropertyDefinition, state.setNodeFieldValue(object, "layout", .{ .record = record }));
+    try testing.expectError(error.DuplicatePropertyDefinition, state.defineNodeFieldPath(object, "layout", "layout.x", .{ .record = record }, 0, null));
+}
+
+test "document state spec: property path definitions are atomic on allocation failure" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, exercisePropertyPathDefinitions, .{});
 }

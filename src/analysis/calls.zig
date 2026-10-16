@@ -172,6 +172,16 @@ const ValueFacts = struct {
             var old = entry.value;
             old.deinit();
         }
+        // Closed scalar fields carry no call or object facts. Omitting them
+        // avoids copying complete presentation records through every call.
+        // An explicit empty field must still refine an unknown record.
+        if (!self.unknown and !value.unknown and !value.unknown_objects and
+            value.labels.count() == 0 and value.objects.count() == 0 and value.fields.count() == 0)
+        {
+            var empty = value;
+            empty.deinit();
+            return;
+        }
         try self.fields.put(name, value);
     }
 

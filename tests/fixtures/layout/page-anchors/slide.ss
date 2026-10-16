@@ -1,11 +1,12 @@
 import std:themes/default as *
 
 fn/! block(label: String) -> Object
-  let item = text(label)
+  let item = text(label, current_theme() with {
+    body.layout.spacing_after = 24
+  })
   ~ item.left == page.left + 80
   ~ item.width == 620
   ~ item.height == 64
-  item.layout.spacing_after = 24
   return item
 end
 

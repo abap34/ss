@@ -857,22 +857,51 @@ pub const DocumentState = struct {
         scope_depth: u32,
         origin: ?model.SourceOrigin,
     ) !void {
+        try self.defineNodeFieldPath(node_id, key, key, value, scope_depth, origin);
+    }
+
+    pub fn conflictingPropertyDefinition(self: *DocumentState, node_id: NodeId, path: []const u8) ?model.PropertyDefinition {
+        const node = self.getNode(node_id) orelse return null;
+        for (node.property_definitions.items) |definition| {
+            if (model.PropertyPath.intersects(definition.path, path)) return definition;
+        }
+        return null;
+    }
+
+    // The field is a materialized value. Definitions retain the exact paths
+    // that supplied it, independently of defaults and sibling definitions.
+    pub fn defineNodeFieldPath(
+        self: *DocumentState,
+        node_id: NodeId,
+        key: []const u8,
+        path: []const u8,
+        value: Value,
+        scope_depth: u32,
+        origin: ?model.SourceOrigin,
+    ) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
-        for (node.fields.items) |field| {
-            if (std.mem.eql(u8, field.key, key)) {
-                return error.DuplicatePropertyDefinition;
-            }
+        if (self.conflictingPropertyDefinition(node_id, path) != null) return error.DuplicatePropertyDefinition;
+        const owned_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(owned_path);
+        var owned_value = try value.clone(self.allocator);
+        errdefer owned_value.deinit(self.allocator);
+        try node.property_definitions.ensureUnusedCapacity(self.allocator, 1);
+        for (node.fields.items) |*field| {
+            if (!std.mem.eql(u8, field.key, key)) continue;
+            field.value.deinit(self.allocator);
+            field.value = owned_value;
+            node.property_definitions.appendAssumeCapacity(.{ .path = owned_path, .origin = origin });
+            return;
         }
         const owned_key = try self.allocator.dupe(u8, key);
         errdefer self.allocator.free(owned_key);
-        var owned_value = try value.clone(self.allocator);
-        errdefer owned_value.deinit(self.allocator);
         try node.fields.append(self.allocator, .{
             .key = owned_key,
             .value = owned_value,
             .scope_depth = scope_depth,
             .origin = origin,
         });
+        node.property_definitions.appendAssumeCapacity(.{ .path = owned_path, .origin = origin });
     }
 
     /// Materialize final group fields once, after evaluation and before
@@ -920,17 +949,6 @@ pub const DocumentState = struct {
         }
         try self.constraints.active.appendSlice(self.allocator, candidates.items);
         self.constraints.default_alignments_collected = true;
-    }
-
-    pub fn unsetNodeField(self: *DocumentState, node_id: NodeId, key: []const u8) !void {
-        const node = self.getNode(node_id) orelse return error.UnknownNode;
-        for (node.fields.items, 0..) |field, index| {
-            if (std.mem.eql(u8, field.key, key)) {
-                var removed = node.fields.orderedRemove(index);
-                removed.deinit(self.allocator);
-                return;
-            }
-        }
     }
 
     pub fn extendRenderEnv(self: *DocumentState, node_id: NodeId, op: []const u8, key: []const u8, value: []const u8) !void {

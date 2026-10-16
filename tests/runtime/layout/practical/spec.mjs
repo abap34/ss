@@ -28,7 +28,7 @@ const variants = [
   { name: "center", source: source.replace("column_policy: LayoutPolicy = LayoutPolicy.top", "column_policy: LayoutPolicy = LayoutPolicy.center"), options: { centered: true } },
   { name: "narrow", source: source.replace("column_width: Number = 1000", "column_width: Number = 880"), options: { width: 880 } },
   { name: "longer", source: source.replace("A synthetic paragraph explains how a small collection is checked before processing.", "A synthetic paragraph explains how a small collection is checked before processing. Additional records require careful review so that every missing value is reported with enough context."), options: {} },
-  { name: "larger-font", source: source.replace("  let upper = text <<", "  description.text.size = 28\n  let upper = text <<"), options: {} },
+  { name: "larger-font", source: source.replace("body.text.size = 24", "body.text.size = 28"), options: {} },
   { name: "moved", source: source.replace("~ row.left == page.left + 150", "~ row.left == page.left + 150\n  ~!~ row.left == page.left + 190").replace("~ row.top == page.top - 210", "~ row.top == page.top - 210\n  ~!~ row.top == page.top - 250"), options: { cardShift: 40, cardDrop: 40 } },
 ];
 for (const variant of variants) {

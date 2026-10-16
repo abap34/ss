@@ -12,246 +12,21 @@ const captures = @import("captures.zig");
 const SemanticEnv = semantic_env.SemanticEnv;
 const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 
-pub const ResourceKind = enum {
-    variable,
-    pages,
-    objects,
-    property,
-};
-
-pub const ObjectIdentity = struct {
-    origin: enum { binding, constant } = .binding,
-    scope: ResourceScope,
-    name: []const u8,
-
-    pub fn eql(self: ObjectIdentity, other: ObjectIdentity) bool {
-        return self.origin == other.origin and resourceScopeEql(self.scope, other.scope) and std.mem.eql(u8, self.name, other.name);
-    }
-};
-
-pub const ObjectOwner = struct {
-    class_id: ?core.NominalId = null,
-    identity: ?ObjectIdentity = null,
-
-    pub fn eql(self: ObjectOwner, other: ObjectOwner) bool {
-        if (!core.NominalId.optionalEql(self.class_id, other.class_id)) return false;
-        if (self.identity) |identity| return if (other.identity) |other_identity| identity.eql(other_identity) else false;
-        return other.identity == null;
-    }
-
-    pub fn intersects(self: ObjectOwner, other: ObjectOwner) bool {
-        if (self.identity != null and other.identity != null) {
-            return self.identity.?.eql(other.identity.?);
-        }
-        return (self.class_id == null or other.class_id == null or self.class_id.?.eql(other.class_id.?));
-    }
-
-    pub fn merge(self: ObjectOwner, other: ObjectOwner) ObjectOwner {
-        return .{
-            .class_id = if (core.NominalId.optionalEql(self.class_id, other.class_id)) self.class_id else null,
-            .identity = if (self.identity != null and other.identity != null and self.identity.?.eql(other.identity.?))
-                self.identity
-            else
-                null,
-        };
-    }
-
-    pub fn isUnknown(self: ObjectOwner) bool {
-        return self.class_id == null and self.identity == null;
-    }
-};
-
-pub const PropertyOwner = union(enum) {
-    any,
-    document,
-    page,
-    object: ObjectOwner,
-
-    pub fn eql(self: PropertyOwner, other: PropertyOwner) bool {
-        return switch (self) {
-            .any => other == .any,
-            .document => other == .document,
-            .page => other == .page,
-            .object => |owner| other == .object and owner.eql(other.object),
-        };
-    }
-
-    pub fn intersects(self: PropertyOwner, other: PropertyOwner) bool {
-        return switch (self) {
-            .any => true,
-            .document => switch (other) {
-                .any, .document => true,
-                .page, .object => false,
-            },
-            .page => switch (other) {
-                .any, .page => true,
-                .document, .object => false,
-            },
-            .object => |left| switch (other) {
-                .any => true,
-                .object => |right| left.intersects(right),
-                .document, .page => false,
-            },
-        };
-    }
-
-    pub fn merge(self: PropertyOwner, other: PropertyOwner) PropertyOwner {
-        return switch (self) {
-            .any => .any,
-            .document => switch (other) {
-                .any => .any,
-                .document => .document,
-                .page, .object => .any,
-            },
-            .page => switch (other) {
-                .any => .any,
-                .page => .page,
-                .document, .object => .any,
-            },
-            .object => |left| switch (other) {
-                .any => .any,
-                .object => |right| .{ .object = left.merge(right) },
-                .document, .page => .any,
-            },
-        };
-    }
-
-    pub fn isUnknown(self: PropertyOwner) bool {
-        return switch (self) {
-            .any => true,
-            .object => |owner| owner.isUnknown(),
-            .document, .page => false,
-        };
-    }
-};
-
-pub const PropertyKey = union(enum) {
-    any,
-    content,
-    named: []const u8,
-
-    const content_name = "content";
-
-    pub fn fromName(maybe_name: ?[]const u8) PropertyKey {
-        const value = maybe_name orelse return .any;
-        if (std.mem.eql(u8, value, content_name)) return .content;
-        return .{ .named = value };
-    }
-
-    pub fn intersects(self: PropertyKey, other: PropertyKey) bool {
-        return switch (self) {
-            .any => true,
-            .content => switch (other) {
-                .any, .content => true,
-                .named => |named_value| std.mem.eql(u8, named_value, content_name),
-            },
-            .named => |left| switch (other) {
-                .any => true,
-                .content => std.mem.eql(u8, left, content_name),
-                .named => |right| std.mem.eql(u8, left, right),
-            },
-        };
-    }
-
-    pub fn displayName(self: PropertyKey) ?[]const u8 {
-        return switch (self) {
-            .any => null,
-            .content => content_name,
-            .named => |value| value,
-        };
-    }
-};
-
-pub const ResourceScope = union(enum) {
-    any,
-    document: core.SourceModuleId,
-    page: core.NodeId,
-
-    pub fn intersects(self: ResourceScope, other: ResourceScope) bool {
-        return switch (self) {
-            .any => true,
-            .document => |left| switch (other) {
-                .any => true,
-                .document => |right| left == right,
-                .page => false,
-            },
-            .page => |left| switch (other) {
-                .any => true,
-                .document => false,
-                .page => |right| left == right,
-            },
-        };
-    }
-};
-
-pub const Resource = union(ResourceKind) {
-    variable: struct {
-        scope: ResourceScope,
-        name: []const u8,
-    },
-    pages: ResourceScope,
-    objects: ?[]const u8,
-    property: struct {
-        owner: PropertyOwner,
-        key: PropertyKey,
-    },
-
-    pub fn eql(self: Resource, other: Resource) bool {
-        return switch (self) {
-            .variable => |variable| other == .variable and resourceScopeEql(variable.scope, other.variable.scope) and std.mem.eql(u8, variable.name, other.variable.name),
-            .pages => |scope| other == .pages and resourceScopeEql(scope, other.pages),
-            .objects => |role| other == .objects and optionalNameEql(role, other.objects),
-            .property => |property| other == .property and property.owner.eql(other.property.owner) and optionalNameEql(property.key.displayName(), other.property.key.displayName()),
-        };
-    }
-
-    pub fn intersects(self: Resource, other: Resource) bool {
-        return switch (self) {
-            .variable => |left| switch (other) {
-                .variable => |right| left.scope.intersects(right.scope) and std.mem.eql(u8, left.name, right.name),
-                else => false,
-            },
-            .pages => |left| switch (other) {
-                .pages => |right| left.intersects(right),
-                else => false,
-            },
-            .objects => |left| switch (other) {
-                .objects => |right| optionalNameIntersects(left, right),
-                else => false,
-            },
-            .property => |left| switch (other) {
-                .property => |right| left.owner.intersects(right.owner) and left.key.intersects(right.key),
-                else => false,
-            },
-        };
-    }
-
-    pub fn makeVariable(scope: ResourceScope, name: []const u8) Resource {
-        return .{ .variable = .{ .scope = scope, .name = name } };
-    }
-
-    pub fn makeObjects(role_name: ?[]const u8) Resource {
-        return .{ .objects = role_name };
-    }
-
-    pub fn makeProperty(owner: PropertyOwner, key: ?[]const u8) Resource {
-        return .{ .property = .{ .owner = owner, .key = PropertyKey.fromName(key) } };
-    }
-
-    pub fn makeContentProperty(owner: PropertyOwner) Resource {
-        return .{ .property = .{ .owner = owner, .key = .content } };
-    }
-
-    pub fn makePages(page_id: ?core.NodeId) Resource {
-        return .{ .pages = if (page_id) |id| .{ .page = id } else .any };
-    }
-};
+const resource_model = @import("resources.zig");
+pub const ResourceKind = resource_model.ResourceKind;
+pub const ObjectIdentity = resource_model.ObjectIdentity;
+pub const ObjectOwner = resource_model.ObjectOwner;
+pub const PropertyOwner = resource_model.PropertyOwner;
+pub const PropertyKey = resource_model.PropertyKey;
+pub const ResourceScope = resource_model.ResourceScope;
+pub const Resource = resource_model.Resource;
 
 pub const AccessSummary = struct {
     allocator: std.mem.Allocator,
     reads: std.ArrayList(Resource),
     writes: std.ArrayList(Resource),
     selection_reads: std.ArrayList(Resource),
+    escaped_objects: std.ArrayList(ObjectIdentity) = .empty,
     display_reads: std.ArrayList(PropertyOwner) = .empty,
     display_definitions: std.ArrayList(DisplayDefinition) = .empty,
     reads_layout: bool = false,
@@ -284,6 +59,7 @@ pub const AccessSummary = struct {
             self.allocator.destroy(definition.reads);
         }
         self.display_definitions.deinit(self.allocator);
+        self.escaped_objects.deinit(self.allocator);
         self.display_reads.deinit(self.allocator);
         self.reads.deinit(self.allocator);
         self.writes.deinit(self.allocator);
@@ -303,6 +79,11 @@ pub const AccessSummary = struct {
         try self.addRead(resource);
     }
 
+    fn addEscapedObject(self: *AccessSummary, identity: ObjectIdentity) !void {
+        for (self.escaped_objects.items) |existing| if (existing.eql(identity)) return;
+        try self.escaped_objects.append(self.allocator, identity);
+    }
+
     pub fn addDisplayDefinition(self: *AccessSummary, owner: PropertyOwner, reads: AccessSummary) !void {
         const owned = try self.allocator.create(AccessSummary);
         errdefer self.allocator.destroy(owned);
@@ -312,6 +93,7 @@ pub const AccessSummary = struct {
     }
 
     pub fn merge(self: *AccessSummary, other: AccessSummary) !void {
+        for (other.escaped_objects.items) |identity| try self.addEscapedObject(identity);
         try self.display_reads.appendSlice(self.allocator, other.display_reads.items);
         for (other.display_definitions.items) |definition| try self.addDisplayDefinition(definition.owner, definition.reads.*);
         try self.reads.ensureUnusedCapacity(self.allocator, other.reads.items.len);
@@ -335,6 +117,7 @@ pub const AccessSummary = struct {
         copied.reads.appendSliceAssumeCapacity(self.reads.items);
         copied.writes.appendSliceAssumeCapacity(self.writes.items);
         copied.selection_reads.appendSliceAssumeCapacity(self.selection_reads.items);
+        try copied.escaped_objects.appendSlice(allocator, self.escaped_objects.items);
         try copied.display_reads.appendSlice(allocator, self.display_reads.items);
         for (self.display_definitions.items) |definition| try copied.addDisplayDefinition(definition.owner, definition.reads.*);
         copied.reads_layout = self.reads_layout;
@@ -499,11 +282,6 @@ fn appendScopeDisplayName(allocator: std.mem.Allocator, out: *std.ArrayList(u8),
     }
 }
 
-fn optionalNameEql(left: ?[]const u8, right: ?[]const u8) bool {
-    if (left) |value| return if (right) |other| std.mem.eql(u8, value, other) else false;
-    return right == null;
-}
-
 fn resourceScopeEql(left: ResourceScope, right: ResourceScope) bool {
     return switch (left) {
         .any => right == .any,
@@ -557,11 +335,6 @@ fn appendObjectIdentity(
     try out.appendSlice(allocator, identity.name);
 }
 
-fn optionalNameIntersects(left: ?[]const u8, right: ?[]const u8) bool {
-    if (left == null or right == null) return true;
-    return std.mem.eql(u8, left.?, right.?);
-}
-
 fn mergeOptionalNames(left: ?[]const u8, right: ?[]const u8) ?[]const u8 {
     if (left == null or right == null) return null;
     if (std.mem.eql(u8, left.?, right.?)) return left;
@@ -586,7 +359,8 @@ pub const RunCache = struct {
     // Borrowed from the graph; cached and returned summaries share these bytes.
     string_allocator: std.mem.Allocator,
     return_body_analyses: usize = 0,
-    next_function_value_id: usize = 1,
+    next_value_fact_id: usize = 1,
+    next_local_object_id: usize = 1,
 
     pub fn init(allocator: std.mem.Allocator, string_allocator: std.mem.Allocator) RunCache {
         return .{
@@ -691,26 +465,27 @@ const PropertyTarget = struct {
 };
 
 const CallbackArgBinding = struct {
-    functions: FunctionValue = .{},
+    values: ValueFacts = .{},
     string_literal: ?[]const u8 = null,
     object_role: ?[]const u8 = null,
     property_target: ?PropertyTarget = null,
 };
 
-// This domain tracks function flow only; scalar facts keep their existing
-// domains. Immutable captures live until the owning analyzer is destroyed.
-const max_function_value_depth = 128;
+// Immutable value facts carry callable candidates and object identities through
+// records and captures. Storage lives until the owning analyzer is destroyed.
+const max_value_fact_depth = 128;
 const max_effect_analysis_depth = 256;
-const FunctionValue = struct {
+const ValueFacts = struct {
     id: usize = 0,
     candidates: []const Callable = &.{},
     fields: []const Field = &.{},
-    const Field = struct { name: []const u8, value: FunctionValue };
+    property_target: ?PropertyTarget = null,
+    const Field = struct { name: []const u8, value: ValueFacts };
     const Callable = union(enum) {
         named: semantic_env.ResolvedFunction,
         closure: struct { module_id: core.SourceModuleId, lambda: ast.LambdaExpr, bindings: []const CapturedBinding },
     };
-    fn field(self: FunctionValue, name: []const u8) FunctionValue {
+    fn field(self: ValueFacts, name: []const u8) ValueFacts {
         for (self.fields) |entry| if (std.mem.eql(u8, entry.name, name)) return entry.value;
         return .{};
     }
@@ -719,7 +494,7 @@ const FunctionValue = struct {
 const CapturedBinding = struct {
     name: []const u8,
     policy: LetPolicy,
-    functions: FunctionValue,
+    values: ValueFacts,
     string_literal: ?[]const u8,
     object_role: ?[]const u8,
     property_target: ?PropertyTarget,
@@ -738,13 +513,14 @@ pub const Analyzer = struct {
     owned_strings: std.ArrayList([]const u8),
     variable_bindings: std.StringHashMap(LetPolicy),
     run_cache: ?*RunCache,
-    function_bindings: std.StringHashMap(FunctionValue),
-    function_storage: std.heap.ArenaAllocator,
+    value_bindings: std.StringHashMap(ValueFacts),
+    value_storage: std.heap.ArenaAllocator,
     capture_index: captures.Index,
-    function_value_depth: usize = 0,
+    value_fact_depth: usize = 0,
     effect_analysis_depth: usize = 0,
     return_fact_recursions: usize = 0,
-    next_function_value_id: usize = 1,
+    next_value_fact_id: usize = 1,
+    next_local_object_id: usize = 1,
 
     pub fn init(allocator: std.mem.Allocator, sema: *const SemanticEnv) Analyzer {
         return initWithScope(allocator, sema, .{ .document = sema.module_id });
@@ -772,16 +548,16 @@ pub const Analyzer = struct {
             .owned_strings = .empty,
             .variable_bindings = std.StringHashMap(LetPolicy).init(allocator),
             .run_cache = run_cache,
-            .function_bindings = .init(allocator),
-            .function_storage = std.heap.ArenaAllocator.init(allocator),
+            .value_bindings = .init(allocator),
+            .value_storage = std.heap.ArenaAllocator.init(allocator),
             .capture_index = captures.Index.init(allocator),
         };
     }
 
     pub fn deinit(self: *Analyzer) void {
         self.capture_index.deinit();
-        self.function_bindings.deinit();
-        self.function_storage.deinit();
+        self.value_bindings.deinit();
+        self.value_storage.deinit();
         self.variable_bindings.deinit();
         for (self.owned_strings.items) |value| self.allocator.free(value);
         self.owned_strings.deinit(self.allocator);
@@ -831,13 +607,85 @@ pub const Analyzer = struct {
         }
     }
 
+    fn localObjectCounter(self: *Analyzer) *usize {
+        return if (self.run_cache) |cache| &cache.next_local_object_id else &self.next_local_object_id;
+    }
+
+    fn isLocalResource(resource: Resource, first: usize, end: usize) bool {
+        if (resource != .property or resource.property.owner != .object) return false;
+        const identity = resource.property.owner.object.identity orelse return false;
+        return identity.origin == .local and identity.local_id >= first and identity.local_id < end;
+    }
+
     fn analyzeStatements(self: *Analyzer, items: []const ast.Statement, let_policy: LetPolicy) anyerror!AccessSummary {
-        var summary = AccessSummary.init(self.allocator);
-        errdefer summary.deinit();
+        const first_local = self.localObjectCounter().*;
+        var parts = std.ArrayList(AccessSummary).empty;
+        defer {
+            for (parts.items) |*part| part.deinit();
+            parts.deinit(self.allocator);
+        }
         for (items) |stmt| {
             var nested = try self.analyzeStatement(stmt, let_policy);
-            defer nested.deinit();
-            try summary.merge(nested);
+            errdefer nested.deinit();
+            try parts.append(self.allocator, nested);
+        }
+        const end_local = self.localObjectCounter().*;
+        // A fresh local object's defaults are closed only while the object stays
+        // inside this execution unit. Escaping objects may receive definitions
+        // from other units, so their reads require an earlier covering definition.
+        for (parts.items, 0..) |*part, i| {
+            if (self.sema.state) |state| try state.checkAnalysisCanceled();
+            var read_index: usize = 0;
+            while (read_index < part.reads.items.len) {
+                const read = part.reads.items[read_index];
+                if (!isLocalResource(read, first_local, end_local)) {
+                    read_index += 1;
+                    continue;
+                }
+                const identity = read.property.owner.object.identity.?;
+                const escapes = blk: {
+                    for (parts.items) |other| for (other.escaped_objects.items) |escaped| {
+                        if (identity.eql(escaped)) break :blk true;
+                    };
+                    break :blk false;
+                };
+                const pending = blk: {
+                    for (parts.items[i..]) |later| {
+                        for (later.writes.items) |write| if (write.intersects(read)) break :blk true;
+                    }
+                    break :blk false;
+                };
+                const covered = blk: {
+                    for (parts.items[0..i]) |earlier| for (earlier.writes.items) |write| {
+                        if (write != .property or !write.property.owner.eql(read.property.owner)) continue;
+                        const defined = write.property.key.displayName() orelse continue;
+                        const required = read.property.key.displayName() orelse continue;
+                        if (core.PropertyPath.contains(defined, required)) break :blk true;
+                    };
+                    break :blk false;
+                };
+                if (!pending and (!escapes or covered)) {
+                    _ = part.reads.orderedRemove(read_index);
+                } else {
+                    // Local allocation identities do not name the caller's binding.
+                    // Keep unresolved escaping reads conservative at that boundary.
+                    if (escapes) part.reads.items[read_index].property.owner.object.identity = null;
+                    read_index += 1;
+                }
+            }
+        }
+        var summary = AccessSummary.init(self.allocator);
+        errdefer summary.deinit();
+        for (parts.items) |part| try summary.merge(part);
+        var write_index: usize = 0;
+        while (write_index < summary.writes.items.len) {
+            const write = summary.writes.items[write_index];
+            const escapes = blk: {
+                if (!isLocalResource(write, first_local, end_local)) break :blk true;
+                for (summary.reads.items) |read| if (write.intersects(read)) break :blk true;
+                break :blk false;
+            };
+            if (escapes) write_index += 1 else _ = summary.writes.orderedRemove(write_index);
         }
         return summary;
     }
@@ -852,8 +700,8 @@ pub const Analyzer = struct {
                 defer expr.deinit();
                 try summary.merge(expr);
                 if (!names.isDiscardBindingName(binding.name)) {
-                    const functions = try self.functionValue(binding.expr);
-                    try self.function_bindings.put(binding.name, functions);
+                    const values = try self.valueFacts(binding.expr);
+                    try self.value_bindings.put(binding.name, values);
                     switch (let_policy) {
                         .scheduled => try summary.addWrite(Resource.makeVariable(self.variable_scope, binding.name)),
                         .local => {},
@@ -882,8 +730,9 @@ pub const Analyzer = struct {
                         if (expr_target) |value| break :blk value;
                         break :blk null;
                     };
-                    if (self.bindingPropertyTarget(binding.name, target, let_policy)) |value| {
+                    if (try self.bindingPropertyTarget(binding.name, target, let_policy)) |value| {
                         try self.property_target_bindings.put(binding.name, value);
+                        try self.value_bindings.put(binding.name, try self.withPropertyTarget(values, value));
                     } else {
                         _ = self.property_target_bindings.remove(binding.name);
                     }
@@ -894,6 +743,7 @@ pub const Analyzer = struct {
                 var nested = try self.analyzeExpr(expr);
                 defer nested.deinit();
                 try summary.merge(nested);
+                try self.addEscapedObjects(&summary, try self.valueFacts(expr));
             },
             .return_void => {},
             .property_set => |property_set| {
@@ -903,12 +753,19 @@ pub const Analyzer = struct {
                 var value_expr = try self.analyzeExpr(property_set.value);
                 defer value_expr.deinit();
                 try summary.merge(value_expr);
-                const target = (try self.propertyTargetExpr(property_set.target)) orelse PropertyTarget.any();
-                const property_name = if (property_set.path.items.len == 0)
-                    null
-                else
-                    property_set.path.items[property_set.path.items.len - 1].name;
-                try summary.addWrite(Resource.makeProperty(target.owner, property_name));
+                try self.addEscapedObjects(&summary, try self.valueFacts(property_set.value));
+                var base = property_set.target;
+                var path = property_set.path.items;
+                var target = try self.propertyTargetExpr(base);
+                while (target == null and path.len > 1) {
+                    const parent = try self.value_storage.allocator().create(ast.Expr);
+                    parent.* = base;
+                    base = .{ .member = .{ .target = parent, .name = path[0].name } };
+                    path = path[1..];
+                    target = try self.propertyTargetExpr(base);
+                }
+                const property_name = if (path.len == 0) null else try ownString(self, try ast.formatRecordPath(self.allocator, path));
+                try summary.addWrite(Resource.makeProperty((target orelse PropertyTarget.any()).owner, property_name));
                 summary.writes_layout_input = true;
             },
             .if_stmt => |if_stmt| {
@@ -947,12 +804,19 @@ pub const Analyzer = struct {
         return try self.analyzeStatements(statements, .local);
     }
 
-    fn bindingPropertyTarget(self: *Analyzer, name: []const u8, target: ?PropertyTarget, let_policy: LetPolicy) ?PropertyTarget {
+    fn bindingPropertyTarget(self: *Analyzer, name: []const u8, target: ?PropertyTarget, let_policy: LetPolicy) !?PropertyTarget {
         const value = target orelse return null;
         return switch (value.owner) {
             .object => |owner| blk: {
-                if (owner.identity != null or !value.fresh or let_policy == .local) break :blk value;
-                break :blk PropertyTarget.objectWithIdentity(owner.class_id, self.variable_scope, name);
+                if (owner.identity != null or !value.fresh) break :blk value;
+                var bound = PropertyTarget.objectWithIdentity(owner.class_id, self.variable_scope, name);
+                if (let_policy == .local) {
+                    const counter = self.localObjectCounter();
+                    bound.owner.object.identity.?.origin = .local;
+                    bound.owner.object.identity.?.local_id = counter.*;
+                    counter.* += 1;
+                }
+                break :blk bound;
             },
             .any, .document, .page => value,
         };
@@ -1001,20 +865,19 @@ pub const Analyzer = struct {
             .apply => |apply| blk: {
                 var summary = try self.analyzeExpr(apply.callee.*);
                 errdefer summary.deinit();
-                const callable = try self.functionValue(apply.callee.*);
+                const callable = try self.valueFacts(apply.callee.*);
                 var args = try self.argumentFacts(apply.args.items);
                 defer self.deinitCallArgFacts(&args);
                 for (args.items) |arg| try summary.merge(arg.summary);
-                var invoked = try self.invokeFunctionValue(callable, args.items);
+                var invoked = try self.invokeValueFacts(callable, args.items);
                 defer invoked.deinit();
                 try summary.merge(invoked);
                 break :blk summary;
             },
             .member => |member| blk: {
                 if (try self.propertyMemberRead(member)) |read| {
-                    var summary = AccessSummary.init(self.allocator);
+                    var summary = try self.analyzeExpr(read.base);
                     errdefer summary.deinit();
-                    try self.addVariableRead(&summary, read.root_name);
                     try summary.addRead(Resource.makeProperty(read.target.owner, read.key));
                     break :blk summary;
                 }
@@ -1057,35 +920,65 @@ pub const Analyzer = struct {
         }
     }
 
-    fn newFunctionValue(self: *Analyzer, candidates: []const FunctionValue.Callable, fields: []const FunctionValue.Field) !FunctionValue {
+    fn newValueFacts(self: *Analyzer, candidates: []const ValueFacts.Callable, fields: []const ValueFacts.Field) !ValueFacts {
         var field_count: usize = 0;
         for (fields) |field| if (field.value.id != 0) {
             field_count += 1;
         };
         if (candidates.len == 0 and field_count == 0) return .{};
-        const counter = if (self.run_cache) |cache| &cache.next_function_value_id else &self.next_function_value_id;
+        const counter = if (self.run_cache) |cache| &cache.next_value_fact_id else &self.next_value_fact_id;
         const id = counter.*;
         counter.* += 1;
-        const allocator = self.function_storage.allocator();
-        const kept_fields = try allocator.alloc(FunctionValue.Field, field_count);
+        const allocator = self.value_storage.allocator();
+        const kept_fields = try allocator.alloc(ValueFacts.Field, field_count);
         var field_index: usize = 0;
         for (fields) |field| {
             if (field.value.id == 0) continue;
             kept_fields[field_index] = field;
             field_index += 1;
         }
-        return .{ .id = id, .candidates = try allocator.dupe(FunctionValue.Callable, candidates), .fields = kept_fields };
+        return .{ .id = id, .candidates = try allocator.dupe(ValueFacts.Callable, candidates), .fields = kept_fields };
     }
 
-    fn joinFunctionValues(self: *Analyzer, left: FunctionValue, right: FunctionValue) anyerror!FunctionValue {
+    fn addEscapedObjects(self: *Analyzer, summary: *AccessSummary, facts: ValueFacts) anyerror!void {
+        if (facts.property_target) |target| {
+            if (target.owner == .object) {
+                if (target.owner.object.identity) |identity| {
+                    if (identity.origin == .local) try summary.addEscapedObject(identity);
+                }
+            }
+        }
+        for (facts.fields) |field| try self.addEscapedObjects(summary, field.value);
+        for (facts.candidates) |candidate| switch (candidate) {
+            .named => {},
+            .closure => |closure| for (closure.bindings) |binding| {
+                try self.addEscapedObjects(summary, binding.values);
+            },
+        };
+    }
+
+    fn withPropertyTarget(self: *Analyzer, facts: ValueFacts, target: ?PropertyTarget) !ValueFacts {
+        const value = target orelse return facts;
+        if (facts.property_target) |existing| {
+            if (existing.owner.eql(value.owner) and existing.fresh == value.fresh) return facts;
+        }
+        var result = facts;
+        const counter = if (self.run_cache) |cache| &cache.next_value_fact_id else &self.next_value_fact_id;
+        result.id = counter.*;
+        counter.* += 1;
+        result.property_target = value;
+        return result;
+    }
+
+    fn joinValueFacts(self: *Analyzer, left: ValueFacts, right: ValueFacts) anyerror!ValueFacts {
         if (left.id == 0) return right;
         if (right.id == 0 or left.id == right.id) return left;
-        const allocator = self.function_storage.allocator();
-        var candidates = std.ArrayList(FunctionValue.Callable).empty;
+        const allocator = self.value_storage.allocator();
+        var candidates = std.ArrayList(ValueFacts.Callable).empty;
         try candidates.appendSlice(allocator, left.candidates);
         try candidates.appendSlice(allocator, right.candidates);
-        var fields = std.ArrayList(FunctionValue.Field).empty;
-        for (left.fields) |field| try fields.append(allocator, .{ .name = field.name, .value = try self.joinFunctionValues(field.value, right.field(field.name)) });
+        var fields = std.ArrayList(ValueFacts.Field).empty;
+        for (left.fields) |field| try fields.append(allocator, .{ .name = field.name, .value = try self.joinValueFacts(field.value, right.field(field.name)) });
         for (right.fields) |field| {
             var found = false;
             for (left.fields) |other| if (std.mem.eql(u8, field.name, other.name)) {
@@ -1094,68 +987,68 @@ pub const Analyzer = struct {
             };
             if (!found) try fields.append(allocator, field);
         }
-        return self.newFunctionValue(candidates.items, fields.items);
+        return self.withPropertyTarget(try self.newValueFacts(candidates.items, fields.items), joinPropertyTargets(left.property_target, right.property_target));
     }
 
-    fn updateFunctionField(self: *Analyzer, value: FunctionValue, path: []const ast.RecordPathSegment, replacement: FunctionValue) anyerror!FunctionValue {
+    fn updateValueField(self: *Analyzer, value: ValueFacts, path: []const ast.RecordPathSegment, replacement: ValueFacts) anyerror!ValueFacts {
         if (path.len == 0) return replacement;
-        var fields = std.ArrayList(FunctionValue.Field).empty;
-        const allocator = self.function_storage.allocator();
+        var fields = std.ArrayList(ValueFacts.Field).empty;
+        const allocator = self.value_storage.allocator();
         for (value.fields) |field| {
             if (!std.mem.eql(u8, field.name, path[0].name)) try fields.append(allocator, field);
         }
-        try fields.append(allocator, .{ .name = path[0].name, .value = try self.updateFunctionField(value.field(path[0].name), path[1..], replacement) });
-        return self.newFunctionValue(value.candidates, fields.items);
+        try fields.append(allocator, .{ .name = path[0].name, .value = try self.updateValueField(value.field(path[0].name), path[1..], replacement) });
+        return self.newValueFacts(value.candidates, fields.items);
     }
 
-    fn callableValue(self: *Analyzer, name: ast.CallableName) anyerror!FunctionValue {
+    fn callableValue(self: *Analyzer, name: ast.CallableName) anyerror!ValueFacts {
         return switch (try self.valueBinding(name)) {
-            .local => self.function_bindings.get(name.name) orelse .{},
-            .function => |resolved| try self.newFunctionValue(&.{.{ .named = resolved }}, &.{}),
+            .local => self.value_bindings.get(name.name) orelse .{},
+            .function => |resolved| try self.newValueFacts(&.{.{ .named = resolved }}, &.{}),
             .constant => |resolved| blk: {
                 if (self.visiting.contains(resolved.key)) break :blk .{};
                 try self.visiting.put(resolved.key, {});
                 defer _ = self.visiting.remove(resolved.key);
-                var facts = self.pushFreshFunctionFacts();
+                var facts = self.pushFreshValueFacts();
                 defer facts.restore();
                 const previous = self.sema;
                 self.sema = self.sema.forModule(resolved.module_id);
                 defer self.sema = previous;
-                break :blk try self.functionValue(resolved.decl.value);
+                break :blk try self.valueFacts(resolved.decl.value);
             },
             else => .{},
         };
     }
 
-    fn functionValue(self: *Analyzer, expr: ast.Expr) anyerror!FunctionValue {
-        if (self.function_value_depth >= max_function_value_depth) return error.FunctionAnalysisLimitExceeded;
-        self.function_value_depth += 1;
-        defer self.function_value_depth -= 1;
+    fn valueFacts(self: *Analyzer, expr: ast.Expr) anyerror!ValueFacts {
+        if (self.value_fact_depth >= max_value_fact_depth) return error.FunctionAnalysisLimitExceeded;
+        self.value_fact_depth += 1;
+        defer self.value_fact_depth -= 1;
         return switch (expr) {
-            .ident => |ident| try self.callableValue(ast.CallableName.bare(ident.name)),
+            .ident => |ident| try self.withPropertyTarget(try self.callableValue(ast.CallableName.bare(ident.name)), self.property_target_bindings.get(ident.name)),
             .lambda => |lambda| blk: {
-                const allocator = self.function_storage.allocator();
+                const allocator = self.value_storage.allocator();
                 var bindings = std.ArrayList(CapturedBinding).empty;
                 for (try self.capture_index.lambdaNames(lambda)) |name| {
                     const policy = self.variable_bindings.get(name) orelse continue;
                     try bindings.append(allocator, .{
                         .name = name,
                         .policy = policy,
-                        .functions = self.function_bindings.get(name) orelse .{},
+                        .values = self.value_bindings.get(name) orelse .{},
                         .string_literal = self.string_bindings.get(name),
                         .object_role = self.object_role_bindings.get(name),
                         .property_target = self.property_target_bindings.get(name),
                         .selection_reads = if (self.selection_read_bindings.get(name)) |reads| try allocator.dupe(Resource, reads.items) else &.{},
                     });
                 }
-                break :blk try self.newFunctionValue(&.{.{ .closure = .{ .module_id = self.sema.module_id, .lambda = lambda, .bindings = bindings.items } }}, &.{});
+                break :blk try self.newValueFacts(&.{.{ .closure = .{ .module_id = self.sema.module_id, .lambda = lambda, .bindings = bindings.items } }}, &.{});
             },
-            .coalesce => |value| try self.joinFunctionValues(try self.functionValue(value.target.*), try self.functionValue(value.fallback.*)),
-            .member => |member| (try self.functionValue(member.target.*)).field(member.name),
+            .coalesce => |value| try self.joinValueFacts(try self.valueFacts(value.target.*), try self.valueFacts(value.fallback.*)),
+            .member => |member| try self.memberValueFacts(member),
             .record => |record| blk: {
-                var fields = std.ArrayList(FunctionValue.Field).empty;
-                const allocator = self.function_storage.allocator();
-                for (record.fields.items) |field| try fields.append(allocator, .{ .name = field.name, .value = try self.functionValue(field.value) });
+                var fields = std.ArrayList(ValueFacts.Field).empty;
+                const allocator = self.value_storage.allocator();
+                for (record.fields.items) |field| try fields.append(allocator, .{ .name = field.name, .value = try self.valueFacts(field.value) });
                 if (self.sema.record(record.module_id, record.type_name)) |decl| {
                     for (decl.decl.fields.items) |field| {
                         var explicit = false;
@@ -1165,28 +1058,29 @@ pub const Analyzer = struct {
                         };
                         if (explicit) continue;
                         if (field.default_value) |default| {
-                            var facts = self.pushFreshFunctionFacts();
+                            var facts = self.pushFreshValueFacts();
                             defer facts.restore();
                             const previous = self.sema;
                             self.sema = self.sema.forModule(decl.module_id);
                             defer self.sema = previous;
-                            try fields.append(allocator, .{ .name = field.name, .value = try self.functionValue(default.*) });
+                            try fields.append(allocator, .{ .name = field.name, .value = try self.valueFacts(default.*) });
                         }
                     }
                 }
-                break :blk try self.newFunctionValue(&.{}, fields.items);
+                break :blk try self.newValueFacts(&.{}, fields.items);
             },
             .record_update => |update| blk: {
-                var result = try self.functionValue(update.target.*);
-                for (update.fields.items) |field| result = try self.updateFunctionField(result, field.path.items, try self.functionValue(field.value));
+                var result = try self.valueFacts(update.target.*);
+                for (update.fields.items) |field| result = try self.updateValueField(result, field.path.items, try self.valueFacts(field.value));
                 break :blk result;
             },
             .call => |call| blk: {
                 switch (try self.valueBinding(call.callee)) {
-                    .primitive, .unknown => break :blk .{},
+                    .primitive => break :blk try self.withPropertyTarget(.{}, try self.propertyTargetCall(call)),
+                    .unknown => break :blk .{},
                     .function => |named| switch (named.decl.result_type.kind) {
                         .function, .record, .optional, .any => {},
-                        else => break :blk .{},
+                        else => break :blk try self.withPropertyTarget(.{}, try self.propertyTargetCall(call)),
                     },
                     else => {},
                 }
@@ -1194,27 +1088,59 @@ pub const Analyzer = struct {
                 if (value.id == 0) break :blk .{};
                 var args = try self.argumentFacts(call.args.items);
                 defer self.deinitCallArgFacts(&args);
-                break :blk try self.returnedFunctionValue(value, args.items);
+                break :blk try self.returnedValueFacts(value, args.items);
             },
             .apply => |apply| blk: {
-                const value = try self.functionValue(apply.callee.*);
+                const value = try self.valueFacts(apply.callee.*);
                 var args = try self.argumentFacts(apply.args.items);
                 defer self.deinitCallArgFacts(&args);
-                break :blk try self.returnedFunctionValue(value, args.items);
+                break :blk try self.returnedValueFacts(value, args.items);
             },
             else => .{},
         };
     }
 
+    fn memberValueFacts(self: *Analyzer, member: ast.MemberExpr) anyerror!ValueFacts {
+        const receiver = try self.valueFacts(member.target.*);
+        const field_facts = receiver.field(member.name);
+        if (field_facts.id != 0) return field_facts;
+        const target = receiver.property_target orelse return .{};
+        const class_id = switch (target.owner) {
+            .any => null,
+            .object => |object| object.class_id,
+            .document => self.sema.builtinClass("Doc"),
+            .page => self.sema.builtinClass("PageContext"),
+        };
+        const field = if (class_id) |id|
+            self.sema.field(id, member.name)
+        else
+            self.sema.fieldByName(member.name);
+        return if (field) |descriptor| try self.valueFactsForType(descriptor.value_type, 0) else .{};
+    }
+
     fn restoreCapturedBindings(self: *Analyzer, bindings: []const CapturedBinding) !void {
         for (bindings) |binding| {
             try self.variable_bindings.put(binding.name, binding.policy);
-            try self.function_bindings.put(binding.name, binding.functions);
+            try self.value_bindings.put(binding.name, binding.values);
             if (binding.string_literal) |value| try self.string_bindings.put(binding.name, value);
             if (binding.object_role) |value| try self.object_role_bindings.put(binding.name, value);
             if (binding.property_target) |value| try self.property_target_bindings.put(binding.name, value);
             try self.bindSelectionReads(binding.name, binding.selection_reads);
         }
+    }
+
+    fn valueFactsForType(self: *Analyzer, ty: ast.Type, depth: usize) anyerror!ValueFacts {
+        if (depth >= max_value_fact_depth) return error.FunctionAnalysisLimitExceeded;
+        if (self.propertyTargetForType(ty)) |target| return self.withPropertyTarget(.{}, target);
+        if (ty.kind == .optional) return if (ty.optional_child) |child| self.valueFactsForType(child.*, depth + 1) else .{};
+        if (ty.kind != .record) return .{};
+        const record = self.sema.record(ty.nominal_module_id, ty.class_name orelse return .{}) orelse return .{};
+        var fields = std.ArrayList(ValueFacts.Field).empty;
+        const allocator = self.value_storage.allocator();
+        for (record.decl.fields.items) |field| {
+            try fields.append(allocator, .{ .name = field.name, .value = try self.valueFactsForType(field.value_type, depth + 1) });
+        }
+        return self.newValueFacts(&.{}, fields.items);
     }
 
     fn bindParamFacts(self: *Analyzer, param: ast.ParamDecl, facts: anytype) !void {
@@ -1231,11 +1157,8 @@ pub const Analyzer = struct {
             }
         }
         if (target) |value| try self.property_target_bindings.put(param.name, value) else _ = self.property_target_bindings.remove(param.name);
-        if (@hasField(Facts, "functions")) {
-            try self.function_bindings.put(param.name, facts.functions);
-        } else {
-            _ = self.function_bindings.remove(param.name);
-        }
+        const value_facts: ValueFacts = if (@hasField(Facts, "values")) facts.values else .{};
+        try self.value_bindings.put(param.name, if (value_facts.id != 0) value_facts else try self.valueFactsForType(param.ty, 0));
         if (@hasField(Facts, "summary")) {
             try self.bindSelectionReads(param.name, facts.summary.selection_reads.items);
         } else {
@@ -1264,7 +1187,7 @@ pub const Analyzer = struct {
         return defaults;
     }
 
-    fn invokeFunctionValue(self: *Analyzer, value: FunctionValue, args: []const CallArgFacts) anyerror!AccessSummary {
+    fn invokeValueFacts(self: *Analyzer, value: ValueFacts, args: []const CallArgFacts) anyerror!AccessSummary {
         if (self.effect_analysis_depth >= max_effect_analysis_depth) return error.FunctionAnalysisLimitExceeded;
         self.effect_analysis_depth += 1;
         defer self.effect_analysis_depth -= 1;
@@ -1274,7 +1197,7 @@ pub const Analyzer = struct {
             var body = switch (candidate) {
                 .named => |named| try self.functionCall(named.key, named.module_id, named.decl, args, AccessSummary.init(self.allocator)),
                 .closure => |closure| blk: {
-                    var facts = self.pushFreshFunctionFacts();
+                    var facts = self.pushFreshValueFacts();
                     defer facts.restore();
                     try self.restoreCapturedBindings(closure.bindings);
                     const previous = self.sema;
@@ -1294,19 +1217,19 @@ pub const Analyzer = struct {
         return summary;
     }
 
-    fn returnedFunctionValue(self: *Analyzer, value: FunctionValue, args: []const CallArgFacts) anyerror!FunctionValue {
-        var result = FunctionValue{};
+    fn returnedValueFacts(self: *Analyzer, value: ValueFacts, args: []const CallArgFacts) anyerror!ValueFacts {
+        var result = ValueFacts{};
         for (value.candidates) |candidate| {
-            var facts = self.pushFreshFunctionFacts();
+            var facts = self.pushFreshValueFacts();
             defer facts.restore();
             const previous = self.sema;
             defer self.sema = previous;
             const returned = switch (candidate) {
                 .named => |named| blk: {
-                    // These result types cannot contain a function value.
+                    // Scalar results contain neither callables nor object identities.
                     switch (named.decl.result_type.kind) {
-                        .function, .record, .optional, .any => {},
-                        else => break :blk FunctionValue{},
+                        .function, .record, .optional, .any, .object, .page, .document, .selection => {},
+                        else => break :blk ValueFacts{},
                     }
                     const already_visiting = self.visiting.contains(named.key);
                     if (!already_visiting) try self.visiting.put(named.key, {});
@@ -1316,8 +1239,8 @@ pub const Analyzer = struct {
                     self.sema = self.sema.forModule(named.module_id);
                     var defaults = try self.bindValueParams(named.decl.params.items, args);
                     defer defaults.deinit();
-                    var returned = FunctionValue{};
-                    _ = try self.collectFunctionReturns(named.decl.statements.items, &returned);
+                    var returned = ValueFacts{};
+                    _ = try self.collectValueReturns(named.decl.statements.items, &returned);
                     break :blk returned;
                 },
                 .closure => |closure| blk: {
@@ -1325,18 +1248,18 @@ pub const Analyzer = struct {
                     try self.restoreCapturedBindings(closure.bindings);
                     var defaults = try self.bindValueParams(closure.lambda.params.items, args);
                     defer defaults.deinit();
-                    break :blk try self.functionValue(closure.lambda.body.*);
+                    break :blk try self.valueFacts(closure.lambda.body.*);
                 },
             };
-            result = try self.joinFunctionValues(result, returned);
+            result = try self.joinValueFacts(result, returned);
         }
         return result;
     }
 
-    fn collectFunctionReturns(self: *Analyzer, statements: []const ast.Statement, result: *FunctionValue) anyerror!bool {
+    fn collectValueReturns(self: *Analyzer, statements: []const ast.Statement, result: *ValueFacts) anyerror!bool {
         for (statements) |stmt| switch (stmt.kind) {
             .return_expr => |expr| {
-                result.* = try self.joinFunctionValues(result.*, try self.functionValue(expr));
+                result.* = try self.joinValueFacts(result.*, try self.valueFacts(expr));
                 return false;
             },
             .return_void => return false,
@@ -1344,21 +1267,21 @@ pub const Analyzer = struct {
                 const then_continues = blk: {
                     var facts = try self.pushLocalFacts();
                     defer facts.restore();
-                    break :blk try self.collectFunctionReturns(branch.then_statements.items, result);
+                    break :blk try self.collectValueReturns(branch.then_statements.items, result);
                 };
                 const else_continues = blk: {
                     var facts = try self.pushLocalFacts();
                     defer facts.restore();
-                    break :blk try self.collectFunctionReturns(branch.else_statements.items, result);
+                    break :blk try self.collectValueReturns(branch.else_statements.items, result);
                 };
                 if (!then_continues and !else_continues) return false;
             },
             .let_binding => |binding| {
-                const functions = try self.functionValue(binding.expr);
+                const values = try self.valueFacts(binding.expr);
                 const string = try literalStringExpr(self, binding.expr);
                 const target = try self.propertyTargetExpr(binding.expr);
                 const role = try self.objectRoleExpr(binding.expr);
-                try self.function_bindings.put(binding.name, functions);
+                try self.value_bindings.put(binding.name, values);
                 if (string) |value| try self.string_bindings.put(binding.name, value);
                 if (target) |value| try self.property_target_bindings.put(binding.name, value);
                 if (role) |value| try self.object_role_bindings.put(binding.name, value);
@@ -1386,7 +1309,7 @@ pub const Analyzer = struct {
                     else => try self.addVariableRead(&summary, call.callee.name),
                 }
                 const value = try self.callableValue(call.callee);
-                var invoked = try self.invokeFunctionValue(value, args.items);
+                var invoked = try self.invokeValueFacts(value, args.items);
                 defer invoked.deinit();
                 try summary.merge(invoked);
                 break :blk summary;
@@ -1416,7 +1339,7 @@ pub const Analyzer = struct {
 
     const CallArgFacts = struct {
         summary: AccessSummary,
-        functions: FunctionValue = .{},
+        values: ValueFacts = .{},
         string_literal: ?[]const u8 = null,
         object_role: ?[]const u8 = null,
         property_target: ?PropertyTarget = null,
@@ -1453,7 +1376,7 @@ pub const Analyzer = struct {
     fn analyzeCallArgFacts(self: *Analyzer, arg: ast.Expr) anyerror!CallArgFacts {
         var facts = CallArgFacts{ .summary = try self.analyzeExpr(arg) };
         errdefer facts.deinit();
-        facts.functions = try self.functionValue(arg);
+        facts.values = try self.valueFacts(arg);
         facts.string_literal = try literalStringExpr(self, arg);
         facts.object_role = try self.objectRoleExpr(arg);
         facts.property_target = try self.propertyTargetExpr(arg);
@@ -1593,7 +1516,7 @@ pub const Analyzer = struct {
             _ = self.visiting.remove(key);
         };
 
-        var state = self.pushFreshFunctionFacts();
+        var state = self.pushFreshValueFacts();
         defer state.restore();
 
         const previous = self.sema;
@@ -1626,7 +1549,7 @@ pub const Analyzer = struct {
         try self.visiting.put(resolved.key, {});
         defer _ = self.visiting.remove(resolved.key);
 
-        var state = self.pushFreshFunctionFacts();
+        var state = self.pushFreshValueFacts();
         defer state.restore();
 
         const previous = self.sema;
@@ -1653,33 +1576,38 @@ pub const Analyzer = struct {
     }
 
     const PropertyMemberRead = struct {
-        root_name: []const u8,
+        base: ast.Expr,
         target: PropertyTarget,
         key: []const u8,
     };
 
     fn propertyMemberRead(self: *Analyzer, member: ast.MemberExpr) !?PropertyMemberRead {
-        const root_name = memberRootIdent(member.target.*) orelse return null;
-        const target = (try self.propertyTargetExpr(.{ .ident = .{ .name = root_name } })) orelse return null;
-        return .{
-            .root_name = root_name,
-            .target = target,
-            .key = member.name,
-        };
-    }
-
-    fn memberRootIdent(expr: ast.Expr) ?[]const u8 {
-        return switch (expr) {
-            .ident => |ident| ident.name,
-            .member => |member| memberRootIdent(member.target.*),
-            else => null,
-        };
+        var current = member;
+        var path = std.ArrayList([]const u8).empty;
+        defer path.deinit(self.allocator);
+        while (true) {
+            try path.append(self.allocator, current.name);
+            const receiver = current.target.*;
+            if (try self.propertyTargetExpr(receiver)) |target| {
+                std.mem.reverse([]const u8, path.items);
+                return .{
+                    .base = receiver,
+                    .target = target,
+                    .key = try ownString(self, try std.mem.join(self.allocator, ".", path.items)),
+                };
+            }
+            if (receiver != .member) return null;
+            current = receiver.member;
+        }
     }
 
     fn bindLocalParams(self: *Analyzer, params: []const ast.ParamDecl) !void {
         try self.variable_bindings.ensureUnusedCapacity(@intCast(params.len));
         for (params) |param| {
             try self.variable_bindings.put(param.name, .local);
+            if (!self.value_bindings.contains(param.name)) {
+                try self.value_bindings.put(param.name, try self.valueFactsForType(param.ty, 0));
+            }
             if (!self.property_target_bindings.contains(param.name)) {
                 if (self.propertyTargetForType(param.ty)) |target| {
                     try self.property_target_bindings.put(param.name, target);
@@ -1705,19 +1633,19 @@ pub const Analyzer = struct {
         }
     }
 
-    const FunctionFactsSnapshot = struct {
+    const ValueFactsSnapshot = struct {
         analyzer: *Analyzer,
-        function_bindings: std.StringHashMap(FunctionValue),
+        value_bindings: std.StringHashMap(ValueFacts),
         string_bindings: std.StringHashMap([]const u8),
         variable_bindings: std.StringHashMap(LetPolicy),
         object_role_bindings: std.StringHashMap([]const u8),
         property_target_bindings: std.StringHashMap(PropertyTarget),
         selection_read_bindings: std.StringHashMap(std.ArrayList(Resource)),
 
-        fn restore(self: *FunctionFactsSnapshot) void {
-            var functions = self.analyzer.function_bindings;
-            self.analyzer.function_bindings = self.function_bindings;
-            functions.deinit();
+        fn restore(self: *ValueFactsSnapshot) void {
+            var values = self.analyzer.value_bindings;
+            self.analyzer.value_bindings = self.value_bindings;
+            values.deinit();
             var string_snapshot = self.analyzer.string_bindings;
             self.analyzer.string_bindings = self.string_bindings;
             string_snapshot.deinit();
@@ -1740,17 +1668,17 @@ pub const Analyzer = struct {
         }
     };
 
-    fn pushFreshFunctionFacts(self: *Analyzer) FunctionFactsSnapshot {
-        const snapshot = FunctionFactsSnapshot{
+    fn pushFreshValueFacts(self: *Analyzer) ValueFactsSnapshot {
+        const snapshot = ValueFactsSnapshot{
             .analyzer = self,
-            .function_bindings = self.function_bindings,
+            .value_bindings = self.value_bindings,
             .string_bindings = self.string_bindings,
             .variable_bindings = self.variable_bindings,
             .object_role_bindings = self.object_role_bindings,
             .property_target_bindings = self.property_target_bindings,
             .selection_read_bindings = self.selection_read_bindings,
         };
-        self.function_bindings = .init(self.allocator);
+        self.value_bindings = .init(self.allocator);
         self.string_bindings = std.StringHashMap([]const u8).init(self.allocator);
         self.variable_bindings = std.StringHashMap(LetPolicy).init(self.allocator);
         self.object_role_bindings = std.StringHashMap([]const u8).init(self.allocator);
@@ -1761,7 +1689,7 @@ pub const Analyzer = struct {
 
     const LocalFactsSnapshot = struct {
         analyzer: *Analyzer,
-        function_bindings: std.StringHashMap(FunctionValue),
+        value_bindings: std.StringHashMap(ValueFacts),
         string_bindings: std.StringHashMap([]const u8),
         variable_bindings: std.StringHashMap(LetPolicy),
         object_role_bindings: std.StringHashMap([]const u8),
@@ -1769,9 +1697,9 @@ pub const Analyzer = struct {
         selection_read_bindings: std.StringHashMap(std.ArrayList(Resource)),
 
         fn restore(self: *LocalFactsSnapshot) void {
-            var functions = self.analyzer.function_bindings;
-            self.analyzer.function_bindings = self.function_bindings;
-            functions.deinit();
+            var values = self.analyzer.value_bindings;
+            self.analyzer.value_bindings = self.value_bindings;
+            values.deinit();
             var strings = self.analyzer.string_bindings;
             self.analyzer.string_bindings = self.string_bindings;
             strings.deinit();
@@ -1795,8 +1723,8 @@ pub const Analyzer = struct {
     };
 
     fn pushLocalFacts(self: *Analyzer) !LocalFactsSnapshot {
-        var function_clone = try self.function_bindings.clone();
-        errdefer function_clone.deinit();
+        var value_clone = try self.value_bindings.clone();
+        errdefer value_clone.deinit();
         var string_clone = try self.cloneStringBindings();
         errdefer string_clone.deinit();
         var local_clone = try self.cloneVariableBindings();
@@ -1810,14 +1738,14 @@ pub const Analyzer = struct {
 
         const snapshot = LocalFactsSnapshot{
             .analyzer = self,
-            .function_bindings = self.function_bindings,
+            .value_bindings = self.value_bindings,
             .string_bindings = self.string_bindings,
             .variable_bindings = self.variable_bindings,
             .object_role_bindings = self.object_role_bindings,
             .property_target_bindings = self.property_target_bindings,
             .selection_read_bindings = self.selection_read_bindings,
         };
-        self.function_bindings = function_clone;
+        self.value_bindings = value_clone;
         self.string_bindings = string_clone;
         self.variable_bindings = local_clone;
         self.object_role_bindings = role_clone;
@@ -1939,7 +1867,7 @@ pub const Analyzer = struct {
 
     fn callbackBindingForFacts(self: *Analyzer, facts: CallArgFacts) CallbackArgBinding {
         var binding = CallbackArgBinding{};
-        binding.functions = facts.functions;
+        binding.values = facts.values;
         binding.string_literal = facts.string_literal;
         binding.object_role = facts.object_role;
         if (facts.property_target) |target| {
@@ -2043,7 +1971,7 @@ pub const Analyzer = struct {
                 try summary.addWrite(Resource.makeProperty(owner, "repr"));
                 summary.writes_layout_input = true;
                 if (arg_facts.len >= 2) {
-                    var reads = try self.invokeFunctionValue(arg_facts[1].functions, arg_facts[0..1]);
+                    var reads = try self.invokeValueFacts(arg_facts[1].values, arg_facts[0..1]);
                     defer reads.deinit();
                     // Registration captures a verified display; its reads occur
                     // when repr is evaluated, not while the callback is stored.
@@ -2051,6 +1979,7 @@ pub const Analyzer = struct {
                 }
             },
             .group => {
+                for (arg_facts) |arg| try self.addEscapedObjects(&summary, arg.values);
                 try summary.addWrite(Resource.makeObjects(core.GroupRole));
                 summary.writes_layout_input = true;
             },
@@ -2063,10 +1992,12 @@ pub const Analyzer = struct {
                 summary.writes_layout_input = true;
             },
             .place_on => {
+                if (arg_facts.len > 1) try self.addEscapedObjects(&summary, arg_facts[1].values);
                 try summary.addWrite(Resource.makeObjects(objectRoleFromArgFacts(arg_facts, 1)));
                 summary.writes_layout_input = true;
             },
             .set_prop => {
+                if (arg_facts.len > 2) try self.addEscapedObjects(&summary, arg_facts[2].values);
                 try summary.addWrite(Resource.makeProperty(
                     propertyOwnerFromArgFacts(arg_facts, 0),
                     literalStringFromArgFacts(arg_facts, 1),
@@ -2098,6 +2029,7 @@ pub const Analyzer = struct {
             .set_content,
             .set_repr,
             .new,
+            .group,
             .place_on,
             .set_prop,
             => true,
@@ -2122,17 +2054,17 @@ pub const Analyzer = struct {
             var evaluation = try self.analyzeExpr(expr);
             defer evaluation.deinit();
             try summary.merge(evaluation);
-            const value = try self.functionValue(expr);
+            const value = try self.valueFacts(expr);
             var args = std.ArrayList(CallArgFacts).empty;
             defer self.deinitCallArgFacts(&args);
             for (callback_arg_bindings.items) |binding| try args.append(self.allocator, .{
                 .summary = AccessSummary.init(self.allocator),
-                .functions = binding.functions,
+                .values = binding.values,
                 .string_literal = binding.string_literal,
                 .object_role = binding.object_role,
                 .property_target = binding.property_target,
             });
-            callback_summary = try self.invokeFunctionValue(value, args.items);
+            callback_summary = try self.invokeValueFacts(value, args.items);
         }
 
         for (summary.selection_reads.items) |selection_resource| {
@@ -2213,7 +2145,7 @@ pub const Analyzer = struct {
                 break :blk null;
             },
             .call => |call| try self.propertyTargetCall(call),
-            .optional_check => |check| try self.propertyTargetExpr(check.target.*),
+            .member, .apply => (try self.valueFacts(expr)).property_target,
             .coalesce => |coalesce| blk: {
                 const target = try self.propertyTargetExpr(coalesce.target.*);
                 const fallback = try self.propertyTargetExpr(coalesce.fallback.*);
@@ -2291,7 +2223,7 @@ pub const Analyzer = struct {
         try self.visiting.put(resolved.key, {});
         defer _ = self.visiting.remove(resolved.key);
 
-        var state = self.pushFreshFunctionFacts();
+        var state = self.pushFreshValueFacts();
         defer state.restore();
 
         const previous = self.sema;
@@ -2402,7 +2334,7 @@ pub const Analyzer = struct {
         defer if (key) |value| self.allocator.free(value);
         if (key) |value| if (self.run_cache.?.return_facts.get(value)) |cached| return @field(cached, @tagName(kind));
 
-        var facts = self.pushFreshFunctionFacts();
+        var facts = self.pushFreshValueFacts();
         defer facts.restore();
         const previous = self.sema;
         self.sema = self.sema.forModule(resolved.module_id);
@@ -2533,7 +2465,7 @@ fn buildFunctionCallSummaryKey(
     try appendFunctionKey(allocator, &out, key);
     try appendKeyInt(allocator, &out, facts.len);
     for (facts) |fact| {
-        try appendKeyInt(allocator, &out, fact.functions.id);
+        try appendKeyInt(allocator, &out, if (fact.values.candidates.len != 0 or fact.values.fields.len != 0) fact.values.id else 0);
         try appendOptionalBytesKey(allocator, &out, fact.string_literal);
         try appendOptionalBytesKey(allocator, &out, fact.object_role);
         try appendOptionalPropertyTargetKey(allocator, &out, fact.property_target);
@@ -2616,7 +2548,12 @@ fn appendPropertyOwnerKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8),
                 try appendKeyBytes(allocator, out, id.name);
             } else try out.append(allocator, 'n');
             if (object_owner.identity) |identity| {
-                try out.append(allocator, if (identity.origin == .constant) 'c' else 'i');
+                try out.append(allocator, switch (identity.origin) {
+                    .constant => 'c',
+                    .binding => 'i',
+                    .local => 'l',
+                });
+                try appendKeyInt(allocator, out, identity.local_id);
                 try appendResourceScopeKey(allocator, out, identity.scope);
                 try appendKeyBytes(allocator, out, identity.name);
             } else {
@@ -2681,7 +2618,7 @@ fn literalStringExpr(self: *Analyzer, expr: ast.Expr) anyerror!?[]const u8 {
                     if (self.visiting.contains(resolved.key)) break :blk null;
                     try self.visiting.put(resolved.key, {});
                     defer _ = self.visiting.remove(resolved.key);
-                    var facts = self.pushFreshFunctionFacts();
+                    var facts = self.pushFreshValueFacts();
                     defer facts.restore();
                     const previous = self.sema;
                     self.sema = self.sema.forModule(resolved.module_id);

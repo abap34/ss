@@ -1868,17 +1868,16 @@ test "compiler semantics: nested property assignment updates style records" {
     try expectObjectFieldPath(source, "latex", &.{"align"}, "left");
 }
 
-test "compiler semantics: nested property assignment preserves existing style record leaves" {
+test "compiler semantics: nested property definitions preserve sibling leaves" {
     const source =
         \\import std:themes/default as *
         \\
         \\page ok
         \\  let body = body_obj("style")
-        \\  body.text = TextStyle {
-        \\    size = 21
-        \\    font = FontFace { family = "Avenir", weight = 600 }
-        \\    markdown_bold_color = c"#445566"
-        \\  }
+        \\  body.text.size = 21
+        \\  body.text.font.family = "Avenir"
+        \\  body.text.font.weight = 600
+        \\  body.text.markdown_bold_color = c"#445566"
         \\  body.text.color = c"#123456"
         \\  body.text.font.style = FontStyle.italic
         \\end
@@ -1892,15 +1891,12 @@ test "compiler semantics: nested property assignment preserves existing style re
     try expectObjectFieldPath(source, "text", &.{"color"}, "0.07058824,0.20392157,0.3372549");
 }
 
-test "compiler semantics: nested property assignment can unset optional style leaves" {
+test "compiler semantics: nested property definitions accept explicit none" {
     const source =
         \\import std:themes/default as *
         \\
         \\page ok
         \\  let body = body_obj("style")
-        \\  body.text = TextStyle {
-        \\    markdown_bold_color = c"#445566"
-        \\  }
         \\  body.text.markdown_bold_color = none
         \\end
         \\
@@ -7833,4 +7829,230 @@ test "compiler semantics: lambda parameters shadow captured names in their own s
         \\  let f = (x: Number, x: Number) |-> x
         \\end
     , "case.ss:bytes:", "DuplicateBinding");
+}
+
+test "compiler semantics: property definitions reject overlapping paths in both orders" {
+    const pairs = [_][]const u8{
+        "a.layout.x = 100\na.layout.x = 200",
+        "a.layout = LayoutStyle { x = 100 }\na.layout.x = 200",
+        "a.layout.x = 100\na.layout = LayoutStyle { x = 200 }",
+        "a.text.font = FontFace {}\na.text.font.family = \"Avenir\"",
+        "a.text.markdown_bold_color = none\na.text.markdown_bold_color = none",
+        "a.numbered_item_source = none\nset_prop(select(a, \"self_object\"), \"numbered_item_source\", none)",
+    };
+    for (pairs) |pair| {
+        const source = try std.fmt.allocPrint(testing.allocator, "import std:themes/default as *\npage main\nlet a = txt_obj!(\"A\", \"body\")\n{s}\nend\n", .{pair});
+        defer testing.allocator.free(source);
+        try expectLoweringErrorDiagnostic(source, "DuplicatePropertyDefinition");
+    }
+}
+
+test "compiler semantics: aliased nested property definitions conflict" {
+    try expectLoweringErrorDiagnostic(
+        \\import std:themes/default as *
+        \\page main
+        \\  let a = txt_obj!("A", "body")
+        \\  let b = a
+        \\  a.layout.x = 100
+        \\  b.layout.x = 200
+        \\end
+    , "DuplicatePropertyDefinition");
+}
+
+test "compiler semantics: nested reads wait for whole property definitions" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\page main
+        \\  let a = txt_obj!("A", "body")
+        \\  note!("x=" ++ str(a.layout?.x ?? 0))
+        \\  a.layout = LayoutStyle { x = 300 }
+        \\end
+    , &.{"x=300"});
+}
+
+test "compiler semantics: whole property reads wait for sibling definitions" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\page main
+        \\  let a = txt_obj!("A", "body")
+        \\  let style = a.layout ?? LayoutStyle {}
+        \\  note!("x=" ++ str(style.x) ++ ",y=" ++ str(style.right_inset))
+        \\  a.layout.x = 300
+        \\  a.layout.right_inset = 200
+        \\end
+    , &.{"x=300,y=200"});
+}
+
+test "compiler semantics: property paths preserve objects carried through returned records" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\record Box { item: Object }
+        \\fn wrap(item: Object) -> Box
+        \\  return Box { item = item }
+        \\end
+        \\page main
+        \\  let a = txt_obj!("A", "body")
+        \\  let box = wrap(a)
+        \\  note!("x=" ++ str(box.item.layout?.x ?? 0))
+        \\  box.item.layout.x = 300
+        \\end
+    , &.{"x=300"});
+}
+
+test "compiler semantics: property paths detect record aliases of an object" {
+    try expectLoweringErrorDiagnostic(
+        \\import std:themes/default as *
+        \\record Box { item: Object }
+        \\page main
+        \\  let a = txt_obj!("A", "body")
+        \\  let box = Box { item = a }
+        \\  a.layout.x = 100
+        \\  box.item.layout.x = 200
+        \\end
+    , "DuplicatePropertyDefinition");
+}
+
+test "compiler semantics: fresh local property definitions satisfy subsequent reads" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\fn make_label() -> String
+        \\  let item = txt_obj("A", "body")
+        \\  item.layout.x = 123
+        \\  let style = item.layout ?? LayoutStyle {}
+        \\  return "x=" ++ str(style.x)
+        \\end
+        \\page main
+        \\  note!(make_label())
+        \\end
+    , &.{"x=123"});
+}
+
+test "compiler semantics: fresh local reads cannot precede their definitions" {
+    try expectLoweringErrorDiagnostic(
+        \\import std:themes/default as *
+        \\fn make_label() -> String
+        \\  let item = txt_obj("A", "body")
+        \\  let x = item.layout?.x ?? 0
+        \\  item.layout.x = 123
+        \\  return "x=" ++ str(x)
+        \\end
+        \\page main
+        \\  note!(make_label())
+        \\end
+    , "ExecutionDependencyCycle");
+}
+
+test "compiler semantics: property definition cannot read its own final value" {
+    try expectLoweringErrorDiagnostic(
+        \\import std:themes/default as *
+        \\page main
+        \\  let item = txt_obj!("A", "body")
+        \\  item.layout.x = (item.layout?.x ?? 0) + 1
+        \\end
+    , "ExecutionDependencyCycle");
+}
+
+test "compiler semantics: optional nested reads retain sibling property precision" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\page main
+        \\  let item = txt_obj!("A", "body")
+        \\  item.layout.x = (item.layout?.right_inset ?? 0) + 1
+        \\  item.layout.right_inset = 123
+        \\  note!(str(item.layout?.x ?? 0))
+        \\end
+    , &.{"124"});
+}
+
+test "compiler semantics: escaping local objects retain unresolved final property reads" {
+    try expectLoweringErrorDiagnostic(
+        \\import std:themes/default as *
+        \\fn make_item() -> Object
+        \\  let item = txt_obj("A", "body")
+        \\  let x = item.layout?.x ?? 0
+        \\  item.link_id = str(x)
+        \\  return item
+        \\end
+        \\page main
+        \\  let item = make_item()
+        \\  item.layout.x = 123
+        \\  place!(item)
+        \\end
+    , "ExecutionDependencyCycle");
+}
+
+test "compiler semantics: returned initialized objects keep internal reads satisfied" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\fn make_item() -> Object
+        \\  let item = txt_obj("A", "body")
+        \\  item.layout.x = 123
+        \\  item.link_id = str(item.layout?.x ?? 0)
+        \\  return item
+        \\end
+        \\page main
+        \\  let item = make_item()
+        \\  note!(item.link_id ?? "missing")
+        \\  place!(item)
+        \\end
+    , &.{"123"});
+}
+
+test "compiler semantics: dump preserves explicitly absent optional properties" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\page main
+        \\  let item = txt_obj!("A", "body")
+        \\  item.numbered_item_source = none
+        \\end
+    , &.{"\"numbered_item_source\":null"});
+}
+
+test "compiler semantics: absent property values use string accessor fallbacks" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\page main
+        \\  let item = txt_obj!("A", "body")
+        \\  set_prop(item, "numbered_item_source", none)
+        \\  if prop_eq(item, "numbered_item_source", "none")
+        \\    note!("Unexpected equality")
+        \\  else
+        \\    note!(prop(item, "numbered_item_source", "Missing"))
+        \\  end
+        \\end
+    , &.{"Missing"});
+}
+
+test "compiler semantics: explicit none refines an optional callable in a record" {
+    try expectObjectContent(
+        \\record Box { callback: (Number -> Number)? }
+        \\fn inc(x: Number) -> Number = x + 1
+        \\fn cleared(box: Box) -> Number
+        \\  let updated = box with { callback = none }
+        \\  let callback = updated.callback ?? inc
+        \\  return callback(1)
+        \\end
+        \\fn unused(x: Number) -> Number = cleared(Box { callback = unused })
+        \\page main
+        \\  text!(str(unused(1)))
+        \\end
+    , "2");
+}
+
+test "compiler semantics: object-valued properties start a new property owner" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\type Linked = object {
+        \\  base = Text
+        \\  roles = ["linked"]
+        \\  peer: Object? = none
+        \\}
+        \\page main
+        \\  let a = txt_obj!("A", "linked")
+        \\  let b = txt_obj!("B", "body")
+        \\  note!("peer=" ++ str(a.peer?.layout?.x ?? 0))
+        \\  a.peer = b
+        \\  b.layout.x = 432
+        \\end
+    , &.{"peer=432"});
 }

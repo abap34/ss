@@ -19,15 +19,17 @@ async function testMarkdownTableRightAlignment() {
       `import std:themes/default as *
 
 page table_align
-let body = text! <<
+let body_content = <<
 | Left | Right |
 | :--- | ---: |
 | L | R |
 | Wide left text | 9 |
 >>
-body.layout.x = 120
-body.layout.right_inset = 420
-body.layout.wrap = WrapMode.on
+let body = text!(body_content, current_theme() with {
+  body.layout.x = 120
+  body.layout.right_inset = 420
+  body.layout.wrap = WrapMode.on
+})
 ~ body.top == page.top - 80
 end
 `,

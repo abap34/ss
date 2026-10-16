@@ -161,11 +161,19 @@ fn reportLowerError(state: *core.DocumentState, err: anyerror, origin: ?core.Sou
     });
 }
 
-fn reportDuplicatePropertyDefinition(state: *core.DocumentState, origin: core.SourceOrigin, key: []const u8) !void {
+fn reportDuplicatePropertyDefinition(state: *core.DocumentState, origin: core.SourceOrigin, node_id: core.NodeId, key: []const u8) !void {
+    const message = if (state.conflictingPropertyDefinition(node_id, key)) |previous| blk: {
+        if (previous.origin) |previous_origin| {
+            if (previous_origin.span) |span| {
+                break :blk try std.fmt.allocPrint(state.allocator, "property '{s}' is already defined on this target; overlaps '{s}' at {s}:bytes:{d}-{d}", .{ key, previous.path, previous_origin.path orelse "<unknown>", span.start, span.end });
+            }
+        }
+        break :blk try std.fmt.allocPrint(state.allocator, "property '{s}' is already defined on this target; overlaps '{s}'", .{ key, previous.path });
+    } else try std.fmt.allocPrint(state.allocator, "property '{s}' is already defined on this target", .{key});
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
             .code = "DuplicatePropertyDefinition",
-            .message = try std.fmt.allocPrint(state.allocator, "property '{s}' is already defined on this target", .{key}),
+            .message = message,
         },
     });
 }
@@ -1178,7 +1186,7 @@ const BuiltinContext = struct {
     pub fn setNodeFieldValue(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: core.Value) !void {
         self.state.setNodeFieldValueWithOrigin(object_id, key, value, self.evaluation.call_depth, self.current_origin) catch |err| switch (err) {
             error.DuplicatePropertyDefinition => {
-                try reportDuplicatePropertyDefinition(self.state, self.current_origin, key);
+                try reportDuplicatePropertyDefinition(self.state, self.current_origin, object_id, key);
                 return err;
             },
             else => return err,
@@ -1193,10 +1201,6 @@ const BuiltinContext = struct {
             },
             else => return err,
         };
-    }
-
-    pub fn unsetNodeField(self: *BuiltinContext, object_id: core.NodeId, key: []const u8) !void {
-        try self.state.unsetNodeField(object_id, key);
     }
 
     pub fn extendRenderEnv(self: *BuiltinContext, node_id: core.NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
@@ -1691,12 +1695,7 @@ fn writeNodeFieldValue(
     value: core.Value,
     origin: core.SourceOrigin,
     scope_depth: u32,
-    replace_existing: bool,
 ) !void {
-    if (value == .none) {
-        try state.unsetNodeField(node_id, field_name);
-        return;
-    }
     if (std.mem.eql(u8, field_name, "content")) {
         const text = try resolveValuePropertyString(state.allocator, value);
         defer if (eval_value.propertyStringNeedsFree(value)) state.allocator.free(text);
@@ -1709,10 +1708,9 @@ fn writeNodeFieldValue(
         };
         return;
     }
-    if (replace_existing) try state.unsetNodeField(node_id, field_name);
     state.setNodeFieldValueWithOrigin(node_id, field_name, value, scope_depth, origin) catch |err| switch (err) {
         error.DuplicatePropertyDefinition => {
-            try reportDuplicatePropertyDefinition(state, origin, field_name);
+            try reportDuplicatePropertyDefinition(state, origin, node_id, field_name);
             return err;
         },
         else => return err,
@@ -1791,10 +1789,16 @@ fn writePropertyPathToNode(
     if (path.len == 0) return error.ExpectedObject;
     const property_name = path[0].name;
     if (path.len == 1) {
-        try writeNodeFieldValue(state, node_id, property_name, value, origin, evaluation.call_depth, false);
+        try writeNodeFieldValue(state, node_id, property_name, value, origin, evaluation.call_depth);
         return;
     }
 
+    const path_text = try ast.formatRecordPath(state.allocator, path);
+    defer state.allocator.free(path_text);
+    if (state.conflictingPropertyDefinition(node_id, path_text) != null) {
+        try reportDuplicatePropertyDefinition(state, origin, node_id, path_text);
+        return error.DuplicatePropertyDefinition;
+    }
     const node = state.getNode(node_id) orelse return error.UnknownNode;
     const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
     const maybe_field = if (core.fields.classId(state, node)) |class_name|
@@ -1811,21 +1815,23 @@ fn writePropertyPathToNode(
     defer if (!value_moved) value_copy.deinit(state.allocator);
     updateRecordFieldPath(state.allocator, &record, path[1..], value_copy) catch |err| switch (err) {
         error.InvalidValueTag => {
-            const path_text = try ast.formatRecordPath(state.allocator, path);
-            defer state.allocator.free(path_text);
             try reportRecordUpdateError(state, origin, "InvalidRecordUpdatePath", "'{s}' does not resolve to a nested record", .{path_text});
             return err;
         },
         error.UnknownRecordField => {
-            const path_text = try ast.formatRecordPath(state.allocator, path);
-            defer state.allocator.free(path_text);
             try reportRecordUpdateError(state, origin, "MissingRecordField", "record update path '{s}' is not present at runtime", .{path_text});
             return err;
         },
         else => return err,
     };
     value_moved = true;
-    try writeNodeFieldValue(state, node_id, property_name, .{ .record = record }, origin, evaluation.call_depth, true);
+    state.defineNodeFieldPath(node_id, property_name, path_text, .{ .record = record }, evaluation.call_depth, origin) catch |err| switch (err) {
+        error.DuplicatePropertyDefinition => {
+            try reportDuplicatePropertyDefinition(state, origin, node_id, path_text);
+            return err;
+        },
+        else => return err,
+    };
 }
 
 fn executeStatement(

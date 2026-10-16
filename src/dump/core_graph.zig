@@ -109,6 +109,10 @@ fn writeMeasurementBounds(parent: *json.Object, key: []const u8, bounds: core.La
 fn writeFields(allocator: std.mem.Allocator, object: *json.Object, fields: anytype) !void {
     var out = try object.objectField("fields");
     for (fields) |field| {
+        if (field.value == .none) {
+            try out.nullField(field.key);
+            continue;
+        }
         const text = try core.value_text.propertyString(allocator, field.value);
         defer if (core.value_text.propertyStringNeedsFree(field.value)) allocator.free(text);
         try out.stringField(field.key, text);

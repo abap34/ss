@@ -29,6 +29,13 @@ pub const Role = []const u8;
 pub const GroupRole: Role = "group";
 pub const ConnectorRole: Role = "connector";
 
+pub const PropertyPath = @import("property_path.zig");
+
+pub const PropertyDefinition = struct {
+    path: []const u8,
+    origin: ?SourceOrigin,
+};
+
 pub const Field = struct {
     key: []const u8,
     value: Value,
@@ -376,11 +383,14 @@ pub const Node = struct {
     page_index: ?usize = null,
     origin: ?SourceOrigin = null,
     fields: std.ArrayList(Field) = .empty,
+    property_definitions: std.ArrayList(PropertyDefinition) = .empty,
     render_env: std.ArrayList(RenderEnvEntry) = .empty,
 
     pub fn deinit(self: *Node, allocator: Allocator) void {
         for (self.fields.items) |*field| field.deinit(allocator);
         self.fields.deinit(allocator);
+        for (self.property_definitions.items) |definition| allocator.free(definition.path);
+        self.property_definitions.deinit(allocator);
         for (self.render_env.items) |entry| {
             allocator.free(entry.op);
             allocator.free(entry.key);

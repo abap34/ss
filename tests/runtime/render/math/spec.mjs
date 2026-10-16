@@ -35,12 +35,14 @@ async function testSizing() {
   ];
   const source = 'import std:themes/default as *\n' + cases.map(c => `
 page ${c.name}
-  let body = text! <<
+  let content = <<
 ${c.content ?? `$$\n${c.formula}\n$$`}
 >>
-  body.text.size = 24
-  body.text.math_scale = 1
-  ${c.style ?? ''}
+  let base_theme = current_theme() with {
+    body.text.size = 24
+    body.text.math_scale = 1
+  }
+  let body = text!(content, base_theme with { ${c.style ?? ''} })
   ~ body.width == ${c.width ?? 500}
   ~ body.left == page.left + 100
   ~ body.top == page.top - 100

@@ -366,6 +366,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const key = try ctx.evalStringArg(call, 1);
             const default_value = try ctx.evalStringArg(call, 2);
             const field = ctx.nodeField(target, key) orelse break :blk .{ .string = default_value };
+            if (field == .none) break :blk .{ .string = default_value };
             const text = try eval_value.propertyString(ctx.state.allocator, field);
             if (eval_value.propertyStringNeedsFree(field)) {
                 break :blk .{ .string = try ctx.ownString(@constCast(text)) };
@@ -384,6 +385,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const key = try ctx.evalStringArg(call, 1);
             const expected = try ctx.evalStringArg(call, 2);
             const actual = ctx.nodeField(target, key) orelse break :blk .{ .boolean = false };
+            if (actual == .none) break :blk .{ .boolean = false };
             const text = try eval_value.propertyString(ctx.state.allocator, actual);
             defer if (eval_value.propertyStringNeedsFree(actual)) ctx.state.allocator.free(text);
             break :blk .{ .boolean = std.mem.eql(u8, text, expected) };
@@ -450,38 +452,10 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         },
         .set_prop => blk: {
             var target = try ctx.evalExprValue(call.args.items[0]);
+            errdefer target.deinit(ctx.state.allocator);
             const key = try ctx.evalStringArg(call, 1);
             var value_arg = try ctx.evalExprValue(call.args.items[2]);
             defer value_arg.deinit(ctx.state.allocator);
-            switch (value_arg) {
-                .none => break :blk switch (target) {
-                    .document => |id| blk2: {
-                        try ctx.unsetNodeField(id, key);
-                        break :blk2 .{ .document = id };
-                    },
-                    .page => |id| blk2: {
-                        try ctx.unsetNodeField(id, key);
-                        break :blk2 .{ .page = id };
-                    },
-                    .object => |id| blk2: {
-                        try ctx.unsetNodeField(id, key);
-                        break :blk2 .{ .object = id };
-                    },
-                    .selection => |sel| blk2: {
-                        if (sel.item_tag != .object) {
-                            target.deinit(ctx.state.allocator);
-                            return error.InvalidSelectionItemType;
-                        }
-                        for (sel.ids.items) |id| try ctx.unsetNodeField(id, key);
-                        break :blk2 target;
-                    },
-                    else => {
-                        target.deinit(ctx.state.allocator);
-                        return error.InvalidValueTag;
-                    },
-                },
-                else => {},
-            }
             break :blk switch (target) {
                 .document => |id| blk2: {
                     try ctx.setNodeFieldValue(id, key, value_arg);
@@ -497,7 +471,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 },
                 .selection => |sel| blk2: {
                     if (sel.item_tag != .object) {
-                        target.deinit(ctx.state.allocator);
                         return error.InvalidSelectionItemType;
                     }
                     for (sel.ids.items) |id| {
@@ -506,7 +479,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                     break :blk2 target;
                 },
                 else => {
-                    target.deinit(ctx.state.allocator);
                     return error.InvalidValueTag;
                 },
             };

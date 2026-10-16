@@ -527,7 +527,6 @@ end
 fn/! text(text_value: String, theme: Theme = current_theme()) -> Object
   let body = objects::body_obj(text_value)
   base::apply_markdown_text_style(body, theme)
-  render::code_theme(body, theme.code.highlight)
   return body
 end
 
@@ -575,9 +574,9 @@ end
 
 fn/! figure(text_value: String, theme: Theme = current_theme()) -> Object
   let obj = objects::raw_obj(text_value, "figure", "figure_text")
-  base::apply_figure_block_style(obj, theme.figure)
+  base::apply_figure_block_style(obj, theme.figure with { text = render::text_with_code_theme(theme.figure.text, theme.code.highlight) })
   base::apply_markdown_heading_styles(obj, theme)
-  render::code_theme(obj, theme.code.highlight)
+  obj.code = theme.code.highlight.code
   return obj
 end
 
@@ -607,7 +606,6 @@ fn/! code(text_value: String, language_name: String = "python", theme: Theme = c
   let code = objects::code_obj(text_value)
   code.language = language_name
   base::apply_code_block_style(code, theme.code)
-  render::code_theme(code, theme.code.highlight)
   return code
 end
 
