@@ -216,6 +216,7 @@ step "release metadata"
 release/tools/preflight.py "$tag"
 run python3 tests/release/release_tools_spec.py
 run python3 tests/release/notes_spec.py
+run python3 tests/release/vscode/spec.py
 release/tools/changelog-section.py "$tag" > "$notes_path"
 test -s "$notes_path"
 

@@ -4,22 +4,34 @@ on:
   push:
     tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 env:
   ZIG_VERSION: 0.16.0
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   publish-vscode:
     name: Validate, package, and publish VSIX
-    if: ${{ !contains(github.ref_name, '-patch.') }}
+    if: ${{ !contains(inputs.tag || github.ref_name, '-patch.') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Select tagged release sources and current completion validation
+        run: python3 release/tools/prepare-vscode-publication.py "$RELEASE_TAG"
 
       - name: Install system dependencies
         run: |
@@ -62,7 +74,7 @@ jobs:
           echo "$HOME/.local/zig" >> "$GITHUB_PATH"
 
       - name: Check release metadata
-        run: release/tools/preflight.py "$GITHUB_REF_NAME"
+        run: release/tools/preflight.py "$RELEASE_TAG"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -79,9 +91,12 @@ jobs:
 
       - name: Validate Zig and LSP
         run: |
-          release_version="${GITHUB_REF_NAME#v}"
+          set -euo pipefail
+          release_version="${RELEASE_TAG#v}"
           zig build test
-          zig build -Doptimize=ReleaseSafe -Dversion="$release_version" -Dcommit="$GITHUB_SHA"
+          git restore -- tests/runtime/harness.mjs tests/runtime/lsp_completion_runtime_spec.mjs
+          git diff --exit-code
+          zig build -Doptimize=ReleaseSafe -Dversion="$release_version" -Dcommit="$RELEASE_COMMIT"
           zig-out/bin/ss --version
           tests/smoke/project.sh
           node tests/smoke/lsp.mjs
@@ -94,7 +109,7 @@ jobs:
 
       - name: Package VS Code extension
         working-directory: editor/vscode
-        run: npm run package:prebuilt -- --out "ss-language-support-${GITHUB_REF_NAME}.vsix" --allow-missing-repository --skip-license
+        run: npm run package:prebuilt -- --out "ss-language-support-${RELEASE_TAG}.vsix" --allow-missing-repository --skip-license
 
       - name: Publish to Marketplace
         working-directory: editor/vscode
@@ -102,7 +117,7 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
           if [ -n "${VSCE_PAT:-}" ]; then
-            npx vsce publish --packagePath "ss-language-support-${GITHUB_REF_NAME}.vsix" -p "$VSCE_PAT" --allow-missing-repository --skip-license
+            npx vsce publish --packagePath "ss-language-support-${RELEASE_TAG}.vsix" -p "$VSCE_PAT" --allow-missing-repository --skip-license
           else
             echo "VSCE_PAT is not configured; skipping Marketplace publish."
           fi
@@ -111,13 +126,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ss-language-support-vsix
-          path: editor/vscode/ss-language-support-${{ github.ref_name }}.vsix
+          path: editor/vscode/ss-language-support-${{ env.RELEASE_TAG }}.vsix
 
       - name: Attach VSIX to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ github.ref_name }}
-          VSIX: editor/vscode/ss-language-support-${{ github.ref_name }}.vsix
+          TAG_NAME: ${{ env.RELEASE_TAG }}
+          VSIX: editor/vscode/ss-language-support-${{ env.RELEASE_TAG }}.vsix
         run: |
           set -euo pipefail
           for attempt in {1..60}; do
