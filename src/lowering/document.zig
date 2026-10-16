@@ -7,6 +7,7 @@ const execution = @import("../analysis/execution.zig");
 pub const EvaluateOptions = struct {
     io: std.Io,
     cancellation: ?utils.Cancellation = null,
+    max_call_frames: u32 = @import("../eval/frames.zig").default_max_frames,
 
     fn checkCanceled(self: EvaluateOptions) !void {
         if (self.cancellation) |cancellation| try cancellation.check();
@@ -22,6 +23,7 @@ pub fn evaluateDocument(
     try eval_toplevel.executeGraph(state.allocator, state, graph, .{
         .io = options.io,
         .cancellation = options.cancellation,
+        .max_call_frames = options.max_call_frames,
     });
     try options.checkCanceled();
     try state.collectDefaultAlignments();

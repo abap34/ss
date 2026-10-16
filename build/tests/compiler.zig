@@ -62,6 +62,10 @@ pub fn register(suite: Suite, modules: project.ProjectModules, compiler_mod: *Mo
         import("compiler", compiler_mod),
     }, true);
     _ = suite.add(captures_spec_mod, .{ .name = "test-captures", .description = "Run focused lambda capture analysis tests" });
+    const frames_spec_mod = createModule(ctx, "tests/eval/frames/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    _ = suite.add(frames_spec_mod, .{ .name = "test-eval-frames", .description = "Check evaluation call frame ownership and resource limits" });
     const environment_spec_mod = createModule(ctx, "tests/eval/environment/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);

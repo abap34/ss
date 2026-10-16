@@ -72,13 +72,15 @@ const ClosureStore = struct {
     }
 };
 
+const call_frames = @import("frames.zig");
+
 const EvalContext = struct {
     io: std.Io,
     state: *core.DocumentState,
     functions: *const core.FunctionMap,
     closures: *ClosureStore,
     module_id: core.SourceModuleId = 0,
-    call_depth: u32 = 0,
+    frames: call_frames.Stack,
     elaboration_origin: ?core.SourceOrigin = null,
     declarations: *const declarations.DeclarationIndex,
     captures: *const CaptureIndex,
@@ -88,8 +90,36 @@ const EvalContext = struct {
 
 pub const ExecuteOptions = struct {
     io: std.Io,
+    max_call_frames: u32 = call_frames.default_max_frames,
     cancellation: ?utils.Cancellation = null,
 };
+
+fn enterCall(
+    evaluation: *EvalContext,
+    module_id: core.SourceModuleId,
+    origin: core.SourceOrigin,
+    captured: ?*const Environment,
+) !*call_frames.Frame {
+    try checkCancellation(evaluation);
+    const frame = evaluation.frames.push(module_id, evaluation.module_id, origin, captured) catch |err| {
+        if (err == error.EvaluationResourceLimit) {
+            try evaluation.state.addValidationDiagnostic(.@"error", null, null, origin, .{
+                .user_report = .{
+                    .code = "EvaluationResourceLimit",
+                    .message = try std.fmt.allocPrint(evaluation.state.allocator, "evaluation exceeded its limit of {d} active call frames", .{evaluation.frames.maximum}),
+                },
+            });
+        }
+        return err;
+    };
+    evaluation.module_id = frame.module_id;
+    return frame;
+}
+
+fn leaveCall(evaluation: *EvalContext, frame: *call_frames.Frame) void {
+    evaluation.module_id = frame.caller_module_id;
+    evaluation.frames.pop(frame);
+}
 
 fn checkCancellation(evaluation: *EvalContext) !void {
     if (evaluation.cancellation) |cancellation| try cancellation.check();
@@ -302,6 +332,7 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.PageCannotBeConstraintTarget => "page anchors cannot be constraint targets",
         error.UnsupportedDocumentEvaluationPrimitive => "this operation is not valid during document evaluation",
         error.FunctionDidNotReturnValue => "function did not return a value",
+        error.EvaluationResourceLimit => "evaluation exhausted its call-frame resource limit",
         else => null,
     };
 }
@@ -321,11 +352,13 @@ pub fn executeGraph(
         .state = state,
         .functions = &state.functions,
         .closures = &closures,
+        .frames = call_frames.Stack.init(allocator, options.max_call_frames),
         .declarations = graph.declarations,
         .captures = &graph.captures,
         .name_resolution_cache = &name_resolution_cache,
         .cancellation = options.cancellation,
     };
+    defer evaluation_context.frames.deinit();
     const evaluation = &evaluation_context;
     try checkCancellation(evaluation);
     try name_resolution_cache.reserve(state);
@@ -372,9 +405,10 @@ fn materializeDisplayContent(evaluation: *EvalContext) !void {
         const page_id = state.parentPageOf(node_id) orelse state.graph.document_id;
         const scope: EvalScope = if (page_id == state.graph.document_id) .document else .page;
         const origin: core.SourceOrigin = node.origin orelse .{};
+        const error_count = diagnosticErrorCount(state);
         const text = evalNodeReprWithFunction(evaluation, page_id, scope, &env, origin, node_id, function) catch |err| {
             if (err == error.Canceled) return err;
-            try reportLowerError(state, err, origin);
+            if (diagnosticErrorCount(state) == error_count) try reportLowerError(state, err, origin);
             return err;
         };
         try state.setNodeDisplayContent(node_id, text);
@@ -407,11 +441,9 @@ fn executeUnit(
     state.graph.composition_cursor = .{ .source_order = unit.source_order };
     defer state.graph.composition_cursor = previous_cursor;
     const previous_module_id = evaluation.module_id;
-    const previous_call_depth = evaluation.call_depth;
+    std.debug.assert(evaluation.frames.depth == 0);
     evaluation.module_id = unit.module_id;
-    evaluation.call_depth = 0;
     defer evaluation.module_id = previous_module_id;
-    defer evaluation.call_depth = previous_call_depth;
     switch (unit.kind) {
         .document_statement => |document_statement| {
             const entry = try document_states.getOrPut(unit.module_id);
@@ -1188,7 +1220,7 @@ const BuiltinContext = struct {
     }
 
     pub fn setNodeFieldValue(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: core.Value) !void {
-        self.state.setNodeFieldValueWithOrigin(object_id, key, value, self.evaluation.call_depth, self.current_origin) catch |err| switch (err) {
+        self.state.setNodeFieldValueWithOrigin(object_id, key, value, self.evaluation.frames.depth, self.current_origin) catch |err| switch (err) {
             error.DuplicatePropertyDefinition => {
                 try reportDuplicatePropertyDefinition(self.state, self.current_origin, object_id, key);
                 return err;
@@ -1681,7 +1713,7 @@ fn registerConstraintsOnPage(evaluation: *EvalContext, page_id: core.NodeId, rul
     for (rules) |rule| {
         var registered = rule;
         registered.page_id = page_id;
-        registered.scope_depth = evaluation.call_depth;
+        registered.scope_depth = evaluation.frames.depth;
         registered.origin = origin;
         state.constraints.active.appendAssumeCapacity(registered);
     }
@@ -1793,7 +1825,7 @@ fn writePropertyPathToNode(
     if (path.len == 0) return error.ExpectedObject;
     const property_name = path[0].name;
     if (path.len == 1) {
-        try writeNodeFieldValue(state, node_id, property_name, value, origin, evaluation.call_depth);
+        try writeNodeFieldValue(state, node_id, property_name, value, origin, evaluation.frames.depth);
         return;
     }
 
@@ -1829,7 +1861,7 @@ fn writePropertyPathToNode(
         else => return err,
     };
     value_moved = true;
-    state.defineNodeFieldPath(node_id, property_name, path_text, .{ .record = record }, evaluation.call_depth, origin) catch |err| switch (err) {
+    state.defineNodeFieldPath(node_id, property_name, path_text, .{ .record = record }, evaluation.frames.depth, origin) catch |err| switch (err) {
         error.DuplicatePropertyDefinition => {
             try reportDuplicatePropertyDefinition(state, origin, node_id, path_text);
             return err;
@@ -1861,7 +1893,7 @@ fn executeStatement(
                 try discardStatementValue(state, value);
                 return .none;
             }
-            if (scope == .page and evaluation.call_depth == 0) {
+            if (scope == .page and evaluation.frames.depth == 0) {
                 try addValueObjectSources(state, page_id, evaluation.module_id, binding.name, null, stmt.span, value);
             }
             try env.putOwned(binding.name, value);
@@ -1924,7 +1956,7 @@ fn executeStatement(
                     target.node_id,
                     target.anchor,
                     role,
-                    evaluation.call_depth,
+                    evaluation.frames.depth,
                     resolved_source,
                     offset,
                     origin,
@@ -1934,7 +1966,7 @@ fn executeStatement(
         .expr_stmt => |expr| {
             var value = try evalExpr(evaluation, page_id, scope, env, origin, expr);
             defer value.deinit(state.allocator);
-            if (scope == .page and evaluation.call_depth == 0) {
+            if (scope == .page and evaluation.frames.depth == 0) {
                 const binding_base = switch (expr) {
                     .call => |call| call.callee.name,
                     else => "",
@@ -2033,23 +2065,16 @@ fn invokeClosureValues(
     };
     try validateFixedArity(state, args.len, closure.lambda.params.items.len, current_origin);
 
-    const previous_call_depth = evaluation.call_depth;
-    evaluation.call_depth += 1;
-    defer evaluation.call_depth = previous_call_depth;
-
-    // This local copy keeps the parent frame stable if a nested lambda grows the store.
-    var local_env = Environment.child(state.allocator, &closure.env);
-    defer local_env.deinit();
+    const frame = try enterCall(evaluation, module_id, current_origin, &closure.env);
+    defer leaveCall(evaluation, frame);
+    const local_env = &frame.environment;
     for (closure.lambda.params.items, 0..) |param, index| {
         const value = args[index];
         try value_contracts.ensureValueConformsToType(state, page_id, value, param.ty, current_origin, .UnmatchedArgumentType);
         try local_env.putBorrowed(param.name, value);
     }
     const start_node_count = state.nodeCount();
-    const previous_module_id = evaluation.module_id;
-    evaluation.module_id = module_id;
-    defer evaluation.module_id = previous_module_id;
-    var value = try evalExpr(evaluation, page_id, scope, &local_env, current_origin, closure.lambda.body.*);
+    var value = try evalExpr(evaluation, page_id, scope, local_env, current_origin, closure.lambda.body.*);
     errdefer value.deinit(state.allocator);
     try markReturnedValueOrigins(state, value, start_node_count, current_origin);
     return value;
@@ -2072,20 +2097,14 @@ fn invokeUserFunctionValues(
     args: []const core.Value,
 ) anyerror!core.Value {
     const state = evaluation.state;
-    const previous_call_depth = evaluation.call_depth;
-    evaluation.call_depth += 1;
-    defer evaluation.call_depth = previous_call_depth;
-
-    var local_env = Environment.init(state.allocator);
-    defer local_env.deinit();
-    try bindUserFunctionValueArgs(evaluation, page_id, scope, env, &local_env, module_id, func, current_origin, args);
+    const frame = try enterCall(evaluation, module_id, current_origin, null);
+    defer leaveCall(evaluation, frame);
+    const local_env = &frame.environment;
+    try bindUserFunctionValueArgs(evaluation, page_id, scope, env, local_env, module_id, func, current_origin, args);
 
     const start_node_count = state.nodeCount();
-    const previous_module_id = evaluation.module_id;
-    evaluation.module_id = module_id;
-    defer evaluation.module_id = previous_module_id;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(evaluation, page_id, scope, &local_env, inner, evaluation.elaboration_origin);
+        const flow = try executeStatement(evaluation, page_id, scope, local_env, inner, evaluation.elaboration_origin);
         switch (flow) {
             .none => {},
             .returned => |result| {

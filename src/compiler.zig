@@ -1,6 +1,7 @@
 pub const syntax = @import("syntax.zig");
 pub const language = @import("language.zig");
 pub const lowering = @import("lowering.zig");
+pub const evaluation_frames = @import("eval/frames.zig");
 pub const evaluation_environment = @import("eval/environment.zig");
 pub const analysis = @import("analysis.zig");
 pub const analysis_semantics = @import("analysis/semantics.zig");
