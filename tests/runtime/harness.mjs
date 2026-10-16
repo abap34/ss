@@ -111,14 +111,14 @@ export class LspClient {
     return this.startRequest(method, params).promise;
   }
 
-  startRequest(method, params) {
+  startRequest(method, params, timeoutMs = 10000) {
     const id = this.nextId++;
     this.send({ jsonrpc: "2.0", id, method, params });
     const promise = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`timed out waiting for response ${id} (${method}); stderr:\n${this.stderr}`));
-      }, 10000);
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timeout });
     });
     return { id, promise };
@@ -224,6 +224,22 @@ export class LspClient {
       });
     });
   }
+}
+
+// Incomplete completion lists may be retriggered while background analysis catches up.
+export async function requestCompleteCompletion(client, params, timeoutMs = 5000) {
+  const deadline = performance.now() + timeoutMs;
+  let delayMs = 100;
+  let result;
+  do {
+    result = await client.startRequest("textDocument/completion", params, Math.max(1, deadline - performance.now())).promise;
+    if (!result?.isIncomplete) return result;
+    const remainingMs = deadline - performance.now();
+    if (remainingMs <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(delayMs, remainingMs)));
+    delayMs = Math.min(delayMs * 2, 400);
+  } while (performance.now() < deadline);
+  throw new Error(`completion remained incomplete after ${timeoutMs} ms: ${JSON.stringify(result)}`);
 }
 
 export async function withLspClient(options, body) {

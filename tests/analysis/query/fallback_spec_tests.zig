@@ -59,6 +59,27 @@ test "fallback analysis: literals give shallow types and arbitrary expressions g
     }
 }
 
+test "fallback analysis: an expired shared deadline gives fallback its own budget" {
+    var snapshot = emptySnapshot();
+    defer snapshot.deinit();
+    var expired_options = options;
+    expired_options.budget_ms = 120;
+    expired_options.start_ns = -120 * std.time.ns_per_ms;
+    const source = "let value: Number = unknown(\nvalue\n";
+    const req = query_types.SourceRequest{ .path = "expired.ss", .source = source, .offset = after(source, "value\n") - 2 };
+    var completion = try api.completeAt(testing.allocator, &snapshot, req, expired_options);
+    defer completion.deinit(testing.allocator);
+    try testing.expect(completion.is_incomplete);
+    try testing.expectEqualStrings("Number", (try candidate(completion, "value")).detail.?);
+    var hover = (try api.hoverAt(testing.allocator, &snapshot, req, expired_options)) orelse return error.ExpectedHover;
+    defer hover.deinit(testing.allocator);
+    try testing.expectEqualStrings("```ss\n(value: Number)\n```", hover.markdown);
+    const targets = try api.definitionAt(testing.allocator, &snapshot, req, expired_options);
+    defer testing.allocator.free(targets);
+    try testing.expectEqual(@as(usize, 1), targets.len);
+    try testing.expectEqual(@as(usize, 0), targets[0].line);
+}
+
 test "fallback analysis: ambiguous declarations give Any and candidate definition locations" {
     var snapshot = emptySnapshot();
     defer snapshot.deinit();

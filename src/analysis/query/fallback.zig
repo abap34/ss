@@ -27,6 +27,7 @@ const Work = struct {
     fn init(opts: types.QueryOptions) Work {
         var options = opts;
         options.budget_ms = Limits.milliseconds;
+        options.start_ns = null;
         return .{ .budget = types.QueryBudget.start(options) };
     }
 

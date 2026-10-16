@@ -12,6 +12,7 @@ import {
   isDefinitionLocation,
   positionAfter,
   positionAt,
+  requestCompleteCompletion,
   root,
   withLspClient,
 } from "./harness.mjs";
@@ -57,7 +58,7 @@ async function testProjectCompletionLifecycle() {
     const diagnostics = await diagnosticsPromise;
     assert(diagnostics.params.diagnostics.length === 0, `fixture diagnostics: ${JSON.stringify(diagnostics.params.diagnostics)}`);
 
-    const globalCompletion = await client.request("textDocument/completion", {
+    const globalCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri },
       position: positionAfter(source, "let heading = "),
     });
@@ -88,15 +89,16 @@ end
     assert(libraryDiagnostics.params.diagnostics.length === 0, `library valid diagnostics: ${JSON.stringify(libraryDiagnostics.params.diagnostics)}`);
 
     const libraryBrokenSource = libraryValidSource.replace('t.link_id = "ultra-big"', "t.");
+    const libraryBrokenDiagnostics = client.waitForDiagnostics(partsUri);
     client.changeDocument({ uri: partsUri, version: 2, text: libraryBrokenSource });
-    const libraryMemberCompletion = await client.request("textDocument/completion", {
+    const libraryMemberCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: partsUri },
       position: positionAfter(libraryBrokenSource, "  t."),
     });
     assertPropertyCompletion(libraryMemberCompletion, "imported library member completion");
-    await client.waitForDiagnostics(partsUri);
+    await libraryBrokenDiagnostics;
 
-    const repeatedLibraryCompletion = await client.request("textDocument/completion", {
+    const repeatedLibraryCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: partsUri },
       position: positionAfter(libraryBrokenSource, "  t."),
     });
@@ -104,13 +106,13 @@ end
 
     const libraryRecordUpdateBrokenSource = libraryValidSource.replace("body.text.size = 24", "bod");
     client.changeDocument({ uri: partsUri, version: 3, text: libraryRecordUpdateBrokenSource });
-    const recordUpdateBaseCompletion = await client.request("textDocument/completion", {
+    const recordUpdateBaseCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: partsUri },
       position: positionAfter(libraryRecordUpdateBrokenSource, "with {\n    "),
     });
     assertThemeRecordCompletion(recordUpdateBaseCompletion, "record update base completion");
 
-    const recordUpdatePrefixCompletion = await client.request("textDocument/completion", {
+    const recordUpdatePrefixCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: partsUri },
       position: positionAfter(libraryRecordUpdateBrokenSource, "bod"),
     });
@@ -118,7 +120,7 @@ end
 
     const libraryRecordUpdateNestedBrokenSource = libraryValidSource.replace("body.text.size = 24", "body.text.");
     client.changeDocument({ uri: partsUri, version: 4, text: libraryRecordUpdateNestedBrokenSource });
-    const recordUpdateNestedCompletion = await client.request("textDocument/completion", {
+    const recordUpdateNestedCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: partsUri },
       position: positionAfter(libraryRecordUpdateNestedBrokenSource, "body.text."),
     });
@@ -147,13 +149,14 @@ end
     assert(unimportedDiagnostics.params.diagnostics.length === 0, `unimported library valid diagnostics: ${JSON.stringify(unimportedDiagnostics.params.diagnostics)}`);
 
     const unimportedLibraryBrokenSource = unimportedLibraryValidSource.replace('t.link_id = "ultra-big"', "t.");
+    const unimportedBrokenDiagnostics = client.waitForDiagnostics(themeTempUri);
     client.changeDocument({ uri: themeTempUri, version: 2, text: unimportedLibraryBrokenSource });
-    const unimportedBrokenCompletion = await client.request("textDocument/completion", {
+    const unimportedBrokenCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri: themeTempUri },
       position: positionAfter(unimportedLibraryBrokenSource, "t."),
     });
     assertPropertyCompletion(unimportedBrokenCompletion, "unimported library broken completion");
-    await client.waitForDiagnostics(themeTempUri);
+    await unimportedBrokenDiagnostics;
 
     const brokenDiagnosticsPromise = client.waitForDiagnostics(
       uri,
@@ -169,7 +172,7 @@ end
     const brokenDiagnostics = await brokenDiagnosticsPromise;
     assert(brokenDiagnostics.params.diagnostics.length > 0, "ranged didChange did not publish diagnostics for broken source");
 
-    const brokenCompletion = await client.request("textDocument/completion", {
+    const brokenCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri },
       position: positionAfter(source, "let heading = "),
     });
@@ -198,7 +201,7 @@ page ok
 end
 `;
     client.changeDocument({ uri, version: 4, text: addedBrokenMemberSource });
-    const addedBrokenMemberCompletion = await client.request("textDocument/completion", {
+    const addedBrokenMemberCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri },
       position: positionAfter(addedBrokenMemberSource, "t."),
     });
@@ -253,7 +256,7 @@ page ok
 end
 `;
     client.changeDocument({ uri, version: 6, text: memberBrokenSource });
-    const memberCompletion = await client.request("textDocument/completion", {
+    const memberCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri },
       position: positionAfter(memberBrokenSource, "t."),
     });
@@ -272,7 +275,7 @@ end
       "enum member-name hole diagnostics",
     );
     client.changeDocument({ uri, version: 7, text: enumBrokenSource });
-    const enumCompletion = await client.request("textDocument/completion", {
+    const enumCompletion = await requestCompleteCompletion(client, {
       textDocument: { uri },
       position: positionAfter(enumBrokenSource, "Align."),
     });
@@ -305,7 +308,7 @@ end
       const diagnostics = await diagnosticsPromise;
       assert(diagnostics.params.diagnostics.length === 0, `qualified diagnostics: ${JSON.stringify(diagnostics.params.diagnostics)}`);
 
-      const completion = await client.request("textDocument/completion", {
+      const completion = await requestCompleteCompletion(client, {
         textDocument: { uri: localUri },
         position: positionAfter(qualifiedSource, "default::"),
       });
@@ -607,7 +610,7 @@ asset_base_dir = "."
       const diagnosticsPromise = client.waitForDiagnostics(localUri);
       client.openDocument({ uri: localUri, text: sourceText });
       await diagnosticsPromise;
-      return client.request("textDocument/completion", {
+      return requestCompleteCompletion(client, {
         textDocument: { uri: localUri },
         position,
       });

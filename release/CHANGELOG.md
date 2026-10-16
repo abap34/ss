@@ -4,6 +4,11 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Restored bounded fallback completion, hover, and definition results after a
+  shared LSP query deadline expires.
+
 ## [0.8.4] - 2026-10-16
 
 ### Added
