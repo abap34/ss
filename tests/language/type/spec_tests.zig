@@ -17,6 +17,20 @@ test "type spec: any is the explicit wildcard in acceptance checks" {
     try testing.expect(!Type.accepts(Type.selection(.page), Type.selection(.object)));
 }
 
+test "type spec: erased selections cannot acquire a concrete element type" {
+    const erased = Type.selection(.any);
+    try testing.expect(Type.accepts(erased, Type.selection(.page)));
+    try testing.expect(Type.accepts(erased, Type.selection(.object)));
+    try testing.expect(!Type.accepts(Type.selection(.page), erased));
+    try testing.expect(!Type.accepts(Type.selection(.object), erased));
+    var erased_result = try Type.functionType(testing.allocator, &.{}, erased);
+    defer erased_result.deinit(testing.allocator);
+    var object_result = try Type.functionType(testing.allocator, &.{}, Type.selection(.object));
+    defer object_result.deinit(testing.allocator);
+    try testing.expect(!Type.accepts(object_result, erased_result));
+    try testing.expect(Type.accepts(erased_result, object_result));
+}
+
 test "type spec: object class names refine only when both sides specify a class" {
     const text = Type.objectClass("Text");
     const image = Type.objectClass("Image");

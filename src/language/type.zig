@@ -263,6 +263,7 @@ pub const Type = struct {
         }
         const expected_param = normalizeParam(expected.param);
         const actual_param = normalizeParam(actual.param);
+        if (expected.kind == .selection and expected_param != .any and actual_param == .any) return false;
         if (!(expected_param == .any or actual_param == .any or expected_param == actual_param)) return false;
         if (expected_param == .object and expected.param_class_name != null and actual.param_class_name != null) {
             if (expected.param_module_id != actual.param_module_id or !std.mem.eql(u8, expected.param_class_name.?, actual.param_class_name.?)) return false;

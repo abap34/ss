@@ -7700,3 +7700,97 @@ test "compiler semantics: constraint anchors wait for delayed object bindings" {
         \\end
     );
 }
+
+test "compiler semantics: erased selections support counting without exposing elements" {
+    try expectObjectContent(
+        \\fn size(items: Selection) -> Number
+        \\  return selection_count(items)
+        \\end
+        \\page main
+        \\  text!(str(size(pages(docctx()))))
+        \\end
+    , "1");
+}
+
+test "compiler semantics: first and callbacks retain explicit page element types" {
+    try expectObjectContent(
+        \\fn ids(items: Selection<Page>) -> String
+        \\  return str(page_index(first(items))) ++ ":" ++ join(items, ",", (p: Page) |-> str(page_index(p)))
+        \\end
+        \\page main
+        \\  text!(ids(pages(docctx())))
+        \\end
+    , "1:1");
+    try expectDiagnostic(
+        \\page main
+        \\  let query = "document" ++ "_pages"
+        \\  text!(content(first(select(docctx(), query))))
+        \\end
+    , "case.ss:bytes:", "TypeMismatch: expected Object, got Page");
+}
+
+test "compiler semantics: first requires a known selection element type" {
+    try expectDiagnostic(
+        \\fn invalid(items: Selection) -> Object
+        \\  return first(items)
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "UnknownSelectionItemType");
+}
+
+test "compiler semantics: selection callbacks require known element types" {
+    const operations = [_][]const u8{
+        "foreach(items, (item: Object) |-> content(item))",
+        "foreach_enumerate(items, (item: Object, index: Number) |-> content(item))",
+        "join(items, \",\", (item: Object) |-> content(item))",
+        "fold(items, \"\", (acc: String, item: Object) |-> acc ++ content(item))",
+    };
+    for (operations) |operation| {
+        const source = try std.fmt.allocPrint(testing.allocator, "fn invalid(items: Selection) -> Void\n  {s}\nend\npage main\nend\n", .{operation});
+        defer testing.allocator.free(source);
+        try expectDiagnostic(source, "case.ss:bytes:", "UnknownSelectionItemType");
+    }
+}
+
+test "compiler semantics: erased selections cannot be returned as object selections or grouped" {
+    try expectDiagnostic(
+        \\fn invalid(items: Selection) -> Selection<Object>
+        \\  return items
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+    try expectDiagnostic(
+        \\fn invalid(items: Selection) -> Object
+        \\  return group(items)
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+}
+
+test "compiler semantics: erased selections cannot receive object properties" {
+    try expectDiagnostic(
+        \\fn invalid(items: Selection) -> Void
+        \\  items.link_id = "invalid"
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidProperty");
+    try expectDiagnostic(
+        \\fn invalid(items: Selection) -> Void
+        \\  set_prop(items, "link_id", "invalid")
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidProperty");
+}
+
+test "compiler semantics: selection algebra cannot recover erased element types" {
+    for ([_][]const u8{ "selection_union", "selection_intersection", "selection_difference" }) |operation| {
+        const source = try std.fmt.allocPrint(testing.allocator, "fn invalid(left: Selection, right: Selection<Page>) -> Selection\n  return {s}(left, right)\nend\npage main\nend\n", .{operation});
+        defer testing.allocator.free(source);
+        try expectDiagnostic(source, "case.ss:bytes:", "UnknownSelectionItemType");
+    }
+}

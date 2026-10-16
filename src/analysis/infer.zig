@@ -922,19 +922,10 @@ fn primitiveResultTypeInfo(
 
     switch (descriptor.result_policy) {
         .first_selection_item => {
-            if (call.args.items.len == 0) return infoFromType(Type.object);
+            if (call.args.items.len == 0) return error.InvalidArity;
             const selection_info = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[0], origin, options);
             if (selection_info.hole != null) return selection_info;
-            var info = switch (selection_info.ty.param) {
-                .page => infoFromType(Type.page),
-                .object, .any, .none => infoFromType(Type.object),
-                else => infoFromType(Type.object),
-            };
-            if (info.ty.kind == .object) {
-                info.object_class = selection_info.object_class;
-                if (selection_info.object_class) |id| info.ty = Type.objectId(id);
-            }
-            return info;
+            return infoFromType(try selectionItemType(state, selection_info, origin));
         },
         .first_arg => {
             if (call.args.items.len <= descriptor.result_arg_index) return infoFromType(registry.primitiveResultType(descriptor) orelse Type.object);
@@ -975,6 +966,17 @@ fn primitiveResultTypeInfo(
     return info;
 }
 
+fn selectionItemType(state: ?*core.DocumentState, info: TypeInfo, origin: core.SourceOrigin) !Type {
+    return switch (info.ty.param) {
+        .page => Type.page,
+        .object => if (info.object_class orelse info.ty.selectionItemId()) |id| Type.objectId(id) else Type.object,
+        else => {
+            try addUserReport(state, origin, "UnknownSelectionItemType", "this operation requires Selection<Page> or Selection<Object>; specify the element type in the Selection annotation", .{});
+            return error.InvalidType;
+        },
+    };
+}
+
 fn validateCallbackShape(
     allocator: std.mem.Allocator,
     state: ?*core.DocumentState,
@@ -1006,20 +1008,16 @@ fn validateCallbackShape(
         });
         return error.InvalidArity;
     }
-    const item_type = switch (selection_info.ty.param) {
-        .page => Type.page,
-        .object => if (selection_info.object_class orelse selection_info.ty.selectionItemId()) |id| Type.objectId(id) else Type.object,
-        .any, .none => Type.object,
-        else => Type.any,
-    };
     if (descriptor.op == .csv_map) {
         const supplied_types = [_]Type{ Type.string, Type.number, Type.number, Type.boolean };
         for (supplied_types, 0..) |ty, index| {
             try ensureType(state, allocator, infoFromType(ty), callback_info.ty.fn_params[index], origin, .UnmatchedArgumentType);
         }
     } else if (supplied_arg_count == 1) {
+        const item_type = try selectionItemType(state, selection_info, origin);
         try ensureType(state, allocator, infoFromType(item_type), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
     } else if (supplied_arg_count == 2) {
+        const item_type = try selectionItemType(state, selection_info, origin);
         switch (descriptor.op) {
             .fold => {
                 try ensureType(state, allocator, infoFromType(Type.string), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
@@ -1060,8 +1058,10 @@ fn inferSelectionAlgebraInfo(
     try ensureType(state, allocator, right, Type.selection(.any), origin, .UnmatchedArgumentType);
     if (left.hole != null) return left;
     if (right.hole != null) return right;
+    _ = try selectionItemType(state, left, origin);
+    _ = try selectionItemType(state, right, origin);
 
-    if (left.ty.param != .any and right.ty.param != .any and left.ty.param != right.ty.param) {
+    if (left.ty.param != right.ty.param) {
         const left_label = try typeLabelAlloc(allocator, left.ty);
         defer allocator.free(left_label);
         const right_label = try typeLabelAlloc(allocator, right.ty);
@@ -1076,13 +1076,7 @@ fn inferSelectionAlgebraInfo(
         return error.InvalidType;
     }
 
-    const item_tag = switch (op) {
-        .selection_union => if (left.ty.param == right.ty.param) left.ty.param else .any,
-        .selection_intersection => if (left.ty.param != .any) left.ty.param else right.ty.param,
-        .selection_difference => left.ty.param,
-        else => unreachable,
-    };
-    var info = infoFromType(Type.selection(item_tag));
+    var info = infoFromType(Type.selection(left.ty.param));
     info.object_class = switch (op) {
         .selection_union => semantic_types.joinObjectClass(left.object_class, right.object_class),
         .selection_intersection => semantic_types.meetObjectClass(left.object_class, right.object_class),
@@ -1276,7 +1270,7 @@ fn lookupFieldForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []
     if (targetClassForInfo(target_info, sema)) |class_name| {
         return sema.field(class_name, key);
     }
-    if (target_info.ty.kind == .object or (target_info.ty.kind == .selection and (target_info.ty.param == .object or target_info.ty.param == .any))) {
+    if (target_info.ty.kind == .object or (target_info.ty.kind == .selection and target_info.ty.param == .object)) {
         return sema.fieldByName(key);
     }
     return null;

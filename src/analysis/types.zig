@@ -136,7 +136,7 @@ pub fn isPropertyReadTarget(info: TypeInfo) bool {
 pub fn isPropertyTarget(info: TypeInfo) bool {
     return switch (info.ty.kind) {
         .document, .page, .object => true,
-        .selection => info.ty.param == .object or info.ty.param == .any,
+        .selection => info.ty.param == .object,
         else => false,
     };
 }
@@ -147,7 +147,7 @@ pub fn targetClassForInfo(info: TypeInfo, sema: *const @import("../language/env.
         .document => sema.builtinClass("Doc"),
         .page => sema.builtinClass("PageContext"),
         .object => info.object_class,
-        .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_class else null,
+        .selection => if (info.ty.param == .object) info.object_class else null,
         else => null,
     };
 }
