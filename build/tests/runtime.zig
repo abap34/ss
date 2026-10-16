@@ -46,6 +46,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/layout/practical/spec.mjs", .name = "test-layout-practical", .description = "Check synthetic practical layouts and editor updates" },
         .{ .path = "tests/runtime/lsp/cancellation/spec.mjs" },
         .{ .path = "tests/runtime/lsp/diagnostics/spec.mjs" },
+        .{ .path = "tests/runtime/lsp/diagnostics/multiple_spec.mjs", .name = "test-lsp-multiple-documents", .description = "Check diagnostics across independent entries and shared imports" },
         .{ .path = "tests/runtime/lsp/diagnostics/layout_spec.mjs" },
         .{ .path = "tests/runtime/lsp/generated_edit/spec.mjs" },
         .{ .path = "tests/runtime/lsp/generated_edit/reuse_spec.mjs" },

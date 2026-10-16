@@ -15,6 +15,10 @@ pub fn register(suite: Suite, modules: project.ProjectModules, compiler_mod: *Mo
     const completion_step = b.step("test-completion", "Run focused analysis and LSP completion tests");
     completion_step.dependOn(&run_completion_spec_tests.step);
     const completion_api = project.createLspModule(ctx, modules);
+    const analysis_store_mod = createModule(ctx, "tests/lsp/analysis/spec_tests.zig", &.{
+        import("lsp", completion_api),
+    }, true);
+    _ = suite.add(analysis_store_mod, .{ .name = "test-lsp-analysis", .description = "Check LSP analysis sharing and ownership" });
     const completion_response_mod = createModule(ctx, "tests/lsp/completion/response_spec_tests.zig", &.{
         import("lsp", completion_api),
     }, true);

@@ -190,6 +190,7 @@ pub fn uriFromPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     const absolute = try project.absolutePath(allocator, path);
     defer allocator.free(absolute);
     var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
     try out.appendSlice(allocator, "file://");
     for (absolute) |byte| {
         if (std.ascii.isAlphanumeric(byte) or byte == '/' or byte == '_' or byte == '-' or byte == '.') {

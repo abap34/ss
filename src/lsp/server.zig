@@ -49,6 +49,8 @@ const uriFromPath = protocol.uriFromPath;
 const LayoutBuildMode = enum {
     configured,
     required,
+    semantic,
+    single_document,
 };
 
 const PendingGeneratedEdit = struct {
@@ -78,6 +80,8 @@ const Server = struct {
     editor_snapshot_cache: editor_snapshot.Cache,
     analysis: ?AnalysisSnapshot = null,
     analysis_revision: u64 = 0,
+    analysis_watched_revision: u64 = 0,
+    other_analyses: lsp_state.AnalysisStore = .{},
     analysis_diagnostics: DiagnosticSet,
     layout_responses: ResponseStore = .{},
     editor_responses: ResponseStore = .{},
@@ -117,6 +121,7 @@ const Server = struct {
         self.documents.deinit();
         if (self.analysis) |*snapshot| snapshot.deinit();
         self.analysis_diagnostics.deinit();
+        self.other_analyses.deinit(self.allocator);
         self.embedded_cache.deinit();
         self.render_resource_cache.deinit();
         self.text_shape_cache.deinit();
@@ -189,11 +194,74 @@ const Server = struct {
         errdefer if (snapshot_owned) snapshot.deinit();
         try self.checkCanceled();
         if (snapshot.generation != self.documents.generation or rebuild_generation != self.documents.generation) return error.Canceled;
-        if (self.analysis) |*old| old.deinit();
+        if (self.analysis) |*old| {
+            if (!std.mem.eql(u8, old.project.entry_path, snapshot.project.entry_path)) {
+                try self.other_analyses.put(self.allocator, .{ .snapshot = old.*, .diagnostics = self.analysis_diagnostics, .watched_revision = self.analysis_watched_revision });
+                self.analysis_diagnostics = DiagnosticSet.init(self.allocator);
+            } else old.deinit();
+        }
+        self.other_analyses.remove(snapshot.project.entry_path);
         self.analysis = snapshot;
+        self.analysis_watched_revision = self.watched_files_revision;
         self.analysis_revision = self.active_revision;
         snapshot_owned = false;
+        try self.refreshOpenDocumentAnalyses();
         try self.acceptAnalysisDiagnostics(&diagnostics);
+    }
+
+    fn analysisReusable(self: *Server, snapshot: *AnalysisSnapshot, watched_revision: u64) bool {
+        if (watched_revision != self.watched_files_revision) return false;
+        if (snapshot.generation == self.documents.generation) return true;
+        // Failed imports may become available through a newly opened overlay.
+        if (snapshot.diagnostics.hasErrors()) return false;
+        for (snapshot.modules) |module| {
+            const path = module.path orelse continue;
+            if (self.documents.sourceForPath(path)) |text| {
+                if (!std.mem.eql(u8, text, module.source)) return false;
+            }
+        }
+        snapshot.generation = self.documents.generation;
+        return true;
+    }
+
+    fn refreshOpenDocumentAnalyses(self: *Server) !void {
+        var documents = self.documents.iterator();
+        while (documents.next()) |document| {
+            const path = document.key_ptr.*;
+            if (self.analysis.?.coversPath(path)) continue;
+            var covered = false;
+            for (self.other_analyses.entries.items) |*entry| {
+                if (entry.snapshot.coversPath(path) and self.analysisReusable(&entry.snapshot, entry.watched_revision)) {
+                    covered = true;
+                    break;
+                }
+            }
+            if (covered) continue;
+            var diagnostics = DiagnosticSet.init(self.allocator);
+            errdefer diagnostics.deinit();
+            var snapshot = try self.buildAnalysis(path, &diagnostics, .semantic, false);
+            var snapshot_owned = true;
+            errdefer if (snapshot_owned) snapshot.deinit();
+            if (!snapshot.coversPath(path)) {
+                snapshot.deinit();
+                snapshot_owned = false;
+                diagnostics.deinit();
+                diagnostics = DiagnosticSet.init(self.allocator);
+                snapshot = try self.buildSingleDocumentAnalysis(path, &diagnostics);
+                snapshot_owned = true;
+            }
+            try self.other_analyses.put(self.allocator, .{ .snapshot = snapshot, .diagnostics = diagnostics, .watched_revision = self.watched_files_revision });
+        }
+        var index: usize = 0;
+        while (index < self.other_analyses.entries.items.len) {
+            const entry = &self.other_analyses.entries.items[index];
+            if (entry.snapshot.generation == self.documents.generation and entry.watched_revision == self.watched_files_revision) {
+                index += 1;
+            } else {
+                var removed = self.other_analyses.entries.swapRemove(index);
+                removed.deinit();
+            }
+        }
     }
 
     fn acceptAnalysisDiagnostics(self: *Server, diagnostics: *DiagnosticSet) !void {
@@ -206,13 +274,14 @@ const Server = struct {
     }
 
     fn publishAnalysisDiagnostics(self: *Server, diagnostics: *DiagnosticSet) !void {
-        if (self.analysis.?.project.lsp.enabled and self.analysis.?.project.lsp.diagnostics) {
-            try self.publishDiagnostics(diagnostics);
-        } else {
-            var empty = DiagnosticSet.init(self.allocator);
-            defer empty.deinit();
-            try self.publishDiagnostics(&empty);
+        var combined = DiagnosticSet.init(self.allocator);
+        defer combined.deinit();
+        if (self.analysis.?.project.lsp.enabled and self.analysis.?.project.lsp.diagnostics) try combined.appendFrom(diagnostics);
+        for (self.other_analyses.entries.items) |*entry| {
+            if (entry.snapshot.generation != self.documents.generation or entry.watched_revision != self.watched_files_revision) continue;
+            if (entry.snapshot.project.lsp.enabled and entry.snapshot.project.lsp.diagnostics) try combined.appendFrom(&entry.diagnostics);
         }
+        try self.publishDiagnostics(&combined);
         var editor_diagnostics = std.ArrayList(u8).empty;
         defer editor_diagnostics.deinit(self.allocator);
         try diagnostics.appendEditorErrorsJson(self.allocator, &editor_diagnostics);
@@ -496,6 +565,7 @@ const Server = struct {
         const include_layout = switch (layout_build) {
             .configured => if (config) |cfg| cfg.wysiwyg.refresh_automatically else true,
             .required => true,
+            .semantic, .single_document => false,
         };
         var default_highlight: ?utils.highlight.Config = null;
         defer if (default_highlight) |*cfg| cfg.deinit(self.allocator);
@@ -504,7 +574,7 @@ const Server = struct {
             break :blk default_highlight.?;
         };
         try self.checkCanceled();
-        const entry_path = if (config) |cfg| try self.allocator.dupe(u8, cfg.entry) else try self.allocator.dupe(u8, changed_abs);
+        const entry_path = try self.allocator.dupe(u8, if (layout_build != .single_document and config != null) config.?.entry else changed_abs);
         defer self.allocator.free(entry_path);
         const asset_base_dir = if (config) |cfg| try self.allocator.dupe(u8, cfg.asset_base_dir) else try dirnameAlloc(self.allocator, entry_path);
         defer self.allocator.free(asset_base_dir);
@@ -551,30 +621,7 @@ const Server = struct {
     }
 
     fn buildSingleDocumentAnalysis(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet) !AnalysisSnapshot {
-        try self.checkCanceled();
-        const entry_path = try project.absolutePath(self.allocator, changed_path);
-        defer self.allocator.free(entry_path);
-        const asset_base_dir = try dirnameAlloc(self.allocator, entry_path);
-        defer self.allocator.free(asset_base_dir);
-
-        var sources = analysis.snapshot.SourceSet.init(self.allocator, self.io);
-        defer sources.deinit();
-        try self.documents.fillOverlay(&sources.overlay);
-        var highlight = try utils.highlight.defaultConfig(self.allocator);
-        defer highlight.deinit(self.allocator);
-
-        var analysis_snapshot = try analysis.snapshot.build(self.allocator, &sources, entry_path, asset_base_dir, .{
-            .generation = self.documents.generation,
-            .project = .{ .highlight = highlight },
-            .cancellation = .{
-                .context = self,
-                .is_canceled = analysisCanceled,
-            },
-            .embedded_cache = &self.embedded_cache,
-        });
-        errdefer analysis_snapshot.deinit();
-        try diagnostics.addAnalysisBag(&analysis_snapshot.diagnostics);
-        return analysis_snapshot;
+        return self.buildAnalysis(changed_path, diagnostics, .single_document, false);
     }
 
     fn addProjectConfigDiagnostic(self: *Server, diagnostics: *analysis.diagnostics.DiagnosticBag, path: []const u8, err: anyerror) !void {
@@ -1090,8 +1137,15 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                 if (server.documents.removeUri(uri)) |path| server.allocator.free(path);
             }
         };
-        if (server.documents.items.count() == 0) server.clearPendingRebuild();
-        server.acceptCurrentRevision();
+        server.other_analyses.deinit(server.allocator);
+        server.analysis_watched_revision = std.math.maxInt(u64);
+        var remaining = server.documents.iterator();
+        if (remaining.next()) |document| {
+            try server.scheduleRebuild(document.key_ptr.*);
+        } else {
+            server.clearPendingRebuild();
+            server.acceptCurrentRevision();
+        }
         return;
     }
 

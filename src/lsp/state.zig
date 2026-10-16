@@ -445,3 +445,44 @@ pub fn deinitStringSet(allocator: std.mem.Allocator, set: *std.StringHashMap(voi
     while (iterator.next()) |entry| allocator.free(entry.key_ptr.*);
     set.deinit();
 }
+
+pub const AnalysisEntry = struct {
+    snapshot: AnalysisSnapshot,
+    diagnostics: @import("diagnostics.zig").DiagnosticSet,
+    watched_revision: u64,
+
+    pub fn deinit(self: *AnalysisEntry) void {
+        self.snapshot.deinit();
+        self.diagnostics.deinit();
+    }
+};
+
+pub const AnalysisStore = struct {
+    entries: std.ArrayList(AnalysisEntry) = .empty,
+
+    pub fn deinit(self: *AnalysisStore, allocator: std.mem.Allocator) void {
+        for (self.entries.items) |*entry| entry.deinit();
+        self.entries.deinit(allocator);
+        self.* = .{};
+    }
+
+    // The caller retains both inputs if allocating the new slot fails.
+    pub fn put(self: *AnalysisStore, allocator: std.mem.Allocator, entry: AnalysisEntry) !void {
+        for (self.entries.items) |*existing| {
+            if (!std.mem.eql(u8, existing.snapshot.project.entry_path, entry.snapshot.project.entry_path)) continue;
+            existing.deinit();
+            existing.* = entry;
+            return;
+        }
+        try self.entries.append(allocator, entry);
+    }
+
+    pub fn remove(self: *AnalysisStore, path: []const u8) void {
+        for (self.entries.items, 0..) |entry, index| {
+            if (!std.mem.eql(u8, entry.snapshot.project.entry_path, path)) continue;
+            var removed = self.entries.swapRemove(index);
+            removed.deinit();
+            return;
+        }
+    }
+};

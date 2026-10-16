@@ -20,6 +20,23 @@ pub const DiagnosticSet = struct {
         self.items.deinit(self.allocator);
     }
 
+    pub fn appendFrom(self: *DiagnosticSet, other: *const DiagnosticSet) !void {
+        for (other.items.items) |item| {
+            var duplicate = false;
+            for (self.items.items) |existing| {
+                if (std.mem.eql(u8, existing.uri, item.uri) and std.meta.eql(existing.range, item.range) and
+                    existing.severity == item.severity and std.mem.eql(u8, existing.code, item.code) and std.mem.eql(u8, existing.message, item.message))
+                {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            try self.items.ensureUnusedCapacity(self.allocator, 1);
+            self.items.appendAssumeCapacity(try item.clone(self.allocator));
+        }
+    }
+
     pub fn add(
         self: *DiagnosticSet,
         path: []const u8,
@@ -316,6 +333,22 @@ const LspDiagnostic = struct {
     code: []u8,
     message: []u8,
     related_information: std.ArrayList(LspRelatedInformation) = .empty,
+
+    fn clone(self: LspDiagnostic, allocator: std.mem.Allocator) !LspDiagnostic {
+        var result = LspDiagnostic{ .uri = &.{}, .range = self.range, .severity = self.severity, .code = &.{}, .message = &.{} };
+        errdefer result.deinit(allocator);
+        result.uri = try allocator.dupe(u8, self.uri);
+        result.code = try allocator.dupe(u8, self.code);
+        result.message = try allocator.dupe(u8, self.message);
+        try result.related_information.ensureTotalCapacity(allocator, self.related_information.items.len);
+        for (self.related_information.items) |item| {
+            const uri = try allocator.dupe(u8, item.uri);
+            errdefer allocator.free(uri);
+            const message = try allocator.dupe(u8, item.message);
+            result.related_information.appendAssumeCapacity(.{ .uri = uri, .range = item.range, .message = message });
+        }
+        return result;
+    }
 
     fn deinit(self: *LspDiagnostic, allocator: std.mem.Allocator) void {
         allocator.free(self.uri);
