@@ -576,13 +576,16 @@ fn appendUnique(allocator: std.mem.Allocator, list: *std.ArrayList(Resource), re
 }
 
 const SummaryCache = std.StringHashMap(AccessSummary);
+const ReturnFact = union(enum) { string_literal: ?[]const u8, object_role: ?[]const u8, property_target: ?PropertyTarget };
 
 pub const RunCache = struct {
     allocator: std.mem.Allocator,
     name_resolution: analysis_cache.NameResolutionCache,
     summaries: SummaryCache,
+    return_facts: std.StringHashMap(ReturnFact),
     // Borrowed from the graph; cached and returned summaries share these bytes.
     string_allocator: std.mem.Allocator,
+    return_body_analyses: usize = 0,
     next_function_value_id: usize = 1,
 
     pub fn init(allocator: std.mem.Allocator, string_allocator: std.mem.Allocator) RunCache {
@@ -590,6 +593,7 @@ pub const RunCache = struct {
             .allocator = allocator,
             .name_resolution = analysis_cache.NameResolutionCache.init(allocator),
             .summaries = SummaryCache.init(allocator),
+            .return_facts = .init(allocator),
             .string_allocator = string_allocator,
         };
     }
@@ -601,6 +605,9 @@ pub const RunCache = struct {
             entry.value_ptr.deinit();
         }
         self.summaries.deinit();
+        var fact_keys = self.return_facts.keyIterator();
+        while (fact_keys.next()) |key| self.allocator.free(key.*);
+        self.return_facts.deinit();
         self.name_resolution.deinit();
     }
 
@@ -736,6 +743,7 @@ pub const Analyzer = struct {
     capture_index: captures.Index,
     function_value_depth: usize = 0,
     effect_analysis_depth: usize = 0,
+    return_fact_recursions: usize = 0,
     next_function_value_id: usize = 1,
 
     pub fn init(allocator: std.mem.Allocator, sema: *const SemanticEnv) Analyzer {
@@ -2370,24 +2378,46 @@ pub const Analyzer = struct {
         resolved: semantic_env.ResolvedFunction,
         call: ast.CallExpr,
     ) anyerror!?PropertyTarget {
-        const fallback = self.propertyTargetForType(resolved.decl.result_type);
-        if (self.visiting.contains(resolved.key)) return fallback;
+        return self.functionReturnFact(.property_target, resolved, call);
+    }
+
+    fn functionReturnFact(self: *Analyzer, comptime kind: ReturnFactKind, resolved: semantic_env.ResolvedFunction, call: ast.CallExpr) anyerror!?FactValue(kind) {
+        const fallback = if (kind == .property_target) self.propertyTargetForType(resolved.decl.result_type) else null;
+        if (self.visiting.contains(resolved.key)) {
+            self.return_fact_recursions += 1;
+            return fallback;
+        }
         try self.visiting.put(resolved.key, {});
         defer _ = self.visiting.remove(resolved.key);
-
-        var arg_facts = try self.collectStaticCallArgFacts(call);
+        const recursions_before = self.return_fact_recursions;
+        var arg_facts = switch (kind) {
+            .property_target => try self.collectStaticCallArgFacts(call),
+            .object_role => try self.collectStringRoleArgFacts(call),
+            .string_literal => try self.collectStringArgFacts(call),
+        };
         defer arg_facts.deinit(self.allocator);
+        const key = if (self.run_cache != null) try buildReturnFactKey(self.allocator, kind, resolved.key, arg_facts.items) else null;
+        defer if (key) |value| self.allocator.free(value);
+        if (key) |value| if (self.run_cache.?.return_facts.get(value)) |cached| return @field(cached, @tagName(kind));
+
         var facts = self.pushFreshFunctionFacts();
         defer facts.restore();
-
         const previous = self.sema;
         self.sema = self.sema.forModule(resolved.module_id);
         defer self.sema = previous;
-        try self.bindStaticParams(StaticCallArgFacts, resolved.decl.params.items, arg_facts.items);
-
-        var result: ?ReturnedFact(.property_target) = null;
-        _ = try self.collectReturnFacts(.property_target, resolved.decl.statements.items, &result);
-        return if (result) |fact| fact.value orelse fallback else fallback;
+        try self.bindStaticParams(std.meta.Child(@TypeOf(arg_facts.items)), resolved.decl.params.items, arg_facts.items);
+        if (self.run_cache) |cache| cache.return_body_analyses += 1;
+        var result: ?ReturnedFact(kind) = null;
+        _ = try self.collectReturnFacts(kind, resolved.decl.statements.items, &result);
+        const value = if (result) |fact| fact.value orelse fallback else fallback;
+        // Recursive fallbacks depend on the active call chain, not just arguments.
+        if (key) |cache_key| if (self.return_fact_recursions == recursions_before) {
+            const cache = self.run_cache.?;
+            const owned_key = try cache.allocator.dupe(u8, cache_key);
+            errdefer cache.allocator.free(owned_key);
+            try cache.return_facts.putNoClobber(owned_key, @unionInit(ReturnFact, @tagName(kind), value));
+        };
+        return value;
     }
 
     fn propertyTargetForType(self: *Analyzer, ty: ast.Type) ?PropertyTarget {
@@ -2461,25 +2491,23 @@ pub const Analyzer = struct {
         resolved: semantic_env.ResolvedFunction,
         call: ast.CallExpr,
     ) anyerror!?[]const u8 {
-        if (self.visiting.contains(resolved.key)) return null;
-        try self.visiting.put(resolved.key, {});
-        defer _ = self.visiting.remove(resolved.key);
-
-        var arg_facts = try self.collectStringRoleArgFacts(call);
-        defer arg_facts.deinit(self.allocator);
-        var facts = self.pushFreshFunctionFacts();
-        defer facts.restore();
-
-        const previous = self.sema;
-        self.sema = self.sema.forModule(resolved.module_id);
-        defer self.sema = previous;
-        try self.bindStaticParams(StringRoleArgFacts, resolved.decl.params.items, arg_facts.items);
-
-        var result: ?ReturnedFact(.object_role) = null;
-        _ = try self.collectReturnFacts(.object_role, resolved.decl.statements.items, &result);
-        return if (result) |fact| fact.value orelse null else null;
+        return self.functionReturnFact(.object_role, resolved, call);
     }
 };
+
+fn buildReturnFactKey(allocator: std.mem.Allocator, comptime kind: Analyzer.ReturnFactKind, key: core.FunctionKey, facts: anytype) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try appendKeyBytes(allocator, &out, @tagName(kind));
+    try appendFunctionKey(allocator, &out, key);
+    try appendKeyInt(allocator, &out, facts.len);
+    for (facts) |fact| {
+        try appendOptionalBytesKey(allocator, &out, fact.string_literal);
+        if (@hasField(@TypeOf(fact), "object_role")) try appendOptionalBytesKey(allocator, &out, fact.object_role);
+        if (@hasField(@TypeOf(fact), "property_target")) try appendOptionalPropertyTargetKey(allocator, &out, fact.property_target);
+    }
+    return out.toOwnedSlice(allocator);
+}
 
 fn buildConstSummaryKey(
     allocator: std.mem.Allocator,
@@ -2690,23 +2718,7 @@ fn literalStringFunctionCall(
     resolved: semantic_env.ResolvedFunction,
     call: ast.CallExpr,
 ) !?[]const u8 {
-    if (self.visiting.contains(resolved.key)) return null;
-    try self.visiting.put(resolved.key, {});
-    defer _ = self.visiting.remove(resolved.key);
-
-    var arg_facts = try self.collectStringArgFacts(call);
-    defer arg_facts.deinit(self.allocator);
-    var facts = self.pushFreshFunctionFacts();
-    defer facts.restore();
-
-    const previous = self.sema;
-    self.sema = self.sema.forModule(resolved.module_id);
-    defer self.sema = previous;
-    try self.bindStaticParams(Analyzer.StringArgFacts, resolved.decl.params.items, arg_facts.items);
-
-    var result: ?Analyzer.ReturnedFact(.string_literal) = null;
-    _ = try self.collectReturnFacts(.string_literal, resolved.decl.statements.items, &result);
-    return if (result) |fact| fact.value else null;
+    return self.functionReturnFact(.string_literal, resolved, call);
 }
 
 fn ownString(self: *Analyzer, value: []const u8) ![]const u8 {

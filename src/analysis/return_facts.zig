@@ -71,6 +71,8 @@ pub const Cache = struct {
     results: std.HashMap(Key, TypeInfo, KeyContext, std.hash_map.default_max_load_percentage),
     visiting: std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage),
     invalid_declarations: std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage),
+    name_resolution: @import("cache.zig").NameResolutionCache,
+    expression_visits: usize = 0,
     body_analyses: usize = 0,
     cache_hits: usize = 0,
     recursive_calls: usize = 0,
@@ -81,6 +83,7 @@ pub const Cache = struct {
             .results = .init(allocator),
             .visiting = .init(allocator),
             .invalid_declarations = .init(allocator),
+            .name_resolution = .init(allocator),
         };
     }
 
@@ -90,6 +93,7 @@ pub const Cache = struct {
         self.results.deinit();
         self.visiting.deinit();
         self.invalid_declarations.deinit();
+        self.name_resolution.deinit();
     }
 
     pub fn get(self: *Cache, key: Key) ?TypeInfo {

@@ -160,3 +160,83 @@ test "return facts: recursive fallbacks terminate without becoming reusable fact
     _ = try analysis.expression(0);
     try testing.expectEqual(@as(usize, 4), analysis.context.body_analyses);
 }
+
+test "primitive argument inference grows linearly with nesting" {
+    for ([_]usize{ 4, 8, 12, 32 }) |depth| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+        var expression: []const u8 = "\"x\"";
+        for (0..depth) |_| expression = try std.fmt.allocPrint(allocator, "concat({s}, \"x\")", .{expression});
+        const source = try std.fmt.allocPrint(allocator, "document\nlet value = {s}\nend\n", .{expression});
+        var analysis = try Analysis.init(allocator, source);
+        defer analysis.deinit();
+        const result = try analysis.expression(0);
+        try testing.expectEqual(depth + 1, result.string_literal.?.len);
+        try testing.expectEqual(2 * depth + 1, analysis.context.expression_visits);
+    }
+}
+
+test "dependency return facts share repeated function bodies" {
+    const dependencies = compiler.analysis.dependencies;
+    for ([_]usize{ 4, 8, 12, 32 }) |depth| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+        var source = std.ArrayList(u8).empty;
+        try source.appendSlice(allocator, "fn f0() -> String = \"leaf\"\n");
+        for (1..depth + 1) |id| try source.appendSlice(allocator, try std.fmt.allocPrint(allocator, "fn f{d}() -> String\nlet local = f{d}()\nreturn local\nend\n", .{ id, id - 1 }));
+        try source.appendSlice(allocator, try std.fmt.allocPrint(allocator, "document\nlet result = f{d}()\nend\n", .{depth}));
+        var analysis = try Analysis.init(allocator, source.items);
+        defer analysis.deinit();
+        const sema = compiler.semantic_env.SemanticEnv.init(null, null, &analysis.functions);
+        var cache = dependencies.RunCache.init(allocator, allocator);
+        defer cache.deinit();
+        var analyzer = dependencies.Analyzer.initWithScopeAndCache(allocator, &sema, .{ .document = 0 }, &cache);
+        defer analyzer.deinit();
+        var summary = try analyzer.documentStatements(analysis.syntax.document_statements.items);
+        defer summary.deinit();
+        try testing.expectEqual(3 * (depth + 1), cache.return_body_analyses);
+    }
+}
+
+test "dependency return caches distinguish argument facts and default arguments" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var analysis = try Analysis.init(allocator,
+        \\fn label(value: String = "default") -> String = value
+        \\fn keep(value: Object) -> Object = value
+        \\document
+        \\  let first = label("first")
+        \\  let second = label("second")
+        \\  let omitted = label()
+        \\  let left = new(current_page(), "left", "body")
+        \\  let right = new(current_page(), "right", "body")
+        \\  let a = keep(left)
+        \\  let b = keep(right)
+        \\  let again = keep(left)
+        \\end
+    );
+    defer analysis.deinit();
+    const dependencies = compiler.analysis.dependencies;
+    const sema = compiler.semantic_env.SemanticEnv.init(null, null, &analysis.functions);
+    var cache = dependencies.RunCache.init(allocator, allocator);
+    defer cache.deinit();
+    var analyzer = dependencies.Analyzer.initWithScopeAndCache(allocator, &sema, .{ .document = 0 }, &cache);
+    defer analyzer.deinit();
+    var summary = try analyzer.documentStatements(analysis.syntax.document_statements.items);
+    defer summary.deinit();
+    try testing.expectEqualStrings("first", analyzer.string_bindings.get("first").?);
+    try testing.expectEqualStrings("second", analyzer.string_bindings.get("second").?);
+    try testing.expectEqualStrings("default", analyzer.string_bindings.get("omitted").?);
+    for ([_]struct { binding: []const u8, original: []const u8 }{
+        .{ .binding = "a", .original = "left" },
+        .{ .binding = "b", .original = "right" },
+        .{ .binding = "again", .original = "left" },
+    }) |item| {
+        try testing.expectEqualStrings(item.original, analyzer.object_role_bindings.get(item.binding).?);
+        const target = analyzer.property_target_bindings.get(item.binding).?;
+        try testing.expectEqualStrings(item.original, target.owner.object.identity.?.name);
+    }
+}
