@@ -7701,6 +7701,31 @@ test "compiler semantics: constraint anchors wait for delayed object bindings" {
     );
 }
 
+test "compiler semantics: nested record anchors wait for both delayed root bindings" {
+    try buildSource(
+        \\record Inner { item: Object }
+        \\record Outer { inner: Inner }
+        \\page main
+        \\  let target = Outer { inner = Inner { item = text!(docctx().footer_text ?? "missing") } }
+        \\  let source = Outer { inner = Inner { item = text!(docctx().watermark ?? "missing") } }
+        \\  ~ target.inner.item.left == source.inner.item.right + 24
+        \\end
+        \\document
+        \\  docctx().footer_text = "Target"
+        \\  docctx().watermark = "Source"
+        \\end
+    );
+}
+
+test "compiler semantics: anchor paths reject mutable object property traversal" {
+    try expectDiagnostic(
+        \\page main
+        \\  let item = text!("Item")
+        \\  ~ item.text.left == page.left + 40
+        \\end
+    , "case.ss:bytes:", "InvalidConstraintObject");
+}
+
 test "compiler semantics: erased selections support counting without exposing elements" {
     try expectObjectContent(
         \\fn size(items: Selection) -> Number

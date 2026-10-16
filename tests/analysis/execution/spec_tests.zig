@@ -69,6 +69,47 @@ test "dependency cycle diagnostics retain source locations in both graph constru
     }
 }
 
+test "nested record anchors depend on both immutable root bindings" {
+    var state = try document(
+        \\record Inner { item: Object }
+        \\record Outer { inner: Inner }
+        \\page main
+        \\  let target = Outer { inner = Inner { item = text!(docctx().footer_text ?? "missing") } }
+        \\  let source = Outer { inner = Inner { item = text!(docctx().watermark ?? "missing") } }
+        \\  ~ target.inner.item.left == source.inner.item.right + 24
+        \\end
+        \\document
+        \\  docctx().footer_text = "Target"
+        \\  docctx().watermark = "Source"
+        \\end
+    );
+    defer state.deinit();
+    var declarations = try compiler.declarations.build(testing.allocator, &state);
+    defer declarations.deinit();
+    var graph = try compiler.analysis.ExecutionGraph.build(testing.allocator, &state, &declarations, .{});
+    defer graph.deinit();
+    try testing.expectEqual(@as(usize, 5), graph.units.items.len);
+    for ([_][]const u8{ "target", "source" }) |name| {
+        var found = false;
+        for (graph.units.items[2].summary.reads.items) |read| {
+            if (read == .variable and std.mem.eql(u8, read.variable.name, name)) found = true;
+        }
+        try testing.expect(found);
+    }
+    for ([_]compiler.analysis.DependencyEdge{
+        .{ .from = 3, .to = 0 },
+        .{ .from = 4, .to = 1 },
+        .{ .from = 0, .to = 2 },
+        .{ .from = 1, .to = 2 },
+    }) |expected| {
+        var found = false;
+        for (graph.edges.items) |edge| {
+            if (edge.from == expected.from and edge.to == expected.to) found = true;
+        }
+        try testing.expect(found);
+    }
+}
+
 // Keep freed allocations mapped but overwrite them, so stale string references
 // fail deterministically rather than depending on allocator reuse.
 const PoisonAllocator = struct {
