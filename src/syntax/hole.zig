@@ -67,9 +67,15 @@ pub const Result = struct {
     pub fn setExpectedType(self: *Result, allocator: std.mem.Allocator, hole_id: HoleId, expected: ast.Type) !void {
         if (hole_id >= self.holes.len) return;
         const hole = &self.holes[hole_id];
+        const retained = try expected.clone(allocator);
         if (hole.expected_type) |*existing| existing.deinit(allocator);
-        hole.expected_type = try expected.clone(allocator);
+        hole.expected_type = retained;
     }
+};
+
+pub const ModuleResult = struct {
+    module_id: u32,
+    result: Result,
 };
 
 pub const Builder = struct {

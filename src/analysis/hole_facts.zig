@@ -13,12 +13,13 @@ pub fn populateExpectedTypes(
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
     declaration_index: *const declarations.DeclarationIndex,
-    holes: *syntax_hole.Result,
+    tables: []syntax_hole.ModuleResult,
 ) !void {
     const sema = SemanticEnv.init(state, declaration_index, &state.functions);
-    for (state.modules.entries.items) |module| {
+    for (tables) |*table| {
+        const module = state.moduleById(table.module_id) orelse continue;
         var module_sema = sema.forModule(module.id);
-        try moduleExpectedTypes(allocator, &module_sema, module.syntax, holes);
+        try moduleExpectedTypes(allocator, &module_sema, module.syntax, &table.result);
     }
 }
 
@@ -170,29 +171,22 @@ fn objectFieldDefaultExpectedTypes(
 fn expectExpr(allocator: std.mem.Allocator, holes: *syntax_hole.Result, expr: ast.Expr, expected: ast.Type) !void {
     switch (expr) {
         .hole => |id| try holes.setExpectedType(allocator, id, expected),
-        .call => |call| {
-            if (call.callee.name_hole) |id| try holes.setExpectedType(allocator, id, expected);
-            for (call.args.items) |arg| try expectExpr(allocator, holes, arg, expected);
+        .lambda => |lambda| if (expected.kind == .function) {
+            if (expected.fn_result) |result| try expectExpr(allocator, holes, lambda.body.*, result.*);
         },
-        .apply => |apply| {
-            try expectExpr(allocator, holes, apply.callee.*, expected);
-            for (apply.args.items) |arg| try expectExpr(allocator, holes, arg, expected);
+        .member => |member| if (member.name_hole) |id| {
+            const member_type = if (member.optional and expected.kind == .optional) expected.optional_child.?.* else expected;
+            try holes.setExpectedType(allocator, id, member_type);
         },
-        .lambda => |lambda| try expectExpr(allocator, holes, lambda.body.*, expected),
-        .member => |member| {
-            if (member.name_hole) |id| try holes.setExpectedType(allocator, id, expected);
-            try expectExpr(allocator, holes, member.target.*, expected);
-        },
-        .record => |record| for (record.fields.items) |field| try expectExpr(allocator, holes, field.value, expected),
-        .record_update => |update| {
-            try expectExpr(allocator, holes, update.target.*, expected);
-            for (update.fields.items) |field| try expectExpr(allocator, holes, field.value, expected);
-        },
-        .optional_check => |check| try expectExpr(allocator, holes, check.target.*, expected),
+        .record_update => |update| try expectExpr(allocator, holes, update.target.*, expected),
         .coalesce => |coalesce| {
-            try expectExpr(allocator, holes, coalesce.target.*, expected);
+            var optional = try ast.Type.optional(allocator, expected);
+            defer optional.deinit(allocator);
+            try expectExpr(allocator, holes, coalesce.target.*, optional);
             try expectExpr(allocator, holes, coalesce.fallback.*, expected);
         },
-        .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
+        // Result types do not determine the argument, callee, member receiver,
+        // presence-test operand, or individual record field types.
+        .call, .apply, .record, .optional_check, .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
     }
 }

@@ -124,6 +124,7 @@ pub const EmbeddedSyntaxCache = struct {
 pub const ModuleGraph = struct {
     allocator: std.mem.Allocator,
     modules: std.ArrayList(core.SourceModule),
+    recovery_holes: std.ArrayList(syntax_hole.ModuleResult) = .empty,
     module_order: std.ArrayList(core.SourceModuleId),
     project_implicit_import_ids: std.ArrayList(core.SourceModuleId),
     project_import_ids: std.ArrayList(core.SourceModuleId),
@@ -140,6 +141,8 @@ pub const ModuleGraph = struct {
     pub fn deinit(self: *ModuleGraph) void {
         for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);
+        for (self.recovery_holes.items) |*table| table.result.deinit(self.allocator);
+        self.recovery_holes.deinit(self.allocator);
         self.module_order.deinit(self.allocator);
         self.project_implicit_import_ids.deinit(self.allocator);
         self.project_import_ids.deinit(self.allocator);
@@ -229,6 +232,8 @@ pub fn loadGraphWithOptions(
     }
 
     graph.modules = try builder.takeModules();
+    graph.recovery_holes = builder.recovery_holes;
+    builder.recovery_holes = .empty;
     return graph;
 }
 
@@ -408,6 +413,7 @@ const Builder = struct {
     recovering: bool,
     embedded_cache: ?*EmbeddedSyntaxCache,
     modules: std.ArrayList(core.SourceModule),
+    recovery_holes: std.ArrayList(syntax_hole.ModuleResult) = .empty,
     by_key: std.StringHashMap(core.SourceModuleId),
     state_by_id: std.AutoHashMap(core.SourceModuleId, VisitState),
     next_id: core.SourceModuleId,
@@ -419,6 +425,8 @@ const Builder = struct {
         self.state_by_id.deinit();
         for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);
+        for (self.recovery_holes.items) |*table| table.result.deinit(self.allocator);
+        self.recovery_holes.deinit(self.allocator);
     }
 
     fn addDiagnostic(
@@ -501,8 +509,9 @@ const Builder = struct {
                     return error.DiagnosticsFailed;
                 };
                 errdefer result.module.deinit(self.allocator);
-                defer result.holes.deinit(self.allocator);
+                errdefer result.holes.deinit(self.allocator);
                 try self.addParseHoleDiagnostics(parse_path, text, result.holes.diagnostics);
+                try self.recovery_holes.append(self.allocator, .{ .module_id = module_id, .result = result.holes });
                 break :recover result.module;
             } else syntax.parseWithSourceNameAndFailure(self.allocator, text, parse_path, &parse_failure) catch |err| {
                 if (err == error.OutOfMemory) return err;

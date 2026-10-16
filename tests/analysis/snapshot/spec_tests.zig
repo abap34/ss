@@ -301,3 +301,86 @@ test "project facts release collected module paths on cancellation and allocatio
         try allocation_testing.checkAllAllocationFailures(testing.allocator, projectFactsWithFailure, .{ &state, cancel });
     }
 }
+
+test "recovered holes retain module identity and owned nominal type names" {
+    const entry = "stdlib/core/hole-entry.ss";
+    const imported = "stdlib/core/hole-library.ss";
+    var snapshot = blk: {
+        var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+        defer sources.deinit();
+        try sources.put(entry,
+            \\import ./hole-library as library
+            \\record Local { value: Number = 1 }
+            \\const missing: Number =
+            \\const nominal: Local =
+        );
+        try sources.put(imported,
+            \\record Remote { value: String = "value" }
+            \\const missing: String =
+            \\const nominal: Remote =
+        );
+        break :blk try analysis.snapshot.build(testing.allocator, &sources, entry, ".", .{});
+    };
+    defer snapshot.deinit();
+    try testing.expect(snapshot.diagnostics.hasErrors());
+    var found_entry = false;
+    var found_import = false;
+    var found_local = false;
+    var found_remote = false;
+    for (snapshot.holes) |hole| {
+        const ty = hole.expected_type orelse continue;
+        if (hole.id == 0 and hole.module_id == 0) {
+            try testing.expectEqual(ast.Type.Kind.number, ty.kind);
+            found_entry = true;
+        } else if (hole.id == 0 and hole.module_id != 0) {
+            try testing.expectEqual(ast.Type.Kind.string, ty.kind);
+            found_import = true;
+        }
+        if (ty.class_name) |name| {
+            if (hole.module_id == 0) {
+                try testing.expectEqualStrings("Local", name);
+                found_local = true;
+            } else {
+                try testing.expectEqualStrings("Remote", name);
+                found_remote = true;
+            }
+        }
+    }
+    try testing.expect(found_entry and found_import and found_local and found_remote);
+}
+
+fn expectRecoveredType(expr: ast.Expr, annotation: ast.Type, expected: ?ast.Type) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var state = try initDocumentState(allocator);
+    defer state.deinit();
+    try state.projectModuleMutable().syntax.constants.append(allocator, .{
+        .name = try allocator.dupe(u8, "value"),
+        .span = .{ .start = 0, .end = 1 },
+        .value_type = try annotation.clone(allocator),
+        .value = try expr.clone(allocator),
+    });
+    var holes = [_]analysis.syntax_hole.Hole{.{ .id = 0, .kind = .expr, .span = .{ .start = 0, .end = 1 }, .expected = .expression }};
+    defer holes[0].deinit(testing.allocator);
+    var tables = [_]analysis.syntax_hole.ModuleResult{.{ .module_id = state.modules.project_id, .result = .{ .holes = &holes, .diagnostics = &.{} } }};
+    try analysis.hole_facts.populateExpectedTypes(testing.allocator, &state, state.declaration_index, &tables);
+    if (expected) |ty| {
+        try testing.expect(holes[0].expected_type != null);
+        try testing.expect(ast.Type.eql(ty, holes[0].expected_type.?));
+    } else try testing.expect(holes[0].expected_type == null);
+}
+
+test "hole expectations follow the type of each syntactic position" {
+    var hole = ast.Expr{ .hole = 0 };
+    var number = ast.Type.number;
+    var fallback = ast.Expr{ .number = 1 };
+    const function = ast.Type{ .kind = .function, .fn_result = &number };
+    try expectRecoveredType(.{ .lambda = .{ .params = .empty, .body = &hole, .span = .{ .start = 0, .end = 1 } } }, function, ast.Type.number);
+    try expectRecoveredType(.{ .member = .{ .target = &hole, .name = "field" } }, ast.Type.number, null);
+    try expectRecoveredType(.{ .optional_check = .{ .target = &hole } }, ast.Type.boolean, null);
+    try expectRecoveredType(.{ .coalesce = .{ .target = &hole, .fallback = &fallback } }, ast.Type.number, .{ .kind = .optional, .optional_child = &number });
+    try expectRecoveredType(.{ .coalesce = .{ .target = &fallback, .fallback = &hole } }, ast.Type.number, ast.Type.number);
+    try expectRecoveredType(.{ .apply = .{ .callee = &hole, .args = .empty } }, ast.Type.number, null);
+    try expectRecoveredType(.{ .record_update = .{ .target = &hole, .fields = .empty, .body_span = .{ .start = 0, .end = 1 } } }, ast.Type.number, ast.Type.number);
+}

@@ -343,6 +343,15 @@ pub const LayoutOutput = struct {
 
 const DeclarationLookup = std.HashMapUnmanaged(core.FunctionKey, usize, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 
+pub const HoleFact = struct {
+    module_id: core.SourceModuleId,
+    id: ast.HoleId,
+    kind: syntax_hole.HoleKind,
+    span: ast.Span,
+    expected: syntax_hole.ExpectedSyntax,
+    expected_type: ?ast.Type,
+};
+
 pub const AnalysisSnapshot = struct {
     builtin_module_id: ?core.SourceModuleId = null,
     syntax_storage: ?SyntaxStorage = null,
@@ -352,7 +361,7 @@ pub const AnalysisSnapshot = struct {
     project: ProjectFacts = .{},
     modules: []ModuleFact = &.{},
     module_order: []core.SourceModuleId = &.{},
-    holes: []syntax_hole.Hole = &.{},
+    holes: []HoleFact = &.{},
     definitions: []core.Definition = &.{},
     type_definitions: []TypeDefinition = &.{},
     value_bindings: []ValueBinding = &.{},
@@ -376,7 +385,7 @@ pub const AnalysisSnapshot = struct {
         state: *core.DocumentState,
         declaration_index: *const declarations.DeclarationIndex,
         diagnostic_bag: diagnostics.DiagnosticBag,
-        holes: ?*const syntax_hole.Result,
+        holes: ?[]const syntax_hole.ModuleResult,
         project_facts: ProjectFacts,
     ) !AnalysisSnapshot {
         var snapshot = AnalysisSnapshot{
@@ -390,11 +399,11 @@ pub const AnalysisSnapshot = struct {
         snapshot.diagnostics.sortByPath();
         snapshot.modules = try cloneModules(allocator, state.modules.entries.items);
         snapshot.module_order = try allocator.dupe(core.SourceModuleId, state.modules.order.items);
-        snapshot.holes = if (holes) |hole_table| try cloneHoles(allocator, hole_table.holes) else &.{};
         snapshot.definitions = try cloneDefinitions(allocator, state.source_map.definitions.items);
         snapshot.type_definitions = try collectTypeDefinitions(allocator, state);
         snapshot.type_storage = TypeStorage.init(allocator);
         const type_storage = &snapshot.type_storage.?;
+        snapshot.holes = if (holes) |tables| try cloneHoles(allocator, type_storage, tables) else &.{};
         snapshot.value_bindings = try collectValueBindings(allocator, type_storage, state);
         snapshot.variable_bindings = try collectVariableBindings(allocator, type_storage, state);
         snapshot.role_bindings = try collectRoleBindings(allocator, declaration_index.roles.items);
@@ -476,7 +485,6 @@ pub const AnalysisSnapshot = struct {
         }
         self.allocator.free(self.modules);
         self.allocator.free(self.module_order);
-        for (self.holes) |*hole| hole.deinit(self.allocator);
         self.allocator.free(self.holes);
         for (self.definitions) |definition| {
             self.allocator.free(definition.name);
@@ -649,7 +657,7 @@ fn buildWithSyntax(
 // Owns the intermediate results until the snapshot takes the requested state.
 const SnapshotInputs = struct {
     state: ?core.DocumentState,
-    parse_holes: syntax_hole.Result,
+    parse_holes: []syntax_hole.ModuleResult,
     execution_graph: ?execution.ExecutionGraph = null,
     analyzed_diagnostic_count: usize = 0,
     layout_output: ?LayoutOutput = null,
@@ -659,7 +667,8 @@ const SnapshotInputs = struct {
         if (self.layout_output) |*value| value.deinit(allocator);
         if (self.reuse_inputs) |*value| value.deinit(allocator);
         if (self.execution_graph) |*value| value.deinit();
-        self.parse_holes.deinit(allocator);
+        for (self.parse_holes) |*table| table.result.deinit(allocator);
+        allocator.free(self.parse_holes);
         if (self.state) |*value| value.deinit();
     }
 
@@ -682,7 +691,7 @@ const SnapshotInputs = struct {
             return false;
         }
         const declaration_index = state.declaration_index;
-        try hole_facts.populateExpectedTypes(allocator, state, declaration_index, &self.parse_holes);
+        try hole_facts.populateExpectedTypes(allocator, state, declaration_index, self.parse_holes);
         try options.checkCanceled();
         try diagnostics.addDocumentStateFrom(diagnostic_bag, state, 0);
         self.analyzed_diagnostic_count = state.diagnostics.entries.items.len;
@@ -750,7 +759,7 @@ const SnapshotInputs = struct {
         const project_facts = try ProjectFacts.fromDocumentState(allocator, state, entry_path, asset_base_dir, options);
         diagnostics_moved.* = true;
         const snapshot_facts_start = utils.measure_profile.start();
-        var snapshot = try AnalysisSnapshot.fromDocumentState(allocator, state, state.declaration_index, diagnostic_bag.*, &self.parse_holes, project_facts);
+        var snapshot = try AnalysisSnapshot.fromDocumentState(allocator, state, state.declaration_index, diagnostic_bag.*, self.parse_holes, project_facts);
         utils.measure_profile.recordAnalysis(.snapshot_facts, snapshot_facts_start);
         snapshot.generation = options.generation;
         snapshot.layout_output = self.layout_output;
@@ -799,16 +808,20 @@ fn loadSnapshotInputs(
     for (index.module_graph.modules.items) |module| {
         if (module.path) |path| try syntax_storage.capture(path, module.source, module.syntax);
     }
-    const state = analysis_pipeline.buildDocumentStateWithOptions(allocator, entry_path, asset_base_dir, &source, &parsed.module, &index, .{
+    var state = analysis_pipeline.buildDocumentStateWithOptions(allocator, entry_path, asset_base_dir, &source, &parsed.module, &index, .{
         .parse_holes = parsed.holes,
     }) catch |err| {
         if (err == error.Canceled) return err;
         try addBuildFailureDiagnostic(diagnostic_bag, entry_path, source, err, null);
         return null;
     };
-    const holes = parsed.holes;
+    errdefer state.deinit();
+    const tables = try allocator.alloc(syntax_hole.ModuleResult, index.module_graph.recovery_holes.items.len + 1);
+    tables[0] = .{ .module_id = state.modules.project_id, .result = parsed.holes };
+    @memcpy(tables[1..], index.module_graph.recovery_holes.items);
+    index.module_graph.recovery_holes.clearRetainingCapacity();
     parsed.holes = .{ .holes = &.{}, .diagnostics = &.{} };
-    return .{ .state = state, .parse_holes = holes };
+    return .{ .state = state, .parse_holes = tables };
 }
 
 fn readSnapshotSource(sources: *const SourceSet, entry_path: []const u8, diagnostic_bag: *diagnostics.DiagnosticBag) !?[]u8 {
@@ -1071,21 +1084,19 @@ fn cloneDefinitions(allocator: std.mem.Allocator, definitions: []const core.Defi
     return out.toOwnedSlice(allocator);
 }
 
-fn cloneHoles(allocator: std.mem.Allocator, holes: []const syntax_hole.Hole) ![]syntax_hole.Hole {
-    var out = std.ArrayList(syntax_hole.Hole).empty;
-    errdefer {
-        for (out.items) |*hole| hole.deinit(allocator);
-        out.deinit(allocator);
-    }
-    for (holes) |hole| {
+fn cloneHoles(allocator: std.mem.Allocator, storage: *TypeStorage, tables: []const syntax_hole.ModuleResult) ![]HoleFact {
+    var out = std.ArrayList(HoleFact).empty;
+    errdefer out.deinit(allocator);
+    for (tables) |table| for (table.result.holes) |hole| {
         try out.append(allocator, .{
+            .module_id = table.module_id,
             .id = hole.id,
             .kind = hole.kind,
             .span = hole.span,
             .expected = hole.expected,
-            .expected_type = if (hole.expected_type) |ty| try ty.clone(allocator) else null,
+            .expected_type = if (hole.expected_type) |ty| try storage.retain(ty) else null,
         });
-    }
+    };
     return out.toOwnedSlice(allocator);
 }
 
