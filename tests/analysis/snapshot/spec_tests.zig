@@ -384,3 +384,81 @@ test "hole expectations follow the type of each syntactic position" {
     try expectRecoveredType(.{ .apply = .{ .callee = &hole, .args = .empty } }, ast.Type.number, null);
     try expectRecoveredType(.{ .record_update = .{ .target = &hole, .fields = .empty, .body_span = .{ .start = 0, .end = 1 } } }, ast.Type.number, ast.Type.number);
 }
+
+test "invalid function bodies do not create undefined caller bindings" {
+    const path = "stdlib/core/caller-diagnostics.ss";
+    const source =
+        \\fn label() -> String
+        \\  let missing: String = undefined_name
+        \\  let subsequent = missing
+        \\  return subsequent
+        \\end
+        \\page main
+        \\  let s: String = label()
+        \\  let next = s
+        \\  let last = label()
+        \\  let other = independent_error
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expectEqual(@as(usize, 2), snapshot.diagnostics.items.items.len);
+    for (snapshot.diagnostics.items.items) |diagnostic| {
+        try testing.expectEqualStrings("UnknownIdentifier", diagnostic.code);
+        try testing.expect(std.mem.indexOf(u8, diagnostic.message, "undefined_name") != null or std.mem.indexOf(u8, diagnostic.message, "independent_error") != null);
+    }
+    try testing.expect(snapshot.retained_layout_inputs == null);
+    try testing.expect(snapshot.layout_output == null);
+}
+
+test "errors in imported defaults and constants retain their defining source" {
+    const path = "stdlib/core/default-diagnostics.ss";
+    const imported = "stdlib/core/default-library.ss";
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path,
+        \\import ./default-library as *
+        \\const early: String = label()
+        \\page main
+        \\  let s = label()
+        \\  let next = s
+        \\  let obtained = value
+        \\  let use = obtained
+        \\end
+    );
+    try sources.put(imported,
+        \\fn label(value: String = missing_default) -> String = value
+        \\const value: String = missing_constant
+    );
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expectEqual(@as(usize, 2), snapshot.diagnostics.items.items.len);
+    for (snapshot.diagnostics.items.items) |diagnostic| {
+        try testing.expectEqualStrings("UnknownIdentifier", diagnostic.code);
+        try testing.expect(std.mem.endsWith(u8, diagnostic.path, "default-library.ss"));
+    }
+}
+
+test "argument type errors remain attached to the call site" {
+    const path = "stdlib/core/argument-diagnostics.ss";
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put("stdlib/core/argument-library.ss", "fn echo(value: String) -> String = value\n");
+    try sources.put(path,
+        \\import ./argument-library as library
+        \\page main
+        \\  let bad = library::echo(1)
+        \\  let next = bad
+        \\end
+    );
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expectEqual(@as(usize, 1), snapshot.diagnostics.items.items.len);
+    const diagnostic = snapshot.diagnostics.items.items[0];
+    try testing.expectEqualStrings(path, diagnostic.path);
+    try testing.expect(std.mem.indexOf(u8, diagnostic.message, "String") != null);
+    try testing.expect(std.mem.indexOf(u8, diagnostic.message, "Number") != null);
+}

@@ -14,6 +14,7 @@ const KeyContext = struct {
         std.hash.autoHash(&hasher, key.arguments.len);
         for (key.arguments) |argument| {
             // Full type equality below handles recursive structure and normalized parameters.
+            std.hash.autoHash(&hasher, argument.failed);
             std.hash.autoHash(&hasher, argument.ty.kind);
             std.hash.autoHash(&hasher, argument.ty.nominal_module_id);
             std.hash.autoHash(&hasher, argument.ty.param_module_id);
@@ -31,7 +32,7 @@ const KeyContext = struct {
         if (!(core.FunctionKeyContext{}).eql(left.function, right.function)) return false;
         if (left.arguments.len != right.arguments.len) return false;
         for (left.arguments, right.arguments) |a, b| {
-            if (!Type.eql(a.ty, b.ty) or !core.NominalId.optionalEql(a.object_class, b.object_class) or
+            if (a.failed != b.failed or !Type.eql(a.ty, b.ty) or !core.NominalId.optionalEql(a.object_class, b.object_class) or
                 !stringEql(a.string_literal, b.string_literal) or a.function_labels.len != b.function_labels.len)
             {
                 return false;
@@ -69,6 +70,7 @@ pub const Cache = struct {
     allocator: std.mem.Allocator,
     results: std.HashMap(Key, TypeInfo, KeyContext, std.hash_map.default_max_load_percentage),
     visiting: std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage),
+    invalid_declarations: std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage),
     body_analyses: usize = 0,
     cache_hits: usize = 0,
     recursive_calls: usize = 0,
@@ -78,6 +80,7 @@ pub const Cache = struct {
             .allocator = allocator,
             .results = .init(allocator),
             .visiting = .init(allocator),
+            .invalid_declarations = .init(allocator),
         };
     }
 
@@ -86,6 +89,7 @@ pub const Cache = struct {
         while (keys.next()) |key| self.allocator.free(key.arguments);
         self.results.deinit();
         self.visiting.deinit();
+        self.invalid_declarations.deinit();
     }
 
     pub fn get(self: *Cache, key: Key) ?TypeInfo {

@@ -11,6 +11,7 @@ pub const HoleType = syntax_hole.HoleType;
 pub const TypeInfo = struct {
     ty: Type = Type.any,
     hole: ?HoleType = null,
+    failed: bool = false,
     object_class: ?core.NominalId = null,
     string_literal: ?[]const u8 = null,
     function_labels: []const []const u8 = &.{},
@@ -44,6 +45,8 @@ pub fn typeInfoLabelAlloc(allocator: std.mem.Allocator, info: TypeInfo) ![]const
 }
 
 pub fn joinTypeInfo(allocator: std.mem.Allocator, a: TypeInfo, b: TypeInfo) !TypeInfo {
+    if (a.failed) return a;
+    if (b.failed) return b;
     if (a.hole != null) return a;
     if (b.hole != null) return b;
     return .{

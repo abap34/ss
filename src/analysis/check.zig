@@ -223,8 +223,22 @@ pub fn originPathForModule(module: *const core.SourceModule) []const u8 {
 const addUserReport = @import("diagnostics.zig").addUserReport;
 
 pub fn continueAfterDiagnostic(state: *const core.DocumentState, diagnostic_count_before: usize, err: anyerror) !void {
+    if (err == error.OutOfMemory or err == error.Canceled) return err;
+    if (err == error.AlreadyDiagnosed and state.diagnostics.entries.items.len != 0) return;
     if (state.diagnostics.entries.items.len > diagnostic_count_before) return;
     return err;
+}
+
+fn retainFailedBinding(state: *core.DocumentState, sema: *const SemanticEnv, env: *TypeEnv, stmt: ast.Statement) !void {
+    const binding = switch (stmt.kind) {
+        .let_binding => |value| value,
+        else => return,
+    };
+    if (language_names.isDiscardBindingName(binding.name) or env.contains(binding.name)) return;
+    var info = infoFromType(binding.type_annotation orelse Type.any);
+    info.failed = true;
+    try env.put(binding.name, info);
+    if (binding.type_annotation != null) try recordBindingType(state, sema.module_id, binding.name_span, info);
 }
 
 fn rejectDuplicateBinding(state: ?*core.DocumentState, env: *const TypeEnv, name: []const u8, origin: core.SourceOrigin) !void {
@@ -373,6 +387,27 @@ pub fn checkPageStatements(
 }
 
 fn checkTopLevelStatement(
+    inference_context: *infer.Context,
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    sema: *const SemanticEnv,
+    origin_path: []const u8,
+    context: StatementContext,
+    env: *TypeEnv,
+    scope: *NameScope,
+    page_context: *PageContextRequirement,
+    stmt: ast.Statement,
+) anyerror!void {
+    const before = state.diagnostics.entries.items.len;
+    checkTopLevelStatementInner(inference_context, allocator, state, sema, origin_path, context, env, scope, page_context, stmt) catch |err| {
+        try continueAfterDiagnostic(state, before, err);
+        try retainFailedBinding(state, sema, env, stmt);
+        if (stmt.kind == .let_binding and !language_names.isDiscardBindingName(stmt.kind.let_binding.name)) try scope.put(stmt.kind.let_binding.name);
+        return err;
+    };
+}
+
+fn checkTopLevelStatementInner(
     inference_context: *infer.Context,
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
@@ -562,6 +597,24 @@ fn isObjectLike(info: semantic_types.TypeInfo) bool {
 }
 
 fn checkStatement(
+    inference_context: *infer.Context,
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    sema: *const SemanticEnv,
+    origin_path: []const u8,
+    env: *TypeEnv,
+    result_type: Type,
+    stmt: ast.Statement,
+) anyerror!void {
+    const before = state.diagnostics.entries.items.len;
+    checkStatementInner(inference_context, allocator, state, sema, origin_path, env, result_type, stmt) catch |err| {
+        try continueAfterDiagnostic(state, before, err);
+        try retainFailedBinding(state, sema, env, stmt);
+        return err;
+    };
+}
+
+fn checkStatementInner(
     inference_context: *infer.Context,
     allocator: std.mem.Allocator,
     state: *core.DocumentState,

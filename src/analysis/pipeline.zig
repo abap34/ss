@@ -95,6 +95,7 @@ fn checkFunctionDefinitionsWithEnv(
         const diagnostic_count = state.diagnostics.entries.items.len;
         checker.checkConst(inference_context, allocator, state, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
             try checker.continueAfterDiagnostic(state, diagnostic_count, err);
+            try inference_context.invalid_declarations.put(entry.key_ptr.*, {});
             had_diagnostics = true;
         };
     }
@@ -110,6 +111,7 @@ fn checkFunctionDefinitionsWithEnv(
         const diagnostic_count = state.diagnostics.entries.items.len;
         checker.checkFunction(inference_context, allocator, state, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
             try checker.continueAfterDiagnostic(state, diagnostic_count, err);
+            try inference_context.invalid_declarations.put(entry.key_ptr.*, {});
             had_diagnostics = true;
         };
     }

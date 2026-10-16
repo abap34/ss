@@ -102,8 +102,7 @@ fn firstHoleInExpr(expr: ast.Expr) ?ast.HoleId {
     };
 }
 
-fn originPathForFunction(sema: *const SemanticEnv, func: ast.FunctionDecl) []const u8 {
-    _ = func;
+fn originPathForModule(sema: *const SemanticEnv) []const u8 {
     const state = sema.state orelse return "";
     const module = state.moduleById(sema.module_id) orelse return "";
     return module.path orelse module.spec;
@@ -167,15 +166,20 @@ fn exprInfoWithOptions(
         .ident => |ident| blk: {
             const name = ident.name;
             switch (try sema.resolveValue(TypeInfo, ast.CallableName.bare(name), env.get(name))) {
-                .local => |info| break :blk info,
+                .local => |info| {
+                    if (info.failed) return error.AlreadyDiagnosed;
+                    break :blk info;
+                },
                 .constant => |resolved| {
+                    if (options.context.invalid_declarations.contains(resolved.key)) return error.AlreadyDiagnosed;
                     if (options.context.visiting.contains(resolved.key)) break :blk infoFromType(resolved.decl.value_type);
                     try options.context.visiting.put(resolved.key, {});
                     defer _ = options.context.visiting.remove(resolved.key);
                     var constant_env = TypeEnv.init(allocator);
                     defer constant_env.deinit();
                     const constant_sema = sema.forModule(resolved.module_id);
-                    const value = try exprInfoWithOptions(allocator, state, &constant_sema, &constant_env, resolved.decl.value, origin, options);
+                    const constant_origin = core.SourceOrigin.at(originPathForModule(&constant_sema), resolved.decl.span);
+                    const value = try exprInfoWithOptions(allocator, state, &constant_sema, &constant_env, resolved.decl.value, constant_origin, options);
                     break :blk semantic_types.refineTypeInfo(infoFromType(resolved.decl.value_type), value);
                 },
                 .function => |resolved| {
@@ -516,6 +520,7 @@ fn inferCallInfo(
     const binding = try sema.resolveValue(TypeInfo, call.callee, env.get(call.callee.name));
     return switch (binding) {
         .local => |callee_info| blk: {
+            if (callee_info.failed) return error.AlreadyDiagnosed;
             if (callee_info.hole != null) break :blk callee_info;
             if (callee_info.ty.kind == .function and callee_info.ty.fn_result != null) {
                 break :blk try inferFunctionValueCallInfo(allocator, state, sema, env, callee_info, call.args.items, origin, options);
@@ -640,8 +645,9 @@ fn inferUserCallInfo(
         if (needs_facts) actual_arguments[index] = actual;
         try ensureType(state, allocator, actual, param.ty, arg_origin, .UnmatchedArgumentType);
     }
+    if (options.context.invalid_declarations.contains(core.functionKey(callee_sema.module_id, func.name))) return error.AlreadyDiagnosed;
     if (!needs_facts) return infoFromType(func.result_type);
-    return try inferUserFunctionReturnInfo(allocator, state, callee_sema, func, actual_arguments, origin, options);
+    return try inferUserFunctionReturnInfo(allocator, state, callee_sema, func, actual_arguments, options);
 }
 
 fn inferPrimitiveCallInfo(
@@ -784,7 +790,6 @@ fn inferUserFunctionReturnInfo(
     sema: *const SemanticEnv,
     func: ast.FunctionDecl,
     actual_arguments: []const TypeInfo,
-    origin: core.SourceOrigin,
     options: InferenceOptions,
 ) !TypeInfo {
     const context = options.context;
@@ -805,8 +810,9 @@ fn inferUserFunctionReturnInfo(
         var param_info = infoFromType(param.ty);
         if (index >= actual_arguments.len) {
             if (param.default_value) |default_value| {
-                const default_info = try exprInfoWithOptions(allocator, state, sema, &env, default_value.*, origin, options);
-                try ensureType(state, allocator, default_info, param.ty, origin, .UnmatchedArgumentType);
+                const default_origin = core.SourceOrigin.at(originPathForModule(sema), param.name_span orelse func.span);
+                const default_info = try exprInfoWithOptions(allocator, state, sema, &env, default_value.*, default_origin, options);
+                try ensureType(state, allocator, default_info, param.ty, default_origin, .UnmatchedArgumentType);
                 param_info = semantic_types.refineTypeInfo(param_info, default_info);
             }
         } else {
@@ -824,7 +830,7 @@ fn inferUserFunctionReturnInfo(
         allocator,
         state,
         sema,
-        originPathForFunction(sema, func),
+        originPathForModule(sema),
         .{ .context = context, .validate_contracts = false },
         &env,
         func.statements.items,
