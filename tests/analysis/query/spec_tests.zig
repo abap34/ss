@@ -185,3 +185,26 @@ test "analysis query spec: import alias completion respects path and keyword bou
         if (case.alias != null) try testing.expect(alias);
     }
 }
+
+test "folding ranges end on the closing line for every newline convention" {
+    for ([_][]const u8{ "\n", "\r\n" }) |newline| {
+        for ([_]bool{ false, true }) |final_newline| {
+            const source = try std.mem.join(testing.allocator, newline, &.{ "page a", "  let x = 1", "end", "page b", "end" });
+            defer testing.allocator.free(source);
+            const text = try std.fmt.allocPrint(testing.allocator, "{s}{s}", .{ source, if (final_newline) newline else "" });
+            defer testing.allocator.free(text);
+            var context = try analysis.query.context.Context.init(testing.allocator, .{ .path = "fold.ss", .source = text, .offset = 5 });
+            defer context.deinit(testing.allocator);
+            var index = try @import("utils").source.LineIndex.init(testing.allocator, text);
+            defer index.deinit(testing.allocator);
+            const ranges = try analysis.query.folding.collect(testing.allocator, index, context.module().?.*);
+            defer testing.allocator.free(ranges);
+            try testing.expectEqual(@as(usize, 2), ranges.len);
+            for (ranges, [_][2]usize{ .{ 1, 3 }, .{ 4, 5 } }) |range, expected| {
+                try testing.expectEqual(expected[0], index.lineAt(range.span.start).number);
+                try testing.expectEqual(expected[1], index.lineAt(range.span.end).number);
+                try testing.expectEqualStrings("end", text[range.span.end - 3 .. range.span.end]);
+            }
+        }
+    }
+}

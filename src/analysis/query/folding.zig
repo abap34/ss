@@ -23,8 +23,11 @@ pub fn collect(allocator: std.mem.Allocator, text: source.LineIndex, program: as
 }
 
 fn appendFromSpan(allocator: std.mem.Allocator, out: *std.ArrayList(Range), text: source.LineIndex, span: ast.Span) !void {
-    const start_line = text.lineAt(@min(span.start, text.text.len)).number;
-    const end_line = text.lineAt(@min(@max(span.end, span.start + 1), text.text.len)).number;
+    const start = @min(span.start, text.text.len);
+    var end = @min(span.end, text.text.len);
+    while (end > start and (text.text[end - 1] == '\n' or text.text[end - 1] == '\r')) end -= 1;
+    const start_line = text.lineAt(start).number;
+    const end_line = text.lineAt(end).number;
     if (end_line <= start_line) return;
-    try out.append(allocator, .{ .span = .{ .start = span.start, .end = span.end } });
+    try out.append(allocator, .{ .span = .{ .start = start, .end = end } });
 }
