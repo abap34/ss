@@ -4,9 +4,91 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-10-16
+
+### Added
+
+- Added explicit optional member access with `?.` for records and objects,
+  including chained access and fallback values with `??`.
+- Added Markdown `==highlight==` syntax and fenced-code line highlights such
+  as `{2-3,5}`, with configurable highlight colors in PDF and HTML output.
+- Added Markdown table column widths with `{100pt}`, `{1fr}`, and `{auto}`
+  annotations.
+- Added typed semantic roles and heading levels for slide objects, including
+  custom object classes and HTML output.
+- Added alignment snapping with visual guides in the VS Code WYSIWYG editor.
+
 ### Changed
 
 - Removed `#` line comments; use `;;` for comments.
+- Unified function evaluation across direct calls, function values, callbacks,
+  and statement and expression positions. `Void` is restricted to function
+  results; its calls execute as statements, and `Void` functions use bare
+  `return` without an expression.
+- Made constraint registration explicit through `constrain!` and
+  `constrain_on!`. Returning a `Constraints` value or using it as a statement
+  no longer registers it. `~` statements continue to register constraints in
+  the current page context.
+- Changed `page_anchor` to require both a page and an anchor name, such as
+  `page_anchor(pagectx(), "left")`. Constraint registration checks that page
+  anchors refer to the page receiving the constraints.
+- Separated object creation from page placement. Unplaced objects and groups
+  are valid values and are excluded from document object queries; placement
+  includes only explicitly grouped descendants and rejects repeated placement.
+  `page_of` now returns `Page?`, and framed components return groups containing
+  their content and decoration.
+- Restricted stored properties to types without functions or unconstrained
+  `Any`, including fields nested in records and optional values. Local records
+  can still contain functions, and display callbacks are registered with
+  `set_repr`.
+- Enforced read-only display evaluation: display callbacks cannot modify
+  properties, create objects or pages, register displays, or read external
+  files, including through helpers and callbacks.
+- Made continuous page display the only WYSIWYG editor mode, with sidebar
+  selection scrolling to the selected page. Removed the single-page mode
+  selector and per-page presentation buttons, and required five CSS pixels
+  of pointer movement before starting an object drag.
+- Separated layout results from evaluated document state, keeping solved
+  geometry out of source objects. Made analysis, evaluation, page preparation,
+  layout solving, rendering, preview reuse, and cache ownership explicit across
+  the CLI and editor pipelines.
+- Managed the bundled MD4C fork with Git subtree and retained its upstream
+  regression suites ([#19](https://github.com/abap34/ss/pull/19)). Contributed by @abap34.
+- Added PR links, inline author credits, and deduplicated acknowledgments to
+  locally prepared release notes. Acknowledgments exclude `abap34` and omit
+  the `Thanks` section when no other authors remain.
+
+### Fixed
+
+- Corrected type checking for required record fields, function parameter
+  variance, callbacks, optional members, property access, and selections.
+  Complete property paths now reject duplicate and overlapping definitions
+  while preserving independently defined sibling fields.
+- Unified lexical name resolution across static analysis, evaluation, hover,
+  and definition, including local shadowing, qualified calls, lambda
+  parameters, and incomplete import aliases.
+- Corrected static fact joins across return paths and selection operations so
+  unknown or conflicting results do not recover unjustified literal values,
+  object classes, or property identities.
+- Corrected static recursion detection for cross-module lambdas, captured
+  records, optional function values, and display functions, preserving the
+  defining module and captured environment through higher-order calls.
+- Corrected dependency analysis for captured environments, function values,
+  omitted arguments, object aliases, nested anchors, and display functions.
+  Dependency scheduling preserves authored composition order and reports the
+  resources involved in actual cycles.
+- Shared semantic analysis across bounded LSP queries, preserved diagnostics
+  for independent documents and failed imports, and rescheduled canceled
+  rebuilds. Excluded strings and comments from semantic queries, ended folding
+  ranges on closing lines, and improved completion and recovery without
+  cascading diagnostics from failed bindings.
+- Preserved direct and nested object references and explicitly absent optional
+  properties in `dump`. Kept empty editor snapshots and layout reports
+  consistent with the populated JSON response structure.
+- Corrected Markdown block spacing, split-group sizing after width allocation,
+  and theme colors for Markdown code blocks.
+- Corrected ownership and allocation-failure handling in analysis and document
+  state, and bounded evaluator call frames, recursion, and execution resources.
 
 ## [0.8.3] - 2026-10-06
 
