@@ -1228,3 +1228,29 @@ test "document state spec: placement rejects a shared descendant before publishi
         try testing.expectEqual(@as(?core.NodeId, null), state.parentPageOf(id));
     }
 }
+
+test "document state spec: composition order preserves page indices and explicit group children" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    state.graph.composition_cursor = .{ .source_order = 30 };
+    const last_page = try state.addPage("Last");
+    state.graph.composition_cursor = .{ .source_order = 10 };
+    const first_page = try state.addPage("First");
+    state.graph.composition_cursor = .{ .source_order = 20 };
+    const middle_page = try state.addPage("Middle");
+    try testing.expectEqualSlices(core.NodeId, &.{ first_page, middle_page, last_page }, state.graph.page_order.items);
+    try testing.expectEqualSlices(core.NodeId, &.{ first_page, middle_page, last_page }, state.childrenOf(state.graph.document_id).?);
+    for (state.graph.page_order.items, 1..) |id, index| try testing.expectEqual(index, state.getNode(id).?.page_index.?);
+
+    const a = try state.createObjectWithOrigin("a", null, .text, .text, "A", null);
+    const b = try state.createObjectWithOrigin("b", null, .text, .text, "B", null);
+    const c = try state.createObjectWithOrigin("c", null, .text, .text, "C", null);
+    state.graph.composition_cursor = .{ .source_order = 50 };
+    try state.placeObjectOnPage(first_page, c);
+    const group = try state.createGroupWithOrigin(&.{ b, a }, null);
+    state.graph.composition_cursor = .{ .source_order = 40 };
+    try state.placeObjectOnPage(first_page, group);
+    try testing.expectEqualSlices(core.NodeId, &.{ group, c }, state.placementRootsOf(first_page));
+    try testing.expectEqualSlices(core.NodeId, &.{ group, b, a, c }, state.childrenOf(first_page).?);
+    try testing.expectEqualSlices(core.NodeId, &.{ b, a }, state.childrenOf(group).?);
+}

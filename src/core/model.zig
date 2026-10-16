@@ -364,6 +364,17 @@ pub const AxisState = struct {
     size_is_default: bool = false,
 };
 
+// Orders authored composition independently of dependency-driven evaluation.
+pub const CompositionOrder = struct {
+    source_order: usize,
+    sequence: usize = 0,
+
+    pub fn lessThan(self: CompositionOrder, other: CompositionOrder) bool {
+        return self.source_order < other.source_order or
+            (self.source_order == other.source_order and self.sequence < other.sequence);
+    }
+};
+
 pub const Node = struct {
     id: NodeId,
     kind: NodeKind,
@@ -381,6 +392,7 @@ pub const Node = struct {
     display_content_provenance: std.ArrayList(ContentProvenance) = .empty,
     repr_function: ?FunctionRef = null,
     page_index: ?usize = null,
+    composition_order: ?CompositionOrder = null,
     origin: ?SourceOrigin = null,
     fields: std.ArrayList(Field) = .empty,
     property_definitions: std.ArrayList(PropertyDefinition) = .empty,

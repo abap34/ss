@@ -289,8 +289,14 @@ const GraphBuilder = struct {
     }
 
     fn nextPageId(self: *GraphBuilder, module: *const core.SourceModule, page: ast.PageDecl) !core.NodeId {
+        // Reserve a position even for empty static pages, in both analysis modes.
+        const source_order = self.source_order;
+        self.source_order += 1;
         return switch (self.page_id_mode) {
             .create => blk: {
+                const previous_cursor = self.state.graph.composition_cursor;
+                self.state.graph.composition_cursor = .{ .source_order = source_order };
+                defer self.state.graph.composition_cursor = previous_cursor;
                 const page_id = try self.state.addPage(page.name);
                 try self.state.addPageSource(
                     page_id,

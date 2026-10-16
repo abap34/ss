@@ -44,7 +44,7 @@ test "diagnostic analysis leaves pages untouched while evaluation registers orde
         try testing.expect(origin.span_end > origin.span_start);
         const unit = graph.units.items[index];
         try testing.expectEqual(page_id, unit.kind.page_statement.page_id);
-        try testing.expectEqual(index, unit.source_order);
+        try testing.expectEqual(index * 2 + 1, unit.source_order);
     }
 }
 

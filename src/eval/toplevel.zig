@@ -403,6 +403,9 @@ fn executeUnit(
 ) !void {
     const state = evaluation.state;
     try checkCancellation(evaluation);
+    const previous_cursor = state.graph.composition_cursor;
+    state.graph.composition_cursor = .{ .source_order = unit.source_order };
+    defer state.graph.composition_cursor = previous_cursor;
     const previous_module_id = evaluation.module_id;
     const previous_call_depth = evaluation.call_depth;
     evaluation.module_id = unit.module_id;

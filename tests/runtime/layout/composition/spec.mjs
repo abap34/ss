@@ -30,7 +30,7 @@ const anchor = `~ a.left == page.left + 80
 
 const failures = [];
 for (const test of [
-  testNestedPlacedObjects, testNestedUnplacedObjectsAndOrdinaryGroup,
+  testAuthoredPlacementOrder, testNestedPlacedObjects, testNestedUnplacedObjectsAndOrdinaryGroup,
   testIntermediateBinding, testOrdinaryGroupInference, testNestedOrdinaryGroupBounds,
   testUnplacedComposition, testNaturalWidths, testEqualFrames, testMeasuredSplitFlow, testMeasuredNestedConstraintUpdate, testHorizontalSplitWidths, testVerticalSplitWidths, testEqualChains, testEqualEvaluation, testEqualEditorUpdates, testSameDirectionBinaryGroups,
   testSharedObjects, testConstraintUpdate, testInferredGroupConstraintUpdate,
@@ -47,6 +47,23 @@ for (const test of [
 }
 assert(failures.length === 0, `failed composition tests: ${failures.join(", ")}`);
 console.log(`layout composition: ${caseCount} cases passed`);
+
+async function testAuthoredPlacementOrder() {
+  const { dump } = await dumpSource("authored-placement-order", `import std:themes/default as *
+page main
+  text!(docctx().footer_text ?? "unset")
+  text!("Second")
+end
+document
+  docctx().footer_text = "First"
+end
+`);
+  const first = node(dump, "First");
+  const second = node(dump, "Second");
+  assert(first.y > second.y, "fallback placement followed evaluation order instead of composition order");
+  const roots = dump.placement_roots.flatMap((entry) => entry.roots);
+  assert(roots.indexOf(first.id) < roots.indexOf(second.id), "placement roots lost authored order");
+}
 
 async function testNestedPlacedObjects() {
   const { dump, source } = await dumpSource("placed", `${prelude}

@@ -8153,3 +8153,49 @@ test "compiler semantics: cached placement summaries retain their caller page" {
         \\end
     , &.{ "first=1", "second=1" });
 }
+
+test "compiler semantics: queries retain placement order across dependency scheduling" {
+    try expectDumpContains(
+        \\page main
+        \\  text!(docctx().footer_text ?? "unset")
+        \\  text!("Second")
+        \\  note!("order=" ++ join(objs_here("body"), ",", (o: Object) |-> content(o)))
+        \\end
+        \\document
+        \\  docctx().footer_text = "First"
+        \\end
+    , &.{"order=First,Second"});
+}
+
+test "compiler semantics: explicit group argument order determines descendant query order" {
+    try expectDumpContains(
+        \\page main
+        \\  let a = text("A")
+        \\  let b = text("B")
+        \\  let c = text("C")
+        \\  place!(group(c, group(b, a)))
+        \\  note!("order=" ++ join(objs_here("body"), ",", (o: Object) |-> content(o)))
+        \\end
+    , &.{"order=C,B,A"});
+}
+
+test "compiler semantics: dynamic pages retain authored positions among static pages" {
+    try expectDumpContains(
+        \\document
+        \\  let first = new_page(docctx(), docctx().footer_text ?? "unset")
+        \\  place_on!(first, text("Dynamic first"))
+        \\end
+        \\page middle
+        \\  note!("middle=" ++ str(page_index(pagectx())))
+        \\end
+        \\document
+        \\  let last = new_page(docctx(), "last")
+        \\  place_on!(last, text("Dynamic last"))
+        \\  docctx().footer_text = "first"
+        \\  docctx().watermark = "order=" ++ join(doc_objs(docctx(), "body"), ",", (o: Object) |-> content(o))
+        \\end
+        \\page report
+        \\  note!(docctx().watermark ?? "missing")
+        \\end
+    , &.{ "middle=2", "order=Dynamic first,Dynamic last" });
+}

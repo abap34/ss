@@ -242,6 +242,7 @@ pub const DocumentConstants = struct {
 pub const DocumentGraph = struct {
     nodes: std.ArrayList(Node) = .empty,
     page_order: std.ArrayList(NodeId) = .empty,
+    composition_cursor: ?model.CompositionOrder = null,
     contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
     page_placement_roots: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
     direct_page_ownership: std.ArrayList(PageOwnershipInfo) = .empty,
@@ -599,6 +600,25 @@ pub const DocumentState = struct {
         return self.graph.nodes.items.len;
     }
 
+    fn nextCompositionOrder(self: *DocumentState) ?model.CompositionOrder {
+        const order = self.graph.composition_cursor orelse return null;
+        self.graph.composition_cursor.?.sequence += 1;
+        return order;
+    }
+
+    fn insertComposition(self: *DocumentState, ids: *std.ArrayList(NodeId), id: NodeId) !usize {
+        var index = ids.items.len;
+        if (self.getNode(id).?.composition_order) |order| {
+            while (index > 0) {
+                const previous = self.getNode(ids.items[index - 1]).?.composition_order orelse break;
+                if (!order.lessThan(previous)) break;
+                index -= 1;
+            }
+        }
+        try ids.insert(self.allocator, index, id);
+        return index;
+    }
+
     pub fn addContainment(self: *DocumentState, parent: NodeId, child: NodeId) !void {
         const parent_is_page = if (self.getNode(parent)) |node| node.kind == .page else false;
         const gop = try self.graph.contains.getOrPut(parent);
@@ -608,7 +628,12 @@ pub const DocumentState = struct {
         for (gop.value_ptr.items) |existing| {
             if (existing == child) return;
         }
-        try gop.value_ptr.append(self.allocator, child);
+        if (parent_is_page or parent == self.graph.document_id) {
+            _ = try self.insertComposition(gop.value_ptr, child);
+        } else {
+            // Group child order is the explicit argument order.
+            try gop.value_ptr.append(self.allocator, child);
+        }
         if (!parent_is_page or child == 0) return;
         const child_index: usize = @intCast(child - 1);
         if (child_index >= self.graph.direct_page_ownership.items.len) return;
@@ -623,21 +648,23 @@ pub const DocumentState = struct {
         for (gop.value_ptr.items) |existing| {
             if (existing == object_id) return;
         }
-        try gop.value_ptr.append(self.allocator, object_id);
+        _ = try self.insertComposition(gop.value_ptr, object_id);
     }
 
     pub fn addPage(self: *DocumentState, name: []const u8) !NodeId {
         const page_id = try self.freshId();
-        const index = self.graph.page_order.items.len + 1;
         const owned_name = try self.copyString(name);
         try self.graph.nodes.append(self.allocator, .{
             .id = page_id,
             .kind = .page,
             .name = owned_name,
             .attached = true,
-            .page_index = index,
+            .composition_order = self.nextCompositionOrder(),
         });
-        try self.graph.page_order.append(self.allocator, page_id);
+        const index = try self.insertComposition(&self.graph.page_order, page_id);
+        for (self.graph.page_order.items[index..], index + 1..) |id, page_index| {
+            self.getNode(id).?.page_index = page_index;
+        }
         try self.addContainment(self.graph.document_id, page_id);
         return page_id;
     }
@@ -717,8 +744,8 @@ pub const DocumentState = struct {
             if (node.attached) return error.DuplicatePlacement;
             if (self.childrenOf(id)) |children| try pending.appendSlice(self.allocator, children);
         }
-        try self.addPagePlacementRoot(page_id, object_id);
         try self.attachObjectSubtreeToPage(page_id, object_id);
+        try self.addPagePlacementRoot(page_id, object_id);
     }
 
     fn attachObjectSubtreeToPage(self: *DocumentState, page_id: NodeId, object_id: NodeId) !void {
@@ -734,6 +761,7 @@ pub const DocumentState = struct {
         if (node.kind != .object) return error.InvalidValueTag;
         node.attached = true;
         node.discarded = false;
+        node.composition_order = self.nextCompositionOrder();
         try self.addContainment(page_id, object_id);
         const children = self.childrenOf(object_id) orelse return;
         for (children) |child_id| try self.placeObjectSubtree(page_id, child_id, visited);
@@ -996,6 +1024,7 @@ pub const DocumentState = struct {
         });
         content_provenance_transferred = true;
         if (attached) {
+            self.getNode(obj_id).?.composition_order = self.nextCompositionOrder();
             try self.addContainment(page_id, obj_id);
             if (kind == .object) try self.addPagePlacementRoot(page_id, obj_id);
         }
