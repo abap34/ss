@@ -483,10 +483,16 @@ fn inferLambdaInfo(
 ) !TypeInfo {
     var local_env = try env.clone();
     defer local_env.deinit();
+    var parameter_names = @import("env.zig").NameEnv.init(allocator);
+    defer parameter_names.deinit();
     const param_types = try allocator.alloc(Type, lambda.params.items.len);
     defer allocator.free(param_types);
     for (lambda.params.items, 0..) |param, index| {
-        try rejectDuplicateBinding(state, &local_env, param.name, origin);
+        if (parameter_names.contains(param.name)) {
+            try addUserReport(state, origin, "DuplicateBinding", "binding '{s}' is already defined in this scope", .{param.name});
+            return error.DuplicateBinding;
+        }
+        try parameter_names.put(param.name);
         param_types[index] = param.ty;
         try local_env.put(param.name, infoFromType(param.ty));
     }

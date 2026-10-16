@@ -31,6 +31,7 @@ fn collectDefinitionsFromModule(
             const scope = analysis_scope.functionScope(func);
             for (func.params.items) |param| {
                 try recordAnnotation(state, module_id, param.name_span, param.ty);
+                if (param.default_value) |value| try collectLambdaDefinitions(allocator, state, source, module_id, value.*, definitions, scope);
                 try putDefinitionAtSpan(allocator, definitions, source, param.name, param.name_span, func.span.start, func.span.end, .variable, module_id, null, scope.kind, scope.name);
             }
             for (func.statements.items) |stmt| {
@@ -43,6 +44,12 @@ fn collectDefinitionsFromModule(
     }
     if (include_variables) {
         const document_scope = analysis_scope.documentScope(source.text.len);
+        for (program.constants.items) |decl| try collectLambdaDefinitions(allocator, state, source, module_id, decl.value, definitions, document_scope);
+        inline for (.{ program.records.items, program.objects.items, program.object_extensions.items }) |decls| {
+            for (decls) |decl| for (decl.fields.items) |field| {
+                if (field.default_value) |value| try collectLambdaDefinitions(allocator, state, source, module_id, value.*, definitions, document_scope);
+            };
+        }
         for (program.document_statements.items) |stmt| {
             try collectDefinitionsFromStatement(allocator, state, source, module_id, stmt, definitions, document_scope, source.text.len);
         }
@@ -67,18 +74,70 @@ fn collectDefinitionsFromStatement(
 ) !void {
     switch (stmt.kind) {
         .let_binding => |binding| {
+            try collectLambdaDefinitions(allocator, state, source, module_id, binding.expr, definitions, scope);
             if (!language_names.isDiscardBindingName(binding.name)) {
                 if (binding.type_annotation) |annotation| try recordAnnotation(state, module_id, binding.name_span, annotation);
                 try putDefinitionAtSpan(allocator, definitions, source, binding.name, binding.name_span, stmt.span.end, visible_end, .variable, module_id, null, scope.kind, scope.name);
             }
         },
         .if_stmt => |if_stmt| {
+            try collectLambdaDefinitions(allocator, state, source, module_id, if_stmt.condition, definitions, scope);
             const then_end = analysis_scope.statementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
             for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, state, source, module_id, nested, definitions, scope, then_end);
             const else_end = analysis_scope.statementsVisibleEnd(if_stmt.else_statements.items, stmt.span.end);
             for (if_stmt.else_statements.items) |nested| try collectDefinitionsFromStatement(allocator, state, source, module_id, nested, definitions, scope, else_end);
         },
-        else => {},
+        .return_expr, .expr_stmt => |expr| try collectLambdaDefinitions(allocator, state, source, module_id, expr, definitions, scope),
+        .property_set => |property| {
+            try collectLambdaDefinitions(allocator, state, source, module_id, property.target, definitions, scope);
+            try collectLambdaDefinitions(allocator, state, source, module_id, property.value, definitions, scope);
+        },
+        .constrain => |constraint| if (constraint.offset) |offset| try collectLambdaDefinitions(allocator, state, source, module_id, offset, definitions, scope),
+        .hole, .return_void => {},
+    }
+}
+
+fn collectLambdaDefinitions(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    source: utils.source.LineIndex,
+    module_id: core.SourceModuleId,
+    expr: ast.Expr,
+    definitions: *std.ArrayList(core.Definition),
+    scope: analysis_scope.SourceScope,
+) anyerror!void {
+    switch (expr) {
+        .lambda => |lambda| {
+            for (lambda.params.items) |param| {
+                try recordAnnotation(state, module_id, param.name_span, param.ty);
+                // Container scope selects the page/function; the lambda's lexical
+                // extent keeps its parameters out of sibling and enclosing code.
+                try putDefinitionAtSpan(allocator, definitions, source, param.name, param.name_span, lambda.span.start, lambda.span.end, .variable, module_id, null, scope.kind, scope.name);
+                if (param.default_value) |value| try collectLambdaDefinitions(allocator, state, source, module_id, value.*, definitions, scope);
+            }
+            try collectLambdaDefinitions(allocator, state, source, module_id, lambda.body.*, definitions, scope);
+        },
+        .call => |call| for (call.args.items) |arg| {
+            try collectLambdaDefinitions(allocator, state, source, module_id, arg, definitions, scope);
+        },
+        .apply => |apply| {
+            try collectLambdaDefinitions(allocator, state, source, module_id, apply.callee.*, definitions, scope);
+            for (apply.args.items) |arg| try collectLambdaDefinitions(allocator, state, source, module_id, arg, definitions, scope);
+        },
+        .record => |record| for (record.fields.items) |field| {
+            try collectLambdaDefinitions(allocator, state, source, module_id, field.value, definitions, scope);
+        },
+        .record_update => |update| {
+            try collectLambdaDefinitions(allocator, state, source, module_id, update.target.*, definitions, scope);
+            for (update.fields.items) |field| try collectLambdaDefinitions(allocator, state, source, module_id, field.value, definitions, scope);
+        },
+        .member => |member| try collectLambdaDefinitions(allocator, state, source, module_id, member.target.*, definitions, scope),
+        .optional_check => |check| try collectLambdaDefinitions(allocator, state, source, module_id, check.target.*, definitions, scope),
+        .coalesce => |coalesce| {
+            try collectLambdaDefinitions(allocator, state, source, module_id, coalesce.target.*, definitions, scope);
+            try collectLambdaDefinitions(allocator, state, source, module_id, coalesce.fallback.*, definitions, scope);
+        },
+        .hole, .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
     }
 }
 

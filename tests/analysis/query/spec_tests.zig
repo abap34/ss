@@ -207,3 +207,63 @@ test "hover and definition ignore literal and comment contents with either query
         }
     }
 }
+
+test "lambda parameters shadow outer names only within their lexical extent" {
+    const path = "stdlib/core/lambda-query-test.ss";
+    const source =
+        \\const identity: Number -> Number = (value: Number) |-> value
+        \\fn factory() -> Number -> Number = (arg: Number) |-> arg
+        \\page main
+        \\  let x = "Outer"
+        \\  let f = (x: Number) |-> x
+        \\  let nested = (x: Number) |-> ((x: String) |-> x)("Inner")
+        \\  let sibling = (n: Number) |-> n
+        \\  let outside = x
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    if (snapshot.diagnostics.hasErrors()) for (snapshot.diagnostics.items.items) |diagnostic| {
+        std.debug.print("{s}: {s}\n", .{ diagnostic.code, diagnostic.message });
+    };
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    const cases = [_]struct { needle: []const u8, name: []const u8, ty: []const u8, declaration: []const u8 }{
+        .{ .needle = "|-> value", .name = "value", .ty = "Number", .declaration = "value: Number" },
+        .{ .needle = "|-> arg", .name = "arg", .ty = "Number", .declaration = "arg: Number" },
+        .{ .needle = "|-> x\n", .name = "x", .ty = "Number", .declaration = "x: Number" },
+        .{ .needle = "|-> x)(", .name = "x", .ty = "String", .declaration = "x: String" },
+        .{ .needle = "|-> n", .name = "n", .ty = "Number", .declaration = "n: Number" },
+        .{ .needle = "outside = x", .name = "x", .ty = "String", .declaration = "x = \"Outer\"" },
+        .{ .needle = "x: String", .name = "x", .ty = "String", .declaration = "x: String" },
+    };
+    var index = try @import("utils").source.LineIndex.init(testing.allocator, source);
+    defer index.deinit(testing.allocator);
+    for (cases) |case| {
+        const begin = std.mem.indexOf(u8, source, case.needle).?;
+        const offset = begin + std.mem.lastIndexOf(u8, case.needle, case.name).?;
+        const request = analysis.query.types.SourceRequest{ .path = path, .source = source, .offset = offset };
+        var hover = (try analysis.snapshot.hoverAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 })) orelse return error.ExpectedHover;
+        defer hover.deinit(testing.allocator);
+        const expected = try std.fmt.allocPrint(testing.allocator, "({s}: {s})", .{ case.name, case.ty });
+        defer testing.allocator.free(expected);
+        try testing.expect(std.mem.indexOf(u8, hover.markdown, expected) != null);
+        const definitions = try analysis.snapshot.definitionAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+        defer testing.allocator.free(definitions);
+        try testing.expectEqual(@as(usize, 1), definitions.len);
+        const declaration = std.mem.indexOf(u8, source, case.declaration).?;
+        try testing.expectEqual(index.lineAt(declaration).number - 1, definitions[0].line);
+        var completion = try analysis.snapshot.completeAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+        defer completion.deinit(testing.allocator);
+        var found = false;
+        for (completion.items) |item| {
+            if (std.mem.eql(u8, item.label, case.name)) {
+                try testing.expectEqualStrings(case.ty, item.detail.?);
+                found = true;
+            }
+        }
+        try testing.expect(found);
+    }
+}

@@ -1259,17 +1259,17 @@ test "compiler semantics: duplicate lambda parameters are rejected" {
     , "case.ss:bytes:", "DuplicateBinding: binding 'x' is already defined in this scope");
 }
 
-test "compiler semantics: lambda parameters cannot shadow visible bindings" {
-    try expectDiagnostic(
+test "compiler semantics: lambda parameters can shadow outer bindings" {
+    try expectObjectContent(
         \\import std:themes/default as *
         \\
-        \\page bad
+        \\page good
         \\  let x = "outer"
         \\  let f = (x: String) |-> x
         \\  text(f("inner"))
         \\end
         \\
-    , "case.ss:bytes:", "DuplicateBinding: binding 'x' is already defined in this scope");
+    , "inner");
 }
 
 test "compiler semantics: singleton selections do not depend on object collection writes" {
@@ -7818,4 +7818,19 @@ test "compiler semantics: selection algebra cannot recover erased element types"
         defer testing.allocator.free(source);
         try expectDiagnostic(source, "case.ss:bytes:", "UnknownSelectionItemType");
     }
+}
+
+test "compiler semantics: lambda parameters shadow captured names in their own scopes" {
+    try expectObjectContent(
+        \\page main
+        \\  let x = "Outer"
+        \\  let f = (x: Number) |-> ((x: Number) |-> x + 1)(x)
+        \\  text!(str(f(2)) ++ ":" ++ x)
+        \\end
+    , "3:Outer");
+    try expectDiagnostic(
+        \\page main
+        \\  let f = (x: Number, x: Number) |-> x
+        \\end
+    , "case.ss:bytes:", "DuplicateBinding");
 }
