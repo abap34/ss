@@ -93,51 +93,12 @@ fn testNow(context: *const anyopaque) i128 {
     return now.*;
 }
 
-test "analysis query spec: expired structural parse budget keeps callable target" {
-    const source =
-        \\page title
-        \\  let t1 = ultra_big! "Title"
-        \\end
-        \\
-    ;
-    const offset = (std.mem.indexOf(u8, source, "ultra_big!") orelse return error.TestUnexpectedResult) + 1;
-
-    var context = try analysis.query.context.Context.initWithBudget(testing.allocator, .{
+test "analysis query spec: expired context leaves lexical lookup to the bounded fallback" {
+    try testing.expectError(error.NoQueryTarget, analysis.query.context.Context.initWithBudget(testing.allocator, .{
         .path = "unit.ss",
-        .source = source,
-        .offset = offset,
-    }, .{
-        .start_ns = 0,
-        .budget_ns = 0,
-    });
-    defer context.deinit(testing.allocator);
-
-    try testing.expect(context.module() == null);
-    try testing.expectEqualStrings("ultra_big!", context.target);
-}
-
-test "analysis query spec: expired structural parse budget keeps local target" {
-    const source =
-        \\page title
-        \\  let t1 = ultra_big! "Title"
-        \\  ~ t1.left == page.left
-        \\end
-        \\
-    ;
-    const offset = (std.mem.indexOf(u8, source, "t1.left") orelse return error.TestUnexpectedResult) + 1;
-
-    var context = try analysis.query.context.Context.initWithBudget(testing.allocator, .{
-        .path = "unit.ss",
-        .source = source,
-        .offset = offset,
-    }, .{
-        .start_ns = 0,
-        .budget_ns = 0,
-    });
-    defer context.deinit(testing.allocator);
-
-    try testing.expect(context.module() == null);
-    try testing.expectEqualStrings("t1", context.target);
+        .source = "page title\n  text!(\"Title\")\nend\n",
+        .offset = 15,
+    }, .{ .start_ns = 0, .budget_ns = 0 }));
 }
 
 fn cancellationState(context: *const anyopaque) bool {
@@ -205,6 +166,44 @@ test "folding ranges end on the closing line for every newline convention" {
                 try testing.expectEqual(expected[1], index.lineAt(range.span.end).number);
                 try testing.expectEqualStrings("end", text[range.span.end - 3 .. range.span.end]);
             }
+        }
+    }
+}
+
+test "hover and definition ignore literal and comment contents with either query budget" {
+    const path = "stdlib/core/literal-query-test.ss";
+    const source =
+        \\fn target() -> String = "Value"
+        \\page main
+        \\  let a = "target"
+        \\  let b = """
+        \\    target
+        \\  """
+        \\  let c = <<
+        \\    target
+        \\  >>
+        \\  ;; target
+        \\  target()
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    for ([_]u32{ 0, 1000 }) |budget| {
+        var position: usize = std.mem.indexOf(u8, source, "page main").?;
+        const call_position = std.mem.lastIndexOf(u8, source, "target").?;
+        while (std.mem.indexOfPos(u8, source, position, "target")) |offset| {
+            const request = analysis.query.types.SourceRequest{ .path = path, .source = source, .offset = offset + 2 };
+            var hover = try analysis.snapshot.hoverAt(testing.allocator, &snapshot, request, .{ .budget_ms = budget });
+            defer if (hover) |*value| value.deinit(testing.allocator);
+            const definitions = try analysis.snapshot.definitionAt(testing.allocator, &snapshot, request, .{ .budget_ms = budget });
+            defer testing.allocator.free(definitions);
+            try testing.expectEqual(offset == call_position, hover != null);
+            try testing.expectEqual(@as(usize, if (offset == call_position) 1 else 0), definitions.len);
+            position = offset + "target".len;
         }
     }
 }

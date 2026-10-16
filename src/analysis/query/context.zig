@@ -1,11 +1,10 @@
 const std = @import("std");
 const ast = @import("ast");
 
-const language_names = @import("../../language/names.zig");
+const scanner = @import("../../syntax/scanner.zig");
 const cursor = @import("cursor.zig");
 const source_query = @import("source.zig");
 const types = @import("types.zig");
-const utils = @import("utils");
 
 pub const Context = struct {
     target: []u8,
@@ -119,8 +118,15 @@ fn targetAtOffset(allocator: std.mem.Allocator, text: []const u8, offset: usize,
             };
         }
     }
-    const span = utils.source.wordSpanAt(text, offset, language_names.isCallableNameChar) orelse return null;
-    return .{
-        .text = try allocator.dupe(u8, text[span.start..span.end]),
-    };
+    // Use the same lexer as the bounded fallback. Skipped comments and block
+    // strings cannot turn into names just because they contain identifier bytes.
+    var tokens = scanner.tokens(text);
+    while (true) {
+        if (budget) |value| if (value.expired()) return null;
+        const token = tokens.next() orelse return null;
+        if (token.span.start > offset) return null;
+        if (token.span.end < offset) continue;
+        if (token.kind != .identifier) return null;
+        return .{ .text = try allocator.dupe(u8, text[token.span.start..token.span.end]) };
+    }
 }
