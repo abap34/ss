@@ -44,9 +44,7 @@ pub fn insertResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         return try edit_response.statusJson(ctx.allocator, .unsupported, "The WYSIWYG editor is not active for this document.");
     }
 
-    var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
-    defer if (owned_snapshot) |*snapshot| snapshot.deinit();
-    const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse
+    const snapshot = try ctx.provider.forDocument(doc_path) orelse
         return try edit_response.statusJson(ctx.allocator, .unsupported, "No compiler snapshot is available.");
     const layout = if (snapshot.layout_output) |*value| value else return try edit_response.statusJson(ctx.allocator, .stale, edit_response.build_diagnostics_message);
     const editor = if (layout.editor) |*value| value else return try edit_response.statusJson(ctx.allocator, .unsupported, "The WYSIWYG editor is not active.");

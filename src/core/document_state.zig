@@ -295,6 +295,7 @@ pub const DocumentSourceMap = struct {
 };
 
 pub const DocumentRuntime = struct {
+    analysis_cancellation: ?utils.Cancellation = null,
     strings: std.ArrayList([]u8) = .empty,
     string_provenance: std.AutoHashMap(usize, std.ArrayList(ContentProvenance)),
     default_values: *DefaultValueCache,
@@ -331,8 +332,13 @@ pub const DocumentState = struct {
     source_map: DocumentSourceMap,
     diagnostics: DocumentDiagnostics,
     runtime: DocumentRuntime,
+
     // Borrowed observer owned by the host build request.
     file_inputs: ?*utils.FileInputs = null,
+
+    pub fn checkAnalysisCanceled(self: *const DocumentState) !void {
+        if (self.runtime.analysis_cancellation) |token| try token.check();
+    }
 
     pub fn init(
         allocator: Allocator,

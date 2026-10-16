@@ -12,11 +12,10 @@ pub const Context = struct {
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
+    ctx.provider.beginQuery(query_budget.hover_ms);
     var position = try lsp_state.requestPosition(ctx.allocator, ctx.documents, params) orelse return nullJson(ctx.allocator);
     defer position.deinit(ctx.allocator);
-    var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
-    defer if (owned_snapshot) |*snapshot| snapshot.deinit();
-    const snapshot = try ctx.provider.forDocument(position.doc_path, &owned_snapshot) orelse return nullJson(ctx.allocator);
+    const snapshot = try ctx.provider.forDocument(position.doc_path) orelse return nullJson(ctx.allocator);
     if (!lsp_state.featureEnabledForAnalysis(snapshot, .hover)) return nullJson(ctx.allocator);
     var hover = try analysis_snapshot.hoverAt(ctx.allocator, snapshot, .{
         .path = position.doc_path,
@@ -24,10 +23,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         .line_index = ctx.documents.indexForPath(position.doc_path),
         .offset = position.offset,
         .source_version = snapshot.generation,
-    }, .{
-        .budget_ms = query_budget.hover_ms,
-        .cancellation = ctx.provider.cancellation,
-    }) orelse return nullJson(ctx.allocator);
+    }, ctx.provider.query_options.?) orelse return nullJson(ctx.allocator);
     defer hover.deinit(ctx.allocator);
     return json(ctx.allocator, hover);
 }

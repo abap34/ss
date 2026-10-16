@@ -1002,15 +1002,13 @@ test "analysis queries: fallback parsing checks cancellation inside a document" 
         .budget_ms = 1000,
         .cancellation = .{ .context = &cancellation, .is_canceled = ParseCancellation.canceled },
     });
-    var context = try compiler.analysis.query.context.Context.initWithBudget(testing.allocator, .{
+    try testing.expectError(error.NoQueryTarget, compiler.analysis.query.context.Context.initWithBudget(testing.allocator, .{
         .path = "cancel.ss",
         .source = source,
         .offset = offsetAfter(source, "val"),
-    }, budget);
-    defer context.deinit(testing.allocator);
-    try testing.expect(context.module() == null);
-    try testing.expectEqualStrings("value", context.target);
-    try testing.expectEqual(@as(usize, 20), cancellation.checks);
+    }, budget));
+    try testing.expect(cancellation.checks >= cancellation.limit);
+    try testing.expect(cancellation.checks <= cancellation.limit + 8);
 }
 
 test "analysis queries: replacing source invalidates syntax and keeps failed replacements atomic" {
@@ -1083,16 +1081,13 @@ test "analysis queries: retained syntax traversal stops before reaching a distan
         .budget_ms = 1000,
         .cancellation = .{ .context = &cancellation, .is_canceled = ParseCancellation.canceled },
     });
-    var context = try compiler.analysis.query.context.Context.initFromSnapshot(testing.allocator, SyntaxView{ .tree = &parsed.module }, .{
+    try testing.expectError(error.NoQueryTarget, compiler.analysis.query.context.Context.initFromSnapshot(testing.allocator, SyntaxView{ .tree = &parsed.module }, .{
         .path = "traversal.ss",
         .source = source,
         .offset = offsetAfter(source, "tar"),
-    }, budget);
-    defer context.deinit(testing.allocator);
-    try testing.expectEqual(&parsed.module, context.module().?);
-    try testing.expect(context.parsed.owned == null);
-    try testing.expect(context.target_kind == null);
-    try testing.expectEqualStrings("target", context.target);
+    }, budget));
+    // Cancellation does not release the syntax borrowed from the snapshot.
+    try testing.expectEqual(@as(usize, 100), parsed.module.functions.items.len);
     try testing.expect(cancellation.checks >= cancellation.limit);
     try testing.expect(cancellation.checks <= cancellation.limit + 8);
 }

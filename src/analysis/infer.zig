@@ -142,6 +142,7 @@ fn exprInfoWithOptions(
     origin: core.SourceOrigin,
     options: InferenceOptions,
 ) anyerror!TypeInfo {
+    if (state) |owner| try owner.checkAnalysisCanceled();
     options.context.expression_visits += 1;
     const allocator = if (state) |owner| owner.inferenceAllocator() else caller_allocator;
     return switch (expr) {

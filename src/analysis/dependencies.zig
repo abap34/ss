@@ -959,6 +959,7 @@ pub const Analyzer = struct {
     }
 
     fn analyzeExpr(self: *Analyzer, value: ast.Expr) anyerror!AccessSummary {
+        if (self.sema.state) |state| try state.checkAnalysisCanceled();
         return switch (value) {
             .hole => AccessSummary.init(self.allocator),
             .ident => |ident| blk: {
@@ -2321,6 +2322,7 @@ pub const Analyzer = struct {
     }
 
     fn returnExprFact(self: *Analyzer, comptime kind: ReturnFactKind, expr: ast.Expr) anyerror!?FactValue(kind) {
+        if (self.sema.state) |state| try state.checkAnalysisCanceled();
         return switch (kind) {
             .string_literal => try literalStringExpr(self, expr),
             .object_role => try self.objectRoleExpr(expr),

@@ -674,6 +674,8 @@ const SnapshotInputs = struct {
 
     fn analyze(self: *SnapshotInputs, allocator: std.mem.Allocator, options: Options, diagnostic_bag: *diagnostics.DiagnosticBag) !bool {
         const state = &self.state.?;
+        state.runtime.analysis_cancellation = options.cancellation;
+        defer state.runtime.analysis_cancellation = null;
         try options.checkCanceled();
         const diagnostic_count_before_analysis = state.diagnostics.entries.items.len;
         var analysis_failed = false;
@@ -871,6 +873,7 @@ fn loadSnapshotModules(allocator: std.mem.Allocator, sources: *const SourceSet, 
         .print_diagnostics = false,
         .recovering = true,
         .embedded_cache = options.embedded_cache,
+        .cancellation = options.cancellation,
     }) catch |err| {
         if (err == error.Canceled) return err;
         if (err != error.DiagnosticsFailed and err != error.UnknownImport and !module_loader.isImportReadFailure(err)) return err;

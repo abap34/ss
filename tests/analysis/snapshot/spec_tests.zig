@@ -462,3 +462,34 @@ test "argument type errors remain attached to the call site" {
     try testing.expect(std.mem.indexOf(u8, diagnostic.message, "String") != null);
     try testing.expect(std.mem.indexOf(u8, diagnostic.message, "Number") != null);
 }
+
+const CancelAtCheck = struct {
+    checks: usize = 0,
+    limit: usize = std.math.maxInt(usize),
+
+    fn canceled(context: *const anyopaque) bool {
+        const self: *CancelAtCheck = @ptrCast(@alignCast(@constCast(context)));
+        self.checks += 1;
+        return self.checks >= self.limit;
+    }
+};
+
+test "snapshot construction propagates cancellation and clears borrowed analysis tokens" {
+    const text = "fn increment(value: Number) -> Number = value + 1\npage sample\nlet result = increment(increment(1))\nend\n";
+    var counter = CancelAtCheck{};
+    var snapshot = try buildStageSnapshot(text, .{
+        .retain_layout_inputs = true,
+        .cancellation = .{ .context = &counter, .is_canceled = CancelAtCheck.canceled },
+    });
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    try testing.expect(snapshot.retained_layout_inputs.?.state.runtime.analysis_cancellation == null);
+    const total = counter.checks;
+    for ([_]usize{ 1, total / 2, total - 1 }) |limit| {
+        counter = .{ .limit = limit };
+        try testing.expectError(error.Canceled, buildStageSnapshot(text, .{
+            .retain_layout_inputs = true,
+            .cancellation = .{ .context = &counter, .is_canceled = CancelAtCheck.canceled },
+        }));
+    }
+}

@@ -153,6 +153,7 @@ pub const LoadDiagnostic = @import("diagnostic").Diagnostic;
 pub const LoadDiagnostics = @import("diagnostic").Bag;
 
 pub const LoadOptions = struct {
+    cancellation: ?utils.Cancellation = null,
     overlay: ?*const SourceOverlay = null,
     diagnostics: ?*LoadDiagnostics = null,
     print_diagnostics: bool = true,
@@ -196,6 +197,7 @@ pub fn loadGraphWithOptions(
         .print_diagnostics = options.print_diagnostics,
         .recovering = options.recovering,
         .embedded_cache = options.embedded_cache,
+        .cancellation = options.cancellation,
         .modules = std.ArrayList(core.SourceModule).empty,
         .by_key = std.StringHashMap(core.SourceModuleId).init(allocator),
         .state_by_id = std.AutoHashMap(core.SourceModuleId, VisitState).init(allocator),
@@ -412,6 +414,7 @@ const Builder = struct {
     print_diagnostics: bool,
     recovering: bool,
     embedded_cache: ?*EmbeddedSyntaxCache,
+    cancellation: ?utils.Cancellation,
     modules: std.ArrayList(core.SourceModule),
     recovery_holes: std.ArrayList(syntax_hole.ModuleResult) = .empty,
     by_key: std.StringHashMap(core.SourceModuleId),
@@ -476,6 +479,7 @@ const Builder = struct {
     }
 
     fn loadImport(self: *Builder, importer_dir: []const u8, import_spec: []const u8) anyerror!core.SourceModuleId {
+        if (self.cancellation) |token| try token.check();
         const resolved = try resolveImport(self.allocator, self.io, importer_dir, import_spec, self.overlay);
         defer freeResolvedModule(self.allocator, resolved);
         return try self.loadResolved(.library, resolved);
@@ -496,15 +500,15 @@ const Builder = struct {
         const cached_index = if (self.embedded_cache != null and resolved.path == null) embeddedModuleIndex(resolved.spec) else null;
         var parse_failure: syntax.ParseFailure = .{};
         const module_syntax = if (cached_index) |index| self.embedded_cache.?.cloneModule(self.allocator, index, &parse_failure) catch |err| {
-            if (err == error.OutOfMemory) return err;
+            if (err == error.OutOfMemory or err == error.Canceled) return err;
             try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
             return error.DiagnosticsFailed;
         } else blk: {
             const parse_start = utils.measure_profile.start();
             defer utils.measure_profile.recordAnalysis(if (embeddedModuleIndex(resolved.spec) != null) .embedded_parse else .module_parse, parse_start);
             break :blk if (self.recovering) recover: {
-                var result = syntax.parseRecoveringWithSourceNameAndFailure(self.allocator, text, parse_path, &parse_failure) catch |err| {
-                    if (err == error.OutOfMemory) return err;
+                var result = syntax.parseRecoveringWithOptions(self.allocator, text, parse_path, .{ .failure = &parse_failure, .cancellation = self.cancellation }) catch |err| {
+                    if (err == error.OutOfMemory or err == error.Canceled) return err;
                     try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
                     return error.DiagnosticsFailed;
                 };
@@ -514,7 +518,7 @@ const Builder = struct {
                 try self.recovery_holes.append(self.allocator, .{ .module_id = module_id, .result = result.holes });
                 break :recover result.module;
             } else syntax.parseWithSourceNameAndFailure(self.allocator, text, parse_path, &parse_failure) catch |err| {
-                if (err == error.OutOfMemory) return err;
+                if (err == error.OutOfMemory or err == error.Canceled) return err;
                 try self.addParseFailureDiagnostic(parse_path, text, err, parse_failure.diagnostic);
                 return error.DiagnosticsFailed;
             };

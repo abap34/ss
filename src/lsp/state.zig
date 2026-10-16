@@ -1,5 +1,6 @@
 const std = @import("std");
 const analysis_snapshot = @import("../analysis/snapshot.zig");
+const QueryOptions = @import("../analysis/query/types.zig").QueryOptions;
 const module_loader = @import("../modules/loader.zig");
 const project = @import("project");
 const utils = @import("utils");
@@ -296,17 +297,17 @@ pub fn featureEnabledForCurrent(snapshot: ?*const AnalysisSnapshot, feature: Fea
 pub const AnalysisProvider = struct {
     context: *anyopaque,
     current: ?*AnalysisSnapshot,
-    generation: u64,
     cancellation: ?utils.Cancellation = null,
-    build: *const fn (context: *anyopaque, path: []const u8) anyerror!AnalysisSnapshot,
+    query_options: ?QueryOptions = null,
+    resolve: *const fn (context: *anyopaque, path: []const u8, options: ?QueryOptions) anyerror!?*AnalysisSnapshot,
 
-    pub fn forDocument(self: *AnalysisProvider, doc_path: []const u8, owned_snapshot: *?AnalysisSnapshot) !?*AnalysisSnapshot {
-        if (self.current) |snapshot| {
-            if (snapshot.generation == self.generation and snapshot.coversPath(doc_path)) return snapshot;
-        }
-        owned_snapshot.* = try self.build(self.context, doc_path);
-        if (owned_snapshot.*) |*snapshot| return snapshot;
-        return null;
+    pub fn beginQuery(self: *AnalysisProvider, budget_ms: u32) void {
+        self.query_options = .{ .budget_ms = budget_ms, .start_ns = utils.time.monotonicNowNs(), .cancellation = self.cancellation };
+    }
+
+    // Results are borrowed from the server until the current request finishes.
+    pub fn forDocument(self: *AnalysisProvider, doc_path: []const u8) !?*AnalysisSnapshot {
+        return self.resolve(self.context, doc_path, self.query_options);
     }
 };
 

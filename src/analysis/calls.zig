@@ -402,6 +402,7 @@ const Analyzer = struct {
     }
 
     fn exprFacts(self: *Analyzer, expr: ast.Expr, env: *const FunctionEnv, owner: ?ast.FunctionDecl) anyerror!ValueFacts {
+        try self.state.checkAnalysisCanceled();
         switch (expr) {
             .hole => return ValueFacts.init(self.allocator),
             .ident => |ident| {

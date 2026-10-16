@@ -44,6 +44,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/layout/vflow/policy_spec.mjs" },
         .{ .path = "tests/runtime/layout/hflow/spec.mjs", .name = "test-layout-hflow", .description = "Run horizontal flow policy tests" },
         .{ .path = "tests/runtime/layout/practical/spec.mjs", .name = "test-layout-practical", .description = "Check synthetic practical layouts and editor updates" },
+        .{ .path = "tests/runtime/lsp/analysis/sharing_spec.mjs", .name = "test-lsp-analysis-sharing", .description = "Check semantic query sharing and deferred layout" },
         .{ .path = "tests/runtime/lsp/cancellation/spec.mjs" },
         .{ .path = "tests/runtime/lsp/diagnostics/spec.mjs" },
         .{ .path = "tests/runtime/lsp/diagnostics/multiple_spec.mjs", .name = "test-lsp-multiple-documents", .description = "Check diagnostics across independent entries and shared imports" },

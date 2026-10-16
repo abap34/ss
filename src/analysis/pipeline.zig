@@ -86,6 +86,7 @@ fn checkFunctionDefinitionsWithEnv(
     var had_diagnostics = false;
     var const_it = state.constants.declarations.iterator();
     while (const_it.next()) |entry| {
+        try state.checkAnalysisCanceled();
         const module_id = entry.key_ptr.module_id;
         const origin_path = blk: {
             if (state.moduleById(module_id)) |module| break :blk checker.originPathForModule(module);
@@ -102,6 +103,7 @@ fn checkFunctionDefinitionsWithEnv(
 
     var it = sema.functions.iterator();
     while (it.next()) |entry| {
+        try state.checkAnalysisCanceled();
         const module_id = entry.key_ptr.module_id;
         const origin_path = blk: {
             if (state.moduleById(module_id)) |module| break :blk checker.originPathForModule(module);
@@ -210,6 +212,7 @@ fn checkDocumentBodies(inference_context: *infer.Context, allocator: std.mem.All
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.semantics_pages, measure_start);
         for (state.modules.order.items) |module_id| {
+            try state.checkAnalysisCanceled();
             const module = state.moduleById(module_id) orelse continue;
             const module_sema = sema.forModule(module_id);
             checker.checkPageStatements(inference_context, allocator, state, &module_sema, checker.originPathForModule(module), module.syntax) catch |err| {
@@ -358,6 +361,7 @@ fn checkPlacementEffectDeclarations(allocator: std.mem.Allocator, state: *core.D
     defer analyzer.deinit();
     var it = state.functions.iterator();
     while (it.next()) |entry| {
+        try state.checkAnalysisCanceled();
         const func = entry.value_ptr.*;
         if (dependencies.callableNamePlacesObjects(func.name)) continue;
         const module_id = entry.key_ptr.module_id;

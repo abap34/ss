@@ -11,8 +11,7 @@ pub const SourceRequest = struct {
 
 pub const QueryOptions = struct {
     budget_ms: u32,
-    allow_stale: bool = true,
-    require_layout: bool = false,
+    start_ns: ?i128 = null,
     cancellation: ?utils.Cancellation = null,
     clock: ?Clock = null,
 };
@@ -34,7 +33,7 @@ pub const QueryBudget = struct {
 
     pub fn start(opts: QueryOptions) QueryBudget {
         return .{
-            .start_ns = if (opts.clock) |clock| clock.now() else monotonicNowNs(),
+            .start_ns = opts.start_ns orelse (if (opts.clock) |clock| clock.now() else monotonicNowNs()),
             .budget_ns = @as(i128, opts.budget_ms) * std.time.ns_per_ms,
             .cancellation = opts.cancellation,
             .clock = opts.clock,

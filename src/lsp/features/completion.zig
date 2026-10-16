@@ -12,12 +12,11 @@ pub const Context = struct {
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
+    ctx.provider.beginQuery(query_budget.completion_ms);
     var position = try lsp_state.requestPosition(ctx.allocator, ctx.documents, params);
     defer if (position) |*pos| pos.deinit(ctx.allocator);
     if (position) |*pos| {
-        var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
-        defer if (owned_snapshot) |*snapshot| snapshot.deinit();
-        const snapshot = try ctx.provider.forDocument(pos.doc_path, &owned_snapshot) orelse return emptyJson(ctx.allocator);
+        const snapshot = try ctx.provider.forDocument(pos.doc_path) orelse return json(ctx.allocator, .{ .items = &.{}, .is_incomplete = true });
         if (!lsp_state.featureEnabledForAnalysis(snapshot, .completion)) return emptyJson(ctx.allocator);
         var completion_result = try analysis_snapshot.completeAt(ctx.allocator, snapshot, .{
             .path = pos.doc_path,
@@ -25,10 +24,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
             .line_index = ctx.documents.indexForPath(pos.doc_path),
             .offset = pos.offset,
             .source_version = snapshot.generation,
-        }, .{
-            .budget_ms = query_budget.completion_ms,
-            .cancellation = ctx.provider.cancellation,
-        });
+        }, ctx.provider.query_options.?);
         defer completion_result.deinit(ctx.allocator);
         return json(ctx.allocator, completion_result);
     }

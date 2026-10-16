@@ -311,3 +311,16 @@ test "missing imports preserve local symbols folding and lexical definitions" {
     try testing.expectEqual(@as(usize, 1), definitions.len);
     try testing.expectEqual(@as(usize, 3), definitions[0].line);
 }
+
+test "analysis query budget includes time spent obtaining the snapshot" {
+    var now: i128 = 10 * std.time.ns_per_s;
+    const started = now;
+    now += 3 * std.time.ns_per_ms;
+    const budget = analysis.query.types.QueryBudget.start(.{
+        .budget_ms = 2,
+        .start_ns = started,
+        .clock = .{ .context = &now, .now_ns = testNow },
+    });
+    try testing.expect(budget.expired());
+    try testing.expect(!budget.canceled());
+}

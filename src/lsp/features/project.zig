@@ -16,9 +16,7 @@ pub const Context = struct {
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     if (try protocol.docPathFromParams(ctx.allocator, params)) |doc_path| {
         defer ctx.allocator.free(doc_path);
-        var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
-        defer if (owned_snapshot) |*snapshot| snapshot.deinit();
-        const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse return try json(ctx.allocator, null);
+        const snapshot = try ctx.provider.forDocument(doc_path) orelse return try json(ctx.allocator, null);
         return try json(ctx.allocator, &snapshot.project);
     }
     return try json(ctx.allocator, if (ctx.provider.current) |snapshot| &snapshot.project else null);

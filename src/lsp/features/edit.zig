@@ -36,9 +36,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         return try statusJson(ctx.allocator, .unsupported, "The WYSIWYG editor is not active for this document.");
     }
 
-    var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
-    defer if (owned_snapshot) |*snapshot| snapshot.deinit();
-    const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse
+    const snapshot = try ctx.provider.forDocument(doc_path) orelse
         return try statusJson(ctx.allocator, .unsupported, "No compiler snapshot is available.");
     const requested_id = protocol.stringField(request_object, "snapshotId") orelse "";
     const layout = if (snapshot.layout_output) |*value| value else return try statusJson(

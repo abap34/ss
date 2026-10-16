@@ -14,13 +14,10 @@ pub const Context = struct {
 };
 
 pub fn snapshotResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
-    var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
-    defer if (owned_snapshot) |*snapshot| snapshot.deinit();
-
     const doc_path = try protocol.docPathFromParams(ctx.allocator, params);
     defer if (doc_path) |path| ctx.allocator.free(path);
     const snapshot = blk: {
-        if (doc_path) |path| break :blk try ctx.provider.forDocument(path, &owned_snapshot);
+        if (doc_path) |path| break :blk try ctx.provider.forDocument(path);
         break :blk ctx.provider.current;
     } orelse return try editor_snapshot.emptyJson(ctx.allocator);
 

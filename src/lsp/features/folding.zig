@@ -12,11 +12,10 @@ pub const Context = struct {
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
+    ctx.provider.beginQuery(1000);
     const doc_path = try protocol.docPathFromParams(ctx.allocator, params) orelse return try ctx.allocator.dupe(u8, "[]");
     defer ctx.allocator.free(doc_path);
-    var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
-    defer if (owned_snapshot) |*snapshot| snapshot.deinit();
-    const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse return try ctx.allocator.dupe(u8, "[]");
+    const snapshot = try ctx.provider.forDocument(doc_path) orelse return try ctx.allocator.dupe(u8, "[]");
     if (!lsp_state.featureEnabledForAnalysis(snapshot, .folding_ranges)) return try ctx.allocator.dupe(u8, "[]");
     const module = snapshot.moduleForPath(doc_path) orelse return try ctx.allocator.dupe(u8, "[]");
     return jsonWithIndex(ctx.allocator, module.line_index, analysis_snapshot.foldingRanges(snapshot, doc_path));

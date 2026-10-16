@@ -17,6 +17,7 @@ pub const Index = struct {
 };
 
 pub const LoadOptions = struct {
+    cancellation: ?utils.Cancellation = null,
     overlay: ?*const module_loader.SourceOverlay = null,
     diagnostics: ?*module_loader.LoadDiagnostics = null,
     print_diagnostics: bool = true,
@@ -39,6 +40,7 @@ pub fn load(
         .print_diagnostics = options.print_diagnostics,
         .recovering = options.recovering,
         .embedded_cache = options.embedded_cache,
+        .cancellation = options.cancellation,
     });
     var index = Index{
         .module_graph = module_graph,

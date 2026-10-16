@@ -82,6 +82,7 @@ const Server = struct {
     analysis_revision: u64 = 0,
     analysis_watched_revision: u64 = 0,
     other_analyses: lsp_state.AnalysisStore = .{},
+    query_budget: ?analysis.query.types.QueryBudget = null,
     analysis_diagnostics: DiagnosticSet,
     layout_responses: ResponseStore = .{},
     editor_responses: ResponseStore = .{},
@@ -574,7 +575,22 @@ const Server = struct {
             break :blk default_highlight.?;
         };
         try self.checkCanceled();
-        const entry_path = try self.allocator.dupe(u8, if (layout_build != .single_document and config != null) config.?.entry else changed_abs);
+        var selected_entry = if (layout_build != .single_document and config != null) config.?.entry else changed_abs;
+        if (layout_build == .semantic) {
+            if (self.analysis) |*current| {
+                if (std.mem.eql(u8, current.project.entry_path, selected_entry) and
+                    self.analysisReusable(current, self.analysis_watched_revision) and !current.coversPath(changed_abs)) selected_entry = changed_abs;
+            }
+            for (self.other_analyses.entries.items) |*entry| {
+                if (std.mem.eql(u8, entry.snapshot.project.entry_path, selected_entry) and
+                    self.analysisReusable(&entry.snapshot, entry.watched_revision) and !entry.snapshot.coversPath(changed_abs))
+                {
+                    selected_entry = changed_abs;
+                    break;
+                }
+            }
+        }
+        const entry_path = try self.allocator.dupe(u8, selected_entry);
         defer self.allocator.free(entry_path);
         const asset_base_dir = if (config) |cfg| try self.allocator.dupe(u8, cfg.asset_base_dir) else try dirnameAlloc(self.allocator, entry_path);
         defer self.allocator.free(asset_base_dir);
@@ -592,6 +608,28 @@ const Server = struct {
             .prefer_translation_patch = prefer_translation_patch,
             .highlight_languages = highlight.languages,
         };
+        if (source_override == null) {
+            for (self.other_analyses.entries.items, 0..) |*entry, index| {
+                if (!std.mem.eql(u8, entry.snapshot.project.entry_path, entry_path) or
+                    !self.analysisReusable(&entry.snapshot, entry.watched_revision)) continue;
+                var retained = self.other_analyses.entries.swapRemove(index);
+                defer retained.diagnostics.deinit();
+                errdefer retained.snapshot.deinit();
+                try diagnostics.appendFrom(&retained.diagnostics);
+                if (include_layout and retained.snapshot.layout_output == null) {
+                    _ = try retained.snapshot.completeRetainedLayout(.{
+                        .context = &layout_context,
+                        .run = runAnalysisLayout,
+                        .on_error = addAnalysisLayoutError,
+                    }, .{ .context = self, .is_canceled = analysisCanceled });
+                    var added = DiagnosticSet.init(self.allocator);
+                    defer added.deinit();
+                    try added.addAnalysisBag(&retained.snapshot.diagnostics);
+                    try diagnostics.appendFrom(&added);
+                }
+                return retained.snapshot;
+            }
+        }
         var analysis_snapshot = try analysis.snapshot.build(self.allocator, &sources, entry_path, asset_base_dir, .{
             .generation = self.documents.generation,
             .project = .{
@@ -611,7 +649,7 @@ const Server = struct {
                 .is_canceled = analysisCanceled,
             },
             .embedded_cache = &self.embedded_cache,
-            .retain_layout_inputs = !include_layout and self.wysiwyg_paths.count() != 0,
+            .retain_layout_inputs = !include_layout,
             .retain_evaluated_layout_state = include_layout and self.wysiwyg_paths.count() != 0,
         });
         errdefer analysis_snapshot.deinit();
@@ -725,28 +763,63 @@ fn analysisProvider(server: *Server) lsp_state.AnalysisProvider {
     return .{
         .context = server,
         .current = if (server.analysis) |*snapshot| snapshot else null,
-        .generation = server.documents.generation,
         .cancellation = .{
             .context = server,
             .is_canceled = analysisCanceled,
         },
-        .build = buildAnalysisForFeature,
+        .resolve = resolveAnalysisForFeature,
     };
 }
 
 fn analysisCanceled(context: *const anyopaque) bool {
     const server: *const Server = @ptrCast(@alignCast(context));
-    return server.workStatus() != .current;
+    return server.workStatus() != .current or (if (server.query_budget) |budget| budget.expired() else false);
 }
 
-fn buildAnalysisForFeature(context: *anyopaque, path: []const u8) !AnalysisSnapshot {
+fn resolveAnalysisForFeature(context: *anyopaque, path: []const u8, options: ?analysis.query.types.QueryOptions) !?*AnalysisSnapshot {
     const server: *Server = @ptrCast(@alignCast(context));
+    try server.checkCanceled();
+    if (server.analysis) |*snapshot| {
+        if (snapshot.coversPath(path) and server.analysisReusable(snapshot, server.analysis_watched_revision)) return snapshot;
+    }
+    for (server.other_analyses.entries.items) |*entry| {
+        if (entry.snapshot.coversPath(path) and server.analysisReusable(&entry.snapshot, entry.watched_revision)) return &entry.snapshot;
+    }
+    const previous_budget = server.query_budget;
+    defer server.query_budget = previous_budget;
+    if (options) |opts| {
+        // Work cancellation is checked independently; avoid a recursive token.
+        var budget_options = opts;
+        budget_options.cancellation = null;
+        server.query_budget = analysis.query.types.QueryBudget.start(budget_options);
+    }
+    return buildSharedAnalysis(server, path) catch |err| {
+        try server.checkCanceled();
+        if (err != error.Canceled) return err;
+        if (server.pending_rebuild_path == null) try server.enqueueRebuild(path, .configured, false, @max(1, server.lspDebounceMs()));
+        return null;
+    };
+}
+
+fn buildSharedAnalysis(server: *Server, path: []const u8) !*AnalysisSnapshot {
     var diagnostics = DiagnosticSet.init(server.allocator);
-    defer diagnostics.deinit();
-    var snapshot = try server.buildAnalysis(path, &diagnostics, .configured, false);
-    if (snapshot.coversPath(path)) return snapshot;
-    snapshot.deinit();
-    return try server.buildSingleDocumentAnalysis(path, &diagnostics);
+    errdefer diagnostics.deinit();
+    var snapshot = try server.buildAnalysis(path, &diagnostics, .semantic, false);
+    var snapshot_owned = true;
+    errdefer if (snapshot_owned) snapshot.deinit();
+    if (!snapshot.coversPath(path)) {
+        // Retain the configured entry too, even when this file is independent.
+        try server.other_analyses.put(server.allocator, .{ .snapshot = snapshot, .diagnostics = diagnostics, .watched_revision = server.watched_files_revision });
+        snapshot_owned = false;
+        diagnostics = DiagnosticSet.init(server.allocator);
+        snapshot = try server.buildSingleDocumentAnalysis(path, &diagnostics);
+        snapshot_owned = true;
+    }
+    try server.other_analyses.put(server.allocator, .{ .snapshot = snapshot, .diagnostics = diagnostics, .watched_revision = server.watched_files_revision });
+    for (server.other_analyses.entries.items) |*entry| {
+        if (std.mem.eql(u8, entry.snapshot.project.entry_path, snapshot.project.entry_path)) return &entry.snapshot;
+    }
+    unreachable;
 }
 
 const AnalysisLayoutContext = struct {
@@ -1101,6 +1174,7 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
         return;
     }
     if (std.mem.eql(u8, method, "workspace/didChangeWatchedFiles")) {
+        const previous_watched_revision = server.watched_files_revision;
         server.watched_files_revision +%= 1;
         var relevant = params == null;
         if (params) |p| if (arrayField(p, "changes")) |changes| {
@@ -1127,6 +1201,11 @@ fn handleMessage(server: *Server, message: *const JsonValue) !void {
                 server.acceptCurrentRevision();
             }
         } else {
+            // Disk notifications for open overlays do not change their source.
+            if (server.analysis_watched_revision == previous_watched_revision) server.analysis_watched_revision = server.watched_files_revision;
+            for (server.other_analyses.entries.items) |*entry| {
+                if (entry.watched_revision == previous_watched_revision) entry.watched_revision = server.watched_files_revision;
+            }
             server.acceptCurrentRevision();
         }
         return;
