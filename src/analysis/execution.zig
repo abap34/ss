@@ -107,12 +107,10 @@ pub const ExecutionGraph = struct {
         try resolveDisplayReads(allocator, graph.units.items);
         try validateExecutionUnits(state, graph.units.items);
         try buildDependencyEdges(allocator, graph.units.items, &graph.edges);
-        var cycle_hint: ?usize = null;
-        graph.order = scheduleFromEdges(allocator, graph.units.items, graph.edges.items, &cycle_hint) catch |err| {
-            if (err == error.ExecutionDependencyCycle and graph.units.items.len != 0) {
-                const diagnostic = analysisDiagnostic(err);
-                try addUnitErrorDiagnostic(state, graph.units.items[cycle_hint orelse 0], diagnostic.code, diagnostic.message);
-            }
+        var cycle = std.ArrayList(usize).empty;
+        defer cycle.deinit(allocator);
+        graph.order = scheduleFromEdges(allocator, graph.units.items, graph.edges.items, &cycle) catch |err| {
+            if (err == error.ExecutionDependencyCycle) try addCycleDiagnostic(allocator, state, graph.units.items, cycle.items);
             return err;
         };
         return graph;
@@ -401,7 +399,7 @@ fn scheduleFromEdges(
     allocator: std.mem.Allocator,
     units: []const ExecutionUnit,
     edges: []const DependencyEdge,
-    cycle_hint: *?usize,
+    cycle: *std.ArrayList(usize),
 ) ![]usize {
     const count = units.len;
     const indegree = try allocator.alloc(usize, count);
@@ -436,15 +434,94 @@ fn scheduleFromEdges(
         }
     }
     if (produced != count) {
-        var candidate: ?usize = null;
-        for (units, 0..) |unit, index| {
-            if (done[index] or indegree[index] == 0) continue;
-            if (candidate == null or unit.source_order < units[candidate.?].source_order) candidate = index;
-        }
-        cycle_hint.* = candidate;
+        try findCycle(allocator, adjacency, done, cycle);
         return error.ExecutionDependencyCycle;
     }
     return out;
+}
+
+// An unfinished unit can be downstream of a cycle. Recover an actual closed
+// path instead of treating every unit left by Kahn's algorithm as cyclic.
+// Use an explicit stack so long dependency chains cannot exhaust the call stack.
+fn findCycle(allocator: std.mem.Allocator, adjacency: Adjacency, done: []const bool, cycle: *std.ArrayList(usize)) !void {
+    const Visit = enum { unseen, active, finished };
+    const visits = try allocator.alloc(Visit, done.len);
+    defer allocator.free(visits);
+    for (done, visits) |is_done, *visit| visit.* = if (is_done) .finished else .unseen;
+    const Frame = struct { unit: usize, cursor: usize = 0 };
+    var stack = std.ArrayList(Frame).empty;
+    defer stack.deinit(allocator);
+    for (0..done.len) |root| {
+        if (visits[root] != .unseen) continue;
+        visits[root] = .active;
+        try stack.append(allocator, .{ .unit = root });
+        while (stack.items.len != 0) {
+            const frame = &stack.items[stack.items.len - 1];
+            const neighbors = adjacency.neighbors(frame.unit);
+            if (frame.cursor == neighbors.len) {
+                visits[frame.unit] = .finished;
+                _ = stack.pop();
+                continue;
+            }
+            const next = neighbors[frame.cursor];
+            frame.cursor += 1;
+            switch (visits[next]) {
+                .finished => {},
+                .unseen => {
+                    visits[next] = .active;
+                    try stack.append(allocator, .{ .unit = next });
+                },
+                .active => {
+                    var in_cycle = false;
+                    for (stack.items) |entry| {
+                        if (entry.unit == next) in_cycle = true;
+                        if (in_cycle) try cycle.append(allocator, entry.unit);
+                    }
+                    std.debug.assert(cycle.items.len != 0);
+                    return;
+                },
+            }
+        }
+    }
+    unreachable; // A finite graph left unfinished by Kahn's algorithm has a cycle.
+}
+
+fn addCycleDiagnostic(allocator: std.mem.Allocator, state: *core.DocumentState, units: []const ExecutionUnit, cycle: []const usize) !void {
+    std.debug.assert(cycle.len != 0);
+    var first: usize = 0;
+    for (cycle, 0..) |unit, index| {
+        if (units[unit].source_order < units[cycle[first]].source_order) first = index;
+    }
+    var message = std.ArrayList(u8).empty;
+    defer message.deinit(allocator);
+    try message.appendSlice(allocator, "document evaluation dependencies contain a cycle:");
+    for (0..cycle.len) |offset| {
+        const from = units[cycle[(first + offset) % cycle.len]];
+        const to = units[cycle[(first + offset + 1) % cycle.len]];
+        const location = try std.fmt.allocPrint(allocator, "\n  {s}:bytes:{d}-{d} -> {s}:bytes:{d}-{d} via ", .{
+            from.path, from.span.start, from.span.end, to.path, to.span.start, to.span.end,
+        });
+        defer allocator.free(location);
+        try message.appendSlice(allocator, location);
+        try appendDependencyReason(allocator, &message, from.summary, to.summary);
+    }
+    try addUnitErrorDiagnostic(state, units[cycle[first]], "ExecutionDependencyCycle", message.items);
+}
+
+fn appendDependencyReason(allocator: std.mem.Allocator, out: *std.ArrayList(u8), writer: dependencies.AccessSummary, reader: dependencies.AccessSummary) !void {
+    for (writer.writes.items) |write| {
+        for (reader.reads.items) |read| {
+            if (!write.intersects(read)) continue;
+            try dependencies.appendResource(allocator, out, write, .{});
+            if (!write.eql(read)) {
+                try out.appendSlice(allocator, " (read as ");
+                try dependencies.appendResource(allocator, out, read, .{});
+                try out.append(allocator, ')');
+            }
+            return;
+        }
+    }
+    unreachable; // Every dependency edge comes from an intersecting write/read pair.
 }
 
 const Adjacency = struct {
@@ -640,14 +717,4 @@ fn addUnitErrorDiagnostic(state: *core.DocumentState, unit: ExecutionUnit, code:
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .code = code, .message = try state.allocator.dupe(u8, message) },
     });
-}
-
-fn analysisDiagnostic(err: anyerror) struct { code: []const u8, message: []const u8 } {
-    return switch (err) {
-        error.InvalidSelectionMutation => .{ .code = "InvalidSelectionMutation", .message = "primitive callbacks must not add objects or pages to the selection being iterated" },
-        error.LayoutDependencyCycle => .{ .code = "LayoutDependencyCycle", .message = "layout reads cannot feed object creation, content, properties, or constraints because layout is solved once" },
-        error.PostLayoutComputationUnsupported => .{ .code = "PostLayoutComputationUnsupported", .message = "layout-reading scheduled computations are not implemented yet" },
-        error.ExecutionDependencyCycle => .{ .code = "ExecutionDependencyCycle", .message = "document evaluation dependencies contain a cycle" },
-        else => .{ .code = "ScheduleAnalysisFailed", .message = "scheduled unit analysis failed" },
-    };
 }

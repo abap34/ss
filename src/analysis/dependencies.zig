@@ -420,7 +420,7 @@ fn appendFlagLine(allocator: std.mem.Allocator, out: *std.ArrayList(u8), flag: [
     try out.appendSlice(allocator, flag);
 }
 
-fn appendResource(
+pub fn appendResource(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     resource: Resource,

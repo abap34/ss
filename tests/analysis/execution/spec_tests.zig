@@ -69,6 +69,75 @@ test "dependency cycle diagnostics retain source locations in both graph constru
     }
 }
 
+fn expectCyclePath(source: []const u8, statements: []const []const u8, keys: []const []const u8) !void {
+    for ([_]compiler.analysis.AnalysisMode{ .diagnostics_only, .evaluation }) |mode| {
+        var state = try document(source);
+        defer state.deinit();
+        {
+            var arena = std.heap.ArenaAllocator.init(testing.allocator);
+            defer arena.deinit();
+            try testing.expectError(error.ExecutionDependencyCycle, compiler.analysis.analyzeDocumentStateWithMode(arena.allocator(), &state, mode));
+        }
+        // The diagnostic and its complete witness must survive graph storage.
+        const diagnostic = state.diagnostics.entries.items[state.diagnostics.entries.items.len - 1];
+        try testing.expectEqualStrings("ExecutionDependencyCycle", diagnostic.code());
+        const location = diagnostic.origin.?.location().?;
+        try testing.expectEqualStrings(statements[0], source[location.span.start..location.span.end]);
+        const message = diagnostic.data.user_report.message;
+        try testing.expectEqual(keys.len, std.mem.count(u8, message, " via "));
+        for (statements) |statement| {
+            const start = std.mem.indexOf(u8, source, statement).?;
+            const span = try std.fmt.allocPrint(testing.allocator, "execution.ss:bytes:{d}-{d}", .{ start, start + statement.len });
+            defer testing.allocator.free(span);
+            // Every member occurs once as a writer and once as a reader.
+            try testing.expectEqual(@as(usize, 2), std.mem.count(u8, message, span));
+        }
+        for (keys) |key| {
+            const reason = try std.fmt.allocPrint(testing.allocator, "Property(owner=document, key={s})", .{key});
+            defer testing.allocator.free(reason);
+            try testing.expectEqual(@as(usize, 1), std.mem.count(u8, message, reason));
+        }
+    }
+}
+
+test "cycle diagnostics identify the cycle instead of an earlier downstream statement" {
+    try expectCyclePath(
+        \\document
+        \\  let downstream = docctx().footer_text
+        \\  docctx().footer_text = docctx().watermark
+        \\  docctx().watermark = docctx().footer_text
+        \\end
+    , &.{
+        "docctx().footer_text = docctx().watermark",
+        "docctx().watermark = docctx().footer_text",
+    }, &.{ "footer_text", "watermark" });
+}
+
+test "cycle diagnostics include the resource of a self dependency" {
+    try expectCyclePath(
+        \\document
+        \\  let independent = 2
+        \\  let downstream = docctx().footer_text
+        \\  docctx().footer_text = docctx().footer_text
+        \\end
+    , &.{"docctx().footer_text = docctx().footer_text"}, &.{"footer_text"});
+}
+
+test "cycle diagnostics retain every edge of a longer closed path" {
+    try expectCyclePath(
+        \\document
+        \\  let downstream = docctx().footer_text
+        \\  docctx().footer_text = docctx().watermark
+        \\  docctx().watermark = docctx().pageno_fmt
+        \\  docctx().pageno_fmt = docctx().footer_text
+        \\end
+    , &.{
+        "docctx().footer_text = docctx().watermark",
+        "docctx().watermark = docctx().pageno_fmt",
+        "docctx().pageno_fmt = docctx().footer_text",
+    }, &.{ "footer_text", "watermark", "pageno_fmt" });
+}
+
 test "nested record anchors depend on both immutable root bindings" {
     var state = try document(
         \\record Inner { item: Object }
