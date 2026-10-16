@@ -54,6 +54,44 @@ class ReleaseNotesTests(unittest.TestCase):
         body = "### Added\n\n- Added mode ([#16](https://github.com/example/ss/pull/16)), by @alice.\n\n### Thanks\n\nThanks to @alice for testing!"
         self.assertEqual(notes.credit_notes(body, [pull(16)]), body)
 
+    def test_maintainer_only_release_keeps_inline_credit_without_thanks(self):
+        for author in ("abap34", "Abap34"):
+            with self.subTest(author=author):
+                prs = [pull(16, author)]
+                output = notes.credit_notes("### Added\n\n- Added mode (#16).", prs)
+                self.assertIn("[#16](https://github.com/example/ss/pull/16)", output)
+                self.assertIn(f"Contributed by @{author}.", output)
+                self.assertNotIn("### Thanks", output)
+                self.assertEqual(notes.credit_notes(output, prs), output)
+
+    def test_other_authors_are_thanked_once_without_maintainer(self):
+        prs = [pull(1, "abap34"), pull(2), pull(3), pull(4, "abap34-helper")]
+        output = notes.credit_notes("### Fixed\n\n- Fixed mode (#1, #2, #3, #4).", prs)
+        self.assertIn("Contributed by @abap34, @abap34-helper, @alice.", output)
+        thanks = output.split("### Thanks\n\n")[1]
+        self.assertEqual(thanks, "Thanks to @abap34-helper, @alice for contributing to this release!")
+        self.assertEqual(notes.credit_notes(output, prs), output)
+
+    def test_existing_maintainer_only_thanks_section_is_removed(self):
+        body = ("### Added\n\n- Added mode (#16).\n\n### Thanks\n\n"
+                "Thanks to @abap34 for contributing to this release!\n\n"
+                "### Notes\n\nAdditional release information.")
+        output = notes.credit_notes(body, [pull(16, "abap34")])
+        self.assertIn("Contributed by @abap34.", output)
+        self.assertNotIn("### Thanks", output)
+        self.assertTrue(output.endswith("### Notes\n\nAdditional release information."))
+
+    def test_existing_mixed_thanks_preserve_other_authors_and_prose(self):
+        for authors in ("@abap34, @alice", "@alice, @abap34", "@alice, @Abap34, @bob"):
+            with self.subTest(authors=authors):
+                body = ("### Added\n\n- Added mode (#16).\n\n### Thanks\n\n"
+                        f"Thanks to {authors} for testing!\n\nExtra appreciation for the review.")
+                output = notes.credit_notes(body, [pull(16, "abap34")])
+                thanks = output.split("### Thanks\n\n")[1]
+                expected = "@alice, @bob" if "@bob" in authors else "@alice"
+                self.assertEqual(thanks, f"Thanks to {expected} for testing!\n\nExtra appreciation for the review.")
+                self.assertEqual(notes.credit_notes(output, [pull(16, "abap34")]), output)
+
     def test_code_and_unrelated_links_do_not_credit_a_pr(self):
         for body in (
             "### Changed\n\n- Documented `#16`.\n\n```md\n- Example (#16).\n```",

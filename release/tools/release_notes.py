@@ -8,6 +8,9 @@ import re
 import subprocess
 
 
+THANKS_EXCLUDED_AUTHORS = {"abap34"}
+
+
 def command(root, args):
     try:
         result = subprocess.run(args, cwd=root, text=True, capture_output=True, timeout=60)
@@ -116,17 +119,28 @@ def credit_notes(body, pull_requests):
 
     for start, end, text in reversed(edits):
         body = body[:start] + text + body[end:]
-    authors = sorted({pr["user"]["login"] for pr in pull_requests if human_author(pr)})
+    authors = sorted({pr["user"]["login"] for pr in pull_requests
+                      if human_author(pr) and pr["user"]["login"].casefold() not in THANKS_EXCLUDED_AUTHORS})
     thanks = re.search(r"(?m)^### Thanks\s*\n(?P<body>.*?)(?=^#{1,3} |\Z)", body, re.DOTALL)
     existing = thanks["body"] if thanks else ""
+
+    def filter_thanks(match):
+        credited_authors = re.findall(r"@[\w-]+", match["authors"])
+        retained = [author for author in credited_authors
+                    if author[1:].casefold() not in THANKS_EXCLUDED_AUTHORS]
+        return "Thanks to " + ", ".join(retained) + match["reason"] if retained else ""
+
+    existing = re.sub(r"Thanks to (?P<authors>@[\w-]+(?:, @[\w-]+)*)(?P<reason> for [^\n]+)",
+                      filter_thanks, existing)
     missing = [author for author in authors if not re.search(rf"(?<![\w@])@{re.escape(author)}(?![\w-])", existing)]
     if missing:
         sentence = "Thanks to " + ", ".join(f"@{author}" for author in missing) + " for contributing to this release!"
-        if thanks:
-            end = thanks.end()
-            body = body[:end].rstrip() + "\n\n" + sentence + "\n\n" + body[end:]
-        else:
-            body = body.rstrip() + "\n\n### Thanks\n\n" + sentence
+        existing = existing.rstrip() + "\n\n" + sentence
+    if thanks:
+        section = "### Thanks\n\n" + existing.strip() + "\n\n" if existing.strip() else ""
+        body = body[:thanks.start()] + section + body[thanks.end():]
+    elif existing.strip():
+        body = body.rstrip() + "\n\n### Thanks\n\n" + existing.strip()
     return body.strip()
 
 

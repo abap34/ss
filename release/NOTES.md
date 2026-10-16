@@ -7,7 +7,10 @@ Several related PRs may share one description, such as `(#15, #17, #18)`.
 
 `release/tools/release_notes.py` links those references, adds the human PR
 authors to the corresponding descriptions, and thanks every human PR author
-once. Bot PRs receive links without mentions or thanks. Existing author
+once except `abap34`. Inline credits still include `abap34`; a release with
+no other authors does not receive a `Thanks` section. Existing `Thanks to`
+sentences also omit `abap34`, and an empty `Thanks` section is removed.
+Bot PRs receive links without mentions or thanks. Other existing author
 mentions and acknowledgments are preserved. Human PRs without a matching
 description are reported for editorial review; the tool does not guess
 correspondences from similar wording.
