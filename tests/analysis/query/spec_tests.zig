@@ -267,3 +267,47 @@ test "lambda parameters shadow outer names only within their lexical extent" {
         try testing.expect(found);
     }
 }
+
+test "missing imports preserve local symbols folding and lexical definitions" {
+    const path = "stdlib/core/import-recovery-query.ss";
+    const source =
+        \\import ./missing-query-module as missing
+        \\fn identity(value: Number) -> Number = value
+        \\page a
+        \\  let x = 1
+        \\  let f = (n: Number) |-> n
+        \\  let later = x
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(snapshot.diagnostics.hasErrors());
+    var unknown_import = false;
+    for (snapshot.diagnostics.items.items) |diagnostic| if (std.mem.eql(u8, diagnostic.code, "UnknownImport")) {
+        unknown_import = true;
+    };
+    if (!unknown_import) for (snapshot.diagnostics.items.items) |diagnostic| {
+        std.debug.print("{s}: {s}\n", .{ diagnostic.code, diagnostic.message });
+    };
+    try testing.expect(unknown_import);
+    const symbols = analysis.snapshot.documentSymbols(&snapshot, path);
+    try testing.expectEqual(@as(usize, 2), symbols.len);
+    try testing.expectEqualStrings("a", symbols[1].name);
+    try testing.expectEqual(@as(usize, 1), analysis.snapshot.foldingRanges(&snapshot, path).len);
+    const request = analysis.query.types.SourceRequest{ .path = path, .source = source, .offset = std.mem.indexOf(u8, source, "later = x").? + "later = ".len };
+    var completion = try analysis.snapshot.completeAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+    defer completion.deinit(testing.allocator);
+    var found = false;
+    for (completion.items) |item| if (std.mem.eql(u8, item.label, "x")) {
+        found = true;
+        try testing.expectEqualStrings("unknown", item.detail.?);
+    };
+    try testing.expect(found);
+    const definitions = try analysis.snapshot.definitionAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+    defer testing.allocator.free(definitions);
+    try testing.expectEqual(@as(usize, 1), definitions.len);
+    try testing.expectEqual(@as(usize, 3), definitions[0].line);
+}

@@ -637,10 +637,10 @@ fn buildWithSyntax(
     defer if (!diagnostics_moved) diagnostic_bag.deinit();
 
     var inputs = try loadSnapshotInputs(allocator, sources, entry_path, asset_base_dir, options, syntax_storage, &diagnostic_bag) orelse
-        return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
+        return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved, syntax_storage);
     defer inputs.deinit(allocator);
     if (!try inputs.analyze(allocator, options, &diagnostic_bag)) {
-        return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
+        return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved, syntax_storage);
     }
     try inputs.solveLayout(allocator, options, &diagnostic_bag);
     return inputs.finish(allocator, entry_path, asset_base_dir, options, &diagnostic_bag, &diagnostics_moved);
@@ -910,9 +910,27 @@ fn finishDiagnosticSnapshot(
     options: ProjectOptions,
     diagnostic_bag: *diagnostics.DiagnosticBag,
     diagnostics_moved: *bool,
+    syntax_storage: *const SyntaxStorage,
 ) !AnalysisSnapshot {
-    var project_facts = try ProjectFacts.init(allocator, entry_path, asset_base_dir, options);
-    errdefer project_facts.deinit(allocator);
+    // Local syntax remains useful even when loading an import failed. Build
+    // source facts without trying to resolve missing imports or evaluate code.
+    for (syntax_storage.trees.items) |tree| {
+        if (!std.mem.eql(u8, tree.path, entry_path)) continue;
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const scratch = arena.allocator();
+        var state = try core.DocumentState.init(scratch, try scratch.dupe(u8, asset_base_dir), try scratch.dupe(u8, entry_path), try scratch.dupe(u8, tree.source), try tree.module.clone(scratch));
+        defer state.deinit();
+        try @import("index.zig").populateDocumentStateAnalysis(scratch, &state);
+        for (state.projectSyntax().functions.items) |func| try state.functions.put(core.functionKey(state.modules.project_id, func.name), func);
+        for (state.projectSyntax().constants.items) |decl| try state.constants.declarations.put(core.constKey(state.modules.project_id, decl.name), decl);
+        const facts = try ProjectFacts.fromDocumentState(allocator, &state, entry_path, asset_base_dir, .{ .project = options });
+        diagnostics_moved.* = true;
+        var snapshot = try AnalysisSnapshot.fromDocumentState(allocator, &state, state.declaration_index, diagnostic_bag.*, null, facts);
+        snapshot.generation = generation;
+        return snapshot;
+    }
+    const project_facts = try ProjectFacts.init(allocator, entry_path, asset_base_dir, options);
     var snapshot = AnalysisSnapshot.fromDiagnostics(allocator, diagnostic_bag.*, project_facts);
     snapshot.generation = generation;
     diagnostics_moved.* = true;
@@ -1346,9 +1364,10 @@ fn collectVariableBindings(
     }
     for (state.source_map.definitions.items) |definition| {
         if (definition.kind != .variable) continue;
-        const info = state.bindingTypeAt(definition.module_id, definition.span_start) orelse continue;
+        const known_info = state.bindingTypeAt(definition.module_id, definition.span_start);
+        const info: @TypeOf(known_info.?) = known_info orelse .{ .ty = ast.Type.any };
         const retained_type = try type_storage.retain(info.ty);
-        const type_label: []u8 = @constCast(try semantic_types.typeInfoLabelAlloc(allocator, .{ .ty = info.ty }));
+        const type_label: []u8 = if (known_info != null) @constCast(try semantic_types.typeInfoLabelAlloc(allocator, .{ .ty = info.ty })) else try allocator.dupe(u8, "unknown");
         errdefer allocator.free(type_label);
         const name = try allocator.dupe(u8, definition.name);
         errdefer allocator.free(name);
