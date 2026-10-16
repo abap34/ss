@@ -113,7 +113,6 @@ let marker = panel!()
 marker.chrome.fill = c"1,0,0"
 marker.chrome.stroke = none
 marker.chrome.line_width = 0
-place!(marker)
 ~ marker.left == page.right + 100
 ~ marker.bottom == page.bottom + 100
 ~ marker.width == 200

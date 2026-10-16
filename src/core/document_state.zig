@@ -699,6 +699,24 @@ pub const DocumentState = struct {
     }
 
     pub fn placeObjectOnPage(self: *DocumentState, page_id: NodeId, object_id: NodeId) !void {
+        const page = self.getNode(page_id) orelse return error.UnknownNode;
+        if (page.kind != .page) return error.InvalidValueTag;
+        // Validate the whole composition before publishing any membership.
+        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(NodeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, object_id);
+        var index: usize = 0;
+        while (index < pending.items.len) : (index += 1) {
+            const id = pending.items[index];
+            const entry = try seen.getOrPut(id);
+            if (entry.found_existing) return error.DuplicateObjectParent;
+            const node = self.getNode(id) orelse return error.UnknownNode;
+            if (node.kind != .object) return error.InvalidValueTag;
+            if (node.attached) return error.DuplicatePlacement;
+            if (self.childrenOf(id)) |children| try pending.appendSlice(self.allocator, children);
+        }
         try self.addPagePlacementRoot(page_id, object_id);
         try self.attachObjectSubtreeToPage(page_id, object_id);
     }
@@ -737,45 +755,21 @@ pub const DocumentState = struct {
         for (children) |child_id| try self.discardObjectSubtreeInner(child_id, visited);
     }
 
-    pub fn connectGeneratedReturnObjects(self: *DocumentState, return_id: NodeId, start_index: usize, origin: ?model.SourceOrigin) !void {
-        const return_node = self.getNode(return_id) orelse return error.UnknownNode;
-        if (return_node.kind != .object) return;
-
-        var candidates = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer candidates.deinit();
-        try candidates.put(return_id, {});
-        if (start_index < self.graph.nodes.items.len) {
-            for (self.graph.nodes.items[start_index..]) |node| {
-                if (node.kind != .object or node.attached or node.discarded) continue;
-                try candidates.put(node.id, {});
-            }
-        }
-
+    pub fn markReturnedObjectOrigins(self: *DocumentState, return_id: NodeId, start_index: usize, origin: ?model.SourceOrigin) !void {
+        const value = origin orelse return;
         var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
         var queue = std.ArrayList(NodeId).empty;
         defer queue.deinit(self.allocator);
-        try seen.put(return_id, {});
         try queue.append(self.allocator, return_id);
-
         var index: usize = 0;
         while (index < queue.items.len) : (index += 1) {
-            try self.appendConnectedCandidates(candidates, &seen, &queue, queue.items[index]);
+            const id = queue.items[index];
+            const entry = try seen.getOrPut(id);
+            if (entry.found_existing) continue;
+            try self.setGeneratedNodeOrigin(id, start_index, value);
+            if (self.childrenOf(id)) |children| try queue.appendSlice(self.allocator, children);
         }
-
-        if (origin) |value| {
-            for (queue.items) |candidate_id| {
-                try self.setGeneratedNodeOrigin(candidate_id, start_index, value);
-            }
-        }
-
-        const page_id = if (return_node.attached) self.parentPageOf(return_id) else null;
-        for (queue.items) |candidate_id| {
-            if (candidate_id == return_id) continue;
-            if (try self.containsDescendant(candidate_id, return_id)) continue;
-            try self.addContainment(return_id, candidate_id);
-        }
-        if (page_id) |page| try self.attachObjectSubtreeToPage(page, return_id);
     }
 
     fn setGeneratedNodeOrigin(self: *DocumentState, node_id: NodeId, start_index: usize, origin: model.SourceOrigin) !void {
@@ -785,64 +779,6 @@ pub const DocumentState = struct {
         const node = &self.graph.nodes.items[node_index];
         if (node.id != node_id) return;
         node.origin = try self.copyOrigin(origin);
-    }
-
-    fn appendConnectedCandidates(
-        self: *DocumentState,
-        candidates: std.AutoHashMap(NodeId, void),
-        seen: *std.AutoHashMap(NodeId, void),
-        queue: *std.ArrayList(NodeId),
-        current: NodeId,
-    ) !void {
-        var containment = self.graph.contains.iterator();
-        while (containment.next()) |entry| {
-            const parent_id = entry.key_ptr.*;
-            for (entry.value_ptr.items) |child_id| {
-                if (parent_id == current) try self.appendCandidate(candidates, seen, queue, child_id);
-                if (child_id == current) try self.appendCandidate(candidates, seen, queue, parent_id);
-            }
-        }
-        for (self.constraints.active.items) |constraint| {
-            if (constraint.target_node == current) {
-                switch (constraint.source) {
-                    .page => {},
-                    .node => |source| try self.appendCandidate(candidates, seen, queue, source.node_id),
-                }
-            }
-            switch (constraint.source) {
-                .page => {},
-                .node => |source| if (source.node_id == current) try self.appendCandidate(candidates, seen, queue, constraint.target_node),
-            }
-        }
-    }
-
-    fn appendCandidate(
-        self: *DocumentState,
-        candidates: std.AutoHashMap(NodeId, void),
-        seen: *std.AutoHashMap(NodeId, void),
-        queue: *std.ArrayList(NodeId),
-        candidate: NodeId,
-    ) !void {
-        if (!candidates.contains(candidate) or seen.contains(candidate)) return;
-        try seen.put(candidate, {});
-        try queue.append(self.allocator, candidate);
-    }
-
-    fn containsDescendant(self: *DocumentState, parent_id: NodeId, child_id: NodeId) !bool {
-        var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer visited.deinit();
-        return try self.containsDescendantInner(parent_id, child_id, &visited);
-    }
-
-    fn containsDescendantInner(self: *DocumentState, parent_id: NodeId, child_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !bool {
-        if (visited.contains(parent_id)) return false;
-        try visited.put(parent_id, {});
-        const children = self.childrenOf(parent_id) orelse return false;
-        for (children) |candidate| {
-            if (candidate == child_id) return true;
-            if (try self.containsDescendantInner(candidate, child_id, visited)) return true;
-        }
-        return false;
     }
 
     pub fn setNodeFieldValue(self: *DocumentState, node_id: NodeId, key: []const u8, value: Value) !void {
@@ -1172,7 +1108,6 @@ pub const DocumentState = struct {
 
     pub fn validatePageLocalLayout(self: *DocumentState) !void {
         try self.addPageOwnershipDiagnostics();
-        try self.addUnplacedObjectDiagnostics(.warning);
         for (self.constraints.active.items) |constraint| {
             try self.addConstraintEndpointOwnershipDiagnostics(constraint);
             try self.addCrossPageConstraintDiagnosticIfKnown(constraint);
@@ -1196,19 +1131,6 @@ pub const DocumentState = struct {
                     .user_report = .{ .code = "PageOwnershipConflict", .message = message },
                 });
             }
-        }
-    }
-
-    fn addUnplacedObjectDiagnostics(self: *DocumentState, severity: DiagnosticSeverity) !void {
-        for (self.graph.nodes.items) |node| {
-            if (node.kind != .object or node.attached or node.discarded) continue;
-            if (try self.hasUnplacedObjectParent(node.id)) continue;
-            if (self.layoutPageOf(node.id) != null) continue;
-            const role = node.role orelse node.name;
-            const message = try std.fmt.allocPrint(self.allocator, "object '{s}' was generated but not placed", .{role});
-            try self.addValidationDiagnostic(severity, null, node.id, node.origin, .{
-                .user_report = .{ .code = "UnplacedObject", .message = message },
-            });
         }
     }
 
@@ -1328,18 +1250,6 @@ pub const DocumentState = struct {
                     if (constraint.origin.?.eql(diagnostic.origin.?)) return true;
                 },
                 else => {},
-            }
-        }
-        return false;
-    }
-
-    fn hasUnplacedObjectParent(self: *DocumentState, child_id: NodeId) !bool {
-        var it = self.graph.contains.iterator();
-        while (it.next()) |entry| {
-            for (entry.value_ptr.items) |candidate| {
-                if (candidate != child_id) continue;
-                const parent = self.getNode(entry.key_ptr.*) orelse continue;
-                if (parent.kind == .object and !parent.attached and !parent.discarded) return true;
             }
         }
         return false;
@@ -1510,9 +1420,7 @@ pub const DocumentState = struct {
             .previous_page => .{
                 .page = self.previousPageOf(base.page) orelse return error.NoPreviousPage,
             },
-            .parent_page => .{
-                .page = self.parentPageOf(base.object) orelse return error.MissingParentPage,
-            },
+            .parent_page => if (self.parentPageOf(base.object)) |page_id| .{ .page = page_id } else .none,
             .children => .{
                 .selection = try self.selectChildren(allocator, base.object, query.name),
             },

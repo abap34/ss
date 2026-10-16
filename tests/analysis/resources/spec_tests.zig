@@ -72,6 +72,15 @@ test "resource index: candidates equal pairwise intersections across scopes owne
     }
     for (classes) |class_id| {
         for (identities) |identity| {
+            for ([_]Scope{ .any, .{ .page = 1 }, .{ .page = 2 } }) |page_scope| {
+                for ([_]?[]const u8{ null, "body", "title" }) |role| {
+                    try resources.append(testing.allocator, .{ .objects = .{
+                        .owner = .{ .class_id = class_id, .identity = identity },
+                        .role = role,
+                        .page_scope = page_scope,
+                    } });
+                }
+            }
             for (keys) |key| {
                 try resources.append(testing.allocator, .{ .property = .{
                     .owner = .{ .object = .{ .class_id = class_id, .identity = identity } },

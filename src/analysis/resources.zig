@@ -186,7 +186,11 @@ pub const Resource = union(ResourceKind) {
         name: []const u8,
     },
     pages: ResourceScope,
-    objects: ?[]const u8,
+    objects: struct {
+        role: ?[]const u8 = null,
+        owner: ObjectOwner = .{},
+        page_scope: ResourceScope = .any,
+    },
     property: struct {
         owner: PropertyOwner,
         key: PropertyKey,
@@ -196,7 +200,7 @@ pub const Resource = union(ResourceKind) {
         return switch (self) {
             .variable => |variable| other == .variable and resourceScopeEql(variable.scope, other.variable.scope) and std.mem.eql(u8, variable.name, other.variable.name),
             .pages => |scope| other == .pages and resourceScopeEql(scope, other.pages),
-            .objects => |role| other == .objects and optionalNameEql(role, other.objects),
+            .objects => |left| other == .objects and optionalNameEql(left.role, other.objects.role) and left.owner.eql(other.objects.owner) and resourceScopeEql(left.page_scope, other.objects.page_scope),
             .property => |property| other == .property and property.owner.eql(other.property.owner) and optionalNameEql(property.key.displayName(), other.property.key.displayName()),
         };
     }
@@ -212,7 +216,7 @@ pub const Resource = union(ResourceKind) {
                 else => false,
             },
             .objects => |left| switch (other) {
-                .objects => |right| optionalNameIntersects(left, right),
+                .objects => |right| optionalNameIntersects(left.role, right.role) and left.owner.intersects(right.owner) and left.page_scope.intersects(right.page_scope),
                 else => false,
             },
             .property => |left| switch (other) {
@@ -227,7 +231,7 @@ pub const Resource = union(ResourceKind) {
     }
 
     pub fn makeObjects(role_name: ?[]const u8) Resource {
-        return .{ .objects = role_name };
+        return .{ .objects = .{ .role = role_name } };
     }
 
     pub fn makeProperty(owner: PropertyOwner, key: ?[]const u8) Resource {

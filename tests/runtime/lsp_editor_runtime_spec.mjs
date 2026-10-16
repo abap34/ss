@@ -1139,7 +1139,6 @@ page feature
 let heading = text!("${title}", current_theme() with {
   body.text.color = c"${color}"
 })
-place!(heading)
 end
 `;
 }
@@ -1161,8 +1160,6 @@ page random
 let title = label!("${title}")
 let colored = label!("colored")
 let accent = c"${color}"
-place!(title)
-place!(colored)
 end
 `;
 }

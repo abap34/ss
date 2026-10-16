@@ -754,7 +754,7 @@ test "compiler semantics: dependency query comments report statement summaries" 
         \\
     ;
     try expectDiagnostic(property_source, "bytes:", "write Property(owner=object:Claim#page:sample.a, key=suffix)");
-    try expectDiagnostic(property_source, "bytes:", "read Objects(role=claim)");
+    try expectDiagnostic(property_source, "bytes:", "read Objects(role=claim,");
     try expectDiagnostic(property_source, "bytes:", "read Property(owner=object:Claim.*, key=suffix)");
 }
 
@@ -5298,7 +5298,7 @@ test "compiler semantics: foreach cannot mutate the iterated object selection" {
         \\import std:themes/default as *
         \\
         \\fn duplicate_title(title_obj: Object) -> Object
-        \\  let page_value = page_of(title_obj)
+        \\  let page_value = page_of(title_obj) ?? pagectx()
         \\  place_on!(page_value, new("copy", "title", "text"))
         \\  return title_obj
         \\end
@@ -5311,8 +5311,8 @@ test "compiler semantics: foreach cannot mutate the iterated object selection" {
     );
 }
 
-test "compiler semantics: foreach selection mutation follows variables and function arguments" {
-    try expectLoweringErrorDiagnostic(
+test "compiler semantics: foreach permits detached objects without changing membership" {
+    try buildSource(
         \\import std:themes/default as *
         \\
         \\fn duplicate_title(title_obj: Object) -> Object
@@ -5330,7 +5330,7 @@ test "compiler semantics: foreach selection mutation follows variables and funct
         \\  mutate(titles)
         \\end
         \\
-    , "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated");
+    );
 }
 
 test "compiler semantics: foreach cannot create pages while iterating pages" {
@@ -5476,15 +5476,17 @@ test "compiler semantics: missing page relationships have specific diagnostics" 
         \\
     , "NoPreviousPage: the current page is the first page and has no previous page");
 
-    try expectLoweringErrorDiagnostic(
+    try expectObjectContent(
         \\import std:themes/default as *
-        \\
         \\page detached
         \\  let item = new("detached", "body", "text")
-        \\  page_of(item)
+        \\  if page_of(item)?
+        \\    note!("Unexpected page")
+        \\  else
+        \\    note!("No page")
+        \\  end
         \\end
-        \\
-    , "MissingParentPage: the object is not attached to a page; place it before requesting its page");
+    , "No page");
 }
 
 test "compiler semantics: document callbacks may use explicit pages without current page" {
@@ -5543,8 +5545,8 @@ test "compiler semantics: document callbacks reject current page access" {
     , "case.ss:bytes:", "NoCurrentPage");
 }
 
-test "compiler semantics: generated objects must be placed or discarded" {
-    try expectLoweredDiagnostic(
+test "compiler semantics: detached objects are valid values" {
+    try expectNoLoweredDiagnostic(
         \\import std:themes/default as *
         \\
         \\page loose
@@ -5581,7 +5583,7 @@ test "compiler semantics: generated objects must be placed or discarded" {
     , "UnplacedObject");
 }
 
-test "compiler semantics: unplaced group warns once for the root object" {
+test "compiler semantics: detached groups are valid values" {
     const source =
         \\import std:themes/default as *
         \\
@@ -5594,7 +5596,7 @@ test "compiler semantics: unplaced group warns once for the root object" {
         \\
     ;
 
-    try expectLoweredDiagnosticCount(source, "UnplacedObject", 1);
+    try expectNoLoweredDiagnostic(source, "UnplacedObject");
     try expectObjectState(source, .{ .role = "group", .attached = false, .discarded = false });
     try expectObjectState(source, .{ .content = "one", .attached = false, .discarded = false });
     try expectObjectState(source, .{ .content = "two", .attached = false, .discarded = false });
@@ -5705,7 +5707,7 @@ test "compiler semantics: returned object placement covers connected generated o
         \\
     , "UnplacedObject");
 
-    try expectLoweredDiagnostic(
+    try expectNoLoweredDiagnostic(
         \\import std:themes/default as *
         \\
         \\fn make_card() -> Object
@@ -5759,7 +5761,7 @@ test "compiler semantics: page overflow points at generated object call site" {
     try expectLoweredDiagnosticWithOrigin(source, expected_origin, "PageOverflow: object extends");
 }
 
-test "compiler semantics: returned object placement follows constraints and group edges" {
+test "compiler semantics: returned objects place only explicit group children" {
     const constrained_source =
         \\import std:themes/default as *
         \\
@@ -5775,9 +5777,7 @@ test "compiler semantics: returned object placement follows constraints and grou
         \\end
         \\
     ;
-    try expectNoLoweredDiagnostic(constrained_source, "UnplacedObject");
-    try expectObjectState(constrained_source, .{ .content = "main", .attached = true, .discarded = false });
-    try expectObjectState(constrained_source, .{ .content = "helper", .attached = true, .discarded = false });
+    try expectLoweringErrorDiagnostic(constrained_source, "UnownedLayoutObject");
 
     const grouped_source =
         \\import std:themes/default as *
@@ -5835,13 +5835,13 @@ test "compiler semantics: disconnected generated objects are not hidden by placi
         \\
     ;
 
-    try expectLoweredDiagnosticCount(source, "UnplacedObject", 1);
-    try expectLoweredDiagnostic(source, "object 'note'");
+    try expectNoLoweredDiagnostic(source, "UnplacedObject");
+    try expectNoLoweredDiagnostic(source, "object 'note'");
     try expectObjectState(source, .{ .content = "main", .attached = true, .discarded = false });
     try expectObjectState(source, .{ .content = "helper", .attached = false, .discarded = false });
 }
 
-test "compiler semantics: underscore discard applies after return object connection" {
+test "compiler semantics: underscore discard follows explicit group children" {
     const source =
         \\import std:themes/default as *
         \\
@@ -5849,7 +5849,7 @@ test "compiler semantics: underscore discard applies after return object connect
         \\  let main = new("main", "body", "text")
         \\  let helper = new("helper", "note", "text")
         \\  ~ helper.top == main.bottom - 8
-        \\  return main
+        \\  return group(main, helper)
         \\end
         \\
         \\page discarded
@@ -5863,15 +5863,15 @@ test "compiler semantics: underscore discard applies after return object connect
     try expectObjectState(source, .{ .content = "helper", .attached = false, .discarded = true });
 }
 
-test "compiler semantics: dump includes unplaced object diagnostics" {
-    try expectDumpContains(
+test "compiler semantics: unused detached objects have no placement diagnostics" {
+    try expectNoLoweredDiagnostic(
         \\import std:themes/default as *
         \\
         \\page loose
         \\  new("loose", "body", "text")
         \\end
         \\
-    , &.{ "diagnostics", "UnplacedObject", "object 'body' was generated but not placed" });
+    , "UnplacedObject");
 }
 
 test "compiler semantics: dump preserves direct and nested object properties" {
@@ -6124,7 +6124,6 @@ test "compiler semantics: aliased object self-anchor constraints are rejected" {
         \\  let a = text("a")
         \\  place!(a)
         \\  let b = a
-        \\  place!(b)
         \\  ~ b.top == a.top + 100
         \\end
         \\
@@ -6139,7 +6138,6 @@ test "compiler semantics: aliased tautological self-anchor constraints are accep
         \\  let a = text("a")
         \\  place!(a)
         \\  let b = a
-        \\  place!(b)
         \\  ~ b.top == a.top
         \\end
         \\
@@ -6681,7 +6679,7 @@ test "compiler semantics: equal branch returns retain query facts and stop at re
         \\page main
         \\  let item = text!("x")
         \\  let result = select(item, query_name(false))
-        \\  let index = page_index(result)
+        \\  let index = page_index(result ?? pagectx())
         \\end
     );
 }
@@ -6695,7 +6693,7 @@ test "compiler semantics: constant concatenation and argument facts resolve quer
         \\page main
         \\  let item = text!("x")
         \\  let result = select(item, identity(query))
-        \\  let index = page_index(result)
+        \\  let index = page_index(result ?? pagectx())
         \\end
     );
 }
@@ -8055,4 +8053,103 @@ test "compiler semantics: object-valued properties start a new property owner" {
         \\  b.layout.x = 432
         \\end
     , &.{"peer=432"});
+}
+
+test "compiler semantics: page queries wait for all descendants of an explicitly placed group" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\document
+        \\  numbering!("fig")
+        \\end
+        \\page main
+        \\  let a = numbered_item("fig", "First")
+        \\  let b = numbered_item("fig", "Second")
+        \\  note!("items=" ++ join(doc_objs(docctx(), "__ss.std.numbered:fig"), ",", (o: Object) |-> content(o)))
+        \\  place!(group(a, group(b)))
+        \\end
+    , &.{ "1. First", "2. Second" });
+}
+
+test "compiler semantics: parent page reads wait for a later subtree placement" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\page main
+        \\  let a = txt_obj("A", "body")
+        \\  if page_of(a)?
+        \\    note!("Found parent")
+        \\  else
+        \\    note!("No parent")
+        \\  end
+        \\  place!(group(a))
+        \\end
+    , &.{"Found parent"});
+}
+
+test "compiler semantics: unplaced objects do not belong to document queries" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\page main
+        \\  let a = txt_obj("Detached", "body")
+        \\  note!("members=" ++ str(selection_count(doc_objs(docctx(), "body"))))
+        \\end
+    , &.{"members=0"});
+}
+
+test "compiler semantics: placement facts follow returned groups and record aliases" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\record Parts { root: Object }
+        \\fn bundle(a: Object, b: Object) -> Parts
+        \\  return Parts { root = group(a, group(b)) }
+        \\end
+        \\page main
+        \\  let a = txt_obj("A", "body")
+        \\  let b = txt_obj("B", "body")
+        \\  let parts = bundle(a, b)
+        \\  note!("members=" ++ str(selection_count(doc_objs(docctx(), "body"))))
+        \\  place!(parts.root)
+        \\end
+    , &.{"members=2"});
+}
+
+test "compiler semantics: local placement satisfies a later parent page read" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\fn make_item!() -> Object
+        \\  let item = txt_obj("A", "body")
+        \\  place!(item)
+        \\  if page_of(item)?
+        \\    item.link_id = "placed"
+        \\  end
+        \\  return item
+        \\end
+        \\page main
+        \\  let item = make_item!()
+        \\  note!(item.link_id ?? "missing")
+        \\end
+    , &.{"placed"});
+}
+
+test "compiler semantics: repeated placement is rejected" {
+    try expectLoweringErrorDiagnostic(
+        \\import std:themes/default as *
+        \\page main
+        \\  let a = txt_obj!("A", "body")
+        \\  place!(a)
+        \\end
+    , "DuplicatePlacement");
+}
+
+test "compiler semantics: cached placement summaries retain their caller page" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\page first
+        \\  note!("first=" ++ str(selection_count(objs_here("body"))))
+        \\  text!("A")
+        \\end
+        \\page second
+        \\  note!("second=" ++ str(selection_count(objs_here("body"))))
+        \\  text!("B")
+        \\end
+    , &.{ "first=1", "second=1" });
 }

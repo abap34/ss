@@ -275,6 +275,8 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.LayoutDependencyCycle => "layout reads cannot feed object creation, content, properties, or constraints because layout is solved once",
         error.PostLayoutComputationUnsupported => "layout-reading scheduled computations are not implemented yet",
         error.ExecutionDependencyCycle => "document evaluation dependencies contain a cycle",
+        error.DuplicatePlacement => "object is already placed on a page",
+        error.DuplicateObjectParent => "object occurs under multiple parents in the placed group",
         error.DuplicateContentDefinition => "object content is already defined",
         error.DuplicatePropertyDefinition => "property is already defined on this target",
         error.DuplicateReprDefinition => "object repr is already defined",
@@ -294,7 +296,6 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.ExpectedObject => "expected an object argument",
         error.NoCurrentPage => "this operation is only valid inside a page block",
         error.NoPreviousPage => "the current page is the first page and has no previous page",
-        error.MissingParentPage => "the object is not attached to a page; place it before requesting its page",
         error.UnknownAnchor => "unknown anchor",
         error.UnknownRole => "unknown role",
         error.UnknownPayloadKind => "unknown payload kind",
@@ -577,7 +578,7 @@ fn evalConstValue(
     var value_moved = false;
     errdefer if (!value_moved) value.deinit(state.allocator);
     try value_contracts.ensureValueConformsToType(state, page_id, value, resolved.decl.value_type, current_origin, .UnmatchedReturnType);
-    try connectValueObjects(state, value, start_node_count, current_origin);
+    try markReturnedValueOrigins(state, value, start_node_count, current_origin);
     try state.constants.values.put(resolved.key, value);
     value_moved = true;
     try state.constants.eval_states.put(resolved.key, 2);
@@ -1967,11 +1968,11 @@ fn addValueObjectSources(
     }
 }
 
-fn connectValueObjects(state: *core.DocumentState, value: core.Value, start_node_count: usize, origin: core.SourceOrigin) !void {
+fn markReturnedValueOrigins(state: *core.DocumentState, value: core.Value, start_node_count: usize, origin: core.SourceOrigin) !void {
     switch (value) {
-        .object => |id| try state.connectGeneratedReturnObjects(id, start_node_count, origin),
+        .object => |id| try state.markReturnedObjectOrigins(id, start_node_count, origin),
         .record => |record| {
-            for (record.fields.items) |field| try connectValueObjects(state, field.value, start_node_count, origin);
+            for (record.fields.items) |field| try markReturnedValueOrigins(state, field.value, start_node_count, origin);
         },
         else => {},
     }
@@ -2047,7 +2048,7 @@ fn invokeClosureValues(
     defer evaluation.module_id = previous_module_id;
     var value = try evalExpr(evaluation, page_id, scope, &local_env, current_origin, closure.lambda.body.*);
     errdefer value.deinit(state.allocator);
-    try connectValueObjects(state, value, start_node_count, current_origin);
+    try markReturnedValueOrigins(state, value, start_node_count, current_origin);
     return value;
 }
 
@@ -2088,7 +2089,7 @@ fn invokeUserFunctionValues(
                 var value = result;
                 errdefer value.deinit(state.allocator);
                 try value_contracts.ensureValueConformsToType(state, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
-                try connectValueObjects(state, value, start_node_count, evaluation.elaboration_origin orelse current_origin);
+                try markReturnedValueOrigins(state, value, start_node_count, evaluation.elaboration_origin orelse current_origin);
                 return value;
             },
         }

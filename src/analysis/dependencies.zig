@@ -108,6 +108,16 @@ pub const AccessSummary = struct {
         if (self.invalid_selection_mutation == null) self.invalid_selection_mutation = other.invalid_selection_mutation;
     }
 
+    fn hasConcreteMembershipScope(self: AccessSummary) bool {
+        for ([_][]const Resource{ self.reads.items, self.writes.items, self.selection_reads.items }) |resources| {
+            for (resources) |resource| {
+                if (resource == .objects and resource.objects.page_scope != .any) return true;
+            }
+        }
+        for (self.display_definitions.items) |definition| if (definition.reads.hasConcreteMembershipScope()) return true;
+        return false;
+    }
+
     pub fn clone(self: AccessSummary, allocator: std.mem.Allocator) std.mem.Allocator.Error!AccessSummary {
         var copied = AccessSummary.init(allocator);
         errdefer copied.deinit();
@@ -227,7 +237,11 @@ pub fn appendResource(
         .objects => |role_name| {
             try out.appendSlice(allocator, "Objects(");
             try out.appendSlice(allocator, "role=");
-            try appendOptionalNameOrAny(allocator, out, role_name);
+            try appendOptionalNameOrAny(allocator, out, role_name.role);
+            try out.appendSlice(allocator, ", owner=");
+            try appendPropertyOwner(allocator, out, .{ .object = role_name.owner }, options);
+            try out.appendSlice(allocator, ", page=");
+            try appendScope(allocator, out, role_name.page_scope, options.pages_scope_displays);
             try out.append(allocator, ')');
         },
         .property => |property| {
@@ -408,24 +422,6 @@ pub const RunCache = struct {
     }
 };
 
-fn singleObjectWriteRole(summary: AccessSummary) ?[]const u8 {
-    var role_name: ?[]const u8 = null;
-    for (summary.writes.items) |resource| {
-        switch (resource) {
-            .objects => |name| {
-                const concrete = name orelse return null;
-                if (role_name) |existing| {
-                    if (!std.mem.eql(u8, existing, concrete)) return null;
-                } else {
-                    role_name = concrete;
-                }
-            },
-            else => {},
-        }
-    }
-    return role_name;
-}
-
 const LetPolicy = enum {
     scheduled,
     local,
@@ -480,6 +476,10 @@ const ValueFacts = struct {
     candidates: []const Callable = &.{},
     fields: []const Field = &.{},
     property_target: ?PropertyTarget = null,
+    object_role: ?[]const u8 = null,
+    // Null means the subtree is unknown; an empty slice proves a leaf.
+    children: ?[]const ValueFacts = null,
+    page_scope: ResourceScope = .any,
     const Field = struct { name: []const u8, value: ValueFacts };
     const Callable = union(enum) {
         named: semantic_env.ResolvedFunction,
@@ -612,8 +612,12 @@ pub const Analyzer = struct {
     }
 
     fn isLocalResource(resource: Resource, first: usize, end: usize) bool {
-        if (resource != .property or resource.property.owner != .object) return false;
-        const identity = resource.property.owner.object.identity orelse return false;
+        const owner: ObjectOwner = switch (resource) {
+            .property => |property| if (property.owner == .object) property.owner.object else return false,
+            .objects => |members| members.owner,
+            else => return false,
+        };
+        const identity = owner.identity orelse return false;
         return identity.origin == .local and identity.local_id >= first and identity.local_id < end;
     }
 
@@ -642,7 +646,7 @@ pub const Analyzer = struct {
                     read_index += 1;
                     continue;
                 }
-                const identity = read.property.owner.object.identity.?;
+                const identity = if (read == .objects) read.objects.owner.identity.? else read.property.owner.object.identity.?;
                 const escapes = blk: {
                     for (parts.items) |other| for (other.escaped_objects.items) |escaped| {
                         if (identity.eql(escaped)) break :blk true;
@@ -657,6 +661,10 @@ pub const Analyzer = struct {
                 };
                 const covered = blk: {
                     for (parts.items[0..i]) |earlier| for (earlier.writes.items) |write| {
+                        if (read == .objects) {
+                            if (write == .objects and write.objects.owner.eql(read.objects.owner)) break :blk true;
+                            continue;
+                        }
                         if (write != .property or !write.property.owner.eql(read.property.owner)) continue;
                         const defined = write.property.key.displayName() orelse continue;
                         const required = read.property.key.displayName() orelse continue;
@@ -669,7 +677,9 @@ pub const Analyzer = struct {
                 } else {
                     // Local allocation identities do not name the caller's binding.
                     // Keep unresolved escaping reads conservative at that boundary.
-                    if (escapes) part.reads.items[read_index].property.owner.object.identity = null;
+                    if (escapes) {
+                        if (read == .objects) part.reads.items[read_index].objects.owner.identity = null else part.reads.items[read_index].property.owner.object.identity = null;
+                    }
                     read_index += 1;
                 }
             }
@@ -680,6 +690,11 @@ pub const Analyzer = struct {
         var write_index: usize = 0;
         while (write_index < summary.writes.items.len) {
             const write = summary.writes.items[write_index];
+            if (write == .objects) {
+                if (isLocalResource(write, first_local, end_local)) summary.writes.items[write_index].objects.owner.identity = null;
+                write_index += 1;
+                continue;
+            }
             const escapes = blk: {
                 if (!isLocalResource(write, first_local, end_local)) break :blk true;
                 for (summary.reads.items) |read| if (write.intersects(read)) break :blk true;
@@ -712,7 +727,7 @@ pub const Analyzer = struct {
                         _ = self.string_bindings.remove(binding.name);
                     }
                     try self.bindSelectionReads(binding.name, expr.selection_reads.items);
-                    const role_name = (try self.objectRoleExpr(binding.expr)) orelse singleObjectWriteRole(expr);
+                    const role_name = (try self.objectRoleExpr(binding.expr)) orelse values.object_role;
                     if (role_name) |name| {
                         try self.object_role_bindings.put(binding.name, name);
                     } else {
@@ -948,6 +963,7 @@ pub const Analyzer = struct {
                 }
             }
         }
+        if (facts.children) |children| for (children) |child| try self.addEscapedObjects(summary, child);
         for (facts.fields) |field| try self.addEscapedObjects(summary, field.value);
         for (facts.candidates) |candidate| switch (candidate) {
             .named => {},
@@ -987,7 +1003,13 @@ pub const Analyzer = struct {
             };
             if (!found) try fields.append(allocator, field);
         }
-        return self.withPropertyTarget(try self.newValueFacts(candidates.items, fields.items), joinPropertyTargets(left.property_target, right.property_target));
+        var result = try self.withPropertyTarget(try self.newValueFacts(candidates.items, fields.items), joinPropertyTargets(left.property_target, right.property_target));
+        result.object_role = mergeOptionalNames(left.object_role, right.object_role);
+        result.page_scope = if (resourceScopeEql(left.page_scope, right.page_scope)) left.page_scope else .any;
+        if (left.children) |left_children| if (right.children) |right_children| {
+            result.children = try std.mem.concat(allocator, ValueFacts, &.{ left_children, right_children });
+        };
+        return result;
     }
 
     fn updateValueField(self: *Analyzer, value: ValueFacts, path: []const ast.RecordPathSegment, replacement: ValueFacts) anyerror!ValueFacts {
@@ -1076,10 +1098,19 @@ pub const Analyzer = struct {
             },
             .call => |call| blk: {
                 switch (try self.valueBinding(call.callee)) {
-                    .primitive => break :blk try self.withPropertyTarget(.{}, try self.propertyTargetCall(call)),
+                    .primitive => |primitive| break :blk try self.primitiveValueFacts(call, primitive),
                     .unknown => break :blk .{},
                     .function => |named| switch (named.decl.result_type.kind) {
-                        .function, .record, .optional, .any => {},
+                        .function, .record, .optional, .any, .page => {},
+                        .object => {
+                            const role = try self.objectRoleCall(call);
+                            if (role != null and !std.mem.eql(u8, role.?, core.GroupRole)) {
+                                var result = try self.withPropertyTarget(.{}, try self.propertyTargetCall(call));
+                                result.object_role = role;
+                                result.children = &.{};
+                                break :blk result;
+                            }
+                        },
                         else => break :blk try self.withPropertyTarget(.{}, try self.propertyTargetCall(call)),
                     },
                     else => {},
@@ -1098,6 +1129,45 @@ pub const Analyzer = struct {
             },
             else => .{},
         };
+    }
+
+    fn primitiveValueFacts(self: *Analyzer, call: ast.CallExpr, primitive: registry.PrimitiveDescriptor) anyerror!ValueFacts {
+        var result = try self.withPropertyTarget(.{}, try self.propertyTargetCall(call));
+        switch (primitive.op) {
+            .pagectx => result.page_scope = if (self.variable_scope == .page) self.variable_scope else .any,
+            .new => {
+                result.object_role = try literalStringArg(self, call, 1);
+                result.children = &.{};
+            },
+            .group => {
+                result.object_role = core.GroupRole;
+                const children = try self.value_storage.allocator().alloc(ValueFacts, call.args.items.len);
+                for (call.args.items, children) |arg, *child| child.* = try self.valueFacts(arg);
+                result.children = children;
+            },
+            .place_on => if (call.args.items.len > 1) {
+                result = try self.valueFacts(call.args.items[1]);
+            },
+            .set_prop, .set_content, .set_repr, .require_asset_exists, .extend_render_env => if (call.args.items.len > 0) {
+                result = try self.valueFacts(call.args.items[0]);
+            },
+            else => {},
+        }
+        return result;
+    }
+
+    fn addPlacementWrites(self: *Analyzer, summary: *AccessSummary, facts: ValueFacts, page_scope: ResourceScope) anyerror!void {
+        const owner = if (facts.property_target) |target| switch (target.owner) {
+            .object => |object| object,
+            else => ObjectOwner{},
+        } else ObjectOwner{};
+        try summary.addWrite(.{ .objects = .{ .owner = owner, .role = facts.object_role, .page_scope = page_scope } });
+        if (facts.children) |children| {
+            for (children) |child| try self.addPlacementWrites(summary, child, page_scope);
+        } else {
+            // Unknown subtrees can contribute descendants of any role or class.
+            try summary.addWrite(.{ .objects = .{ .page_scope = page_scope } });
+        }
     }
 
     fn memberValueFacts(self: *Analyzer, member: ast.MemberExpr) anyerror!ValueFacts {
@@ -1495,18 +1565,23 @@ pub const Analyzer = struct {
         defer self.effect_analysis_depth -= 1;
 
         const cache_key = if (self.run_cache != null)
-            try buildFunctionCallSummaryKey(self.allocator, key, arg_facts)
+            try buildFunctionCallSummaryKey(self.allocator, key, arg_facts, self.variable_scope)
         else
             null;
         defer if (cache_key) |owned| self.allocator.free(owned);
-        if (cache_key) |owned| {
+        const shared_key = if (self.run_cache != null)
+            try buildFunctionCallSummaryKey(self.allocator, key, arg_facts, .any)
+        else
+            null;
+        defer if (shared_key) |owned| self.allocator.free(owned);
+        for ([_]?[]const u8{ shared_key, cache_key }) |maybe_key| if (maybe_key) |owned| {
             if (try self.run_cache.?.cachedSummary(owned, self.allocator)) |cached_body| {
                 var body = cached_body;
                 defer body.deinit();
                 try summary.merge(body);
                 return summary;
             }
-        }
+        };
 
         // Re-entering a higher-order function with a different callback can be
         // finite. The termination pass validates calls before scheduling.
@@ -1527,7 +1602,9 @@ pub const Analyzer = struct {
         var statements = try self.analyzeStatements(func.statements.items, .local);
         defer statements.deinit();
         try body.merge(statements);
-        if (cache_key) |owned| try self.run_cache.?.putSummary(owned, body);
+        // Pure value helpers and page-independent effects can be shared across
+        // pages; only concrete membership scopes require the caller-page key.
+        if (cache_key) |owned| try self.run_cache.?.putSummary(if (body.hasConcreteMembershipScope()) owned else shared_key.?, body);
         try summary.merge(body);
         return summary;
     }
@@ -1922,7 +1999,6 @@ pub const Analyzer = struct {
                 summary.reads_layout = true;
             },
             .group => {
-                try summary.addWrite(Resource.makeObjects(core.GroupRole));
                 summary.writes_layout_input = true;
             },
             .new_page => {
@@ -1980,7 +2056,6 @@ pub const Analyzer = struct {
             },
             .group => {
                 for (arg_facts) |arg| try self.addEscapedObjects(&summary, arg.values);
-                try summary.addWrite(Resource.makeObjects(core.GroupRole));
                 summary.writes_layout_input = true;
             },
             .new_page => {
@@ -1988,12 +2063,11 @@ pub const Analyzer = struct {
                 summary.writes_layout_input = true;
             },
             .new => {
-                try summary.addWrite(Resource.makeObjects(literalStringFromArgFacts(arg_facts, 1)));
                 summary.writes_layout_input = true;
             },
             .place_on => {
                 if (arg_facts.len > 1) try self.addEscapedObjects(&summary, arg_facts[1].values);
-                try summary.addWrite(Resource.makeObjects(objectRoleFromArgFacts(arg_facts, 1)));
+                if (arg_facts.len > 1) try self.addPlacementWrites(&summary, arg_facts[1].values, arg_facts[0].values.page_scope);
                 summary.writes_layout_input = true;
             },
             .set_prop => {
@@ -2096,18 +2170,21 @@ pub const Analyzer = struct {
         };
         switch (query.op) {
             .document_pages => try summary.addSelectionRead(Resource.makePages(null)),
-            .page_objects_by_role,
-            .document_objects_by_role,
-            => try summary.addSelectionRead(Resource.makeObjects(literalStringFromArgFacts(arg_facts, 2))),
-            .children,
-            .descendants,
-            => try summary.addSelectionRead(Resource.makeObjects(null)),
+            .document_objects_by_role => try summary.addSelectionRead(Resource.makeObjects(literalStringFromArgFacts(arg_facts, 2))),
+            .page_objects_by_role => try summary.addSelectionRead(.{ .objects = .{
+                .role = literalStringFromArgFacts(arg_facts, 2),
+                .page_scope = if (arg_facts.len > 0) arg_facts[0].values.page_scope else .any,
+            } }),
+            // Containment is fixed when the group value is constructed.
+            .children, .descendants => {},
             // A singleton snapshots the supplied identity, not a collection.
             // Its argument dependencies have already been collected.
             .self_object => {},
-            .previous_page,
-            .parent_page,
-            => try summary.addRead(Resource.makePages(null)),
+            .previous_page => try summary.addRead(Resource.makePages(null)),
+            .parent_page => {
+                const owner = propertyOwnerFromArgFacts(arg_facts, 0);
+                try summary.addRead(.{ .objects = .{ .owner = if (owner == .object) owner.object else .{} } });
+            },
         }
     }
 
@@ -2458,20 +2535,36 @@ fn buildFunctionCallSummaryKey(
     allocator: std.mem.Allocator,
     key: core.FunctionKey,
     facts: []const Analyzer.CallArgFacts,
+    scope: ResourceScope,
 ) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     try appendKeyBytes(allocator, &out, "call");
+    try appendResourceScopeKey(allocator, &out, scope);
     try appendFunctionKey(allocator, &out, key);
     try appendKeyInt(allocator, &out, facts.len);
     for (facts) |fact| {
         try appendKeyInt(allocator, &out, if (fact.values.candidates.len != 0 or fact.values.fields.len != 0) fact.values.id else 0);
         try appendOptionalBytesKey(allocator, &out, fact.string_literal);
         try appendOptionalBytesKey(allocator, &out, fact.object_role);
+        try appendResourceScopeKey(allocator, &out, fact.values.page_scope);
+        try appendCompositionKey(allocator, &out, fact.values);
         try appendOptionalPropertyTargetKey(allocator, &out, fact.property_target);
         try appendResourceListKey(allocator, &out, fact.summary.selection_reads.items);
     }
     return try out.toOwnedSlice(allocator);
+}
+
+fn appendCompositionKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: ValueFacts) anyerror!void {
+    try appendOptionalBytesKey(allocator, out, value.object_role);
+    if (value.children) |children| {
+        try out.append(allocator, 'c');
+        try appendKeyInt(allocator, out, children.len);
+        for (children) |child| {
+            try appendOptionalPropertyTargetKey(allocator, out, child.property_target);
+            try appendCompositionKey(allocator, out, child);
+        }
+    } else try out.append(allocator, '?');
 }
 
 fn appendFunctionKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), key: core.FunctionKey) !void {
@@ -2497,7 +2590,9 @@ fn appendResourceKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), reso
         },
         .objects => |role_name| {
             try out.append(allocator, 'o');
-            try appendOptionalBytesKey(allocator, out, role_name);
+            try appendOptionalBytesKey(allocator, out, role_name.role);
+            try appendPropertyOwnerKey(allocator, out, .{ .object = role_name.owner });
+            try appendResourceScopeKey(allocator, out, role_name.page_scope);
         },
         .property => |property| {
             try out.append(allocator, 'p');

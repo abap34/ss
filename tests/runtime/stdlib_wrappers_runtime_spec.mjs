@@ -21,7 +21,6 @@ async function testPreludeLatexUsesLiteralPayload() {
 
 page latex
 let formula = latex!("${source}")
-place!(formula)
 end
 `,
       "utf8",

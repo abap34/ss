@@ -224,7 +224,7 @@ test "execution graph owns computed resource names after analyzers and cached su
             \\end
             \\page main
             \\  let items = doc_objs(docctx(), "tag" ++ "ged")
-            \\  let item = new("item", "tag" ++ "ged", "text")
+            \\  let item = place!(new("item", "tag" ++ "ged", "text"))
             \\end
         );
         defer state.deinit();
@@ -247,7 +247,7 @@ test "execution graph owns computed resource names after analyzers and cached su
         var found_role = false;
         for (graph.units.items[3].summary.reads.items) |resource| {
             if (resource == .objects) {
-                if (resource.objects) |role| {
+                if (resource.objects.role) |role| {
                     if (std.mem.eql(u8, role, "tagged")) found_role = true;
                 }
             }

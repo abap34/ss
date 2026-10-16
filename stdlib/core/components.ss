@@ -194,11 +194,11 @@ fn marked_callout!(source_text: String, target_text: String, note_text: String, 
     report_warning("MarkedCalloutTargetMissing: target text was not found in source text")
   end
 
-  let before = marked_callout_text!(str_before(source_text, target_text), style.text)
-  let target = marked_callout_text!(target_text, style.target)
-  let after = marked_callout_text!(str_after(source_text, target_text), style.text)
+  let before = marked_callout_text(str_before(source_text, target_text), style.text)
+  let target = marked_callout_text(target_text, style.target)
+  let after = marked_callout_text(str_after(source_text, target_text), style.text)
 
-  let target_back = panel!()
+  let target_back = panel()
   target_back.chrome = style.target_chrome
   layout::surround(target_back, target, style.target_chrome.pad_x, style.target_chrome.pad_y)
 
@@ -209,7 +209,7 @@ fn marked_callout!(source_text: String, target_text: String, note_text: String, 
   ~ after.left == target.right + style.target_chrome.pad_x
   ~ after.top == before.top
 
-  let callout = bracket_callout!(target, note_text, style.callout_x, style.callout_top_y, style.callout_width, style.callout)
+  let callout = bracket_callout(target, note_text, style.callout_x, style.callout_top_y, style.callout_width, style.callout)
   return objects::place!(group(before, target, after, target_back, callout))
 end
 
@@ -226,8 +226,7 @@ fn doc_bg(fill_name: Color?) -> Void
 end
 
 fn/! frame_s(inner: Object, pad_x: Number, pad_y: Number) -> Object
-  surround_s(inner, pad_x, pad_y)
-  return inner
+  return surround_s(inner, pad_x, pad_y)
 end
 
 fn/! frame(text_value: String, role_name: String, payload_name: String, left: Number, right: Number, pad_x: Number, pad_y: Number, fill_name: Color?, stroke_name: Color?, line_width_name: Number, radius_name: Number) -> Object
@@ -239,13 +238,13 @@ fn/! frame(text_value: String, role_name: String, payload_name: String, left: Nu
   render::box(chrome, fill_name, stroke_name, line_width_name, radius_name)
   chrome.layout.spacing_after = 34
   layout::surround(chrome, inner, pad_x, pad_y)
-  return inner
+  return group(inner, chrome)
 end
 
 fn surround_s(inner: Object, pad_x: Number, pad_y: Number) -> Object
   let chrome = panel()
   layout::surround(chrome, inner, pad_x, pad_y)
-  return inner
+  return group(inner, chrome)
 end
 
 fn border_p(inner: Object, pad_x: Number, pad_y: Number, fill_name: Color?, stroke_name: Color?, line_width: Number, radius: Number) -> Object
@@ -282,7 +281,7 @@ fn code_panel(text_value: String, language_name: String, left: Number, right: Nu
   let chrome = panel()
   chrome.layout.spacing_after = 34
   layout::surround(chrome, code, pad_x, pad_y)
-  return code
+  return group(code, chrome)
 end
 
 fn code_box(text_value: String, language_name: String, left: Number, right: Number, pad_x: Number, pad_y: Number, fill_name: Color?, stroke_name: Color?, line_width_name: Number, radius_name: Number) -> Object
@@ -291,7 +290,7 @@ fn code_box(text_value: String, language_name: String, left: Number, right: Numb
   render::box(chrome, fill_name, stroke_name, line_width_name, radius_name)
   chrome.layout.spacing_after = 34
   layout::surround(chrome, code, pad_x, pad_y)
-  return code
+  return group(code, chrome)
 end
 
 fn/! text(text_value: String) -> Object

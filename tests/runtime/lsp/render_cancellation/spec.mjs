@@ -43,7 +43,6 @@ automatic = false
 
 page latex
 let formula = latex!("$x$")
-place!(formula)
 end
 `;
   await writeFile(slide, source, "utf8");

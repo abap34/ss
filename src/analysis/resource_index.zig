@@ -48,7 +48,7 @@ pub const ResourceWriterIndex = struct {
                 try scoped.add(self.allocator, variable.scope, entry);
             },
             .pages => |scope| try self.pages.add(self.allocator, scope, entry),
-            .objects => |role| try self.objects.add(self.allocator, role, entry),
+            .objects => |members| try self.objects.add(self.allocator, members.role, entry),
             .property => |property| switch (property.owner) {
                 .any => try self.any_owner.add(self.allocator, property.key.indexName(), entry),
                 .document => try self.document_owner.add(self.allocator, property.key.indexName(), entry),
@@ -76,7 +76,7 @@ pub const ResourceWriterIndex = struct {
                 if (self.variables.getPtr(variable.name)) |scoped| try scoped.visit(variable.scope, visitor);
             },
             .pages => |scope| try self.pages.visit(scope, visitor),
-            .objects => |role| try self.objects.visit(role, visitor),
+            .objects => |members| try self.objects.visit(members.role, visitor),
             .property => |property| {
                 const key = property.key.indexName();
                 try self.any_owner.visit(key, visitor);

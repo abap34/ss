@@ -832,7 +832,6 @@ pub fn nodeDisplayContentProvenance(node: *const Node) []const ContentProvenance
 
 pub const Query = struct {
     input: ValueTag,
-    output: ValueTag,
     name: []const u8,
     op: Op,
 
@@ -850,7 +849,6 @@ pub const Query = struct {
     pub fn selfObject() Query {
         return .{
             .input = .object,
-            .output = .selection,
             .name = "self-object",
             .op = .{ .self_object = {} },
         };
@@ -859,7 +857,6 @@ pub const Query = struct {
     pub fn previousPage() Query {
         return .{
             .input = .page,
-            .output = .page,
             .name = "previous-page",
             .op = .{ .previous_page = {} },
         };
@@ -868,7 +865,6 @@ pub const Query = struct {
     pub fn parentPage() Query {
         return .{
             .input = .object,
-            .output = .page,
             .name = "parent-page",
             .op = .{ .parent_page = {} },
         };
@@ -877,7 +873,6 @@ pub const Query = struct {
     pub fn children() Query {
         return .{
             .input = .object,
-            .output = .selection,
             .name = "children",
             .op = .{ .children = {} },
         };
@@ -886,7 +881,6 @@ pub const Query = struct {
     pub fn descendants() Query {
         return .{
             .input = .object,
-            .output = .selection,
             .name = "descendants",
             .op = .{ .descendants = {} },
         };
@@ -895,7 +889,6 @@ pub const Query = struct {
     pub fn pageObjectsByRole(role: Role) Query {
         return .{
             .input = .page,
-            .output = .selection,
             .name = "page-objects-by-role",
             .op = .{ .page_objects_by_role = role },
         };
@@ -904,7 +897,6 @@ pub const Query = struct {
     pub fn documentObjectsByRole(role: Role) Query {
         return .{
             .input = .document,
-            .output = .selection,
             .name = "document-objects-by-role",
             .op = .{ .document_objects_by_role = role },
         };
@@ -913,7 +905,6 @@ pub const Query = struct {
     pub fn documentPages() Query {
         return .{
             .input = .document,
-            .output = .selection,
             .name = "document-pages",
             .op = .{ .document_pages = {} },
         };

@@ -161,7 +161,7 @@ let b = new("B", "body", "text")
 group(a, b)
 end
 `);
-  assert(incomplete.dump.diagnostics.some((item) => item.code === "UnplacedObject"), "a group with an unplaced child was treated as completely placed");
+  assertNoDiagnostic(incomplete.dump, "UnplacedObject");
   assert(!incomplete.dump.nodes.some((item) => item.content === "B"), "ordinary grouping implicitly placed its unplaced child");
 
   const separate = await dumpSource("cross-page-group", `${prelude}
@@ -177,7 +177,7 @@ let b = first(objs_all("second_box"))
 group(a, b)
 end
 `);
-  assert(separate.dump.diagnostics.some((item) => item.code === "UnplacedObject"), "a group spanning two pages was inferred onto one page");
+  assertNoDiagnostic(separate.dump, "UnplacedObject");
   assert(groupNodes(separate.dump).length === 0, "a cross-page group became attached");
 }
 

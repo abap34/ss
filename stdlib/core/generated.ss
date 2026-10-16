@@ -96,24 +96,26 @@ fn mk_pageno!(page_value: Page, doc: Document, format: String?, decorate: Object
   let page_no = place_on!(page_value, new("", "pageno", "text"))
   decorate(page_no)
   position_pageno(page_value, page_no)
-  set_pageno(page_no, doc, format)
+  set_pageno(page_no, page_value, format)
   return page_value
 end
 
 fn set_pagenos(doc: Document) -> Void
   foreach(
-    selectors::doc_objs(doc, "pageno"),
-    (page_no: Object) |-> set_pageno(page_no, doc, none)
+    selectors::pages(doc),
+    (page_value: Page) |-> foreach(
+      selectors::objs(page_value, "pageno"),
+      (page_no: Object) |-> set_pageno(page_no, page_value, none)
+    )
   )
 end
 
-fn set_pageno(page_no: Object, doc: Document, format: String?) -> Object
+fn set_pageno(page_no: Object, page_value: Page, format: String?) -> Object
   set_prop(page_no, "pageno_format", format)
-  return set_repr(page_no, pageno_repr)
+  return set_repr(page_no, (item: Object) |-> pageno_repr(item, page_value))
 end
 
-fn pageno_repr(page_no: Object) -> String
-  let page_value = selectors::page_of(page_no)
+fn pageno_repr(page_no: Object, page_value: Page) -> String
   if page_no.pageno_format?
     let format_text = page_no.pageno_format ?? ""
     let page_text = replace(format_text, "{page}", str(page_index(page_value)))

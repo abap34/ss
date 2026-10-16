@@ -26,7 +26,7 @@ await mkdir(output, { recursive: true });
 const directory = await mkdtemp(path.join(output, "run-"));
 const prelude = `import std:core/prelude as *
 fn mark!(label: String) -> Object
-  return text!(label)
+  return text(label)
 end
 `;
 const cases = [];

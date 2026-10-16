@@ -233,7 +233,7 @@ test "document state spec: group inference requires every live child to have a p
         try testing.expect(!state.getNode(group).?.attached);
     }
     try state.validatePageLocalLayout();
-    try expectDiagnosticCode(&state, "UnplacedObject");
+    try expectNoDiagnosticCode(&state, "UnplacedObject");
 
     try state.placeObjectOnPage(page, unplaced);
     try testing.expectEqual(page, state.layoutPageOf(partial).?);
@@ -278,7 +278,7 @@ test "document state spec: ambiguous nested groups cannot inherit a sibling page
     const ambiguous = try state.createGroupWithOrigin(&.{ first, duplicate }, null);
     try testing.expectEqual(@as(?core.NodeId, null), state.layoutPageOf(ambiguous));
     try state.validatePageLocalLayout();
-    try expectDiagnosticCode(&state, "UnplacedObject");
+    try expectNoDiagnosticCode(&state, "UnplacedObject");
     try expectDiagnosticCode(&state, "PageOwnershipConflict");
 }
 
@@ -309,8 +309,8 @@ test "document state spec: page placement records roots without flattening group
 
     try state.placeObjectOnPage(page, group);
     try state.placeObjectOnPage(page, label);
-    try state.placeObjectOnPage(page, label);
-    try state.connectGeneratedReturnObjects(label, state.nodeCount(), .{ .label = "label-return" });
+    try testing.expectError(error.DuplicatePlacement, state.placeObjectOnPage(page, label));
+    try state.markReturnedObjectOrigins(label, state.nodeCount(), .{ .label = "label-return" });
 
     const placement_roots = state.placementRootsOf(page);
     try testing.expectEqualSlices(core.NodeId, &.{ group, label }, placement_roots);
@@ -950,6 +950,12 @@ fn addValidationUserReport(state: *core.DocumentState, origin: core.SourceOrigin
     });
 }
 
+fn expectNoDiagnosticCode(state: *core.DocumentState, code: []const u8) !void {
+    for (state.diagnostics.entries.items) |diagnostic| {
+        if (diagnostic.data == .user_report) try testing.expect(!std.mem.eql(u8, diagnostic.data.user_report.code, code));
+    }
+}
+
 fn expectDiagnosticCode(state: *core.DocumentState, code: []const u8) !void {
     for (state.diagnostics.entries.items) |diagnostic| {
         switch (diagnostic.data) {
@@ -1205,4 +1211,20 @@ fn exercisePropertyPathDefinitions(allocator: std.mem.Allocator) !void {
 
 test "document state spec: property path definitions are atomic on allocation failure" {
     try allocation_testing.checkAllAllocationFailures(testing.allocator, exercisePropertyPathDefinitions, .{});
+}
+
+test "document state spec: placement rejects a shared descendant before publishing membership" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    const child = try state.createObjectWithOrigin("child", null, .text, .text, "Child", null);
+    const left = try state.createGroupWithOrigin(&.{child}, null);
+    const right = try state.createGroupWithOrigin(&.{child}, null);
+    const outer = try state.createGroupWithOrigin(&.{ left, right }, null);
+    try testing.expectError(error.DuplicateObjectParent, state.placeObjectOnPage(page, outer));
+    try testing.expectEqual(@as(usize, 0), state.placementRootsOf(page).len);
+    for ([_]core.NodeId{ child, left, right, outer }) |id| {
+        try testing.expect(!state.getNode(id).?.attached);
+        try testing.expectEqual(@as(?core.NodeId, null), state.parentPageOf(id));
+    }
 }
