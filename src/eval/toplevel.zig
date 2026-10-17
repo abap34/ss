@@ -665,6 +665,10 @@ fn evalMemberValue(
         const value = target.record.field(name) orelse return .{ .none = {} };
         return try value.clone(state.allocator);
     }
+    if (target == .object) {
+        const node = state.getNode(target.object) orelse return error.UnknownNode;
+        if (node.placement != null) return eval_value.placementMember(state, node.id, name);
+    }
     if (target == .object or target == .page) {
         if (names.parseAnchorName(name)) |anchor| {
             return .{ .anchor = if (target == .object)
@@ -2161,17 +2165,19 @@ fn resolveAnchorPathValue(
         return error.UnknownIdentifier;
     };
     var current = try base.clone(state.allocator);
+    errdefer current.deinit(state.allocator);
     while (iter.next()) |field_name| {
-        if (current != .record) {
-            current.deinit(state.allocator);
-            return error.InvalidValueTag;
-        }
-        const field_value = current.record.field(field_name) orelse {
-            current.deinit(state.allocator);
-            try reportUnknownIdentifier(state, field_name, current_origin);
-            return error.UnknownIdentifier;
+        const next = switch (current) {
+            .object => |id| try eval_value.placementMember(state, id, field_name),
+            .record => |record| blk: {
+                const field_value = record.field(field_name) orelse {
+                    try reportUnknownIdentifier(state, field_name, current_origin);
+                    return error.UnknownIdentifier;
+                };
+                break :blk try field_value.clone(state.allocator);
+            },
+            else => return error.InvalidValueTag,
         };
-        const next = try field_value.clone(state.allocator);
         current.deinit(state.allocator);
         current = next;
     }

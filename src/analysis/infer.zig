@@ -219,6 +219,12 @@ fn inferRecordInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     const record_decl = sema.record(record.module_id, record.type_name) orelse {
+        if (sema.resolveTypeNameInContext(record.module_id orelse sema.module_id, record.type_name)) |ty| {
+            if (ty.kind == .placed or ty.kind == .placement) {
+                try addUserReportAtSpan(state, origin, record.type_name_span, "InvalidTypeConstruction", "{s} is a placement reference; use place! to register an input value", .{record.type_name});
+                return error.InvalidType;
+            }
+        }
         if (sema.enumExists(record.module_id, record.type_name)) {
             try addUserReportAtSpan(state, origin, record.type_name_span, "InvalidTypeConstruction", "{s} is an enum type; use {s}.<case>", .{ record.type_name, record.type_name });
             return error.InvalidType;
@@ -499,6 +505,13 @@ fn inferMemberInfoFromTargetInfo(
     if (target_info.ty.kind == .optional) {
         try addUserReportAtSpan(state, origin, member_span, "InvalidOptionalMember", "optional receivers require ?. or an explicit fallback with ?? before member access", .{});
         return error.InvalidType;
+    }
+    if (target_info.ty.kind == .placed or target_info.ty.kind == .placement) {
+        const field_type = @import("../language/placement.zig").memberType(target_info.ty, member_name) orelse {
+            try addUserReportAtSpan(state, origin, member_span, "UnknownField", "type '{s}' has no field '{s}'", .{ target_info.ty.label(), member_name });
+            return error.InvalidType;
+        };
+        return infoFromType(field_type);
     }
     if (target_info.ty.kind == .record) {
         const record_id = target_info.ty.nominalId() orelse {
@@ -1009,6 +1022,8 @@ fn returnTypeNeedsInferredFacts(ty: Type) bool {
         .boolean,
         .constraints,
         .record,
+        .placed,
+        .placement,
         .path,
         .parameter,
         .void,
@@ -1676,6 +1691,10 @@ fn validateMemberTargetPropertySetPath(
         if (segment.name_hole != null) return;
         const owner_type = current_info.ty;
         current_info = try inferMemberInfoFromTargetInfo(allocator, state, sema, current_info, segment.name, segment.span, origin);
+        if (index == path.len - 1 and (owner_type.kind == .placed or owner_type.kind == .placement) and current_info.hole == null) {
+            try addUserReportAtSpan(state, origin, segment.span, "ImmutablePlacement", "placement member '{s}' is read-only", .{segment.name});
+            return error.InvalidType;
+        }
         if (index == path.len - 1 and owner_type.kind == .record and current_info.hole == null) {
             try addUserReportAtSpan(state, origin, segment.span, "ImmutableValue", "field '{s}' belongs to an immutable value; use with to construct an updated value", .{segment.name});
             return error.InvalidType;

@@ -283,3 +283,32 @@ test "rigid type parameters still support optional lifting" {
     try testing.expect(Type.accepts(optional, Type.none));
     try testing.expect(!Type.accepts(param, optional));
 }
+
+test "type spec: placed inputs remain invariant while placement erasure is one way" {
+    var inner = try Type.recordType("Box").inModule(4).withArguments(testing.allocator, &.{Type.number});
+    defer inner.deinit(testing.allocator);
+    var placed = try Type.placedOf(testing.allocator, inner);
+    defer placed.deinit(testing.allocator);
+    var different = try Type.placedOf(testing.allocator, inner.inModule(5));
+    defer different.deinit(testing.allocator);
+    try expectFormat(placed, "Placed<Box<Number>>");
+    try expectFormat(Type.placement, "Placement");
+    try testing.expect(Type.accepts(Type.placement, placed));
+    try testing.expect(!Type.accepts(placed, Type.placement));
+    try testing.expect(!Type.accepts(placed, different));
+    try testing.expect(!Type.accepts(placed, inner));
+    try testing.expect(!Type.accepts(placed, Type.object));
+    try testing.expect(!Type.accepts(Type.object, placed));
+    var selection = try Type.selectionOf(testing.allocator, placed);
+    defer selection.deinit(testing.allocator);
+    try testing.expect(Type.accepts(Type.selection(.placement), selection));
+    try testing.expect(!Type.accepts(selection, Type.selection(.placement)));
+    var copy = try placed.clone(testing.allocator);
+    defer copy.deinit(testing.allocator);
+    try testing.expect(Type.eql(copy, placed));
+    var a = std.hash.Wyhash.init(0);
+    var b = std.hash.Wyhash.init(0);
+    placed.hashInto(&a);
+    copy.hashInto(&b);
+    try testing.expectEqual(a.final(), b.final());
+}

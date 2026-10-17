@@ -1,5 +1,16 @@
 const core = @import("core");
 
+pub fn placementMember(state: *core.DocumentState, id: core.NodeId, name: []const u8) !core.Value {
+    const node = state.getNode(id) orelse return error.UnknownNode;
+    const placement = node.placement orelse return error.InvalidValueTag;
+    return switch (@import("../language/placement.zig").member(name) orelse return error.UnknownField) {
+        .value => try placement.value.clone(state.allocator),
+        .page => .{ .page = placement.page_id },
+        .document => .{ .document = state.graph.document_id },
+        .anchor => |anchor| .{ .anchor = .{ .node = .{ .node_id = id, .anchor = anchor } } },
+    };
+}
+
 pub fn string(value: core.Value) ![]const u8 {
     return switch (value) {
         .string => |text| text,

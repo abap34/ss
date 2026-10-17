@@ -175,9 +175,11 @@ fn exerciseAppliedRecordTypes(allocator: std.mem.Allocator) !void {
     defer optional.deinit(allocator);
     var action = try Type.functionType(allocator, &.{optional}, .{ .kind = .void });
     defer action.deinit(allocator);
-    var selected = try Type.selectionOf(allocator, Type.objectClass("Item").inModule(3));
+    var placed = try Type.placedOf(allocator, Type.recordType("Item").inModule(3));
+    defer placed.deinit(allocator);
+    var selected = try Type.selectionOf(allocator, placed);
     defer selected.deinit(allocator);
-    var record = core.RecordValue.init(try Type.recordType("Box").inModule(2).withArguments(allocator, &.{ action, selected }));
+    var record = core.RecordValue.init(try Type.recordType("Box").inModule(2).withArguments(allocator, &.{ action, selected, Type.placement }));
     defer record.deinit(allocator);
     try record.fields.append(allocator, .{ .name = "count", .value = .{ .number = 3 } });
     var copy = try record.clone(allocator);
@@ -218,6 +220,9 @@ test "core value text spec: malformed serialized record types are rejected" {
         "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"function\",\"parameters\":[]}]}",
         "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"parameter\"}]}",
         "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"number\",\"arguments\":[]}]}",
+        "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"placed\"}]}",
+        "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"placed\",\"arguments\":[{\"kind\":\"number\"},{\"kind\":\"string\"}]}]}",
+        "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"placement\",\"arguments\":[]}]}",
     }) |ty| {
         const source = try std.fmt.allocPrint(testing.allocator, "{{\"kind\":\"record\",\"type\":{s},\"fields\":[]}}", .{ty});
         defer testing.allocator.free(source);

@@ -19,6 +19,7 @@ const PropertyTarget = union(enum) {
     class: core.NominalId,
     any_object,
     record: ast.Type,
+    placement: ast.Type,
 };
 
 pub fn at(
@@ -343,6 +344,18 @@ fn appendProperties(builder: *CandidateBuilder, snapshot: anytype, target: Prope
             try appendRecordFields(builder, snapshot, record_name);
             return;
         },
+        .placement => |ty| {
+            const placement = @import("../../language/placement.zig");
+            for (placement.input_members) |name| {
+                const field_type = placement.memberType(ty, name) orelse continue;
+                const detail = try field_type.formatAlloc(builder.scratch.allocator());
+                try builder.add(.{ .label = name, .kind = .property, .detail = try builder.retainDetail(detail) });
+            }
+            for (comptime std.meta.fieldNames(core.Anchor)) |name| {
+                try builder.add(.{ .label = name, .kind = .property, .detail = "Anchor" });
+            }
+            return;
+        },
         else => {},
     }
 
@@ -406,7 +419,9 @@ fn enumTypeForExpr(budget: QueryBudget, snapshot: anytype, req: types.SourceRequ
 fn propertyTargetForExpr(allocator: std.mem.Allocator, budget: QueryBudget, snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) anyerror!?PropertyTarget {
     if (budget.expired()) return null;
     const module = snapshot.moduleForPath(req.path) orelse return null;
-    if (try recordTypeForCompletionExpr(allocator, budget, snapshot, req, program, expr, depth)) |ty| return .{ .record = ty };
+    if (try resolve_query.typeForExpr(allocator, budget, snapshot, module.id, req.offset, expr)) |ty| {
+        if (propertyTargetForType(snapshot, ty)) |target| return target;
+    }
     if (depth > 16) return null;
     return switch (expr) {
         .ident => |ident| blk: {
@@ -460,6 +475,7 @@ fn propertyTargetForType(snapshot: anytype, ty: ast.Type) ?PropertyTarget {
         .object => .any_object,
         .selection => if (ty.selectionItem().kind == .object) .any_object else null,
         .record => if (ty.nominalId() != null) .{ .record = ty } else null,
+        .placed, .placement => .{ .placement = ty },
         else => null,
     };
 }
@@ -468,7 +484,7 @@ fn fieldAppliesToTarget(budget: QueryBudget, snapshot: anytype, field: anytype, 
     return switch (target) {
         .any_object => true,
         .class => |id| classContains(budget, snapshot, id, .{ .module_id = field.class_module_id, .name = field.class_name }),
-        .record => false,
+        .record, .placement => false,
     };
 }
 

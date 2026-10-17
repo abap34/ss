@@ -572,6 +572,14 @@ fn resolveAnchorPathInfo(
     };
     while (iter.next()) |field_name| {
         if (info.hole != null) return info;
+        if (info.ty.kind == .placed or info.ty.kind == .placement) {
+            const field_type = @import("../language/placement.zig").memberType(info.ty, field_name) orelse {
+                try addUserReport(state, origin, "UnknownField", "type '{s}' has no field '{s}'", .{ info.ty.label(), field_name });
+                return error.InvalidType;
+            };
+            info = infoFromType(field_type);
+            continue;
+        }
         if (info.ty.kind != .record) {
             try addUserReport(state, origin, "InvalidConstraintObject", "anchor path '{s}' does not resolve through a value with fields", .{path});
             return error.InvalidType;
@@ -591,7 +599,7 @@ fn resolveAnchorPathInfo(
 
 fn isObjectLike(info: semantic_types.TypeInfo) bool {
     return switch (info.ty.kind) {
-        .object => true,
+        .object, .placed, .placement => true,
         else => false,
     };
 }

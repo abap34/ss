@@ -44,6 +44,8 @@ pub const Type = struct {
         document,
         page,
         object,
+        placed,
+        placement,
         selection,
         anchor,
         function,
@@ -66,6 +68,7 @@ pub const Type = struct {
     pub const document = Type{ .kind = .document };
     pub const page = Type{ .kind = .page };
     pub const object = Type{ .kind = .object };
+    pub const placement = Type{ .kind = .placement };
     pub const anchor = Type{ .kind = .anchor };
     pub const function = Type{ .kind = .function };
     pub const string = Type{ .kind = .string };
@@ -150,6 +153,14 @@ pub const Type = struct {
 
     pub fn selectionItem(self: Type) Type {
         return if (self.kind == .selection and self.arguments.len == 1) self.arguments[0] else Type.any;
+    }
+
+    pub fn placedOf(allocator: std.mem.Allocator, input: Type) !Type {
+        return (Type{ .kind = .placed }).withArguments(allocator, &.{input});
+    }
+
+    pub fn placedInput(self: Type) ?Type {
+        return if (self.kind == .placed and self.arguments.len == 1) self.arguments[0] else null;
     }
 
     pub fn mutableArguments(self: *Type) []Type {
@@ -344,6 +355,7 @@ pub const Type = struct {
             return accepts(child.*, actual);
         }
         if (actual.kind == .optional) return false;
+        if (expected.kind == .placement and actual.kind == .placed) return actual.placedInput() != null;
         if (expected.kind == .parameter or actual.kind == .parameter) return eql(expected, actual);
         if (expected.kind == .color or actual.kind == .color) {
             return expected.kind == .color and actual.kind == .color;
@@ -506,6 +518,8 @@ pub const Type = struct {
             .document => "Document",
             .page => "Page",
             .object => "Object",
+            .placed => "Placed",
+            .placement => "Placement",
             .selection => "Selection",
             .anchor => "Anchor",
             .function => "Function",

@@ -24,6 +24,8 @@ const builtin_types = [_]BuiltinType{
     .{ .name = "Document", .ty = ast.Type.document },
     .{ .name = "Page", .ty = ast.Type.page },
     .{ .name = "Object", .ty = ast.Type.object },
+    .{ .name = "Placed", .ty = .{ .kind = .placed } },
+    .{ .name = "Placement", .ty = ast.Type.placement },
     .{ .name = "Anchor", .ty = ast.Type.anchor },
     .{ .name = "String", .ty = ast.Type.string },
     .{ .name = "Color", .ty = ast.Type.color },

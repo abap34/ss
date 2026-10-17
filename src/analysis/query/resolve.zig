@@ -67,7 +67,7 @@ pub const FieldRef = struct {
     value_type: ast.Type,
     name: []const u8,
     type_label: []const u8,
-    module_id: core.SourceModuleId,
+    module_id: ?core.SourceModuleId = null,
     name_span: ?ast.Span = null,
 };
 
@@ -305,6 +305,10 @@ fn resolveType(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: any
 pub fn fieldForType(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, ty: ast.Type, name: []const u8) anyerror!?FieldRef {
     if (expired(budget)) return null;
     if (ty.optional_child) |child| return fieldForType(allocator, budget, snapshot, child.*, name);
+    if (ty.kind == .placed or ty.kind == .placement) {
+        const field_type = @import("../../language/placement.zig").memberType(ty, name) orelse return null;
+        return .{ .name = name, .value_type = field_type, .type_label = try field_type.formatAlloc(allocator) };
+    }
     if (recordIdForType(ty)) |id| {
         var field = recordField(budget, snapshot, id, name) orelse return null;
         if (ty.arguments.len == 0) return field;
