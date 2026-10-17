@@ -5,6 +5,7 @@ const core = @import("core");
 const infer = @import("infer.zig");
 const semantic_env = @import("../language/env.zig");
 const semantic_types = @import("types.zig");
+const language_names = @import("../language/names.zig");
 
 const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
@@ -176,6 +177,10 @@ fn checkObjectFields(
     for (fields) |field| {
         const origin = core.SourceOrigin.at(origin_path, field.span);
 
+        if (stored and language_names.parseAnchorName(field.name) != null) {
+            try addUserReport(state, origin, "ReservedAnchorField", "field '{s}' is reserved for symbolic anchors; choose another field name", .{field.name});
+            return error.InvalidType;
+        }
         const field_type = field.value_type;
         if (field_type.kind == .hole) continue;
         if (stored and !try semantic_types.isPropertyStorable(allocator, sema, field_type)) {

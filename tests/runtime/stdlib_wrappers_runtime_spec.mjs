@@ -17,7 +17,7 @@ async function testPreludeLatexUsesLiteralPayload() {
     const source = "$x$";
     await writeFile(
       path.join(project, "slide.ss"),
-      `import std:core/prelude as *
+      `import std:prelude as *
 
 page latex
 let formula = latex!("${source}")
@@ -48,7 +48,7 @@ async function testThemeStoredThemeOverride(themeName) {
       `import std:themes/${themeName} as *
 
 document
-theme!(default_theme() with {
+set_theme(default_theme() with {
   body.text.size = 31
 })
 end

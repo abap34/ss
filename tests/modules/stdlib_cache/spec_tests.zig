@@ -15,8 +15,8 @@ test "embedded syntax cache returns independent module trees" {
     defer second.deinit();
     try testing.expectEqual(parsed_after_first, cache.parsedModuleCount());
 
-    const first_objects = moduleBySpec(&first, "std:core/objects") orelse return error.MissingObjects;
-    const second_objects = moduleBySpec(&second, "std:core/objects") orelse return error.MissingObjects;
+    const first_objects = moduleBySpec(&first, "std:internal/objects") orelse return error.MissingObjects;
+    const second_objects = moduleBySpec(&second, "std:internal/objects") orelse return error.MissingObjects;
     try testing.expect(first_objects.syntax.functions.items.len != 0);
     try testing.expectEqual(first_objects.syntax.functions.items.len, second_objects.syntax.functions.items.len);
 
@@ -30,7 +30,7 @@ test "embedded syntax cache returns independent module trees" {
     var third = try loadGraph(&cache);
     defer third.deinit();
     try testing.expectEqual(parsed_after_first, cache.parsedModuleCount());
-    const third_objects = moduleBySpec(&third, "std:core/objects") orelse return error.MissingObjects;
+    const third_objects = moduleBySpec(&third, "std:internal/objects") orelse return error.MissingObjects;
     try testing.expectEqualStrings(second_name, third_objects.syntax.functions.items[0].name);
 }
 

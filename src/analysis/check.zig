@@ -224,7 +224,7 @@ const addUserReport = @import("diagnostics.zig").addUserReport;
 
 pub fn continueAfterDiagnostic(state: *const core.DocumentState, diagnostic_count_before: usize, err: anyerror) !void {
     if (err == error.OutOfMemory or err == error.Canceled) return err;
-    if (err == error.AlreadyDiagnosed and state.diagnostics.entries.items.len != 0) return;
+    if ((err == error.AlreadyDiagnosed or err == error.DiagnosticsFailed) and state.diagnostics.entries.items.len != 0) return;
     if (state.diagnostics.entries.items.len > diagnostic_count_before) return;
     return err;
 }
@@ -546,7 +546,7 @@ fn validateAnchorRef(
             const path = anchorObjectPath(anchor_ref) orelse return;
             const info = try resolveAnchorPathInfo(state, sema, env, origin, path);
             if (info.hole != null) return;
-            if (!isObjectLike(info)) {
+            if (!isObjectLike(info) and (is_target or info.ty.kind != .page)) {
                 try ensureType(state, allocator, info, Type.object, origin, .UnmatchedArgumentType);
             }
         },

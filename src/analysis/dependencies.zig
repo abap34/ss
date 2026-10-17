@@ -890,6 +890,11 @@ pub const Analyzer = struct {
                 break :blk summary;
             },
             .member => |member| blk: {
+                if (names.parseAnchorName(member.name) != null) {
+                    if (try self.propertyTargetExpr(member.target.*)) |target| {
+                        if (target.owner == .object or target.owner == .page) break :blk try self.analyzeExpr(member.target.*);
+                    }
+                }
                 if (try self.propertyMemberRead(member)) |read| {
                     var summary = try self.analyzeExpr(read.base);
                     errdefer summary.deinit();

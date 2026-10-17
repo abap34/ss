@@ -105,14 +105,15 @@ end
           (identifier)))
       text: (block_text))
     (constrain_statement
-      left: (member_expression
-        object: (identifier)
-        member: (identifier))
-      right: (binary_expression
+      value: (binary_expression
         (member_expression
           object: (identifier)
           member: (identifier))
-        (identifier)))))
+        (binary_expression
+          (member_expression
+            object: (identifier)
+            member: (identifier))
+          (identifier))))))
 
 ================================================================================
 Constraint updates
@@ -147,3 +148,28 @@ end
         object: (identifier)
         member: (identifier))
       source: (number))))
+
+================================================================================
+Constraint values and explicit page registration
+================================================================================
+
+page Values
+  let rule = a.left == b.right + 24
+  ~ rule
+  target ~ rule
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (binary_expression
+        (member_expression (identifier) (identifier))
+        (binary_expression
+          (member_expression (identifier) (identifier))
+          (number))))
+    (constrain_statement (identifier))
+    (constrain_statement (identifier) (identifier))))

@@ -1,6 +1,6 @@
-import std:core/classes
-import std:core/objects as objects
-import std:core/selectors as selectors
+import std:internal/classes
+import std:internal/objects as objects
+import std:query as selectors
 
 fn style_pageno(page_no: Object) -> Object
   page_no.text = TextStyle {
@@ -20,22 +20,24 @@ fn style_pageno(page_no: Object) -> Object
 end
 
 fn position_pageno(page_value: Page, page_no: Object) -> Object
-  constrain_on!(page_value, constraints(
-    equal(anchor(page_no, "right"), page_anchor(page_value, "right"), -24),
-    equal(anchor(page_no, "bottom"), page_anchor(page_value, "bottom"), 20)
-  ))
+  page_value ~ page_no.right == page_value.right - 24
+  page_value ~ page_no.bottom == page_value.bottom + 20
   return page_no
 end
 
 fn pageno_s(page_no: Object) -> Object
   style_pageno(page_no)
-  return position_pageno(pagectx(), page_no)
+  ~ page_no.right == page.right - 24
+  ~ page_no.bottom == page.bottom + 20
+  return set_pageno(page_no, pagectx(), none)
 end
 
 fn/! pageno_obj(decorate: Object -> Object = style_pageno) -> Object
   let page_no = objects::obj("", "pageno", "text")
   decorate(page_no)
-  return position_pageno(pagectx(), page_no)
+  ~ page_no.right == page.right - 24
+  ~ page_no.bottom == page.bottom + 20
+  return set_pageno(page_no, pagectx(), none)
 end
 
 fn pagenos!(format: String? = none) -> Void
@@ -111,7 +113,7 @@ fn set_pagenos(doc: Document) -> Void
 end
 
 fn set_pageno(page_no: Object, page_value: Page, format: String?) -> Object
-  set_prop(page_no, "pageno_format", format)
+  page_no.pageno_format = format
   return set_repr(page_no, (item: Object) |-> pageno_repr(item, page_value))
 end
 
@@ -150,10 +152,8 @@ end
 fn mk_footer!(page_value: Page, text_value: String, decorate: Object -> Object = style_footer) -> Page
   let footer = place_on!(page_value, new(text_value, "footer", "text"))
   decorate(footer)
-  constrain_on!(page_value, constraints(
-    equal(anchor(footer, "left"), page_anchor(page_value, "left"), 72),
-    equal(anchor(footer, "bottom"), page_anchor(page_value, "bottom"), 20)
-  ))
+  page_value ~ footer.left == page_value.left + 72
+  page_value ~ footer.bottom == page_value.bottom + 20
   return page_value
 end
 
@@ -169,12 +169,10 @@ fn mk_logo!(page_value: Page, path_value: String, scale: Number) -> Page
   logo.render_kind = RenderKind.raster_asset
   logo.asset.scale = scale
   logo.layout.wrap = WrapMode.off
-  constrain_on!(page_value, constraints(
-    equal(anchor(logo, "right"), anchor(logo, "left"), 96),
-    equal(anchor(logo, "top"), anchor(logo, "bottom"), 40),
-    equal(anchor(logo, "right"), page_anchor(page_value, "right"), -72),
-    equal(anchor(logo, "top"), page_anchor(page_value, "top"), -36)
-  ))
+  page_value ~ logo.right == logo.left + 96
+  page_value ~ logo.top == logo.bottom + 40
+  page_value ~ logo.right == page_value.right - 72
+  page_value ~ logo.top == page_value.top - 36
   return page_value
 end
 
@@ -204,12 +202,10 @@ end
 fn mk_mark!(page_value: Page, text_value: String, decorate: Object -> Object = style_watermark) -> Page
   let mark = place_on!(page_value, new(text_value, "watermark", "text"))
   decorate(mark)
-  constrain_on!(page_value, constraints(
-    equal(anchor(mark, "right"), anchor(mark, "left"), 800),
-    equal(anchor(mark, "top"), anchor(mark, "bottom"), 90),
-    equal(anchor(mark, "center_x"), page_anchor(page_value, "center_x")),
-    equal(anchor(mark, "center_y"), page_anchor(page_value, "center_y"))
-  ))
+  page_value ~ mark.right == mark.left + 800
+  page_value ~ mark.top == mark.bottom + 90
+  page_value ~ mark.center_x == page_value.center_x
+  page_value ~ mark.center_y == page_value.center_y
   return page_value
 end
 

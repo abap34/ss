@@ -194,6 +194,7 @@ pub fn prepareObjectWithRender(
     switch (render.kind) {
         .text => switch (parse_mode) {
             .none => {},
+            .plain => text_layout = try markdown.parsePlainTextContent(allocator, content),
             .block => {
                 markdown_doc = try markdown.parseMarkdownContent(allocator, content);
                 try collectMarkdownBlockAssetDeps(allocator, markdown_doc.?.blocks.items, &asset_deps);

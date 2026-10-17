@@ -124,7 +124,7 @@ automatic = false
 async function testFrameDiagnosticsRespectFitPolicy() {
   for (const policy of [null, "ignore", "error"]) {
     const frameSource = `page example
-let body = text!("SupercalifragilisticexpialidociousSupercalifragilisticexpialidocious")
+let body = body_obj!("SupercalifragilisticexpialidociousSupercalifragilisticexpialidocious")
 body.text.size = 24
 body.text.line_height = 30
 ${policy ? `body.layout.fit = FitPolicy.${policy}\n` : ""}~ body.left == page.left + 100

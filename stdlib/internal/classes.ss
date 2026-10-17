@@ -1,288 +1,10 @@
-type SemanticRole = auto | paragraph | heading | code | figure | caption
-
-record SemanticStyle {
-  role: SemanticRole = SemanticRole.auto
-  heading_level: Number? = none
-}
-
-type LayoutPolicy = left | right | top | top_flow | center | center_stack
-type SplitAxis = none | horizontal | vertical
-type RenderKind = text | code | latex | vector_asset | raster_asset | vector_path | connector | chrome_only
-type LineCap = butt | round | square
-type LineJoin = miter | round | bevel
-type FillRule = nonzero | even_odd
-type PaintSpace = local | page
-type GradientSpread = pad | repeat | reflect
-type FillKind = none | solid | linear | radial
-type ConnectorAnchor = center | left | right | top | bottom
-type ConnectorRoute = straight | horizontal_then_vertical | vertical_then_horizontal | curve
-type PdfPageBox = media | crop | bleed | trim | art
-type TextParseMode = none | inline | block
-type WrapMode = on | off
-type MathFit = none | shrink
-type FitPolicy = warn | error | ignore
-type Align = left | center | right
-type FontStyle = normal | oblique | italic
-type FontStretch = ultra_condensed | extra_condensed | condensed | semi_condensed | normal | semi_expanded | expanded | extra_expanded | ultra_expanded
-type LatexEngine = pdflatex | lualatex
-type PathVerb = move | line | quadratic | cubic | arc | close
-
-record PathCommand {
-  verb: PathVerb
-  x: Number = 0
-  y: Number = 0
-  control_x: Number = 0
-  control_y: Number = 0
-  control2_x: Number = 0
-  control2_y: Number = 0
-  radius_x: Number = 0
-  radius_y: Number = 0
-  rotation: Number = 0
-  large_arc: Bool = false
-  clockwise: Bool = true
-}
-
-record VectorStrokeStyle {
-  color: Color? = c"#4b5563"
-  width: Number = 1.6
-  cap: LineCap = LineCap.butt
-  join: LineJoin = LineJoin.miter
-  miter_limit: Number = 10
-  dash: String = ""
-  dash_offset: Number = 0
-}
-
-record LineStyle {
-  start_x: Number = 0
-  start_y: Number = 0.5
-  end_x: Number = 1
-  end_y: Number = 0.5
-  stroke: VectorStrokeStyle = VectorStrokeStyle {}
-  marker_start: MarkerStyle? = none
-  marker_end: MarkerStyle? = none
-}
-
-record GradientDirection {
-  start_x: Number = 0
-  start_y: Number = 0.5
-  end_x: Number = 1
-  end_y: Number = 0.5
-}
-
-record PatternStyle {
-  path: Path? = none
-  cell_width: Number = 8
-  cell_height: Number = 8
-  xx: Number = 1
-  yx: Number = 0
-  xy: Number = 0
-  yy: Number = 1
-  x0: Number = 0
-  y0: Number = 0
-  rotation: Number = 0
-  space: PaintSpace = PaintSpace.local
-  fill: Color? = none
-  stroke: VectorStrokeStyle? = none
-}
-
-record FillStyle {
-  kind: FillKind = FillKind.none
-  color: Color? = none
-  color2: Color? = none
-  start_x: Number = 0
-  start_y: Number = 0
-  start_radius: Number = 0
-  end_x: Number = 1
-  end_y: Number = 1
-  end_radius: Number = 1
-  spread: GradientSpread = GradientSpread.pad
-  space: PaintSpace = PaintSpace.local
-  rule: FillRule = FillRule.nonzero
-  opacity: Number = 1
-  pattern: PatternStyle? = none
-}
-
-record MarkerStyle {
-  path: Path? = none
-  width: Number = 10
-  height: Number = 10
-  fill: FillStyle = FillStyle {}
-  stroke: VectorStrokeStyle = VectorStrokeStyle {}
-}
-
-record VectorStyle {
-  fill: FillStyle = FillStyle {}
-  stroke: VectorStrokeStyle = VectorStrokeStyle {}
-}
-
-record ConnectorStyle {
-  source: Object? = none
-  target: Object? = none
-  source_anchor: ConnectorAnchor = ConnectorAnchor.right
-  target_anchor: ConnectorAnchor = ConnectorAnchor.left
-  route: ConnectorRoute = ConnectorRoute.straight
-  curve: Number = 0.5
-  stroke: VectorStrokeStyle = VectorStrokeStyle {
-    color = c"#4b5563"
-    width = 1.6
-  }
-  marker_start: MarkerStyle? = none
-  marker_end: MarkerStyle? = none
-}
-
-record FontFace {
-  family: String = "Helvetica"
-  weight: Number = 400
-  style: FontStyle = FontStyle.normal
-  stretch: FontStretch = FontStretch.normal
-}
-
-record LayoutStyle {
-  font_size: Number? = none
-  line_height: Number? = none
-  spacing_after: Number = 32
-  x: Number = 96
-  right_inset: Number = 96
-  wrap: WrapMode = WrapMode.on
-  fit: FitPolicy = FitPolicy.warn
-}
-
-record MarkdownUnderlineStyle {
-  color: Color? = none
-  opacity: Number = 1
-  width: Number? = none
-  offset: Number = 0
-  dash: String = ""
-}
-
-record MarkdownQuoteStyle {
-  color: Color? = none
-  inset: Number = 14
-  pad_x: Number = 16
-  pad_y: Number = 8
-  fill: Color? = none
-  radius: Number = 4
-  bar_color: Color? = c"0.55,0.60,0.68"
-  bar_width: Number = 3
-  bar_dash: String = ""
-}
-
-record TextStyle {
-  parse: TextParseMode = TextParseMode.inline
-  font: FontFace = FontFace { family = "Helvetica" }
-  bold_weight: Number = 700
-  italic_style: FontStyle = FontStyle.italic
-  code_font: FontFace = FontFace { family = "monospace" }
-  size: Number = 20
-  line_height: Number? = none
-  color: Color = c"0.08,0.08,0.08"
-  link_color: Color = c"0.1,0.25,0.75"
-  markdown_bold_color: Color? = none
-  markdown_highlight_fill: Color? = c"#fff2a8"
-  markdown_underline: MarkdownUnderlineStyle = MarkdownUnderlineStyle {}
-  markdown_quote: MarkdownQuoteStyle = MarkdownQuoteStyle {}
-  math_scale: Number = 1
-  inline_math_spacing: Number = 0.08
-  display_math_gap: Number = 0.2
-  display_math_fit: MathFit = MathFit.none
-  math_align: Align = Align.center
-  emoji_spacing: Number = 0.12
-  markdown_block_gap: Number = 8
-  markdown_list_inset: Number = 8
-  markdown_list_indent: Number = 26
-  markdown_code_font_size: Number = 15
-  markdown_code_line_height: Number = 20
-  markdown_code_pad_x: Number = 12
-  markdown_code_pad_y: Number = 10
-  markdown_code_highlight_fill: Color? = c"#fff2a8"
-  markdown_code_fill: Color? = none
-  markdown_code_stroke: Color? = none
-  markdown_code_line_width: Number = 1
-  markdown_code_radius: Number = 10
-  markdown_code_plain_color: Color? = none
-  markdown_code_keyword_color: Color? = none
-  markdown_code_function_color: Color? = none
-  markdown_code_type_color: Color? = none
-  markdown_code_constant_color: Color? = none
-  markdown_code_number_color: Color? = none
-  markdown_code_variable_color: Color? = none
-  markdown_code_operator_color: Color? = none
-  markdown_code_comment_color: Color? = none
-  markdown_code_string_color: Color? = none
-  markdown_table_cell_pad_x: Number = 10
-  markdown_table_cell_pad_y: Number = 7
-  markdown_table_border: Color = c"0.82,0.84,0.88"
-  markdown_table_line_width: Number = 0.8
-  markdown_table_header_fill: Color = c"0.94,0.96,0.98"
-  markdown_table_alt_row_fill: Color? = none
-}
-
-record MarkdownHeadingStyle {
-  text: TextStyle = TextStyle {}
-}
-
-record MarkdownHeadingStyles {
-  h1: MarkdownHeadingStyle? = none
-  h2: MarkdownHeadingStyle? = none
-  h3: MarkdownHeadingStyle? = none
-  h4: MarkdownHeadingStyle? = none
-  h5: MarkdownHeadingStyle? = none
-  h6: MarkdownHeadingStyle? = none
-}
-
-record LatexStyle {
-  scale: Number = 1
-  min_height: Number = 30
-  align: Align = Align.center
-}
-
-record CodeStyle {
-  plain_color: Color = c"0.12,0.12,0.12"
-  keyword_color: Color = c"#cf222e"
-  function_color: Color = c"#8250df"
-  type_color: Color = c"#953800"
-  constant_color: Color = c"#0550ae"
-  number_color: Color = c"#0550ae"
-  variable_color: Color = c"0.12,0.12,0.12"
-  operator_color: Color = c"#0550ae"
-  comment_color: Color = c"0.3059,0.5412,0.3608"
-  string_color: Color = c"0.6980,0.2549,0.2157"
-}
-
-record CodeHighlightTheme {
-  code: CodeStyle = CodeStyle {}
-  fill: Color? = none
-  stroke: Color? = none
-}
-
-record ChromeStyle {
-  fill: Color? = none
-  stroke: Color? = none
-  line_width: Number = 1
-  radius: Number = 10
-  pad_x: Number = 0
-  pad_y: Number = 0
-}
-
-record UnderlineStyle {
-  color: Color? = none
-  width: Number = 1
-  offset: Number = -2
-}
-
-record RuleStyle {
-  stroke: Color? = none
-  line_width: Number = 1
-  dash: String = ""
-}
-
-record AssetStyle {
-  scale: Number = 1
-  tint: Color? = none
-  width: Number? = none
-  pdf_page: Number = 1
-  pdf_box: PdfPageBox = PdfPageBox.crop
-}
+import std:graphics/types
+import std:math/types
+import std:assets/types
+import std:layout/types
+import std:code/types
+import std:text/types
+import std:graphics/paint/types
 
 type Doc = object {
   layout_h: LayoutPolicy = LayoutPolicy.left
@@ -330,7 +52,7 @@ type Text = object {
 
   text: TextStyle = TextStyle {}
   markdown_headings: MarkdownHeadingStyles = MarkdownHeadingStyles {}
-  code: CodeStyle = CodeStyle {}
+  code: CodeColors = CodeColors {}
   underline: UnderlineStyle = UnderlineStyle {}
   math_align: Align = Align.center
 }
@@ -463,17 +185,17 @@ type Code = object {
     wrap = WrapMode.off
   }
   language: String = "plain"
-  code: CodeStyle = CodeStyle {
-    plain_color = c"0.12,0.12,0.12"
-    keyword_color = c"#cf222e"
-    function_color = c"#8250df"
-    type_color = c"#953800"
-    constant_color = c"#0550ae"
-    number_color = c"#0550ae"
-    variable_color = c"0.12,0.12,0.12"
-    operator_color = c"#0550ae"
-    comment_color = c"0.3059,0.5412,0.3608"
-    string_color = c"0.6980,0.2549,0.2157"
+  code: CodeColors = CodeColors {
+    plain = c"0.12,0.12,0.12"
+    keyword = c"#cf222e"
+    function = c"#8250df"
+    type_name = c"#953800"
+    constant = c"#0550ae"
+    number = c"#0550ae"
+    variable = c"0.12,0.12,0.12"
+    operator = c"#0550ae"
+    comment = c"0.3059,0.5412,0.3608"
+    string = c"0.6980,0.2549,0.2157"
   }
 }
 

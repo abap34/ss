@@ -1,4 +1,4 @@
-record Reference { target: Object }
+type Reference = record { target: Object }
 type Linked = object {
   roles = ["linked"]
   referent: Object?

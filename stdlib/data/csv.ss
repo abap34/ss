@@ -1,10 +1,4 @@
-;; Usage: import std:data/csv as csv
-;;        csv::show_table! "results.csv"
-;; Use header=false for a file without a header record.
-;; to_markdown accepts CSV text directly for composition with text.
-
-import std:themes/default as theme
-import std:themes/base as base
+;; CSV text conversion with Markdown escaping.
 
 const newline: String = "
 "
@@ -75,10 +69,4 @@ fn to_markdown(data: String, header: Bool = true) -> String
     return body
   end
   return replace(separator, "---", "") ++ separator ++ body
-end
-
-;; show_table constructs an Object; show_table! also places it on the current page.
-;; Paths use the same asset base directory and input tracking as readlines.
-fn/! show_table(path: String, header: Bool = true, style: base::Theme = theme::current_theme()) -> Object
-  return theme::text(to_markdown(readlines(path), header), style)
 end

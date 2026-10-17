@@ -133,14 +133,14 @@ test "module loader spec: source parse failures use the diagnostic error" {
     defer program.deinit(testing.allocator);
     var overlay = compiler.module_loader.SourceOverlay.init(testing.allocator);
     defer overlay.deinit();
-    try overlay.put("stdlib/core/invalid-module.ss", "@");
+    try overlay.put("stdlib/internal/invalid-module.ss", "@");
     var diagnostics = compiler.module_loader.LoadDiagnostics.init(testing.allocator);
     defer diagnostics.deinit();
 
     try testing.expectError(error.DiagnosticsFailed, compiler.module_loader.loadGraphWithOptions(
         testing.allocator,
         testing.io,
-        "stdlib/core",
+        "stdlib/internal",
         program,
         .{
             .overlay = &overlay,
@@ -163,7 +163,7 @@ test "module loader spec: graph failures clean previously loaded modules" {
 }
 
 test "module loader spec: stdlib resolution frees partial allocations" {
-    const source = "import std:core/prelude as core\n";
+    const source = "import std:prelude as core\n";
     var program = try compiler.syntax.parseWithSourceName(testing.allocator, source, "stdlib-allocation-test.ss");
     defer program.deinit(testing.allocator);
 

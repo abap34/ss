@@ -14,6 +14,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     const b = suite.ctx.b;
     const test_step = suite.all;
     const specs = [_]Spec{
+        .{ .path = "tests/runtime/stdlib/spec.mjs", .name = "test-stdlib", .description = "Check public standard-library construction and placement contracts" },
         .{ .path = "tests/runtime/data/csv/spec.mjs", .name = "test-csv", .description = "Check CSV parsing, table rendering, and editor inputs" },
         .{ .path = "tests/editor/build-status/spec.mjs" },
         .{ .path = "tests/editor/component-width/spec.mjs" },
@@ -92,32 +93,15 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
     const editor_view_tests = steps.node(b, &suite.checks.node.step, "tests/editor/vscode/view/spec.mjs", null);
     editor_view_tests.step.dependOn(&suite.checks.vscode_packages.step);
     addFocusedTestStep(b, "test-editor-view", "Run focused editor view resource tests", &editor_view_tests.step);
-    addSmokeChecks(b, test_step, exe);
+    addStdlibChecks(b, test_step, exe);
 }
 
-fn addSmokeChecks(b: *std.Build, test_step: *Step, exe: std.Build.LazyPath) void {
-    const smoke_check_files = [_][]const u8{
-        "stdlib/core/classes.ss",
-        "stdlib/core/components.ss",
-        "stdlib/core/generated.ss",
-        "stdlib/core/layout.ss",
-        "stdlib/core/objects.ss",
-        "stdlib/core/paths.ss",
-        "stdlib/core/fills.ss",
-        "stdlib/core/shapes.ss",
-        "stdlib/core/connectors.ss",
-        "stdlib/core/render.ss",
-        "stdlib/core/selectors.ss",
-        "stdlib/core/utils.ss",
-        "stdlib/themes/academic.ss",
-        "stdlib/themes/base.ss",
-        "stdlib/themes/default.ss",
-        "stdlib/themes/pop.ss",
-    };
-
-    for (smoke_check_files) |path| {
-        const smoke_check = steps.runExecutable(b, exe);
-        smoke_check.addArgs(&.{ "check", path });
-        test_step.dependOn(&smoke_check.step);
+fn addStdlibChecks(b: *std.Build, test_step: *Step, exe: std.Build.LazyPath) void {
+    const stdlib_step = b.step("test-stdlib-modules", "Check every embedded standard-library module");
+    for (@import("../../stdlib/embed.zig").modules) |module| {
+        const check = steps.runExecutable(b, exe);
+        check.addArgs(&.{ "check", "--quiet", module.path });
+        stdlib_step.dependOn(&check.step);
     }
+    test_step.dependOn(stdlib_step);
 }

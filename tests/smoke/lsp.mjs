@@ -17,15 +17,15 @@ import {
 
 const fixture = path.join(root, "tests", "fixtures", "project-basic", "slide.ss");
 const partsFixture = path.join(root, "tests", "fixtures", "project-basic", "parts.ss");
-const defaultTheme = path.join(root, "stdlib", "themes", "default.ss");
+const textModule = path.join(root, "stdlib", "text.ss");
 const uri = pathToFileURL(fixture).toString();
 const source = await readFile(fixture, "utf8");
 const partsUri = pathToFileURL(partsFixture).toString();
 const partsSource = await readFile(partsFixture, "utf8");
-const defaultThemeUri = pathToFileURL(defaultTheme).toString();
-const defaultThemeSource = await readFile(defaultTheme, "utf8");
+const textModuleUri = pathToFileURL(textModule).toString();
+const textModuleSource = await readFile(textModule, "utf8");
 const moduleLabelDefinition = functionDefinitionLocation(partsUri, partsSource, "module_label");
-const coverDefinition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "cover");
+const subtitleDefinition = functionDefinitionLocation(textModuleUri, textModuleSource, "subtitle");
 
 await withLspClient({ cwd: root }, async (client) => {
   const initialize = await client.initialize();
@@ -65,12 +65,12 @@ await withLspClient({ cwd: root }, async (client) => {
 
   const pairedDefinition = await client.request("textDocument/definition", {
     textDocument: { uri },
-    position: positionAt(source, "cover!", 2),
+    position: positionAt(source, "subtitle!", 2),
   });
   assert(Array.isArray(pairedDefinition), `expected paired definition array, got ${JSON.stringify(pairedDefinition)}`);
   assert(
-    pairedDefinition.some((location) => isDefinitionLocation(location, coverDefinition)),
-    `definition did not jump to default theme cover: ${JSON.stringify(pairedDefinition)}`,
+    pairedDefinition.some((location) => isDefinitionLocation(location, subtitleDefinition)),
+    `definition did not jump to text module subtitle: ${JSON.stringify(pairedDefinition)}`,
   );
 
   const brokenDiagnosticsPromise = client.waitForDiagnostics(

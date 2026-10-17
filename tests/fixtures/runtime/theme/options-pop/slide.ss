@@ -1,8 +1,8 @@
 import std:themes/pop as *
-import std:themes/base as theme_base
+import std:theme/types as theme_base
 
 document
-  theme!(default_theme(theme_base::ThemeOptions {
+  set_theme(default_theme(theme_base::ThemeOptions {
     font_family = "Pop Sans"
     code_font_family = "Pop Mono"
     text_color = c"#203850"
@@ -11,8 +11,10 @@ document
   }))
 end
 
-page pop_cover
-  cover!("PopCover", "PopSubtitle", "PopAuthor")
+page pop_title
+  title!("PopTitle")
+  subtitle!("PopSubtitle")
+  byline!("PopAuthor")
 end
 
 page pop_body

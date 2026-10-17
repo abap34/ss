@@ -13,7 +13,7 @@ const gap = 32;
 const constraintTolerance = 0.01;
 let caseCount = 0;
 
-const prelude = `import std:core/prelude as *
+const prelude = `import std:prelude as *
 
 fn box(label: String, width: Number, height: Number) -> Object
   let item = new(label, "body", "text")
@@ -139,8 +139,8 @@ end
 async function testOrdinaryGroupInference() {
   const fallbackSource = `${prelude}
 page fallback
-let a = text!("A")
-let b = text!("B")
+let a = body_obj!("A")
+let b = body_obj!("B")
 `;
   const plain = await dumpSource("plain-fallback", `${fallbackSource}end\n`);
   const grouped = await dumpSource("grouped-fallback", `${fallbackSource}group(a, b)\nend\n`);
@@ -259,8 +259,8 @@ end
 async function testNaturalWidths() {
   const { dump } = await dumpSource("natural-widths", `${prelude}
 page natural
-let a = text!("short")
-let b = text!("a considerably longer line")
+let a = body_obj!("short")
+let b = body_obj!("a considerably longer line")
 a || b
 end
 `);
@@ -420,17 +420,17 @@ async function testMeasuredSplitFlow() {
       const { dump } = await dumpSource(`measured-flow-${policy}-${caseCount}`, `${prelude}
 page measured
 vflow(LayoutPolicy.${policy})
-text!("Before split")
-let a = text("Short")
-let b = text("${"Words wrap at the allocated width. ".repeat(5)}")
-${expression.includes("c") ? 'let c = text("Third")' : ""}
+body_obj!("Before split")
+let a = body_obj("Short")
+let b = body_obj("${"Words wrap at the allocated width. ".repeat(5)}")
+${expression.includes("c") ? 'let c = body_obj("Third")' : ""}
 let g = ${expression}
 g.chrome.pad_x = 12
 g.chrome.pad_y = 8
 g.layout.spacing_after = 32
 ~ g.width == 1000
 place!(g)
-text!("After split")
+body_obj!("After split")
 end
 `);
       const before = node(dump, "Before split");
@@ -458,17 +458,17 @@ end
 async function testMeasuredNestedConstraintUpdate() {
   const { dump } = await dumpSource("measured-nested-update", `${prelude}
 page updated
-text!("Before split")
-let a = text("Short")
-let b = text("Second line")
-let c = text("Third")
+body_obj!("Before split")
+let a = body_obj("Short")
+let b = body_obj("Second line")
+let c = body_obj("Third")
 let inner = b // c
 ~!~ c.top == b.bottom - 80
 let g = a |=| inner
 g.layout.spacing_after = 32
 ~ g.width == 1000
 place!(g)
-text!("After split")
+body_obj!("After split")
 end
 `);
   const b = node(dump, "Second line");
@@ -576,8 +576,8 @@ async function testVerticalSplitWidths() {
   ]) {
     const { dump } = await dumpSource(`vertical-width-${name}`, `${prelude}
 page example
-let a = text("Short")
-let b = text("Second line")
+let a = body_obj("Short")
+let b = body_obj("Second line")
 let g = a /=/ b
 ${constraints}
 place!(g)
@@ -596,8 +596,8 @@ end
     const { dump } = await dumpSource(`vertical-width-policy-${policy}`, `${prelude}
 page example
 hflow(LayoutPolicy.${policy})
-let a = text("Short")
-let b = text("${"Words wrap within the available row width. ".repeat(12)}")
+let a = body_obj("Short")
+let b = body_obj("${"Words wrap within the available row width. ".repeat(12)}")
 let g = a /=/ b
 g.chrome.pad_x = 16
 ~ g.height == 400
@@ -625,9 +625,9 @@ end
   ]) {
     const { dump } = await dumpSource(`vertical-width-${name}`, `${prelude}
 page example
-let a = text("Short")
-let b = text("Second line")
-let c = text("Third")
+let a = body_obj("Short")
+let b = body_obj("Second line")
+let c = body_obj("Third")
 let g = ${expression}
 ${name === "horizontal-parent" ? "~ g.width == 800" : ""}
 ${name === "vertical-parent" ? "~ g.height == 400" : ""}
@@ -672,8 +672,8 @@ async function testEqualChains() {
   for (const operator of ["|=|", "/=/"]) {
     for (const count of [3, 4, 5]) {
       for (const nested of [false, true]) {
-        const operands = Array.from({ length: count }, (_, index) => `text("Item ${index}")`);
-        if (nested) operands[1] = `(text("Nested one") ${operator} text("Nested two") ${operator} text("Nested three"))`;
+        const operands = Array.from({ length: count }, (_, index) => `body_obj("Item ${index}")`);
+        if (nested) operands[1] = `(body_obj("Nested one") ${operator} body_obj("Nested two") ${operator} body_obj("Nested three"))`;
         const { dump } = await dumpSource(`equal-chain-${operator === "|=|" ? "h" : "v"}-${count}-${nested}`, `${prelude}
 page chain
 vflow(LayoutPolicy.top)
@@ -700,8 +700,8 @@ end
   }
   const bound = await dumpSource("equal-bound-group", `${prelude}
 page bound
-let left = text("A") |=| text("B")
-let g = left |=| text("C")
+let left = body_obj("A") |=| body_obj("B")
+let g = left |=| body_obj("C")
 ~ g.width == 1000
 place!(g)
 end
@@ -711,7 +711,7 @@ end
 
   await expectFailure("equal-duplicate", `${prelude}
 page duplicate
-let a = text("A")
+let a = body_obj("A")
 place!(a |=| a)
 end
 `, "InvalidGroupSplit");
@@ -723,7 +723,7 @@ end
 }
 
 async function testEqualEvaluation() {
-  const { dump } = await dumpSource("equal-evaluation-shadowing", `import std:core/objects as objects
+  const { dump } = await dumpSource("equal-evaluation-shadowing", `import std:internal/objects as objects
 fn hsplit(items: Selection<Object>) -> Object
   return new("Wrong hsplit", "body", "text")
 end
@@ -760,9 +760,9 @@ async function testEqualEditorUpdates() {
   const expressions = ["a || b || c", "a |=| b |=| c", "(a |=| b) |=| c", "a /=/ b /=/ c", "a // b // c", "a |=| b |=| c", "a /=/ b /=/ c", "a /=/ b /=/ c", "a // b // c"];
   const sources = expressions.map((expression, index) => `${prelude}
 page editor
-let a = text("Short")
-let b = text("A considerably longer line")
-let c = text("Third")
+let a = body_obj("Short")
+let b = body_obj("A considerably longer line")
+let c = body_obj("Third")
 let g = ${expression}
 ${index < 6 ? "~ g.width == 1000" : index === 7 ? "~ g.width == 600" : ""}
 ~ g.height == 500
@@ -865,7 +865,7 @@ end
 }
 
 async function testExplicitGap() {
-  const { dump } = await dumpSource("explicit-gap", `import std:core/layout as joins
+  const { dump } = await dumpSource("explicit-gap", `import std:layout as joins
 ${prelude}
 page gaps
 vflow(LayoutPolicy.top)
@@ -930,7 +930,7 @@ end
 }
 
 async function testFixedStdlibResolution() {
-  const { dump } = await dumpSource("shadowing", `import std:core/objects as layout
+  const { dump } = await dumpSource("shadowing", `import std:internal/objects as layout
 fn hjoin(a: Object, b: Object) -> Object
   return a
 end
@@ -982,7 +982,7 @@ fn maybe() -> Object?
   return none
 end
 page invalid
-let a = text!("A")
+let a = body_obj!("A")
 a ${operator} ${operand}
 end
 `, "TypeMismatch");
@@ -1128,12 +1128,12 @@ let a = new("A", "body", "text")
 let b = new("B", "body", "text")
 let combined = a || b
 let destination = new_page(docctx(), "generated")
-constrain_on!(destination, constraints(
-  equal(anchor(a, "right"), anchor(a, "left"), 120),
-  equal(anchor(a, "top"), anchor(a, "bottom"), 80),
-  equal(anchor(b, "right"), anchor(b, "left"), 180),
-  equal(anchor(b, "top"), anchor(b, "bottom"), 60)
-))
+destination ~ constraints(
+  (a.right == a.left + 120),
+  (a.top == a.bottom + 80),
+  (b.right == b.left + 180),
+  (b.top == b.bottom + 60)
+)
 destination.layout_v = LayoutPolicy.center
 place_on!(destination, combined)
 end

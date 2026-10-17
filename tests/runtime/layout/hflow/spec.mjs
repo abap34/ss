@@ -10,7 +10,7 @@ import { editorSnapshot } from "../../editor/support.mjs";
 const outputRoot = path.join(root, ".ss-cache/tests/layout/hflow");
 await mkdir(outputRoot, { recursive: true });
 const output = await mkdtemp(path.join(outputRoot, "run-"));
-const prelude = `import std:core/prelude as *
+const prelude = `import std:prelude as *
 fn box(label: String, width: Number, height: Number) -> Object
   let item = new(label, "body", "text")
   ~ item.width == width

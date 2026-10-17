@@ -4,7 +4,7 @@ const testing = std.testing;
 
 test "inferred types and facts are released with successful and failed generations" {
     const prefix =
-        \\record Payload { amount: Number? = none }
+        \\type Payload = record { amount: Number? = none }
         \\fn identity(value: Number?) -> Number? = value
         \\fn choose(flag: Bool) -> Number -> Number
         \\  if flag
@@ -27,7 +27,7 @@ test "inferred types and facts are released with successful and failed generatio
                 defer testing.allocator.free(source);
                 var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
                 defer sources.deinit();
-                const path = "stdlib/core/inference-ownership-test.ss";
+                const path = "stdlib/internal/inference-ownership-test.ss";
                 try sources.put(path, source);
                 var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{
                     .generation = generation,

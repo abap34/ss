@@ -39,7 +39,7 @@ entry = "slide.ss"
 [editor.wysiwyg.refresh]
 automatic = false
 `, "utf8");
-  const source = `import std:core/prelude as *
+  const source = `import std:prelude as *
 
 page latex
 let formula = latex!("$x$")

@@ -57,9 +57,9 @@ Repeated updates continue along the same edge after the older state is processed
   let body = text!(body_content, current_theme() with {
     body.text.size = 16
     body.text.line_height = 22
-    body.text.markdown_table_cell_pad_x = 7
-    body.text.markdown_table_cell_pad_y = 5
-    body.text.markdown_table_line_width = 0.8
+    body.text.markdown.table.cell_pad_x = 7
+    body.text.markdown.table.cell_pad_y = 5
+    body.text.markdown.table.line_width = 0.8
   })
 
   ~ body.left == page.left + 642
@@ -85,7 +85,7 @@ async function testChromeStrokeStaysInsideFrameForDiagnostics() {
       `import std:themes/default as *
 
 page chrome_ok
-  let panel = panel!()
+  let panel = place!(new("", "panel", "text"))
   panel.chrome = ChromeStyle {
     fill = c"0.97,0.98,1"
     stroke = c"0.80,0.84,0.90"

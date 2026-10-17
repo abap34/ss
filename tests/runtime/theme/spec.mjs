@@ -56,13 +56,13 @@ async function testThemeOptionsAndHeadRuleGap() {
   const nodes = await dumpNodes(path.join(fixtures, "options-default"));
   const body = findTextNode(nodes, "SettingsBody");
   const heading = findTextNode(nodes, "SettingsHead");
-  const coverTitle = findTextNode(nodes, "SettingsCover");
-  const coverAuthor = findTextNode(nodes, "SettingsAuthor");
+  const title = findTextNode(nodes, "SettingsTitle");
+  const author = findTextNode(nodes, "SettingsAuthor");
   const callout = findTextNode(nodes, "SettingsCallout");
   const original = findTextNode(nodes, "OriginalTheme");
   const fontOnly = findTextNode(nodes, "FontOnly");
   const pageNumber = nodes.find((node) => node.role === "pageno");
-  const rule = nodes.find((node) => node.role === "rule" && node.width > 1000);
+  const rule = nodes.find((node) => node.role === "rule" && node.parent === heading.parent);
 
   assert(body.render?.text, `body text paint was not emitted: ${JSON.stringify(body.render)}`);
   assert(body.render.text.font.family === "Fixture Sans", `body font: ${body.render.text.font.family}`);
@@ -78,9 +78,9 @@ async function testThemeOptionsAndHeadRuleGap() {
   assertColor(rule.render.rule.stroke, [36 / 255, 104 / 255, 172 / 255], "head rule color");
   assertNear(heading.y - (rule.y + rule.height), 12, "head rule gap");
 
-  assert(coverTitle.render?.text?.font.family === "Fixture Sans", `cover title font: ${coverTitle.render?.text?.font.family}`);
-  assertColor(coverTitle.render?.text?.color, [36 / 255, 104 / 255, 172 / 255], "cover title color");
-  assertColor(coverAuthor.render?.text?.color, [36 / 255, 104 / 255, 172 / 255], "cover author color");
+  assert(title.render?.text?.font.family === "Fixture Sans", `title font: ${title.render?.text?.font.family}`);
+  assertColor(title.render?.text?.color, [16 / 255, 32 / 255, 48 / 255], "title color");
+  assertColor(author.render?.text?.color, [112 / 255, 128 / 255, 144 / 255], "byline color");
   assert(callout.render?.text?.font.family === "Fixture Sans", `callout font: ${callout.render?.text?.font.family}`);
   assert(callout.render?.text?.code_font.family === "Fixture Mono", `callout code font: ${callout.render?.text?.code_font.family}`);
   assert(pageNumber?.render?.text?.font.family === "Fixture Sans", `page number font: ${pageNumber?.render?.text?.font.family}`);
@@ -125,7 +125,7 @@ async function testVariantThemeOptions() {
     assert(body.render.text.code_font.family === item.codeFont, `${item.fixture} code font`);
     assertColor(body.render.text.color, item.text, `${item.fixture} body color`);
     assertColor(heading.render?.text?.color, item.accent, `${item.fixture} head color`);
-    assertColor(author.render?.text?.color, item.accent, `${item.fixture} author color`);
+    assertColor(author.render?.text?.color, item.muted, `${item.fixture} author color`);
     assert(callout.render?.text?.font.family === item.font, `${item.fixture} callout font`);
     assertColor(callout.render?.text?.color, item.muted, `${item.fixture} callout color`);
     assert(pageNumber?.render?.text?.font.family === item.font, `${item.fixture} page number font`);
@@ -145,7 +145,8 @@ async function dumpNodes(fixture) {
     const dumpPath = path.join(output, "dump.json");
     await runSs(["dump", path.join(fixture, "slide.ss"), dumpPath], repository);
     const dump = JSON.parse(await readFile(dumpPath, "utf8"));
-    return dump.nodes;
+    const parents = new Map(dump.contains.flatMap(entry => entry.children.map(id => [id, entry.parent])));
+    return dump.nodes.map(node => ({ ...node, parent: parents.get(node.id) }));
   } finally {
     await rm(output, { recursive: true, force: true });
   }

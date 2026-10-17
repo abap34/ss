@@ -32,7 +32,7 @@ async function testSnapshotAndSourceEdits() {
     const source = `import std:themes/default as *
 import "./position" as *
 
-record Parts {
+type Parts = record {
   root: Object
 }
 

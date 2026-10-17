@@ -159,7 +159,7 @@ fn buildStageSnapshot(source: []const u8, options: analysis.snapshot.Options) !a
     var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
     defer sources.deinit();
     // A core-module path keeps these ownership checks independent of the prelude.
-    const path = "stdlib/core/snapshot-stage-test.ss";
+    const path = "stdlib/internal/snapshot-stage-test.ss";
     try sources.put(path, source);
     return analysis.snapshot.build(testing.allocator, &sources, path, ".", options);
 }
@@ -172,7 +172,7 @@ test "snapshot construction preserves query sources and optional execution input
         try testing.expect(!snapshot.diagnostics.hasErrors());
         try testing.expectEqual(@as(u64, 7), snapshot.generation);
         try testing.expectEqual(retain_inputs, snapshot.retained_layout_inputs != null);
-        try testing.expectEqualStrings(source, analysis.snapshot.sourceForPath(&snapshot, "stdlib/core/snapshot-stage-test.ss").?);
+        try testing.expectEqualStrings(source, analysis.snapshot.sourceForPath(&snapshot, "stdlib/internal/snapshot-stage-test.ss").?);
         if (snapshot.retained_layout_inputs) |*inputs| {
             try testing.expectEqualStrings(source, inputs.state.projectSource());
             try testing.expectEqual(@as(usize, 1), inputs.state.graph.page_order.items.len);
@@ -186,7 +186,7 @@ test "snapshot construction preserves query sources after semantic errors" {
     defer snapshot.deinit();
     try testing.expect(snapshot.diagnostics.hasErrors());
     try testing.expect(snapshot.retained_layout_inputs == null);
-    try testing.expectEqualStrings(source, analysis.snapshot.sourceForPath(&snapshot, "stdlib/core/snapshot-stage-test.ss").?);
+    try testing.expectEqualStrings(source, analysis.snapshot.sourceForPath(&snapshot, "stdlib/internal/snapshot-stage-test.ss").?);
 }
 
 const CancelAfterLayout = struct {
@@ -221,8 +221,8 @@ test "snapshot cancellation releases results returned by the layout hook" {
 test "snapshot retains recovered import diagnostics and clears them after repair" {
     var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
     defer sources.deinit();
-    const entry = "stdlib/core/snapshot-import-test.ss";
-    const imported = "stdlib/core/snapshot-import-library.ss";
+    const entry = "stdlib/internal/snapshot-import-test.ss";
+    const imported = "stdlib/internal/snapshot-import-library.ss";
     const entry_source = "import ./snapshot-import-library as library\npage sample\nend\n";
     const broken_source = "const missing: Number =\nconst kept: Number = 2\n";
     try sources.put(entry, entry_source);
@@ -303,19 +303,19 @@ test "project facts release collected module paths on cancellation and allocatio
 }
 
 test "recovered holes retain module identity and owned nominal type names" {
-    const entry = "stdlib/core/hole-entry.ss";
-    const imported = "stdlib/core/hole-library.ss";
+    const entry = "stdlib/internal/hole-entry.ss";
+    const imported = "stdlib/internal/hole-library.ss";
     var snapshot = blk: {
         var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
         defer sources.deinit();
         try sources.put(entry,
             \\import ./hole-library as library
-            \\record Local { value: Number = 1 }
+            \\type Local = record { value: Number = 1 }
             \\const missing: Number =
             \\const nominal: Local =
         );
         try sources.put(imported,
-            \\record Remote { value: String = "value" }
+            \\type Remote = record { value: String = "value" }
             \\const missing: String =
             \\const nominal: Remote =
         );
@@ -386,7 +386,7 @@ test "hole expectations follow the type of each syntactic position" {
 }
 
 test "invalid function bodies do not create undefined caller bindings" {
-    const path = "stdlib/core/caller-diagnostics.ss";
+    const path = "stdlib/internal/caller-diagnostics.ss";
     const source =
         \\fn label() -> String
         \\  let missing: String = undefined_name
@@ -415,8 +415,8 @@ test "invalid function bodies do not create undefined caller bindings" {
 }
 
 test "errors in imported defaults and constants retain their defining source" {
-    const path = "stdlib/core/default-diagnostics.ss";
-    const imported = "stdlib/core/default-library.ss";
+    const path = "stdlib/internal/default-diagnostics.ss";
+    const imported = "stdlib/internal/default-library.ss";
     var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
     defer sources.deinit();
     try sources.put(path,
@@ -443,10 +443,10 @@ test "errors in imported defaults and constants retain their defining source" {
 }
 
 test "argument type errors remain attached to the call site" {
-    const path = "stdlib/core/argument-diagnostics.ss";
+    const path = "stdlib/internal/argument-diagnostics.ss";
     var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
     defer sources.deinit();
-    try sources.put("stdlib/core/argument-library.ss", "fn echo(value: String) -> String = value\n");
+    try sources.put("stdlib/internal/argument-library.ss", "fn echo(value: String) -> String = value\n");
     try sources.put(path,
         \\import ./argument-library as library
         \\page main

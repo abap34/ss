@@ -24,7 +24,7 @@ for (const operator of operators) {
 const output = path.join(root, ".ss-cache/tests/syntax/formatting");
 await mkdir(output, { recursive: true });
 const directory = await mkdtemp(path.join(output, "run-"));
-const prelude = `import std:core/prelude as *
+const prelude = `import std:prelude as *
 fn mark!(label: String) -> Object
   return text(label)
 end

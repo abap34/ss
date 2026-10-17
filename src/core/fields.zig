@@ -61,17 +61,15 @@ pub fn readExplicit(
 }
 
 pub fn recordFloatProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
-    return read(state.allocator, state, node, record_key, &.{field_name}, .number);
+    return recordPathFloatProperty(state, node, record_key, &.{field_name});
 }
 
 pub fn positiveRecordFloatProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
-    const value = recordFloatProperty(state, node, record_key, field_name) orelse return null;
-    return if (value > 0) value else null;
+    return positivePathFloatProperty(state, node, record_key, &.{field_name});
 }
 
 pub fn nonNegativeRecordFloatProperty(state: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
-    const value = recordFloatProperty(state, node, record_key, field_name) orelse return null;
-    return if (value >= 0) value else null;
+    return nonNegativePathFloatProperty(state, node, record_key, &.{field_name});
 }
 
 pub fn classId(state: anytype, node: *const Node) ?model.NominalId {
@@ -160,4 +158,18 @@ fn valueNumber(value_to_read: Value) ?f32 {
 
 fn isNoneDefault(value_text_value: []const u8) bool {
     return std.mem.eql(u8, std.mem.trim(u8, value_text_value, " \t\r\n"), "none");
+}
+
+pub fn recordPathFloatProperty(state: anytype, node: *const Node, record_key: []const u8, path: []const []const u8) ?f32 {
+    return read(state.allocator, state, node, record_key, path, .number);
+}
+
+pub fn positivePathFloatProperty(state: anytype, node: *const Node, record_key: []const u8, path: []const []const u8) ?f32 {
+    const value = recordPathFloatProperty(state, node, record_key, path) orelse return null;
+    return if (value > 0) value else null;
+}
+
+pub fn nonNegativePathFloatProperty(state: anytype, node: *const Node, record_key: []const u8, path: []const []const u8) ?f32 {
+    const value = recordPathFloatProperty(state, node, record_key, path) orelse return null;
+    return if (value >= 0) value else null;
 }

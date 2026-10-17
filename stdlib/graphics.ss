@@ -1,7 +1,10 @@
-import std:core/classes
-import std:core/fills as fills
-import std:core/objects as objects
-import std:core/paths as paths
+import std:graphics/types as { LineCap, LineJoin, FillRule, PaintSpace, GradientSpread, FillKind, ConnectorAnchor, ConnectorRoute, PathVerb, PathCommand, VectorStrokeStyle, LineStyle, GradientDirection, PatternStyle, FillStyle, MarkerStyle, VectorStyle, ConnectorStyle }
+import std:internal/classes
+import std:internal/objects as objects
+
+import std:graphics/path as paths
+
+import std:graphics/paint as fills
 
 fn/! path_shape_unit(path_value: Path, fill_value: FillStyle = FillStyle {}, stroke_value: VectorStrokeStyle = VectorStrokeStyle {}, marker_start_value: MarkerStyle? = none, marker_end_value: MarkerStyle? = none) -> Object
   let obj = objects::path_obj(path_value)
@@ -48,7 +51,7 @@ fn/! rectangle(width: Number = 160, height: Number = 100, style: VectorStyle = V
 end
 
 fn/! rounded_rectangle(width: Number = 160, height: Number = 100, radius: Number = 0.12, style: VectorStyle = VectorStyle {}) -> Object
-  let right = sub(1, radius)
+  let right = (1 - radius)
   return shape_size(path_shape_unit(path(
     paths::move_to(radius, 0),
     paths::line_to(right, 0),
@@ -264,18 +267,6 @@ fn/! cloud(width: Number = 180, height: Number = 110, style: VectorStyle = Vecto
   ), style.fill, style.stroke), width, height)
 end
 
-fn/! rect(width: Number = 160, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
-  return rectangle(width, height, style)
-end
-
-fn/! rounded_rect(width: Number = 160, height: Number = 100, radius: Number = 0.12, style: VectorStyle = VectorStyle {}) -> Object
-  return rounded_rectangle(width, height, radius, style)
-end
-
-fn/! triangle_up(width: Number = 120, height: Number = 110, style: VectorStyle = VectorStyle {}) -> Object
-  return triangle(width, height, style)
-end
-
 fn/! triangle_right(width: Number = 120, height: Number = 110, style: VectorStyle = VectorStyle {}) -> Object
   return path_shape(path(paths::move_to(0, 0), paths::line_to(1, 0.5), paths::line_to(0, 1), paths::close_path()), width, height, style)
 end
@@ -300,10 +291,6 @@ fn/! star4(size: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
     paths::line_to(0.38, 0.38),
     paths::close_path()
   ), size, size, style)
-end
-
-fn/! star5(size: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
-  return star(size, style)
 end
 
 fn/! star6(size: Number = 120, style: VectorStyle = VectorStyle {}) -> Object
@@ -333,10 +320,6 @@ fn/! cross_shape(size: Number = 120, style: VectorStyle = VectorStyle {}) -> Obj
   ), size, size, style)
 end
 
-fn/! chevron_right(width: Number = 150, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
-  return chevron(width, height, style)
-end
-
 fn/! chevron_left(width: Number = 150, height: Number = 100, style: VectorStyle = VectorStyle {}) -> Object
   return path_shape(path(
     paths::move_to(1, 0), paths::line_to(0.35, 0), paths::line_to(0, 0.5),
@@ -356,10 +339,6 @@ fn/! chevron_up(width: Number = 100, height: Number = 150, style: VectorStyle = 
     paths::move_to(0, 1), paths::line_to(0, 0.35), paths::line_to(0.5, 0),
     paths::line_to(1, 0.35), paths::line_to(1, 1), paths::line_to(0.5, 0.65), paths::close_path()
   ), width, height, style)
-end
-
-fn/! block_arrow_right(width: Number = 170, height: Number = 90, style: VectorStyle = VectorStyle {}) -> Object
-  return arrow_shape(width, height, style)
 end
 
 fn/! block_arrow_left(width: Number = 170, height: Number = 90, style: VectorStyle = VectorStyle {}) -> Object

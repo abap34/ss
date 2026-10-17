@@ -1,4 +1,4 @@
-import std:core/classes
+import std:internal/classes
 
 fn prev_page() -> Page
   return select(pagectx(), "previous_page")

@@ -12,7 +12,7 @@ const project = await mkdtemp(path.join(scratch, 'project-'));
 const sourcePath = path.join(project, 'slide.ss');
 const csvPath = path.join(project, 'data.csv');
 const prelude = 'import std:themes/default as *\nimport std:data/csv as csv\n';
-const source = `${prelude}page table\nlet table = csv::show_table! "data.csv"\n~ table.width == 900\nend\n`;
+const source = `${prelude}page table\nlet table = text!(csv::to_markdown(readlines("data.csv")))\n~ table.width == 900\nend\n`;
 function run(args) {
   const result = spawnSync(ssBin, args, { cwd: project, encoding: 'utf8', timeout: 30000 });
   assert.ifError(result.error);
@@ -36,7 +36,7 @@ try {
   assert.equal(content(await dump('A,B')), '| A | B |\n| --- | --- |\n');
   assert.equal(content(await dump('')), '');
   assert.equal(content(await dump('\ufeff')), '');
-  const plain = await dump('001,1.2300\n002,2.0000', source.replace('csv::show_table! "data.csv"', 'csv::show_table!("data.csv", false)'));
+  const plain = await dump('001,1.2300\n002,2.0000', source.replace('text!(csv::to_markdown(readlines("data.csv")))', 'text!(csv::to_markdown(readlines("data.csv"), false))'));
   assert.equal(content(plain), '|  |  |\n| --- | --- |\n| 001 | 1.2300 |\n| 002 | 2.0000 |\n');
   const escaped = content(await dump('Heading\n"a|b *x* _y_ `z` [link](url) <tag> &amp; $x$ \\path"'));
   for (const entity of ['\\|', '\\*', '\\_', '\\`', '\\[', '\\<', '\\&', '\\$', '\\\\']) assert(escaped.includes(entity), escaped);
@@ -72,7 +72,7 @@ end
   assert.notEqual(run(['check', '--quiet', 'slide.ss']).status, 0, 'Invalid callback parameter type accepted');
   await writeFile(sourcePath, mapped.replace('-> String\nreturn value ++ suffix', '-> Number\nreturn 1'));
   assert.notEqual(run(['check', '--quiet', 'slide.ss']).status, 0, 'Invalid callback result type accepted');
-  await dump('A,B\n1,2', source.replace('page table', 'document\ntheme!(default_theme() with { body.text.size = 31 })\nend\npage table'));
+  await dump('A,B\n1,2', source.replace('page table', 'document\nset_theme(default_theme() with { body.text.size = 31 })\nend\npage table'));
   const styled = JSON.parse(await readFile(path.join(project, 'dump.json'), 'utf8'));
   const text = JSON.parse(styled.nodes.find(node => node.role === 'body').fields.text);
   assert.equal(text.fields.find(field => field.name === 'size').value.value, 31);

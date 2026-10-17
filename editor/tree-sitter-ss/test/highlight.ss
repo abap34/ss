@@ -1,11 +1,11 @@
 import std:themes/default
 import std:themes/default as *
-import std:core/objects as { body_obj, body_obj! }
-import std:themes/base as { ThemeOptions }
+import std:internal/objects as { body_obj, body_obj! }
+import std:theme/types as { ThemeOptions }
 
-@render("text")
+@render("markdown")
 fn/! label(text_value: String) -> Object
-  let obj = text(text_value)
+  let obj = markdown(text_value)
   return obj
 end
 

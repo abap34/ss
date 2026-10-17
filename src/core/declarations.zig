@@ -236,7 +236,7 @@ pub fn build(allocator: std.mem.Allocator, state: anytype) !DeclarationIndex {
 }
 
 fn indexModule(index: *DeclarationIndex, module: anytype) !void {
-    if (std.mem.eql(u8, module.spec, "std:core/classes")) index.builtin_module_id = module.id;
+    if (std.mem.eql(u8, module.spec, "std:internal/classes")) index.builtin_module_id = module.id;
     for (module.syntax.types.items) |decl| {
         const type_index = index.types.items.len;
         try index.types.append(index.allocator, .{

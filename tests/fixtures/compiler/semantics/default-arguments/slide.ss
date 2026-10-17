@@ -5,5 +5,5 @@ page main
 end
 
 document
-  theme!(default_theme() with { body.text.size = 22 })
+  set_theme(default_theme() with { body.text.size = 22 })
 end

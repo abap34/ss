@@ -14,14 +14,14 @@ import {
   withLspClient,
 } from "./harness.mjs";
 
-const defaultTheme = path.join(root, "stdlib", "themes", "default.ss");
-const defaultThemeUri = pathToFileURL(defaultTheme).toString();
-const defaultThemeSource = await readFile(defaultTheme, "utf8");
-const coverDefinition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "cover");
-const baseTheme = path.join(root, "stdlib", "themes", "base.ss");
+const textModule = path.join(root, "stdlib", "text.ss");
+const textModuleUri = pathToFileURL(textModule).toString();
+const textModuleSource = await readFile(textModule, "utf8");
+const titleDefinition = functionDefinitionLocation(textModuleUri, textModuleSource, "title");
+const baseTheme = path.join(root, "stdlib", "theme", "types.ss");
 const baseThemeUri = pathToFileURL(baseTheme).toString();
 const baseThemeSource = await readFile(baseTheme, "utf8");
-const themeDefinition = typeDefinitionLocation(baseThemeUri, baseThemeSource, "record", "Theme");
+const themeDefinition = typeDefinitionLocation(baseThemeUri, baseThemeSource, "type", "Theme");
 
 await testStdlibDefinitionOutsideWorkspace();
 await testDefinitionAfterOpeningUnrelatedFile();
@@ -50,14 +50,10 @@ async function testStdlibDefinitionOutsideWorkspace() {
   try {
     const slide = path.join(project, "slide.ss");
     const uri = pathToFileURL(slide).toString();
-    const source = `import std:themes/default
+    const source = `import std:text as text_api
 
 page title
-default::cover!(
-  "Hello",
-  "Subtitle",
-  "Author"
-)
+text_api::title!("Hello")
 end
 `;
     await writeFile(slide, source, "utf8");
@@ -69,25 +65,25 @@ end
       await diagnosticsPromise;
       const definition = await client.request("textDocument/definition", {
         textDocument: { uri },
-        position: positionAt(source, "cover!", 2),
+        position: positionAt(source, "title!", 2),
       });
       assert(Array.isArray(definition), `expected outside definition array, got ${JSON.stringify(definition)}`);
       assert(
-        definition.some((location) => isDefinitionLocation(location, coverDefinition)),
-        `outside workspace definition did not jump to default theme cover: ${JSON.stringify(definition)}`,
+        definition.some((location) => isDefinitionLocation(location, titleDefinition)),
+        `outside workspace definition did not jump to text module title: ${JSON.stringify(definition)}`,
       );
       const importDefinition = await client.request("textDocument/definition", {
         textDocument: { uri },
-        position: positionAt(source, "std:themes/default", 1),
+        position: positionAt(source, "std:text", 1),
       });
       assert(Array.isArray(importDefinition), `expected import definition array, got ${JSON.stringify(importDefinition)}`);
       assert(
         importDefinition.some((location) =>
-          location.uri === defaultThemeUri &&
+          location.uri === textModuleUri &&
           location.range?.start?.line === 0 &&
           location.range?.start?.character === 0
         ),
-        `import spec definition did not jump to default theme file: ${JSON.stringify(importDefinition)}`,
+        `import spec definition did not jump to text module file: ${JSON.stringify(importDefinition)}`,
       );
     });
   } finally {
@@ -102,14 +98,10 @@ async function testDefinitionAfterOpeningUnrelatedFile() {
     const side = path.join(project, "side.ss");
     const slideUri = pathToFileURL(slide).toString();
     const sideUri = pathToFileURL(side).toString();
-    const slideSource = `import std:themes/default
+    const slideSource = `import std:text as text_api
 
 page title
-default::cover!(
-  "Hello",
-  "Subtitle",
-  "Author"
-)
+text_api::title!("Hello")
 end
 `;
     const sideSource = `page side
@@ -130,12 +122,12 @@ end
 
       const definition = await client.request("textDocument/definition", {
         textDocument: { uri: slideUri },
-        position: positionAt(slideSource, "cover!", 2),
+        position: positionAt(slideSource, "title!", 2),
       });
       assert(Array.isArray(definition), `expected definition array after snapshot switch, got ${JSON.stringify(definition)}`);
       assert(
-        definition.some((location) => isDefinitionLocation(location, coverDefinition)),
-        `definition after snapshot switch did not jump to default theme cover: ${JSON.stringify(definition)}`,
+        definition.some((location) => isDefinitionLocation(location, titleDefinition)),
+        `definition after snapshot switch did not jump to text module title: ${JSON.stringify(definition)}`,
       );
     });
   } finally {
@@ -150,7 +142,7 @@ async function testLargeDocumentDefinitionUsesSnapshotFallback() {
     const theme = path.join(project, "theme.ss");
     const slideUri = pathToFileURL(slide).toString();
     const themeUri = pathToFileURL(theme).toString();
-    const themeSource = `import std:themes/default
+    const themeSource = `import std:text as default
 
 fn/! ultra_big(content: String) -> Object
   return default::h1(content)
@@ -230,7 +222,7 @@ asset_base_dir = "."
 diagnostics = false
 completion = false
 `, "utf8");
-    const disabledSource = `import std:themes/default as *
+    const disabledSource = `import std:prelude as *
 
 pag broken
 `;
@@ -565,7 +557,7 @@ async function testRandomizedLspOperationsAreStable() {
 entry = "slide.ss"
 asset_base_dir = "."
 `, "utf8");
-    const libSource = `import std:themes/default as *
+    const libSource = `import std:prelude as *
 
 fn label!(value: String) -> Object
   return text!(value)
@@ -735,7 +727,7 @@ async function testConstraintConflictDiagnosticMatchesCli() {
   try {
     const slide = path.join(project, "slide.ss");
     const uri = pathToFileURL(slide).toString();
-    const source = `import std:themes/default as *
+    const source = `import std:prelude as *
 
 page broken
 let a = text!("A")
@@ -800,7 +792,7 @@ async function testDependencyQueryDiagnostic() {
   try {
     const slide = path.join(project, "slide.ss");
     const uri = pathToFileURL(slide).toString();
-    const source = `import std:themes/default as *
+    const source = `import std:prelude as *
 
 page sample
 let t = title!("A")
@@ -1121,13 +1113,13 @@ end
 }
 
 function featureSource(title, color) {
-  return `import std:themes/default as *
+  return `import std:prelude as *
 
 fn themed!(theme: Theme) -> Object
   return text!("typed", theme)
 end
 
-record LocalStyle {
+type LocalStyle = record {
   color: Color = c"${color}"
 }
 
@@ -1146,7 +1138,7 @@ end
 function typeDefinitionLocation(uri, text, keyword, name) {
   const needle = `${keyword} ${name}`;
   const lines = text.split("\n");
-  const line = lines.findIndex((lineText) => lineText.trim() === `${needle} {`);
+  const line = lines.findIndex((lineText) => lineText.trim() === `${needle} = record {`);
   assert(line >= 0, `fixture did not contain ${needle}`);
   const character = lines[line].indexOf(name);
   assert(character >= 0, `fixture did not contain ${name} on ${needle} line`);

@@ -85,9 +85,9 @@ end
 
 <!-- syntax: accept module -->
 ```ss
-import std:core/prelude as { text, text!, place!, }
-record Empty {}
-record Style { size: Number = 20; color: Color = c"black" }
+import std:prelude as { text, text!, place!, }
+type Empty = record {}
+type Style = record { size: Number = 20; color: Color = c"black" }
 type Align = left | center | right
 type Card = object {
   base = Object
@@ -165,12 +165,12 @@ Missing closing delimiter
 ```ss
 page First
 end
-import std:core/prelude
+import std:prelude
 ```
 
 <!-- syntax: reject module ExpectedIdentifier -->
 ```ss
-import std:core/prelude as {}
+import std:prelude as {}
 ```
 
 <!-- syntax: reject module RequiredParameterAfterDefault -->

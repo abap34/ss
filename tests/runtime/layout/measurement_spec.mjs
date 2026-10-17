@@ -320,14 +320,14 @@ async function testPdfFactorScalesMeasuredAssetFrame() {
     await writeMinimalPdf(pdfPath, 200, 100);
     await writeFile(
       slide,
-      `import std:core/prelude as *
+      `import std:prelude as *
 
 page pdf_scale
-  let small = pdf("asset.pdf", 0.3)
+  let small = pdf("asset.pdf", 0.3, 1, PdfPageBox.crop, AssetBlockStyle {})
   small.link_id = "small"
   place!(small)
 
-  let large = pdf("asset.pdf", 2)
+  let large = pdf("asset.pdf", 2, 1, PdfPageBox.crop, AssetBlockStyle {})
   large.link_id = "large"
   place!(large)
 end
@@ -360,7 +360,7 @@ function bodyBoxSource() {
   return `import std:themes/default as *
 
 fn body_box!(body_text: String) -> Object
-  let chrome = panel!()
+  let chrome = place!(new("", "panel", "text"))
   chrome.chrome = ChromeStyle {
     fill = c"0.97,0.98,1"
     stroke = c"0.80,0.84,0.90"

@@ -57,10 +57,10 @@ fn exerciseWithOptions(source: []const u8, first: []const u8, second: []const u8
 }
 
 const number_record =
-    \\record Style {
+    \\type Style = record {
     \\  value: Number = 12
     \\}
-    \\record Box {
+    \\type Box = record {
     \\  style: Style = Style {}
     \\}
     \\fn make() -> Box
@@ -72,10 +72,10 @@ const number_record =
 ;
 
 const string_record =
-    \\record Style {
+    \\type Style = record {
     \\  value: String = "second"
     \\}
-    \\record Box {
+    \\type Box = record {
     \\  style: Style = Style {}
     \\}
     \\fn make() -> Box
@@ -152,7 +152,7 @@ test "nominal enums: qualified cases and function contracts retain the defining 
 test "nominal enums: invalid record syntax keeps its qualified declaration" {
     try exercise(
         \\import "a" as a
-        \\record Mode {
+        \\type Mode = record {
         \\  value: Number = 0
         \\}
         \\page main
@@ -188,7 +188,7 @@ test "nominal records: object defaults and nested writes preserve record ownersh
 
 test "nominal records: primitive contracts refer to their declared module" {
     try exercise(
-        \\record PathCommand {
+        \\type PathCommand = record {
         \\  verb: PathVerb = PathVerb.move
         \\  x: Number = 0
         \\  y: Number = 0
@@ -198,7 +198,7 @@ test "nominal records: primitive contracts refer to their declared module" {
         \\end
     , "", "", null);
     try exercise(
-        \\record PathCommand {
+        \\type PathCommand = record {
         \\  verb: PathVerb = PathVerb.move
         \\  x: Number = 0
         \\  y: Number = 0

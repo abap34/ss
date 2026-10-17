@@ -27,17 +27,20 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const anchor_name = try ctx.evalStringArg(call, 1);
             break :blk try ctx.pageAnchorValue(page_id, anchor_name);
         },
-        .equal => blk: {
-            const target = try ctx.evalAnchorArg(call, 0);
-            const source = try ctx.evalAnchorArg(call, 1);
-            const offset: f32 = if (call.args.items.len == 3) try ctx.evalNumberArg(call, 2) else 0;
-            break :blk .{ .constraints = try ctx.equalAnchorConstraintSet(target, source, offset) };
+        .num_eq => blk: {
+            var left = try ctx.evalExprValue(call.args.items[0]);
+            defer left.deinit(ctx.state.allocator);
+            var right = try ctx.evalExprValue(call.args.items[1]);
+            defer right.deinit(ctx.state.allocator);
+            if (left == .anchor and right == .anchor) {
+                break :blk .{ .constraints = try ctx.equalAnchorConstraintSet(left.anchor, right.anchor, 0) };
+            }
+            break :blk .{ .boolean = try eval_value.number(left) == try eval_value.number(right) };
         },
-        .num_eq, .num_ne, .num_lt, .num_le, .num_gt, .num_ge => blk: {
+        .num_ne, .num_lt, .num_le, .num_gt, .num_ge => blk: {
             const left = try ctx.evalNumberArg(call, 0);
             const right = try ctx.evalNumberArg(call, 1);
             break :blk .{ .boolean = switch (descriptor.op) {
-                .num_eq => left == right,
                 .num_ne => left != right,
                 .num_lt => left < right,
                 .num_le => left <= right,
@@ -56,15 +59,15 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const value = try ctx.evalNumberArg(call, 0);
             break :blk .{ .number = -value };
         },
-        .add => blk: {
-            const left = try ctx.evalNumberArg(call, 0);
-            const right = try ctx.evalNumberArg(call, 1);
-            break :blk .{ .number = left + right };
-        },
-        .sub => blk: {
-            const left = try ctx.evalNumberArg(call, 0);
-            const right = try ctx.evalNumberArg(call, 1);
-            break :blk .{ .number = left - right };
+        .add, .sub => blk: {
+            var left = try ctx.evalExprValue(call.args.items[0]);
+            defer left.deinit(ctx.state.allocator);
+            var right = try ctx.evalExprValue(call.args.items[1]);
+            defer right.deinit(ctx.state.allocator);
+            const sign: f32 = if (descriptor.op == .add) 1 else -1;
+            if (left == .anchor) break :blk .{ .anchor = left.anchor.shifted(sign * try eval_value.number(right)) };
+            if (descriptor.op == .add and right == .anchor) break :blk .{ .anchor = right.anchor.shifted(try eval_value.number(left)) };
+            break :blk .{ .number = try eval_value.number(left) + sign * try eval_value.number(right) };
         },
         .mul => blk: {
             const left = try ctx.evalNumberArg(call, 0);

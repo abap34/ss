@@ -93,7 +93,11 @@ fn setRecordEnumField(
 }
 
 fn setRecordFieldValue(state: *core.DocumentState, node_id: model.NodeId, root_key: []const u8, field_name: []const u8, value: core.Value) !void {
-    try setRecordPathValue(state, node_id, root_key, &.{field_name}, value);
+    var parts = std.ArrayList([]const u8).empty;
+    defer parts.deinit(state.allocator);
+    var iter = std.mem.splitScalar(u8, field_name, '.');
+    while (iter.next()) |part| try parts.append(state.allocator, part);
+    try setRecordPathValue(state, node_id, root_key, parts.items, value);
 }
 
 fn setRecordPathValue(state: *core.DocumentState, node_id: model.NodeId, root_key: []const u8, path: []const []const u8, value: core.Value) !void {
@@ -200,11 +204,11 @@ fn setTextLineHeight(state: *core.DocumentState, node_id: model.NodeId, value: [
 }
 
 fn setTextMathScale(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordStringField(state, node_id, "text", "math_scale", value);
+    try setRecordStringField(state, node_id, "text", "math.scale", value);
 }
 
 fn setTextMarkdownBoldColor(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
-    try setRecordStringField(state, node_id, "text", "markdown_bold_color", value);
+    try setRecordStringField(state, node_id, "text", "markdown.bold_color", value);
 }
 
 fn setTextMarkdownBoldWeight(state: *core.DocumentState, node_id: model.NodeId, value: []const u8) !void {
@@ -2620,11 +2624,11 @@ test "render policy: markdown underline style resolves as text paint" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "_Hello_");
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_underline", "color" }, .{ .string = "0.2,0.4,0.6" });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_underline", "opacity" }, .{ .number = 0.35 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_underline", "width" }, .{ .number = 5 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_underline", "offset" }, .{ .number = 3 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_underline", "dash" }, .{ .string = "8,4" });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "color" }, .{ .string = "0.2,0.4,0.6" });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "opacity" }, .{ .number = 0.35 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "width" }, .{ .number = 5 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "offset" }, .{ .number = 3 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "underline", "dash" }, .{ .string = "8,4" });
 
     const resolved = core.render_policy.resolve(&state, state.getNode(object).?);
     const underline = resolved.text.?.markdown_underline;
@@ -2644,15 +2648,15 @@ test "render policy: markdown quote style resolves as text paint" {
 
     const page = try state.addPage("Page");
     const object = try state.makeObject(page, "body", null, .text, .text, "> Hello");
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "color" }, .{ .string = "0.2,0.3,0.4" });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "inset" }, .{ .number = 12 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "pad_x" }, .{ .number = 18 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "pad_y" }, .{ .number = 9 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "fill" }, .{ .string = "0.9,0.8,0.7" });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "radius" }, .{ .number = 7 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "bar_color" }, .{ .string = "0.6,0.2,0.1" });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "bar_width" }, .{ .number = 4 });
-    try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "bar_dash" }, .{ .string = "8,3" });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "color" }, .{ .string = "0.2,0.3,0.4" });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "inset" }, .{ .number = 12 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "pad_x" }, .{ .number = 18 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "pad_y" }, .{ .number = 9 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "fill" }, .{ .string = "0.9,0.8,0.7" });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "radius" }, .{ .number = 7 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "bar_color" }, .{ .string = "0.6,0.2,0.1" });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "bar_width" }, .{ .number = 4 });
+    try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "bar_dash" }, .{ .string = "8,3" });
 
     const quote = core.render_policy.resolve(&state, state.getNode(object).?).text.?.markdown_quote;
     try expectColor(0.2, 0.3, 0.4, quote.color.?);
@@ -2682,12 +2686,12 @@ test "layout metrics include markdown quote padding" {
         try setTextFontFamily(&state, object, "Helvetica");
         try setTextSize(&state, object, "20");
         try setTextLineHeight(&state, object, "29");
-        try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "inset" }, .{ .number = 0 });
-        try setRecordPathValue(&state, object, "text", &.{ "markdown_quote", "pad_x" }, .{ .number = 0 });
+        try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "inset" }, .{ .number = 0 });
+        try setRecordPathValue(&state, object, "text", &.{ "markdown", "quote", "pad_x" }, .{ .number = 0 });
         (try state_layout.frame(object)).*.width = 1000;
     }
-    try setRecordPathValue(&state, compact, "text", &.{ "markdown_quote", "pad_y" }, .{ .number = 0 });
-    try setRecordPathValue(&state, padded, "text", &.{ "markdown_quote", "pad_y" }, .{ .number = 12 });
+    try setRecordPathValue(&state, compact, "text", &.{ "markdown", "quote", "pad_y" }, .{ .number = 0 });
+    try setRecordPathValue(&state, padded, "text", &.{ "markdown", "quote", "pad_y" }, .{ .number = 12 });
 
     const compact_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(compact).?, (try state_layout.frame(compact)).*);
     const padded_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(padded).?, (try state_layout.frame(padded)).*);
@@ -2729,11 +2733,11 @@ test "render policy: markdown headings resolve their own text paint" {
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "color" }, .{ .string = "0.1,0.6,0.2" });
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "font", "family" }, .{ .string = "Avenir Next" });
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "font", "weight" }, .{ .number = 650 });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math_scale" }, .{ .number = 1.3 });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "inline_math_spacing" }, .{ .number = 0.2 });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "display_math_gap" }, .{ .number = 2.4 });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "display_math_fit" }, .{ .string = "shrink" });
-    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math_align" }, .{ .string = "left" });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math", "scale" }, .{ .number = 1.3 });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math", "inline_spacing" }, .{ .number = 0.2 });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math", "display_gap" }, .{ .number = 2.4 });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math", "display_fit" }, .{ .string = "shrink" });
+    try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "math", "align" }, .{ .string = "left" });
     try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "text", "emoji_spacing" }, .{ .number = 0.25 });
 
     const resolved = core.render_policy.resolve(&state, state.getNode(object).?);
@@ -2778,8 +2782,8 @@ test "layout metrics use the markdown block gap after a heading" {
         try setRecordPathValue(&state, object, "markdown_headings", &.{ "h2", "spacing_after" }, .{ .number = 97 });
         (try state_layout.frame(object)).*.width = 1000;
     }
-    try setRecordNumberField(&state, compact, "text", "markdown_block_gap", 8);
-    try setRecordNumberField(&state, relaxed, "text", "markdown_block_gap", 20);
+    try setRecordNumberField(&state, compact, "text", "markdown.block_gap", 8);
+    try setRecordNumberField(&state, relaxed, "text", "markdown.block_gap", 20);
 
     const compact_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(compact).?, (try state_layout.frame(compact)).*);
     const relaxed_height = metrics.intrinsicHeight(try state_layout.work(), state.getNode(relaxed).?, (try state_layout.frame(relaxed)).*);
