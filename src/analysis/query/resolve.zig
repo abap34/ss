@@ -158,7 +158,7 @@ pub fn typeForExpr(budget: ?QueryBudget, snapshot: anytype, module_id: core.Sour
             switch (selectedValue(budget, snapshot, module_id, offset, ast.CallableName.bare(ident.name)) catch unreachable) {
                 .local => |binding| {
                     if (binding.object_class) |id| {
-                        break :blk if (binding.value_type.kind == .selection) ast.Type.selectionType(ast.Type.objectId(id)) else ast.Type.objectId(id);
+                        break :blk if (binding.value_type.kind == .selection) binding.value_type else ast.Type.objectId(id);
                     }
                     break :blk binding.value_type;
                 },

@@ -903,14 +903,12 @@ const Parser = struct {
             if (source.startsWithAt(self.source, self.pos, "->")) {
                 self.pos += 2;
                 source.skipInlineSpaces(self.source, &self.pos);
-                const result_type = try self.parseTypeAnnotation();
-                defer {
-                    for (params.items) |*param| param.deinit(self.allocator);
-                    params.deinit(self.allocator);
-                    var owned_result = result_type;
-                    owned_result.deinit(self.allocator);
-                }
-                return try ast.Type.functionType(self.allocator, params.items, result_type);
+                var result_type = try self.parseTypeAnnotation();
+                defer result_type.deinit(self.allocator);
+                const function_type = try ast.Type.functionType(self.allocator, params.items, result_type);
+                for (params.items) |*param| param.deinit(self.allocator);
+                params.deinit(self.allocator);
+                return function_type;
             }
             if (params.items.len == 1) {
                 const grouped = params.items[0];
@@ -927,14 +925,11 @@ const Parser = struct {
         if (!source.startsWithAt(self.source, self.pos, "->")) return left;
         self.pos += 2;
         source.skipInlineSpaces(self.source, &self.pos);
-        const result_type = try self.parseTypeAnnotation();
-        defer {
-            var owned_left = left;
-            owned_left.deinit(self.allocator);
-            var owned_result = result_type;
-            owned_result.deinit(self.allocator);
-        }
-        return try ast.Type.functionType(self.allocator, &.{left}, result_type);
+        var result_type = try self.parseTypeAnnotation();
+        defer result_type.deinit(self.allocator);
+        const function_type = try ast.Type.functionType(self.allocator, &.{left}, result_type);
+        left.deinit(self.allocator);
+        return function_type;
     }
 
     fn parsePrimaryTypeAnnotation(self: *Parser) anyerror!ast.Type {
@@ -989,7 +984,7 @@ const Parser = struct {
             self.allocator.free(name.text);
             var item_type = try self.parseOptionalTypeParam();
             defer item_type.deinit(self.allocator);
-            return ast.Type.selectionType(item_type);
+            return try ast.Type.selectionOf(self.allocator, item_type);
         }
         const class_name = self.source[name.span.start..name.span.end];
         self.allocator.free(name.text);

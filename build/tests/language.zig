@@ -30,11 +30,12 @@ pub fn register(suite: Suite, modules: project.ProjectModules) void {
     _ = suite.add(language_type_spec_mod, .{ .name = "test-language-type", .description = "Run focused language type tests" });
     const analysis_mod = project.createAnalysisModule(ctx, modules);
     _ = suite.add(analysis_mod, .{});
-    suite.addFile("tests/analysis/types/spec_tests.zig", &.{
+    const analysis_types_spec_mod = createModule(ctx, "tests/analysis/types/spec_tests.zig", &.{
         import("core", modules.core),
         import("language_type", modules.language_type),
         import("analysis", analysis_mod),
     }, true);
+    _ = suite.add(analysis_types_spec_mod, .{ .name = "test-analysis-types", .description = "Run focused type assignment and recovery tests" });
     const analysis_query_spec_mod = createModule(ctx, "tests/analysis/query/spec_tests.zig", &.{
         import("analysis", analysis_mod),
         import("utils", modules.utils),

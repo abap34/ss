@@ -784,7 +784,7 @@ fn returnTypeNeedsInferredFacts(ty: Type) bool {
         .hole,
         => true,
         .object => ty.class_name == null,
-        .selection => (ty.param == .object or ty.param == .any) and ty.param_class_name == null,
+        .selection => (ty.selectionItem().kind == .object or ty.selectionItem().kind == .any) and ty.selectionItem().class_name == null,
         .optional => if (ty.optional_child) |child| returnTypeNeedsInferredFacts(child.*) else true,
         .none,
         .document,
@@ -994,7 +994,7 @@ fn primitiveResultTypeInfo(
 }
 
 fn selectionItemType(state: ?*core.DocumentState, info: TypeInfo, origin: core.SourceOrigin) !Type {
-    return switch (info.ty.param) {
+    return switch (info.ty.selectionItem().kind) {
         .page => Type.page,
         .object => if (info.object_class orelse info.ty.selectionItemId()) |id| Type.objectId(id) else Type.object,
         else => {
@@ -1084,7 +1084,7 @@ fn inferSelectionAlgebraInfo(
     _ = try selectionItemType(state, left, origin);
     _ = try selectionItemType(state, right, origin);
 
-    if (left.ty.param != right.ty.param) {
+    if (left.ty.selectionItem().kind != right.ty.selectionItem().kind) {
         const left_label = try typeLabelAlloc(allocator, left.ty);
         defer allocator.free(left_label);
         const right_label = try typeLabelAlloc(allocator, right.ty);
@@ -1099,15 +1099,15 @@ fn inferSelectionAlgebraInfo(
         return error.InvalidType;
     }
 
-    var info = infoFromType(Type.selection(left.ty.param));
+    var info = infoFromType(if (left.ty.selectionItem().kind == .page) Type.selection(.page) else Type.selection(.object));
     info.object_class = switch (op) {
         .selection_union => semantic_types.joinObjectClass(left.object_class, right.object_class),
         .selection_intersection => semantic_types.meetObjectClass(left.object_class, right.object_class),
         .selection_difference => left.object_class,
         else => unreachable,
     };
-    if (info.ty.param == .object) if (info.object_class) |id| {
-        info.ty = Type.selectionType(Type.objectId(id));
+    if (info.ty.selectionItem().kind == .object) if (info.object_class) |id| {
+        info.ty = try Type.selectionOf(allocator, Type.objectId(id));
     };
     return info;
 }
@@ -1146,8 +1146,8 @@ fn inferSelectCallInfo(
     }
     var info = infoFromType(registry.queryOutputType(query));
     info.object_class = inferQueryOutputClass(sema, env, query, call, base);
-    if (info.ty.kind == .selection and info.ty.param == .object) if (info.object_class) |id| {
-        info.ty = Type.selectionType(Type.objectId(id));
+    if (info.ty.kind == .selection and info.ty.selectionItem().kind == .object) if (info.object_class) |id| {
+        info.ty = try Type.selectionOf(allocator, Type.objectId(id));
     };
     return info;
 }
@@ -1291,7 +1291,7 @@ fn lookupFieldForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []
     if (targetClassForInfo(target_info, sema)) |class_name| {
         return sema.field(class_name, key);
     }
-    if (target_info.ty.kind == .object or (target_info.ty.kind == .selection and target_info.ty.param == .object)) {
+    if (target_info.ty.kind == .object or (target_info.ty.kind == .selection and target_info.ty.selectionItem().kind == .object)) {
         return sema.fieldByName(key);
     }
     return null;

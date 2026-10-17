@@ -153,3 +153,62 @@ test "type spec: function parameters are contravariant and results are covariant
     try testing.expect(Type.accepts(optional_result, narrow));
     try testing.expect(!Type.accepts(narrow, optional_result));
 }
+
+fn typeHash(ty: Type) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    ty.hashInto(&hasher);
+    return hasher.final();
+}
+
+test "type arguments preserve nested nominal identities and formatting" {
+    var box = try Type.recordType("Box").inModule(1).withArguments(testing.allocator, &.{Type.recordType("Text").inModule(2)});
+    defer box.deinit(testing.allocator);
+    var selected = try Type.selectionOf(testing.allocator, box);
+    defer selected.deinit(testing.allocator);
+    var other_box = try Type.recordType("Box").inModule(1).withArguments(testing.allocator, &.{Type.recordType("Text").inModule(3)});
+    defer other_box.deinit(testing.allocator);
+    var other_selection = try Type.selectionOf(testing.allocator, other_box);
+    defer other_selection.deinit(testing.allocator);
+
+    try expectFormat(selected, "Selection<Box<Text>>");
+    try testing.expect(!Type.eql(selected, other_selection));
+    try testing.expect(!Type.accepts(selected, other_selection));
+    try testing.expect(typeHash(selected) != typeHash(other_selection));
+    try testing.expectEqual(@as(?u32, 2), selected.selectionItem().arguments[0].nominal_module_id);
+}
+
+test "type argument ownership and source spans do not affect equality or hashing" {
+    const borrowed = Type.selectionType(Type.objectClass("Text").inModule(7));
+    var owned = try borrowed.clone(testing.allocator);
+    defer owned.deinit(testing.allocator);
+    owned.mutableArguments()[0].class_name_span = .{ .start = 10, .end = 14 };
+    try testing.expect(Type.eql(borrowed, owned));
+    try testing.expectEqual(typeHash(borrowed), typeHash(owned));
+    try testing.expect(borrowed.arguments.ptr != owned.arguments.ptr);
+}
+
+fn exerciseNestedTypeOwnership(allocator: std.mem.Allocator) !void {
+    var box = try Type.recordType("Box").withArguments(allocator, &.{Type.number});
+    defer box.deinit(allocator);
+    var selected = try Type.selectionOf(allocator, box);
+    defer selected.deinit(allocator);
+    var callback = try Type.functionType(allocator, &.{selected}, box);
+    defer callback.deinit(allocator);
+    var maybe = try Type.optional(allocator, callback);
+    defer maybe.deinit(allocator);
+    var cloned = try maybe.clone(allocator);
+    defer cloned.deinit(allocator);
+    try testing.expect(Type.eql(maybe, cloned));
+    try testing.expectEqual(typeHash(maybe), typeHash(cloned));
+    try testing.expect(maybe.optional_child.?.fn_params[0].arguments.ptr != cloned.optional_child.?.fn_params[0].arguments.ptr);
+    var replaced = try box.withArguments(allocator, &.{Type.string});
+    defer replaced.deinit(allocator);
+    try testing.expect(!Type.eql(box, replaced));
+    const formatted = try cloned.formatAlloc(allocator);
+    defer allocator.free(formatted);
+    try testing.expectEqualStrings("(Selection<Box<Number>> -> Box<Number>)?", formatted);
+}
+
+test "nested type arguments clean up every failed allocation" {
+    try testing.checkAllAllocationFailures(testing.allocator, exerciseNestedTypeOwnership, .{});
+}

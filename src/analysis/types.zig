@@ -23,7 +23,7 @@ pub fn infoFromType(ty: Type) TypeInfo {
     if (holeIdFromType(ty)) |hole_id| return infoFromHole(hole_id);
     return .{
         .ty = ty,
-        .object_class = if (ty.kind == .object) ty.nominalId() else if (ty.kind == .selection and ty.param == .object) ty.selectionItemId() else null,
+        .object_class = if (ty.kind == .object) ty.nominalId() else if (ty.kind == .selection and ty.selectionItem().kind == .object) ty.selectionItemId() else null,
     };
 }
 
@@ -139,7 +139,7 @@ pub fn isPropertyReadTarget(info: TypeInfo) bool {
 pub fn isPropertyTarget(info: TypeInfo) bool {
     return switch (info.ty.kind) {
         .document, .page, .object => true,
-        .selection => info.ty.param == .object,
+        .selection => info.ty.selectionItem().kind == .object,
         else => false,
     };
 }
@@ -150,7 +150,7 @@ pub fn targetClassForInfo(info: TypeInfo, sema: *const @import("../language/env.
         .document => sema.builtinClass("Doc"),
         .page => sema.builtinClass("PageContext"),
         .object => info.object_class,
-        .selection => if (info.ty.param == .object) info.object_class else null,
+        .selection => if (info.ty.selectionItem().kind == .object) info.object_class else null,
         else => null,
     };
 }
@@ -169,8 +169,12 @@ pub fn assignability(actual: TypeInfo, expected: Type) Assignability {
 }
 
 pub fn holeIdFromType(ty: Type) ?ast.HoleId {
-    if (ty.kind != .hole) return null;
-    return ty.hole_id;
+    if (ty.kind == .hole) return ty.hole_id;
+    for (ty.arguments) |argument| if (holeIdFromType(argument)) |id| return id;
+    if (ty.optional_child) |child| if (holeIdFromType(child.*)) |id| return id;
+    for (ty.fn_params) |param| if (holeIdFromType(param)) |id| return id;
+    if (ty.fn_result) |result| if (holeIdFromType(result.*)) |id| return id;
+    return null;
 }
 
 pub fn ensureType(

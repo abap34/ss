@@ -773,26 +773,21 @@ fn resolveTypeReference(
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
+    for (ty.mutableArguments()) |*argument| try resolveTypeReference(argument, module_id, sema);
     switch (ty.kind) {
         .object => if (ty.class_name) |name| {
             if (sema.resolveTypeNameInContext(module_id, name)) |resolved| {
                 const class_name_span = ty.class_name_span;
+                const arguments = ty.arguments;
+                const owns_arguments = ty.owns_arguments;
                 ty.* = resolved;
+                ty.arguments = arguments;
+                ty.owns_arguments = owns_arguments;
                 switch (ty.kind) {
                     .object, .record => ty.class_name_span = class_name_span,
                     .enum_type => ty.enum_name_span = class_name_span,
                     else => {},
                 }
-            }
-        },
-        .selection => if (ty.param_class_name) |name| {
-            if (sema.resolveTypeNameInContext(module_id, name)) |resolved| {
-                const param_class_name_span = ty.param_class_name_span;
-                if (resolved.kind == .object) {
-                    ty.param_class_name = resolved.class_name;
-                    ty.param_module_id = resolved.nominal_module_id;
-                }
-                ty.param_class_name_span = param_class_name_span;
             }
         },
         .function => {
@@ -989,6 +984,7 @@ fn checkTypeAnnotation(
         });
         return error.InvalidType;
     }
+    for (ty.arguments) |argument| try checkTypeAnnotation(state, sema, module_id, argument, origin);
     if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none or ty.kind == .hole) return;
     if (ty.kind == .optional) {
         if (ty.optional_child) |child| try checkTypeAnnotation(state, sema, module_id, child.*, origin);
@@ -1001,9 +997,6 @@ fn checkTypeAnnotation(
         if (ty.nominal_module_id == null or sema.class(ty.nominal_module_id, class_name) == null) {
             return reportUnknownType(state, origin, class_name);
         }
-    }
-    if (ty.param_class_name) |class_name| {
-        if (ty.param_module_id == null or sema.class(ty.param_module_id, class_name) == null) return reportUnknownType(state, origin, class_name);
     }
     if (ty.kind == .function) {
         var had_diagnostics = false;

@@ -13,11 +13,8 @@ const KeyContext = struct {
         var hasher = std.hash.Wyhash.init((core.FunctionKeyContext{}).hash(key.function));
         std.hash.autoHash(&hasher, key.arguments.len);
         for (key.arguments) |argument| {
-            // Full type equality below handles recursive structure and normalized parameters.
             std.hash.autoHash(&hasher, argument.failed);
-            std.hash.autoHash(&hasher, argument.ty.kind);
-            std.hash.autoHash(&hasher, argument.ty.nominal_module_id);
-            std.hash.autoHash(&hasher, argument.ty.param_module_id);
+            argument.ty.hashInto(&hasher);
             std.hash.autoHash(&hasher, if (argument.object_class) |id| @as(?u32, id.module_id) else null);
             hashString(&hasher, if (argument.object_class) |id| id.name else null);
             hashString(&hasher, argument.string_literal);

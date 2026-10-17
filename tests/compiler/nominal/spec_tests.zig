@@ -382,11 +382,14 @@ test "nominal objects: a shadowing base name does not create an inheritance cycl
 test "nominal objects: selections retain their element module" {
     const first = Type.objectClass("Box").inModule(1);
     const second = Type.objectClass("Box").inModule(2);
-    const selection = Type.selectionType(first);
+    var selection = try Type.selectionOf(testing.allocator, first);
+    defer selection.deinit(testing.allocator);
+    var other_selection = try Type.selectionOf(testing.allocator, second);
+    defer other_selection.deinit(testing.allocator);
     try testing.expect(!Type.eql(first, second));
     try testing.expect(!Type.accepts(first, second));
-    try testing.expect(!Type.eql(selection, Type.selectionType(second)));
-    try testing.expect(!Type.accepts(selection, Type.selectionType(second)));
+    try testing.expect(!Type.eql(selection, other_selection));
+    try testing.expect(!Type.accepts(selection, other_selection));
     var cloned = try selection.clone(testing.allocator);
     defer cloned.deinit(testing.allocator);
     try testing.expect(selection.selectionItemId().?.eql(cloned.selectionItemId().?));
