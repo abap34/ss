@@ -39,7 +39,7 @@ pub fn collectFunctionsFromModules(
     var functions = core.FunctionMap.init(allocator);
     for (programs, 0..) |program, program_index| {
         for (program.functions.items) |func| {
-            try functions.put(core.functionKey(@intCast(program_index), func.name), func);
+            try functions.put(core.functionDeclarationKey(@intCast(program_index), func), func);
         }
     }
     return functions;
@@ -195,6 +195,7 @@ fn checkDocumentDeclarations(allocator: std.mem.Allocator, state: *core.Document
         defer utils.measure_profile.recordAnalysis(.semantics_fields, measure_start);
         try semantics.checkDuplicateValueDeclarations(allocator, state);
         try semantics.checkTypeAnnotations(allocator, state, sema);
+        try semantics.checkDisplayDeclarations(allocator, state);
         {
             const object_declarations_start = utils.measure_profile.start();
             defer utils.measure_profile.recordAnalysis(.semantics_object_declarations, object_declarations_start);

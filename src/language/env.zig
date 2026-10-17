@@ -70,6 +70,14 @@ pub const SemanticEnv = struct {
         };
     }
 
+    pub fn displayForType(self: *const SemanticEnv, input: ast.Type) ?ResolvedFunction {
+        if (input.kind != .record) return null;
+        const index = self.declarationIndex() orelse return null;
+        const descriptor = index.display(input.nominalId() orelse return null) orelse return null;
+        const key = core.functionDeclarationKey(descriptor.module_id, descriptor.decl.*);
+        return .{ .key = key, .module_id = key.module_id, .decl = self.functions.get(key) orelse return null };
+    }
+
     pub fn resolvedFunction(self: *const SemanticEnv, callee: ast.CallableName) ?ResolvedFunction {
         return switch (self.resolveFunction(callee)) {
             .found => |resolved| resolved,

@@ -17,7 +17,7 @@ fn appendFunctionDeclarations(
     module_id: core.SourceModuleId,
 ) !void {
     for (program.functions.items) |func| {
-        try functions.put(core.functionKey(module_id, func.name), func);
+        try functions.put(core.functionDeclarationKey(module_id, func), func);
     }
 }
 
@@ -1070,6 +1070,7 @@ pub fn checkDuplicateValueDeclarations(
         defer names.deinit();
         const origin_path = checker.originPathForModule(module);
         for (module.syntax.functions.items) |func| {
+            if (func.isDisplay()) continue;
             if (names.contains(func.name)) {
                 const origin = core.SourceOrigin.at(origin_path, func.span);
 
@@ -1092,4 +1093,66 @@ pub fn checkDuplicateValueDeclarations(
             try names.put(constant_decl.name, {});
         }
     }
+}
+
+/// A display belongs to one nominal type and covers its complete type family.
+/// Ordinary function lookup never chooses between these declarations by name.
+pub fn checkDisplayDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+    for (state.modules.order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
+        var seen = std.StringHashMap(void).init(allocator);
+        defer seen.deinit();
+        for (module.syntax.functions.items) |function| {
+            if (std.mem.eql(u8, function.name, "display!")) {
+                try displayError(state, module_id, function, "InvalidDisplaySignature", "display defines a type's presentation and cannot have a placing variant");
+            }
+            if (!function.isDisplay()) continue;
+            if (function.params.items.len != 1) {
+                try displayError(state, module_id, function, "InvalidDisplaySignature", "display requires exactly one Placed<T> parameter");
+                continue;
+            }
+            const parameter = function.params.items[0];
+            const input = parameter.ty.placedInput() orelse {
+                try displayError(state, module_id, function, "InvalidDisplaySignature", "display requires a Placed<T> receiver");
+                continue;
+            };
+            if (parameter.default_value != null or input.kind != .record) {
+                try displayError(state, module_id, function, "InvalidDisplaySignature", "display requires a user-defined type receiver without a default argument");
+                continue;
+            }
+            const id = input.nominalId() orelse return error.InvalidType;
+            if (id.module_id != module_id) {
+                try displayError(state, module_id, function, "ForeignDisplayDeclaration", "define display in the module that declares its input type");
+            }
+            if (input.arguments.len != function.type_params.items.len) {
+                try displayError(state, module_id, function, "InvalidDisplaySignature", "display must cover all type arguments of its input type without specialization");
+            }
+            for (input.arguments, 0..) |argument, i| {
+                const parameter_id = argument.parameter_id orelse {
+                    try displayError(state, module_id, function, "InvalidDisplaySignature", "display type arguments must be distinct type parameters");
+                    continue;
+                };
+                if (argument.kind != .parameter or parameter_id.module_id != module_id or parameter_id.declaration_start != function.span.start) {
+                    try displayError(state, module_id, function, "InvalidDisplaySignature", "display type arguments must belong to its own declaration");
+                }
+                for (input.arguments[0..i]) |previous| {
+                    if (ast.Type.eql(previous, argument)) try displayError(state, module_id, function, "InvalidDisplaySignature", "display must cover every input type argument independently");
+                }
+            }
+            if (function.result_type.kind != .record and function.result_type.kind != .parameter) {
+                try displayError(state, module_id, function, "InvalidDisplaySignature", "display must return an unplaced presentation value");
+            }
+            const entry = try seen.getOrPut(id.name);
+            if (entry.found_existing) {
+                try displayError(state, module_id, function, "DuplicateDisplay", "the input type already has a display declaration in this module");
+            }
+        }
+    }
+}
+
+fn displayError(state: *core.DocumentState, module_id: core.SourceModuleId, function: ast.FunctionDecl, code: []const u8, message: []const u8) !void {
+    try state.addValidationDiagnostic(.@"error", null, null, state.sourceOrigin(module_id, function.span), .{
+        .user_report = .{ .code = code, .message = try state.allocator.dupe(u8, message) },
+    });
+    return error.DiagnosticsFailed;
 }

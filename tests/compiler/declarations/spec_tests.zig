@@ -158,3 +158,43 @@ test "declaration index: failed collection releases every partial container" {
     defer state.deinit();
     try allocation_testing.checkAllAllocationFailures(testing.allocator, buildIndex, .{&state});
 }
+
+const display_source =
+    \\type Label { text: String }
+    \\type Caption { text: String }
+    \\type RenderLabel { text: String }
+    \\type RenderCaption { text: String }
+    \\type Box<T> { value: T }
+    \\fn display(self: Placed<Label>) -> RenderLabel = RenderLabel { text = self.value.text }
+    \\fn display(self: Placed<Caption>) -> RenderCaption = RenderCaption { text = self.value.text }
+    \\fn display<T>(self: Placed<Box<T>>) -> T = self.value.value
+;
+
+fn buildDisplayIndex(allocator: std.mem.Allocator, state: *const core.DocumentState) !void {
+    var index = try core.declarations.build(allocator, state);
+    defer index.deinit();
+    const label = index.display(.{ .module_id = 0, .name = "Label" }).?;
+    const caption = index.display(.{ .module_id = 0, .name = "Caption" }).?;
+    try testing.expect(label.decl.span.start != caption.decl.span.start);
+    try testing.expect(index.display(.{ .module_id = 1, .name = "Label" }) == null);
+}
+
+test "declaration index: display lookup uses the input declaration and retains independent function identities" {
+    var state = try documentFromSource(display_source);
+    defer state.deinit();
+    try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
+    const sema = compiler.semantic_env.SemanticEnv.init(&state, state.declaration_index, &state.functions);
+    const label = sema.displayForType(compiler.language.Type.recordType("Label").inModule(0)).?;
+    const caption = sema.displayForType(compiler.language.Type.recordType("Caption").inModule(0)).?;
+    try testing.expect(!label.key.eql(caption.key));
+    try testing.expectEqualStrings("RenderLabel", label.decl.result_type.class_name.?);
+    try testing.expectEqualStrings("RenderCaption", caption.decl.result_type.class_name.?);
+    try testing.expect(sema.function("display") == null);
+    try testing.expect(sema.displayForType(compiler.language.Type.recordType("Label").inModule(1)) == null);
+    var box = try compiler.language.Type.recordType("Box").inModule(0).withArguments(testing.allocator, &.{compiler.language.Type.number});
+    defer box.deinit(testing.allocator);
+    const generic = sema.displayForType(box).?;
+    try testing.expectEqual(@as(usize, 1), generic.decl.type_params.items.len);
+    try testing.expect(!generic.key.eql(label.key));
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, buildDisplayIndex, .{&state});
+}

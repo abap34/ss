@@ -433,6 +433,10 @@ pub const ConstDecl = struct {
 };
 
 pub const FunctionDecl = struct {
+    pub fn isDisplay(self: FunctionDecl) bool {
+        return std.mem.eql(u8, self.name, "display");
+    }
+
     instance_id: ?u32 = null,
     type_params: std.ArrayList(TypeParameter) = .empty,
     name: []const u8,
