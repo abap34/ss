@@ -137,6 +137,7 @@ pub const EvalContext = struct {
         switch (placement.display) {
             .pending => {},
             .running => return error.DisplayExpansionCycle,
+            .native => return error.DisplayTargetMismatch,
             .expanded => |result| {
                 if (!result.target.eql(target)) return error.DisplayTargetMismatch;
                 return result.child;
@@ -151,8 +152,40 @@ pub const EvalContext = struct {
         defer output.deinit(self.state.allocator);
         try checkCancellation(self);
         const child = try self.state.registerPlacement(id, output, origin);
-        self.state.getNode(id).?.placement.?.display = .{ .expanded = .{ .target = target, .child = child } };
+        const parent = self.state.getNode(id).?;
+        parent.object_kind = .overlay;
+        parent.placement.?.display = .{ .expanded = .{ .target = target, .child = child } };
         return child;
+    }
+
+    pub fn expandDisplayTarget(self: *EvalContext, id: core.NodeId, target: core.native_display.Target) !?core.NodeId {
+        switch (target) {
+            .function => |function| return try self.expandDisplay(id, function),
+            .native => |kind| {
+                try checkCancellation(self);
+                const node = self.state.getNode(id) orelse return error.UnknownNode;
+                if (node.discarded) return error.InvalidPlacementParent;
+                const placement = if (node.placement) |*value| value else return error.InvalidValueTag;
+                try core.native_display.validateValue(self.state, placement.value, kind);
+                switch (placement.display) {
+                    .pending => {},
+                    .native => |existing| {
+                        if (existing != kind) return error.DisplayTargetMismatch;
+                        return null;
+                    },
+                    .running => return error.DisplayExpansionCycle,
+                    .expanded => return error.DisplayTargetMismatch,
+                }
+                node.object_kind = switch (kind) {
+                    .text => .text,
+                };
+                node.payload_kind = switch (kind) {
+                    .text => .text,
+                };
+                placement.display = .{ .native = kind };
+                return null;
+            },
+        }
     }
 };
 

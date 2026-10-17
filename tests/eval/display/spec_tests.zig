@@ -34,7 +34,7 @@ fn prepare(state: *core.DocumentState, input: Type) !core.FunctionKey {
     defer context.deinit();
     const sema = compiler.semantic_env.SemanticEnv.init(state, state.declaration_index, &state.functions);
     const target = try compiler.analysis.infer.prepareDisplay(state.allocator, state, &sema, input, state.sourceOrigin(0, .{ .start = 0, .end = 1 }), &context);
-    return target.key;
+    return target.function;
 }
 
 fn register(state: *core.DocumentState, page: core.NodeId, ty: Type, field_name: []const u8, field: core.Value) !core.NodeId {
@@ -309,4 +309,195 @@ test "display expansion: allocation failures preserve a retryable parent and no 
         }
     }
     return error.AllocationFailuresDidNotFinish;
+}
+
+fn documentWithModules(text: []const u8) !core.DocumentState {
+    const allocator = testing.allocator;
+    var source = try allocator.dupe(u8, text);
+    defer allocator.free(source);
+    var syntax = try compiler.syntax.parseWithSourceName(allocator, source, "native-display-spec.ss");
+    defer syntax.deinit(allocator);
+    var index = try compiler.analysis.loadModuleIndex(allocator, testing.io, ".", syntax, .{});
+    defer index.deinit();
+    return compiler.analysis.buildDocumentState(allocator, "native-display-spec.ss", ".", &source, &syntax, &index);
+}
+
+fn prepareTarget(state: *core.DocumentState, input: Type) !core.native_display.Target {
+    var context = compiler.analysis.infer.Context.init(state.allocator);
+    defer context.deinit();
+    const sema = compiler.semantic_env.SemanticEnv.init(state, state.declaration_index, &state.functions);
+    return compiler.analysis.infer.prepareDisplay(state.allocator, state, &sema, input, state.sourceOrigin(0, .{ .start = 0, .end = 1 }), &context);
+}
+
+test "native text display: a user display reaches Markdown preparation through immutable Text input" {
+    var state = try documentWithModules(
+        \\import std:text/content as native
+        \\import std:text/types as styles
+        \\type Message { content: String }
+        \\fn display(self: Placed<Message>) -> native::Text
+        \\  return native::Text {
+        \\    content = self.value.content
+        \\    style = styles::TextStyle { size = 31 parse = styles::TextParseMode.block }
+        \\  }
+        \\end
+    );
+    defer state.deinit();
+    try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
+    const input = Type.recordType("Message").inModule(0);
+    const target = try prepareTarget(&state, input);
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    const page = try state.addPage("Page");
+    const parent = try register(&state, page, input, "content", .{ .string = "# Overview\n\n**Typed** text" });
+    var evaluation = try compiler.evaluation.EvalContext.init(testing.allocator, &state, &graph, .{ .io = testing.io });
+    defer evaluation.deinit();
+    try testing.expectError(error.InvalidNativeDisplay, evaluation.expandDisplayTarget(parent, .{ .native = .text }));
+    try testing.expect(state.getNode(parent).?.placement.?.display == .pending);
+    try testing.expectError(error.UnexpandedDisplay, core.prepared.prepare(testing.allocator, &state));
+    const child = (try evaluation.expandDisplayTarget(parent, target)).?;
+    const native = try prepareTarget(&state, state.getNode(child).?.placement.?.value.record.ty);
+    try testing.expectEqual(core.native_display.Kind.text, native.native);
+    const count = state.nodeCount();
+    try testing.expectEqual(@as(?core.NodeId, null), try evaluation.expandDisplayTarget(child, native));
+    try testing.expectEqual(@as(?core.NodeId, null), try evaluation.expandDisplayTarget(child, native));
+    try testing.expectEqual(count, state.nodeCount());
+    try testing.expect(state.childrenOf(child) == null);
+    const node = state.getNode(child).?;
+    try testing.expect(node.role == null);
+    try testing.expectEqual(@as(usize, 0), node.fields.items.len);
+    try testing.expectEqual(core.ObjectKind.text, node.object_kind.?);
+    try testing.expectEqualStrings("# Overview\n\n**Typed** text", core.nodeDisplayContent(node));
+    const render = core.render_policy.resolve(&state, node);
+    try testing.expectEqual(@as(f32, 31), render.text.?.font_size);
+    var prepared = try core.prepared.prepareObjectWithRender(testing.allocator, &state, node, render);
+    defer prepared.deinit(testing.allocator);
+    try testing.expectEqual(core.markdown.ParseMode.block, prepared.parse_mode);
+    try testing.expect(prepared.markdown_doc.?.blocks.items.len >= 2);
+    try testing.expectEqualStrings("# Overview\n\n**Typed** text", prepared.content);
+    try testing.expectEqual(core.ObjectKind.overlay, state.getNode(parent).?.object_kind.?);
+    try testing.expectEqual(core.render_policy.RenderKind.chrome_only, core.render_policy.resolveKind(&state, state.getNode(parent).?));
+    var pages = try core.prepared.prepare(testing.allocator, &state);
+    defer pages.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), pages.pages.len);
+    try testing.expectEqual(@as(usize, 2), pages.pages[0].objects.len);
+    try testing.expectError(error.DisplayTargetMismatch, evaluation.expandDisplayTarget(child, target));
+}
+
+test "native text display: nominal identity and complete input are required" {
+    var state = try documentWithModules(
+        \\import std:text/content as native
+        \\type Text { content: String }
+    );
+    defer state.deinit();
+    try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
+    const local = Type.recordType("Text").inModule(0);
+    try testing.expect(core.native_display.kindForType(&state, local) == null);
+    try testing.expectError(error.InvalidType, prepareTarget(&state, local));
+    const native_module = state.moduleByPathOrSpec("std:text/content").?;
+    const native_type = Type.recordType("Text").inModule(native_module.id);
+    try testing.expectEqual(core.native_display.Kind.text, (try prepareTarget(&state, native_type)).native);
+    var value = core.Value{ .record = .init(native_type) };
+    defer value.deinit(testing.allocator);
+    try value.record.fields.append(testing.allocator, .{ .name = "content", .value = .{ .string = "Missing style" } });
+    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .text));
+    try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(Type.recordType("TextStyle").inModule(0)) } });
+    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .text));
+}
+
+fn preparePlan(state: *core.DocumentState, input: Type) !compiler.analysis.display.Plan {
+    var context = compiler.analysis.infer.Context.init(state.allocator);
+    defer context.deinit();
+    const sema = compiler.semantic_env.SemanticEnv.init(state, state.declaration_index, &state.functions);
+    return compiler.analysis.display.prepare(state.allocator, state, &sema, input, state.sourceOrigin(0, .{ .start = 0, .end = 1 }), &context);
+}
+
+fn preparePlanWithAllocator(allocator: std.mem.Allocator, state: *core.DocumentState, input: Type) !void {
+    var context = compiler.analysis.infer.Context.init(allocator);
+    defer context.deinit();
+    const sema = compiler.semantic_env.SemanticEnv.init(state, state.declaration_index, &state.functions);
+    var plan = try compiler.analysis.display.prepare(allocator, state, &sema, input, state.sourceOrigin(0, .{ .start = 0, .end = 1 }), &context);
+    defer plan.deinit();
+}
+
+test "display plan: nested generic wrappers terminate at the native Text type" {
+    var state = try documentWithModules(
+        \\import std:text/content as native
+        \\type Wrapper<T> { value: T }
+        \\type Message { content: String }
+        \\fn display<T>(self: Placed<Wrapper<T>>) -> T = self.value.value
+        \\fn display(self: Placed<Message>) -> native::Text
+        \\  return native::Text { content = self.value.content }
+        \\end
+    );
+    defer state.deinit();
+    try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
+    const message_type = Type.recordType("Message").inModule(0);
+    const wrapper_type = Type.recordType("Wrapper").inModule(0);
+    var inner = try wrapper_type.withArguments(testing.allocator, &.{message_type});
+    defer inner.deinit(testing.allocator);
+    var outer = try wrapper_type.withArguments(testing.allocator, &.{inner});
+    defer outer.deinit(testing.allocator);
+    var plan = try preparePlan(&state, outer);
+    defer plan.deinit();
+    try testing.expectEqual(@as(usize, 4), plan.steps.items.len);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, preparePlanWithAllocator, .{ &state, outer });
+    try testing.expect(Type.eql(outer, plan.steps.items[0].input));
+    try testing.expect(Type.eql(inner, plan.steps.items[1].input));
+    try testing.expect(Type.eql(message_type, plan.steps.items[2].input));
+    try testing.expectEqual(core.native_display.Kind.text, plan.steps.items[3].target.native);
+    try testing.expect(!plan.steps.items[0].target.function.eql(plan.steps.items[1].target.function));
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    const page = try state.addPage("Page");
+    const message = try register(&state, page, message_type, "content", .{ .string = "**Nested** input" });
+    const inner_placement = try register(&state, page, inner, "value", state.getNode(message).?.placement.?.value);
+    const outer_placement = try register(&state, page, outer, "value", state.getNode(inner_placement).?.placement.?.value);
+    var evaluation = try compiler.evaluation.EvalContext.init(testing.allocator, &state, &graph, .{ .io = testing.io });
+    defer evaluation.deinit();
+    var id = outer_placement;
+    for (plan.steps.items, 0..) |step, index| {
+        try testing.expect(Type.eql(step.input, state.getNode(id).?.placement.?.value.record.ty));
+        if (try evaluation.expandDisplayTarget(id, step.target)) |child| {
+            try testing.expectEqual(id, state.getNode(child).?.placement.?.parent_id);
+            try testing.expectEqual(page, state.getNode(child).?.placement.?.page_id);
+            id = child;
+        } else try testing.expectEqual(plan.steps.items.len - 1, index);
+    }
+    const node = state.getNode(id).?;
+    try testing.expectEqualStrings("**Nested** input", core.nodeDisplayContent(node));
+    try testing.expectEqual(core.markdown.ParseMode.block, core.markdown.parseModeForNode(&state, node));
+}
+
+test "display plan: exact cycles and growing type arguments are rejected before evaluation" {
+    const cases = [_]struct { source: []const u8, name: []const u8, generic: bool }{
+        .{ .source =
+        \\type Loop {}
+        \\fn display(self: Placed<Loop>) -> Loop = self.value
+        , .name = "Loop", .generic = false },
+        .{ .source =
+        \\type First {}
+        \\type Second {}
+        \\fn display(self: Placed<First>) -> Second = Second {}
+        \\fn display(self: Placed<Second>) -> First = First {}
+        , .name = "First", .generic = false },
+        .{ .source =
+        \\type Growing<T> { value: T }
+        \\fn display<T>(self: Placed<Growing<T>>) -> Growing<Growing<T>>
+        \\  return Growing<Growing<T>> { value = self.value }
+        \\end
+        , .name = "Growing", .generic = true },
+    };
+    for (cases) |case| {
+        var state = try documentFromSource(case.source);
+        defer state.deinit();
+        try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
+        var input = Type.recordType(case.name).inModule(0);
+        if (case.generic) input = try input.withArguments(testing.allocator, &.{Type.number});
+        defer input.deinit(testing.allocator);
+        const count = state.nodeCount();
+        try testing.expectError(error.NonTerminatingDisplay, preparePlan(&state, input));
+        try testing.expectEqual(count, state.nodeCount());
+        try testing.expectEqualStrings("NonTerminatingDisplay", state.diagnostics.entries.items[state.diagnostics.entries.items.len - 1].code());
+        if (case.generic) try testing.expectEqual(@as(usize, 1), state.instantiations.entries.items.len);
+    }
 }

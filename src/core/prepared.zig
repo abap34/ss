@@ -173,6 +173,10 @@ pub fn prepareObjectWithRender(
     node: *const model.Node,
     render: render_policy.ResolvedRender,
 ) !PreparedObject {
+    if (node.placement) |placement| switch (placement.display) {
+        .pending, .running => return error.UnexpandedDisplay,
+        .native, .expanded => {},
+    };
     const semantics = try resolveSemantics(state, node);
     var env = try render_env.resolveForNode(allocator, state, node);
     defer env.deinit(allocator);

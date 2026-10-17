@@ -805,6 +805,25 @@ pub fn prepareDisplay(
     input: Type,
     origin: core.SourceOrigin,
     context: *Context,
+) anyerror!core.native_display.Target {
+    try state.checkAnalysisCanceled();
+    if (core.native_display.kindForType(state, input)) |kind| {
+        core.native_display.validateType(state, input, kind) catch |err| {
+            try addUserReport(state, origin, "InvalidNativeDisplay", "native display type '{s}' does not satisfy its rendering contract", .{input.label()});
+            return err;
+        };
+        return .{ .native = kind };
+    }
+    return .{ .function = (try prepareDisplayFunction(allocator, state, sema, input, origin, context)).key };
+}
+
+fn prepareDisplayFunction(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    sema: *const SemanticEnv,
+    input: Type,
+    origin: core.SourceOrigin,
+    context: *Context,
 ) anyerror!semantic_env.ResolvedFunction {
     try state.checkAnalysisCanceled();
     const generic_arguments = @import("generic_arguments.zig");
