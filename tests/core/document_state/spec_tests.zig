@@ -117,6 +117,148 @@ test "document state spec: pages are ordered document children with one-based pa
     try testing.expectEqual(second, document_children[1]);
 }
 
+fn placementInput(allocator: std.mem.Allocator) !core.Value {
+    const ty = try ast.Type.recordType("Labeled").inModule(7).withArguments(allocator, &.{ast.Type.number});
+    var record = core.RecordValue.init(ty);
+    errdefer record.deinit(allocator);
+    try record.fields.append(allocator, .{ .name = "label", .value = .{ .string = "Count" } });
+    try record.fields.append(allocator, .{ .name = "value", .value = .{ .number = 3 } });
+    return .{ .record = record };
+}
+
+test "document state spec: repeated input registration creates independent placements before display" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const first_page = try state.addPage("First");
+    const second_page = try state.addPage("Second");
+    const ids = blk: {
+        var input = try placementInput(testing.allocator);
+        defer input.deinit(testing.allocator);
+        break :blk [_]core.NodeId{
+            try state.registerPlacement(first_page, input, null),
+            try state.registerPlacement(first_page, input, null),
+            try state.registerPlacement(second_page, input, null),
+        };
+    };
+
+    try testing.expect(ids[0] != ids[1] and ids[1] != ids[2]);
+    try testing.expectEqualSlices(core.NodeId, ids[0..2], state.placementRootsOf(first_page));
+    try testing.expectEqualSlices(core.NodeId, ids[2..], state.placementRootsOf(second_page));
+    for (ids, [_]core.NodeId{ first_page, first_page, second_page }) |id, page_id| {
+        const node = state.getNode(id).?;
+        const input = node.placement.?.value.record;
+        try testing.expectEqual(@as(?u32, 7), input.ty.nominal_module_id);
+        try testing.expectEqualStrings("Labeled", input.ty.class_name.?);
+        try testing.expectEqual(ast.Type.Kind.number, input.ty.arguments[0].kind);
+        try testing.expectEqualStrings("Count", input.field("label").?.string);
+        try testing.expectEqual(@as(f32, 3), input.field("value").?.number);
+        try testing.expectEqual(page_id, node.placement.?.parent_id);
+        try testing.expectEqual(page_id, state.parentPageOf(id).?);
+        try testing.expectEqual(page_id, state.layoutPageOf(id).?);
+        try testing.expect(node.role == null and node.payload_kind == null and node.object_kind == null);
+        try testing.expect(node.content == null and node.display_content == null);
+    }
+}
+
+test "document state spec: placement children have one direct parent and inherit page ownership" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    var input = try placementInput(testing.allocator);
+    defer input.deinit(testing.allocator);
+    const parent = try state.registerPlacement(page, input, null);
+    const first = try state.registerPlacement(parent, input, null);
+    const second = try state.registerPlacement(parent, input, null);
+    const grandchild = try state.registerPlacement(first, input, null);
+
+    try testing.expectEqualSlices(core.NodeId, &.{parent}, state.childrenOf(page).?);
+    try testing.expectEqualSlices(core.NodeId, &.{parent}, state.placementRootsOf(page));
+    try testing.expectEqualSlices(core.NodeId, &.{ first, second }, state.childrenOf(parent).?);
+    try testing.expectEqualSlices(core.NodeId, &.{grandchild}, state.childrenOf(first).?);
+    for ([_]core.NodeId{ parent, first, second, grandchild }) |id| {
+        try testing.expectEqual(page, state.parentPageOf(id).?);
+        try testing.expectEqual(page, state.layoutPageOf(id).?);
+    }
+    try testing.expectEqual(first, state.getNode(grandchild).?.placement.?.parent_id);
+    try state.validatePageLocalLayout();
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
+
+    try state.addContainment(parent, first);
+    try testing.expectEqualSlices(core.NodeId, &.{ first, second }, state.childrenOf(parent).?);
+    try testing.expectError(error.DuplicateObjectParent, state.addContainment(second, first));
+    try testing.expectError(error.DuplicateObjectParent, state.addContainment(page, first));
+    try testing.expectError(error.DuplicatePlacement, state.placeObjectOnPage(page, parent));
+}
+
+test "document state spec: registration order does not reorder authored placement roots or display children" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    var input = try placementInput(testing.allocator);
+    defer input.deinit(testing.allocator);
+    state.graph.composition_cursor = .{ .source_order = 30 };
+    const last = try state.registerPlacement(page, input, null);
+    state.graph.composition_cursor = .{ .source_order = 10 };
+    const first = try state.registerPlacement(page, input, null);
+    const next = try state.registerPlacement(page, input, null);
+    try testing.expectEqualSlices(core.NodeId, &.{ first, next, last }, state.placementRootsOf(page));
+    try testing.expectEqualSlices(core.NodeId, &.{ first, next, last }, state.childrenOf(page).?);
+
+    state.graph.composition_cursor = .{ .source_order = 90 };
+    const first_child = try state.registerPlacement(first, input, null);
+    state.graph.composition_cursor = .{ .source_order = 5 };
+    const next_child = try state.registerPlacement(first, input, null);
+    try testing.expectEqualSlices(core.NodeId, &.{ first_child, next_child }, state.childrenOf(first).?);
+    try testing.expectEqual(@as(usize, 0), state.graph.composition_cursor.?.sequence);
+}
+
+test "document state spec: registration rejects invalid parents without allocating a placement" {
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    const legacy = try state.makeObject(page, "legacy", null, .text, .text, "Legacy");
+    const count = state.nodeCount();
+    var input = try placementInput(testing.allocator);
+    defer input.deinit(testing.allocator);
+    try testing.expectError(error.UnknownNode, state.registerPlacement(999, input, null));
+    try testing.expectError(error.InvalidPlacementParent, state.registerPlacement(state.graph.document_id, input, null));
+    try testing.expectError(error.InvalidPlacementParent, state.registerPlacement(legacy, input, null));
+    try testing.expectError(error.InvalidValueTag, state.registerPlacement(page, .void, null));
+    try testing.expectEqual(count, state.nodeCount());
+}
+
+fn exercisePlacementRegistration(allocator: std.mem.Allocator) !void {
+    var state = try initEmptyDocumentStateWithAllocator(allocator);
+    defer state.deinit();
+    const page = try state.addPage("Page");
+    var input = try placementInput(allocator);
+    defer input.deinit(allocator);
+    var parent = page;
+    for (0..4) |index| {
+        state.graph.composition_cursor = .{ .source_order = index };
+        const count = state.nodeCount();
+        const next_id = state.graph.next_id;
+        const ownership_count = state.graph.direct_page_ownership.items.len;
+        const children_count = if (state.childrenOf(parent)) |children| children.len else 0;
+        const roots_count = state.placementRootsOf(page).len;
+        const id = state.registerPlacement(parent, input, .{ .path = "input.ss", .label = "item" }) catch |err| {
+            try testing.expectEqual(count, state.nodeCount());
+            try testing.expectEqual(next_id, state.graph.next_id);
+            try testing.expectEqual(ownership_count, state.graph.direct_page_ownership.items.len);
+            try testing.expectEqual(children_count, if (state.childrenOf(parent)) |children| children.len else @as(usize, 0));
+            try testing.expectEqual(roots_count, state.placementRootsOf(page).len);
+            try testing.expectEqual(@as(usize, 0), state.graph.composition_cursor.?.sequence);
+            return err;
+        };
+        try testing.expectEqualStrings("input.ss", state.getNode(id).?.origin.?.path.?);
+        if (index == 1) parent = id;
+    }
+}
+
+test "document state spec: placement registration preserves ownership and graph on allocation failure" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, exercisePlacementRegistration, .{});
+}
+
 test "document state spec: containment is idempotent for the same parent-child pair" {
     var state = try initEmptyDocumentState();
     defer state.deinit();

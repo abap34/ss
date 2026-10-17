@@ -595,19 +595,34 @@ pub const DocumentState = struct {
     }
 
     fn insertComposition(self: *DocumentState, ids: *std.ArrayList(NodeId), id: NodeId) !usize {
-        var index = ids.items.len;
-        if (self.getNode(id).?.composition_order) |order| {
-            while (index > 0) {
-                const previous = self.getNode(ids.items[index - 1]).?.composition_order orelse break;
-                if (!order.lessThan(previous)) break;
-                index -= 1;
-            }
-        }
+        const index = self.compositionInsertionIndex(ids.items, id);
         try ids.insert(self.allocator, index, id);
         return index;
     }
 
+    fn compositionInsertionIndex(self: *DocumentState, ids: []const NodeId, id: NodeId) usize {
+        var index = ids.len;
+        if (self.getNode(id).?.composition_order) |order| {
+            while (index > 0) {
+                const previous = self.getNode(ids[index - 1]).?.composition_order orelse break;
+                if (!order.lessThan(previous)) break;
+                index -= 1;
+            }
+        }
+        return index;
+    }
+
     pub fn addContainment(self: *DocumentState, parent: NodeId, child: NodeId) !void {
+        if (self.getNode(child)) |node| {
+            if (node.placement) |placement| {
+                if (parent != placement.parent_id) return error.DuplicateObjectParent;
+                // Registration publishes this edge together with the input.
+                return;
+            }
+        }
+        if (self.getNode(parent)) |node| {
+            if (node.placement != null) return error.InvalidPlacementParent;
+        }
         const parent_is_page = if (self.getNode(parent)) |node| node.kind == .page else false;
         const gop = try self.graph.contains.getOrPut(parent);
         if (!gop.found_existing) {
@@ -667,6 +682,76 @@ pub const DocumentState = struct {
         content: ?[]const u8,
     ) !NodeId {
         return self.makeNodeWithOrigin(page_id, true, .object, name, role, object_kind, payload_kind, content, null);
+    }
+
+    /// Register a fresh placement without evaluating its display. The caller
+    /// has checked the input's display contract and keeps borrowed Value data
+    /// alive for the document. No rendering kind or legacy role is inferred.
+    pub fn registerPlacement(
+        self: *DocumentState,
+        parent_id: NodeId,
+        input: Value,
+        origin: ?model.SourceOrigin,
+    ) !NodeId {
+        if (input == .void) return error.InvalidValueTag;
+        const parent = self.getNode(parent_id) orelse return error.UnknownNode;
+        if (parent.discarded) return error.InvalidPlacementParent;
+        const is_root = parent.kind == .page;
+        const page_id = if (is_root) parent_id else if (parent.placement) |placement|
+            placement.page_id
+        else
+            return error.InvalidPlacementParent;
+
+        var value = try input.clone(self.allocator);
+        errdefer value.deinit(self.allocator);
+        const owned_origin = if (origin) |source| try self.copyOrigin(source) else null;
+        try self.graph.nodes.ensureUnusedCapacity(self.allocator, 1);
+        try self.graph.direct_page_ownership.ensureUnusedCapacity(self.allocator, 1);
+
+        const children = try self.graph.contains.getOrPut(parent_id);
+        if (!children.found_existing) children.value_ptr.* = .empty;
+        errdefer if (!children.found_existing) {
+            children.value_ptr.deinit(self.allocator);
+            _ = self.graph.contains.remove(parent_id);
+        };
+        try children.value_ptr.ensureUnusedCapacity(self.allocator, 1);
+
+        const roots: ?*std.ArrayList(NodeId) = if (is_root) blk: {
+            const entry = try self.graph.page_placement_roots.getOrPut(page_id);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            errdefer if (!entry.found_existing) {
+                entry.value_ptr.deinit(self.allocator);
+                _ = self.graph.page_placement_roots.remove(page_id);
+            };
+            try entry.value_ptr.ensureUnusedCapacity(self.allocator, 1);
+            break :blk entry.value_ptr;
+        } else null;
+
+        // All fallible work precedes publication. Failed registrations neither
+        // consume an identity/order position nor leave a partially attached node.
+        const id = self.graph.next_id;
+        self.graph.next_id += 1;
+        self.graph.direct_page_ownership.appendAssumeCapacity(.{ .first = page_id, .count = 1 });
+        self.graph.nodes.appendAssumeCapacity(.{
+            .id = id,
+            .kind = .object,
+            .name = "placement",
+            .attached = true,
+            .placement = .{ .value = value, .parent_id = parent_id, .page_id = page_id },
+            .composition_order = if (is_root) self.nextCompositionOrder() else null,
+            .origin = owned_origin,
+        });
+        if (is_root) {
+            const position = self.compositionInsertionIndex(children.value_ptr.items, id);
+            children.value_ptr.insertAssumeCapacity(position, id);
+            const root_position = self.compositionInsertionIndex(roots.?.items, id);
+            roots.?.insertAssumeCapacity(root_position, id);
+        } else {
+            // A display's children retain its output order, independently of
+            // the execution unit that happened to expand their parent.
+            children.value_ptr.appendAssumeCapacity(id);
+        }
+        return id;
     }
 
     pub fn createObjectWithOrigin(
