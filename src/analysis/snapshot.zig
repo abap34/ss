@@ -1380,7 +1380,10 @@ fn collectVariableBindings(
         if (definition.kind != .variable) continue;
         const known_info = state.bindingTypeAt(definition.module_id, definition.span_start);
         const info: @TypeOf(known_info.?) = known_info orelse .{ .ty = ast.Type.any };
-        const retained_type = try type_storage.retain(info.ty);
+        const retained_type = if (info.ty.kind == .selection and info.object_class != null) blk: {
+            const item = ast.Type.objectId(info.object_class.?);
+            break :blk try type_storage.retain(.{ .kind = .selection, .arguments = &.{item} });
+        } else try type_storage.retain(info.ty);
         const type_label: []u8 = if (known_info != null) @constCast(try semantic_types.typeInfoLabelAlloc(allocator, .{ .ty = info.ty })) else try allocator.dupe(u8, "unknown");
         errdefer allocator.free(type_label);
         const name = try allocator.dupe(u8, definition.name);

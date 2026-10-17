@@ -65,3 +65,16 @@ test "analysis type spec: known type mismatch remains a mismatch" {
         analysis_types.ensureType(null, testing.allocator, number_info, Type.string, .{}, core.TypeMismatchCode.UnmatchedArgumentType),
     );
 }
+
+test "analysis type spec: holes nested in type arguments block assignment" {
+    const incomplete = Type.selectionType(Type.selectionType(Type.hole(9)));
+    const complete = Type.selectionType(Type.selection(.object));
+    switch (analysis_types.assignability(.{ .ty = incomplete }, complete)) {
+        .blocked_by_hole => |id| try testing.expectEqual(@as(u32, 9), id),
+        else => return error.ExpectedBlockedByHole,
+    }
+    switch (analysis_types.assignability(.{ .ty = complete }, incomplete)) {
+        .blocked_by_hole => |id| try testing.expectEqual(@as(u32, 9), id),
+        else => return error.ExpectedBlockedByHole,
+    }
+}

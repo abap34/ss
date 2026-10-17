@@ -17,7 +17,10 @@ pub const Storage = struct {
         const allocator = self.arena.allocator();
         var result = source;
         if (source.class_name) |name| result.class_name = try allocator.dupe(u8, name);
-        if (source.param_class_name) |name| result.param_class_name = try allocator.dupe(u8, name);
+        const arguments = try allocator.alloc(Type, source.arguments.len);
+        for (source.arguments, arguments) |argument, *retained| retained.* = try self.retain(argument);
+        result.arguments = arguments;
+        result.owns_arguments = false;
         if (source.enum_name) |name| result.enum_name = try allocator.dupe(u8, name);
         if (source.optional_child) |child| {
             result.optional_child = try allocator.create(Type);

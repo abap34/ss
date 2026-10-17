@@ -8282,3 +8282,18 @@ test "compiler semantics: symbolic anchor names cannot be shadowed by object fie
         \\end
     );
 }
+
+test "compiler semantics: nested selection arguments validate their annotations" {
+    try expectDiagnostic(
+        \\fn invalid(value: Selection<Selection<Void>>) -> Void
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidVoidType");
+    try expectDiagnostic(
+        \\fn invalid(value: Selection<Selection<Missing>>) -> Void
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "UnknownType: unknown type: Missing");
+}

@@ -412,7 +412,7 @@ fn propertyTargetForType(snapshot: anytype, ty: ast.Type) ?PropertyTarget {
     if (resolve_query.objectClassForType(snapshot, ty)) |id| return .{ .class = id };
     return switch (ty.kind) {
         .object => .any_object,
-        .selection => if (ty.param == .object) .any_object else null,
+        .selection => if (ty.selectionItem().kind == .object) .any_object else null,
         .record => if (ty.nominalId()) |id| .{ .record = id } else null,
         else => null,
     };

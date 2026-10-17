@@ -1126,8 +1126,8 @@ test "syntax spec: optional types compose with functions and selections" {
     const items = keep.params.items[2].ty;
     try testing.expectEqual(Type.Kind.optional, items.kind);
     try testing.expectEqual(Type.Kind.selection, items.optional_child.?.kind);
-    try testing.expectEqual(Type.Kind.object, items.optional_child.?.param);
-    try testing.expectEqualStrings("Text", items.optional_child.?.param_class_name.?);
+    try testing.expectEqual(Type.Kind.object, items.optional_child.?.selectionItem().kind);
+    try testing.expectEqualStrings("Text", items.optional_child.?.selectionItem().class_name.?);
 }
 
 test "syntax spec: failed function declarations release parsed ownership" {
@@ -1258,8 +1258,8 @@ test "syntax spec: qualified type names parse in annotations and type parameters
     try testing.expectEqualStrings("classes::TextStyle", keep.params.items[0].ty.class_name.?);
     try testing.expectEqualStrings("classes::TextStyle", source[keep.params.items[0].ty.class_name_span.?.start..keep.params.items[0].ty.class_name_span.?.end]);
     try testing.expectEqual(Type.Kind.selection, keep.params.items[1].ty.kind);
-    try testing.expectEqualStrings("classes::Text", keep.params.items[1].ty.param_class_name.?);
-    try testing.expectEqualStrings("classes::Text", source[keep.params.items[1].ty.param_class_name_span.?.start..keep.params.items[1].ty.param_class_name_span.?.end]);
+    try testing.expectEqualStrings("classes::Text", keep.params.items[1].ty.selectionItem().class_name.?);
+    try testing.expectEqualStrings("classes::Text", source[keep.params.items[1].ty.selectionItem().class_name_span.?.start..keep.params.items[1].ty.selectionItem().class_name_span.?.end]);
     try testing.expectEqual(Type.Kind.object, keep.result_type.kind);
     try testing.expectEqualStrings("classes::Text", keep.result_type.class_name.?);
     try testing.expectEqualStrings("classes::Text", source[keep.result_type.class_name_span.?.start..keep.result_type.class_name_span.?.end]);
@@ -2698,4 +2698,28 @@ test "syntax spec: constraint value registration releases parsed ownership" {
         "page main\n  let rule = a.left + 4 == b.right + 28\n  ~ rule\n  pagectx() ~ rule\nend\n",
     });
     try expectParseErrorWithoutLeaks(error.ExpectedExpression, "page main\n  target ~\nend\n");
+}
+
+test "syntax spec: nested selection arguments retain function and optional children" {
+    const source_text =
+        \\fn keep(items: Selection<Selection<(Page -> Object)?>>) -> Void
+        \\end
+        \\fn unary(items: Selection<Page> -> Selection<Object>) -> Void
+        \\end
+        \\fn multiple(items: (Selection<Page>, Selection<Object>) -> Selection<Page>) -> Void
+        \\end
+    ;
+    var parsed = try parse(source_text);
+    defer parsed.deinit();
+    const outer = parsed.module.functions.items[0].params.items[0].ty;
+    const inner = outer.selectionItem();
+    try testing.expectEqual(Type.Kind.selection, inner.kind);
+    const optional = inner.selectionItem();
+    try testing.expectEqual(Type.Kind.optional, optional.kind);
+    const callback = optional.optional_child.?;
+    try testing.expectEqual(Type.Kind.function, callback.kind);
+    try testing.expectEqual(Type.Kind.page, callback.fn_params[0].kind);
+    try testing.expectEqual(Type.Kind.object, callback.fn_result.?.kind);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
 }

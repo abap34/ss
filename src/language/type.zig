@@ -6,12 +6,10 @@ pub const SourceSpan = model.SourceSpan;
 pub const Type = struct {
     kind: Kind,
     nominal_module_id: ?u32 = null,
-    param: Kind = .none,
     class_name: ?[]const u8 = null,
     class_name_span: ?SourceSpan = null,
-    param_class_name: ?[]const u8 = null,
-    param_module_id: ?u32 = null,
-    param_class_name_span: ?SourceSpan = null,
+    arguments: []const Type = &.{},
+    owns_arguments: bool = false,
     enum_name: ?[]const u8 = null,
     enum_name_span: ?SourceSpan = null,
     optional_child: ?*Type = null,
@@ -98,7 +96,7 @@ pub const Type = struct {
     }
 
     pub fn selectionItemId(self: Type) ?model.NominalId {
-        return .{ .module_id = self.param_module_id orelse return null, .name = self.param_class_name orelse return null };
+        return self.selectionItem().nominalId();
     }
 
     pub fn hole(hole_id: u32) Type {
@@ -112,18 +110,60 @@ pub const Type = struct {
         return .{ .kind = .optional, .optional_child = copied };
     }
 
-    pub fn selection(item: Kind) Type {
-        return .{ .kind = .selection, .param = normalizeParam(item) };
+    pub fn selection(comptime item: Kind) Type {
+        return selectionType(.{ .kind = if (item == .none) .any else item });
     }
 
-    pub fn selectionType(item: Type) Type {
-        return .{
-            .kind = .selection,
-            .param = normalizeParam(item.kind),
-            .param_class_name = if (item.kind == .object) item.class_name else null,
-            .param_module_id = if (item.kind == .object) item.nominal_module_id else null,
-            .param_class_name_span = if (item.kind == .object) item.class_name_span else null,
-        };
+    pub fn selectionType(comptime item: Type) Type {
+        return .{ .kind = .selection, .arguments = &.{item} };
+    }
+
+    pub fn selectionOf(allocator: std.mem.Allocator, item: Type) !Type {
+        return (Type{ .kind = .selection }).withArguments(allocator, &.{item});
+    }
+
+    pub fn selectionItem(self: Type) Type {
+        return if (self.kind == .selection and self.arguments.len == 1) self.arguments[0] else Type.any;
+    }
+
+    pub fn mutableArguments(self: *Type) []Type {
+        std.debug.assert(self.arguments.len == 0 or self.owns_arguments);
+        return @constCast(self.arguments);
+    }
+
+    pub fn withArguments(self: Type, allocator: std.mem.Allocator, arguments: []const Type) !Type {
+        var base = self;
+        base.arguments = &.{};
+        base.owns_arguments = false;
+        var result = try base.clone(allocator);
+        errdefer result.deinit(allocator);
+        result.arguments = try cloneArguments(allocator, arguments);
+        result.owns_arguments = true;
+        return result;
+    }
+
+    fn cloneArguments(allocator: std.mem.Allocator, arguments: []const Type) ![]Type {
+        const result = try allocator.alloc(Type, arguments.len);
+        errdefer allocator.free(result);
+        var initialized: usize = 0;
+        errdefer for (result[0..initialized]) |*argument| argument.deinit(allocator);
+        for (arguments, result) |argument, *copy| {
+            copy.* = try argument.clone(allocator);
+            initialized += 1;
+        }
+        return result;
+    }
+
+    fn deinitArguments(self: *Type, allocator: std.mem.Allocator) void {
+        if (self.owns_arguments) {
+            for (self.arguments) |argument| {
+                var owned = argument;
+                owned.deinit(allocator);
+            }
+            allocator.free(self.arguments);
+        }
+        self.arguments = &.{};
+        self.owns_arguments = false;
     }
 
     pub fn functionType(allocator: std.mem.Allocator, params: []const Type, result: Type) anyerror!Type {
@@ -146,6 +186,7 @@ pub const Type = struct {
     }
 
     pub fn deinit(self: *Type, allocator: std.mem.Allocator) void {
+        self.deinitArguments(allocator);
         switch (self.kind) {
             .function => {
                 for (self.fn_params) |param| {
@@ -172,10 +213,10 @@ pub const Type = struct {
     }
 
     pub fn clone(self: Type, allocator: std.mem.Allocator) anyerror!Type {
-        return switch (self.kind) {
+        var result = switch (self.kind) {
             .function => blk: {
-                const result = self.fn_result orelse break :blk self;
-                break :blk try functionType(allocator, self.fn_params, result.*);
+                const result_type = self.fn_result orelse break :blk self;
+                break :blk try functionType(allocator, self.fn_params, result_type.*);
             },
             .optional => blk: {
                 const child = self.optional_child orelse break :blk self;
@@ -183,14 +224,19 @@ pub const Type = struct {
             },
             else => self,
         };
-    }
-
-    fn normalizeParam(param: Kind) Kind {
-        return if (param == .none) .any else param;
+        result.arguments = &.{};
+        result.owns_arguments = false;
+        errdefer result.deinit(allocator);
+        if (self.arguments.len != 0) {
+            result.arguments = try cloneArguments(allocator, self.arguments);
+            result.owns_arguments = true;
+        }
+        return result;
     }
 
     pub fn eql(a: Type, b: Type) bool {
-        if (a.kind != b.kind) return false;
+        if (a.kind != b.kind or a.arguments.len != b.arguments.len) return false;
+        for (a.arguments, b.arguments) |left, right| if (!eql(left, right)) return false;
         if (a.kind == .hole) return a.hole_id == b.hole_id;
         if (a.kind == .function) {
             if ((a.fn_result == null) != (b.fn_result == null)) return false;
@@ -213,10 +259,7 @@ pub const Type = struct {
             return true;
         }
         return a.nominal_module_id == b.nominal_module_id and
-            a.param_module_id == b.param_module_id and
-            normalizeParam(a.param) == normalizeParam(b.param) and
             optionalStringEql(a.class_name, b.class_name) and
-            optionalStringEql(a.param_class_name, b.param_class_name) and
             optionalStringEql(a.enum_name, b.enum_name);
     }
 
@@ -240,13 +283,13 @@ pub const Type = struct {
             return expected.kind == .enum_type and
                 actual.kind == .enum_type and
                 expected.nominal_module_id == actual.nominal_module_id and
-                optionalStringEql(expected.enum_name, actual.enum_name);
+                eql(expected, actual);
         }
         if (expected.kind == .record or actual.kind == .record) {
             return expected.kind == .record and
                 actual.kind == .record and
                 expected.nominal_module_id == actual.nominal_module_id and
-                optionalStringEql(expected.class_name, actual.class_name);
+                eql(expected, actual);
         }
         if (expected.kind != actual.kind) return false;
         if (expected.kind == .function) {
@@ -261,14 +304,48 @@ pub const Type = struct {
         if (expected.kind == .object and expected.class_name != null and actual.class_name != null) {
             if (expected.nominal_module_id != actual.nominal_module_id or !std.mem.eql(u8, expected.class_name.?, actual.class_name.?)) return false;
         }
-        const expected_param = normalizeParam(expected.param);
-        const actual_param = normalizeParam(actual.param);
-        if (expected.kind == .selection and expected_param != .any and actual_param == .any) return false;
-        if (!(expected_param == .any or actual_param == .any or expected_param == actual_param)) return false;
-        if (expected_param == .object and expected.param_class_name != null and actual.param_class_name != null) {
-            if (expected.param_module_id != actual.param_module_id or !std.mem.eql(u8, expected.param_class_name.?, actual.param_class_name.?)) return false;
+        if (expected.kind == .selection) {
+            const wanted = expected.selectionItem();
+            const received = actual.selectionItem();
+            if (wanted.kind == .any) return true;
+            if (received.kind == .any) return false;
+            return accepts(wanted, received);
         }
+        if (expected.arguments.len != actual.arguments.len) return false;
+        for (expected.arguments, actual.arguments) |left, right| if (!eql(left, right)) return false;
         return true;
+    }
+
+    pub fn hashInto(self: Type, hasher: *std.hash.Wyhash) void {
+        std.hash.autoHash(hasher, self.kind);
+        std.hash.autoHash(hasher, self.arguments.len);
+        for (self.arguments) |argument| argument.hashInto(hasher);
+        switch (self.kind) {
+            .hole => std.hash.autoHash(hasher, self.hole_id),
+            .function => {
+                std.hash.autoHash(hasher, self.fn_params.len);
+                for (self.fn_params) |param| param.hashInto(hasher);
+                std.hash.autoHash(hasher, self.fn_result != null);
+                if (self.fn_result) |result| result.hashInto(hasher);
+            },
+            .optional => {
+                std.hash.autoHash(hasher, self.optional_child != null);
+                if (self.optional_child) |child| child.hashInto(hasher);
+            },
+            else => {
+                std.hash.autoHash(hasher, self.nominal_module_id);
+                hashName(hasher, self.class_name);
+                hashName(hasher, self.enum_name);
+            },
+        }
+    }
+
+    fn hashName(hasher: *std.hash.Wyhash, name: ?[]const u8) void {
+        std.hash.autoHash(hasher, name != null);
+        if (name) |text| {
+            std.hash.autoHash(hasher, text.len);
+            hasher.update(text);
+        }
     }
 
     pub fn formatAlloc(self: Type, allocator: std.mem.Allocator) ![]const u8 {
@@ -283,13 +360,7 @@ pub const Type = struct {
             .selection => {
                 try out.appendSlice(allocator, displayName(self.kind));
                 try out.append(allocator, '<');
-                if (normalizeParam(self.param) == .object and self.param_class_name != null) {
-                    try out.appendSlice(allocator, "Object<");
-                    try out.appendSlice(allocator, self.param_class_name.?);
-                    try out.append(allocator, '>');
-                } else {
-                    try out.appendSlice(allocator, displayName(normalizeParam(self.param)));
-                }
+                try self.selectionItem().formatInto(allocator, out);
                 try out.append(allocator, '>');
             },
             .object => {
@@ -343,6 +414,14 @@ pub const Type = struct {
                 try out.appendSlice(allocator, displayName(self.kind)),
             .hole => try out.appendSlice(allocator, displayName(self.kind)),
             else => try out.appendSlice(allocator, displayName(self.kind)),
+        }
+        if (self.kind != .selection and self.arguments.len != 0) {
+            try out.append(allocator, '<');
+            for (self.arguments, 0..) |argument, index| {
+                if (index > 0) try out.appendSlice(allocator, ", ");
+                try argument.formatInto(allocator, out);
+            }
+            try out.append(allocator, '>');
         }
     }
 

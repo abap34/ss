@@ -108,10 +108,16 @@ pub fn valueConformsToType(state: anytype, value: core.Value, expected: ast.Type
         const actual_id = core.fields.classId(state, node) orelse return false;
         return id.eql(actual_id);
     }
-    if (expected.kind == .selection and expected.param != .any and expected.param != .none) {
+    if (expected.kind == .selection) {
         if (value != .selection) return false;
-        if ((expected.param == .object and value.selection.item_tag != .object) or
-            (expected.param == .page and value.selection.item_tag != .page)) return false;
+        const item = expected.selectionItem();
+        if (item.arguments.len != 0) return false;
+        switch (item.kind) {
+            .any => return true,
+            .object => if (value.selection.item_tag != .object) return false,
+            .page => if (value.selection.item_tag != .page) return false,
+            else => return false,
+        }
         if (expected.selectionItemId()) |id| {
             for (value.selection.ids.items) |node_id| {
                 const node = state.getNode(node_id) orelse return false;

@@ -240,3 +240,18 @@ test "dependency return caches distinguish argument facts and default arguments"
         try testing.expectEqualStrings(item.original, target.owner.object.identity.?.name);
     }
 }
+
+test "return facts: nested argument identities select distinct cached results" {
+    const Type = compiler.language.Type;
+    var cache = infer.Context.init(testing.allocator);
+    defer cache.deinit();
+    const first = Type.selectionType(Type.selectionType(Type.recordType("Item").inModule(1)));
+    const second = Type.selectionType(Type.selectionType(Type.recordType("Item").inModule(2)));
+    const key = core.functionKey(0, "keep");
+    try cache.put(.{ .function = key, .arguments = &.{.{ .ty = first }} }, .{ .ty = Type.string, .string_literal = "first" });
+    try cache.put(.{ .function = key, .arguments = &.{.{ .ty = second }} }, .{ .ty = Type.string, .string_literal = "second" });
+    var cloned = try first.clone(testing.allocator);
+    defer cloned.deinit(testing.allocator);
+    try testing.expectEqualStrings("first", cache.get(.{ .function = key, .arguments = &.{.{ .ty = cloned }} }).?.string_literal.?);
+    try testing.expectEqualStrings("second", cache.get(.{ .function = key, .arguments = &.{.{ .ty = second }} }).?.string_literal.?);
+}

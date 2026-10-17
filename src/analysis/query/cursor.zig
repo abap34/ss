@@ -610,6 +610,9 @@ fn callableInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?Callable
 
 fn sourceNameInType(budget: ?QueryBudget, ty: ast.Type, offset: usize) ?SourceNameTarget {
     if (expired(budget)) return null;
+    for (ty.arguments) |argument| {
+        if (sourceNameInType(budget, argument, offset)) |target| return target;
+    }
     return switch (ty.kind) {
         .object, .record => if (spanContainsOptional(ty.class_name_span, offset)) .{
             .text = ty.class_name orelse "",
@@ -617,10 +620,6 @@ fn sourceNameInType(budget: ?QueryBudget, ty: ast.Type, offset: usize) ?SourceNa
         } else null,
         .enum_type => if (spanContainsOptional(ty.enum_name_span, offset)) .{
             .text = ty.enum_name orelse "",
-            .kind = .identifier,
-        } else null,
-        .selection => if (spanContainsOptional(ty.param_class_name_span, offset)) .{
-            .text = ty.param_class_name orelse "",
             .kind = .identifier,
         } else null,
         .function => blk: {

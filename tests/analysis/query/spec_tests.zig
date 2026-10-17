@@ -324,3 +324,29 @@ test "analysis query budget includes time spent obtaining the snapshot" {
     try testing.expect(budget.expired());
     try testing.expect(!budget.canceled());
 }
+
+test "analysis queries resolve nominal names inside nested type arguments" {
+    const path = "stdlib/internal/nested-type-query-test.ss";
+    const source =
+        \\type Payload {
+        \\  count: Number
+        \\}
+        \\fn inspect(items: Selection<Selection<Payload>>) -> Void
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    const offset = std.mem.lastIndexOf(u8, source, "Payload").?;
+    const request = analysis.query.types.SourceRequest{ .path = path, .source = source, .offset = offset };
+    var hover = (try analysis.snapshot.hoverAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 })) orelse return error.ExpectedHover;
+    defer hover.deinit(testing.allocator);
+    try testing.expect(std.mem.indexOf(u8, hover.markdown, "Payload") != null);
+    const definitions = try analysis.snapshot.definitionAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+    defer testing.allocator.free(definitions);
+    try testing.expectEqual(@as(usize, 1), definitions.len);
+    try testing.expectEqual(@as(usize, 0), definitions[0].line);
+}
