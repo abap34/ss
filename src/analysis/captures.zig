@@ -38,6 +38,10 @@ pub const Index = struct {
         try self.statements(function.statements.items);
     }
 
+    pub fn collectRecord(self: *Index, record: ast.RecordDecl) !void {
+        try self.fields(record.fields.items);
+    }
+
     fn fields(self: *Index, items: []const ast.ObjectFieldDecl) !void {
         for (items) |field| {
             if (field.default_value) |value| try self.expr(value.*, null);

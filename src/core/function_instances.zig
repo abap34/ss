@@ -33,7 +33,6 @@ pub const Store = struct {
     entries: std.ArrayList(*Instance) = .empty,
     index: std.HashMap(Key, u32, KeyContext, std.hash_map.default_max_load_percentage),
     call_targets: std.AutoHashMap(u64, model.FunctionKey),
-    next_call_id: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{ .allocator = allocator, .index = .init(allocator), .call_targets = .init(allocator) };

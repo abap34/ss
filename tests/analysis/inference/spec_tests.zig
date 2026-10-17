@@ -80,3 +80,28 @@ test "generic instances retain owned declarations across snapshot generations" {
         }
     }
 }
+
+test "concrete type defaults retain owned syntax across successful and failed generations" {
+    for ([_]bool{ false, true }) |invalid| {
+        const source = if (invalid)
+            "type Handler<T> { apply: (T) -> T = (x: T) |-> x + 1 }\npage main\nlet value = Handler<String> {}\nend\n"
+        else
+            "fn identity<T>(x: T) -> T = x\ntype Handler<T> { apply: (T) -> T = (x: T) |-> identity<T>(x) }\npage main\nlet number = Handler<Number> {}\nlet text = Handler<String> {}\nend\n";
+        var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+        defer sources.deinit();
+        const path = "stdlib/internal/generic-type-ownership-test.ss";
+        try sources.put(path, source);
+        var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{ .retain_layout_inputs = true });
+        defer snapshot.deinit();
+        try testing.expectEqual(invalid, snapshot.diagnostics.hasErrors());
+        if (!invalid) {
+            const state = &snapshot.retained_layout_inputs.?.state;
+            try testing.expectEqual(@as(usize, 2), state.type_instances.entries.items.len);
+            const number = state.type_instances.entries.items[0];
+            const text = state.type_instances.entries.items[1];
+            try testing.expectEqual(.number, number.ty.arguments[0].kind);
+            try testing.expectEqual(.string, text.ty.arguments[0].kind);
+            try testing.expect(number.declaration.fields.items[0].default_value != text.declaration.fields.items[0].default_value);
+        }
+    }
+}

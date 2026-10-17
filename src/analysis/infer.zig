@@ -226,21 +226,65 @@ fn inferRecordInfo(
         try addUserReportAtSpan(state, origin, record.type_name_span, "UnknownType", "unknown type: {s}", .{record.type_name});
         return error.InvalidType;
     };
-    try semantic_types.ensureTypeArgumentCount(state, record_decl.decl.type_params.items.len, record.type_args.items.len, origin);
+    const generic = record_decl.decl.type_params.items.len != 0;
+    if (!generic or record.type_args.items.len != 0) {
+        try semantic_types.ensureTypeArgumentCount(state, record_decl.decl.type_params.items.len, record.type_args.items.len, origin);
+    }
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
-    for (record.fields.items) |field_expr| {
+    const actuals = try allocator.alloc(TypeInfo, record.fields.items.len);
+    defer allocator.free(actuals);
+    for (record.fields.items, actuals) |field_expr, *actual| {
         if (seen.contains(field_expr.name)) {
             try addUserReportAtSpan(state, origin, field_expr.name_span, "DuplicateField", "field '{s}' is already set in {s}", .{ field_expr.name, record.type_name });
             return error.InvalidType;
         }
         try seen.put(field_expr.name, {});
-        const field = sema.recordField(.{ .module_id = record_decl.module_id, .name = record_decl.name }, field_expr.name) orelse {
+        if (sema.recordField(.{ .module_id = record_decl.module_id, .name = record_decl.name }, field_expr.name) == null) {
             try addUserReportAtSpan(state, origin, field_expr.name_span, "UnknownField", "type '{s}' has no field '{s}'", .{ record.type_name, field_expr.name });
             return error.InvalidType;
+        }
+        actual.* = try exprInfoWithOptions(allocator, state, sema, env, field_expr.value, origin, options);
+    }
+    var ty = Type.recordType(record_decl.name).inModule(record_decl.module_id);
+    if (generic) {
+        const bindings = try allocator.alloc(Type.Substitution, record_decl.decl.type_params.items.len);
+        defer allocator.free(bindings);
+        const known = try allocator.alloc(bool, bindings.len);
+        defer allocator.free(known);
+        @memset(known, false);
+        for (bindings, 0..) |*binding, index| binding.* = .{
+            .parameter = .{ .module_id = record_decl.module_id, .declaration_start = record_decl.decl.span.start, .index = @intCast(index) },
+            .replacement = Type.any,
         };
-        const expected = field.value_type;
-        const actual = try exprInfoWithOptions(allocator, state, sema, env, field_expr.value, origin, options);
+        const generic_arguments = @import("generic_arguments.zig");
+        if (record.type_args.items.len != 0) {
+            for (bindings, record.type_args.items, known) |*binding, argument, *is_known| {
+                binding.replacement = argument;
+                is_known.* = generic_arguments.isConcrete(argument);
+            }
+        } else {
+            for (record.fields.items, actuals) |field_expr, actual| {
+                const field = sema.recordField(ty.nominalId().?, field_expr.name).?;
+                generic_arguments.infer(field.value_type, actual.ty, bindings, known) catch {
+                    try addUserReport(state, origin, "ConflictingTypeArguments", "fields infer different types for a parameter of '{s}'", .{record.type_name});
+                    return error.InvalidType;
+                };
+            }
+        }
+        for (known, record_decl.decl.type_params.items) |is_known, parameter| if (!is_known) {
+            try addUserReport(state, origin, "CannotInferTypeArgument", "cannot determine concrete type argument '{s}' for '{s}'", .{ parameter.name, record.type_name });
+            return error.InvalidType;
+        };
+        const arguments = try allocator.alloc(Type, bindings.len);
+        defer allocator.free(arguments);
+        for (arguments, bindings) |*argument, binding| argument.* = binding.replacement;
+        ty = try ty.withArguments(allocator, arguments);
+    }
+    errdefer ty.deinit(allocator);
+    for (record.fields.items, actuals) |field_expr, actual| {
+        var expected = (try sema.recordFieldType(allocator, ty, field_expr.name)).?;
+        defer expected.deinit(allocator);
         try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
     }
     for (record_decl.decl.fields.items) |field| {
@@ -249,7 +293,72 @@ fn inferRecordInfo(
             return error.InvalidType;
         }
     }
-    return infoFromType(Type.recordType(record_decl.name).inModule(record_decl.module_id));
+    if (generic) try instantiateRecord(allocator, state orelse return error.InvalidType, sema, ty, record, record_decl, origin, options);
+    return infoFromType(ty);
+}
+
+fn instantiateRecord(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    sema: *const SemanticEnv,
+    ty: Type,
+    expression: ast.RecordExpr,
+    definition: declarations.RecordDescriptor,
+    origin: core.SourceOrigin,
+    options: InferenceOptions,
+) anyerror!void {
+    try state.checkAnalysisCanceled();
+    if (state.type_instances.isChecking(ty.nominalId().?)) {
+        try addUserReport(state, origin, "RecursiveInstantiation", "cannot establish termination of defaults for type '{s}'", .{definition.name});
+        return error.InvalidType;
+    }
+    const instance = state.type_instances.find(ty) orelse create: {
+        const bindings = try core.type_instances.substitutions(allocator, ty, definition.decl.*);
+        defer allocator.free(bindings);
+        var declaration = try definition.decl.clone(state.allocator);
+        var owned = true;
+        errdefer if (owned) declaration.deinit(state.allocator);
+        var transform = @import("instantiate.zig").Transform{
+            .allocator = state.allocator,
+            .next_expression_id = &state.next_expression_id,
+            .substitutions = bindings,
+        };
+        try transform.record(&declaration);
+        for (declaration.type_params.items) |*parameter| parameter.deinit(state.allocator);
+        declaration.type_params.deinit(state.allocator);
+        declaration.type_params = .empty;
+        const entry = try state.type_instances.add(ty, declaration);
+        owned = false;
+        errdefer entry.status = .failed;
+        var body_sema = sema.forModule(definition.module_id);
+        body_sema.record_source_facts = false;
+        checkRecordInstanceDefaults(allocator, state, &body_sema, entry.declaration, options) catch |err| {
+            if (err == error.OutOfMemory or err == error.Canceled) return err;
+            try addUserReport(state, origin, "InvalidInstantiation", "instantiation of '{s}' failed; see the field default diagnostic", .{definition.name});
+            return err;
+        };
+        entry.status = .checked;
+        break :create entry;
+    };
+    if (instance.status == .failed) return error.AlreadyDiagnosed;
+    if (expression.analysis_id) |id| try state.type_instances.construction_targets.put(id, instance);
+}
+
+fn checkRecordInstanceDefaults(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    sema: *const SemanticEnv,
+    declaration: ast.RecordDecl,
+    options: InferenceOptions,
+) !void {
+    var env = TypeEnv.init(allocator);
+    defer env.deinit();
+    for (declaration.fields.items) |field| {
+        const default = field.default_value orelse continue;
+        const origin = core.SourceOrigin.at(originPathForModule(sema), field.span);
+        const actual = try exprInfoWithOptions(allocator, state, sema, &env, default.*, origin, options);
+        try ensureType(state, allocator, actual, field.value_type, origin, .UnmatchedArgumentType);
+    }
 }
 
 fn inferRecordUpdateInfo(
@@ -269,14 +378,14 @@ fn inferRecordUpdateInfo(
         try addUserReport(state, origin, "InvalidValueUpdate", "with expects a value with fields, got {s}", .{actual});
         return error.InvalidType;
     }
-    const record_id = target_info.ty.nominalId() orelse {
+    _ = target_info.ty.nominalId() orelse {
         try addUserReport(state, origin, "InvalidValueUpdate", "ss produced a type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
 
     try rejectOverlappingValueUpdateFields(allocator, state, update.fields.items, origin);
     for (update.fields.items) |field| {
-        try inferRecordUpdateField(allocator, state, sema, env, record_id, field, origin, options);
+        try inferRecordUpdateField(allocator, state, sema, env, target_info.ty, field, origin, options);
     }
     return infoFromType(target_info.ty);
 }
@@ -305,19 +414,20 @@ fn inferRecordUpdateField(
     state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
-    base_record_id: core.NominalId,
+    base_type: Type,
     update_field: ast.RecordUpdateFieldExpr,
     origin: core.SourceOrigin,
     options: InferenceOptions,
 ) !void {
-    var current_record_id = base_record_id;
+    var current_type = try base_type.clone(allocator);
+    defer current_type.deinit(allocator);
     for (update_field.path.items, 0..) |segment, index| {
         if (segment.name_hole != null) return;
-        const field = sema.recordField(current_record_id, segment.name) orelse {
-            try addUserReportAtSpan(state, origin, segment.span, "UnknownField", "type '{s}' has no field '{s}'", .{ current_record_id.name, segment.name });
+        var field_type = (try sema.recordFieldType(allocator, current_type, segment.name)) orelse {
+            try addUserReportAtSpan(state, origin, segment.span, "UnknownField", "type '{s}' has no field '{s}'", .{ current_type.class_name.?, segment.name });
             return error.InvalidType;
         };
-        const field_type = field.value_type;
+        defer field_type.deinit(allocator);
 
         if (index + 1 == update_field.path.items.len) {
             const actual = try exprInfoWithOptions(allocator, state, sema, env, update_field.value, origin, options);
@@ -332,10 +442,9 @@ fn inferRecordUpdateField(
             try addUserReportAtSpan(state, origin, segment.span, "InvalidValueUpdatePath", "field '{s}' has type {s}, which has no fields", .{ path, label });
             return error.InvalidType;
         }
-        current_record_id = field_type.nominalId() orelse {
-            try addUserReportAtSpan(state, origin, segment.span, "InvalidValueUpdatePath", "ss produced a type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
-            return error.InvalidType;
-        };
+        const next_type = try field_type.clone(allocator);
+        current_type.deinit(allocator);
+        current_type = next_type;
     }
 }
 
@@ -396,14 +505,11 @@ fn inferMemberInfoFromTargetInfo(
             try addUserReportAtSpan(state, origin, member_span, "InvalidType", "ss produced a type without a resolved declaration; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
-        const field = sema.recordField(record_id, member_name) orelse {
+        const field_type = (try sema.recordFieldType(allocator, target_info.ty, member_name)) orelse {
             try addUserReportAtSpan(state, origin, member_span, "UnknownField", "type '{s}' has no field '{s}'", .{ record_id.name, member_name });
             return error.InvalidType;
         };
-        const field_type = field.value_type;
-        var result_type = try field_type.clone(allocator);
-        errdefer result_type.deinit(allocator);
-        return infoFromType(result_type);
+        return infoFromType(field_type);
     }
     if (!semantic_types.isPropertyReadTarget(target_info)) {
         const message = if (target_info.ty.kind == .selection)
@@ -636,7 +742,7 @@ fn instantiateFunction(
         errdefer if (owned) declaration.deinit(state.allocator);
         var transform = @import("instantiate.zig").Transform{
             .allocator = state.allocator,
-            .next_call_id = &state.instantiations.next_call_id,
+            .next_expression_id = &state.next_expression_id,
             .substitutions = bindings,
         };
         try transform.function(&declaration);
@@ -1599,34 +1705,36 @@ fn validateNestedPropertySetPath(
         try addUserReportAtSpan(state, origin, path[0].span, "InvalidValueUpdatePath", "field '{s}' has type {s}, which has no fields", .{ path_text, label });
         return error.InvalidType;
     }
-    var current_record_id = root_type.nominalId() orelse {
+    _ = root_type.nominalId() orelse {
         try addUserReportAtSpan(state, origin, path[0].span, "InvalidValueUpdatePath", "ss produced a type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
+    var current_type = try root_type.clone(allocator);
+    defer current_type.deinit(allocator);
     for (path[1..], 1..) |segment, index| {
         if (segment.name_hole != null) return;
-        const field = sema.recordField(current_record_id, segment.name) orelse {
-            try addUserReportAtSpan(state, origin, segment.span, "UnknownField", "type '{s}' has no field '{s}'", .{ current_record_id.name, segment.name });
+        var field_type = (try sema.recordFieldType(allocator, current_type, segment.name)) orelse {
+            try addUserReportAtSpan(state, origin, segment.span, "UnknownField", "type '{s}' has no field '{s}'", .{ current_type.class_name.?, segment.name });
             return error.InvalidType;
         };
+        defer field_type.deinit(allocator);
         if (index + 1 == path.len) {
             const path_text = try ast.formatRecordPath(allocator, path[0 .. index + 1]);
             defer allocator.free(path_text);
-            try validateExpectedFieldValueAtSpan(state, field.value_type, path_text, value_info, origin, segment.span);
+            try validateExpectedFieldValueAtSpan(state, field_type, path_text, value_info, origin, segment.span);
             return;
         }
-        if (field.value_type.kind != .record) {
+        if (field_type.kind != .record) {
             const path_text = try ast.formatRecordPath(allocator, path[0 .. index + 1]);
             defer allocator.free(path_text);
-            const label = try typeLabelAlloc(allocator, field.value_type);
+            const label = try typeLabelAlloc(allocator, field_type);
             defer allocator.free(label);
             try addUserReportAtSpan(state, origin, segment.span, "InvalidValueUpdatePath", "field '{s}' has type {s}, which has no fields", .{ path_text, label });
             return error.InvalidType;
         }
-        current_record_id = field.value_type.nominalId() orelse {
-            try addUserReportAtSpan(state, origin, segment.span, "InvalidValueUpdatePath", "ss produced a type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
-            return error.InvalidType;
-        };
+        const next_type = try field_type.clone(allocator);
+        current_type.deinit(allocator);
+        current_type = next_type;
     }
 }
 

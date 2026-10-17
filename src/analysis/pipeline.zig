@@ -176,7 +176,10 @@ fn analyzeDocumentStateSemantics(
 
     try checkDocumentDeclarations(allocator, state, &sema);
     try checkDocumentBodies(&inference_context, allocator, state, &sema);
-    if (state.instantiations.entries.items.len != 0) try calls.checkFunctionCallGraph(allocator, state, &sema);
+    if (state.instantiations.entries.items.len != 0 or state.type_instances.entries.items.len != 0) {
+        try calls.checkFunctionCallGraph(allocator, state, &sema);
+        try checkPlacementEffectDeclarations(allocator, state, &sema);
+    }
     return declaration_index;
 }
 
@@ -390,6 +393,7 @@ const PlacementEffectAnalyzer = struct {
     function_visiting: FunctionVisitSet,
     const_memo: FunctionBoolMap,
     const_visiting: FunctionVisitSet,
+    record_visiting: std.AutoHashMap(*const ast.RecordDecl, void),
 
     fn init(allocator: std.mem.Allocator, sema: *const SemanticEnv) PlacementEffectAnalyzer {
         return .{
@@ -399,10 +403,12 @@ const PlacementEffectAnalyzer = struct {
             .function_visiting = FunctionVisitSet.init(allocator),
             .const_memo = FunctionBoolMap.init(allocator),
             .const_visiting = FunctionVisitSet.init(allocator),
+            .record_visiting = .init(allocator),
         };
     }
 
     fn deinit(self: *PlacementEffectAnalyzer) void {
+        self.record_visiting.deinit();
         self.const_visiting.deinit();
         self.const_memo.deinit();
         self.function_visiting.deinit();
@@ -517,6 +523,18 @@ const PlacementEffectAnalyzer = struct {
             .record => |record| blk: {
                 for (record.fields.items) |field| {
                     if (try self.expr(sema, locals, field.value)) break :blk true;
+                }
+                if (sema.recordConstruction(record)) |definition| {
+                    if (definition.decl.type_params.items.len != 0 or self.record_visiting.contains(definition.decl)) break :blk false;
+                    try self.record_visiting.put(definition.decl, {});
+                    defer _ = self.record_visiting.remove(definition.decl);
+                    const default_sema = sema.forModule(definition.module_id);
+                    var default_locals = std.StringHashMap(void).init(self.allocator);
+                    defer default_locals.deinit();
+                    for (definition.decl.fields.items) |field| {
+                        if (record.hasField(field.name)) continue;
+                        if (field.default_value) |default| if (try self.expr(&default_sema, &default_locals, default.*)) break :blk true;
+                    }
                 }
                 break :blk false;
             },
@@ -648,7 +666,7 @@ pub fn buildDocumentStateWithOptions(
         try semantics.resolveTypeReferences(allocator, &state, &sema);
         try state.rebuildDeclarationIndex();
         try semantics.resolveEnumCaseExpressionsAndDefaults(allocator, &state, &sema);
-        var transform = @import("instantiate.zig").Transform{ .allocator = allocator, .next_call_id = &state.instantiations.next_call_id };
+        var transform = @import("instantiate.zig").Transform{ .allocator = allocator, .next_expression_id = &state.next_expression_id };
         for (state.modules.entries.items) |*module| try transform.module(&module.syntax);
         try semantics.rebuildConstDeclarations(allocator, &state);
         try semantics.rebuildFunctionDeclarations(allocator, &state);

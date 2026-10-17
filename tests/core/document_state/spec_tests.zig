@@ -1287,3 +1287,36 @@ fn exerciseFunctionInstanceStore(allocator: std.mem.Allocator) !void {
 test "document state spec: concrete function instances own declarations and type arguments" {
     try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseFunctionInstanceStore, .{});
 }
+
+fn exerciseTypeInstanceStore(allocator: std.mem.Allocator) !void {
+    var store = core.type_instances.Store.init(allocator);
+    defer store.deinit();
+    var nested = try ast.Type.optional(allocator, ast.Type.recordType("Item").inModule(4));
+    defer nested.deinit(allocator);
+    var ty = try ast.Type.recordType("Box").inModule(7).withArguments(allocator, &.{nested});
+    defer ty.deinit(allocator);
+    var declaration = ast.RecordDecl{
+        .name = try allocator.dupe(u8, "Box"),
+        .span = .{ .start = 10, .end = 20 },
+        .fields = .empty,
+    };
+    var owned = true;
+    defer if (owned) declaration.deinit(allocator);
+    const instance = try store.add(ty, declaration);
+    owned = false;
+    try testing.expect(store.find(ty).? == instance);
+    try testing.expect(store.isChecking(ty.nominalId().?));
+    instance.status = .checked;
+    try testing.expect(!store.isChecking(ty.nominalId().?));
+    try testing.expect(store.find(ty.inModule(8)) == null);
+    try testing.expect(store.find(ast.Type.recordType("Box").inModule(7)) == null);
+    var other = try ast.Type.recordType("Box").inModule(7).withArguments(allocator, &.{ast.Type.number});
+    defer other.deinit(allocator);
+    try testing.expect(store.find(other) == null);
+    try store.construction_targets.put(5, instance);
+    try testing.expect(store.construction(.{ .analysis_id = 5, .type_name = "Box", .fields = .empty }).? == instance);
+}
+
+test "document state spec: concrete type instances own declarations and nested arguments" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseTypeInstanceStore, .{});
+}

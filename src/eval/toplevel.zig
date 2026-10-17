@@ -715,7 +715,12 @@ fn evalRecord(
     record: ast.RecordExpr,
 ) !core.Value {
     const state = evaluation.state;
-    const resolved = findRecordDecl(state, record.module_id, record.type_name) orelse {
+    const instance = state.type_instances.construction(record);
+    const resolved = (if (instance) |concrete| declarations.RecordDescriptor{
+        .decl = &concrete.declaration,
+        .name = concrete.declaration.name,
+        .module_id = concrete.ty.nominal_module_id.?,
+    } else findRecordDecl(state, record.module_id, record.type_name)) orelse {
         if (findEnumDecl(state, record.module_id, record.type_name) != null) {
             try reportInvalidTypeConstruction(state, current_origin, record.type_name);
             return error.InvalidType;
@@ -726,14 +731,18 @@ fn evalRecord(
     const caller_module_id = evaluation.module_id;
     defer evaluation.module_id = caller_module_id;
 
-    var value = core.RecordValue.init(ast.Type.recordType(resolved.decl.name).inModule(resolved.module_id));
+    if (resolved.decl.type_params.items.len != 0) return error.InvalidType;
+    var value = core.RecordValue.init(if (instance) |concrete|
+        try concrete.ty.clone(state.allocator)
+    else
+        ast.Type.recordType(resolved.decl.name).inModule(resolved.module_id));
     errdefer value.deinit(state.allocator);
 
     var default_env = Environment.init(state.allocator);
     defer default_env.deinit();
     evaluation.module_id = resolved.module_id;
     for (resolved.decl.fields.items) |field| {
-        if (recordDefinesField(record, field.name)) continue;
+        if (record.hasField(field.name)) continue;
         const default_expr = field.default_value orelse {
             try reportRecordUpdateError(state, current_origin, "MissingField", "value of type '{s}' requires field '{s}'", .{ record.type_name, field.name });
             return error.InvalidType;
@@ -748,13 +757,6 @@ fn evalRecord(
         try putRecordFieldValue(state.allocator, &value, field.name, field_value, true);
     }
     return .{ .record = value };
-}
-
-fn recordDefinesField(record: ast.RecordExpr, name: []const u8) bool {
-    for (record.fields.items) |field| {
-        if (std.mem.eql(u8, field.name, name)) return true;
-    }
-    return false;
 }
 
 fn evalRecordDefaults(

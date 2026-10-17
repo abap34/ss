@@ -492,6 +492,7 @@ fn resolveModuleFieldDefaults(
         try materializeFieldDefaults(allocator, module_id, sema, object_decl.fields.items);
     }
     for (program.records.items) |*record_decl| {
+        if (record_decl.type_params.items.len != 0) continue;
         try materializeFieldDefaults(allocator, module_id, sema, record_decl.fields.items);
     }
     for (program.object_extensions.items) |*extension| {
@@ -566,6 +567,9 @@ fn staticRecordPropertyValue(
     module_id: core.SourceModuleId,
     record_expr: ast.RecordExpr,
 ) anyerror!?core.Value {
+    if (sema.record(record_expr.module_id, record_expr.type_name)) |decl| {
+        if (decl.decl.type_params.items.len != 0) return null;
+    }
     var value_type = ast.Type.recordType(record_expr.type_name);
     value_type.nominal_module_id = record_expr.module_id;
     var record = core.RecordValue.init(try value_type.withArguments(allocator, record_expr.type_args.items));

@@ -860,6 +860,20 @@ pub const Analyzer = struct {
             .record => |record| blk: {
                 var summary = AccessSummary.init(self.allocator);
                 errdefer summary.deinit();
+                if (self.sema.recordConstruction(record)) |decl| {
+                    for (decl.decl.fields.items) |field| {
+                        if (record.hasField(field.name)) continue;
+                        const default = field.default_value orelse continue;
+                        var facts = self.pushFreshValueFacts();
+                        defer facts.restore();
+                        const previous = self.sema;
+                        self.sema = self.sema.forModule(decl.module_id);
+                        defer self.sema = previous;
+                        var nested = try self.analyzeExpr(default.*);
+                        defer nested.deinit();
+                        try summary.merge(nested);
+                    }
+                }
                 for (record.fields.items) |field| {
                     var nested = try self.analyzeExpr(field.value);
                     defer nested.deinit();
@@ -1076,14 +1090,9 @@ pub const Analyzer = struct {
                 var fields = std.ArrayList(ValueFacts.Field).empty;
                 const allocator = self.value_storage.allocator();
                 for (record.fields.items) |field| try fields.append(allocator, .{ .name = field.name, .value = try self.valueFacts(field.value) });
-                if (self.sema.record(record.module_id, record.type_name)) |decl| {
+                if (self.sema.recordConstruction(record)) |decl| {
                     for (decl.decl.fields.items) |field| {
-                        var explicit = false;
-                        for (record.fields.items) |given| if (std.mem.eql(u8, field.name, given.name)) {
-                            explicit = true;
-                            break;
-                        };
-                        if (explicit) continue;
+                        if (record.hasField(field.name)) continue;
                         if (field.default_value) |default| {
                             var facts = self.pushFreshValueFacts();
                             defer facts.restore();
@@ -1213,7 +1222,9 @@ pub const Analyzer = struct {
         var fields = std.ArrayList(ValueFacts.Field).empty;
         const allocator = self.value_storage.allocator();
         for (record.decl.fields.items) |field| {
-            try fields.append(allocator, .{ .name = field.name, .value = try self.valueFactsForType(field.value_type, depth + 1) });
+            var field_type = (try self.sema.recordFieldType(allocator, ty, field.name)) orelse continue;
+            defer field_type.deinit(allocator);
+            try fields.append(allocator, .{ .name = field.name, .value = try self.valueFactsForType(field_type, depth + 1) });
         }
         return self.newValueFacts(&.{}, fields.items);
     }

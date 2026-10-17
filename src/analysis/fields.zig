@@ -104,6 +104,7 @@ fn checkRecordDeclaration(
     origin_path: []const u8,
     record_decl: ast.RecordDecl,
 ) !void {
+    if (record_decl.type_params.items.len != 0) return;
     try checkObjectFields(allocator, state, sema, origin_path, record_decl.fields.items, false);
 }
 
@@ -188,7 +189,7 @@ fn checkObjectFields(
             return error.InvalidType;
         }
         if (field.default_value) |default_value| {
-            try checkFieldDefault(allocator, state, sema, origin, field_type, default_value.*, field.default_property_value);
+            try checkFieldDefault(allocator, state, sema, origin, field_type, default_value.*, field.default_property_value, stored);
         }
     }
 }
@@ -201,6 +202,7 @@ fn checkFieldDefault(
     ty: ast.Type,
     default_value: ast.Expr,
     default_property_value: ?[]const u8,
+    stored: bool,
 ) !void {
     var env = TypeEnv.init(allocator);
     defer env.deinit();
@@ -209,7 +211,7 @@ fn checkFieldDefault(
         else => return err,
     };
     if (actual.hole != null) return;
-    if (fieldDefaultHasStaticPropertyValue(default_value, default_property_value) and fieldDefaultTypeAccepts(ty, actual.ty, default_value)) return;
+    if ((!stored or fieldDefaultHasStaticPropertyValue(default_value, default_property_value)) and fieldDefaultTypeAccepts(ty, actual.ty, default_value)) return;
     const label = try fieldTypeLabel(allocator, ty);
     defer allocator.free(label);
     try addUserReport(state, origin, "InvalidFieldDefault", "default value does not match field type {s}", .{label});

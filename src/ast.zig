@@ -748,11 +748,17 @@ pub const RecordFieldExpr = struct {
 };
 
 pub const RecordExpr = struct {
+    analysis_id: ?u64 = null,
     type_args: std.ArrayList(Type) = .empty,
     module_id: ?u32 = null,
     type_name: []const u8,
     type_name_span: ?Span = null,
     fields: std.ArrayList(RecordFieldExpr),
+
+    pub fn hasField(self: RecordExpr, name: []const u8) bool {
+        for (self.fields.items) |field| if (std.mem.eql(u8, field.name, name)) return true;
+        return false;
+    }
 
     pub fn deinit(self: *RecordExpr, allocator: Allocator) void {
         for (self.type_args.items) |*argument| argument.deinit(allocator);
@@ -776,6 +782,7 @@ pub const RecordExpr = struct {
             type_args.deinit(allocator);
         }
         return .{
+            .analysis_id = self.analysis_id,
             .type_args = type_args,
             .type_name = try allocator.dupe(u8, self.type_name),
             .type_name_span = self.type_name_span,
