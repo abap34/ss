@@ -76,6 +76,7 @@ pub const NameResolutionCache = struct {
     };
 
     pub fn resolvedFunction(self: *NameResolutionCache, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedFunction {
+        if (sema.instantiatedFunction(callee)) |resolved| return resolved;
         const key = resolutionKey(sema, callee);
         if (self.functions.get(key)) |cached| return cached;
         const resolved = sema.resolvedFunction(callee);

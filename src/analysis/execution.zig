@@ -85,6 +85,7 @@ pub const ExecutionGraph = struct {
 
         if (options.page_id_mode == .create) {
             for (state.modules.entries.items) |module| try graph.captures.collectModule(module.syntax);
+            for (state.instantiations.entries.items) |instance| try graph.captures.collectFunction(instance.declaration);
         }
 
         var collected_modules = std.AutoHashMap(core.SourceModuleId, void).init(allocator);

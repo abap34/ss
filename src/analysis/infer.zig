@@ -185,6 +185,10 @@ fn exprInfoWithOptions(
                     break :blk semantic_types.refineTypeInfo(infoFromType(resolved.decl.value_type), value);
                 },
                 .function => |resolved| {
+                    if (resolved.decl.type_params.items.len != 0 and resolved.decl.instance_id == null) {
+                        try addUserReport(state, origin, "UninstantiatedFunction", "generic function '{s}' requires a concrete call", .{resolved.decl.name});
+                        return error.InvalidType;
+                    }
                     var info = infoFromType(try functionTypeForDecl(allocator, resolved.decl));
                     info.function_labels = try singleFunctionLabel(allocator, resolved.decl.name);
                     break :blk info;
@@ -553,8 +557,15 @@ fn inferCallInfo(
             return error.UnknownFunction;
         },
         .function => |resolved| blk: {
-            const callee_sema = sema.forModule(resolved.module_id);
-            break :blk try inferUserCallInfo(allocator, state, sema, &callee_sema, env, call, origin, resolved.decl, options);
+            if (resolved.decl.type_params.items.len != 0 and resolved.decl.instance_id == null) {
+                if (firstHoleInArgs(call.args.items)) |id| break :blk infoFromHole(id);
+            }
+            const concrete = if (resolved.decl.type_params.items.len != 0 and resolved.decl.instance_id == null)
+                try instantiateFunction(allocator, state, sema, env, call, origin, resolved, options)
+            else
+                resolved;
+            const callee_sema = sema.forModule(concrete.module_id);
+            break :blk try inferUserCallInfo(allocator, state, sema, &callee_sema, env, call, origin, concrete.decl, options);
         },
         .primitive => |primitive| try inferPrimitiveCallInfo(allocator, state, sema, env, call, origin, primitive, options),
         .unknown => {
@@ -562,6 +573,94 @@ fn inferCallInfo(
             return error.UnknownFunction;
         },
     };
+}
+
+fn instantiateFunction(
+    allocator: std.mem.Allocator,
+    maybe_state: ?*core.DocumentState,
+    caller_sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    call: ast.CallExpr,
+    origin: core.SourceOrigin,
+    definition: semantic_env.ResolvedFunction,
+    options: InferenceOptions,
+) anyerror!semantic_env.ResolvedFunction {
+    const state = maybe_state orelse return error.InvalidType;
+    try state.checkAnalysisCanceled();
+    const func = definition.decl;
+    if (call.args.items.len < contracts.requiredParamCount(func) or call.args.items.len > func.params.items.len) {
+        try addUserReport(state, origin, "InvalidArity", "expected {d}..{d} arguments, got {d}", .{ contracts.requiredParamCount(func), func.params.items.len, call.args.items.len });
+        return error.InvalidArity;
+    }
+    const bindings = try allocator.alloc(Type.Substitution, func.type_params.items.len);
+    defer allocator.free(bindings);
+    const known = try allocator.alloc(bool, bindings.len);
+    defer allocator.free(known);
+    @memset(known, false);
+    for (bindings, 0..) |*binding, index| {
+        binding.* = .{
+            .parameter = .{ .module_id = definition.module_id, .declaration_start = func.span.start, .index = @intCast(index) },
+            .replacement = Type.any,
+        };
+    }
+    const generic_arguments = @import("generic_arguments.zig");
+    if (call.type_args.items.len != 0) {
+        for (bindings, call.type_args.items, known) |*binding, argument, *is_known| {
+            binding.replacement = argument;
+            is_known.* = generic_arguments.isConcrete(argument);
+        }
+    } else {
+        for (call.args.items, func.params.items[0..call.args.items.len]) |arg, parameter| {
+            const actual = try exprInfoWithOptions(allocator, state, caller_sema, env, arg, origin, options);
+            generic_arguments.infer(parameter.ty, actual.ty, bindings, known) catch {
+                try addUserReport(state, origin, "ConflictingTypeArguments", "arguments infer different types for a parameter of '{s}'", .{func.name});
+                return error.InvalidType;
+            };
+        }
+    }
+    for (known, func.type_params.items) |is_known, parameter| if (!is_known) {
+        try addUserReport(state, origin, "CannotInferTypeArgument", "cannot determine concrete type argument '{s}' for '{s}'", .{ parameter.name, func.name });
+        return error.InvalidType;
+    };
+    const arguments = try allocator.alloc(Type, bindings.len);
+    defer allocator.free(arguments);
+    for (arguments, bindings) |*argument, binding| argument.* = binding.replacement;
+    const instance_key = core.function_instances.Key{ .definition = definition.key, .arguments = arguments };
+    if (state.instantiations.isChecking(definition.key)) {
+        try addUserReport(state, origin, "RecursiveInstantiation", "cannot establish termination of generic function '{s}'", .{func.name});
+        return error.InvalidType;
+    }
+    const instance = state.instantiations.find(instance_key) orelse create: {
+        var declaration = try func.clone(state.allocator);
+        var owned = true;
+        errdefer if (owned) declaration.deinit(state.allocator);
+        var transform = @import("instantiate.zig").Transform{
+            .allocator = state.allocator,
+            .next_call_id = &state.instantiations.next_call_id,
+            .substitutions = bindings,
+        };
+        try transform.function(&declaration);
+        const entry = try state.instantiations.add(instance_key, declaration);
+        owned = false;
+        errdefer entry.status = .failed;
+        const key = core.FunctionKey{ .module_id = definition.module_id, .name = entry.declaration.name, .instance_id = entry.declaration.instance_id };
+        try state.functions.put(key, entry.declaration);
+        var body_sema = caller_sema.forModule(definition.module_id);
+        body_sema.record_source_facts = false;
+        const checker = @import("check.zig");
+        const path = originPathForModule(&body_sema);
+        checker.checkFunction(options.context, allocator, state, &body_sema, path, entry.declaration) catch |err| {
+            if (err == error.OutOfMemory or err == error.Canceled) return err;
+            try addUserReport(state, origin, "InvalidInstantiation", "instantiation of '{s}' failed; see the function body diagnostic", .{func.name});
+            return err;
+        };
+        entry.status = .checked;
+        break :create entry;
+    };
+    if (instance.status == .failed) return error.AlreadyDiagnosed;
+    const key = core.FunctionKey{ .module_id = definition.module_id, .name = instance.declaration.name, .instance_id = instance.declaration.instance_id };
+    if (call.callee.call_id) |id| try state.instantiations.call_targets.put(id, key);
+    return .{ .key = key, .module_id = definition.module_id, .decl = instance.declaration };
 }
 
 fn reportCallResolutionFailure(
@@ -661,7 +760,7 @@ fn inferUserCallInfo(
         if (needs_facts) actual_arguments[index] = actual;
         try ensureType(state, allocator, actual, param.ty, arg_origin, .UnmatchedArgumentType);
     }
-    if (options.context.invalid_declarations.contains(core.functionKey(callee_sema.module_id, func.name))) return error.AlreadyDiagnosed;
+    if (options.context.invalid_declarations.contains((core.FunctionKey{ .module_id = callee_sema.module_id, .name = func.name, .instance_id = func.instance_id }))) return error.AlreadyDiagnosed;
     if (!needs_facts) return infoFromType(func.result_type);
     return try inferUserFunctionReturnInfo(allocator, state, callee_sema, func, actual_arguments, options);
 }
@@ -820,7 +919,7 @@ fn inferUserFunctionReturnInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     const context = options.context;
-    const visit_key = core.functionKey(sema.module_id, func.name);
+    const visit_key = core.FunctionKey{ .module_id = sema.module_id, .name = func.name, .instance_id = func.instance_id };
     if (context.visiting.contains(visit_key)) {
         context.recursive_calls += 1;
         return infoFromType(func.result_type);

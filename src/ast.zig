@@ -433,6 +433,7 @@ pub const ConstDecl = struct {
 };
 
 pub const FunctionDecl = struct {
+    instance_id: ?u32 = null,
     type_params: std.ArrayList(TypeParameter) = .empty,
     name: []const u8,
     name_span: ?Span = null,
@@ -470,6 +471,7 @@ pub const FunctionDecl = struct {
         const type_params = try cloneTypeParameters(allocator, self.type_params.items);
         return .{
             .type_params = type_params,
+            .instance_id = self.instance_id,
             .name = copied_name,
             .name_span = self.name_span,
             .span = span,
@@ -529,6 +531,7 @@ pub const ParamDecl = struct {
 };
 
 pub const CallableName = struct {
+    call_id: ?u64 = null,
     qualifier: ?[]const u8 = null,
     name: []const u8,
     name_hole: ?HoleId = null,
@@ -566,6 +569,7 @@ pub const CallableName = struct {
             .qualifier = qualifier,
             .name = try allocator.dupe(u8, self.name),
             .name_hole = self.name_hole,
+            .call_id = self.call_id,
             .qualifier_span = self.qualifier_span,
             .name_span = self.name_span,
             .span = self.span,
@@ -659,6 +663,7 @@ pub const ApplyExpr = struct {
 };
 
 pub const LambdaExpr = struct {
+    analysis_id: ?u64 = null,
     params: std.ArrayList(ParamDecl),
     body: *Expr,
     span: Span,
@@ -685,6 +690,7 @@ pub const LambdaExpr = struct {
         errdefer body.deinit(allocator);
 
         return .{
+            .analysis_id = self.analysis_id,
             .params = params,
             .body = body,
             .span = self.span,

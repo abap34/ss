@@ -101,19 +101,26 @@ fn checkFunctionDefinitionsWithEnv(
         };
     }
 
+    var keys: std.ArrayList(core.FunctionKey) = .empty;
+    defer keys.deinit(allocator);
     var it = sema.functions.iterator();
     while (it.next()) |entry| {
+        if (entry.value_ptr.type_params.items.len != 0 or entry.value_ptr.instance_id != null) continue;
+        try keys.append(allocator, entry.key_ptr.*);
+    }
+    for (keys.items) |key| {
         try state.checkAnalysisCanceled();
-        const module_id = entry.key_ptr.module_id;
+        const func = sema.functions.get(key).?;
+        const module_id = key.module_id;
         const origin_path = blk: {
             if (state.moduleById(module_id)) |module| break :blk checker.originPathForModule(module);
             break :blk "";
         };
         const module_sema = sema.forModule(module_id);
         const diagnostic_count = state.diagnostics.entries.items.len;
-        checker.checkFunction(inference_context, allocator, state, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
+        checker.checkFunction(inference_context, allocator, state, &module_sema, origin_path, func) catch |err| {
             try checker.continueAfterDiagnostic(state, diagnostic_count, err);
-            try inference_context.invalid_declarations.put(entry.key_ptr.*, {});
+            try inference_context.invalid_declarations.put(key, {});
             had_diagnostics = true;
         };
     }
@@ -169,6 +176,7 @@ fn analyzeDocumentStateSemantics(
 
     try checkDocumentDeclarations(allocator, state, &sema);
     try checkDocumentBodies(&inference_context, allocator, state, &sema);
+    if (state.instantiations.entries.items.len != 0) try calls.checkFunctionCallGraph(allocator, state, &sema);
     return declaration_index;
 }
 
@@ -640,6 +648,8 @@ pub fn buildDocumentStateWithOptions(
         try semantics.resolveTypeReferences(allocator, &state, &sema);
         try state.rebuildDeclarationIndex();
         try semantics.resolveEnumCaseExpressionsAndDefaults(allocator, &state, &sema);
+        var transform = @import("instantiate.zig").Transform{ .allocator = allocator, .next_call_id = &state.instantiations.next_call_id };
+        for (state.modules.entries.items) |*module| try transform.module(&module.syntax);
         try semantics.rebuildConstDeclarations(allocator, &state);
         try semantics.rebuildFunctionDeclarations(allocator, &state);
     }

@@ -2575,6 +2575,10 @@ fn appendCompositionKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), v
 fn appendFunctionKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), key: core.FunctionKey) !void {
     try appendKeyInt(allocator, out, key.module_id);
     try appendKeyBytes(allocator, out, key.name);
+    if (key.instance_id) |id| {
+        try out.append(allocator, 'i');
+        try appendKeyInt(allocator, out, id);
+    } else try out.append(allocator, 'd');
 }
 
 fn appendResourceListKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), resources: []const Resource) !void {

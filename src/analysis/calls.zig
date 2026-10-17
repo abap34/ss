@@ -17,6 +17,7 @@ const LambdaKey = struct {
     module_id: core.SourceModuleId,
     span: ast.Span,
     capture_id: usize = 0,
+    analysis_id: ?u64 = null,
 };
 
 const Label = union(enum) {
@@ -42,6 +43,8 @@ const Label = union(enum) {
                     left_key.module_id < right_key.module_id
                 else if (!spanEql(left_key.span, right_key.span))
                     spanLessThan(left_key.span, right_key.span)
+                else if (left_key.analysis_id != right_key.analysis_id)
+                    optionalIdLessThan(u64, left_key.analysis_id, right_key.analysis_id)
                 else
                     left_key.capture_id < right_key.capture_id,
             },
@@ -57,6 +60,7 @@ const LabelContext = struct {
                 hasher.update(&.{0});
                 hasher.update(std.mem.asBytes(&key.module_id));
                 hasher.update(key.name);
+                std.hash.autoHash(&hasher, key.instance_id);
             },
             .lambda => |key| {
                 hasher.update(&.{1});
@@ -64,6 +68,7 @@ const LabelContext = struct {
                 hasher.update(std.mem.asBytes(&key.span.start));
                 hasher.update(std.mem.asBytes(&key.span.end));
                 hasher.update(std.mem.asBytes(&key.capture_id));
+                std.hash.autoHash(&hasher, key.analysis_id);
             },
         }
         return hasher.final();
@@ -77,7 +82,7 @@ const LabelContext = struct {
             },
             .lambda => |left_key| switch (right) {
                 .function => false,
-                .lambda => |right_key| left_key.module_id == right_key.module_id and spanEql(left_key.span, right_key.span) and left_key.capture_id == right_key.capture_id,
+                .lambda => |right_key| left_key.module_id == right_key.module_id and spanEql(left_key.span, right_key.span) and left_key.capture_id == right_key.capture_id and left_key.analysis_id == right_key.analysis_id,
             },
         };
     }
@@ -308,7 +313,7 @@ const Analyzer = struct {
     }
 
     fn lambdaLabel(self: *Analyzer, lambda: ast.LambdaExpr) Label {
-        return .{ .lambda = .{ .module_id = self.sema.module_id, .span = lambda.span } };
+        return .{ .lambda = .{ .module_id = self.sema.module_id, .span = lambda.span, .analysis_id = lambda.analysis_id } };
     }
 
     fn enter(self: *Analyzer, activation: Activation) anyerror!ValueFacts {
@@ -841,8 +846,8 @@ const Analyzer = struct {
 
     fn labelText(self: *Analyzer, label: Label) ![]const u8 {
         return switch (label) {
-            .function => |key| try std.fmt.allocPrint(self.allocator, "fn:{d}:{s}", .{ key.module_id, key.name }),
-            .lambda => |key| try std.fmt.allocPrint(self.allocator, "lambda:{d}:{d}-{d}:{d}", .{ key.module_id, key.span.start, key.span.end, key.capture_id }),
+            .function => |key| try std.fmt.allocPrint(self.allocator, "fn:{d}:{s}:{?d}", .{ key.module_id, key.name, key.instance_id }),
+            .lambda => |key| try std.fmt.allocPrint(self.allocator, "lambda:{d}:{d}-{d}:{d}:{?d}", .{ key.module_id, key.span.start, key.span.end, key.capture_id, key.analysis_id }),
         };
     }
 
@@ -891,7 +896,13 @@ fn activationOrigin(state: *const core.DocumentState, activation: Activation) ?c
 
 fn functionKeyLessThan(left: core.FunctionKey, right: core.FunctionKey) bool {
     if (left.module_id != right.module_id) return left.module_id < right.module_id;
-    return std.mem.lessThan(u8, left.name, right.name);
+    if (!std.mem.eql(u8, left.name, right.name)) return std.mem.lessThan(u8, left.name, right.name);
+    return optionalIdLessThan(u32, left.instance_id, right.instance_id);
+}
+
+fn optionalIdLessThan(comptime T: type, left: ?T, right: ?T) bool {
+    if (left) |value| return if (right) |other| value < other else false;
+    return right != null;
 }
 
 fn spanEql(left: ast.Span, right: ast.Span) bool {

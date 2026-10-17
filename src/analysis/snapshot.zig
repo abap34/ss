@@ -1304,6 +1304,7 @@ fn collectValueBindings(allocator: std.mem.Allocator, type_storage: *TypeStorage
     var function_iterator = state.functions.iterator();
     while (function_iterator.next()) |entry| {
         const func = entry.value_ptr.*;
+        if (func.instance_id != null) continue;
         const retained_type = try type_storage.retain(func.result_type);
         const signature: []u8 = @constCast(try query_signature.formatUserSignature(allocator, func.name, func));
         errdefer allocator.free(signature);

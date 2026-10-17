@@ -238,7 +238,7 @@ fn retainFailedBinding(state: *core.DocumentState, sema: *const SemanticEnv, env
     var info = infoFromType(binding.type_annotation orelse Type.any);
     info.failed = true;
     try env.put(binding.name, info);
-    if (binding.type_annotation != null) try recordBindingType(state, sema.module_id, binding.name_span, info);
+    if (binding.type_annotation != null and sema.record_source_facts) try recordBindingType(state, sema.module_id, binding.name_span, info);
 }
 
 fn rejectDuplicateBinding(state: ?*core.DocumentState, env: *const TypeEnv, name: []const u8, origin: core.SourceOrigin) !void {
@@ -290,7 +290,7 @@ pub fn checkFunction(
         }
         const param_info = infoFromType(param.ty);
         try env.put(param.name, param_info);
-        try recordBindingType(state, sema.module_id, param.name_span, param_info);
+        if (sema.record_source_facts) try recordBindingType(state, sema.module_id, param.name_span, param_info);
     }
 
     var had_diagnostics = false;
@@ -432,7 +432,7 @@ fn checkTopLevelStatementInner(
             try rejectVoidValue(state, info, origin);
             if (!binds_name) return;
             try env.put(binding.name, info);
-            try recordBindingType(state, sema.module_id, binding.name_span, info);
+            if (sema.record_source_facts) try recordBindingType(state, sema.module_id, binding.name_span, info);
             try scope.put(binding.name);
         },
         .return_expr => {
@@ -636,7 +636,7 @@ fn checkStatementInner(
             try rejectVoidValue(state, info, origin);
             if (!binds_name) return;
             try env.put(binding.name, info);
-            try recordBindingType(state, sema.module_id, binding.name_span, info);
+            if (sema.record_source_facts) try recordBindingType(state, sema.module_id, binding.name_span, info);
         },
         .return_expr => |expr| {
             if (result_type.kind == .void) {
