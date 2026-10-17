@@ -415,6 +415,14 @@ pub const Placement = struct {
     value: Value,
     parent_id: NodeId,
     page_id: NodeId,
+    display: union(enum) {
+        pending,
+        running,
+        expanded: struct {
+            target: FunctionKey,
+            child: NodeId,
+        },
+    } = .pending,
 };
 
 pub const Node = struct {

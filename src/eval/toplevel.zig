@@ -116,6 +116,7 @@ pub const EvalContext = struct {
     pub fn displayValue(self: *EvalContext, id: core.NodeId, target: core.FunctionKey) !core.Value {
         try checkCancellation(self);
         const node = self.state.getNode(id) orelse return error.UnknownNode;
+        if (node.discarded) return error.InvalidPlacementParent;
         const placement = node.placement orelse return error.InvalidValueTag;
         const function = self.functions.get(target) orelse return error.UnknownFunction;
         if (!function.isDisplay() or (function.type_params.items.len != 0 and function.instance_id == null)) return error.UnpreparedDisplay;
@@ -124,6 +125,34 @@ pub const EvalContext = struct {
         var env = Environment.init(self.state.allocator);
         defer env.deinit();
         return invokeUserFunctionValues(self, page_id, .page, &env, target.module_id, function, origin, &.{.{ .object = id }});
+    }
+
+    /// Executes one prepared display unit. The returned child is registered but
+    /// not expanded here: its own reads and producers determine when it can run.
+    pub fn expandDisplay(self: *EvalContext, id: core.NodeId, target: core.FunctionKey) !core.NodeId {
+        try checkCancellation(self);
+        const node = self.state.getNode(id) orelse return error.UnknownNode;
+        if (node.discarded) return error.InvalidPlacementParent;
+        const placement = if (node.placement) |*value| value else return error.InvalidValueTag;
+        switch (placement.display) {
+            .pending => {},
+            .running => return error.DisplayExpansionCycle,
+            .expanded => |result| {
+                if (!result.target.eql(target)) return error.DisplayTargetMismatch;
+                return result.child;
+            },
+        }
+        const origin = node.origin;
+        placement.display = .running;
+        // Evaluation and child registration can grow the node store. Never
+        // retain a node pointer across either operation.
+        errdefer self.state.getNode(id).?.placement.?.display = .pending;
+        var output = try self.displayValue(id, target);
+        defer output.deinit(self.state.allocator);
+        try checkCancellation(self);
+        const child = try self.state.registerPlacement(id, output, origin);
+        self.state.getNode(id).?.placement.?.display = .{ .expanded = .{ .target = target, .child = child } };
+        return child;
     }
 };
 
