@@ -74,18 +74,57 @@ const ClosureStore = struct {
 
 const call_frames = @import("frames.zig");
 
-const EvalContext = struct {
+pub const EvalContext = struct {
     io: std.Io,
     state: *core.DocumentState,
     functions: *const core.FunctionMap,
-    closures: *ClosureStore,
+    closures: ClosureStore,
     module_id: core.SourceModuleId = 0,
     frames: call_frames.Stack,
     elaboration_origin: ?core.SourceOrigin = null,
     declarations: *const declarations.DeclarationIndex,
     captures: *const CaptureIndex,
-    name_resolution_cache: *analysis_cache.NameResolutionCache,
+    name_resolution_cache: analysis_cache.NameResolutionCache,
     cancellation: ?utils.Cancellation,
+
+    pub fn init(allocator: std.mem.Allocator, state: *core.DocumentState, graph: *const execution.ExecutionGraph, options: ExecuteOptions) !EvalContext {
+        var result = EvalContext{
+            .io = options.io,
+            .state = state,
+            .functions = &state.functions,
+            .closures = ClosureStore.init(allocator),
+            .frames = call_frames.Stack.init(allocator, options.max_call_frames),
+            .declarations = graph.declarations,
+            .captures = &graph.captures,
+            .name_resolution_cache = analysis_cache.NameResolutionCache.init(allocator),
+            .cancellation = options.cancellation,
+        };
+        errdefer result.deinit();
+        try checkCancellation(&result);
+        try result.name_resolution_cache.reserve(state);
+        return result;
+    }
+
+    pub fn deinit(self: *EvalContext) void {
+        self.frames.deinit();
+        self.closures.deinit();
+        self.name_resolution_cache.deinit();
+    }
+
+    /// The checked target is selected during analysis. Returned closures remain
+    /// valid for this evaluation context, just like ordinary function results.
+    pub fn displayValue(self: *EvalContext, id: core.NodeId, target: core.FunctionKey) !core.Value {
+        try checkCancellation(self);
+        const node = self.state.getNode(id) orelse return error.UnknownNode;
+        const placement = node.placement orelse return error.InvalidValueTag;
+        const function = self.functions.get(target) orelse return error.UnknownFunction;
+        if (!function.isDisplay() or (function.type_params.items.len != 0 and function.instance_id == null)) return error.UnpreparedDisplay;
+        const page_id = placement.page_id;
+        const origin = node.origin orelse self.state.sourceOrigin(target.module_id, function.span);
+        var env = Environment.init(self.state.allocator);
+        defer env.deinit();
+        return invokeUserFunctionValues(self, page_id, .page, &env, target.module_id, function, origin, &.{.{ .object = id }});
+    }
 };
 
 pub const ExecuteOptions = struct {
@@ -343,25 +382,9 @@ pub fn executeGraph(
     graph: *const execution.ExecutionGraph,
     options: ExecuteOptions,
 ) !void {
-    var name_resolution_cache = analysis_cache.NameResolutionCache.init(allocator);
-    defer name_resolution_cache.deinit();
-    var closures = ClosureStore.init(allocator);
-    defer closures.deinit();
-    var evaluation_context = EvalContext{
-        .io = options.io,
-        .state = state,
-        .functions = &state.functions,
-        .closures = &closures,
-        .frames = call_frames.Stack.init(allocator, options.max_call_frames),
-        .declarations = graph.declarations,
-        .captures = &graph.captures,
-        .name_resolution_cache = &name_resolution_cache,
-        .cancellation = options.cancellation,
-    };
-    defer evaluation_context.frames.deinit();
+    var evaluation_context = try EvalContext.init(allocator, state, graph, options);
+    defer evaluation_context.deinit();
     const evaluation = &evaluation_context;
-    try checkCancellation(evaluation);
-    try name_resolution_cache.reserve(state);
     var document_states = std.AutoHashMap(core.SourceModuleId, DocumentExecutionState).init(allocator);
     defer {
         var iter = document_states.valueIterator();
@@ -999,7 +1022,7 @@ fn evalLambda(
     env: *Environment,
     lambda: ast.LambdaExpr,
 ) !core.Value {
-    const closures = evaluation.closures;
+    const closures = &evaluation.closures;
     const free_names = evaluation.captures.names(lambda) orelse return error.MissingLambdaCaptures;
     const id = try closures.add(lambda, env, free_names);
     return .{ .function = .{
@@ -2062,7 +2085,7 @@ fn invokeClosureValues(
     args: []const core.Value,
 ) anyerror!core.Value {
     const state = evaluation.state;
-    const closures = evaluation.closures;
+    const closures = &evaluation.closures;
     _ = caller_env;
     const closure = closures.get(closure_id) orelse {
         try reportUnknownFunction(state, "#lambda", current_origin);
