@@ -350,3 +350,60 @@ test "analysis queries resolve nominal names inside nested type arguments" {
     try testing.expectEqual(@as(usize, 1), definitions.len);
     try testing.expectEqual(@as(usize, 0), definitions[0].line);
 }
+
+test "analysis query spec: generic type parameters retain their lexical scope and definition" {
+    const path = "stdlib/internal/generic-query-test.ss";
+    const source =
+        \\type T { count: Number }
+        \\type Box<T> { value: T }
+        \\fn first<T>(value: T) -> T = value
+        \\fn second<T>(value: T) -> T = value
+        \\page main
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+
+    for ([_]struct { occurrence: []const u8, relative: usize, declaration_line: usize, declaration_column: usize }{
+        .{ .occurrence = "Box<T>", .relative = 4, .declaration_line = 1, .declaration_column = 9 },
+        .{ .occurrence = "value: T }", .relative = 7, .declaration_line = 1, .declaration_column = 9 },
+        .{ .occurrence = "first<T>", .relative = 6, .declaration_line = 2, .declaration_column = 9 },
+        .{ .occurrence = "first<T>(value: T)", .relative = 16, .declaration_line = 2, .declaration_column = 9 },
+        .{ .occurrence = "second<T>(value: T)", .relative = 17, .declaration_line = 3, .declaration_column = 10 },
+    }) |item| {
+        const offset = std.mem.indexOf(u8, source, item.occurrence).? + item.relative;
+        const request = analysis.query.types.SourceRequest{ .path = path, .source = source, .offset = offset };
+        var hover = (try analysis.snapshot.hoverAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 })).?;
+        defer hover.deinit(testing.allocator);
+        try testing.expectEqualStrings("Type parameter `T`", hover.markdown);
+        var completion = try analysis.snapshot.completeAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+        defer completion.deinit(testing.allocator);
+        var found_parameter = false;
+        for (completion.items) |candidate| {
+            if (std.mem.eql(u8, candidate.label, "T") and std.mem.eql(u8, candidate.detail orelse "", "type parameter")) found_parameter = true;
+        }
+        try testing.expect(found_parameter);
+        const definitions = try analysis.snapshot.definitionAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+        defer testing.allocator.free(definitions);
+        try testing.expectEqual(@as(usize, 1), definitions.len);
+        try testing.expectEqual(item.declaration_line, definitions[0].line);
+        try testing.expectEqual(item.declaration_column, definitions[0].character);
+    }
+
+    var count: usize = 0;
+    var first_id: ?@TypeOf(snapshot.value_bindings[0].value_type.parameter_id.?) = null;
+    for (snapshot.value_bindings) |binding| {
+        if (!std.mem.eql(u8, binding.name, "first") and !std.mem.eql(u8, binding.name, "second")) continue;
+        try testing.expect(std.mem.indexOf(u8, binding.signature, "<T>(value: T) -> T") != null);
+        try testing.expectEqual(.parameter, binding.value_type.kind);
+        const id = binding.value_type.parameter_id.?;
+        if (first_id) |previous| try testing.expect(!std.meta.eql(previous, id));
+        first_id = id;
+        count += 1;
+    }
+    try testing.expectEqual(@as(usize, 2), count);
+}

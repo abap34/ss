@@ -82,3 +82,5 @@
 (selected_imports (bare_callable_identifier) @variable)
 ((selected_imports (bare_callable_identifier) @type)
   (#match? @type "^[A-Z]"))
+
+(value_field name: (identifier) @property)

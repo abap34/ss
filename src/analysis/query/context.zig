@@ -83,6 +83,12 @@ pub const Context = struct {
         return self.kindIs(kind);
     }
 
+    pub fn typeParameter(self: *const Context) ?ast.TypeParameter {
+        if (!self.kindIs(.type_name) and !self.kindIs(.type_parameter)) return null;
+        const parsed = self.module() orelse return null;
+        return cursor.visibleTypeParameter(self.budget, parsed, self.offset, self.target);
+    }
+
     pub fn isValueName(self: *const Context) bool {
         return self.target_kind == null or self.kindIs(.identifier) or self.kindIs(.callable_name);
     }

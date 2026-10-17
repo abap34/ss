@@ -8297,3 +8297,46 @@ test "compiler semantics: nested selection arguments validate their annotations"
         \\end
     , "case.ss:bytes:", "UnknownType: unknown type: Missing");
 }
+
+test "compiler semantics: explicit type arguments cannot be ignored" {
+    try expectDiagnostic(
+        \\fn keep(value: Number) -> Number = value
+        \\page main
+        \\  let value = keep<String>(1)
+        \\end
+    , "case.ss:bytes:", "InvalidTypeArity");
+    try expectDiagnostic(
+        \\type Value { count: Number }
+        \\page main
+        \\  let value = Value<String> { count = 1 }
+        \\end
+    , "case.ss:bytes:", "InvalidTypeArity");
+    try expectDiagnostic(
+        \\type Value { count: Number }
+        \\fn read(value: Value<Number>) -> Number = value.count
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidTypeArity");
+    try expectDiagnostic(
+        \\fn read(value: Selection<Page, Object>) -> Void
+        \\end
+        \\page main
+        \\end
+    , "case.ss:bytes:", "InvalidTypeArity");
+    try expectDiagnostic(
+        \\fn keep(value: Number) -> Number = value
+        \\page main
+        \\  let value = keep<Missing>(1)
+        \\end
+    , "case.ss:bytes:", "UnknownType: unknown type: Missing");
+}
+
+test "compiler semantics spec: generic parameters cannot shadow built-in types" {
+    try expectDiagnostic("fn identity<Number>(x: Number) -> Number = x\n", "case.ss:bytes:", "InvalidTypeParameter");
+    try expectDiagnostic("type Box<Selection> { value: Selection }\n", "case.ss:bytes:", "InvalidTypeParameter");
+}
+
+test "compiler semantics: void results reject type arguments" {
+    try expectDiagnostic("fn run() -> Void<Number>\nend\n", "case.ss:bytes:", "InvalidTypeArity");
+    try expectDiagnostic("fn run(action: () -> Void<Number>) -> Void\nend\n", "case.ss:bytes:", "InvalidTypeArity");
+}

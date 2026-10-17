@@ -27,6 +27,7 @@ async function testTypeDeclarationSyntax() {
   const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
   for (const [source, keyword, name] of [
     ["type Card { title: String }", "type", "Card"],
+    ["type Box<T> { value: T }", "type", "Box"],
     ["enum Align { left center right }", "enum", "Align"],
   ]) {
     const match = grammar.repository.declarations.patterns

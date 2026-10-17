@@ -53,7 +53,17 @@ pub fn formatUserSignature(
         defer allocator.free(label);
         try params.appendSlice(allocator, label);
     }
-    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ name, params.items, result_label });
+    var type_params = std.ArrayList(u8).empty;
+    defer type_params.deinit(allocator);
+    if (func.type_params.items.len != 0) {
+        try type_params.append(allocator, '<');
+        for (func.type_params.items, 0..) |parameter, index| {
+            if (index != 0) try type_params.appendSlice(allocator, ", ");
+            try type_params.appendSlice(allocator, parameter.name);
+        }
+        try type_params.append(allocator, '>');
+    }
+    return std.fmt.allocPrint(allocator, "{s}{s}({s}) -> {s}", .{ name, type_params.items, params.items, result_label });
 }
 
 pub fn formatConstSignature(
@@ -98,7 +108,9 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
                 try fields.appendSlice(allocator, " = ");
                 try fields.appendSlice(allocator, text);
             }
-            break :blk std.fmt.allocPrint(allocator, "{s} {{ {s} }}", .{ record.type_name, fields.items });
+            const name = try formatAppliedName(allocator, record.type_name, record.type_args.items);
+            defer allocator.free(name);
+            break :blk std.fmt.allocPrint(allocator, "{s} {{ {s} }}", .{ name, fields.items });
         },
         .record_update => |update| blk: {
             const target = try formatExpr(allocator, update.target.*);
@@ -119,7 +131,9 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
             break :blk std.fmt.allocPrint(allocator, "{s} with {{ {s} }}", .{ target, fields.items });
         },
         .call => |call| blk: {
-            const callee = try call.callee.displayAlloc(allocator);
+            const name = try call.callee.displayAlloc(allocator);
+            defer allocator.free(name);
+            const callee = try formatAppliedName(allocator, name, call.type_args.items);
             defer allocator.free(callee);
             var args = std.ArrayList(u8).empty;
             defer args.deinit(allocator);
@@ -163,4 +177,19 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
             break :blk std.fmt.allocPrint(allocator, "{s} ?? {s}", .{ target, fallback });
         },
     };
+}
+
+fn formatAppliedName(allocator: std.mem.Allocator, name: []const u8, arguments: []const ast.Type) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, name);
+    if (arguments.len != 0) {
+        try out.append(allocator, '<');
+        for (arguments, 0..) |argument, index| {
+            if (index != 0) try out.appendSlice(allocator, ", ");
+            try argument.formatInto(allocator, &out);
+        }
+        try out.append(allocator, '>');
+    }
+    return out.toOwnedSlice(allocator);
 }

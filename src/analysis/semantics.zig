@@ -78,7 +78,12 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
             try names.put(object_decl.name, "object");
         }
 
+        for (module.syntax.functions.items) |func| {
+            try checkTypeParameterNames(state, origin_path, func.type_params.items);
+        }
+
         for (module.syntax.records.items) |record_decl| {
+            try checkTypeParameterNames(state, origin_path, record_decl.type_params.items);
             if (isBuiltinTypeName(record_decl.name)) {
                 const origin = core.SourceOrigin.at(origin_path, record_decl.span);
 
@@ -129,6 +134,19 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
 }
 
 const isBuiltinTypeName = semantic_env.isBuiltinTypeName;
+
+fn checkTypeParameterNames(state: *core.DocumentState, origin_path: []const u8, parameters: []const ast.TypeParameter) !void {
+    for (parameters) |parameter| {
+        if (!isBuiltinTypeName(parameter.name)) continue;
+        try state.addValidationDiagnostic(.@"error", null, null, core.SourceOrigin.at(origin_path, parameter.span), .{
+            .user_report = .{
+                .code = "InvalidTypeParameter",
+                .message = try std.fmt.allocPrint(state.allocator, "type parameter '{s}' conflicts with a built-in type", .{parameter.name}),
+            },
+        });
+        return error.InvalidTypeParameter;
+    }
+}
 
 pub fn checkTypeAnnotations(
     allocator: std.mem.Allocator,
@@ -275,9 +293,10 @@ fn resolveModuleTypeReferences(
     sema: *const SemanticEnv,
 ) !void {
     for (program.records.items) |*record_decl| {
+        const scoped_sema = sema.forTypeParameters(module_id, record_decl.type_params.items, record_decl.span.start);
         for (record_decl.fields.items) |*field| {
-            try resolveTypeReference(&field.value_type, module_id, sema);
-            if (field.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, sema);
+            try resolveTypeReference(&field.value_type, module_id, &scoped_sema);
+            if (field.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, &scoped_sema);
         }
     }
     for (program.objects.items) |*object_decl| {
@@ -318,13 +337,14 @@ fn resolveFunctionTypeReferences(
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
+    const scoped_sema = sema.forTypeParameters(module_id, func.type_params.items, func.span.start);
     for (func.params.items) |*param| {
-        try resolveParamTypeReference(param, module_id, sema);
-        if (param.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, sema);
+        try resolveParamTypeReference(param, module_id, &scoped_sema);
+        if (param.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, &scoped_sema);
     }
-    try resolveTypeReference(&func.result_type, module_id, sema);
+    try resolveTypeReference(&func.result_type, module_id, &scoped_sema);
     for (func.statements.items) |*stmt| {
-        try resolveStatementTypeReferences(allocator, stmt, module_id, sema);
+        try resolveStatementTypeReferences(allocator, stmt, module_id, &scoped_sema);
     }
 }
 
@@ -367,6 +387,7 @@ fn resolveExprTypeReferences(
     switch (expr.*) {
         .ident, .hole, .string, .color, .number, .boolean, .none, .enum_case => {},
         .call => |*call| {
+            for (call.type_args.items) |*argument| try resolveTypeReference(argument, module_id, sema);
             for (call.args.items) |*arg| try resolveExprTypeReferences(allocator, arg, module_id, sema);
         },
         .apply => |*apply| {
@@ -378,6 +399,7 @@ fn resolveExprTypeReferences(
             try resolveExprTypeReferences(allocator, lambda.body, module_id, sema);
         },
         .record => |*record| {
+            for (record.type_args.items) |*argument| try resolveTypeReference(argument, module_id, sema);
             try resolveRecordTypeName(allocator, module_id, sema, record);
             for (record.fields.items) |*field| try resolveExprTypeReferences(allocator, &field.value, module_id, sema);
         },
@@ -784,7 +806,7 @@ fn resolveTypeReference(
                 ty.arguments = arguments;
                 ty.owns_arguments = owns_arguments;
                 switch (ty.kind) {
-                    .object, .record => ty.class_name_span = class_name_span,
+                    .object, .record, .parameter => ty.class_name_span = class_name_span,
                     .enum_type => ty.enum_name_span = class_name_span,
                     else => {},
                 }
@@ -894,6 +916,8 @@ fn checkExprTypeAnnotations(
     switch (expr) {
         .ident, .hole, .string, .color, .number, .boolean, .none, .enum_case => {},
         .call => |call| {
+            const origin = core.SourceOrigin{ .path = origin_path, .span = call.callee.span };
+            for (call.type_args.items) |argument| try checkTypeAnnotation(state, sema, module_id, argument, origin);
             var had_diagnostics = false;
             for (call.args.items) |arg| {
                 const diagnostic_count = state.diagnostics.entries.items.len;
@@ -935,6 +959,8 @@ fn checkExprTypeAnnotations(
             if (had_diagnostics) return error.DiagnosticsFailed;
         },
         .record => |record| {
+            const origin = core.SourceOrigin{ .path = origin_path, .span = record.type_name_span };
+            for (record.type_args.items) |argument| try checkTypeAnnotation(state, sema, module_id, argument, origin);
             var had_diagnostics = false;
             for (record.fields.items) |field| {
                 const diagnostic_count = state.diagnostics.entries.items.len;
@@ -967,7 +993,7 @@ fn checkExprTypeAnnotations(
 }
 
 fn checkResultTypeAnnotation(state: *core.DocumentState, sema: *const SemanticEnv, module_id: core.SourceModuleId, ty: ast.Type, origin: core.SourceOrigin) anyerror!void {
-    if (ty.kind == .void) return;
+    if (ty.kind == .void) return semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
     try checkTypeAnnotation(state, sema, module_id, ty, origin);
 }
 
@@ -985,19 +1011,23 @@ fn checkTypeAnnotation(
         return error.InvalidType;
     }
     for (ty.arguments) |argument| try checkTypeAnnotation(state, sema, module_id, argument, origin);
-    if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none or ty.kind == .hole) return;
+    if (ty.kind == .selection) try semantic_types.ensureTypeArgumentCount(state, 1, ty.arguments.len, origin);
+    if (ty.kind != .selection and ty.kind != .record and ty.kind != .object) try semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
+    if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none or ty.kind == .hole or ty.kind == .parameter) return;
     if (ty.kind == .optional) {
         if (ty.optional_child) |child| try checkTypeAnnotation(state, sema, module_id, child.*, origin);
         return;
     }
     if (ty.kind == .record) {
         const record_name = ty.class_name orelse return;
-        if (sema.record(ty.nominal_module_id, record_name) == null) return reportUnknownType(state, origin, record_name);
+        const declaration = sema.record(ty.nominal_module_id, record_name) orelse return reportUnknownType(state, origin, record_name);
+        try semantic_types.ensureTypeArgumentCount(state, declaration.decl.type_params.items.len, ty.arguments.len, origin);
     } else if (ty.class_name) |class_name| {
         if (ty.nominal_module_id == null or sema.class(ty.nominal_module_id, class_name) == null) {
             return reportUnknownType(state, origin, class_name);
         }
     }
+    if (ty.kind == .object) try semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
     if (ty.kind == .function) {
         var had_diagnostics = false;
         for (ty.fn_params) |param| {

@@ -212,3 +212,74 @@ fn exerciseNestedTypeOwnership(allocator: std.mem.Allocator) !void {
 test "nested type arguments clean up every failed allocation" {
     try testing.checkAllAllocationFailures(testing.allocator, exerciseNestedTypeOwnership, .{});
 }
+
+test "type parameters use declaration identity instead of spelling" {
+    const id = Type.ParameterId{ .module_id = 1, .declaration_start = 10, .index = 0 };
+    const original = Type.parameter(id, "T", .{ .start = 15, .end = 16 });
+    const renamed = Type.parameter(id, "Renamed", null);
+    try testing.expect(Type.eql(original, renamed));
+    try testing.expectEqual(typeHash(original), typeHash(renamed));
+    for ([_]Type.ParameterId{
+        .{ .module_id = 2, .declaration_start = 10, .index = 0 },
+        .{ .module_id = 1, .declaration_start = 20, .index = 0 },
+        .{ .module_id = 1, .declaration_start = 10, .index = 1 },
+    }) |other_id| {
+        const other = Type.parameter(other_id, "T", null);
+        try testing.expect(!Type.eql(original, other));
+        try testing.expect(!Type.accepts(original, other));
+        try testing.expect(typeHash(original) != typeHash(other));
+    }
+    try testing.expect(!Type.accepts(original, Type.any));
+    try testing.expect(!Type.accepts(Type.any, original));
+    try expectFormat(original, "T");
+}
+
+fn exerciseTypeSubstitution(allocator: std.mem.Allocator) !void {
+    const id = Type.ParameterId{ .module_id = 1, .declaration_start = 10, .index = 0 };
+    const param = Type.parameter(id, "T", null);
+    var box = try Type.recordType("Box").inModule(2).withArguments(allocator, &.{param});
+    defer box.deinit(allocator);
+    var selection = try Type.selectionOf(allocator, box);
+    defer selection.deinit(allocator);
+    var maybe = try Type.optional(allocator, selection);
+    defer maybe.deinit(allocator);
+    var callback = try Type.functionType(allocator, &.{maybe}, box);
+    defer callback.deinit(allocator);
+    var result = try callback.substitute(allocator, &.{.{ .parameter = id, .replacement = Type.number }});
+    defer result.deinit(allocator);
+    try testing.expect(callback.containsParameter());
+    try testing.expect(!result.containsParameter());
+    try testing.expectEqual(Type.Kind.number, result.fn_result.?.arguments[0].kind);
+    try testing.expectEqual(@as(?u32, 2), result.fn_result.?.nominal_module_id);
+    try testing.expectEqual(Type.Kind.number, result.fn_params[0].optional_child.?.selectionItem().arguments[0].kind);
+    try testing.expectEqual(Type.Kind.parameter, callback.fn_result.?.arguments[0].kind);
+}
+
+test "type substitution traverses nested arguments optional and function types" {
+    try testing.checkAllAllocationFailures(testing.allocator, exerciseTypeSubstitution, .{});
+}
+
+test "type substitution preserves free parameters and does not capture replacement parameters" {
+    const first = Type.ParameterId{ .module_id = 1, .declaration_start = 10, .index = 0 };
+    const second = Type.ParameterId{ .module_id = 1, .declaration_start = 20, .index = 0 };
+    const t = Type.parameter(first, "T", null);
+    const other_t = Type.parameter(second, "T", null);
+    var result = try t.substitute(testing.allocator, &.{
+        .{ .parameter = first, .replacement = other_t },
+        .{ .parameter = second, .replacement = Type.number },
+    });
+    defer result.deinit(testing.allocator);
+    try testing.expect(Type.eql(result, other_t));
+    var free = try other_t.substitute(testing.allocator, &.{.{ .parameter = first, .replacement = Type.number }});
+    defer free.deinit(testing.allocator);
+    try testing.expect(Type.eql(free, other_t));
+}
+
+test "rigid type parameters still support optional lifting" {
+    const param = Type.parameter(.{ .module_id = 1, .declaration_start = 10, .index = 0 }, "T", null);
+    var optional = try Type.optional(testing.allocator, param);
+    defer optional.deinit(testing.allocator);
+    try testing.expect(Type.accepts(optional, param));
+    try testing.expect(Type.accepts(optional, Type.none));
+    try testing.expect(!Type.accepts(param, optional));
+}

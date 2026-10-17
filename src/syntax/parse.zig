@@ -384,6 +384,11 @@ const Parser = struct {
         if (options.paired and names.hasBangSuffix(parsed_name.text)) {
             return self.failAt(self.pos - 1, error.PairedFunctionNameCannotEndWithBang);
         }
+        var type_params = try self.parseTypeParameters();
+        errdefer {
+            for (type_params.items) |*parameter| parameter.deinit(self.allocator);
+            type_params.deinit(self.allocator);
+        }
         source.skipInlineSpaces(self.source, &self.pos);
         try self.expectChar('(');
 
@@ -451,7 +456,7 @@ const Parser = struct {
             statements.deinit(self.allocator);
         }
         if (result_type.kind != .void and !functionBodyReturns(statements.items) and !(self.recovering and self.unterminated_block_string)) return self.fail(error.ExpectedReturn);
-        return .{ .name = parsed_name.text, .name_span = parsed_name.span, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .statements = statements };
+        return .{ .name = parsed_name.text, .name_span = parsed_name.span, .span = .{ .start = start, .end = self.pos }, .type_params = type_params, .params = params, .result_type = result_type, .statements = statements };
     }
 
     fn parseFunctionBody(self: *Parser, result_type: ast.Type) !std.ArrayList(Statement) {
@@ -514,10 +519,18 @@ const Parser = struct {
             .callee = .{ .name = try self.allocator.dupe(u8, "pagectx") },
             .args = .empty,
         } });
+        var type_args = std.ArrayList(ast.Type).empty;
+        errdefer type_args.deinit(self.allocator);
+        try type_args.ensureTotalCapacity(self.allocator, func.type_params.items.len);
+        for (func.type_params.items) |parameter| {
+            type_args.appendAssumeCapacity(ast.Type.objectClassAt(self.source[parameter.span.start..parameter.span.end], parameter.span));
+        }
         outer_args.appendAssumeCapacity(.{ .call = .{
             .callee = .{ .name = try self.allocator.dupe(u8, func.name) },
+            .type_args = type_args,
             .args = inner_args,
         } });
+        type_args = .empty;
         inner_args = .empty;
 
         const return_expr = Expr{ .call = .{
@@ -569,10 +582,20 @@ const Parser = struct {
         var parsed_name_moved = false;
         errdefer if (!parsed_name_moved) self.allocator.free(parsed_name.text);
         source.skipTriviaFrom(self.source, &self.pos);
+        var type_params = try self.parseTypeParameters();
+        defer {
+            for (type_params.items) |*parameter| parameter.deinit(self.allocator);
+            type_params.deinit(self.allocator);
+        }
+        source.skipTriviaFrom(self.source, &self.pos);
         if (self.peekChar('{')) {
             parsed_name_moved = true;
-            return .{ .record = try self.parseRecordDeclBody(start, parsed_name) };
+            var decl = try self.parseRecordDeclBody(start, parsed_name);
+            decl.type_params = type_params;
+            type_params = .empty;
+            return .{ .record = decl };
         }
+        if (type_params.items.len != 0) return self.fail(error.ExpectedChar);
         source.skipInlineSpaces(self.source, &self.pos);
         try self.expectChar('=');
         source.skipInlineSpaces(self.source, &self.pos);
@@ -937,16 +960,16 @@ const Parser = struct {
         const name = try self.parseQualifiedTypeNameWithSpan();
         if (std.mem.eql(u8, name.text, "Document")) {
             self.allocator.free(name.text);
-            return ast.Type.document;
+            return try self.parseNamedTypeArguments(ast.Type.document);
         }
         if (std.mem.eql(u8, name.text, "Page")) {
             self.allocator.free(name.text);
-            return ast.Type.page;
+            return try self.parseNamedTypeArguments(ast.Type.page);
         }
         if (std.mem.eql(u8, name.text, "Object")) return try self.parseObjectType(name);
         if (std.mem.eql(u8, name.text, "Anchor")) {
             self.allocator.free(name.text);
-            return ast.Type.anchor;
+            return try self.parseNamedTypeArguments(ast.Type.anchor);
         }
         if (std.mem.eql(u8, name.text, "Function")) {
             self.allocator.free(name.text);
@@ -954,41 +977,41 @@ const Parser = struct {
         }
         if (std.mem.eql(u8, name.text, "String")) {
             self.allocator.free(name.text);
-            return ast.Type.string;
+            return try self.parseNamedTypeArguments(ast.Type.string);
         }
         if (std.mem.eql(u8, name.text, "Color")) {
             self.allocator.free(name.text);
-            return ast.Type.color;
+            return try self.parseNamedTypeArguments(ast.Type.color);
         }
         if (std.mem.eql(u8, name.text, "Number")) {
             self.allocator.free(name.text);
-            return ast.Type.number;
+            return try self.parseNamedTypeArguments(ast.Type.number);
         }
         if (std.mem.eql(u8, name.text, "Bool")) {
             self.allocator.free(name.text);
-            return ast.Type.boolean;
+            return try self.parseNamedTypeArguments(ast.Type.boolean);
         }
         if (std.mem.eql(u8, name.text, "Constraints")) {
             self.allocator.free(name.text);
-            return ast.Type.constraints;
+            return try self.parseNamedTypeArguments(ast.Type.constraints);
         }
         if (std.mem.eql(u8, name.text, "Void")) {
             self.allocator.free(name.text);
-            return .{ .kind = .void };
+            return try self.parseNamedTypeArguments(.{ .kind = .void });
         }
         if (std.mem.eql(u8, name.text, "None")) {
             self.allocator.free(name.text);
-            return ast.Type.none;
+            return try self.parseNamedTypeArguments(ast.Type.none);
         }
         if (std.mem.eql(u8, name.text, "Selection")) {
             self.allocator.free(name.text);
-            var item_type = try self.parseOptionalTypeParam();
-            defer item_type.deinit(self.allocator);
-            return try ast.Type.selectionOf(self.allocator, item_type);
+            source.skipInlineSpaces(self.source, &self.pos);
+            if (!source.startsWithAt(self.source, self.pos, "<")) return try ast.Type.selectionOf(self.allocator, ast.Type.any);
+            return try self.parseNamedTypeArguments(.{ .kind = .selection });
         }
         const class_name = self.source[name.span.start..name.span.end];
         self.allocator.free(name.text);
-        return ast.Type.objectClassAt(class_name, name.span);
+        return try self.parseNamedTypeArguments(ast.Type.objectClassAt(class_name, name.span));
     }
 
     fn parseQualifiedTypeName(self: *Parser) anyerror![]const u8 {
@@ -1022,18 +1045,86 @@ const Parser = struct {
         return ast.Type.objectClassAt(self.source[class_name.span.start..class_name.span.end], class_name.span);
     }
 
-    fn parseOptionalTypeParam(self: *Parser) anyerror!ast.Type {
+    fn parseTypeParameters(self: *Parser) !std.ArrayList(ast.TypeParameter) {
+        var parameters = std.ArrayList(ast.TypeParameter).empty;
+        errdefer {
+            for (parameters.items) |*parameter| parameter.deinit(self.allocator);
+            parameters.deinit(self.allocator);
+        }
         source.skipInlineSpaces(self.source, &self.pos);
-        if (self.eof() or self.source[self.pos] != '<') return ast.Type.any;
-        return try self.parseTypeParam();
+        if (!source.startsWithAt(self.source, self.pos, "<")) return parameters;
+        self.pos += 1;
+        while (true) {
+            source.skipTriviaFrom(self.source, &self.pos);
+            const name = try self.parseIdentifierWithSpan();
+            var moved = false;
+            errdefer if (!moved) self.allocator.free(name.text);
+            for (parameters.items) |parameter| {
+                if (std.mem.eql(u8, parameter.name, name.text)) return self.failSpan(name.span, error.DuplicateTypeParameter);
+            }
+            try parameters.append(self.allocator, .{ .name = name.text, .span = name.span });
+            moved = true;
+            source.skipTriviaFrom(self.source, &self.pos);
+            if (!self.peekChar(',')) break;
+            self.pos += 1;
+        }
+        try self.expectChar('>');
+        return parameters;
     }
 
-    fn parseTypeParam(self: *Parser) anyerror!ast.Type {
+    fn parseTypeArguments(self: *Parser) anyerror!std.ArrayList(ast.Type) {
+        var arguments = std.ArrayList(ast.Type).empty;
+        errdefer {
+            for (arguments.items) |*argument| argument.deinit(self.allocator);
+            arguments.deinit(self.allocator);
+        }
         try self.expectChar('<');
-        var inner = try self.parseTypeAnnotation();
-        errdefer inner.deinit(self.allocator);
+        while (true) {
+            source.skipTriviaFrom(self.source, &self.pos);
+            if (self.peekChar('>')) return self.fail(error.ExpectedTypeAnnotation);
+            try arguments.ensureUnusedCapacity(self.allocator, 1);
+            arguments.appendAssumeCapacity(try self.parseTypeAnnotation());
+            source.skipTriviaFrom(self.source, &self.pos);
+            if (!self.peekChar(',')) break;
+            self.pos += 1;
+        }
         try self.expectChar('>');
-        return inner;
+        return arguments;
+    }
+
+    fn parseNamedTypeArguments(self: *Parser, base: ast.Type) !ast.Type {
+        source.skipInlineSpaces(self.source, &self.pos);
+        if (!source.startsWithAt(self.source, self.pos, "<")) return base;
+        var arguments = try self.parseTypeArguments();
+        errdefer {
+            for (arguments.items) |*argument| argument.deinit(self.allocator);
+            arguments.deinit(self.allocator);
+        }
+        var result = base;
+        result.arguments = try arguments.toOwnedSlice(self.allocator);
+        result.owns_arguments = true;
+        return result;
+    }
+
+    fn parseTypeApplication(self: *Parser) !?std.ArrayList(ast.Type) {
+        if (!source.startsWithAt(self.source, self.pos, "<") or source.startsWithAt(self.source, self.pos, "<<")) return null;
+        var probe = self.*;
+        probe.recovering = false;
+        probe.holes = null;
+        var arguments = probe.parseTypeArguments() catch |err| switch (err) {
+            error.OutOfMemory, error.Canceled => return err,
+            else => return null,
+        };
+        var transferred = false;
+        defer if (!transferred) {
+            for (arguments.items) |*argument| argument.deinit(self.allocator);
+            arguments.deinit(self.allocator);
+        };
+        source.skipInlineSpaces(self.source, &probe.pos);
+        if (!source.startsWithAt(probe.source, probe.pos, "(") and !source.startsWithAt(probe.source, probe.pos, "{")) return null;
+        self.pos = probe.pos;
+        transferred = true;
+        return arguments;
     }
 
     fn parsePage(self: *Parser) !PageDecl {
@@ -1400,7 +1491,7 @@ const Parser = struct {
         const name_end = self.pos;
         source.skipInlineSpaces(self.source, &self.pos);
 
-        if (self.startsExpressionAfterName(name, name_end)) {
+        if (try self.startsExpressionAfterName(name, name_end)) {
             name.deinit(self.allocator);
             name_owned = false;
             self.pos = start;
@@ -1417,10 +1508,17 @@ const Parser = struct {
         return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
     }
 
-    fn startsExpressionAfterName(self: *const Parser, name: ast.CallableName, name_end: usize) bool {
+    fn startsExpressionAfterName(self: *Parser, name: ast.CallableName, name_end: usize) !bool {
         if (self.pos >= self.source.len) return false;
         if (self.source[self.pos] == '(' or self.source[self.pos] == '"' or
             source.startsWithAt(self.source, self.pos, "<<")) return true;
+        var probe = self.*;
+        if (try probe.parseTypeApplication()) |arguments| {
+            var owned = arguments;
+            for (owned.items) |*argument| argument.deinit(self.allocator);
+            owned.deinit(self.allocator);
+            return true;
+        }
         // A bang callable cannot be a bare operand. Its remaining line is
         // therefore still a text argument, including leading operator marks.
         if (std.mem.endsWith(u8, name.name, "!")) return false;
@@ -1957,15 +2055,26 @@ const Parser = struct {
                 return .{ .boolean = value };
             }
         }
+        var type_args = (try self.parseTypeApplication()) orelse std.ArrayList(ast.Type).empty;
+        defer {
+            for (type_args.items) |*argument| argument.deinit(self.allocator);
+            type_args.deinit(self.allocator);
+        }
         if (!self.eof() and self.source[self.pos] == '{') {
             const type_name_span = name.span;
             name_owned = false;
             const type_name = try self.takeQualifiedNameText(name);
-            return try self.parseRecordLiteralAfterName(type_name, type_name_span);
+            var result = try self.parseRecordLiteralAfterName(type_name, type_name_span);
+            result.record.type_args = type_args;
+            type_args = .empty;
+            return result;
         }
         if (!self.eof() and self.source[self.pos] == '(') {
             name_owned = false;
-            return .{ .call = try self.parseCallAfterName(name) };
+            var result = try self.parseCallAfterName(name);
+            result.type_args = type_args;
+            type_args = .empty;
+            return .{ .call = result };
         }
         if (source.startsWithAt(self.source, self.pos, "<<")) {
             const text = try self.parseChevronBlockStringLiteral();

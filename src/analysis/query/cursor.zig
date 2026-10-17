@@ -10,6 +10,8 @@ pub const SourceNameKind = enum {
     callable_qualifier,
     callable_name,
     identifier,
+    type_name,
+    type_parameter,
     member_name,
     record_field_name,
     record_update_path_segment,
@@ -110,6 +112,10 @@ pub fn sourceNameAt(budget: ?QueryBudget, program: *const ast.Module, offset: us
     }
     for (program.records.items) |record| {
         if (expired(budget)) return null;
+        for (record.type_params.items) |parameter| {
+            if (expired(budget)) return null;
+            if (spanContainsOffset(parameter.span, offset)) return .{ .text = parameter.name, .kind = .type_parameter };
+        }
         if (sourceNameInFields(budget, record.fields.items, offset)) |target| return target;
     }
     for (program.objects.items) |object| {
@@ -127,6 +133,10 @@ pub fn sourceNameAt(budget: ?QueryBudget, program: *const ast.Module, offset: us
     }
     for (program.functions.items) |func| {
         if (expired(budget)) return null;
+        for (func.type_params.items) |parameter| {
+            if (expired(budget)) return null;
+            if (spanContainsOffset(parameter.span, offset)) return .{ .text = parameter.name, .kind = .type_parameter };
+        }
         for (func.params.items) |param| {
             if (expired(budget)) return null;
             if (spanContainsOptional(param.name_span, offset)) return .{
@@ -134,6 +144,7 @@ pub fn sourceNameAt(budget: ?QueryBudget, program: *const ast.Module, offset: us
                 .kind = .identifier,
             };
             if (sourceNameInType(budget, param.ty, offset)) |target| return target;
+            if (param.default_value) |value| if (sourceNameInExpr(budget, value.*, offset)) |target| return target;
         }
         if (sourceNameInType(budget, func.result_type, offset)) |target| return target;
         if (sourceNameInStatements(budget, func.statements.items, offset)) |target| return target;
@@ -142,6 +153,26 @@ pub fn sourceNameAt(budget: ?QueryBudget, program: *const ast.Module, offset: us
     for (program.pages.items) |page| {
         if (expired(budget)) return null;
         if (sourceNameInStatements(budget, page.statements.items, offset)) |target| return target;
+    }
+    return null;
+}
+
+pub fn visibleTypeParameter(budget: ?QueryBudget, program: *const ast.Module, offset: usize, name: []const u8) ?ast.TypeParameter {
+    for (program.records.items) |record| {
+        if (expired(budget)) return null;
+        if (!spanContainsOffset(record.span, offset)) continue;
+        for (record.type_params.items) |parameter| {
+            if (expired(budget)) return null;
+            if (std.mem.eql(u8, parameter.name, name)) return parameter;
+        }
+    }
+    for (program.functions.items) |func| {
+        if (expired(budget)) return null;
+        if (!spanContainsOffset(func.span, offset)) continue;
+        for (func.type_params.items) |parameter| {
+            if (expired(budget)) return null;
+            if (std.mem.eql(u8, parameter.name, name)) return parameter;
+        }
     }
     return null;
 }
@@ -614,13 +645,13 @@ fn sourceNameInType(budget: ?QueryBudget, ty: ast.Type, offset: usize) ?SourceNa
         if (sourceNameInType(budget, argument, offset)) |target| return target;
     }
     return switch (ty.kind) {
-        .object, .record => if (spanContainsOptional(ty.class_name_span, offset)) .{
+        .object, .record, .parameter => if (spanContainsOptional(ty.class_name_span, offset)) .{
             .text = ty.class_name orelse "",
-            .kind = .identifier,
+            .kind = .type_name,
         } else null,
         .enum_type => if (spanContainsOptional(ty.enum_name_span, offset)) .{
             .text = ty.enum_name orelse "",
-            .kind = .identifier,
+            .kind = .type_name,
         } else null,
         .function => blk: {
             for (ty.fn_params) |param| {
@@ -644,6 +675,9 @@ fn sourceNameInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?Source
         } else null,
         .call => |call| blk: {
             if (sourceNameInCallable(call.callee, offset)) |target| break :blk target;
+            for (call.type_args.items) |argument| {
+                if (sourceNameInType(budget, argument, offset)) |target| break :blk target;
+            }
             for (call.args.items) |arg| {
                 if (expired(budget)) return null;
                 if (sourceNameInExpr(budget, arg, offset)) |target| break :blk target;
@@ -681,6 +715,9 @@ fn sourceNameInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?Source
                 .text = record.type_name,
                 .kind = .identifier,
             };
+            for (record.type_args.items) |argument| {
+                if (sourceNameInType(budget, argument, offset)) |target| break :blk target;
+            }
             for (record.fields.items) |field| {
                 if (expired(budget)) return null;
                 if (spanContainsOptional(field.name_span, offset)) break :blk .{

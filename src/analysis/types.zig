@@ -19,6 +19,19 @@ pub const TypeInfo = struct {
 
 pub const TypeEnv = analysis_env.ValueEnv(TypeInfo);
 
+pub fn ensureTypeArgumentCount(state: ?*core.DocumentState, expected: usize, actual: usize, origin: core.SourceOrigin) !void {
+    if (expected == actual) return;
+    if (state) |document| {
+        try document.addValidationDiagnostic(.@"error", null, null, origin, .{
+            .user_report = .{
+                .code = "InvalidTypeArity",
+                .message = try std.fmt.allocPrint(document.allocator, "expected {d} type arguments, got {d}", .{ expected, actual }),
+            },
+        });
+    }
+    return error.InvalidTypeArity;
+}
+
 pub fn infoFromType(ty: Type) TypeInfo {
     if (holeIdFromType(ty)) |hole_id| return infoFromHole(hole_id);
     return .{

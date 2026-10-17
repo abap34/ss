@@ -1,0 +1,106 @@
+================================================================================
+Generic declarations and explicit applications
+================================================================================
+
+type Box<T> {
+  value: T
+}
+fn identity<T>(value: T) -> T
+  return value
+end
+page generic
+  let value = identity<Number>(3)
+  let nested = Box<Selection<Page>> { value = pages(document) }
+  lib::wrap!<Box<Text>>(value)
+  let comparison = value < other
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_identifier)
+    (type_parameters (type_parameter (type_identifier)))
+    (type_body
+      (object_field (identifier) (type (primary_type (type_identifier))))))
+  (function_declaration
+    (bare_callable_identifier (identifier))
+    (type_parameters (type_parameter (type_identifier)))
+    (parameters (parameter (identifier) (type (primary_type (type_identifier)))))
+    (type (primary_type (type_identifier)))
+    (return_statement (identifier)))
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (call_expression
+        (callable_identifier (bare_callable_identifier (identifier)))
+        (type_arguments (type (primary_type (type_identifier))))
+        (number)))
+    (let_statement
+      (identifier)
+      (value_construction
+        (type_identifier)
+        (type_arguments
+          (type (primary_type
+            (type_arguments (type (primary_type (type_identifier)))))))
+        (value_field
+          (identifier)
+          (call_expression
+            (callable_identifier (bare_callable_identifier (identifier)))
+            (identifier)))))
+    (expression_statement
+      (call_expression
+        (callable_identifier (qualified_callable_identifier (identifier) (bare_callable_identifier (identifier))))
+        (type_arguments (type (primary_type (type_identifier) (type_arguments (type (primary_type (type_identifier)))))))
+        (identifier)))
+    (let_statement (identifier) (binary_expression (identifier) (identifier)))))
+
+================================================================================
+Type arguments compose with optional and function types
+================================================================================
+
+fn keep<T>(value: Box<(Number? -> T)?>) -> Box<T?>
+  return value
+end
+page generic
+  let value = f < Box < Text > > (3)
+  let compared = (x < y) > z
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (bare_callable_identifier (identifier))
+    (type_parameters (type_parameter (type_identifier)))
+    (parameters
+      (parameter
+        (identifier)
+        (type
+          (primary_type
+            (type_identifier)
+            (type_arguments
+              (type
+                (optional_type
+                  (primary_type
+                    (type (function_type
+                      (optional_type (primary_type (type_identifier)))
+                      (type (primary_type (type_identifier)))))))))))))
+    (type (primary_type
+      (type_identifier)
+      (type_arguments (type (optional_type (primary_type (type_identifier)))))))
+    (return_statement (identifier)))
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (call_expression
+        (callable_identifier (bare_callable_identifier (identifier)))
+        (type_arguments (type (primary_type (type_identifier) (type_arguments (type (primary_type (type_identifier)))))))
+        (number)))
+    (let_statement
+      (identifier)
+      (binary_expression
+        (parenthesized_expression (binary_expression (identifier) (identifier)))
+        (identifier)))))

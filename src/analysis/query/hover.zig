@@ -50,6 +50,9 @@ fn resolveHover(allocator: std.mem.Allocator, snapshot: anytype, req: types.Sour
 
     if (context.expired()) return null;
     const module = snapshot.moduleForPath(req.path) orelse return null;
+    if (context.typeParameter()) |parameter| return .{
+        .markdown = try std.fmt.allocPrint(allocator, "Type parameter `{s}`", .{parameter.name}),
+    };
     if (resolve_query.structuredField(budget, snapshot, module.id, context)) |field| return .{
         .markdown = try std.fmt.allocPrint(allocator, "```ss\n({s}: {s})\n```", .{ field.name, field.type_label }),
     };
@@ -65,7 +68,7 @@ fn resolveHover(allocator: std.mem.Allocator, snapshot: anytype, req: types.Sour
             },
             .unknown => {},
         }
-    } else if (!context.targetKindIs(.enum_name)) return null;
+    } else if (!context.targetKindIs(.enum_name) and !context.targetKindIs(.type_name)) return null;
     if (resolve_query.typeDefinition(budget, snapshot, module.id, context.target, context.qualifiedCallableAlias())) |type_definition| {
         return try typeHover(allocator, type_definition, context.target);
     }

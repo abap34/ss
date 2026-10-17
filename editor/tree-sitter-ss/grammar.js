@@ -23,6 +23,8 @@ module.exports = grammar({
 
   conflicts: $ => [
     [$.source_file],
+    [$._expression, $.bare_callable_identifier, $._type_name],
+    [$._expression, $.bare_callable_identifier],
   ],
 
   rules: {
@@ -73,6 +75,7 @@ module.exports = grammar({
         seq("fn/!", field("name", $.identifier)),
         seq("fn", field("name", $.bare_callable_identifier)),
       ),
+      optional($.type_parameters),
       $.parameters,
       "->",
       field("result", $.type),
@@ -86,7 +89,7 @@ module.exports = grammar({
     type_declaration: $ => seq(
       "type",
       field("name", $.type_identifier),
-      choice(seq("=", $.object_type), $.type_body),
+      choice(seq("=", $.object_type), seq(optional($.type_parameters), $.type_body)),
     ),
 
     enum_declaration: $ => seq(
@@ -98,10 +101,17 @@ module.exports = grammar({
       "}",
     ),
 
+    type_parameters: $ => seq("<", typeList($, $.type_parameter), ">"),
+    type_parameter: $ => field("name", alias($.identifier, $.type_identifier)),
+    type_arguments: $ => seq("<", typeList($, $.type), ">"),
+
     type: $ => choice(
       $.function_type,
+      $.optional_type,
       $.primary_type,
     ),
+
+    optional_type: $ => seq($.primary_type, "?"),
 
     object_type: $ => seq(
       "object",
@@ -214,6 +224,7 @@ module.exports = grammar({
       $.property_exists_expression,
       $.text_call_expression,
       $.call_expression,
+      $.value_construction,
       $.member_expression,
       $.if_expression,
       $.list_expression,
@@ -249,13 +260,25 @@ module.exports = grammar({
       field("text", choice($.string, $.block_text)),
     )),
     call_expression: $ => prec.left(PREC.call, seq(
-      field("function", choice($.callable_identifier, $.parenthesized_expression, $.lambda_expression, $.call_expression)),
+      choice(
+        seq(field("function", $.callable_identifier), optional($.type_arguments)),
+        field("function", choice($.parenthesized_expression, $.lambda_expression, $.call_expression)),
+      ),
       "(",
       repeat($._terminator),
       optional(commaSepNewline($, $._expression)),
       repeat($._terminator),
       ")",
     )),
+    value_construction: $ => prec(PREC.call, seq(
+      field("type", $._type_name),
+      optional($.type_arguments),
+      "{",
+      repeat($._terminator),
+      repeat(seq($.value_field, optional(","), repeat($._terminator))),
+      "}",
+    )),
+    value_field: $ => seq(field("name", $.identifier), "=", field("value", $._expression)),
     member_expression: $ => prec.left(PREC.call, seq(
       field("object", choice($.identifier, $.call_expression, $.member_expression, $.parenthesized_expression)),
       choice(".", "?."),
@@ -288,7 +311,7 @@ module.exports = grammar({
     annotation_value: $ => $._expression,
 
     function_type: $ => prec.right(1, choice(
-      seq(field("param", $.primary_type), "->", field("result", $.type)),
+      seq(field("param", choice($.primary_type, $.optional_type)), "->", field("result", $.type)),
       seq("(", optional(commaSepNewline($, $.type)), ")", "->", field("result", $.type)),
     )),
 
@@ -296,7 +319,7 @@ module.exports = grammar({
       "document",
       "page",
       seq(choice("object", "Object"), optional(seq("<", $._type_name, ">"))),
-      seq(choice("selection", "Selection"), optional(seq("<", $.type, ">"))),
+      seq(choice("selection", "Selection"), optional($.type_arguments)),
       "anchor",
       "string",
       "number",
@@ -307,12 +330,12 @@ module.exports = grammar({
       "void",
       "Void",
       seq("(", $.type, ")"),
-      $._type_name,
+      seq($._type_name, optional($.type_arguments)),
     ),
 
     identifier: _ => /[A-Za-z_][A-Za-z0-9_]*/,
-    callable_identifier: $ => prec(1, choice($.bare_callable_identifier, $.qualified_callable_identifier)),
-    bare_callable_identifier: $ => prec(1, seq($.identifier, optional("!"))),
+    callable_identifier: $ => choice($.bare_callable_identifier, $.qualified_callable_identifier),
+    bare_callable_identifier: $ => seq($.identifier, optional("!")),
     qualified_callable_identifier: $ => prec(1, seq(field("module", $.identifier), "::", field("name", $.bare_callable_identifier))),
     import_spec: _ => /[A-Za-z0-9_./:-]+/,
     _type_name: $ => choice(alias($.identifier, $.type_identifier), $.qualified_type_identifier),
@@ -344,5 +367,14 @@ function commaSepNewline($, rule) {
     rule,
     repeat(seq(repeat($._terminator), ",", repeat($._terminator), rule)),
     optional(seq(repeat($._terminator), ",")),
+  );
+}
+
+function typeList($, rule) {
+  return seq(
+    repeat($._terminator),
+    rule,
+    repeat(seq(repeat($._terminator), ",", repeat($._terminator), rule)),
+    repeat($._terminator),
   );
 }

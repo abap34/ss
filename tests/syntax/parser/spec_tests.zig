@@ -2723,3 +2723,88 @@ test "syntax spec: nested selection arguments retain function and optional child
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
     try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
 }
+
+test "syntax spec: generic declarations and applications preserve type arguments" {
+    const source_text =
+        \\type Box<T> {
+        \\  value: T
+        \\}
+        \\fn identity<T>(value: T) -> T = value
+        \\fn/! wrap<T>(value: T) -> Box<T> = Box<T> { value = value }
+        \\page main
+        \\  let value: Box<Selection<Page>> = Box<Selection<Page>> { value = pages(document) }
+        \\  let x = identity<Number>(3)
+        \\  let y = lib::identity<Box<Selection<Page>>>(value)
+        \\  wrap! <Box<Selection<Page>>> (value)
+        \\end
+    ;
+    var parsed = try parse(source_text);
+    defer parsed.deinit();
+    const box = parsed.module.records.items[0];
+    try testing.expectEqualStrings("T", box.type_params.items[0].name);
+    try testing.expectEqualStrings("T", source_text[box.type_params.items[0].span.start..box.type_params.items[0].span.end]);
+    const identity = parsed.module.functions.items[0];
+    try testing.expectEqualStrings("T", identity.type_params.items[0].name);
+    const paired = parsed.module.functions.items[2];
+    try testing.expectEqualStrings("wrap!", paired.name);
+    try testing.expectEqualStrings("T", paired.type_params.items[0].name);
+    const forwarded = paired.statements.items[0].kind.return_expr.call.args.items[1].call;
+    try testing.expectEqualStrings("T", forwarded.type_args.items[0].class_name.?);
+    const statements = parsed.module.pages.items[0].statements.items;
+    const constructed = statements[0].kind.let_binding.expr.record;
+    try testing.expectEqualStrings("Box", constructed.type_name);
+    try testing.expectEqual(Type.Kind.page, constructed.type_args.items[0].selectionItem().kind);
+    const explicit = statements[1].kind.let_binding.expr.call;
+    try testing.expectEqual(Type.Kind.number, explicit.type_args.items[0].kind);
+    const qualified = statements[2].kind.let_binding.expr.call;
+    try testing.expectEqualStrings("lib", qualified.callee.qualifier.?);
+    try testing.expectEqualStrings("Box", qualified.type_args.items[0].class_name.?);
+    try testing.expectEqual(Type.Kind.page, qualified.type_args.items[0].arguments[0].selectionItem().kind);
+    const placed = statements[3].kind.expr_stmt.call;
+    try testing.expectEqualStrings("wrap!", placed.callee.name);
+    try testing.expectEqual(@as(usize, 1), placed.type_args.items.len);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
+}
+
+test "syntax spec: generic calls are distinguished from comparison expressions" {
+    var parsed = try parse(
+        \\page main
+        \\  let a = f<Number>(3)
+        \\  let b = f < Number > (3)
+        \\  let c = x < y
+        \\  let d = (x < y) > z
+        \\end
+    );
+    defer parsed.deinit();
+    const statements = parsed.module.pages.items[0].statements.items;
+    for (statements[0..2]) |statement| {
+        const call = statement.kind.let_binding.expr.call;
+        try testing.expectEqualStrings("f", call.callee.name);
+        try testing.expectEqual(Type.Kind.number, call.type_args.items[0].kind);
+    }
+    for (statements[2..]) |statement| {
+        try testing.expectEqual(@as(usize, 0), statement.kind.let_binding.expr.call.type_args.items.len);
+    }
+}
+
+test "syntax spec: type parameters reject duplicate and empty declarations" {
+    try expectParseErrorWithoutLeaks(error.DuplicateTypeParameter, "type Box<T, T> { value: T }\n");
+    try expectParseErrorWithoutLeaks(error.DuplicateTypeParameter, "fn keep<T, T>(x: T) -> T = x\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedIdentifier, "type Box<> { value: Number }\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "fn keep(x: Box<>) -> Number = 0\n");
+}
+
+test "syntax spec: incomplete generic input preserves subsequent declarations" {
+    const sources = [_][]const u8{
+        "type Broken<T,> { value: T }\ntype Kept { value: Number }\n",
+        "fn broken<T,>(value: T) -> T = value\nfn kept() -> Number = 1\n",
+        "page main\n  let missing = call<Number,>(1)\n  let kept = 2\nend\n",
+    };
+    for (sources) |text| {
+        try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{text});
+    }
+    var recovered = try syntax.parseRecoveringWithSourceName(testing.allocator, sources[0], "generics.ss");
+    defer recovered.deinit(testing.allocator);
+    try testing.expectEqualStrings("Kept", recovered.module.records.items[0].name);
+}

@@ -148,7 +148,7 @@ fn expectedRuntimeKind(expected: ast.Type) ?core.ValueTag {
         .boolean => .boolean,
         .constraints => .constraints,
         .void => .void,
-        .optional, .any, .hole => null,
+        .optional, .any, .hole, .parameter => null,
     };
 }
 

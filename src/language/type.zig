@@ -16,6 +16,13 @@ pub const Type = struct {
     fn_params: []Type = &.{},
     fn_result: ?*Type = null,
     hole_id: ?u32 = null,
+    parameter_id: ?ParameterId = null,
+
+    pub const ParameterId = struct {
+        module_id: u32,
+        declaration_start: usize,
+        index: u32,
+    };
 
     pub const Kind = enum {
         none,
@@ -36,6 +43,7 @@ pub const Type = struct {
         path,
         optional,
         hole,
+        parameter,
         void,
     };
 
@@ -101,6 +109,10 @@ pub const Type = struct {
 
     pub fn hole(hole_id: u32) Type {
         return .{ .kind = .hole, .hole_id = hole_id };
+    }
+
+    pub fn parameter(id: ParameterId, name: []const u8, span: ?SourceSpan) Type {
+        return .{ .kind = .parameter, .parameter_id = id, .class_name = name, .class_name_span = span };
     }
 
     pub fn optional(allocator: std.mem.Allocator, child: Type) !Type {
@@ -234,10 +246,52 @@ pub const Type = struct {
         return result;
     }
 
+    pub const Substitution = struct {
+        parameter: ParameterId,
+        replacement: Type,
+    };
+
+    /// Returns an independently owned type. Replacements are simultaneous:
+    /// parameters inside a replacement belong to its original environment.
+    pub fn substitute(self: Type, allocator: std.mem.Allocator, bindings: []const Substitution) !Type {
+        var result = try self.clone(allocator);
+        errdefer result.deinit(allocator);
+        try result.substituteOwned(allocator, bindings);
+        return result;
+    }
+
+    fn substituteOwned(self: *Type, allocator: std.mem.Allocator, bindings: []const Substitution) anyerror!void {
+        if (self.kind == .parameter) {
+            const id = self.parameter_id orelse return;
+            for (bindings) |binding| {
+                if (!std.meta.eql(id, binding.parameter)) continue;
+                const replacement = try binding.replacement.clone(allocator);
+                self.deinit(allocator);
+                self.* = replacement;
+                return;
+            }
+            return;
+        }
+        for (self.mutableArguments()) |*argument| try argument.substituteOwned(allocator, bindings);
+        for (self.fn_params) |*parameter_type| try parameter_type.substituteOwned(allocator, bindings);
+        if (self.fn_result) |result| try result.substituteOwned(allocator, bindings);
+        if (self.optional_child) |child| try child.substituteOwned(allocator, bindings);
+    }
+
+    pub fn containsParameter(self: Type) bool {
+        if (self.kind == .parameter) return true;
+        for (self.arguments) |argument| if (argument.containsParameter()) return true;
+        for (self.fn_params) |parameter_type| if (parameter_type.containsParameter()) return true;
+        if (self.fn_result) |result| if (result.containsParameter()) return true;
+        if (self.optional_child) |child| if (child.containsParameter()) return true;
+        return false;
+    }
+
     pub fn eql(a: Type, b: Type) bool {
         if (a.kind != b.kind or a.arguments.len != b.arguments.len) return false;
         for (a.arguments, b.arguments) |left, right| if (!eql(left, right)) return false;
         if (a.kind == .hole) return a.hole_id == b.hole_id;
+        if (a.kind == .parameter) return std.meta.eql(a.parameter_id, b.parameter_id);
         if (a.kind == .function) {
             if ((a.fn_result == null) != (b.fn_result == null)) return false;
             if (a.fn_params.len != b.fn_params.len) return false;
@@ -265,7 +319,7 @@ pub const Type = struct {
 
     pub fn accepts(expected: Type, actual: Type) bool {
         if (expected.kind == .hole or actual.kind == .hole) return false;
-        if (expected.kind == .any or actual.kind == .any) return true;
+        if (expected.kind == .any or actual.kind == .any) return expected.kind != .parameter and actual.kind != .parameter;
         if (expected.kind == .optional) {
             if (actual.kind == .none) return true;
             const child = expected.optional_child orelse return false;
@@ -276,6 +330,7 @@ pub const Type = struct {
             return accepts(child.*, actual);
         }
         if (actual.kind == .optional) return false;
+        if (expected.kind == .parameter or actual.kind == .parameter) return eql(expected, actual);
         if (expected.kind == .color or actual.kind == .color) {
             return expected.kind == .color and actual.kind == .color;
         }
@@ -322,6 +377,7 @@ pub const Type = struct {
         for (self.arguments) |argument| argument.hashInto(hasher);
         switch (self.kind) {
             .hole => std.hash.autoHash(hasher, self.hole_id),
+            .parameter => std.hash.autoHash(hasher, self.parameter_id),
             .function => {
                 std.hash.autoHash(hasher, self.fn_params.len);
                 for (self.fn_params) |param| param.hashInto(hasher);
@@ -408,7 +464,7 @@ pub const Type = struct {
                 try out.appendSlice(allocator, name)
             else
                 try out.appendSlice(allocator, displayName(self.kind)),
-            .record => if (self.class_name) |name|
+            .record, .parameter => if (self.class_name) |name|
                 try out.appendSlice(allocator, name)
             else
                 try out.appendSlice(allocator, displayName(self.kind)),
@@ -449,6 +505,7 @@ pub const Type = struct {
             .path => "Path",
             .optional => "Optional",
             .hole => "HoleType",
+            .parameter => "TypeParameter",
             .void => "Void",
         };
     }
