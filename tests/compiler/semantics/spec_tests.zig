@@ -7743,6 +7743,38 @@ test "compiler semantics: nested record anchors wait for both delayed root bindi
     );
 }
 
+test "compiler semantics: generic anchor paths retain nested arguments and delayed bindings" {
+    try buildSource(
+        \\type Box<T> { value: T }
+        \\page main
+        \\  let target = Box { value = Box { value = text!(docctx().footer_text ?? "missing") } }
+        \\  let source = Box { value = Box { value = text!(docctx().watermark ?? "missing") } }
+        \\  ~ target.value.value.left == source.value.value.right + 24
+        \\end
+        \\document
+        \\  docctx().footer_text = "Target"
+        \\  docctx().watermark = "Source"
+        \\end
+    );
+}
+
+test "compiler semantics: generic anchor paths reject nonplacement fields" {
+    try expectDiagnostic(
+        \\type Box<T> { value: T }
+        \\page main
+        \\  let target = Box { value = Box { value = "Text" } }
+        \\  ~ target.value.value.left == page.left + 24
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+    try expectDiagnostic(
+        \\type Box<T> { value: T }
+        \\page main
+        \\  let target = Box { value = Box { value = text!("Text") } }
+        \\  ~ target.value.missing.left == page.left + 24
+        \\end
+    , "case.ss:bytes:", "UnknownField");
+}
+
 test "compiler semantics: anchor paths reject mutable object property traversal" {
     try expectDiagnostic(
         \\page main

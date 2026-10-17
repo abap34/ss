@@ -580,11 +580,11 @@ fn resolveAnchorPathInfo(
             try addUserReport(state, origin, "InvalidType", "ss produced a type without a resolved declaration; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
-        const field = sema.recordField(record_id, field_name) orelse {
+        const field_type = (try sema.recordFieldType(state.inferenceAllocator(), info.ty, field_name)) orelse {
             try addUserReport(state, origin, "UnknownField", "type '{s}' has no field '{s}'", .{ record_id.name, field_name });
             return error.InvalidType;
         };
-        info = infoFromType(field.value_type);
+        info = infoFromType(field_type);
     }
     return info;
 }
