@@ -8665,3 +8665,37 @@ test "compiler semantics: incompatible concrete defaults report the definition a
     try expectOverlayDiagnostic(source, imported, "bad.ss:bytes:", "TypeMismatch");
     try expectOverlayDiagnostic(source, imported, "case.ss:bytes:", "InvalidInstantiation");
 }
+
+test "compiler semantics: placed parameters expose typed input ownership and anchors" {
+    try buildSource(
+        \\type Box<T> { value: T }
+        \\fn unwrap<T>(item: Placed<T>) -> T = item.value
+        \\fn read(item: Placed<Box<Number>>) -> Number = unwrap(item).value
+        \\fn optional(item: Placed<Box<Number>>?) -> Number = item?.value?.value ?? 0
+        \\fn owner(item: Placement) -> Page = item.page
+        \\fn document_of(item: Placement) -> Document = item.document
+        \\fn erase(item: Placed<Box<Number>>) -> Placement = item
+        \\fn left(item: Placement) -> Anchor = item.left
+        \\fn align(a: Placement, b: Placed<Box<Number>>) -> Constraints
+        \\  return a.left == b.right + 12
+        \\end
+        \\page main
+        \\end
+    );
+}
+
+test "compiler semantics: placement references reject missing arguments and arbitrary input access" {
+    const cases = [_]struct { source: []const u8, diagnostic: []const u8 }{
+        .{ .source = "fn read(item: Placed) -> Void\nend\n", .diagnostic = "InvalidTypeArity" },
+        .{ .source = "fn read(item: Placed<Number, String>) -> Void\nend\n", .diagnostic = "InvalidTypeArity" },
+        .{ .source = "fn read(item: Placement<Number>) -> Void\nend\n", .diagnostic = "InvalidTypeArity" },
+        .{ .source = "fn read(item: Placed<Void>) -> Void\nend\n", .diagnostic = "InvalidVoidType" },
+        .{ .source = "fn read(item: Placement) -> Number = item.value\n", .diagnostic = "UnknownField" },
+        .{ .source = "type Item { title: String }\nfn read(item: Placed<Item>) -> String = item.title\n", .diagnostic = "UnknownField" },
+        .{ .source = "fn read(item: Placement) -> Placed<Number> = item\n", .diagnostic = "TypeMismatch" },
+        .{ .source = "fn mutate(item: Placed<Number>) -> Void\nitem.value = 3\nend\n", .diagnostic = "ImmutablePlacement" },
+        .{ .source = "page main\nlet fake = Placed<Number> {}\nend\n", .diagnostic = "InvalidTypeConstruction" },
+        .{ .source = "page main\nlet fake = Placement {}\nend\n", .diagnostic = "InvalidTypeConstruction" },
+    };
+    for (cases) |case| try expectDiagnostic(case.source, "bytes:", case.diagnostic);
+}

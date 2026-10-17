@@ -1016,8 +1016,8 @@ fn checkTypeAnnotation(
         return error.InvalidType;
     }
     for (ty.arguments) |argument| try checkTypeAnnotation(state, sema, module_id, argument, origin);
-    if (ty.kind == .selection) try semantic_types.ensureTypeArgumentCount(state, 1, ty.arguments.len, origin);
-    if (ty.kind != .selection and ty.kind != .record and ty.kind != .object) try semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
+    if (ty.kind == .selection or ty.kind == .placed) try semantic_types.ensureTypeArgumentCount(state, 1, ty.arguments.len, origin);
+    if (ty.kind != .selection and ty.kind != .placed and ty.kind != .record and ty.kind != .object) try semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
     if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none or ty.kind == .hole or ty.kind == .parameter) return;
     if (ty.kind == .optional) {
         if (ty.optional_child) |child| try checkTypeAnnotation(state, sema, module_id, child.*, origin);

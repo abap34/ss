@@ -559,3 +559,73 @@ test "analysis query spec: generic type parameters retain their lexical scope an
     }
     try testing.expectEqual(@as(usize, 2), count);
 }
+
+test "analysis query spec: placement members expose concrete input and hide erased fields" {
+    const path = "stdlib/internal/placement-query-test.ss";
+    const source =
+        \\type Box<T> { value: T }
+        \\fn read(item: Placed<Box<Number>>) -> Number = item.value.value
+        \\fn owner(item: Placement) -> Page = item.page
+        \\fn document_of(item: Placement) -> Document = item.document
+        \\fn left(item: Placement) -> Anchor = item.left
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    try expectAppliedField(&snapshot, path, source, "item.value.value", "value", "Number", 0);
+    for ([_]struct { needle: []const u8, label: []const u8, ty: []const u8, has_value: bool }{
+        .{ .needle = "item.value", .label = "value", .ty = "Box<Number>", .has_value = true },
+        .{ .needle = "item.page", .label = "page", .ty = "Page", .has_value = false },
+        .{ .needle = "item.document", .label = "document", .ty = "Document", .has_value = false },
+        .{ .needle = "item.left", .label = "left", .ty = "Anchor", .has_value = false },
+    }) |case| {
+        const request = analysis.query.types.SourceRequest{ .path = path, .source = source, .offset = std.mem.indexOf(u8, source, case.needle).? + case.needle.len - 1 };
+        var completion = try analysis.snapshot.completeAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+        defer completion.deinit(testing.allocator);
+        var found = false;
+        for (completion.items) |item| {
+            try testing.expect(!std.mem.eql(u8, item.label, "content"));
+            if (!case.has_value) try testing.expect(!std.mem.eql(u8, item.label, "value"));
+            if (!std.mem.eql(u8, item.label, case.label)) continue;
+            try testing.expectEqualStrings(case.ty, item.detail orelse "");
+            found = true;
+        }
+        try testing.expect(found);
+        var hover = (try analysis.snapshot.hoverAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 })) orelse return error.ExpectedHover;
+        defer hover.deinit(testing.allocator);
+        try testing.expect(std.mem.indexOf(u8, hover.markdown, case.ty) != null);
+        const definitions = try analysis.snapshot.definitionAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+        defer testing.allocator.free(definitions);
+        try testing.expectEqual(@as(usize, 0), definitions.len);
+    }
+}
+
+test "analysis query spec: unfinished placement access keeps the concrete input type" {
+    const path = "stdlib/internal/unfinished-placement-query-test.ss";
+    for ([_]struct { source: []const u8, needle: []const u8, expected: []const u8 }{
+        .{ .source = "type Box<T> { value: T }\nfn read(item: Placed<Box<Number>>) -> Number = item.\n", .needle = "item.", .expected = "Box<Number>" },
+        .{ .source = "type Box<T> { value: T }\nfn read(item: Placed<Box<Number>>) -> Number = item.value.\n", .needle = "item.value.", .expected = "Number" },
+    }) |case| {
+        var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+        defer sources.deinit();
+        try sources.put(path, case.source);
+        var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+        defer snapshot.deinit();
+        var completion = try analysis.snapshot.completeAt(testing.allocator, &snapshot, .{
+            .path = path,
+            .source = case.source,
+            .offset = std.mem.indexOf(u8, case.source, case.needle).? + case.needle.len,
+        }, .{ .budget_ms = 1000 });
+        defer completion.deinit(testing.allocator);
+        var found = false;
+        for (completion.items) |item| {
+            if (!std.mem.eql(u8, item.label, "value")) continue;
+            try testing.expectEqualStrings(case.expected, item.detail orelse "");
+            found = true;
+        }
+        try testing.expect(found);
+    }
+}
