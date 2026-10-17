@@ -741,6 +741,21 @@ fn instantiateFunction(
         try addUserReport(state, origin, "CannotInferTypeArgument", "cannot determine concrete type argument '{s}' for '{s}'", .{ parameter.name, func.name });
         return error.InvalidType;
     };
+    const concrete = try instantiateBoundFunction(allocator, state, caller_sema, definition, bindings, origin, options.context);
+    if (call.callee.call_id) |id| try state.instantiations.call_targets.put(id, concrete.key);
+    return concrete;
+}
+
+fn instantiateBoundFunction(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    caller_sema: *const SemanticEnv,
+    definition: semantic_env.ResolvedFunction,
+    bindings: []const Type.Substitution,
+    origin: core.SourceOrigin,
+    context: *Context,
+) anyerror!semantic_env.ResolvedFunction {
+    const func = definition.decl;
     const arguments = try allocator.alloc(Type, bindings.len);
     defer allocator.free(arguments);
     for (arguments, bindings) |*argument, binding| argument.* = binding.replacement;
@@ -768,7 +783,7 @@ fn instantiateFunction(
         body_sema.record_source_facts = false;
         const checker = @import("check.zig");
         const path = originPathForModule(&body_sema);
-        checker.checkFunction(options.context, allocator, state, &body_sema, path, entry.declaration) catch |err| {
+        checker.checkFunction(context, allocator, state, &body_sema, path, entry.declaration) catch |err| {
             if (err == error.OutOfMemory or err == error.Canceled) return err;
             try addUserReport(state, origin, "InvalidInstantiation", "instantiation of '{s}' failed; see the function body diagnostic", .{func.name});
             return err;
@@ -778,8 +793,55 @@ fn instantiateFunction(
     };
     if (instance.status == .failed) return error.AlreadyDiagnosed;
     const key = core.functionDeclarationKey(definition.module_id, instance.declaration);
-    if (call.callee.call_id) |id| try state.instantiations.call_targets.put(id, key);
     return .{ .key = key, .module_id = definition.module_id, .decl = instance.declaration };
+}
+
+/// Prepares a display call from a concrete placement input, without synthesizing
+/// a source-level call or erasing the receiver's type arguments.
+pub fn prepareDisplay(
+    allocator: std.mem.Allocator,
+    state: *core.DocumentState,
+    sema: *const SemanticEnv,
+    input: Type,
+    origin: core.SourceOrigin,
+    context: *Context,
+) anyerror!semantic_env.ResolvedFunction {
+    try state.checkAnalysisCanceled();
+    const generic_arguments = @import("generic_arguments.zig");
+    if (!generic_arguments.isConcrete(input)) {
+        try addUserReport(state, origin, "UnresolvedDisplayType", "display requires a fully concrete input type", .{});
+        return error.InvalidType;
+    }
+    const definition = sema.displayForType(input) orelse {
+        try addUserReport(state, origin, "MissingDisplay", "type '{s}' has no display declaration", .{input.label()});
+        return error.InvalidType;
+    };
+    var receiver = try Type.placedOf(allocator, input);
+    defer receiver.deinit(allocator);
+    const concrete = if (definition.decl.type_params.items.len == 0) definition else instantiate: {
+        const parameters = definition.decl.type_params.items;
+        const bindings = try allocator.alloc(Type.Substitution, parameters.len);
+        defer allocator.free(bindings);
+        const known = try allocator.alloc(bool, parameters.len);
+        defer allocator.free(known);
+        @memset(known, false);
+        for (bindings, 0..) |*binding, index| binding.* = .{
+            .parameter = .{ .module_id = definition.module_id, .declaration_start = definition.decl.span.start, .index = @intCast(index) },
+            .replacement = Type.any,
+        };
+        try generic_arguments.infer(definition.decl.params.items[0].ty, receiver, bindings, known);
+        for (known) |is_known| if (!is_known) {
+            try addUserReport(state, origin, "UnresolvedDisplayType", "cannot infer every type argument of display", .{});
+            return error.InvalidType;
+        };
+        break :instantiate try instantiateBoundFunction(allocator, state, sema, definition, bindings, origin, context);
+    };
+    try ensureType(state, allocator, infoFromType(receiver), concrete.decl.params.items[0].ty, origin, .UnmatchedArgumentType);
+    if (concrete.decl.result_type.kind != .record) {
+        try addUserReport(state, origin, "InvalidDisplayResult", "display must return an unplaced presentation value after instantiation", .{});
+        return error.InvalidType;
+    }
+    return concrete;
 }
 
 fn reportCallResolutionFailure(

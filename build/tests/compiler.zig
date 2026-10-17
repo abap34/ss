@@ -13,6 +13,10 @@ pub fn register(suite: Suite, modules: project.ProjectModules, compiler_mod: *Mo
         import("compiler", compiler_mod),
     }, true);
     _ = suite.add(value_contracts_spec_mod, .{ .name = "test-value-contracts", .description = "Check runtime value type contracts" });
+    const display_spec_mod = createModule(ctx, "tests/eval/display/spec_tests.zig", &.{
+        import("compiler", compiler_mod),
+    }, true);
+    _ = suite.add(display_spec_mod, .{ .name = "test-display", .description = "Check typed display instantiation and evaluation" });
     const execution_spec_mod = createModule(ctx, "tests/analysis/execution/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);
