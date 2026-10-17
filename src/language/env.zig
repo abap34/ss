@@ -188,6 +188,23 @@ pub const SemanticEnv = struct {
         return null;
     }
 
+    pub fn recordConstruction(self: *const SemanticEnv, expr: ast.RecordExpr) ?declarations.RecordDescriptor {
+        if (self.state) |state| if (state.type_instances.construction(expr)) |instance| {
+            return .{ .decl = &instance.declaration, .name = instance.declaration.name, .module_id = instance.ty.nominal_module_id.? };
+        };
+        return self.record(expr.module_id, expr.type_name);
+    }
+
+    /// Returns an owned field type with the receiver's type arguments substituted.
+    pub fn recordFieldType(self: *const SemanticEnv, allocator: std.mem.Allocator, ty: ast.Type, field_name: []const u8) !?ast.Type {
+        const id = ty.nominalId() orelse return null;
+        const member = self.recordField(id, field_name) orelse return null;
+        const decl = self.record(id.module_id, id.name) orelse return null;
+        const bindings = try core.type_instances.substitutions(allocator, ty, decl.decl.*);
+        defer allocator.free(bindings);
+        return try member.value_type.substitute(allocator, bindings);
+    }
+
     pub fn roleClass(self: *const SemanticEnv, role_name: []const u8) ?core.NominalId {
         if (self.declarationIndex()) |index| return index.roleClass(role_name);
         return null;

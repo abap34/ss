@@ -148,10 +148,14 @@ fn recordFieldExpectedTypes(
     record: ast.RecordExpr,
     holes: *syntax_hole.Result,
 ) !void {
-    const decl = sema.record(record.module_id, record.type_name) orelse return;
+    const decl = sema.recordConstruction(record) orelse return;
     for (record.fields.items) |field_expr| {
-        const field = sema.recordField(.{ .module_id = decl.module_id, .name = decl.name }, field_expr.name) orelse continue;
-        try expectExpr(allocator, holes, field_expr.value, field.value_type);
+        for (decl.decl.fields.items) |field| {
+            if (std.mem.eql(u8, field.name, field_expr.name)) {
+                try expectExpr(allocator, holes, field_expr.value, field.value_type);
+                break;
+            }
+        }
     }
 }
 

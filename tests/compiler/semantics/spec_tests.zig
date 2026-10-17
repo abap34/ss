@@ -8473,3 +8473,163 @@ test "compiler semantics: generic optional values and generated placing calls" {
         \\end
     );
 }
+
+test "compiler semantics: generic values infer arguments and preserve nested updates" {
+    try expectDumpContains(
+        \\type Box<T> { value: T }
+        \\fn wrap<T>(value: T) -> Box<T> = Box<T> { value = value }
+        \\fn unwrap<T>(box: Box<T>) -> T = box.value
+        \\page main
+        \\  let number: Box<Number> = Box { value = 3 }
+        \\  let original = wrap(wrap("Original"))
+        \\  let changed = original with { value.value = "Changed" }
+        \\  let amount: Number = unwrap(number)
+        \\  text!(original.value.value)
+        \\  text!(changed.value.value)
+        \\  text!(unwrap(wrap("Inferred")))
+        \\end
+    , &.{ "\"content\":\"Original\"", "\"content\":\"Changed\"", "\"content\":\"Inferred\"" });
+}
+
+test "compiler semantics: concrete type defaults own distinct generic callbacks" {
+    try expectDumpContains(
+        \\fn identity<T>(value: T) -> T = value
+        \\type Handler<T> {
+        \\  apply: (T) -> T = (value: T) |-> identity<T>(value)
+        \\  fallback: T? = none
+        \\}
+        \\page main
+        \\  let numbers = Handler<Number> {}
+        \\  let strings = Handler<String> {}
+        \\  let n: Number = numbers.apply(7)
+        \\  let missing: Number? = numbers.fallback
+        \\  text!(strings.apply("Default callback"))
+        \\end
+    , &.{"\"content\":\"Default callback\""});
+}
+
+test "compiler semantics: generic type defaults preserve deferred callback reads" {
+    try expectDumpContains(
+        \\type Reader<T> {
+        \\  read: (T) -> String = (value: T) |-> value.link_id ?? "Missing"
+        \\}
+        \\page main
+        \\  let reader = Reader<Body> {}
+        \\  let input = text!("Input")
+        \\  text!(reader.read(input))
+        \\  input.link_id = "Deferred generic default"
+        \\end
+    , &.{"\"content\":\"Deferred generic default\""});
+}
+
+test "compiler semantics: applied types reject incompatible fields and updates" {
+    try expectDiagnostic(
+        \\type Box<T> { value: T }
+        \\page main
+        \\  let invalid = Box<Number> { value = "Text" }
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+    try expectDiagnostic(
+        \\type Box<T> { value: T }
+        \\page main
+        \\  let original = Box { value = Box { value = 1 } }
+        \\  let invalid = original with { value.value = "Text" }
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+    try expectDiagnostic(
+        \\type Same<T> { left: T right: T }
+        \\page main
+        \\  let invalid = Same { left = 1 right = "Text" }
+        \\end
+    , "case.ss:bytes:", "ConflictingTypeArguments");
+    try expectDiagnostic(
+        \\type Missing<T> { value: T? = none }
+        \\page main
+        \\  let invalid = Missing {}
+        \\end
+    , "case.ss:bytes:", "CannotInferTypeArgument");
+}
+
+test "compiler semantics: generic type defaults cannot expand without termination" {
+    try expectDiagnostic(
+        \\type Growing<T> {
+        \\  next: Growing<T?> = Growing<T?> {}
+        \\}
+        \\page main
+        \\  let invalid = Growing<Number> {}
+        \\end
+    , "case.ss:bytes:", "RecursiveInstantiation");
+}
+
+test "compiler semantics: type defaults read document collections in dependency order" {
+    try expectDumpContains(
+        \\type Count<T> { amount: Number = selection_count(objs_all("body")) }
+        \\page first
+        \\  let count = Count<Number> {}
+        \\  title!(str(count.amount))
+        \\end
+        \\page second
+        \\  text!("First body")
+        \\  text!("Second body")
+        \\end
+    , &.{"\"content\":\"2\""});
+}
+
+test "compiler semantics: generic type construction retains imported nominal identity" {
+    try buildSourceWithOverlay(
+        \\import "lib/types" as lib
+        \\type Item { value: String }
+        \\page main
+        \\  let a: lib::Box<Item> = lib::Box { value = Item { value = "Local" } }
+        \\  let b: lib::Box<lib::Item> = lib::Box { value = lib::Item { value = 3 } }
+        \\  let n: Number = b.value.value
+        \\  text!(a.value.value)
+        \\end
+    ,
+        \\type Item { value: Number }
+        \\type Box<T> { value: T }
+    );
+}
+
+test "compiler semantics: concrete type defaults preserve placement effects" {
+    try expectDiagnostic(
+        \\type Component<T> { child: Object = text!("Implicit placement") }
+        \\fn make() -> Component<Number> = Component<Number> {}
+        \\page main
+        \\  let invalid = make()
+        \\end
+    , "case.ss:bytes:", "PlacementEffect");
+}
+
+test "compiler semantics: type defaults use their definition module and concrete arguments" {
+    try expectObjectContentWithTwoOverlays(
+        \\import ./lib/a as a
+        \\import ./lib/b as b
+        \\fn label<T>(value: T) -> String = "Caller"
+        \\page main
+        \\  let number = a::Label<Number> {}
+        \\  let string = b::Label<String> {}
+        \\  note!(number.apply(3) ++ ":" ++ string.apply("Value"))
+        \\end
+    ,
+        \\fn label<T>(value: T) -> String = "First"
+        \\type Label<T> { apply: (T) -> String = (value: T) |-> label<T>(value) }
+    ,
+        \\fn label<T>(value: T) -> String = "Second"
+        \\type Label<T> { apply: (T) -> String = (value: T) |-> label<T>(value) }
+    , "First:Second");
+}
+
+test "compiler semantics: incompatible concrete defaults report the definition and use" {
+    const source =
+        \\import ./lib/bad as lib
+        \\page main
+        \\  let invalid = lib::Default<String> {}
+        \\end
+    ;
+    const imported =
+        \\type Default<T> { value: T = 1 }
+    ;
+    try expectOverlayDiagnostic(source, imported, "bad.ss:bytes:", "TypeMismatch");
+    try expectOverlayDiagnostic(source, imported, "case.ss:bytes:", "InvalidInstantiation");
+}

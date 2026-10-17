@@ -1,11 +1,11 @@
 const std = @import("std");
 const ast = @import("ast");
 
-/// Transforms an owned declaration while preserving source locations. Call IDs
+/// Transforms an owned declaration while preserving source locations. Expression IDs
 /// identify the resulting AST occurrences independently of their source spans.
 pub const Transform = struct {
     allocator: std.mem.Allocator,
-    next_call_id: *u64,
+    next_expression_id: *u64,
     substitutions: []const ast.Type.Substitution = &.{},
 
     pub fn module(self: *Transform, value: *ast.Module) !void {
@@ -22,6 +22,13 @@ pub const Transform = struct {
         }
         try self.statements(value.document_statements.items);
         for (value.pages.items) |*page| try self.statements(page.statements.items);
+    }
+
+    pub fn record(self: *Transform, value: *ast.RecordDecl) !void {
+        for (value.fields.items) |*field| {
+            try self.ty(&field.value_type);
+            if (field.default_value) |default| try self.expr(default);
+        }
     }
 
     pub fn function(self: *Transform, value: *ast.FunctionDecl) !void {
@@ -66,8 +73,8 @@ pub const Transform = struct {
     fn expr(self: *Transform, value: *ast.Expr) anyerror!void {
         switch (value.*) {
             .call => |*call| {
-                call.callee.call_id = self.next_call_id.*;
-                self.next_call_id.* += 1;
+                call.callee.call_id = self.next_expression_id.*;
+                self.next_expression_id.* += 1;
                 for (call.type_args.items) |*argument| try self.ty(argument);
                 for (call.args.items) |*argument| try self.expr(argument);
             },
@@ -76,14 +83,16 @@ pub const Transform = struct {
                 for (call.args.items) |*argument| try self.expr(argument);
             },
             .lambda => |*lambda| {
-                lambda.analysis_id = self.next_call_id.*;
-                self.next_call_id.* += 1;
+                lambda.analysis_id = self.next_expression_id.*;
+                self.next_expression_id.* += 1;
                 for (lambda.params.items) |*parameter| try self.param(parameter);
                 try self.expr(lambda.body);
             },
-            .record => |*record| {
-                for (record.type_args.items) |*argument| try self.ty(argument);
-                for (record.fields.items) |*field| try self.expr(&field.value);
+            .record => |*record_value| {
+                record_value.analysis_id = self.next_expression_id.*;
+                self.next_expression_id.* += 1;
+                for (record_value.type_args.items) |*argument| try self.ty(argument);
+                for (record_value.fields.items) |*field| try self.expr(&field.value);
             },
             .record_update => |*update| {
                 try self.expr(update.target);

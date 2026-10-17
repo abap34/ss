@@ -436,18 +436,15 @@ const Analyzer = struct {
             },
             .record => |record| {
                 var value = ValueFacts.init(self.allocator);
-                const resolved = self.sema.record(record.module_id, record.type_name) orelse return ValueFacts.unknownValue(self.allocator);
+                const resolved = self.sema.recordConstruction(record) orelse return ValueFacts.unknownValue(self.allocator);
                 const previous = self.sema;
                 {
                     self.sema = self.sema.forModule(resolved.module_id);
                     defer self.sema = previous;
                     const default_env = FunctionEnv.init(self.allocator);
                     for (resolved.decl.fields.items) |field| {
-                        var supplied = false;
-                        for (record.fields.items) |explicit| {
-                            if (std.mem.eql(u8, explicit.name, field.name)) supplied = true;
-                        }
-                        if (supplied) continue;
+                        if (resolved.decl.type_params.items.len != 0) continue;
+                        if (record.hasField(field.name)) continue;
                         if (field.default_value) |expr_value| {
                             try value.putField(field.name, try self.exprFacts(expr_value.*, &default_env, owner));
                         }
