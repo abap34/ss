@@ -10,7 +10,7 @@ const error_report = utils.err;
 const source = utils.source;
 
 const max_module_bytes = 256 * 1024;
-const implicit_prelude_spec = "std:core/prelude";
+const implicit_prelude_spec = "std:prelude";
 
 pub const SourceOverlay = struct {
     allocator: std.mem.Allocator,
@@ -51,31 +51,7 @@ pub const SourceOverlay = struct {
     }
 };
 
-const EmbeddedModule = struct {
-    spec: []const u8,
-    source: []const u8,
-};
-
-const embedded_modules = [_]EmbeddedModule{
-    .{ .spec = "std:data/csv", .source = stdlib_assets.data_csv },
-    .{ .spec = "std:core/prelude", .source = stdlib_assets.core_prelude },
-    .{ .spec = "std:core/classes", .source = stdlib_assets.core_classes },
-    .{ .spec = "std:core/layout", .source = stdlib_assets.core_layout },
-    .{ .spec = "std:core/objects", .source = stdlib_assets.core_objects },
-    .{ .spec = "std:core/paths", .source = stdlib_assets.core_paths },
-    .{ .spec = "std:core/fills", .source = stdlib_assets.core_fills },
-    .{ .spec = "std:core/shapes", .source = stdlib_assets.core_shapes },
-    .{ .spec = "std:core/connectors", .source = stdlib_assets.core_connectors },
-    .{ .spec = "std:core/render", .source = stdlib_assets.core_render },
-    .{ .spec = "std:core/selectors", .source = stdlib_assets.core_selectors },
-    .{ .spec = "std:core/utils", .source = stdlib_assets.core_utils },
-    .{ .spec = "std:core/generated", .source = stdlib_assets.core_generated },
-    .{ .spec = "std:core/components", .source = stdlib_assets.core_components },
-    .{ .spec = "std:themes/base", .source = stdlib_assets.themes_base },
-    .{ .spec = "std:themes/default", .source = stdlib_assets.themes_default },
-    .{ .spec = "std:themes/academic", .source = stdlib_assets.themes_academic },
-    .{ .spec = "std:themes/pop", .source = stdlib_assets.themes_pop },
-};
+const embedded_modules = stdlib_assets.modules;
 
 pub const EmbeddedSyntaxCache = struct {
     arena: std.heap.ArenaAllocator,
@@ -682,7 +658,7 @@ const Builder = struct {
 
 fn shouldImplicitlyImportPrelude(kind: core.SourceModuleKind, spec: []const u8) bool {
     if (kind == .project) return true;
-    return !std.mem.startsWith(u8, spec, "std:core/");
+    return !std.mem.startsWith(u8, spec, "std:");
 }
 
 fn embeddedModuleIndex(spec: []const u8) ?usize {
@@ -693,10 +669,13 @@ fn embeddedModuleIndex(spec: []const u8) ?usize {
 }
 
 fn shouldProjectImplicitlyImportPrelude(project_dir: []const u8) bool {
-    const base = std.fs.path.basename(project_dir);
-    if (!std.mem.eql(u8, base, "core")) return true;
-    const parent = std.fs.path.dirname(project_dir) orelse return true;
-    return !std.mem.eql(u8, std.fs.path.basename(parent), "stdlib");
+    for (embedded_modules) |module| {
+        const directory = std.fs.path.dirname(module.path) orelse continue;
+        if (std.mem.eql(u8, project_dir, directory)) return false;
+        if (project_dir.len > directory.len and std.mem.endsWith(u8, project_dir, directory) and
+            std.fs.path.isSep(project_dir[project_dir.len - directory.len - 1])) return false;
+    }
+    return true;
 }
 
 fn resolveImport(

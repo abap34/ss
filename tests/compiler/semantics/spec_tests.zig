@@ -493,11 +493,11 @@ test "compiler semantics: imported function return inference diagnostics keep ca
 
 test "compiler semantics: default import introduces an alias and bare names" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:text
         \\
         \\page ok
         \\  h2!("bare")
-        \\  default::h2!("qualified")
+        \\  text::h2!("qualified")
         \\end
         \\
     );
@@ -565,7 +565,7 @@ test "compiler semantics: return inference preserves facts for imprecise object 
 
 test "compiler semantics: fact-complete return annotations still validate function bodies" {
     try expectDiagnostic(
-        \\record Settings {
+        \\type Settings = record {
         \\  size: Number
         \\}
         \\
@@ -603,10 +603,10 @@ test "compiler semantics: editor variable info keeps object classes through pair
 
 test "compiler semantics: stdlib editor variable info keeps theme object classes" {
     try expectVariableObjectClasses(
-        \\import std:themes/default
+        \\import std:text
         \\
         \\fn/! h2(content: String) -> Object
-        \\  let t = default::h2(content)
+        \\  let t = text::h2(content)
         \\  t.link_id = "heading"
         \\  return t
         \\end
@@ -633,10 +633,10 @@ test "compiler semantics: core prelude is implicitly open" {
 
 test "compiler semantics: default alias supports theme override with prelude placement" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:text
         \\
         \\fn/! h2(content: String) -> Object
-        \\  let t = default::h2(content)
+        \\  let t = text::h2(content)
         \\  t.link_id = "heading"
         \\  return t
         \\end
@@ -654,9 +654,9 @@ test "compiler semantics: theme text size override keeps automatic line height" 
         \\
         \\page ok
         \\  let title = head!("large text
-        \\next line", current_theme() with {
-        \\    head.title.text.size = 64
-        \\    head.title.text.line_height = none
+        \\next line", current_theme().head with {
+        \\    title.text.size = 64
+        \\    title.text.line_height = none
         \\  })
         \\end
         \\
@@ -760,14 +760,14 @@ test "compiler semantics: dependency query comments report statement summaries" 
 
 test "compiler semantics: stdlib core components build when called directly" {
     try buildSourceWithAssetFixtures(
-        \\import std:core/components
+        \\import std:prelude
         \\
         \\page text_components
         \\  title!("Title")
         \\  subtitle!("Subtitle")
         \\  text!("Body")
         \\  latex!("$x + y$")
-        \\  code_l!("const x = 1", "zig")
+        \\  code!("const x = 1", "zig")
         \\  code!("print('x')", "python")
         \\  code_file!("snippet.zig", "zig")
         \\  note!("note")
@@ -775,12 +775,12 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\end
         \\
         \\page frame_components
-        \\  frame_s!(text("frame_s"), 8, 6)
-        \\  frame!("frame", "body", "text", 96, 96, 8, 6, none, none, 0, 0)
-        \\  place!(surround_s(text("surround"), 8, 6))
-        \\  place!(border_p(text("border_p"), 8, 6, none, c"0.2,0.2,0.2", 1, 4))
-        \\  place!(border(text("border")))
-        \\  place!(outline(text("outline")))
+        \\  box!(text("frame_s"), ChromeStyle { pad_x = 8 pad_y = 6 })
+        \\  box!(text("frame"), ChromeStyle { pad_x = 8 pad_y = 6 })
+        \\  box!(text("surround"), ChromeStyle { pad_x = 8 pad_y = 6 })
+        \\  box!(text("border_p"), ChromeStyle { pad_x = 8 pad_y = 6 stroke = c"0.2,0.2,0.2" line_width = 1 radius = 4 })
+        \\  box!(text("border"))
+        \\  box!(text("outline"))
         \\end
         \\
         \\page asset_components
@@ -790,7 +790,7 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\
         \\page citation_component
         \\  let target = text!("body [1]")
-        \\  citation!(target, 1, "reference")
+        \\  citation!(1, "reference")
         \\end
         \\
         \\page shape_components
@@ -800,7 +800,11 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\  ~ source.top == page.top - 180
         \\  ~ target.left == source.right + 180
         \\  ~ target.top == source.top + 80
-        \\  bracket_callout!(source, "note", 560, 140, 220)
+        \\  let annotation = callout_parts(source, "note")
+        \\  ~ annotation.note.left == page.left + 560
+        \\  ~ annotation.note.top == page.top - 140
+        \\  ~ annotation.note.width == 220
+        \\  place!(annotation.root)
         \\  annotate!("before target after", "target", "note", MarkedCalloutStyle {
         \\    x = 160
         \\    top_y = 320
@@ -874,7 +878,7 @@ test "compiler semantics: latex is the only public explicit LaTeX constructor" {
 
 test "compiler semantics: connector components resolve generic connector rendering" {
     try expectDumpContains(
-        \\import std:core/prelude
+        \\import std:prelude
         \\
         \\page shapes
         \\  let source = text!("source")
@@ -901,7 +905,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  h1!("Title")
         \\  h2!("Subtitle")
         \\  head!("Head")
-        \\  subhead!("Subhead")
+        \\  subtitle!("Subhead")
         \\  text!("Body")
         \\  latex!("$x^2$")
         \\  code!("print('x')", "python")
@@ -910,8 +914,10 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  annotate!("before target after", "target", "note")
         \\end
         \\
-        \\page default_cover
-        \\  cover!("Title", "Subtitle", "Author")
+        \\page default_title
+        \\  title!("Title")
+        \\  subtitle!("Subtitle")
+        \\  byline!("Author")
         \\end
         \\
     );
@@ -923,7 +929,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  h2!("Subtitle")
         \\  h3!("Section")
         \\  head!("Head")
-        \\  subhead!("Subhead")
+        \\  subtitle!("Subhead")
         \\  text!("Body")
         \\  code!("print('x')", "python")
         \\  code_file!("snippet.zig", "zig")
@@ -931,8 +937,10 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  annotate!("before target after", "target", "note")
         \\end
         \\
-        \\page academic_cover
-        \\  cover!("Title", "Subtitle", "Author", "2026")
+        \\page academic_title
+        \\  title!("Title")
+        \\  subtitle!("Subtitle")
+        \\  byline!("Author")
         \\end
         \\
     );
@@ -943,10 +951,10 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  h1!("Title")
         \\  h2!("Subtitle")
         \\  head!("Head")
-        \\  subhead!("Subhead")
+        \\  subtitle!("Subhead")
         \\  text!("Body")
         \\  latex!("$x^2$")
-        \\  figure!("Figure")
+        \\  figure!(rectangle(200, 100), "Figure")
         \\  image!("image.svg")
         \\  pdf!("doc.pdf")
         \\  code!("print('x')", "python")
@@ -956,8 +964,10 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  annotate!("before target after", "target", "note")
         \\end
         \\
-        \\page pop_cover
-        \\  cover!("Title", "Subtitle", "Author")
+        \\page pop_title
+        \\  title!("Title")
+        \\  subtitle!("Subtitle")
+        \\  byline!("Author")
         \\end
         \\
     );
@@ -983,7 +993,7 @@ test "compiler semantics: code_file reads source text from asset base" {
 
 test "compiler semantics: import as star introduces bare names" {
     try buildSource(
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\page ok
         \\  h2!("open")
@@ -994,19 +1004,19 @@ test "compiler semantics: import as star introduces bare names" {
 
 test "compiler semantics: import alias does not introduce bare names" {
     try expectDiagnostic(
-        \\import std:themes/default as base
+        \\import std:markdown as base
         \\
         \\page bad
-        \\  h2!("bare")
+        \\  link("bare", "https://example.com")
         \\end
         \\
-    , "case.ss:bytes:", "UnknownFunction: unknown function: h2!");
+    , "case.ss:bytes:", "UnknownFunction: unknown function: link");
 
     try buildSource(
-        \\import std:themes/default as base
+        \\import std:markdown as base
         \\
         \\page ok
-        \\  base::h2!("qualified")
+        \\  base::link("qualified", "https://example.com")
         \\end
         \\
     );
@@ -1014,18 +1024,18 @@ test "compiler semantics: import alias does not introduce bare names" {
 
 test "compiler semantics: import as star does not introduce an alias" {
     try expectDiagnostic(
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\page bad
-        \\  default::h2!("qualified")
+        \\  text::h2!("qualified")
         \\end
         \\
-    , "case.ss:bytes:", "UnknownModuleAlias: unknown import alias: default");
+    , "case.ss:bytes:", "UnknownModuleAlias: unknown import alias: text");
 }
 
 test "compiler semantics: qualified calls bypass local shadowing" {
     const source =
-        \\import std:themes/default
+        \\import std:text
         \\
         \\fn/! h2(content: String) -> Object
         \\  return text("local")
@@ -1033,7 +1043,7 @@ test "compiler semantics: qualified calls bypass local shadowing" {
         \\
         \\page ok
         \\  h2!("ignored")
-        \\  default::h2!("qualified")
+        \\  text::h2!("qualified")
         \\end
         \\
     ;
@@ -1098,7 +1108,7 @@ test "compiler semantics: later bare-name import overrides earlier imports" {
         \\import std:themes/academic as *
         \\
         \\page ok
-        \\  h2!("later")
+        \\  h2!("later", default_theme().h2)
         \\end
         \\
     , "text", &.{"size"}, "28");
@@ -1110,7 +1120,7 @@ test "compiler semantics: later alias import overrides earlier aliases" {
         \\import std:themes/academic as theme
         \\
         \\page ok
-        \\  theme::h2!("later")
+        \\  h2!("later", theme::default_theme().h2)
         \\end
         \\
     , "text", &.{"size"}, "28");
@@ -1274,7 +1284,7 @@ test "compiler semantics: lambda parameters can shadow outer bindings" {
 
 test "compiler semantics: singleton selections do not depend on object collection writes" {
     try buildSource(
-        \\import std:core/prelude as *
+        \\import std:prelude as *
         \\fn wrap(item: Object) -> Selection<Object>
         \\  return select(item, "self_object")
         \\end
@@ -1315,13 +1325,15 @@ test "compiler semantics: dynamically built text survives lowering" {
     , "hello world");
 }
 
-test "compiler semantics: math alignment helpers are stdlib functions" {
+test "compiler semantics: math alignment uses typed properties" {
     try buildSource(
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  left_math(text("$$x^2$$"))
-        \\  math_align(latex("$x^2 + y^2 = z^2$"), Align.right)
+        \\  let body = body_obj("$$x^2$$")
+        \\  body.math_align = Align.left
+        \\  let formula = latex("$x^2 + y^2 = z^2$")
+        \\  formula.math_align = Align.right
         \\end
         \\
     );
@@ -1416,23 +1428,24 @@ test "compiler semantics: enum cases are resolved before evaluation" {
 
 test "compiler semantics: qualified type names resolve in annotations records and enum cases" {
     try buildSource(
-        \\import std:core/classes as classes
-        \\import std:core/objects as objects
+        \\import std:text as classes
+        \\import std:layout as layout_types
+        \\import std:internal/objects as objects
         \\
         \\fn keep_style(style: classes::TextStyle) -> classes::TextStyle
         \\  return style
         \\end
         \\
-        \\fn keep_align(align: classes::Align) -> classes::Align
+        \\fn keep_align(align: layout_types::Align) -> layout_types::Align
         \\  return align
         \\end
         \\
         \\page ok
         \\  let style = keep_style(classes::TextStyle {
         \\    size = 32
-        \\    math_align = classes::Align.left
+        \\    math = classes::TextMathStyle { align = layout_types::Align.left }
         \\  })
-        \\  let align = keep_align(classes::Align.left)
+        \\  let align = keep_align(layout_types::Align.left)
         \\  let body = objects::body_obj("qualified")
         \\  body.text.size = style.size
         \\  body.math_align = align
@@ -1724,30 +1737,30 @@ test "compiler semantics: Color is a static type" {
         \\
         \\page ok
         \\  let body = body_obj("**bold**")
-        \\  body.text.markdown_bold_color = c"#884422"
+        \\  body.text.markdown.bold_color = c"#884422"
         \\end
         \\
-    , "text", &.{"markdown_bold_color"}, "0.53333336,0.26666668,0.13333334");
+    , "text", &.{ "markdown", "bold_color" }, "0.53333336,0.26666668,0.13333334");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text.markdown_code_fill = "red"
+        \\  body.text.markdown.code.chrome.fill = "red"
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown_code_fill' expects Color?, got String");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown.code.chrome.fill' expects Color?, got String");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text.markdown_bold_color = "red"
+        \\  body.text.markdown.bold_color = "red"
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown_bold_color' expects Color?, got String");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown.bold_color' expects Color?, got String");
 }
 
 test "compiler semantics: structured style values expand to render properties" {
@@ -1770,32 +1783,32 @@ test "compiler semantics: structured style values expand to render properties" {
     try expectObjectFieldPath(source, "text", &.{ "font", "weight" }, "700");
 }
 
-test "compiler semantics: markdown underline helpers set structured style" {
+test "compiler semantics: markdown underline uses a structured style" {
     const source =
         \\import std:themes/default as *
         \\
         \\page ok
         \\  let body = body_obj("plain _underlined_ text")
-        \\  md_underline(body, md_underline_style(c"#cc3366", 0.35, 5, 3, "8,4"))
+        \\  body.text.markdown.underline = MarkdownUnderlineStyle { color = c"#cc3366" opacity = 0.35 width = 5 offset = 3 dash = "8,4" }
         \\end
         \\
     ;
 
-    try expectObjectFieldPath(source, "text", &.{ "markdown_underline", "color" }, "0.8,0.2,0.4");
-    try expectObjectFieldPath(source, "text", &.{ "markdown_underline", "opacity" }, "0.35");
-    try expectObjectFieldPath(source, "text", &.{ "markdown_underline", "width" }, "5");
-    try expectObjectFieldPath(source, "text", &.{ "markdown_underline", "offset" }, "3");
-    try expectObjectFieldPath(source, "text", &.{ "markdown_underline", "dash" }, "8,4");
+    try expectObjectFieldPath(source, "text", &.{ "markdown", "underline", "color" }, "0.8,0.2,0.4");
+    try expectObjectFieldPath(source, "text", &.{ "markdown", "underline", "opacity" }, "0.35");
+    try expectObjectFieldPath(source, "text", &.{ "markdown", "underline", "width" }, "5");
+    try expectObjectFieldPath(source, "text", &.{ "markdown", "underline", "offset" }, "3");
+    try expectObjectFieldPath(source, "text", &.{ "markdown", "underline", "dash" }, "8,4");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = body_obj("_bad_")
-        \\  body.text.markdown_underline.opacity = "opaque"
+        \\  body.text.markdown.underline.opacity = "opaque"
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown_underline.opacity' expects Number, got String");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown.underline.opacity' expects Number, got String");
 }
 
 test "compiler semantics: set_prop rejects a duplicate property definition" {
@@ -1877,7 +1890,7 @@ test "compiler semantics: nested property definitions preserve sibling leaves" {
         \\  body.text.size = 21
         \\  body.text.font.family = "Avenir"
         \\  body.text.font.weight = 600
-        \\  body.text.markdown_bold_color = c"#445566"
+        \\  body.text.markdown.bold_color = c"#445566"
         \\  body.text.color = c"#123456"
         \\  body.text.font.style = FontStyle.italic
         \\end
@@ -1887,7 +1900,7 @@ test "compiler semantics: nested property definitions preserve sibling leaves" {
     try expectObjectFieldPath(source, "text", &.{ "font", "family" }, "Avenir");
     try expectObjectFieldPath(source, "text", &.{ "font", "weight" }, "600");
     try expectObjectFieldPath(source, "text", &.{ "font", "style" }, "italic");
-    try expectObjectFieldPath(source, "text", &.{"markdown_bold_color"}, "0.26666668,0.33333334,0.4");
+    try expectObjectFieldPath(source, "text", &.{ "markdown", "bold_color" }, "0.26666668,0.33333334,0.4");
     try expectObjectFieldPath(source, "text", &.{"color"}, "0.07058824,0.20392157,0.3372549");
 }
 
@@ -1897,11 +1910,11 @@ test "compiler semantics: nested property definitions accept explicit none" {
         \\
         \\page ok
         \\  let body = body_obj("style")
-        \\  body.text.markdown_bold_color = none
+        \\  body.text.markdown.bold_color = none
         \\end
         \\
     ;
-    try expectObjectFieldPathNone(source, "text", &.{"markdown_bold_color"});
+    try expectObjectFieldPathNone(source, "text", &.{ "markdown", "bold_color" });
 }
 
 test "compiler semantics: nested property assignment rejects invalid paths and values" {
@@ -1949,9 +1962,10 @@ test "compiler semantics: nested property assignment rejects invalid paths and v
 test "compiler semantics: code theme helpers set code and markdown colors" {
     try buildSource(
         \\import std:themes/default as *
+        \\import std:code as palettes
         \\
         \\document
-        \\  code_theme_all(code_theme_one_dark())
+        \\  set_theme(default_theme() with { code.highlight = palettes::code_theme_one_dark() })
         \\end
         \\
         \\page ok
@@ -1963,20 +1977,19 @@ test "compiler semantics: code theme helpers set code and markdown colors" {
 
     const explicit_source =
         \\import std:themes/default as *
+        \\import std:code as palettes
         \\
         \\page ok
-        \\  let snippet = code_in("fn demo() -> Void\nend", "ss", 96, 96)
-        \\  code_theme(snippet, code_theme_one_dark())
-        \\  let body = body_obj("```ss\nfn demo() -> Void\nend\n```")
-        \\  md_code(body, 19, 25, 12, 9, c"#282c34", c"#3e4451", 0.9, 6)
-        \\  code_theme(body, code_theme_one_dark())
+        \\  let colors = palettes::code_theme_one_dark()
+        \\  let snippet = code("fn demo() -> Void\nend", "ss", current_theme().code with { highlight = colors })
+        \\  let body = text("```ss\nfn demo() -> Void\nend\n```", current_theme() with { code.highlight = colors })
         \\end
         \\
     ;
-    try expectObjectFieldPath(explicit_source, "code", &.{"keyword_color"}, "0.7764706,0.47058824,0.8666667");
-    try expectObjectFieldPath(explicit_source, "code", &.{"function_color"}, "0.38039216,0.6862745,0.9372549");
-    try expectObjectFieldPath(explicit_source, "text", &.{"markdown_code_keyword_color"}, "0.7764706,0.47058824,0.8666667");
-    try expectObjectFieldPath(explicit_source, "text", &.{"markdown_code_function_color"}, "0.38039216,0.6862745,0.9372549");
+    try expectObjectFieldPath(explicit_source, "code", &.{"keyword"}, "0.7764706,0.47058824,0.8666667");
+    try expectObjectFieldPath(explicit_source, "code", &.{"function"}, "0.38039216,0.6862745,0.9372549");
+    try expectObjectFieldPath(explicit_source, "text", &.{ "markdown", "code", "colors", "keyword" }, "0.7764706,0.47058824,0.8666667");
+    try expectObjectFieldPath(explicit_source, "text", &.{ "markdown", "code", "colors", "function" }, "0.38039216,0.6862745,0.9372549");
 }
 
 test "compiler semantics: default theme applies code theme to code and markdown" {
@@ -1990,11 +2003,11 @@ test "compiler semantics: default theme applies code theme to code and markdown"
         \\
     ;
     try expectResolvedCodePaintIsColorful(source);
-    try expectObjectFieldPath(source, "code", &.{"plain_color"}, "0.14117648,0.16078432,0.18431373");
-    try expectObjectFieldPath(source, "code", &.{"keyword_color"}, "0.8117647,0.13333334,0.18039216");
-    try expectObjectFieldPath(source, "text", &.{"markdown_code_plain_color"}, "0.14117648,0.16078432,0.18431373");
-    try expectObjectFieldPath(source, "text", &.{"markdown_code_keyword_color"}, "0.8117647,0.13333334,0.18039216");
-    try expectObjectFieldPath(source, "text", &.{"markdown_code_fill"}, "0.9647059,0.972549,0.98039216");
+    try expectObjectFieldPath(source, "code", &.{"plain"}, "0.14117648,0.16078432,0.18431373");
+    try expectObjectFieldPath(source, "code", &.{"keyword"}, "0.8117647,0.13333334,0.18039216");
+    try expectObjectFieldPath(source, "text", &.{ "markdown", "code", "colors", "plain" }, "0.14117648,0.16078432,0.18431373");
+    try expectObjectFieldPath(source, "text", &.{ "markdown", "code", "colors", "keyword" }, "0.8117647,0.13333334,0.18039216");
+    try expectObjectFieldPath(source, "text", &.{ "markdown", "code", "chrome", "fill" }, "0.9647059,0.972549,0.98039216");
 }
 
 test "compiler semantics: default code fonts use the generic monospace family" {
@@ -2047,12 +2060,12 @@ test "compiler semantics: record update copies nested fields" {
     try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
-        \\record Inner {
+        \\type Inner = record {
         \\  size: Number = 20
         \\  color: Color = c"#111111"
         \\}
         \\
-        \\record LocalTheme {
+        \\type LocalTheme = record {
         \\  body: Inner = Inner {}
         \\}
         \\
@@ -2073,11 +2086,11 @@ test "compiler semantics: record update copies nested fields" {
     try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
-        \\record Inner {
+        \\type Inner = record {
         \\  size: Number = 20
         \\}
         \\
-        \\record LocalTheme {
+        \\type LocalTheme = record {
         \\  body: Inner = Inner {}
         \\}
         \\
@@ -2099,7 +2112,7 @@ test "compiler semantics: explicit record fields override their defaults" {
     const source =
         \\import std:themes/default as *
         \\
-        \\record Label {
+        \\type Label = record {
         \\  text: String = "default"
         \\}
         \\
@@ -2119,11 +2132,11 @@ test "compiler semantics: function defaults and closures use callee bindings" {
     try expectObjectContent(
         \\import std:themes/default as *
         \\
-        \\record Inner {
+        \\type Inner = record {
         \\  size: Number = 20
         \\}
         \\
-        \\record LocalTheme {
+        \\type LocalTheme = record {
         \\  body: Inner = Inner {}
         \\}
         \\
@@ -2152,11 +2165,11 @@ test "compiler semantics: nested record member reads preserve their source value
     try expectObjectContent(
         \\import std:themes/default as *
         \\
-        \\record Inner {
+        \\type Inner = record {
         \\  size: Number = 20
         \\}
         \\
-        \\record LocalTheme {
+        \\type LocalTheme = record {
         \\  body: Inner = Inner {}
         \\}
         \\
@@ -2236,18 +2249,18 @@ test "compiler semantics: record update rejects invalid paths and values" {
 test "compiler semantics: theme overlay customizes current and local themes" {
     const theme_source =
         \\import std:themes/default as *
-        \\import std:themes/default as base
+        \\import std:text as base
         \\
         \\document
-        \\  theme!(default_theme() with {
+        \\  set_theme(default_theme() with {
         \\    body.text.size = 22
         \\    h1.text.color = c"#123456"
         \\  })
         \\end
         \\
         \\fn/! h1(text_value: String, theme: Theme = current_theme()) -> Object
-        \\  return base::h1(text_value, theme with {
-        \\    h1.text.size = 44
+        \\  return base::h1(text_value, theme.h1 with {
+        \\    text.size = 44
         \\  })
         \\end
         \\
@@ -2288,7 +2301,7 @@ test "compiler semantics: user record declarations define typed record values" {
     try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
-        \\record CaptionStyle {
+        \\type CaptionStyle = record {
         \\  size: Number = 18
         \\  color: Color = c"0.2,0.2,0.2"
         \\}
@@ -2322,8 +2335,8 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\
         \\page ok
         \\  let body = body_obj("ok")
-        \\  body.text.markdown_code_fill = none
-        \\  body.text.color = fallback(body.text?.markdown_code_fill)
+        \\  body.text.markdown.code.chrome.fill = none
+        \\  body.text.color = fallback(body.text?.markdown?.code?.chrome?.fill)
         \\end
         \\
     );
@@ -2369,7 +2382,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\
         \\page ok
         \\  let body = body_obj("body")
-        \\  if body.text?.markdown_code_fill?
+        \\  if body.text?.markdown?.code?.chrome?.fill?
         \\    body_obj("still-set")
         \\  else
         \\    body_obj("unset")
@@ -2424,7 +2437,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text.color = take_color(body.text?.markdown_code_fill)
+        \\  body.text.color = take_color(body.text?.markdown?.code?.chrome?.fill)
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -2438,7 +2451,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text.markdown_code_fill = take_maybe("red")
+        \\  body.text.markdown.code.chrome.fill = take_maybe("red")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
@@ -2506,7 +2519,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\
         \\fn may_be_none(target: Body, prefer_markup: Bool) -> Color?
         \\  if prefer_markup
-        \\    return target.text?.markdown_code_fill
+        \\    return target.text?.markdown?.code?.chrome?.fill
         \\  else
         \\    if target.link_id?
         \\      return c"0.1,0.2,0.3"
@@ -2522,7 +2535,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\
         \\page bad
         \\  let body = text("report")
-        \\  body.text.markdown_code_fill = none
+        \\  body.text.markdown.code.chrome.fill = none
         \\  let x = may_be_none(body, true)
         \\  let y = must_call_by_notnone(x)
         \\  body.text.color = y
@@ -2564,7 +2577,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\  if target.link_id?
         \\    target.text.color = chosen
         \\  else
-        \\    target.text.markdown_code_fill = secondary
+        \\    target.text.markdown.code.chrome.fill = secondary
         \\  end
         \\end
         \\
@@ -2655,7 +2668,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\
         \\fn maybe_accent(target: Body, use_saved: Bool, force_number: Bool) -> Color?
         \\  if use_saved
-        \\    return target.text?.markdown_code_fill
+        \\    return target.text?.markdown?.code?.chrome?.fill
         \\  else
         \\    if force_number
         \\      return 1
@@ -3024,7 +3037,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  set_prop(body, "text_color", body.text?.markdown_code_fill)
+        \\  set_prop(body, "text_color", body.text?.markdown?.code?.chrome?.fill)
         \\end
         \\
     , "case.ss:bytes:", "UnknownField: unknown field: text_color");
@@ -3056,10 +3069,10 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text.markdown_code_fill = 1
+        \\  body.text.markdown.code.chrome.fill = 1
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown_code_fill' expects Color?, got Number");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown.code.chrome.fill' expects Color?, got Number");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -3105,10 +3118,10 @@ test "compiler semantics: object field defaults are statically typed" {
         \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
-        \\record Outer {
+        \\type Outer = record {
         \\  inner: Inner = Inner {}
         \\}
-        \\record Inner {
+        \\type Inner = record {
         \\  mode: Mode = Mode.beta
         \\}
         \\type Card = object {
@@ -3268,12 +3281,12 @@ test "compiler semantics: document page and selection properties are typed" {
     , "case.ss:bytes:", "InvalidFieldValue: field 'layout.wrap' expects WrapMode, got String");
 }
 
-test "compiler semantics: document math alignment helpers update the document setting" {
+test "compiler semantics: document math alignment uses a typed property" {
     try expectObjectContent(
         \\import std:themes/default as *
         \\
         \\document
-        \\  left_math_all()
+        \\  docctx().math_align = Align.left
         \\end
         \\
         \\page ok
@@ -3298,7 +3311,8 @@ test "compiler semantics: math alignment rejects unknown literals" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  math_align(text("$$x^2$$"), Align.sideways)
+        \\  let body = body_obj("$$x^2$$")
+        \\  body.math_align = Align.sideways
         \\end
         \\
     , "case.ss:bytes:", "UnknownEnumCase: enum 'Align' has no case 'sideways'");
@@ -3346,7 +3360,7 @@ test "compiler semantics: chained member assignment writes through record fields
     const source =
         \\import std:themes/default as *
         \\
-        \\record Parts {
+        \\type Parts = record {
         \\  root: Object
         \\  middle: Object
         \\}
@@ -3394,10 +3408,10 @@ test "compiler semantics: member reads materialize typed property values" {
         \\  target.layout.wrap = WrapMode.off
         \\  target.text.size = 24
         \\  target.link_id = "custom"
-        \\  target.text.markdown_code_fill = c"0.1,0.2,0.3"
-        \\  let panel_obj = panel()
+        \\  target.text.markdown.code.chrome.fill = c"0.1,0.2,0.3"
+        \\  let panel_obj = new("", "panel", "text")
         \\  let other = body_obj("color")
-        \\  other.text.color = target.text?.markdown_code_fill ?? c"0,0,0"
+        \\  other.text.color = target.text?.markdown?.code?.chrome?.fill ?? c"0,0,0"
         \\  body_obj(wrap_label(target.layout?.wrap ?? WrapMode.on) ++ ":" ++ str(target.text?.size ?? 0) ++ ":" ++ link_label(target.link_id ?? "fallback"))
         \\  body_obj(render_label(panel_obj.render_kind ?? RenderKind.text))
         \\end
@@ -3412,7 +3426,7 @@ test "compiler semantics: member reads materialize typed property values" {
         \\end
         \\
         \\page ok
-        \\  let panel_obj = panel()
+        \\  let panel_obj = new("", "panel", "text")
         \\  body_obj(render_label(panel_obj.render_kind ?? RenderKind.text))
         \\end
         \\
@@ -3424,7 +3438,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
         \\import std:themes/default as *
         \\
         \\fn optional_color_label(target: Body) -> String
-        \\  if !target.text?.markdown_code_fill?
+        \\  if !target.text?.markdown?.code?.chrome?.fill?
         \\    return "none"
         \\  else
         \\    return "some"
@@ -3434,7 +3448,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
         \\page ok
         \\  let unset = body_obj("unset")
         \\  let set = body_obj("set")
-        \\  set.text.markdown_code_fill = c"0.1,0.2,0.3"
+        \\  set.text.markdown.code.chrome.fill = c"0.1,0.2,0.3"
         \\  body_obj(optional_color_label(unset) ++ ":" ++ optional_color_label(set))
         \\end
         \\
@@ -3523,7 +3537,7 @@ test "compiler semantics: removed render kind chrome case is rejected" {
         \\import std:themes/default as *
         \\
         \\page bad
-        \\  let panel_obj = panel()
+        \\  let panel_obj = new("", "panel", "text")
         \\  panel_obj.render_kind = RenderKind.chrome
         \\end
         \\
@@ -3927,7 +3941,7 @@ test "compiler semantics: display callback writes are rejected" {
 
 test "compiler semantics: display registration through record and optional callbacks is checked" {
     try expectDiagnostic(
-        \\record Formatter { format: (Object -> String)? }
+        \\type Formatter = record { format: (Object -> String)? }
         \\fn attach(item: Object, formatter: Formatter) -> Object
         \\  return set_repr(item, formatter.format ?? ((value: Object) |-> content(value)))
         \\end
@@ -4035,7 +4049,7 @@ test "compiler semantics: displays cannot read external files during materializa
 
 test "compiler semantics: object link tracking does not authorize nested stored function calls" {
     try expectDiagnostic(
-        \\record Formatter { format: Object -> String }
+        \\type Formatter = record { format: Object -> String }
         \\type Holder = object {
         \\  roles = ["holder"]
         \\  formatter: Formatter?
@@ -4279,7 +4293,7 @@ test "compiler semantics: callbacks keep their defining module scope" {
 test "compiler semantics: closures returned through branch scopes own captured records" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\record Box {
+        \\type Box = record {
         \\  value: Number = 7
         \\}
         \\fn make() -> Number -> Box
@@ -4302,7 +4316,7 @@ test "compiler semantics: closures returned through branch scopes own captured r
 test "compiler semantics: borrowed arguments and defaults preserve record updates" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\record Box {
+        \\type Box = record {
         \\  value: Number = 7
         \\}
         \\fn update(original: Box, same: Box = original) -> Box
@@ -4386,7 +4400,7 @@ test "compiler semantics: constants are evaluated once as value bindings" {
     const source =
         \\import std:themes/default as *
         \\
-        \\record Parts {
+        \\type Parts = record {
         \\  root: Object
         \\  middle: Object
         \\}
@@ -4850,7 +4864,7 @@ test "compiler semantics: nested captured cross-module lambdas cannot hide recur
 
 test "compiler semantics: record argument recursion is rejected before evaluation" {
     try expectDiagnostic(
-        \\record Box {
+        \\type Box = record {
         \\  f: Number -> Number
         \\}
         \\fn call_box(b: Box, x: Number) -> Number
@@ -4867,7 +4881,7 @@ test "compiler semantics: record argument recursion is rejected before evaluatio
 
 test "compiler semantics: optional function argument recursion is rejected before evaluation" {
     try expectDiagnostic(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
@@ -4886,7 +4900,7 @@ test "compiler semantics: optional function argument recursion is rejected befor
 
 test "compiler semantics: record and optional function arguments retain terminating candidates" {
     try expectObjectContent(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
@@ -4902,12 +4916,12 @@ test "compiler semantics: record and optional function arguments retain terminat
 
 test "compiler semantics: record fields do not mix callable candidates" {
     try expectObjectContent(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\record Pair {
+        \\type Pair = record {
         \\  first: Number -> Number
         \\  second: Number -> Number
         \\}
@@ -4925,12 +4939,12 @@ test "compiler semantics: record fields do not mix callable candidates" {
 
 test "compiler semantics: nested record updates replace only the selected callable field" {
     try expectObjectContent(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\record Nested {
+        \\type Nested = record {
         \\  box: Box
         \\  other: Number -> Number
         \\}
@@ -4950,12 +4964,12 @@ test "compiler semantics: nested record updates replace only the selected callab
 
 test "compiler semantics: record updates retain recursion in untouched fields" {
     try expectDiagnostic(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\record Pair {
+        \\type Pair = record {
         \\  first: Number -> Number
         \\  second: Number -> Number
         \\}
@@ -4974,12 +4988,12 @@ test "compiler semantics: record updates retain recursion in untouched fields" {
 
 test "compiler semantics: returned captured records retain recursive candidates" {
     try expectDiagnostic(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\record Nested { box: Box }
+        \\type Nested = record { box: Box }
         \\fn wrap(n: Nested) -> Number -> Number
         \\  return (x: Number) |-> n.box.f(x)
         \\end
@@ -4997,12 +5011,12 @@ test "compiler semantics: returned captured records retain recursive candidates"
 
 test "compiler semantics: returned captured records retain terminating candidates" {
     try expectObjectContent(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\record Nested { box: Box }
+        \\type Nested = record { box: Box }
         \\fn wrap(n: Nested) -> Number -> Number
         \\  return (x: Number) |-> n.box.f(x)
         \\end
@@ -5017,7 +5031,7 @@ test "compiler semantics: returned captured records retain terminating candidate
 
 test "compiler semantics: record return paths merge candidates by field" {
     try expectDiagnostic(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
@@ -5040,7 +5054,7 @@ test "compiler semantics: record return paths merge candidates by field" {
 
 test "compiler semantics: record parameter defaults retain recursive candidates" {
     try expectDiagnostic(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn invoke(b: Box = Box { f = bad }) -> Number
         \\  return b.f(1)
         \\end
@@ -5055,12 +5069,12 @@ test "compiler semantics: record parameter defaults retain recursive candidates"
 
 test "compiler semantics: optional record defaults preserve explicit function fields" {
     try expectObjectContent(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\record DefaultBox { f: (Number -> Number)? = none }
+        \\type DefaultBox = record { f: (Number -> Number)? = none }
         \\fn invoke(b: DefaultBox = DefaultBox { f = inc }) -> Number
         \\  return (b.f ?? inc)(1)
         \\end
@@ -5075,12 +5089,12 @@ test "compiler semantics: optional record defaults preserve explicit function fi
 
 test "compiler semantics: record field placement distinguishes cached calls" {
     try expectDiagnostic(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\record Pair {
+        \\type Pair = record {
         \\  first: Number -> Number
         \\  second: Number -> Number
         \\}
@@ -5099,7 +5113,7 @@ test "compiler semantics: record field placement distinguishes cached calls" {
 
 test "compiler semantics: unknown property callbacks cannot establish termination" {
     try expectDiagnostic(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
@@ -5120,7 +5134,7 @@ test "compiler semantics: unknown property callbacks cannot establish terminatio
 
 test "compiler semantics: cached higher-order calls distinguish captured records" {
     try expectDiagnostic(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
@@ -5142,7 +5156,7 @@ test "compiler semantics: cached higher-order calls distinguish captured records
 
 test "compiler semantics: record updates replace recursive function fields before calls" {
     try expectObjectContent(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number = x + 1
         \\fn invoke(box: Box) -> Number
         \\  let value = box with { f = inc }
@@ -5171,7 +5185,7 @@ test "compiler semantics: cross-module captured record closures remain distinct"
         \\  text!(str(b::invoke(first, 3)) ++ ":" ++ str(b::invoke(second, 3)))
         \\end
     ,
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn pack(f: Number -> Number) -> Box
         \\  return Box { f = f }
         \\end
@@ -5207,7 +5221,7 @@ test "compiler semantics: callbacks cannot hide unknown function properties" {
 
 test "compiler semantics: record return joins retain recursive fields after known fields" {
     try expectDiagnostic(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number = x + 1
         \\fn choose(box: Box, flag: Bool) -> Box
         \\  if flag
@@ -5225,7 +5239,7 @@ test "compiler semantics: record return joins retain recursive fields after know
 
 test "compiler semantics: record return joins retain recursive fields before known fields" {
     try expectDiagnostic(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn inc(x: Number) -> Number = x + 1
         \\fn choose(box: Box, flag: Bool) -> Box
         \\  if flag
@@ -5243,7 +5257,7 @@ test "compiler semantics: record return joins retain recursive fields before kno
 
 test "compiler semantics: growing closure environments exhaust analysis before evaluation" {
     try expectDiagnostic(
-        \\record Box { f: Number -> Number }
+        \\type Box = record { f: Number -> Number }
         \\fn wrap(b: Box) -> Number -> Number
         \\  return (x: Number) |-> b.f(x)
         \\end
@@ -5495,7 +5509,7 @@ test "compiler semantics: document callbacks may use explicit pages without curr
         \\
         \\fn decorate!(page_value: Page) -> Object
         \\  let item = place_on!(page_value, new("explicit", "body", "text"))
-        \\  constrain_on!(page_value, equal(anchor(item, "left"), page_anchor(page_value, "left"), 72))
+        \\  page_value ~ (item.left == page_value.left + 72)
         \\  return item
         \\end
         \\
@@ -5620,7 +5634,7 @@ test "compiler semantics: constraints resolve record member object anchors" {
     try expectNoLoweredDiagnostic(
         \\import std:themes/default as *
         \\
-        \\record Parts {
+        \\type Parts = record {
         \\  root: Object
         \\  left: Object
         \\  right: Object
@@ -6586,7 +6600,7 @@ test "compiler semantics: page requirement follows the selected callable" {
 test "compiler semantics: constants shadow enum receivers in expressions" {
     try expectObjectContent(
         \\type Mode = alpha | beta
-        \\record Settings {
+        \\type Settings = record {
         \\  size: Number = 17
         \\}
         \\const Mode: Settings = Settings {}
@@ -6598,7 +6612,7 @@ test "compiler semantics: constants shadow enum receivers in expressions" {
 
 test "compiler semantics: qualified calls bypass local values" {
     try expectObjectContent(
-        \\import std:themes/default as theme
+        \\import std:text as theme
         \\page main
         \\  let h1 = 1
         \\  theme::h1!("qualified")
@@ -6847,7 +6861,7 @@ test "compiler semantics: returned closures keep captured property targets" {
 test "compiler semantics: record and optional function calls retain write effects" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\record Action { run: (Object -> Object)? }
+        \\type Action = record { run: (Object -> Object)? }
         \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
         \\fn apply_to(item: Object, action: Action) -> Object
         \\  let callback = action.run ?? ((value: Object) |-> value)
@@ -7028,7 +7042,7 @@ test "compiler semantics: default facts and effects use the definition module" {
 test "compiler semantics: callback effects distinguish specializations and returned record updates" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\record Action { run: Object -> Object }
+        \\type Action = record { run: Object -> Object }
         \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
         \\fn identity(item: Object) -> Object = item
         \\fn pack(callback: Object -> Object) -> Action = Action { run = callback }
@@ -7243,13 +7257,13 @@ test "compiler semantics: materialized displays cannot read solved geometry" {
 
 test "compiler semantics: records require fields without declared defaults" {
     try expectDiagnostic(
-        \\record Settings { size: Number }
+        \\type Settings = record { size: Number }
         \\page main
         \\  let settings = Settings {}
         \\end
     , "bytes:", "MissingRecordField");
     try expectDiagnostic(
-        \\record Settings { size: Number? }
+        \\type Settings = record { size: Number? }
         \\page main
         \\  let settings = Settings {}
         \\end
@@ -7258,7 +7272,7 @@ test "compiler semantics: records require fields without declared defaults" {
 
 test "compiler semantics: explicit none and declared defaults satisfy record fields" {
     try expectObjectContent(
-        \\record Settings {
+        \\type Settings = record {
         \\  size: Number
         \\  suffix: String? = none
         \\}
@@ -7268,7 +7282,7 @@ test "compiler semantics: explicit none and declared defaults satisfy record fie
         \\end
     , "3!");
     try buildSource(
-        \\record Settings { size: Number? }
+        \\type Settings = record { size: Number? }
         \\page main
         \\  let settings = Settings { size = none }
         \\end
@@ -7347,8 +7361,8 @@ test "compiler semantics: stored property declarations reject functions recursiv
         \\end
     , "bytes:", "InvalidPropertyType");
     try expectDiagnostic(
-        \\record Action { callback: Number -> Number }
-        \\record Wrapper { action: Action? = none }
+        \\type Action = record { callback: Number -> Number }
+        \\type Wrapper = record { action: Action? = none }
         \\type Holder = object {
         \\  roles = ["holder"]
         \\  wrapper: Wrapper?
@@ -7367,8 +7381,8 @@ test "compiler semantics: property assignment and set_prop reject embedded funct
         \\end
     , "bytes:", "InvalidProperty");
     try expectDiagnostic(
-        \\record Action { callback: Number -> Number }
-        \\record Wrapper { action: Action }
+        \\type Action = record { callback: Number -> Number }
+        \\type Wrapper = record { action: Action }
         \\fn identity(value: Number) -> Number = value
         \\page main
         \\  let item = text!("A")
@@ -7376,7 +7390,7 @@ test "compiler semantics: property assignment and set_prop reject embedded funct
         \\end
     , "bytes:", "InvalidProperty");
     try expectDiagnostic(
-        \\record Action { callback: Number -> Number }
+        \\type Action = record { callback: Number -> Number }
         \\fn identity(value: Number) -> Number = value
         \\page main
         \\  let item = text!("A")
@@ -7387,7 +7401,7 @@ test "compiler semantics: property assignment and set_prop reject embedded funct
 
 test "compiler semantics: local records may contain functions and register displays" {
     try expectObjectContent(
-        \\record Action { callback: Object -> String }
+        \\type Action = record { callback: Object -> String }
         \\fn label(item: Object) -> String = "X"
         \\page main
         \\  let action = Action { callback = label }
@@ -7405,8 +7419,8 @@ test "compiler semantics: optional records require explicit optional member acce
         \\end
     , "bytes:", "InvalidOptionalMember");
     try expectObjectContent(
-        \\record Leaf { width: Number = 5 }
-        \\record Branch { leaf: Leaf? = none }
+        \\type Leaf = record { width: Number = 5 }
+        \\type Branch = record { leaf: Leaf? = none }
         \\fn width(branch: Branch?) -> Number = branch?.leaf?.width ?? 0
         \\page main
         \\  let missing = Branch {}
@@ -7415,15 +7429,15 @@ test "compiler semantics: optional records require explicit optional member acce
         \\end
     , "0:0:5");
     try expectObjectContent(
-        \\record Leaf { width: Number = 5 }
+        \\type Leaf = record { width: Number = 5 }
         \\fn width(leaf: Leaf) -> Number = leaf?.width
         \\page main
         \\  text!(str(width(Leaf {})))
         \\end
     , "5");
     try expectDiagnostic(
-        \\record Leaf { width: Number = 5 }
-        \\record Branch { leaf: Leaf = Leaf {} }
+        \\type Leaf = record { width: Number = 5 }
+        \\type Branch = record { leaf: Leaf = Leaf {} }
         \\fn width(branch: Branch?) -> Number = branch?.leaf.width
         \\page main
         \\end
@@ -7454,7 +7468,7 @@ test "compiler semantics: optional object members retain property dependencies" 
 
 test "compiler semantics: optional function members retain termination checking" {
     try expectObjectContent(
-        \\record Action { callback: Number -> Number }
+        \\type Action = record { callback: Number -> Number }
         \\fn identity(value: Number) -> Number = value
         \\fn apply(action: Action?) -> Number = (action?.callback ?? identity)(3)
         \\page main
@@ -7462,7 +7476,7 @@ test "compiler semantics: optional function members retain termination checking"
         \\end
     , "3:3");
     try expectDiagnostic(
-        \\record Action { callback: Number -> Number }
+        \\type Action = record { callback: Number -> Number }
         \\fn identity(value: Number) -> Number = value
         \\fn apply(action: Action?, value: Number) -> Number = (action?.callback ?? identity)(value)
         \\fn recursive(value: Number) -> Number = apply(Action { callback = recursive }, value)
@@ -7474,7 +7488,7 @@ test "compiler semantics: optional function members retain termination checking"
 
 test "compiler semantics: optional member results cannot be assignment targets" {
     try expectDiagnostic(
-        \\record Holder { item: Object? = none }
+        \\type Holder = record { item: Object? = none }
         \\page main
         \\  let holder = Holder { item = text!("A") }
         \\  (holder?.item).link_id = "X"
@@ -7485,7 +7499,7 @@ test "compiler semantics: optional member results cannot be assignment targets" 
 test "compiler semantics: void calls share direct indirect apply record and callback behavior" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\record Action {
+        \\type Action = record {
         \\  run: (Object, String) -> Void
         \\}
         \\fn mark(item: Object, value: String) -> Void
@@ -7563,7 +7577,7 @@ test "compiler semantics: void types are restricted to function results" {
         \\end
     , "case.ss:bytes:", "InvalidVoidType");
     try expectDiagnostic(
-        \\record Invalid {
+        \\type Invalid = record {
         \\  value: Void
         \\}
         \\page main
@@ -7614,7 +7628,7 @@ test "compiler semantics: explicit constraint registration rejects page anchor m
         \\  let p = new_page(docctx(), "First")
         \\  let q = new_page(docctx(), "Second")
         \\  let item = new("Item", "body", "text")
-        \\  constrain_on!(p, equal(anchor(item, "left"), page_anchor(q, "left"), 40))
+        \\  p ~ (item.left == q.left + 40)
         \\  place_on!(p, item)
         \\end
     , "CrossPageConstraint");
@@ -7624,7 +7638,7 @@ test "compiler semantics: constraint registration rejects layout feedback" {
     try expectLoweringErrorDiagnostic(
         \\page main
         \\  let item = text!("Item")
-        \\  constrain!(equal(anchor(item, "left"), page_anchor(pagectx(), "left"), frame_x(item)))
+        \\  ~ (item.left == pagectx().left + frame_x(item))
         \\end
     , "LayoutDependencyCycle");
 }
@@ -7663,7 +7677,7 @@ test "compiler semantics: function constraint anchors are checked without invoca
 test "compiler semantics: registration is an effect even in a String returning display function" {
     try expectDiagnostic(
         \\fn display(item: Object) -> String
-        \\  constrain_on!(pagectx(), equal(anchor(item, "left"), page_anchor(pagectx(), "left"), 40))
+        \\  pagectx() ~ (item.left == pagectx().left + 40)
         \\  return "Item"
         \\end
         \\page main
@@ -7677,8 +7691,8 @@ test "compiler semantics: saved constraint values cannot feed solved geometry ba
     try expectLoweringErrorDiagnostic(
         \\page main
         \\  let item = text!("Item")
-        \\  let rules = equal(anchor(item, "left"), page_anchor(pagectx(), "left"), frame_x(item))
-        \\  constrain!(rules)
+        \\  let rules = (item.left == pagectx().left + frame_x(item))
+        \\  ~ rules
         \\end
     , "PostLayoutComputationUnsupported");
 }
@@ -7697,8 +7711,8 @@ test "compiler semantics: constraint anchors wait for delayed object bindings" {
 
 test "compiler semantics: nested record anchors wait for both delayed root bindings" {
     try buildSource(
-        \\record Inner { item: Object }
-        \\record Outer { inner: Inner }
+        \\type Inner = record { item: Object }
+        \\type Outer = record { inner: Inner }
         \\page main
         \\  let target = Outer { inner = Inner { item = text!(docctx().footer_text ?? "missing") } }
         \\  let source = Outer { inner = Inner { item = text!(docctx().watermark ?? "missing") } }
@@ -7835,7 +7849,7 @@ test "compiler semantics: property definitions reject overlapping paths in both 
         "a.layout = LayoutStyle { x = 100 }\na.layout.x = 200",
         "a.layout.x = 100\na.layout = LayoutStyle { x = 200 }",
         "a.text.font = FontFace {}\na.text.font.family = \"Avenir\"",
-        "a.text.markdown_bold_color = none\na.text.markdown_bold_color = none",
+        "a.text.markdown.bold_color = none\na.text.markdown.bold_color = none",
         "a.numbered_item_source = none\nset_prop(select(a, \"self_object\"), \"numbered_item_source\", none)",
     };
     for (pairs) |pair| {
@@ -7884,7 +7898,7 @@ test "compiler semantics: whole property reads wait for sibling definitions" {
 test "compiler semantics: property paths preserve objects carried through returned records" {
     try expectDumpContains(
         \\import std:themes/default as *
-        \\record Box { item: Object }
+        \\type Box = record { item: Object }
         \\fn wrap(item: Object) -> Box
         \\  return Box { item = item }
         \\end
@@ -7900,7 +7914,7 @@ test "compiler semantics: property paths preserve objects carried through return
 test "compiler semantics: property paths detect record aliases of an object" {
     try expectLoweringErrorDiagnostic(
         \\import std:themes/default as *
-        \\record Box { item: Object }
+        \\type Box = record { item: Object }
         \\page main
         \\  let a = txt_obj!("A", "body")
         \\  let box = Box { item = a }
@@ -8023,7 +8037,7 @@ test "compiler semantics: absent property values use string accessor fallbacks" 
 
 test "compiler semantics: explicit none refines an optional callable in a record" {
     try expectObjectContent(
-        \\record Box { callback: (Number -> Number)? }
+        \\type Box = record { callback: (Number -> Number)? }
         \\fn inc(x: Number) -> Number = x + 1
         \\fn cleared(box: Box) -> Number
         \\  let updated = box with { callback = none }
@@ -8098,7 +8112,7 @@ test "compiler semantics: unplaced objects do not belong to document queries" {
 test "compiler semantics: placement facts follow returned groups and record aliases" {
     try expectDumpContains(
         \\import std:themes/default as *
-        \\record Parts { root: Object }
+        \\type Parts = record { root: Object }
         \\fn bundle(a: Object, b: Object) -> Parts
         \\  return Parts { root = group(a, group(b)) }
         \\end
@@ -8198,4 +8212,55 @@ test "compiler semantics: dynamic pages retain authored positions among static p
         \\  note!(docctx().watermark ?? "missing")
         \\end
     , &.{ "middle=2", "order=Dynamic first,Dynamic last" });
+}
+
+test "compiler semantics: optional fallback preserves an optional result" {
+    try buildSource(
+        \\fn choose(primary: Color?, fallback: Color?) -> Color?
+        \\  return primary ?? fallback
+        \\end
+        \\page main
+        \\  let body = new("Optional colors", "body", "text")
+        \\  body.text.color = choose(none, c"#123456") ?? c"#000000"
+        \\end
+    );
+    try expectDiagnostic(
+        \\fn choose(primary: Color?, fallback: Number?) -> Color?
+        \\  return primary ?? fallback
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+}
+
+test "compiler semantics: constraint operators reject numbers and wrong registration targets" {
+    try expectDiagnostic(
+        \\page main
+        \\  let item = text!("Item")
+        \\  let invalid = item.left == 40
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+    try expectDiagnostic(
+        \\page main
+        \\  ~ true
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+    try expectDiagnostic(
+        \\page main
+        \\  let item = text!("Item")
+        \\  item ~ item.left == pagectx().left
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+}
+
+test "compiler semantics: symbolic anchor names cannot be shadowed by object fields" {
+    try expectDiagnostic(
+        \\type Card = object { base = Text left: Number = 10 }
+    , "case.ss:bytes:", "ReservedAnchorField");
+    try buildSource(
+        \\type Margins = record { left: Number = 10 right: Number = 20 }
+        \\page main
+        \\  let margins = Margins {}
+        \\  let item = text!("Margins")
+        \\  ~ item.left == page.left + margins.left
+        \\end
+    );
 }

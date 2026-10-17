@@ -13,7 +13,7 @@ await mkdir(output, { recursive: true });
 const project = await mkdtemp(path.join(output, "run-"));
 const slide = path.join(project, "slide.ss");
 const uri = pathToFileURL(slide).href;
-const wrap = (body) => `import std:core/prelude as *\npage Blocks\n${body}\nend\n`;
+const wrap = (body) => `import std:prelude as *\npage Blocks\n${body}\nend\n`;
 const operators = ["||", "//", "|=|", "/=/"];
 let cases = 0;
 const example = await readFile(path.join(root, "tests/fixtures/syntax/blocks/composition.ss"), "utf8");

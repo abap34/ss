@@ -2047,12 +2047,15 @@ fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
             measured.width = @max(try markdownBlocksConstrainedLogicalWidth(ctx, doc.blocks.items, text, 0, width), 1);
             break :blk measured;
         },
-        .@"inline" => blk: {
+        .plain, .@"inline" => blk: {
             const baseline_bl = Defaults.height * 0.5;
             var owned_layout: ?core.markdown.TextLayout = null;
             defer if (owned_layout) |*layout| layout.deinit(ctx.allocator);
             const layout = command.text_layout orelse blk2: {
-                owned_layout = try core.markdown.parseTextLayoutContent(ctx.allocator, command.content);
+                owned_layout = if (command.parse_mode == .plain)
+                    try core.markdown.parsePlainTextContent(ctx.allocator, command.content)
+                else
+                    try core.markdown.parseTextLayoutContent(ctx.allocator, command.content);
                 break :blk2 &owned_layout.?;
             };
             var inline_text = text;
@@ -2754,11 +2757,14 @@ fn drawTextCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Fram
             };
             _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0);
         },
-        .@"inline" => {
+        .plain, .@"inline" => {
             var owned_layout: ?core.markdown.TextLayout = null;
             defer if (owned_layout) |*layout| layout.deinit(ctx.allocator);
             const layout = command.text_layout orelse blk: {
-                owned_layout = try core.markdown.parseTextLayoutContent(ctx.allocator, command.content);
+                owned_layout = if (command.parse_mode == .plain)
+                    try core.markdown.parsePlainTextContent(ctx.allocator, command.content)
+                else
+                    try core.markdown.parseTextLayoutContent(ctx.allocator, command.content);
                 break :blk &owned_layout.?;
             };
             const baseline = try baselineBlForBox(ctx, frame, text.font, text.font_size, text.line_height);

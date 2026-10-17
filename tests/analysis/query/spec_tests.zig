@@ -7,8 +7,8 @@ comptime {
 }
 
 test "analysis query spec: optional members support completion hover and definition" {
-    const path = "stdlib/core/optional-query-test.ss";
-    const source = "record Style { size: Number = 4 }\nfn read(style: Style?) -> Number = style?.size ?? 0\npage main\nend\n";
+    const path = "stdlib/internal/optional-query-test.ss";
+    const source = "type Style = record { size: Number = 4 }\nfn read(style: Style?) -> Number = style?.size ?? 0\npage main\nend\n";
     var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
     defer sources.deinit();
     try sources.put(path, source);
@@ -32,7 +32,7 @@ test "analysis query spec: optional members support completion hover and definit
     try testing.expectEqual(@as(usize, 1), definitions.len);
     try testing.expectEqual(@as(usize, 0), definitions[0].line);
 
-    const incomplete = "record Style { size: Number = 4 }\nfn read(style: Style?) -> Number = style?.\npage main\nend\n";
+    const incomplete = "type Style = record { size: Number = 4 }\nfn read(style: Style?) -> Number = style?.\npage main\nend\n";
     try sources.put(path, incomplete);
     var partial = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
     defer partial.deinit();
@@ -171,7 +171,7 @@ test "folding ranges end on the closing line for every newline convention" {
 }
 
 test "hover and definition ignore literal and comment contents with either query budget" {
-    const path = "stdlib/core/literal-query-test.ss";
+    const path = "stdlib/internal/literal-query-test.ss";
     const source =
         \\fn target() -> String = "Value"
         \\page main
@@ -209,7 +209,7 @@ test "hover and definition ignore literal and comment contents with either query
 }
 
 test "lambda parameters shadow outer names only within their lexical extent" {
-    const path = "stdlib/core/lambda-query-test.ss";
+    const path = "stdlib/internal/lambda-query-test.ss";
     const source =
         \\const identity: Number -> Number = (value: Number) |-> value
         \\fn factory() -> Number -> Number = (arg: Number) |-> arg
@@ -269,7 +269,7 @@ test "lambda parameters shadow outer names only within their lexical extent" {
 }
 
 test "missing imports preserve local symbols folding and lexical definitions" {
-    const path = "stdlib/core/import-recovery-query.ss";
+    const path = "stdlib/internal/import-recovery-query.ss";
     const source =
         \\import ./missing-query-module as missing
         \\fn identity(value: Number) -> Number = value

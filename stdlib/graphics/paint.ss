@@ -1,5 +1,7 @@
-import std:core/classes
-import std:core/paths as paths
+import std:internal/classes
+import std:internal/objects as objects
+
+import std:graphics/path as paths
 
 fn vector_stroke(color_name: Color?, width: Number = 1, cap: LineCap = LineCap.butt, join: LineJoin = LineJoin.miter, dash: String = "", dash_offset: Number = 0) -> VectorStrokeStyle
   return VectorStrokeStyle {
@@ -21,15 +23,15 @@ fn solid_stroke(color_name: Color = c"#4b5563", width: Number = 1.6, cap: LineCa
 end
 
 fn dashed_stroke(color_name: Color = c"#4b5563", width: Number = 1.6, dash: Number = 8, gap: Number = 5) -> VectorStrokeStyle
-  return vector_stroke(color_name, width, LineCap.butt, LineJoin.miter, concat(concat(str(dash), ","), str(gap)))
+  return vector_stroke(color_name, width, LineCap.butt, LineJoin.miter, str(dash) ++ "," ++ str(gap))
 end
 
 fn dotted_stroke(color_name: Color = c"#4b5563", width: Number = 1.6, gap: Number = 4) -> VectorStrokeStyle
-  return vector_stroke(color_name, width, LineCap.round, LineJoin.round, concat(concat(str(width), ","), str(gap)))
+  return vector_stroke(color_name, width, LineCap.round, LineJoin.round, str(width) ++ "," ++ str(gap))
 end
 
 fn dash_dot_stroke(color_name: Color = c"#4b5563", width: Number = 1.6, dash: Number = 8, gap: Number = 4) -> VectorStrokeStyle
-  return vector_stroke(color_name, width, LineCap.round, LineJoin.round, concat(concat(concat(concat(concat(concat(str(dash), ","), str(gap)), ","), str(width)), ","), str(gap)))
+  return vector_stroke(color_name, width, LineCap.butt, LineJoin.miter, str(dash) ++ "," ++ str(gap) ++ "," ++ str(width) ++ "," ++ str(gap))
 end
 
 fn vector_style(fill_value: FillStyle = FillStyle {}, stroke_value: VectorStrokeStyle = VectorStrokeStyle {}) -> VectorStyle
@@ -205,15 +207,15 @@ fn grid_pattern(color_name: Color = c"#4b5563", spacing: Number = 8, width: Numb
 end
 
 fn dot_pattern(color_name: Color = c"#4b5563", spacing: Number = 8, radius: Number = 1.2) -> PatternStyle
-  let center = div(spacing, 2)
-  let k = mul(radius, 0.55228475)
+  let center = (spacing / 2)
+  let k = (radius * 0.55228475)
   return PatternStyle {
     path = path(
-      paths::move_to(add(center, radius), center),
-      paths::cubic_to(add(center, radius), add(center, k), add(center, k), add(center, radius), center, add(center, radius)),
-      paths::cubic_to(sub(center, k), add(center, radius), sub(center, radius), add(center, k), sub(center, radius), center),
-      paths::cubic_to(sub(center, radius), sub(center, k), sub(center, k), sub(center, radius), center, sub(center, radius)),
-      paths::cubic_to(add(center, k), sub(center, radius), add(center, radius), sub(center, k), add(center, radius), center),
+      paths::move_to((center + radius), center),
+      paths::cubic_to((center + radius), (center + k), (center + k), (center + radius), center, (center + radius)),
+      paths::cubic_to((center - k), (center + radius), (center - radius), (center + k), (center - radius), center),
+      paths::cubic_to((center - radius), (center - k), (center - k), (center - radius), center, (center - radius)),
+      paths::cubic_to((center + k), (center - radius), (center + radius), (center - k), (center + radius), center),
       paths::close_path()
     )
     cell_width = spacing
@@ -223,7 +225,7 @@ fn dot_pattern(color_name: Color = c"#4b5563", spacing: Number = 8, radius: Numb
 end
 
 fn checker_pattern(color_name: Color = c"#4b5563", cell_size: Number = 8) -> PatternStyle
-  let half = div(cell_size, 2)
+  let half = (cell_size / 2)
   return PatternStyle {
     path = path(
       paths::move_to(0, 0),
@@ -246,8 +248,8 @@ end
 fn wave_pattern(color_name: Color = c"#4b5563", width: Number = 16, height: Number = 8, line_width: Number = 1) -> PatternStyle
   return PatternStyle {
     path = path(
-      paths::move_to(0, div(height, 2)),
-      paths::cubic_to(div(width, 4), 0, mul(width, 0.75), height, width, div(height, 2))
+      paths::move_to(0, (height / 2)),
+      paths::cubic_to((width / 4), 0, (width * 0.75), height, width, (height / 2))
     )
     cell_width = width
     cell_height = height
@@ -287,7 +289,7 @@ fn grid_fill(color_name: Color, background: Color? = none, spacing: Number = 8, 
 end
 
 fn dots_fill(color_name: Color, background: Color? = none, spacing: Number = 8, diameter: Number = 2) -> FillStyle
-  return pattern_fill(dot_pattern(color_name, spacing, div(diameter, 2)), FillStyle { kind = FillKind.solid color = background })
+  return pattern_fill(dot_pattern(color_name, spacing, (diameter / 2)), FillStyle { kind = FillKind.solid color = background })
 end
 
 fn checker_fill(color_name: Color, background: Color? = none, size: Number = 8) -> FillStyle
@@ -295,8 +297,8 @@ fn checker_fill(color_name: Color, background: Color? = none, size: Number = 8) 
 end
 
 fn brick_fill(color_name: Color, background: Color? = none, width: Number = 16, height: Number = 8, line_width: Number = 1) -> FillStyle
-  let double_height = mul(height, 2)
-  let half_width = div(width, 2)
+  let double_height = (height * 2)
+  let half_width = (width / 2)
   let pattern_value = PatternStyle {
     path = path(
       paths::move_to(0, 0),
@@ -318,7 +320,7 @@ fn brick_fill(color_name: Color, background: Color? = none, width: Number = 16, 
 end
 
 fn waves_fill(color_name: Color, background: Color? = none, spacing: Number = 10, width: Number = 1) -> FillStyle
-  return pattern_fill(wave_pattern(color_name, mul(spacing, 2), spacing, width), FillStyle { kind = FillKind.solid color = background })
+  return pattern_fill(wave_pattern(color_name, (spacing * 2), spacing, width), FillStyle { kind = FillKind.solid color = background })
 end
 
 fn stipple_sparse_fill(color_name: Color, background: Color? = none) -> FillStyle

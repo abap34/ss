@@ -16,7 +16,7 @@ An ==important **detail**== with ==*italic text*, `code`, and [a link](https://e
 | ==Note== | ==Highlighted table content wraps within its allocated column width.== |
 >>
 let note = text!("A ==custom green highlight==")
-note.text.markdown_highlight_fill = c"#b9f6ca"
+note.text.markdown.highlight_fill = c"#b9f6ca"
 end
 
 page wrapping

@@ -1,18 +1,48 @@
-pub const core_prelude = @embedFile("core/prelude.ss");
-pub const core_classes = @embedFile("core/classes.ss");
-pub const core_layout = @embedFile("core/layout.ss");
-pub const core_objects = @embedFile("core/objects.ss");
-pub const core_paths = @embedFile("core/paths.ss");
-pub const core_fills = @embedFile("core/fills.ss");
-pub const core_shapes = @embedFile("core/shapes.ss");
-pub const core_connectors = @embedFile("core/connectors.ss");
-pub const core_render = @embedFile("core/render.ss");
-pub const core_selectors = @embedFile("core/selectors.ss");
-pub const core_utils = @embedFile("core/utils.ss");
-pub const core_generated = @embedFile("core/generated.ss");
-pub const core_components = @embedFile("core/components.ss");
-pub const themes_base = @embedFile("themes/base.ss");
-pub const themes_default = @embedFile("themes/default.ss");
-pub const themes_academic = @embedFile("themes/academic.ss");
-pub const themes_pop = @embedFile("themes/pop.ss");
-pub const data_csv = @embedFile("data/csv.ss");
+pub const Module = struct { spec: []const u8, path: []const u8, source: []const u8 };
+
+pub const modules = [_]Module{
+    .{ .spec = "std:assets/style", .path = "stdlib/assets/style.ss", .source = @embedFile("assets/style.ss") },
+    .{ .spec = "std:assets/types", .path = "stdlib/assets/types.ss", .source = @embedFile("assets/types.ss") },
+    .{ .spec = "std:assets", .path = "stdlib/assets.ss", .source = @embedFile("assets.ss") },
+    .{ .spec = "std:code/palettes", .path = "stdlib/code/palettes.ss", .source = @embedFile("code/palettes.ss") },
+    .{ .spec = "std:code/style", .path = "stdlib/code/style.ss", .source = @embedFile("code/style.ss") },
+    .{ .spec = "std:code/types", .path = "stdlib/code/types.ss", .source = @embedFile("code/types.ss") },
+    .{ .spec = "std:code", .path = "stdlib/code.ss", .source = @embedFile("code.ss") },
+    .{ .spec = "std:graphics/paint/types", .path = "stdlib/graphics/paint/types.ss", .source = @embedFile("graphics/paint/types.ss") },
+    .{ .spec = "std:components/box", .path = "stdlib/components/box.ss", .source = @embedFile("components/box.ss") },
+    .{ .spec = "std:components/callout/style", .path = "stdlib/components/callout/style.ss", .source = @embedFile("components/callout/style.ss") },
+    .{ .spec = "std:components/callout", .path = "stdlib/components/callout.ss", .source = @embedFile("components/callout.ss") },
+    .{ .spec = "std:components/figure/style", .path = "stdlib/components/figure/style.ss", .source = @embedFile("components/figure/style.ss") },
+    .{ .spec = "std:components/figure", .path = "stdlib/components/figure.ss", .source = @embedFile("components/figure.ss") },
+    .{ .spec = "std:components/toc/style", .path = "stdlib/components/toc/style.ss", .source = @embedFile("components/toc/style.ss") },
+    .{ .spec = "std:components/toc", .path = "stdlib/components/toc.ss", .source = @embedFile("components/toc.ss") },
+    .{ .spec = "std:data/csv", .path = "stdlib/data/csv.ss", .source = @embedFile("data/csv.ss") },
+    .{ .spec = "std:document", .path = "stdlib/document.ss", .source = @embedFile("document.ss") },
+    .{ .spec = "std:graphics/connectors", .path = "stdlib/graphics/connectors.ss", .source = @embedFile("graphics/connectors.ss") },
+    .{ .spec = "std:graphics/paint", .path = "stdlib/graphics/paint.ss", .source = @embedFile("graphics/paint.ss") },
+    .{ .spec = "std:graphics/path", .path = "stdlib/graphics/path.ss", .source = @embedFile("graphics/path.ss") },
+    .{ .spec = "std:graphics/types", .path = "stdlib/graphics/types.ss", .source = @embedFile("graphics/types.ss") },
+    .{ .spec = "std:graphics", .path = "stdlib/graphics.ss", .source = @embedFile("graphics.ss") },
+    .{ .spec = "std:internal/callout", .path = "stdlib/internal/callout.ss", .source = @embedFile("internal/callout.ss") },
+    .{ .spec = "std:internal/classes", .path = "stdlib/internal/classes.ss", .source = @embedFile("internal/classes.ss") },
+    .{ .spec = "std:internal/document", .path = "stdlib/internal/document.ss", .source = @embedFile("internal/document.ss") },
+    .{ .spec = "std:internal/objects", .path = "stdlib/internal/objects.ss", .source = @embedFile("internal/objects.ss") },
+    .{ .spec = "std:internal/style", .path = "stdlib/internal/style.ss", .source = @embedFile("internal/style.ss") },
+    .{ .spec = "std:layout/types", .path = "stdlib/layout/types.ss", .source = @embedFile("layout/types.ss") },
+    .{ .spec = "std:layout", .path = "stdlib/layout.ss", .source = @embedFile("layout.ss") },
+    .{ .spec = "std:markdown", .path = "stdlib/markdown.ss", .source = @embedFile("markdown.ss") },
+    .{ .spec = "std:math/types", .path = "stdlib/math/types.ss", .source = @embedFile("math/types.ss") },
+    .{ .spec = "std:math", .path = "stdlib/math.ss", .source = @embedFile("math.ss") },
+    .{ .spec = "std:prelude", .path = "stdlib/prelude.ss", .source = @embedFile("prelude.ss") },
+    .{ .spec = "std:query", .path = "stdlib/query.ss", .source = @embedFile("query.ss") },
+    .{ .spec = "std:templates/slide/style", .path = "stdlib/templates/slide/style.ss", .source = @embedFile("templates/slide/style.ss") },
+    .{ .spec = "std:templates/slide", .path = "stdlib/templates/slide.ss", .source = @embedFile("templates/slide.ss") },
+    .{ .spec = "std:text/style", .path = "stdlib/text/style.ss", .source = @embedFile("text/style.ss") },
+    .{ .spec = "std:text/types", .path = "stdlib/text/types.ss", .source = @embedFile("text/types.ss") },
+    .{ .spec = "std:text", .path = "stdlib/text.ss", .source = @embedFile("text.ss") },
+    .{ .spec = "std:theme/types", .path = "stdlib/theme/types.ss", .source = @embedFile("theme/types.ss") },
+    .{ .spec = "std:theme", .path = "stdlib/theme.ss", .source = @embedFile("theme.ss") },
+    .{ .spec = "std:themes/academic", .path = "stdlib/themes/academic.ss", .source = @embedFile("themes/academic.ss") },
+    .{ .spec = "std:themes/default", .path = "stdlib/themes/default.ss", .source = @embedFile("themes/default.ss") },
+    .{ .spec = "std:themes/pop", .path = "stdlib/themes/pop.ss", .source = @embedFile("themes/pop.ss") },
+};

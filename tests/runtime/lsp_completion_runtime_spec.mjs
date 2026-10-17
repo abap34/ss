@@ -20,9 +20,9 @@ import {
 const fixture = path.join(root, "tests", "fixtures", "project-basic", "slide.ss");
 const partsFixture = path.join(root, "tests", "fixtures", "project-basic", "parts.ss");
 const themeTempFixture = path.join(root, "tests", "fixtures", "project-basic", "theme-temp.ss");
-const defaultTheme = path.join(root, "stdlib", "themes", "default.ss");
-const baseTheme = path.join(root, "stdlib", "themes", "base.ss");
-const classes = path.join(root, "stdlib", "core", "classes.ss");
+const defaultTheme = path.join(root, "stdlib", "text.ss");
+const baseTheme = path.join(root, "stdlib", "theme", "types.ss");
+const classes = path.join(root, "stdlib", "text", "types.ss");
 const uri = pathToFileURL(fixture).toString();
 const partsUri = pathToFileURL(partsFixture).toString();
 const themeTempUri = pathToFileURL(themeTempFixture).toString();
@@ -35,11 +35,13 @@ const baseThemeSource = await readFile(baseTheme, "utf8");
 const classesSource = await readFile(classes, "utf8");
 const defaultThemeH2Definition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "h2");
 const defaultThemeTextDefinition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "text");
-const baseThemeThemeDefinition = declarationDefinitionLocation(baseThemeUri, baseThemeSource, "record", "Theme");
+const baseThemeThemeDefinition = declarationDefinitionLocation(baseThemeUri, baseThemeSource, "type", "Theme");
 const baseThemeBodyFieldDefinition = recordFieldDefinitionLocation(baseThemeUri, baseThemeSource, "Theme", "body");
-const baseThemeTextBlockTextDefinition = recordFieldDefinitionLocation(baseThemeUri, baseThemeSource, "TextBlockStyle", "text");
+const textStylePath = path.join(root, "stdlib", "text", "style.ss");
+const baseThemeTextBlockTextDefinition = recordFieldDefinitionLocation(pathToFileURL(textStylePath).toString(), await readFile(textStylePath, "utf8"), "TextBlockStyle", "text");
 const classesTextStyleSizeDefinition = recordFieldDefinitionLocation(classesUri, classesSource, "TextStyle", "size");
-const alignCenterDefinition = enumCaseDefinitionLocation(classesUri, classesSource, "Align", "center");
+const layoutTypes = path.join(root, "stdlib", "layout", "types.ss");
+const alignCenterDefinition = enumCaseDefinitionLocation(pathToFileURL(layoutTypes).toString(), await readFile(layoutTypes, "utf8"), "Align", "center");
 
 await testProjectCompletionLifecycle();
 await testQualifiedModuleCompletion();
@@ -67,8 +69,8 @@ async function testProjectCompletionLifecycle() {
     assertCompletionHas(globalCompletion, "module_label!", "global completion");
     assertCompletionMissing(globalCompletion, ["place", "text_size"], "global completion");
 
-    const libraryValidSource = `import std:themes/default
-import std:themes/default as *
+    const libraryValidSource = `import std:text as default
+import std:text as *
 
 fn module_label!(text_value: String, color_name: Color = c"0.07,0.08,0.10") -> Object
   return text!(text_value, current_theme() with {
@@ -135,7 +137,7 @@ end
     const libraryRestoredDiagnostics = await libraryRestoredDiagnosticsPromise;
     assert(libraryRestoredDiagnostics.params.diagnostics.length === 0, `library restored diagnostics: ${JSON.stringify(libraryRestoredDiagnostics.params.diagnostics)}`);
 
-    const unimportedLibraryValidSource = `import std:themes/default
+    const unimportedLibraryValidSource = `import std:text as default
 
 fn/! ultra_big(content: String) -> Object
   let t = default::h1(content)
@@ -193,7 +195,7 @@ end
     const fixedDiagnostics = await fixedDiagnosticsPromise;
     assert(fixedDiagnostics.params.diagnostics.length === 0, "ranged didChange did not clear diagnostics after restoring source");
 
-    const addedBrokenMemberSource = `import std:themes/default
+    const addedBrokenMemberSource = `import std:text as default
 
 page ok
   let t = default::h1("body")
@@ -207,8 +209,8 @@ end
     });
     assertPropertyCompletion(addedBrokenMemberCompletion, "added broken member completion");
 
-    const memberValidSource = `import std:themes/default
-import std:themes/default as *
+    const memberValidSource = `import std:text as default
+import std:text as *
 
 page ok
   let t = text("body")
@@ -232,7 +234,7 @@ end
       position: positionAt(memberValidSource, "text(", 1),
     });
     assert(
-      textHover.contents?.value?.includes("text(text_value: String, theme: Theme = current_theme()) -> Object"),
+      textHover.contents?.value?.includes("text(content: String, style: Theme = theme::current_theme()) -> Object"),
       `text hover did not show themed signature: ${JSON.stringify(textHover)}`,
     );
 
@@ -247,8 +249,8 @@ end
       `text definition did not jump to themed text: ${JSON.stringify(textDefinition)}`,
     );
 
-    const memberBrokenSource = `import std:themes/default
-import std:themes/default as *
+    const memberBrokenSource = `import std:text as default
+import std:text as *
 
 page ok
   let t = text! "body"
@@ -263,10 +265,10 @@ end
     assertPropertyCompletion(memberCompletion, "member completion");
     assertCompletionMissing(memberCompletion, ["Align"], "member completion");
 
-    const enumBrokenSource = `import std:themes/default as *
+    const enumBrokenSource = `import std:text as *
 
 page ok
-  let style = TextStyle { math_align = Align. }
+  let style = TextStyle {} with { math.align = Align. }
 end
 `;
     const enumDiagnosticsPromise = client.waitForDiagnostics(
@@ -293,7 +295,7 @@ async function testQualifiedModuleCompletion() {
   try {
     const slide = path.join(project, "slide.ss");
     const localUri = pathToFileURL(slide).toString();
-    const qualifiedSource = `import std:themes/default
+    const qualifiedSource = `import std:text as default
 
 page title
   default::h2!("Qualified")
@@ -401,7 +403,7 @@ async function testTypeAndImportDefinition() {
   try {
     const slide = path.join(project, "slide.ss");
     const localUri = pathToFileURL(slide).toString();
-    const localSource = `import std:themes/default as *
+    const localSource = `import std:text as *
 
 fn themed(theme_value: Theme) -> Object
   let override = Theme {
@@ -429,7 +431,7 @@ end
 
       const importDefinition = await client.request("textDocument/definition", {
         textDocument: { uri: localUri },
-        position: positionAt(localSource, "std:themes/default", 4),
+        position: positionAt(localSource, "std:text", 4),
       });
       assert(Array.isArray(importDefinition), `expected import definition array, got ${JSON.stringify(importDefinition)}`);
       assert(importDefinition.length === 1, `import definition was not unique: ${JSON.stringify(importDefinition)}`);
@@ -532,7 +534,7 @@ end
 }
 
 async function testBrokenTypeNameCompletion() {
-  const brokenTypeSource = `import std:themes/default as *
+  const brokenTypeSource = `import std:text as *
 
 type LocalMode = alpha | beta
 type LocalCard = object {
@@ -553,7 +555,7 @@ end
 }
 
 async function testColdBrokenEntryCompletion() {
-  const coldBrokenSource = `import std:themes/default
+  const coldBrokenSource = `import std:text as default
 
 page ok
   let t = default::h1("body")
@@ -565,8 +567,8 @@ end
 }
 
 async function testMultilineEntryCompletion() {
-  const multilineBrokenSource = `import std:themes/default
-import std:themes/default as *
+  const multilineBrokenSource = `import std:text as default
+import std:text as *
 
 fn/! ultra_big(content: String) -> Object
   let t = default::h1(content)
@@ -677,7 +679,7 @@ function assertSameLabels(left, right, label) {
 function declarationDefinitionLocation(uri, text, keyword, name) {
   const needle = `${keyword} ${name}`;
   const lines = text.split("\n");
-  const line = lines.findIndex((lineText) => lineText.trim() === `${needle} {`);
+  const line = lines.findIndex((lineText) => lineText.trim() === `${needle} = record {`);
   assert(line >= 0, `fixture did not contain ${needle}`);
   const character = lines[line].indexOf(name);
   assert(character >= 0, `fixture did not contain ${name} on ${needle} line`);
@@ -686,7 +688,7 @@ function declarationDefinitionLocation(uri, text, keyword, name) {
 
 function recordFieldDefinitionLocation(uri, text, recordName, fieldName) {
   const lines = text.split("\n");
-  const start = lines.findIndex((lineText) => lineText.trim() === `record ${recordName} {`);
+  const start = lines.findIndex((lineText) => lineText.trim() === `type ${recordName} = record {`);
   assert(start >= 0, `fixture did not contain record ${recordName}`);
   for (let line = start + 1; line < lines.length; line += 1) {
     if (lines[line].trim() === "}") break;

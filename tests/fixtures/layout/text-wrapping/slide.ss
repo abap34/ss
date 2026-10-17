@@ -1,7 +1,7 @@
 import std:themes/default as *
 
 document
-theme!(default_theme(ThemeOptions {
+set_theme(default_theme(ThemeOptions {
   font_family = "DejaVu Sans"
 }) with {
   body.text.size = 28

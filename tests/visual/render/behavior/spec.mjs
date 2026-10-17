@@ -60,7 +60,7 @@ end
 async function renderPdfAssetCases() {
   const project = await createProject("pdf-assets");
   await writeMinimalPdf(path.join(project, "asset.pdf"), 200, 100);
-  await writeFile(path.join(project, "slide.ss"), `import std:core/prelude as *
+  await writeFile(path.join(project, "slide.ss"), `import std:prelude as *
 
 page small
 let asset = pdf!("asset.pdf", 0.3)
@@ -92,11 +92,11 @@ end
 
 async function renderOffPageCase() {
   const project = await createProject("off-page");
-  await writeFile(path.join(project, "slide.ss"), `import std:core/prelude as *
+  await writeFile(path.join(project, "slide.ss"), `import std:prelude as *
 
 page offpage
 page_bg(c"1,1,1")
-let marker = panel!()
+let marker = place!(new("", "panel", "text"))
 marker.chrome.fill = c"1,0,0"
 marker.chrome.stroke = none
 marker.chrome.line_width = 0

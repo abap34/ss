@@ -1,4 +1,4 @@
-import std:core/prelude as *
+import std:prelude as *
 
 fn make_body!(page_value: Page, label: String) -> Object
   return place_on!(page_value, new(label, "body", "text"))

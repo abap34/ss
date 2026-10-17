@@ -1,7 +1,7 @@
 import std:themes/default as *
 
 document
-  theme!(default_theme(ThemeOptions {
+  set_theme(default_theme(ThemeOptions {
     font_family = "Fixture Sans"
     code_font_family = "Fixture Mono"
     text_color = c"#102030"
@@ -12,8 +12,10 @@ document
   })
 end
 
-page cover_settings
-  cover!("SettingsCover", "SettingsSubtitle", "SettingsAuthor")
+page title_settings
+  title!("SettingsTitle")
+  subtitle!("SettingsSubtitle")
+  byline!("SettingsAuthor")
 end
 
 page body_settings

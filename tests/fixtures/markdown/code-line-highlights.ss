@@ -29,11 +29,11 @@ def greet(name):
     print(message)
 ```
 >>
-note.text.markdown_code_highlight_fill = c"#b9f6ca"
+note.text.markdown.code.highlight_fill = c"#b9f6ca"
 let plain = text! <<
 ```zig {1}
 const disabled = true;
 ```
 >>
-plain.text.markdown_code_highlight_fill = none
+plain.text.markdown.code.highlight_fill = none
 end

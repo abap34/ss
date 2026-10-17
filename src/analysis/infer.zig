@@ -408,6 +408,9 @@ fn inferMemberInfoFromTargetInfo(
         try addUserReportAtSpan(state, origin, member_span, "InvalidProperty", "{s}", .{message});
         return error.InvalidType;
     }
+    if ((target_info.ty.kind == .object or target_info.ty.kind == .page) and language_names.parseAnchorName(member_name) != null) {
+        return infoFromType(Type.anchor);
+    }
     if (std.mem.eql(u8, member_name, "content")) {
         if (target_info.ty.kind != .object) {
             try addUserReportAtSpan(state, origin, member_span, "InvalidProperty", "content is available only on Object", .{});
@@ -463,8 +466,10 @@ fn inferCoalesceInfo(
         return error.InvalidType;
     };
     const fallback_info = try exprInfoWithOptions(allocator, state, sema, env, coalesce.fallback.*, origin, options);
-    try ensureType(state, allocator, fallback_info, child.*, origin, .UnmatchedArgumentType);
-    return infoFromType(child.*);
+    if (fallback_info.hole != null) return fallback_info;
+    const result_type = if (fallback_info.ty.kind == .optional or fallback_info.ty.kind == .none) target_info.ty else child.*;
+    try ensureType(state, allocator, fallback_info, result_type, origin, .UnmatchedArgumentType);
+    return infoFromType(result_type);
 }
 
 fn functionTypeForDecl(allocator: std.mem.Allocator, func: ast.FunctionDecl) !Type {
@@ -681,6 +686,16 @@ fn inferPrimitiveCallInfo(
             try addUserReport(state, origin, "VoidValue", "Void calls do not produce argument values", .{});
             return error.InvalidType;
         }
+    }
+    if (argument_infos.len == 2 and argument_infos[0].hole == null and argument_infos[1].hole == null) {
+        const left = argument_infos[0].ty.kind;
+        const right = argument_infos[1].ty.kind;
+        if (descriptor.op == .num_eq and left == .anchor and right == .anchor) return infoFromType(Type.constraints);
+        if ((descriptor.op == .add or descriptor.op == .sub) and left == .anchor and right == .number) return infoFromType(Type.anchor);
+        if (descriptor.op == .add and left == .number and right == .anchor) return infoFromType(Type.anchor);
+    }
+    for (argument_infos, 0..) |actual, index| {
+        if (isPrimitiveFunctionArgument(descriptor, index)) continue;
         if (sema.primitiveArgType(descriptor, index)) |expected| {
             const argument_type = if (descriptor.op == .group and actual.ty.kind == .selection) Type.selection(.object) else expected;
             try ensureType(state, allocator, actual, argument_type, origin, .UnmatchedArgumentType);

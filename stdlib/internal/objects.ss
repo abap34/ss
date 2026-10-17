@@ -1,4 +1,4 @@
-import std:core/classes
+import std:internal/classes
 
 fn/! obj(text_value: String, role_name: String, payload_name: String) -> Object
   return new(text_value, role_name, payload_name)
@@ -71,24 +71,20 @@ fn vspace(height: Number) -> Object
   return spacer(height)
 end
 
-fn/! raw_obj(text_value: String, role_name: String, payload_name: String) -> Object
-  return obj(text_value, role_name, payload_name)
-end
-
 fn/! latex_obj(text_value: String) -> Object
-  return raw_obj(text_value, "latex", "latex")
+  return obj(text_value, "latex", "latex")
 end
 
 fn/! fig_obj(text_value: String) -> Object
-  return raw_obj(text_value, "figure", "figure_text")
+  return obj(text_value, "figure", "figure_text")
 end
 
 fn/! img_obj(path_value: String) -> Object
-  return raw_obj(path_value, "image", "image_ref")
+  return obj(path_value, "image", "image_ref")
 end
 
 fn/! pdf_obj(path_value: String) -> Object
-  return raw_obj(path_value, "pdf", "pdf_ref")
+  return obj(path_value, "pdf", "pdf_ref")
 end
 
 fn/! icon_obj(source: String) -> Object
@@ -96,6 +92,6 @@ fn/! icon_obj(source: String) -> Object
 end
 
 fn/! code_obj(text_value: String) -> Object
-  let code = raw_obj(text_value, "code", "code")
+  let code = obj(text_value, "code", "code")
   return code
 end

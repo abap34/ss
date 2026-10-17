@@ -1,4 +1,4 @@
-import std:core/prelude as *
+import std:prelude as *
 
 page Blocks
   let g = (text << ;; Description

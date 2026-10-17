@@ -17,6 +17,7 @@ const markdown_flags = c.MD_DIALECT_GITHUB |
 
 pub const ParseMode = enum {
     none,
+    plain,
     @"inline",
     block,
 };
@@ -443,6 +444,7 @@ pub fn parseTextLayoutForNode(
     node: anytype,
     content: []const u8,
 ) !TextLayout {
+    if (parseModeForNode(state, node) == .plain) return parsePlainTextContent(allocator, content);
     var layout = TextLayout{};
     errdefer layout.deinit(allocator);
 
@@ -451,6 +453,24 @@ pub fn parseTextLayoutForNode(
     }
 
     try parsePlainLines(allocator, &layout, content);
+    return layout;
+}
+
+pub fn parsePlainTextContent(allocator: Allocator, content: []const u8) !TextLayout {
+    var layout = TextLayout{};
+    errdefer layout.deinit(allocator);
+    var lines = source.lineIterator(content);
+    while (lines.next()) |view| {
+        try layout.lines.append(allocator, .{});
+        const text = try allocator.dupe(u8, view.text(content));
+        errdefer allocator.free(text);
+        try layout.lines.items[layout.lines.items.len - 1].runs.append(allocator, .{
+            .kind = .text,
+            .text = text,
+            .source_start = view.span.start,
+            .source_end = view.span.end,
+        });
+    }
     return layout;
 }
 

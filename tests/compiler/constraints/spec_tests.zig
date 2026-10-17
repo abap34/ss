@@ -38,7 +38,7 @@ test "constraint values returned or used as statements do not register themselve
     defer arena.deinit();
     var state = try evaluate(arena.allocator(),
         \\fn relation(a: Object, b: Object) -> Constraints
-        \\  return equal(anchor(a, "left"), anchor(b, "right"), 24)
+        \\  return (a.left == b.right + 24)
         \\end
         \\page main
         \\  let a = text!("A")
@@ -60,15 +60,15 @@ test "constraint registration is explicit and a bundle is reusable" {
     defer arena.deinit();
     var state = try evaluate(arena.allocator(),
         \\fn relation(a: Object, b: Object) -> Constraints
-        \\  return equal(anchor(a, "left"), anchor(b, "right"), 24)
+        \\  return (a.left == b.right + 24)
         \\end
         \\page main
         \\  let a = text!("A")
         \\  let b = text!("B")
         \\  let rules = constraints(relation(a, b))
-        \\  constrain!(rules)
-        \\  constrain_on!(pagectx(), rules)
-        \\  constrain!(constraints())
+        \\  ~ rules
+        \\  pagectx() ~ rules
+        \\  ~ constraints()
         \\end
     );
     defer state.deinit();
@@ -87,7 +87,7 @@ test "constraint statements and explicit page registration have the same registr
         \\page main
         \\  let item = text!("Item")
         \\  ~ item.left == page.left + 40
-        \\  constrain_on!(pagectx(), equal(anchor(item, "left"), page_anchor(pagectx(), "left"), 40))
+        \\  pagectx() ~ (item.left == pagectx().left + 40)
         \\end
     );
     defer state.deinit();
@@ -114,7 +114,7 @@ test "explicit registration from document context does not require a current pag
         \\document
         \\  let p = first(pages(docctx()))
         \\  let item = new("Item", "body", "text")
-        \\  constrain_on!(p, equal(anchor(item, "left"), page_anchor(p, "left"), 40))
+        \\  p ~ (item.left == p.left + 40)
         \\  place_on!(p, item)
         \\end
         \\page main
@@ -134,7 +134,7 @@ test "registration retains its page until object placement is known" {
         \\  let p = new_page(docctx(), "First")
         \\  let q = new_page(docctx(), "Second")
         \\  let item = new("Item", "body", "text")
-        \\  constrain_on!(p, equal(anchor(item, "left"), page_anchor(p, "left"), 40))
+        \\  p ~ (item.left == p.left + 40)
         \\  place_on!(q, item)
         \\end
     );
@@ -149,8 +149,8 @@ test "constraint construction has no layout write effect but registration does" 
     var text = try allocator.dupe(u8,
         \\page main
         \\  let item = text!("Item")
-        \\  let rules = equal(anchor(item, "left"), page_anchor(pagectx(), "left"), 40)
-        \\  constrain!(rules)
+        \\  let rules = (item.left == pagectx().left + 40)
+        \\  ~ rules
         \\end
     );
     defer allocator.free(text);
@@ -166,4 +166,44 @@ test "constraint construction has no layout write effect but registration does" 
     try testing.expect(!graph.units.items[1].summary.writes_layout_input);
     try testing.expect(graph.units.items[2].summary.writes_layout_input);
     try testing.expect(!graph.units.items[2].summary.places_objects);
+}
+
+test "anchor operators normalize offsets and preserve numeric equality" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var state = try evaluate(arena.allocator(),
+        \\fn relation(a: Object, b: Object) -> Constraints
+        \\  return a.left + 4 == 30 + b.right - 2
+        \\end
+        \\page main
+        \\  let a = text!("A")
+        \\  let b = text!("B")
+        \\  if 2 + 3 == 5
+        \\    ~ relation(a, b)
+        \\  end
+        \\end
+    );
+    defer state.deinit();
+    try testing.expectEqual(@as(usize, 1), countExplicit(&state));
+    for (state.constraints.active.items) |rule| {
+        if (!rule.default_alignment) try testing.expectEqual(@as(f32, 24), rule.offset);
+    }
+}
+
+test "page operator registers a relation before placement in document scope" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var state = try evaluate(arena.allocator(),
+        \\document
+        \\  let p = new_page(docctx(), "Generated")
+        \\  let a = new("A", "body", "text")
+        \\  let rule = a.left == p.left + 40
+        \\  p ~ rule
+        \\  place_on!(p, a)
+        \\end
+    );
+    defer state.deinit();
+    try testing.expectEqual(@as(usize, 1), countExplicit(&state));
+    try testing.expect(!hasDiagnostic(&state, "CrossPageConstraint"));
+    try testing.expect(!hasDiagnostic(&state, "UnownedLayoutObject"));
 }

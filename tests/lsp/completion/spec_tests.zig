@@ -41,8 +41,8 @@ const DeadlineAfterTarget = struct {
 
 test "analysis queries: every deadline selects the independent lexical completion" {
     var case = try CompletionCase.init(
-        \\import std:themes/default
-        \\record Label {
+        \\import std:text
+        \\type Label = record {
         \\  title: String,
         \\  subtitle: String,
         \\  body: String
@@ -51,13 +51,13 @@ test "analysis queries: every deadline selects the independent lexical completio
         \\  let value = Label { title = "Title", subtitle = "Subtitle", body = "Body" }
         \\  let copy = value with { title = "Changed" }
         \\  let t = text!("Body")
-        \\  default::h1("Title")
+        \\  text::h1("Title")
         \\  t.text.size = 20
         \\end
     );
     defer case.deinit();
     const snapshot = try case.snapshotFor(case.source);
-    for ([_][]const u8{ "page main\n", "default::", "t.", "with { " }) |needle| {
+    for ([_][]const u8{ "page main\n", "text::", "t.", "with { " }) |needle| {
         const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, needle) };
         var clock = DeadlineClock{};
         var full = try snapshot_api.completeAt(testing.allocator, snapshot, req, clock.options());
@@ -161,7 +161,7 @@ test "analysis queries: definition fallback still honors cancellation" {
 
 test "analysis completion: composition references retain fixed stdlib types and definitions" {
     var case = try CompletionCase.init(
-        \\import std:core/objects as layout
+        \\import std:internal/objects as layout
         \\const hjoin: Number = 9
         \\fn vjoin(a: Object, b: Object) -> Number
         \\  return 1
@@ -180,13 +180,13 @@ test "analysis completion: composition references retain fixed stdlib types and 
     try testing.expect(!snapshot.diagnostics.hasErrors());
     const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
     for ([_][]const u8{ "hjoin", "vjoin" }) |name| {
-        const binding = resolve_query.valueBinding(null, snapshot, module.id, name, "std:core/layout", .function) orelse return error.ExpectedFunction;
+        const binding = resolve_query.valueBinding(null, snapshot, module.id, name, "std:layout", .function) orelse return error.ExpectedFunction;
         try testing.expect(binding.module_id != module.id);
         try testing.expectEqual(.object, binding.value_type.kind);
-        const definition = resolve_query.valueDefinition(null, snapshot, module.id, name, "std:core/layout", .function) orelse return error.ExpectedDefinition;
+        const definition = resolve_query.valueDefinition(null, snapshot, module.id, name, "std:layout", .function) orelse return error.ExpectedDefinition;
         try testing.expectEqual(binding.module_id.?, definition.module_id);
-        try testing.expectEqualStrings("std:core/layout", snapshot.moduleById(definition.module_id).?.spec);
-        try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, name, "std:core/layout", .constant) == null);
+        try testing.expectEqualStrings("std:layout", snapshot.moduleById(definition.module_id).?.spec);
+        try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, name, "std:layout", .constant) == null);
     }
     const constant = resolve_query.valueBinding(null, snapshot, module.id, "hjoin", null, .constant) orelse return error.ExpectedConstant;
     try testing.expectEqual(module.id, constant.module_id);
@@ -195,9 +195,9 @@ test "analysis completion: composition references retain fixed stdlib types and 
     try testing.expectEqual(module.id, explicit_function.module_id);
     try testing.expectEqual(.number, explicit_function.value_type.kind);
     try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, "hjoin", "layout", .function) == null);
-    try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, "hjoin", "std:core/missing", .function) == null);
+    try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, "hjoin", "std:missing", .function) == null);
     const expired_budget = query_types.QueryBudget.start(.{ .budget_ms = 0 });
-    try testing.expect(resolve_query.valueBinding(expired_budget, snapshot, module.id, "hjoin", "std:core/layout", .function) == null);
+    try testing.expect(resolve_query.valueBinding(expired_budget, snapshot, module.id, "hjoin", "std:layout", .function) == null);
 
     var result = try snapshot_api.completeAt(case.allocator, snapshot, .{
         .path = case.path,
@@ -212,11 +212,11 @@ test "analysis completion: composition references retain fixed stdlib types and 
 
 test "analysis completion: dot module and normal positions keep candidate kinds separate" {
     var case = try CompletionCase.init(
-        \\import std:themes/default
-        \\import std:themes/default as *
+        \\import std:text
+        \\import std:text as *
         \\
         \\page title
-        \\  let t = default::h1("body")
+        \\  let t = text::h1("body")
         \\  t.text.size = 20
         \\end
         \\
@@ -239,7 +239,7 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
     }
 
     {
-        var result = try case.completeAfter("default::");
+        var result = try case.completeAfter("text::");
         defer result.deinit(case.allocator);
         try expectUnique(result);
         try expectHas(result, "h1");
@@ -268,7 +268,7 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
 
 test "analysis completion: normal position follows import visibility" {
     var case = try CompletionCase.init(
-        \\import std:themes/default as theme
+        \\import std:markdown as theme
         \\
         \\page title
         \\
@@ -281,14 +281,13 @@ test "analysis completion: normal position follows import visibility" {
     defer result.deinit(case.allocator);
     try expectUnique(result);
     try expectHas(result, "page");
-    try expectMissing(result, "h1");
-    try expectMissing(result, "h1!");
+    try expectMissing(result, "link");
     try expectMissing(result, "text_size");
 }
 
 test "analysis completion: visible function prefers imported module definitions over re-exported names" {
     var case = try CompletionCase.init(
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\page title
         \\  text!("body")
@@ -302,7 +301,7 @@ test "analysis completion: visible function prefers imported module definitions 
     const item = resolve_query.valueBinding(null, snapshot, module.id, "text", null, .function) orelse return error.ExpectedFunction;
 
     try testing.expectEqualStrings("text", item.name);
-    try testing.expectEqualStrings("text(text_value: String, theme: Theme = current_theme()) -> Object", item.signature);
+    try testing.expectEqualStrings("text(content: String, style: Theme = theme::current_theme()) -> Object", item.signature);
 }
 
 test "analysis completion: visible variables and definitions use shared scope resolution" {
@@ -363,7 +362,7 @@ test "analysis completion: visible variables and definitions use shared scope re
 
 test "analysis completion: normal positions include builtin and source type names" {
     var case = try CompletionCase.init(
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\page title
         \\end
@@ -372,7 +371,7 @@ test "analysis completion: normal positions include builtin and source type name
     defer case.deinit();
 
     const request_source =
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\type SourceOnly = alpha | beta
         \\type SourceCard = object {
@@ -396,20 +395,20 @@ test "analysis completion: normal positions include builtin and source type name
 
 test "analysis completion: enum type dot completes cases" {
     var case = try CompletionCase.init(
-        \\import std:themes/default as *
-        \\import std:core/classes as classes
+        \\import std:text as *
+        \\import std:layout as classes
         \\
         \\page title
-        \\  let style = TextStyle { math_align = Align.center }
-        \\  let qualified = TextStyle { math_align = classes::Align.left }
+        \\  let style = TextStyle {} with { math.align = Align.center }
+        \\  let qualified = TextStyle {} with { math.align = classes::Align.left }
         \\end
         \\
     );
     defer case.deinit();
 
     const request_source =
-        \\import std:themes/default as *
-        \\import std:core/classes as classes
+        \\import std:text as *
+        \\import std:layout as classes
         \\
         \\page title
         \\  Align.
@@ -436,7 +435,7 @@ test "analysis completion: enum type dot completes cases" {
 
 test "analysis completion: source recovery sees preceding same-scope bindings" {
     var case = try CompletionCase.init(
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\page title
         \\  let t = h2! "before"
@@ -450,7 +449,7 @@ test "analysis completion: source recovery sees preceding same-scope bindings" {
     defer case.deinit();
 
     const request_source =
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\page title
         \\  let t = h2! "before"
@@ -485,7 +484,7 @@ test "analysis completion: source recovery sees preceding same-scope bindings" {
 
 test "analysis completion: fn paired function and const result annotations drive property targets" {
     var case = try CompletionCase.init(
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\fn make_plain() -> Object
         \\  return h2!("plain")
@@ -510,7 +509,7 @@ test "analysis completion: fn paired function and const result annotations drive
     defer case.deinit();
 
     const request_source =
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\fn make_plain() -> Object
         \\  return h2!("plain")
@@ -546,20 +545,20 @@ test "analysis completion: fn paired function and const result annotations drive
 
 test "analysis completion: record update paths complete record fields" {
     var case = try CompletionCase.init(
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\page title
         \\  let local = current_theme() with {
         \\    body.text.size = 20
         \\  }
-        \\  text!("body", local)
+        \\  text!("body", local.body)
         \\end
         \\
     );
     defer case.deinit();
 
     const request_source =
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\page title
         \\  let local = current_theme() with {
@@ -569,7 +568,7 @@ test "analysis completion: record update paths complete record fields" {
         \\    body.text.
         \\    body.text.size =
         \\  }
-        \\  text!("body", local)
+        \\  text!("body", local.body)
         \\end
         \\
     ;
@@ -620,13 +619,13 @@ test "analysis completion: record update paths complete record fields" {
 
     {
         const unindented_source =
-            \\import std:themes/default as *
+            \\import std:text as *
             \\
             \\page title
             \\  let local = current_theme() with  {
             \\bod
             \\  }
-            \\  text!("body", local)
+            \\  text!("body", local.body)
             \\end
             \\
         ;
@@ -645,14 +644,14 @@ test "analysis completion: record update paths complete record fields" {
         var result = try case.completeSourceAfter(request_source, "body.text.size =");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectMissing(result, "callout");
+        try expectMissing(result, "generated");
         try expectHas(result, "page");
     }
 }
 
 test "analysis completion: chevron blocks and comments do not create fake bindings or scopes" {
     var case = try CompletionCase.init(
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\page title
         \\  ;; let fake_comment = h2! "comment"
@@ -667,7 +666,7 @@ test "analysis completion: chevron blocks and comments do not create fake bindin
     defer case.deinit();
 
     const request_source =
-        \\import std:themes/default as *
+        \\import std:text as *
         \\
         \\page title
         \\  ;; let fake_comment = h2! "comment"
@@ -730,8 +729,8 @@ fn checkNominalQueries(imports: []const u8) !void {
     defer sources.deinit();
     try sources.put(path, source);
     try sources.put(root ++ "/a.ss",
-        \\record Style { only_a: Number = 1 }
-        \\record Box { value: Style = Style {} }
+        \\type Style = record { only_a: Number = 1 }
+        \\type Box = record { value: Style = Style {} }
         \\type Base = object { object_a: Number = 1 }
         \\type Card = object { base = Base
         \\  roles = ["query-a"] }
@@ -744,8 +743,8 @@ fn checkNominalQueries(imports: []const u8) !void {
         \\end
     );
     try sources.put(root ++ "/b.ss",
-        \\record Style { only_b: String = "b" }
-        \\record Box { value: Style = Style {} }
+        \\type Style = record { only_b: String = "b" }
+        \\type Box = record { value: Style = Style {} }
         \\type Base = object { object_b: String = "b" }
         \\type Card = object { base = Base
         \\  roles = ["query-b"] }
@@ -1175,8 +1174,8 @@ test "selected imports: queries retain canonical declarations and export visibil
     ;
     const facade_source = "import impl as { make, Item }\n";
     const impl_source =
-        \\record Item { value: Number = 12 }
-        \\record Hidden { private: Number = 0 }
+        \\type Item = record { value: Number = 12 }
+        \\type Hidden = record { private: Number = 0 }
         \\const secret: Number = 99
         \\fn make(item: Item = Item {}) -> Item
         \\  return item
@@ -1236,7 +1235,7 @@ test "selected imports: queries retain canonical declarations and export visibil
 
 test "analysis queries: qualified calls bypass local names in hover and definition" {
     var case = try CompletionCase.init(
-        \\import std:themes/default as theme
+        \\import std:text as theme
         \\page main
         \\  let h1 = theme::h1("First")
         \\  theme::h1("Second")
@@ -1258,7 +1257,7 @@ test "analysis queries: qualified calls bypass local names in hover and definiti
 
 test "analysis queries: fields never fall back to unrelated value names" {
     var case = try CompletionCase.init(
-        \\record Label {
+        \\type Label = record {
         \\  text: String = "Body"
         \\}
         \\page main
@@ -1308,7 +1307,7 @@ test "analysis queries: let initializer resolves outside its own binding" {
 test "analysis queries: constant record receivers precede enum names" {
     var case = try CompletionCase.init(
         \\type Mode = alpha | beta
-        \\record Settings {
+        \\type Settings = record {
         \\  size: Number = 17
         \\}
         \\const Mode: Settings = Settings {}

@@ -426,11 +426,9 @@ fn starterSlideTemplate() []const u8 {
     \\import std:themes/default as *
     \\
     \\page title
-    \\cover!(
-    \\  "Hello, ss",
-    \\  "Write slides as programs.",
-    \\  "ss init"
-    \\)
+    \\title!("Hello, ss")
+    \\subtitle!("Write slides as programs.")
+    \\byline!("ss init")
     \\end
     \\
     \\page body

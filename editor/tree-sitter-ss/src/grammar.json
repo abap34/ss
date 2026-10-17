@@ -561,6 +561,10 @@
             },
             {
               "type": "SYMBOL",
+              "name": "record_type"
+            },
+            {
+              "type": "SYMBOL",
               "name": "enum_type"
             }
           ]
@@ -621,17 +625,8 @@
       "type": "SEQ",
       "members": [
         {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "STRING",
-              "value": "object"
-            },
-            {
-              "type": "STRING",
-              "value": "protocol"
-            }
-          ]
+          "type": "STRING",
+          "value": "object"
         },
         {
           "type": "STRING",
@@ -649,6 +644,37 @@
           "content": {
             "type": "SYMBOL",
             "name": "object_member"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "}"
+        }
+      ]
+    },
+    "record_type": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "record"
+        },
+        {
+          "type": "STRING",
+          "value": "{"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_terminator"
+          }
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "object_field"
           }
         },
         {
@@ -1052,24 +1078,28 @@
       "type": "SEQ",
       "members": [
         {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "page",
+              "content": {
+                "type": "SYMBOL",
+                "name": "_expression"
+              }
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
           "type": "STRING",
           "value": "~"
         },
         {
           "type": "FIELD",
-          "name": "left",
-          "content": {
-            "type": "SYMBOL",
-            "name": "member_expression"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": "=="
-        },
-        {
-          "type": "FIELD",
-          "name": "right",
+          "name": "value",
           "content": {
             "type": "SYMBOL",
             "name": "_expression"
@@ -3088,7 +3118,7 @@
       "type": "IMMEDIATE_TOKEN",
       "content": {
         "type": "PATTERN",
-        "value": "[ \\t]+([^ \\t|/\"(<?\\n][^\\n]*|\\|([^|=\\n][^\\n]*|=([^|\\n][^\\n]*)?)?|\\/([^/=\\n][^\\n]*|=([^/\\n][^\\n]*)?)?|<([^<\\n][^\\n]*)?|\\?([^?\\n][^\\n]*)?)"
+        "value": "[ \\t]+([^ \\t|/\"(<?~\\n][^\\n]*|\\|([^|=\\n][^\\n]*|=([^|\\n][^\\n]*)?)?|\\/([^/=\\n][^\\n]*|=([^/\\n][^\\n]*)?)?|<([^<\\n][^\\n]*)?|\\?([^?\\n][^\\n]*)?)"
       }
     },
     "_bang_line_text": {

@@ -329,11 +329,28 @@ pub const PropagationPath = struct {
 };
 
 pub const AnchorValue = union(enum) {
-    page: struct { page_id: NodeId, anchor: Anchor },
+    page: struct { page_id: NodeId, anchor: Anchor, offset: f32 = 0 },
     node: struct {
         node_id: NodeId,
         anchor: Anchor,
+        offset: f32 = 0,
     },
+
+    pub fn offset(self: AnchorValue) f32 {
+        return switch (self) {
+            .page => |value| value.offset,
+            .node => |value| value.offset,
+        };
+    }
+
+    pub fn shifted(self: AnchorValue, amount: f32) AnchorValue {
+        var result = self;
+        switch (result) {
+            .page => |*value| value.offset += amount,
+            .node => |*value| value.offset += amount,
+        }
+        return result;
+    }
 
     pub fn toConstraintSource(self: AnchorValue) ConstraintSource {
         return switch (self) {

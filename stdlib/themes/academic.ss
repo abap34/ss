@@ -1,12 +1,8 @@
-import std:themes/default as base
-import std:themes/base as theme_base
-import std:core/classes
-import std:core/components as components
-import std:core/layout as layout
-import std:core/objects as objects
-import std:core/generated as generated
+import std:theme/types
 
-fn default_theme(options: theme_base::ThemeOptions = theme_base::ThemeOptions {}) -> theme_base::Theme
+import std:themes/default as base
+
+fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme
   return base::default_theme(options) with {
     body.text.size = 20
     body.text.line_height = 28
@@ -14,19 +10,19 @@ fn default_theme(options: theme_base::ThemeOptions = theme_base::ThemeOptions {}
     body.layout.spacing_after = 32
     body.layout.x = 96
     body.layout.right_inset = 96
-    body.text.markdown_code_font_size = 18
-    body.text.markdown_code_line_height = 24
-    body.text.markdown_code_pad_x = 12
-    body.text.markdown_code_pad_y = 10
-    body.text.markdown_code_fill = c"0.94,0.94,0.94"
-    body.text.markdown_code_stroke = c"0.78,0.78,0.78"
-    body.text.markdown_code_line_width = 1
-    body.text.markdown_code_radius = 0
-    body.text.markdown_quote.color = c"0.18,0.18,0.18"
-    body.text.markdown_quote.fill = none
-    body.text.markdown_quote.radius = 0
-    body.text.markdown_quote.bar_color = c"0.35,0.35,0.35"
-    body.text.markdown_quote.bar_width = 2
+    body.text.markdown.code.size = 18
+    body.text.markdown.code.line_height = 24
+    body.text.markdown.code.chrome.pad_x = 12
+    body.text.markdown.code.chrome.pad_y = 10
+    body.text.markdown.code.chrome.fill = c"0.94,0.94,0.94"
+    body.text.markdown.code.chrome.stroke = c"0.78,0.78,0.78"
+    body.text.markdown.code.chrome.line_width = 1
+    body.text.markdown.code.chrome.radius = 0
+    body.text.markdown.quote.color = c"0.18,0.18,0.18"
+    body.text.markdown.quote.fill = none
+    body.text.markdown.quote.radius = 0
+    body.text.markdown.quote.bar_color = c"0.35,0.35,0.35"
+    body.text.markdown.quote.bar_width = 2
     h1.text.size = 32
     h1.text.line_height = 36
     h1.text.color = options.text_color ?? c"0,0,0.0353"
@@ -53,10 +49,6 @@ fn default_theme(options: theme_base::ThemeOptions = theme_base::ThemeOptions {}
     head.title.layout.x = 30
     head.title.layout.right_inset = 30
     head.top = 30
-    subhead.text.size = 12
-    subhead.text.line_height = 24
-    subhead.text.color = options.text_color ?? c"0,0,0.0353"
-    subhead.layout.spacing_after = 34
     code.text.size = 15
     code.layout.x = 102
     code.layout.right_inset = 102
@@ -66,20 +58,6 @@ fn default_theme(options: theme_base::ThemeOptions = theme_base::ThemeOptions {}
     code.chrome.radius = 0
     code.chrome.pad_x = 12
     code.chrome.pad_y = 10
-    cover.title.text.size = 44
-    cover.title.text.line_height = 40
-    cover.title.text.color = options.accent_color ?? c"0,0,0.0353"
-    cover.title.text.font.weight = 400
-    cover.subtitle.text.size = 18
-    cover.subtitle.text.line_height = 24
-    cover.subtitle.text.color = options.text_color ?? c"0,0,0.0353"
-    cover.subtitle.text.font.weight = 700
-    cover.author.text.size = 20
-    cover.author.text.line_height = 26
-    cover.author.text.color = options.accent_color ?? c"0,0,0.0353"
-    cover.date.text.size = 14
-    cover.date.text.line_height = 20
-    cover.date.text.color = options.muted_color ?? c"0,0,0.0353"
     callout.text.size = 20
     callout.text.line_height = 28
     callout.text.color = options.text_color ?? c"0,0,0.0353"
@@ -102,154 +80,4 @@ fn default_theme(options: theme_base::ThemeOptions = theme_base::ThemeOptions {}
     callout.callout.text.line_height = 21
     callout.callout.text.color = options.muted_color ?? c"0,0,0.0353"
   }
-end
-
-fn theme!(theme_value: theme_base::Theme) -> Void
-  theme_base::set_theme!(theme_value)
-end
-
-fn current_theme() -> theme_base::Theme
-  return docctx().theme ?? default_theme()
-end
-
-fn annotate!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
-  return theme_base::annotate_with_style!(source_text, target_text, note_text, style)
-end
-
-fn/! h1(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
-  return base::h1(text_value, theme)
-end
-
-fn/! h2(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
-  return base::h2(text_value, theme)
-end
-
-fn/! h3(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
-  return base::h3(text_value, theme)
-end
-
-fn/! h4(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
-  return base::h4(text_value, theme)
-end
-
-fn/! h5(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
-  return base::h5(text_value, theme)
-end
-
-fn/! h6(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
-  return base::h6(text_value, theme)
-end
-
-fn/! head(title_text: String, theme: theme_base::Theme = current_theme()) -> Object
-  let title = objects::title_obj(title_text)
-  theme_base::apply_text_block_style(title, theme.head.title)
-  ~ title.left == page.left + theme.head.title.layout.x
-  ~ title.top == page.top - theme.head.top
-  return title
-end
-
-fn/! subhead(subtitle_text: String, theme: theme_base::Theme = current_theme()) -> Object
-  let subtitle = objects::sub_obj(subtitle_text)
-  theme_base::apply_text_block_style(subtitle, theme.subhead)
-  ~ subtitle.left == page.left + 96
-  ~ subtitle.right == page.right - 96
-  ~ subtitle.top == page.top - 150
-  return subtitle
-end
-
-fn/! text(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
-  return base::text(text_value, theme)
-end
-
-fn/! note(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
-  return base::note(text_value, theme)
-end
-
-fn/! byline(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
-  return theme_base::byline_with_style(text_value, theme.byline)
-end
-
-fn/! label(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
-  return theme_base::label_with_style(text_value, theme.label)
-end
-
-fn/! citation(target: Object, number: Number, reference_text: String, theme: theme_base::Theme = current_theme()) -> Object
-  return theme_base::citation_with_style(target, number, reference_text, theme.citation)
-end
-
-fn/! pageno(theme: theme_base::Theme = current_theme()) -> Object
-  return theme_base::pageno_with_style(theme.generated.pageno)
-end
-
-fn pagenos!(format: String? = none, theme: theme_base::Theme = current_theme()) -> Void
-  theme_base::pagenos_with_style!(format, theme.generated.pageno)
-end
-
-fn footers!(text_value: String, theme: theme_base::Theme = current_theme()) -> Void
-  theme_base::footers_with_style!(text_value, theme.generated.footer)
-end
-
-fn watermark!(text_value: String, theme: theme_base::Theme = current_theme()) -> Void
-  theme_base::watermark_with_style!(text_value, theme.generated.watermark)
-end
-
-fn/! latex(text_value: String, scale: Number = 1) -> Object
-  return base::latex(text_value, scale)
-end
-
-fn/! figure(text_value: String, theme: theme_base::Theme = current_theme()) -> Object
-  return base::figure(text_value, theme)
-end
-
-fn/! image(path_value: String, factor: Number = 1, theme: theme_base::Theme = current_theme()) -> Object
-  return base::image(path_value, factor, theme)
-end
-
-fn/! pdf(path_value: String, factor: Number = 1, page_number: Number = 1, page_box: PdfPageBox = PdfPageBox.crop, theme: theme_base::Theme = current_theme()) -> Object
-  return base::pdf(path_value, factor, page_number, page_box, theme)
-end
-
-fn/! code(text_value: String, language_name: String = "python", theme: theme_base::Theme = current_theme()) -> Object
-  return base::code(text_value, language_name, theme)
-end
-
-fn/! code_file(path_value: String, language_name: String = "plain", theme: theme_base::Theme = current_theme()) -> Object
-  return code(readlines(path_value), language_name, theme)
-end
-
-fn toc(title_text: String, theme: theme_base::Theme = current_theme()) -> Object
-  let parts = theme_base::toc_parts(title_text, theme.toc)
-  let title = parts.title
-  let list = parts.list
-  let chrome = parts.chrome
-  ~ title.left == page.left + 30
-  ~ title.top == page.top - 30
-  ~ list.top == title.bottom - 35
-  layout::surround(chrome, list, theme.toc.chrome.pad_x, theme.toc.chrome.pad_y)
-  return group(title, chrome, list)
-end
-
-fn toc!(title_text: String, theme: theme_base::Theme = current_theme()) -> Object
-  let contents = objects::place!(toc(title_text, theme))
-  pageno!(theme)
-  return contents
-end
-
-fn/! cover(title_text: String, subtitle_text: String, author_name: String, date: String = "", theme: theme_base::Theme = current_theme()) -> Object
-  let parts = theme_base::cover_parts(title_text, subtitle_text, author_name, theme.cover)
-  let title = parts.title
-  let subtitle = parts.subtitle
-  let author = parts.author
-  let date_text = objects::by_obj(date)
-  theme_base::apply_text_block_style(date_text, theme.cover.date)
-
-  ~ title.left == page.left + 72
-  ~ title.top == page.top - 240
-  ~ subtitle.left == title.left
-  ~ subtitle.top == title.bottom - 28
-  ~ author.left == subtitle.left
-  ~ author.top == subtitle.bottom - 36
-  ~ date_text.left == author.left
-  ~ date_text.top == author.bottom - 18
-  return group(title, subtitle, author, date_text)
 end

@@ -134,10 +134,10 @@ async function testStdlibShapeCatalog() {
     "rectangle", "rounded_rectangle", "ellipse", "circle", "capsule",
     "triangle", "right_triangle", "diamond", "parallelogram", "trapezoid",
     "pentagon", "hexagon", "octagon", "star", "chevron", "arrow_shape",
-    "plus_shape", "heart", "speech_bubble", "cloud", "rect", "rounded_rect",
-    "triangle_up", "triangle_right", "triangle_down", "triangle_left",
-    "star4", "star5", "star6", "cross_shape", "chevron_right", "chevron_left",
-    "chevron_down", "chevron_up", "block_arrow_right", "block_arrow_left",
+    "plus_shape", "heart", "speech_bubble", "cloud",
+    "triangle_right", "triangle_down", "triangle_left",
+    "star4", "star6", "cross_shape", "chevron_left",
+    "chevron_down", "chevron_up", "block_arrow_left",
     "block_arrow_down", "block_arrow_up", "semicircle", "quarter_circle",
   ];
   const fills = [
@@ -197,7 +197,11 @@ page callout
 let target = text!("target")
 ~ target.left == page.left + 180
 ~ target.top == page.top - 220
-bracket_callout!(target, "note", 650, 390, 220, CalloutStyle { left_bracket = true })
+let annotation = callout_parts(target, "note", CalloutStyle { left_bracket = true })
+~ annotation.note.left == page.left + 650
+~ annotation.note.top == page.top - 390
+~ annotation.note.width == 220
+place!(annotation.root)
 end
 `, "utf8");
     expectSuccess(await runSs(["dump", "slide.ss", "dump.json"], project), "callout connector dump");

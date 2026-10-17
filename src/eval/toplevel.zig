@@ -665,6 +665,14 @@ fn evalMemberValue(
         const value = target.record.field(name) orelse return .{ .none = {} };
         return try value.clone(state.allocator);
     }
+    if (target == .object or target == .page) {
+        if (names.parseAnchorName(name)) |anchor| {
+            return .{ .anchor = if (target == .object)
+                .{ .node = .{ .node_id = target.object, .anchor = anchor } }
+            else
+                .{ .page = .{ .page_id = target.page, .anchor = anchor } } };
+        }
+    }
     if (std.mem.eql(u8, name, "content")) {
         const object_id = try resolveValueObjectId(target);
         return .{ .string = state.getNode(object_id).?.content orelse "" };
@@ -1128,10 +1136,6 @@ const BuiltinContext = struct {
         return try evalCallObjectArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
     }
 
-    pub fn evalAnchorArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.AnchorValue {
-        return try evalCallAnchorArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
-    }
-
     pub fn evalRoleArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.Role {
         return try evalCallRoleArg(self.evaluation, self.page_id, self.scope, self.env, self.current_origin, call, index);
     }
@@ -1558,13 +1562,6 @@ fn resolveValueBoolean(value: core.Value) !bool {
     return eval_value.boolean(value);
 }
 
-fn resolveValueAnchor(value: core.Value) !core.AnchorValue {
-    return switch (value) {
-        .anchor => |anchor| anchor,
-        else => return error.ExpectedAnchor,
-    };
-}
-
 fn resolveValueObjectId(value: core.Value) !core.NodeId {
     return switch (value) {
         .object => |id| id,
@@ -1618,18 +1615,6 @@ fn evalCallObjectArg(
     index: usize,
 ) anyerror!core.NodeId {
     return try resolveValueObjectId(try evalCallArg(evaluation, page_id, scope, env, current_origin, call, index));
-}
-
-fn evalCallAnchorArg(
-    evaluation: *EvalContext,
-    page_id: core.NodeId,
-    scope: EvalScope,
-    env: *Environment,
-    current_origin: core.SourceOrigin,
-    call: CallExpr,
-    index: usize,
-) anyerror!core.AnchorValue {
-    return try resolveValueAnchor(try evalCallArg(evaluation, page_id, scope, env, current_origin, call, index));
 }
 
 fn evalCallRoleArg(
@@ -1687,7 +1672,7 @@ fn anchorEqualityConstraintSet(
             .target_node = node.node_id,
             .target_anchor = node.anchor,
             .source = source.toConstraintSource(),
-            .offset = offset,
+            .offset = offset + source.offset() - target.offset(),
             .origin = origin,
             .role = core.constraintRoleForRelation(node.node_id, node.anchor, source.toConstraintSource()),
             .page_id = if (source == .page) source.page.page_id else null,
@@ -1927,11 +1912,20 @@ fn executeStatement(
         },
         .constrain => |decl| {
             if (scope != .page) return error.NoCurrentPage;
-            const target = try resolveAnchorRef(state, env, origin, decl.target, true);
-            const resolved_source: ?core.ConstraintSource = if (decl.source) |source_ref|
-                try resolveAnchorRef(state, env, origin, source_ref, false)
+            const target = try resolveAnchorRef(state, env, origin, page_id, decl.target, true);
+            const source_value: ?core.AnchorValue = if (decl.source) |source_ref|
+                try resolveAnchorRef(state, env, origin, page_id, source_ref, false)
             else
                 null;
+            const resolved_source: ?core.ConstraintSource = if (source_value) |value| value.toConstraintSource() else null;
+            if (source_value) |value| {
+                if (value == .page and value.page.page_id != page_id) {
+                    try state.addValidationDiagnostic(.@"error", page_id, target.node_id, origin, .{
+                        .user_report = .{ .code = "CrossPageConstraint", .message = try state.allocator.dupe(u8, "constraint page anchor refers to a different page from its registration") },
+                    });
+                    return error.DiagnosticsFailed;
+                }
+            }
             const offset: f32 = if (decl.offset) |expr| blk: {
                 const value = try evalExpr(evaluation, page_id, scope, env, origin, expr);
                 break :blk try resolveValueNumber(value);
@@ -2125,17 +2119,19 @@ fn resolveAnchorRef(
     state: *core.DocumentState,
     env: *Environment,
     current_origin: core.SourceOrigin,
+    page_id: core.NodeId,
     anchor_ref: AnchorRef,
     comptime is_target: bool,
-) !if (is_target) ResolvedTarget else core.ConstraintSource {
+) !if (is_target) ResolvedTarget else core.AnchorValue {
     switch (anchor_ref.kind) {
         .page => {
             if (is_target) return error.PageCannotBeConstraintTarget;
-            return .{ .page = anchor_ref.anchor };
+            return .{ .page = .{ .page_id = page_id, .anchor = anchor_ref.anchor } };
         },
         .node => {
             var value = try resolveAnchorPathValue(state, env, current_origin, anchor_ref.node_path orelse anchor_ref.node_name.?);
             defer value.deinit(state.allocator);
+            if (!is_target and value == .page) return .{ .page = .{ .page_id = value.page, .anchor = anchor_ref.anchor } };
             const node_id = try resolveValueObjectId(value);
             if (is_target) {
                 return .{ .node_id = node_id, .anchor = anchor_ref.anchor };

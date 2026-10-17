@@ -6,9 +6,9 @@ document
     generated.footer.text.size = 18
     generated.watermark.text.size = 19
   }
-  pagenos!(none, theme)
-  footers!("footer", theme)
-  watermark!("watermark", theme)
+  pagenos!(none, theme.generated.pageno)
+  footers!("footer", theme.generated.footer)
+  watermark!("watermark", theme.generated.watermark)
 end
 
 page ok

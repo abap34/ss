@@ -86,7 +86,7 @@ module.exports = grammar({
       "type",
       field("name", $.type_identifier),
       "=",
-      choice($.object_type, $.enum_type),
+      choice($.object_type, $.record_type, $.enum_type),
     ),
 
     enum_type: $ => seq(field("case", $.identifier), repeat(seq("|", field("case", $.identifier))), $._terminator),
@@ -97,12 +97,14 @@ module.exports = grammar({
     ),
 
     object_type: $ => seq(
-      choice("object", "protocol"),
+      "object",
       "{",
       repeat($._terminator),
       repeat($.object_member),
       "}",
     ),
+
+    record_type: $ => seq("record", "{", repeat($._terminator), repeat($.object_field), "}"),
 
     object_member: $ => choice($.object_base, $.object_implements, $.object_roles, $.object_field),
     object_base: $ => seq("base", "=", field("type", $._type_name), optional($._terminator)),
@@ -142,7 +144,7 @@ module.exports = grammar({
 
     let_statement: $ => seq("let", field("name", $.identifier), "=", field("value", $._expression), $._terminator),
     return_statement: $ => seq("return", optional(field("value", $._expression)), $._terminator),
-    constrain_statement: $ => seq("~", field("left", $.member_expression), "==", field("right", $._expression), $._terminator),
+    constrain_statement: $ => seq(optional(field("page", $._expression)), "~", field("value", $._expression), $._terminator),
     constraint_update_statement: $ => seq(
       token(prec(1, "~!~")),
       field("target", $.member_expression),
@@ -317,7 +319,7 @@ module.exports = grammar({
     // Only a line-leading delimiter closes the literal. Leave its suffix and
     // newline to the surrounding expression, just like other string literals.
     block_text: _ => token(seq("<<", /[ \t\r]*(;;[^\n]*)?\n([ \t\r]*([^ \t\r>\n][^\n]*|>([^>\n][^\n]*)?)?\n)*[ \t\r]*>>/)),
-    line_text: _ => token.immediate(/[ \t]+([^ \t|/"(<?\n][^\n]*|\|([^|=\n][^\n]*|=([^|\n][^\n]*)?)?|\/([^/=\n][^\n]*|=([^/\n][^\n]*)?)?|<([^<\n][^\n]*)?|\?([^?\n][^\n]*)?)/),
+    line_text: _ => token.immediate(/[ \t]+([^ \t|/"(<?~\n][^\n]*|\|([^|=\n][^\n]*|=([^|\n][^\n]*)?)?|\/([^/=\n][^\n]*|=([^/\n][^\n]*)?)?|<([^<\n][^\n]*)?|\?([^?\n][^\n]*)?)/),
     _bang_line_text: _ => token.immediate(/[ \t]+([^ \t"(<\n][^\n]*|<([^<\n][^\n]*)?)/),
     number: _ => /\d+(\.\d+)?/,
     boolean: _ => choice("true", "false"),

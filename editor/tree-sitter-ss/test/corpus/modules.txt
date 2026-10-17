@@ -74,7 +74,7 @@ end
 Selected imports with explicit placement names
 ================================================================================
 
-import std:core/objects as { body_obj, body_obj! }
+import std:internal/objects as { body_obj, body_obj! }
 import "library" as {
   Item,
   make, make!, ;; retained declaration names
@@ -95,3 +95,27 @@ import "library" as {
       (bare_callable_identifier (identifier))
       (bare_callable_identifier (identifier))
       (comment))))
+
+================================================================================
+Record type declarations share the type declaration syntax
+================================================================================
+
+type Padding = record {
+  x: Number = 12
+  y: Number = 8
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_identifier)
+    (record_type
+      (object_field
+        (identifier)
+        (type (primary_type (type_identifier)))
+        (number))
+      (object_field
+        (identifier)
+        (type (primary_type (type_identifier)))
+        (number)))))

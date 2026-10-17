@@ -227,6 +227,11 @@ const Parser = struct {
                     try module.types.append(self.allocator, type_decl);
                     type_decl_moved = true;
                 },
+                .record => |value| {
+                    var record_decl = value;
+                    errdefer record_decl.deinit(self.allocator);
+                    try module.records.append(self.allocator, record_decl);
+                },
                 .object => |value| {
                     var object_decl = value;
                     var object_decl_moved = false;
@@ -235,13 +240,6 @@ const Parser = struct {
                     object_decl_moved = true;
                 },
             }
-        } else if (try self.consumeKeyword("record")) {
-            imports_allowed.* = false;
-            var record_decl = try self.parseRecordDeclAfterKeyword(item_start);
-            var record_decl_moved = false;
-            errdefer if (!record_decl_moved) record_decl.deinit(self.allocator);
-            try module.records.append(self.allocator, record_decl);
-            record_decl_moved = true;
         } else if (try self.consumeKeyword("extend")) {
             imports_allowed.* = false;
             var extension = try self.parseObjectExtensionAfterKeyword(item_start);
@@ -567,6 +565,7 @@ const Parser = struct {
     const TypeItem = union(enum) {
         enum_decl: TypeDecl,
         object: ObjectDecl,
+        record: RecordDecl,
     };
 
     fn parseTypeItemAfterKeyword(self: *Parser, start: usize) !TypeItem {
@@ -580,9 +579,9 @@ const Parser = struct {
             parsed_name_moved = true;
             return .{ .object = try self.parseObjectDeclBody(start, parsed_name) };
         }
-        if (try self.consumeKeyword("protocol")) {
+        if (try self.consumeKeyword("record")) {
             parsed_name_moved = true;
-            return .{ .object = try self.parseObjectDeclBody(start, parsed_name) };
+            return .{ .record = try self.parseRecordDeclBody(start, parsed_name) };
         }
         var cases = std.ArrayList(ast.EnumCaseDecl).empty;
         var needs_case = true;
@@ -658,11 +657,6 @@ const Parser = struct {
         try self.parseObjectMembers(&decl.base, null, &decl.roles, &decl.fields);
         decl.span.end = self.pos;
         return decl;
-    }
-
-    fn parseRecordDeclAfterKeyword(self: *Parser, start: usize) !RecordDecl {
-        const name = try self.parseIdentifierWithSpan();
-        return try self.parseRecordDeclBody(start, name);
     }
 
     fn parseRecordDeclBody(self: *Parser, start: usize, name: ParsedName) !RecordDecl {
@@ -1382,12 +1376,20 @@ const Parser = struct {
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .constrain = decl } };
         }
         if (self.consumeConstraintMarker()) {
+            if (!self.startsDirectConstraint()) {
+                var rules = try self.parseConstraintValue();
+                errdefer rules.deinit(self.allocator);
+                var current_page = try self.makeCall0("pagectx");
+                errdefer current_page.deinit(self.allocator);
+                try self.consumeStatementTerminator();
+                const call = try self.makeCall2("constrain_on!", .{ .call = current_page }, rules);
+                return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
+            }
             var decl = try self.parseMemberConstraintDecl(.add);
             errdefer decl.deinit(self.allocator);
             try self.consumeStatementTerminator();
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .constrain = decl } };
         }
-        if (self.peekAnchorAssignment()) return self.fail(error.ExpectedConstraintMarker);
         if (try self.parseMemberAssignmentStatement(start)) |stmt| {
             return stmt;
         }
@@ -1437,6 +1439,7 @@ const Parser = struct {
         if (self.peekCompositionOperatorAt(continuation) != null or source.startsWithAt(self.source, self.pos, "??")) return true;
         // Keep spaced punctuation in line text. A member or optional operand
         // can use adjacent punctuation, parentheses, or a lexical binding.
+        if (self.source[self.pos] == '~') return true;
         if (self.pos != name_end) return false;
         return switch (self.source[self.pos]) {
             '.', '?', '{' => true,
@@ -1447,6 +1450,15 @@ const Parser = struct {
     fn parseExpressionStatement(self: *Parser, start: usize) !Statement {
         var expr = try self.parseExpr();
         errdefer expr.deinit(self.allocator);
+        source.skipInlineSpaces(self.source, &self.pos);
+        const expression_end = start + std.mem.trimEnd(u8, self.source[start..self.pos], " \t\r\n").len;
+        const same_line = std.mem.indexOfScalar(u8, self.source[expression_end..self.pos], '\n') == null;
+        if (same_line and self.consumeConstraintMarker()) {
+            var rules = try self.parseConstraintValue();
+            errdefer rules.deinit(self.allocator);
+            const call = try self.makeCall2("constrain_on!", expr, rules);
+            expr = .{ .call = call };
+        }
         // A missing expression may leave its delimiter for an enclosing parser.
         // At statement level, recovery must consume it before trying again.
         if (self.pos == start) return self.fail(error.ExpectedExpression);
@@ -1594,7 +1606,7 @@ const Parser = struct {
     }
 
     fn makeFixedCompositionCall(self: *Parser, function_name: []const u8, operator_span: ast.Span, operands: []const Expr, spans: []const ast.Span) !Expr {
-        const qualifier = try self.allocator.dupe(u8, "std:core/layout");
+        const qualifier = try self.allocator.dupe(u8, "std:layout");
         errdefer self.allocator.free(qualifier);
         const name = try self.allocator.dupe(u8, function_name);
         errdefer self.allocator.free(name);
@@ -2357,6 +2369,10 @@ const Parser = struct {
         return .{ .coalesce = .{ .target = target_ptr, .fallback = fallback_ptr } };
     }
 
+    fn makeCall0(self: *Parser, name: []const u8) !ast.CallExpr {
+        return .{ .callee = try self.makeSyntheticCallableName(name), .args = .empty };
+    }
+
     fn makeCall1(self: *Parser, name: []const u8, arg0: Expr) !ast.CallExpr {
         var callee = try self.makeSyntheticCallableName(name);
         errdefer callee.deinit(self.allocator);
@@ -2392,6 +2408,15 @@ const Parser = struct {
 
     fn makeSyntheticCallableName(self: *Parser, name: []const u8) !ast.CallableName {
         return ast.CallableName.bare(try self.allocator.dupe(u8, name));
+    }
+
+    fn parseConstraintValue(self: *Parser) !Expr {
+        source.skipInlineSpaces(self.source, &self.pos);
+        if (self.atStatementBoundary()) {
+            if (!self.recovering) return self.fail(error.ExpectedExpression);
+            return self.makeHoleExpr(.expr, .expression, pointSpan(self.pos), error.ExpectedExpression, diagnostics.foundToken(self.source, self.pos));
+        }
+        return self.parseExpr();
     }
 
     fn parseMemberConstraintDecl(self: *Parser, action: ConstraintDecl.Action) !ConstraintDecl {
@@ -2794,7 +2819,7 @@ const Parser = struct {
             "const",
             "type",
             "record",
-            "protocol",
+            "object",
             "extend",
             "if",
             "else",
@@ -2894,22 +2919,29 @@ const Parser = struct {
         return scanner.atStatementBoundary(self.source, self.pos);
     }
 
-    fn peekAnchorAssignment(self: *Parser) bool {
+    fn startsDirectConstraint(self: *const Parser) bool {
         var probe = self.pos;
-        source.skipTriviaFrom(self.source, &probe);
+        source.skipInlineSpaces(self.source, &probe);
         if (!scanner.scanIdentifier(self.source, &probe)) return false;
-        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
-        if (probe >= self.source.len or self.source[probe] != '.') return false;
-        probe += 1;
-        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
-        const member_start = probe;
+        var last_member: ?[]const u8 = null;
+        while (true) {
+            source.skipInlineSpaces(self.source, &probe);
+            if (probe >= self.source.len or self.source[probe] != '.') break;
+            probe += 1;
+            source.skipInlineSpaces(self.source, &probe);
+            const member_start = probe;
+            if (!scanner.scanIdentifier(self.source, &probe)) return false;
+            last_member = self.source[member_start..probe];
+        }
+        const member = last_member orelse return false;
+        if (!source.startsWithAt(self.source, probe, "==")) return false;
+        if (std.mem.eql(u8, member, "width") or std.mem.eql(u8, member, "height")) return true;
+        if (names.parseAnchorName(member) == null) return false;
+        probe += 2;
+        source.skipInlineSpaces(self.source, &probe);
         if (!scanner.scanIdentifier(self.source, &probe)) return false;
-        const member_name = self.source[member_start..probe];
-        if (names.parseAnchorName(member_name) == null and
-            !std.mem.eql(u8, member_name, "width") and
-            !std.mem.eql(u8, member_name, "height")) return false;
-        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
-        return source.startsWithAt(self.source, probe, "==");
+        source.skipInlineSpaces(self.source, &probe);
+        return probe < self.source.len and self.source[probe] == '.';
     }
 
     fn peekPropertyAssignment(self: *Parser) bool {

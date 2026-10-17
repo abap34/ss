@@ -553,9 +553,9 @@ end
     const output = combinedOutput(result);
     assert(result.code !== 0, "check should fail when a standard-library helper cannot read its input");
     const diagnostic = output.split("\n").find((line) => line.includes("ReadlinesFailed:"));
-    assert(diagnostic?.includes("std:themes/default:"), `standard-library diagnostic used the wrong source path:\n${output}`);
+    assert(diagnostic?.includes("std:code:"), `standard-library diagnostic used the wrong source path:\n${output}`);
     assert(
-      output.includes("|   return code(readlines(path_value), language_name, theme)"),
+      output.includes("|   return code(readlines(path), language, style)"),
       `standard-library diagnostic omitted its source excerpt:\n${output}`,
     );
   } finally {
@@ -980,16 +980,16 @@ end
     );
     await writeFile(
       path.join(project, "theme.ss"),
-      `import std:themes/default as default
+      `import std:text as default
 
 fn/! success_text(content: String) -> Object
-  return default::text(content, default::current_theme() with {
+  return default::text(content, current_theme() with {
     body.text.cjk_bold_passes = 3
   })
 end
 
 fn/! danger_text(content: String) -> Object
-  return default::text(content, default::current_theme() with {
+  return default::text(content, current_theme() with {
     body.text.cjk_bold_passes = 3
   })
 end
@@ -1114,7 +1114,7 @@ let first: = 1
 let second: = "ok"
 let third: String = 2
 end
-record Broken {
+type Broken = record {
   field:
 }
 `,
@@ -1186,7 +1186,7 @@ async function testMemberNameHoleSuppressesEnumCaseDiagnostic() {
     await writeFile(
       path.join(project, "slide.ss"),
       `type Align = left | center | right
-record TextStyle {
+type TextStyle = record {
   math_align: Align
 }
 
@@ -1212,10 +1212,10 @@ async function testRecordUpdatePathHoleSuppressesFieldDiagnostic() {
   try {
     await writeFile(
       path.join(project, "slide.ss"),
-      `record Inner {
+      `type Inner = record {
   size: Number
 }
-record Theme {
+type Theme = record {
   body: Inner
 }
 

@@ -460,3 +460,27 @@ fn parseBlocksWithAllocator(allocator: std.mem.Allocator) !void {
 test "block Markdown preserves callback errors across allocation failures" {
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseBlocksWithAllocator, .{});
 }
+
+test "plain text preserves markup and source spans without creating assets" {
+    const content = "**literal** $math$ &amp; <tag>\r\n\n日本語";
+    var layout = try markdown.parsePlainTextContent(testing.allocator, content);
+    defer layout.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 3), layout.lines.items.len);
+    for (layout.lines.items) |line| {
+        try testing.expectEqual(@as(usize, 1), line.runs.items.len);
+        const run = line.runs.items[0];
+        try testing.expectEqual(markdown.RunKind.text, run.kind);
+        try testing.expectEqualStrings(content[run.source_start..run.source_end], run.text);
+        try testing.expect(run.url == null and run.icon == null);
+    }
+    try testing.expectEqualStrings("**literal** $math$ &amp; <tag>", layout.lines.items[0].runs.items[0].text);
+}
+
+test "plain text layout releases partial allocations" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, plainTextAllocationFailure, .{});
+}
+
+fn plainTextAllocationFailure(allocator: std.mem.Allocator) !void {
+    var layout = try markdown.parsePlainTextContent(allocator, "First\r\n\nLast\n");
+    defer layout.deinit(allocator);
+}

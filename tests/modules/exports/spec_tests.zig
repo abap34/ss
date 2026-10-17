@@ -5,7 +5,7 @@ const testing = std.testing;
 
 const implementation =
     \\const suffix: String = "original"
-    \\record Item { value: String = "original" }
+    \\type Item = record { value: String = "original" }
     \\type Choice = first | second
     \\type Card = object { roles = ["exported-card"] }
     \\fn default_item() -> Item
@@ -129,22 +129,19 @@ test "selected bindings precede open imports and local declarations precede both
 
 test "prelude exports use the canonical parameters without forwarding functions" {
     try exercise(
-        \\import std:core/prelude as prelude
+        \\import std:prelude as prelude
         \\page main
-        \\  prelude::pageno_obj!(decorate)
-        \\end
-        \\fn decorate(item: Object) -> Object
-        \\  return body_obj("custom")
+        \\  prelude::text!("custom")
         \\end
     , "", "", .{ .verify = struct {
         fn verify(state: *core.DocumentState) !void {
-            const prelude = state.moduleByPathOrSpec("std:core/prelude") orelse return error.MissingPrelude;
+            const prelude = state.moduleByPathOrSpec("std:prelude") orelse return error.MissingPrelude;
             try testing.expectEqual(@as(usize, 0), prelude.syntax.functions.items.len);
             const sema = compiler.semantic_env.SemanticEnv.init(state, state.declaration_index, &state.functions);
-            const function = sema.resolvedFunction(.{ .qualifier = "prelude", .name = "pageno_obj!" }) orelse return error.MissingFunction;
-            const generated = state.moduleByPathOrSpec("std:core/generated") orelse return error.MissingModule;
+            const function = sema.resolvedFunction(.{ .qualifier = "prelude", .name = "text!" }) orelse return error.MissingFunction;
+            const generated = state.moduleByPathOrSpec("std:text") orelse return error.MissingModule;
             try testing.expectEqual(generated.id, function.module_id);
-            try testing.expectEqual(@as(usize, 1), function.decl.params.items.len);
+            try testing.expectEqual(@as(usize, 2), function.decl.params.items.len);
             var found_custom = false;
             for (state.graph.nodes.items) |*node| {
                 if (std.mem.eql(u8, core.nodeDisplayContent(node), "custom")) found_custom = true;

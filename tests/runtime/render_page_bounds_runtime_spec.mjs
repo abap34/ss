@@ -105,11 +105,11 @@ async function mkdtempProject(prefix) {
 async function writeOffPageSlide(slide) {
   await writeFile(
     slide,
-    `import std:core/prelude as *
+    `import std:prelude as *
 
 page offpage
 page_bg(c"1,1,1")
-let marker = panel!()
+let marker = place!(new("", "panel", "text"))
 marker.chrome.fill = c"1,0,0"
 marker.chrome.stroke = none
 marker.chrome.line_width = 0

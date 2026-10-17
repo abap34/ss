@@ -424,7 +424,7 @@ test "syntax spec: declaration names preserve source spans" {
         \\type Widget = object {
         \\  title: String
         \\}
-        \\record Theme {
+        \\type Theme = record {
         \\  accent: Color
         \\}
         \\const accent: Color = c"#336699"
@@ -1015,10 +1015,10 @@ test "syntax spec: recovering blocks propagate every allocation failure" {
 }
 
 test "syntax spec: failed object declarations release parsed ownership" {
-    try expectParseErrorWithoutLeaks(error.ExpectedChar, "record Theme\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedChar, "type Theme = record\n");
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "extend Widget\n");
     try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation,
-        \\record Theme {
+        \\type Theme = record {
         \\  label
         \\}
         \\
@@ -1054,7 +1054,7 @@ test "syntax spec: object declarations survive every allocation failure" {
         testing.allocator,
         parseAndDeinitSource,
         .{
-            \\record Theme {
+            \\type Theme = record {
             \\  handler: Selection<(Page -> Object)?> = build
             \\}
             \\
@@ -1123,13 +1123,13 @@ test "syntax spec: failed function declarations release parsed ownership" {
 
 test "syntax spec: expression parsing survives every allocation failure" {
     const source =
-        \\import std:core/classes as classes
+        \\import std:internal/classes as classes
         \\type Align = left | center
         \\type Card = object {
         \\  roles = ["card"]
         \\  label: String = "caption"
         \\}
-        \\record Theme {
+        \\type Theme = record {
         \\  body: String = "body"
         \\}
         \\extend Card {
@@ -1215,7 +1215,7 @@ test "syntax spec: paired functions survive every allocation failure" {
 
 test "syntax spec: qualified type names parse in annotations and type parameters" {
     const source =
-        \\import std:core/classes as classes
+        \\import std:internal/classes as classes
         \\
         \\fn keep(value: classes::TextStyle, items: Selection<classes::Text>) -> Object<classes::Text>
         \\  return value
@@ -1239,7 +1239,7 @@ test "syntax spec: qualified type names parse in annotations and type parameters
 
 test "syntax spec: qualified record literals and enum targets parse" {
     var parsed = try parse(
-        \\import std:core/classes as classes
+        \\import std:internal/classes as classes
         \\
         \\page Values
         \\  let style = classes::TextStyle { size = 32 }
@@ -1523,7 +1523,7 @@ test "syntax spec: expression parsing lowers operators to named primitive calls"
 
 fn expectComposition(expr: ast.Expr, name: []const u8) !ast.CallExpr {
     const call = try expectCall(expr, name, 2);
-    try testing.expectEqualStrings("std:core/layout", call.callee.qualifier.?);
+    try testing.expectEqualStrings("std:layout", call.callee.qualifier.?);
     try testing.expect(call.callee.qualifier_span == null);
     try testing.expectEqual(@as(usize, 2), call.arg_spans.items.len);
     return call;
@@ -1874,7 +1874,7 @@ test "syntax spec: equal composition chains preserve grouping and spans" {
     const statements = parsed.module.pages.items[0].statements.items;
     for ([_]usize{ 0, 2 }, [_][]const u8{ "hsplit", "vsplit" }) |index, name| {
         const split = try expectCall(statements[index].kind.let_binding.expr, name, 1);
-        try testing.expectEqualStrings("std:core/layout", split.callee.qualifier.?);
+        try testing.expectEqualStrings("std:layout", split.callee.qualifier.?);
         try expectSpanText(source_text, split.callee.span.?, if (index == 0) "|=|" else "/=/");
         const append = try expectComposition(split.args.items[0], "composition_append");
         const pair = try expectComposition(append.args.items[0], "composition_objects");
@@ -2179,12 +2179,14 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
     try expectPath(property.path.items, &.{"left"});
     try expectString(property.value, "red");
 
-    try expectParseError(error.ExpectedConstraintMarker,
-        \\page Bad
-        \\  box.left == page.left + 10
+    var equality = try parse(
+        \\page Equality
+        \\  box.left == other.left + 10
         \\end
         \\
     );
+    defer equality.deinit();
+    try testing.expectEqualStrings("num_eq", equality.module.pages.items[0].statements.items[0].kind.expr_stmt.call.callee.name);
 }
 
 test "syntax spec: constraints accept record member anchor paths" {
@@ -2510,7 +2512,7 @@ test "syntax spec: recovering parse keeps type expression holes" {
         \\page Recover
         \\  let item: = 1
         \\end
-        \\record Broken {
+        \\type Broken = record {
         \\  field:
         \\}
         \\type Widget = object {
@@ -2616,4 +2618,29 @@ test "recovering parser advances past stray expression delimiters" {
         const call = try expectCall(after.kind.expr_stmt, "text!", 1);
         try expectString(call.args.items[0], "After");
     }
+}
+
+test "syntax spec: type declarations distinguish records objects and enums" {
+    var parsed = try parse(
+        \\type Padding = record { x: Number = 12 y: Number = 8 }
+        \\type Card = object { padding: Padding = Padding {} }
+        \\type Mode = light | dark
+        \\extend Card { label: String = "Card" }
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 1), parsed.module.records.items.len);
+    try testing.expectEqual(@as(usize, 1), parsed.module.objects.items.len);
+    try testing.expectEqual(@as(usize, 1), parsed.module.types.items.len);
+    try testing.expectEqual(@as(usize, 1), parsed.module.object_extensions.items.len);
+    try testing.expectEqualStrings("Padding", parsed.module.records.items[0].name);
+    try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{
+        "type Padding = record { x: Number = 12 }\n",
+    });
+}
+
+test "syntax spec: constraint value registration releases parsed ownership" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{
+        "page main\n  let rule = a.left + 4 == b.right + 28\n  ~ rule\n  pagectx() ~ rule\nend\n",
+    });
+    try expectParseErrorWithoutLeaks(error.ExpectedExpression, "page main\n  target ~\nend\n");
 }

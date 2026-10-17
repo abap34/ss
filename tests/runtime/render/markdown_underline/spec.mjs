@@ -13,7 +13,7 @@ page underline
 let body = text!("before _custom_ after", current_theme() with {
   body.text.size = 32
   body.text.line_height = 42
-  body.text.markdown_underline = md_underline_style(c"#cc3366", 0.35, 5, 3, "7,3")
+  body.text.markdown.underline = MarkdownUnderlineStyle { color = c"#cc3366" opacity = 0.35 width = 5 offset = 3 dash = "7,3" }
 })
 ~ body.left == page.left + 80
 ~ body.top == page.top - 80
