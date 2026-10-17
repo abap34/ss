@@ -2,7 +2,7 @@ import std:graphics/paint/types as { ChromeStyle }
 import std:internal/classes
 import std:layout as layout
 
-type BoxParts = record {
+type BoxParts {
   root: Object
   content: Object
   background: Object

@@ -86,8 +86,7 @@ module.exports = grammar({
     type_declaration: $ => seq(
       "type",
       field("name", $.type_identifier),
-      "=",
-      choice($.object_type, $.record_type),
+      choice(seq("=", $.object_type), $.type_body),
     ),
 
     enum_declaration: $ => seq(
@@ -112,7 +111,7 @@ module.exports = grammar({
       "}",
     ),
 
-    record_type: $ => seq("record", "{", repeat($._terminator), repeat($.object_field), "}"),
+    type_body: $ => seq("{", repeat($._terminator), repeat($.object_field), "}"),
 
     object_member: $ => choice($.object_base, $.object_implements, $.object_roles, $.object_field),
     object_base: $ => seq("base", "=", field("type", $._type_name), optional($._terminator)),

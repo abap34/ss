@@ -3082,21 +3082,6 @@
     }
   },
   {
-    "type": "record_type",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "object_field",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "return_statement",
     "named": true,
     "fields": {
@@ -3289,6 +3274,21 @@
     }
   },
   {
+    "type": "type_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "object_field",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "type_declaration",
     "named": true,
     "fields": {
@@ -3312,7 +3312,7 @@
           "named": true
         },
         {
-          "type": "record_type",
+          "type": "type_body",
           "named": true
         }
       ]
@@ -3659,10 +3659,6 @@
     "named": false
   },
   {
-    "type": "record",
-    "named": false
-  },
-  {
     "type": "return",
     "named": false
   },
@@ -3676,11 +3672,11 @@
   },
   {
     "type": "string",
-    "named": true
+    "named": false
   },
   {
     "type": "string",
-    "named": false
+    "named": true
   },
   {
     "type": "then",

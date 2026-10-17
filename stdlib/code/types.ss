@@ -1,4 +1,4 @@
-type CodeColors = record {
+type CodeColors {
   plain: Color? = none
   keyword: Color? = none
   function: Color? = none
@@ -11,7 +11,7 @@ type CodeColors = record {
   string: Color? = none
 }
 
-type CodeHighlightTheme = record {
+type CodeHighlightTheme {
   code: CodeColors = CodeColors {}
   fill: Color? = none
   stroke: Color? = none

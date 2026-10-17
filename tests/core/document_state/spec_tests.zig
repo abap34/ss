@@ -647,10 +647,10 @@ test "document state spec: identical validation user reports are deduplicated" {
     var state = try initEmptyDocumentState();
     defer state.deinit();
 
-    try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 10, .end = 20 } }, "UnknownRecordField: missing field");
-    try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 10, .end = 20 } }, "UnknownRecordField: missing field");
-    try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 30, .end = 40 } }, "UnknownRecordField: missing field");
-    try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 10, .end = 20 } }, "UnknownRecordField: different field");
+    try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 10, .end = 20 } }, "UnknownField: missing field");
+    try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 10, .end = 20 } }, "UnknownField: missing field");
+    try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 30, .end = 40 } }, "UnknownField: missing field");
+    try addValidationUserReport(&state, .{ .path = "theme.ss", .span = .{ .start = 10, .end = 20 } }, "UnknownField: different field");
 
     try testing.expectEqual(@as(usize, 4), state.diagnostics.entries.items.len);
     state.diagnostics.deduplicateValidationUserReports(state.allocator);
@@ -658,9 +658,9 @@ test "document state spec: identical validation user reports are deduplicated" {
     try testing.expect(state.diagnostics.entries.items[0].origin.?.eql(core.SourceOrigin.at("theme.ss", .{ .start = 10, .end = 20 })));
     try testing.expect(state.diagnostics.entries.items[1].origin.?.eql(core.SourceOrigin.at("theme.ss", .{ .start = 30, .end = 40 })));
     try testing.expect(state.diagnostics.entries.items[2].origin.?.eql(core.SourceOrigin.at("theme.ss", .{ .start = 10, .end = 20 })));
-    try testing.expectEqualStrings("UnknownRecordField: missing field", state.diagnostics.entries.items[0].data.user_report.message);
-    try testing.expectEqualStrings("UnknownRecordField: missing field", state.diagnostics.entries.items[1].data.user_report.message);
-    try testing.expectEqualStrings("UnknownRecordField: different field", state.diagnostics.entries.items[2].data.user_report.message);
+    try testing.expectEqualStrings("UnknownField: missing field", state.diagnostics.entries.items[0].data.user_report.message);
+    try testing.expectEqualStrings("UnknownField: missing field", state.diagnostics.entries.items[1].data.user_report.message);
+    try testing.expectEqualStrings("UnknownField: different field", state.diagnostics.entries.items[2].data.user_report.message);
 }
 
 test "document state spec: node fields reject duplicate keys" {

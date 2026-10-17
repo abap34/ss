@@ -275,12 +275,12 @@ fn appendParsedTypeNameCompletions(builder: *CandidateBuilder, program: ?*const 
     for (parsed.types.items) |decl| {
         try builder.checkBudget();
         const label = spanText(source, decl.name_span) orelse continue;
-        try builder.add(.{ .label = label, .kind = .type_decl, .detail = "type" });
+        try builder.add(.{ .label = label, .kind = .type_decl, .detail = "enum" });
     }
     for (parsed.records.items) |decl| {
         try builder.checkBudget();
         const label = spanText(source, decl.name_span) orelse continue;
-        try builder.add(.{ .label = label, .kind = .type_decl, .detail = "record" });
+        try builder.add(.{ .label = label, .kind = .type_decl, .detail = "type" });
     }
     for (parsed.objects.items) |decl| {
         try builder.checkBudget();

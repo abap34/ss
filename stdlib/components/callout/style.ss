@@ -1,6 +1,6 @@
 import std:internal/classes
 
-type CalloutStyle = record {
+type CalloutStyle {
   left_bracket: Bool = false
   stroke: Color? = c"#4b5563"
   line_width: Number = 1.6

@@ -8,7 +8,7 @@ comptime {
 
 test "analysis query spec: optional members support completion hover and definition" {
     const path = "stdlib/internal/optional-query-test.ss";
-    const source = "type Style = record { size: Number = 4 }\nfn read(style: Style?) -> Number = style?.size ?? 0\npage main\nend\n";
+    const source = "type Style { size: Number = 4 }\nfn read(style: Style?) -> Number = style?.size ?? 0\npage main\nend\n";
     var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
     defer sources.deinit();
     try sources.put(path, source);
@@ -32,7 +32,7 @@ test "analysis query spec: optional members support completion hover and definit
     try testing.expectEqual(@as(usize, 1), definitions.len);
     try testing.expectEqual(@as(usize, 0), definitions[0].line);
 
-    const incomplete = "type Style = record { size: Number = 4 }\nfn read(style: Style?) -> Number = style?.\npage main\nend\n";
+    const incomplete = "type Style { size: Number = 4 }\nfn read(style: Style?) -> Number = style?.\npage main\nend\n";
     try sources.put(path, incomplete);
     var partial = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
     defer partial.deinit();

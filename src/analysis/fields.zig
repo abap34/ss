@@ -90,7 +90,7 @@ fn checkRecordNamesUnique(
         if (names.contains(record_decl.name)) {
             const origin = core.SourceOrigin.at(origin_path, record_decl.span);
 
-            try addUserReport(state, origin, "DuplicateRecordType", "record type '{s}' is already defined in this module", .{record_decl.name});
+            try addUserReport(state, origin, "DuplicateType", "type '{s}' is already defined in this module", .{record_decl.name});
             return error.InvalidType;
         }
         try names.put(record_decl.name, {});

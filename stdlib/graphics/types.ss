@@ -16,7 +16,7 @@ enum ConnectorRoute { straight horizontal_then_vertical vertical_then_horizontal
 
 enum PathVerb { move line quadratic cubic arc close }
 
-type PathCommand = record {
+type PathCommand {
   verb: PathVerb
   x: Number = 0
   y: Number = 0
@@ -31,7 +31,7 @@ type PathCommand = record {
   clockwise: Bool = true
 }
 
-type VectorStrokeStyle = record {
+type VectorStrokeStyle {
   color: Color? = c"#4b5563"
   width: Number = 1.6
   cap: LineCap = LineCap.butt
@@ -41,7 +41,7 @@ type VectorStrokeStyle = record {
   dash_offset: Number = 0
 }
 
-type LineStyle = record {
+type LineStyle {
   start_x: Number = 0
   start_y: Number = 0.5
   end_x: Number = 1
@@ -51,14 +51,14 @@ type LineStyle = record {
   marker_end: MarkerStyle? = none
 }
 
-type GradientDirection = record {
+type GradientDirection {
   start_x: Number = 0
   start_y: Number = 0.5
   end_x: Number = 1
   end_y: Number = 0.5
 }
 
-type PatternStyle = record {
+type PatternStyle {
   path: Path? = none
   cell_width: Number = 8
   cell_height: Number = 8
@@ -74,7 +74,7 @@ type PatternStyle = record {
   stroke: VectorStrokeStyle? = none
 }
 
-type FillStyle = record {
+type FillStyle {
   kind: FillKind = FillKind.none
   color: Color? = none
   color2: Color? = none
@@ -91,7 +91,7 @@ type FillStyle = record {
   pattern: PatternStyle? = none
 }
 
-type MarkerStyle = record {
+type MarkerStyle {
   path: Path? = none
   width: Number = 10
   height: Number = 10
@@ -99,12 +99,12 @@ type MarkerStyle = record {
   stroke: VectorStrokeStyle = VectorStrokeStyle {}
 }
 
-type VectorStyle = record {
+type VectorStyle {
   fill: FillStyle = FillStyle {}
   stroke: VectorStrokeStyle = VectorStrokeStyle {}
 }
 
-type ConnectorStyle = record {
+type ConnectorStyle {
   source: Object? = none
   target: Object? = none
   source_anchor: ConnectorAnchor = ConnectorAnchor.right

@@ -1,6 +1,6 @@
 enum PdfPageBox { media crop bleed trim art }
 
-type AssetStyle = record {
+type AssetStyle {
   scale: Number = 1
   tint: Color? = none
   width: Number? = none

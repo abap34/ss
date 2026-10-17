@@ -7,13 +7,13 @@ import std:components/toc/style
 import std:templates/slide/style
 import std:components/callout/style
 
-type GeneratedStyle = record {
+type GeneratedStyle {
   pageno: TextBlockStyle = TextBlockStyle {}
   footer: TextBlockStyle = TextBlockStyle {}
   watermark: TextBlockStyle = TextBlockStyle {}
 }
 
-type ThemeOptions = record {
+type ThemeOptions {
   font_family: String? = none
   code_font_family: String? = none
   text_color: Color? = none
@@ -21,7 +21,7 @@ type ThemeOptions = record {
   muted_color: Color? = none
 }
 
-type Theme = record {
+type Theme {
   body: TextBlockStyle = TextBlockStyle {}
   h1: TextBlockStyle = TextBlockStyle {}
   h2: TextBlockStyle = TextBlockStyle {}

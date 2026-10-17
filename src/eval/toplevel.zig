@@ -229,11 +229,11 @@ fn reportRecordUpdateError(state: *core.DocumentState, origin: core.SourceOrigin
     });
 }
 
-fn reportInvalidRecordLiteral(state: *core.DocumentState, origin: core.SourceOrigin, type_name: []const u8) !void {
+fn reportInvalidTypeConstruction(state: *core.DocumentState, origin: core.SourceOrigin, type_name: []const u8) !void {
     try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
-            .code = "InvalidRecordLiteral",
-            .message = try std.fmt.allocPrint(state.allocator, "{s} is an enum type, not a record; use {s}.<case>", .{ type_name, type_name }),
+            .code = "InvalidTypeConstruction",
+            .message = try std.fmt.allocPrint(state.allocator, "{s} is an enum type; use {s}.<case>", .{ type_name, type_name }),
         },
     });
 }
@@ -274,7 +274,7 @@ fn unknownNameCode(kind: []const u8) []const u8 {
     if (std.mem.eql(u8, kind, "import alias")) return "UnknownModuleAlias";
     if (std.mem.eql(u8, kind, "query")) return "UnknownQuery";
     if (std.mem.eql(u8, kind, "identifier")) return "UnknownIdentifier";
-    if (std.mem.eql(u8, kind, "record type")) return "UnknownRecordType";
+    if (std.mem.eql(u8, kind, "type")) return "UnknownType";
     if (std.mem.eql(u8, kind, "anchor")) return "UnknownAnchor";
     if (std.mem.eql(u8, kind, "role")) return "UnknownRole";
     if (std.mem.eql(u8, kind, "payload kind")) return "UnknownPayloadKind";
@@ -717,10 +717,10 @@ fn evalRecord(
     const state = evaluation.state;
     const resolved = findRecordDecl(state, record.module_id, record.type_name) orelse {
         if (findEnumDecl(state, record.module_id, record.type_name) != null) {
-            try reportInvalidRecordLiteral(state, current_origin, record.type_name);
+            try reportInvalidTypeConstruction(state, current_origin, record.type_name);
             return error.InvalidType;
         }
-        try reportNamedResolutionError(state, error.UnknownType, "record type", record.type_name, current_origin);
+        try reportNamedResolutionError(state, error.UnknownType, "type", record.type_name, current_origin);
         return error.UnknownType;
     };
     const caller_module_id = evaluation.module_id;
@@ -736,7 +736,7 @@ fn evalRecord(
     for (resolved.decl.fields.items) |field| {
         if (recordDefinesField(record, field.name)) continue;
         const default_expr = field.default_value orelse {
-            try reportRecordUpdateError(state, current_origin, "MissingRecordField", "record '{s}' requires field '{s}'", .{ record.type_name, field.name });
+            try reportRecordUpdateError(state, current_origin, "MissingField", "value of type '{s}' requires field '{s}'", .{ record.type_name, field.name });
             return error.InvalidType;
         };
         const field_value = try evalExpr(evaluation, page_id, scope, &default_env, current_origin, default_expr.*);
@@ -767,7 +767,7 @@ fn evalRecordDefaults(
 ) !core.RecordValue {
     const state = evaluation.state;
     const resolved = findRecordDecl(state, record_id.module_id, record_id.name) orelse {
-        try reportNamedResolutionError(state, error.UnknownType, "record type", record_id.name, current_origin);
+        try reportNamedResolutionError(state, error.UnknownType, "type", record_id.name, current_origin);
         return error.UnknownType;
     };
     const caller_module_id = evaluation.module_id;
@@ -800,7 +800,7 @@ fn evalRecordUpdate(
     var target = try evalExpr(evaluation, page_id, scope, env, current_origin, update.target.*);
     errdefer target.deinit(state.allocator);
     if (target != .record) {
-        try reportRecordUpdateError(state, current_origin, "InvalidRecordUpdate", "with expects a record value", .{});
+        try reportRecordUpdateError(state, current_origin, "InvalidValueUpdate", "with expects a value with fields", .{});
         return error.InvalidValueTag;
     }
 
@@ -812,13 +812,13 @@ fn evalRecordUpdate(
             error.InvalidValueTag => {
                 const path = try ast.formatRecordPath(state.allocator, field.path.items);
                 defer state.allocator.free(path);
-                try reportRecordUpdateError(state, current_origin, "InvalidRecordUpdatePath", "'{s}' does not resolve to a nested record", .{path});
+                try reportRecordUpdateError(state, current_origin, "InvalidValueUpdatePath", "'{s}' does not resolve to a nested value with fields", .{path});
                 return err;
             },
-            error.UnknownRecordField => {
+            error.UnknownField => {
                 const path = try ast.formatRecordPath(state.allocator, field.path.items);
                 defer state.allocator.free(path);
-                try reportRecordUpdateError(state, current_origin, "MissingRecordField", "record update path '{s}' is not present at runtime", .{path});
+                try reportRecordUpdateError(state, current_origin, "MissingField", "value update path '{s}' is not present at runtime", .{path});
                 return err;
             },
             else => return err,
@@ -834,7 +834,7 @@ fn updateRecordFieldPath(
     path: []const ast.RecordPathSegment,
     value: core.Value,
 ) !void {
-    if (path.len == 0) return error.UnknownRecordField;
+    if (path.len == 0) return error.UnknownField;
     if (path.len == 1) {
         try putRecordFieldValue(allocator, record, path[0].name, value, true);
         return;
@@ -845,7 +845,7 @@ fn updateRecordFieldPath(
         try updateRecordFieldPath(allocator, &field.value.record, path[1..], value);
         return;
     }
-    return error.UnknownRecordField;
+    return error.UnknownField;
 }
 
 fn findRecordDecl(state: *const core.DocumentState, module_id: ?core.SourceModuleId, type_name: []const u8) ?declarations.RecordDescriptor {
@@ -891,7 +891,7 @@ fn materializePropertyRecord(
         return try slot.value.record.clone(state.allocator);
     }
     const record_id = ty.nominalId() orelse {
-        try reportRecordUpdateError(state, origin, "InvalidRecordUpdatePath", "ss produced a record type without a resolved declaration while evaluating this update; report this as an ss bug with the source file", .{});
+        try reportRecordUpdateError(state, origin, "InvalidValueUpdatePath", "ss produced a type without a resolved declaration while evaluating this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
     return evalRecordDefaults(evaluation, page_id, scope, origin, record_id);
@@ -1836,11 +1836,11 @@ fn writePropertyPathToNode(
     defer if (!value_moved) value_copy.deinit(state.allocator);
     updateRecordFieldPath(state.allocator, &record, path[1..], value_copy) catch |err| switch (err) {
         error.InvalidValueTag => {
-            try reportRecordUpdateError(state, origin, "InvalidRecordUpdatePath", "'{s}' does not resolve to a nested record", .{path_text});
+            try reportRecordUpdateError(state, origin, "InvalidValueUpdatePath", "'{s}' does not resolve to a nested value with fields", .{path_text});
             return err;
         },
-        error.UnknownRecordField => {
-            try reportRecordUpdateError(state, origin, "MissingRecordField", "record update path '{s}' is not present at runtime", .{path_text});
+        error.UnknownField => {
+            try reportRecordUpdateError(state, origin, "MissingField", "value update path '{s}' is not present at runtime", .{path_text});
             return err;
         },
         else => return err,

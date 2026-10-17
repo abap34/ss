@@ -310,12 +310,12 @@ test "recovered holes retain module identity and owned nominal type names" {
         defer sources.deinit();
         try sources.put(entry,
             \\import ./hole-library as library
-            \\type Local = record { value: Number = 1 }
+            \\type Local { value: Number = 1 }
             \\const missing: Number =
             \\const nominal: Local =
         );
         try sources.put(imported,
-            \\type Remote = record { value: String = "value" }
+            \\type Remote { value: String = "value" }
             \\const missing: String =
             \\const nominal: Remote =
         );

@@ -14,7 +14,6 @@
   "enum"
   "extend"
   "object"
-  "record"
   "base"
   "implements"
   "roles"

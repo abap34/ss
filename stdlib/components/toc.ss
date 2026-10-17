@@ -4,7 +4,7 @@ import std:internal/document as generated
 import std:internal/style as styles
 import std:components/box as boxes
 
-type TocParts = record {
+type TocParts {
   root: Object
   title: Object
   list: Object

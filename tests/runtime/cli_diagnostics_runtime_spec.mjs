@@ -999,11 +999,11 @@ end
 
     const result = await runSs(["check", "slide.ss"], project);
     const output = combinedOutput(result);
-    const headers = output.match(/^ERROR: .*UnknownRecordField:/gm) ?? [];
+    const headers = output.match(/^ERROR: .*UnknownField:/gm) ?? [];
     assert(result.code !== 0, "check should fail for an unknown record field in a placing function");
     assert(headers.length === 2, `two unknown record fields produced ${headers.length} diagnostic headers instead of two:\n${output}`);
-    assert(output.includes("theme.ss:5:15: UnknownRecordField:"), `first unknown record field diagnostic did not point at the field token:\n${output}`);
-    assert(output.includes("theme.ss:11:15: UnknownRecordField:"), `second unknown record field diagnostic did not point at the field token:\n${output}`);
+    assert(output.includes("theme.ss:5:15: UnknownField:"), `first unknown record field diagnostic did not point at the field token:\n${output}`);
+    assert(output.includes("theme.ss:11:15: UnknownField:"), `second unknown record field diagnostic did not point at the field token:\n${output}`);
     assert(output.includes("|     body.text.cjk_bold_passes = 3"), `unknown record field diagnostic omitted its source excerpt:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -1114,7 +1114,7 @@ let first: = 1
 let second: = "ok"
 let third: String = 2
 end
-type Broken = record {
+type Broken {
   field:
 }
 `,
@@ -1186,7 +1186,7 @@ async function testMemberNameHoleSuppressesEnumCaseDiagnostic() {
     await writeFile(
       path.join(project, "slide.ss"),
       `enum Align { left center right }
-type TextStyle = record {
+type TextStyle {
   math_align: Align
 }
 
@@ -1212,10 +1212,10 @@ async function testRecordUpdatePathHoleSuppressesFieldDiagnostic() {
   try {
     await writeFile(
       path.join(project, "slide.ss"),
-      `type Inner = record {
+      `type Inner {
   size: Number
 }
-type Theme = record {
+type Theme {
   body: Inner
 }
 
@@ -1233,7 +1233,7 @@ end
     const output = combinedOutput(result);
     assert(result.code !== 0, "check should fail for a missing record update path segment");
     assert(output.includes("ExpectedIdentifier"), `record update path hole diagnostic missing:\n${output}`);
-    assert(!output.includes("UnknownRecordField"), `record update path hole produced a secondary UnknownRecordField diagnostic:\n${output}`);
+    assert(!output.includes("UnknownField"), `record update path hole produced a secondary UnknownField diagnostic:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

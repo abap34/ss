@@ -86,8 +86,8 @@ end
 <!-- syntax: accept module -->
 ```ss
 import std:prelude as { text, text!, place!, }
-type Empty = record {}
-type Style = record { size: Number = 20; color: Color = c"black" }
+type Empty {}
+type Style { size: Number = 20; color: Color = c"black" }
 enum Align { left center right }
 type Card = object {
   base = Object

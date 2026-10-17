@@ -4,7 +4,7 @@ const testing = std.testing;
 
 test "inferred types and facts are released with successful and failed generations" {
     const prefix =
-        \\type Payload = record { amount: Number? = none }
+        \\type Payload { amount: Number? = none }
         \\fn identity(value: Number?) -> Number? = value
         \\fn choose(flag: Bool) -> Number -> Number
         \\  if flag

@@ -11,8 +11,9 @@
   "end"
   "property"
   "type"
+  "enum"
   "extend"
-  "protocol"
+  "object"
   "base"
   "implements"
   "roles"
@@ -35,12 +36,16 @@
   "/=/"
   "::"
   "=="
+  "!="
+  "<="
+  ">="
   "="
   ":"
-  "|"
   "."
+  "?."
   ","
   "!"
+  "~!~"
   "~"
   "<"
   ">"
@@ -73,3 +78,7 @@
 (object_field name: (identifier) @property)
 (member_expression member: (identifier) @property)
 (annotation name: (identifier) @attribute)
+
+(selected_imports (bare_callable_identifier) @variable)
+((selected_imports (bare_callable_identifier) @type)
+  (#match? @type "^[A-Z]"))
