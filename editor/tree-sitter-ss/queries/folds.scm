@@ -5,4 +5,5 @@
 (for_statement) @fold
 (block_text) @fold
 (type_declaration) @fold
+(enum_declaration) @fold
 (object_extension) @fold

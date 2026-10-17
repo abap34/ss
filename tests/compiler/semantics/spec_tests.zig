@@ -1370,8 +1370,8 @@ test "compiler semantics: enum cases type function parameters" {
     try buildSource(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | Beta | READY
-        \\type Any = String | Number
+        \\enum Mode { alpha Beta READY }
+        \\enum Any { String Number }
         \\
         \\fn keep_mode(mode: Mode) -> Mode
         \\  return mode
@@ -1392,7 +1392,7 @@ test "compiler semantics: enum cases type function parameters" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\
         \\fn keep_mode(mode: Mode) -> Mode
         \\  return mode
@@ -1409,7 +1409,7 @@ test "compiler semantics: enum cases are resolved before evaluation" {
     try expectDumpContains(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\
         \\fn keep_mode(mode: Mode) -> Mode
         \\  return mode
@@ -1459,7 +1459,7 @@ test "compiler semantics: enum type names are not record constructors" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\
         \\page bad
         \\  let mode = Mode {}
@@ -1481,7 +1481,7 @@ test "compiler semantics: enum names can be shadowed by values" {
     try buildSource(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\type Card = object {
         \\  roles = ["card"]
         \\  custom_mode: Mode = Mode.alpha
@@ -1501,7 +1501,7 @@ test "compiler semantics: enum type names do not depend on capitalization" {
     try buildSource(
         \\import std:themes/default as *
         \\
-        \\type mode = active | String
+        \\enum mode { active String }
         \\
         \\fn keep(value: mode) -> mode
         \\  return value
@@ -1533,7 +1533,7 @@ test "compiler semantics: enum types resolve through imported modules" {
         \\end
         \\
     ,
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\
     );
 }
@@ -1542,7 +1542,7 @@ test "compiler semantics: enum properties serialize as case names" {
     try expectObjectContent(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\type Card = object {
         \\  roles = ["card"]
         \\  custom_mode: Mode = Mode.alpha
@@ -1561,7 +1561,7 @@ test "compiler semantics: enum properties serialize as case names" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\type Card = object {
         \\  roles = ["card"]
         \\  custom_mode: Mode = Mode.alpha
@@ -1577,8 +1577,8 @@ test "compiler semantics: enum properties serialize as case names" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
-        \\type Other = beta
+        \\enum Mode { alpha beta }
+        \\enum Other { beta }
         \\type Card = object {
         \\  roles = ["card"]
         \\  custom_mode: Mode = Mode.alpha
@@ -1596,7 +1596,7 @@ test "compiler semantics: type names share one namespace" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Color = accent
+        \\enum Color { accent }
         \\
         \\page bad
         \\end
@@ -1606,7 +1606,7 @@ test "compiler semantics: type names share one namespace" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha
+        \\enum Mode { alpha }
         \\type Mode = object {
         \\}
         \\
@@ -1618,7 +1618,7 @@ test "compiler semantics: type names share one namespace" {
     try buildSource(
         \\import std:themes/default as *
         \\
-        \\type Scalar = Number | String
+        \\enum Scalar { Number String }
         \\
         \\fn keep_scalar(value: Scalar) -> Scalar
         \\  return value
@@ -1634,7 +1634,7 @@ test "compiler semantics: type names share one namespace" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta | alpha
+        \\enum Mode { alpha beta alpha }
         \\
         \\page bad
         \\end
@@ -1644,7 +1644,7 @@ test "compiler semantics: type names share one namespace" {
     try buildSource(
         \\import std:themes/default as *
         \\
-        \\type Mode = Alpha | beta
+        \\enum Mode { Alpha beta }
         \\
         \\page ok
         \\  let mode = Mode.Alpha
@@ -1668,7 +1668,7 @@ test "compiler semantics: type names share one namespace" {
         \\
         \\type Card = object {
         \\}
-        \\type Mode = Card | local
+        \\enum Mode { Card local }
         \\
         \\page ok
         \\  let card_case = Mode.Card
@@ -1680,7 +1680,7 @@ test "compiler semantics: type names share one namespace" {
         \\import "lib/types"
         \\import std:themes/default as *
         \\
-        \\type Mode = RemoteType | local
+        \\enum Mode { RemoteType local }
         \\
         \\page ok
         \\  let remote_case = Mode.RemoteType
@@ -2591,7 +2591,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Status = draft | reviewing | ready
+        \\enum Status { draft reviewing ready }
         \\
         \\fn maybe_status(has_owner: Bool, has_review: Bool) -> Status?
         \\  if has_owner
@@ -2623,8 +2623,8 @@ test "compiler semantics: optional values stay checked through multi-step flows"
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Status = draft | reviewing | ready
-        \\type OtherStatus = draft | reviewing | ready
+        \\enum Status { draft reviewing ready }
+        \\enum OtherStatus { draft reviewing ready }
         \\
         \\fn normalize_status(status: Status?, fallback: OtherStatus, force_fallback: Bool) -> Status
         \\  if force_fallback
@@ -2724,8 +2724,8 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Status = draft | ready
-        \\type OtherStatus = draft | ready
+        \\enum Status { draft ready }
+        \\enum OtherStatus { draft ready }
         \\
         \\fn choose_status(primary: Status, fallback: OtherStatus, use_primary: Bool) -> Status
         \\  if use_primary
@@ -2901,7 +2901,7 @@ test "compiler semantics: enum optional values reject strings and other enums" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\
         \\fn take_mode(value: Mode) -> Mode
         \\  return value
@@ -2916,7 +2916,7 @@ test "compiler semantics: enum optional values reject strings and other enums" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\
         \\fn take_maybe(value: Mode?) -> Mode?
         \\  return value
@@ -2931,8 +2931,8 @@ test "compiler semantics: enum optional values reject strings and other enums" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
-        \\type Other = alpha | beta
+        \\enum Mode { alpha beta }
+        \\enum Other { alpha beta }
         \\
         \\fn take_maybe(value: Mode?) -> Mode?
         \\  return value
@@ -2947,8 +2947,8 @@ test "compiler semantics: enum optional values reject strings and other enums" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
-        \\type Other = alpha | beta
+        \\enum Mode { alpha beta }
+        \\enum Other { alpha beta }
         \\
         \\fn bad_return() -> Mode
         \\  return Other.alpha
@@ -2963,8 +2963,8 @@ test "compiler semantics: enum optional values reject strings and other enums" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
-        \\type Other = alpha | beta
+        \\enum Mode { alpha beta }
+        \\enum Other { alpha beta }
         \\
         \\fn bad_coalesce(value: Mode?) -> Mode
         \\  return value ?? Other.alpha
@@ -3089,7 +3089,7 @@ test "compiler semantics: object field defaults are statically typed" {
     const defaults_source =
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\type Card = object {
         \\  roles = ["card"]
         \\  size: Number = 1.02
@@ -3117,7 +3117,7 @@ test "compiler semantics: object field defaults are statically typed" {
     const nested_defaults_source =
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\type Outer = record {
         \\  inner: Inner = Inner {}
         \\}
@@ -3217,7 +3217,7 @@ test "compiler semantics: object field defaults are statically typed" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\type Card = object {
         \\  mode: Mode = "alpha"
         \\}
@@ -3230,8 +3230,8 @@ test "compiler semantics: object field defaults are statically typed" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Mode = alpha | beta
-        \\type Other = alpha | beta
+        \\enum Mode { alpha beta }
+        \\enum Other { alpha beta }
         \\type Card = object {
         \\  mode: Mode = Other.alpha
         \\}
@@ -6599,7 +6599,7 @@ test "compiler semantics: page requirement follows the selected callable" {
 
 test "compiler semantics: constants shadow enum receivers in expressions" {
     try expectObjectContent(
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\type Settings = record {
         \\  size: Number = 17
         \\}

@@ -1185,7 +1185,7 @@ async function testMemberNameHoleSuppressesEnumCaseDiagnostic() {
   try {
     await writeFile(
       path.join(project, "slide.ss"),
-      `type Align = left | center | right
+      `enum Align { left center right }
 type TextStyle = record {
   math_align: Align
 }

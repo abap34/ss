@@ -998,7 +998,7 @@
     }
   },
   {
-    "type": "enum_type",
+    "type": "enum_declaration",
     "named": true,
     "fields": {
       "case": {
@@ -1007,6 +1007,16 @@
         "types": [
           {
             "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
             "named": true
           }
         ]
@@ -3203,6 +3213,10 @@
           "named": true
         },
         {
+          "type": "enum_declaration",
+          "named": true
+        },
+        {
           "type": "function_declaration",
           "named": true
         },
@@ -3293,10 +3307,6 @@
       "multiple": false,
       "required": true,
       "types": [
-        {
-          "type": "enum_type",
-          "named": true
-        },
         {
           "type": "object_type",
           "named": true
@@ -3569,6 +3579,10 @@
     "named": false
   },
   {
+    "type": "enum",
+    "named": false
+  },
+  {
     "type": "extend",
     "named": false
   },
@@ -3662,11 +3676,11 @@
   },
   {
     "type": "string",
-    "named": false
+    "named": true
   },
   {
     "type": "string",
-    "named": true
+    "named": false
   },
   {
     "type": "then",
@@ -3690,10 +3704,6 @@
   },
   {
     "type": "{",
-    "named": false
-  },
-  {
-    "type": "|",
     "named": false
   },
   {

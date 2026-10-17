@@ -420,7 +420,7 @@ test "syntax spec: qualified callable names preserve source spans" {
 
 test "syntax spec: declaration names preserve source spans" {
     const source_text =
-        \\type Mode = light | dark
+        \\enum Mode { light dark }
         \\type Widget = object {
         \\  title: String
         \\}
@@ -865,7 +865,7 @@ test "syntax spec: bare user type names parse as object class annotations" {
 
 test "syntax spec: enum declarations and optional types parse" {
     var parsed = try parse(
-        \\type Align = left | center | right
+        \\enum Align { left center right }
         \\
         \\fn keep(value: Color?, missing: None) -> Color?
         \\  return value
@@ -881,7 +881,7 @@ test "syntax spec: enum declarations and optional types parse" {
     try testing.expectEqualStrings("center", parsed.module.types.items[0].cases.items[1].name);
     try testing.expectEqualStrings("right", parsed.module.types.items[0].cases.items[2].name);
     try expectSpanText(
-        \\type Align = left | center | right
+        \\enum Align { left center right }
         \\
         \\fn keep(value: Color?, missing: None) -> Color?
         \\  return value
@@ -895,6 +895,34 @@ test "syntax spec: enum declarations and optional types parse" {
     try testing.expectEqual(Type.Kind.none, keep.params.items[1].ty.kind);
     try testing.expectEqual(Type.Kind.optional, keep.result_type.kind);
     try testing.expectEqual(Type.Kind.color, keep.result_type.optional_child.?.kind);
+}
+
+test "syntax spec: enum braces preserve multiline cases and source spans" {
+    const text =
+        \\enum Mode {
+        \\  alpha ;; first case
+        \\  beta
+        \\}
+        \\enum EmptyName { none }
+    ;
+    var parsed = try parse(text);
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 2), parsed.module.types.items.len);
+    const mode = parsed.module.types.items[0];
+    try testing.expectEqual(@as(usize, 2), mode.cases.items.len);
+    try expectSpanText(text, mode.cases.items[1].name_span.?, "beta");
+    try expectSpanText(text, mode.name_span.?, "Mode");
+    try testing.expectEqualStrings("none", parsed.module.types.items[1].cases.items[0].name);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{text});
+}
+
+test "syntax spec: enum declarations require nonempty braces and reject legacy aliases" {
+    try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "enum Mode {}\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedChar, "enum Mode { alpha\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedChar, "enum Mode = alpha\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedIdentifier, "enum Mode { alpha | beta }\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "type Mode = alpha | beta\n");
+    try expectParseErrorWithoutLeaks(error.ReservedIdentifier, "const enum = 1\n");
 }
 
 test "syntax spec: incomplete enum declarations are rejected while parsing" {
@@ -932,7 +960,7 @@ test "syntax spec: constant and enum parsing survive every allocation failure" {
     try allocation_testing.checkAllAllocationFailures(
         testing.allocator,
         parseAndDeinitSource,
-        .{"type Mode = alpha | beta\n"},
+        .{"enum Mode { alpha beta }\n"},
     );
 }
 
@@ -1124,7 +1152,7 @@ test "syntax spec: failed function declarations release parsed ownership" {
 test "syntax spec: expression parsing survives every allocation failure" {
     const source =
         \\import std:internal/classes as classes
-        \\type Align = left | center
+        \\enum Align { left center }
         \\type Card = object {
         \\  roles = ["card"]
         \\  label: String = "caption"
@@ -1294,7 +1322,7 @@ test "syntax spec: enum values color literals and none stay explicit in the AST"
 
 test "syntax spec: object field defaults are parsed as expressions" {
     var parsed = try parse(
-        \\type Align = left | center | right
+        \\enum Align { left center right }
         \\type Card = object {
         \\  roles = ["card"]
         \\  size: Number = 1.02
@@ -2624,7 +2652,7 @@ test "syntax spec: type declarations distinguish records objects and enums" {
     var parsed = try parse(
         \\type Padding = record { x: Number = 12 y: Number = 8 }
         \\type Card = object { padding: Padding = Padding {} }
-        \\type Mode = light | dark
+        \\enum Mode { light dark }
         \\extend Card { label: String = "Card" }
     );
     defer parsed.deinit();

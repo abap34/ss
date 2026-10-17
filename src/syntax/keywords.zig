@@ -15,6 +15,7 @@ const keywords = [_][]const u8{
     "return",
     "end",
     "type",
+    "enum",
     "record",
     "object",
     "extend",

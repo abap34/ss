@@ -27,3 +27,5 @@ text! <<
 body
 >>
 end
+
+enum Mode { light dark }

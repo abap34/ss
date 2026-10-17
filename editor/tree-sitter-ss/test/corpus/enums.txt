@@ -1,0 +1,24 @@
+================================================================================
+Explicit enum declarations
+================================================================================
+
+enum Align {
+  left
+  center
+  right
+}
+
+enum Mode { light dark }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (type_identifier)
+    (identifier)
+    (identifier)
+    (identifier))
+  (enum_declaration
+    (type_identifier)
+    (identifier)
+    (identifier)))

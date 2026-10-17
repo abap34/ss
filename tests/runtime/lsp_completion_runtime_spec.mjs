@@ -536,7 +536,7 @@ end
 async function testBrokenTypeNameCompletion() {
   const brokenTypeSource = `import std:text as *
 
-type LocalMode = alpha | beta
+enum LocalMode { alpha beta }
 type LocalCard = object {
 }
 
@@ -700,7 +700,7 @@ function recordFieldDefinitionLocation(uri, text, recordName, fieldName) {
 
 function enumCaseDefinitionLocation(uri, text, typeName, caseName) {
   const lines = text.split("\n");
-  const line = lines.findIndex((lineText) => lineText.includes(`type ${typeName} =`) && lineText.includes(caseName));
+  const line = lines.findIndex((lineText) => lineText.includes(`enum ${typeName} {`) && lineText.includes(caseName));
   assert(line >= 0, `fixture did not contain enum ${typeName}.${caseName}`);
   const character = lines[line].indexOf(caseName);
   assert(character >= 0, `fixture did not contain case ${caseName}`);

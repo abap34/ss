@@ -36,6 +36,7 @@ module.exports = grammar({
       $.const_declaration,
       $.function_declaration,
       $.type_declaration,
+      $.enum_declaration,
       $.object_extension,
       $.document_block,
       $.page_declaration,
@@ -86,10 +87,17 @@ module.exports = grammar({
       "type",
       field("name", $.type_identifier),
       "=",
-      choice($.object_type, $.record_type, $.enum_type),
+      choice($.object_type, $.record_type),
     ),
 
-    enum_type: $ => seq(field("case", $.identifier), repeat(seq("|", field("case", $.identifier))), $._terminator),
+    enum_declaration: $ => seq(
+      "enum",
+      field("name", $.type_identifier),
+      "{",
+      repeat($._terminator),
+      repeat1(seq(field("case", $.identifier), repeat($._terminator))),
+      "}",
+    ),
 
     type: $ => choice(
       $.function_type,

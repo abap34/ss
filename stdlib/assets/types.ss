@@ -1,4 +1,4 @@
-type PdfPageBox = media | crop | bleed | trim | art
+enum PdfPageBox { media crop bleed trim art }
 
 type AssetStyle = record {
   scale: Number = 1
