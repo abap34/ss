@@ -4,6 +4,7 @@ const core = @import("core");
 
 const name_resolution = @import("../../language/name_resolution.zig");
 const type_resolution = @import("../../language/type_resolution.zig");
+const generic_arguments = @import("../generic_arguments.zig");
 const utils = @import("utils");
 const QueryBudget = @import("types.zig").QueryBudget;
 
@@ -42,6 +43,9 @@ pub const TypeDefinition = struct {
 
 pub const ValueBinding = struct {
     value_type: ast.Type,
+    callable_type: ?ast.Type = null,
+    type_parameter_count: usize = 0,
+    declaration_start: usize = 0,
     name: []const u8,
     kind: core.DefinitionKind,
     module_id: ?core.SourceModuleId,
@@ -144,18 +148,15 @@ pub fn recordIdForType(ty: ast.Type) ?core.NominalId {
     return if (ty.kind == .record) ty.nominalId() else null;
 }
 
-pub fn recordIdForExpr(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, expr: ast.Expr) ?core.NominalId {
-    if (expired(budget)) return null;
-    return recordIdForType(typeForExpr(budget, snapshot, module_id, offset, expr) orelse return null);
-}
-
-pub fn typeForExpr(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, expr: ast.Expr) ?ast.Type {
+/// Types and labels allocated here belong to a request-local arena. Queries never
+/// modify the shared snapshot or its type storage.
+pub fn typeForExpr(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, expr: ast.Expr) anyerror!?ast.Type {
     if (expired(budget)) return null;
     return switch (expr) {
-        .record => |record| if (record.module_id) |id| ast.Type.recordType(record.type_name).inModule(id) else resolvedTypeName(budget, snapshot, module_id, record.type_name),
-        .record_update => |update| typeForExpr(budget, snapshot, module_id, offset, update.target.*),
+        .record => |record| try typeForConstruction(allocator, budget, snapshot, module_id, offset, record),
+        .record_update => |update| try typeForExpr(allocator, budget, snapshot, module_id, offset, update.target.*),
         .ident => |ident| blk: {
-            switch (selectedValue(budget, snapshot, module_id, offset, ast.CallableName.bare(ident.name)) catch unreachable) {
+            switch (try selectedValue(budget, snapshot, module_id, offset, ast.CallableName.bare(ident.name))) {
                 .local => |binding| {
                     if (binding.object_class) |id| {
                         break :blk if (binding.value_type.kind == .selection) binding.value_type else ast.Type.objectId(id);
@@ -163,31 +164,162 @@ pub fn typeForExpr(budget: ?QueryBudget, snapshot: anytype, module_id: core.Sour
                     break :blk binding.value_type;
                 },
                 .constant => |binding| break :blk binding.value_type,
+                .function => |binding| break :blk if (binding.type_parameter_count == 0) binding.callable_type else null,
                 else => break :blk null,
             }
         },
         .call => |call| blk: {
-            const binding = selectedValue(budget, snapshot, module_id, offset, call.callee) catch unreachable;
+            const binding = try selectedValue(budget, snapshot, module_id, offset, call.callee);
             break :blk switch (binding) {
-                .local => |value| if (value.value_type.kind == .function and value.value_type.fn_result != null) value.value_type.fn_result.?.* else null,
-                .constant => |value| if (value.value_type.kind == .function and value.value_type.fn_result != null) value.value_type.fn_result.?.* else null,
-                .function => |value| value.value_type,
+                .local => |value| if (value.value_type.fn_result) |result| result.* else null,
+                .constant => |value| if (value.value_type.fn_result) |result| result.* else null,
+                .function => |value| try typeForCall(allocator, budget, snapshot, module_id, offset, value, call),
                 .primitive => if (primitiveBinding(budget, snapshot, call.callee.name)) |value| value.value_type else null,
                 .unknown => null,
             };
         },
+        .apply => |apply| blk: {
+            const callee = (try typeForExpr(allocator, budget, snapshot, module_id, offset, apply.callee.*)) orelse break :blk null;
+            break :blk if (callee.fn_result) |result| result.* else null;
+        },
         .member => |member| blk: {
-            const target = typeForExpr(budget, snapshot, module_id, offset, member.target.*) orelse break :blk null;
-            const field = fieldForType(budget, snapshot, target, member.name) orelse break :blk null;
+            const target = (try typeForExpr(allocator, budget, snapshot, module_id, offset, member.target.*)) orelse break :blk null;
+            const field = (try fieldForType(allocator, budget, snapshot, target, member.name)) orelse break :blk null;
             break :blk field.value_type;
+        },
+        .string => ast.Type.string,
+        .color => ast.Type.color,
+        .number => ast.Type.number,
+        .boolean => ast.Type.boolean,
+        .none => ast.Type.none,
+        .enum_case => |case| if (case.module_id) |id| ast.Type.enumType(case.enum_name).inModule(id) else resolvedTypeName(budget, snapshot, module_id, case.enum_name),
+        .coalesce => |coalesce| blk: {
+            const target = (try typeForExpr(allocator, budget, snapshot, module_id, offset, coalesce.target.*)) orelse break :blk null;
+            break :blk if (target.optional_child) |child| child.* else target;
         },
         else => null,
     };
 }
 
-pub fn fieldForType(budget: ?QueryBudget, snapshot: anytype, ty: ast.Type, name: []const u8) ?FieldRef {
+fn substitutions(allocator: std.mem.Allocator, module_id: core.SourceModuleId, declaration_start: usize, count: usize) ![]ast.Type.Substitution {
+    const bindings = try allocator.alloc(ast.Type.Substitution, count);
+    for (bindings, 0..) |*binding, index| binding.* = .{
+        .parameter = .{ .module_id = module_id, .declaration_start = declaration_start, .index = @intCast(index) },
+        .replacement = ast.Type.any,
+    };
+    return bindings;
+}
+
+pub fn typeForConstruction(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, record: ast.RecordExpr) anyerror!?ast.Type {
+    const base = if (record.module_id) |id| ast.Type.recordType(record.type_name).inModule(id) else resolvedTypeName(budget, snapshot, module_id, record.type_name) orelse return null;
+    const id = base.nominalId() orelse return null;
+    for (snapshot.records) |definition| {
+        if (expired(budget)) return null;
+        if (definition.module_id != id.module_id or !std.mem.eql(u8, definition.name, id.name)) continue;
+        if (definition.type_parameter_count == 0) return if (record.type_args.items.len == 0) base else null;
+        const bindings = try substitutions(allocator, id.module_id, definition.declaration_start, definition.type_parameter_count);
+        const known = try allocator.alloc(bool, bindings.len);
+        @memset(known, false);
+        if (record.type_args.items.len != 0) {
+            if (record.type_args.items.len != bindings.len) return null;
+            for (bindings, record.type_args.items, known) |*binding, argument, *found| {
+                binding.replacement = (try resolveType(allocator, budget, snapshot, module_id, offset, argument)) orelse return null;
+                found.* = true;
+            }
+        } else {
+            for (record.fields.items) |field| {
+                if (expired(budget)) return null;
+                const pattern = recordField(budget, snapshot, id, field.name) orelse continue;
+                const actual = (try typeForExpr(allocator, budget, snapshot, module_id, offset, field.value)) orelse continue;
+                generic_arguments.infer(pattern.value_type, actual, bindings, known) catch return null;
+            }
+        }
+        // A partially written constructor still has useful declaration fields.
+        for (known) |found| if (!found) return base;
+        const arguments = try allocator.alloc(ast.Type, bindings.len);
+        for (arguments, bindings) |*argument, binding| argument.* = binding.replacement;
+        return try base.withArguments(allocator, arguments);
+    }
+    return null;
+}
+
+fn typeForCall(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, function: ValueBinding, call: ast.CallExpr) anyerror!?ast.Type {
+    if (function.type_parameter_count == 0) return function.value_type;
+    const bindings = try substitutions(allocator, function.module_id orelse return null, function.declaration_start, function.type_parameter_count);
+    const known = try allocator.alloc(bool, bindings.len);
+    @memset(known, false);
+    if (call.type_args.items.len != 0) {
+        if (call.type_args.items.len != bindings.len) return null;
+        for (bindings, call.type_args.items, known) |*binding, argument, *found| {
+            binding.replacement = (try resolveType(allocator, budget, snapshot, module_id, offset, argument)) orelse return null;
+            found.* = true;
+        }
+    } else {
+        const signature = function.callable_type orelse return null;
+        const count = @min(call.args.items.len, signature.fn_params.len);
+        for (signature.fn_params[0..count], call.args.items[0..count]) |pattern, argument| {
+            if (expired(budget)) return null;
+            const actual = (try typeForExpr(allocator, budget, snapshot, module_id, offset, argument)) orelse continue;
+            generic_arguments.infer(pattern, actual, bindings, known) catch return null;
+        }
+    }
+    for (known) |found| if (!found) return null;
+    return try function.value_type.substitute(allocator, bindings);
+}
+
+fn resolveType(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, offset: usize, ty: ast.Type) anyerror!?ast.Type {
     if (expired(budget)) return null;
-    if (recordIdForType(ty)) |id| return recordField(budget, snapshot, id, name);
+    if (ty.optional_child) |child| return try ast.Type.optional(allocator, (try resolveType(allocator, budget, snapshot, module_id, offset, child.*)) orelse return null);
+    if (ty.fn_result) |result| {
+        const parameters = try allocator.alloc(ast.Type, ty.fn_params.len);
+        for (parameters, ty.fn_params) |*parameter, original| parameter.* = (try resolveType(allocator, budget, snapshot, module_id, offset, original)) orelse return null;
+        return try ast.Type.functionType(allocator, parameters, (try resolveType(allocator, budget, snapshot, module_id, offset, result.*)) orelse return null);
+    }
+    var base = ty;
+    if (ty.parameter_id == null and ty.nominal_module_id == null) {
+        if (ty.class_name orelse ty.enum_name) |name| {
+            var parameter: ?ast.Type = null;
+            if (snapshot.moduleById(module_id)) |module| {
+                if (snapshot.syntaxForSource(module.path orelse module.spec, module.source)) |program| {
+                    inline for (.{ program.records.items, program.functions.items }) |declarations| {
+                        for (declarations) |declaration| {
+                            if (expired(budget)) return null;
+                            if (offset < declaration.span.start or offset > declaration.span.end) continue;
+                            for (declaration.type_params.items, 0..) |item, index| {
+                                if (!std.mem.eql(u8, item.name, name)) continue;
+                                parameter = .{ .kind = .parameter, .class_name = item.name, .parameter_id = .{ .module_id = module_id, .declaration_start = declaration.span.start, .index = @intCast(index) } };
+                            }
+                        }
+                    }
+                }
+            }
+            base = parameter orelse resolvedTypeName(budget, snapshot, module_id, name) orelse return null;
+        }
+    }
+    if (ty.arguments.len == 0) return base;
+    const arguments = try allocator.alloc(ast.Type, ty.arguments.len);
+    for (arguments, ty.arguments) |*argument, original| argument.* = (try resolveType(allocator, budget, snapshot, module_id, offset, original)) orelse return null;
+    return try base.withArguments(allocator, arguments);
+}
+
+pub fn fieldForType(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, ty: ast.Type, name: []const u8) anyerror!?FieldRef {
+    if (expired(budget)) return null;
+    if (ty.optional_child) |child| return fieldForType(allocator, budget, snapshot, child.*, name);
+    if (recordIdForType(ty)) |id| {
+        var field = recordField(budget, snapshot, id, name) orelse return null;
+        if (ty.arguments.len == 0) return field;
+        for (snapshot.records) |definition| {
+            if (expired(budget)) return null;
+            if (definition.module_id != id.module_id or !std.mem.eql(u8, definition.name, id.name)) continue;
+            if (definition.type_parameter_count != ty.arguments.len) return null;
+            const bindings = try substitutions(allocator, id.module_id, definition.declaration_start, ty.arguments.len);
+            for (bindings, ty.arguments) |*binding, argument| binding.replacement = argument;
+            field.value_type = try field.value_type.substitute(allocator, bindings);
+            field.type_label = try field.value_type.formatAlloc(allocator);
+            return field;
+        }
+        return null;
+    }
     var current = objectClassForType(snapshot, ty);
     var remaining = snapshot.classes.len;
     while (current) |id| {
@@ -229,21 +361,15 @@ pub fn classBase(budget: ?QueryBudget, snapshot: anytype, class_id: core.Nominal
     return null;
 }
 
-pub fn recordIdAfterPath(budget: ?QueryBudget, snapshot: anytype, base_record_name: core.NominalId, path: []const ast.RecordPathSegment) ?core.NominalId {
+pub fn typeAfterPath(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, base: ast.Type, path: []const ast.RecordPathSegment) !?ast.Type {
     if (expired(budget)) return null;
-    var current_record_name = base_record_name;
+    var current = base;
     for (path) |segment| {
-        if (expired(budget)) return null;
-        if (segment.name.len == 0) return null;
-        const field = recordField(budget, snapshot, current_record_name, segment.name) orelse return null;
-        current_record_name = recordIdForType(field.value_type) orelse return null;
+        if (expired(budget) or segment.name.len == 0) return null;
+        const field = (try fieldForType(allocator, budget, snapshot, current, segment.name)) orelse return null;
+        current = field.value_type;
     }
-    return current_record_name;
-}
-
-pub fn recordIdForTypeName(budget: ?QueryBudget, snapshot: anytype, current_module_id: core.SourceModuleId, name: []const u8) ?core.NominalId {
-    if (expired(budget)) return null;
-    return recordIdForType(resolvedTypeName(budget, snapshot, current_module_id, name) orelse return null);
+    return current;
 }
 
 pub fn resolvedTypeName(budget: ?QueryBudget, snapshot: anytype, current_module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
@@ -298,24 +424,25 @@ pub fn selectedValue(budget: ?QueryBudget, snapshot: anytype, module_id: core.So
     return name_resolution.resolveValue(VariableBinding, ValueBinding, ValueBinding, Resolver{ .snapshot = snapshot, .budget = budget, .module_id = module_id }, callee, visibleVariableBinding(budget, snapshot, module_id, offset, callee.name));
 }
 
-pub fn structuredField(budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, context: anytype) ?FieldRef {
+pub fn structuredField(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, module_id: core.SourceModuleId, context: anytype) !?FieldRef {
     const cursor = @import("cursor.zig");
     if (context.targetKindIs(.member_name)) {
         const parsed = context.module() orelse return null;
         const member = cursor.memberAt(budget, parsed, context.offset) orelse return null;
-        const ty = typeForExpr(budget, snapshot, module_id, context.offset, member.target) orelse return null;
-        return fieldForType(budget, snapshot, ty, member.name);
+        const ty = (try typeForExpr(allocator, budget, snapshot, module_id, context.offset, member.target)) orelse return null;
+        return fieldForType(allocator, budget, snapshot, ty, member.name);
     }
     if (context.targetKindIs(.record_field_name)) {
-        const id = recordIdForTypeName(budget, snapshot, module_id, context.qualifier orelse return null) orelse return null;
-        return recordField(budget, snapshot, id, context.target);
+        const construction = context.construction orelse return null;
+        const ty = (try typeForConstruction(allocator, budget, snapshot, module_id, context.offset, construction)) orelse return null;
+        return fieldForType(allocator, budget, snapshot, ty, context.target);
     }
     if (context.targetKindIs(.record_update_path_segment)) {
         const parsed = context.module() orelse return null;
         const target = cursor.recordUpdatePathAt(budget, parsed, context.offset) orelse return null;
-        const base = recordIdForExpr(budget, snapshot, module_id, context.offset, target.target) orelse return null;
-        const id = recordIdAfterPath(budget, snapshot, base, target.path[0..target.segment_index]) orelse return null;
-        return recordField(budget, snapshot, id, target.path[target.segment_index].name);
+        const base = (try typeForExpr(allocator, budget, snapshot, module_id, context.offset, target.target)) orelse return null;
+        const ty = (try typeAfterPath(allocator, budget, snapshot, base, target.path[0..target.segment_index])) orelse return null;
+        return fieldForType(allocator, budget, snapshot, ty, target.path[target.segment_index].name);
     }
     return null;
 }
@@ -426,6 +553,9 @@ fn valueBindingFromSnapshot(binding: anytype) ValueBinding {
         .signature = binding.signature,
         .type_label = binding.type_label,
         .value_type = binding.value_type,
+        .callable_type = binding.callable_type,
+        .type_parameter_count = binding.type_parameter_count,
+        .declaration_start = binding.declaration_start,
         .documentation = binding.documentation,
         .primitive = binding.primitive,
     };

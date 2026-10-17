@@ -23,6 +23,7 @@ pub const SourceNameTarget = struct {
     text: []const u8,
     kind: SourceNameKind,
     qualifier: ?[]const u8 = null,
+    construction: ?ast.RecordExpr = null,
 };
 
 pub const RecordUpdatePathTarget = struct {
@@ -724,6 +725,7 @@ fn sourceNameInExpr(budget: ?QueryBudget, expr: ast.Expr, offset: usize) ?Source
                     .text = field.name,
                     .kind = .record_field_name,
                     .qualifier = record.type_name,
+                    .construction = record,
                 };
                 if (sourceNameInExpr(budget, field.value, offset)) |target| break :blk target;
             }

@@ -53,7 +53,9 @@ fn resolveHover(allocator: std.mem.Allocator, snapshot: anytype, req: types.Sour
     if (context.typeParameter()) |parameter| return .{
         .markdown = try std.fmt.allocPrint(allocator, "Type parameter `{s}`", .{parameter.name}),
     };
-    if (resolve_query.structuredField(budget, snapshot, module.id, context)) |field| return .{
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    if (try resolve_query.structuredField(scratch.allocator(), budget, snapshot, module.id, context)) |field| return .{
         .markdown = try std.fmt.allocPrint(allocator, "```ss\n({s}: {s})\n```", .{ field.name, field.type_label }),
     };
     const qualifier = context.qualifiedCallableAlias();

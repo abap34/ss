@@ -73,8 +73,11 @@ pub const CompletionCandidate = struct {
 pub const CompletionResult = struct {
     items: []CompletionCandidate,
     is_incomplete: bool = false,
+    owned_details: [][]const u8 = &.{},
 
     pub fn deinit(self: *CompletionResult, allocator: std.mem.Allocator) void {
+        for (self.owned_details) |detail| allocator.free(detail);
+        allocator.free(self.owned_details);
         allocator.free(self.items);
     }
 };

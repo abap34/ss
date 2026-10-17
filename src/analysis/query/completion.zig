@@ -18,7 +18,7 @@ const Result = types.CompletionResult;
 const PropertyTarget = union(enum) {
     class: core.NominalId,
     any_object,
-    record: core.NominalId,
+    record: ast.Type,
 };
 
 pub fn at(
@@ -44,6 +44,7 @@ pub fn at(
 
 fn complete(builder: *CandidateBuilder, snapshot: anytype, req: types.SourceRequest, parsed_module: ?*const ast.Module) !void {
     if (try completeRecordUpdateAt(builder, snapshot, req, parsed_module)) return;
+    if (try completeRecordConstructionAt(builder, snapshot, req, parsed_module)) return;
     try builder.checkBudget();
     if (try completeModuleAccessAt(builder, snapshot, req, parsed_module)) return;
     try builder.checkBudget();
@@ -74,6 +75,8 @@ const CandidateBuilder = struct {
     budget: QueryBudget,
     items: std.ArrayList(Candidate),
     seen: std.StringHashMap(void),
+    scratch: std.heap.ArenaAllocator,
+    owned_details: std.ArrayList([]const u8) = .empty,
 
     fn init(allocator: std.mem.Allocator, budget: QueryBudget) CandidateBuilder {
         return .{
@@ -81,12 +84,16 @@ const CandidateBuilder = struct {
             .budget = budget,
             .items = .empty,
             .seen = std.StringHashMap(void).init(allocator),
+            .scratch = .init(allocator),
         };
     }
 
     fn deinit(self: *CandidateBuilder) void {
         self.items.deinit(self.allocator);
         self.seen.deinit();
+        self.scratch.deinit();
+        for (self.owned_details.items) |detail| self.allocator.free(detail);
+        self.owned_details.deinit(self.allocator);
     }
 
     fn checkBudget(self: *const CandidateBuilder) !void {
@@ -100,10 +107,20 @@ const CandidateBuilder = struct {
         try self.items.append(self.allocator, candidate);
     }
 
+    fn retainDetail(self: *CandidateBuilder, detail: []const u8) ![]const u8 {
+        const owned = try self.allocator.dupe(u8, detail);
+        errdefer self.allocator.free(owned);
+        try self.owned_details.append(self.allocator, owned);
+        return owned;
+    }
+
     fn finish(self: *CandidateBuilder, is_incomplete: bool) !Result {
         if (self.budget.canceled()) return emptyResult(self.allocator);
+        const items = try self.items.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(items);
         return .{
-            .items = try self.items.toOwnedSlice(self.allocator),
+            .items = items,
+            .owned_details = try self.owned_details.toOwnedSlice(self.allocator),
             .is_incomplete = is_incomplete,
         };
     }
@@ -129,7 +146,7 @@ fn completeMemberAccessAt(builder: *CandidateBuilder, snapshot: anytype, req: ty
     const member = cursor.memberAt(budget, parsed, req.offset) orelse return false;
     if (enumTypeForExpr(budget, snapshot, req, member.target)) |enum_type| {
         try appendEnumCases(builder, snapshot, enum_type);
-    } else if (propertyTargetForExpr(budget, snapshot, req, parsed, member.target, 0)) |target| {
+    } else if (try propertyTargetForExpr(builder.scratch.allocator(), budget, snapshot, req, parsed, member.target, 0)) |target| {
         try appendProperties(builder, snapshot, target);
     }
     return true;
@@ -139,9 +156,21 @@ fn completeRecordUpdateAt(builder: *CandidateBuilder, snapshot: anytype, req: ty
     const budget = builder.budget;
     const parsed = program orelse return false;
     const target = cursor.recordUpdateCompletionAt(budget, parsed, req.offset) orelse return false;
-    const base_record_name = recordIdForCompletionExpr(budget, snapshot, req, parsed, target.target, 0) orelse return false;
-    const record_name = resolve_query.recordIdAfterPath(budget, snapshot, base_record_name, target.path_prefix) orelse return false;
-    try appendProperties(builder, snapshot, .{ .record = record_name });
+    const scratch = builder.scratch.allocator();
+    const base = (try recordTypeForCompletionExpr(scratch, budget, snapshot, req, parsed, target.target, 0)) orelse return false;
+    const ty = (try resolve_query.typeAfterPath(scratch, budget, snapshot, base, target.path_prefix)) orelse return false;
+    if (resolve_query.recordIdForType(ty) == null) return false;
+    try appendProperties(builder, snapshot, .{ .record = ty });
+    return true;
+}
+
+fn completeRecordConstructionAt(builder: *CandidateBuilder, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !bool {
+    const parsed = program orelse return false;
+    const target = cursor.sourceNameAt(builder.budget, parsed, req.offset) orelse return false;
+    const record = target.construction orelse return false;
+    const module = snapshot.moduleForPath(req.path) orelse return false;
+    const ty = (try resolve_query.typeForConstruction(builder.scratch.allocator(), builder.budget, snapshot, module.id, req.offset, record)) orelse return false;
+    try appendProperties(builder, snapshot, .{ .record = ty });
     return true;
 }
 
@@ -328,15 +357,18 @@ fn appendProperties(builder: *CandidateBuilder, snapshot: anytype, target: Prope
     try builder.add(.{ .label = "content", .kind = .property, .detail = "String" });
 }
 
-fn appendRecordFields(builder: *CandidateBuilder, snapshot: anytype, record_id: core.NominalId) !void {
+fn appendRecordFields(builder: *CandidateBuilder, snapshot: anytype, ty: ast.Type) !void {
     try builder.checkBudget();
+    const record_id = resolve_query.recordIdForType(ty) orelse return;
     var index = snapshot.record_fields.len;
     while (index > 0) {
         try builder.checkBudget();
         index -= 1;
         const field = snapshot.record_fields[index];
         if (field.module_id != record_id.module_id or !std.mem.eql(u8, field.record_name, record_id.name)) continue;
-        try builder.add(.{ .label = field.name, .kind = .property, .detail = field.type_label });
+        const applied = (try resolve_query.fieldForType(builder.scratch.allocator(), builder.budget, snapshot, ty, field.name)) orelse continue;
+        const detail = try builder.retainDetail(applied.type_label);
+        try builder.add(.{ .label = field.name, .kind = .property, .detail = detail });
     }
 }
 
@@ -371,10 +403,10 @@ fn enumTypeForExpr(budget: QueryBudget, snapshot: anytype, req: types.SourceRequ
     return .{ .name = id.name, .module_id = id.module_id };
 }
 
-fn propertyTargetForExpr(budget: QueryBudget, snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) ?PropertyTarget {
+fn propertyTargetForExpr(allocator: std.mem.Allocator, budget: QueryBudget, snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) anyerror!?PropertyTarget {
     if (budget.expired()) return null;
     const module = snapshot.moduleForPath(req.path) orelse return null;
-    if (recordIdForCompletionExpr(budget, snapshot, req, program, expr, depth)) |record_name| return .{ .record = record_name };
+    if (try recordTypeForCompletionExpr(allocator, budget, snapshot, req, program, expr, depth)) |ty| return .{ .record = ty };
     if (depth > 16) return null;
     return switch (expr) {
         .ident => |ident| blk: {
@@ -382,7 +414,7 @@ fn propertyTargetForExpr(budget: QueryBudget, snapshot: anytype, req: types.Sour
                 if (propertyTargetForVariable(snapshot, variable)) |target| break :blk target;
             }
             if (cursor.visibleLetBindingAt(budget, program, req.offset, ident.name)) |binding| {
-                if (propertyTargetForExpr(budget, snapshot, req, program, binding.expr, depth + 1)) |target| break :blk target;
+                if (try propertyTargetForExpr(allocator, budget, snapshot, req, program, binding.expr, depth + 1)) |target| break :blk target;
             }
             if (resolve_query.valueBinding(budget, snapshot, module.id, ident.name, null, .constant)) |constant| {
                 if (propertyTargetForType(snapshot, constant.value_type)) |target| break :blk target;
@@ -400,15 +432,17 @@ fn propertyTargetForExpr(budget: QueryBudget, snapshot: anytype, req: types.Sour
     };
 }
 
-fn recordIdForCompletionExpr(budget: QueryBudget, snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) ?core.NominalId {
+fn recordTypeForCompletionExpr(allocator: std.mem.Allocator, budget: QueryBudget, snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) anyerror!?ast.Type {
     if (budget.expired()) return null;
     const module = snapshot.moduleForPath(req.path) orelse return null;
-    if (resolve_query.recordIdForExpr(budget, snapshot, module.id, req.offset, expr)) |record_name| return record_name;
+    if (try resolve_query.typeForExpr(allocator, budget, snapshot, module.id, req.offset, expr)) |ty| {
+        if (resolve_query.recordIdForType(ty) != null) return ty;
+    }
     if (depth > 16) return null;
     return switch (expr) {
         .ident => |ident| blk: {
             const binding = cursor.visibleLetBindingAt(budget, program, req.offset, ident.name) orelse break :blk null;
-            break :blk recordIdForCompletionExpr(budget, snapshot, req, program, binding.expr, depth + 1);
+            break :blk try recordTypeForCompletionExpr(allocator, budget, snapshot, req, program, binding.expr, depth + 1);
         },
         else => null,
     };
@@ -425,7 +459,7 @@ fn propertyTargetForType(snapshot: anytype, ty: ast.Type) ?PropertyTarget {
     return switch (ty.kind) {
         .object => .any_object,
         .selection => if (ty.selectionItem().kind == .object) .any_object else null,
-        .record => if (ty.nominalId()) |id| .{ .record = id } else null,
+        .record => if (ty.nominalId() != null) .{ .record = ty } else null,
         else => null,
     };
 }

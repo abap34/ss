@@ -97,7 +97,9 @@ fn appendStructuredTarget(
     context: *const context_query.Context,
     request_path: []const u8,
 ) !bool {
-    if (resolve_query.structuredField(context.budget, snapshot, current_module_id, context)) |field| {
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    if (try resolve_query.structuredField(scratch.allocator(), context.budget, snapshot, current_module_id, context)) |field| {
         return appendTargetFromSpan(allocator, out, snapshot, field.module_id, field.name_span, request_path);
     }
     if (context.targetKindIs(.member_name) or context.targetKindIs(.enum_case_name)) {
