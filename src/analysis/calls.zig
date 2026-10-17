@@ -280,6 +280,18 @@ const Analyzer = struct {
             for (func.params.items) |param| try env.bind(param.name, ValueFacts.unknownValue(self.allocator));
             _ = try self.enter(.{ .label = label, .env = env, .owner = func });
         }
+        // Display bodies use the same call analysis in a read-only environment.
+        // Keep its summaries separate from ordinary construction calls.
+        var displays = Analyzer.init(self.allocator, self.state, &self.sema);
+        displays.checking_display = true;
+        var display_it = self.sema.functions.iterator();
+        while (display_it.next()) |entry| {
+            const func = entry.value_ptr.*;
+            if (!func.isDisplay()) continue;
+            var env = FunctionEnv.init(self.allocator);
+            for (func.params.items) |param| try env.bind(param.name, ValueFacts.unknownValue(self.allocator));
+            _ = try displays.enter(.{ .label = displays.namedLabel(entry.key_ptr.*), .env = env, .owner = func });
+        }
         // Declaration checking leaves higher-order parameters open. Recheck
         // executed roots with actual arguments, without reusing open captures
         // or summaries as evidence that a call has been verified.
@@ -843,7 +855,7 @@ const Analyzer = struct {
 
     fn labelText(self: *Analyzer, label: Label) ![]const u8 {
         return switch (label) {
-            .function => |key| try std.fmt.allocPrint(self.allocator, "fn:{d}:{s}:{?d}", .{ key.module_id, key.name, key.instance_id }),
+            .function => |key| try std.fmt.allocPrint(self.allocator, "fn:{d}:{s}:{?d}:{?d}", .{ key.module_id, key.name, key.declaration_start, key.instance_id }),
             .lambda => |key| try std.fmt.allocPrint(self.allocator, "lambda:{d}:{d}-{d}:{d}:{?d}", .{ key.module_id, key.span.start, key.span.end, key.capture_id, key.analysis_id }),
         };
     }
@@ -894,6 +906,7 @@ fn activationOrigin(state: *const core.DocumentState, activation: Activation) ?c
 fn functionKeyLessThan(left: core.FunctionKey, right: core.FunctionKey) bool {
     if (left.module_id != right.module_id) return left.module_id < right.module_id;
     if (!std.mem.eql(u8, left.name, right.name)) return std.mem.lessThan(u8, left.name, right.name);
+    if (left.declaration_start != right.declaration_start) return optionalIdLessThan(usize, left.declaration_start, right.declaration_start);
     return optionalIdLessThan(u32, left.instance_id, right.instance_id);
 }
 

@@ -7694,13 +7694,13 @@ test "compiler semantics: function constraint anchors are checked without invoca
 
 test "compiler semantics: registration is an effect even in a String returning display function" {
     try expectDiagnostic(
-        \\fn display(item: Object) -> String
+        \\fn describe(item: Object) -> String
         \\  pagectx() ~ (item.left == pagectx().left + 40)
         \\  return "Item"
         \\end
         \\page main
         \\  let item = text!("Item")
-        \\  set_repr(item, display)
+        \\  set_repr(item, describe)
         \\end
     , "case.ss:bytes:", "ImpureDisplayFunction");
 }
@@ -8698,4 +8698,74 @@ test "compiler semantics: placement references reject missing arguments and arbi
         .{ .source = "page main\nlet fake = Placement {}\nend\n", .diagnostic = "InvalidTypeConstruction" },
     };
     for (cases) |case| try expectDiagnostic(case.source, "bytes:", case.diagnostic);
+}
+
+test "compiler semantics: each display declaration body is checked independently" {
+    try expectDiagnostic(
+        \\type A { value: String }
+        \\type B { value: Number }
+        \\fn display(self: Placed<A>) -> B = B { value = self.value.value }
+        \\fn display(self: Placed<B>) -> B = self.value
+        \\page main
+        \\end
+    , "bytes:", "TypeMismatch");
+}
+
+test "compiler semantics: display declarations require an owned type and one unspecialized receiver" {
+    const cases = [_]struct { source: []const u8, diagnostic: []const u8 }{
+        .{ .source = "fn display() -> Number = 1\n", .diagnostic = "InvalidDisplaySignature" },
+        .{ .source = "fn display(self: Placement) -> Number = 1\n", .diagnostic = "InvalidDisplaySignature" },
+        .{ .source = "fn display(self: Placed<Number>) -> Number = self.value\n", .diagnostic = "InvalidDisplaySignature" },
+        .{ .source = "type A {}\nfn display(self: Placed<A>) -> Void\nend\n", .diagnostic = "InvalidDisplaySignature" },
+        .{ .source = "type A {}\nfn display(self: Placed<A>) -> Placed<A> = self\n", .diagnostic = "InvalidDisplaySignature" },
+        .{ .source = "type A {}\nfn display(self: Placed<A>) -> A = self.value\nfn display(other: Placed<A>) -> A = other.value\n", .diagnostic = "DuplicateDisplay" },
+        .{ .source = "type Box<T> { value: T }\nfn display(self: Placed<Box<Number>>) -> Box<Number> = self.value\n", .diagnostic = "InvalidDisplaySignature" },
+        .{ .source = "type Box<A, B> {}\nfn display<T, U>(self: Placed<Box<T, T>>) -> T = self.value\n", .diagnostic = "InvalidDisplaySignature" },
+        .{ .source = "type Box<T> { value: T }\nfn display<T, U>(self: Placed<Box<T>>) -> T = self.value.value\n", .diagnostic = "InvalidDisplaySignature" },
+        .{ .source = "type A {}\nfn display!(self: Placed<A>) -> A = self.value\n", .diagnostic = "InvalidDisplaySignature" },
+    };
+    for (cases) |case| try expectDiagnostic(case.source, "bytes:", case.diagnostic);
+    try expectOverlayDiagnostic(
+        \\import "./lib/bad" as lib
+        \\fn display(self: Placed<lib::A>) -> lib::A = self.value
+    , "type A {}\n", "bytes:", "ForeignDisplayDeclaration");
+}
+
+test "compiler semantics: display names in different modules do not collide under imports" {
+    try buildSourceWithTwoOverlays(
+        \\import "./lib/a" as *
+        \\import "./lib/b" as *
+        \\page main
+        \\end
+    ,
+        \\type A { value: Number }
+        \\type RenderA { value: Number }
+        \\fn display(self: Placed<A>) -> RenderA = RenderA { value = self.value.value }
+    ,
+        \\type B { value: Number }
+        \\type RenderB { value: Number }
+        \\fn display(self: Placed<B>) -> RenderB = RenderB { value = self.value.value }
+    );
+}
+
+test "compiler semantics: typed displays reject writes through ordinary helpers" {
+    try expectDiagnostic(
+        \\type A { value: Number }
+        \\type Output { value: Number }
+        \\fn change_owner(item: Placed<A>) -> Number
+        \\  item.page.layout.x = 12
+        \\  return item.value.value
+        \\end
+        \\fn display(self: Placed<A>) -> Output
+        \\  return Output { value = change_owner(self) }
+        \\end
+    , "bytes:", "ImpureDisplayFunction");
+    try expectDiagnostic(
+        \\type A {}
+        \\type Output {}
+        \\fn display(self: Placed<A>) -> Output
+        \\  ~ self.left == self.page.left
+        \\  return Output {}
+        \\end
+    , "bytes:", "ImpureDisplayFunction");
 }

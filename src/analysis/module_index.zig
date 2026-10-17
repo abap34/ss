@@ -66,7 +66,7 @@ fn moduleById(modules: []const core.SourceModule, module_id: core.SourceModuleId
 
 fn appendFunctions(functions: *core.FunctionMap, program: ast.Module, module_id: core.SourceModuleId) !void {
     for (program.functions.items) |function| {
-        try functions.put(core.functionKey(module_id, function.name), function);
+        try functions.put(core.functionDeclarationKey(module_id, function), function);
     }
 }
 

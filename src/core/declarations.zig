@@ -33,6 +33,11 @@ pub const RecordDescriptor = struct {
     module_id: u32,
 };
 
+pub const DisplayDescriptor = struct {
+    decl: *const ast.FunctionDecl,
+    module_id: u32,
+};
+
 pub const RecordFieldDescriptor = struct {
     name: []const u8,
     name_span: ?ast.Span = null,
@@ -88,6 +93,7 @@ const ModuleNameKeyContext = struct {
 };
 
 const ModuleNameMap = std.HashMap(ModuleNameKey, usize, ModuleNameKeyContext, std.hash_map.default_max_load_percentage);
+const DisplayMap = std.HashMap(ModuleNameKey, DisplayDescriptor, ModuleNameKeyContext, std.hash_map.default_max_load_percentage);
 
 pub const DeclarationIndex = struct {
     builtin_module_id: u32 = 0,
@@ -100,6 +106,7 @@ pub const DeclarationIndex = struct {
     record_fields: std.ArrayList(RecordFieldDescriptor),
     type_by_module: ModuleNameMap,
     record_by_module: ModuleNameMap,
+    display_by_type: DisplayMap,
     class_by_module: ModuleNameMap,
     role_by_name: std.StringHashMap(usize),
     field_by_name: std.StringHashMap(?usize),
@@ -117,6 +124,7 @@ pub const DeclarationIndex = struct {
             .record_fields = .empty,
             .type_by_module = ModuleNameMap.init(allocator),
             .record_by_module = ModuleNameMap.init(allocator),
+            .display_by_type = DisplayMap.init(allocator),
             .class_by_module = ModuleNameMap.init(allocator),
             .role_by_name = std.StringHashMap(usize).init(allocator),
             .field_by_name = std.StringHashMap(?usize).init(allocator),
@@ -134,6 +142,7 @@ pub const DeclarationIndex = struct {
         self.record_fields.deinit(self.allocator);
         self.type_by_module.deinit();
         self.record_by_module.deinit();
+        self.display_by_type.deinit();
         self.class_by_module.deinit();
         self.role_by_name.deinit();
         self.field_by_name.deinit();
@@ -149,6 +158,10 @@ pub const DeclarationIndex = struct {
     pub fn record(self: *const DeclarationIndex, id: model.NominalId) ?RecordDescriptor {
         const index = self.record_by_module.get(.{ .module_id = id.module_id, .name = id.name }) orelse return null;
         return self.records.items[index];
+    }
+
+    pub fn display(self: *const DeclarationIndex, id: model.NominalId) ?DisplayDescriptor {
+        return self.display_by_type.get(id);
     }
 
     pub fn classInModule(self: *const DeclarationIndex, module_id: u32, name: []const u8) ?ClassDescriptor {
@@ -237,6 +250,17 @@ pub fn build(allocator: std.mem.Allocator, state: anytype) !DeclarationIndex {
 
 fn indexModule(index: *DeclarationIndex, module: anytype) !void {
     if (std.mem.eql(u8, module.spec, "std:internal/classes")) index.builtin_module_id = module.id;
+    for (module.syntax.functions.items) |*function| {
+        if (!function.isDisplay() or function.params.items.len != 1) continue;
+        const input = function.params.items[0].ty.placedInput() orelse continue;
+        if (input.kind != .record) continue;
+        const id = input.nominalId() orelse continue;
+        if (id.module_id != module.id) continue;
+        // Invalid or duplicate signatures are diagnosed by static semantics.
+        // Keep the first declaration deterministic even in an invalid snapshot.
+        const entry = try index.display_by_type.getOrPut(id);
+        if (!entry.found_existing) entry.value_ptr.* = .{ .decl = function, .module_id = module.id };
+    }
     for (module.syntax.types.items) |decl| {
         const type_index = index.types.items.len;
         try index.types.append(index.allocator, .{

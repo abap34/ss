@@ -762,7 +762,7 @@ fn instantiateFunction(
         const entry = try state.instantiations.add(instance_key, declaration);
         owned = false;
         errdefer entry.status = .failed;
-        const key = core.FunctionKey{ .module_id = definition.module_id, .name = entry.declaration.name, .instance_id = entry.declaration.instance_id };
+        const key = core.functionDeclarationKey(definition.module_id, entry.declaration);
         try state.functions.put(key, entry.declaration);
         var body_sema = caller_sema.forModule(definition.module_id);
         body_sema.record_source_facts = false;
@@ -777,7 +777,7 @@ fn instantiateFunction(
         break :create entry;
     };
     if (instance.status == .failed) return error.AlreadyDiagnosed;
-    const key = core.FunctionKey{ .module_id = definition.module_id, .name = instance.declaration.name, .instance_id = instance.declaration.instance_id };
+    const key = core.functionDeclarationKey(definition.module_id, instance.declaration);
     if (call.callee.call_id) |id| try state.instantiations.call_targets.put(id, key);
     return .{ .key = key, .module_id = definition.module_id, .decl = instance.declaration };
 }
@@ -879,7 +879,7 @@ fn inferUserCallInfo(
         if (needs_facts) actual_arguments[index] = actual;
         try ensureType(state, allocator, actual, param.ty, arg_origin, .UnmatchedArgumentType);
     }
-    if (options.context.invalid_declarations.contains((core.FunctionKey{ .module_id = callee_sema.module_id, .name = func.name, .instance_id = func.instance_id }))) return error.AlreadyDiagnosed;
+    if (options.context.invalid_declarations.contains(core.functionDeclarationKey(callee_sema.module_id, func))) return error.AlreadyDiagnosed;
     if (!needs_facts) return infoFromType(func.result_type);
     return try inferUserFunctionReturnInfo(allocator, state, callee_sema, func, actual_arguments, options);
 }
@@ -1040,7 +1040,7 @@ fn inferUserFunctionReturnInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     const context = options.context;
-    const visit_key = core.FunctionKey{ .module_id = sema.module_id, .name = func.name, .instance_id = func.instance_id };
+    const visit_key = core.functionDeclarationKey(sema.module_id, func);
     if (context.visiting.contains(visit_key)) {
         context.recursive_calls += 1;
         return infoFromType(func.result_type);

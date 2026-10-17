@@ -26,7 +26,7 @@ fn collectDefinitionsFromModule(
     definitions: *std.ArrayList(core.Definition),
 ) !void {
     for (program.functions.items) |func| {
-        try putDefinitionAtSpan(allocator, definitions, source, func.name, func.name_span, 0, source.text.len, .function, module_id, file, .module, null);
+        if (!func.isDisplay()) try putDefinitionAtSpan(allocator, definitions, source, func.name, func.name_span, 0, source.text.len, .function, module_id, file, .module, null);
         if (include_variables) {
             const scope = analysis_scope.functionScope(func);
             for (func.params.items) |param| {

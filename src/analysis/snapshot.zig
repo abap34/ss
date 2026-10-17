@@ -943,7 +943,7 @@ fn finishDiagnosticSnapshot(
         var state = try core.DocumentState.init(scratch, try scratch.dupe(u8, asset_base_dir), try scratch.dupe(u8, entry_path), try scratch.dupe(u8, tree.source), try tree.module.clone(scratch));
         defer state.deinit();
         try @import("index.zig").populateDocumentStateAnalysis(scratch, &state);
-        for (state.projectSyntax().functions.items) |func| try state.functions.put(core.functionKey(state.modules.project_id, func.name), func);
+        for (state.projectSyntax().functions.items) |func| try state.functions.put(core.functionDeclarationKey(state.modules.project_id, func), func);
         for (state.projectSyntax().constants.items) |decl| try state.constants.declarations.put(core.constKey(state.modules.project_id, decl.name), decl);
         const facts = try ProjectFacts.fromDocumentState(allocator, &state, entry_path, asset_base_dir, .{ .project = options });
         diagnostics_moved.* = true;
@@ -1309,7 +1309,7 @@ fn collectValueBindings(allocator: std.mem.Allocator, type_storage: *TypeStorage
     var function_iterator = state.functions.iterator();
     while (function_iterator.next()) |entry| {
         const func = entry.value_ptr.*;
-        if (func.instance_id != null) continue;
+        if (func.instance_id != null or func.isDisplay()) continue;
         const retained_type = try type_storage.retain(func.result_type);
         const parameters = try allocator.alloc(ast.Type, func.params.items.len);
         defer allocator.free(parameters);

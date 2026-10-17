@@ -629,3 +629,29 @@ test "analysis query spec: unfinished placement access keeps the concrete input 
         try testing.expect(found);
     }
 }
+
+test "analysis query spec: display receiver fields retain independent lexical scopes" {
+    const path = "stdlib/internal/display-scope-query-test.ss";
+    const source =
+        \\type Label { title: String }
+        \\type Counter { count: Number }
+        \\type Output { text: String }
+        \\fn display(first: Placed<Label>) -> Output
+        \\  let title = first.value.title
+        \\  return Output { text = title }
+        \\end
+        \\fn display(second: Placed<Counter>) -> Output
+        \\  let count = second.value.count
+        \\  return Output { text = "Counter" }
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    try expectAppliedField(&snapshot, path, source, "first.value.title", "title", "String", 0);
+    try expectAppliedField(&snapshot, path, source, "second.value.count", "count", "Number", 1);
+    for (snapshot.value_bindings) |binding| try testing.expect(!std.mem.eql(u8, binding.name, "display"));
+}

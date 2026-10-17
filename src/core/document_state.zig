@@ -92,6 +92,16 @@ pub fn functionKey(module_id: SourceModuleId, name: []const u8) FunctionKey {
     return .{ .module_id = module_id, .name = name };
 }
 
+/// Display entries share a source name but retain distinct declaration identities.
+pub fn functionDeclarationKey(module_id: SourceModuleId, declaration: ast.FunctionDecl) FunctionKey {
+    return .{
+        .module_id = module_id,
+        .name = declaration.name,
+        .instance_id = declaration.instance_id,
+        .declaration_start = if (declaration.isDisplay()) declaration.span.start else null,
+    };
+}
+
 pub fn constKey(module_id: SourceModuleId, name: []const u8) FunctionKey {
     return .{ .module_id = module_id, .name = name };
 }

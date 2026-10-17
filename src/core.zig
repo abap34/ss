@@ -70,6 +70,7 @@ pub const FunctionMap = @import("core/document_state.zig").FunctionMap;
 pub const ConstMap = @import("core/document_state.zig").ConstMap;
 pub const ConstValueMap = @import("core/document_state.zig").ConstValueMap;
 pub const ConstEvalStateMap = @import("core/document_state.zig").ConstEvalStateMap;
+pub const functionDeclarationKey = @import("core/document_state.zig").functionDeclarationKey;
 pub const functionKey = @import("core/document_state.zig").functionKey;
 pub const constKey = @import("core/document_state.zig").constKey;
 pub const DefinitionKind = @import("core/document_state.zig").DefinitionKind;
