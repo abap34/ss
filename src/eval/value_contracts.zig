@@ -95,9 +95,8 @@ pub fn valueConformsToType(state: anytype, value: core.Value, expected: ast.Type
         };
     }
     if (expected.kind == .record) {
-        const expected_name = expected.class_name orelse return false;
         return switch (value) {
-            .record => |record| record.module_id == expected.nominal_module_id and std.mem.eql(u8, record.type_name, expected_name),
+            .record => |record| ast.Type.eql(record.ty, expected),
             else => false,
         };
     }

@@ -3156,7 +3156,7 @@ test "compiler semantics: object field defaults are statically typed" {
         nested_defaults_source,
         "card",
         "config",
-        "{\"kind\":\"record\",\"type\":\"Outer\",\"module\":0,\"fields\":[{\"name\":\"inner\",\"explicit\":false,\"value\":{\"kind\":\"record\",\"type\":\"Inner\",\"module\":0,\"fields\":[{\"name\":\"mode\",\"explicit\":false,\"value\":{\"kind\":\"enum\",\"type\":\"Mode\",\"module\":0,\"case\":\"beta\"}}]}}]}",
+        "{\"kind\":\"record\",\"type\":{\"kind\":\"record\",\"name\":\"Outer\",\"module\":0},\"fields\":[{\"name\":\"inner\",\"explicit\":false,\"value\":{\"kind\":\"record\",\"type\":{\"kind\":\"record\",\"name\":\"Inner\",\"module\":0},\"fields\":[{\"name\":\"mode\",\"explicit\":false,\"value\":{\"kind\":\"enum\",\"type\":\"Mode\",\"module\":0,\"case\":\"beta\"}}]}}]}",
     );
 
     try expectBodyTextDefaults(

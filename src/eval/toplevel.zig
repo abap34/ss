@@ -726,8 +726,7 @@ fn evalRecord(
     const caller_module_id = evaluation.module_id;
     defer evaluation.module_id = caller_module_id;
 
-    var value = core.RecordValue.init(resolved.decl.name);
-    value.module_id = resolved.module_id;
+    var value = core.RecordValue.init(ast.Type.recordType(resolved.decl.name).inModule(resolved.module_id));
     errdefer value.deinit(state.allocator);
 
     var default_env = Environment.init(state.allocator);
@@ -773,8 +772,7 @@ fn evalRecordDefaults(
     const caller_module_id = evaluation.module_id;
     defer evaluation.module_id = caller_module_id;
 
-    var value = core.RecordValue.init(resolved.decl.name);
-    value.module_id = resolved.module_id;
+    var value = core.RecordValue.init(ast.Type.recordType(resolved.decl.name).inModule(resolved.module_id));
     errdefer value.deinit(state.allocator);
 
     var default_env = Environment.init(state.allocator);
@@ -898,17 +896,24 @@ fn materializePropertyRecord(
 }
 
 fn cloneTaggedRecordForRuntime(state: *core.DocumentState, record: core.RecordValue) anyerror!core.RecordValue {
-    var cloned = core.RecordValue.init(try state.copyString(record.type_name));
-    cloned.module_id = record.module_id;
+    var cloned = core.RecordValue.init(try record.ty.clone(state.allocator));
     errdefer cloned.deinit(state.allocator);
+    try retainTypeNames(state, &cloned.ty);
     for (record.fields.items) |field| {
-        try cloned.fields.append(state.allocator, .{
-            .name = try state.copyString(field.name),
-            .value = try cloneTaggedValueForRuntime(state, field.value),
-            .explicit = field.explicit,
-        });
+        const name = try state.copyString(field.name);
+        const value = try cloneTaggedValueForRuntime(state, field.value);
+        try putRecordFieldValue(state.allocator, &cloned, name, value, field.explicit);
     }
     return cloned;
+}
+
+fn retainTypeNames(state: *core.DocumentState, ty: *ast.Type) anyerror!void {
+    if (ty.class_name) |name| ty.class_name = try state.copyString(name);
+    if (ty.enum_name) |name| ty.enum_name = try state.copyString(name);
+    for (ty.mutableArguments()) |*argument| try retainTypeNames(state, argument);
+    for (ty.fn_params) |*parameter| try retainTypeNames(state, parameter);
+    if (ty.fn_result) |result| try retainTypeNames(state, result);
+    if (ty.optional_child) |child| try retainTypeNames(state, child);
 }
 
 fn cloneTaggedValueForRuntime(state: *core.DocumentState, value: core.Value) anyerror!core.Value {

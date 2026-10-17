@@ -4,6 +4,7 @@ const model = @import("model");
 const utils = @import("utils");
 
 const json = utils.json;
+const type_json = @import("type_json.zig");
 
 pub fn propertyString(allocator: std.mem.Allocator, value: model.Value) ![]const u8 {
     return switch (value) {
@@ -71,11 +72,7 @@ pub fn typedPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: as
             if (parsed != .record) {
                 return error.InvalidValueTag;
             }
-            if (ty.class_name) |expected| {
-                if (parsed.record.module_id != ty.nominal_module_id or !std.mem.eql(u8, parsed.record.type_name, expected)) {
-                    return error.InvalidValueTag;
-                }
-            }
+            if (!ast.Type.eql(parsed.record.ty, ty)) return error.InvalidValueTag;
             break :blk parsed;
         },
         .path => blk: {
@@ -101,7 +98,7 @@ pub fn typedPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: as
 }
 
 fn deinitParsedRecordValue(allocator: std.mem.Allocator, record: *model.RecordValue) void {
-    allocator.free(record.type_name);
+    type_json.deinit(allocator, &record.ty);
     for (record.fields.items) |*field| {
         allocator.free(field.name);
         deinitParsedPropertyValue(allocator, &field.value);
@@ -143,8 +140,7 @@ fn appendTaggedValueJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
         },
         .record => |record| {
             try out.appendSlice(allocator, "{\"kind\":\"record\",\"type\":");
-            try json.appendString(allocator, out, record.type_name);
-            try appendModuleId(allocator, out, record.module_id);
+            try type_json.append(allocator, out, record.ty);
             try out.appendSlice(allocator, ",\"fields\":[");
             for (record.fields.items, 0..) |field, index| {
                 if (index > 0) try out.append(allocator, ',');
@@ -259,11 +255,15 @@ fn parseTaggedValue(allocator: std.mem.Allocator, value: json.Value) !model.Valu
         return .{ .object = @intCast(raw.integer) };
     }
     if (std.mem.eql(u8, kind, "record")) {
-        const type_value = json.stringField(object, "type") orelse return error.InvalidValueTag;
+        const type_value = json.fieldValue(object, "type") orelse return error.InvalidValueTag;
         const fields = json.arrayFieldObject(object, "fields") orelse return error.InvalidValueTag;
-        var record = model.RecordValue.init(try allocator.dupe(u8, type_value));
+        var ty = try type_json.parse(allocator, type_value.*);
+        if (ty.kind != .record) {
+            type_json.deinit(allocator, &ty);
+            return error.InvalidValueTag;
+        }
+        var record = model.RecordValue.init(ty);
         errdefer deinitParsedRecordValue(allocator, &record);
-        record.module_id = try parseModuleId(object);
         for (fields.items) |field_item| {
             if (field_item != .object) return error.InvalidValueTag;
             const field_object = &field_item.object;

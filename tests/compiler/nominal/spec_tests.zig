@@ -230,8 +230,7 @@ test "nominal types: identity survives optional and function type cloning" {
 
 test "nominal values: tagged defaults and clones retain nested identities" {
     const allocator = testing.allocator;
-    var record = core.RecordValue.init("Style");
-    record.module_id = 1;
+    var record = core.RecordValue.init(Type.recordType("Style").inModule(1));
     defer record.deinit(allocator);
     try record.fields.append(allocator, .{
         .name = "mode",
@@ -239,12 +238,12 @@ test "nominal values: tagged defaults and clones retain nested identities" {
     });
     var clone = try record.clone(allocator);
     defer clone.deinit(allocator);
-    try testing.expectEqual(@as(?u32, 1), clone.module_id);
+    try testing.expectEqual(@as(?u32, 1), clone.ty.nominal_module_id);
     const text = try core.value_text.propertyString(allocator, .{ .record = clone });
     defer allocator.free(text);
     var parsed = try core.value_text.typedPropertyValue(allocator, text, Type.recordType("Style").inModule(1));
     defer core.value_text.deinitParsedPropertyValue(allocator, &parsed);
-    try testing.expectEqual(@as(?u32, 1), parsed.record.module_id);
+    try testing.expectEqual(@as(?u32, 1), parsed.record.ty.nominal_module_id);
     try testing.expectEqual(@as(?u32, 2), parsed.record.field("mode").?.enum_case.module_id);
     try testing.expectError(error.InvalidValueTag, core.value_text.typedPropertyValue(allocator, text, Type.recordType("Style").inModule(2)));
 }

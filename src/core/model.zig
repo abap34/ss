@@ -1,4 +1,6 @@
 const std = @import("std");
+const language_type = @import("language_type");
+const Type = language_type.Type;
 const path_model = @import("path.zig");
 
 pub const Path = path_model.Path;
@@ -6,8 +8,8 @@ pub const PathCommand = path_model.Command;
 pub const PathPoint = path_model.Point;
 pub const PathCubic = path_model.Cubic;
 
-pub const SourceOrigin = @import("source_origin.zig").Origin;
-pub const SourceSpan = @import("source_origin.zig").Span;
+pub const SourceOrigin = language_type.SourceOrigin;
+pub const SourceSpan = language_type.SourceSpan;
 
 pub const Allocator = std.mem.Allocator;
 pub const NodeId = u32;
@@ -36,19 +38,7 @@ pub const FunctionKeyContext = struct {
     }
 };
 
-pub const NominalId = struct {
-    module_id: u32,
-    name: []const u8,
-
-    pub fn optionalEql(a: ?NominalId, b: ?NominalId) bool {
-        if ((a == null) != (b == null)) return false;
-        return if (a) |id| id.eql(b.?) else true;
-    }
-
-    pub fn eql(a: NominalId, b: NominalId) bool {
-        return a.module_id == b.module_id and std.mem.eql(u8, a.name, b.name);
-    }
-};
+pub const NominalId = language_type.NominalId;
 pub const Role = []const u8;
 pub const GroupRole: Role = "group";
 pub const ConnectorRole: Role = "connector";
@@ -589,27 +579,28 @@ pub const RecordFieldValue = struct {
     }
 };
 
-/// Owns fields and their values; type_name and field names remain borrowed.
+/// Owns type structure, fields and their values; nominal and field names are borrowed.
 pub const RecordValue = struct {
-    module_id: ?u32 = null,
-    type_name: []const u8,
+    ty: Type,
     fields: std.ArrayList(RecordFieldValue),
 
-    pub fn init(type_name: []const u8) RecordValue {
+    /// Takes ownership of the type's structural storage.
+    pub fn init(ty: Type) RecordValue {
+        std.debug.assert(ty.kind == .record);
         return .{
-            .type_name = type_name,
+            .ty = ty,
             .fields = .empty,
         };
     }
 
     pub fn deinit(self: *RecordValue, allocator: Allocator) void {
+        self.ty.deinit(allocator);
         for (self.fields.items) |*item| item.deinit(allocator);
         self.fields.deinit(allocator);
     }
 
     pub fn clone(self: RecordValue, allocator: Allocator) anyerror!RecordValue {
-        var copied = RecordValue.init(self.type_name);
-        copied.module_id = self.module_id;
+        var copied = RecordValue.init(try self.ty.clone(allocator));
         errdefer copied.deinit(allocator);
         try copied.fields.ensureTotalCapacity(allocator, self.fields.items.len);
         for (self.fields.items) |item| {

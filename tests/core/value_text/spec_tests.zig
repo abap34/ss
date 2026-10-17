@@ -3,6 +3,7 @@ const ast = @import("ast");
 const core = @import("core");
 
 const testing = std.testing;
+const allocation_testing = @import("allocation_testing");
 
 test "core value text spec: object properties round trip exact node identifiers" {
     for ([_]core.NodeId{ 0, 1, 16777217, std.math.maxInt(core.NodeId) }) |id| {
@@ -25,16 +26,16 @@ test "core value text spec: object properties round trip exact node identifiers"
 }
 
 const tagged_style_json =
-    \\{"kind":"record","type":"TextStyle","fields":[{"name":"font","explicit":true,"value":{"kind":"record","type":"FontFace","fields":[{"name":"family","explicit":true,"value":{"kind":"string","value":"Helvetica"}},{"name":"weight","explicit":true,"value":{"kind":"enum","type":"FontWeight","case":"bold"}}]}},{"name":"line_height","explicit":false,"value":{"kind":"number","value":28}},{"name":"enabled","explicit":true,"value":{"kind":"bool","value":true}}]}
+    \\{"kind":"record","type":{"kind":"record","name":"TextStyle"},"fields":[{"name":"font","explicit":true,"value":{"kind":"record","type":{"kind":"record","name":"FontFace"},"fields":[{"name":"family","explicit":true,"value":{"kind":"string","value":"Helvetica"}},{"name":"weight","explicit":true,"value":{"kind":"enum","type":"FontWeight","case":"bold"}}]}},{"name":"line_height","explicit":false,"value":{"kind":"number","value":28}},{"name":"enabled","explicit":true,"value":{"kind":"bool","value":true}}]}
 ;
 
 test "core value text spec: tagged property value deinit frees duplicated names and strings" {
     var value = try core.value_text.parsePropertyValue(testing.allocator, tagged_style_json);
     defer core.value_text.deinitParsedPropertyValue(testing.allocator, &value);
 
-    try testing.expectEqualStrings("TextStyle", value.record.type_name);
+    try testing.expectEqualStrings("TextStyle", value.record.ty.class_name.?);
     const font = value.record.field("font").?.record;
-    try testing.expectEqualStrings("FontFace", font.type_name);
+    try testing.expectEqualStrings("FontFace", font.ty.class_name.?);
     try testing.expectEqualStrings("Helvetica", font.field("family").?.string);
     const weight = font.field("weight").?.enum_case;
     try testing.expectEqualStrings("FontWeight", weight.enum_name);
@@ -51,7 +52,7 @@ test "core value text spec: class record defaults stay alive for the document st
         var slot = (try core.fields.get(testing.allocator, &state, document, "style")).?;
         try testing.expect(!slot.owned);
         try testing.expect(!slot.owns_tagged_text);
-        try testing.expectEqualStrings("TextStyle", slot.value.record.type_name);
+        try testing.expectEqualStrings("TextStyle", slot.value.record.ty.class_name.?);
         const font = slot.value.record.field("font").?.record;
         const family = font.field("family").?.string;
         try testing.expectEqualStrings("Helvetica", family);
@@ -166,4 +167,60 @@ fn initDocumentStateWithTaggedRecordDefault() !core.DocumentState {
 
 fn zeroSpan() ast.Span {
     return .{ .start = 0, .end = 0 };
+}
+
+fn exerciseAppliedRecordTypes(allocator: std.mem.Allocator) !void {
+    const Type = ast.Type;
+    var optional = try Type.optional(allocator, Type.recordType("Inner").inModule(7));
+    defer optional.deinit(allocator);
+    var action = try Type.functionType(allocator, &.{optional}, .{ .kind = .void });
+    defer action.deinit(allocator);
+    var selected = try Type.selectionOf(allocator, Type.objectClass("Item").inModule(3));
+    defer selected.deinit(allocator);
+    var record = core.RecordValue.init(try Type.recordType("Box").inModule(2).withArguments(allocator, &.{ action, selected }));
+    defer record.deinit(allocator);
+    try record.fields.append(allocator, .{ .name = "count", .value = .{ .number = 3 } });
+    var copy = try record.clone(allocator);
+    defer copy.deinit(allocator);
+    try testing.expect(Type.eql(record.ty, copy.ty));
+    try testing.expect(record.ty.arguments.ptr != copy.ty.arguments.ptr);
+    copy.ty.mutableArguments()[0].fn_params[0].optional_child.?.nominal_module_id = 8;
+    try testing.expect(!Type.eql(record.ty, copy.ty));
+    const encoded = try core.value_text.propertyString(allocator, .{ .record = record });
+    defer allocator.free(encoded);
+    var decoded = try core.value_text.typedPropertyValue(allocator, encoded, record.ty);
+    defer core.value_text.deinitParsedPropertyValue(allocator, &decoded);
+    try testing.expect(Type.eql(record.ty, decoded.record.ty));
+    try testing.expectEqualStrings("Inner", decoded.record.ty.arguments[0].fn_params[0].optional_child.?.class_name.?);
+    try testing.expectEqual(@as(?u32, 7), decoded.record.ty.arguments[0].fn_params[0].optional_child.?.nominal_module_id);
+    if (core.value_text.typedPropertyValue(allocator, encoded, copy.ty)) |value| {
+        var unexpected = value;
+        defer core.value_text.deinitParsedPropertyValue(allocator, &unexpected);
+        return error.TestExpectedError;
+    } else |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => try testing.expectEqual(error.InvalidValueTag, err),
+    }
+}
+
+test "core value text spec: record values preserve complete type arguments through cloning and serialization" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseAppliedRecordTypes, .{});
+}
+
+test "core value text spec: malformed serialized record types are rejected" {
+    for ([_][]const u8{
+        "{\"kind\":\"number\"}",
+        "{\"kind\":\"record\"}",
+        "{\"kind\":\"record\",\"name\":\"\"}",
+        "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"object\",\"name\":3}]}",
+        "{\"kind\":\"record\",\"name\":\"Box\",\"module\":-1}",
+        "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"optional\"}]}",
+        "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"function\",\"parameters\":[]}]}",
+        "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"parameter\"}]}",
+        "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"number\",\"arguments\":[]}]}",
+    }) |ty| {
+        const source = try std.fmt.allocPrint(testing.allocator, "{{\"kind\":\"record\",\"type\":{s},\"fields\":[]}}", .{ty});
+        defer testing.allocator.free(source);
+        try testing.expectError(error.InvalidValueTag, core.value_text.parsePropertyValue(testing.allocator, source));
+    }
 }

@@ -109,7 +109,7 @@ fn setRecordPathValue(state: *core.DocumentState, node_id: model.NodeId, root_ke
         return;
     }
 
-    var record = core.RecordValue.init(recordTypeName(root_key));
+    var record = core.RecordValue.init(ast.Type.recordType(recordTypeName(root_key)));
     defer record.deinit(state.allocator);
     try putRecordPathValue(state.allocator, &record, path, value);
     try state.setNodeFieldValue(node_id, root_key, .{ .record = record });
@@ -125,7 +125,7 @@ fn putRecordPathValue(allocator: std.mem.Allocator, record: *core.RecordValue, p
         return putRecordPathValue(allocator, &field.value.record, path[1..], value);
     }
 
-    var nested = core.RecordValue.init(recordTypeName(path[0]));
+    var nested = core.RecordValue.init(ast.Type.recordType(recordTypeName(path[0])));
     errdefer nested.deinit(allocator);
     try putRecordPathValue(allocator, &nested, path[1..], value);
     try record.fields.append(allocator, .{
