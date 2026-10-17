@@ -1,12 +1,12 @@
-type Align = left | center | right
+enum Align { left center right }
 
-type LayoutPolicy = left | right | top | top_flow | center | center_stack
+enum LayoutPolicy { left right top top_flow center center_stack }
 
-type SplitAxis = none | horizontal | vertical
+enum SplitAxis { none horizontal vertical }
 
-type WrapMode = on | off
+enum WrapMode { on off }
 
-type FitPolicy = warn | error | ignore
+enum FitPolicy { warn error ignore }
 
 type LayoutStyle = record {
   font_size: Number? = none

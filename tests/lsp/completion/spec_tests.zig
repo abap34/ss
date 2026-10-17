@@ -373,7 +373,7 @@ test "analysis completion: normal positions include builtin and source type name
     const request_source =
         \\import std:text as *
         \\
-        \\type SourceOnly = alpha | beta
+        \\enum SourceOnly { alpha beta }
         \\type SourceCard = object {
         \\}
         \\
@@ -734,7 +734,7 @@ fn checkNominalQueries(imports: []const u8) !void {
         \\type Base = object { object_a: Number = 1 }
         \\type Card = object { base = Base
         \\  roles = ["query-a"] }
-        \\type Mode = alpha
+        \\enum Mode { alpha }
         \\fn make() -> Card
         \\  return new("", "query-a", "text")
         \\end
@@ -748,7 +748,7 @@ fn checkNominalQueries(imports: []const u8) !void {
         \\type Base = object { object_b: String = "b" }
         \\type Card = object { base = Base
         \\  roles = ["query-b"] }
-        \\type Mode = beta
+        \\enum Mode { beta }
         \\fn make() -> Card
         \\  return new("", "query-b", "text")
         \\end
@@ -1255,6 +1255,25 @@ test "analysis queries: qualified calls bypass local names in hover and definiti
     try testing.expect(targets[0].module_spec != null or !std.mem.eql(u8, targets[0].path orelse "", case.path));
 }
 
+test "analysis queries: enum declarations support hover and lexical completion" {
+    var case = try CompletionCase.init(
+        \\enum Mode { light dark }
+        \\page main
+        \\  let mode = Mode.light
+        \\end
+    );
+    defer case.deinit();
+    const snapshot = try case.snapshotFor(case.source);
+    var clock = DeadlineClock{};
+    const req = query_types.SourceRequest{ .path = case.path, .source = case.source, .offset = offsetAfter(case.source, "= Mode") - 1 };
+    var hover = (try snapshot_api.hoverAt(case.allocator, snapshot, req, clock.options())) orelse return error.ExpectedHover;
+    defer hover.deinit(case.allocator);
+    try testing.expectEqualStrings("```ss\nenum Mode\n```", hover.markdown);
+    var completion = try snapshot_api.completeAt(case.allocator, snapshot, req, .{ .budget_ms = 0 });
+    defer completion.deinit(case.allocator);
+    try expectHas(completion, "Mode");
+}
+
 test "analysis queries: fields never fall back to unrelated value names" {
     var case = try CompletionCase.init(
         \\type Label = record {
@@ -1306,7 +1325,7 @@ test "analysis queries: let initializer resolves outside its own binding" {
 
 test "analysis queries: constant record receivers precede enum names" {
     var case = try CompletionCase.init(
-        \\type Mode = alpha | beta
+        \\enum Mode { alpha beta }
         \\type Settings = record {
         \\  size: Number = 17
         \\}

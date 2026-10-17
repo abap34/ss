@@ -6,7 +6,7 @@ const testing = std.testing;
 const implementation =
     \\const suffix: String = "original"
     \\type Item = record { value: String = "original" }
-    \\type Choice = first | second
+    \\enum Choice { first second }
     \\type Card = object { roles = ["exported-card"] }
     \\fn default_item() -> Item
     \\  return Item { value = suffix }

@@ -88,7 +88,7 @@ end
 import std:prelude as { text, text!, place!, }
 type Empty = record {}
 type Style = record { size: Number = 20; color: Color = c"black" }
-type Align = left | center | right
+enum Align { left center right }
 type Card = object {
   base = Object
   roles = ["card",]

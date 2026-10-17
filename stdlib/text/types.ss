@@ -3,20 +3,20 @@ import std:graphics/paint/types
 import std:layout/types
 import std:math/types
 
-type SemanticRole = auto | paragraph | heading | code | figure | caption
+enum SemanticRole { auto paragraph heading code figure caption }
 
 type SemanticStyle = record {
   role: SemanticRole = SemanticRole.auto
   heading_level: Number? = none
 }
 
-type RenderKind = text | code | latex | vector_asset | raster_asset | vector_path | connector | chrome_only
+enum RenderKind { text code latex vector_asset raster_asset vector_path connector chrome_only }
 
-type TextParseMode = none | plain | inline | block
+enum TextParseMode { none plain inline block }
 
-type FontStyle = normal | oblique | italic
+enum FontStyle { normal oblique italic }
 
-type FontStretch = ultra_condensed | extra_condensed | condensed | semi_condensed | normal | semi_expanded | expanded | extra_expanded | ultra_expanded
+enum FontStretch { ultra_condensed extra_condensed condensed semi_condensed normal semi_expanded expanded extra_expanded ultra_expanded }
 
 type FontFace = record {
   family: String = "Helvetica"

@@ -43,9 +43,8 @@ fn resolveHover(allocator: std.mem.Allocator, snapshot: anytype, req: types.Sour
         inline for (.{ core.DefinitionKind.constant, core.DefinitionKind.function }) |kind| {
             if (resolve_query.exportedValueBinding(budget, snapshot, selected.module_id, selected.name, kind)) |binding| return try bindingHover(allocator, binding, budget);
         }
-        if (resolve_query.exportedTypeDefinition(budget, snapshot, selected.module_id, selected.name) != null) return .{
-            .markdown = try std.fmt.allocPrint(allocator, "```ss\ntype {s}\n```", .{selected.name}),
-        };
+        if (resolve_query.exportedTypeDefinition(budget, snapshot, selected.module_id, selected.name)) |definition|
+            return try typeHover(allocator, definition, selected.name);
         return null;
     }
 
@@ -68,12 +67,14 @@ fn resolveHover(allocator: std.mem.Allocator, snapshot: anytype, req: types.Sour
         }
     } else if (!context.targetKindIs(.enum_name)) return null;
     if (resolve_query.typeDefinition(budget, snapshot, module.id, context.target, context.qualifiedCallableAlias())) |type_definition| {
-        _ = type_definition;
-        return .{
-            .markdown = try std.fmt.allocPrint(allocator, "```ss\ntype {s}\n```", .{context.target}),
-        };
+        return try typeHover(allocator, type_definition, context.target);
     }
     return null;
+}
+
+fn typeHover(allocator: std.mem.Allocator, definition: resolve_query.TypeDefinition, name: []const u8) !types.HoverInfo {
+    const keyword: []const u8 = if (definition.kind == .enum_type) "enum" else "type";
+    return .{ .markdown = try std.fmt.allocPrint(allocator, "```ss\n{s} {s}\n```", .{ keyword, name }) };
 }
 
 fn bindingHover(allocator: std.mem.Allocator, binding: resolve_query.ValueBinding, budget: types.QueryBudget) !types.HoverInfo {

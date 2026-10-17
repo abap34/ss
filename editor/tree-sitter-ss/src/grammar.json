@@ -67,6 +67,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "enum_declaration"
+        },
+        {
+          "type": "SYMBOL",
           "name": "object_extension"
         },
         {
@@ -562,35 +566,42 @@
             {
               "type": "SYMBOL",
               "name": "record_type"
-            },
-            {
-              "type": "SYMBOL",
-              "name": "enum_type"
             }
           ]
         }
       ]
     },
-    "enum_type": {
+    "enum_declaration": {
       "type": "SEQ",
       "members": [
         {
+          "type": "STRING",
+          "value": "enum"
+        },
+        {
           "type": "FIELD",
-          "name": "case",
+          "name": "name",
           "content": {
             "type": "SYMBOL",
-            "name": "identifier"
+            "name": "type_identifier"
           }
+        },
+        {
+          "type": "STRING",
+          "value": "{"
         },
         {
           "type": "REPEAT",
           "content": {
+            "type": "SYMBOL",
+            "name": "_terminator"
+          }
+        },
+        {
+          "type": "REPEAT1",
+          "content": {
             "type": "SEQ",
             "members": [
-              {
-                "type": "STRING",
-                "value": "|"
-              },
               {
                 "type": "FIELD",
                 "name": "case",
@@ -598,13 +609,20 @@
                   "type": "SYMBOL",
                   "name": "identifier"
                 }
+              },
+              {
+                "type": "REPEAT",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_terminator"
+                }
               }
             ]
           }
         },
         {
-          "type": "SYMBOL",
-          "name": "_terminator"
+          "type": "STRING",
+          "value": "}"
         }
       ]
     },

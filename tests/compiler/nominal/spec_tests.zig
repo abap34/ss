@@ -121,13 +121,13 @@ test "nominal records: identical shapes from different modules are not assignabl
 
 test "nominal enums: qualified cases and function contracts retain the defining module" {
     const first =
-        \\type Mode = first
+        \\enum Mode { first }
         \\fn accept(value: Mode) -> String
         \\  return "first"
         \\end
     ;
     const second =
-        \\type Mode = second
+        \\enum Mode { second }
         \\fn accept(value: Mode) -> String
         \\  return "second"
         \\end
@@ -158,7 +158,7 @@ test "nominal enums: invalid record syntax keeps its qualified declaration" {
         \\page main
         \\  let invalid = a::Mode {}
         \\end
-    , "type Mode = first", "", "InvalidRecordLiteral:");
+    , "enum Mode { first }", "", "InvalidRecordLiteral:");
 }
 
 test "nominal records: object defaults and nested writes preserve record ownership" {

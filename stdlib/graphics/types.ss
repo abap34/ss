@@ -1,20 +1,20 @@
-type LineCap = butt | round | square
+enum LineCap { butt round square }
 
-type LineJoin = miter | round | bevel
+enum LineJoin { miter round bevel }
 
-type FillRule = nonzero | even_odd
+enum FillRule { nonzero even_odd }
 
-type PaintSpace = local | page
+enum PaintSpace { local page }
 
-type GradientSpread = pad | repeat | reflect
+enum GradientSpread { pad repeat reflect }
 
-type FillKind = none | solid | linear | radial
+enum FillKind { none solid linear radial }
 
-type ConnectorAnchor = center | left | right | top | bottom
+enum ConnectorAnchor { center left right top bottom }
 
-type ConnectorRoute = straight | horizontal_then_vertical | vertical_then_horizontal | curve
+enum ConnectorRoute { straight horizontal_then_vertical vertical_then_horizontal curve }
 
-type PathVerb = move | line | quadratic | cubic | arc | close
+enum PathVerb { move line quadratic cubic arc close }
 
 type PathCommand = record {
   verb: PathVerb

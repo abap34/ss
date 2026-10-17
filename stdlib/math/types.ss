@@ -1,7 +1,7 @@
 import std:layout/types
-type MathFit = none | shrink
+enum MathFit { none shrink }
 
-type LatexEngine = pdflatex | lualatex
+enum LatexEngine { pdflatex lualatex }
 
 type LatexStyle = record {
   scale: Number = 1
