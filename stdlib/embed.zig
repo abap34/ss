@@ -37,6 +37,7 @@ pub const modules = [_]Module{
     .{ .spec = "std:query", .path = "stdlib/query.ss", .source = @embedFile("query.ss") },
     .{ .spec = "std:templates/slide/style", .path = "stdlib/templates/slide/style.ss", .source = @embedFile("templates/slide/style.ss") },
     .{ .spec = "std:templates/slide", .path = "stdlib/templates/slide.ss", .source = @embedFile("templates/slide.ss") },
+    .{ .spec = "std:text/content", .path = "stdlib/text/content.ss", .source = @embedFile("text/content.ss") },
     .{ .spec = "std:text/style", .path = "stdlib/text/style.ss", .source = @embedFile("text/style.ss") },
     .{ .spec = "std:text/types", .path = "stdlib/text/types.ss", .source = @embedFile("text/types.ss") },
     .{ .spec = "std:text", .path = "stdlib/text.ss", .source = @embedFile("text.ss") },

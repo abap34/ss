@@ -343,6 +343,13 @@ pub fn resolvePageBackground(state: anytype, page: *const Node) ?Color {
 }
 
 pub fn resolveKind(state: anytype, node: *const Node) RenderKind {
+    if (node.placement) |placement| switch (placement.display) {
+        .expanded => return .chrome_only,
+        .native => |kind| return switch (kind) {
+            .text => .text,
+        },
+        .pending, .running => {},
+    };
     if (parseRenderKindProperty(state, node)) |kind| return kind;
     return .text;
 }

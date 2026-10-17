@@ -5,6 +5,7 @@ pub const contracts = @import("analysis/contracts.zig");
 pub const resource_index = @import("analysis/resource_index.zig");
 pub const dependencies = @import("analysis/dependencies.zig");
 pub const diagnostics = @import("analysis/diagnostics.zig");
+pub const display = @import("analysis/display.zig");
 pub const hole_facts = @import("analysis/hole_facts.zig");
 pub const infer = @import("analysis/infer.zig");
 pub const index = @import("analysis/index.zig");

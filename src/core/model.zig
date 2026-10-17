@@ -408,6 +408,8 @@ pub const CompositionOrder = struct {
     }
 };
 
+pub const NativeDisplayKind = enum { text };
+
 /// Input storage follows Value ownership: recursive storage is owned, while
 /// strings, names and function identities borrow the document's runtime inputs.
 /// Parent and page are fixed when the placement is registered, before display.
@@ -418,6 +420,7 @@ pub const Placement = struct {
     display: union(enum) {
         pending,
         running,
+        native: NativeDisplayKind,
         expanded: struct {
             target: FunctionKey,
             child: NodeId,
@@ -879,6 +882,11 @@ pub fn roleEq(role: ?Role, expected: []const u8) bool {
 }
 
 pub fn nodeField(node: *const Node, key: []const u8) ?Value {
+    if (node.placement) |placement| {
+        if (placement.display == .native) return switch (placement.display.native) {
+            .text => if (std.mem.eql(u8, key, "text")) placement.value.record.field("style") else null,
+        };
+    }
     for (node.fields.items) |field| {
         if (std.mem.eql(u8, field.key, key)) return field.value;
     }
@@ -886,6 +894,11 @@ pub fn nodeField(node: *const Node, key: []const u8) ?Value {
 }
 
 pub fn nodeDisplayContent(node: *const Node) []const u8 {
+    if (node.placement) |placement| {
+        if (placement.display == .native) return switch (placement.display.native) {
+            .text => placement.value.record.field("content").?.string,
+        };
+    }
     if (node.display_content) |content| return content;
     return node.content orelse "";
 }
