@@ -33,6 +33,8 @@ pub const SemanticEnv = struct {
     declarations: ?*const declarations.DeclarationIndex,
     functions: *const core.FunctionMap,
     module_id: core.SourceModuleId = 0,
+    type_parameters: []const ast.TypeParameter = &.{},
+    type_parameter_declaration_start: usize = 0,
 
     pub fn init(
         state: ?*const core.DocumentState,
@@ -49,6 +51,14 @@ pub const SemanticEnv = struct {
     pub fn forModule(self: *const SemanticEnv, module_id: core.SourceModuleId) SemanticEnv {
         var next = self.*;
         next.module_id = module_id;
+        next.type_parameters = &.{};
+        return next;
+    }
+
+    pub fn forTypeParameters(self: *const SemanticEnv, module_id: core.SourceModuleId, parameters: []const ast.TypeParameter, declaration_start: usize) SemanticEnv {
+        var next = self.forModule(module_id);
+        next.type_parameters = parameters;
+        next.type_parameter_declaration_start = declaration_start;
         return next;
     }
 
@@ -208,6 +218,13 @@ pub const SemanticEnv = struct {
     }
 
     pub fn resolveTypeNameInContext(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
+        if (module_id == self.module_id) for (self.type_parameters, 0..) |parameter, index| {
+            if (std.mem.eql(u8, parameter.name, name)) return ast.Type.parameter(.{
+                .module_id = module_id,
+                .declaration_start = self.type_parameter_declaration_start,
+                .index = @intCast(index),
+            }, parameter.name, parameter.span);
+        };
         return switch (type_resolution.resolveText(void, TypeResolver{ .env = self }, module_id, name)) {
             .found => |binding| binding.ty,
             else => null,

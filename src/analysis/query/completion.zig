@@ -265,6 +265,18 @@ fn appendTypeNameCompletions(builder: *CandidateBuilder, snapshot: anytype, prog
         try builder.checkBudget();
         try builder.add(.{ .label = builtin.name, .kind = .type_decl, .detail = "builtin type" });
     }
+    if (program) |parsed| {
+        inline for (.{ parsed.records.items, parsed.functions.items }) |declarations| {
+            for (declarations) |declaration| {
+                try builder.checkBudget();
+                if (req.offset < declaration.span.start or req.offset > declaration.span.end) continue;
+                for (declaration.type_params.items) |parameter| {
+                    const label = spanText(req.source, parameter.span) orelse continue;
+                    try builder.add(.{ .label = label, .kind = .type_decl, .detail = "type parameter" });
+                }
+            }
+        }
+    }
     try appendParsedTypeNameCompletions(builder, program, req.source);
     try appendVisibleDeclarations(builder, snapshot, req.path, .type);
 }

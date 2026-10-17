@@ -264,13 +264,51 @@ pub const ObjectDecl = struct {
     }
 };
 
+pub const TypeParameter = struct {
+    name: []const u8,
+    span: Span,
+
+    pub fn deinit(self: *TypeParameter, allocator: Allocator) void {
+        allocator.free(self.name);
+    }
+
+    pub fn clone(self: TypeParameter, allocator: Allocator) !TypeParameter {
+        return .{ .name = try allocator.dupe(u8, self.name), .span = self.span };
+    }
+};
+
+fn cloneTypeParameters(allocator: Allocator, parameters: []const TypeParameter) !std.ArrayList(TypeParameter) {
+    var result = std.ArrayList(TypeParameter).empty;
+    errdefer {
+        for (result.items) |*parameter| parameter.deinit(allocator);
+        result.deinit(allocator);
+    }
+    try result.ensureTotalCapacity(allocator, parameters.len);
+    for (parameters) |parameter| result.appendAssumeCapacity(try parameter.clone(allocator));
+    return result;
+}
+
+fn cloneTypeArguments(allocator: Allocator, arguments: []const Type) !std.ArrayList(Type) {
+    var result = std.ArrayList(Type).empty;
+    errdefer {
+        for (result.items) |*argument| argument.deinit(allocator);
+        result.deinit(allocator);
+    }
+    try result.ensureTotalCapacity(allocator, arguments.len);
+    for (arguments) |argument| result.appendAssumeCapacity(try argument.clone(allocator));
+    return result;
+}
+
 pub const RecordDecl = struct {
+    type_params: std.ArrayList(TypeParameter) = .empty,
     name: []const u8,
     name_span: ?Span = null,
     fields: std.ArrayList(ObjectFieldDecl),
     span: Span,
 
     pub fn deinit(self: *RecordDecl, allocator: Allocator) void {
+        for (self.type_params.items) |*parameter| parameter.deinit(allocator);
+        self.type_params.deinit(allocator);
         allocator.free(self.name);
         for (self.fields.items) |*field| field.deinit(allocator);
         self.fields.deinit(allocator);
@@ -284,6 +322,7 @@ pub const RecordDecl = struct {
             .span = self.span,
         };
         errdefer result.deinit(allocator);
+        result.type_params = try cloneTypeParameters(allocator, self.type_params.items);
         try result.fields.ensureTotalCapacity(allocator, self.fields.items.len);
         for (self.fields.items) |value| result.fields.appendAssumeCapacity(try value.clone(allocator));
         return result;
@@ -394,6 +433,7 @@ pub const ConstDecl = struct {
 };
 
 pub const FunctionDecl = struct {
+    type_params: std.ArrayList(TypeParameter) = .empty,
     name: []const u8,
     name_span: ?Span = null,
     span: Span,
@@ -402,6 +442,8 @@ pub const FunctionDecl = struct {
     statements: std.ArrayList(Statement),
 
     pub fn deinit(self: *FunctionDecl, allocator: Allocator) void {
+        for (self.type_params.items) |*parameter| parameter.deinit(allocator);
+        self.type_params.deinit(allocator);
         allocator.free(self.name);
         for (self.params.items) |*param| param.deinit(allocator);
         self.params.deinit(allocator);
@@ -425,7 +467,9 @@ pub const FunctionDecl = struct {
             params.appendAssumeCapacity(try param.clone(allocator));
         }
 
+        const type_params = try cloneTypeParameters(allocator, self.type_params.items);
         return .{
+            .type_params = type_params,
             .name = copied_name,
             .name_span = self.name_span,
             .span = span,
@@ -436,32 +480,11 @@ pub const FunctionDecl = struct {
     }
 
     pub fn clone(self: FunctionDecl, allocator: Allocator) anyerror!FunctionDecl {
-        const name = try allocator.dupe(u8, self.name);
-        errdefer allocator.free(name);
-        var result_type = try self.result_type.clone(allocator);
-        errdefer result_type.deinit(allocator);
-        var params = std.ArrayList(ParamDecl).empty;
-        errdefer {
-            for (params.items) |*param| param.deinit(allocator);
-            params.deinit(allocator);
-        }
-        try params.ensureTotalCapacity(allocator, self.params.items.len);
-        for (self.params.items) |value| params.appendAssumeCapacity(try value.clone(allocator));
-        var statements = std.ArrayList(Statement).empty;
-        errdefer {
-            for (statements.items) |*statement| statement.deinit(allocator);
-            statements.deinit(allocator);
-        }
-        try statements.ensureTotalCapacity(allocator, self.statements.items.len);
-        for (self.statements.items) |value| statements.appendAssumeCapacity(try value.clone(allocator));
-        return .{
-            .name = name,
-            .name_span = self.name_span,
-            .span = self.span,
-            .params = params,
-            .result_type = result_type,
-            .statements = statements,
-        };
+        var result = try self.cloneSignature(allocator, self.name, self.span);
+        errdefer result.deinit(allocator);
+        try result.statements.ensureTotalCapacity(allocator, self.statements.items.len);
+        for (self.statements.items) |statement| result.statements.appendAssumeCapacity(try statement.clone(allocator));
+        return result;
     }
 };
 
@@ -556,11 +579,14 @@ pub const CallableName = struct {
 };
 
 pub const CallExpr = struct {
+    type_args: std.ArrayList(Type) = .empty,
     callee: CallableName,
     args: std.ArrayList(Expr),
     arg_spans: std.ArrayList(Span) = .empty,
 
     pub fn deinit(self: *CallExpr, allocator: Allocator) void {
+        for (self.type_args.items) |*argument| argument.deinit(allocator);
+        self.type_args.deinit(allocator);
         self.callee.deinit(allocator);
         for (self.args.items) |*arg| arg.deinit(allocator);
         self.args.deinit(allocator);
@@ -580,7 +606,13 @@ pub const CallExpr = struct {
         var arg_spans = std.ArrayList(Span).empty;
         errdefer arg_spans.deinit(allocator);
         try arg_spans.appendSlice(allocator, self.arg_spans.items);
+        var type_args = try cloneTypeArguments(allocator, self.type_args.items);
+        errdefer {
+            for (type_args.items) |*argument| argument.deinit(allocator);
+            type_args.deinit(allocator);
+        }
         return .{
+            .type_args = type_args,
             .callee = callee,
             .args = args,
             .arg_spans = arg_spans,
@@ -710,12 +742,15 @@ pub const RecordFieldExpr = struct {
 };
 
 pub const RecordExpr = struct {
+    type_args: std.ArrayList(Type) = .empty,
     module_id: ?u32 = null,
     type_name: []const u8,
     type_name_span: ?Span = null,
     fields: std.ArrayList(RecordFieldExpr),
 
     pub fn deinit(self: *RecordExpr, allocator: Allocator) void {
+        for (self.type_args.items) |*argument| argument.deinit(allocator);
+        self.type_args.deinit(allocator);
         allocator.free(self.type_name);
         for (self.fields.items) |*field| field.deinit(allocator);
         self.fields.deinit(allocator);
@@ -729,7 +764,13 @@ pub const RecordExpr = struct {
         }
         try fields.ensureTotalCapacity(allocator, self.fields.items.len);
         for (self.fields.items) |field| fields.appendAssumeCapacity(try field.clone(allocator));
+        var type_args = try cloneTypeArguments(allocator, self.type_args.items);
+        errdefer {
+            for (type_args.items) |*argument| argument.deinit(allocator);
+            type_args.deinit(allocator);
+        }
         return .{
+            .type_args = type_args,
             .type_name = try allocator.dupe(u8, self.type_name),
             .type_name_span = self.type_name_span,
             .module_id = self.module_id,

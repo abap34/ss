@@ -69,9 +69,12 @@ fn appendResolvedTarget(
     if (context.isQualifiedCallableQualifier()) return false;
     if (context.importSpecAtOffset()) return false;
     const module = snapshot.moduleForPath(req.path) orelse return false;
+    if (context.typeParameter()) |parameter| {
+        return appendTargetFromSpan(allocator, out, snapshot, module.id, parameter.span, req.path);
+    }
     if (try appendStructuredTarget(allocator, out, snapshot, module.id, context, req.path)) return true;
     if (context.expired()) return true;
-    if (!context.isValueName() and !context.targetKindIs(.enum_name)) return true;
+    if (!context.isValueName() and !context.targetKindIs(.enum_name) and !context.targetKindIs(.type_name)) return true;
     const qualifier = context.qualifiedCallableAlias();
     if (context.isValueName()) {
         var callee = ast.CallableName.bare(context.target);

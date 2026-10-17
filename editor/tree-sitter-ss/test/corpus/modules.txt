@@ -57,11 +57,12 @@ end
         (identifier)
         (type
           (primary_type
-            (type
-              (primary_type
-                (qualified_type_identifier
-                  (identifier)
-                  (type_identifier))))))))
+            (type_arguments
+              (type
+                (primary_type
+                  (qualified_type_identifier
+                    (identifier)
+                    (type_identifier)))))))))
     (type
       (primary_type
         (qualified_type_identifier

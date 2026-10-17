@@ -222,6 +222,7 @@ fn inferRecordInfo(
         try addUserReportAtSpan(state, origin, record.type_name_span, "UnknownType", "unknown type: {s}", .{record.type_name});
         return error.InvalidType;
     };
+    try semantic_types.ensureTypeArgumentCount(state, record_decl.decl.type_params.items.len, record.type_args.items.len, origin);
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     for (record.fields.items) |field_expr| {
@@ -525,6 +526,14 @@ fn inferCallInfo(
 ) anyerror!TypeInfo {
     if (call.callee.name_hole) |hole_id| return infoFromHole(hole_id);
     const binding = try options.context.name_resolution.resolveValue(sema, TypeInfo, call.callee, env.get(call.callee.name));
+    if (call.type_args.items.len != 0) {
+        const expected_count = switch (binding) {
+            .function => |resolved| resolved.decl.type_params.items.len,
+            .unknown => call.type_args.items.len,
+            else => 0,
+        };
+        try semantic_types.ensureTypeArgumentCount(state, expected_count, call.type_args.items.len, origin);
+    }
     return switch (binding) {
         .local => |callee_info| blk: {
             if (callee_info.failed) return error.AlreadyDiagnosed;
@@ -796,6 +805,7 @@ fn returnTypeNeedsInferredFacts(ty: Type) bool {
         .constraints,
         .record,
         .path,
+        .parameter,
         .void,
         => false,
     };

@@ -120,7 +120,7 @@
             "1": { "name": "keyword.control.ss" },
             "2": { "name": "entity.name.type.ss" }
           },
-          "match": "\\b(enum|type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\{)"
+          "match": "\\b(enum|type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=[<{])"
         },
         {
           "captures": {
