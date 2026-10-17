@@ -34,6 +34,7 @@ pub const SemanticEnv = struct {
     functions: *const core.FunctionMap,
     module_id: core.SourceModuleId = 0,
     type_parameters: []const ast.TypeParameter = &.{},
+    record_source_facts: bool = true,
     type_parameter_declaration_start: usize = 0,
 
     pub fn init(
@@ -90,7 +91,14 @@ pub const SemanticEnv = struct {
         };
     }
 
+    pub fn instantiatedFunction(self: *const SemanticEnv, callee: ast.CallableName) ?ResolvedFunction {
+        const state = self.state orelse return null;
+        const key = state.instantiations.call_targets.get(callee.call_id orelse return null) orelse return null;
+        return .{ .key = key, .module_id = key.module_id, .decl = self.functions.get(key) orelse return null };
+    }
+
     pub fn resolveFunction(self: *const SemanticEnv, callee: ast.CallableName) FunctionResolution {
+        if (self.instantiatedFunction(callee)) |resolved| return .{ .found = resolved };
         if (callee.name_hole != null) return .unknown;
         return name_resolution.resolve(ResolvedFunction, FunctionResolver{ .env = self }, self.module_id, .{
             .qualifier = callee.qualifier,

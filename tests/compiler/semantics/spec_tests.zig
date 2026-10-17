@@ -8340,3 +8340,136 @@ test "compiler semantics: void results reject type arguments" {
     try expectDiagnostic("fn run() -> Void<Number>\nend\n", "case.ss:bytes:", "InvalidTypeArity");
     try expectDiagnostic("fn run(action: () -> Void<Number>) -> Void\nend\n", "case.ss:bytes:", "InvalidTypeArity");
 }
+
+test "compiler semantics: generic functions specialize explicit and inferred calls" {
+    try expectDumpContains(
+        \\fn identity<T>(value: T) -> T = value
+        \\fn forward<T>(value: T) -> T = identity<T>(value)
+        \\page main
+        \\  let number: Number = forward<Number>(7)
+        \\  let title: String = forward("Generic")
+        \\  let inferred: Number = identity(number)
+        \\  text!(title)
+        \\end
+    , &.{"\"content\":\"Generic\""});
+}
+
+test "compiler semantics: generic bodies are checked for each concrete argument" {
+    try expectDiagnostic(
+        \\fn increment<T>(value: T) -> T = value + 1
+        \\page main
+        \\  let valid = increment(1)
+        \\  let invalid = increment("Text")
+        \\end
+    , "case.ss:bytes:", "InvalidInstantiation");
+    try expectDiagnostic(
+        \\fn first<T>(left: T, right: T) -> T = left
+        \\page main
+        \\  let invalid = first(1, "Text")
+        \\end
+    , "case.ss:bytes:", "ConflictingTypeArguments");
+    try expectDiagnostic(
+        \\fn unused<T>() -> Number = 1
+        \\page main
+        \\  let invalid = unused()
+        \\end
+    , "case.ss:bytes:", "CannotInferTypeArgument");
+}
+
+test "compiler semantics: generic defaults and closures retain concrete bindings" {
+    try buildSource(
+        \\fn identity<T>(value: T) -> T = value
+        \\fn repeat<T>(value: T, copy: T = identity<T>(value)) -> T = copy
+        \\fn closure<T>(value: T) -> () -> T = () |-> identity<T>(value)
+        \\fn apply<T>(action: (T) -> T, value: T) -> T = action(value)
+        \\page main
+        \\  let number: Number = repeat(4)
+        \\  let title: String = repeat("Default")
+        \\  let first = closure(3)
+        \\  let second = closure("Closure")
+        \\  let n: Number = first()
+        \\  let s: String = second()
+        \\  let result: Number = apply((x: Number) |-> x + 1, 2)
+        \\  text!(s)
+        \\end
+    );
+}
+
+test "compiler semantics: generic imports retain definition module and nominal arguments" {
+    try buildSourceWithOverlay(
+        \\import "lib/types" as lib
+        \\type Item { value: String }
+        \\page main
+        \\  let local: Item = lib::identity(Item { value = "Local" })
+        \\  let imported: lib::Item = lib::identity(lib::Item { value = 4 })
+        \\  let title: String = lib::label("Caller")
+        \\  text!(title)
+        \\end
+    ,
+        \\type Item { value: Number }
+        \\fn identity<T>(value: T) -> T = value
+        \\fn private_label(value: String) -> String = value
+        \\fn label<T>(value: T) -> String = private_label("Library")
+    );
+}
+
+test "compiler semantics: generic calls reject mismatches and polymorphic values" {
+    try expectDiagnostic(
+        \\fn identity<T>(value: T) -> T = value
+        \\page main
+        \\  let invalid = identity<Number>("Text")
+        \\end
+    , "case.ss:bytes:", "TypeMismatch");
+    try expectDiagnostic(
+        \\fn identity<T>(value: T) -> T = value
+        \\page main
+        \\  let invalid = identity
+        \\end
+    , "case.ss:bytes:", "UninstantiatedFunction");
+}
+
+test "compiler semantics: generic concrete bodies preserve deferred property reads" {
+    try expectDumpContains(
+        \\fn read<T>(value: T) -> String = value.link_id ?? "missing"
+        \\page main
+        \\  let input = text!("Input")
+        \\  let output = text!(read(input))
+        \\  input.link_id = "Forward"
+        \\end
+    , &.{"\"content\":\"Forward\""});
+}
+
+test "compiler semantics: changing type arguments cannot conceal recursion" {
+    try expectDiagnostic(
+        \\fn grow<T>() -> Number = grow<T?>()
+        \\page main
+        \\  let invalid = grow<Number>()
+        \\end
+    , "case.ss:bytes:", "RecursiveFunction");
+}
+
+test "compiler semantics: generic operator results are checked after substitution" {
+    try expectDiagnostic(
+        \\fn same<T>(left: T, right: T) -> Bool = left == right
+        \\page main
+        \\  let valid = same(1, 2)
+        \\  let a = text!("A")
+        \\  let b = text!("B")
+        \\  let invalid = same(a.left, b.left)
+        \\end
+    , "case.ss:bytes:", "InvalidInstantiation");
+}
+
+test "compiler semantics: generic optional values and generated placing calls" {
+    try buildSource(
+        \\fn unwrap<T>(value: T?, fallback: T) -> T = value ?? fallback
+        \\fn/! wrapped<T>(value: T) -> T = value
+        \\page main
+        \\  let missing: Number? = none
+        \\  let n: Number = unwrap(missing, 2)
+        \\  let s: String = unwrap<String>(none, "Fallback")
+        \\  let first = wrapped!<Body>(text(s))
+        \\  let second = wrapped!(text("Created"))
+        \\end
+    );
+}

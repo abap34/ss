@@ -12,6 +12,30 @@ pub const SourceSpan = @import("source_origin.zig").Span;
 pub const Allocator = std.mem.Allocator;
 pub const NodeId = u32;
 
+pub const FunctionKey = struct {
+    module_id: u32,
+    name: []const u8,
+    instance_id: ?u32 = null,
+
+    pub fn eql(left: FunctionKey, right: FunctionKey) bool {
+        return left.module_id == right.module_id and left.instance_id == right.instance_id and std.mem.eql(u8, left.name, right.name);
+    }
+};
+
+pub const FunctionKeyContext = struct {
+    pub fn hash(_: FunctionKeyContext, key: FunctionKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(std.mem.asBytes(&key.module_id));
+        hasher.update(key.name);
+        std.hash.autoHash(&hasher, key.instance_id);
+        return hasher.final();
+    }
+
+    pub fn eql(_: FunctionKeyContext, left: FunctionKey, right: FunctionKey) bool {
+        return left.eql(right);
+    }
+};
+
 pub const NominalId = struct {
     module_id: u32,
     name: []const u8,

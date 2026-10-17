@@ -1254,3 +1254,36 @@ test "document state spec: composition order preserves page indices and explicit
     try testing.expectEqualSlices(core.NodeId, &.{ group, b, a, c }, state.childrenOf(first_page).?);
     try testing.expectEqualSlices(core.NodeId, &.{ b, a }, state.childrenOf(group).?);
 }
+
+fn exerciseFunctionInstanceStore(allocator: std.mem.Allocator) !void {
+    var store = core.function_instances.Store.init(allocator);
+    defer store.deinit();
+    var optional = try ast.Type.optional(allocator, ast.Type.number);
+    defer optional.deinit(allocator);
+    const arguments = [_]ast.Type{optional};
+    const key = core.function_instances.Key{ .definition = core.functionKey(7, "identity"), .arguments = &arguments };
+    var declaration = ast.FunctionDecl{
+        .name = try allocator.dupe(u8, "identity"),
+        .span = .{ .start = 0, .end = 1 },
+        .params = .empty,
+        .result_type = ast.Type.number,
+        .statements = .empty,
+    };
+    var owned = true;
+    defer if (owned) declaration.deinit(allocator);
+    const instance = try store.add(key, declaration);
+    owned = false;
+    try testing.expect(store.find(key).? == instance);
+    try testing.expect(store.isChecking(key.definition));
+    instance.status = .checked;
+    try testing.expect(!store.isChecking(key.definition));
+    const other_arguments = [_]ast.Type{ast.Type.string};
+    try testing.expect(store.find(.{ .definition = key.definition, .arguments = &other_arguments }) == null);
+    try testing.expect(store.find(.{ .definition = core.functionKey(8, "identity"), .arguments = &arguments }) == null);
+    try store.call_targets.put(3, .{ .module_id = 7, .name = instance.declaration.name, .instance_id = instance.declaration.instance_id });
+    try testing.expectEqual(@as(?u32, 0), store.call_targets.get(3).?.instance_id);
+}
+
+test "document state spec: concrete function instances own declarations and type arguments" {
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseFunctionInstanceStore, .{});
+}

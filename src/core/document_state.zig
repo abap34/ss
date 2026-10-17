@@ -80,27 +80,8 @@ const DefaultValueCache = struct {
     }
 };
 
-pub const FunctionKey = struct {
-    module_id: SourceModuleId,
-    name: []const u8,
-
-    pub fn eql(left: FunctionKey, right: FunctionKey) bool {
-        return left.module_id == right.module_id and std.mem.eql(u8, left.name, right.name);
-    }
-};
-
-pub const FunctionKeyContext = struct {
-    pub fn hash(_: FunctionKeyContext, key: FunctionKey) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(std.mem.asBytes(&key.module_id));
-        hasher.update(key.name);
-        return hasher.final();
-    }
-
-    pub fn eql(_: FunctionKeyContext, left: FunctionKey, right: FunctionKey) bool {
-        return left.eql(right);
-    }
-};
+pub const FunctionKey = model.FunctionKey;
+pub const FunctionKeyContext = model.FunctionKeyContext;
 
 pub const FunctionMap = std.HashMap(FunctionKey, ast.FunctionDecl, FunctionKeyContext, std.hash_map.default_max_load_percentage);
 pub const ConstMap = std.HashMap(FunctionKey, ast.ConstDecl, FunctionKeyContext, std.hash_map.default_max_load_percentage);
@@ -328,6 +309,7 @@ pub const DocumentState = struct {
     declaration_index: *declarations.DeclarationIndex,
     constants: DocumentConstants,
     functions: FunctionMap,
+    instantiations: @import("function_instances.zig").Store,
     graph: DocumentGraph,
     constraints: DocumentConstraints,
     source_map: DocumentSourceMap,
@@ -361,6 +343,7 @@ pub const DocumentState = struct {
             .declaration_index = declaration_index,
             .constants = .init(allocator),
             .functions = FunctionMap.init(allocator),
+            .instantiations = .init(allocator),
             .graph = .init(allocator),
             .constraints = .{},
             .source_map = .init(allocator),
@@ -442,6 +425,7 @@ pub const DocumentState = struct {
     fn deinitWithInputOwnership(self: *DocumentState, inputs: InputOwnership) void {
         self.declaration_index.deinit();
         self.allocator.destroy(self.declaration_index);
+        self.instantiations.deinit();
         switch (inputs) {
             .borrowed => {
                 self.modules.entries.deinit(self.allocator);

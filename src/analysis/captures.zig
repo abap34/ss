@@ -23,17 +23,19 @@ pub const Index = struct {
 
     pub fn collectModule(self: *Index, module: ast.Module) !void {
         for (module.constants.items) |constant| try self.expr(constant.value, null);
-        for (module.functions.items) |function| {
-            for (function.params.items) |param| {
-                if (param.default_value) |value| try self.expr(value.*, null);
-            }
-            try self.statements(function.statements.items);
-        }
+        for (module.functions.items) |function| try self.collectFunction(function);
         for (module.records.items) |record| try self.fields(record.fields.items);
         for (module.objects.items) |object| try self.fields(object.fields.items);
         for (module.object_extensions.items) |extension| try self.fields(extension.fields.items);
         try self.statements(module.document_statements.items);
         for (module.pages.items) |page| try self.statements(page.statements.items);
+    }
+
+    pub fn collectFunction(self: *Index, function: ast.FunctionDecl) !void {
+        for (function.params.items) |param| {
+            if (param.default_value) |value| try self.expr(value.*, null);
+        }
+        try self.statements(function.statements.items);
     }
 
     fn fields(self: *Index, items: []const ast.ObjectFieldDecl) !void {
