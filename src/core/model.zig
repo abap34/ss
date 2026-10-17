@@ -406,12 +406,22 @@ pub const CompositionOrder = struct {
     }
 };
 
+/// Input storage follows Value ownership: recursive storage is owned, while
+/// strings, names and function identities borrow the document's runtime inputs.
+/// Parent and page are fixed when the placement is registered, before display.
+pub const Placement = struct {
+    value: Value,
+    parent_id: NodeId,
+    page_id: NodeId,
+};
+
 pub const Node = struct {
     id: NodeId,
     kind: NodeKind,
     name: []const u8,
     attached: bool = false,
     discarded: bool = false,
+    placement: ?Placement = null,
     role: ?Role = null,
     object_kind: ?ObjectKind = null,
     payload_kind: ?PayloadKind = null,
@@ -430,6 +440,7 @@ pub const Node = struct {
     render_env: std.ArrayList(RenderEnvEntry) = .empty,
 
     pub fn deinit(self: *Node, allocator: Allocator) void {
+        if (self.placement) |*placement| placement.value.deinit(allocator);
         for (self.fields.items) |*field| field.deinit(allocator);
         self.fields.deinit(allocator);
         for (self.property_definitions.items) |definition| allocator.free(definition.path);

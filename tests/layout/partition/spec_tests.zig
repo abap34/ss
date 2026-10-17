@@ -88,6 +88,33 @@ fn emptyState() !core.DocumentState {
     return core.DocumentState.init(testing.allocator, base, path, source, ast.Module.init());
 }
 
+test "layout partition: registered placement descendants remain in their owning page" {
+    var state = try emptyState();
+    defer state.deinit();
+    const first_page = try state.addPage("First");
+    const second_page = try state.addPage("Second");
+    var input = core.RecordValue.init(ast.Type.recordType("Content").inModule(0));
+    defer input.deinit(testing.allocator);
+    const first = try state.registerPlacement(first_page, .{ .record = input }, null);
+    const child = try state.registerPlacement(first, .{ .record = input }, null);
+    const grandchild = try state.registerPlacement(child, .{ .record = input }, null);
+    const second = try state.registerPlacement(second_page, .{ .record = input }, null);
+    const other_child = try state.registerPlacement(second, .{ .record = input }, null);
+    try state.constraints.addAnchor(state.allocator, grandchild, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 24, null);
+
+    var result = try partition.Document.init(testing.allocator, &state);
+    defer result.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), result.pages.len);
+    try testing.expectEqualSlices(core.NodeId, &.{first}, state.childrenOf(first_page).?);
+    try testing.expectEqual(@as(usize, 3), result.pages[0].node_ids.len);
+    for ([_]core.NodeId{ first, child, grandchild }) |id| {
+        try testing.expect(std.mem.indexOfScalar(core.NodeId, result.pages[0].node_ids, id) != null);
+    }
+    try testing.expectEqualSlices(core.NodeId, &.{ second, other_child }, result.pages[1].node_ids);
+    try testing.expectEqualSlices(usize, &.{0}, result.pages[0].constraint_indexes);
+    try testing.expectEqual(@as(usize, 0), result.pages[1].constraint_indexes.len);
+}
+
 const MeasuredPages = struct {
     mask: u8 = 0,
 
