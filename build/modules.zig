@@ -44,14 +44,13 @@ pub fn create(ctx: Context, build_options: *Step.Options, tree_sitter: tree_sitt
                 \\Restore the tracked third_party/md4c files and retry the build.
             );
     }
-    const model_mod = createModule(ctx, "src/core/model.zig", &.{}, null);
+    const source_origin_mod = createModule(ctx, "src/core/source_origin.zig", &.{}, null);
+    const language_type_mod = createModule(ctx, "src/language/type.zig", &.{import("source_origin", source_origin_mod)}, null);
+    const model_mod = createModule(ctx, "src/core/model.zig", &.{import("language_type", language_type_mod)}, null);
     const keywords_mod = createModule(ctx, "src/syntax/keywords.zig", &.{}, null);
     const utils_mod = createModule(ctx, "src/utils/root.zig", &.{
         import("model", model_mod),
         import("syntax_keywords", keywords_mod),
-    }, null);
-    const language_type_mod = createModule(ctx, "src/language/type.zig", &.{
-        import("model", model_mod),
     }, null);
     const ast_mod = createModule(ctx, "src/ast.zig", &.{
         import("model", model_mod),

@@ -1192,7 +1192,7 @@ fn exercisePropertyPathDefinitions(allocator: std.mem.Allocator) !void {
     var state = try initEmptyDocumentStateWithAllocator(allocator);
     defer state.deinit();
     const object = try state.createGroupWithOrigin(&.{}, null);
-    var record = core.RecordValue.init("LayoutStyle");
+    var record = core.RecordValue.init(ast.Type.recordType("LayoutStyle"));
     defer record.deinit(allocator);
     try record.fields.append(allocator, .{ .name = "x", .value = .{ .number = 12 } });
     try state.defineNodeFieldPath(object, "layout", "layout.x", .{ .record = record }, 0, null);

@@ -106,7 +106,7 @@ test "natural measurement includes tables beside ordinary paragraphs" {
     defer state_layout.deinit();
     const page_id = try state.addPage("mixed-block-geometry");
     const object_id = try state.makeObject(page_id, "mixed blocks", null, .text, .text, "Introduction\n\n| column | value |\n| --- | --- |\n| first | second |");
-    var text_style = core.RecordValue.init("TextStyle");
+    var text_style = core.RecordValue.init(ast.Type.recordType("TextStyle"));
     defer text_style.deinit(testing.allocator);
     try text_style.fields.append(testing.allocator, .{
         .name = "parse",
@@ -142,7 +142,7 @@ fn markdownGeometry(content: []const u8, family: []const u8, width: f32) !Markdo
     defer state_layout.deinit();
     const page_id = try state.addPage("block-geometry");
     const object_id = try state.makeObject(page_id, "blocks", null, .text, .text, content);
-    var style = core.RecordValue.init("TextStyle");
+    var style = core.RecordValue.init(ast.Type.recordType("TextStyle"));
     defer style.deinit(testing.allocator);
     try style.fields.append(testing.allocator, .{
         .name = "parse",
@@ -2295,7 +2295,7 @@ test "Markdown code line backgrounds cover source rows without changing glyphs o
         var fixture = LayoutFixture.init(&state);
         defer fixture.deinit();
         const page_id = try state.addPage("code-line-highlights");
-        var style = core.RecordValue.init("TextStyle");
+        var style = core.RecordValue.init(ast.Type.recordType("TextStyle"));
         defer style.deinit(testing.allocator);
         try style.fields.append(testing.allocator, .{
             .name = "parse",
@@ -2458,7 +2458,7 @@ fn verifyTableGeometry(source: []const u8) !void {
     defer state_layout.deinit();
     const page_id = try state.addPage("retained-table");
     const object_id = try state.makeObject(page_id, "table", null, .text, .text, source);
-    var text_style = core.RecordValue.init("TextStyle");
+    var text_style = core.RecordValue.init(ast.Type.recordType("TextStyle"));
     defer text_style.deinit(testing.allocator);
     try text_style.fields.append(testing.allocator, .{ .name = "parse", .value = .{ .enum_case = .{ .enum_name = "TextParseMode", .case_name = "block" } }, .explicit = true });
     try state.setNodeFieldValue(object_id, "text", .{ .record = text_style });

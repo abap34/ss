@@ -7,6 +7,16 @@ const import = project.import;
 
 pub fn register(suite: Suite, modules: project.ProjectModules, compiler_mod: *Module) void {
     const ctx = suite.ctx;
+    const value_contracts_mod = createModule(ctx, "src/eval/value_contracts.zig", &.{
+        import("core", modules.core),
+        import("ast", modules.ast),
+    }, true);
+    const value_contracts_spec_mod = createModule(ctx, "tests/eval/contracts/spec_tests.zig", &.{
+        import("core", modules.core),
+        import("ast", modules.ast),
+        import("value_contracts", value_contracts_mod),
+    }, true);
+    _ = suite.add(value_contracts_spec_mod, .{ .name = "test-value-contracts", .description = "Check runtime value type contracts" });
     const execution_spec_mod = createModule(ctx, "tests/analysis/execution/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);

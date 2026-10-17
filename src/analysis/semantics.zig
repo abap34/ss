@@ -566,8 +566,9 @@ fn staticRecordPropertyValue(
     module_id: core.SourceModuleId,
     record_expr: ast.RecordExpr,
 ) anyerror!?core.Value {
-    var record = core.RecordValue.init(record_expr.type_name);
-    record.module_id = record_expr.module_id;
+    var value_type = ast.Type.recordType(record_expr.type_name);
+    value_type.nominal_module_id = record_expr.module_id;
+    var record = core.RecordValue.init(try value_type.withArguments(allocator, record_expr.type_args.items));
     errdefer record.deinit(allocator);
 
     if (sema.declarations) |index| {

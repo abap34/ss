@@ -1,7 +1,21 @@
 const std = @import("std");
-const model = @import("model");
+pub const SourceOrigin = @import("source_origin").Origin;
 
-pub const SourceSpan = model.SourceSpan;
+pub const SourceSpan = @import("source_origin").Span;
+
+pub const NominalId = struct {
+    module_id: u32,
+    name: []const u8,
+
+    pub fn optionalEql(a: ?NominalId, b: ?NominalId) bool {
+        if ((a == null) != (b == null)) return false;
+        return if (a) |id| id.eql(b.?) else true;
+    }
+
+    pub fn eql(a: NominalId, b: NominalId) bool {
+        return a.module_id == b.module_id and std.mem.eql(u8, a.name, b.name);
+    }
+};
 
 pub const Type = struct {
     kind: Kind,
@@ -65,7 +79,7 @@ pub const Type = struct {
         return .{ .kind = .object, .class_name = name };
     }
 
-    pub fn objectId(id: model.NominalId) Type {
+    pub fn objectId(id: NominalId) Type {
         return objectClass(id.name).inModule(id.module_id);
     }
 
@@ -96,14 +110,14 @@ pub const Type = struct {
         return resolved;
     }
 
-    pub fn nominalId(self: Type) ?model.NominalId {
+    pub fn nominalId(self: Type) ?NominalId {
         return .{
             .module_id = self.nominal_module_id orelse return null,
             .name = (if (self.kind == .enum_type) self.enum_name else self.class_name) orelse return null,
         };
     }
 
-    pub fn selectionItemId(self: Type) ?model.NominalId {
+    pub fn selectionItemId(self: Type) ?NominalId {
         return self.selectionItem().nominalId();
     }
 
