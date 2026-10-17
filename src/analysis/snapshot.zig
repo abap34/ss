@@ -222,6 +222,9 @@ pub const ValueBindingKind = enum {
 
 pub const ValueBinding = struct {
     value_type: ast.Type = ast.Type.any,
+    callable_type: ?ast.Type = null,
+    type_parameter_count: usize = 0,
+    declaration_start: usize = 0,
     name: []u8,
     kind: ValueBindingKind,
     module_id: ?core.SourceModuleId,
@@ -270,6 +273,8 @@ pub const FieldFact = struct {
 pub const RecordFact = struct {
     name: []u8,
     module_id: core.SourceModuleId,
+    type_parameter_count: usize = 0,
+    declaration_start: usize = 0,
 };
 
 pub const RecordFieldFact = struct {
@@ -1306,6 +1311,12 @@ fn collectValueBindings(allocator: std.mem.Allocator, type_storage: *TypeStorage
         const func = entry.value_ptr.*;
         if (func.instance_id != null) continue;
         const retained_type = try type_storage.retain(func.result_type);
+        const parameters = try allocator.alloc(ast.Type, func.params.items.len);
+        defer allocator.free(parameters);
+        for (parameters, func.params.items) |*ty, param| ty.* = param.ty;
+        var callable_type = try ast.Type.functionType(allocator, parameters, func.result_type);
+        defer callable_type.deinit(allocator);
+        const retained_callable = try type_storage.retain(callable_type);
         const signature: []u8 = @constCast(try query_signature.formatUserSignature(allocator, func.name, func));
         errdefer allocator.free(signature);
         const type_label: []u8 = @constCast(try func.result_type.formatAlloc(allocator));
@@ -1314,6 +1325,9 @@ fn collectValueBindings(allocator: std.mem.Allocator, type_storage: *TypeStorage
             .name = try allocator.dupe(u8, func.name),
             .value_type = retained_type,
             .kind = .function,
+            .callable_type = retained_callable,
+            .type_parameter_count = func.type_params.items.len,
+            .declaration_start = func.span.start,
             .module_id = entry.key_ptr.module_id,
             .signature = signature,
             .type_label = type_label,
@@ -1521,6 +1535,8 @@ fn collectRecords(allocator: std.mem.Allocator, records: []const declarations.Re
     for (records) |item| try out.append(allocator, .{
         .name = try allocator.dupe(u8, item.name),
         .module_id = item.module_id,
+        .type_parameter_count = item.decl.type_params.items.len,
+        .declaration_start = item.decl.span.start,
     });
     return out.toOwnedSlice(allocator);
 }

@@ -1,6 +1,158 @@
 const std = @import("std");
 const analysis = @import("analysis");
+const allocation_testing = @import("allocation_testing");
 const testing = std.testing;
+
+fn expectAppliedField(snapshot: *const analysis.snapshot.AnalysisSnapshot, path: []const u8, source: []const u8, needle: []const u8, field_name: []const u8, expected_type: []const u8, declaration_line: usize) !void {
+    const offset = std.mem.indexOf(u8, source, needle).? + needle.len - 1;
+    const request = analysis.query.types.SourceRequest{ .path = path, .source = source, .offset = offset };
+    var completion = try analysis.snapshot.completeAt(testing.allocator, snapshot, request, .{ .budget_ms = 1000 });
+    defer completion.deinit(testing.allocator);
+    var found = false;
+    for (completion.items) |candidate| {
+        if (!std.mem.eql(u8, candidate.label, field_name)) continue;
+        try testing.expectEqualStrings(expected_type, candidate.detail orelse "");
+        found = true;
+    }
+    try testing.expect(found);
+    var hover = (try analysis.snapshot.hoverAt(testing.allocator, snapshot, request, .{ .budget_ms = 1000 })) orelse return error.ExpectedHover;
+    defer hover.deinit(testing.allocator);
+    const expected = try std.fmt.allocPrint(testing.allocator, "({s}: {s})", .{ field_name, expected_type });
+    defer testing.allocator.free(expected);
+    try testing.expect(std.mem.indexOf(u8, hover.markdown, expected) != null);
+    const definitions = try analysis.snapshot.definitionAt(testing.allocator, snapshot, request, .{ .budget_ms = 1000 });
+    defer testing.allocator.free(definitions);
+    try testing.expectEqual(@as(usize, 1), definitions.len);
+    try testing.expectEqual(declaration_line, definitions[0].line);
+}
+
+test "analysis query spec: applied fields retain arguments across members constructors calls and updates" {
+    const path = "stdlib/internal/applied-fields-query-test.ss";
+    const source =
+        \\type Box<T> { value: T }
+        \\type Handler<T> { apply: (T) -> T }
+        \\type T { unrelated: String }
+        \\fn identity<T>(value: T) -> T = value
+        \\fn nested(box: Box<Box<Number>>) -> Number = box.value.value
+        \\fn optional(box: Box<String>?) -> String = box?.value ?? ""
+        \\fn callback(handler: Handler<Number>) -> Number = handler.apply(3)
+        \\fn generic<T>(box: Box<T>) -> T = identity<Box<T>>(box).value
+        \\page main
+        \\  let number = Box<Number> { value = 7 }
+        \\  let inferred = Box { value = "Inferred" }
+        \\  let deep = Box { value = number }
+        \\  let updated = deep with { value.value = 9 }
+        \\  let direct: Number = identity(number).value
+        \\  let explicit: Number = identity<Box<Number>>(number).value
+        \\  let direct_constructor: String = (Box<String> { value = "Direct" }).value
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    for ([_][]const u8{ "box.value.value", "Box<Number> { value", "with { value.value", "identity(number).value", "identity<Box<Number>>(number).value" }) |needle| {
+        try expectAppliedField(&snapshot, path, source, needle, "value", "Number", 0);
+    }
+    for ([_][]const u8{ "box?.value", "Box { value", "(Box<String> { value = \"Direct\" }).value" }) |needle| {
+        try expectAppliedField(&snapshot, path, source, needle, "value", "String", 0);
+    }
+    try expectAppliedField(&snapshot, path, source, "handler.apply", "apply", "Number -> Number", 1);
+    try expectAppliedField(&snapshot, path, source, "identity<Box<T>>(box).value", "value", "T", 0);
+    // Query specialization must leave the shared declaration facts unchanged.
+    for (snapshot.record_fields) |field| {
+        if (std.mem.eql(u8, field.record_name, "Box")) try testing.expectEqual(.parameter, field.value_type.kind);
+    }
+}
+
+test "analysis query spec: incomplete applied members and updates retain concrete completion" {
+    const path = "stdlib/internal/partial-applied-query-test.ss";
+    const cases = [_]struct { source: []const u8, needle: []const u8 }{
+        .{ .source = "type Box<T> { value: T }\nfn read(box: Box<Number>) -> Number = box.\n", .needle = "box." },
+        .{ .source = "type Box<T> { value: T }\npage main\nlet box = Box { value = Box { value = 1 } }\nlet next = box with { value. }\nend\n", .needle = "with { value." },
+        .{ .source = "type Box<T> { value: T }\npage main\nlet box = Box<Number> { val = 1 }\nend\n", .needle = "Box<Number> { val" },
+    };
+    for (cases) |case| {
+        var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+        defer sources.deinit();
+        try sources.put(path, case.source);
+        var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+        defer snapshot.deinit();
+        var completion = try analysis.snapshot.completeAt(testing.allocator, &snapshot, .{
+            .path = path,
+            .source = case.source,
+            .offset = std.mem.indexOf(u8, case.source, case.needle).? + case.needle.len,
+        }, .{ .budget_ms = 1000 });
+        defer completion.deinit(testing.allocator);
+        var found = false;
+        for (completion.items) |item| {
+            if (!std.mem.eql(u8, item.label, "value")) continue;
+            try testing.expectEqualStrings("Number", item.detail orelse "");
+            found = true;
+        }
+        if (!found) std.debug.print("missing concrete field completion after {s}\n", .{case.needle});
+        try testing.expect(found);
+    }
+}
+
+test "analysis query spec: applied imported fields retain their nominal module" {
+    const path = "stdlib/internal/applied-import-query-test.ss";
+    const imported_path = "stdlib/internal/query-types.ss";
+    const imported = "type Box<T> { value: T }\ntype Payload { size: Number }\nfn identity<T>(value: T) -> T = value\n";
+    const source =
+        \\import ./query-types as lib
+        \\type Payload { size: String }
+        \\fn read(box: lib::Box<lib::Payload>) -> Number = box.value.size
+        \\page main
+        \\  let n = lib::identity<lib::Payload>(lib::Payload { size = 3 }).size
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    try sources.put(imported_path, imported);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    try expectAppliedField(&snapshot, path, source, "box.value.size", "size", "Number", 1);
+    try expectAppliedField(&snapshot, path, source, "lib::identity<lib::Payload>(lib::Payload { size = 3 }).size", "size", "Number", 1);
+    const definitions = try analysis.snapshot.definitionAt(testing.allocator, &snapshot, .{
+        .path = path,
+        .source = source,
+        .offset = std.mem.indexOf(u8, source, "box.value.size").? + "box.value.si".len,
+    }, .{ .budget_ms = 1000 });
+    defer testing.allocator.free(definitions);
+    try testing.expectEqual(@as(usize, 1), definitions.len);
+    try testing.expect(std.mem.endsWith(u8, definitions[0].path orelse "", "query-types.ss"));
+}
+
+fn exerciseAppliedQueryAllocations(allocator: std.mem.Allocator, snapshot: *const analysis.snapshot.AnalysisSnapshot, request: analysis.query.types.SourceRequest) !void {
+    var completion = try analysis.snapshot.completeAt(allocator, snapshot, request, .{ .budget_ms = 10000 });
+    defer completion.deinit(allocator);
+    var hover = (try analysis.snapshot.hoverAt(allocator, snapshot, request, .{ .budget_ms = 10000 })) orelse return error.ExpectedHover;
+    defer hover.deinit(allocator);
+    const definitions = try analysis.snapshot.definitionAt(allocator, snapshot, request, .{ .budget_ms = 10000 });
+    defer allocator.free(definitions);
+}
+
+test "analysis query spec: applied query allocations have request ownership" {
+    const path = "stdlib/internal/applied-ownership-query-test.ss";
+    const source = "type Box<T> { value: T }\nfn read(box: Box<Box<Number>>) -> Number = box.value.value\n";
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    const request = analysis.query.types.SourceRequest{
+        .path = path,
+        .source = source,
+        .offset = std.mem.indexOf(u8, source, "box.value.value").? + "box.value.val".len,
+    };
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, exerciseAppliedQueryAllocations, .{ &snapshot, request });
+}
 
 comptime {
     _ = @import("fallback_spec_tests.zig");
