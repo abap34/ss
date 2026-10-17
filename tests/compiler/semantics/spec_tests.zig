@@ -565,7 +565,7 @@ test "compiler semantics: return inference preserves facts for imprecise object 
 
 test "compiler semantics: fact-complete return annotations still validate function bodies" {
     try expectDiagnostic(
-        \\type Settings = record {
+        \\type Settings {
         \\  size: Number
         \\}
         \\
@@ -1465,7 +1465,7 @@ test "compiler semantics: enum type names are not record constructors" {
         \\  let mode = Mode {}
         \\end
         \\
-    , "case.ss:bytes:", "InvalidRecordLiteral: Mode is an enum type, not a record; use Mode.<case>");
+    , "case.ss:bytes:", "InvalidTypeConstruction: Mode is an enum type; use Mode.<case>");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -1474,7 +1474,7 @@ test "compiler semantics: enum type names are not record constructors" {
         \\  let style = FontStyle {}
         \\end
         \\
-    , "case.ss:bytes:", "InvalidRecordLiteral: FontStyle is an enum type, not a record; use FontStyle.<case>");
+    , "case.ss:bytes:", "InvalidTypeConstruction: FontStyle is an enum type; use FontStyle.<case>");
 }
 
 test "compiler semantics: enum names can be shadowed by values" {
@@ -1926,7 +1926,7 @@ test "compiler semantics: nested property assignment rejects invalid paths and v
         \\  body.text.missing = 1
         \\end
         \\
-    , "case.ss:bytes:", "UnknownRecordField: record type 'TextStyle' has no field 'missing'");
+    , "case.ss:bytes:", "UnknownField: type 'TextStyle' has no field 'missing'");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -1936,7 +1936,7 @@ test "compiler semantics: nested property assignment rejects invalid paths and v
         \\  body.text.size.value = 1
         \\end
         \\
-    , "case.ss:bytes:", "InvalidRecordUpdatePath: field 'text.size' is Number, not a record");
+    , "case.ss:bytes:", "InvalidValueUpdatePath: field 'text.size' has type Number, which has no fields");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -1946,7 +1946,7 @@ test "compiler semantics: nested property assignment rejects invalid paths and v
         \\  body.link_id.value = "id"
         \\end
         \\
-    , "case.ss:bytes:", "InvalidRecordUpdatePath: field 'link_id' is String, not a record");
+    , "case.ss:bytes:", "InvalidValueUpdatePath: field 'link_id' has type String, which has no fields");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2056,16 +2056,34 @@ test "compiler semantics: structured style value members are typed" {
     , "case.ss:bytes:", "InvalidFieldValue: field 'text' expects TextStyle, got FontFace");
 }
 
-test "compiler semantics: record update copies nested fields" {
+test "compiler semantics: ordinary values reject direct and nested field assignment" {
+    try expectDiagnostic(
+        \\type Inner { size: Number = 20 }
+        \\page main
+        \\  let value = Inner {}
+        \\  value.size = 24
+        \\end
+    , "case.ss:bytes:", "ImmutableValue: field 'size' belongs to an immutable value; use with to construct an updated value");
+    try expectDiagnostic(
+        \\type Inner { size: Number = 20 }
+        \\type Outer { inner: Inner = Inner {} }
+        \\page main
+        \\  let value = Outer {}
+        \\  value.inner.size = 24
+        \\end
+    , "case.ss:bytes:", "ImmutableValue: field 'size' belongs to an immutable value; use with to construct an updated value");
+}
+
+test "compiler semantics: ordinary value updates copy nested fields" {
     try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
-        \\type Inner = record {
+        \\type Inner {
         \\  size: Number = 20
         \\  color: Color = c"#111111"
         \\}
         \\
-        \\type LocalTheme = record {
+        \\type LocalTheme {
         \\  body: Inner = Inner {}
         \\}
         \\
@@ -2086,11 +2104,11 @@ test "compiler semantics: record update copies nested fields" {
     try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
-        \\type Inner = record {
+        \\type Inner {
         \\  size: Number = 20
         \\}
         \\
-        \\type LocalTheme = record {
+        \\type LocalTheme {
         \\  body: Inner = Inner {}
         \\}
         \\
@@ -2112,7 +2130,7 @@ test "compiler semantics: explicit record fields override their defaults" {
     const source =
         \\import std:themes/default as *
         \\
-        \\type Label = record {
+        \\type Label {
         \\  text: String = "default"
         \\}
         \\
@@ -2132,11 +2150,11 @@ test "compiler semantics: function defaults and closures use callee bindings" {
     try expectObjectContent(
         \\import std:themes/default as *
         \\
-        \\type Inner = record {
+        \\type Inner {
         \\  size: Number = 20
         \\}
         \\
-        \\type LocalTheme = record {
+        \\type LocalTheme {
         \\  body: Inner = Inner {}
         \\}
         \\
@@ -2165,11 +2183,11 @@ test "compiler semantics: nested record member reads preserve their source value
     try expectObjectContent(
         \\import std:themes/default as *
         \\
-        \\type Inner = record {
+        \\type Inner {
         \\  size: Number = 20
         \\}
         \\
-        \\type LocalTheme = record {
+        \\type LocalTheme {
         \\  body: Inner = Inner {}
         \\}
         \\
@@ -2209,7 +2227,7 @@ test "compiler semantics: record update rejects invalid paths and values" {
         \\  }
         \\end
         \\
-    , "case.ss:bytes:", "UnknownRecordField: record type 'TextStyle' has no field 'missing'");
+    , "case.ss:bytes:", "UnknownField: type 'TextStyle' has no field 'missing'");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2220,7 +2238,7 @@ test "compiler semantics: record update rejects invalid paths and values" {
         \\  }
         \\end
         \\
-    , "case.ss:bytes:", "InvalidRecordUpdatePath: field 'font.family' is String, not a record");
+    , "case.ss:bytes:", "InvalidValueUpdatePath: field 'font.family' has type String, which has no fields");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2243,7 +2261,7 @@ test "compiler semantics: record update rejects invalid paths and values" {
         \\  }
         \\end
         \\
-    , "case.ss:bytes:", "OverlappingRecordUpdate: update path 'font' overlaps 'font.family'");
+    , "case.ss:bytes:", "OverlappingValueUpdate: update path 'font' overlaps 'font.family'");
 }
 
 test "compiler semantics: theme overlay customizes current and local themes" {
@@ -2301,7 +2319,7 @@ test "compiler semantics: user record declarations define typed record values" {
     try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
-        \\type CaptionStyle = record {
+        \\type CaptionStyle {
         \\  size: Number = 18
         \\  color: Color = c"0.2,0.2,0.2"
         \\}
@@ -3118,10 +3136,10 @@ test "compiler semantics: object field defaults are statically typed" {
         \\import std:themes/default as *
         \\
         \\enum Mode { alpha beta }
-        \\type Outer = record {
+        \\type Outer {
         \\  inner: Inner = Inner {}
         \\}
-        \\type Inner = record {
+        \\type Inner {
         \\  mode: Mode = Mode.beta
         \\}
         \\type Card = object {
@@ -3360,7 +3378,7 @@ test "compiler semantics: chained member assignment writes through record fields
     const source =
         \\import std:themes/default as *
         \\
-        \\type Parts = record {
+        \\type Parts {
         \\  root: Object
         \\  middle: Object
         \\}
@@ -3941,7 +3959,7 @@ test "compiler semantics: display callback writes are rejected" {
 
 test "compiler semantics: display registration through record and optional callbacks is checked" {
     try expectDiagnostic(
-        \\type Formatter = record { format: (Object -> String)? }
+        \\type Formatter { format: (Object -> String)? }
         \\fn attach(item: Object, formatter: Formatter) -> Object
         \\  return set_repr(item, formatter.format ?? ((value: Object) |-> content(value)))
         \\end
@@ -4049,7 +4067,7 @@ test "compiler semantics: displays cannot read external files during materializa
 
 test "compiler semantics: object link tracking does not authorize nested stored function calls" {
     try expectDiagnostic(
-        \\type Formatter = record { format: Object -> String }
+        \\type Formatter { format: Object -> String }
         \\type Holder = object {
         \\  roles = ["holder"]
         \\  formatter: Formatter?
@@ -4293,7 +4311,7 @@ test "compiler semantics: callbacks keep their defining module scope" {
 test "compiler semantics: closures returned through branch scopes own captured records" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\type Box = record {
+        \\type Box {
         \\  value: Number = 7
         \\}
         \\fn make() -> Number -> Box
@@ -4316,7 +4334,7 @@ test "compiler semantics: closures returned through branch scopes own captured r
 test "compiler semantics: borrowed arguments and defaults preserve record updates" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\type Box = record {
+        \\type Box {
         \\  value: Number = 7
         \\}
         \\fn update(original: Box, same: Box = original) -> Box
@@ -4400,7 +4418,7 @@ test "compiler semantics: constants are evaluated once as value bindings" {
     const source =
         \\import std:themes/default as *
         \\
-        \\type Parts = record {
+        \\type Parts {
         \\  root: Object
         \\  middle: Object
         \\}
@@ -4864,7 +4882,7 @@ test "compiler semantics: nested captured cross-module lambdas cannot hide recur
 
 test "compiler semantics: record argument recursion is rejected before evaluation" {
     try expectDiagnostic(
-        \\type Box = record {
+        \\type Box {
         \\  f: Number -> Number
         \\}
         \\fn call_box(b: Box, x: Number) -> Number
@@ -4881,7 +4899,7 @@ test "compiler semantics: record argument recursion is rejected before evaluatio
 
 test "compiler semantics: optional function argument recursion is rejected before evaluation" {
     try expectDiagnostic(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
@@ -4900,7 +4918,7 @@ test "compiler semantics: optional function argument recursion is rejected befor
 
 test "compiler semantics: record and optional function arguments retain terminating candidates" {
     try expectObjectContent(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
@@ -4916,12 +4934,12 @@ test "compiler semantics: record and optional function arguments retain terminat
 
 test "compiler semantics: record fields do not mix callable candidates" {
     try expectObjectContent(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\type Pair = record {
+        \\type Pair {
         \\  first: Number -> Number
         \\  second: Number -> Number
         \\}
@@ -4939,12 +4957,12 @@ test "compiler semantics: record fields do not mix callable candidates" {
 
 test "compiler semantics: nested record updates replace only the selected callable field" {
     try expectObjectContent(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\type Nested = record {
+        \\type Nested {
         \\  box: Box
         \\  other: Number -> Number
         \\}
@@ -4964,12 +4982,12 @@ test "compiler semantics: nested record updates replace only the selected callab
 
 test "compiler semantics: record updates retain recursion in untouched fields" {
     try expectDiagnostic(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\type Pair = record {
+        \\type Pair {
         \\  first: Number -> Number
         \\  second: Number -> Number
         \\}
@@ -4988,12 +5006,12 @@ test "compiler semantics: record updates retain recursion in untouched fields" {
 
 test "compiler semantics: returned captured records retain recursive candidates" {
     try expectDiagnostic(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\type Nested = record { box: Box }
+        \\type Nested { box: Box }
         \\fn wrap(n: Nested) -> Number -> Number
         \\  return (x: Number) |-> n.box.f(x)
         \\end
@@ -5011,12 +5029,12 @@ test "compiler semantics: returned captured records retain recursive candidates"
 
 test "compiler semantics: returned captured records retain terminating candidates" {
     try expectObjectContent(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\type Nested = record { box: Box }
+        \\type Nested { box: Box }
         \\fn wrap(n: Nested) -> Number -> Number
         \\  return (x: Number) |-> n.box.f(x)
         \\end
@@ -5031,7 +5049,7 @@ test "compiler semantics: returned captured records retain terminating candidate
 
 test "compiler semantics: record return paths merge candidates by field" {
     try expectDiagnostic(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
@@ -5054,7 +5072,7 @@ test "compiler semantics: record return paths merge candidates by field" {
 
 test "compiler semantics: record parameter defaults retain recursive candidates" {
     try expectDiagnostic(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn invoke(b: Box = Box { f = bad }) -> Number
         \\  return b.f(1)
         \\end
@@ -5069,12 +5087,12 @@ test "compiler semantics: record parameter defaults retain recursive candidates"
 
 test "compiler semantics: optional record defaults preserve explicit function fields" {
     try expectObjectContent(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\type DefaultBox = record { f: (Number -> Number)? = none }
+        \\type DefaultBox { f: (Number -> Number)? = none }
         \\fn invoke(b: DefaultBox = DefaultBox { f = inc }) -> Number
         \\  return (b.f ?? inc)(1)
         \\end
@@ -5089,12 +5107,12 @@ test "compiler semantics: optional record defaults preserve explicit function fi
 
 test "compiler semantics: record field placement distinguishes cached calls" {
     try expectDiagnostic(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\type Pair = record {
+        \\type Pair {
         \\  first: Number -> Number
         \\  second: Number -> Number
         \\}
@@ -5113,7 +5131,7 @@ test "compiler semantics: record field placement distinguishes cached calls" {
 
 test "compiler semantics: unknown property callbacks cannot establish termination" {
     try expectDiagnostic(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
@@ -5134,7 +5152,7 @@ test "compiler semantics: unknown property callbacks cannot establish terminatio
 
 test "compiler semantics: cached higher-order calls distinguish captured records" {
     try expectDiagnostic(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
@@ -5156,7 +5174,7 @@ test "compiler semantics: cached higher-order calls distinguish captured records
 
 test "compiler semantics: record updates replace recursive function fields before calls" {
     try expectObjectContent(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number = x + 1
         \\fn invoke(box: Box) -> Number
         \\  let value = box with { f = inc }
@@ -5185,7 +5203,7 @@ test "compiler semantics: cross-module captured record closures remain distinct"
         \\  text!(str(b::invoke(first, 3)) ++ ":" ++ str(b::invoke(second, 3)))
         \\end
     ,
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn pack(f: Number -> Number) -> Box
         \\  return Box { f = f }
         \\end
@@ -5221,7 +5239,7 @@ test "compiler semantics: callbacks cannot hide unknown function properties" {
 
 test "compiler semantics: record return joins retain recursive fields after known fields" {
     try expectDiagnostic(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number = x + 1
         \\fn choose(box: Box, flag: Bool) -> Box
         \\  if flag
@@ -5239,7 +5257,7 @@ test "compiler semantics: record return joins retain recursive fields after know
 
 test "compiler semantics: record return joins retain recursive fields before known fields" {
     try expectDiagnostic(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn inc(x: Number) -> Number = x + 1
         \\fn choose(box: Box, flag: Bool) -> Box
         \\  if flag
@@ -5257,7 +5275,7 @@ test "compiler semantics: record return joins retain recursive fields before kno
 
 test "compiler semantics: growing closure environments exhaust analysis before evaluation" {
     try expectDiagnostic(
-        \\type Box = record { f: Number -> Number }
+        \\type Box { f: Number -> Number }
         \\fn wrap(b: Box) -> Number -> Number
         \\  return (x: Number) |-> b.f(x)
         \\end
@@ -5634,7 +5652,7 @@ test "compiler semantics: constraints resolve record member object anchors" {
     try expectNoLoweredDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Parts = record {
+        \\type Parts {
         \\  root: Object
         \\  left: Object
         \\  right: Object
@@ -6600,7 +6618,7 @@ test "compiler semantics: page requirement follows the selected callable" {
 test "compiler semantics: constants shadow enum receivers in expressions" {
     try expectObjectContent(
         \\enum Mode { alpha beta }
-        \\type Settings = record {
+        \\type Settings {
         \\  size: Number = 17
         \\}
         \\const Mode: Settings = Settings {}
@@ -6861,7 +6879,7 @@ test "compiler semantics: returned closures keep captured property targets" {
 test "compiler semantics: record and optional function calls retain write effects" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\type Action = record { run: (Object -> Object)? }
+        \\type Action { run: (Object -> Object)? }
         \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
         \\fn apply_to(item: Object, action: Action) -> Object
         \\  let callback = action.run ?? ((value: Object) |-> value)
@@ -7042,7 +7060,7 @@ test "compiler semantics: default facts and effects use the definition module" {
 test "compiler semantics: callback effects distinguish specializations and returned record updates" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\type Action = record { run: Object -> Object }
+        \\type Action { run: Object -> Object }
         \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
         \\fn identity(item: Object) -> Object = item
         \\fn pack(callback: Object -> Object) -> Action = Action { run = callback }
@@ -7257,22 +7275,22 @@ test "compiler semantics: materialized displays cannot read solved geometry" {
 
 test "compiler semantics: records require fields without declared defaults" {
     try expectDiagnostic(
-        \\type Settings = record { size: Number }
+        \\type Settings { size: Number }
         \\page main
         \\  let settings = Settings {}
         \\end
-    , "bytes:", "MissingRecordField");
+    , "bytes:", "MissingField");
     try expectDiagnostic(
-        \\type Settings = record { size: Number? }
+        \\type Settings { size: Number? }
         \\page main
         \\  let settings = Settings {}
         \\end
-    , "bytes:", "MissingRecordField");
+    , "bytes:", "MissingField");
 }
 
 test "compiler semantics: explicit none and declared defaults satisfy record fields" {
     try expectObjectContent(
-        \\type Settings = record {
+        \\type Settings {
         \\  size: Number
         \\  suffix: String? = none
         \\}
@@ -7282,7 +7300,7 @@ test "compiler semantics: explicit none and declared defaults satisfy record fie
         \\end
     , "3!");
     try buildSource(
-        \\type Settings = record { size: Number? }
+        \\type Settings { size: Number? }
         \\page main
         \\  let settings = Settings { size = none }
         \\end
@@ -7361,8 +7379,8 @@ test "compiler semantics: stored property declarations reject functions recursiv
         \\end
     , "bytes:", "InvalidPropertyType");
     try expectDiagnostic(
-        \\type Action = record { callback: Number -> Number }
-        \\type Wrapper = record { action: Action? = none }
+        \\type Action { callback: Number -> Number }
+        \\type Wrapper { action: Action? = none }
         \\type Holder = object {
         \\  roles = ["holder"]
         \\  wrapper: Wrapper?
@@ -7381,8 +7399,8 @@ test "compiler semantics: property assignment and set_prop reject embedded funct
         \\end
     , "bytes:", "InvalidProperty");
     try expectDiagnostic(
-        \\type Action = record { callback: Number -> Number }
-        \\type Wrapper = record { action: Action }
+        \\type Action { callback: Number -> Number }
+        \\type Wrapper { action: Action }
         \\fn identity(value: Number) -> Number = value
         \\page main
         \\  let item = text!("A")
@@ -7390,7 +7408,7 @@ test "compiler semantics: property assignment and set_prop reject embedded funct
         \\end
     , "bytes:", "InvalidProperty");
     try expectDiagnostic(
-        \\type Action = record { callback: Number -> Number }
+        \\type Action { callback: Number -> Number }
         \\fn identity(value: Number) -> Number = value
         \\page main
         \\  let item = text!("A")
@@ -7401,7 +7419,7 @@ test "compiler semantics: property assignment and set_prop reject embedded funct
 
 test "compiler semantics: local records may contain functions and register displays" {
     try expectObjectContent(
-        \\type Action = record { callback: Object -> String }
+        \\type Action { callback: Object -> String }
         \\fn label(item: Object) -> String = "X"
         \\page main
         \\  let action = Action { callback = label }
@@ -7419,8 +7437,8 @@ test "compiler semantics: optional records require explicit optional member acce
         \\end
     , "bytes:", "InvalidOptionalMember");
     try expectObjectContent(
-        \\type Leaf = record { width: Number = 5 }
-        \\type Branch = record { leaf: Leaf? = none }
+        \\type Leaf { width: Number = 5 }
+        \\type Branch { leaf: Leaf? = none }
         \\fn width(branch: Branch?) -> Number = branch?.leaf?.width ?? 0
         \\page main
         \\  let missing = Branch {}
@@ -7429,15 +7447,15 @@ test "compiler semantics: optional records require explicit optional member acce
         \\end
     , "0:0:5");
     try expectObjectContent(
-        \\type Leaf = record { width: Number = 5 }
+        \\type Leaf { width: Number = 5 }
         \\fn width(leaf: Leaf) -> Number = leaf?.width
         \\page main
         \\  text!(str(width(Leaf {})))
         \\end
     , "5");
     try expectDiagnostic(
-        \\type Leaf = record { width: Number = 5 }
-        \\type Branch = record { leaf: Leaf = Leaf {} }
+        \\type Leaf { width: Number = 5 }
+        \\type Branch { leaf: Leaf = Leaf {} }
         \\fn width(branch: Branch?) -> Number = branch?.leaf.width
         \\page main
         \\end
@@ -7468,7 +7486,7 @@ test "compiler semantics: optional object members retain property dependencies" 
 
 test "compiler semantics: optional function members retain termination checking" {
     try expectObjectContent(
-        \\type Action = record { callback: Number -> Number }
+        \\type Action { callback: Number -> Number }
         \\fn identity(value: Number) -> Number = value
         \\fn apply(action: Action?) -> Number = (action?.callback ?? identity)(3)
         \\page main
@@ -7476,7 +7494,7 @@ test "compiler semantics: optional function members retain termination checking"
         \\end
     , "3:3");
     try expectDiagnostic(
-        \\type Action = record { callback: Number -> Number }
+        \\type Action { callback: Number -> Number }
         \\fn identity(value: Number) -> Number = value
         \\fn apply(action: Action?, value: Number) -> Number = (action?.callback ?? identity)(value)
         \\fn recursive(value: Number) -> Number = apply(Action { callback = recursive }, value)
@@ -7488,7 +7506,7 @@ test "compiler semantics: optional function members retain termination checking"
 
 test "compiler semantics: optional member results cannot be assignment targets" {
     try expectDiagnostic(
-        \\type Holder = record { item: Object? = none }
+        \\type Holder { item: Object? = none }
         \\page main
         \\  let holder = Holder { item = text!("A") }
         \\  (holder?.item).link_id = "X"
@@ -7499,7 +7517,7 @@ test "compiler semantics: optional member results cannot be assignment targets" 
 test "compiler semantics: void calls share direct indirect apply record and callback behavior" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\type Action = record {
+        \\type Action {
         \\  run: (Object, String) -> Void
         \\}
         \\fn mark(item: Object, value: String) -> Void
@@ -7577,7 +7595,7 @@ test "compiler semantics: void types are restricted to function results" {
         \\end
     , "case.ss:bytes:", "InvalidVoidType");
     try expectDiagnostic(
-        \\type Invalid = record {
+        \\type Invalid {
         \\  value: Void
         \\}
         \\page main
@@ -7711,8 +7729,8 @@ test "compiler semantics: constraint anchors wait for delayed object bindings" {
 
 test "compiler semantics: nested record anchors wait for both delayed root bindings" {
     try buildSource(
-        \\type Inner = record { item: Object }
-        \\type Outer = record { inner: Inner }
+        \\type Inner { item: Object }
+        \\type Outer { inner: Inner }
         \\page main
         \\  let target = Outer { inner = Inner { item = text!(docctx().footer_text ?? "missing") } }
         \\  let source = Outer { inner = Inner { item = text!(docctx().watermark ?? "missing") } }
@@ -7898,7 +7916,7 @@ test "compiler semantics: whole property reads wait for sibling definitions" {
 test "compiler semantics: property paths preserve objects carried through returned records" {
     try expectDumpContains(
         \\import std:themes/default as *
-        \\type Box = record { item: Object }
+        \\type Box { item: Object }
         \\fn wrap(item: Object) -> Box
         \\  return Box { item = item }
         \\end
@@ -7914,7 +7932,7 @@ test "compiler semantics: property paths preserve objects carried through return
 test "compiler semantics: property paths detect record aliases of an object" {
     try expectLoweringErrorDiagnostic(
         \\import std:themes/default as *
-        \\type Box = record { item: Object }
+        \\type Box { item: Object }
         \\page main
         \\  let a = txt_obj!("A", "body")
         \\  let box = Box { item = a }
@@ -8037,7 +8055,7 @@ test "compiler semantics: absent property values use string accessor fallbacks" 
 
 test "compiler semantics: explicit none refines an optional callable in a record" {
     try expectObjectContent(
-        \\type Box = record { callback: (Number -> Number)? }
+        \\type Box { callback: (Number -> Number)? }
         \\fn inc(x: Number) -> Number = x + 1
         \\fn cleared(box: Box) -> Number
         \\  let updated = box with { callback = none }
@@ -8112,7 +8130,7 @@ test "compiler semantics: unplaced objects do not belong to document queries" {
 test "compiler semantics: placement facts follow returned groups and record aliases" {
     try expectDumpContains(
         \\import std:themes/default as *
-        \\type Parts = record { root: Object }
+        \\type Parts { root: Object }
         \\fn bundle(a: Object, b: Object) -> Parts
         \\  return Parts { root = group(a, group(b)) }
         \\end
@@ -8256,7 +8274,7 @@ test "compiler semantics: symbolic anchor names cannot be shadowed by object fie
         \\type Card = object { base = Text left: Number = 10 }
     , "case.ss:bytes:", "ReservedAnchorField");
     try buildSource(
-        \\type Margins = record { left: Number = 10 right: Number = 20 }
+        \\type Margins { left: Number = 10 right: Number = 20 }
         \\page main
         \\  let margins = Margins {}
         \\  let item = text!("Margins")

@@ -2,19 +2,19 @@ import std:internal/classes
 import std:text/style
 import std:components/callout/style
 
-type HeadStyle = record {
+type HeadStyle {
   title: TextBlockStyle = TextBlockStyle {}
   rule: RuleBlockStyle = RuleBlockStyle {}
   top: Number = 56
   gap: Number = 0
 }
 
-type RuleBlockStyle = record {
+type RuleBlockStyle {
   rule: RuleStyle = RuleStyle {}
   layout: LayoutStyle = LayoutStyle {}
 }
 
-type MarkedCalloutStyle = record {
+type MarkedCalloutStyle {
   x: Number = 96
   top_y: Number = 220
   text: TextStyle = TextStyle {

@@ -424,7 +424,7 @@ test "syntax spec: declaration names preserve source spans" {
         \\type Widget = object {
         \\  title: String
         \\}
-        \\type Theme = record {
+        \\type Theme {
         \\  accent: Color
         \\}
         \\const accent: Color = c"#336699"
@@ -1043,10 +1043,10 @@ test "syntax spec: recovering blocks propagate every allocation failure" {
 }
 
 test "syntax spec: failed object declarations release parsed ownership" {
-    try expectParseErrorWithoutLeaks(error.ExpectedChar, "type Theme = record\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedChar, "type Theme\n");
     try expectParseErrorWithoutLeaks(error.ExpectedChar, "extend Widget\n");
     try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation,
-        \\type Theme = record {
+        \\type Theme {
         \\  label
         \\}
         \\
@@ -1082,7 +1082,7 @@ test "syntax spec: object declarations survive every allocation failure" {
         testing.allocator,
         parseAndDeinitSource,
         .{
-            \\type Theme = record {
+            \\type Theme {
             \\  handler: Selection<(Page -> Object)?> = build
             \\}
             \\
@@ -1157,7 +1157,7 @@ test "syntax spec: expression parsing survives every allocation failure" {
         \\  roles = ["card"]
         \\  label: String = "caption"
         \\}
-        \\type Theme = record {
+        \\type Theme {
         \\  body: String = "body"
         \\}
         \\extend Card {
@@ -2540,7 +2540,7 @@ test "syntax spec: recovering parse keeps type expression holes" {
         \\page Recover
         \\  let item: = 1
         \\end
-        \\type Broken = record {
+        \\type Broken {
         \\  field:
         \\}
         \\type Widget = object {
@@ -2648,9 +2648,36 @@ test "recovering parser advances past stray expression delimiters" {
     }
 }
 
-test "syntax spec: type declarations distinguish records objects and enums" {
+test "syntax spec: ordinary type declarations preserve field defaults and spans" {
+    const source_text =
+        \\type Padding {
+        \\  horizontal: Number = 16
+        \\  vertical: Number = 12
+        \\}
+        \\type Card {
+        \\  title: String
+        \\  padding: Padding = Padding {}
+        \\}
+        \\type Empty {}
+    ;
+    var parsed = try parse(source_text);
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 3), parsed.module.records.items.len);
+    const card = parsed.module.records.items[1];
+    try expectSpanText(source_text, card.name_span.?, "Card");
+    try expectSpanText(source_text, card.fields.items[0].name_span.?, "title");
+    try testing.expect(card.fields.items[0].default_value == null);
+    try testing.expect(card.fields.items[1].default_value != null);
+    try testing.expectEqual(@as(usize, 0), parsed.module.records.items[2].fields.items.len);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
+    try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "type Card = record { title: String }\n");
+    try expectParseErrorWithoutLeaks(error.ExpectedTypeAnnotation, "type Card { title }\n");
+}
+
+test "syntax spec: ordinary types coexist with legacy object declarations during migration" {
     var parsed = try parse(
-        \\type Padding = record { x: Number = 12 y: Number = 8 }
+        \\type Padding { x: Number = 12 y: Number = 8 }
         \\type Card = object { padding: Padding = Padding {} }
         \\enum Mode { light dark }
         \\extend Card { label: String = "Card" }
@@ -2662,7 +2689,7 @@ test "syntax spec: type declarations distinguish records objects and enums" {
     try testing.expectEqual(@as(usize, 1), parsed.module.object_extensions.items.len);
     try testing.expectEqualStrings("Padding", parsed.module.records.items[0].name);
     try testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{
-        "type Padding = record { x: Number = 12 }\n",
+        "type Padding { x: Number = 12 }\n",
     });
 }
 

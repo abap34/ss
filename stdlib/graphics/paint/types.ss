@@ -1,4 +1,4 @@
-type ChromeStyle = record {
+type ChromeStyle {
   fill: Color? = none
   stroke: Color? = none
   line_width: Number = 1

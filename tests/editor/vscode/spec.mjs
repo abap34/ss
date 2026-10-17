@@ -20,7 +20,20 @@ await testPresentationCommand();
 await testLineCommentSyntax();
 await testCompositionOperatorSyntax();
 await testPairedFunctionKeywordSyntax();
+await testTypeDeclarationSyntax();
 await testBlockStringSyntax();
+
+async function testTypeDeclarationSyntax() {
+  const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
+  for (const [source, keyword, name] of [
+    ["type Card { title: String }", "type", "Card"],
+    ["enum Align { left center right }", "enum", "Align"],
+  ]) {
+    const match = grammar.repository.declarations.patterns
+      .map((pattern) => new RegExp(pattern.match).exec(source)).find(Boolean);
+    assert(match?.[1] === keyword && match?.[2] === name, `type declaration was not highlighted: ${source}`);
+  }
+}
 
 async function testPairedFunctionKeywordSyntax() {
   const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));

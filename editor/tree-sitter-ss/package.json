@@ -5,7 +5,7 @@
   "main": "grammar.js",
   "scripts": {
     "generate": "tree-sitter generate",
-    "test": "tree-sitter generate && tree-sitter test && tree-sitter query queries/highlights.scm test/highlight.ss --quiet && tree-sitter query queries/locals.scm test/highlight.ss --quiet && tree-sitter query queries/folds.scm test/highlight.ss --quiet && node test/formatting.mjs"
+    "test": "tree-sitter generate && tree-sitter test && tree-sitter query queries/highlights.scm test/highlight.ss --quiet && tree-sitter query queries/locals.scm test/highlight.ss --quiet && tree-sitter query queries/folds.scm test/highlight.ss --quiet && tree-sitter query ../zed/languages/ss/highlights.scm test/highlight.ss --quiet && tree-sitter query ../zed/languages/ss/outline.scm test/highlight.ss --quiet && tree-sitter query ../zed/languages/ss/indents.scm test/highlight.ss --quiet && tree-sitter query ../zed/languages/ss/brackets.scm test/highlight.ss --quiet && node test/formatting.mjs"
   },
   "keywords": [
     "tree-sitter",

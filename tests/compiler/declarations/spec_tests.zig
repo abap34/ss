@@ -5,7 +5,7 @@ const core = compiler.core;
 const testing = std.testing;
 
 const source =
-    \\type Style = record {
+    \\type Style {
     \\  amount: Number = 12
     \\}
     \\type Base = object {

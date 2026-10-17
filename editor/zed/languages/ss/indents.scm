@@ -17,8 +17,11 @@
   (object_type
     "object" @start.object
     "}" @end)
-  (object_type
-    "protocol" @start.object
+  (type_body
+    "{" @start.type
+    "}" @end)
+  (enum_declaration
+    "{" @start.enum
     "}" @end)
   (object_extension
     "extend" @start.extend

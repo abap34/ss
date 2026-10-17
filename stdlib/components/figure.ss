@@ -3,7 +3,7 @@ import std:theme as theme
 import std:text/types
 import std:internal/style as styles
 
-type FigureParts = record {
+type FigureParts {
   root: Object
   body: Object
   caption: Object

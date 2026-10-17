@@ -568,16 +568,17 @@ const Parser = struct {
         const parsed_name = try self.parseIdentifierWithSpan();
         var parsed_name_moved = false;
         errdefer if (!parsed_name_moved) self.allocator.free(parsed_name.text);
+        source.skipTriviaFrom(self.source, &self.pos);
+        if (self.peekChar('{')) {
+            parsed_name_moved = true;
+            return .{ .record = try self.parseRecordDeclBody(start, parsed_name) };
+        }
         source.skipInlineSpaces(self.source, &self.pos);
         try self.expectChar('=');
         source.skipInlineSpaces(self.source, &self.pos);
         if (try self.consumeKeyword("object")) {
             parsed_name_moved = true;
             return .{ .object = try self.parseObjectDeclBody(start, parsed_name) };
-        }
-        if (try self.consumeKeyword("record")) {
-            parsed_name_moved = true;
-            return .{ .record = try self.parseRecordDeclBody(start, parsed_name) };
         }
         return self.fail(error.ExpectedTypeAnnotation);
     }
@@ -2813,7 +2814,6 @@ const Parser = struct {
             "const",
             "type",
             "enum",
-            "record",
             "object",
             "extend",
             "if",

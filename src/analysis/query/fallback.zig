@@ -139,7 +139,7 @@ const Context = struct {
             .variable
         else if (std.mem.eql(u8, previous, "fn"))
             .function
-        else if (std.mem.eql(u8, previous, "record") or std.mem.eql(u8, previous, "type") or std.mem.eql(u8, previous, "enum"))
+        else if (std.mem.eql(u8, previous, "type") or std.mem.eql(u8, previous, "enum"))
             .type_decl
         else
             return null;

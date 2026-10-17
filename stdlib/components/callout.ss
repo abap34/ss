@@ -4,7 +4,7 @@ import std:internal/callout as helpers
 import std:graphics/connectors as connectors
 import std:components/box as boxes
 
-type CalloutParts = record {
+type CalloutParts {
   root: Object
   note: Object
   background: Object

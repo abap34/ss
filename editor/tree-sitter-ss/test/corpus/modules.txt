@@ -97,10 +97,10 @@ import "library" as {
       (comment))))
 
 ================================================================================
-Record type declarations share the type declaration syntax
+Ordinary type declarations
 ================================================================================
 
-type Padding = record {
+type Padding {
   x: Number = 12
   y: Number = 8
 }
@@ -110,7 +110,7 @@ type Padding = record {
 (source_file
   (type_declaration
     (type_identifier)
-    (record_type
+    (type_body
       (object_field
         (identifier)
         (type (primary_type (type_identifier)))

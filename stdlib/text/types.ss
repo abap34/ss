@@ -5,7 +5,7 @@ import std:math/types
 
 enum SemanticRole { auto paragraph heading code figure caption }
 
-type SemanticStyle = record {
+type SemanticStyle {
   role: SemanticRole = SemanticRole.auto
   heading_level: Number? = none
 }
@@ -18,14 +18,14 @@ enum FontStyle { normal oblique italic }
 
 enum FontStretch { ultra_condensed extra_condensed condensed semi_condensed normal semi_expanded expanded extra_expanded ultra_expanded }
 
-type FontFace = record {
+type FontFace {
   family: String = "Helvetica"
   weight: Number = 400
   style: FontStyle = FontStyle.normal
   stretch: FontStretch = FontStretch.normal
 }
 
-type MarkdownUnderlineStyle = record {
+type MarkdownUnderlineStyle {
   color: Color? = none
   opacity: Number = 1
   width: Number? = none
@@ -33,7 +33,7 @@ type MarkdownUnderlineStyle = record {
   dash: String = ""
 }
 
-type MarkdownQuoteStyle = record {
+type MarkdownQuoteStyle {
   color: Color? = none
   inset: Number = 14
   pad_x: Number = 16
@@ -45,7 +45,7 @@ type MarkdownQuoteStyle = record {
   bar_dash: String = ""
 }
 
-type TextMathStyle = record {
+type TextMathStyle {
   scale: Number = 1
   inline_spacing: Number = 0.08
   display_gap: Number = 0.2
@@ -53,12 +53,12 @@ type TextMathStyle = record {
   align: Align = Align.center
 }
 
-type MarkdownListStyle = record {
+type MarkdownListStyle {
   inset: Number = 8
   indent: Number = 26
 }
 
-type MarkdownTableStyle = record {
+type MarkdownTableStyle {
   cell_pad_x: Number = 10
   cell_pad_y: Number = 7
   border: Color = c"0.82,0.84,0.88"
@@ -67,7 +67,7 @@ type MarkdownTableStyle = record {
   alt_row_fill: Color? = none
 }
 
-type MarkdownCodeStyle = record {
+type MarkdownCodeStyle {
   size: Number = 15
   line_height: Number = 20
   highlight_fill: Color? = c"#fff2a8"
@@ -75,7 +75,7 @@ type MarkdownCodeStyle = record {
   colors: CodeColors = CodeColors {}
 }
 
-type MarkdownStyle = record {
+type MarkdownStyle {
   bold_color: Color? = none
   highlight_fill: Color? = c"#fff2a8"
   underline: MarkdownUnderlineStyle = MarkdownUnderlineStyle {}
@@ -86,7 +86,7 @@ type MarkdownStyle = record {
   table: MarkdownTableStyle = MarkdownTableStyle {}
 }
 
-type TextStyle = record {
+type TextStyle {
   parse: TextParseMode = TextParseMode.inline
   font: FontFace = FontFace { family = "Helvetica" }
   bold_weight: Number = 700
@@ -101,11 +101,11 @@ type TextStyle = record {
   math: TextMathStyle = TextMathStyle {}
 }
 
-type MarkdownHeadingStyle = record {
+type MarkdownHeadingStyle {
   text: TextStyle = TextStyle {}
 }
 
-type MarkdownHeadingStyles = record {
+type MarkdownHeadingStyles {
   h1: MarkdownHeadingStyle? = none
   h2: MarkdownHeadingStyle? = none
   h3: MarkdownHeadingStyle? = none
@@ -114,13 +114,13 @@ type MarkdownHeadingStyles = record {
   h6: MarkdownHeadingStyle? = none
 }
 
-type UnderlineStyle = record {
+type UnderlineStyle {
   color: Color? = none
   width: Number = 1
   offset: Number = -2
 }
 
-type RuleStyle = record {
+type RuleStyle {
   stroke: Color? = none
   line_width: Number = 1
   dash: String = ""

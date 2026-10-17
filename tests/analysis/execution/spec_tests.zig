@@ -140,8 +140,8 @@ test "cycle diagnostics retain every edge of a longer closed path" {
 
 test "nested record anchors depend on both immutable root bindings" {
     var state = try document(
-        \\type Inner = record { item: Object }
-        \\type Outer = record { inner: Inner }
+        \\type Inner { item: Object }
+        \\type Outer { inner: Inner }
         \\page main
         \\  let target = Outer { inner = Inner { item = text!(docctx().footer_text ?? "missing") } }
         \\  let source = Outer { inner = Inner { item = text!(docctx().watermark ?? "missing") } }

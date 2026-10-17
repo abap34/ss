@@ -51,7 +51,7 @@ fn collectWithAllocationFailures(allocator: std.mem.Allocator, module: compiler.
 
 test "captures: every declaration and statement boundary collects lambdas with allocation cleanup" {
     var module = try compiler.syntax.parse(testing.allocator,
-        \\type Config = record {
+        \\type Config {
         \\  callback: Number -> Number = (x: Number) |-> x
         \\}
         \\type Item = object {

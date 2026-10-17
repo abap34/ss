@@ -42,7 +42,7 @@ const DeadlineAfterTarget = struct {
 test "analysis queries: every deadline selects the independent lexical completion" {
     var case = try CompletionCase.init(
         \\import std:text
-        \\type Label = record {
+        \\type Label {
         \\  title: String,
         \\  subtitle: String,
         \\  body: String
@@ -729,8 +729,8 @@ fn checkNominalQueries(imports: []const u8) !void {
     defer sources.deinit();
     try sources.put(path, source);
     try sources.put(root ++ "/a.ss",
-        \\type Style = record { only_a: Number = 1 }
-        \\type Box = record { value: Style = Style {} }
+        \\type Style { only_a: Number = 1 }
+        \\type Box { value: Style = Style {} }
         \\type Base = object { object_a: Number = 1 }
         \\type Card = object { base = Base
         \\  roles = ["query-a"] }
@@ -743,8 +743,8 @@ fn checkNominalQueries(imports: []const u8) !void {
         \\end
     );
     try sources.put(root ++ "/b.ss",
-        \\type Style = record { only_b: String = "b" }
-        \\type Box = record { value: Style = Style {} }
+        \\type Style { only_b: String = "b" }
+        \\type Box { value: Style = Style {} }
         \\type Base = object { object_b: String = "b" }
         \\type Card = object { base = Base
         \\  roles = ["query-b"] }
@@ -1174,8 +1174,8 @@ test "selected imports: queries retain canonical declarations and export visibil
     ;
     const facade_source = "import impl as { make, Item }\n";
     const impl_source =
-        \\type Item = record { value: Number = 12 }
-        \\type Hidden = record { private: Number = 0 }
+        \\type Item { value: Number = 12 }
+        \\type Hidden { private: Number = 0 }
         \\const secret: Number = 99
         \\fn make(item: Item = Item {}) -> Item
         \\  return item
@@ -1276,7 +1276,7 @@ test "analysis queries: enum declarations support hover and lexical completion" 
 
 test "analysis queries: fields never fall back to unrelated value names" {
     var case = try CompletionCase.init(
-        \\type Label = record {
+        \\type Label {
         \\  text: String = "Body"
         \\}
         \\page main
@@ -1326,7 +1326,7 @@ test "analysis queries: let initializer resolves outside its own binding" {
 test "analysis queries: constant record receivers precede enum names" {
     var case = try CompletionCase.init(
         \\enum Mode { alpha beta }
-        \\type Settings = record {
+        \\type Settings {
         \\  size: Number = 17
         \\}
         \\const Mode: Settings = Settings {}

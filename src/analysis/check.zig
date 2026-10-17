@@ -573,15 +573,15 @@ fn resolveAnchorPathInfo(
     while (iter.next()) |field_name| {
         if (info.hole != null) return info;
         if (info.ty.kind != .record) {
-            try addUserReport(state, origin, "InvalidConstraintObject", "anchor path '{s}' does not resolve through a record", .{path});
+            try addUserReport(state, origin, "InvalidConstraintObject", "anchor path '{s}' does not resolve through a value with fields", .{path});
             return error.InvalidType;
         }
         const record_id = info.ty.nominalId() orelse {
-            try addUserReport(state, origin, "InvalidRecordType", "ss produced a record type without a resolved declaration; report this as an ss bug with the source file", .{});
+            try addUserReport(state, origin, "InvalidType", "ss produced a type without a resolved declaration; report this as an ss bug with the source file", .{});
             return error.InvalidType;
         };
         const field = sema.recordField(record_id, field_name) orelse {
-            try addUserReport(state, origin, "UnknownRecordField", "record type '{s}' has no field '{s}'", .{ record_id.name, field_name });
+            try addUserReport(state, origin, "UnknownField", "type '{s}' has no field '{s}'", .{ record_id.name, field_name });
             return error.InvalidType;
         };
         info = infoFromType(field.value_type);

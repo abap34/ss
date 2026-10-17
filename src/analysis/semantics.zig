@@ -95,7 +95,7 @@ pub fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.Document
                 });
                 return error.UnknownType;
             }
-            try names.put(record_decl.name, "record");
+            try names.put(record_decl.name, "value");
         }
 
         for (module.syntax.types.items) |decl| {

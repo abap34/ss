@@ -553,19 +553,24 @@
           }
         },
         {
-          "type": "STRING",
-          "value": "="
-        },
-        {
           "type": "CHOICE",
           "members": [
             {
-              "type": "SYMBOL",
-              "name": "object_type"
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "="
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "object_type"
+                }
+              ]
             },
             {
               "type": "SYMBOL",
-              "name": "record_type"
+              "name": "type_body"
             }
           ]
         }
@@ -670,13 +675,9 @@
         }
       ]
     },
-    "record_type": {
+    "type_body": {
       "type": "SEQ",
       "members": [
-        {
-          "type": "STRING",
-          "value": "record"
-        },
         {
           "type": "STRING",
           "value": "{"

@@ -17,7 +17,7 @@ fn/! head(title_text: String, style: HeadStyle = theme::current_theme().head) ->
   return group(title, rule)
 end
 
-type Cols = record {
+type Cols {
   left: Number = 96
   right: Number = 96
   top: Number? = none
@@ -26,7 +26,7 @@ type Cols = record {
   page_width: Number = 1280
 }
 
-type Cols2 = record {
+type Cols2 {
   root: Object
   left: Object
   right: Object

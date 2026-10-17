@@ -49,9 +49,9 @@ test "failed environment replacement preserves the original binding" {
 fn recordState() !core.DocumentState {
     const allocator = testing.allocator;
     const text = try allocator.dupe(u8,
-        \\type Inner = record { label: String = "default" }
-        \\type Outer = record { inner: Inner = Inner { label = "override" } }
-        \\type Container = record { outer: Outer = Outer { inner = Inner { label = "override" } } }
+        \\type Inner { label: String = "default" }
+        \\type Outer { inner: Inner = Inner { label = "override" } }
+        \\type Container { outer: Outer = Outer { inner = Inner { label = "override" } } }
     );
     errdefer allocator.free(text);
     var syntax = try compiler.syntax.parseWithSourceName(allocator, text, "ownership.ss");

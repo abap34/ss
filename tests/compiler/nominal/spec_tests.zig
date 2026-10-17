@@ -57,10 +57,10 @@ fn exerciseWithOptions(source: []const u8, first: []const u8, second: []const u8
 }
 
 const number_record =
-    \\type Style = record {
+    \\type Style {
     \\  value: Number = 12
     \\}
-    \\type Box = record {
+    \\type Box {
     \\  style: Style = Style {}
     \\}
     \\fn make() -> Box
@@ -72,10 +72,10 @@ const number_record =
 ;
 
 const string_record =
-    \\type Style = record {
+    \\type Style {
     \\  value: String = "second"
     \\}
-    \\type Box = record {
+    \\type Box {
     \\  style: Style = Style {}
     \\}
     \\fn make() -> Box
@@ -106,7 +106,7 @@ test "nominal records: aliases do not expose unqualified type names" {
         \\page main
         \\  let invalid = Box {}
         \\end
-    , number_record, "", "UnknownRecordType:");
+    , number_record, "", "UnknownType:");
 }
 
 test "nominal records: identical shapes from different modules are not assignable" {
@@ -152,13 +152,13 @@ test "nominal enums: qualified cases and function contracts retain the defining 
 test "nominal enums: invalid record syntax keeps its qualified declaration" {
     try exercise(
         \\import "a" as a
-        \\type Mode = record {
+        \\type Mode {
         \\  value: Number = 0
         \\}
         \\page main
         \\  let invalid = a::Mode {}
         \\end
-    , "enum Mode { first }", "", "InvalidRecordLiteral:");
+    , "enum Mode { first }", "", "InvalidTypeConstruction:");
 }
 
 test "nominal records: object defaults and nested writes preserve record ownership" {
@@ -188,7 +188,7 @@ test "nominal records: object defaults and nested writes preserve record ownersh
 
 test "nominal records: primitive contracts refer to their declared module" {
     try exercise(
-        \\type PathCommand = record {
+        \\type PathCommand {
         \\  verb: PathVerb = PathVerb.move
         \\  x: Number = 0
         \\  y: Number = 0
@@ -198,7 +198,7 @@ test "nominal records: primitive contracts refer to their declared module" {
         \\end
     , "", "", null);
     try exercise(
-        \\type PathCommand = record {
+        \\type PathCommand {
         \\  verb: PathVerb = PathVerb.move
         \\  x: Number = 0
         \\  y: Number = 0

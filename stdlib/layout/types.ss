@@ -8,7 +8,7 @@ enum WrapMode { on off }
 
 enum FitPolicy { warn error ignore }
 
-type LayoutStyle = record {
+type LayoutStyle {
   font_size: Number? = none
   line_height: Number? = none
   spacing_after: Number = 32
