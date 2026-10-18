@@ -1584,14 +1584,8 @@ fn evalSelectCall(
         .self_placement => {
             return try state.select(state.allocator, base, core.Query.selfPlacement());
         },
-        .self_object => {
-            return try state.select(state.allocator, base, core.Query.selfObject());
-        },
         .previous_page => {
             return try state.select(state.allocator, base, core.Query.previousPage());
-        },
-        .parent_page => {
-            return try state.select(state.allocator, base, core.Query.parentPage());
         },
         .children => {
             return try state.select(state.allocator, base, core.Query.children());

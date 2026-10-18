@@ -135,10 +135,8 @@ pub fn primitiveAllowsDisplayEvaluation(op: PrimitiveCall) bool {
 }
 
 pub const QueryOp = enum {
-    self_object,
     self_placement,
     previous_page,
-    parent_page,
     children,
     descendants,
     document_pages,
@@ -277,9 +275,7 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
 
 const query_descriptors = [_]QueryDescriptor{
     .{ .op = .self_placement, .name = "self_placement", .arity = 2, .input_name = "base", .input_type = Type.placement, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.placement), .preserves_input_type = true, .summary = "Return the placement itself as a typed one-element selection" },
-    .{ .op = .self_object, .name = "self_object", .arity = 2, .input_name = "base", .input_type = Type.object, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.object), .summary = "Return the object itself as a one-element Selection" },
     .{ .op = .previous_page, .name = "previous_page", .arity = 2, .input_name = "base", .input_type = Type.page, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = .{ .kind = .optional, .optional_child = @constCast(&Type.page) }, .summary = "Return the previous page, or none for the first page" },
-    .{ .op = .parent_page, .name = "parent_page", .arity = 2, .input_name = "base", .input_type = Type.object, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = .{ .kind = .optional, .optional_child = @constCast(&Type.page) }, .summary = "Return the containing page, or none when unplaced" },
     .{ .op = .children, .name = "children", .arity = 2, .input_name = "base", .input_type = Type.placement, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.placement), .summary = "Select direct display children" },
     .{ .op = .descendants, .name = "descendants", .arity = 2, .input_name = "base", .input_type = Type.placement, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.placement), .summary = "Select all display descendants in construction order" },
     .{ .op = .document_pages, .name = "document_pages", .arity = 2, .input_name = "base", .input_type = Type.document, .extra_arg_names = &.{}, .extra_arg_types = &.{}, .output_type = Type.selection(.page), .summary = "Select all pages in the document" },

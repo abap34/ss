@@ -69,12 +69,12 @@ test "language registry spec: query output types are declared in the registry" {
 
     const objects = registry.lookupQueryOp("page_objects_by_role").?;
     try testing.expect(Type.eql(Type.selection(.object), registry.queryOutputType(objects)));
-    const parent = registry.lookupQueryOp("parent_page").?;
-    const parent_type = registry.queryOutputType(parent);
-    try testing.expectEqual(Type.Kind.optional, parent_type.kind);
-    try testing.expect(Type.eql(Type.page, parent_type.optional_child.?.*));
     const previous = registry.lookupQueryOp("previous_page").?;
-    try testing.expect(Type.eql(parent_type, registry.queryOutputType(previous)));
+    const previous_type = registry.queryOutputType(previous);
+    try testing.expectEqual(Type.Kind.optional, previous_type.kind);
+    try testing.expect(Type.eql(Type.page, previous_type.optional_child.?.*));
+    try testing.expect(registry.lookupQueryOp("self_object") == null);
+    try testing.expect(registry.lookupQueryOp("parent_page") == null);
 }
 
 test "language registry spec: stdlib helpers are not kernel primitives" {

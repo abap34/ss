@@ -202,6 +202,8 @@ test "typed queries: invalid types scopes and arities fail before evaluation" {
         .{ .expression = "select<Heading>(document, \"children\")", .code = "InvalidArity" },
         .{ .expression = "select<Heading, Heading>(document)", .code = "InvalidTypeArity" },
         .{ .expression = "select(document)", .code = "MissingTypeArguments" },
+        .{ .expression = "select(text!(\"Input\"), \"self_object\")", .code = "UnknownQuery" },
+        .{ .expression = "select(text!(\"Input\"), \"parent_page\")", .code = "UnknownQuery" },
     }) |case| {
         const source = try std.fmt.allocPrint(testing.allocator, "type Heading {{ title: String }}\npage main\n  let document = docctx()\n  let items = {s}\nend\n", .{case.expression});
         defer testing.allocator.free(source);
@@ -493,7 +495,7 @@ test "typed queries: reading one's own children during display rejects a depende
 
 test "typed queries: child and singleton queries require a placement reference" {
     for ([_][]const u8{ "children", "descendants", "selection" }) |query| {
-        for ([_][]const u8{ "7", "Heading { title = \"Value\" }", "pagectx()", "body_obj!(\"Legacy\")" }) |input| {
+        for ([_][]const u8{ "7", "Heading { title = \"Value\" }", "pagectx()", "text(\"Value\")" }) |input| {
             const source = try std.fmt.allocPrint(testing.allocator,
                 \\type Heading {{ title: String }}
                 \\page main
