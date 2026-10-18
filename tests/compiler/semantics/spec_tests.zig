@@ -664,31 +664,22 @@ test "compiler semantics: dependency query comments report statement summaries" 
     try expectDiagnostic(function_call_source, "bytes:", "write Variable(scope=page:sample, name=out)");
 
     const property_source =
-        \\import std:themes/default as *
-        \\
-        \\type Claim = object {
-        \\  roles = ["claim"]
-        \\  suffix: String? = none
-        \\}
-        \\
-        \\fn/! claim(text: String) -> Object = txt_obj(text, "claim")
-        \\
-        \\fn claim_suffix(item: Object) -> String
-        \\  return item.suffix ?? ""
+        \\fn heading_title(item: Placed<Heading>) -> String
+        \\  return item.value.title ++ str(item.document.layout_h_center_offset)
         \\end
         \\
         \\page sample
-        \\  let a = claim!("A")
-        \\  a.suffix = "!"
+        \\  docctx().layout_h_center_offset = 42
         \\  ;; ^dep?
-        \\  text!(join(doc_objs(docctx(), "claim"), "", claim_suffix))
+        \\  heading!("A")
+        \\  text!(join(select<Heading>(docctx()), "", heading_title))
         \\  ;; ^dep?
         \\end
         \\
     ;
-    try expectDiagnostic(property_source, "bytes:", "write Property(owner=object:Claim#page:sample.a, key=suffix)");
-    try expectDiagnostic(property_source, "bytes:", "read Objects(role=claim,");
-    try expectDiagnostic(property_source, "bytes:", "read Property(owner=object:Claim.*, key=suffix)");
+    try expectDiagnostic(property_source, "bytes:", "write Property(owner=document, key=layout_h_center_offset)");
+    try expectDiagnostic(property_source, "bytes:", "read Objects(role=*, type=Heading,");
+    try expectDiagnostic(property_source, "bytes:", "read Property(owner=document, key=layout_h_center_offset)");
 }
 
 test "compiler semantics: stdlib core components build when called directly" {
@@ -2560,9 +2551,8 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
-        \\type Card = object {
-        \\  roles = ["card"]
-        \\}
+        \\type Card {}
+        \\type Body {}
         \\
         \\fn choose_card(card_value: Card, body_value: Body, use_card: Bool) -> Card
         \\  if use_card
@@ -2576,7 +2566,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\  text!("bad")
         \\end
         \\
-    , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Body>");
+    , "case.ss:bytes:", "TypeMismatch: expected Card, got Body");
 }
 
 test "compiler semantics: if branch checks do not depend on optional types" {
@@ -3381,50 +3371,24 @@ test "compiler semantics: repeated content definitions are rejected" {
     , "DuplicateContentDefinition: object content is already defined");
 }
 
-test "compiler semantics: independent claim properties join before summary reads" {
+test "compiler semantics: immutable claim inputs combine with construction ordered numbering" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\import std:internal/classes as { Text }
-        \\
-        \\type Claim = object {
-        \\  base = Text
-        \\  roles = ["claim"]
-        \\  suffix: String? = none
-        \\  number_prefix: String? = none
-        \\}
-        \\
-        \\fn/! claim(text_value: String) -> Object
-        \\  return txt_obj(text_value, "claim")
+        \\type Claim { title: String suffix: String = "" }
+        \\fn display(self: Placed<Claim>) -> Text = text(self.value.title ++ self.value.suffix)
+        \\fn claim_text(item: Placed<Claim>) -> String
+        \\  let index = number_of(item, select<Claim>(item.document)) ?? 0
+        \\  return str(index) ++ ":" ++ item.value.title ++ item.value.suffix
         \\end
-        \\
-        \\fn number_claim(item: Object, index: Number) -> Object
-        \\  item.number_prefix = str(index) ++ ":"
-        \\  return item
-        \\end
-        \\
-        \\fn claim_text(item: Object) -> String
-        \\  let prefix = item.number_prefix ?? ""
-        \\  let suffix = item.suffix ?? ""
-        \\  return prefix ++ item.content ++ suffix
-        \\end
-        \\
-        \\document
-        \\  foreach_enumerate(doc_objs(docctx(), "claim"), number_claim)
-        \\end
-        \\
         \\page summary
-        \\  text!(join(doc_objs(docctx(), "claim"), ",", claim_text))
+        \\  text!(join(select<Claim>(docctx()), ",", claim_text))
         \\end
-        \\
         \\page one
-        \\  let a = claim!("A")
-        \\  a.suffix = "!"
+        \\  let original = Claim { title = "A" }
+        \\  place!(original with { suffix = "!" })
         \\end
-        \\
         \\page two
-        \\  claim!("B")
+        \\  place!(Claim { title = "B" })
         \\end
-        \\
     , "1:A!,2:B");
 }
 
@@ -4508,27 +4472,6 @@ test "compiler semantics: record field placement distinguishes cached calls" {
     , "case.ss:bytes:", "RecursiveFunction");
 }
 
-test "compiler semantics: unknown property callbacks cannot establish termination" {
-    try expectDiagnostic(
-        \\type Box { f: Number -> Number }
-        \\fn inc(x: Number) -> Number
-        \\  return x + 1
-        \\end
-        \\
-        \\type Holder = object {
-        \\  roles = ["holder"]
-        \\  callback: (Number -> Number)?
-        \\}
-        \\fn invoke(h: Holder) -> Number
-        \\  return (h.callback ?? inc)(1)
-        \\end
-        \\page main
-        \\  let holder = obj("holder", "holder", "text")
-        \\  let value = invoke(holder)
-        \\end
-    , "case.ss:bytes:", "InvalidPropertyType");
-}
-
 test "compiler semantics: cached higher-order calls distinguish captured records" {
     try expectDiagnostic(
         \\type Box { f: Number -> Number }
@@ -4594,26 +4537,6 @@ test "compiler semantics: cross-module captured record closures remain distinct"
         \\  return f(x)
         \\end
     , "4:6");
-}
-
-test "compiler semantics: callbacks cannot hide unknown function properties" {
-    try expectDiagnostic(
-        \\import std:themes/default as *
-        \\type Holder = object {
-        \\  roles = ["holder"]
-        \\  callback: (Number -> Number)?
-        \\}
-        \\fn inc(x: Number) -> Number
-        \\  return x + 1
-        \\end
-        \\fn invoke(h: Holder) -> Number
-        \\  return (h.callback ?? inc)(1)
-        \\end
-        \\page main
-        \\  let holder = obj("holder", "holder", "text")
-        \\  let _ = foreach(objs(pagectx(), "holder"), invoke)
-        \\end
-    , "case.ss:bytes:", "InvalidPropertyType");
 }
 
 test "compiler semantics: record return joins retain recursive fields after known fields" {
@@ -6077,22 +6000,22 @@ test "compiler semantics: dependency role joins include unknown return expressio
     , "items=A");
 }
 
-test "compiler semantics: property target returns join identities across branches" {
+test "compiler semantics: property target returns join page identities across branches" {
     try expectObjectContent(
-        \\type Card = object { roles = ["card"] label: String = "old" }
-        \\fn pick(flag: Bool, a: Card, b: Card) -> Object
+        \\fn pick(flag: Bool, a: Page, b: Page) -> Page
         \\  if flag
         \\    return a
         \\  end
         \\  return b
         \\end
-        \\page main
-        \\  let a = new("A", "card", "text")
-        \\  let b = new("B", "card", "text")
-        \\  text!("picked=" ++ (pick(true, a, b).label ?? ""))
-        \\  a.label = "new A"
+        \\document
+        \\  let a = new_page(docctx(), "first")
+        \\  let b = new_page(docctx(), "second")
+        \\  place_on!(a, text("picked=" ++ str(pick(page_index(a) == 1, a, b).layout_h_center_offset)))
+        \\  a.layout_h_center_offset = 42
+        \\  b.layout_h_center_offset = 17
         \\end
-    , "picked=new A");
+    , "picked=42");
 }
 
 test "compiler semantics: returned object roles join all branches before placement" {
@@ -6154,43 +6077,48 @@ test "compiler semantics: returned closures keep captured property targets" {
 test "compiler semantics: record and optional function calls retain write effects" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\type Action { run: (Object -> Object)? }
-        \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
-        \\fn apply_to(item: Object, action: Action) -> Object
-        \\  let callback = action.run ?? ((value: Object) |-> value)
+        \\type Action { run: (Document -> Document)? }
+        \\fn mark(item: Document) -> Document
+        \\  item.layout_h_center_offset = 42
+        \\  return item
+        \\end
+        \\fn apply_to(item: Document, action: Action) -> Document
+        \\  let callback = action.run ?? ((value: Document) |-> value)
         \\  return callback(item)
         \\end
         \\page main
-        \\  let item = body_obj!("A")
-        \\  text!(item.link_id ?? "missing")
+        \\  let item = docctx()
+        \\  text!(str(item.layout_h_center_offset))
         \\  apply_to(item, Action { run = mark })
         \\end
-    , "marked");
+    , "42");
 }
 
 test "compiler semantics: unused closures do not execute property writes" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\page main
-        \\  let item = body_obj!("A")
-        \\  let unused = () |-> set_prop(item, "link_id", "unused")
-        \\  item.link_id = "marked"
-        \\  text!(item.link_id ?? "missing")
+        \\fn unused_write(item: Document) -> Document
+        \\  item.layout_h_center_offset = 17
+        \\  return item
         \\end
-    , "marked");
+        \\page main
+        \\  let item = docctx()
+        \\  let unused = () |-> unused_write(item)
+        \\  item.layout_h_center_offset = 42
+        \\  text!(str(item.layout_h_center_offset))
+        \\end
+    , "42");
 }
 
 test "compiler semantics: selected callback aliases retain transitive reads" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\fn label(item: Object) -> String = (item.link_id ?? "missing")
+        \\fn label(item: Page) -> String = str(item.layout_h_center_offset)
         \\page main
-        \\  let item = body_obj!("A")
+        \\  let item = pagectx()
         \\  let callback = label
-        \\  text!(join(objs_here("body"), ",", callback))
-        \\  item.link_id = "marked"
+        \\  text!(join(pages(docctx()), ",", callback))
+        \\  item.layout_h_center_offset = 42
         \\end
-    , "marked");
+    , "42");
 }
 
 test "compiler semantics: nested imported closures preserve callback effects and definition environments" {
@@ -6198,38 +6126,44 @@ test "compiler semantics: nested imported closures preserve callback effects and
         \\import std:themes/default as *
         \\import "./lib/a" as a
         \\import "./lib/b" as b
-        \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
-        \\fn helper(item: Object) -> String = "wrong"
+        \\fn mark(item: Document) -> Document
+        \\  item.layout_h_center_offset = 42
+        \\  return item
+        \\end
+        \\fn helper(item: Document) -> String = "wrong"
         \\page main
-        \\  let item = body_obj!("A")
+        \\  let item = docctx()
         \\  let callback = a::wrap(mark)
         \\  text!(a::reader(item)())
         \\  b::invoke(callback, item)
         \\end
     ,
-        \\fn helper(item: Object) -> String = (item.link_id ?? "missing")
-        \\fn wrap(callback: Object -> Object) -> Object -> Object
-        \\  return (item: Object) |-> callback(item)
+        \\fn helper(item: Document) -> String = (str(item.layout_h_center_offset))
+        \\fn wrap(callback: Document -> Document) -> Document -> Document
+        \\  return (item: Document) |-> callback(item)
         \\end
-        \\fn reader(item: Object) -> (() -> String)
+        \\fn reader(item: Document) -> (() -> String)
         \\  return () |-> helper(item)
         \\end
     ,
-        \\fn invoke(callback: Object -> Object, item: Object) -> Object = callback(item)
-    , "marked");
+        \\fn invoke(callback: Document -> Document, item: Document) -> Document = callback(item)
+    , "42");
 }
 
 test "compiler semantics: default callbacks contribute effects in their definition environment" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
-        \\fn apply_to(item: Object, callback: Object -> Object = mark) -> Object = callback(item)
+        \\fn mark(item: Document) -> Document
+        \\  item.layout_h_center_offset = 42
+        \\  return item
+        \\end
+        \\fn apply_to(item: Document, callback: Document -> Document = mark) -> Document = callback(item)
         \\page main
-        \\  let item = body_obj!("A")
-        \\  text!(item.link_id ?? "missing")
+        \\  let item = docctx()
+        \\  text!(str(item.layout_h_center_offset))
         \\  apply_to(item)
         \\end
-    , "marked");
+    , "42");
 }
 
 test "compiler semantics: omitted theme arguments read later document definitions" {
@@ -6238,74 +6172,76 @@ test "compiler semantics: omitted theme arguments read later document definition
 
 test "compiler semantics: unused default arguments still contribute writes" {
     try expectObjectContent(
-        \\fn initialize(item: Object, ignored: Object = set_prop(item, "link_id", "Ready")) -> String = "done"
+        \\fn prepare(item: Document) -> Document
+        \\  item.layout_h_center_offset = 42
+        \\  return item
+        \\end
+        \\fn initialize(item: Document, ignored: Document = prepare(item)) -> String = "done"
         \\page main
-        \\  let item = body_obj!("Target")
-        \\  text!(item.link_id ?? "missing")
+        \\  let item = docctx()
+        \\  text!(str(item.layout_h_center_offset))
         \\  text!(initialize(item))
         \\end
-    , "Ready");
+    , "42");
 }
 
 test "compiler semantics: default reads use preceding parameters and distinguish call arguments" {
     try expectObjectContent(
-        \\fn read(item: Object, selected: Object = item, value: String = selected.link_id ?? "missing") -> String = value
-        \\page main
-        \\  let first = body_obj!("First")
-        \\  let second = body_obj!("Second")
-        \\  text!(read(first) ++ ":" ++ read(second))
-        \\  first.link_id = "A"
-        \\  second.link_id = "B"
+        \\fn read(item: Page, selected: Page = item, value: Number = selected.layout_h_center_offset) -> Number = value
+        \\document
+        \\  let first = new_page(docctx(), "first")
+        \\  let second = new_page(docctx(), "second")
+        \\  place_on!(first, text(str(read(first)) ++ ":" ++ str(read(second))))
+        \\  first.layout_h_center_offset = 17
+        \\  second.layout_h_center_offset = 42
         \\end
-    , "A:B");
+    , "17:42");
 }
 
 test "compiler semantics: explicit arguments do not evaluate default effects" {
     try expectObjectContent(
-        \\fn label(item: Object, value: String = item.link_id ?? "missing") -> String = value
+        \\fn label(item: Document, value: Number = item.layout_h_center_offset) -> Number = value
         \\page main
-        \\  let item = body_obj!("Target")
-        \\  item.link_id = label(item, "Ready")
-        \\  text!(item.link_id ?? "missing")
+        \\  let item = docctx()
+        \\  item.layout_h_center_offset = label(item, 42)
+        \\  text!(str(item.layout_h_center_offset))
         \\end
-    , "Ready");
+    , "42");
 }
 
-test "compiler semantics: default object allocations retain distinct identities" {
+test "compiler semantics: default placements retain distinct identities" {
     try expectObjectContent(
-        \\fn make(item: Object = new("Target", "custom", "text")) -> Object = item
+        \\fn make!(item: Placed<Text> = text!("Target")) -> Placed<Text> = item
         \\page main
-        \\  let first = make()
-        \\  let second = make()
-        \\  first.link_id = second.link_id ?? "missing"
-        \\  second.link_id = "Ready"
-        \\  text!(first.link_id ?? "missing")
+        \\  let first = make!()
+        \\  let second = make!()
+        \\  text!(str(selection_count(selection(first) | selection(second))) ++ ":" ++ str(selection_count(selection(first) & selection(second))))
         \\end
-    , "Ready");
+    , "2:0");
 }
 
 test "compiler semantics: default selections retain collection dependencies" {
     try expectObjectContent(
-        \\fn label(item: Object) -> String = content(item)
-        \\fn labels(items: Selection<Object> = objs_here("tagged")) -> String = join(items, ",", label)
+        \\fn label(item: Placed<Heading>) -> String = item.value.title
+        \\fn labels(items: Selection<Placed<Heading>> = select<Heading>(docctx())) -> String = join(items, ",", label)
         \\page main
         \\  text!(labels())
-        \\  txt_obj!("A", "tagged")
+        \\  heading!("A")
         \\end
     , "A");
 }
 
 test "compiler semantics: later parameters do not shadow names in earlier defaults" {
     try expectObjectContent(
-        \\fn source(item: Object) -> String = item.link_id ?? "missing"
-        \\fn other(item: Object) -> String = "wrong"
-        \\fn read(item: Object, value: String = source(item), source: Object -> String = other) -> String = value
+        \\fn source(item: Document) -> Number = item.layout_h_center_offset
+        \\fn other(item: Document) -> Number = 17
+        \\fn read(item: Document, value: Number = source(item), source: Document -> Number = other) -> Number = value
         \\page main
-        \\  let item = body_obj!("Target")
-        \\  text!(read(item))
-        \\  item.link_id = "Ready"
+        \\  let item = docctx()
+        \\  text!(str(read(item)))
+        \\  item.layout_h_center_offset = 42
         \\end
-    , "Ready");
+    , "42");
 }
 
 test "compiler semantics: default facts and effects use the definition module" {
@@ -6335,85 +6271,84 @@ test "compiler semantics: default facts and effects use the definition module" {
 test "compiler semantics: callback effects distinguish specializations and returned record updates" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\type Action { run: Object -> Object }
-        \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
-        \\fn identity(item: Object) -> Object = item
-        \\fn pack(callback: Object -> Object) -> Action = Action { run = callback }
-        \\fn apply_to(item: Object, action: Action) -> Object = action.run(item)
+        \\type Action { run: Document -> Document }
+        \\fn mark(item: Document) -> Document
+        \\  item.layout_h_center_offset = 42
+        \\  return item
+        \\end
+        \\fn identity(item: Document) -> Document = item
+        \\fn pack(callback: Document -> Document) -> Action = Action { run = callback }
+        \\fn apply_to(item: Document, action: Action) -> Document = action.run(item)
         \\page main
-        \\  let item = body_obj!("A")
+        \\  let item = docctx()
         \\  apply_to(item, pack(identity))
-        \\  text!(item.link_id ?? "missing")
+        \\  text!(str(item.layout_h_center_offset))
         \\  apply_to(item, pack(identity) with { run = mark })
         \\end
-    , "marked");
+    , "42");
 }
 
 test "compiler semantics: function aliases retain effects across document blocks" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\fn label(item: Object) -> String = (item.link_id ?? "missing")
+        \\fn label(item: Document) -> String = (str(item.layout_h_center_offset))
         \\document
         \\  let callback = label
         \\end
         \\document
-        \\  let item = body_obj("A")
+        \\  let item = docctx()
         \\  let value = callback(item)
-        \\  item.link_id = "marked"
-        \\  let output = body_obj(value)
+        \\  item.layout_h_center_offset = 42
+        \\  let output = text(value)
         \\  place_on!(new_page(docctx(), "main"), output)
         \\end
-    , "marked");
+    , "42");
 }
 
 test "compiler semantics: finite higher order reentry retains inner callback effects" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\fn mark(item: Object) -> Object = set_prop(item, "link_id", "marked")
-        \\fn apply_to(item: Object, callback: Object -> Object) -> Object = callback(item)
-        \\fn indirect(item: Object) -> Object = apply_to(item, mark)
+        \\fn mark(item: Document) -> Document
+        \\  item.layout_h_center_offset = 42
+        \\  return item
+        \\end
+        \\fn apply_to(item: Document, callback: Document -> Document) -> Document = callback(item)
+        \\fn indirect(item: Document) -> Document = apply_to(item, mark)
         \\page main
-        \\  let item = body_obj!("A")
-        \\  text!(item.link_id ?? "missing")
+        \\  let item = docctx()
+        \\  text!(str(item.layout_h_center_offset))
         \\  apply_to(item, indirect)
         \\end
-    , "marked");
+    , "42");
 }
 
 test "compiler semantics: finite higher order reentry preserves returned function effects" {
     try expectObjectContent(
         \\import std:themes/default as *
-        \\fn label(item: Object) -> String = item.link_id ?? "missing"
-        \\fn direct() -> Object -> String = label
-        \\fn apply_factory(factory: () -> (Object -> String)) -> Object -> String = factory()
-        \\fn nested() -> Object -> String = apply_factory(direct)
+        \\fn label(item: Document) -> String = str(item.layout_h_center_offset)
+        \\fn direct() -> Document -> String = label
+        \\fn apply_factory(factory: () -> (Document -> String)) -> Document -> String = factory()
+        \\fn nested() -> Document -> String = apply_factory(direct)
         \\page main
-        \\  let item = body_obj!("A")
+        \\  let item = docctx()
         \\  let callback = apply_factory(nested)
         \\  text!(callback(item))
-        \\  item.link_id = "marked"
+        \\  item.layout_h_center_offset = 42
         \\end
-    , "marked");
+    , "42");
 }
 
-test "compiler semantics: broad reads survive narrower overlapping reads" {
+test "compiler semantics: broad page reads survive narrower overlapping reads" {
     try expectObjectContent(
-        \\import std:themes/default as *
-        \\import std:internal/classes as { Text }
-        \\type Tagged = object {
-        \\  base = Text
-        \\  roles = ["tagged"]
-        \\  badge: String? = none
-        \\  summary: String? = none
-        \\}
-        \\page main
-        \\  let a = txt_obj!("A", "tagged")
-        \\  let b = txt_obj!("B", "tagged")
-        \\  a.summary = (a.badge ?? "-") ++ join(doc_objs(docctx(), "tagged"), ",", (item: Object) |-> item.badge ?? "-")
-        \\  b.badge = "X"
-        \\  text!(a.summary ?? "missing")
+        \\page first
+        \\  let a = pagectx()
+        \\  text!(str(a.layout_h_center_offset) ++ join(pages(docctx()), ",", (item: Page) |-> str(item.layout_h_center_offset)))
+        \\  a.layout_h_center_offset = 1
         \\end
-    , "--,X");
+        \\page second
+        \\  pagectx().layout_h_center_offset = 2
+        \\end
+    , "11,2");
 }
 
 test "compiler semantics: selected aliases retain object property dependencies" {
@@ -6595,25 +6530,30 @@ test "compiler semantics: selections remain writable and individual objects read
     , "X");
 }
 
-test "compiler semantics: stored property declarations reject functions recursively" {
-    try expectDiagnostic(
-        \\type Holder = object {
-        \\  roles = ["holder"]
-        \\  callback: Number -> Number
-        \\}
+test "compiler semantics: immutable types retain callable fields through nested optional values" {
+    try expectObjectContent(
+        \\type Holder { callback: Number -> Number }
+        \\fn increment(value: Number) -> Number = value + 1
         \\page main
+        \\  let holder = Holder { callback = increment }
+        \\  text!(str(holder.callback(2)))
         \\end
-    , "bytes:", "InvalidPropertyType");
-    try expectDiagnostic(
+    , "3");
+    try expectObjectContent(
         \\type Action { callback: Number -> Number }
         \\type Wrapper { action: Action? = none }
-        \\type Holder = object {
-        \\  roles = ["holder"]
-        \\  wrapper: Wrapper?
-        \\}
-        \\page main
+        \\type Holder { wrapper: Wrapper? = none }
+        \\fn increment(value: Number) -> Number = value + 1
+        \\fn invoke(holder: Holder) -> Number
+        \\  let wrapper = holder.wrapper ?? Wrapper {}
+        \\  let action = wrapper.action ?? Action { callback = increment }
+        \\  return action.callback(2)
         \\end
-    , "bytes:", "InvalidPropertyType");
+        \\page main
+        \\  let holder = Holder { wrapper = Wrapper { action = Action { callback = increment } } }
+        \\  text!(str(invoke(holder)) ++ ":" ++ str(invoke(Holder {})))
+        \\end
+    , "3:3");
 }
 
 test "compiler semantics: property assignment and set_prop reject embedded function values" {
@@ -7332,23 +7272,16 @@ test "compiler semantics: explicit none refines an optional callable in a record
     , "2");
 }
 
-test "compiler semantics: object-valued properties start a new property owner" {
-    try expectDumpContains(
-        \\import std:themes/default as *
-        \\import std:internal/classes as { Text }
-        \\type Linked = object {
-        \\  base = Text
-        \\  roles = ["linked"]
-        \\  peer: Object? = none
-        \\}
+test "compiler semantics: nested optional page references retain the referenced settings owner" {
+    try expectObjectContent(
+        \\type Linked { peer: Page? = none }
         \\page main
-        \\  let a = txt_obj!("A", "linked")
-        \\  let b = txt_obj!("B", "body")
-        \\  text!("peer=" ++ str(a.peer?.layout?.x ?? 0))
-        \\  a.peer = b
-        \\  b.layout.x = 432
+        \\  let b = pagectx()
+        \\  let a = Linked { peer = b }
+        \\  text!("peer=" ++ str(a.peer?.layout_h_center_offset ?? 0))
+        \\  b.layout_h_center_offset = 432
         \\end
-    , &.{"peer=432"});
+    , "peer=432");
 }
 
 test "compiler semantics: numbering queries wait for nested typed group descendants" {
@@ -7530,10 +7463,15 @@ test "compiler semantics: constraint operators reject numbers and wrong registra
     , "case.ss:bytes:", "TypeMismatch");
 }
 
-test "compiler semantics: symbolic anchor names cannot be shadowed by object fields" {
-    try expectDiagnostic(
-        \\type Card = object { base = Flow left: Number = 10 }
-    , "case.ss:bytes:", "ReservedAnchorField");
+test "compiler semantics: ordinary input fields and placement anchors have separate types" {
+    try expectObjectContent(
+        \\type Card { left: Number = 10 right: Number = 20 }
+        \\fn display(self: Placed<Card>) -> Text = text(str(self.value.left) ++ ":" ++ str(self.value.right))
+        \\page main
+        \\  let item = place!(Card { left = 42 })
+        \\  ~ item.left == page.left + item.value.left
+        \\end
+    , "42:20");
     try buildSource(
         \\type Margins { left: Number = 10 right: Number = 20 }
         \\page main
