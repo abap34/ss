@@ -10,19 +10,16 @@ const project = await mkdtemp(path.join(parent, "run-"));
 const slide = path.join(project, "slide.ss");
 const run = (args) => execFileSync(ssBin, args, { cwd: project, encoding: "utf8", timeout: 60000 });
 const source = (attributes, content = "Custom meaning") => `
-import std:themes/default as *
-import std:internal/classes as { Text }
-type Custom = object {
-  base = Text
-  roles = ["custom-meaning"]
-  semantics: SemanticStyle = SemanticStyle { ${attributes} }
-}
+type Custom { content: String }
+fn display(self: Placed<Custom>) -> Text
+  return text(self.value.content) with { semantics = TextSemantics { ${attributes} } }
+end
 page main
-  title_obj!("Standard title")
-  sub_obj!("Standard subtitle")
-  code_obj!("source")
-  fig_obj!("diagram")
-  txt_obj!("${content}", "custom-meaning")
+  heading!("Standard title")
+  heading!("Standard subtitle", 2)
+  code!("source")
+  place!(text("diagram") with { semantics = TextSemantics { role = SemanticRole.figure } })
+  place!(Custom { content = "${content}" })
 end
 `;
 

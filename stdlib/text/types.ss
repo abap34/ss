@@ -5,7 +5,7 @@ import std:math/types
 
 enum SemanticRole { auto paragraph heading code figure caption }
 
-type SemanticStyle {
+type TextSemantics {
   role: SemanticRole = SemanticRole.auto
   heading_level: Number? = none
 }

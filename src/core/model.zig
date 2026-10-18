@@ -931,6 +931,7 @@ pub fn nodeField(node: *const Node, key: []const u8) ?Value {
                     break :blk null;
                 },
                 .text => blk: {
+                    if (std.mem.eql(u8, key, "semantics")) break :blk placement.value.record.field(key);
                     if (std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "underline")) break :blk style.record.field(key);
                     if (std.mem.eql(u8, key, "markdown_headings")) break :blk style.record.field("headings");
                     break :blk null;

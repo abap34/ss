@@ -11,6 +11,8 @@ import std:layout as {
 }
 import std:text as {
   Text,
+  TextSemantics,
+  SemanticRole,
   default_text_style,
   text,
   text!,

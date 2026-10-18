@@ -637,7 +637,7 @@ asset_base_dir = "."
 
 function assertTextInputCompletion(completion, label) {
   assertUniqueCompletionLabels(completion, label);
-  for (const field of ["content", "style", "config"]) {
+  for (const field of ["content", "style", "config", "semantics"]) {
     assertCompletionHas(completion, field, label);
     assertCompletionKind(completion, field, 10, label);
   }

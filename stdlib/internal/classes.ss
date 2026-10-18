@@ -36,7 +36,7 @@ type PageContext = object {
 }
 
 type Flow = object {
-  semantics: SemanticStyle = SemanticStyle {}
+  semantics: TextSemantics = TextSemantics {}
   render_kind: RenderKind = RenderKind.text
   layout: LayoutStyle = LayoutStyle {}
   chrome: ChromeStyle = ChromeStyle {}
@@ -56,7 +56,7 @@ type Text = object {
 type Title = object {
   base = Text
   roles = ["title"]
-  semantics: SemanticStyle = SemanticStyle { role = SemanticRole.heading, heading_level = 1 }
+  semantics: TextSemantics = TextSemantics { role = SemanticRole.heading, heading_level = 1 }
 
   text: TextStyle = TextStyle {
     size = 34
@@ -72,7 +72,7 @@ type Title = object {
 type Sub = object {
   base = Text
   roles = ["subtitle"]
-  semantics: SemanticStyle = SemanticStyle { role = SemanticRole.heading, heading_level = 2 }
+  semantics: TextSemantics = TextSemantics { role = SemanticRole.heading, heading_level = 2 }
 
   text: TextStyle = TextStyle {
     size = 18
@@ -164,7 +164,7 @@ type Cite = object {
 type Code = object {
   base = Text
   roles = ["code"]
-  semantics: SemanticStyle = SemanticStyle { role = SemanticRole.code }
+  semantics: TextSemantics = TextSemantics { role = SemanticRole.code }
 
   render_kind: RenderKind = RenderKind.code
   text: TextStyle = TextStyle {
@@ -218,7 +218,7 @@ type Latex = object {
 type Fig = object {
   base = Text
   roles = ["figure"]
-  semantics: SemanticStyle = SemanticStyle { role = SemanticRole.figure }
+  semantics: TextSemantics = TextSemantics { role = SemanticRole.figure }
 
   asset: AssetStyle = AssetStyle {}
   text: TextStyle = TextStyle {
