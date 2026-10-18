@@ -1,8 +1,7 @@
-import std:internal/classes
-import std:text/style
+import std:text/style as { TextBlockStyle }
+import std:text/types as { TextParseMode }
 
 type TocStyle {
-  title: TextBlockStyle = TextBlockStyle {}
-  body: TextBlockStyle = TextBlockStyle {}
-  chrome: ChromeStyle = ChromeStyle {}
+  title: TextBlockStyle = TextBlockStyle {} with { text.size = 36 }
+  body: TextBlockStyle = TextBlockStyle {} with { text.parse = TextParseMode.none }
 }

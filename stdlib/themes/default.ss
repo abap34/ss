@@ -293,14 +293,7 @@ fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme
           right_inset = 96
         }
       }
-      chrome = ChromeStyle {
-        fill = c"1,1,1"
-        stroke = c"0.78,0.84,0.92"
-        line_width = 0.9
-        radius = 8
-        pad_x = 14
-        pad_y = 12
-      }
+
     }
     callout = MarkedCalloutStyle {
       text = base_text with {

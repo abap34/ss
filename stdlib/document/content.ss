@@ -16,3 +16,15 @@ fn display(self: Placed<PageNumber>) -> Text
     style = self.value.style
   }
 end
+
+const default_heading_style: TextBlockStyle = TextBlockStyle {} with { text.size = 36 }
+
+type Heading {
+  title: String
+  level: Number = 1
+  style: TextBlockStyle = default_heading_style
+}
+
+fn display(self: Placed<Heading>) -> Text
+  return Text { content = self.value.title style = self.value.style }
+end

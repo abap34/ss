@@ -85,7 +85,7 @@ import std:components/callout as {
 import std:components/toc as {
   toc,
   toc!,
-  toc_parts,
+  Toc,
 }
 import std:templates/slide as {
   head,
@@ -96,6 +96,11 @@ import std:templates/slide as {
   cols2_parts,
 }
 import std:document as {
+  Heading,
+  PageNumber,
+  heading,
+  heading!,
+  number_of,
   citation,
   citation!,
   pageno,

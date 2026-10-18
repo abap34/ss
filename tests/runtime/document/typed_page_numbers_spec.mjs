@@ -35,11 +35,12 @@ try {
     assert.equal(number.role, null);
     assert.equal(number.placement.display.state, "expanded");
   }
-  const contents = byType("Contents");
+  const contents = byType("Toc");
   assert.equal(contents.length, 1);
-  const contentsText = dump.nodes.find(node => node.id === contents[0].placement.children[0]);
-  assert.equal(contentsText.content, "- From source data to a slide ... 2\n- Reuse one definition across pages ... 3");
-  assert.equal(byType("Section").length, 2);
+  const contentsGroup = dump.nodes.find(node => node.id === contents[0].placement.children[0]);
+  const contentsText = dump.nodes.find(node => node.id === contentsGroup.placement.children[1]);
+  assert.equal(contentsText.content, "From source data to a slide ... 2\nReuse one definition across pages ... 3");
+  assert.equal(byType("Heading").length, 2);
   assert(placed.some(node => node.content === "See the architecture on page 2."));
   assert.equal(byType("Image").length, 1);
   assert.equal(byType("Code").length, 1);
@@ -47,6 +48,19 @@ try {
   for (const node of placed) assert.equal(node.role, null);
   run("render", "--quiet", source, "--output", path.join(output, "slides.pdf"));
   assert.equal((await readFile(path.join(output, "slides.pdf"))).subarray(0, 5).toString(), "%PDF-");
+  const numbering = path.join(root, "tests/fixtures/typed-document/numbering.ss");
+  run("check", "--quiet", numbering);
+  run("dump", "--quiet", numbering, "--output", path.join(output, "numbering.json"));
+  const numbered = JSON.parse(await readFile(path.join(output, "numbering.json"), "utf8"));
+  assert.deepEqual(numbered.diagnostics, []);
+  const texts = numbered.nodes.filter(node => node.placement?.display.kind === "text").map(node => node.content);
+  for (const expected of ["See claim 1 on page 1", "Absent: -1", "Claim 1: Shared", "Claim 2: Shared", "Claim 1: Other series", "Main section ... 1\nSubsection ... 1"]) {
+    assert(texts.includes(expected), `Missing ${expected}: ${JSON.stringify(texts)}`);
+  }
+  assert.equal(numbered.nodes.filter(node => node.placement?.input.type.name === "Claim").length, 3);
+  assert.equal(numbered.nodes.filter(node => node.placement?.input.type.name === "Heading").length, 2);
+  assert(!texts.includes("Unused"));
+  run("render", "--quiet", numbering, "--output", path.join(output, "numbering.pdf"));
 } finally {
   await rm(output, { recursive: true, force: true });
 }

@@ -67,7 +67,6 @@ fn default_theme(options: ThemeOptions = ThemeOptions {}) -> Theme
     toc.title.text.line_height = 42
     toc.title.text.color = options.accent_color ?? c"1,0.3765,0.5098"
     toc.title.layout.spacing_after = 46
-    toc.chrome = panel
     callout.text.size = 20
     callout.text.line_height = 28
     callout.text.color = options.text_color ?? c"0.1569,0.1333,0.2196"

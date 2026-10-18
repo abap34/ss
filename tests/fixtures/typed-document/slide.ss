@@ -21,34 +21,7 @@ fn footer_number(page: Page, document: Document) -> String
   return body_page_number(page, document) ++ "/" ++ str(page_count(document) - 1)
 end
 
-const footer: document_api::PageNumber = document_api::PageNumber {
-  format = footer_number
-  style = theme.generated.pageno
-}
-
-type Section {
-  title: String
-}
-
-fn/! section(title: String) -> Section = Section { title = title }
-
-fn display(self: Placed<Section>) -> text_api::Text
-  return text_api::Text { content = self.value.title style = theme.h1 }
-end
-
-type Contents {
-  format: (Page, Document) -> String = body_page_number
-}
-
-fn display(self: Placed<Contents>) -> text_api::Text
-  let sections = select<Section>(self.document)
-  let format = self.value.format
-  return text_api::Text {
-    content = join(sections, "
-", (section: Placed<Section>) |-> "- " ++ section.value.title ++ " ... " ++ format(section.page, section.document))
-    style = body_style
-  }
-end
+const footer: document_api::PageNumber = document_api::pageno(theme.generated.pageno, footer_number)
 
 page cover
   let title = place!(text_api::Text {
@@ -66,19 +39,16 @@ page cover
 end
 
 page contents
-  let title = place!(text_api::Text { content = "Contents" style = theme.h1 })
-  let contents = place!(Contents {})
+  let contents = toc!("Contents", theme.toc with { body = body_style }, body_page_number)
   let number = place!(footer)
-  ~ title.left == page.left + 64
-  ~ title.top == page.top - 56
-  ~ contents.left == title.left
-  ~ contents.top == title.bottom - 48
+  ~ contents.left == page.left + 64
+  ~ contents.top == page.top - 56
   ~ number.right == page.right - 64
   ~ number.bottom == page.bottom + 28
 end
 
 page architecture
-  let title = section!("From source data to a slide")
+  let title = heading!("From source data to a slide", 1, theme.h1)
   let explanation = place!(text_api::Text {
     content = <<
 ### Keep the inputs explicit
@@ -108,7 +78,7 @@ page architecture
 end
 
 page implementation
-  let title = section!("Reuse one definition across pages")
+  let title = heading!("Reuse one definition across pages", 1, theme.h1)
   let program = place!(code_api::Code {
     source = <<
 def compile_report(source):
@@ -119,7 +89,7 @@ def compile_report(source):
     language = "python"
     style = theme.code with { text.size = 22 }
   })
-  let architecture = first(select<Section>(docctx()))
+  let architecture = first(select<Heading>(docctx()))
   let reference = place!(text_api::Text {
     content = "See the architecture on page " ++ body_page_number(architecture.page, architecture.document) ++ "."
     style = body_style

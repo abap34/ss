@@ -1,26 +1,25 @@
 import std:components/toc/style as { TocStyle }
-import std:theme as theme
-import std:internal/document as generated
-import std:internal/style as styles
-import std:components/box as boxes
+import std:document/content as { Heading, format_page_number }
+import std:text/content as { Text }
+import std:query as query
 
-type TocParts {
-  root: Object
-  title: Object
-  list: Object
-  background: Object
+type Toc {
+  title: String
+  style: TocStyle = TocStyle {}
+  format: (Page, Document) -> String = format_page_number
+  include: Placed<Heading> -> Bool = include_heading
 }
 
-fn toc_parts(title_text: String, style: TocStyle = theme::current_theme().toc) -> TocParts
-  let title = styles::text_object(title_text, "label", style.title)
-  let list = generated::toc_obj()
-  styles::apply_text_block_style(list, style.body)
-  ~ list.top == title.bottom - 34
-  ~ list.left == title.left
-  let framed = boxes::box_parts(list, style.chrome)
-  return TocParts { root = group(title, framed.root) title = title list = list background = framed.background }
+fn include_heading(item: Placed<Heading>) -> Bool = item.value.level == 1
+
+fn/! toc(title: String, style: TocStyle = TocStyle {}, format: (Page, Document) -> String = format_page_number, include: Placed<Heading> -> Bool = include_heading) -> Toc
+  return Toc { title = title style = style format = format include = include }
 end
 
-fn/! toc(title_text: String, style: TocStyle = theme::current_theme().toc) -> Object
-  return toc_parts(title_text, style).root
+fn display(self: Placed<Toc>) -> Group<Text, Text>
+  let headings = query::filter(select<Heading>(self.document), self.value.include)
+  let format = self.value.format
+  let body = join(headings, "
+", (item: Placed<Heading>) |-> item.value.title ++ " ... " ++ format(item.page, item.document))
+  return Text { content = self.value.title style = self.value.style.title } // Text { content = body style = self.value.style.body }
 end

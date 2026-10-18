@@ -231,7 +231,7 @@ fn typeForPrimitiveCall(allocator: std.mem.Allocator, budget: ?QueryBudget, snap
         }
         return registry.queryOutputType(query);
     }
-    if (descriptor.result_policy == .first_arg and call.args.items.len > descriptor.result_arg_index) {
+    if ((descriptor.result_policy == .first_arg or descriptor.result_policy == .argument_type) and call.args.items.len > descriptor.result_arg_index) {
         return try typeForExpr(allocator, budget, snapshot, module_id, offset, call.args.items[descriptor.result_arg_index]);
     }
     if (descriptor.op == .first and call.args.items.len == 1) {

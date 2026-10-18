@@ -493,7 +493,7 @@ test "typed queries: reading one's own children during display rejects a depende
 
 test "typed queries: child and singleton queries require a placement reference" {
     for ([_][]const u8{ "children", "descendants", "selection" }) |query| {
-        for ([_][]const u8{ "7", "Heading { title = \"Value\" }", "pagectx()", "text!(\"Legacy\")" }) |input| {
+        for ([_][]const u8{ "7", "Heading { title = \"Value\" }", "pagectx()", "body_obj!(\"Legacy\")" }) |input| {
             const source = try std.fmt.allocPrint(testing.allocator,
                 \\type Heading {{ title: String }}
                 \\page main
