@@ -915,7 +915,7 @@ async function testContextDiagnosticsDoNotLeakInternalErrors() {
   const cases = [
     {
       prefix: "ss-cli-invalid-field-default-",
-      source: `type Card = object {
+      source: `type Card {
   accent: Color = "red"
 }
 

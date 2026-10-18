@@ -5,23 +5,24 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { root, ssBin, withLspClient } from "../../harness.mjs";
-import { editorSnapshot } from "../../editor/support.mjs";
 
 const outputRoot = path.join(root, ".ss-cache/tests/layout/hflow");
 await mkdir(outputRoot, { recursive: true });
 const output = await mkdtemp(path.join(outputRoot, "run-"));
 const prelude = `import std:prelude as *
-fn box(label: String, width: Number, height: Number) -> Object
-  let item = new(label, "body", "text")
-  ~ item.width == width
-  ~ item.height == height
-  return item
+type Box { label: String width: Number height: Number }
+fn box(label: String, width: Number, height: Number) -> Box
+  return Box { label = label width = width height = height }
+end
+fn display(self: Placed<Box>) -> PathShape
+  return rectangle(self.value.width, self.value.height)
 end
 `;
-const pair = `let a = place_on!(pagectx(), box("A", 240, 80))
-let b = place_on!(pagectx(), box("B", 120, 60))
-a // b`;
+const pair = `let stack = place!(box("A", 240, 80) // box("B", 120, 60))
+let a = first(children(stack))
+let b = first(children(stack) - selection(a))`;
 let count = 0;
+const failures = [];
 
 for (const policy of ["left", "center", "right"]) {
   const dump = await runCase(`pair-${policy}`, `page example
@@ -54,9 +55,7 @@ end`);
 for (const policy of ["left", "center", "right"]) {
   const dump = await runCase(`page-${policy}`, `page example
 hflow(LayoutPolicy.${policy}, 25)
-let a = place_on!(pagectx(), box("A", 120, 80))
-let b = place_on!(pagectx(), box("B", 240, 60))
-a // b
+place!(box("A", 120, 80) // box("B", 240, 60))
 end`);
   const a = node(dump, "A"), b = node(dump, "B");
   close(anchor(a, policy), anchor(b, policy), "page alignment");
@@ -68,12 +67,12 @@ end`);
 for (const policy of ["left", "center", "right"]) {
   const dump = await runCase(`cell-${policy}`, `page example
 hflow(LayoutPolicy.${policy})
-let a = place_on!(pagectx(), box("A", 240, 80))
-let b = place_on!(pagectx(), box("B", 120, 60))
-let c = place_on!(pagectx(), box("C", 160, 180))
-let d = place_on!(pagectx(), box("D", 100, 40))
+let a = box("A", 240, 80)
+let b = box("B", 120, 60)
+let c = box("C", 160, 180)
+let d = box("D", 100, 40)
 let column = a // b
-let row = column |=| (c // d)
+let row = place!(column |=| (c // d))
 ~ row.left == page.left + 80
 ~ row.top == page.top - 80
 ~ row.width == 1000
@@ -106,18 +105,18 @@ const pages = await runCase("page-overrides", `document
 hflow_doc(LayoutPolicy.center, 40)
 end
 page inherited
-let a = place_on!(pagectx(), box("Inherited", 120, 80))
+let a = place!(box("Inherited", 120, 80))
 end
 page overridden
 hflow(LayoutPolicy.left)
-let b = place_on!(pagectx(), box("Overridden", 120, 80))
+let b = place!(box("Overridden", 120, 80))
 end
 page reset_offset
 hflow(LayoutPolicy.center)
-let c = place_on!(pagectx(), box("Reset", 120, 80))
+let c = place!(box("Reset", 120, 80))
 end
 page inherited_again
-let d = place_on!(pagectx(), box("Inherited again", 120, 80))
+let d = place!(box("Inherited again", 120, 80))
 end`);
 close(anchor(node(pages, "Inherited"), "center"), 680, "document center offset");
 close(node(pages, "Overridden").x, 96, "page left override");
@@ -126,9 +125,7 @@ close(anchor(node(pages, "Inherited again"), "center"), 680, "page override did 
 
 const row = await runCase("horizontal-row", `page example
 hflow(LayoutPolicy.center)
-let a = place_on!(pagectx(), box("A", 120, 80))
-let b = place_on!(pagectx(), box("B", 240, 60))
-a || b
+place!(box("A", 120, 80) || box("B", 240, 60))
 end`);
 close(node(row, "B").x, node(row, "A").x + 152, "horizontal adjacency");
 close((node(row, "A").x + node(row, "B").x + 240) / 2, 640, "complete row centered");
@@ -144,10 +141,8 @@ close(anchor(node(fixedTarget, "A"), "center"), 640, "fixed target did not pull 
 const manyStacks = await runCase("many-independent-stacks", `page example
 hflow(LayoutPolicy.center)
 ${Array.from({ length: 12 }, (_, index) => `
-let a${index} = place_on!(pagectx(), box("A${index}", 240, 80))
-let b${index} = place_on!(pagectx(), box("B${index}", 120, 60))
-a${index} // b${index}
-~ a${index}.top == page.top - 80`).join("\n")}
+let stack${index} = place!(box("A${index}", 240, 80) // box("B${index}", 120, 60))
+~ stack${index}.top == page.top - 80`).join("\n")}
 end`);
 for (let index = 0; index < 12; index++) {
   close(anchor(node(manyStacks, `A${index}`), "center"), 640, "independent stack placement");
@@ -157,11 +152,12 @@ for (let index = 0; index < 12; index++) {
 for (const operator of ["||", "|=|"]) {
   const dump = await runCase(operator === "||" ? "natural-columns" : "natural-equal-columns", `page example
 hflow(LayoutPolicy.center)
-let a = place_on!(pagectx(), box("A", 240, 80))
-let b = place_on!(pagectx(), box("B", 120, 60))
-let c = place_on!(pagectx(), box("C", 240, 180))
-let d = place_on!(pagectx(), box("D", 100, 40))
-(a // b) ${operator} (c // d)
+let a = box("A", 240, 80)
+let b = box("B", 120, 60)
+let c = box("C", 240, 180)
+let d = box("D", 100, 40)
+let columns = place!((a // b) ${operator} (c // d))
+${operator === "|=|" ? "~ columns.left == page.left + 72\n~ columns.width == 1136" : ""}
 end`);
   const a = node(dump, "A"), b = node(dump, "B"), c = node(dump, "C"), d = node(dump, "D");
   close(anchor(a, "center"), anchor(b, "center"), "natural left column alignment");
@@ -186,13 +182,15 @@ assert(!deleted.constraints.some(constraint => constraint.default_alignment && c
 const code = "```ss\n" + 'let value = text!("Example line")\n'.repeat(12) + "```";
 const naturalText = await runCase("natural-text-columns", `page example
 hflow(LayoutPolicy.center)
-let a = text!("A description above an illustration")
-let b = place_on!(pagectx(), box("B", 160, 160))
-let c = text! <<
+let a = text("A description above an illustration")
+let b = box("B", 160, 160)
+let c = text(<<
 ${code}
->>
-let d = text!("Example caption")
-(a // b) |=| (c // d)
+>>)
+let d = text("Example caption")
+let columns = place!((a // b) |=| (c // d))
+~ columns.left == page.left + 72
+~ columns.width == 1136
 end`);
 const description = node(naturalText, "A description above an illustration");
 const illustration = node(naturalText, "B");
@@ -222,12 +220,17 @@ await withLspClient({ cwd: directory }, async (client) => {
     if (index === 0) client.openDocument({ uri, text: source });
     else client.changeDocument({ uri, text: source, version: index + 1 });
     assert.deepEqual((await diagnostics).params.diagnostics, []);
-    const snapshot = await editorSnapshot(client, uri);
+    const snapshot = await client.request("ss/editorSnapshot", { textDocument: { uri } });
+    assert.equal(snapshot.kind, "ss-editor-snapshot");
+    assert.equal(snapshot.coordinate_space?.origin, "page-top-left");
+    assert(snapshot.display?.schema === 2 && snapshot.display.html.includes("ss-vector-path") &&
+      snapshot.display.css.includes(".ss-item"), "snapshot omitted shared HTML shape output");
     const a = snapshot.layout.objects.find(object => object.id === snapshot.editing.find(target => target.binding === "a").node_id);
     const b = snapshot.layout.objects.find(object => object.id === snapshot.editing.find(target => target.binding === "b").node_id);
     close(anchor(a, policy), anchor(b, policy), "editor alignment after policy change");
   }
 });
+assert.deepEqual(failures, [], "horizontal flow geometry");
 console.log(`horizontal flow: ${count} cases passed`);
 
 function anchor(node, policy) {
@@ -235,13 +238,16 @@ function anchor(node, policy) {
 }
 
 function node(dump, label) {
-  const result = dump.nodes.find(node => node.content === label);
+  const result = dump.nodes.find(node => node.content === label || (
+    node.placement?.input.type?.name === "Box" &&
+    node.placement.input.fields.find(field => field.name === "label")?.value.value === label
+  ));
   assert(result, `missing ${label}`);
   return result;
 }
 
 function close(actual, expected, label) {
-  assert(Math.abs(actual - expected) < 0.1, `${label}: ${actual} != ${expected}`);
+  if (!(Math.abs(actual - expected) < 0.1)) failures.push(`${label}: ${actual} != ${expected}`);
 }
 
 async function saveCase(name, source) {

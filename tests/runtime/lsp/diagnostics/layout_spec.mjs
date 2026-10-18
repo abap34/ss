@@ -124,10 +124,12 @@ automatic = false
 async function testFrameDiagnosticsRespectFitPolicy() {
   for (const policy of [null, "ignore", "error"]) {
     const frameSource = `page example
-let body = body_obj!("SupercalifragilisticexpialidociousSupercalifragilisticexpialidocious")
-body.text.size = 24
-body.text.line_height = 30
-${policy ? `body.layout.fit = FitPolicy.${policy}\n` : ""}~ body.left == page.left + 100
+let body = text!("SupercalifragilisticexpialidociousSupercalifragilisticexpialidocious", default_text_style with {
+  text.size = 24
+  text.line_height = 30
+  ${policy ? `layout.fit = FitPolicy.${policy}` : ""}
+})
+~ body.left == page.left + 100
 ~ body.width == 120
 ~ body.top == page.top - 120
 end

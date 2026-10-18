@@ -1123,7 +1123,7 @@ type LocalStyle {
   color: Color = c"${color}"
 }
 
-type Badge = object {
+type Badge {
   label: String = "badge"
 }
 
