@@ -1180,3 +1180,77 @@ test "public placement: non-displayable values and placed references fail before
         for (state.graph.page_order.items) |page| try testing.expectEqual(@as(usize, 0), state.placementRootsOf(page).len);
     }
 }
+
+test "native latex display: immutable body and configuration survive reuse and display expansion" {
+    var state = try documentWithModules(
+        \\import std:math as math
+        \\type Formula { body: math::Latex }
+        \\fn display(self: Placed<Formula>) -> math::Latex = self.value.body
+        \\const body: math::Latex = math::Latex {
+        \\  source = "Raw **body** $x$"
+        \\  config = math::LatexConfig { preamble = "Custom preamble" }
+        \\  style = math::LatexBlockStyle {} with { chrome.pad_x = 12 }
+        \\}
+        \\page first
+        \\  let normal = place!(body)
+        \\  let changed = place!(body with {
+        \\    config.engine = math::LatexEngine.lualatex
+        \\    config.preamble = "Other preamble"
+        \\    style.latex.scale = 2
+        \\  })
+        \\end
+        \\page second
+        \\  let wrapped = place!(Formula { body = body })
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    const parent = state.placementRootsOf(state.graph.page_order.items[1])[0];
+    const child = state.childrenOf(parent).?[0];
+    // Mutable legacy configuration cannot change immutable display inputs.
+    try state.extendRenderEnv(state.graph.document_id, "add", "latex.preamble", "Legacy preamble");
+    for ([_]core.NodeId{ roots[0], roots[1], child }, 0..) |id, index| {
+        const node = state.getNode(id).?;
+        try testing.expectEqual(core.native_display.Kind.latex, node.placement.?.display.native);
+        try testing.expect(node.role == null);
+        try testing.expectEqual(@as(usize, 0), node.fields.items.len);
+        const paint = core.render_policy.resolve(&state, node);
+        try testing.expectEqual(core.render_policy.RenderKind.latex, paint.kind);
+        try testing.expectEqual(@as(f32, if (index == 1) 2 else 1), paint.latex.?.scale);
+        try testing.expectEqual(@as(f32, 12), paint.chrome.pad_x);
+        var prepared = try core.prepared.prepareObject(testing.allocator, &state, node);
+        defer prepared.deinit(testing.allocator);
+        try testing.expectEqualStrings("Raw **body** $x$", prepared.content);
+        try testing.expectEqual(core.markdown.ParseMode.none, prepared.parse_mode);
+        try testing.expect(prepared.markdown_doc == null);
+        try testing.expectEqual(@as(usize, 1), prepared.asset_deps.len);
+        try testing.expectEqualStrings(prepared.content, prepared.asset_deps[0].source);
+        try testing.expectEqual(if (index == 1) core.render_env.LatexEngine.lualatex else .pdflatex, prepared.latex_engine);
+        try testing.expectEqual(@as(usize, 1), prepared.latex_preamble.len);
+        try testing.expectEqualStrings(if (index == 1) "Other preamble" else "Custom preamble", prepared.latex_preamble[0].value);
+    }
+}
+
+test "native latex display: configuration must have the declared nominal type" {
+    var state = try documentWithModules(
+        \\import std:math as math
+        \\type Latex { source: String }
+    );
+    defer state.deinit();
+    try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
+    const local = Type.recordType("Latex").inModule(0);
+    try testing.expect(core.native_display.kindForType(&state, local) == null);
+    const native_type = Type.recordType("Latex").inModule(state.moduleByPathOrSpec("std:math/content").?.id);
+    try testing.expectEqual(core.native_display.Kind.latex, (try prepareTarget(&state, native_type)).native);
+    var value = core.Value{ .record = .init(native_type) };
+    defer value.deinit(testing.allocator);
+    try value.record.fields.append(testing.allocator, .{ .name = "source", .value = .{ .string = "Body" } });
+    const style_type = Type.recordType("LatexBlockStyle").inModule(state.moduleByPathOrSpec("std:math/style").?.id);
+    try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(style_type) } });
+    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .latex));
+    try value.record.fields.append(testing.allocator, .{ .name = "config", .value = .{ .record = .init(Type.recordType("LatexConfig").inModule(0)) } });
+    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .latex));
+}

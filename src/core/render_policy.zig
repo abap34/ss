@@ -351,6 +351,7 @@ pub fn resolveKind(state: anytype, node: *const Node) RenderKind {
             .image => .raster_asset,
             .pdf => .vector_asset,
             .code => .code,
+            .latex => .latex,
         },
         .pending, .running => {},
     };

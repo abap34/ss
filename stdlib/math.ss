@@ -1,5 +1,6 @@
-import std:math/types as { MathFit, LatexEngine, LatexStyle }
-import std:internal/classes
+import std:math/types as { MathFit, LatexEngine, LatexStyle, LatexConfig }
+import std:math/content as { Latex }
+import std:math/style as { LatexBlockStyle }
 import std:internal/objects as objects
 
 fn latex_engine(engine: LatexEngine) -> Void

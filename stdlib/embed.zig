@@ -35,6 +35,8 @@ pub const modules = [_]Module{
     .{ .spec = "std:layout", .path = "stdlib/layout.ss", .source = @embedFile("layout.ss") },
     .{ .spec = "std:markdown", .path = "stdlib/markdown.ss", .source = @embedFile("markdown.ss") },
     .{ .spec = "std:math/types", .path = "stdlib/math/types.ss", .source = @embedFile("math/types.ss") },
+    .{ .spec = "std:math/content", .path = "stdlib/math/content.ss", .source = @embedFile("math/content.ss") },
+    .{ .spec = "std:math/style", .path = "stdlib/math/style.ss", .source = @embedFile("math/style.ss") },
     .{ .spec = "std:math", .path = "stdlib/math.ss", .source = @embedFile("math.ss") },
     .{ .spec = "std:prelude", .path = "stdlib/prelude.ss", .source = @embedFile("prelude.ss") },
     .{ .spec = "std:query", .path = "stdlib/query.ss", .source = @embedFile("query.ss") },
