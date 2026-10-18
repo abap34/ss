@@ -1,5 +1,4 @@
 const std = @import("std");
-const core = @import("core");
 const dependencies = @import("dependencies.zig");
 
 const Allocator = std.mem.Allocator;
@@ -20,7 +19,7 @@ pub const ResourceWriterIndex = struct {
     allocator: Allocator,
     variables: std.StringHashMapUnmanaged(ScopedEntries) = .{},
     pages: ScopedEntries = .{},
-    objects: NamedEntries = .{},
+    objects: Entries = .empty,
     any_owner: NamedEntries = .{},
     document_owner: NamedEntries = .{},
     page_owner: NamedEntries = .{},
@@ -48,7 +47,7 @@ pub const ResourceWriterIndex = struct {
                 try scoped.add(self.allocator, variable.scope, entry);
             },
             .pages => |scope| try self.pages.add(self.allocator, scope, entry),
-            .objects => |members| try self.objects.add(self.allocator, members.role, entry),
+            .objects => try self.objects.append(self.allocator, entry),
             .property => |property| switch (property.owner) {
                 .any => try self.any_owner.add(self.allocator, property.key.indexName(), entry),
                 .document => try self.document_owner.add(self.allocator, property.key.indexName(), entry),
@@ -76,7 +75,7 @@ pub const ResourceWriterIndex = struct {
                 if (self.variables.getPtr(variable.name)) |scoped| try scoped.visit(variable.scope, visitor);
             },
             .pages => |scope| try self.pages.visit(scope, visitor),
-            .objects => |members| try self.objects.visit(members.role, visitor),
+            .objects => try visitEntries(self.objects.items, visitor),
             .property => |property| {
                 const key = property.key.indexName();
                 try self.any_owner.visit(key, visitor);
@@ -84,7 +83,7 @@ pub const ResourceWriterIndex = struct {
                     .any => {
                         try self.document_owner.visit(key, visitor);
                         try self.page_owner.visit(key, visitor);
-                        try self.object_owners.all_by_class.visit(null, key, visitor);
+                        try self.object_owners.all.visit(key, visitor);
                     },
                     .document => try self.document_owner.visit(key, visitor),
                     .page => try self.page_owner.visit(key, visitor),
@@ -121,7 +120,7 @@ const ScopedEntries = struct {
     }
 };
 
-// Property callers supply the first path segment; role callers supply the full name.
+// Keys are the first path segment of a property.
 const NamedEntries = struct {
     any: Entries = .empty,
     named: std.StringHashMapUnmanaged(Entries) = .{},
@@ -148,78 +147,36 @@ const NamedEntries = struct {
     }
 };
 
-const ClassEntries = struct {
-    any: NamedEntries = .{},
-    concrete: std.HashMapUnmanaged(core.NominalId, NamedEntries, NominalContext, std.hash_map.default_max_load_percentage) = .{},
-
-    fn deinit(self: *ClassEntries, allocator: Allocator) void {
-        self.any.deinit(allocator);
-        deinitValues(allocator, &self.concrete);
-    }
-
-    fn add(self: *ClassEntries, allocator: Allocator, entry: WriteEntry) !void {
-        const property = entry.resource.property;
-        const keys = if (property.owner.object.class_id) |class_id|
-            try getBucket(allocator, &self.concrete, class_id)
-        else
-            &self.any;
-        try keys.add(allocator, property.key.indexName(), entry);
-    }
-
-    fn visit(self: *const ClassEntries, class_id: ?core.NominalId, key: ?[]const u8, visitor: anytype) !void {
-        try self.any.visit(key, visitor);
-        if (class_id) |id| {
-            if (self.concrete.getPtr(id)) |keys| try keys.visit(key, visitor);
-        } else {
-            var values = self.concrete.valueIterator();
-            while (values.next()) |keys| try keys.visit(key, visitor);
-        }
-    }
-};
-
 const ObjectEntries = struct {
-    all_by_class: ClassEntries = .{},
-    unidentified_by_class: ClassEntries = .{},
+    all: NamedEntries = .{},
+    unidentified: NamedEntries = .{},
     by_identity: std.HashMapUnmanaged(ObjectIdentity, NamedEntries, IdentityContext, std.hash_map.default_max_load_percentage) = .{},
 
     fn deinit(self: *ObjectEntries, allocator: Allocator) void {
-        self.all_by_class.deinit(allocator);
-        self.unidentified_by_class.deinit(allocator);
+        self.all.deinit(allocator);
+        self.unidentified.deinit(allocator);
         deinitValues(allocator, &self.by_identity);
     }
 
     fn add(self: *ObjectEntries, allocator: Allocator, entry: WriteEntry) !void {
-        try self.all_by_class.add(allocator, entry);
         const property = entry.resource.property;
+        try self.all.add(allocator, property.key.indexName(), entry);
         if (property.owner.object.identity) |identity| {
             const keys = try getBucket(allocator, &self.by_identity, identity);
             try keys.add(allocator, property.key.indexName(), entry);
         } else {
-            try self.unidentified_by_class.add(allocator, entry);
+            try self.unidentified.add(allocator, property.key.indexName(), entry);
         }
     }
 
     fn visit(self: *const ObjectEntries, owner: dependencies.ObjectOwner, key: ?[]const u8, visitor: anytype) !void {
         if (owner.identity) |identity| {
-            // When both sides have an identity, it takes precedence over class
-            // information. Only writers without an identity use class matching.
+            // A known identity also depends on writers with unknown identities.
             if (self.by_identity.getPtr(identity)) |keys| try keys.visit(key, visitor);
-            try self.unidentified_by_class.visit(owner.class_id, key, visitor);
+            try self.unidentified.visit(key, visitor);
         } else {
-            try self.all_by_class.visit(owner.class_id, key, visitor);
+            try self.all.visit(key, visitor);
         }
-    }
-};
-
-const NominalContext = struct {
-    pub fn hash(_: NominalContext, id: core.NominalId) u64 {
-        var hasher = std.hash.Wyhash.init(id.module_id);
-        hasher.update(id.name);
-        return hasher.final();
-    }
-
-    pub fn eql(_: NominalContext, a: core.NominalId, b: core.NominalId) bool {
-        return a.eql(b);
     }
 };
 

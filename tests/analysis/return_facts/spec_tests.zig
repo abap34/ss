@@ -196,7 +196,11 @@ test "dependency return facts share repeated function bodies" {
         defer analyzer.deinit();
         var summary = try analyzer.documentStatements(analysis.syntax.document_statements.items);
         defer summary.deinit();
-        try testing.expectEqual(3 * (depth + 1), cache.return_body_analyses);
+        // String and property-target facts each analyze every body once.
+        try testing.expectEqual(2 * (depth + 1), cache.return_body_analyses);
+        var repeated = try analyzer.documentStatements(analysis.syntax.document_statements.items);
+        defer repeated.deinit();
+        try testing.expectEqual(2 * (depth + 1), cache.return_body_analyses);
     }
 }
 

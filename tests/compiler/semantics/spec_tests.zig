@@ -678,7 +678,7 @@ test "compiler semantics: dependency query comments report statement summaries" 
         \\
     ;
     try expectDiagnostic(property_source, "bytes:", "write Property(owner=document, key=layout_h_center_offset)");
-    try expectDiagnostic(property_source, "bytes:", "read Objects(role=*, type=Heading,");
+    try expectDiagnostic(property_source, "bytes:", "read Objects(type=Heading,");
     try expectDiagnostic(property_source, "bytes:", "read Property(owner=document, key=layout_h_center_offset)");
 }
 

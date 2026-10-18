@@ -38,11 +38,12 @@ fn verifyResourceMatrix(allocator: std.mem.Allocator, resources: []const Resourc
 
 test "resource index: candidates equal pairwise intersections across scopes owners and wildcards" {
     const scopes = [_]Scope{ .any, .{ .document = 1 }, .{ .document = 2 }, .{ .page = 1 }, .{ .page = 2 } };
-    const classes = [_]?compiler.core.NominalId{
+    const Type = compiler.language.Type;
+    const input_types = [_]?Type{
         null,
-        .{ .module_id = 1, .name = "Text" },
-        .{ .module_id = 2, .name = "Text" },
-        .{ .module_id = 1, .name = "Body" },
+        Type.recordType("Text").inModule(1),
+        Type.recordType("Text").inModule(2),
+        Type.recordType("Body").inModule(1),
     };
     const identities = [_]?dependencies.ObjectIdentity{
         null,
@@ -64,29 +65,25 @@ test "resource index: candidates equal pairwise intersections across scopes owne
             try resources.append(testing.allocator, Resource.makeVariable(scope, name));
         }
     }
-    for ([_]?[]const u8{ null, "title", "body" }) |role| {
-        try resources.append(testing.allocator, Resource.makeObjects(role));
-    }
+    try resources.append(testing.allocator, Resource.makeObjects());
     for ([_]Owner{ .any, .document, .page }) |owner| {
         for (keys) |key| try resources.append(testing.allocator, .{ .property = .{ .owner = owner, .key = key } });
     }
-    for (classes) |class_id| {
-        for (identities) |identity| {
+    for (identities) |identity| {
+        for (input_types) |input_type| {
             for ([_]Scope{ .any, .{ .page = 1 }, .{ .page = 2 } }) |page_scope| {
-                for ([_]?[]const u8{ null, "body", "title" }) |role| {
-                    try resources.append(testing.allocator, .{ .objects = .{
-                        .owner = .{ .class_id = class_id, .identity = identity },
-                        .role = role,
-                        .page_scope = page_scope,
-                    } });
-                }
-            }
-            for (keys) |key| {
-                try resources.append(testing.allocator, .{ .property = .{
-                    .owner = .{ .object = .{ .class_id = class_id, .identity = identity } },
-                    .key = key,
+                try resources.append(testing.allocator, .{ .objects = .{
+                    .owner = .{ .identity = identity },
+                    .input_type = input_type,
+                    .page_scope = page_scope,
                 } });
             }
+        }
+        for (keys) |key| {
+            try resources.append(testing.allocator, .{ .property = .{
+                .owner = .{ .object = .{ .identity = identity } },
+                .key = key,
+            } });
         }
     }
     try verifyResourceMatrix(testing.allocator, resources.items);
@@ -102,12 +99,11 @@ test "resource index: unrelated pages and owners do not increase candidate count
             const page_id: u32 = @intCast(position);
             try index.addWrite(position, Resource.makeVariable(.{ .page = page_id }, "title"));
             try index.addWrite(count + position, Resource.makeProperty(.{ .object = .{
-                .class_id = .{ .module_id = 1, .name = "Text" },
                 .identity = .{ .scope = .{ .page = page_id }, .name = "title" },
             } }, "x"));
             try index.addWrite(count * 2 + position, Resource.makePages(page_id));
             try index.addWrite(count * 3 + position, Resource.makeProperty(.{ .object = .{
-                .class_id = .{ .module_id = page_id, .name = "Shared" },
+                .identity = .{ .scope = .{ .page = page_id }, .name = "other" },
             } }, "x"));
         }
         var total: usize = 0;
@@ -116,12 +112,11 @@ test "resource index: unrelated pages and owners do not increase candidate count
             const reads = [_]Resource{
                 Resource.makeVariable(.{ .page = page_id }, "title"),
                 Resource.makeProperty(.{ .object = .{
-                    .class_id = .{ .module_id = 1, .name = "Text" },
                     .identity = .{ .scope = .{ .page = page_id }, .name = "title" },
                 } }, "x"),
                 Resource.makePages(page_id),
                 Resource.makeProperty(.{ .object = .{
-                    .class_id = .{ .module_id = page_id, .name = "Shared" },
+                    .identity = .{ .scope = .{ .page = page_id }, .name = "other" },
                 } }, "x"),
             };
             for (reads) |read| {
@@ -142,16 +137,15 @@ test "resource index: allocation failures release every partially built bucket" 
         Resource.makeVariable(.{ .page = 1 }, "title"),
         Resource.makePages(null),
         Resource.makePages(1),
-        Resource.makeObjects(null),
-        Resource.makeObjects("title"),
+        Resource.makeObjects(),
+        Resource{ .objects = .{ .input_type = compiler.language.Type.recordType("Heading").inModule(1) } },
         Resource.makeProperty(.any, null),
         Resource.makeProperty(.document, "x"),
         Resource.makeContentProperty(.page),
         Resource.makeProperty(.{ .object = .{} }, "x"),
-        Resource.makeProperty(.{ .object = .{ .class_id = .{ .module_id = 1, .name = "Text" } } }, "x"),
+        Resource.makeProperty(.{ .object = .{ .identity = .{ .scope = .{ .page = 1 }, .name = "other" } } }, "x"),
         Resource.makeProperty(.{ .object = .{ .identity = .{ .scope = .{ .page = 1 }, .name = "title" } } }, null),
         Resource.makeProperty(.{ .object = .{
-            .class_id = .{ .module_id = 1, .name = "Text" },
             .identity = .{ .scope = .{ .page = 2 }, .name = "title" },
         } }, "x"),
     };
