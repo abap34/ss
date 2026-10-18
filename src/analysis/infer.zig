@@ -1075,7 +1075,6 @@ fn inferPrimitiveCallInfo(
         switch (descriptor.op) {
             .prop, .has_prop, .prop_eq => try validateKnownPropertyKeyCall(state.?, call, sema, origin, argument_infos),
             .set_prop => try validateSetPropCall(state.?, call, sema, origin, argument_infos),
-            .set_repr => try validateSetReprCall(allocator, state.?, call, origin, argument_infos),
             .extend_render_env => try validateExtendRenderEnvCall(state.?, call, env, origin, argument_infos),
             else => {},
         }
@@ -1109,34 +1108,6 @@ fn validateKnownPropertyKeyCall(
         try addUserReport(state, origin, "UnknownField", "unknown field: {s}", .{key});
         return error.InvalidType;
     }
-}
-
-fn validateSetReprCall(
-    allocator: std.mem.Allocator,
-    state: *core.DocumentState,
-    call: ast.CallExpr,
-    origin: core.SourceOrigin,
-    argument_infos: []const TypeInfo,
-) !void {
-    if (call.args.items.len < 2) return;
-    const object_info = argument_infos[0];
-    const callback_info = argument_infos[1];
-    if (object_info.hole != null) return;
-    if (callback_info.hole != null) return;
-    if (callback_info.ty.kind != .function or callback_info.ty.fn_result == null) {
-        try addUserReport(state, origin, "InvalidCallback", "set_repr expects Object -> String", .{});
-        return error.InvalidType;
-    }
-    if (callback_info.ty.fn_params.len != 1) {
-        try addUserReport(state, origin, "InvalidCallback", "set_repr callback receives 1 argument, but its function type has {d}", .{callback_info.ty.fn_params.len});
-        return error.InvalidArity;
-    }
-    const object_arg_type = if (object_info.ty.kind == .object and object_info.object_class != null)
-        Type.objectId(object_info.object_class.?)
-    else
-        Type.object;
-    try ensureType(state, allocator, infoFromType(object_arg_type), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
-    try ensureType(state, allocator, infoFromType(callback_info.ty.fn_result.?.*), Type.string, origin, .UnmatchedReturnType);
 }
 
 fn isPrimitiveFunctionArgument(descriptor: registry.PrimitiveDescriptor, index: usize) bool {

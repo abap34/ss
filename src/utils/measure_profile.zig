@@ -87,7 +87,6 @@ pub const WysiwygKind = enum {
     evaluate_solve,
     evaluate,
     execute_units,
-    materialize_display,
     prepare,
     solve,
     render_compile,
@@ -211,7 +210,6 @@ var analysis_execution_graph = CountTime{};
 var wysiwyg_evaluate_solve = CountTime{};
 var wysiwyg_evaluate = CountTime{};
 var wysiwyg_execute_units = CountTime{};
-var wysiwyg_materialize_display = CountTime{};
 var wysiwyg_prepare = CountTime{};
 var wysiwyg_solve = CountTime{};
 var wysiwyg_render_compile = CountTime{};
@@ -373,7 +371,6 @@ pub fn recordWysiwyg(kind: WysiwygKind, start_ns: i128) void {
         .evaluate_solve => &wysiwyg_evaluate_solve,
         .evaluate => &wysiwyg_evaluate,
         .execute_units => &wysiwyg_execute_units,
-        .materialize_display => &wysiwyg_materialize_display,
         .prepare => &wysiwyg_prepare,
         .solve => &wysiwyg_solve,
         .render_compile => &wysiwyg_render_compile,
@@ -461,7 +458,6 @@ pub fn printIfEnabled() void {
     printCounter("WYSIWYG evaluate and solve", &wysiwyg_evaluate_solve);
     printCounter("WYSIWYG evaluate", &wysiwyg_evaluate);
     printCounter("WYSIWYG execute units", &wysiwyg_execute_units);
-    printCounter("WYSIWYG materialize display", &wysiwyg_materialize_display);
     printCounter("WYSIWYG prepare", &wysiwyg_prepare);
     printCounter("WYSIWYG solve", &wysiwyg_solve);
     printCounter("WYSIWYG render compile", &wysiwyg_render_compile);

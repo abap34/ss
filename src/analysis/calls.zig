@@ -233,17 +233,6 @@ const Activation = struct {
     owner: ?ast.FunctionDecl,
 };
 
-const DisplayRegistration = struct {
-    target: ValueFacts,
-    callback: ValueFacts,
-    origin: ?core.SourceOrigin,
-};
-
-const DisplayRead = struct {
-    target: ValueFacts,
-    origin: ?core.SourceOrigin,
-};
-
 const Analyzer = struct {
     allocator: std.mem.Allocator,
     state: *core.DocumentState,
@@ -262,8 +251,6 @@ const Analyzer = struct {
     types_checked: bool = true,
     object_properties: std.ArrayList(ValueFacts) = .empty,
     unknown_properties: ValueFacts,
-    display_registrations: std.ArrayList(DisplayRegistration) = .empty,
-    display_reads: std.ArrayList(DisplayRead) = .empty,
     typed_displays: std.ArrayList(struct { plan: usize, receiver: ValueFacts, origin: ?core.SourceOrigin }) = .empty,
 
     fn init(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) Analyzer {
@@ -589,24 +576,6 @@ const Analyzer = struct {
                 try value.objects.put(id, {});
                 return value;
             },
-            .set_repr => {
-                if (args.len >= 2 and self.require_known_calls) {
-                    try self.display_registrations.append(self.allocator, .{
-                        .target = try args[0].clone(self.allocator),
-                        .callback = try args[1].clone(self.allocator),
-                        .origin = self.current_origin,
-                    });
-                }
-            },
-            .repr => {
-                if (args.len >= 1 and self.require_known_calls) {
-                    if (self.checking_display) {
-                        try self.checkDisplayRead(args[0]);
-                    } else {
-                        try self.display_reads.append(self.allocator, .{ .target = try args[0].clone(self.allocator), .origin = self.current_origin });
-                    }
-                }
-            },
             .set_prop => {
                 if (args.len >= 3 and call.args.items[1] == .string) {
                     const path = [_]ast.RecordPathSegment{.{ .name = call.args.items[1].string.text, .span = .{ .start = 0, .end = 0 } }};
@@ -708,34 +677,6 @@ const Analyzer = struct {
                 },
             };
         }
-        // Materialization invokes every registered display, even when no repr
-        // expression occurs in the source. The construction store is now frozen.
-        for (self.display_registrations.items) |registration| {
-            self.current_origin = registration.origin;
-            _ = try self.invokeValue(registration.callback, &.{registration.target}, null);
-        }
-        for (self.display_reads.items) |read| {
-            self.current_origin = read.origin;
-            try self.checkDisplayRead(read.target);
-        }
-    }
-
-    fn checkDisplayRead(self: *Analyzer, target: ValueFacts) anyerror!void {
-        for (self.display_registrations.items) |registration| {
-            var receiver = ValueFacts.init(self.allocator);
-            if (target.unknown_objects) {
-                receiver = try registration.target.clone(self.allocator);
-            } else if (registration.target.unknown_objects) {
-                receiver = try target.clone(self.allocator);
-            } else {
-                var objects = target.objects.keyIterator();
-                while (objects.next()) |id| {
-                    if (registration.target.objects.contains(id.*)) try receiver.objects.put(id.*, {});
-                }
-            }
-            if (!receiver.unknown_objects and receiver.objects.count() == 0) continue;
-            _ = try self.invokeValue(registration.callback, &.{receiver}, null);
-        }
     }
 
     fn rejectDisplayWrite(self: *Analyzer) anyerror {
@@ -827,8 +768,8 @@ const Analyzer = struct {
 
     fn constFacts(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!ValueFacts {
         // Runtime constants retain their first value, including object identity.
-        // Display reads still check initializer purity: an explicit repr may
-        // execute before a construction root has forced the lazy constant.
+        // Check initializer purity again in displays, independently of whether
+        // an ordinary construction call has already forced the constant.
         if (!self.checking_display) {
             if (self.const_values.get(resolved.key)) |value| return value.clone(self.allocator);
         }

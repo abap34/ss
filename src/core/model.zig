@@ -443,10 +443,6 @@ pub const Node = struct {
     content: ?[]const u8 = null,
     content_owned: bool = false,
     content_provenance: std.ArrayList(ContentProvenance) = .empty,
-    display_content: ?[]const u8 = null,
-    display_content_owned: bool = false,
-    display_content_provenance: std.ArrayList(ContentProvenance) = .empty,
-    repr_function: ?FunctionRef = null,
     page_index: ?usize = null,
     composition_order: ?CompositionOrder = null,
     origin: ?SourceOrigin = null,
@@ -471,11 +467,6 @@ pub const Node = struct {
         }
         for (self.content_provenance.items) |*entry| entry.deinit(allocator);
         self.content_provenance.deinit(allocator);
-        if (self.display_content_owned) {
-            if (self.display_content) |content| allocator.free(content);
-        }
-        for (self.display_content_provenance.items) |*entry| entry.deinit(allocator);
-        self.display_content_provenance.deinit(allocator);
     }
 };
 
@@ -972,12 +963,10 @@ pub fn nodeDisplayContent(node: *const Node) []const u8 {
     if (node.placement) |placement| {
         if (placement.display == .native) return nodeContent(node).?;
     }
-    if (node.display_content) |content| return content;
     return nodeContent(node) orelse "";
 }
 
 pub fn nodeDisplayContentProvenance(node: *const Node) []const ContentProvenance {
-    if (node.display_content != null) return node.display_content_provenance.items;
     return node.content_provenance.items;
 }
 

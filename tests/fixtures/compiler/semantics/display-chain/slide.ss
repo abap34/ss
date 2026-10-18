@@ -1,23 +1,11 @@
-import std:themes/default as *
-import std:internal/classes as { Text }
-
-type Link = object {
-  base = Text
-  roles = ["link"]
-  peer: Object?
-}
-fn formatter(fallback: Object) -> Object -> String
-  return (item: Object) |-> repr(item.peer ?? fallback) ++ "!"
+type Outer { format: () -> String }
+type Inner { format: () -> String }
+fn formatter(value: String) -> () -> String = () |-> value ++ "!"
+fn display(self: Placed<Outer>) -> Inner
+  let format = self.value.format
+  return Inner { format = () |-> format() ++ "!" }
 end
+fn display(self: Placed<Inner>) -> Text = text(self.value.format())
 page main
-  let leaf = body_obj("leaf")
-  let a = txt_obj("A", "link")
-  a.peer = leaf
-  set_repr(a, formatter(leaf))
-  let b = txt_obj("B", "link")
-  b.peer = a
-  set_repr(b, formatter(leaf))
-  place_on!(pagectx(), leaf)
-  place_on!(pagectx(), a)
-  place_on!(pagectx(), b)
+  place!(Outer { format = formatter("leaf") })
 end

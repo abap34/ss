@@ -18,7 +18,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.Docu
     const render = core.render_policy.resolve(state, &node);
     const display_content = core.nodeDisplayContent(&node);
     const content = core.nodeContent(&node);
-    const has_display_content = content != null or node.display_content != null;
+    const has_display_content = content != null;
     const should_parse_blocks = core.markdown.shouldParseBlocksNode(state, &node) and has_display_content;
     const should_parse_inline = core.markdown.shouldParseInlineNode(state, &node) and has_display_content and !should_parse_blocks;
 
@@ -52,9 +52,6 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.Docu
     try item.optionalEnumTagField("payload_kind", node.payload_kind);
     try item.optionalStringField("content", content);
     try writePlacement(&item, state, &node);
-    if (node.display_content != null) {
-        try item.stringField("display_content", display_content);
-    }
     if (should_parse_blocks) {
         try writeMarkdownBlocks(&item, "blocks", markdown_doc_storage.blocks.items);
     } else {

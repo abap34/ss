@@ -1065,30 +1065,6 @@ pub const DocumentState = struct {
         node.content_provenance = owned_provenance;
     }
 
-    pub fn setNodeDisplayContent(self: *DocumentState, node_id: NodeId, value: []const u8) !void {
-        const node = self.getNode(node_id) orelse return error.UnknownNode;
-        const owned_value = try self.allocator.dupe(u8, value);
-        errdefer self.allocator.free(owned_value);
-        const provenance = self.stringProvenance(value);
-        var owned_provenance = try self.cloneProvenanceList(provenance);
-        errdefer self.deinitProvenanceList(&owned_provenance);
-        try self.setStringProvenance(owned_value, owned_provenance.items);
-        if (node.display_content_owned) {
-            if (node.display_content) |content| self.allocator.free(content);
-        }
-        for (node.display_content_provenance.items) |*entry| entry.deinit(self.allocator);
-        node.display_content_provenance.clearRetainingCapacity();
-        node.display_content = owned_value;
-        node.display_content_owned = true;
-        node.display_content_provenance = owned_provenance;
-    }
-
-    pub fn setNodeReprFunction(self: *DocumentState, node_id: NodeId, function: FunctionRef) !void {
-        const node = self.getNode(node_id) orelse return error.UnknownNode;
-        if (node.repr_function != null) return error.DuplicateReprDefinition;
-        node.repr_function = function;
-    }
-
     fn makeNodeWithOrigin(
         self: *DocumentState,
         page_id: NodeId,

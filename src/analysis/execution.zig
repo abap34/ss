@@ -114,7 +114,6 @@ pub const ExecutionGraph = struct {
         };
         try builder.collectExecutionUnits(state.projectModule());
         try graph.appendDisplayUnits(state);
-        try resolveDisplayReads(allocator, graph.units.items);
         try validateExecutionUnits(state, graph.units.items);
         try buildDependencyEdges(allocator, graph.units.items, &graph.edges);
         var cycle = std.ArrayList(usize).empty;
@@ -186,38 +185,6 @@ pub const ExecutionGraph = struct {
         self.resource_strings.deinit();
     }
 };
-
-// All registrations are known before expanding deferred display reads. A
-// registration is visited once per unit, including conservative owner matches.
-// Termination and purity have already been validated by call analysis.
-fn resolveDisplayReads(allocator: std.mem.Allocator, units: []ExecutionUnit) !void {
-    var definitions = std.ArrayList(dependencies.AccessSummary.DisplayDefinition).empty;
-    defer definitions.deinit(allocator);
-    for (units) |unit| try definitions.appendSlice(allocator, unit.summary.display_definitions.items);
-    if (definitions.items.len == 0) return;
-    const visited = try allocator.alloc(bool, definitions.items.len);
-    defer allocator.free(visited);
-    var pending = std.ArrayList(dependencies.PropertyOwner).empty;
-    defer pending.deinit(allocator);
-    for (units) |*unit| {
-        if (unit.summary.display_reads.items.len == 0) continue;
-        @memset(visited, false);
-        pending.clearRetainingCapacity();
-        try pending.appendSlice(allocator, unit.summary.display_reads.items);
-        var cursor_index: usize = 0;
-        while (cursor_index < pending.items.len) : (cursor_index += 1) {
-            const owner = pending.items[cursor_index];
-            for (definitions.items, 0..) |definition, i| {
-                if (visited[i] or !definition.owner.intersects(owner)) continue;
-                visited[i] = true;
-                for (definition.reads.reads.items) |read| try unit.summary.addRead(read);
-                for (definition.reads.selection_reads.items) |read| try unit.summary.addSelectionRead(read);
-                unit.summary.reads_layout = unit.summary.reads_layout or definition.reads.reads_layout;
-                try pending.appendSlice(allocator, definition.reads.display_reads.items);
-            }
-        }
-    }
-}
 
 pub fn validateDependencies(
     allocator: std.mem.Allocator,
@@ -383,12 +350,6 @@ fn validateExecutionUnits(state: *core.DocumentState, units: []const ExecutionUn
             try addUnitErrorDiagnostic(state, unit, "InvalidSelectionMutation", message);
             _ = invalid;
             return error.InvalidSelectionMutation;
-        }
-        for (unit.summary.display_definitions.items) |definition| {
-            if (definition.reads.reads_layout) {
-                try addUnitErrorDiagnostic(state, unit, "LayoutDependencyCycle", "display functions determine content before layout and cannot read solved geometry");
-                return error.LayoutDependencyCycle;
-            }
         }
         if (unit.summary.reads_layout and unit.summary.writes_layout_input) {
             const message = "layout reads cannot feed object creation, content, properties, or constraints because layout is solved once";
