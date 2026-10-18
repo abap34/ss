@@ -5,21 +5,15 @@ const fields = @import("fields.zig");
 /// Collect adjacency and optional equal cuts before update normalization.
 /// Layout consumes only the constraints surviving update normalization.
 pub fn collect(state: anytype, node: *const model.Node, constraints: *std.ArrayList(model.Constraint)) !void {
-    try collectAdjacency(state, node, constraints);
-    var axis_field = (try fields.get(state.allocator, state, node, "split_axis")) orelse return;
-    defer axis_field.deinit(state.allocator);
-    const axis_name = switch (axis_field.value) {
-        .none => return,
-        .enum_case => |value| value.case_name,
-        .string => |value| value,
-        else => return error.InvalidGroupSplit,
-    };
-    if (std.mem.eql(u8, axis_name, "none")) return;
-    const horizontal = std.mem.eql(u8, axis_name, "horizontal");
-    if (!horizontal and !std.mem.eql(u8, axis_name, "vertical")) return error.InvalidGroupSplit;
-    const gap = try readNumber(state, node, "split_gap", &.{}, 32);
-    const pad_x = try readNumber(state, node, "chrome", &.{"pad_x"}, 0);
-    const pad_y = try readNumber(state, node, "chrome", &.{"pad_y"}, 0);
+    const config = try settings(state, node);
+    try collectAlignment(state, node, config, constraints);
+    if (config.mode == .overlay) return;
+    try collectAdjacency(state, node, config, constraints);
+    if (!config.mode.equal()) return;
+    const horizontal = config.mode.isHorizontal();
+    const gap = config.gap;
+    const pad_x = config.pad_x;
+    const pad_y = config.pad_y;
     if (!std.math.isFinite(gap) or gap < 0 or !std.math.isFinite(pad_x) or pad_x < 0 or !std.math.isFinite(pad_y) or pad_y < 0) return error.InvalidGroupSplit;
     var children = std.ArrayList(model.NodeId).empty;
     defer children.deinit(state.allocator);
@@ -53,7 +47,7 @@ pub fn collect(state: anytype, node: *const model.Node, constraints: *std.ArrayL
     }
     for (children.items) |child_id| {
         const child = state.getNode(child_id).?;
-        if (model.roleEq(child.role, model.GroupRole)) {
+        if (model.isGroupNode(child)) {
             // A nested group receives the complete cell on the other axis.
             if (horizontal) {
                 try append(state.allocator, constraints, template, child_id, .bottom, .bottom, pad_y, false);
@@ -71,19 +65,15 @@ pub fn collect(state: anytype, node: *const model.Node, constraints: *std.ArrayL
     }
 }
 
-fn collectAdjacency(state: anytype, node: *const model.Node, constraints: *std.ArrayList(model.Constraint)) !void {
-    var slot = (try fields.get(state.allocator, state, node, "join_axis")) orelse return;
-    defer slot.deinit(state.allocator);
-    const name = switch (slot.value) {
-        .enum_case => |value| value.case_name,
-        .string => |value| value,
-        .none => return,
-        else => return error.InvalidGroupSplit,
+fn collectAdjacency(state: anytype, node: *const model.Node, config: Settings, constraints: *std.ArrayList(model.Constraint)) !void {
+    const horizontal = if (node.placement != null) config.mode.isHorizontal() else legacy: {
+        const axis = try readAxis(state, node, "join_axis");
+        if (std.mem.eql(u8, axis, "none")) return;
+        if (std.mem.eql(u8, axis, "horizontal")) break :legacy true;
+        if (std.mem.eql(u8, axis, "vertical")) break :legacy false;
+        return error.InvalidGroupSplit;
     };
-    if (std.mem.eql(u8, name, "none")) return;
-    const horizontal = std.mem.eql(u8, name, "horizontal");
-    if (!horizontal and !std.mem.eql(u8, name, "vertical")) return error.InvalidGroupSplit;
-    const gap = try readNumber(state, node, "split_gap", &.{}, 32);
+    const gap = config.gap;
     if (!std.math.isFinite(gap)) return error.InvalidGroupSplit;
     var template = model.Constraint{
         .target_node = node.id,
@@ -111,7 +101,7 @@ fn collectAdjacency(state: anytype, node: *const model.Node, constraints: *std.A
             alignment.target_node = id;
             alignment.target_anchor = .left;
             alignment.source = .{ .node = .{ .node_id = node.id, .anchor = .left } };
-            alignment.offset = try readNumber(state, node, "chrome", &.{"pad_x"}, 0);
+            alignment.offset = config.pad_x;
             alignment.default_alignment = true;
             try constraints.append(state.allocator, alignment);
         }
@@ -169,4 +159,81 @@ fn append(allocator: std.mem.Allocator, constraints: *std.ArrayList(model.Constr
     constraint.offset = offset;
     constraint.default_alignment = alignment;
     try constraints.append(allocator, constraint);
+}
+
+pub const Settings = struct {
+    mode: model.GroupComposition = .overlay,
+    gap: f32 = 32,
+    pad_x: f32 = 0,
+    pad_y: f32 = 0,
+    align_y: bool = false,
+};
+
+pub fn settings(state: anytype, node: *const model.Node) !Settings {
+    if (node.placement) |placement| {
+        if (placement.value == .group) {
+            const value = placement.value.group;
+            return .{ .mode = value.composition, .gap = value.gap, .align_y = value.composition.isHorizontal() };
+        }
+        return .{};
+    }
+    // Legacy fields remain until ordinary constructors stop producing Object.
+    const split = try readAxis(state, node, "split_axis");
+    const join = try readAxis(state, node, "join_axis");
+    const equal = !std.mem.eql(u8, split, "none");
+    const axis = if (equal) split else join;
+    const mode: model.GroupComposition = if (std.mem.eql(u8, axis, "horizontal"))
+        (if (equal) .equal_horizontal else .horizontal)
+    else if (std.mem.eql(u8, axis, "vertical"))
+        (if (equal) .equal_vertical else .vertical)
+    else if (std.mem.eql(u8, axis, "none")) .overlay else return error.InvalidGroupSplit;
+    const align_y = if (model.nodeField(node, "align_children_y")) |value| value == .boolean and value.boolean else false;
+    return .{
+        .mode = mode,
+        .gap = try readNumber(state, node, "split_gap", &.{}, 32),
+        .pad_x = try readNumber(state, node, "chrome", &.{"pad_x"}, 0),
+        .pad_y = try readNumber(state, node, "chrome", &.{"pad_y"}, 0),
+        .align_y = align_y,
+    };
+}
+
+fn collectAlignment(state: anytype, node: *const model.Node, config: Settings, constraints: *std.ArrayList(model.Constraint)) !void {
+    if (!config.align_y) return;
+    var template = model.Constraint{
+        .target_node = node.id,
+        .target_anchor = .top,
+        .source = .{ .node = .{ .node_id = node.id, .anchor = .top } },
+        .offset = 0,
+        .origin = node.origin,
+        .default_alignment = true,
+    };
+    for (node.fields.items) |field| {
+        if (!std.mem.eql(u8, field.key, "align_children_y")) continue;
+        template.scope_depth = field.scope_depth;
+        template.origin = field.origin;
+        break;
+    }
+    var previous: ?model.NodeId = null;
+    for (state.childrenOf(node.id) orelse &.{}) |child_id| {
+        const child = state.getNode(child_id) orelse continue;
+        if (child.kind != .object or child.discarded) continue;
+        if (previous) |source_id| {
+            var constraint = template;
+            constraint.target_node = child_id;
+            constraint.source.node.node_id = source_id;
+            try constraints.append(state.allocator, constraint);
+        }
+        previous = child_id;
+    }
+}
+
+fn readAxis(state: anytype, node: *const model.Node, key: []const u8) ![]const u8 {
+    var slot = (try fields.get(state.allocator, state, node, key)) orelse return "none";
+    defer slot.deinit(state.allocator);
+    return switch (slot.value) {
+        .none => "none",
+        .string => |value| value,
+        .enum_case => |value| value.case_name,
+        else => error.InvalidGroupSplit,
+    };
 }

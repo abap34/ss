@@ -160,7 +160,7 @@ fn completeRecordUpdateAt(builder: *CandidateBuilder, snapshot: anytype, req: ty
     const scratch = builder.scratch.allocator();
     const base = (try recordTypeForCompletionExpr(scratch, budget, snapshot, req, parsed, target.target, 0)) orelse return false;
     const ty = (try resolve_query.typeAfterPath(scratch, budget, snapshot, base, target.path_prefix)) orelse return false;
-    if (resolve_query.recordIdForType(ty) == null) return false;
+    if (ty.kind != .group and resolve_query.recordIdForType(ty) == null) return false;
     try appendProperties(builder, snapshot, .{ .record = ty });
     return true;
 }
@@ -372,6 +372,10 @@ fn appendProperties(builder: *CandidateBuilder, snapshot: anytype, target: Prope
 
 fn appendRecordFields(builder: *CandidateBuilder, snapshot: anytype, ty: ast.Type) !void {
     try builder.checkBudget();
+    if (ty.kind == .group) {
+        try builder.add(.{ .label = "gap", .kind = .property, .detail = "Number" });
+        return;
+    }
     const record_id = resolve_query.recordIdForType(ty) orelse return;
     var index = snapshot.record_fields.len;
     while (index > 0) {
@@ -451,7 +455,7 @@ fn recordTypeForCompletionExpr(allocator: std.mem.Allocator, budget: QueryBudget
     if (budget.expired()) return null;
     const module = snapshot.moduleForPath(req.path) orelse return null;
     if (try resolve_query.typeForExpr(allocator, budget, snapshot, module.id, req.offset, expr)) |ty| {
-        if (resolve_query.recordIdForType(ty) != null) return ty;
+        if (ty.kind == .group or resolve_query.recordIdForType(ty) != null) return ty;
     }
     if (depth > 16) return null;
     return switch (expr) {
@@ -475,6 +479,7 @@ fn propertyTargetForType(snapshot: anytype, ty: ast.Type) ?PropertyTarget {
         .object => .any_object,
         .selection => if (ty.selectionItem().kind == .object) .any_object else null,
         .record => if (ty.nominalId() != null) .{ .record = ty } else null,
+        .group => .{ .record = ty },
         .placed, .placement => .{ .placement = ty },
         else => null,
     };

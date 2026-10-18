@@ -41,6 +41,8 @@ fn write(object: *json.Object, value: core.Value) anyerror!void {
         },
         .group => |group| {
             try core.type_json.writeField(object, "type", group.ty);
+            try object.enumTagField("composition", group.composition);
+            try object.floatField("gap", group.gap, "{d}");
             var children = try object.arrayField("children");
             for (group.children.items) |child| {
                 var item = try children.objectItem();

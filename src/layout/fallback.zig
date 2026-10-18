@@ -48,8 +48,8 @@ fn isPageSplit(state: *Workspace, workspace: *const graph.AxisWorkspace, node_id
     if (workspace.graph.parentGroupIndexes(node_id).len != 0) return false;
     const node = state.source.getNode(node_id) orelse return false;
     if (!groups.isGroupNode(node)) return false;
-    const axis = fields.read(state.allocator, state.source, node, "split_axis", &.{}, .text) orelse return false;
-    return std.mem.eql(u8, axis, "horizontal") or std.mem.eql(u8, axis, "vertical");
+    const config = @import("../core/group_composition.zig").settings(state.source, node) catch return false;
+    return config.mode.equal();
 }
 
 pub fn buildHorizontalConstraints(state: *Workspace, workspace: *const graph.AxisWorkspace, options: graph.SolveOptions) !std.ArrayList(Constraint) {

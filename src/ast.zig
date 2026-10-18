@@ -4,6 +4,7 @@ pub const types = @import("language_type");
 
 const Allocator = std.mem.Allocator;
 pub const Type = types.Type;
+pub const GroupComposition = types.GroupComposition;
 pub const HoleId = u32;
 
 pub const Module = struct {
@@ -538,6 +539,7 @@ pub const CallableName = struct {
     call_id: ?u64 = null,
     // Operators resolve directly to the kernel operation, never lexical names.
     is_operator: bool = false,
+    composition: ?GroupComposition = null,
     qualifier: ?[]const u8 = null,
     name: []const u8,
     name_hole: ?HoleId = null,
@@ -577,6 +579,7 @@ pub const CallableName = struct {
             .name_hole = self.name_hole,
             .call_id = self.call_id,
             .is_operator = self.is_operator,
+            .composition = self.composition,
             .qualifier_span = self.qualifier_span,
             .name_span = self.name_span,
             .span = self.span,

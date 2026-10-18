@@ -159,7 +159,7 @@ test "analysis queries: definition fallback still honors cancellation" {
     }
 }
 
-test "analysis completion: composition references retain fixed stdlib types and definitions" {
+test "analysis completion: composition remains independent of lexical function names" {
     var case = try CompletionCase.init(
         \\import std:internal/objects as layout
         \\const hjoin: Number = 9
@@ -180,13 +180,7 @@ test "analysis completion: composition references retain fixed stdlib types and 
     try testing.expect(!snapshot.diagnostics.hasErrors());
     const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
     for ([_][]const u8{ "hjoin", "vjoin" }) |name| {
-        const binding = resolve_query.valueBinding(null, snapshot, module.id, name, "std:layout", .function) orelse return error.ExpectedFunction;
-        try testing.expect(binding.module_id != module.id);
-        try testing.expectEqual(.object, binding.value_type.kind);
-        const definition = resolve_query.valueDefinition(null, snapshot, module.id, name, "std:layout", .function) orelse return error.ExpectedDefinition;
-        try testing.expectEqual(binding.module_id.?, definition.module_id);
-        try testing.expectEqualStrings("std:layout", snapshot.moduleById(definition.module_id).?.spec);
-        try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, name, "std:layout", .constant) == null);
+        try testing.expect(resolve_query.valueBinding(null, snapshot, module.id, name, "std:layout", .function) == null);
     }
     const constant = resolve_query.valueBinding(null, snapshot, module.id, "hjoin", null, .constant) orelse return error.ExpectedConstant;
     try testing.expectEqual(module.id, constant.module_id);

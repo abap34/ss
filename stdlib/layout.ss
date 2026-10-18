@@ -1,48 +1,6 @@
 import std:layout/types as { Align, LayoutPolicy, SplitAxis, WrapMode, FitPolicy, LayoutStyle }
 import std:internal/classes
 
-fn hjoin(a: Object, b: Object, gap: Number = 32) -> Object
-  return compose(composition_objects(a, b), true, false, gap)
-end
-
-fn vjoin(a: Object, b: Object, gap: Number = 32) -> Object
-  return compose(composition_objects(a, b), false, false, gap)
-end
-
-fn hsplit(items: Selection<Object>, gap: Number = 32) -> Object
-  return compose(items, true, true, gap)
-end
-
-fn vsplit(items: Selection<Object>, gap: Number = 32) -> Object
-  return compose(items, false, true, gap)
-end
-
-fn composition_objects(a: Object, b: Object) -> Selection<Object>
-  return select(a, "self_object") | select(b, "self_object")
-end
-
-fn composition_append(items: Selection<Object>, child: Object) -> Selection<Object>
-  return items | select(child, "self_object")
-end
-
-fn compose(items: Selection<Object>, horizontal: Bool, equal: Bool, gap: Number) -> Object
-  let result = group(items)
-  result.split_gap = gap
-  result.align_children_y = horizontal
-  if horizontal
-    result.join_axis = SplitAxis.horizontal
-    if equal
-      result.split_axis = SplitAxis.horizontal
-    end
-  else
-    result.join_axis = SplitAxis.vertical
-    if equal
-      result.split_axis = SplitAxis.vertical
-    end
-  end
-  return result
-end
-
 fn hflow(policy: LayoutPolicy, center_offset: Number = 0) -> Void
   pagectx().layout_h = policy
   pagectx().layout_h_center_offset = center_offset

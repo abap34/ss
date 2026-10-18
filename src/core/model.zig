@@ -1,6 +1,7 @@
 const std = @import("std");
 const language_type = @import("language_type");
 const Type = language_type.Type;
+pub const GroupComposition = language_type.GroupComposition;
 const path_model = @import("path.zig");
 
 pub const Path = path_model.Path;
@@ -647,6 +648,8 @@ pub const RecordValue = struct {
 /// separate positions; identities are allocated only when it is placed.
 pub const GroupValue = struct {
     ty: Type,
+    composition: language_type.GroupComposition = .overlay,
+    gap: f32 = 32,
     children: std.ArrayList(Value) = .empty,
 
     pub fn deinit(self: *GroupValue, allocator: Allocator) void {
@@ -656,7 +659,7 @@ pub const GroupValue = struct {
     }
 
     pub fn clone(self: GroupValue, allocator: Allocator) anyerror!GroupValue {
-        var result = GroupValue{ .ty = try self.ty.clone(allocator) };
+        var result = GroupValue{ .ty = try self.ty.clone(allocator), .composition = self.composition, .gap = self.gap };
         errdefer result.deinit(allocator);
         try result.children.ensureTotalCapacity(allocator, self.children.items.len);
         for (self.children.items) |child| result.children.appendAssumeCapacity(try child.clone(allocator));
@@ -1060,3 +1063,9 @@ pub const Query = struct {
         };
     }
 };
+
+/// Expanded displays and input groups own the bounds of their children.
+pub fn isGroupNode(node: *const Node) bool {
+    if (node.placement) |placement| return placement.display == .expanded or placement.display == .group;
+    return roleEq(node.role, GroupRole);
+}

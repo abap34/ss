@@ -1623,7 +1623,6 @@ const Parser = struct {
         var left = try self.parseSelectionUnionExpr();
         errdefer left.deinit(self.allocator);
         var direction: ?CompositionOperator = null;
-        var first_operator_span: ast.Span = undefined;
         while (true) {
             source.skipInlineSpaces(self.source, &self.pos);
             const boundary = self.pos;
@@ -1632,9 +1631,6 @@ const Parser = struct {
                 // Newlines separate statements unless the next token continues
                 // this composition. Do not consume the following statement.
                 self.pos = boundary;
-                if (direction != null and direction.?.equal()) {
-                    left = try self.makeFixedCompositionCall(if (direction.? == .equal_horizontal) "hsplit" else "vsplit", first_operator_span, &.{left}, &.{self.trimExpressionSpan(left_start, self.pos)});
-                }
                 return left;
             };
             const operator_span = ast.Span{ .start = self.pos, .end = self.pos + @as(usize, if (operator.equal()) 3 else 2) };
@@ -1645,7 +1641,6 @@ const Parser = struct {
                 return err;
             }
             const first = direction == null;
-            if (first) first_operator_span = operator_span;
             direction = operator;
             const left_span = self.trimExpressionSpan(left_start, self.pos);
             self.pos = operator_span.end;
@@ -1653,12 +1648,16 @@ const Parser = struct {
             const right_start = self.pos;
             var right = try self.parseCompositionOperand();
             errdefer right.deinit(self.allocator);
-            const name = switch (operator) {
-                .horizontal => "hjoin",
-                .vertical => "vjoin",
-                .equal_horizontal, .equal_vertical => if (first) "composition_objects" else "composition_append",
-            };
-            left = try self.makeFixedCompositionCall(name, operator_span, &.{ left, right }, &.{ left_span, self.trimExpressionSpan(right_start, self.pos) });
+            if (operator.equal() and !first) {
+                // Only this unparenthesized chain is extended. Nested input
+                // groups remain separate children, even with the same mode.
+                try left.call.args.ensureUnusedCapacity(self.allocator, 1);
+                try left.call.arg_spans.ensureUnusedCapacity(self.allocator, 1);
+                left.call.args.appendAssumeCapacity(right);
+                left.call.arg_spans.appendAssumeCapacity(self.trimExpressionSpan(right_start, self.pos));
+            } else {
+                left = try self.makeCompositionCall(operator, operator_span, &.{ left, right }, &.{ left_span, self.trimExpressionSpan(right_start, self.pos) });
+            }
         }
     }
 
@@ -1710,10 +1709,8 @@ const Parser = struct {
         return .{ .start = start, .end = trimmed_end };
     }
 
-    fn makeFixedCompositionCall(self: *Parser, function_name: []const u8, operator_span: ast.Span, operands: []const Expr, spans: []const ast.Span) !Expr {
-        const qualifier = try self.allocator.dupe(u8, "std:layout");
-        errdefer self.allocator.free(qualifier);
-        const name = try self.allocator.dupe(u8, function_name);
+    fn makeCompositionCall(self: *Parser, operator: CompositionOperator, operator_span: ast.Span, operands: []const Expr, spans: []const ast.Span) !Expr {
+        const name = try self.allocator.dupe(u8, "group");
         errdefer self.allocator.free(name);
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
@@ -1723,8 +1720,14 @@ const Parser = struct {
         try arg_spans.appendSlice(self.allocator, spans);
         return .{ .call = .{
             .callee = .{
-                .qualifier = qualifier,
                 .name = name,
+                .is_operator = true,
+                .composition = switch (operator) {
+                    .horizontal => .horizontal,
+                    .vertical => .vertical,
+                    .equal_horizontal => .equal_horizontal,
+                    .equal_vertical => .equal_vertical,
+                },
                 .name_span = operator_span,
                 .span = operator_span,
             },

@@ -6,10 +6,6 @@ import std:components/box
 import std:components/figure
 import std:layout as {
   place!,
-  hjoin,
-  vjoin,
-  hsplit,
-  vsplit,
   hflow,
   hflow_doc,
   vflow,

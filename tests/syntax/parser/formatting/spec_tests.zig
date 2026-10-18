@@ -100,7 +100,7 @@ fn equivalent(left: ast.Expr, right: ast.Expr) bool {
     return switch (left) {
         .call => |call| blk: {
             const other = right.call;
-            if (!std.mem.eql(u8, call.callee.name, other.callee.name) or
+            if (call.callee.composition != other.callee.composition or call.callee.is_operator != other.callee.is_operator or !std.mem.eql(u8, call.callee.name, other.callee.name) or
                 !std.mem.eql(u8, call.callee.qualifier orelse "", other.callee.qualifier orelse "") or
                 call.args.items.len != other.args.items.len) break :blk false;
             for (call.args.items, other.args.items) |a, b| if (!equivalent(a, b)) break :blk false;

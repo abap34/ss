@@ -207,6 +207,7 @@ pub const SemanticEnv = struct {
 
     /// Returns an owned field type with the receiver's type arguments substituted.
     pub fn recordFieldType(self: *const SemanticEnv, allocator: std.mem.Allocator, ty: ast.Type, field_name: []const u8) !?ast.Type {
+        if (ty.kind == .group) return ast.Type.groupMemberType(field_name);
         const id = ty.nominalId() orelse return null;
         const member = self.recordField(id, field_name) orelse return null;
         const decl = self.record(id.module_id, id.name) orelse return null;

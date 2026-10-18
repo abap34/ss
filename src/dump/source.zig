@@ -283,6 +283,7 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
             try object.stringField("exprKind", "call");
             try object.stringField("name", call.callee.name);
             try object.optionalStringField("qualifier", call.callee.qualifier);
+            try object.optionalEnumTagField("composition", call.callee.composition);
             if (call.callee.name_hole) |id| try object.intField("nameHoleId", id);
         },
         .apply => |apply| {
@@ -451,6 +452,7 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
             try item.stringField("kind", "call");
             try item.stringField("name", call.callee.name);
             try item.optionalStringField("qualifier", call.callee.qualifier);
+            try item.optionalEnumTagField("composition", call.callee.composition);
             if (call.callee.name_hole) |id| try item.intField("nameHoleId", id);
             var args = try item.arrayField("args");
             for (call.args.items) |arg| try writeExprItem(allocator, &args, arg);

@@ -1434,3 +1434,83 @@ test "typed groups: invalid children and mismatched signatures are diagnosed sta
         try testing.expectEqual(@as(usize, 0), state.graph.page_order.items.len);
     }
 }
+
+test "typed compositions: operators preserve inputs, nested structure and immutable gap updates" {
+    var state = try documentWithModules(
+        \\import std:text as t
+        \\fn group(a: t::Text, b: t::Text) -> Number = 0
+        \\type Row { content: Group<t::Text, t::Text> }
+        \\fn display(self: Placed<Row>) -> Group<t::Text, t::Text> = self.value.content
+        \\const a: t::Text = t::Text { content = "A" }
+        \\const b: t::Text = t::Text { content = "B" }
+        \\page first
+        \\  let original = Row { content = a || b }
+        \\  let updated = original with { content.gap = 48 }
+        \\  place!(original)
+        \\  place!(updated)
+        \\  place!(updated)
+        \\  place!(t::Text { content = concat(str(original.content.gap), concat("/", str(updated.content.gap))) })
+        \\  place!(a |=| b |=| a)
+        \\  place!((a |=| b) |=| a)
+        \\  place!((a // b) with { gap = 12 })
+        \\  place!((a /=/ b) with { gap = 24 })
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const roots = state.placementRootsOf(state.graph.page_order.items[0]);
+    try testing.expectEqual(@as(usize, 8), roots.len);
+    for (roots[0..3], [_]f32{ 32, 48, 48 }) |root, gap| {
+        const group = state.getNode(state.childrenOf(root).?[0]).?.placement.?.value.group;
+        try testing.expectEqual(gap, group.gap);
+        try testing.expectEqual(.horizontal, group.composition);
+        try testing.expectEqual(@as(usize, 2), group.children.items.len);
+    }
+    try testing.expectEqualStrings("32/48", core.nodeContent(state.getNode(roots[3]).?).?);
+    const flat = state.getNode(roots[4]).?.placement.?.value.group;
+    try testing.expectEqual(.equal_horizontal, flat.composition);
+    try testing.expectEqual(@as(usize, 3), flat.children.items.len);
+    const nested = state.getNode(roots[5]).?.placement.?.value.group;
+    try testing.expectEqual(@as(usize, 2), nested.children.items.len);
+    try testing.expect(nested.children.items[0] == .group);
+    try testing.expectEqual(.vertical, state.getNode(roots[6]).?.placement.?.value.group.composition);
+    try testing.expectEqual(.equal_vertical, state.getNode(roots[7]).?.placement.?.value.group.composition);
+}
+
+test "typed compositions: invalid updates and placed operands fail before evaluation" {
+    for ([_][]const u8{
+        \\import std:text as t
+        \\page first
+        \\  let a = t::Text { content = "A" }
+        \\  let invalid = (a || a) with { gap = "wide" }
+        \\end
+        ,
+        \\import std:text as t
+        \\page first
+        \\  let a = t::Text { content = "A" }
+        \\  let invalid = (a || a) with { missing = 3 }
+        \\end
+        ,
+        \\import std:text as t
+        \\page first
+        \\  let a = t::Text { content = "A" }
+        \\  let group = a || a
+        \\  group.gap = 4
+        \\end
+        ,
+        \\import std:text as t
+        \\page first
+        \\  let a = place!(t::Text { content = "A" })
+        \\  let invalid = a || a
+        \\end
+        ,
+    }) |source| {
+        var state = try documentWithModules(source);
+        defer state.deinit();
+        if (compiler.analysis.analyzeDocumentState(testing.allocator, &state)) |_| return error.ExpectedTypeError else |_| {}
+        try testing.expect(state.diagnostics.entries.items.len != 0);
+        try testing.expectEqual(@as(usize, 0), state.graph.page_order.items.len);
+    }
+}

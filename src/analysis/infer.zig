@@ -378,13 +378,13 @@ fn inferRecordUpdateInfo(
 ) !TypeInfo {
     const target_info = try exprInfoWithOptions(allocator, state, sema, env, update.target.*, origin, options);
     if (target_info.hole != null) return target_info;
-    if (target_info.ty.kind != .record) {
+    if (target_info.ty.kind != .record and target_info.ty.kind != .group) {
         const actual = try typeInfoLabelAlloc(allocator, target_info);
         defer allocator.free(actual);
         try addUserReport(state, origin, "InvalidValueUpdate", "with expects a value with fields, got {s}", .{actual});
         return error.InvalidType;
     }
-    _ = target_info.ty.nominalId() orelse {
+    if (target_info.ty.kind == .record) _ = target_info.ty.nominalId() orelse {
         try addUserReport(state, origin, "InvalidValueUpdate", "ss produced a type without a resolved declaration while checking this update; report this as an ss bug with the source file", .{});
         return error.InvalidType;
     };
@@ -430,7 +430,7 @@ fn inferRecordUpdateField(
     for (update_field.path.items, 0..) |segment, index| {
         if (segment.name_hole != null) return;
         var field_type = (try sema.recordFieldType(allocator, current_type, segment.name)) orelse {
-            try addUserReportAtSpan(state, origin, segment.span, "UnknownField", "type '{s}' has no field '{s}'", .{ current_type.class_name.?, segment.name });
+            try addUserReportAtSpan(state, origin, segment.span, "UnknownField", "type '{s}' has no field '{s}'", .{ current_type.class_name orelse current_type.label(), segment.name });
             return error.InvalidType;
         };
         defer field_type.deinit(allocator);
@@ -440,7 +440,7 @@ fn inferRecordUpdateField(
             try ensureType(state, allocator, actual, field_type, origin, .UnmatchedArgumentType);
             return;
         }
-        if (field_type.kind != .record) {
+        if (field_type.kind != .record and field_type.kind != .group) {
             const path = try ast.formatRecordPath(allocator, update_field.path.items[0 .. index + 1]);
             defer allocator.free(path);
             const label = try typeLabelAlloc(allocator, field_type);
@@ -509,6 +509,13 @@ fn inferMemberInfoFromTargetInfo(
     if (target_info.ty.kind == .placed or target_info.ty.kind == .placement) {
         const field_type = @import("../language/placement.zig").memberType(target_info.ty, member_name) orelse {
             try addUserReportAtSpan(state, origin, member_span, "UnknownField", "type '{s}' has no field '{s}'", .{ target_info.ty.label(), member_name });
+            return error.InvalidType;
+        };
+        return infoFromType(field_type);
+    }
+    if (target_info.ty.kind == .group) {
+        const field_type = Type.groupMemberType(member_name) orelse {
+            try addUserReportAtSpan(state, origin, member_span, "UnknownField", "type 'Group' has no field '{s}'", .{member_name});
             return error.InvalidType;
         };
         return infoFromType(field_type);
@@ -967,6 +974,10 @@ fn inferUserCallInfo(
     return try inferUserFunctionReturnInfo(allocator, state, callee_sema, func, actual_arguments, options);
 }
 
+fn callArgumentOrigin(call: ast.CallExpr, index: usize, origin: core.SourceOrigin) core.SourceOrigin {
+    return if (origin.span != null and index < call.arg_spans.items.len) origin.withSpan(call.arg_spans.items[index]) else origin;
+}
+
 fn inferPrimitiveCallInfo(
     allocator: std.mem.Allocator,
     state: ?*core.DocumentState,
@@ -989,7 +1000,8 @@ fn inferPrimitiveCallInfo(
     const argument_infos = try allocator.alloc(TypeInfo, call.args.items.len);
     defer allocator.free(argument_infos);
     for (call.args.items, 0..) |arg, index| {
-        const actual = try exprInfoWithOptions(allocator, state, sema, env, arg, origin, options);
+        const arg_origin = if (call.callee.composition != null) callArgumentOrigin(call, index, origin) else origin;
+        const actual = try exprInfoWithOptions(allocator, state, sema, env, arg, arg_origin, options);
         argument_infos[index] = actual;
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
         if (actual.hole == null and actual.ty.kind == .void) {
@@ -1012,16 +1024,20 @@ fn inferPrimitiveCallInfo(
     {
         const children = try allocator.alloc(Type, argument_infos.len);
         defer allocator.free(children);
-        for (argument_infos, children) |info, *child| {
+        for (argument_infos, children, 0..) |info, *child, index| {
             if (info.hole != null) return info;
             if (info.ty.kind != .record and info.ty.kind != .group) {
-                try addUserReport(state, origin, "InvalidGroupInput", "group requires unplaced presentation values", .{});
+                try addUserReport(state, callArgumentOrigin(call, index, origin), "InvalidGroupInput", "group requires unplaced presentation values", .{});
                 return error.InvalidType;
             }
             child.* = info.ty;
         }
         if (state) |owner| if (call.callee.call_id) |id| try owner.displays.typed_group_calls.put(id, {});
         return infoFromType(try (Type{ .kind = .group }).withArguments(allocator, children));
+    }
+    if (descriptor.op == .group and call.callee.composition != null) {
+        // A composition operand is one input, never an implicit selection spread.
+        for (argument_infos, 0..) |actual, index| try ensureType(state, allocator, actual, Type.object, callArgumentOrigin(call, index, origin), .UnmatchedArgumentType);
     }
     for (argument_infos, 0..) |actual, index| {
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
@@ -1857,7 +1873,7 @@ fn validateMemberTargetPropertySetPath(
             try addUserReportAtSpan(state, origin, segment.span, "ImmutablePlacement", "placement member '{s}' is read-only", .{segment.name});
             return error.InvalidType;
         }
-        if (index == path.len - 1 and owner_type.kind == .record and current_info.hole == null) {
+        if (index == path.len - 1 and (owner_type.kind == .record or owner_type.kind == .group) and current_info.hole == null) {
             try addUserReportAtSpan(state, origin, segment.span, "ImmutableValue", "field '{s}' belongs to an immutable value; use with to construct an updated value", .{segment.name});
             return error.InvalidType;
         }

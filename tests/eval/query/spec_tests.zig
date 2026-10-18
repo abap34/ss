@@ -589,7 +589,7 @@ test "typed queries: shared typed subtree helpers preserve the receiver path and
     try testing.expectEqualStrings("1:0", core.nodeDisplayContent(state.getNode(text).?));
 }
 
-test "typed queries: generated groups preserve dependency and document order" {
+test "typed queries: generated compositions preserve dependency and document order" {
     var state = try document(
         \\import std:text/content as native
         \\type Heading { title: String }
@@ -597,7 +597,7 @@ test "typed queries: generated groups preserve dependency and document order" {
         \\type Toc {}
         \\fn display(self: Placed<Heading>) -> native::Text = native::Text { content = self.value.title }
         \\fn display(self: Placed<Bundle>) -> Group<Heading, Group<Heading, Heading>>
-        \\  return group(Heading { title = "First" }, group(Heading { title = "Second" }, Heading { title = "Third" }))
+        \\  return (Heading { title = "First" } || (Heading { title = "Second" } // Heading { title = "Third" })) with { gap = 48 }
         \\end
         \\fn display(self: Placed<Toc>) -> native::Text
         \\  return native::Text { content = join(select<Heading>(self.document), ", ", (h: Placed<Heading>) |-> h.value.title) }
