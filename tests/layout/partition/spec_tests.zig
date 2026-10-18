@@ -115,6 +115,29 @@ test "layout partition: registered placement descendants remain in their owning 
     try testing.expectEqual(@as(usize, 0), result.pages[1].constraint_indexes.len);
 }
 
+test "prepared pages preserve nested child order regardless of constraint discovery" {
+    var state = try emptyState();
+    defer state.deinit();
+    const page = try state.addPage("Paint order");
+    var input = core.RecordValue.init(ast.Type.recordType("Content").inModule(0));
+    defer input.deinit(testing.allocator);
+    const first = try state.registerPlacement(page, .{ .record = input }, null);
+    const second = try state.registerPlacement(page, .{ .record = input }, null);
+    const second_child = try state.registerPlacement(second, .{ .record = input }, null);
+    const background = try state.registerPlacement(first, .{ .record = input }, null);
+    const foreground = try state.registerPlacement(first, .{ .record = input }, null);
+    const expected = [_]core.NodeId{ first, background, foreground, second, second_child };
+    for (expected) |id| state.getNode(id).?.placement.?.display = .group;
+    try state.constraints.addAnchor(state.allocator, foreground, .left, .{ .node = .{ .node_id = background, .anchor = .left } }, 16, null);
+    for (0..2) |_| {
+        var prepared = try core.prepared.prepare(testing.allocator, &state);
+        defer prepared.deinit(testing.allocator);
+        try testing.expectEqual(expected.len, prepared.pages[0].objects.len);
+        for (expected, prepared.pages[0].objects) |id, object| try testing.expectEqual(id, object.node_id);
+        state.constraints.active.clearRetainingCapacity();
+    }
+}
+
 const MeasuredPages = struct {
     mask: u8 = 0,
 
