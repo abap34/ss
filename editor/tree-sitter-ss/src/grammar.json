@@ -71,10 +71,6 @@
         },
         {
           "type": "SYMBOL",
-          "name": "object_extension"
-        },
-        {
-          "type": "SYMBOL",
           "name": "document_block"
         },
         {
@@ -902,10 +898,6 @@
         },
         {
           "type": "SYMBOL",
-          "name": "object_implements"
-        },
-        {
-          "type": "SYMBOL",
           "name": "object_roles"
         },
         {
@@ -920,39 +912,6 @@
         {
           "type": "STRING",
           "value": "base"
-        },
-        {
-          "type": "STRING",
-          "value": "="
-        },
-        {
-          "type": "FIELD",
-          "name": "type",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_type_name"
-          }
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "_terminator"
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        }
-      ]
-    },
-    "object_implements": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "implements"
         },
         {
           "type": "STRING",
@@ -1010,45 +969,6 @@
               "type": "BLANK"
             }
           ]
-        }
-      ]
-    },
-    "object_extension": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "extend"
-        },
-        {
-          "type": "FIELD",
-          "name": "target",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_type_name"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": "{"
-        },
-        {
-          "type": "REPEAT",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_terminator"
-          }
-        },
-        {
-          "type": "REPEAT",
-          "content": {
-            "type": "SYMBOL",
-            "name": "object_member"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": "}"
         }
       ]
     },

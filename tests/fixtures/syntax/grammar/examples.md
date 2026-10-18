@@ -94,7 +94,6 @@ type Card = object {
   roles = ["card",]
   style: Style
 }
-extend Card { roles = ["extra"] }
 const identity: (Number) -> Number = (x: Number) |-> x
 fn consume(value: (Page -> Object)?, items: Selection<Object<Card>>) -> Void
   return

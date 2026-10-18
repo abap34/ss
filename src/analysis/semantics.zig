@@ -176,15 +176,6 @@ pub fn checkTypeAnnotations(
                 };
             }
         }
-        for (module.syntax.object_extensions.items) |extension| {
-            for (extension.fields.items) |field| {
-                const diagnostic_count = state.diagnostics.entries.items.len;
-                checkFieldTypeAnnotation(allocator, state, sema, module_id, origin_path, field) catch |err| {
-                    try continueAfterDiagnostic(state, diagnostic_count, err);
-                    had_diagnostics = true;
-                };
-            }
-        }
 
         for (module.syntax.functions.items) |func| {
             const origin = core.SourceOrigin.at(origin_path, func.span);
@@ -302,14 +293,6 @@ fn resolveModuleTypeReferences(
     for (program.objects.items) |*object_decl| {
         if (object_decl.base) |base| object_decl.base_module_id = resolvedClassModule(sema, module_id, base);
         for (object_decl.fields.items) |*field| {
-            try resolveTypeReference(&field.value_type, module_id, sema);
-            if (field.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, sema);
-        }
-    }
-    for (program.object_extensions.items) |*extension| {
-        extension.target_module_id = resolvedClassModule(sema, module_id, extension.target);
-        if (extension.implements) |name| extension.implements_module_id = resolvedClassModule(sema, module_id, name);
-        for (extension.fields.items) |*field| {
             try resolveTypeReference(&field.value_type, module_id, sema);
             if (field.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, sema);
         }
@@ -441,9 +424,6 @@ fn resolveModuleEnumCaseExpressions(
     for (program.records.items) |*record_decl| {
         try resolveFieldEnumCaseExpressions(allocator, module_id, sema, record_decl.fields.items);
     }
-    for (program.object_extensions.items) |*extension| {
-        try resolveFieldEnumCaseExpressions(allocator, module_id, sema, extension.fields.items);
-    }
     for (program.functions.items) |*func| {
         try resolveFunctionEnumCases(allocator, module_id, sema, func);
     }
@@ -494,9 +474,6 @@ fn resolveModuleFieldDefaults(
     for (program.records.items) |*record_decl| {
         if (record_decl.type_params.items.len != 0) continue;
         try materializeFieldDefaults(allocator, module_id, sema, record_decl.fields.items);
-    }
-    for (program.object_extensions.items) |*extension| {
-        try materializeFieldDefaults(allocator, module_id, sema, extension.fields.items);
     }
 }
 

@@ -3,4 +3,3 @@
 (document_block) @item
 (type_declaration name: (type_identifier) @name) @item
 (enum_declaration name: (type_identifier) @name) @item
-(object_extension target: (type_identifier) @name) @item

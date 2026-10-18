@@ -34,10 +34,6 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, state: *core.Docume
             try checkObjectDeclaration(allocator, state, &module_sema, origin_path, object_decl);
             try checkRolesUnique(state, origin_path, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
         }
-        for (module.syntax.object_extensions.items) |extension| {
-            try checkObjectExtension(allocator, state, &module_sema, origin_path, extension);
-            try checkRolesUnique(state, origin_path, &roles, extension.target, extension.roles.items, extension.span);
-        }
     }
 }
 
@@ -143,28 +139,6 @@ fn checkObjectDeclaration(
         }
     }
     try checkObjectFields(allocator, state, sema, origin_path, object_decl.fields.items, true);
-}
-
-fn checkObjectExtension(
-    allocator: std.mem.Allocator,
-    state: *core.DocumentState,
-    sema: *const SemanticEnv,
-    origin_path: []const u8,
-    extension: ast.ObjectExtensionDecl,
-) !void {
-    const origin = core.SourceOrigin.at(origin_path, extension.span);
-
-    if (extension.target_module_id == null) {
-        try addUserReport(state, origin, "InvalidObjectExtension", "unknown object class: {s}", .{extension.target});
-        return error.InvalidType;
-    }
-    if (extension.implements) |implements| {
-        if (extension.implements_module_id == null) {
-            try addUserReport(state, origin, "InvalidObjectExtension", "unknown protocol: {s}", .{implements});
-            return error.InvalidType;
-        }
-    }
-    try checkObjectFields(allocator, state, sema, origin_path, extension.fields.items, true);
 }
 
 fn checkObjectFields(

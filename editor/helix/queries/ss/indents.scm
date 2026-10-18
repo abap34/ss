@@ -5,7 +5,6 @@
   (if_statement)
   (for_statement)
   (object_type)
-  (object_extension)
 ] @indent
 
 [

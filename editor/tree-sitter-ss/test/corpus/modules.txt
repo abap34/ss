@@ -1,13 +1,9 @@
 ================================================================================
-Qualified object bases and extension targets
+Qualified object bases
 ================================================================================
 
 type Derived = object {
   base = library::Base
-}
-
-extend library::Derived {
-  implements = protocols::Contract
 }
 
 --------------------------------------------------------------------------------
@@ -21,15 +17,7 @@ extend library::Derived {
           (qualified_type_identifier
             (identifier)
             (type_identifier))))))
-  (object_extension
-    (qualified_type_identifier
-      (identifier)
-      (type_identifier))
-    (object_member
-      (object_implements
-        (qualified_type_identifier
-          (identifier)
-          (type_identifier))))))
+)
 
 ================================================================================
 Qualified object and selection annotations
@@ -209,3 +197,31 @@ end
                 (number))))
           (identifier))
         (identifier)))))
+
+================================================================================
+Removed extension keywords are ordinary names
+================================================================================
+
+type Card { implements: String = "contract" }
+fn extend(value: Number) -> Number
+  return value
+end
+page main
+  let implements = extend(1)
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_identifier)
+    (type_body
+      (object_field (identifier) (type (primary_type (type_identifier))) (string))))
+  (function_declaration
+    (bare_callable_identifier (identifier))
+    (parameters (parameter (identifier) (type (primary_type (type_identifier)))))
+    (type (primary_type (type_identifier)))
+    (return_statement (identifier)))
+  (page_declaration
+    (identifier)
+    (let_statement (identifier) (call_expression (callable_identifier (bare_callable_identifier (identifier))) (number)))))

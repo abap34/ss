@@ -22,6 +22,7 @@ await testCompositionOperatorSyntax();
 await testPairedFunctionKeywordSyntax();
 await testValueUpdateKeywordSyntax();
 await testTypeDeclarationSyntax();
+await testRemovedExtensionKeywords();
 await testBlockStringSyntax();
 
 async function testValueUpdateKeywordSyntax() {
@@ -41,6 +42,15 @@ async function testTypeDeclarationSyntax() {
     const match = grammar.repository.declarations.patterns
       .map((pattern) => new RegExp(pattern.match).exec(source)).find(Boolean);
     assert(match?.[1] === keyword && match?.[2] === name, `type declaration was not highlighted: ${source}`);
+  }
+}
+
+async function testRemovedExtensionKeywords() {
+  const grammar = JSON.parse(await readFile(path.join(root, "editor/vscode/syntaxes/ss.tmLanguage.json"), "utf8"));
+  const keyword = new RegExp(grammar.repository.keywords.patterns[0].match, "g");
+  assert("extend implements".match(keyword) === null, "removed extension names must remain ordinary identifiers");
+  for (const pattern of grammar.repository.declarations.patterns) {
+    assert(new RegExp(pattern.match).exec("extend Card") === null, "removed extensions must not highlight as declarations");
   }
 }
 

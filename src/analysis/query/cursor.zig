@@ -72,10 +72,6 @@ pub fn callableAt(budget: ?QueryBudget, program: *const ast.Module, offset: usiz
         if (expired(budget)) return null;
         if (callableInFields(budget, object.fields.items, offset)) |target| return target;
     }
-    for (program.object_extensions.items) |extension| {
-        if (expired(budget)) return null;
-        if (callableInFields(budget, extension.fields.items, offset)) |target| return target;
-    }
     for (program.constants.items) |constant_decl| {
         if (expired(budget)) return null;
         if (callableInExpr(budget, constant_decl.value, offset)) |target| return target;
@@ -122,10 +118,6 @@ pub fn sourceNameAt(budget: ?QueryBudget, program: *const ast.Module, offset: us
     for (program.objects.items) |object| {
         if (expired(budget)) return null;
         if (sourceNameInFields(budget, object.fields.items, offset)) |target| return target;
-    }
-    for (program.object_extensions.items) |extension| {
-        if (expired(budget)) return null;
-        if (sourceNameInFields(budget, extension.fields.items, offset)) |target| return target;
     }
     for (program.constants.items) |constant_decl| {
         if (expired(budget)) return null;
@@ -188,10 +180,6 @@ pub fn recordUpdatePathAt(budget: ?QueryBudget, program: *const ast.Module, offs
         if (expired(budget)) return null;
         if (recordUpdatePathInFields(budget, object.fields.items, offset)) |target| return target;
     }
-    for (program.object_extensions.items) |extension| {
-        if (expired(budget)) return null;
-        if (recordUpdatePathInFields(budget, extension.fields.items, offset)) |target| return target;
-    }
     for (program.constants.items) |constant_decl| {
         if (expired(budget)) return null;
         if (recordUpdatePathInExpr(budget, constant_decl.value, offset)) |target| return target;
@@ -224,10 +212,6 @@ pub fn recordUpdateCompletionAt(budget: ?QueryBudget, program: *const ast.Module
         if (expired(budget)) return null;
         if (recordUpdateCompletionInFields(budget, object.fields.items, offset)) |target| return target;
     }
-    for (program.object_extensions.items) |extension| {
-        if (expired(budget)) return null;
-        if (recordUpdateCompletionInFields(budget, extension.fields.items, offset)) |target| return target;
-    }
     for (program.constants.items) |constant_decl| {
         if (expired(budget)) return null;
         if (recordUpdateCompletionInExpr(budget, constant_decl.value, offset)) |target| return target;
@@ -259,10 +243,6 @@ pub fn memberAt(budget: ?QueryBudget, program: *const ast.Module, offset: usize)
     for (program.objects.items) |object| {
         if (expired(budget)) return null;
         if (memberInFields(budget, object.fields.items, offset)) |target| return target;
-    }
-    for (program.object_extensions.items) |extension| {
-        if (expired(budget)) return null;
-        if (memberInFields(budget, extension.fields.items, offset)) |target| return target;
     }
     for (program.constants.items) |constant_decl| {
         if (expired(budget)) return null;

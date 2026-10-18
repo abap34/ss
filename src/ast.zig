@@ -13,7 +13,6 @@ pub const Module = struct {
     types: std.ArrayList(TypeDecl),
     records: std.ArrayList(RecordDecl),
     objects: std.ArrayList(ObjectDecl),
-    object_extensions: std.ArrayList(ObjectExtensionDecl),
     constants: std.ArrayList(ConstDecl),
     functions: std.ArrayList(FunctionDecl),
     document_blocks: std.ArrayList(DocumentBlockDecl),
@@ -21,7 +20,7 @@ pub const Module = struct {
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Module {
-        return .{ .imports = .empty, .top_level_items = .empty, .types = .empty, .records = .empty, .objects = .empty, .object_extensions = .empty, .constants = .empty, .functions = .empty, .document_blocks = .empty, .document_statements = .empty, .pages = .empty };
+        return .{ .imports = .empty, .top_level_items = .empty, .types = .empty, .records = .empty, .objects = .empty, .constants = .empty, .functions = .empty, .document_blocks = .empty, .document_statements = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Module, allocator: Allocator) void {
@@ -34,8 +33,6 @@ pub const Module = struct {
         self.records.deinit(allocator);
         for (self.objects.items) |*object| object.deinit(allocator);
         self.objects.deinit(allocator);
-        for (self.object_extensions.items) |*extension| extension.deinit(allocator);
-        self.object_extensions.deinit(allocator);
         for (self.constants.items) |*constant| constant.deinit(allocator);
         self.constants.deinit(allocator);
         for (self.functions.items) |*func| func.deinit(allocator);
@@ -60,8 +57,6 @@ pub const Module = struct {
         for (self.records.items) |value| result.records.appendAssumeCapacity(try value.clone(allocator));
         try result.objects.ensureTotalCapacity(allocator, self.objects.items.len);
         for (self.objects.items) |value| result.objects.appendAssumeCapacity(try value.clone(allocator));
-        try result.object_extensions.ensureTotalCapacity(allocator, self.object_extensions.items.len);
-        for (self.object_extensions.items) |value| result.object_extensions.appendAssumeCapacity(try value.clone(allocator));
         try result.constants.ensureTotalCapacity(allocator, self.constants.items.len);
         for (self.constants.items) |value| result.constants.appendAssumeCapacity(try value.clone(allocator));
         try result.functions.ensureTotalCapacity(allocator, self.functions.items.len);
@@ -324,46 +319,6 @@ pub const RecordDecl = struct {
         };
         errdefer result.deinit(allocator);
         result.type_params = try cloneTypeParameters(allocator, self.type_params.items);
-        try result.fields.ensureTotalCapacity(allocator, self.fields.items.len);
-        for (self.fields.items) |value| result.fields.appendAssumeCapacity(try value.clone(allocator));
-        return result;
-    }
-};
-
-pub const ObjectExtensionDecl = struct {
-    target: []const u8,
-    target_span: ?Span = null,
-    target_module_id: ?u32 = null,
-    implements_module_id: ?u32 = null,
-    implements: ?[]const u8 = null,
-    roles: std.ArrayList([]const u8),
-    fields: std.ArrayList(ObjectFieldDecl),
-    span: Span,
-
-    pub fn deinit(self: *ObjectExtensionDecl, allocator: Allocator) void {
-        allocator.free(self.target);
-        if (self.implements) |implements| allocator.free(implements);
-        for (self.roles.items) |role| allocator.free(role);
-        self.roles.deinit(allocator);
-        for (self.fields.items) |*field| field.deinit(allocator);
-        self.fields.deinit(allocator);
-    }
-
-    pub fn clone(self: ObjectExtensionDecl, allocator: Allocator) anyerror!ObjectExtensionDecl {
-        var result = ObjectExtensionDecl{
-            .target = try allocator.dupe(u8, self.target),
-            .target_span = self.target_span,
-            .target_module_id = self.target_module_id,
-            .implements_module_id = self.implements_module_id,
-            .implements = null,
-            .roles = .empty,
-            .fields = .empty,
-            .span = self.span,
-        };
-        errdefer result.deinit(allocator);
-        if (self.implements) |value| result.implements = try allocator.dupe(u8, value);
-        try result.roles.ensureTotalCapacity(allocator, self.roles.items.len);
-        for (self.roles.items) |value| result.roles.appendAssumeCapacity(try allocator.dupe(u8, value));
         try result.fields.ensureTotalCapacity(allocator, self.fields.items.len);
         for (self.fields.items) |value| result.fields.appendAssumeCapacity(try value.clone(allocator));
         return result;

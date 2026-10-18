@@ -6,5 +6,4 @@
 (block_text) @fold
 (type_declaration) @fold
 (enum_declaration) @fold
-(object_extension) @fold
 (value_update_expression) @fold

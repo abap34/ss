@@ -106,10 +106,6 @@ fn writeModuleSyntax(allocator: std.mem.Allocator, object: *json.Object, program
     for (program.objects.items) |object_decl| try writeObjectDeclaration(allocator, &objects, object_decl);
     try objects.end();
 
-    var object_extensions = try program_object.arrayField("objectExtensions");
-    for (program.object_extensions.items) |extension| try writeObjectExtension(allocator, &object_extensions, extension);
-    try object_extensions.end();
-
     var constants = try program_object.arrayField("constants");
     for (program.constants.items) |constant_decl| {
         var item = try constants.objectItem();
@@ -203,16 +199,6 @@ fn writeRecordDeclaration(allocator: std.mem.Allocator, records: *json.Array, re
     try item.stringField("name", record_decl.name);
     try writeObjectFieldsField(allocator, &item, record_decl.fields.items);
     try writeSpan(&item, record_decl.span);
-    try item.end();
-}
-
-fn writeObjectExtension(allocator: std.mem.Allocator, extensions: *json.Array, extension: ast.ObjectExtensionDecl) !void {
-    var item = try extensions.objectItem();
-    try item.stringField("target", extension.target);
-    try item.optionalStringField("implements", extension.implements);
-    try writeStringArrayField(&item, "roles", extension.roles.items);
-    try writeObjectFieldsField(allocator, &item, extension.fields.items);
-    try writeSpan(&item, extension.span);
     try item.end();
 }
 

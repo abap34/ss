@@ -48,7 +48,6 @@ fn moduleExpectedTypes(
     }
     for (program.records.items) |decl| try objectFieldDefaultExpectedTypes(allocator, sema, decl.fields.items, holes);
     for (program.objects.items) |decl| try objectFieldDefaultExpectedTypes(allocator, sema, decl.fields.items, holes);
-    for (program.object_extensions.items) |decl| try objectFieldDefaultExpectedTypes(allocator, sema, decl.fields.items, holes);
 }
 
 fn statementExpectedTypes(

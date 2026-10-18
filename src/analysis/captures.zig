@@ -26,7 +26,6 @@ pub const Index = struct {
         for (module.functions.items) |function| try self.collectFunction(function);
         for (module.records.items) |record| try self.fields(record.fields.items);
         for (module.objects.items) |object| try self.fields(object.fields.items);
-        for (module.object_extensions.items) |extension| try self.fields(extension.fields.items);
         try self.statements(module.document_statements.items);
         for (module.pages.items) |page| try self.statements(page.statements.items);
     }

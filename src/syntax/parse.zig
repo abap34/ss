@@ -14,7 +14,6 @@ const Module = ast.Module;
 const TypeDecl = ast.TypeDecl;
 const RecordDecl = ast.RecordDecl;
 const ObjectDecl = ast.ObjectDecl;
-const ObjectExtensionDecl = ast.ObjectExtensionDecl;
 const ConstDecl = ast.ConstDecl;
 const FunctionDecl = ast.FunctionDecl;
 const PageDecl = ast.PageDecl;
@@ -237,13 +236,6 @@ const Parser = struct {
                     object_decl_moved = true;
                 },
             }
-        } else if (try self.consumeKeyword("extend")) {
-            imports_allowed.* = false;
-            var extension = try self.parseObjectExtensionAfterKeyword(item_start);
-            var extension_moved = false;
-            errdefer if (!extension_moved) extension.deinit(self.allocator);
-            try module.object_extensions.append(self.allocator, extension);
-            extension_moved = true;
         } else if (try self.consumeKeyword("document")) {
             imports_allowed.* = false;
             var statements = try self.parseBodyStatements();
@@ -645,26 +637,6 @@ const Parser = struct {
         };
     }
 
-    fn parseObjectExtensionAfterKeyword(self: *Parser, start: usize) !ObjectExtensionDecl {
-        const target = try self.parseQualifiedTypeNameWithSpan();
-        var target_moved = false;
-        errdefer if (!target_moved) self.allocator.free(target.text);
-        source.skipTriviaFrom(self.source, &self.pos);
-        try self.expectChar('{');
-        var extension = ObjectExtensionDecl{
-            .target = target.text,
-            .target_span = target.span,
-            .roles = .empty,
-            .fields = .empty,
-            .span = .{ .start = start, .end = start },
-        };
-        target_moved = true;
-        errdefer extension.deinit(self.allocator);
-        try self.parseObjectMembers(null, &extension.implements, &extension.roles, &extension.fields);
-        extension.span.end = self.pos;
-        return extension;
-    }
-
     fn parseObjectDeclBody(self: *Parser, start: usize, name: ParsedName) !ObjectDecl {
         var name_moved = false;
         errdefer if (!name_moved) self.allocator.free(name.text);
@@ -679,7 +651,7 @@ const Parser = struct {
         };
         name_moved = true;
         errdefer decl.deinit(self.allocator);
-        try self.parseObjectMembers(&decl.base, null, &decl.roles, &decl.fields);
+        try self.parseObjectMembers(&decl.base, &decl.roles, &decl.fields);
         decl.span.end = self.pos;
         return decl;
     }
@@ -754,7 +726,6 @@ const Parser = struct {
     fn parseObjectMembers(
         self: *Parser,
         maybe_base: ?*?[]const u8,
-        maybe_implements: ?*?[]const u8,
         roles: *std.ArrayList([]const u8),
         fields: *std.ArrayList(ast.ObjectFieldDecl),
     ) !void {
@@ -773,14 +744,6 @@ const Parser = struct {
                         const value = try self.parseQualifiedTypeName();
                         if (base.*) |existing| self.allocator.free(existing);
                         base.* = value;
-                    } else {
-                        return self.fail(error.ExpectedIdentifier);
-                    }
-                } else if (std.mem.eql(u8, name.text, "implements")) {
-                    if (maybe_implements) |implements| {
-                        const value = try self.parseQualifiedTypeName();
-                        if (implements.*) |existing| self.allocator.free(existing);
-                        implements.* = value;
                     } else {
                         return self.fail(error.ExpectedIdentifier);
                     }
@@ -2966,7 +2929,6 @@ const Parser = struct {
             "type",
             "enum",
             "object",
-            "extend",
             "if",
             "else",
             "end",

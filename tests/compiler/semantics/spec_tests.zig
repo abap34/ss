@@ -7291,19 +7291,38 @@ test "compiler semantics: lambda parameters shadow captured names in their own s
     , "case.ss:bytes:", "DuplicateBinding");
 }
 
-test "compiler semantics: property definitions reject overlapping paths in both orders" {
-    const pairs = [_][]const u8{
+test "compiler semantics: document and page settings reject duplicate definitions through aliases" {
+    const scopes = [_][]const u8{ "document\nlet a = docctx()", "page main\nlet a = pagectx()" };
+    const definitions = [_][]const u8{
+        "a.layout_h_center_offset = 100\na.layout_h_center_offset = 200",
+        "a.background_fill = none\na.background_fill = none",
+        "let b = a\na.background_fill = none\nb.background_fill = none",
+    };
+    for (scopes) |scope| {
+        for (definitions) |definition| {
+            const source = try std.fmt.allocPrint(testing.allocator, "{s}\n{s}\nend\n", .{ scope, definition });
+            defer testing.allocator.free(source);
+            try expectLoweringErrorDiagnostic(source, "DuplicatePropertyDefinition");
+        }
+    }
+}
+
+test "compiler semantics: ordinary values reject overlapping writes in both orders" {
+    const definitions = [_][]const u8{
         "a.layout.x = 100\na.layout.x = 200",
         "a.layout = LayoutStyle { x = 100 }\na.layout.x = 200",
         "a.layout.x = 100\na.layout = LayoutStyle { x = 200 }",
         "a.text.font = FontFace {}\na.text.font.family = \"Avenir\"",
         "a.text.markdown.bold_color = none\na.text.markdown.bold_color = none",
-        "a.optional_label = none\nset_prop(select(a, \"self_object\"), \"optional_label\", none)",
     };
-    for (pairs) |pair| {
-        const source = try std.fmt.allocPrint(testing.allocator, "import std:themes/default as *\nextend Flow {{ optional_label: String? = none }}\npage main\nlet a = txt_obj!(\"A\", \"body\")\n{s}\nend\n", .{pair});
+    for (definitions) |definition| {
+        const source = try std.fmt.allocPrint(
+            testing.allocator,
+            "type Card {{ layout: LayoutStyle = LayoutStyle {{}} text: TextStyle = TextStyle {{}} }}\npage main\nlet a = Card {{}}\n{s}\nend\n",
+            .{definition},
+        );
         defer testing.allocator.free(source);
-        try expectLoweringErrorDiagnostic(source, "DuplicatePropertyDefinition");
+        try expectDiagnostic(source, "case.ss:bytes:", "ImmutableValue");
     }
 }
 
@@ -7458,31 +7477,15 @@ test "compiler semantics: returned initialized objects keep internal reads satis
     , &.{"123"});
 }
 
-test "compiler semantics: dump preserves explicitly absent optional properties" {
-    try expectDumpContains(
-        \\import std:themes/default as *
-        \\extend Flow { optional_label: String? = none }
+test "compiler semantics: absent input fields use ordinary optional fallbacks" {
+    try expectObjectContent(
+        \\type Label { optional_label: String? = none }
+        \\fn display(self: Placed<Label>) -> Text = text(self.value.optional_label ?? "Missing")
         \\page main
-        \\  let item = txt_obj!("A", "body")
-        \\  item.optional_label = none
+        \\  let original = Label { optional_label = "Present" }
+        \\  place!(original with { optional_label = none })
         \\end
-    , &.{"\"optional_label\":null"});
-}
-
-test "compiler semantics: absent property values use string accessor fallbacks" {
-    try expectDumpContains(
-        \\import std:themes/default as *
-        \\extend Flow { optional_label: String? = none }
-        \\page main
-        \\  let item = txt_obj!("A", "body")
-        \\  set_prop(item, "optional_label", none)
-        \\  if prop_eq(item, "optional_label", "none")
-        \\    text!("Unexpected equality")
-        \\  else
-        \\    text!(prop(item, "optional_label", "Missing"))
-        \\  end
-        \\end
-    , &.{"Missing"});
+    , "Missing");
 }
 
 test "compiler semantics: explicit none refines an optional callable in a record" {

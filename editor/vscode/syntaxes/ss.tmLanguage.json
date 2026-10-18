@@ -90,7 +90,7 @@
       "patterns": [
         {
           "name": "keyword.control.ss",
-          "match": "\\bfn/!|\\b(?:import|as|const|document|page|fn|let|with|return|end|type|enum|extend|object|base|implements|roles|property|if|then|else|for|in)\\b"
+          "match": "\\bfn/!|\\b(?:import|as|const|document|page|fn|let|with|return|end|type|enum|object|base|roles|property|if|then|else|for|in)\\b"
         },
         {
           "name": "storage.type.ss",
@@ -130,13 +130,6 @@
             "4": { "name": "storage.type.ss" }
           },
           "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)\\s*(object)\\b"
-        },
-        {
-          "captures": {
-            "1": { "name": "keyword.control.ss" },
-            "2": { "name": "entity.name.type.class.ss" }
-          },
-          "match": "\\b(extend)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b"
         },
         {
           "captures": {

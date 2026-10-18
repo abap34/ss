@@ -45,7 +45,7 @@ fn collectDefinitionsFromModule(
     if (include_variables) {
         const document_scope = analysis_scope.documentScope(source.text.len);
         for (program.constants.items) |decl| try collectLambdaDefinitions(allocator, state, source, module_id, decl.value, definitions, document_scope);
-        inline for (.{ program.records.items, program.objects.items, program.object_extensions.items }) |decls| {
+        inline for (.{ program.records.items, program.objects.items }) |decls| {
             for (decls) |decl| for (decl.fields.items) |field| {
                 if (field.default_value) |value| try collectLambdaDefinitions(allocator, state, source, module_id, value.*, definitions, document_scope);
             };
