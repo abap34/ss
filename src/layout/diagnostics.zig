@@ -225,7 +225,7 @@ fn contentVisualFrame(state: *Workspace, node: *const Node, render: render_polic
     return switch (render.kind) {
         .latex => latexContentVisualFrame(content_frame, content_width, content_height, render.latex),
         .vector_asset, .raster_asset, .text, .code => topAnchoredContentVisualFrame(content_frame, content_width, content_height),
-        .vector_path, .connector, .chrome_only => null,
+        .vector_path, .chrome_only => null,
     };
 }
 

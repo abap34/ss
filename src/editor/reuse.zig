@@ -34,7 +34,7 @@ pub fn translateRebuilt(
     const previous_editor = if (previous_layout.editor) |*value| value else return null;
     var collected = try collectTranslations(allocator, state, &prepared.layouts, &previous_layout.report) orelse return null;
     defer collected.deinit(allocator);
-    if (!translationPatchPreservesRenderedOutput(state, &prepared.pages, collected.translations)) return null;
+    if (!translationPatchPreservesRenderedOutput(&prepared.pages, collected.translations)) return null;
     const editor = try editor_snapshot.buildTranslationPatch(
         allocator,
         state,
@@ -127,7 +127,6 @@ pub fn apply(ctx: Context, snapshot: *analysis.snapshot.AnalysisSnapshot, path: 
         return false;
     defer collected.deinit(ctx.allocator);
     if (!translationPatchPreservesRenderedOutput(
-        state,
         pages,
         collected.translations,
     )) return false;

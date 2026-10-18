@@ -611,32 +611,13 @@ test "compiler semantics: editor variable info keeps object classes through pair
     });
 }
 
-test "compiler semantics: stdlib editor variable info keeps theme object classes" {
-    try expectVariableObjectClasses(
-        \\import std:text
-        \\
-        \\fn/! h2(content: String) -> Object
-        \\  let t = sub_obj(content)
-        \\  t.link_id = "heading"
-        \\  return t
-        \\end
-        \\
-        \\page ok
-        \\  let t = body_obj! "body"
-        \\  t.link_id = "body"
-        \\end
-        \\
-    , &.{
-        .{ .name = "t", .scope_kind = "function", .scope_name = "h2", .object_class = "Sub" },
-        .{ .name = "t", .scope_kind = "page", .scope_name = "ok", .object_class = "Body" },
-    });
-}
-
-test "compiler semantics: obsolete text convenience constructors are not public" {
-    for ([_][]const u8{ "title", "subtitle", "note", "byline", "label", "h1", "h2", "h3", "h4", "h5", "h6" }) |name| {
-        const source = try std.fmt.allocPrint(testing.allocator, "page main\n  {s}!(\"Text\")\nend\n", .{name});
-        defer testing.allocator.free(source);
-        try expectDiagnostic(source, "case.ss:bytes:", "UnknownFunction");
+test "compiler semantics: obsolete convenience constructors are not public" {
+    for ([_][]const u8{ "title", "subtitle", "note", "byline", "label", "h1", "h2", "h3", "h4", "h5", "h6", "title_obj", "sub_obj", "note_obj", "by_obj", "lab_obj", "cite_obj", "rule_obj", "path_obj", "panel_obj", "latex_obj", "fig_obj", "img_obj", "pdf_obj", "icon_obj", "code_obj", "connector_obj", "surround", "spacer", "vspace" }) |name| {
+        for ([_][]const u8{ "", "!" }) |suffix| {
+            const source = try std.fmt.allocPrint(testing.allocator, "page main\n  {s}{s}(\"Text\")\nend\n", .{ name, suffix });
+            defer testing.allocator.free(source);
+            try expectDiagnostic(source, "case.ss:bytes:", "UnknownFunction");
+        }
     }
 }
 
@@ -1329,7 +1310,6 @@ test "compiler semantics: qualified type names resolve in annotations records an
     try buildSource(
         \\import std:text as classes
         \\import std:layout as layout_types
-        \\import std:internal/objects as objects
         \\
         \\fn keep_style(style: classes::TextStyle) -> classes::TextStyle
         \\  return style
@@ -1345,10 +1325,8 @@ test "compiler semantics: qualified type names resolve in annotations records an
         \\    math = classes::TextMathStyle { align = layout_types::Align.left }
         \\  })
         \\  let align = keep_align(layout_types::Align.left)
-        \\  let body = objects::body_obj("qualified")
-        \\  body.text.size = style.size
-        \\  body.math_align = align
-        \\  objects::place!(body)
+        \\  let body = classes::text("qualified", classes::TextBlockStyle { text = style with { math.align = align } })
+        \\  layout_types::place!(body)
         \\end
         \\
     );
@@ -1760,9 +1738,6 @@ test "compiler semantics: nested property assignment updates style records" {
         \\  body.layout.x = 123
         \\  body.layout.wrap = WrapMode.off
         \\
-        \\  let formula = latex_obj("$x$")
-        \\  formula.latex.scale = 2
-        \\  formula.latex.align = Align.left
         \\end
         \\
     ;
@@ -1774,8 +1749,6 @@ test "compiler semantics: nested property assignment updates style records" {
     try expectObjectFieldPath(source, "text", &.{ "font", "stretch" }, "expanded");
     try expectObjectFieldPath(source, "layout", &.{"x"}, "123");
     try expectObjectFieldPath(source, "layout", &.{"wrap"}, "off");
-    try expectObjectFieldPath(source, "latex", &.{"scale"}, "2");
-    try expectObjectFieldPath(source, "latex", &.{"align"}, "left");
 }
 
 test "compiler semantics: nested property definitions preserve sibling leaves" {

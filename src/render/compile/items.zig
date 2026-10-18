@@ -45,7 +45,6 @@ const TextPaint = core.render_policy.TextPaint;
 const CodePaint = core.render_policy.CodePaint;
 const LatexPaint = core.render_policy.LatexPaint;
 const VectorPathPaint = core.render_policy.VectorPathPaint;
-const ConnectorPaint = core.render_policy.ConnectorPaint;
 const MarkerPaint = core.render_policy.MarkerPaint;
 const MarkdownDocument = core.markdown.MarkdownDocument;
 const Line = core.markdown.Line;
@@ -113,7 +112,6 @@ const DrawContext = struct {
     capture_measurement_content: bool = false,
     latex_preamble: []const LatexPreambleEntry = &.{},
     latex_engine: LatexEngine = .pdflatex,
-    commands: ?[]const ObjectCommand = null,
 };
 
 fn inlineContext(ctx: *const DrawContext) inline_layout.Context {
@@ -1040,7 +1038,7 @@ fn collectObjectPreloads(
                 } });
             }
         },
-        .code, .vector_path, .connector, .chrome_only => {},
+        .code, .vector_path, .chrome_only => {},
     }
 }
 
@@ -1294,7 +1292,6 @@ fn objectCommandLabel(command: *const ObjectCommand) []const u8 {
         .code => "code block",
         .chrome_only => "object chrome",
         .vector_path => "vector path object",
-        .connector => "connector object",
         .latex => "LaTeX fragment",
         .vector_asset => "vector asset",
         .raster_asset => "raster asset",
@@ -1309,7 +1306,6 @@ fn profileRenderMeasureKind(kind: RenderKind) utils.measure_profile.RenderMeasur
         .vector_asset => .vector_asset,
         .raster_asset => .raster_asset,
         .vector_path => .shape,
-        .connector => .shape,
         .chrome_only => .chrome_only,
     };
 }
@@ -1625,7 +1621,6 @@ fn buildRenderPage(
             .io = parent_ctx.io,
             .text_cache = parent_ctx.text_cache,
         },
-        .commands = commands,
     };
 
     const page_fill = background orelse Color{ .r = 1, .g = 1, .b = 1 };
@@ -1766,7 +1761,6 @@ fn drawObjectContent(ctx: *DrawContext, command: *const ObjectCommand) !void {
         .vector_asset => try drawVectorAsset(ctx, content_frame, command.content, command.render.asset),
         .raster_asset => try drawRasterAsset(ctx, content_frame, command.content, command.render.asset),
         .vector_path => if (command.render.vector_path) |path| try drawVectorPathOp(ctx, content_frame, path),
-        .connector => if (command.render.connector) |connector| try drawConnectorOp(ctx, connector),
     }
 }
 
@@ -1794,7 +1788,6 @@ fn measuredObjectCommandVisualFrame(ctx: *DrawContext, command: *const ObjectCom
             const measured = try measureObjectCommandContent(ctx, command, null);
             return expandFrameToMeasuredInk(command.frame, command.render, measured);
         },
-        .vector_path, .connector => return command.frame,
         else => {},
     }
     return command.frame;
@@ -1951,7 +1944,6 @@ fn measureObjectCommandContent(ctx: *DrawContext, command: *const ObjectCommand,
         .vector_asset => try drawVectorAsset(ctx, content_frame, command.content, command.render.asset),
         .raster_asset => try drawRasterAsset(ctx, content_frame, command.content, command.render.asset),
         .vector_path => if (command.render.vector_path) |path| try drawVectorPathOp(ctx, content_frame, path),
-        .connector => if (command.render.connector) |connector| try drawConnectorOp(ctx, connector),
         else => return null,
     }
     return try measurement.inkFrame();
@@ -1970,7 +1962,7 @@ fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectComman
     if (mode == .natural) {
         if (render.text) |*text| text.wrap = false;
     }
-    if (render.kind == .vector_path or render.kind == .connector or render.kind == .chrome_only) {
+    if (render.kind == .vector_path or render.kind == .chrome_only) {
         if (render.vector_path) |path| if (path.natural_size) |size| {
             const shape_frame = Frame{
                 .x = 0,
@@ -2007,7 +1999,7 @@ fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectComman
             content_frame.height,
             mode,
         ),
-        .vector_path, .connector, .chrome_only => unreachable,
+        .vector_path, .chrome_only => unreachable,
     };
     return expandContentMeasurement(render, frame, content_frame, content_measure);
 }
@@ -2021,7 +2013,6 @@ fn measureFrameIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, frame
     const content_frame = contentFrameForRender(frame, command.render);
     switch (command.render.kind) {
         .vector_path => if (command.render.vector_path) |path| try drawVectorPathOp(ctx, content_frame, path),
-        .connector => if (command.render.connector) |connector| try drawConnectorOp(ctx, connector),
         .chrome_only => {},
         else => unreachable,
     }
@@ -2537,69 +2528,6 @@ fn paintRadius(space: core.render_policy.PaintSpace, mapping: PathMapping, value
     return if (space == .page) value else mapping.radius_scale * value;
 }
 
-fn drawConnectorOp(ctx: *DrawContext, paint: ConnectorPaint) !void {
-    const commands = ctx.commands orelse return;
-    const source_frame = commandFrame(commands, paint.source) orelse return;
-    const target_frame = commandFrame(commands, paint.target) orelse return;
-    const start = connectorAnchorPoint(source_frame, paint.source_anchor);
-    const end = connectorAnchorPoint(target_frame, paint.target_anchor);
-
-    var path_commands: [4]render_ir.PathCommand = undefined;
-    var path_len: usize = 0;
-    var start_tangent = end;
-    var end_tangent = start;
-    path_commands[path_len] = .{ .move_to = start };
-    path_len += 1;
-    switch (paint.route) {
-        .straight => {
-            path_commands[path_len] = .{ .line_to = end };
-            path_len += 1;
-        },
-        .horizontal_then_vertical => {
-            const middle = render_ir.Point{ .x = end.x, .y = start.y };
-            path_commands[path_len] = .{ .line_to = middle };
-            path_len += 1;
-            path_commands[path_len] = .{ .line_to = end };
-            path_len += 1;
-            start_tangent = if (pointsDiffer(start, middle)) middle else end;
-            end_tangent = if (pointsDiffer(middle, end)) middle else start;
-        },
-        .vertical_then_horizontal => {
-            const middle = render_ir.Point{ .x = start.x, .y = end.y };
-            path_commands[path_len] = .{ .line_to = middle };
-            path_len += 1;
-            path_commands[path_len] = .{ .line_to = end };
-            path_len += 1;
-            start_tangent = if (pointsDiffer(start, middle)) middle else end;
-            end_tangent = if (pointsDiffer(middle, end)) middle else start;
-        },
-        .curve => {
-            const amount = std.math.clamp(@as(f64, paint.curve), 0, 1);
-            const distance = std.math.hypot(end.x - start.x, end.y - start.y) * amount;
-            const source_direction = connectorDirection(paint.source_anchor, start, end);
-            const target_direction = connectorDirection(paint.target_anchor, end, start);
-            const control1 = render_ir.Point{
-                .x = start.x + source_direction.x * distance,
-                .y = start.y + source_direction.y * distance,
-            };
-            const control2 = render_ir.Point{
-                .x = end.x + target_direction.x * distance,
-                .y = end.y + target_direction.y * distance,
-            };
-            path_commands[path_len] = .{ .cubic_to = .{ .control1 = control1, .control2 = control2, .end = end } };
-            path_len += 1;
-            start_tangent = control1;
-            end_tangent = control2;
-        },
-    }
-
-    var dash_storage: [8]f64 = @splat(0);
-    const stroke = renderStroke(paint.stroke, &dash_storage);
-    try activeEmitter(ctx).vectorPath(ctx.allocator, path_commands[0..path_len], .{}, stroke);
-    if (paint.marker_start) |marker| try drawMarker(ctx, marker, start, start_tangent);
-    if (paint.marker_end) |marker| try drawMarker(ctx, marker, end, end_tangent);
-}
-
 fn drawMarker(ctx: *DrawContext, marker: MarkerPaint, tip: render_ir.Point, tangent: render_ir.Point) !void {
     const dx = tip.x - tangent.x;
     const dy = tip.y - tangent.y;
@@ -2624,43 +2552,8 @@ fn drawMarker(ctx: *DrawContext, marker: MarkerPaint, tip: render_ir.Point, tang
     }, marker.fill, marker.stroke);
 }
 
-fn connectorDirection(anchor: core.render_policy.ConnectorAnchor, point: render_ir.Point, other: render_ir.Point) render_ir.Point {
-    return switch (anchor) {
-        .left => .{ .x = -1, .y = 0 },
-        .right => .{ .x = 1, .y = 0 },
-        .top => .{ .x = 0, .y = -1 },
-        .bottom => .{ .x = 0, .y = 1 },
-        .center => blk: {
-            const dx = other.x - point.x;
-            const dy = other.y - point.y;
-            const length = std.math.hypot(dx, dy);
-            if (length == 0) break :blk .{ .x = 1, .y = 0 };
-            break :blk .{ .x = dx / length, .y = dy / length };
-        },
-    };
-}
-
 fn pointsDiffer(left: render_ir.Point, right: render_ir.Point) bool {
     return left.x != right.x or left.y != right.y;
-}
-
-fn commandFrame(commands: []const ObjectCommand, node_id: core.NodeId) ?Frame {
-    for (commands) |command| if (command.node_id == node_id) return command.frame;
-    return null;
-}
-
-fn connectorAnchorPoint(frame: Frame, anchor: core.render_policy.ConnectorAnchor) render_ir.Point {
-    const left = @as(f64, frame.x);
-    const right = @as(f64, frame.x + frame.width);
-    const top = @as(f64, toTopY(frame.y + frame.height));
-    const bottom = @as(f64, toTopY(frame.y));
-    return switch (anchor) {
-        .center => .{ .x = (left + right) / 2, .y = (top + bottom) / 2 },
-        .left => .{ .x = left, .y = (top + bottom) / 2 },
-        .right => .{ .x = right, .y = (top + bottom) / 2 },
-        .top => .{ .x = (left + right) / 2, .y = top },
-        .bottom => .{ .x = (left + right) / 2, .y = bottom },
-    };
 }
 
 fn renderPathCommands(allocator: Allocator, path: core.Path, mapping: PathMapping) !std.ArrayList(render_ir.PathCommand) {

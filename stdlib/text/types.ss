@@ -10,7 +10,7 @@ type TextSemantics {
   heading_level: Number? = none
 }
 
-enum RenderKind { text code latex vector_asset raster_asset vector_path connector chrome_only }
+enum RenderKind { text code latex vector_asset raster_asset vector_path chrome_only }
 
 enum TextParseMode { none plain inline block }
 
