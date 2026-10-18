@@ -100,6 +100,7 @@ const LambdaCaptureMap = std.AutoHashMap(LambdaKey, FunctionEnv);
 const ValueFacts = struct {
     labels: LabelMap,
     fields: std.StringHashMap(ValueFacts),
+    children: std.ArrayList(ValueFacts) = .empty,
     objects: std.AutoHashMap(usize, void),
     unknown_objects: bool = false,
     unknown: bool = false,
@@ -124,6 +125,8 @@ const ValueFacts = struct {
     fn deinit(self: *ValueFacts) void {
         var fields = self.fields.valueIterator();
         while (fields.next()) |field| field.deinit();
+        for (self.children.items) |*child| child.deinit();
+        self.children.deinit(self.fields.allocator);
         self.fields.deinit();
         self.labels.deinit();
         self.objects.deinit();
@@ -150,6 +153,20 @@ const ValueFacts = struct {
             if (self.unknown) try value.unionWith(unknownValue(self.fields.allocator));
             try self.fields.put(field.key_ptr.*, value);
         }
+        for (self.children.items, 0..) |*child, index| {
+            if (index < other.children.items.len) {
+                try child.unionWith(other.children.items[index]);
+            } else if (other.unknown) try child.unionWith(unknownValue(self.fields.allocator));
+        }
+        if (other.children.items.len > self.children.items.len) {
+            try self.children.ensureTotalCapacity(self.fields.allocator, other.children.items.len);
+            for (other.children.items[self.children.items.len..]) |child| {
+                var copy = try child.clone(self.fields.allocator);
+                errdefer copy.deinit();
+                if (self.unknown) try copy.unionWith(unknownValue(self.fields.allocator));
+                self.children.appendAssumeCapacity(copy);
+            }
+        }
         self.unknown = self.unknown or other.unknown;
     }
 
@@ -165,6 +182,7 @@ const ValueFacts = struct {
         self.unknown = true;
         var fields = self.fields.valueIterator();
         while (fields.next()) |field| field.forgetFunctions();
+        for (self.children.items) |*child| child.forgetFunctions();
     }
 
     fn getField(self: ValueFacts, name: []const u8, allocator: std.mem.Allocator) !ValueFacts {
@@ -181,7 +199,7 @@ const ValueFacts = struct {
         // avoids copying complete presentation records through every call.
         // An explicit empty field must still refine an unknown record.
         if (!self.unknown and !value.unknown and !value.unknown_objects and
-            value.labels.count() == 0 and value.objects.count() == 0 and value.fields.count() == 0)
+            value.labels.count() == 0 and value.objects.count() == 0 and value.fields.count() == 0 and value.children.items.len == 0)
         {
             var empty = value;
             empty.deinit();
@@ -241,6 +259,7 @@ const Analyzer = struct {
     current_origin: ?core.SourceOrigin = null,
     call_depth: usize = 0,
     checking_display: bool = false,
+    types_checked: bool = true,
     object_properties: std.ArrayList(ValueFacts) = .empty,
     unknown_properties: ValueFacts,
     display_registrations: std.ArrayList(DisplayRegistration) = .empty,
@@ -285,6 +304,7 @@ const Analyzer = struct {
         // Keep its summaries separate from ordinary construction calls.
         var displays = Analyzer.init(self.allocator, self.state, &self.sema);
         displays.checking_display = true;
+        displays.types_checked = self.types_checked;
         var display_it = self.sema.functions.iterator();
         while (display_it.next()) |entry| {
             const func = entry.value_ptr.*;
@@ -298,6 +318,7 @@ const Analyzer = struct {
         // or summaries as evidence that a call has been verified.
         var roots = Analyzer.init(self.allocator, self.state, &self.sema);
         roots.require_known_calls = true;
+        roots.types_checked = self.types_checked;
         try roots.checkRoots();
         try roots.checkDisplayFunctions();
     }
@@ -519,13 +540,17 @@ const Analyzer = struct {
                 return ValueFacts.unknownValue(self.allocator);
             },
             .function => |resolved| {
-                const func = resolved.decl;
-                const label = self.namedLabel(resolved.key);
+                const key = if (call.callee.call_id) |id| self.state.instantiations.call_targets.get(id) orelse resolved.key else resolved.key;
+                const func = self.state.functions.get(key) orelse resolved.decl;
+                const label = self.namedLabel(key);
                 const arg_labels = try self.argumentFacts(call.args.items, env, owner);
                 return try self.invokeNamed(label, resolved.module_id, func, arg_labels.items);
             },
             .primitive => |primitive| {
-                if (self.checking_display and !registry.primitiveAllowsDisplayEvaluation(primitive.op)) return self.rejectDisplayWrite();
+                const typed_group = primitive.op == .group and self.state.displays.isTypedGroupCall(call.callee.call_id);
+                const unresolved_group = primitive.op == .group and (!self.types_checked or
+                    (owner != null and owner.?.type_params.items.len != 0 and owner.?.instance_id == null));
+                if (self.checking_display and !typed_group and !unresolved_group and !registry.primitiveAllowsDisplayEvaluation(primitive.op)) return self.rejectDisplayWrite();
                 const arg_labels = try self.argumentFacts(call.args.items, env, owner);
                 if (primitive.callback) |callback_spec| {
                     if (call.args.items.len > callback_spec.function_arg_index) {
@@ -548,6 +573,13 @@ const Analyzer = struct {
     }
 
     fn primitiveFacts(self: *Analyzer, primitive: registry.PrimitiveDescriptor, call: ast.CallExpr, args: []const ValueFacts) !ValueFacts {
+        if (primitive.op == .group and self.state.displays.isTypedGroupCall(call.callee.call_id)) {
+            var value = ValueFacts.init(self.allocator);
+            errdefer value.deinit();
+            try value.children.ensureTotalCapacity(self.allocator, args.len);
+            for (args) |arg| value.children.appendAssumeCapacity(try arg.clone(self.allocator));
+            return value;
+        }
         switch (primitive.op) {
             .new, .group => {
                 if (!self.require_known_calls) return ValueFacts.unknownValue(self.allocator);
@@ -658,6 +690,15 @@ const Analyzer = struct {
             receivers[0] = registration.receiver;
             for (plan.steps.items, 0..) |step, index| switch (step.target) {
                 .native => {},
+                .group => {
+                    const input = try receivers[index].getField("value", self.allocator);
+                    for (step.children.items, 0..) |child_index, position| {
+                        var receiver = ValueFacts.init(self.allocator);
+                        const value = if (position < input.children.items.len) try input.children.items[position].clone(self.allocator) else ValueFacts.unknownValue(self.allocator);
+                        try receiver.putField("value", value);
+                        receivers[child_index] = receiver;
+                    }
+                },
                 .function => |key| {
                     const output = try self.invokeNamed(self.namedLabel(key), key.module_id, self.state.functions.get(key).?, &.{receivers[index]});
                     var receiver = ValueFacts.init(self.allocator);
@@ -866,6 +907,12 @@ const Analyzer = struct {
             try self.appendValue(out, value.fields.get(name).?);
             try out.append(self.allocator, ';');
         }
+        try out.appendSlice(self.allocator, "children[");
+        for (value.children.items) |child| {
+            try self.appendValue(out, child);
+            try out.append(self.allocator, ';');
+        }
+        try out.append(self.allocator, ']');
         try out.appendSlice(self.allocator, if (value.unknown_objects) "}?objects[" else "}objects[");
         var ids = std.ArrayList(usize).empty;
         var objects = value.objects.keyIterator();
@@ -901,14 +948,19 @@ const Analyzer = struct {
     }
 };
 
-pub fn checkFunctionCallGraph(
-    allocator: std.mem.Allocator,
-    state: *core.DocumentState,
-    sema: *const SemanticEnv,
-) anyerror!void {
+pub fn checkFunctionCallGraphBeforeTypes(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) anyerror!void {
+    return checkCallGraph(allocator, state, sema, false);
+}
+
+pub fn checkFunctionCallGraph(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) anyerror!void {
+    return checkCallGraph(allocator, state, sema, true);
+}
+
+fn checkCallGraph(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv, types_checked: bool) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var analyzer = Analyzer.init(arena.allocator(), state, sema);
+    analyzer.types_checked = types_checked;
     defer analyzer.const_visiting.deinit();
     try analyzer.checkAll();
 }

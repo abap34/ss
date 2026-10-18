@@ -14,6 +14,7 @@ pub fn runtimeKind(value: core.Value) core.ValueTag {
         .string => .string,
         .enum_case => .enum_case,
         .record => .record,
+        .group => .group,
         .path => .path,
         .number => .number,
         .boolean => .boolean,
@@ -94,6 +95,14 @@ pub fn valueConformsToType(state: anytype, value: core.Value, expected: ast.Type
             else => false,
         };
     }
+    if (expected.kind == .group) {
+        if (value != .group or !ast.Type.eql(value.group.ty, expected)) return false;
+        if (value.group.children.items.len != expected.arguments.len) return false;
+        for (value.group.children.items, expected.arguments) |child, ty| {
+            if (!valueConformsToType(state, child, ty)) return false;
+        }
+        return true;
+    }
     if (expected.kind == .record) {
         return switch (value) {
             .record => |record| ast.Type.eql(record.ty, expected),
@@ -156,6 +165,7 @@ fn expectedRuntimeKind(expected: ast.Type) ?core.ValueTag {
         .string, .color => .string,
         .enum_type => .enum_case,
         .record => .record,
+        .group => .group,
         .path => .path,
         .number => .number,
         .boolean => .boolean,

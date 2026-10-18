@@ -808,6 +808,7 @@ pub fn prepareDisplay(
     context: *Context,
 ) anyerror!core.native_display.Target {
     try state.checkAnalysisCanceled();
+    if (input.kind == .group) return .group;
     if (core.native_display.kindForType(state, input)) |kind| {
         core.native_display.validateType(state, input, kind) catch |err| {
             try addUserReport(state, origin, "InvalidNativeDisplay", "native display type '{s}' does not satisfy its rendering contract", .{input.label()});
@@ -857,7 +858,7 @@ fn prepareDisplayFunction(
         break :instantiate try instantiateBoundFunction(allocator, state, sema, definition, bindings, origin, context);
     };
     try ensureType(state, allocator, infoFromType(receiver), concrete.decl.params.items[0].ty, origin, .UnmatchedArgumentType);
-    if (concrete.decl.result_type.kind != .record) {
+    if (concrete.decl.result_type.kind != .record and concrete.decl.result_type.kind != .group) {
         try addUserReport(state, origin, "InvalidDisplayResult", "display must return an unplaced presentation value after instantiation", .{});
         return error.InvalidType;
     }
@@ -1006,6 +1007,22 @@ fn inferPrimitiveCallInfo(
         if ((descriptor.op == .add or descriptor.op == .sub) and left == .anchor and right == .number) return infoFromType(Type.anchor);
         if (descriptor.op == .add and left == .number and right == .anchor) return infoFromType(Type.anchor);
     }
+    if (descriptor.op == .group and argument_infos.len > 0 and
+        (argument_infos[0].ty.kind == .record or argument_infos[0].ty.kind == .group))
+    {
+        const children = try allocator.alloc(Type, argument_infos.len);
+        defer allocator.free(children);
+        for (argument_infos, children) |info, *child| {
+            if (info.hole != null) return info;
+            if (info.ty.kind != .record and info.ty.kind != .group) {
+                try addUserReport(state, origin, "InvalidGroupInput", "group requires unplaced presentation values", .{});
+                return error.InvalidType;
+            }
+            child.* = info.ty;
+        }
+        if (state) |owner| if (call.callee.call_id) |id| try owner.displays.typed_group_calls.put(id, {});
+        return infoFromType(try (Type{ .kind = .group }).withArguments(allocator, children));
+    }
     for (argument_infos, 0..) |actual, index| {
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
         if (sema.primitiveArgType(descriptor, index)) |expected| {
@@ -1019,7 +1036,7 @@ fn inferPrimitiveCallInfo(
         // Legacy object constructors are removed as stdlib migrates. Their
         // attachment path must not be used for immutable typed inputs.
         if (input.ty.kind == .object) return input;
-        if (input.ty.kind != .record) {
+        if (input.ty.kind != .record and input.ty.kind != .group) {
             try addUserReport(state, origin, "InvalidPlacementInput", "placement requires an unplaced presentation value", .{});
             return error.InvalidType;
         }
@@ -1132,6 +1149,7 @@ fn returnTypeNeedsInferredFacts(ty: Type) bool {
         .constraints,
         .record,
         .placed,
+        .group,
         .placement,
         .path,
         .parameter,
@@ -1325,7 +1343,7 @@ fn primitiveResultTypeInfo(
 
     var info = infoFromType(result_type);
     info.object_class = switch (descriptor.result_policy) {
-        .group_object => sema.builtinClass("Group"),
+        .group_object => sema.builtinClass("ObjectGroup"),
         .object_from_role_arg => inferObjectConstructorClass(sema, env, call, if (descriptor.op == .new) 1 else 2),
         else => null,
     };
@@ -1474,7 +1492,7 @@ fn inferSelectCallInfo(
             return error.InvalidArity;
         }
         const input = call.type_args.items[0];
-        if (input.kind != .record) {
+        if (input.kind != .record and input.kind != .group) {
             try addUserReport(state, origin, "InvalidSelectionType", "select<T> requires an ordinary input type", .{});
             return error.InvalidType;
         }

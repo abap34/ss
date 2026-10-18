@@ -17,6 +17,7 @@ pub fn register(suite: Suite, exe: std.Build.LazyPath) void {
         .{ .path = "tests/runtime/stdlib/spec.mjs", .name = "test-stdlib", .description = "Check public standard-library construction and placement contracts" },
         .{ .path = "tests/runtime/assets/typed_pdf_spec.mjs", .name = "test-typed-pdf", .description = "Check typed PDF inputs, page selection, and rendering" },
         .{ .path = "tests/runtime/code/typed_display_spec.mjs", .name = "test-typed-code", .description = "Check immutable code display inputs and syntax highlighting" },
+        .{ .path = "tests/runtime/layout/group/spec.mjs", .name = "test-typed-group", .description = "Check typed group ownership, bounds, and rendering" },
         .{ .path = "tests/runtime/math/typed_display_spec.mjs", .name = "test-typed-latex", .description = "Check immutable LaTeX bodies, configuration, and rendering" },
         .{ .path = "tests/runtime/document/typed_page_numbers_spec.mjs", .name = "test-typed-document", .description = "Check typed page numbers, contents, and references in a multi-page document" },
         .{ .path = "tests/runtime/data/csv/spec.mjs", .name = "test-csv", .description = "Check CSV parsing, table rendering, and editor inputs" },

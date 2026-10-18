@@ -119,7 +119,7 @@ fn writePlacement(item: *json.Object, state: *core.DocumentState, node: *const c
     var display = try out.objectField("display");
     try display.enumTagField("state", placement.display);
     switch (placement.display) {
-        .pending, .running => {},
+        .pending, .running, .group => {},
         .native => |kind| try display.enumTagField("kind", kind),
         .expanded => |expanded| {
             var target = try display.objectField("target");

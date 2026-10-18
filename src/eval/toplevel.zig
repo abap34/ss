@@ -153,7 +153,7 @@ pub const EvalContext = struct {
         switch (placement.display) {
             .pending => {},
             .running => return error.DisplayExpansionCycle,
-            .native => return error.DisplayTargetMismatch,
+            .native, .group => return error.DisplayTargetMismatch,
             .expanded => |result| {
                 if (!result.target.eql(target)) return error.DisplayTargetMismatch;
                 return result.child;
@@ -176,6 +176,22 @@ pub const EvalContext = struct {
 
     pub fn expandDisplayTarget(self: *EvalContext, id: core.NodeId, target: core.native_display.Target) ![]const core.NodeId {
         switch (target) {
+            .group => {
+                try checkCancellation(self);
+                const node = self.state.getNode(id) orelse return error.UnknownNode;
+                const placement = node.placement orelse return error.InvalidValueTag;
+                if (placement.value != .group) return error.InvalidValueTag;
+                switch (placement.display) {
+                    .pending => {},
+                    .group => return self.state.childrenOf(id) orelse &.{},
+                    else => return error.DisplayTargetMismatch,
+                }
+                const children = try self.state.registerPlacementChildren(id, placement.value.group.children.items, node.origin);
+                const parent = self.state.getNode(id).?;
+                parent.object_kind = .overlay;
+                parent.placement.?.display = .group;
+                return children;
+            },
             .function => |function| {
                 _ = try self.expandDisplay(id, function);
                 return self.state.childrenOf(id) orelse return error.InvalidDisplayPlan;
@@ -193,7 +209,7 @@ pub const EvalContext = struct {
                         return &.{};
                     },
                     .running => return error.DisplayExpansionCycle,
-                    .expanded => return error.DisplayTargetMismatch,
+                    .expanded, .group => return error.DisplayTargetMismatch,
                 }
                 const payload_kind: core.PayloadKind = switch (kind) {
                     .text, .code => .text,
@@ -1379,7 +1395,7 @@ const BuiltinContext = struct {
         const call = call_id orelse return error.UnpreparedDisplay;
         const plan_index = self.state.displays.call_targets.get(call) orelse return error.UnpreparedDisplay;
         const plan = self.state.displays.plans.items[plan_index];
-        if (!ast.Type.eql(input.record.ty, plan.steps.items[0].input)) return error.InvalidValueTag;
+        if (!ast.Type.eql(input.presentationType() orelse return error.InvalidValueTag, plan.steps.items[0].input)) return error.InvalidValueTag;
         const producer = self.evaluation.execution_unit orelse return error.UnpreparedDisplay;
         const unit = self.evaluation.display_entries.get(.{ .producer = producer, .call_id = call }) orelse return error.UnpreparedDisplay;
         const inputs = &self.evaluation.display_inputs.items[unit];

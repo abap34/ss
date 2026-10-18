@@ -36,6 +36,7 @@ pub const ConstraintSet = model.ConstraintSet;
 pub const FunctionRef = model.FunctionRef;
 pub const RecordFieldValue = model.RecordFieldValue;
 pub const RecordValue = model.RecordValue;
+pub const GroupValue = model.GroupValue;
 pub const Path = model.Path;
 pub const PathCommand = model.PathCommand;
 pub const PathPoint = model.PathPoint;

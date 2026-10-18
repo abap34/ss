@@ -6,6 +6,7 @@ pub const Kind = model.NativeDisplayKind;
 pub const Target = union(enum) {
     function: model.FunctionKey,
     native: Kind,
+    group,
 };
 
 pub const Step = struct {
@@ -61,15 +62,21 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
     plans: std.ArrayList(Plan) = .empty,
     call_targets: std.AutoHashMap(u64, usize),
+    typed_group_calls: std.AutoHashMap(u64, void),
 
     pub fn init(allocator: std.mem.Allocator) Store {
-        return .{ .allocator = allocator, .call_targets = .init(allocator) };
+        return .{ .allocator = allocator, .call_targets = .init(allocator), .typed_group_calls = .init(allocator) };
     }
 
     pub fn deinit(self: *Store) void {
         for (self.plans.items) |*plan| plan.deinit();
         self.plans.deinit(self.allocator);
         self.call_targets.deinit();
+        self.typed_group_calls.deinit();
+    }
+
+    pub fn isTypedGroupCall(self: *const Store, call_id: ?u64) bool {
+        return if (call_id) |id| self.typed_group_calls.contains(id) else false;
     }
 
     pub fn find(self: *const Store, input: ast.Type) ?usize {

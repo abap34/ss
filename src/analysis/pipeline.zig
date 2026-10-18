@@ -67,6 +67,7 @@ pub fn checkFunctionDefinitions(
     var inference_context = infer.Context.init(allocator);
     defer inference_context.deinit();
     try checkFunctionDefinitionsWithEnv(&inference_context, allocator, state, &sema);
+    try calls.checkFunctionCallGraph(allocator, state, &sema);
 }
 
 fn checkFunctionDefinitionsWithEnv(
@@ -78,7 +79,7 @@ fn checkFunctionDefinitionsWithEnv(
     {
         const measure_start = utils.measure_profile.start();
         defer utils.measure_profile.recordAnalysis(.semantics_call_graph, measure_start);
-        try calls.checkFunctionCallGraph(allocator, state, sema);
+        try calls.checkFunctionCallGraphBeforeTypes(allocator, state, sema);
     }
 
     const bodies_start = utils.measure_profile.start();
@@ -176,8 +177,9 @@ fn analyzeDocumentStateSemantics(
 
     try checkDocumentDeclarations(allocator, state, &sema);
     try checkDocumentBodies(&inference_context, allocator, state, &sema);
+    // Effects of overloaded constructors require the checked argument types.
+    try calls.checkFunctionCallGraph(allocator, state, &sema);
     if (state.instantiations.entries.items.len != 0 or state.type_instances.entries.items.len != 0 or state.displays.plans.items.len != 0) {
-        try calls.checkFunctionCallGraph(allocator, state, &sema);
         try checkPlacementEffectDeclarations(allocator, state, &sema);
     }
     return declaration_index;

@@ -39,6 +39,16 @@ fn write(object: *json.Object, value: core.Value) anyerror!void {
             }
             try fields.end();
         },
+        .group => |group| {
+            try core.type_json.writeField(object, "type", group.ty);
+            var children = try object.arrayField("children");
+            for (group.children.items) |child| {
+                var item = try children.objectItem();
+                try write(&item, child);
+                try item.end();
+            }
+            try children.end();
+        },
         .selection => |selection| {
             try object.enumTagField("item_kind", selection.item_tag);
             var ids = try object.arrayField("ids");
