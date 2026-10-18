@@ -662,7 +662,9 @@ pub const Analyzer = struct {
     }
 
     pub fn statement(self: *Analyzer, stmt: ast.Statement) anyerror!AccessSummary {
-        return try self.analyzeStatement(stmt, .scheduled);
+        var summary = try self.analyzeStatement(stmt, .scheduled);
+        self.closeRegisteredStructureReads(&summary);
+        return summary;
     }
 
     fn valueBinding(self: *Analyzer, callee: ast.CallableName) !@import("../language/name_resolution.zig").ValueResolution(LetPolicy, semantic_env.ResolvedConst, semantic_env.ResolvedFunction) {
@@ -700,6 +702,38 @@ pub const Analyzer = struct {
         };
         const identity = owner.identity orelse return false;
         return identity.origin == .local and identity.local_id >= first and identity.local_id < end;
+    }
+
+    fn closeRegisteredStructureReads(self: *Analyzer, summary: *AccessSummary) void {
+        var index: usize = 0;
+        while (index < summary.reads.items.len) {
+            if (self.isRegisteredStructureRead(summary.reads.items[index])) {
+                _ = summary.reads.orderedRemove(index);
+            } else index += 1;
+        }
+    }
+
+    fn isRegisteredStructureRead(self: *Analyzer, read: Resource) bool {
+        if (read != .objects) return false;
+        const call = read.objects.placement.call orelse return false;
+        const state = self.sema.state orelse return false;
+        const plan_index = state.displays.call_targets.get(call) orelse return false;
+        const plan = state.displays.plans.items[plan_index];
+        // Once a root reference exists, all of its input-group structure is
+        // registered. A user display is the only source of later children.
+        for (plan.steps.items) |step| {
+            const member = Resource{ .objects = .{
+                .input_type = step.input,
+                .placement = .exact(call, step.path),
+            } };
+            if (!member.intersects(read)) continue;
+            var ancestor = step.parent;
+            while (ancestor) |parent| {
+                if (plan.steps.items[parent].target != .group) return false;
+                ancestor = plan.steps.items[parent].parent;
+            }
+        }
+        return true;
     }
 
     fn analyzeStatements(self: *Analyzer, items: []const ast.Statement, let_policy: LetPolicy) anyerror!AccessSummary {
@@ -768,6 +802,7 @@ pub const Analyzer = struct {
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
         for (parts.items) |part| try summary.merge(part);
+        self.closeRegisteredStructureReads(&summary);
         var write_index: usize = 0;
         while (write_index < summary.writes.items.len) {
             const write = summary.writes.items[write_index];
@@ -2340,10 +2375,7 @@ pub const Analyzer = struct {
                 .docctx => PropertyTarget.document(),
                 .pagectx, .new_page => PropertyTarget.page(),
                 .group => null,
-                .place_on => if (call.args.items.len > 1)
-                    try self.propertyTargetExpr(call.args.items[1])
-                else
-                    PropertyTarget.any(),
+                .place_on => PropertyTarget.freshObject(),
                 .foreach, .selection_filter, .foreach_enumerate => if (call.args.items.len > 0)
                     try self.propertyTargetExpr(call.args.items[0])
                 else
