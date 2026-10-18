@@ -20,6 +20,7 @@ const PropertyTarget = union(enum) {
     any_object,
     record: ast.Type,
     placement: ast.Type,
+    settings: ast.Type,
 };
 
 pub fn at(
@@ -340,6 +341,13 @@ fn spanText(source: []const u8, maybe_span: ?ast.Span) ?[]const u8 {
 fn appendProperties(builder: *CandidateBuilder, snapshot: anytype, target: PropertyTarget) !void {
     try builder.checkBudget();
     switch (target) {
+        .settings => |ty| {
+            if (resolve_query.settingsId(snapshot)) |id| try appendRecordFields(builder, snapshot, ast.Type.recordType(id.name).inModule(id.module_id));
+            if (ty.kind == .page) {
+                for (comptime std.meta.fieldNames(core.Anchor)) |name| try builder.add(.{ .label = name, .kind = .property, .detail = "Anchor" });
+            }
+            return;
+        },
         .record => |record_name| {
             try appendRecordFields(builder, snapshot, record_name);
             return;
@@ -476,6 +484,7 @@ fn propertyTargetForType(snapshot: anytype, ty: ast.Type) ?PropertyTarget {
     if (ty.kind == .optional) return if (ty.optional_child) |child| propertyTargetForType(snapshot, child.*) else null;
     if (resolve_query.objectClassForType(snapshot, ty)) |id| return .{ .class = id };
     return switch (ty.kind) {
+        .document, .page => .{ .settings = ty },
         .object => .any_object,
         .selection => if (ty.selectionItem().kind == .object) .any_object else null,
         .record => if (ty.nominalId() != null) .{ .record = ty } else null,
@@ -489,7 +498,7 @@ fn fieldAppliesToTarget(budget: QueryBudget, snapshot: anytype, field: anytype, 
     return switch (target) {
         .any_object => true,
         .class => |id| classContains(budget, snapshot, id, .{ .module_id = field.class_module_id, .name = field.class_name }),
-        .record, .placement => false,
+        .record, .placement, .settings => false,
     };
 }
 

@@ -198,6 +198,11 @@ pub const SemanticEnv = struct {
         return null;
     }
 
+    pub fn settingsField(self: *const SemanticEnv, field_name: []const u8) ?declarations.RecordFieldDescriptor {
+        const index = self.declarationIndex() orelse return null;
+        return index.settingsField(field_name);
+    }
+
     pub fn recordConstruction(self: *const SemanticEnv, expr: ast.RecordExpr) ?declarations.RecordDescriptor {
         if (self.state) |state| if (state.type_instances.construction(expr)) |instance| {
             return .{ .decl = &instance.declaration, .name = instance.declaration.name, .module_id = instance.ty.nominal_module_id.? };

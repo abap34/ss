@@ -3,6 +3,49 @@ const analysis = @import("analysis");
 const allocation_testing = @import("allocation_testing");
 const testing = std.testing;
 
+test "analysis query spec: document and page settings share value fields and their definitions" {
+    const path = "stdlib/internal/settings-query-test.ss";
+    const source =
+        \\import std:prelude as *
+        \\type PageSettings { layout_h_center_offset: String = "Unrelated" }
+        \\fn document_offset(doc: Document) -> Number = doc.layout_h_center_offset
+        \\fn page_offset(page: Page) -> Number = page.layout_h_center_offset
+        \\page main
+        \\  let value: Number = document_offset(docctx()) + page_offset(pagectx())
+        \\end
+    ;
+    var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+    defer snapshot.deinit();
+    try testing.expect(!snapshot.diagnostics.hasErrors());
+    for ([_][]const u8{ "doc.layout_h_center_offset", "page.layout_h_center_offset" }) |needle| {
+        try expectAppliedField(&snapshot, path, source, needle, "layout_h_center_offset", "Number", 4);
+        const request = analysis.query.types.SourceRequest{
+            .path = path,
+            .source = source,
+            .offset = std.mem.indexOf(u8, source, needle).? + needle.len - 1,
+        };
+        const definitions = try analysis.snapshot.definitionAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+        defer testing.allocator.free(definitions);
+        try testing.expectEqual(@as(usize, 1), definitions.len);
+        try testing.expectEqualStrings("std:document/settings", definitions[0].module_spec orelse return error.ExpectedDefinitionModule);
+        var completion = try analysis.snapshot.completeAt(testing.allocator, &snapshot, request, .{ .budget_ms = 1000 });
+        defer completion.deinit(testing.allocator);
+        var has_left = false;
+        for (completion.items) |candidate| {
+            try testing.expect(!std.mem.eql(u8, candidate.label, "content"));
+            try testing.expect(!std.mem.eql(u8, candidate.label, "render_kind"));
+            if (std.mem.eql(u8, candidate.label, "left")) {
+                try testing.expectEqualStrings("Anchor", candidate.detail orelse "");
+                has_left = true;
+            }
+        }
+        try testing.expectEqual(std.mem.startsWith(u8, needle, "page."), has_left);
+    }
+}
+
 fn expectAppliedField(snapshot: *const analysis.snapshot.AnalysisSnapshot, path: []const u8, source: []const u8, needle: []const u8, field_name: []const u8, expected_type: []const u8, declaration_line: usize) !void {
     const offset = std.mem.indexOf(u8, source, needle).? + needle.len - 1;
     const request = analysis.query.types.SourceRequest{ .path = path, .source = source, .offset = offset };

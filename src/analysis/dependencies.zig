@@ -1384,11 +1384,14 @@ pub const Analyzer = struct {
         const field_facts = receiver.field(member.name);
         if (field_facts.id != 0) return field_facts;
         const target = receiver.property_target orelse return .{};
+        if (target.owner == .document or target.owner == .page) {
+            const field = self.sema.settingsField(member.name) orelse return .{};
+            return self.valueFactsForType(field.value_type, 0);
+        }
         const class_id = switch (target.owner) {
             .any => null,
             .object => |object| object.class_id,
-            .document => self.sema.builtinClass("Doc"),
-            .page => self.sema.builtinClass("PageContext"),
+            .document, .page => unreachable,
         };
         const field = if (class_id) |id|
             self.sema.field(id, member.name)

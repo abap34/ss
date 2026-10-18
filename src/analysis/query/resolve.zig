@@ -358,6 +358,12 @@ fn resolveType(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: any
 pub fn fieldForType(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, ty: ast.Type, name: []const u8) anyerror!?FieldRef {
     if (expired(budget)) return null;
     if (ty.optional_child) |child| return fieldForType(allocator, budget, snapshot, child.*, name);
+    if (ty.kind == .document or ty.kind == .page) {
+        if (ty.kind == .page and @import("../../language/names.zig").parseAnchorName(name) != null) {
+            return .{ .name = name, .value_type = ast.Type.anchor, .type_label = "Anchor" };
+        }
+        return recordField(budget, snapshot, settingsId(snapshot) orelse return null, name);
+    }
     if (ty.kind == .placed or ty.kind == .placement) {
         const field_type = @import("../../language/placement.zig").memberType(ty, name) orelse return null;
         return .{ .name = name, .value_type = field_type, .type_label = try field_type.formatAlloc(allocator) };
@@ -405,12 +411,12 @@ pub fn objectClassForType(snapshot: anytype, ty: ast.Type) ?core.NominalId {
     return switch (ty.kind) {
         .object => ty.nominalId(),
         .selection => ty.selectionItemId(),
-        .document, .page => .{
-            .module_id = snapshot.builtin_module_id orelse return null,
-            .name = if (ty.kind == .document) "Doc" else "PageContext",
-        },
         else => null,
     };
+}
+
+pub fn settingsId(snapshot: anytype) ?core.NominalId {
+    return .{ .module_id = snapshot.settings_module_id orelse return null, .name = "PageSettings" };
 }
 
 pub fn classBase(budget: ?QueryBudget, snapshot: anytype, class_id: core.NominalId) ?core.NominalId {

@@ -358,7 +358,7 @@ pub const HoleFact = struct {
 };
 
 pub const AnalysisSnapshot = struct {
-    builtin_module_id: ?core.SourceModuleId = null,
+    settings_module_id: ?core.SourceModuleId = null,
     syntax_storage: ?SyntaxStorage = null,
     type_storage: ?TypeStorage = null,
     allocator: std.mem.Allocator,
@@ -400,7 +400,7 @@ pub const AnalysisSnapshot = struct {
         };
         errdefer snapshot.deinit();
 
-        snapshot.builtin_module_id = declaration_index.builtin_module_id;
+        snapshot.settings_module_id = declaration_index.settings_module_id;
         snapshot.diagnostics.sortByPath();
         snapshot.modules = try cloneModules(allocator, state.modules.entries.items);
         snapshot.module_order = try allocator.dupe(core.SourceModuleId, state.modules.order.items);

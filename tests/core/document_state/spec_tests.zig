@@ -1110,8 +1110,8 @@ fn expectDiagnosticCode(state: *core.DocumentState, code: []const u8) !void {
     return error.ExpectedDiagnosticMissing;
 }
 
-test "document state spec: explicit field reads ignore inherited class defaults" {
-    var state = try initDocumentStateWithLayoutClassDefaults();
+test "document state spec: explicit field reads ignore shared settings defaults" {
+    var state = try initDocumentStateWithLayoutSettingsDefaults();
     defer state.deinit();
 
     const page = try state.addPage("Page");
@@ -1149,11 +1149,11 @@ test "document state spec: render environment entries are deduplicated by full t
     try testing.expectEqual(@as(usize, 3), node.render_env.items.len);
 }
 
-fn initDocumentStateWithLayoutClassDefaults() !core.DocumentState {
+fn initDocumentStateWithLayoutSettingsDefaults() !core.DocumentState {
     const allocator = testing.allocator;
     const asset_base_dir = try allocator.dupe(u8, ".");
     errdefer allocator.free(asset_base_dir);
-    const project_path = try allocator.dupe(u8, "layout-classes.ss");
+    const project_path = try allocator.dupe(u8, "layout-settings.ss");
     errdefer allocator.free(project_path);
     const project_source = try allocator.dupe(u8, "");
     errdefer allocator.free(project_source);
@@ -1161,30 +1161,21 @@ fn initDocumentStateWithLayoutClassDefaults() !core.DocumentState {
     var program = ast.Module.init();
     errdefer program.deinit(allocator);
 
-    try program.objects.append(allocator, .{
-        .name = try allocator.dupe(u8, "Doc"),
-        .roles = .empty,
+    try program.records.append(allocator, .{
+        .name = try allocator.dupe(u8, "PageSettings"),
         .fields = .empty,
         .span = zeroSpan(),
     });
-    try program.objects.items[0].fields.append(allocator, .{
+    try program.records.items[0].fields.append(allocator, .{
         .name = try allocator.dupe(u8, "layout_v"),
         .value_type = ast.Type.enumType("LayoutPolicy"),
         .default_property_value = try allocator.dupe(u8, "top_flow"),
         .span = zeroSpan(),
     });
-    try program.objects.items[0].fields.append(allocator, .{
+    try program.records.items[0].fields.append(allocator, .{
         .name = try allocator.dupe(u8, "layout_v_center_offset"),
         .value_type = ast.Type.number,
         .default_property_value = try allocator.dupe(u8, "0"),
-        .span = zeroSpan(),
-    });
-
-    try program.objects.append(allocator, .{
-        .name = try allocator.dupe(u8, "PageContext"),
-        .base = try allocator.dupe(u8, "Doc"),
-        .roles = .empty,
-        .fields = .empty,
         .span = zeroSpan(),
     });
 
@@ -1192,6 +1183,7 @@ fn initDocumentStateWithLayoutClassDefaults() !core.DocumentState {
     program = ast.Module.init();
     errdefer state.deinit();
     try state.modules.order.append(allocator, state.modules.project_id);
+    state.declaration_index.settings_module_id = state.modules.project_id;
     return state;
 }
 
