@@ -1386,10 +1386,6 @@ const BuiltinContext = struct {
         const expected = sema.primitiveArgType(descriptor, index) orelse return;
         try value_contracts.ensureValueConformsToType(self.state, self.page_id, value, expected, self.current_origin, .UnmatchedArgumentType);
     }
-
-    pub fn checkAssetExists(self: *BuiltinContext, object_id: core.NodeId) !void {
-        try validateAssetExists(self.state, self.page_id, object_id, self.current_origin);
-    }
 };
 
 fn evalPrimitiveCall(
@@ -1429,22 +1425,6 @@ fn emitUserReport(
     );
 }
 
-fn validateAssetExists(state: *core.DocumentState, page_id: core.NodeId, object_id: core.NodeId, origin: core.SourceOrigin) !void {
-    const node = state.getNode(object_id) orelse return error.UnknownNode;
-    const diagnostic_origin = assetContentDiagnosticOrigin(node, origin);
-    if (node.object_kind == null or node.object_kind.? != .asset or core.nodeContent(node) == null) {
-        try state.addValidationDiagnostic(.@"error", page_id, object_id, diagnostic_origin, .{
-            .asset_invalid = .{
-                .reason = try state.allocator.dupe(u8, "expected an asset object with a path"),
-                .payload_kind = node.payload_kind,
-            },
-        });
-        return;
-    }
-
-    try validateAssetPath(state, page_id, object_id, core.nodeContent(node).?, node.payload_kind, diagnostic_origin);
-}
-
 fn validateAssetPath(
     state: *core.DocumentState,
     page_id: core.NodeId,
@@ -1469,11 +1449,6 @@ fn validateAssetPath(
         });
         return;
     }
-}
-
-fn assetContentDiagnosticOrigin(node: *const core.Node, fallback: core.SourceOrigin) core.SourceOrigin {
-    const content = core.nodeContent(node) orelse return fallback;
-    return core.ContentProvenance.originForSpan(node.content_provenance.items, 0, content.len) orelse fallback;
 }
 
 const resolveAssetPath = utils.fs.resolveAssetPath;
@@ -1844,16 +1819,8 @@ fn writePropertyPathToNode(
     }
     const node = state.getNode(node_id) orelse return error.UnknownNode;
     const sema = SemanticEnv.init(state, evaluation.declarations, functions).forModule(evaluation.module_id);
-    const field_type = if (node.kind == .document or node.kind == .page) blk: {
-        const field = sema.settingsField(property_name) orelse return error.InvalidType;
-        break :blk field.value_type;
-    } else blk: {
-        const field = (if (core.fields.classId(state, node)) |class_name|
-            sema.field(class_name, property_name)
-        else
-            sema.fieldByName(property_name)) orelse return error.InvalidType;
-        break :blk field.value_type;
-    };
+    if (node.kind != .document and node.kind != .page) return error.InvalidType;
+    const field_type = (sema.settingsField(property_name) orelse return error.InvalidType).value_type;
     if (field_type.kind != .record) return error.InvalidValueTag;
     var record = core.Value{ .record = try materializePropertyRecord(evaluation, page_id, scope, origin, node, property_name, field_type) };
     defer record.deinit(state.allocator);

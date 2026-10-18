@@ -194,6 +194,5 @@ fn putDefinition(
 fn recordAnnotation(state: *core.DocumentState, module_id: core.SourceModuleId, span: ?ast.Span, ty: ast.Type) !void {
     try state.recordBindingType(module_id, span, .{
         .ty = ty,
-        .object_class = @import("types.zig").infoFromType(ty).object_class,
     });
 }

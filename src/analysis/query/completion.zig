@@ -16,8 +16,6 @@ const Candidate = types.CompletionCandidate;
 const Result = types.CompletionResult;
 
 const PropertyTarget = union(enum) {
-    class: core.NominalId,
-    any_object,
     record: ast.Type,
     placement: ast.Type,
     settings: ast.Type,
@@ -67,9 +65,6 @@ fn completeRegular(builder: *CandidateBuilder, snapshot: anytype, req: types.Sou
     }
     try appendVisibleDeclarations(builder, snapshot, req.path, .value);
     try appendTypeNameCompletions(builder, snapshot, program, req);
-    for (snapshot.role_bindings) |role| {
-        try builder.add(.{ .label = role.name, .kind = .role, .detail = role.type_label });
-    }
 }
 
 const CandidateBuilder = struct {
@@ -261,8 +256,8 @@ fn appendModuleDeclarations(builder: *CandidateBuilder, snapshot: anytype, modul
 fn appendTypeDefinition(builder: *CandidateBuilder, definition: anytype) !void {
     try builder.add(.{
         .label = definition.name,
-        .kind = if (definition.kind == .object) .class else .type_decl,
-        .detail = if (definition.kind == .record) "record" else if (definition.kind == .object) null else "type",
+        .kind = .type_decl,
+        .detail = if (definition.kind == .record) "type" else "enum",
     });
 }
 
@@ -359,18 +354,7 @@ fn appendProperties(builder: *CandidateBuilder, snapshot: anytype, target: Prope
             }
             return;
         },
-        else => {},
     }
-
-    var index = snapshot.fields.len;
-    while (index > 0) {
-        try builder.checkBudget();
-        index -= 1;
-        const field = snapshot.fields[index];
-        if (!fieldAppliesToTarget(builder.budget, snapshot, field, target)) continue;
-        try builder.add(.{ .label = field.name, .kind = .property, .detail = field.type_label });
-    }
-    try builder.add(.{ .label = "content", .kind = .property, .detail = "String" });
 }
 
 fn appendRecordFields(builder: *CandidateBuilder, snapshot: anytype, ty: ast.Type) !void {
@@ -471,43 +455,18 @@ fn recordTypeForCompletionExpr(allocator: std.mem.Allocator, budget: QueryBudget
 }
 
 fn propertyTargetForVariable(snapshot: anytype, variable: anytype) ?PropertyTarget {
-    if (variable.object_class) |id| return .{ .class = id };
     return propertyTargetForType(snapshot, variable.value_type);
 }
 
 fn propertyTargetForType(snapshot: anytype, ty: ast.Type) ?PropertyTarget {
     if (ty.kind == .optional) return if (ty.optional_child) |child| propertyTargetForType(snapshot, child.*) else null;
-    if (resolve_query.objectClassForType(snapshot, ty)) |id| return .{ .class = id };
     return switch (ty.kind) {
         .document, .page => .{ .settings = ty },
-        .object => .any_object,
-        .selection => if (ty.selectionItem().kind == .object) .any_object else null,
         .record => if (ty.nominalId() != null) .{ .record = ty } else null,
         .group => .{ .record = ty },
         .placed, .placement => .{ .placement = ty },
         else => null,
     };
-}
-
-fn fieldAppliesToTarget(budget: QueryBudget, snapshot: anytype, field: anytype, target: PropertyTarget) bool {
-    return switch (target) {
-        .any_object => true,
-        .class => |id| classContains(budget, snapshot, id, .{ .module_id = field.class_module_id, .name = field.class_name }),
-        .record, .placement, .settings => false,
-    };
-}
-
-fn classContains(budget: QueryBudget, snapshot: anytype, class_id: core.NominalId, expected: core.NominalId) bool {
-    var current: ?core.NominalId = class_id;
-    var remaining_bases = snapshot.classes.len;
-    while (current) |id| {
-        if (budget.expired()) return false;
-        if (id.eql(expected)) return true;
-        if (remaining_bases == 0) return false;
-        remaining_bases -= 1;
-        current = resolve_query.classBase(budget, snapshot, id);
-    }
-    return false;
 }
 
 fn appendImportAsCompletions(builder: *CandidateBuilder, source: []const u8, offset: usize) !void {

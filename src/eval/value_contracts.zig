@@ -116,13 +116,6 @@ pub fn valueConformsToType(state: anytype, value: core.Value, expected: ast.Type
         if (expected.kind == .placement) return expected.arguments.len == 0;
         return valueConformsToType(state, placement.value, expected.placedInput() orelse return false);
     }
-    if (expected.kind == .object and expected.class_name != null) {
-        const id = expected.nominalId() orelse return false;
-        if (value != .object) return false;
-        const node = state.getNode(value.object) orelse return false;
-        const actual_id = core.fields.classId(state, node) orelse return false;
-        return id.eql(actual_id);
-    }
     if (expected.kind == .selection) {
         if (value != .selection) return false;
         const item = expected.selectionItem();
@@ -136,16 +129,8 @@ pub fn valueConformsToType(state: anytype, value: core.Value, expected: ast.Type
         if (item.arguments.len != 0) return false;
         switch (item.kind) {
             .any => return true,
-            .object => if (value.selection.item_tag != .object) return false,
             .page => if (value.selection.item_tag != .page) return false,
             else => return false,
-        }
-        if (expected.selectionItemId()) |id| {
-            for (value.selection.ids.items) |node_id| {
-                const node = state.getNode(node_id) orelse return false;
-                const actual_id = core.fields.classId(state, node) orelse return false;
-                if (!id.eql(actual_id)) return false;
-            }
         }
         return true;
     }
@@ -158,7 +143,7 @@ fn expectedRuntimeKind(expected: ast.Type) ?core.ValueTag {
         .none => .none,
         .document => .document,
         .page => .page,
-        .object, .placed, .placement => .object,
+        .placed, .placement => .object,
         .selection => .selection,
         .anchor => .anchor,
         .function => .function,

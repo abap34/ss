@@ -63,7 +63,6 @@ pub const Type = struct {
         any,
         document,
         page,
-        object,
         unresolved,
         placed,
         group,
@@ -89,7 +88,6 @@ pub const Type = struct {
     pub const any = Type{ .kind = .any };
     pub const document = Type{ .kind = .document };
     pub const page = Type{ .kind = .page };
-    pub const object = Type{ .kind = .object };
     pub const placement = Type{ .kind = .placement };
     pub const anchor = Type{ .kind = .anchor };
     pub const function = Type{ .kind = .function };
@@ -103,18 +101,6 @@ pub const Type = struct {
     /// A source-level name awaiting resolution in its declaration environment.
     pub fn unresolvedNameAt(name: []const u8, span: SourceSpan) Type {
         return .{ .kind = .unresolved, .class_name = name, .class_name_span = span };
-    }
-
-    pub fn objectClass(name: []const u8) Type {
-        return .{ .kind = .object, .class_name = name };
-    }
-
-    pub fn objectId(id: NominalId) Type {
-        return objectClass(id.name).inModule(id.module_id);
-    }
-
-    pub fn objectClassAt(name: []const u8, span: SourceSpan) Type {
-        return .{ .kind = .object, .class_name = name, .class_name_span = span };
     }
 
     pub fn enumType(name: []const u8) Type {
@@ -134,7 +120,7 @@ pub const Type = struct {
     }
 
     pub fn inModule(self: Type, module_id: u32) Type {
-        std.debug.assert(self.kind == .record or self.kind == .enum_type or self.kind == .object);
+        std.debug.assert(self.kind == .record or self.kind == .enum_type);
         var resolved = self;
         resolved.nominal_module_id = module_id;
         return resolved;
@@ -146,10 +132,6 @@ pub const Type = struct {
             .module_id = self.nominal_module_id orelse return null,
             .name = (if (self.kind == .enum_type) self.enum_name else self.class_name) orelse return null,
         };
-    }
-
-    pub fn selectionItemId(self: Type) ?NominalId {
-        return self.selectionItem().nominalId();
     }
 
     pub fn hole(hole_id: u32) Type {
@@ -424,9 +406,6 @@ pub const Type = struct {
             }
             return acceptsResolved(expected.fn_result.?.*, actual.fn_result.?.*);
         }
-        if (expected.kind == .object and expected.class_name != null and actual.class_name != null) {
-            if (expected.nominal_module_id != actual.nominal_module_id or !std.mem.eql(u8, expected.class_name.?, actual.class_name.?)) return false;
-        }
         if (expected.kind == .selection) {
             const wanted = expected.selectionItem();
             const received = actual.selectionItem();
@@ -486,14 +465,6 @@ pub const Type = struct {
                 try out.append(allocator, '<');
                 try self.selectionItem().formatInto(allocator, out);
                 try out.append(allocator, '>');
-            },
-            .object => {
-                try out.appendSlice(allocator, "Object");
-                if (self.class_name) |class_name| {
-                    try out.append(allocator, '<');
-                    try out.appendSlice(allocator, class_name);
-                    try out.append(allocator, '>');
-                }
             },
             .function => {
                 if (self.fn_result == null) {
@@ -559,7 +530,6 @@ pub const Type = struct {
             .any => "Any",
             .document => "Document",
             .page => "Page",
-            .object => "Object",
             .unresolved => "UnresolvedType",
             .placed => "Placed",
             .group => "Group",

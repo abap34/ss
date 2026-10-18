@@ -748,7 +748,6 @@ const Analyzer = struct {
                 return combined;
             },
             .selection_difference, .sub => if (args.len > 0) return args[0].clone(self.allocator),
-            .require_asset_exists => if (args.len >= 1) return args[0].clone(self.allocator),
             else => {},
         }
         switch (primitive.result_policy) {

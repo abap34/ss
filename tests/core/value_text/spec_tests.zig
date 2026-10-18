@@ -5,7 +5,7 @@ const core = @import("core");
 const testing = std.testing;
 const allocation_testing = @import("allocation_testing");
 
-test "core value text spec: object properties round trip exact node identifiers" {
+test "core value text spec: placement references round trip exact node identifiers" {
     for ([_]core.NodeId{ 0, 1, 16777217, std.math.maxInt(core.NodeId) }) |id| {
         const original = core.Value{ .object = id };
         try testing.expect(core.value_text.propertyStringNeedsFree(original));
@@ -14,7 +14,7 @@ test "core value text spec: object properties round trip exact node identifiers"
         var parsed = try core.value_text.parsePropertyValue(testing.allocator, text);
         defer core.value_text.deinitParsedPropertyValue(testing.allocator, &parsed);
         try testing.expectEqual(id, parsed.object);
-        var typed = try core.value_text.typedPropertyValue(testing.allocator, text, ast.Type.object);
+        var typed = try core.value_text.typedPropertyValue(testing.allocator, text, ast.Type.placement);
         defer core.value_text.deinitParsedPropertyValue(testing.allocator, &typed);
         try testing.expectEqual(id, typed.object);
     }
@@ -214,6 +214,8 @@ test "core value text spec: malformed serialized record types are rejected" {
         "{\"kind\":\"number\"}",
         "{\"kind\":\"record\"}",
         "{\"kind\":\"record\",\"name\":\"\"}",
+        "{\"kind\":\"object\"}",
+        "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"object\",\"name\":\"Text\",\"module\":1}]}",
         "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"object\",\"name\":3}]}",
         "{\"kind\":\"record\",\"name\":\"Box\",\"module\":-1}",
         "{\"kind\":\"record\",\"name\":\"Box\",\"arguments\":[{\"kind\":\"optional\"}]}",

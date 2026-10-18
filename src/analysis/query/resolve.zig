@@ -60,7 +60,6 @@ pub const VariableBinding = struct {
     value_type: ast.Type,
     name: []const u8,
     type_label: []const u8,
-    object_class: ?core.NominalId = null,
     module_id: core.SourceModuleId,
 };
 
@@ -108,7 +107,6 @@ pub fn visibleVariableBinding(budget: ?QueryBudget, snapshot: anytype, module_id
                 .name = binding.name,
                 .type_label = binding.type_label,
                 .value_type = binding.value_type,
-                .object_class = binding.object_class,
                 .module_id = binding.module_id,
             };
             best_start = binding.span_start;
@@ -159,9 +157,6 @@ pub fn typeForExpr(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot:
         .ident => |ident| blk: {
             switch (try selectedValue(budget, snapshot, module_id, offset, ident.reference())) {
                 .local => |binding| {
-                    if (binding.object_class) |id| {
-                        break :blk if (binding.value_type.kind == .selection) binding.value_type else ast.Type.objectId(id);
-                    }
                     break :blk binding.value_type;
                 },
                 .constant => |binding| break :blk binding.value_type,
@@ -387,45 +382,11 @@ pub fn fieldForType(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot
         }
         return null;
     }
-    var current = objectClassForType(snapshot, ty);
-    var remaining = snapshot.classes.len;
-    while (current) |id| {
-        if (expired(budget)) return null;
-        var index = snapshot.fields.len;
-        while (index > 0) {
-            if (expired(budget)) return null;
-            index -= 1;
-            const field = snapshot.fields[index];
-            if (field.class_module_id != id.module_id or !std.mem.eql(u8, field.class_name, id.name) or !std.mem.eql(u8, field.name, name)) continue;
-            return .{ .name = field.name, .value_type = field.value_type, .type_label = field.type_label, .module_id = field.module_id, .name_span = field.name_span };
-        }
-        if (remaining == 0) return null;
-        remaining -= 1;
-        current = classBase(budget, snapshot, id);
-    }
     return null;
-}
-
-pub fn objectClassForType(snapshot: anytype, ty: ast.Type) ?core.NominalId {
-    if (ty.kind == .optional) return if (ty.optional_child) |child| objectClassForType(snapshot, child.*) else null;
-    return switch (ty.kind) {
-        .object => ty.nominalId(),
-        .selection => ty.selectionItemId(),
-        else => null,
-    };
 }
 
 pub fn settingsId(snapshot: anytype) ?core.NominalId {
     return .{ .module_id = snapshot.settings_module_id orelse return null, .name = "PageSettings" };
-}
-
-pub fn classBase(budget: ?QueryBudget, snapshot: anytype, class_id: core.NominalId) ?core.NominalId {
-    if (expired(budget)) return null;
-    for (snapshot.classes) |item| {
-        if (expired(budget)) return null;
-        if (item.module_id == class_id.module_id and std.mem.eql(u8, item.name, class_id.name)) return item.base;
-    }
-    return null;
 }
 
 pub fn typeAfterPath(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot: anytype, base: ast.Type, path: []const ast.RecordPathSegment) !?ast.Type {
@@ -645,7 +606,6 @@ fn resolvedTypeDefinition(item: anytype) TypeDefinition {
         .name = item.name,
         .kind = switch (item.kind) {
             .record => .record,
-            .object => .object,
             .enum_type => .enum_type,
         },
         .module_id = item.module_id,
@@ -783,11 +743,6 @@ fn TypeResolver(comptime SnapshotPtr: type) type {
             if (typeDefinitionInModule(self.budget, self.snapshot, module_id, .record, name)) |target| return .{
                 .kind = .record,
                 .ty = ast.Type.recordType(target.name).inModule(module_id),
-                .target = target,
-            };
-            if (typeDefinitionInModule(self.budget, self.snapshot, module_id, .object, name)) |target| return .{
-                .kind = .object,
-                .ty = ast.Type.objectClass(target.name).inModule(module_id),
                 .target = target,
             };
             if (typeDefinitionInModule(self.budget, self.snapshot, module_id, .enum_type, name)) |target| return .{

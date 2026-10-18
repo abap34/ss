@@ -27,43 +27,6 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, state: *core
     }
     try records.end();
 
-    var classes = try object.arrayField("classes");
-    for (index.classes.items) |class| {
-        var item = try classes.objectItem();
-        try item.stringField("name", class.name);
-        try item.optionalStringField("base", if (class.base) |base| base.name else null);
-        if (class.base) |base| try item.intField("baseModuleId", base.module_id);
-        try item.intField("moduleId", class.module_id);
-        try item.end();
-    }
-    try classes.end();
-
-    var roles = try object.arrayField("roles");
-    for (index.roles.items) |role| {
-        var item = try roles.objectItem();
-        try item.stringField("name", role.name);
-        try item.stringField("class", role.class_name);
-        try item.intField("classModuleId", role.class_module_id);
-        try item.intField("moduleId", role.module_id);
-        try item.end();
-    }
-    try roles.end();
-
-    var fields = try object.arrayField("fields");
-    for (index.fields.items) |field| {
-        var item = try fields.objectItem();
-        const type_label = try field.value_type.formatAlloc(allocator);
-        defer allocator.free(type_label);
-        try item.stringField("name", field.name);
-        try item.stringField("class", field.class_name);
-        try item.intField("classModuleId", field.class_module_id);
-        try item.stringField("type", type_label);
-        try item.optionalStringField("defaultProperty", field.default_property_value);
-        try item.intField("moduleId", field.module_id);
-        try item.end();
-    }
-    try fields.end();
-
     var record_fields = try object.arrayField("recordFields");
     for (index.record_fields.items) |field| {
         var item = try record_fields.objectItem();
@@ -79,12 +42,6 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, state: *core
     try record_fields.end();
 
     try object.end();
-}
-
-fn writeStringArrayField(object: *json.Object, name: []const u8, values: []const []const u8) !void {
-    var array = try object.arrayField(name);
-    for (values) |value| try array.stringItem(value);
-    try array.end();
 }
 
 fn writeEnumCasesField(object: *json.Object, name: []const u8, values: anytype) !void {

@@ -52,7 +52,7 @@ pub fn parse(allocator: std.mem.Allocator, value: json.Value) anyerror!Type {
         if (name_value.* != .string or name_value.string.len == 0) return error.InvalidValueTag;
         const name = name_value.string;
         switch (kind) {
-            .record, .object => ty.class_name = try allocator.dupe(u8, name),
+            .record => ty.class_name = try allocator.dupe(u8, name),
             .enum_type => ty.enum_name = try allocator.dupe(u8, name),
             else => return error.InvalidValueTag,
         }
@@ -63,7 +63,7 @@ pub fn parse(allocator: std.mem.Allocator, value: json.Value) anyerror!Type {
         ty.nominal_module_id = @intCast(module.integer);
     }
     if (json.fieldValue(object, "arguments")) |arguments| {
-        if (kind != .record and kind != .group and kind != .selection and kind != .placed and kind != .object) return error.InvalidValueTag;
+        if (kind != .record and kind != .group and kind != .selection and kind != .placed) return error.InvalidValueTag;
         ty.arguments = try parseTypes(allocator, arguments.*);
         ty.owns_arguments = true;
     }

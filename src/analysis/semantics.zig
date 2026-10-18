@@ -243,11 +243,6 @@ pub fn resolveTypeReferences(
     }
 }
 
-fn resolvedClassModule(sema: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?core.SourceModuleId {
-    const ty = sema.resolveTypeNameInContext(module_id, name) orelse return null;
-    return if (ty.kind == .object) ty.nominal_module_id else null;
-}
-
 fn resolveModuleTypeReferences(
     allocator: std.mem.Allocator,
     program: *ast.Module,
@@ -574,7 +569,7 @@ fn resolveRecordTypeName(
     const resolved = sema.resolveTypeNameInContext(module_id, record.type_name) orelse return;
     record.module_id = resolved.nominal_module_id;
     const resolved_name = switch (resolved.kind) {
-        .record, .object => resolved.class_name orelse return,
+        .record => resolved.class_name orelse return,
         .enum_type => resolved.enum_name orelse return,
         else => return,
     };
@@ -736,7 +731,7 @@ fn resolveTypeReference(
 ) !void {
     for (ty.mutableArguments()) |*argument| try resolveTypeReference(argument, module_id, sema);
     switch (ty.kind) {
-        .object, .unresolved => if (ty.class_name) |name| {
+        .unresolved => if (ty.class_name) |name| {
             if (sema.resolveTypeNameInContext(module_id, name)) |resolved| {
                 const class_name_span = ty.class_name_span;
                 const arguments = ty.arguments;
@@ -745,7 +740,7 @@ fn resolveTypeReference(
                 ty.arguments = arguments;
                 ty.owns_arguments = owns_arguments;
                 switch (ty.kind) {
-                    .object, .record, .parameter => ty.class_name_span = class_name_span,
+                    .record, .parameter => ty.class_name_span = class_name_span,
                     .enum_type => ty.enum_name_span = class_name_span,
                     else => {},
                 }
@@ -952,7 +947,7 @@ fn checkTypeAnnotation(
     if (ty.kind == .unresolved) return reportUnknownType(state, origin, ty.class_name orelse "");
     for (ty.arguments) |argument| try checkTypeAnnotation(state, sema, module_id, argument, origin);
     if (ty.kind == .selection or ty.kind == .placed) try semantic_types.ensureTypeArgumentCount(state, 1, ty.arguments.len, origin);
-    if (ty.kind != .selection and ty.kind != .placed and ty.kind != .group and ty.kind != .record and ty.kind != .object) try semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
+    if (ty.kind != .selection and ty.kind != .placed and ty.kind != .group and ty.kind != .record) try semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
     if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none or ty.kind == .hole or ty.kind == .parameter) return;
     if (ty.kind == .optional) {
         if (ty.optional_child) |child| try checkTypeAnnotation(state, sema, module_id, child.*, origin);
@@ -962,12 +957,7 @@ fn checkTypeAnnotation(
         const record_name = ty.class_name orelse return;
         const declaration = sema.record(ty.nominal_module_id, record_name) orelse return reportUnknownType(state, origin, record_name);
         try semantic_types.ensureTypeArgumentCount(state, declaration.decl.type_params.items.len, ty.arguments.len, origin);
-    } else if (ty.class_name) |class_name| {
-        if (ty.nominal_module_id == null or sema.class(ty.nominal_module_id, class_name) == null) {
-            return reportUnknownType(state, origin, class_name);
-        }
     }
-    if (ty.kind == .object) try semantic_types.ensureTypeArgumentCount(state, 0, ty.arguments.len, origin);
     if (ty.kind == .function) {
         var had_diagnostics = false;
         for (ty.fn_params) |param| {

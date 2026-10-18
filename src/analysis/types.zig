@@ -12,7 +12,6 @@ pub const TypeInfo = struct {
     ty: Type = Type.any,
     hole: ?HoleType = null,
     failed: bool = false,
-    object_class: ?core.NominalId = null,
     string_literal: ?[]const u8 = null,
     function_labels: []const []const u8 = &.{},
 };
@@ -36,7 +35,6 @@ pub fn infoFromType(ty: Type) TypeInfo {
     if (holeIdFromType(ty)) |hole_id| return infoFromHole(hole_id);
     return .{
         .ty = ty,
-        .object_class = if (ty.kind == .object) ty.nominalId() else if (ty.kind == .selection and ty.selectionItem().kind == .object) ty.selectionItemId() else null,
     };
 }
 
@@ -64,7 +62,6 @@ pub fn joinTypeInfo(allocator: std.mem.Allocator, a: TypeInfo, b: TypeInfo) !Typ
     if (b.hole != null) return b;
     return .{
         .ty = a.ty,
-        .object_class = joinObjectClass(a.object_class, b.object_class),
         .string_literal = joinStringLiteral(a.string_literal, b.string_literal),
         .function_labels = try joinFunctionLabels(allocator, a.function_labels, b.function_labels),
     };
@@ -76,14 +73,7 @@ pub fn refineTypeInfo(annotation: TypeInfo, actual: TypeInfo) TypeInfo {
     if (actual.hole != null) return actual;
     var result = actual;
     result.ty = annotation.ty;
-    result.object_class = meetObjectClass(annotation.object_class, actual.object_class);
     return result;
-}
-
-// Distinct nominal classes have an empty intersection. Without an empty-selection
-// fact, retaining either operand is a sound approximation of that intersection.
-pub fn meetObjectClass(a: ?core.NominalId, b: ?core.NominalId) ?core.NominalId {
-    return a orelse b;
 }
 
 pub fn singleFunctionLabel(allocator: std.mem.Allocator, label: []const u8) ![]const []const u8 {
@@ -112,12 +102,6 @@ fn appendUniqueLabel(allocator: std.mem.Allocator, labels: *std.ArrayList([]cons
     try labels.append(allocator, label);
 }
 
-pub fn joinObjectClass(a: ?core.NominalId, b: ?core.NominalId) ?core.NominalId {
-    if (a == null or b == null) return null;
-    if (a.?.eql(b.?)) return a;
-    return null;
-}
-
 pub fn joinStringLiteral(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
     if (a == null or b == null) return null;
     if (std.mem.eql(u8, a.?, b.?)) return a;
@@ -144,26 +128,15 @@ pub fn resolveStringLiteral(env: *const TypeEnv, expr: ast.Expr) ?[]const u8 {
 
 pub fn isPropertyReadTarget(info: TypeInfo) bool {
     return switch (info.ty.kind) {
-        .document, .page, .object => true,
+        .document, .page => true,
         else => false,
     };
 }
 
 pub fn isPropertyTarget(info: TypeInfo) bool {
     return switch (info.ty.kind) {
-        .document, .page, .object => true,
-        .selection => info.ty.selectionItem().kind == .object,
+        .document, .page => true,
         else => false,
-    };
-}
-
-pub fn targetClassForInfo(info: TypeInfo) ?core.NominalId {
-    if (info.hole != null) return null;
-    return switch (info.ty.kind) {
-        .document, .page => null,
-        .object => info.object_class,
-        .selection => if (info.ty.selectionItem().kind == .object) info.object_class else null,
-        else => null,
     };
 }
 
@@ -231,7 +204,7 @@ pub fn ensureTypeWithHoles(
     return error.InvalidType;
 }
 
-// Stored properties must have a function-free value type. Object and
+// Stored properties must have a function-free value type. Placement and
 // page references do not embed the properties of their referents.
 pub fn isPropertyStorable(allocator: std.mem.Allocator, sema: *const @import("../language/env.zig").SemanticEnv, ty: Type) !bool {
     var pending = std.ArrayList(Type).empty;

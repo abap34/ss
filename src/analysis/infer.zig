@@ -20,7 +20,6 @@ const infoFromType = semantic_types.infoFromType;
 const isPropertyTarget = semantic_types.isPropertyTarget;
 const joinTypeInfo = semantic_types.joinTypeInfo;
 const singleFunctionLabel = semantic_types.singleFunctionLabel;
-const targetClassForInfo = semantic_types.targetClassForInfo;
 const typeInfoLabelAlloc = semantic_types.typeInfoLabelAlloc;
 const typeLabelAlloc = semantic_types.typeLabelAlloc;
 pub const Context = return_facts.Cache;
@@ -532,30 +531,20 @@ fn inferMemberInfoFromTargetInfo(
     }
     if (!semantic_types.isPropertyReadTarget(target_info)) {
         const message = if (target_info.ty.kind == .selection)
-            "selection fields cannot be read directly; select an object with first(...) before reading its fields"
+            "selection fields cannot be read directly; select an element with first(...) before reading its fields"
         else
-            "member reads require a value with fields, Document, Page, or Object";
+            "member reads require a value with fields, Document, Page, or a placement reference";
         try addUserReportAtSpan(state, origin, member_span, "InvalidProperty", "{s}", .{message});
         return error.InvalidType;
     }
-    if ((target_info.ty.kind == .object or target_info.ty.kind == .page) and language_names.parseAnchorName(member_name) != null) {
+    if (target_info.ty.kind == .page and language_names.parseAnchorName(member_name) != null) {
         return infoFromType(Type.anchor);
-    }
-    if (std.mem.eql(u8, member_name, "content")) {
-        if (target_info.ty.kind != .object) {
-            try addUserReportAtSpan(state, origin, member_span, "InvalidProperty", "content is available only on Object", .{});
-            return error.InvalidType;
-        }
-        return infoFromType(Type.string);
     }
     const field_type = fieldTypeForTarget(sema, target_info, member_name) orelse {
         try addUserReportAtSpan(state, origin, member_span, "UnknownField", "unknown field: {s}", .{member_name});
         return error.InvalidType;
     };
-    if (target_info.ty.kind == .document or target_info.ty.kind == .page) return infoFromType(field_type);
-    var result_type = if (field_type.kind == .optional) try field_type.clone(allocator) else try Type.optional(allocator, field_type);
-    errdefer result_type.deinit(allocator);
-    return infoFromType(result_type);
+    return infoFromType(field_type);
 }
 
 fn inferOptionalCheckInfo(
@@ -1074,8 +1063,7 @@ fn returnTypeNeedsInferredFacts(ty: Type) bool {
         .enum_type,
         .hole,
         => true,
-        .object => ty.class_name == null,
-        .selection => (ty.selectionItem().kind == .object or ty.selectionItem().kind == .any) and ty.selectionItem().class_name == null,
+        .selection => ty.selectionItem().kind == .any,
         .optional => if (ty.optional_child) |child| returnTypeNeedsInferredFacts(child.*) else true,
         .none,
         .document,
@@ -1151,9 +1139,6 @@ fn inferUserFunctionReturnInfo(
     );
     var result = returns orelse infoFromType(func.result_type);
     result.ty = func.result_type;
-    if (func.result_type.kind == .object) {
-        if (func.result_type.nominalId()) |class_id| result.object_class = class_id;
-    }
     // A result that used a recursive fallback depends on the active call chain.
     if (context.recursive_calls == recursive_calls_before) try context.put(key, result);
     return result;
@@ -1273,7 +1258,6 @@ fn selectionItemType(state: ?*core.DocumentState, info: TypeInfo, origin: core.S
     return switch (info.ty.selectionItem().kind) {
         .page => Type.page,
         .placed, .placement => info.ty.selectionItem(),
-        .object => if (info.object_class orelse info.ty.selectionItemId()) |id| Type.objectId(id) else Type.object,
         else => {
             try addUserReport(state, origin, "UnknownSelectionItemType", "this operation requires a Selection of pages or placements; specify the element type in the Selection annotation", .{});
             return error.InvalidType;
@@ -1378,17 +1362,7 @@ fn inferSelectionAlgebraInfo(
         return error.InvalidType;
     }
 
-    var info = infoFromType(if (left.ty.selectionItem().kind == .page) Type.selection(.page) else Type.selection(.object));
-    info.object_class = switch (op) {
-        .selection_union => semantic_types.joinObjectClass(left.object_class, right.object_class),
-        .selection_intersection => semantic_types.meetObjectClass(left.object_class, right.object_class),
-        .selection_difference => left.object_class,
-        else => unreachable,
-    };
-    if (info.ty.selectionItem().kind == .object) if (info.object_class) |id| {
-        info.ty = try Type.selectionOf(allocator, Type.objectId(id));
-    };
-    return info;
+    return infoFromType(Type.selection(.page));
 }
 
 fn inferSelectCallInfo(
@@ -1457,13 +1431,7 @@ fn fieldTypeForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []co
         const field = sema.settingsField(key) orelse return null;
         return field.value_type;
     }
-    const field = if (targetClassForInfo(target_info)) |class_name|
-        sema.field(class_name, key)
-    else if (target_info.ty.kind == .object or (target_info.ty.kind == .selection and target_info.ty.selectionItem().kind == .object))
-        sema.fieldByName(key)
-    else
-        null;
-    return if (field) |descriptor| descriptor.value_type else null;
+    return null;
 }
 
 fn validateExpectedFieldValueAtSpan(

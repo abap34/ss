@@ -1312,9 +1312,6 @@ pub const Analyzer = struct {
                     result.placement = .exact(call.callee.call_id.?, &.{});
                 } else result = input;
             },
-            .require_asset_exists => if (call.args.items.len > 0) {
-                result = try self.valueFacts(call.args.items[0]);
-            },
             else => {},
         }
         return result;
@@ -1448,7 +1445,7 @@ pub const Analyzer = struct {
                 .named => |named| blk: {
                     // Scalar results contain neither callables nor object identities.
                     switch (named.decl.result_type.kind) {
-                        .function, .record, .group, .optional, .any, .object, .placed, .placement, .page, .document, .selection => {},
+                        .function, .record, .group, .optional, .any, .placed, .placement, .page, .document, .selection => {},
                         else => break :blk ValueFacts{},
                     }
                     const already_visiting = self.visiting.contains(named.key);
@@ -2193,7 +2190,6 @@ pub const Analyzer = struct {
             .report_error,
             .report_warning,
             .readlines,
-            .require_asset_exists,
             => {},
             else => {},
         }
@@ -2346,10 +2342,6 @@ pub const Analyzer = struct {
                 .group => null,
                 .place_on => if (call.args.items.len > 1)
                     try self.propertyTargetExpr(call.args.items[1])
-                else
-                    PropertyTarget.any(),
-                .require_asset_exists => if (call.args.items.len > 0)
-                    try self.propertyTargetExpr(call.args.items[0])
                 else
                     PropertyTarget.any(),
                 .foreach, .selection_filter, .foreach_enumerate => if (call.args.items.len > 0)
@@ -2534,11 +2526,10 @@ pub const Analyzer = struct {
         return switch (ty.kind) {
             .document => PropertyTarget.document(),
             .page => PropertyTarget.page(),
-            .object => PropertyTarget.object(),
             .placed, .placement => PropertyTarget.object(),
             .selection => switch (ty.selectionItem().kind) {
                 .page => PropertyTarget.page(),
-                .object, .any => PropertyTarget.object(),
+                .any => PropertyTarget.object(),
                 .placed, .placement => PropertyTarget.object(),
                 else => null,
             },
