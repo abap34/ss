@@ -408,7 +408,7 @@ pub const CompositionOrder = struct {
     }
 };
 
-pub const NativeDisplayKind = enum { text, image, pdf };
+pub const NativeDisplayKind = enum { text, image, pdf, code };
 
 /// Input storage follows Value ownership: recursive storage is owned, while
 /// strings, names and function identities borrow the document's runtime inputs.
@@ -894,6 +894,15 @@ pub fn nodeField(node: *const Node, key: []const u8) ?Value {
                     break :blk null;
                 },
                 .image, .pdf => if (std.mem.eql(u8, key, "asset") or std.mem.eql(u8, key, "chrome")) style.record.field(key) else null,
+                .code => blk: {
+                    if (std.mem.eql(u8, key, "language")) break :blk placement.value.record.field("language");
+                    if (std.mem.eql(u8, key, "text") or std.mem.eql(u8, key, "chrome")) break :blk style.record.field(key);
+                    if (std.mem.eql(u8, key, "code")) {
+                        const highlight = style.record.field("highlight") orelse break :blk null;
+                        if (highlight == .record) break :blk highlight.record.field("code");
+                    }
+                    break :blk null;
+                },
             };
         }
     }
@@ -908,6 +917,7 @@ pub fn nodeContent(node: *const Node) ?[]const u8 {
         if (placement.display == .native) return switch (placement.display.native) {
             .text => placement.value.record.field("content").?.string,
             .image, .pdf => placement.value.record.field("path").?.string,
+            .code => placement.value.record.field("source").?.string,
         };
     }
     return node.content;

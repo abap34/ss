@@ -1,4 +1,5 @@
-import std:internal/classes
+import std:code/types as { CodeColors, CodeHighlightTheme }
+import std:text/types as { TextStyle }
 
 fn code_theme_github_light() -> CodeHighlightTheme
   return CodeHighlightTheme {

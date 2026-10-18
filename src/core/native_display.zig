@@ -83,7 +83,7 @@ fn isLibraryType(state: anytype, ty: ast.Type, spec: []const u8, name: []const u
 const Contract = struct {
     module: []const u8,
     name: []const u8,
-    content_field: []const u8,
+    string_fields: []const []const u8,
     style_module: []const u8,
     style_name: []const u8,
 };
@@ -93,21 +93,28 @@ fn contract(kind: Kind) Contract {
         .text => .{
             .module = "std:text/content",
             .name = "Text",
-            .content_field = "content",
+            .string_fields = &.{"content"},
             .style_module = "std:text/style",
             .style_name = "TextBlockStyle",
         },
         .image => .{
             .module = "std:assets/content",
             .name = "Image",
-            .content_field = "path",
+            .string_fields = &.{"path"},
             .style_module = "std:assets/style",
             .style_name = "AssetBlockStyle",
+        },
+        .code => .{
+            .module = "std:code/content",
+            .name = "Code",
+            .string_fields = &.{ "source", "language" },
+            .style_module = "std:code/style",
+            .style_name = "CodeBlockStyle",
         },
         .pdf => .{
             .module = "std:assets/content",
             .name = "Pdf",
-            .content_field = "path",
+            .string_fields = &.{"path"},
             .style_module = "std:assets/style",
             .style_name = "AssetBlockStyle",
         },
@@ -129,8 +136,10 @@ pub fn validateType(state: anytype, ty: ast.Type, kind: Kind) !void {
     const id = ty.nominalId().?;
     const index = state.declaration_index;
     const expected = contract(kind);
-    const content = index.recordField(id, expected.content_field) orelse return error.InvalidNativeDisplay;
-    if (!ast.Type.eql(content.value_type, ast.Type.string)) return error.InvalidNativeDisplay;
+    for (expected.string_fields) |name| {
+        const field = index.recordField(id, name) orelse return error.InvalidNativeDisplay;
+        if (!ast.Type.eql(field.value_type, ast.Type.string)) return error.InvalidNativeDisplay;
+    }
     const style = index.recordField(id, "style") orelse return error.InvalidNativeDisplay;
     if (!isLibraryType(state, style.value_type, expected.style_module, expected.style_name)) return error.InvalidNativeDisplay;
 }
@@ -142,8 +151,10 @@ pub fn validateValue(state: anytype, value: model.Value, kind: Kind) !void {
     };
     try validateType(state, record.ty, kind);
     const expected = contract(kind);
-    const content = record.field(expected.content_field) orelse return error.InvalidNativeDisplay;
-    if (content != .string) return error.InvalidNativeDisplay;
+    for (expected.string_fields) |name| {
+        const field = record.field(name) orelse return error.InvalidNativeDisplay;
+        if (field != .string) return error.InvalidNativeDisplay;
+    }
     const style = record.field("style") orelse return error.InvalidNativeDisplay;
     if (style != .record or !isLibraryType(state, style.record.ty, expected.style_module, expected.style_name)) return error.InvalidNativeDisplay;
 }

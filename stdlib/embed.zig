@@ -5,6 +5,7 @@ pub const modules = [_]Module{
     .{ .spec = "std:assets/style", .path = "stdlib/assets/style.ss", .source = @embedFile("assets/style.ss") },
     .{ .spec = "std:assets/types", .path = "stdlib/assets/types.ss", .source = @embedFile("assets/types.ss") },
     .{ .spec = "std:assets", .path = "stdlib/assets.ss", .source = @embedFile("assets.ss") },
+    .{ .spec = "std:code/content", .path = "stdlib/code/content.ss", .source = @embedFile("code/content.ss") },
     .{ .spec = "std:code/palettes", .path = "stdlib/code/palettes.ss", .source = @embedFile("code/palettes.ss") },
     .{ .spec = "std:code/style", .path = "stdlib/code/style.ss", .source = @embedFile("code/style.ss") },
     .{ .spec = "std:code/types", .path = "stdlib/code/types.ss", .source = @embedFile("code/types.ss") },
