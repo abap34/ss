@@ -13,6 +13,15 @@ function run(...args) {
   assert.equal(result.status, 0, result.stderr);
 }
 try {
+  await writeFile(path.join(project, "unused.ss"), `import std:math as formulas
+const body: formulas::Latex = formulas::latex("Undefined TeX command")
+page unused
+end
+`);
+  run("dump", "--quiet", "unused.ss", "--output", "unused.json");
+  const unused = JSON.parse(await readFile(path.join(project, "unused.json"), "utf8"));
+  assert.deepEqual(unused.diagnostics, []);
+  assert(!unused.nodes.some(node => node.placement));
   await copyFile(path.join(root, "tests/fixtures/typed-display/latex.ss"), path.join(project, "slide.ss"));
   const probe = spawnSync("pdflatex", ["--version"], { timeout: 10000 });
   if (probe.error?.code !== "ENOENT") {

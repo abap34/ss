@@ -27,8 +27,9 @@ const raceMarker = path.join(directory, "change-after-tex");
 const previousPath = process.env.PATH;
 let watch;
 const source = String.raw`import std:themes/default as *
+import std:math as formulas
 page dependencies
-let formula = latex!("$\ProbeText$")
+let formula = latex!("$\ProbeText$", formulas::LatexBlockStyle {}, LatexConfig { preamble = readlines("preamble.tex") })
 ~ formula.left == page.left + 60
 ~ formula.top == page.top - 120
 let inline = text!("Inline $\ProbeText$")

@@ -23,7 +23,7 @@ if (pdflatexAvailable && pdftotextAvailable) {
 if (pdflatexAvailable && process.platform !== "win32") {
   await testExplicitLatexBodiesShareOneEngineProcess();
   await testMarkdownAndExplicitLatexShareOneEngineProcess();
-  await testLatexPreambleScopesCreateSeparateEngineProcesses();
+  await testLatexConfigurationsCreateSeparateEngineProcesses();
   await testLatexArtifactCacheIsReusedAndInvalidated();
 }
 if (
@@ -40,16 +40,14 @@ async function testLuaLaTeXRendersJapaneseText() {
     await writeFile(
       path.join(project, "slide.ss"),
       `import std:themes/default as *
+import std:math as formulas
 
-document
-  latex_engine(LatexEngine.pdflatex)
-  latex_preamble("\\usepackage{luatexja-fontspec}")
-  latex_preamble("\\setmainjfont{HaranoAjiMincho-Regular}")
-end
-
+const config: LatexConfig = LatexConfig {
+  engine = LatexEngine.lualatex
+  preamble = "\\usepackage{luatexja-fontspec}\\setmainjfont{HaranoAjiMincho-Regular}"
+}
 page formula
-page_latex_engine(LatexEngine.lualatex)
-latex!("\u65e5\u672c\u8a9e\u3092\u542b\u3080\u6570\u5f0f $x^2$")
+latex!("\u65e5\u672c\u8a9e\u3092\u542b\u3080\u6570\u5f0f $x^2$", formulas::LatexBlockStyle {}, config)
 end
 `,
       "utf8",
@@ -161,9 +159,10 @@ async function testAlgorithm2eRemainsSelectable() {
     await writeFile(
       path.join(project, "slide.ss"),
       `import std:themes/default as *
+import std:math as formulas
 
 page algorithm
-let algorithm = latex! <<
+let source = <<
 \\DontPrintSemicolon
 \\begin{algorithm}[H]
   \\KwData{SelectableAlgorithmInput}
@@ -171,15 +170,13 @@ let algorithm = latex! <<
   \\While{condition}{update state\\;}
 \\end{algorithm}
 >>
+let algorithm = latex!(source, formulas::LatexBlockStyle {}, LatexConfig { preamble = readlines("preamble.tex") })
 ~ algorithm.left == page.left + 120
 ~ algorithm.right == page.right - 120
 ~ algorithm.top == page.top - 100
 ~ algorithm.bottom == page.bottom + 100
 end
 
-document
-  latex_preamble_file("preamble.tex")
-end
 `,
       "utf8",
     );
@@ -246,29 +243,28 @@ end
   }
 }
 
-async function testLatexPreambleScopesCreateSeparateEngineProcesses() {
+async function testLatexConfigurationsCreateSeparateEngineProcesses() {
   const project = await mkdtempProject("ss-latex-preamble-groups-");
   try {
     const instrumented = await instrumentPdflatex(project);
     await writeFile(
       path.join(project, "slide.ss"),
       `import std:themes/default as *
+import std:math as formulas
 
 page first
-page_latex_preamble("\\newcommand{\\ScopedToken}{First}")
-latex!("$\\ScopedToken$")
+latex!("$\\ScopedToken$", formulas::LatexBlockStyle {}, LatexConfig { preamble = "\\newcommand{\\ScopedToken}{First}" })
 end
 
 page second
-page_latex_preamble("\\newcommand{\\ScopedToken}{Second}")
-latex!("$\\ScopedToken$")
+latex!("$\\ScopedToken$", formulas::LatexBlockStyle {}, LatexConfig { preamble = "\\newcommand{\\ScopedToken}{Second}" })
 end
 `,
       "utf8",
     );
 
     const render = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project, { env: instrumented.env });
-    assert(render.code === 0, `scoped LaTeX preamble render failed:\n${combinedOutput(render)}`);
+    assert(render.code === 0, `configured LaTeX preamble render failed:\n${combinedOutput(render)}`);
     const runs = await pdflatexRunCount(instrumented.counter);
     assert(runs === 2, `two distinct LaTeX preambles started pdflatex ${runs} times instead of twice`);
   } finally {
@@ -284,14 +280,16 @@ async function testLatexArtifactCacheIsReusedAndInvalidated() {
     await writeFile(
       path.join(project, "slide.ss"),
       `import std:themes/default as *
+import std:math as formulas
 
+const config: LatexConfig = LatexConfig { preamble = readlines("preamble.tex") }
 document
-latex_preamble_file("preamble.tex")
+latex_preamble(config.preamble)
 end
 
 page formula
 text!("Markdown $\\CacheToken$")
-latex!("$\\CacheToken$")
+latex!("$\\CacheToken$", formulas::LatexBlockStyle {}, config)
 end
 `,
       "utf8",

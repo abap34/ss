@@ -37,16 +37,17 @@ async function renderLatexCases() {
     naturalTwo: 1,
   };
   const source = `import std:themes/default as *
+import std:math as formulas
 
 page math_scale_one
-let formula = latex!("$x + y = z$", 1)
+let formula = latex!("$x + y = z$", formulas::LatexBlockStyle {} with { latex.scale = 1 })
 ~ formula.left == page.left + 96
 ~ formula.right == page.right - 96
 ~ formula.top == page.top - 240
 end
 
 page math_scale_two
-let formula = latex!("$x + y = z$", 2)
+let formula = latex!("$x + y = z$", formulas::LatexBlockStyle {} with { latex.scale = 2 })
 ~ formula.left == page.left + 96
 ~ formula.right == page.right - 96
 ~ formula.top == page.top - 240

@@ -1228,14 +1228,14 @@ test "native latex display: immutable body and configuration survive reuse and d
     var state = try documentWithModules(
         \\import std:math as math
         \\type Formula { body: math::Latex }
-        \\fn display(self: Placed<Formula>) -> math::Latex = self.value.body
+        \\fn display(self: Placed<Formula>) -> math::Latex = math::latex(self.value.body.source, self.value.body.style, self.value.body.config)
         \\const body: math::Latex = math::Latex {
         \\  source = "Raw **body** $x$"
         \\  config = math::LatexConfig { preamble = "Custom preamble" }
         \\  style = math::LatexBlockStyle {} with { chrome.pad_x = 12 }
         \\}
         \\page first
-        \\  let normal = place!(body)
+        \\  let normal: Placed<math::Latex> = math::latex!(body.source, body.style, body.config)
         \\  let changed = place!(body with {
         \\    config.engine = math::LatexEngine.lualatex
         \\    config.preamble = "Other preamble"
@@ -1860,4 +1860,21 @@ test "asset constructors: reused paths retain their source through helpers and d
         try testing.expectEqual(start, origin.span.?.start);
         try testing.expectEqual(start + prepared.content.len, origin.span.?.end);
     }
+}
+
+
+test "latex constructor: unused bodies do not allocate placements or require external tools" {
+    var state = try documentWithModules(
+        \\import std:math as formulas
+        \\const body: formulas::Latex = formulas::latex("Unknown TeX command", formulas::LatexBlockStyle {}, formulas::LatexConfig { engine = formulas::LatexEngine.lualatex })
+        \\page unused
+        \\  let pair = group(body, body)
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    try testing.expectEqual(@as(usize, 2), state.nodeCount());
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
 }

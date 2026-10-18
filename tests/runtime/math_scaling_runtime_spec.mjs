@@ -99,6 +99,7 @@ async function testLatexRespectsFixedFrameHeight() {
     await writeFile(
       path.join(project, "slide.ss"),
       `import std:themes/default as *
+import std:math as formulas
 
 page latex_fixed_height
 let formula = latex! <<
@@ -132,7 +133,7 @@ upsilon
 end
 
 page oversized_math_frame
-let formula = latex!("$x + y = z$", 1)
+let formula = latex!("$x + y = z$", formulas::LatexBlockStyle {} with { latex.scale = 1 })
 ~ formula.left == page.left + 96
 ~ formula.right == page.right - 96
 ~ formula.top == page.top + 120

@@ -1340,12 +1340,12 @@ test "compiler semantics: dynamically built text survives lowering" {
 test "compiler semantics: math alignment uses typed properties" {
     try buildSource(
         \\import std:themes/default as *
+        \\import std:math as formulas
         \\
         \\page ok
         \\  let body = body_obj("$$x^2$$")
         \\  body.math_align = Align.left
-        \\  let formula = latex("$x^2 + y^2 = z^2$")
-        \\  formula.math_align = Align.right
+        \\  let formula = latex!("$x^2 + y^2 = z^2$", formulas::LatexBlockStyle {} with { latex.align = Align.right })
         \\end
         \\
     );

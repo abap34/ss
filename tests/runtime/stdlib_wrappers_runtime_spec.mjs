@@ -31,9 +31,11 @@ end
     const dump = JSON.parse(await readFile(dumpPath, "utf8"));
     const node = dump.nodes.find((candidate) => candidate.content === source);
     assert(node, `latex node was not found: ${JSON.stringify(dump.nodes)}`);
-    assert(node.role === "latex", `latex should use latex role: ${JSON.stringify(node)}`);
-    assert(node.object_kind === "asset", `latex should use asset object kind: ${JSON.stringify(node)}`);
-    assert(node.payload_kind === "latex", `latex should use latex payload: ${JSON.stringify(node)}`);
+    assert(node.role === null, `typed latex unexpectedly has a role: ${JSON.stringify(node)}`);
+    assert(node.placement?.input.type.name === "Latex", `latex constructor lost its input type: ${JSON.stringify(node)}`);
+    assert(node.placement?.display.kind === "latex", `latex constructor lost its display: ${JSON.stringify(node)}`);
+    assert(node.render.kind === "latex", `latex should render its literal body: ${JSON.stringify(node)}`);
+    assert(node.blocks === null && node.inline_lines === null, `latex body was parsed as Markdown: ${JSON.stringify(node)}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

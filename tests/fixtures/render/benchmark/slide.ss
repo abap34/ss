@@ -1,4 +1,5 @@
 import std:themes/default as *
+import std:math as formulas
 
 page overview
 let heading = h1!("Rendering benchmark")
@@ -54,7 +55,7 @@ end
 
 page latex_math
 let heading = h1!("LaTeX mathematics")
-let formula = latex!("$x_1^2 + \frac{a+b}{\sqrt{c}} = y^{n+1}$", 1.5)
+let formula = latex!("$x_1^2 + \frac{a+b}{\sqrt{c}} = y^{n+1}$", formulas::LatexBlockStyle {} with { latex.scale = 1.5 })
 let body = text! <<
 Inline mathematics keeps $x_1^2 + \alpha$ on the surrounding baseline．
 
