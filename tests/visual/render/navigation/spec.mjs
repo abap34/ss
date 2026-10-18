@@ -178,6 +178,8 @@ async function runStandalone() {
 
 function navigationFixture() {
   return `import std:themes/default as *
+import std:assets as { pdf!, AssetBlockStyle, AssetStyle, PdfPageBox }
+import std:graphics/paint/types as { ChromeStyle }
 
 page first
 let title = heading!("First page", 1, default_theme().h1)
@@ -192,14 +194,10 @@ let title = heading!("Second page", 1, default_theme().h1)
 end
 
 page third
-let picture = pdf_obj("asset.pdf")
-picture.asset.scale = 0.72
-picture.asset.pdf_page = 2
-picture.asset.pdf_box = PdfPageBox.crop
-picture.chrome.fill = none
-picture.chrome.stroke = none
-picture.chrome.line_width = 0
-place_on!(pagectx(), picture)
+let picture = pdf!("asset.pdf", AssetBlockStyle {
+  asset = AssetStyle { scale = 0.72 pdf_page = 2 pdf_box = PdfPageBox.crop }
+  chrome = ChromeStyle { fill = none stroke = none line_width = 0 }
+})
 ~ picture.left == page.left + 312
 ~ picture.top == page.top - 168
 end

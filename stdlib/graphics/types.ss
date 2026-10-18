@@ -10,10 +10,6 @@ enum GradientSpread { pad repeat reflect }
 
 enum FillKind { none solid linear radial }
 
-enum ConnectorAnchor { center left right top bottom }
-
-enum ConnectorRoute { straight horizontal_then_vertical vertical_then_horizontal curve }
-
 enum PathVerb { move line quadratic cubic arc close }
 
 type PathCommand {
@@ -102,19 +98,4 @@ type MarkerStyle {
 type VectorStyle {
   fill: FillStyle = FillStyle {}
   stroke: VectorStrokeStyle = VectorStrokeStyle {}
-}
-
-type ConnectorStyle {
-  source: Object? = none
-  target: Object? = none
-  source_anchor: ConnectorAnchor = ConnectorAnchor.right
-  target_anchor: ConnectorAnchor = ConnectorAnchor.left
-  route: ConnectorRoute = ConnectorRoute.straight
-  curve: Number = 0.5
-  stroke: VectorStrokeStyle = VectorStrokeStyle {
-    color = c"#4b5563"
-    width = 1.6
-  }
-  marker_start: MarkerStyle? = none
-  marker_end: MarkerStyle? = none
 }

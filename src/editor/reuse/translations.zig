@@ -74,24 +74,9 @@ pub fn collectTranslations(
 }
 
 pub fn translationPatchPreservesRenderedOutput(
-    state: *core.DocumentState,
     pages: *const core.prepared.PreparedPages,
     translations: []const editor_snapshot.Translation,
 ) bool {
-    for (state.graph.nodes.items) |*node| {
-        if (node.kind != .object or !node.attached or node.discarded) continue;
-        const render = core.render_policy.resolve(state, node);
-        if (render.kind != .connector and render.connector == null) continue;
-        if (hasTranslationForNode(translations, node.id)) return false;
-        if (render.connector) |connector| {
-            if (hasTranslationForNode(translations, connector.source) or
-                hasTranslationForNode(translations, connector.target))
-            {
-                return false;
-            }
-        }
-    }
-
     for (pages.pages) |page| {
         for (page.objects) |object| {
             if (!hasTranslationForNode(translations, object.node_id)) continue;

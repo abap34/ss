@@ -24,7 +24,6 @@ pub const RenderKind = enum {
     vector_asset,
     raster_asset,
     vector_path,
-    connector,
     chrome_only,
 };
 
@@ -34,8 +33,6 @@ pub const FillRule = enum { nonzero, even_odd };
 pub const PaintSpace = enum { local, page };
 pub const GradientSpread = enum { pad, repeat, reflect };
 pub const VectorFillKind = enum { none, solid, linear, radial };
-pub const ConnectorAnchor = enum { center, left, right, top, bottom };
-pub const ConnectorRoute = enum { straight, horizontal_then_vertical, vertical_then_horizontal, curve };
 
 pub const DashPattern = struct {
     values: [8]f32 = @splat(0),
@@ -103,18 +100,6 @@ pub const VectorPathPaint = struct {
     natural_size: ?Size = null,
     fill: VectorFillPaint,
     stroke: ?VectorStrokePaint,
-    marker_start: ?MarkerPaint,
-    marker_end: ?MarkerPaint,
-};
-
-pub const ConnectorPaint = struct {
-    source: model.NodeId,
-    target: model.NodeId,
-    source_anchor: ConnectorAnchor,
-    target_anchor: ConnectorAnchor,
-    route: ConnectorRoute,
-    curve: f32,
-    stroke: VectorStrokePaint,
     marker_start: ?MarkerPaint,
     marker_end: ?MarkerPaint,
 };
@@ -315,7 +300,6 @@ pub const ResolvedRender = struct {
     asset: ?AssetPaint,
     code: ?CodePaint,
     vector_path: ?VectorPathPaint,
-    connector: ?ConnectorPaint,
     chrome: ChromePaint,
     underline: UnderlinePaint,
     rule: RulePaint,
@@ -333,7 +317,6 @@ pub fn resolve(state: anytype, node: *const Node) ResolvedRender {
         .asset = resolveAsset(state, node, kind),
         .code = resolveCode(state, node, kind),
         .vector_path = resolveVectorPath(node, kind),
-        .connector = resolveConnector(node, kind),
         .chrome = resolveChrome(state, node),
         .underline = resolveUnderline(state, node),
         .rule = resolveRule(state, node),
@@ -621,34 +604,6 @@ fn markerFromNode(node: *const Node, field_name: []const u8) ?MarkerPaint {
     return markerFromValue(marker);
 }
 
-fn resolveConnector(node: *const Node, kind: RenderKind) ?ConnectorPaint {
-    if (kind != .connector) return null;
-    const value = model.nodeField(node, "connector") orelse return null;
-    const record = switch (value) {
-        .record => |record| record,
-        else => return null,
-    };
-    const source = recordObject(record, "source") orelse return null;
-    const target = recordObject(record, "target") orelse return null;
-    const stroke_value = record.field("stroke") orelse return null;
-    const stroke_record = switch (stroke_value) {
-        .record => |stroke_record| stroke_record,
-        else => return null,
-    };
-    const stroke = vectorStrokeFromRecord(stroke_record) orelse return null;
-    return .{
-        .source = source,
-        .target = target,
-        .source_anchor = parseEnum(ConnectorAnchor, recordText(record, "source_anchor")) orelse .right,
-        .target_anchor = parseEnum(ConnectorAnchor, recordText(record, "target_anchor")) orelse .left,
-        .route = parseEnum(ConnectorRoute, recordText(record, "route")) orelse .straight,
-        .curve = recordNumber(record, "curve") orelse 0.5,
-        .stroke = stroke,
-        .marker_start = markerFromRecord(record, "marker_start"),
-        .marker_end = markerFromRecord(record, "marker_end"),
-    };
-}
-
 fn resolveVectorStroke(node: *const Node, key: []const u8) ?VectorStrokePaint {
     const value = model.nodeField(node, key) orelse return null;
     return switch (value) {
@@ -693,15 +648,6 @@ fn vectorFillFromRecord(record: model.RecordValue) VectorFillPaint {
         .opacity = recordNumber(record, "opacity") orelse 1,
         .pattern = resolvePattern(record),
     };
-}
-
-fn markerFromRecord(record: model.RecordValue, field_name: []const u8) ?MarkerPaint {
-    const value = record.field(field_name) orelse return null;
-    const marker = switch (value) {
-        .record => |marker| marker,
-        else => return null,
-    };
-    return markerFromValue(marker);
 }
 
 fn markerFromValue(marker: model.RecordValue) ?MarkerPaint {
@@ -934,14 +880,6 @@ fn recordText(record: model.RecordValue, field_name: []const u8) ?[]const u8 {
 
 fn recordColor(record: model.RecordValue, field_name: []const u8) ?Color {
     return parseColor(recordText(record, field_name) orelse return null);
-}
-
-fn recordObject(record: model.RecordValue, field_name: []const u8) ?model.NodeId {
-    const value = record.field(field_name) orelse return null;
-    return switch (value) {
-        .object => |node_id| node_id,
-        else => null,
-    };
 }
 
 fn parseDashPattern(value: []const u8) DashPattern {

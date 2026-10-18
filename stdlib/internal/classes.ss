@@ -53,38 +53,6 @@ type Text = object {
   math_align: Align = Align.center
 }
 
-type Title = object {
-  base = Text
-  roles = ["title"]
-  semantics: TextSemantics = TextSemantics { role = SemanticRole.heading, heading_level = 1 }
-
-  text: TextStyle = TextStyle {
-    size = 34
-    color = c"0,0,0.0353"
-  }
-  layout: LayoutStyle = LayoutStyle {
-    spacing_after = 58
-    x = 72
-    right_inset = 72
-  }
-}
-
-type Sub = object {
-  base = Text
-  roles = ["subtitle"]
-  semantics: TextSemantics = TextSemantics { role = SemanticRole.heading, heading_level = 2 }
-
-  text: TextStyle = TextStyle {
-    size = 18
-    color = c"0,0,0.0353"
-  }
-  layout: LayoutStyle = LayoutStyle {
-    spacing_after = 38
-    x = 96
-    right_inset = 96
-  }
-}
-
 type Body = object {
   base = Text
   roles = ["body"]
@@ -109,55 +77,6 @@ type Note = object {
     spacing_after = 28
     x = 96
     right_inset = 96
-  }
-}
-
-type By = object {
-  base = Text
-  roles = ["byline"]
-
-  text: TextStyle = TextStyle {
-    size = 20
-    color = c"0.2745,0.5098,0.7059"
-  }
-  layout: LayoutStyle = LayoutStyle {
-    spacing_after = 18
-    x = 72
-    right_inset = 72
-  }
-}
-
-type Lab = object {
-  base = Text
-  roles = ["label"]
-
-  text: TextStyle = TextStyle {
-    size = 14
-    color = c"0.2745,0.5098,0.7059"
-  }
-  layout: LayoutStyle = LayoutStyle {
-    spacing_after = 0
-    x = 72
-    right_inset = 72
-    wrap = WrapMode.off
-  }
-}
-
-type Cite = object {
-  base = Text
-  roles = ["citation"]
-
-  text: TextStyle = TextStyle {
-    parse = TextParseMode.inline
-    size = 13
-    color = c"0.58,0.58,0.58"
-    link_color = c"0.58,0.58,0.58"
-  }
-  layout: LayoutStyle = LayoutStyle {
-    spacing_after = 0
-    x = 120
-    right_inset = 90
-    wrap = WrapMode.off
   }
 }
 
@@ -327,63 +246,6 @@ type VectorShape = object {
     spacing_after = 0
     x = 72
     right_inset = 72
-    wrap = WrapMode.off
-  }
-}
-
-type Connector = object {
-  base = Panel
-  roles = ["connector"]
-
-  connector: ConnectorStyle = ConnectorStyle {}
-  render_kind: RenderKind = RenderKind.connector
-  layout: LayoutStyle = LayoutStyle {
-    font_size = 1
-    line_height = 1
-    spacing_after = 0
-    x = 0
-    right_inset = 0
-    wrap = WrapMode.off
-  }
-}
-
-type Footer = object {
-  base = Text
-  roles = ["footer"]
-
-  text: TextStyle = TextStyle {
-    size = 12
-    color = c"0.42,0.42,0.42"
-  }
-  layout: LayoutStyle = LayoutStyle {
-    spacing_after = 0
-    wrap = WrapMode.off
-  }
-}
-
-type Logo = object {
-  base = Img
-  roles = ["logo"]
-
-  asset: AssetStyle = AssetStyle {}
-  layout: LayoutStyle = LayoutStyle {
-    spacing_after = 32
-    x = 102
-    right_inset = 102
-    wrap = WrapMode.off
-  }
-}
-
-type Watermark = object {
-  base = Text
-  roles = ["watermark"]
-
-  text: TextStyle = TextStyle {
-    size = 72
-    color = c"0.85,0.85,0.85"
-  }
-  layout: LayoutStyle = LayoutStyle {
-    spacing_after = 0
     wrap = WrapMode.off
   }
 }

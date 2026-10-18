@@ -44,7 +44,6 @@ pub const FunctionKeyContext = struct {
 pub const NominalId = language_type.NominalId;
 pub const Role = []const u8;
 pub const GroupRole: Role = "group";
-pub const ConnectorRole: Role = "connector";
 
 pub const PropertyPath = @import("property_path.zig");
 

@@ -12,8 +12,6 @@ const Node = model.Node;
 const AxisState = model.AxisState;
 const Anchor = model.Anchor;
 const Constraint = model.Constraint;
-const ConnectorRole = model.ConnectorRole;
-const roleEq = model.roleEq;
 
 pub fn constraintTargetsGroup(state: *Workspace, constraint: Constraint) bool {
     const target_node = state.source.getNode(constraint.target_node) orelse return false;
@@ -93,8 +91,6 @@ fn requiredGroupAxisSize(state: *Workspace, workspace: *const graph.AxisWorkspac
     var largest: f32 = 0;
     var count: usize = 0;
     for (state.source.childrenOf(group_id) orelse &.{}) |child_id| {
-        const child = state.source.getNode(child_id) orelse return error.UnknownNode;
-        if (roleEq(child.role, ConnectorRole)) continue;
         const extent = (try requiredChildAxisSize(state, workspace, child_id, remaining - 1)) orelse return null;
         total += extent;
         largest = @max(largest, extent);
@@ -145,8 +141,6 @@ fn computeChildGroupAxisState(state: *Workspace, workspace: *const graph.AxisWor
     var start: ?f32 = null;
     var end: ?f32 = null;
     for (group_children) |child_id| {
-        const child = state.source.getNode(child_id) orelse return error.UnknownNode;
-        if (roleEq(child.role, ConnectorRole)) continue;
         const child_start, const child_end = try groupChildAxisBounds(state, workspace, child_id);
         if (child_start == null or child_end == null) return .{};
         if (start == null or child_start.? < start.?) start = child_start.?;

@@ -291,7 +291,6 @@ fn hashResolvedRender(hasher: *std.hash.Wyhash, render: core.render_policy.Resol
     hashOptionalAssetPaint(hasher, render.asset);
     hashOptionalCodePaint(hasher, render.code);
     hashOptionalVectorPathPaint(hasher, render.vector_path);
-    hashOptionalConnectorPaint(hasher, render.connector);
     hashChromePaint(hasher, render.chrome);
     hashUnderlinePaint(hasher, render.underline);
     hashRulePaint(hasher, render.rule);
@@ -520,21 +519,6 @@ fn hashOptionalVectorStroke(hasher: *std.hash.Wyhash, maybe: ?core.render_policy
         hashU64(hasher, stroke.dash.count);
         for (stroke.dash.slice()) |entry| hashF32(hasher, entry);
         hashF32(hasher, stroke.dash.offset);
-    }
-}
-
-fn hashOptionalConnectorPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.ConnectorPaint) void {
-    hashBool(hasher, maybe != null);
-    if (maybe) |connector| {
-        hashU64(hasher, connector.source);
-        hashU64(hasher, connector.target);
-        hashString(hasher, @tagName(connector.source_anchor));
-        hashString(hasher, @tagName(connector.target_anchor));
-        hashString(hasher, @tagName(connector.route));
-        hashF32(hasher, connector.curve);
-        hashOptionalVectorStroke(hasher, connector.stroke);
-        hashOptionalMarker(hasher, connector.marker_start);
-        hashOptionalMarker(hasher, connector.marker_end);
     }
 }
 
