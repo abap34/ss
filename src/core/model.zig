@@ -103,12 +103,6 @@ pub const ContentProvenance = struct {
     }
 };
 
-pub const RenderEnvEntry = struct {
-    op: []const u8,
-    key: []const u8,
-    value: []const u8,
-};
-
 pub const NodeKind = enum {
     document,
     page,
@@ -447,7 +441,6 @@ pub const Node = struct {
     origin: ?SourceOrigin = null,
     fields: std.ArrayList(Field) = .empty,
     property_definitions: std.ArrayList(PropertyDefinition) = .empty,
-    render_env: std.ArrayList(RenderEnvEntry) = .empty,
 
     pub fn deinit(self: *Node, allocator: Allocator) void {
         if (self.placement) |*placement| placement.value.deinit(allocator);
@@ -455,12 +448,6 @@ pub const Node = struct {
         self.fields.deinit(allocator);
         for (self.property_definitions.items) |definition| allocator.free(definition.path);
         self.property_definitions.deinit(allocator);
-        for (self.render_env.items) |entry| {
-            allocator.free(entry.op);
-            allocator.free(entry.key);
-            allocator.free(entry.value);
-        }
-        self.render_env.deinit(allocator);
         if (self.content_owned) {
             if (self.content) |content| allocator.free(content);
         }

@@ -1133,22 +1133,6 @@ test "document state spec: explicit field reads ignore shared settings defaults"
     try testing.expectApproxEqAbs(@as(f32, 40), explicit_offset, 0.0001);
 }
 
-test "document state spec: render environment entries are deduplicated by full triple" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "text", null, .text, .text, "Hello");
-
-    try state.extendRenderEnv(object, "set", "text_color", "red");
-    try state.extendRenderEnv(object, "set", "text_color", "red");
-    try state.extendRenderEnv(object, "set", "text_color", "blue");
-    try state.extendRenderEnv(object, "push", "text_color", "red");
-
-    const node = state.getNode(object).?;
-    try testing.expectEqual(@as(usize, 3), node.render_env.items.len);
-}
-
 fn initDocumentStateWithLayoutSettingsDefaults() !core.DocumentState {
     const allocator = testing.allocator;
     const asset_base_dir = try allocator.dupe(u8, ".");
@@ -1189,37 +1173,6 @@ fn initDocumentStateWithLayoutSettingsDefaults() !core.DocumentState {
 
 fn zeroSpan() ast.Span {
     return .{ .start = 0, .end = 0 };
-}
-
-test "document state spec: LaTeX render environment resolves preamble and engine by scope" {
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-
-    const page = try state.addPage("Page");
-    const object = try state.makeObject(page, "latex", null, .asset, .latex, "$x$");
-
-    try state.extendRenderEnv(state.graph.document_id, core.render_env.OpAdd, core.render_env.KeyLatexPreamble, "doc preamble");
-    try state.extendRenderEnv(state.graph.document_id, core.render_env.OpSet, core.render_env.KeyLatexEngine, "lualatex");
-    try state.extendRenderEnv(page, core.render_env.OpAdd, core.render_env.KeyLatexPreambleFile, "page.tex");
-    try state.extendRenderEnv(page, core.render_env.OpSet, core.render_env.KeyLatexEngine, "pdflatex");
-    try state.extendRenderEnv(object, core.render_env.OpAdd, core.render_env.KeyLatexPreamble, "object preamble");
-
-    var env = try core.render_env.resolveForNode(testing.allocator, &state, state.getNode(object).?);
-    defer env.deinit(testing.allocator);
-
-    try testing.expectEqual(@as(usize, 3), env.latex_preamble.items.len);
-    try testing.expectEqual(core.render_env.LatexPreambleSource.text, env.latex_preamble.items[0].source);
-    try testing.expectEqualStrings("doc preamble", env.latex_preamble.items[0].value);
-    try testing.expectEqual(core.render_env.LatexPreambleSource.file, env.latex_preamble.items[1].source);
-    try testing.expectEqualStrings("page.tex", env.latex_preamble.items[1].value);
-    try testing.expectEqual(core.render_env.LatexPreambleSource.text, env.latex_preamble.items[2].source);
-    try testing.expectEqualStrings("object preamble", env.latex_preamble.items[2].value);
-    try testing.expectEqual(core.render_env.LatexEngine.pdflatex, env.latex_engine);
-
-    const document = state.getNode(state.graph.document_id).?;
-    var document_env = try core.render_env.resolveForNode(testing.allocator, &state, document);
-    defer document_env.deinit(testing.allocator);
-    try testing.expectEqual(core.render_env.LatexEngine.lualatex, document_env.latex_engine);
 }
 
 test "diagnostic codes survive rewording cloning and duplicate detection" {

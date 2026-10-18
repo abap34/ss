@@ -1376,10 +1376,6 @@ const BuiltinContext = struct {
         };
     }
 
-    pub fn extendRenderEnv(self: *BuiltinContext, node_id: core.NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
-        try self.state.extendRenderEnv(node_id, op, key, value);
-    }
-
     pub fn invokeCallback(self: *BuiltinContext, function: core.FunctionRef, args: []const core.Value) !core.Value {
         return try invokeFunctionRef(self.evaluation, self.page_id, self.scope, self.env, function, self.current_origin, args);
     }

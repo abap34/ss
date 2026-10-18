@@ -1357,7 +1357,7 @@ pub const Analyzer = struct {
                     result.placement = .exact(call.callee.call_id.?, &.{});
                 } else result = input;
             },
-            .set_prop, .set_content, .require_asset_exists, .extend_render_env => if (call.args.items.len > 0) {
+            .set_prop, .set_content, .require_asset_exists => if (call.args.items.len > 0) {
                 result = try self.valueFacts(call.args.items[0]);
             },
             else => {},
@@ -2348,7 +2348,6 @@ pub const Analyzer = struct {
             .constrain_on => {
                 summary.writes_layout_input = true;
             },
-            .extend_render_env,
             .report_error,
             .report_warning,
             .readlines,
@@ -2551,7 +2550,7 @@ pub const Analyzer = struct {
                     try self.propertyTargetExpr(call.args.items[0])
                 else
                     PropertyTarget.any(),
-                .set_prop, .extend_render_env, .foreach, .selection_filter, .foreach_enumerate => if (call.args.items.len > 0)
+                .set_prop, .foreach, .selection_filter, .foreach_enumerate => if (call.args.items.len > 0)
                     try self.propertyTargetExpr(call.args.items[0])
                 else
                     PropertyTarget.any(),

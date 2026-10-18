@@ -561,7 +561,7 @@ test "measurement cache observes changed highlight query contents" {
     try testing.expectEqual(fresh.cache_key, changed.cache_key);
 }
 
-fn latexEngineAvailable(engine: core.render_env.LatexEngine) !bool {
+fn latexEngineAvailable(engine: core.latex_config.LatexEngine) !bool {
     const result = std.process.run(testing.allocator, testing.io, .{
         .argv = &.{ engine.executable(), "--version" },
         .stdout_limit = .limited(16 * 1024),
@@ -2006,68 +2006,6 @@ test "font environment refresh failures produce actionable diagnostics" {
 
     try testing.expect(!(try render_compile.addFontEnvironmentDiagnostic(&state, error.IntentionalCompileFailure)));
     try testing.expectEqual(@as(usize, 2), state.diagnostics.entries.items.len);
-}
-
-test "preload cache scan reports the LaTeX preamble path" {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
-    defer testing.allocator.free(root);
-    const preamble_path = try std.fs.path.join(testing.allocator, &.{ root, "preamble.tex" });
-    defer testing.allocator.free(preamble_path);
-    const cache_dir = try std.fs.path.join(testing.allocator, &.{ root, "render-cache" });
-    defer testing.allocator.free(cache_dir);
-    try std.Io.Dir.cwd().createDirPath(testing.io, preamble_path);
-
-    var state = try initEmptyDocumentState();
-    defer state.deinit();
-    var state_layout = LayoutFixture.init(&state);
-    defer state_layout.deinit();
-    const preamble = [_]core.render_env.LatexPreambleEntry{
-        .{ .source = .file, .value = preamble_path },
-    };
-    var dependencies = [_]core.prepared.AssetDependency{
-        .{ .kind = .latex_body, .source = "x", .content_start = 0, .content_end = 1 },
-    };
-    var objects = [_]core.prepared.PreparedObject{
-        .{
-            .node_id = 2,
-            .content = "x",
-            .content_provenance = &.{},
-            .link_id = null,
-            .render = undefined,
-            .parse_mode = .none,
-            .asset_deps = &dependencies,
-            .latex_preamble = &preamble,
-            .latex_engine = .pdflatex,
-            .origin = null,
-            .payload_kind = .latex,
-            .attached = true,
-        },
-    };
-    var page_storage = [_]core.prepared.PreparedPage{
-        .{
-            .page_id = 1,
-            .index = 0,
-            .background = null,
-            .objects = &objects,
-        },
-    };
-    const pages = core.prepared.PreparedPages{ .pages = &page_storage };
-
-    var failed = false;
-    render_compile.preload(testing.allocator, testing.io, &state, &pages, .{ .cache_dir = cache_dir }, null) catch {
-        failed = true;
-    };
-    try testing.expect(failed);
-    try testing.expectEqual(@as(usize, 1), state.diagnostics.entries.items.len);
-    const message = switch (state.diagnostics.entries.items[0].data) {
-        .render_failed => |data| data.reason,
-        else => return error.ExpectedRenderFailureDiagnostic,
-    };
-    try testing.expect(std.mem.indexOf(u8, message, "LaTeX preamble") != null);
-    try testing.expect(std.mem.indexOf(u8, message, preamble_path) != null);
-    try testing.expect(std.mem.indexOf(u8, message, "could not be read") != null);
 }
 
 test "font diagnostics identify prior failures by cause code" {

@@ -25,7 +25,6 @@ const spanDecoration = inline_layout.spanDecoration;
 const lineContainsDisplayMath = inline_layout.lineContainsDisplayMath;
 const LatexAsset = artifacts.LatexAsset;
 const hashString = fingerprint.hashString;
-const hashUsize = fingerprint.hashUsize;
 const cache_versions = @import("cache_versions.zig");
 const measurement_store = @import("render_measurements");
 const page_cache = @import("page_cache.zig");
@@ -50,8 +49,7 @@ const MarkdownDocument = core.markdown.MarkdownDocument;
 const Line = core.markdown.Line;
 const Block = core.markdown.Block;
 const Run = core.markdown.Run;
-const LatexPreambleEntry = core.render_env.LatexPreambleEntry;
-const LatexEngine = core.render_env.LatexEngine;
+const LatexEngine = core.latex_config.LatexEngine;
 
 const ContentRange = render_text.ContentRange;
 
@@ -110,7 +108,7 @@ const DrawContext = struct {
     emitter: ?render_emitter.Emitter = null,
     measurement_bounds: ?*MeasurementBounds = null,
     capture_measurement_content: bool = false,
-    latex_preamble: []const LatexPreambleEntry = &.{},
+    latex_preamble: []const u8 = &.{},
     latex_engine: LatexEngine = .pdflatex,
 };
 
@@ -182,7 +180,7 @@ const PreloadTask = union(enum) {
 
 const LatexPreload = struct {
     source: []const u8,
-    preamble: []const LatexPreambleEntry,
+    preamble: []const u8,
     engine: LatexEngine,
     kind: LatexFragmentKind,
     target: RenderDiagnosticTarget = .{},
@@ -260,7 +258,7 @@ const ObjectCommand = struct {
     markdown_doc: ?*const MarkdownDocument = null,
     text_layout: ?*const core.markdown.TextLayout = null,
     asset_deps: []const core.prepared.AssetDependency = &.{},
-    latex_preamble: []const LatexPreambleEntry,
+    latex_preamble: []const u8,
     latex_engine: LatexEngine,
     latex_kind: LatexFragmentKind = .body,
     origin: ?core.SourceOrigin = null,
@@ -293,7 +291,7 @@ const PreloadWork = struct {
 const LatexBatchEntry = struct {
     task_index: usize,
     source: []const u8,
-    preamble: []const LatexPreambleEntry,
+    preamble: []const u8,
     engine: LatexEngine,
     kind: LatexFragmentKind,
     out: []u8,
@@ -445,7 +443,6 @@ pub const LayoutMeasurementScope = struct {
         measurement_ctx.command_failure = &target;
         var cache_key = self.measurementKey(state.allocator, command, width, mode) catch |err| {
             if (err == error.Canceled) return error.Canceled;
-            artifacts.recordLatexPreambleFingerprintFailure(artifactContext(&measurement_ctx), command.latex_preamble);
             try addMeasurementRenderDiagnostic(&measurement_ctx, state, &command, err, &target);
             return err;
         };
@@ -950,7 +947,7 @@ fn collectPreparedObjectPreloads(
                 const kind: LatexFragmentKind = if (dep.kind == .display_math) .display_math else .inline_math;
                 try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .latex = .{
                     .source = try ctx.allocator.dupe(u8, dep.source),
-                    .preamble = try cloneLatexPreambleEntries(ctx.allocator, object.latex_preamble),
+                    .preamble = try ctx.allocator.dupe(u8, object.latex_preamble),
                     .engine = object.latex_engine,
                     .kind = kind,
                     .target = dep_target,
@@ -959,7 +956,7 @@ fn collectPreparedObjectPreloads(
             .latex_body => {
                 try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .latex = .{
                     .source = try ctx.allocator.dupe(u8, dep.source),
-                    .preamble = try cloneLatexPreambleEntries(ctx.allocator, object.latex_preamble),
+                    .preamble = try ctx.allocator.dupe(u8, object.latex_preamble),
                     .engine = object.latex_engine,
                     .kind = .body,
                     .target = dep_target,
@@ -1010,7 +1007,7 @@ fn collectObjectPreloads(
         .latex => {
             if (command.latex_kind == .body) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .latex = .{
                 .source = try ctx.allocator.dupe(u8, command.content),
-                .preamble = try cloneLatexPreambleEntries(ctx.allocator, command.latex_preamble),
+                .preamble = try ctx.allocator.dupe(u8, command.latex_preamble),
                 .engine = command.latex_engine,
                 .kind = command.latex_kind,
                 .target = targetWithContentSpan(target, 0, command.content.len),
@@ -1057,7 +1054,7 @@ fn collectAssetDepsForPlan(
                 const kind: LatexFragmentKind = if (dep.kind == .display_math) .display_math else .inline_math;
                 try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .latex = .{
                     .source = try ctx.allocator.dupe(u8, dep.source),
-                    .preamble = try cloneLatexPreambleEntries(ctx.allocator, command.latex_preamble),
+                    .preamble = try ctx.allocator.dupe(u8, command.latex_preamble),
                     .engine = command.latex_engine,
                     .kind = kind,
                     .target = dep_target,
@@ -1066,7 +1063,7 @@ fn collectAssetDepsForPlan(
             .latex_body => {
                 if (command.latex_kind == .body) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .latex = .{
                     .source = try ctx.allocator.dupe(u8, dep.source),
-                    .preamble = try cloneLatexPreambleEntries(ctx.allocator, command.latex_preamble),
+                    .preamble = try ctx.allocator.dupe(u8, command.latex_preamble),
                     .engine = command.latex_engine,
                     .kind = command.latex_kind,
                     .target = dep_target,
@@ -1420,15 +1417,12 @@ fn preloadLatexTaskBatches(
     }
 }
 
-fn latexBatchGroupKey(ctx: *DrawContext, preamble: []const LatexPreambleEntry, engine: LatexEngine) ![]u8 {
+fn latexBatchGroupKey(ctx: *DrawContext, preamble: []const u8, engine: LatexEngine) ![]u8 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, native_artifact_cache_version);
     hashString(&hasher, "latex-batch");
     hashString(&hasher, @tagName(engine));
-    for (preamble) |entry| {
-        hashString(&hasher, @tagName(entry.source));
-        hashString(&hasher, entry.value);
-    }
+    hashString(&hasher, preamble);
     return std.fmt.allocPrint(ctx.allocator, "{x}", .{hasher.final()});
 }
 
@@ -2186,12 +2180,6 @@ fn inkBoundsFromFrame(ink: Frame, left: f32, top_bl: f32) core.LayoutBounds {
     };
 }
 
-fn cloneLatexPreambleEntries(allocator: Allocator, preamble: []const LatexPreambleEntry) ![]const LatexPreambleEntry {
-    const cloned = try allocator.alloc(LatexPreambleEntry, preamble.len);
-    @memcpy(cloned, preamble);
-    return cloned;
-}
-
 fn freePreloadTasks(allocator: Allocator, tasks: []const PreloadTask) void {
     for (tasks) |task| freePreloadTask(allocator, task);
 }
@@ -2224,11 +2212,7 @@ fn latexPreloadTaskKey(ctx: *DrawContext, latex: LatexPreload) ![]u8 {
     hashString(&hasher, latex.source);
     hashString(&hasher, @tagName(latex.engine));
     hashString(&hasher, @tagName(latex.kind));
-    hashUsize(&hasher, latex.preamble.len);
-    for (latex.preamble) |entry| {
-        hashString(&hasher, @tagName(entry.source));
-        hashString(&hasher, entry.value);
-    }
+    hashString(&hasher, latex.preamble);
     return std.fmt.allocPrint(ctx.allocator, "latex-{x}", .{hasher.final()});
 }
 

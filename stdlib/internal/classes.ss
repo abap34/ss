@@ -21,7 +21,6 @@ type Text = object {
   markdown_headings: MarkdownHeadingStyles = MarkdownHeadingStyles {}
   code: CodeColors = CodeColors {}
   underline: UnderlineStyle = UnderlineStyle {}
-  math_align: Align = Align.center
 }
 
 type Body = object {
