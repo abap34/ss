@@ -3,6 +3,7 @@ const fields = @import("../core/fields.zig");
 const Workspace = @import("workspace.zig").Workspace;
 const model = @import("model");
 const graph = @import("graph.zig");
+const composition = @import("../core/group_composition.zig");
 const metrics = @import("metrics.zig");
 const fallback = @import("fallback.zig");
 
@@ -85,9 +86,9 @@ fn requiredGroupAxisSize(state: *Workspace, workspace: *const graph.AxisWorkspac
     if (remaining == 0) return null;
     const node = state.source.getNode(group_id) orelse return error.UnknownNode;
     const split = workspace.graph.hasSplitChildren(group_id);
-    const direction = fields.read(state.allocator, state.source, node, if (split) "split_axis" else "join_axis", &.{}, .text) orelse return null;
-    const along = if (workspace.axis == .horizontal) std.mem.eql(u8, direction, "horizontal") else std.mem.eql(u8, direction, "vertical");
-    if (!along and !std.mem.eql(u8, direction, "horizontal") and !std.mem.eql(u8, direction, "vertical")) return null;
+    const config = try composition.settings(state.source, node);
+    if (config.mode == .overlay) return null;
+    const along = (workspace.axis == .horizontal) == config.mode.isHorizontal();
     var total: f32 = 0;
     var largest: f32 = 0;
     var count: usize = 0;
@@ -100,7 +101,7 @@ fn requiredGroupAxisSize(state: *Workspace, workspace: *const graph.AxisWorkspac
         count += 1;
     }
     if (count == 0) return null;
-    const gap = fields.read(state.allocator, state.source, node, "split_gap", &.{}, .number) orelse 32;
+    const gap = config.gap;
     const n: f32 = @floatFromInt(count);
     const extent = if (!along) largest else if (split) n * largest + (n - 1) * gap else total + (n - 1) * gap;
     return extent + 2 * groupAxisPadding(state, workspace, group_id);

@@ -406,10 +406,12 @@ end
     assert(dump.diagnostics.length === 0, `first cell update diagnostics: ${JSON.stringify(dump.diagnostics)}`);
   }
 
-  await expectFailure("negative-split-gap", `${prelude}
+  await expectFailure("negative-split-gap", `import std:text as { Text }
+${prelude}
 page invalid
-let items = selection_union(select(text("A"), "self_object"), select(text("B"), "self_object"))
-place_on!(pagectx(), hsplit(items, -1))
+let a = Text { content = "A" }
+let b = Text { content = "B" }
+place!((a |=| b) with { gap = -1 })
 end
 `, "InvalidGroupSplit");
 }
@@ -865,16 +867,22 @@ end
 }
 
 async function testExplicitGap() {
-  const { dump } = await dumpSource("explicit-gap", `import std:layout as joins
-${prelude}
+  const { dump } = await dumpSource("explicit-gap", `import std:text as { Text }
 page gaps
-vflow(LayoutPolicy.top)
-${boxes}
-place_on!(pagectx(), joins::hjoin(a, joins::vjoin(b, c, 12), 48))
-${anchor}
+let a = Text { content = "A" }
+let b = Text { content = "B" }
+let c = Text { content = "C" }
+let item = place!((a || ((b // c) with { gap = 12 })) with { gap = 48 })
+~ item.left == page.left + 80
+~ item.top == page.top - 80
 end
 `);
-  assertNestedFrames(dump, 48, 12);
+  const a = node(dump, "A");
+  const b = node(dump, "B");
+  const c = node(dump, "C");
+  assertClose(b.x, a.x + a.width + 48, "outer immutable spacing");
+  assertClose(b.x, c.x, "column alignment");
+  assertClose(top(c), b.y - 12, "inner immutable spacing");
 }
 
 async function testInferredGroupConstraintUpdate() {

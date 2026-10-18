@@ -1550,15 +1550,16 @@ test "syntax spec: expression parsing lowers operators to named primitive calls"
     try expectBoolean(logical_not.args.items[0], false);
 }
 
-fn expectComposition(expr: ast.Expr, name: []const u8) !ast.CallExpr {
-    const call = try expectCall(expr, name, 2);
-    try testing.expectEqualStrings("std:layout", call.callee.qualifier.?);
-    try testing.expect(call.callee.qualifier_span == null);
-    try testing.expectEqual(@as(usize, 2), call.arg_spans.items.len);
-    return call;
+fn expectComposition(expr: ast.Expr, mode: ast.GroupComposition) !ast.CallExpr {
+    const result = try expectCall(expr, "group", 2);
+    try testing.expectEqual(mode, result.callee.composition.?);
+    try testing.expect(result.callee.is_operator);
+    try testing.expect(result.callee.qualifier == null);
+    try testing.expectEqual(@as(usize, 2), result.arg_spans.items.len);
+    return result;
 }
 
-test "syntax spec: composition lowers to fixed stdlib calls and associates left" {
+test "syntax spec: composition preserves its operation and associates left" {
     var parsed = try parse(
         \\page Composition
         \\  let horizontal = a || b || c
@@ -1568,14 +1569,14 @@ test "syntax spec: composition lowers to fixed stdlib calls and associates left"
     );
     defer parsed.deinit();
     const statements = parsed.module.pages.items[0].statements.items;
-    for ([_][]const u8{ "hjoin", "vjoin" }, 0..) |name, index| {
+    for ([_]ast.GroupComposition{ .horizontal, .vertical }, 0..) |name, index| {
         const outer = try expectComposition(statements[index].kind.let_binding.expr, name);
         const inner = try expectComposition(outer.args.items[0], name);
         try expectIdent(inner.args.items[0], "a");
         try expectIdent(inner.args.items[1], "b");
         try expectIdent(outer.args.items[1], "c");
     }
-    _ = try expectComposition(statements[2].kind.let_binding.expr, "hjoin");
+    _ = try expectComposition(statements[2].kind.let_binding.expr, .horizontal);
 }
 
 test "syntax spec: parentheses preserve mixed and same direction compositions" {
@@ -1588,15 +1589,15 @@ test "syntax spec: parentheses preserve mixed and same direction compositions" {
     );
     defer parsed.deinit();
     const statements = parsed.module.pages.items[0].statements.items;
-    const nested = try expectComposition(statements[0].kind.let_binding.expr, "hjoin");
+    const nested = try expectComposition(statements[0].kind.let_binding.expr, .horizontal);
     try expectIdent(nested.args.items[0], "a");
-    _ = try expectComposition(nested.args.items[1], "vjoin");
-    const divided = try expectComposition(statements[1].kind.let_binding.expr, "vjoin");
-    _ = try expectComposition(divided.args.items[0], "hjoin");
-    _ = try expectComposition(divided.args.items[1], "hjoin");
-    const right_nested = try expectComposition(statements[2].kind.let_binding.expr, "hjoin");
+    _ = try expectComposition(nested.args.items[1], .vertical);
+    const divided = try expectComposition(statements[1].kind.let_binding.expr, .vertical);
+    _ = try expectComposition(divided.args.items[0], .horizontal);
+    _ = try expectComposition(divided.args.items[1], .horizontal);
+    const right_nested = try expectComposition(statements[2].kind.let_binding.expr, .horizontal);
     try expectIdent(right_nested.args.items[0], "a");
-    _ = try expectComposition(right_nested.args.items[1], "hjoin");
+    _ = try expectComposition(right_nested.args.items[1], .horizontal);
 }
 
 test "syntax spec: composition binds less tightly than existing expression operators" {
@@ -1610,20 +1611,20 @@ test "syntax spec: composition binds less tightly than existing expression opera
     );
     defer parsed.deinit();
     const statements = parsed.module.pages.items[0].statements.items;
-    const arithmetic = try expectComposition(statements[0].kind.let_binding.expr, "vjoin");
+    const arithmetic = try expectComposition(statements[0].kind.let_binding.expr, .vertical);
     const add = try expectCall(arithmetic.args.items[0], "add", 2);
     _ = try expectCall(add.args.items[1], "mul", 2);
     const div = try expectCall(arithmetic.args.items[1], "div", 2);
     try expectNumber(div.args.items[0], 8);
     try expectNumber(div.args.items[1], 2);
-    const concatenated = try expectComposition(statements[1].kind.let_binding.expr, "hjoin");
+    const concatenated = try expectComposition(statements[1].kind.let_binding.expr, .horizontal);
     _ = try expectCall(concatenated.args.items[0], "concat", 2);
-    const fallback = try expectComposition(statements[2].kind.let_binding.expr, "hjoin");
+    const fallback = try expectComposition(statements[2].kind.let_binding.expr, .horizontal);
     try expectIdent(fallback.args.items[0].coalesce.target.*, "optional");
     try expectIdent(fallback.args.items[0].coalesce.fallback.*, "a");
     try expectIdent(fallback.args.items[1].coalesce.target.*, "b");
     try expectIdent(fallback.args.items[1].coalesce.fallback.*, "c");
-    const checked = try expectComposition(statements[3].kind.let_binding.expr, "hjoin");
+    const checked = try expectComposition(statements[3].kind.let_binding.expr, .horizontal);
     try expectIdent(checked.args.items[0].optional_check.target.*, "a");
     _ = try expectCall(checked.args.items[1], "not", 1);
 }
@@ -1646,25 +1647,25 @@ test "syntax spec: composition expression statements coexist with call and line 
     defer parsed.deinit();
     const statements = parsed.module.pages.items[0].statements.items;
     try testing.expectEqual(@as(usize, 10), statements.len);
-    _ = try expectComposition(statements[0].kind.expr_stmt, "hjoin");
-    _ = try expectComposition(statements[1].kind.expr_stmt, "vjoin");
+    _ = try expectComposition(statements[0].kind.expr_stmt, .horizontal);
+    _ = try expectComposition(statements[1].kind.expr_stmt, .vertical);
     for (statements[2..4]) |statement| {
-        const composition = try expectComposition(statement.kind.expr_stmt, "hjoin");
+        const composition = try expectComposition(statement.kind.expr_stmt, .horizontal);
         const text_call = try expectCall(composition.args.items[0], "text", 1);
         const image_call = try expectCall(composition.args.items[1], "image", 1);
         try expectString(text_call.args.items[0], "x");
         try expectString(image_call.args.items[0], "y");
     }
-    const members = try expectComposition(statements[4].kind.expr_stmt, "hjoin");
+    const members = try expectComposition(statements[4].kind.expr_stmt, .horizontal);
     _ = try expectMember(members.args.items[0], "left");
     _ = try expectMember(members.args.items[1], "right");
     const placing = try expectCall(statements[5].kind.expr_stmt, "place!", 1);
-    _ = try expectComposition(placing.args.items[0], "hjoin");
+    _ = try expectComposition(placing.args.items[0], .horizontal);
     for ([_][]const u8{ "foo || bar // baz", "- bullet", "literal" }, 6..) |expected, index| {
         const text_call = try expectCall(statements[index].kind.expr_stmt, "text", 1);
         try expectString(text_call.args.items[0], expected);
     }
-    _ = try expectComposition(statements[9].kind.expr_stmt, "hjoin");
+    _ = try expectComposition(statements[9].kind.expr_stmt, .horizontal);
 }
 
 test "syntax spec: composition continues before and after the operator across trivia" {
@@ -1682,8 +1683,8 @@ test "syntax spec: composition continues before and after the operator across tr
     defer parsed.deinit();
     const statements = parsed.module.pages.items[0].statements.items;
     try testing.expectEqual(@as(usize, 2), statements.len);
-    const nested = try expectComposition(statements[0].kind.let_binding.expr, "hjoin");
-    _ = try expectComposition(nested.args.items[1], "vjoin");
+    const nested = try expectComposition(statements[0].kind.let_binding.expr, .horizontal);
+    _ = try expectComposition(nested.args.items[1], .vertical);
     try expectIdent(statements[1].kind.let_binding.expr, "d");
 
     try parseAndDeinitSource(testing.allocator, "page Valid\n  let value = a\n    || b\nend\n");
@@ -1726,16 +1727,16 @@ test "syntax spec: composition preserves punctuation in line text arguments" {
         const call = try expectCall(statements[index].kind.expr_stmt, if (index < 8) "text!" else "text", 1);
         try expectString(call.args.items[0], expected);
     }
-    const fallback = try expectComposition(statements[13].kind.expr_stmt, "hjoin");
+    const fallback = try expectComposition(statements[13].kind.expr_stmt, .horizontal);
     try expectIdent(fallback.args.items[0].coalesce.target.*, "a");
     try expectIdent(fallback.args.items[0].coalesce.fallback.*, "b");
     for (statements[14..16]) |statement| {
-        const composition = try expectComposition(statement.kind.expr_stmt, "hjoin");
+        const composition = try expectComposition(statement.kind.expr_stmt, .horizontal);
         _ = try expectMember(composition.args.items[0], "left");
     }
-    const checked = try expectComposition(statements[16].kind.expr_stmt, "hjoin");
+    const checked = try expectComposition(statements[16].kind.expr_stmt, .horizontal);
     try expectIdent(checked.args.items[0].optional_check.target.*, "a");
-    const placed = try expectComposition(statements[17].kind.expr_stmt, "hjoin");
+    const placed = try expectComposition(statements[17].kind.expr_stmt, .horizontal);
     for (placed.args.items) |operand| _ = try expectCall(operand, "text!", 1);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
 }
@@ -1769,15 +1770,15 @@ test "syntax spec: composition preserves operator and operand source spans" {
     const source_text = "page Span\n  let layout = a || (b // c) || d\nend\n";
     var parsed = try parse(source_text);
     defer parsed.deinit();
-    const outer = try expectComposition(parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr, "hjoin");
+    const outer = try expectComposition(parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr, .horizontal);
     try expectSpanText(source_text, outer.callee.name_span.?, "||");
     try expectSpanText(source_text, outer.callee.span.?, "||");
     try expectSpanText(source_text, outer.arg_spans.items[0], "a || (b // c)");
     try expectSpanText(source_text, outer.arg_spans.items[1], "d");
-    const horizontal = try expectComposition(outer.args.items[0], "hjoin");
+    const horizontal = try expectComposition(outer.args.items[0], .horizontal);
     try expectSpanText(source_text, horizontal.arg_spans.items[0], "a");
     try expectSpanText(source_text, horizontal.arg_spans.items[1], "(b // c)");
-    const vertical = try expectComposition(horizontal.args.items[1], "vjoin");
+    const vertical = try expectComposition(horizontal.args.items[1], .vertical);
     try expectSpanText(source_text, vertical.callee.name_span.?, "//");
     try expectSpanText(source_text, vertical.arg_spans.items[0], "b");
     try expectSpanText(source_text, vertical.arg_spans.items[1], "c");
@@ -1816,11 +1817,11 @@ test "syntax spec: recovering composition retains missing operands and following
     defer parsed.deinit();
     const statements = parsed.result.module.pages.items[0].statements.items;
     try testing.expectEqual(@as(usize, 4), statements.len);
-    const horizontal = try expectComposition(statements[0].kind.expr_stmt, "hjoin");
+    const horizontal = try expectComposition(statements[0].kind.expr_stmt, .horizontal);
     try testing.expect(horizontal.args.items[1] == .hole);
     try testing.expectEqualStrings("ok", statements[1].kind.let_binding.name);
     const placing = try expectCall(statements[2].kind.let_binding.expr, "place!", 1);
-    const vertical = try expectComposition(placing.args.items[0], "vjoin");
+    const vertical = try expectComposition(placing.args.items[0], .vertical);
     try testing.expect(vertical.args.items[1] == .hole);
     try testing.expectEqualStrings("after", statements[3].kind.let_binding.name);
     try testing.expectEqual(@as(usize, 2), parsed.result.holes.holes.len);
@@ -1859,7 +1860,7 @@ test "syntax spec: missing composition operands preserve conditional and constra
     try testing.expectEqual(@as(usize, 2), parsed.result.module.pages.items.len);
     const statements = parsed.result.module.pages.items[0].statements.items;
     try testing.expectEqual(@as(usize, 7), statements.len);
-    for ([_]usize{ 0, 2, 4 }, [_][]const u8{ "hjoin", "vjoin", "hjoin" }) |index, name| {
+    for ([_]usize{ 0, 2, 4 }, [_]ast.GroupComposition{ .horizontal, .vertical, .horizontal }) |index, name| {
         const composition = try expectComposition(statements[index].kind.expr_stmt, name);
         try testing.expect(composition.args.items[1] == .hole);
     }
@@ -1901,26 +1902,20 @@ test "syntax spec: equal composition chains preserve grouping and spans" {
     var parsed = try parse(source_text);
     defer parsed.deinit();
     const statements = parsed.module.pages.items[0].statements.items;
-    for ([_]usize{ 0, 2 }, [_][]const u8{ "hsplit", "vsplit" }) |index, name| {
-        const split = try expectCall(statements[index].kind.let_binding.expr, name, 1);
-        try testing.expectEqualStrings("std:layout", split.callee.qualifier.?);
+    for ([_]usize{ 0, 2 }, [_]ast.GroupComposition{ .equal_horizontal, .equal_vertical }) |index, mode| {
+        const split = try expectCall(statements[index].kind.let_binding.expr, "group", 3);
+        try testing.expectEqual(mode, split.callee.composition.?);
+        try testing.expect(split.callee.is_operator);
         try expectSpanText(source_text, split.callee.span.?, if (index == 0) "|=|" else "/=/");
-        const append = try expectComposition(split.args.items[0], "composition_append");
-        const pair = try expectComposition(append.args.items[0], "composition_objects");
-        try expectIdent(pair.args.items[0], "a");
-        try expectIdent(pair.args.items[1], "b");
-        try expectIdent(append.args.items[1], "c");
-        try expectSpanText(source_text, append.arg_spans.items[1], "c");
+        for (split.args.items, [_][]const u8{ "a", "b", "c" }) |operand, name| try expectIdent(operand, name);
+        try expectSpanText(source_text, split.arg_spans.items[2], "c");
     }
-    const grouped = try expectCall(statements[1].kind.let_binding.expr, "hsplit", 1);
-    const pair = try expectComposition(grouped.args.items[0], "composition_objects");
-    _ = try expectCall(pair.args.items[0], "hsplit", 1);
-    const mixed = try expectCall(statements[3].kind.let_binding.expr, "hsplit", 1);
-    const mixed_pair = try expectComposition(mixed.args.items[0], "composition_objects");
-    _ = try expectComposition(mixed_pair.args.items[1], "vjoin");
-    const division = try expectCall(statements[4].kind.let_binding.expr, "vsplit", 1);
-    const divided_pair = try expectComposition(division.args.items[0], "composition_objects");
-    for (divided_pair.args.items) |operand| _ = try expectCall(operand, "div", 2);
+    const grouped = try expectComposition(statements[1].kind.let_binding.expr, .equal_horizontal);
+    _ = try expectComposition(grouped.args.items[0], .equal_horizontal);
+    const mixed = try expectComposition(statements[3].kind.let_binding.expr, .equal_horizontal);
+    _ = try expectComposition(mixed.args.items[1], .vertical);
+    const division = try expectComposition(statements[4].kind.let_binding.expr, .equal_vertical);
+    for (division.args.items) |operand| _ = try expectCall(operand, "div", 2);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{source_text});
     try allocation_testing.checkAllAllocationFailures(testing.allocator, cloneAndDeinitModule, .{&parsed.module});
 }
@@ -1942,9 +1937,9 @@ test "syntax spec: equal compositions diagnose mixed operators and recover missi
     defer parsed.deinit();
     const statements = parsed.result.module.pages.items[0].statements.items;
     try testing.expectEqual(@as(usize, 3), statements.len);
-    const horizontal = try expectCall(statements[0].kind.expr_stmt, "hsplit", 1);
-    const append = try expectComposition(horizontal.args.items[0], "composition_append");
-    try testing.expect(append.args.items[1] == .hole);
+    const horizontal = try expectCall(statements[0].kind.expr_stmt, "group", 3);
+    try testing.expectEqual(ast.GroupComposition.equal_horizontal, horizontal.callee.composition.?);
+    try testing.expect(horizontal.args.items[2] == .hole);
     try testing.expectEqualStrings("ok", statements[1].kind.let_binding.name);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{incomplete});
 }
@@ -1963,8 +1958,8 @@ test "syntax spec: equal operators continue after trivia and remain literal in t
     );
     defer parsed.deinit();
     const statements = parsed.module.pages.items[0].statements.items;
-    _ = try expectCall(statements[0].kind.expr_stmt, "hsplit", 1);
-    _ = try expectCall(statements[1].kind.expr_stmt, "vsplit", 1);
+    _ = try expectComposition(statements[0].kind.expr_stmt, .equal_horizontal);
+    _ = try expectComposition(statements[1].kind.expr_stmt, .equal_vertical);
     for ([_][]const u8{ "|=| raw", "/=/ raw", "a |=| b /=/ c" }, 2..) |value, index| {
         const call = try expectCall(statements[index].kind.expr_stmt, if (index < 4) "text!" else "text", 1);
         try expectString(call.args.items[0], value);
@@ -2054,15 +2049,14 @@ test "syntax spec: chevron blocks close at the first line-leading delimiter" {
 
 test "syntax spec: chevron suffixes belong to the enclosing expression" {
     const operators = [_][]const u8{ "||", "//", "|=|", "/=/" };
-    for (operators, [_][]const u8{ "hjoin", "vjoin", "hsplit", "vsplit" }) |operator, name| {
+    for (operators, [_]ast.GroupComposition{ .horizontal, .vertical, .equal_horizontal, .equal_vertical }) |operator, name| {
         for ([_][]const u8{ "", " ", "\t" }) |spacing| {
             const text = try std.fmt.allocPrint(testing.allocator, "page Blocks\nlet g = text << ;; header\nA\n\t>>{s}{s} ;; continuation\ntext <<\nB\n>>\nend\n", .{ spacing, operator });
             defer testing.allocator.free(text);
             var parsed = try parse(text);
             defer parsed.deinit();
             const expression = parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr;
-            const call = try expectCall(expression, name, if (operator.len == 2) 2 else 1);
-            const pair = if (operator.len == 2) call else try expectComposition(call.args.items[0], "composition_objects");
+            const pair = try expectComposition(expression, name);
             const left = try expectCall(pair.args.items[0], "text", 1);
             const right = try expectCall(pair.args.items[1], "text", 1);
             try expectString(left.args.items[0], "A");
@@ -2072,7 +2066,7 @@ test "syntax spec: chevron suffixes belong to the enclosing expression" {
     const nested = "page Blocks\nlet g = (text <<\nA\n>>) || text(<< ;; header\nB\n>>)\nend\n";
     var parsed = try parse(nested);
     defer parsed.deinit();
-    _ = try expectComposition(parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr, "hjoin");
+    _ = try expectComposition(parsed.module.pages.items[0].statements.items[0].kind.let_binding.expr, .horizontal);
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseAndDeinitSource, .{nested});
     try allocation_testing.checkAllAllocationFailures(testing.allocator, parseRecoveringAndDeinitSource, .{nested});
     var crlf = try parse("page Blocks\r\nlet s = << ;; header\r\nA\r\n\t>> ++ \"B\"\r\nend\r\n");

@@ -3,6 +3,22 @@ pub const SourceOrigin = @import("source_origin").Origin;
 
 pub const SourceSpan = @import("source_origin").Span;
 
+pub const GroupComposition = enum {
+    overlay,
+    horizontal,
+    vertical,
+    equal_horizontal,
+    equal_vertical,
+
+    pub fn isHorizontal(self: GroupComposition) bool {
+        return self == .horizontal or self == .equal_horizontal;
+    }
+
+    pub fn equal(self: GroupComposition) bool {
+        return self == .equal_horizontal or self == .equal_vertical;
+    }
+};
+
 pub const NominalId = struct {
     module_id: u32,
     name: []const u8,
@@ -18,6 +34,10 @@ pub const NominalId = struct {
 };
 
 pub const Type = struct {
+    pub fn groupMemberType(name: []const u8) ?Type {
+        return if (std.mem.eql(u8, name, "gap")) Type.number else null;
+    }
+
     kind: Kind,
     nominal_module_id: ?u32 = null,
     class_name: ?[]const u8 = null,

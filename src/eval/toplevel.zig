@@ -789,10 +789,7 @@ fn evalMember(
     const state = evaluation.state;
     const functions = evaluation.functions;
     if (borrowLocalValue(env, member.target.*)) |target| {
-        if (target == .record) {
-            const value = target.record.field(member.name) orelse return .{ .none = {} };
-            return try value.clone(state.allocator);
-        }
+        if (target == .record or target == .group) return evalMemberValue(state, functions, target, member.name);
     }
     var target = try evalExpr(evaluation, page_id, scope, env, current_origin, member.target.*);
     defer target.deinit(state.allocator);
@@ -818,6 +815,10 @@ fn evalMemberValue(
     target: core.Value,
     name: []const u8,
 ) !core.Value {
+    if (target == .group) {
+        if (std.mem.eql(u8, name, "gap")) return .{ .number = target.group.gap };
+        return error.UnknownField;
+    }
     if (target == .record) {
         const value = target.record.field(name) orelse return .{ .none = {} };
         return try value.clone(state.allocator);
@@ -960,7 +961,7 @@ fn evalRecordUpdate(
     const state = evaluation.state;
     var target = try evalExpr(evaluation, page_id, scope, env, current_origin, update.target.*);
     errdefer target.deinit(state.allocator);
-    if (target != .record) {
+    if (target != .record and target != .group) {
         try reportRecordUpdateError(state, current_origin, "InvalidValueUpdate", "with expects a value with fields", .{});
         return error.InvalidValueTag;
     }
@@ -969,7 +970,7 @@ fn evalRecordUpdate(
         var field_value = try evalExpr(evaluation, page_id, scope, env, current_origin, field.value);
         var field_value_moved = false;
         errdefer if (!field_value_moved) field_value.deinit(state.allocator);
-        updateRecordFieldPath(state.allocator, &target.record, field.path.items, field_value) catch |err| switch (err) {
+        updateRecordFieldPath(state.allocator, &target, field.path.items, field_value) catch |err| switch (err) {
             error.InvalidValueTag => {
                 const path = try ast.formatRecordPath(state.allocator, field.path.items);
                 defer state.allocator.free(path);
@@ -991,19 +992,25 @@ fn evalRecordUpdate(
 
 fn updateRecordFieldPath(
     allocator: std.mem.Allocator,
-    record: *core.RecordValue,
+    target: *core.Value,
     path: []const ast.RecordPathSegment,
     value: core.Value,
 ) !void {
     if (path.len == 0) return error.UnknownField;
-    if (path.len == 1) {
-        try putRecordFieldValue(allocator, record, path[0].name, value, true);
+    if (target.* == .group) {
+        if (!std.mem.eql(u8, path[0].name, "gap")) return error.UnknownField;
+        if (path.len != 1 or value != .number) return error.InvalidValueTag;
+        target.group.gap = value.number;
         return;
     }
-    for (record.fields.items) |*field| {
+    if (target.* != .record) return error.InvalidValueTag;
+    if (path.len == 1) {
+        try putRecordFieldValue(allocator, &target.record, path[0].name, value, true);
+        return;
+    }
+    for (target.record.fields.items) |*field| {
         if (!std.mem.eql(u8, field.name, path[0].name)) continue;
-        if (field.value != .record) return error.InvalidValueTag;
-        try updateRecordFieldPath(allocator, &field.value.record, path[1..], value);
+        try updateRecordFieldPath(allocator, &field.value, path[1..], value);
         return;
     }
     return error.UnknownField;
@@ -1379,8 +1386,19 @@ const BuiltinContext = struct {
         return try self.state.createObjectWithOrigin(role_name, role, object_kind, payload_kind, content, self.current_origin);
     }
 
-    pub fn makeGroup(self: *BuiltinContext, child_ids: []const core.NodeId) !core.NodeId {
-        return try self.state.createGroupWithOrigin(child_ids, self.current_origin);
+    pub fn makeGroup(self: *BuiltinContext, child_ids: []const core.NodeId, composition: ?ast.GroupComposition) !core.NodeId {
+        const id = try self.state.createGroupWithOrigin(child_ids, self.current_origin);
+        // Removed with the remaining legacy Object constructors. Typed groups
+        // keep the configuration in their immutable input instead of fields.
+        if (composition) |mode| {
+            const axis: core.Value = .{ .string = if (mode.isHorizontal()) "horizontal" else "vertical" };
+            const depth = self.evaluation.frames.depth;
+            try self.state.setNodeFieldValueWithOrigin(id, "join_axis", axis, depth, self.current_origin);
+            if (mode.equal()) try self.state.setNodeFieldValueWithOrigin(id, "split_axis", axis, depth, self.current_origin);
+            try self.state.setNodeFieldValueWithOrigin(id, "split_gap", .{ .number = 32 }, depth, self.current_origin);
+            try self.state.setNodeFieldValueWithOrigin(id, "align_children_y", .{ .boolean = mode.isHorizontal() }, depth, self.current_origin);
+        }
+        return id;
     }
 
     pub fn makePage(self: *BuiltinContext, title: []const u8) !core.NodeId {
@@ -2029,7 +2047,7 @@ fn writePropertyPathToNode(
         sema.fieldByName(property_name);
     const field = maybe_field orelse return error.InvalidType;
     if (field.value_type.kind != .record) return error.InvalidValueTag;
-    var record = try materializePropertyRecord(evaluation, page_id, scope, origin, node, property_name, field.value_type);
+    var record = core.Value{ .record = try materializePropertyRecord(evaluation, page_id, scope, origin, node, property_name, field.value_type) };
     defer record.deinit(state.allocator);
 
     var value_copy = try value.clone(state.allocator);
@@ -2047,7 +2065,7 @@ fn writePropertyPathToNode(
         else => return err,
     };
     value_moved = true;
-    state.defineNodeFieldPath(node_id, property_name, path_text, .{ .record = record }, evaluation.frames.depth, origin) catch |err| switch (err) {
+    state.defineNodeFieldPath(node_id, property_name, path_text, record, evaluation.frames.depth, origin) catch |err| switch (err) {
         error.DuplicatePropertyDefinition => {
             try reportDuplicatePropertyDefinition(state, origin, node_id, path_text);
             return err;

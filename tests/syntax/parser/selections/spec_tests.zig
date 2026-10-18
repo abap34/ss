@@ -33,8 +33,8 @@ test "selection operators: arithmetic intersection and union retain fixed preced
     const chained = try call(statements[2].kind.let_binding.expr, "selection_union");
     _ = try call(chained.args.items[0], "selection_union");
     _ = try call(statements[3].kind.expr_stmt, "selection_union");
-    try testing.expectEqualStrings("hjoin", statements[4].kind.let_binding.expr.call.callee.name);
-    try testing.expectEqualStrings("hsplit", statements[5].kind.let_binding.expr.call.callee.name);
+    try testing.expectEqual(ast.GroupComposition.horizontal, statements[4].kind.let_binding.expr.call.callee.composition.?);
+    try testing.expectEqual(ast.GroupComposition.equal_horizontal, statements[5].kind.let_binding.expr.call.callee.composition.?);
     try testing.expect(statements[6].kind.let_binding.expr == .lambda);
 }
 

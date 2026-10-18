@@ -1004,7 +1004,7 @@ pub const DocumentState = struct {
         var candidates = std.ArrayList(Constraint).empty;
         defer candidates.deinit(self.allocator);
         for (self.graph.nodes.items) |node| {
-            if (node.kind != .object or node.discarded or !roleEq(node.role, GroupRole)) continue;
+            if (node.kind != .object or node.discarded or !model.isGroupNode(&node)) continue;
             group_composition.collect(self, &node, &candidates) catch |err| {
                 if (err != error.InvalidGroupSplit) return err;
                 try self.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
@@ -1015,29 +1015,6 @@ pub const DocumentState = struct {
                 });
                 return err;
             };
-            for (node.fields.items) |field| {
-                if (!std.mem.eql(u8, field.key, "align_children_y")) continue;
-                if (field.value != .boolean or !field.value.boolean) break;
-                const children = self.childrenOf(node.id) orelse break;
-                var previous: ?NodeId = null;
-                for (children) |child_id| {
-                    const child = self.getNode(child_id) orelse continue;
-                    if (child.kind != .object or child.discarded) continue;
-                    if (previous) |source_id| {
-                        try candidates.append(self.allocator, .{
-                            .target_node = child_id,
-                            .target_anchor = .top,
-                            .source = .{ .node = .{ .node_id = source_id, .anchor = .top } },
-                            .offset = 0,
-                            .origin = field.origin,
-                            .scope_depth = field.scope_depth,
-                            .default_alignment = true,
-                        });
-                    }
-                    previous = child_id;
-                }
-                break;
-            }
         }
         try self.constraints.active.appendSlice(self.allocator, candidates.items);
         self.constraints.default_alignments_collected = true;

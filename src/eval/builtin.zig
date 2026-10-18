@@ -415,7 +415,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         },
         .group => blk: {
             if (ctx.state.displays.isTypedGroupCall(call.callee.call_id)) {
-                var result = core.GroupValue{ .ty = .{ .kind = .group } };
+                var result = core.GroupValue{ .ty = .{ .kind = .group }, .composition = call.callee.composition orelse .overlay };
                 errdefer result.deinit(ctx.state.allocator);
                 try result.children.ensureTotalCapacity(ctx.state.allocator, call.args.items.len);
                 const types = try ctx.state.allocator.alloc(ast.Type, call.args.items.len);
@@ -436,13 +436,14 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 switch (value) {
                     .object => |id| try child_ids.append(ctx.state.allocator, id),
                     .selection => |selection| {
+                        if (call.callee.composition != null) return error.InvalidType;
                         if (selection.item_tag != .object) return error.InvalidType;
                         try child_ids.appendSlice(ctx.state.allocator, selection.ids.items);
                     },
                     else => return error.InvalidType,
                 }
             }
-            break :blk .{ .object = try ctx.makeGroup(child_ids.items) };
+            break :blk .{ .object = try ctx.makeGroup(child_ids.items, call.callee.composition) };
         },
         .new_page => blk: {
             _ = try evalDocumentArg(ctx, call, 0);

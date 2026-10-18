@@ -472,6 +472,16 @@ test "compiler semantics: composition type diagnostics identify the operand" {
     const start = std.mem.indexOf(u8, source, "123").?;
     const expected_origin = try std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ start, start + 3 });
     try compiler_semantics.expectDiagnostic(testing.io, allocator, path, source, expected_origin, "TypeMismatch");
+    const typed_source =
+        \\import std:text as { Text }
+        \\page example
+        \\  let a = Text { content = "A" }
+        \\  let row = a || (a // 123)
+        \\end
+    ;
+    const typed_start = std.mem.indexOf(u8, typed_source, "123").?;
+    const typed_origin = try std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ typed_start, typed_start + 3 });
+    try compiler_semantics.expectDiagnostic(testing.io, allocator, path, typed_source, typed_origin, "InvalidGroupInput");
 }
 
 test "compiler semantics: imported function return inference diagnostics keep callee origin" {

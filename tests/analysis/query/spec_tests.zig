@@ -827,3 +827,36 @@ test "analysis query spec: groups retain concrete types through unfinished place
     defer hover.deinit(testing.allocator);
     try testing.expect(std.mem.indexOf(u8, hover.markdown, "Group<T1, ...>") != null);
 }
+
+test "analysis query spec: composition spacing completes in member and with expressions" {
+    const path = "stdlib/internal/composition-query-test.ss";
+    for ([_][]const u8{ "row.ga", "row with { ga }" }) |expression| {
+        const source = try std.fmt.allocPrint(testing.allocator,
+            \\import std:text as text_api
+            \\page main
+            \\  let a = text_api::Text {{ content = "A" }}
+            \\  let row = a || a
+            \\  let updated = {s}
+            \\end
+        , .{expression});
+        defer testing.allocator.free(source);
+        var sources = analysis.snapshot.SourceSet.init(testing.allocator, testing.io);
+        defer sources.deinit();
+        try sources.put(path, source);
+        var snapshot = try analysis.snapshot.build(testing.allocator, &sources, path, ".", .{});
+        defer snapshot.deinit();
+        var completion = try analysis.snapshot.completeAt(testing.allocator, &snapshot, .{
+            .path = path,
+            .source = source,
+            .offset = std.mem.lastIndexOf(u8, source, "ga").? + 2,
+        }, .{ .budget_ms = 1000 });
+        defer completion.deinit(testing.allocator);
+        var found = false;
+        for (completion.items) |item| {
+            if (!std.mem.eql(u8, item.label, "gap")) continue;
+            try testing.expectEqualStrings("Number", item.detail.?);
+            found = true;
+        }
+        try testing.expect(found);
+    }
+}

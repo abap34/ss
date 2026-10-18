@@ -130,7 +130,8 @@ test "comparisons: concatenation coalescing and composition keep operand boundar
     try ident(defaulted.args.items[0].coalesce.fallback.*, "b");
     try ident(defaulted.args.items[1].coalesce.target.*, "c");
     try ident(defaulted.args.items[1].coalesce.fallback.*, "d");
-    const composed = try call(statements[2].kind.let_binding.expr, "hjoin", 2);
+    const composed = try call(statements[2].kind.let_binding.expr, "group", 2);
+    try testing.expectEqual(ast.GroupComposition.horizontal, composed.callee.composition.?);
     _ = try call(composed.args.items[0], "num_lt", 2);
     _ = try call(composed.args.items[1], "num_ge", 2);
     const arguments = try call(statements[3].kind.let_binding.expr, "consume", 2);

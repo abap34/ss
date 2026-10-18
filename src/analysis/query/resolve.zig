@@ -362,6 +362,10 @@ pub fn fieldForType(allocator: std.mem.Allocator, budget: ?QueryBudget, snapshot
         const field_type = @import("../../language/placement.zig").memberType(ty, name) orelse return null;
         return .{ .name = name, .value_type = field_type, .type_label = try field_type.formatAlloc(allocator) };
     }
+    if (ty.kind == .group) {
+        const field_type = ast.Type.groupMemberType(name) orelse return null;
+        return .{ .name = name, .value_type = field_type, .type_label = try field_type.formatAlloc(allocator) };
+    }
     if (recordIdForType(ty)) |id| {
         var field = recordField(budget, snapshot, id, name) orelse return null;
         if (ty.arguments.len == 0) return field;
