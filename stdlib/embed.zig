@@ -20,6 +20,7 @@ pub const modules = [_]Module{
     .{ .spec = "std:components/toc", .path = "stdlib/components/toc.ss", .source = @embedFile("components/toc.ss") },
     .{ .spec = "std:data/csv", .path = "stdlib/data/csv.ss", .source = @embedFile("data/csv.ss") },
     .{ .spec = "std:document", .path = "stdlib/document.ss", .source = @embedFile("document.ss") },
+    .{ .spec = "std:document/numbering", .path = "stdlib/document/numbering.ss", .source = @embedFile("document/numbering.ss") },
     .{ .spec = "std:document/content", .path = "stdlib/document/content.ss", .source = @embedFile("document/content.ss") },
     .{ .spec = "std:graphics/connectors", .path = "stdlib/graphics/connectors.ss", .source = @embedFile("graphics/connectors.ss") },
     .{ .spec = "std:graphics/content", .path = "stdlib/graphics/content.ss", .source = @embedFile("graphics/content.ss") },

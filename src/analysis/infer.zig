@@ -1327,9 +1327,11 @@ fn primitiveResultTypeInfo(
             if (selection_info.hole != null) return selection_info;
             return infoFromType(try selectionItemType(state, selection_info, origin));
         },
-        .first_arg => {
+        .first_arg, .argument_type => {
             if (call.args.items.len <= descriptor.result_arg_index) return infoFromType(registry.primitiveResultType(descriptor) orelse Type.object);
-            return argument_infos[descriptor.result_arg_index];
+            const result = argument_infos[descriptor.result_arg_index];
+            if (descriptor.result_policy == .argument_type and result.hole == null) return infoFromType(result.ty);
+            return result;
         },
         .selection_algebra => return try inferSelectionAlgebraInfo(allocator, state, call, descriptor.op, origin, argument_infos),
         .select_query => return try inferSelectCallInfo(allocator, state, sema, env, call, origin, argument_infos),
@@ -1420,7 +1422,8 @@ fn validateCallbackShape(
         const item_type = try selectionItemType(state, selection_info, origin);
         switch (descriptor.op) {
             .fold => {
-                try ensureType(state, allocator, infoFromType(Type.string), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, argument_infos[1], callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, infoFromType(callback_info.ty.fn_result.?.*), argument_infos[1].ty, origin, .UnmatchedReturnType);
                 try ensureType(state, allocator, infoFromType(item_type), callback_info.ty.fn_params[1], origin, .UnmatchedArgumentType);
             },
             .foreach_enumerate => {

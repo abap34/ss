@@ -871,7 +871,6 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  latex!("$x^2$")
         \\  code!("print('x')", "python")
         \\  code_file!("snippet.zig", "zig")
-        \\  toc!("Contents")
         \\  annotate!("before target after", "target", "note")
         \\end
         \\
@@ -894,7 +893,6 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  text!("Body")
         \\  code!("print('x')", "python")
         \\  code_file!("snippet.zig", "zig")
-        \\  toc!("Contents")
         \\  annotate!("before target after", "target", "note")
         \\end
         \\
@@ -920,7 +918,6 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  code!("print('x')", "python")
         \\  code_file!("snippet.zig", "zig")
         \\  note!("note")
-        \\  toc!("Contents")
         \\  annotate!("before target after", "target", "note")
         \\end
         \\
@@ -1799,11 +1796,10 @@ test "compiler semantics: all themed text constructors apply their theme records
     try expectFixtureObjectFieldPath("theme/generated-constructors", "text", &.{"size"}, "19");
 }
 
-test "compiler semantics: image and academic toc apply their chrome theme records" {
+test "compiler semantics: image chrome and typed toc text accept explicit styles" {
     try expectFixtureObjectFieldPath("theme/image", "chrome", &.{"stroke"}, "0.19215687,0.36078432,0.65882355");
     try expectFixtureObjectFieldPath("theme/image", "chrome", &.{"pad_x"}, "17");
-    try expectFixtureObjectFieldPath("theme/academic-toc", "chrome", &.{"fill"}, "0.93333334,0.9529412,0.9764706");
-    try expectFixtureObjectFieldPath("theme/academic-toc", "chrome", &.{"pad_y"}, "11");
+    try expectFixtureDumpContains("theme/toc-style", &.{ "\"font_size\":41.0", "\"font_size\":23.0" });
 }
 
 test "compiler semantics: nested property assignment updates style records" {
@@ -8756,4 +8752,57 @@ test "compiler semantics: typed displays reject writes through ordinary helpers"
         \\  return Output {}
         \\end
     , "bytes:", "ImpureDisplayFunction");
+}
+
+
+test "compiler semantics: fold preserves numeric and record accumulator types" {
+    try expectObjectContent(
+        \\type Count { total: Number = 0 }
+        \\fn add(acc: Count, p: Page, amount: Number) -> Count = acc with { total = acc.total + amount }
+        \\page first
+        \\  let all = pages(docctx())
+        \\  let numeric = fold(all, 0, (acc: Number, p: Page) |-> acc + page_index(p))
+        \\  let seed = Count { total = 10 }
+        \\  let result = fold(all, seed, add, 2)
+        \\  text!(str(numeric) ++ "/" ++ str(result.total) ++ "/" ++ str(seed.total))
+        \\end
+        \\page second
+        \\end
+    , "3/14/10");
+}
+
+test "compiler semantics: fold on an empty selection returns an independent seed" {
+    try expectObjectContent(
+        \\type Count { total: Number = 12 }
+        \\fn unreachable_step(acc: Count, p: Page) -> Count = Count { total = 999 }
+        \\page example
+        \\  let all = pages(docctx())
+        \\  let result = fold(all - all, Count {}, unreachable_step)
+        \\  text!(str(result.total))
+        \\end
+    , "12");
+}
+
+test "compiler semantics: fold rejects accumulator input and output mismatches" {
+    try expectBuildFails(
+        \\page example
+        \\  fold(pages(docctx()), 0, (acc: String, p: Page) |-> 1)
+        \\end
+    );
+    try expectBuildFails(
+        \\page example
+        \\  fold(pages(docctx()), 0, (acc: Number, p: Page) |-> "wrong")
+        \\end
+    );
+}
+
+
+test "compiler semantics: fold does not retain a literal fact from its initial value" {
+    try expectDiagnostic(
+        \\page example
+        \\  let query = fold(pages(docctx()), "self_placement", (acc: String, p: Page) |-> "invalid")
+        \\  let item = text!("Item")
+        \\  select(item, query)
+        \\end
+    , "bytes:", "select query must be a statically known string");
 }

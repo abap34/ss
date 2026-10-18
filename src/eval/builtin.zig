@@ -244,7 +244,8 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .fold => blk: {
             var target = try ctx.evalExprValue(call.args.items[0]);
             defer target.deinit(ctx.state.allocator);
-            var accumulator = try ctx.evalStringArg(call, 1);
+            var accumulator = try ctx.evalExprValue(call.args.items[1]);
+            errdefer accumulator.deinit(ctx.state.allocator);
             const callback = try evalFunctionArg(ctx, call, 2);
             var extras = try evalExtraArgs(ctx, call, 3);
             defer extras.deinit(ctx.state.allocator);
@@ -258,17 +259,14 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             for (snapshot.ids.items) |id| {
                 var args = std.ArrayList(core.Value).empty;
                 defer args.deinit(ctx.state.allocator);
-                try args.append(ctx.state.allocator, .{ .string = accumulator });
+                try args.append(ctx.state.allocator, accumulator);
                 try args.append(ctx.state.allocator, itemValue(snapshot.item_tag, id));
                 try args.appendSlice(ctx.state.allocator, extras.items);
-                var result = try ctx.invokeCallback(callback, args.items);
-                defer result.deinit(ctx.state.allocator);
-                accumulator = switch (result) {
-                    .string => |text| text,
-                    else => return error.ExpectedStringArgument,
-                };
+                const result = try ctx.invokeCallback(callback, args.items);
+                accumulator.deinit(ctx.state.allocator);
+                accumulator = result;
             }
-            break :blk .{ .string = accumulator };
+            break :blk accumulator;
         },
         .join => blk: {
             var target = try ctx.evalExprValue(call.args.items[0]);

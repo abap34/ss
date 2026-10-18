@@ -52,7 +52,7 @@ test "dependency cycle diagnostics retain source locations in both graph constru
     for ([_]compiler.analysis.AnalysisMode{ .diagnostics_only, .evaluation }) |mode| {
         var state = try document(
             \\page bad
-            \\  let target = text("hello")
+            \\  let target = body_obj("hello")
             \\  target.content = target.content ++ "!"
             \\end
         );
@@ -308,7 +308,7 @@ test "validation diagnostics own messages independently of analysis storage" {
     try expectOwnedDiagnostic(
         \\fn label(item: Object) -> String = readlines("missing.txt")
         \\page main
-        \\  set_repr(text!("A"), label)
+        \\  set_repr(body_obj!("A"), label)
         \\end
     , "ImpureDisplayFunction", "display functions must be pure and read-only, including indirect calls");
     try expectOwnedDiagnostic(
@@ -323,7 +323,7 @@ test "validation diagnostics own messages independently of analysis storage" {
     , "InvalidPropertyType", "property 'format' must not contain functions or unconstrained Any values");
     try expectOwnedDiagnostic(
         \\page main
-        \\  let item = text!("A")
+        \\  let item = body_obj!("A")
         \\  set_repr(item, (self: Object) |-> repr(self))
         \\end
     , "RecursiveFunction", "recursive function value application");

@@ -79,43 +79,40 @@ end
 toc!("Contents")
 end
 page section
-h1!("Section")
+heading!("Section")
 end
 `);
   assert(!contents.nodes.some(n => n.role === 'pageno'));
   assert(contents.nodes.some(n => n.content === 'Contents'));
 
   const sharedStyles = await dump(`import std:themes/default as base
-document
-set_theme(base::default_theme() with { head.title.text.size = 29 })
-end
+const theme: Theme = base::default_theme()
 page title
- title!("Document title", current_theme().h1 with { text.size = 33 })
- byline!("Document author", current_theme().byline with { text.size = 17 })
+ text!("Document title", theme.h1 with { text.size = 33 })
+ text!("Document author", theme.byline with { text.size = 17 })
 end
 page heading
-head!("Slide title")
+ heading!("Slide title", 1, theme.h1 with { text.size = 29 })
 end
 page contents
-toc!("Contents title")
+ toc!("Contents title", theme.toc)
 end
 page references
-citation!(1, "Reference", current_theme().citation with { text.size = 11 })
+ text!("[1] Reference", theme.citation with { text.size = 11 })
 end
 `);
-  for (const [content, size, role] of [
-    ['Document title', 33, 'title'],
-    ['Document author', 17, 'byline'],
-    ['Slide title', 29, 'title'],
-    ['Contents title', 36, 'label'],
-    ['[1] Reference', 11, 'citation'],
+  for (const [content, size] of [
+    ['Document title', 33],
+    ['Document author', 17],
+    ['Slide title', 29],
+    ['Contents title', 36],
+    ['[1] Reference', 11],
   ]) {
     const node = sharedStyles.nodes.find(n => n.content === content);
-    assert(node, `Missing styled object: ${content}`);
+    assert(node, `Missing styled text: ${content}`);
     assert.equal(node.render.text.font_size, size, content);
-    assert.equal(node.role, role, content);
+    assert.equal(node.role, null, content);
   }
-  assert.equal(sharedStyles.nodes.filter(n => n.role === 'rule').length, 1);
 
   const localPageNumbers = await dump(`page first
 text!("First")
@@ -127,9 +124,7 @@ pageno!()
 end
 `);
   const documentPageNumbers = await dump(`document
-pagenos!()
-footers!("Footer")
-watermark!("Draft")
+foreach(pages(docctx()), (p: Page) |-> place_on!(p, pageno()))
 end
 page first
 text!("First")
@@ -138,20 +133,12 @@ page second
 text!("Second")
 end
 `);
-  const localNumbers = localPageNumbers.nodes.filter(n => n.role === 'pageno');
-  const documentNumbers = documentPageNumbers.nodes.filter(n => n.role === 'pageno');
-  assert.equal(localNumbers.length, 2);
-  assert.equal(documentNumbers.length, 2);
-  assert.deepEqual(localNumbers.map(n => n.display_content), ['1/2', '2/2']);
-  assert.deepEqual(documentNumbers.map(n => n.display_content), ['1/2', '2/2']);
-  for (let index = 0; index < 2; index++) {
-    for (const key of ['x', 'y', 'width', 'height']) {
-      assert(Math.abs(localNumbers[index][key] - documentNumbers[index][key]) < 0.01,
-        `Page number ${index + 1} ${key} differs between page and document registration`);
-    }
+  for (const document of [localPageNumbers, documentPageNumbers]) {
+    const numbers = document.nodes.filter(n => n.placement?.input.type.name === 'PageNumber');
+    assert.equal(numbers.length, 2);
+    assert.deepEqual(numbers.map(n => document.nodes.find(child => child.id === n.placement.children[0]).content), ['1/2', '2/2']);
+    for (const number of numbers) assert.equal(number.role, null);
   }
-  assert.equal(documentPageNumbers.nodes.filter(n => n.role === 'footer').length, 2);
-  assert.equal(documentPageNumbers.nodes.filter(n => n.role === 'watermark').length, 2);
 
   for (const name of ['default', 'academic', 'pop']) {
     const themed = await dump(`import std:themes/${name} as chosen

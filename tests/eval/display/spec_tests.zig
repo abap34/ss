@@ -1914,3 +1914,50 @@ test "native text display: public constructors preserve explicit TeX configurati
         if (preamble.len != 0) try testing.expectEqualStrings(preamble, env.latex_preamble.items[0].value);
     }
 }
+
+
+test "document constructors: unused metadata does not allocate placements or run callbacks" {
+    var state = try documentWithModules(
+        \\import std:document as doc
+        \\import std:components/toc as contents
+        \\const heading: doc::Heading = doc::heading("Unplaced")
+        \\const number: doc::PageNumber = doc::pageno()
+        \\const toc: contents::Toc = contents::toc("Unplaced")
+        \\page unused
+        \\  let copies = group(heading, number, toc)
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    try testing.expectEqual(@as(usize, 2), state.nodeCount());
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
+}
+
+
+test "fold evaluation: aggregate accumulators own nested selections independently" {
+    var state = try documentWithModules(
+        \\type Total { count: Number selected: Selection<Page> }
+        \\fn accumulate(total: Total, page: Page) -> Total
+        \\  return total with { count = total.count + page_index(page) }
+        \\end
+        \\page first
+        \\  let selected = pages(docctx())
+        \\  let initial = Total { count = 10 selected = selected }
+        \\  let total = fold(selected, initial, accumulate)
+        \\  let empty = fold(selected - selected, initial, accumulate)
+        \\  text!(str(total.count) ++ "/" ++ str(initial.count) ++ "/" ++ str(selection_count(total.selected)) ++ "/" ++ str(empty.count))
+        \\end
+        \\page second
+        \\end
+    );
+    defer state.deinit();
+    var graph = (try compiler.analysis.analyzeDocumentStateWithMode(testing.allocator, &state, .evaluation)).?;
+    defer graph.deinit();
+    try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
+    const root = state.placementRootsOf(state.graph.page_order.items[0])[0];
+    const input = state.getNode(root).?.placement.?.value.record;
+    try testing.expectEqualStrings("13/10/2/10", input.field("content").?.string);
+    try testing.expectEqual(@as(usize, 0), state.diagnostics.entries.items.len);
+}

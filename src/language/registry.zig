@@ -181,6 +181,8 @@ pub const PrimitiveResultPolicy = enum {
     declared,
     first_selection_item,
     first_arg,
+    // Callback results preserve this type, not the argument value or its facts.
+    argument_type,
     selection_algebra,
     select_query,
     target_arg,
@@ -250,7 +252,7 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .foreach, .name = "foreach", .min_arity = 2, .max_arity = 255, .arg_names = &.{ "selection", "callback" }, .arg_types = &.{ Type.selection(.any), Type.function, Type.any }, .result_type = Type.selection(.any), .result_policy = .first_arg, .callback = .{ .function_arg_index = 1, .supplied_arg_count = 1 }, .summary = "Call a callback once for every item in a finite Selection snapshot" },
     .{ .op = .selection_filter, .name = "selection_filter", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "selection", "predicate" }, .arg_types = &.{ Type.selection(.any), Type.function }, .result_type = Type.selection(.any), .result_policy = .first_arg, .callback = .{ .function_arg_index = 1, .supplied_arg_count = 1, .expected_result_type = Type.boolean }, .summary = "Retain items satisfying a predicate in finite selection order" },
     .{ .op = .foreach_enumerate, .name = "foreach_enumerate", .min_arity = 2, .max_arity = 255, .arg_names = &.{ "selection", "callback" }, .arg_types = &.{ Type.selection(.any), Type.function, Type.any }, .result_type = Type.selection(.any), .result_policy = .first_arg, .callback = .{ .function_arg_index = 1, .supplied_arg_count = 2 }, .summary = "Call a callback once for every item in a finite Selection snapshot with a one-based index" },
-    .{ .op = .fold, .name = "fold", .min_arity = 3, .max_arity = 255, .arg_names = &.{ "selection", "initial", "callback" }, .arg_types = &.{ Type.selection(.any), Type.string, Type.function, Type.any }, .result_type = Type.string, .callback = .{ .function_arg_index = 2, .supplied_arg_count = 2, .expected_result_type = Type.string }, .summary = "Fold a finite Selection snapshot with a string accumulator" },
+    .{ .op = .fold, .name = "fold", .min_arity = 3, .max_arity = 255, .arg_names = &.{ "selection", "initial", "callback" }, .arg_types = &.{ Type.selection(.any), Type.any, Type.function, Type.any }, .result_type = null, .result_policy = .argument_type, .result_arg_index = 1, .callback = .{ .function_arg_index = 2, .supplied_arg_count = 2 }, .summary = "Fold a finite Selection snapshot while preserving the initial accumulator type" },
     .{ .op = .join, .name = "join", .min_arity = 3, .max_arity = 255, .arg_names = &.{ "selection", "separator", "callback" }, .arg_types = &.{ Type.selection(.any), Type.string, Type.function, Type.any }, .result_type = Type.string, .callback = .{ .function_arg_index = 2, .supplied_arg_count = 1, .expected_result_type = Type.string }, .summary = "Map a finite Selection snapshot to strings and join them" },
     .{ .op = .first, .name = "first", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_types = &.{Type.selection(.any)}, .result_type = null, .result_policy = .first_selection_item, .summary = "Get the first element of a Selection" },
     .{ .op = .selection_union, .name = "selection_union", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_types = &.{ Type.selection(.any), Type.selection(.any) }, .result_type = Type.selection(.any), .result_policy = .selection_algebra, .summary = "Return the union of two Selections" },
