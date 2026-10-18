@@ -680,10 +680,7 @@ const Analyzer = struct {
                 return try self.invokeNamed(label, resolved.module_id, func, arg_labels.items);
             },
             .primitive => |primitive| {
-                const typed_group = primitive.op == .group and self.state.displays.isTypedGroupCall(call.callee.call_id);
-                const unresolved_group = primitive.op == .group and (!self.types_checked or
-                    (owner != null and owner.?.type_params.items.len != 0 and owner.?.instance_id == null));
-                if (self.checking_display and !typed_group and !unresolved_group and !registry.primitiveAllowsDisplayEvaluation(primitive.op)) return self.rejectDisplayWrite();
+                if (self.checking_display and !registry.primitiveAllowsDisplayEvaluation(primitive.op)) return self.rejectDisplayWrite();
                 const arg_labels = try self.argumentFacts(call.args.items, env, owner);
                 if (primitive.places_objects) try self.recordPlacement();
                 if (primitive.callback) |callback_spec| {
@@ -721,7 +718,7 @@ const Analyzer = struct {
     }
 
     fn primitiveFacts(self: *Analyzer, primitive: registry.PrimitiveDescriptor, call: ast.CallExpr, args: []const ValueFacts) !ValueFacts {
-        if (primitive.op == .group and self.state.displays.isTypedGroupCall(call.callee.call_id)) {
+        if (primitive.op == .group) {
             var value = ValueFacts.init(self.allocator);
             errdefer value.deinit();
             try value.children.ensureTotalCapacity(self.allocator, args.len);
@@ -751,23 +748,6 @@ const Analyzer = struct {
                 return combined;
             },
             .selection_difference, .sub => if (args.len > 0) return args[0].clone(self.allocator),
-            .new, .group => {
-                if (!self.require_known_calls) return ValueFacts.unknownValue(self.allocator);
-                var value = ValueFacts.init(self.allocator);
-                const id = self.object_properties.items.len;
-                try self.object_properties.append(self.allocator, ValueFacts.init(self.allocator));
-                try value.objects.put(id, {});
-                return value;
-            },
-            .set_prop => {
-                if (args.len >= 3 and call.args.items[1] == .string) {
-                    const path = [_]ast.RecordPathSegment{.{ .name = call.args.items[1].string.text, .span = .{ .start = 0, .end = 0 } }};
-                    try self.writeProperty(args[0], &path, args[2]);
-                } else if (args.len >= 3 and self.require_known_calls) {
-                    // A computed name may affect any property of the target.
-                    try self.mergeProperties(args[0], ValueFacts.unknownValue(self.allocator));
-                }
-            },
             .require_asset_exists => if (args.len >= 1) return args[0].clone(self.allocator),
             else => {},
         }
@@ -792,7 +772,6 @@ const Analyzer = struct {
                 return result;
             },
             .first_arg => if (args.len >= 1) return args[0].clone(self.allocator),
-            .target_arg => if (args.len > primitive.result_arg_index) return args[primitive.result_arg_index].clone(self.allocator),
             else => {},
         }
         return ValueFacts.unknownValue(self.allocator);

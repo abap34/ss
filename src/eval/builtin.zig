@@ -308,40 +308,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const object_id = try ctx.evalObjectArg(call, 0);
             break :blk .{ .number = try ctx.frameHeight(object_id) };
         },
-        .content => blk: {
-            const object_id = try ctx.evalObjectArg(call, 0);
-            break :blk .{ .string = ctx.nodeContent(object_id) orelse "" };
-        },
-        .prop => blk: {
-            var target = try ctx.evalExprValue(call.args.items[0]);
-            defer target.deinit(ctx.state.allocator);
-            const key = try ctx.evalStringArg(call, 1);
-            const default_value = try ctx.evalStringArg(call, 2);
-            const field = ctx.nodeField(target, key) orelse break :blk .{ .string = default_value };
-            if (field == .none) break :blk .{ .string = default_value };
-            const text = try eval_value.propertyString(ctx.state.allocator, field);
-            if (eval_value.propertyStringNeedsFree(field)) {
-                break :blk .{ .string = try ctx.ownString(@constCast(text)) };
-            }
-            break :blk .{ .string = text };
-        },
-        .has_prop => blk: {
-            var target = try ctx.evalExprValue(call.args.items[0]);
-            defer target.deinit(ctx.state.allocator);
-            const key = try ctx.evalStringArg(call, 1);
-            break :blk .{ .boolean = ctx.nodeField(target, key) != null };
-        },
-        .prop_eq => blk: {
-            var target = try ctx.evalExprValue(call.args.items[0]);
-            defer target.deinit(ctx.state.allocator);
-            const key = try ctx.evalStringArg(call, 1);
-            const expected = try ctx.evalStringArg(call, 2);
-            const actual = ctx.nodeField(target, key) orelse break :blk .{ .boolean = false };
-            if (actual == .none) break :blk .{ .boolean = false };
-            const text = try eval_value.propertyString(ctx.state.allocator, actual);
-            defer if (eval_value.propertyStringNeedsFree(actual)) ctx.state.allocator.free(text);
-            break :blk .{ .boolean = std.mem.eql(u8, text, expected) };
-        },
         .selection_empty, .selection_count => blk: {
             var target = try ctx.evalExprValue(call.args.items[0]);
             defer target.deinit(ctx.state.allocator);
@@ -355,97 +321,31 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 else => unreachable,
             };
         },
-        .set_content => blk: {
-            const object_id = try ctx.evalObjectArg(call, 0);
-            const text = try ctx.evalStringArg(call, 1);
-            try ctx.setNodeContent(object_id, text);
-            break :blk .{ .object = object_id };
-        },
         .group => blk: {
-            if (ctx.state.displays.isTypedGroupCall(call.callee.call_id)) {
-                var result = core.GroupValue{ .ty = .{ .kind = .group }, .composition = call.callee.composition orelse .overlay };
-                errdefer result.deinit(ctx.state.allocator);
-                try result.children.ensureTotalCapacity(ctx.state.allocator, call.args.items.len);
-                const types = try ctx.state.allocator.alloc(ast.Type, call.args.items.len);
-                defer ctx.state.allocator.free(types);
-                for (call.args.items, types) |arg, *ty| {
-                    const child = try ctx.evalExprValue(arg);
-                    result.children.appendAssumeCapacity(child);
-                    ty.* = child.presentationType() orelse return error.InvalidType;
-                }
-                result.ty = try result.ty.withArguments(ctx.state.allocator, types);
-                break :blk .{ .group = result };
+            var result = core.GroupValue{ .ty = .{ .kind = .group }, .composition = call.callee.composition orelse .overlay };
+            errdefer result.deinit(ctx.state.allocator);
+            try result.children.ensureTotalCapacity(ctx.state.allocator, call.args.items.len);
+            const types = try ctx.state.allocator.alloc(ast.Type, call.args.items.len);
+            defer ctx.state.allocator.free(types);
+            for (call.args.items, types) |arg, *ty| {
+                const child = try ctx.evalExprValue(arg);
+                result.children.appendAssumeCapacity(child);
+                ty.* = child.presentationType() orelse return error.InvalidType;
             }
-            var child_ids = std.ArrayList(core.NodeId).empty;
-            defer child_ids.deinit(ctx.state.allocator);
-            for (call.args.items) |arg| {
-                var value = try ctx.evalExprValue(arg);
-                defer value.deinit(ctx.state.allocator);
-                switch (value) {
-                    .object => |id| try child_ids.append(ctx.state.allocator, id),
-                    .selection => |selection| {
-                        if (call.callee.composition != null) return error.InvalidType;
-                        if (selection.item_tag != .object) return error.InvalidType;
-                        try child_ids.appendSlice(ctx.state.allocator, selection.ids.items);
-                    },
-                    else => return error.InvalidType,
-                }
-            }
-            break :blk .{ .object = try ctx.makeGroup(child_ids.items, call.callee.composition) };
+            result.ty = try result.ty.withArguments(ctx.state.allocator, types);
+            break :blk .{ .group = result };
         },
         .new_page => blk: {
             _ = try evalDocumentArg(ctx, call, 0);
             const title = try ctx.evalStringArg(call, 1);
             break :blk .{ .page = try ctx.makePage(title) };
         },
-        .new => blk: {
-            const content = try ctx.evalStringArg(call, 0);
-            const role_name = try ctx.evalStringArg(call, 1);
-            const role = try ctx.evalRoleArg(call, 1);
-            const payload = try ctx.evalPayloadArg(call, 2);
-            break :blk .{ .object = try ctx.makeObject(role_name, role, payload.object_kind, payload.payload_kind, content) };
-        },
         .place_on => blk: {
             const page_id = try evalPageArg(ctx, call, 0);
             var value = try ctx.evalExprValue(call.args.items[1]);
             defer value.deinit(ctx.state.allocator);
-            if (value == .record or value == .group) break :blk .{ .object = try ctx.registerPlacement(page_id, value, call.callee.call_id) };
-            const object_id = if (value == .object) value.object else return error.ExpectedObject;
-            try ctx.placeObjectOnPage(page_id, object_id);
-            break :blk .{ .object = object_id };
-        },
-        .set_prop => blk: {
-            var target = try ctx.evalExprValue(call.args.items[0]);
-            errdefer target.deinit(ctx.state.allocator);
-            const key = try ctx.evalStringArg(call, 1);
-            var value_arg = try ctx.evalExprValue(call.args.items[2]);
-            defer value_arg.deinit(ctx.state.allocator);
-            break :blk switch (target) {
-                .document => |id| blk2: {
-                    try ctx.setNodeFieldValue(id, key, value_arg);
-                    break :blk2 .{ .document = id };
-                },
-                .page => |id| blk2: {
-                    try ctx.setNodeFieldValue(id, key, value_arg);
-                    break :blk2 .{ .page = id };
-                },
-                .object => |id| blk2: {
-                    try ctx.setNodeFieldValue(id, key, value_arg);
-                    break :blk2 .{ .object = id };
-                },
-                .selection => |sel| blk2: {
-                    if (sel.item_tag != .object) {
-                        return error.InvalidSelectionItemType;
-                    }
-                    for (sel.ids.items) |id| {
-                        try ctx.setNodeFieldValue(id, key, value_arg);
-                    }
-                    break :blk2 target;
-                },
-                else => {
-                    return error.InvalidValueTag;
-                },
-            };
+            if (value != .record and value != .group) return error.InvalidType;
+            break :blk .{ .object = try ctx.registerPlacement(page_id, value, call.callee.call_id) };
         },
         .constrain_on => blk: {
             var page_value = try ctx.evalExprValue(call.args.items[0]);

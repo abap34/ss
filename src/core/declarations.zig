@@ -96,7 +96,6 @@ const ModuleNameMap = std.HashMap(ModuleNameKey, usize, ModuleNameKeyContext, st
 const DisplayMap = std.HashMap(ModuleNameKey, DisplayDescriptor, ModuleNameKeyContext, std.hash_map.default_max_load_percentage);
 
 pub const DeclarationIndex = struct {
-    builtin_module_id: u32 = 0,
     settings_module_id: ?u32 = null,
     allocator: std.mem.Allocator,
     types: std.ArrayList(TypeDescriptor),
@@ -149,11 +148,6 @@ pub const DeclarationIndex = struct {
         self.field_by_name.deinit();
         self.field_by_class.deinit();
         self.record_field_by_record.deinit();
-    }
-
-    pub fn builtinClass(self: *const DeclarationIndex, name: []const u8) ?model.NominalId {
-        const descriptor = self.classInModule(self.builtin_module_id, name) orelse return null;
-        return .{ .module_id = descriptor.module_id, .name = descriptor.name };
     }
 
     pub fn record(self: *const DeclarationIndex, id: model.NominalId) ?RecordDescriptor {
@@ -231,7 +225,6 @@ pub const DeclarationIndex = struct {
 pub fn build(allocator: std.mem.Allocator, state: anytype) !DeclarationIndex {
     var index = DeclarationIndex.init(allocator);
     errdefer index.deinit();
-    index.builtin_module_id = state.modules.project_id;
 
     if (state.modules.order.items.len == 0) {
         for (state.modules.entries.items) |*module| try indexModule(&index, module);
@@ -255,7 +248,6 @@ pub fn build(allocator: std.mem.Allocator, state: anytype) !DeclarationIndex {
 }
 
 fn indexModule(index: *DeclarationIndex, module: anytype) !void {
-    if (std.mem.eql(u8, module.spec, "std:internal/classes")) index.builtin_module_id = module.id;
     if (std.mem.eql(u8, module.spec, "std:document/settings")) index.settings_module_id = module.id;
     for (module.syntax.functions.items) |*function| {
         if (!function.isDisplay() or function.params.items.len != 1) continue;

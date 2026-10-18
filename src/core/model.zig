@@ -966,8 +966,6 @@ pub const Query = struct {
         previous_page: void,
         children: void,
         descendants: void,
-        page_objects_by_role: Role,
-        document_objects_by_role: Role,
         document_pages: void,
     };
 
@@ -1000,22 +998,6 @@ pub const Query = struct {
             .input = .object,
             .name = "descendants",
             .op = .{ .descendants = {} },
-        };
-    }
-
-    pub fn pageObjectsByRole(role: Role) Query {
-        return .{
-            .input = .page,
-            .name = "page-objects-by-role",
-            .op = .{ .page_objects_by_role = role },
-        };
-    }
-
-    pub fn documentObjectsByRole(role: Role) Query {
-        return .{
-            .input = .document,
-            .name = "document-objects-by-role",
-            .op = .{ .document_objects_by_role = role },
         };
     }
 

@@ -180,11 +180,6 @@ pub const SemanticEnv = struct {
         return index.classById(ty.nominalId() orelse return null);
     }
 
-    pub fn builtinClass(self: *const SemanticEnv, name: []const u8) ?core.NominalId {
-        const state = self.state orelse return null;
-        return state.builtinClass(name);
-    }
-
     pub fn record(self: *const SemanticEnv, module_id: ?core.SourceModuleId, name: []const u8) ?declarations.RecordDescriptor {
         const index = self.declarationIndex() orelse return null;
         if (module_id) |id| return index.record(.{ .module_id = id, .name = name });

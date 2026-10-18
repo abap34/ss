@@ -49,3 +49,15 @@ fn moduleBySpec(graph: *compiler.module_loader.ModuleGraph, spec: []const u8) ?*
     }
     return null;
 }
+
+test "standard library modules contain no legacy object declarations" {
+    var cache = compiler.module_loader.EmbeddedSyntaxCache.init(testing.allocator);
+    defer cache.deinit();
+    var graph = try loadGraph(&cache);
+    defer graph.deinit();
+    try testing.expect(moduleBySpec(&graph, "std:internal/classes") == null);
+    try testing.expect(moduleBySpec(&graph, "std:internal/objects") == null);
+    for (graph.modules.items) |module| {
+        try testing.expectEqual(@as(usize, 0), module.syntax.objects.items.len);
+    }
+}

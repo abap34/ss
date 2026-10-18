@@ -41,10 +41,6 @@ test "language registry spec: semantic contracts live on primitive descriptors" 
     try testing.expectEqual(registry.PrimitiveResultPolicy.argument_type, fold.result_policy);
     try testing.expectEqual(@as(usize, 1), fold.result_arg_index);
 
-    const set_content = registry.lookupPrimitiveCall("set_content").?;
-    try testing.expect(Type.eql(Type.object, registry.primitiveResultType(set_content).?));
-    try testing.expectEqual(registry.PrimitiveResultPolicy.first_arg, set_content.result_policy);
-
     const page_index = registry.lookupPrimitiveCall("page_index").?;
     try testing.expect(Type.eql(Type.page, registry.primitiveArgType(page_index, 0).?));
 
@@ -70,14 +66,14 @@ test "language registry spec: query output types are declared in the registry" {
         try testing.expectEqual(std.mem.eql(u8, name, "self_placement"), query.preserves_input_type);
     }
 
-    const objects = registry.lookupQueryOp("page_objects_by_role").?;
-    try testing.expect(Type.eql(Type.selection(.object), registry.queryOutputType(objects)));
     const previous = registry.lookupQueryOp("previous_page").?;
     const previous_type = registry.queryOutputType(previous);
     try testing.expectEqual(Type.Kind.optional, previous_type.kind);
     try testing.expect(Type.eql(Type.page, previous_type.optional_child.?.*));
     try testing.expect(registry.lookupQueryOp("self_object") == null);
     try testing.expect(registry.lookupQueryOp("parent_page") == null);
+    try testing.expect(registry.lookupQueryOp("page_objects_by_role") == null);
+    try testing.expect(registry.lookupQueryOp("document_objects_by_role") == null);
 }
 
 test "language registry spec: stdlib helpers are not kernel primitives" {
@@ -85,4 +81,16 @@ test "language registry spec: stdlib helpers are not kernel primitives" {
     try testing.expect(registry.lookupPrimitiveCall("append") == null);
     try testing.expect(registry.lookupPrimitiveCall("clear") == null);
     try testing.expect(registry.lookupPrimitiveCall("sty") == null);
+}
+
+test "language registry spec: legacy object primitives are unavailable" {
+    for ([_][]const u8{ "new", "content", "prop", "has_prop", "prop_eq", "set_content", "set_prop" }) |name| {
+        try testing.expect(registry.lookupPrimitiveCall(name) == null);
+    }
+    const group = registry.lookupPrimitiveCall("group").?;
+    try testing.expect(registry.primitiveAllowsDisplayEvaluation(group.op));
+    try testing.expectEqual(Type.Kind.group, registry.primitiveResultType(group).?.kind);
+    const place = registry.lookupPrimitiveCall("place_on!").?;
+    try testing.expectEqual(registry.PrimitiveResultPolicy.placement, place.result_policy);
+    try testing.expect(Type.eql(Type.placement, registry.primitiveResultType(place).?));
 }

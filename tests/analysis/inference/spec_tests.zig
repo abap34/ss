@@ -68,7 +68,23 @@ test "generic instances retain owned declarations across snapshot generations" {
         try testing.expectEqual(invalid, snapshot.diagnostics.hasErrors());
         if (!invalid) {
             const state = &snapshot.retained_layout_inputs.?.state;
-            try testing.expectEqual(@as(usize, 2), state.instantiations.entries.items.len);
+            var identity_instances: usize = 0;
+            var number_instance = false;
+            var string_instance = false;
+            for (state.instantiations.entries.items) |instance| {
+                if (instance.key.definition.module_id != state.modules.project_id or
+                    !std.mem.eql(u8, instance.key.definition.name, "identity")) continue;
+                identity_instances += 1;
+                try testing.expectEqual(@as(usize, 1), instance.key.arguments.len);
+                try testing.expectEqual(.checked, instance.status);
+                const kind = instance.key.arguments[0].kind;
+                try testing.expectEqual(kind, instance.declaration.params.items[0].ty.kind);
+                try testing.expectEqual(kind, instance.declaration.result_type.kind);
+                if (kind == .number) number_instance = true;
+                if (kind == .string) string_instance = true;
+            }
+            try testing.expectEqual(@as(usize, 2), identity_instances);
+            try testing.expect(number_instance and string_instance);
             const parameter_offset = std.mem.indexOf(u8, source, "value: T").?;
             try testing.expectEqual(.parameter, state.bindingTypeAt(0, parameter_offset).?.ty.kind);
             const local_offset = std.mem.indexOf(u8, source, "copy: T").?;
