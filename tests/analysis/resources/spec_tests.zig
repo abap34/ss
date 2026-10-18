@@ -162,13 +162,13 @@ test "resource index: typed subtree reads retain broad writers and exclude disti
     const Type = compiler.language.Type;
     const heading = Type.recordType("Heading").inModule(1);
     const other_heading = Type.recordType("Heading").inModule(2);
-    const read: Resource = .{ .objects = .{ .input_type = heading, .placement_call = 10 } };
+    const read: Resource = .{ .objects = .{ .input_type = heading, .placement = .{ .call = 10 } } };
     const writers = [_]Resource{
         .{ .objects = .{} },
         .{ .objects = .{ .input_type = heading } },
-        .{ .objects = .{ .input_type = heading, .placement_call = 10 } },
-        .{ .objects = .{ .input_type = heading, .placement_call = 11 } },
-        .{ .objects = .{ .input_type = other_heading, .placement_call = 10 } },
+        .{ .objects = .{ .input_type = heading, .placement = .{ .call = 10 } } },
+        .{ .objects = .{ .input_type = heading, .placement = .{ .call = 11 } } },
+        .{ .objects = .{ .input_type = other_heading, .placement = .{ .call = 10 } } },
     };
     var index = resource_index.ResourceWriterIndex.init(testing.allocator);
     defer index.deinit();
@@ -181,14 +181,14 @@ test "resource index: typed subtree reads retain broad writers and exclude disti
 }
 
 test "resource index: direct-child depth excludes later descendants while unknown writers remain candidates" {
-    const read: Resource = .{ .objects = .{ .placement_call = 10, .depth = .exact(1) } };
+    const read: Resource = .{ .objects = .{ .placement = .{ .call = 10, .depth = .exact(1) } } };
     const writers = [_]Resource{
         .{ .objects = .{} },
-        .{ .objects = .{ .placement_call = 10, .depth = .exact(0) } },
-        .{ .objects = .{ .placement_call = 10, .depth = .exact(1) } },
-        .{ .objects = .{ .placement_call = 10, .depth = .exact(2) } },
-        .{ .objects = .{ .placement_call = 11, .depth = .exact(1) } },
-        .{ .objects = .{ .placement_call = 10, .depth = .{ .min = 1 } } },
+        .{ .objects = .{ .placement = .{ .call = 10, .depth = .exact(0) } } },
+        .{ .objects = .{ .placement = .{ .call = 10, .depth = .exact(1) } } },
+        .{ .objects = .{ .placement = .{ .call = 10, .depth = .exact(2) } } },
+        .{ .objects = .{ .placement = .{ .call = 11, .depth = .exact(1) } } },
+        .{ .objects = .{ .placement = .{ .call = 10, .depth = .{ .min = 1 } } } },
     };
     var index = resource_index.ResourceWriterIndex.init(testing.allocator);
     defer index.deinit();
@@ -200,4 +200,80 @@ test "resource index: direct-child depth excludes later descendants while unknow
     try testing.expectEqualSlices(bool, &.{ true, false, true, false, false, true }, &seen);
     try testing.expect(!read.eql(writers[3]));
     try allocation_testing.checkAllAllocationFailures(testing.allocator, verifyResourceMatrix, .{&writers});
+}
+
+fn verifyDisplayTreeRegions(allocator: std.mem.Allocator) !void {
+    const PlacementScope = dependencies.PlacementScope;
+    var plan = compiler.core.native_display.Plan{ .allocator = allocator };
+    defer plan.deinit();
+    const parents = [_]?usize{ null, 0, 1, 0, 3, 0, 2 };
+    const paths = [_][]const usize{ &.{}, &.{0}, &.{ 0, 0 }, &.{1}, &.{ 1, 0 }, &.{2}, &.{ 0, 0, 0 } };
+    for (parents, paths, 0..) |parent, path, index| {
+        const target: compiler.core.native_display.Target = if (index == 4 or index == 5 or index == 6)
+            .{ .native = .text }
+        else
+            .{ .function = .{ .module_id = 0, .name = "display" } };
+        try testing.expectEqual(index, try plan.append(compiler.language.Type.recordType("Content"), target, parent));
+        try testing.expectEqualSlices(usize, path, plan.steps.items[index].path);
+    }
+    try testing.expectEqualSlices(usize, &.{ 1, 3, 5 }, plan.steps.items[0].children.items);
+    var writers: [parents.len]Resource = undefined;
+    for (&writers, plan.steps.items) |*writer, step| writer.* = .{ .objects = .{ .placement = .exact(10, step.path) } };
+    const root = PlacementScope.exact(10, plan.steps.items[0].path);
+    const left = PlacementScope.exact(10, plan.steps.items[1].path);
+    const right = PlacementScope.exact(10, plan.steps.items[3].path);
+    const reads = [_]PlacementScope{ root.children(), left.children(), left.descendants(), right.descendants() };
+    const expected = [_][parents.len]bool{
+        .{ false, true, false, true, false, true, false },
+        .{ false, false, true, false, false, false, false },
+        .{ false, false, true, false, false, false, true },
+        .{ false, false, false, false, true, false, false },
+    };
+    var index = resource_index.ResourceWriterIndex.init(allocator);
+    defer index.deinit();
+    for (writers, 0..) |write, unit| try index.addWrite(unit, write);
+    for (reads, expected) |scope, matches| {
+        const read: Resource = .{ .objects = .{ .placement = scope } };
+        var seen: [parents.len]bool = undefined;
+        @memset(&seen, false);
+        var visitor = MatchingVisitor{ .read = read, .seen = &seen };
+        try index.forEachCandidate(read, &visitor);
+        try testing.expectEqualSlices(bool, &matches, &seen);
+        for (writers, matches) |writer, match| {
+            try testing.expectEqual(match, read.intersects(writer));
+            try testing.expectEqual(match, writer.intersects(read));
+        }
+    }
+    try verifyResourceMatrix(allocator, &writers);
+}
+
+test "resource index: display tree paths distinguish sibling subtrees and nonadjacent descendants" {
+    try verifyDisplayTreeRegions(testing.allocator);
+    try allocation_testing.checkAllAllocationFailures(testing.allocator, verifyDisplayTreeRegions, .{});
+}
+
+test "placement scopes: joins preserve a common ancestor and widen different roots conservatively" {
+    const PlacementScope = dependencies.PlacementScope;
+    const left = PlacementScope.exact(10, &.{ 0, 1 });
+    const right = PlacementScope.exact(10, &.{ 0, 2 });
+    const sibling = PlacementScope.exact(10, &.{ 1, 1 });
+    const joined = left.join(right);
+    try testing.expectEqualSlices(usize, &.{0}, joined.path);
+    try testing.expectEqual(@as(?u64, 10), joined.call);
+    try testing.expectEqual(@as(usize, 2), joined.depth.min);
+    try testing.expectEqual(@as(?usize, 2), joined.depth.max);
+    try testing.expect(joined.intersects(left));
+    try testing.expect(joined.intersects(right));
+    try testing.expect(!joined.intersects(sibling));
+    try testing.expect(!left.eql(right));
+    const child = PlacementScope.exact(10, &.{ 0, 1, 0 });
+    try testing.expect(joined.children().intersects(child));
+    try testing.expect(!joined.children().intersects(left));
+    const other_root = PlacementScope.exact(11, &.{ 9, 2 });
+    const wide = left.join(other_root);
+    try testing.expect(wide.call == null);
+    try testing.expectEqual(@as(usize, 0), wide.path.len);
+    for ([_]PlacementScope{ left, right, sibling, other_root }) |scope| try testing.expect(wide.intersects(scope));
+    try testing.expect(!wide.intersects(child));
+    try testing.expect(wide.join(.{}).eql(.{}));
 }

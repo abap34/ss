@@ -12,7 +12,7 @@ pub const Step = struct {
     input: ast.Type,
     target: Target,
     parent: ?usize,
-    depth: usize,
+    path: []const usize,
     children: std.ArrayList(usize) = .empty,
 };
 
@@ -23,6 +23,7 @@ pub const Plan = struct {
     pub fn deinit(self: *Plan) void {
         for (self.steps.items) |*step| {
             step.input.deinit(self.allocator);
+            self.allocator.free(step.path);
             step.children.deinit(self.allocator);
         }
         self.steps.deinit(self.allocator);
@@ -36,6 +37,12 @@ pub const Plan = struct {
         } else if (self.steps.items.len != 0) return error.InvalidDisplayPlan;
         var owned = try input.clone(self.allocator);
         errdefer owned.deinit(self.allocator);
+        const path = try self.allocator.alloc(usize, if (parent) |owner| self.steps.items[owner].path.len + 1 else 0);
+        errdefer self.allocator.free(path);
+        if (parent) |owner| {
+            @memcpy(path[0 .. path.len - 1], self.steps.items[owner].path);
+            path[path.len - 1] = self.steps.items[owner].children.items.len;
+        }
         try self.steps.ensureUnusedCapacity(self.allocator, 1);
         if (parent) |index| try self.steps.items[index].children.ensureUnusedCapacity(self.allocator, 1);
         const index = self.steps.items.len;
@@ -43,7 +50,7 @@ pub const Plan = struct {
             .input = owned,
             .target = target,
             .parent = parent,
-            .depth = if (parent) |owner| self.steps.items[owner].depth + 1 else 0,
+            .path = path,
         });
         if (parent) |owner| self.steps.items[owner].children.appendAssumeCapacity(index);
         return index;

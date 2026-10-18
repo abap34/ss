@@ -757,7 +757,7 @@ test "display plan: nested generic wrappers terminate at the native Text type" {
     var id = outer_placement;
     for (plan.steps.items, 0..) |step, index| {
         try testing.expect(Type.eql(step.input, state.getNode(id).?.placement.?.value.record.ty));
-        try testing.expectEqual(index, step.depth);
+        try testing.expectEqual(index, step.path.len);
         try testing.expectEqual(if (index == 0) null else @as(?usize, index - 1), step.parent);
         const children = try evaluation.expandDisplayTarget(id, step.target);
         try testing.expectEqual(step.children.items.len, children.len);
