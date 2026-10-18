@@ -255,6 +255,7 @@ pub const LatexPaint = struct {
 pub const default_latex_min_height: f32 = 30;
 
 pub const AssetPaint = struct {
+    format: enum { image, pdf } = .image,
     scale: f32,
     tint: ?Color,
     pdf_page: usize,
@@ -348,6 +349,7 @@ pub fn resolveKind(state: anytype, node: *const Node) RenderKind {
         .native => |kind| return switch (kind) {
             .text => .text,
             .image => .raster_asset,
+            .pdf => .vector_asset,
         },
         .pending, .running => {},
     };
@@ -520,6 +522,7 @@ fn resolveLatex(state: anytype, node: *const Node, kind: RenderKind) ?LatexPaint
 fn resolveAsset(state: anytype, node: *const Node, kind: RenderKind) ?AssetPaint {
     return switch (kind) {
         .vector_asset, .raster_asset => .{
+            .format = if (isPdfInput(node)) .pdf else .image,
             .scale = positiveRecordFloatProperty(state, node, "asset", &.{"scale"}) orelse 1,
             .tint = parseRecordColorProperty(state, node, "asset", &.{"tint"}),
             .pdf_page = resolvedPdfPage(state, node),
@@ -529,9 +532,23 @@ fn resolveAsset(state: anytype, node: *const Node, kind: RenderKind) ?AssetPaint
     };
 }
 
+fn isPdfInput(node: *const Node) bool {
+    if (node.placement) |placement| {
+        if (placement.display == .native) return placement.display.native == .pdf;
+    }
+    return std.ascii.eqlIgnoreCase(std.fs.path.extension(model.nodeContent(node) orelse ""), ".pdf");
+}
+
 fn resolvedPdfPage(state: anytype, node: *const Node) usize {
     const number = positiveRecordFloatProperty(state, node, "asset", &.{"pdf_page"}) orelse 1;
-    return @max(@as(usize, 1), @as(usize, @intFromFloat(@floor(number))));
+    return pdfPageNumber(@floor(number)) orelse 1;
+}
+
+pub fn pdfPageNumber(number: f32) ?usize {
+    if (!std.math.isFinite(number) or number < 1 or @floor(number) != number) return null;
+    const upper_bound = @as(f64, @floatFromInt(std.math.maxInt(usize))) + 1;
+    if (@as(f64, number) >= upper_bound) return null;
+    return @intFromFloat(number);
 }
 
 fn resolvedPdfPageBox(state: anytype, node: *const Node) PdfPageBox {

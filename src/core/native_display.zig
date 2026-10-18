@@ -104,6 +104,13 @@ fn contract(kind: Kind) Contract {
             .style_module = "std:assets/style",
             .style_name = "AssetBlockStyle",
         },
+        .pdf => .{
+            .module = "std:assets/content",
+            .name = "Pdf",
+            .content_field = "path",
+            .style_module = "std:assets/style",
+            .style_name = "AssetBlockStyle",
+        },
     };
 }
 

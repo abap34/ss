@@ -1,4 +1,4 @@
-import std:assets/content as { Image }
+import std:assets/content as { Image, Pdf }
 import std:assets/style as { AssetBlockStyle }
 import std:assets/types as { PdfPageBox, AssetStyle }
 import std:theme as theme

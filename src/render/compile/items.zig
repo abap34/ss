@@ -1009,7 +1009,7 @@ fn collectObjectPreloads(
         },
         .vector_asset => {
             const source = try artifacts.resolveAssetPath(artifactContext(ctx), command.content);
-            if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".pdf")) {
+            if (isPdfAssetOp(command)) {
                 try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .vector_pdf = .{
                     .source = source,
                     .target = targetWithContentSpan(target, 0, command.content.len),
@@ -1685,7 +1685,7 @@ fn drawObjectCommandIntoIr(ctx: *DrawContext, command: *const ObjectCommand) !vo
 }
 
 fn isPdfAssetOp(command: *const ObjectCommand) bool {
-    return command.render.kind == .vector_asset and std.ascii.eqlIgnoreCase(std.fs.path.extension(command.content), ".pdf");
+    return command.render.kind == .vector_asset and command.render.asset != null and command.render.asset.?.format == .pdf;
 }
 
 fn pdfAssetPlacement(ctx: *DrawContext, command: *const ObjectCommand, source_z: [:0]const u8) !Frame {
@@ -2122,16 +2122,18 @@ fn measureAssetIntrinsic(
     height: f32,
     mode: core.LayoutMeasurementMode,
 ) !core.LayoutMeasurement {
-    if (core.fontawesome.parseSource(command.content)) |spec| {
-        if (!core.fontawesome.contains(spec)) return NativePdfError.InvalidFontAwesomeIcon;
-        const size = if (mode == .natural) Size{ .width = 72, .height = 72 } else Size{ .width = @max(width, 1), .height = @max(height, 1) };
-        return .{ .width = size.width, .height = size.height, .ink_bounds = .{ .width = size.width, .height = size.height } };
+    if (!isPdfAssetOp(command)) {
+        if (core.fontawesome.parseSource(command.content)) |spec| {
+            if (!core.fontawesome.contains(spec)) return NativePdfError.InvalidFontAwesomeIcon;
+            const size = if (mode == .natural) Size{ .width = 72, .height = 72 } else Size{ .width = @max(width, 1), .height = @max(height, 1) };
+            return .{ .width = size.width, .height = size.height, .ink_bounds = .{ .width = size.width, .height = size.height } };
+        }
     }
     const source = try artifacts.resolveAssetPath(artifactContext(ctx), command.content);
     defer ctx.allocator.free(source);
     const extension = std.fs.path.extension(source);
     var natural: Size = undefined;
-    if (std.ascii.eqlIgnoreCase(extension, ".pdf")) {
+    if (command.render.asset != null and command.render.asset.?.format == .pdf) {
         natural = try artifacts.pdfAssetSize(artifactContext(ctx), source, command.render.asset, .pdf);
     } else if (std.ascii.eqlIgnoreCase(extension, ".svg")) {
         const svg = try artifacts.svgAsset(artifactContext(ctx), source);
@@ -3689,7 +3691,8 @@ fn requiredLatexPaint(command: *const ObjectCommand) !LatexPaint {
 }
 
 fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: ?core.render_policy.AssetPaint) !void {
-    if (core.fontawesome.parseSource(content) != null) {
+    const is_pdf = asset != null and asset.?.format == .pdf;
+    if (!is_pdf and core.fontawesome.parseSource(content) != null) {
         const icon = try artifacts.renderIconToSvg(artifactContext(ctx), content);
         defer ctx.allocator.free(icon.path);
         try drawSvgFrame(ctx, frame, icon.path, if (asset) |paint| paint.tint else null);
@@ -3698,19 +3701,14 @@ fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: 
     const source = try artifacts.resolveAssetPath(artifactContext(ctx), content);
     defer ctx.allocator.free(source);
     const extension = std.fs.path.extension(source);
-    if (std.ascii.eqlIgnoreCase(extension, ".svg")) {
+    if (!is_pdf and std.ascii.eqlIgnoreCase(extension, ".svg")) {
         try drawSvgNatural(ctx, frame, source, asset);
         return;
     }
-    if (std.ascii.eqlIgnoreCase(extension, ".pdf")) {
+    if (is_pdf) {
         const size = try artifacts.pdfAssetSize(artifactContext(ctx), source, asset, .pdf);
         const fitted = naturalAssetFrame(frame, scaledAssetSize(size, asset));
-        const paint = asset orelse core.render_policy.AssetPaint{
-            .scale = 1,
-            .tint = null,
-            .pdf_page = 1,
-            .pdf_box = .crop,
-        };
+        const paint = asset.?;
         const rect = render_ir.Rect{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height };
         if (ctx.measurement_bounds) |bounds| {
             bounds.include(rect);

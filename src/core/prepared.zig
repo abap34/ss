@@ -215,7 +215,7 @@ pub fn prepareObjectWithRender(
             .content_end = content.len,
         }),
         .vector_asset => {
-            if (std.ascii.eqlIgnoreCase(std.fs.path.extension(content), ".pdf")) {
+            if (render.asset != null and render.asset.?.format == .pdf) {
                 try asset_deps.append(allocator, .{
                     .kind = .vector_pdf,
                     .source = content,
