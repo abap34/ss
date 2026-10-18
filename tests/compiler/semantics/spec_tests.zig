@@ -3151,7 +3151,7 @@ test "compiler semantics: document page and selection properties are typed" {
 
 test "compiler semantics: document and page settings exclude presentation styles" {
     for ([_][]const u8{ "docctx()", "pagectx()" }) |target| {
-        for ([_][]const u8{ "math_align", "logo_path", "logo_scale", "code_theme_plain_color", "code_theme_keyword_color", "code_theme_fill", "code_theme_stroke" }) |field| {
+        for ([_][]const u8{ "footer_text", "watermark", "math_align", "logo_path", "logo_scale", "code_theme_plain_color", "code_theme_keyword_color", "code_theme_fill", "code_theme_stroke" }) |field| {
             const source = try std.fmt.allocPrint(testing.allocator, "page example\nlet removed = {s}.{s}\nend", .{ target, field });
             defer testing.allocator.free(source);
             try expectDiagnostic(source, "bytes:", "UnknownField");
@@ -3200,14 +3200,14 @@ test "compiler semantics: member sugar reads and writes properties and content" 
         \\import std:themes/default as *
         \\
         \\document
-        \\  docctx().footer_text = "footer"
-        \\  foreach(pages(docctx()), (p: Page) |-> place_on!(p, text(docctx().footer_text ?? "")))
+        \\  docctx().layout_h_center_offset = 42
+        \\  foreach(pages(docctx()), (p: Page) |-> place_on!(p, text(str(docctx().layout_h_center_offset))))
         \\end
         \\
         \\page ok
         \\end
         \\
-    , "footer");
+    , "42");
 }
 
 test "compiler semantics: chained member assignment writes through record fields" {
@@ -3461,27 +3461,27 @@ test "compiler semantics: document property writes schedule before reads" {
         \\import std:themes/default as *
         \\
         \\document
-        \\  docctx().footer_text = "before"
+        \\  docctx().layout_h_center_offset = 11
         \\end
         \\
         \\page first
-        \\  text!(docctx().footer_text ?? "unset")
+        \\  text!(str(docctx().layout_h_center_offset))
         \\end
         \\
-    , "before");
+    , "11");
 
     try expectObjectContent(
         \\import std:themes/default as *
         \\
         \\page first
-        \\  text!(docctx().footer_text ?? "unset")
+        \\  text!(str(docctx().layout_h_center_offset))
         \\end
         \\
         \\document
-        \\  docctx().footer_text = "after"
+        \\  docctx().layout_h_center_offset = 22
         \\end
         \\
-    , "after");
+    , "22");
 }
 
 test "compiler semantics: content definitions cannot replace constructor content" {
@@ -3686,7 +3686,7 @@ test "compiler semantics: void functions may finish without explicit return" {
         \\import std:themes/default as *
         \\
         \\fn remember() -> Void
-        \\  docctx().footer_text = "remembered"
+        \\  docctx().layout_h_center_offset = 45
         \\end
         \\
         \\document
@@ -3694,10 +3694,10 @@ test "compiler semantics: void functions may finish without explicit return" {
         \\end
         \\
         \\page one
-        \\  text!(docctx().footer_text ?? "missing")
+        \\  text!(str(docctx().layout_h_center_offset))
         \\end
         \\
-    , "remembered");
+    , "45");
 }
 
 test "compiler semantics: expression-bodied functions evaluate like return statements" {
@@ -3707,17 +3707,17 @@ test "compiler semantics: expression-bodied functions evaluate like return state
         \\fn bang(value: String) -> String = value ++ "!"
         \\
         \\fn remember() -> Void =
-        \\  set_prop(docctx(), "footer_text", bang("saved"))
+        \\  hflow_doc(LayoutPolicy.center, 41)
         \\
         \\document
         \\  remember()
         \\end
         \\
         \\page one
-        \\  text!(docctx().footer_text ?? "missing")
+        \\  text!(bang(str(docctx().layout_h_center_offset)))
         \\end
         \\
-    , "saved!");
+    , "41!");
 }
 
 test "compiler semantics: paired expression-bodied functions place returned objects" {
@@ -3749,7 +3749,7 @@ test "compiler semantics: expression-bodied functions are checked against result
         \\import std:themes/default as *
         \\
         \\fn side_effect() -> Void =
-        \\  set_prop(docctx(), "footer_text", "done")
+        \\  hflow_doc(LayoutPolicy.center, 42)
         \\
         \\page bad
         \\  let value = side_effect()
@@ -6047,13 +6047,13 @@ test "compiler semantics: non-callable locals shadow functions and primitives" {
 test "compiler semantics: scheduled local object wins over same-named constructor" {
     try expectObjectContent(
         \\page main
-        \\  let figure = text(docctx().footer_text ?? "unset")
+        \\  let figure = text(str(docctx().layout_h_center_offset))
         \\  place_on!(pagectx(), figure)
         \\end
         \\document
-        \\  docctx().footer_text = "after"
+        \\  docctx().layout_h_center_offset = 22
         \\end
-    , "after");
+    , "22");
 }
 
 test "compiler semantics: scheduled bindings remain visible across document blocks" {
@@ -6667,7 +6667,7 @@ test "compiler semantics: separate constructor calls retain distinct identities"
 }
 
 test "compiler semantics: typed display callbacks wait for captured document property reads" {
-    try expectFixtureObjectContent("display-dependencies", "A!");
+    try expectFixtureObjectContent("display-dependencies", "A42");
 }
 
 test "compiler semantics: typed display collection reads wait for all matching inputs" {
@@ -6690,7 +6690,7 @@ test "compiler semantics: typed displays combine selected input fields with sche
         \\fn display(self: Placed<Item>) -> Text = text(self.value.prefix)
         \\fn display(self: Placed<Summary>) -> Text
         \\  let item = first(select<Item>(self.document))
-        \\  return text("selected=" ++ item.value.prefix ++ (self.document.footer_text ?? "missing"))
+        \\  return text("selected=" ++ item.value.prefix ++ str(self.document.layout_h_center_offset))
         \\end
         \\page main
         \\  place!(Summary {})
@@ -6699,9 +6699,9 @@ test "compiler semantics: typed displays combine selected input fields with sche
         \\  place!(Item { prefix = "A" })
         \\end
         \\document
-        \\  docctx().footer_text = "X"
+        \\  docctx().layout_h_center_offset = 42
         \\end
-    , "selected=AX");
+    , "selected=A42");
 }
 
 test "compiler semantics: records require fields without declared defaults" {
@@ -6981,18 +6981,18 @@ test "compiler semantics: void indirect bare returns stop the body" {
     try expectObjectContent(
         \\import std:themes/default as *
         \\fn stop() -> Void
-        \\  docctx().footer_text = "stopped"
+        \\  docctx().layout_h_center_offset = 7
         \\  return
-        \\  docctx().footer_text = "unreachable"
+        \\  docctx().layout_h_center_offset = 99
         \\end
         \\document
         \\  let f = stop
         \\  f()
         \\end
         \\page main
-        \\  text!(docctx().footer_text ?? "missing")
+        \\  text!(str(docctx().layout_h_center_offset))
         \\end
-    , "stopped");
+    , "7");
 }
 
 test "compiler semantics: void return expressions are rejected even when their expression is void" {
@@ -7149,27 +7149,27 @@ test "compiler semantics: saved constraint values cannot feed solved geometry ba
 test "compiler semantics: constraint anchors wait for delayed object bindings" {
     try buildSource(
         \\page main
-        \\  let item = text!(docctx().footer_text ?? "missing")
+        \\  let item = text!(str(docctx().layout_h_center_offset))
         \\  ~ item.left == page.left + 40
         \\end
         \\document
-        \\  docctx().footer_text = "Ready"
+        \\  docctx().layout_h_center_offset = 42
         \\end
     );
 }
 
 test "compiler semantics: nested record anchors wait for both delayed root bindings" {
     try buildSource(
-        \\type Inner { item: Object }
+        \\type Inner { item: Placed<Text> }
         \\type Outer { inner: Inner }
         \\page main
-        \\  let target = Outer { inner = Inner { item = body_obj!(docctx().footer_text ?? "missing") } }
-        \\  let source = Outer { inner = Inner { item = body_obj!(docctx().watermark ?? "missing") } }
+        \\  let target = Outer { inner = Inner { item = text!(str(docctx().layout_h_center_offset)) } }
+        \\  let source = Outer { inner = Inner { item = text!(str(docctx().layout_v_center_offset)) } }
         \\  ~ target.inner.item.left == source.inner.item.right + 24
         \\end
         \\document
-        \\  docctx().footer_text = "Target"
-        \\  docctx().watermark = "Source"
+        \\  docctx().layout_h_center_offset = 42
+        \\  docctx().layout_v_center_offset = 84
         \\end
     );
 }
@@ -7178,13 +7178,13 @@ test "compiler semantics: generic anchor paths retain nested arguments and delay
     try buildSource(
         \\type Box<T> { value: T }
         \\page main
-        \\  let target = Box { value = Box { value = text!(docctx().footer_text ?? "missing") } }
-        \\  let source = Box { value = Box { value = text!(docctx().watermark ?? "missing") } }
+        \\  let target = Box { value = Box { value = text!(str(docctx().layout_h_center_offset)) } }
+        \\  let source = Box { value = Box { value = text!(str(docctx().layout_v_center_offset)) } }
         \\  ~ target.value.value.left == source.value.value.right + 24
         \\end
         \\document
-        \\  docctx().footer_text = "Target"
-        \\  docctx().watermark = "Source"
+        \\  docctx().layout_h_center_offset = 42
+        \\  docctx().layout_v_center_offset = 84
         \\end
     );
 }
@@ -7649,14 +7649,14 @@ test "compiler semantics: cached placement summaries retain their caller page" {
 test "compiler semantics: queries retain placement order across dependency scheduling" {
     try expectDumpContains(
         \\page main
-        \\  body_obj!(docctx().footer_text ?? "unset")
-        \\  body_obj!("Second")
-        \\  text!("order=" ++ join(objs_here("body"), ",", (o: Object) |-> content(o)))
+        \\  heading!(str(docctx().layout_h_center_offset))
+        \\  heading!("Second")
+        \\  text!("order=" ++ join(select<Heading>(pagectx()), ",", (item: Placed<Heading>) |-> item.value.title))
         \\end
         \\document
-        \\  docctx().footer_text = "First"
+        \\  docctx().layout_h_center_offset = 42
         \\end
-    , &.{"order=First,Second"});
+    , &.{"order=42,Second"});
 }
 
 test "compiler semantics: explicit group argument order determines descendant query order" {
@@ -7674,20 +7674,19 @@ test "compiler semantics: explicit group argument order determines descendant qu
 test "compiler semantics: dynamic pages retain authored positions among static pages" {
     try expectDumpContains(
         \\document
-        \\  let first = new_page(docctx(), docctx().footer_text ?? "unset")
-        \\  place_on!(first, body_obj("Dynamic first"))
+        \\  let first = new_page(docctx(), str(docctx().layout_h_center_offset))
+        \\  place_on!(first, heading("Dynamic first"))
         \\end
         \\page middle
         \\  text!("middle=" ++ str(page_index(pagectx())))
         \\end
         \\document
         \\  let last = new_page(docctx(), "last")
-        \\  place_on!(last, body_obj("Dynamic last"))
-        \\  docctx().footer_text = "first"
-        \\  docctx().watermark = "order=" ++ join(doc_objs(docctx(), "body"), ",", (o: Object) |-> content(o))
+        \\  place_on!(last, heading("Dynamic last"))
+        \\  docctx().layout_h_center_offset = 42
         \\end
         \\page report
-        \\  text!(docctx().watermark ?? "missing")
+        \\  text!("order=" ++ join(select<Heading>(docctx()), ",", (item: Placed<Heading>) |-> item.value.title))
         \\end
     , &.{ "middle=2", "order=Dynamic first,Dynamic last" });
 }
@@ -8383,15 +8382,15 @@ test "compiler semantics: qualified constants preserve scheduled reads" {
         \\  text!(config::caption)
         \\end
         \\document
-        \\  docctx().footer_text = "Scheduled"
+        \\  docctx().layout_h_center_offset = 42
         \\end
     ,
         \\import ./b as values
         \\const caption: String = values::caption
     ,
         \\import std:prelude as *
-        \\const caption: String = docctx().footer_text ?? "Missing"
-    , "Scheduled");
+        \\const caption: String = str(docctx().layout_h_center_offset)
+    , "42");
 }
 
 test "compiler semantics: qualified values cannot bypass display purity" {
@@ -8410,7 +8409,7 @@ test "compiler semantics: qualified values cannot bypass display purity" {
     ,
         \\import std:prelude as *
         \\fn change() -> Void
-        \\  docctx().footer_text = "Changed"
+        \\  docctx().layout_h_center_offset = 42
         \\end
     , "lib/bad.ss:bytes:", "ImpureDisplayFunction");
 }

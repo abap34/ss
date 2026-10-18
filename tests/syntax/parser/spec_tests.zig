@@ -578,8 +578,8 @@ test "syntax spec: functions can use expression bodies" {
         \\fn remember() -> Void =
         \\  set_prop(
         \\    docctx(),
-        \\    "footer_text",
-        \\    "remembered",
+        \\    "layout_h_center_offset",
+        \\    42,
         \\  )
         \\
         \\fn/! badge(text_value: String) -> Object = text(text_value)
@@ -1172,7 +1172,7 @@ test "syntax spec: expression parsing survives every allocation failure" {
         \\  let updated = Theme { body = tone } with {
         \\    body.text.size = -(1 + 2)
         \\  }
-        \\  if docctx().footer_text?
+        \\  if docctx().background_fill?
         \\    return callback(pagectx()).body ?? updated
         \\  else
         \\    return applied
@@ -1183,7 +1183,7 @@ test "syntax spec: expression parsing survives every allocation failure" {
         \\end
         \\page Expressions
         \\  let card = Card { label = default_tone }
-        \\  docctx().footer_text = card.label ++ "!"
+        \\  docctx().layout_h_center_offset = 42
         \\  ~ card.left == page.left - 10
         \\  text "caption"
         \\end
@@ -1213,7 +1213,7 @@ test "syntax spec: module cloning survives every allocation failure" {
         \\fn choose(tone: String = "soft") -> Object
         \\  let applied = ((value: String) |-> text(value))(tone)
         \\  let updated = Card { label = tone } with { label = applied }
-        \\  return docctx().footer_text? ?? updated
+        \\  return docctx().background_fill? ?? updated
         \\end
         \\page Expressions
         \\  let value = choose("loud")
@@ -1367,8 +1367,8 @@ test "syntax spec: object field defaults are parsed as expressions" {
 test "syntax spec: member optional and coalesce keep nested targets" {
     var parsed = try parse(
         \\page Members
-        \\  let footer = docctx().footer_text ?? "missing"
-        \\  let has_footer = docctx().footer_text?
+        \\  let fill = docctx().background_fill ?? c"0,0,0"
+        \\  let has_fill = docctx().background_fill?
         \\  let color = text("x").text_markdown_code_fill ?? c"0,0,0"
         \\end
         \\
@@ -1378,16 +1378,16 @@ test "syntax spec: member optional and coalesce keep nested targets" {
     const statements = parsed.module.pages.items[0].statements.items;
     switch (statements[0].kind.let_binding.expr) {
         .coalesce => |coalesce| {
-            const footer = try expectMember(coalesce.target.*, "footer_text");
-            _ = try expectCall(footer.target.*, "docctx", 0);
-            try expectString(coalesce.fallback.*, "missing");
+            const fill = try expectMember(coalesce.target.*, "background_fill");
+            _ = try expectCall(fill.target.*, "docctx", 0);
+            try expectColor(coalesce.fallback.*, "0,0,0");
         },
         else => return error.ExpectedCoalesceExpr,
     }
     switch (statements[1].kind.let_binding.expr) {
         .optional_check => |optional_check| {
-            const footer = try expectMember(optional_check.target.*, "footer_text");
-            _ = try expectCall(footer.target.*, "docctx", 0);
+            const fill = try expectMember(optional_check.target.*, "background_fill");
+            _ = try expectCall(fill.target.*, "docctx", 0);
         },
         else => return error.ExpectedOptionalCheckExpr,
     }
@@ -2292,7 +2292,7 @@ test "syntax spec: member expressions stay in the AST" {
         \\page Members
         \\  let target = text("hello")
         \\  target.content = target.content ++ "!"
-        \\  docctx().footer_text = "footer"
+        \\  docctx().layout_h_center_offset = 42
         \\  let color = target.text_color ?? "black"
         \\  let has_color = target.text_color?
         \\end
@@ -2310,8 +2310,8 @@ test "syntax spec: member expressions stay in the AST" {
 
     const doc_prop = statements[2].kind.property_set;
     _ = try expectCall(doc_prop.target, "docctx", 0);
-    try expectPath(doc_prop.path.items, &.{"footer_text"});
-    try expectString(doc_prop.value, "footer");
+    try expectPath(doc_prop.path.items, &.{"layout_h_center_offset"});
+    try expectNumber(doc_prop.value, 42);
 
     switch (statements[3].kind.let_binding.expr) {
         .coalesce => |coalesce| {

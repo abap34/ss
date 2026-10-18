@@ -669,14 +669,14 @@ test "typed queries: stored closures retain captures and wait for document prope
         \\  return native::Text { content = last.format() ++ ":" ++ join(items, ",", (item: Placed<Item>) |-> item.value.format()) }
         \\end
         \\fn item(label: String, context: Document) -> Item
-        \\  return Item { format = () |-> (context.footer_text ?? "Missing") ++ label }
+        \\  return Item { format = () |-> str(context.layout_h_center_offset) ++ label }
         \\end
         \\page summary
         \\  place_on!(pagectx(), Summary {})
         \\end
         \\page body
         \\  place_on!(pagectx(), group(item("A", docctx()), item("B", docctx())))
-        \\  docctx().footer_text = "Ready"
+        \\  docctx().layout_h_center_offset = 42
         \\end
     );
     defer state.deinit();
@@ -684,7 +684,7 @@ test "typed queries: stored closures retain captures and wait for document prope
     defer graph.deinit();
     try compiler.lowering.evaluateDocument(&state, &graph, .{ .io = testing.io });
     const summary = state.placementRootsOf(state.graph.page_order.items[0])[0];
-    try testing.expectEqualStrings("ReadyB:ReadyA,ReadyB", core.nodeDisplayContent(state.getNode(state.childrenOf(summary).?[0]).?));
+    try testing.expectEqualStrings("42B:42A,42B", core.nodeDisplayContent(state.getNode(state.childrenOf(summary).?[0]).?));
 }
 
 test "typed queries: ordinary calls through filtered unions retain all function candidates" {
