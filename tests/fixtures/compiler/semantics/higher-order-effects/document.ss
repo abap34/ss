@@ -1,12 +1,16 @@
-import std:themes/default as *
-fn label(item: Object) -> String = (item.link_id ?? "missing")
+fn label(doc: Document) -> String
+  if doc.layout_h_center_offset == 42
+    return "marked"
+  end
+  return "missing"
+end
 document
   let callback = label
 end
 document
-  let item = body_obj("A")
-  let value = callback(item)
-  item.link_id = "marked"
-  let output = body_obj(value)
+  let current = docctx()
+  let value = callback(current)
+  current.layout_h_center_offset = 42
+  let output = text(value)
   place_on!(new_page(docctx(), "main"), output)
 end

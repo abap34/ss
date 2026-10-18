@@ -35,7 +35,14 @@ pub const VariableTypeExpectation = struct {
 };
 
 fn analyzeAndFinalizeDocumentState(io: std.Io, allocator: std.mem.Allocator, state: *core.DocumentState) !void {
-    var execution_graph = (try analysis.analyzeDocumentStateWithMode(allocator, state, .evaluation)).?;
+    var execution_graph = (analysis.analyzeDocumentStateWithMode(allocator, state, .evaluation) catch |err| {
+        for (state.diagnostics.entries.items) |diagnostic| {
+            const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
+            defer allocator.free(message);
+            std.debug.print("{s}\n", .{message});
+        }
+        return err;
+    }).?;
     defer execution_graph.deinit();
     if (utils.err.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
     try lowering.evaluateDocument(state, &execution_graph, .{ .io = io });
@@ -253,42 +260,6 @@ pub fn expectObjectPropertyWithOverlays(
             defer if (core.value_text.propertyStringNeedsFree(field.value)) allocator.free(value);
             if (std.mem.eql(u8, value, expected)) return;
         }
-    }
-    return error.ExpectedObjectPropertyMissing;
-}
-
-pub fn expectClassDefaultProperty(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    source: []const u8,
-    role: []const u8,
-    key: []const u8,
-    expected: ?[]const u8,
-) !void {
-    var state = try buildFinalizedDocumentState(io, allocator, path, source);
-    defer state.deinit();
-
-    for (state.graph.nodes.items) |node| {
-        if (node.kind != .object) continue;
-        const node_role = node.role orelse continue;
-        if (!std.mem.eql(u8, node_role, role)) continue;
-        var slot = (try core.fields.get(allocator, &state, &node, key)) orelse {
-            if (expected == null) return;
-            return error.ExpectedObjectPropertyMissing;
-        };
-        defer slot.deinit(allocator);
-        if (expected) |value| {
-            const actual = core.value_text.propertyString(allocator, slot.value) catch |err| switch (err) {
-                error.ExpectedStringArgument => return error.ExpectedObjectPropertyMissing,
-                else => return err,
-            };
-            defer if (core.value_text.propertyStringNeedsFree(slot.value)) allocator.free(actual);
-            if (std.mem.eql(u8, actual, value)) return;
-            return error.ExpectedObjectPropertyMissing;
-        }
-        if (slot.value == .none) return;
-        return error.ExpectedObjectPropertyMissing;
     }
     return error.ExpectedObjectPropertyMissing;
 }
@@ -519,7 +490,7 @@ pub fn expectDiagnosticWithOverlays(
     return error.ExpectedDiagnosticMissing;
 }
 
-fn buildFinalizedDocumentState(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !core.DocumentState {
+pub fn buildFinalizedDocumentState(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !core.DocumentState {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);
