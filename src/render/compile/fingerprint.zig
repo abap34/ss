@@ -415,6 +415,7 @@ fn hashOptionalLatexPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.L
 fn hashOptionalAssetPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.AssetPaint) void {
     hashBool(hasher, maybe != null);
     if (maybe) |asset| {
+        hashString(hasher, @tagName(asset.format));
         hashF32(hasher, asset.scale);
         hashOptionalColor(hasher, asset.tint);
         hashU64(hasher, asset.pdf_page);

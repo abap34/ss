@@ -440,25 +440,31 @@ test "native image display: immutable inputs retain asset styles and independent
     try testing.expectEqualSlices(core.NodeId, &.{ roots[0], roots[1], child }, selected.ids.items);
 }
 
-test "native image display: local names and incomplete inputs cannot impersonate renderer types" {
+test "native asset display: local names and incomplete inputs cannot impersonate renderer types" {
     var state = try documentWithModules(
         \\import std:assets as assets
         \\type Image { path: String }
+        \\type Pdf { path: String }
     );
     defer state.deinit();
     try compiler.analysis.analyzeDocumentState(testing.allocator, &state);
-    const local = Type.recordType("Image").inModule(0);
-    try testing.expect(core.native_display.kindForType(&state, local) == null);
-    try testing.expectError(error.InvalidType, prepareTarget(&state, local));
-    const native_module = state.moduleByPathOrSpec("std:assets/content").?;
-    const native_type = Type.recordType("Image").inModule(native_module.id);
-    try testing.expectEqual(core.native_display.Kind.image, (try prepareTarget(&state, native_type)).native);
-    var value = core.Value{ .record = .init(native_type) };
-    defer value.deinit(testing.allocator);
-    try value.record.fields.append(testing.allocator, .{ .name = "path", .value = .{ .string = "Missing style" } });
-    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .image));
-    try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(Type.recordType("AssetBlockStyle").inModule(0)) } });
-    try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, .image));
+    for ([_]struct { name: []const u8, kind: core.native_display.Kind }{
+        .{ .name = "Image", .kind = .image },
+        .{ .name = "Pdf", .kind = .pdf },
+    }) |case| {
+        const local = Type.recordType(case.name).inModule(0);
+        try testing.expect(core.native_display.kindForType(&state, local) == null);
+        try testing.expectError(error.InvalidType, prepareTarget(&state, local));
+        const native_module = state.moduleByPathOrSpec("std:assets/content").?;
+        const native_type = Type.recordType(case.name).inModule(native_module.id);
+        try testing.expectEqual(case.kind, (try prepareTarget(&state, native_type)).native);
+        var value = core.Value{ .record = .init(native_type) };
+        defer value.deinit(testing.allocator);
+        try value.record.fields.append(testing.allocator, .{ .name = "path", .value = .{ .string = "Missing style" } });
+        try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, case.kind));
+        try value.record.fields.append(testing.allocator, .{ .name = "style", .value = .{ .record = .init(Type.recordType("AssetBlockStyle").inModule(0)) } });
+        try testing.expectError(error.InvalidNativeDisplay, core.native_display.validateValue(&state, value, case.kind));
+    }
 }
 
 test "native image display: missing assets report their placement and page before rendering" {

@@ -195,17 +195,28 @@ pub const EvalContext = struct {
                     .running => return error.DisplayExpansionCycle,
                     .expanded => return error.DisplayTargetMismatch,
                 }
-                if (kind == .image) {
-                    try validateAssetPath(self.state, placement.page_id, id, placement.value.record.field("path").?.string, .image_ref, node.origin);
+                const payload_kind: core.PayloadKind = switch (kind) {
+                    .text => .text,
+                    .image => .image_ref,
+                    .pdf => .pdf_ref,
+                };
+                if (kind == .image or kind == .pdf) {
+                    try validateAssetPath(self.state, placement.page_id, id, placement.value.record.field("path").?.string, payload_kind, node.origin);
+                }
+                if (kind == .pdf) {
+                    const style = placement.value.record.field("style").?.record;
+                    const page = style.field("asset").?.record.field("pdf_page").?.number;
+                    if (core.render_policy.pdfPageNumber(page) == null) {
+                        try self.state.addValidationDiagnostic(.@"error", placement.page_id, id, node.origin, .{
+                            .asset_invalid = .{ .reason = try self.state.allocator.dupe(u8, "PDF page number must be a positive integer within the supported range") },
+                        });
+                    }
                 }
                 node.object_kind = switch (kind) {
                     .text => .text,
-                    .image => .asset,
+                    .image, .pdf => .asset,
                 };
-                node.payload_kind = switch (kind) {
-                    .text => .text,
-                    .image => .image_ref,
-                };
+                node.payload_kind = payload_kind;
                 placement.display = .{ .native = kind };
                 return &.{};
             },
