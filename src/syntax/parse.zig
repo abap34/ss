@@ -2103,9 +2103,6 @@ const Parser = struct {
             name_owned = false;
             return .{ .call = try self.makeUnaryStringCall(name, text) };
         }
-        if (std.mem.endsWith(u8, name.name, "!")) {
-            return self.fail(error.ExpectedChar);
-        }
         const name_span = name.span;
         name_owned = false;
         const text = try self.takeQualifiedNameText(name);

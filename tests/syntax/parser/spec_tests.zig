@@ -760,13 +760,23 @@ test "syntax spec: bang suffix is limited to callable names" {
         \\end
         \\
     );
+}
 
-    try expectParseError(error.ExpectedChar,
-        \\page Bad
-        \\  let value = mark!
+test "syntax spec: bang-marked functions are ordinary references" {
+    var parsed = try parse(
+        \\page References
+        \\  let local = mark!
+        \\  let imported = actions::mark!
+        \\  apply(mark!)
         \\end
-        \\
     );
+    defer parsed.deinit();
+
+    const statements = parsed.module.pages.items[0].statements.items;
+    try testing.expectEqualStrings("mark!", statements[0].kind.let_binding.expr.ident.name);
+    try testing.expectEqualStrings("actions::mark!", statements[1].kind.let_binding.expr.ident.name);
+    const apply = try expectCall(statements[2].kind.expr_stmt, "apply", 1);
+    try testing.expectEqualStrings("mark!", apply.args.items[0].ident.name);
 }
 
 test "syntax spec: qualified callables parse in normal and text block calls" {
