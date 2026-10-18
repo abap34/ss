@@ -84,7 +84,7 @@ fn requiredGroupAxisSize(state: *Workspace, workspace: *const graph.AxisWorkspac
     if (remaining == 0) return null;
     const node = state.source.getNode(group_id) orelse return error.UnknownNode;
     const split = workspace.graph.hasSplitChildren(group_id);
-    const config = try composition.settings(state.source, node);
+    const config = composition.settings(node);
     if (config.mode == .overlay) return null;
     const along = (workspace.axis == .horizontal) == config.mode.isHorizontal();
     var total: f32 = 0;

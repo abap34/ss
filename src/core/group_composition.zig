@@ -1,20 +1,17 @@
 const std = @import("std");
 const model = @import("model");
-const fields = @import("fields.zig");
 
 /// Collect adjacency and optional equal cuts before update normalization.
 /// Layout consumes only the constraints surviving update normalization.
 pub fn collect(state: anytype, node: *const model.Node, constraints: *std.ArrayList(model.Constraint)) !void {
-    const config = try settings(state, node);
+    const config = settings(node);
     try collectAlignment(state, node, config, constraints);
     if (config.mode == .overlay) return;
     try collectAdjacency(state, node, config, constraints);
     if (!config.mode.equal()) return;
     const horizontal = config.mode.isHorizontal();
     const gap = config.gap;
-    const pad_x = config.pad_x;
-    const pad_y = config.pad_y;
-    if (!std.math.isFinite(gap) or gap < 0 or !std.math.isFinite(pad_x) or pad_x < 0 or !std.math.isFinite(pad_y) or pad_y < 0) return error.InvalidGroupSplit;
+    if (!std.math.isFinite(gap) or gap < 0) return error.InvalidGroupSplit;
     var children = std.ArrayList(model.NodeId).empty;
     defer children.deinit(state.allocator);
     for (state.childrenOf(node.id) orelse &.{}) |child_id| {
@@ -23,7 +20,7 @@ pub fn collect(state: anytype, node: *const model.Node, constraints: *std.ArrayL
         try children.append(state.allocator, child_id);
     }
     if (children.items.len < 2) return error.InvalidGroupSplit;
-    var template = model.Constraint{
+    const template = model.Constraint{
         .target_node = children.items[0],
         .target_anchor = .left,
         .source = .{ .node = .{ .node_id = node.id, .anchor = .left } },
@@ -31,36 +28,29 @@ pub fn collect(state: anytype, node: *const model.Node, constraints: *std.ArrayL
         .group_split = true,
         .origin = node.origin,
     };
-    for (node.fields.items) |field| {
-        if (!std.mem.eql(u8, field.key, "split_axis")) continue;
-        template.scope_depth = field.scope_depth;
-        template.origin = field.origin;
-        break;
-    }
     const count: f32 = @floatFromInt(children.items.len);
-    const padding = if (horizontal) pad_x else pad_y;
     for (children.items, 0..) |child_id, index| {
         const start = @as(f32, @floatFromInt(index)) / count;
         const end = @as(f32, @floatFromInt(index + 1)) / count;
-        try appendCut(state.allocator, constraints, template, child_id, horizontal, true, start, padding * (1 - 2 * start) + gap * start);
-        try appendCut(state.allocator, constraints, template, child_id, horizontal, false, end, padding * (1 - 2 * end) + gap * (end - 1));
+        try appendCut(state.allocator, constraints, template, child_id, horizontal, true, start, gap * start);
+        try appendCut(state.allocator, constraints, template, child_id, horizontal, false, end, gap * (end - 1));
     }
     for (children.items) |child_id| {
         const child = state.getNode(child_id).?;
         if (model.isGroupNode(child)) {
             // A nested group receives the complete cell on the other axis.
             if (horizontal) {
-                try append(state.allocator, constraints, template, child_id, .bottom, .bottom, pad_y, false);
-                try append(state.allocator, constraints, template, child_id, .top, .top, -pad_y, false);
+                try append(state.allocator, constraints, template, child_id, .bottom, .bottom, 0, false);
+                try append(state.allocator, constraints, template, child_id, .top, .top, 0, false);
             } else {
-                try append(state.allocator, constraints, template, child_id, .left, .left, pad_x, false);
-                try append(state.allocator, constraints, template, child_id, .right, .right, -pad_x, false);
+                try append(state.allocator, constraints, template, child_id, .left, .left, 0, false);
+                try append(state.allocator, constraints, template, child_id, .right, .right, 0, false);
             }
         } else if (horizontal) {
             // Resolved to top or center_y by the effective page policy.
-            try append(state.allocator, constraints, template, child_id, .top, .top, -pad_y, true);
+            try append(state.allocator, constraints, template, child_id, .top, .top, 0, true);
         } else {
-            try append(state.allocator, constraints, template, child_id, .left, .left, pad_x, true);
+            try append(state.allocator, constraints, template, child_id, .left, .left, 0, true);
         }
     }
 }
@@ -69,29 +59,17 @@ fn collectAdjacency(state: anytype, node: *const model.Node, config: Settings, c
     // Equal cuts already determine each cell's position and extent. Adding a
     // sibling relation would keep the previous cell pinned after its cuts are
     // replaced by a caller's position update.
-    if (node.placement != null and config.mode.equal()) return;
-    const horizontal = if (node.placement != null) config.mode.isHorizontal() else legacy: {
-        const axis = try readAxis(state, node, "join_axis");
-        if (std.mem.eql(u8, axis, "none")) return;
-        if (std.mem.eql(u8, axis, "horizontal")) break :legacy true;
-        if (std.mem.eql(u8, axis, "vertical")) break :legacy false;
-        return error.InvalidGroupSplit;
-    };
+    if (config.mode.equal()) return;
+    const horizontal = config.mode.isHorizontal();
     const gap = config.gap;
     if (!std.math.isFinite(gap)) return error.InvalidGroupSplit;
-    var template = model.Constraint{
+    const template = model.Constraint{
         .target_node = node.id,
         .target_anchor = if (horizontal) .left else .top,
         .source = .{ .node = .{ .node_id = node.id, .anchor = if (horizontal) .right else .bottom } },
         .offset = if (horizontal) gap else -gap,
         .origin = node.origin,
     };
-    for (node.fields.items) |field| {
-        if (!std.mem.eql(u8, field.key, "join_axis")) continue;
-        template.scope_depth = field.scope_depth;
-        template.origin = field.origin;
-        break;
-    }
     var previous: ?model.NodeId = null;
     var count: usize = 0;
     for (state.childrenOf(node.id) orelse &.{}) |id| {
@@ -105,7 +83,7 @@ fn collectAdjacency(state: anytype, node: *const model.Node, config: Settings, c
             alignment.target_node = id;
             alignment.target_anchor = .left;
             alignment.source = .{ .node = .{ .node_id = node.id, .anchor = .left } };
-            alignment.offset = config.pad_x;
+            alignment.offset = 0;
             alignment.default_alignment = true;
             try constraints.append(state.allocator, alignment);
         }
@@ -145,16 +123,6 @@ fn appendCut(allocator: std.mem.Allocator, constraints: *std.ArrayList(model.Con
     try constraints.append(allocator, cut);
 }
 
-fn readNumber(state: anytype, node: *const model.Node, key: []const u8, path: []const []const u8, default: f32) !f32 {
-    var slot = (try fields.get(state.allocator, state, node, key)) orelse return default;
-    defer slot.deinit(state.allocator);
-    const value = fields.pathValue(slot.value, path) orelse return default;
-    return switch (value) {
-        .number => |number| number,
-        else => error.InvalidGroupSplit,
-    };
-}
-
 fn append(allocator: std.mem.Allocator, constraints: *std.ArrayList(model.Constraint), template: model.Constraint, target: model.NodeId, target_anchor: model.Anchor, source_anchor: model.Anchor, offset: f32, alignment: bool) !void {
     var constraint = template;
     constraint.target_node = target;
@@ -168,42 +136,19 @@ fn append(allocator: std.mem.Allocator, constraints: *std.ArrayList(model.Constr
 pub const Settings = struct {
     mode: model.GroupComposition = .overlay,
     gap: f32 = 32,
-    pad_x: f32 = 0,
-    pad_y: f32 = 0,
     align_y: bool = false,
 };
 
-pub fn settings(state: anytype, node: *const model.Node) !Settings {
-    if (node.placement) |placement| {
-        if (placement.value == .group) {
-            const value = placement.value.group;
-            return .{ .mode = value.composition, .gap = value.gap, .align_y = value.composition.isHorizontal() };
-        }
-        return .{};
-    }
-    // Legacy fields remain until ordinary constructors stop producing Object.
-    const split = try readAxis(state, node, "split_axis");
-    const join = try readAxis(state, node, "join_axis");
-    const equal = !std.mem.eql(u8, split, "none");
-    const axis = if (equal) split else join;
-    const mode: model.GroupComposition = if (std.mem.eql(u8, axis, "horizontal"))
-        (if (equal) .equal_horizontal else .horizontal)
-    else if (std.mem.eql(u8, axis, "vertical"))
-        (if (equal) .equal_vertical else .vertical)
-    else if (std.mem.eql(u8, axis, "none")) .overlay else return error.InvalidGroupSplit;
-    const align_y = if (model.nodeField(node, "align_children_y")) |value| value == .boolean and value.boolean else false;
-    return .{
-        .mode = mode,
-        .gap = try readNumber(state, node, "split_gap", &.{}, 32),
-        .pad_x = try readNumber(state, node, "chrome", &.{"pad_x"}, 0),
-        .pad_y = try readNumber(state, node, "chrome", &.{"pad_y"}, 0),
-        .align_y = align_y,
-    };
+pub fn settings(node: *const model.Node) Settings {
+    const placement = node.placement orelse return .{};
+    if (placement.value != .group) return .{};
+    const value = placement.value.group;
+    return .{ .mode = value.composition, .gap = value.gap, .align_y = value.composition.isHorizontal() };
 }
 
 fn collectAlignment(state: anytype, node: *const model.Node, config: Settings, constraints: *std.ArrayList(model.Constraint)) !void {
     if (!config.align_y) return;
-    var template = model.Constraint{
+    const template = model.Constraint{
         .target_node = node.id,
         .target_anchor = .top,
         .source = .{ .node = .{ .node_id = node.id, .anchor = .top } },
@@ -211,12 +156,6 @@ fn collectAlignment(state: anytype, node: *const model.Node, config: Settings, c
         .origin = node.origin,
         .default_alignment = true,
     };
-    for (node.fields.items) |field| {
-        if (!std.mem.eql(u8, field.key, "align_children_y")) continue;
-        template.scope_depth = field.scope_depth;
-        template.origin = field.origin;
-        break;
-    }
     var previous: ?model.NodeId = null;
     for (state.childrenOf(node.id) orelse &.{}) |child_id| {
         const child = state.getNode(child_id) orelse continue;
@@ -229,15 +168,4 @@ fn collectAlignment(state: anytype, node: *const model.Node, config: Settings, c
         }
         previous = child_id;
     }
-}
-
-fn readAxis(state: anytype, node: *const model.Node, key: []const u8) ![]const u8 {
-    var slot = (try fields.get(state.allocator, state, node, key)) orelse return "none";
-    defer slot.deinit(state.allocator);
-    return switch (slot.value) {
-        .none => "none",
-        .string => |value| value,
-        .enum_case => |value| value.case_name,
-        else => error.InvalidGroupSplit,
-    };
 }

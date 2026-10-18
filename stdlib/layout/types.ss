@@ -2,8 +2,6 @@ enum Align { left center right }
 
 enum LayoutPolicy { left right top top_flow center center_stack }
 
-enum SplitAxis { none horizontal vertical }
-
 enum WrapMode { on off }
 
 enum FitPolicy { warn error ignore }

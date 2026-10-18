@@ -995,7 +995,7 @@ pub const DocumentState = struct {
         node.property_definitions.appendAssumeCapacity(.{ .path = owned_path, .origin = origin });
     }
 
-    /// Materialize final group fields once, after evaluation and before
+    /// Materialize group composition constraints once, after evaluation and before
     /// constraint-update normalization. Repeated calls do not recreate masked
     /// candidates. Anchor selection is deferred to the page layout policy.
     pub fn collectDefaultAlignments(self: *DocumentState) !void {
@@ -1009,7 +1009,7 @@ pub const DocumentState = struct {
                 try self.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
                     .user_report = .{
                         .code = "InvalidGroupSplit",
-                        .message = try self.allocator.dupe(u8, "a split group requires at least two distinct live objects, a horizontal or vertical axis, and finite non-negative spacing and padding"),
+                        .message = try self.allocator.dupe(u8, "a composed group requires at least two live placements and finite spacing; equal splits require non-negative spacing"),
                     },
                 });
                 return err;
@@ -1511,14 +1511,13 @@ pub const DocumentState = struct {
     }
 
     /// Set algebra must not make operand order determine numbering order.
-    /// Legacy unattached objects retain their old ordering during migration.
     pub fn orderSelection(self: *DocumentState, allocator: Allocator, selection: *Selection) !void {
-        if (selection.ids.items.len < 2) return;
         for (selection.ids.items) |id| {
             const node = self.getNode(id) orelse return error.UnknownNode;
-            if (selection.item_tag == .object and node.placement == null) return;
+            if (selection.item_tag == .object and node.placement == null) return error.InvalidSelectionScope;
             if (selection.item_tag == .page and node.kind != .page) return error.InvalidSelectionScope;
         }
+        if (selection.ids.items.len < 2) return;
         var wanted = std.AutoHashMap(NodeId, void).init(allocator);
         defer wanted.deinit();
         for (selection.ids.items) |id| try wanted.put(id, {});
